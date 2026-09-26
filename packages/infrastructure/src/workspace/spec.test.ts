@@ -146,9 +146,9 @@ describe('the checkout a run gets', () => {
 
 describe('the credential a run gets', () => {
   it('is read off the run’s own tool policy, not a table of roles', () => {
-    // BD-021: a read-only stage gets no git write token at all, so the broker mints nothing and
-    // `cred.get` has nothing to answer. The honest question is whether the run can change the
-    // checkout.
+    // BD-021: a read-only stage gets no git write token at all — the runner mints it a `read`
+    // credential (WP-76), which fetches and cannot push. The honest question is whether the run can
+    // change the checkout.
     expect(build().readOnly).toBe(false);
     expect(build({ spec: runSpecFixture({ tools: ['Read', 'Grep'] }) }).readOnly).toBe(true);
     expect(runIsReadOnly(runSpecFixture({ tools: ['Read', 'Edit'] }))).toBe(false);
@@ -157,20 +157,17 @@ describe('the credential a run gets', () => {
   });
 
   /**
-   * **A review-only run mints nothing, so it has no run-scoped credential to leak** (WP-24 review
-   * round 2, and the measurement behind the sentence in `pipeline/review-only.ts` and in
-   * `pipeline/integrations.ts` § `reviewWrites.thread`).
+   * **A review-only run holds at most a `read` credential** (WP-76 — this read *"mints nothing"*
+   * from WP-24 review round 2 until then, which was true only because nothing minted anything).
    *
-   * The thread a review posts is redacted against the **git binding's** credentials and TD-012's
-   * patterns, and round 1 filed the gap that it is not redacted against a credential
-   * `mintCredential` issued for the run. This walks the chain that decides whether such a
-   * credential exists: `REVIEW_ONLY_TEMPLATE`'s one agent stage is the reviewer's,
-   * `TOOLS_BY_ROLE.reviewer` has neither `Write` nor `Edit`, `runIsReadOnly` is therefore true,
-   * `buildWorkspaceSpec` marks the workspace read-only, and `RunCredentialBroker.issue` returns
-   * `null` **without calling the source** (BD-021). So on this build there is nothing run-scoped to
-   * survive into a thread; the gap opens for a future role that both mints and posts.
+   * The chain that decides the scope: `REVIEW_ONLY_TEMPLATE`'s one agent stage is the reviewer's,
+   * `TOOLS_BY_ROLE.reviewer` has neither `Write` nor `Edit`, `runIsReadOnly` is therefore true and
+   * `buildWorkspaceSpec` marks the workspace read-only, so the runner mints `read` (TD-028's WP-76
+   * amendment, decision 2) and the broker **refuses** a `push` credential for it. What a review may
+   * therefore leak into a thread is a read token; `pipeline/review-only.ts` states where that is
+   * redacted and where it is not.
    */
-  it('is none for a review-only run: the reviewer writes nothing, so the broker mints nothing', async () => {
+  it('is at most a read credential for a review-only run: the broker refuses a push one', () => {
     const stage = REVIEW_ONLY_TEMPLATE.stages.find((entry) => entry.id === 'code_review');
     expect(stage?.kind).toBe('agent');
     const role = stage?.kind === 'agent' ? stage.role : null;
@@ -178,7 +175,7 @@ describe('the credential a run gets', () => {
     const tools = TOOLS_BY_ROLE.reviewer;
     // Positively, not "does not contain Write": a list that grew an `Edit` is the thing to catch.
     // `Bash` since WP-54 (product/13's "tests only", PROGRESS backlog 39): a shell changes what the
-    // run may *execute*, never whether the broker mints a credential — that is `Write`/`Edit`.
+    // run may *execute*, never the scope it is minted — that is `Write`/`Edit`.
     expect(tools).toEqual(['Read', 'Glob', 'Grep', 'Bash']);
 
     const spec = runSpecFixture({
@@ -189,31 +186,22 @@ describe('the credential a run gets', () => {
       artifactType: 'ReviewVerdict',
     });
     expect(runIsReadOnly(spec)).toBe(true);
-    expect(build({ spec }).readOnly).toBe(true);
+    const readOnly = build({ spec }).readOnly;
+    expect(readOnly).toBe(true);
 
-    let mints = 0;
-    const broker = new RunCredentialBroker({
-      mint: async () => {
-        mints += 1;
-        throw new Error('a read-only run must not reach the credential source');
-      },
-      revoke: async () => {
-        throw new Error('nothing was minted, so nothing can be revoked');
-      },
-    });
-    const issued = await broker.issue({
-      runId: spec.runId,
-      project: 'acme/api',
+    const broker = new RunCredentialBroker();
+    const credential = {
       host: 'git.example.com',
-      readOnly: build({ spec }).readOnly,
-      branchPatterns: ['agentic/*'],
-      ttlSeconds: 900,
-    });
-    expect(issued).toBeNull();
-    expect(mints).toBe(0);
-    // …and the workspace's own `cred.get` has nothing to be answered with either.
-    expect(broker.answer(spec.runId, 'git.example.com')).toBeNull();
+      username: 'oauth2',
+      password: 'fake_run_credential_000000',
+      expiresAt: '2026-09-11T00:00:00.000Z',
+    };
+    expect(() =>
+      broker.hold({ runId: spec.runId, readOnly, credential: { ...credential, scope: 'push' } }),
+    ).toThrow(/read-only run was sent a push credential/);
     expect(broker.liveCount).toBe(0);
+    broker.hold({ runId: spec.runId, readOnly, credential: { ...credential, scope: 'read' } });
+    expect(broker.scopeOf(spec.runId)).toBe('read');
   });
 });
 

@@ -1,67 +1,67 @@
+import { WorkspaceError } from '@platform/application';
 import { describe, expect, it } from 'vitest';
-import { RunCredentialBroker, type RunCredentialSource } from './broker.js';
+import { type CarriedRunCredential, RunCredentialBroker } from './broker.js';
 
 const RUN = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+const OTHER = '9f8a1c22-6f3f-4c07-8f61-3a2f6b19bb01';
 const HOST = 'gitlab.example.com';
 const SECRET = 'glpat-FAKE-000000000000000000';
 
-const source = () => {
-  const minted: unknown[] = [];
-  const revoked: unknown[] = [];
-  let counter = 0;
-  const port: RunCredentialSource = {
-    async mint(request) {
-      minted.push(request);
-      counter += 1;
-      return {
-        username: 'agentic-bot',
-        value: `${SECRET}-${counter}`,
-        expiresAt: '2026-09-11T00:00:00.000Z',
-        revokeId: `tokens/${counter}`,
-      };
-    },
-    async revoke(credential) {
-      revoked.push(credential);
-    },
-  };
-  return { port, minted, revoked };
-};
+const carried = (overrides: Partial<CarriedRunCredential> = {}): CarriedRunCredential => ({
+  host: HOST,
+  username: 'oauth2',
+  password: `${SECRET}-1`,
+  scope: 'push',
+  expiresAt: '2026-09-11T00:00:00.000Z',
+  ...overrides,
+});
 
-const issue = async (overrides: { readOnly?: boolean } = {}) => {
-  const harness = source();
-  const broker = new RunCredentialBroker(harness.port);
-  const credential = await broker.issue({
-    runId: RUN,
-    project: 'acme/web',
-    host: HOST,
-    readOnly: overrides.readOnly ?? false,
-    branchPatterns: ['agentic/*'],
-    ttlSeconds: 86_400,
-  });
-  return { ...harness, broker, credential };
+const holding = (overrides: Partial<CarriedRunCredential> = {}, readOnly = false) => {
+  const broker = new RunCredentialBroker();
+  const credential = broker.hold({ runId: RUN, readOnly, credential: carried(overrides) });
+  return { broker, credential };
 };
 
 describe('run credential broker', () => {
-  it('mints a push credential scoped to agentic/* and answers for the git host', async () => {
-    const { broker, minted, credential } = await issue();
-    expect(minted).toEqual([
-      { project: 'acme/web', scope: 'push', branchPatterns: ['agentic/*'], ttlSeconds: 86_400 },
-    ]);
-    expect(credential).toEqual({ host: HOST, username: 'agentic-bot', password: `${SECRET}-1` });
+  it('holds the carried credential and answers for the git host with exactly it', () => {
+    const { broker, credential } = holding();
+    expect(credential).toEqual({ host: HOST, username: 'oauth2', password: `${SECRET}-1` });
     expect(broker.answer(RUN, HOST)).toEqual(credential);
+    expect(broker.credentialFor(RUN)).toEqual(credential);
+    expect(broker.scopeOf(RUN)).toBe('push');
   });
 
-  it('mints nothing at all for a read-only stage (BD-021)', async () => {
-    const { broker, minted, credential } = await issue({ readOnly: true });
-    expect(credential).toBeNull();
-    expect(minted).toEqual([]);
+  it('holds a read credential for a read-only run (the read scope’s producer, backlog 133 (2))', () => {
+    const { broker } = holding({ scope: 'read' }, true);
+    expect(broker.credentialFor(RUN)?.password).toBe(`${SECRET}-1`);
+    expect(broker.scopeOf(RUN)).toBe('read');
+  });
+
+  /** Rule 42: the refusal above is paired with the acceptance that differs from it by one field. */
+  it('refuses a push credential for a read-only run, and holds nothing', () => {
+    const broker = new RunCredentialBroker();
+    expect(() =>
+      broker.hold({ runId: RUN, readOnly: true, credential: carried({ scope: 'push' }) }),
+    ).toThrow(WorkspaceError);
+    expect(broker.liveCount).toBe(0);
     expect(broker.answer(RUN, HOST)).toBeNull();
+  });
+
+  it.each([
+    ['an empty password', { password: '' }],
+    ['a blank password', { password: '   ' }],
+    ['an empty username', { username: '' }],
+  ])('refuses %s (standing rule 18)', (_label, overrides) => {
+    const broker = new RunCredentialBroker();
+    expect(() =>
+      broker.hold({ runId: RUN, readOnly: false, credential: carried(overrides) }),
+    ).toThrow(/empty credential is not a credential/);
   });
 
   /**
    * Standing rule 43. `evil.example.com` is refused by `endsWith`, by `includes`, by a case fold
    * and by exact matching alike, so it is not a test of anything. Each case below is named for the
-   * wrong implementation it separates — mutate `host !== issued.host` to that implementation and
+   * wrong implementation it separates — mutate `host !== held.host` to that implementation and
    * exactly the named test fails.
    */
   it.each([
@@ -72,118 +72,38 @@ describe('run credential broker', () => {
     ['the upper-case spelling, which a case fold admits', 'GITLAB.example.com'],
     ['the DNS-absolute spelling, which a trailing-dot strip admits', 'gitlab.example.com.'],
     ['an unrelated host', 'evil.example.com'],
-  ])('refuses %s', async (_label, host) => {
-    const { broker } = await issue();
+  ])('refuses %s', (_label, host) => {
+    const { broker } = holding();
     expect(broker.answer(RUN, host)).toBeNull();
   });
 
-  it('answers nothing for a run it never issued to', async () => {
-    const { broker } = await issue();
-    expect(broker.answer('9f8a1c22-6f3f-4c07-8f61-3a2f6b19bb01', HOST)).toBeNull();
+  it('answers nothing for a run it holds nothing for', () => {
+    const { broker } = holding();
+    expect(broker.answer(OTHER, HOST)).toBeNull();
   });
 
-  it('stops answering the moment the credential is revoked', async () => {
-    const { broker, revoked } = await issue();
-    expect(broker.answer(RUN, HOST)).not.toBeNull();
-    await broker.revoke(RUN);
-    expect(revoked).toEqual([{ value: `${SECRET}-1`, revokeId: 'tokens/1' }]);
-    expect(broker.answer(RUN, HOST)).toBeNull();
-    expect(broker.liveCount).toBe(0);
-  });
-
-  /**
-   * The window this test exists for was found by mutation, not by design: deleting the run from
-   * the map in `revoke`'s `finally` makes `issued.revoked` *look* redundant — both
-   * `if (issued.revoked)` and setting the flag before the provider call survived every other test
-   * in this file. They are not redundant. Revocation is a network call, and a `cred.get` arriving
-   * while it is in flight is the one moment the map still holds a credential the platform has
-   * already decided to destroy. The revocation here never settles, so the window is held open
-   * deterministically — no timing, no sleep.
-   */
-  it('stops answering while the revocation is still in flight', async () => {
-    const harness = source();
-    let releaseRevoke: (() => void) | undefined;
-    const slow: RunCredentialSource = {
-      mint: harness.port.mint,
-      revoke: () =>
-        new Promise<void>((resolve) => {
-          releaseRevoke = resolve;
-        }),
-    };
-    const broker = new RunCredentialBroker(slow);
-    await broker.issue({
-      runId: RUN,
-      project: 'acme/web',
-      host: HOST,
-      readOnly: false,
-      branchPatterns: ['agentic/*'],
-      ttlSeconds: 60,
-    });
-    expect(broker.answer(RUN, HOST)).not.toBeNull();
-
-    const pending = broker.revoke(RUN);
-    // The provider call has started and has not returned. The credential is still in the map.
-    expect(broker.liveCount).toBe(1);
+  it('stops answering the moment the credential is forgotten', () => {
+    const { broker } = holding();
+    expect(broker.forget(RUN)).toBe(true);
     expect(broker.answer(RUN, HOST)).toBeNull();
     expect(broker.credentialFor(RUN)).toBeNull();
-
-    releaseRevoke?.();
-    await pending;
-    expect(broker.answer(RUN, HOST)).toBeNull();
+    expect(broker.scopeOf(RUN)).toBeNull();
+    expect(broker.liveCount).toBe(0);
+    expect(broker.forget(RUN)).toBe(false);
   });
 
-  it('revokes once, however many times it is asked', async () => {
-    const { broker, revoked } = await issue();
-    await broker.revoke(RUN);
-    await broker.revoke(RUN);
-    expect(revoked).toHaveLength(1);
-  });
-
-  /**
-   * The order matters and is asserted, not described: the broker marks the run refused *before*
-   * the provider call, so a revocation that throws still leaves the door shut. A broker that
-   * revoked first and marked second would keep handing out a push token every time the provider
-   * was briefly unreachable.
-   */
-  it('stops answering even when the revocation itself fails', async () => {
-    const harness = source();
-    const failing: RunCredentialSource = {
-      mint: harness.port.mint,
-      async revoke() {
-        throw new Error('gitlab is down');
-      },
-    };
-    const broker = new RunCredentialBroker(failing);
-    await broker.issue({
-      runId: RUN,
-      project: 'acme/web',
-      host: HOST,
+  it('keeps two runs apart, so one workspace cannot ask for another’s token', () => {
+    const broker = new RunCredentialBroker();
+    broker.hold({ runId: RUN, readOnly: false, credential: carried() });
+    broker.hold({
+      runId: OTHER,
       readOnly: false,
-      branchPatterns: ['agentic/*'],
-      ttlSeconds: 60,
+      credential: carried({ password: `${SECRET}-2` }),
     });
-    await expect(broker.revoke(RUN)).rejects.toThrow('gitlab is down');
-    expect(broker.answer(RUN, HOST)).toBeNull();
-  });
-
-  it('keeps two runs' + " apart, so one workspace cannot ask for another's token", async () => {
-    const harness = source();
-    const broker = new RunCredentialBroker(harness.port);
-    const other = '9f8a1c22-6f3f-4c07-8f61-3a2f6b19bb01';
-    for (const runId of [RUN, other]) {
-      await broker.issue({
-        runId,
-        project: 'acme/web',
-        host: HOST,
-        readOnly: false,
-        branchPatterns: ['agentic/*'],
-        ttlSeconds: 60,
-      });
-    }
     expect(broker.answer(RUN, HOST)?.password).toBe(`${SECRET}-1`);
-    expect(broker.answer(other, HOST)?.password).toBe(`${SECRET}-2`);
-    await broker.revoke(RUN);
+    expect(broker.answer(OTHER, HOST)?.password).toBe(`${SECRET}-2`);
+    broker.forget(RUN);
     expect(broker.answer(RUN, HOST)).toBeNull();
-    expect(broker.answer(other, HOST)?.password).toBe(`${SECRET}-2`);
+    expect(broker.answer(OTHER, HOST)?.password).toBe(`${SECRET}-2`);
   });
 });

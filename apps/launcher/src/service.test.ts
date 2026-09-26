@@ -9,12 +9,7 @@
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
-import {
-  type LogFields,
-  type Logger,
-  silentLogger,
-  type WorkspaceProvider,
-} from '@platform/application';
+import { type LogFields, silentLogger, type WorkspaceProvider } from '@platform/application';
 import { runner, workspace } from '@platform/infrastructure';
 import { PLATFORM_SKILLS } from '@platform/prompts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -27,26 +22,19 @@ let clock: runner.ManualClock;
 let provider: workspace.FakeWorkspaceProvider;
 let broker: workspace.RunCredentialBroker;
 let service: LauncherService;
-let minted: number;
-let revoked: number;
 
-const credentials: workspace.RunCredentialSource = {
-  async mint() {
-    minted += 1;
-    return {
-      username: 'agentic',
-      value: `${SECRET}-${minted}`,
-      expiresAt: '2026-09-11T00:00:00.000Z',
-      revokeId: `tokens/${minted}`,
-    };
-  },
-  async revoke() {
-    revoked += 1;
-  },
-};
+/** What the runner mints and the create request carries (WP-76). Obviously fake (BD-002). */
+const carried = (overrides: Partial<workspace.CarriedRunCredential> = {}) => ({
+  host: 'vcs.example.com',
+  username: 'oauth2',
+  password: `${SECRET}-1`,
+  scope: 'push' as const,
+  expiresAt: '2026-09-11T00:00:00.000Z',
+  ...overrides,
+});
 
 const build = (overrides: { retentionSweepMs?: number } = {}) => {
-  broker = new workspace.RunCredentialBroker(credentials, silentLogger);
+  broker = new workspace.RunCredentialBroker(silentLogger);
   service = new LauncherService({
     provider,
     broker,
@@ -58,24 +46,15 @@ const build = (overrides: { retentionSweepMs?: number } = {}) => {
 };
 
 const start = async (overrides: { readOnly?: boolean } = {}) => {
-  const spec = workspace.workspaceSpecFixture({
-    runId: randomUUID(),
-    readOnly: overrides.readOnly ?? false,
-  });
+  const readOnly = overrides.readOnly ?? false;
+  const spec = workspace.workspaceSpecFixture({ runId: randomUUID(), readOnly });
   return {
     spec,
-    started: await service.startRun(spec, {
-      project: 'acme/web',
-      host: 'vcs.example.com',
-      branchPatterns: ['agentic/*'],
-      ttlSeconds: 86_400,
-    }),
+    started: await service.startRun(spec, carried(readOnly ? { scope: 'read' } : {})),
   };
 };
 
 beforeEach(async () => {
-  minted = 0;
-  revoked = 0;
   dir = await workspace.shortTempDir('agentic-launcher-');
   clock = runner.manualClock();
   provider = new workspace.FakeWorkspaceProvider({
@@ -93,19 +72,30 @@ afterEach(async () => {
 });
 
 describe('startRun', () => {
-  it('mirrors, mints, creates and attaches', async () => {
+  it('holds the carried credential, mirrors with it, creates and attaches', async () => {
     const { spec, started } = await start();
-    expect(minted).toBe(1);
     expect(started.credential).toMatchObject({ host: 'vcs.example.com', password: `${SECRET}-1` });
+    expect(started.credentialScope).toBe('push');
+    expect(broker.credentialFor(spec.runId)?.password).toBe(`${SECRET}-1`);
     expect(started.attachment.workdir).toBe('/work/repo');
     expect(provider.events.map((event) => event.kind)).toEqual(['mirror', 'create', 'attach']);
     expect(started.handle.runId).toBe(spec.runId);
   });
 
-  it('mints nothing for a read-only stage (BD-021)', async () => {
+  it('holds a read credential for a read-only stage, and refuses a push one (BD-021)', async () => {
     const { started } = await start({ readOnly: true });
-    expect(minted).toBe(0);
+    expect(started.credentialScope).toBe('read');
+    const spec = workspace.workspaceSpecFixture({ runId: randomUUID(), readOnly: true });
+    await expect(service.startRun(spec, carried())).rejects.toMatchObject({
+      code: 'invalid_spec',
+    });
+  });
+
+  it('lets a read-only stage start with no credential — an anonymous fetch', async () => {
+    const spec = workspace.workspaceSpecFixture({ runId: randomUUID(), readOnly: true });
+    const started = await service.startRun(spec, null);
     expect(started.credential).toBeNull();
+    expect(provider.events.map((event) => event.kind)).toEqual(['mirror', 'create', 'attach']);
   });
 
   /**
@@ -115,53 +105,44 @@ describe('startRun', () => {
    * `null`. The container and the socket are created as for any run.
    */
   it('neither mirrors nor asks the broker for a spec with no checkout, and still attaches', async () => {
-    const issue = vi.spyOn(broker, 'issue');
+    const hold = vi.spyOn(broker, 'hold');
     const spec = workspace.repoLessWorkspaceSpecFixture({ runId: randomUUID() });
     const started = await service.startRun(spec, null);
     expect(provider.events.map((event) => event.kind)).toEqual(['create', 'attach']);
-    expect(issue).not.toHaveBeenCalled();
-    expect(minted).toBe(0);
+    expect(hold).not.toHaveBeenCalled();
     expect(started.credential).toBeNull();
     expect(started.handle.cacheKey).toBeNull();
     expect(started.attachment.workdir).toBe('/work/repo');
   });
 
-  it('refuses a credential request that does not match whether the spec has a repository', async () => {
-    const request = {
-      project: 'acme/web',
-      host: 'vcs.example.com',
-      branchPatterns: ['agentic/*'],
-      ttlSeconds: 60,
-    } as const;
+  it('refuses a credential that does not match the spec: none for no repository, one for a writer', async () => {
     const repoLess = workspace.repoLessWorkspaceSpecFixture({ runId: randomUUID() });
-    await expect(service.startRun(repoLess, request)).rejects.toMatchObject({
+    await expect(service.startRun(repoLess, carried())).rejects.toMatchObject({
       code: 'invalid_spec',
     });
     const repoFul = workspace.workspaceSpecFixture({ runId: randomUUID() });
     await expect(service.startRun(repoFul, null)).rejects.toMatchObject({ code: 'invalid_spec' });
-    expect(minted).toBe(0);
+    expect(broker.liveCount).toBe(0);
     expect(provider.events).toEqual([]);
   });
 
   /**
-   * TD-021 mints with `expires_at` tomorrow, so a run that never started would otherwise leave a
-   * live push token for a day. The revocation is in the failure path, and this is the assertion:
-   * the second `startRun` for the same run id fails inside `create` — after the mint — and the
-   * credential must not survive it.
+   * A run that never started must not leave the credential answerable: the second `startRun` for
+   * the same run id fails inside `create`, and the broker has forgotten the value — the runner,
+   * which sees the create fail, revokes it at the provider (TD-028's WP-76 amendment, decision 5).
    */
-  it('revokes the credential when the workspace cannot be created', async () => {
+  it('forgets the credential when the workspace cannot be created', async () => {
     const spec = workspace.workspaceSpecFixture({ runId: randomUUID() });
-    const request = {
-      project: 'acme/web',
-      host: 'vcs.example.com',
-      branchPatterns: ['agentic/*'],
-      ttlSeconds: 60,
-    } as const;
-    await service.startRun(spec, request);
-    await expect(service.startRun(spec, request)).rejects.toMatchObject({ code: 'invalid_spec' });
-    expect(minted).toBe(2);
-    expect(revoked).toBe(1);
+    const other = workspace.workspaceSpecFixture({ runId: randomUUID() });
+    await service.startRun(other, carried());
+    await service.startRun(spec, carried());
+    await expect(service.startRun(spec, carried())).rejects.toMatchObject({
+      code: 'invalid_spec',
+    });
     expect(broker.answer(spec.runId, 'vcs.example.com')).toBeNull();
+    expect(broker.credentialFor(spec.runId)).toBeNull();
+    // Another run's credential is untouched by this one's failure.
+    expect(broker.credentialFor(other.runId)).not.toBeNull();
   });
 });
 
@@ -184,12 +165,7 @@ describe('startRun', () => {
  * than decorative.
  */
 describe('startRun leaves no container behind on any failure path', () => {
-  const request = {
-    project: 'acme/web',
-    host: 'vcs.example.com',
-    branchPatterns: ['agentic/*'],
-    ttlSeconds: 86_400,
-  } as const;
+  const request = carried();
 
   /**
    * A delegating object rather than a `Proxy`, for the reason recorded below at "destroys the
@@ -256,7 +232,7 @@ describe('startRun leaves no container behind on any failure path', () => {
     // with no grace period, and "the shim exited" is not "the workspace's processes are gone".
     expect(kinds).toEqual(['create', 'stop', 'remove']);
     expect(provider.isRunning(spec.runId)).toBe(false);
-    expect(revoked).toBe(1);
+    expect(broker.credentialFor(spec.runId)).toBeNull();
   });
 
   /**
@@ -270,49 +246,6 @@ describe('startRun leaves no container behind on any failure path', () => {
     await expect(serviceWith(broken).startRun(spec, request)).rejects.toThrow(
       'injected failure in attach',
     );
-  });
-
-  /**
-   * The other half of "quietly": quiet towards the caller, loud towards the operator.
-   *
-   * This revoke is the last thing that can stop the run's git push token — `endRun` takes a handle
-   * this path never returns, and nothing else revokes — so a failure here leaves a **live push
-   * token for the whole TTL** (a day, by TD-021's default) on a run that never started. Round 2
-   * wrote `.catch(() => undefined)` one line above a teardown that logs its own failure.
-   */
-  it('warns when the credential of a failed start cannot be revoked', async () => {
-    const warnings: { fields: LogFields; message: string }[] = [];
-    const logger: Logger = {
-      ...silentLogger,
-      warn: (fields, message) => {
-        warnings.push({ fields, message });
-      },
-    };
-    const spec = workspace.workspaceSpecFixture({ runId: randomUUID() });
-    const { provider: broken } = failingAtStep(provider, 3);
-    const service = new LauncherService({
-      provider: broken,
-      broker: new workspace.RunCredentialBroker({
-        mint: credentials.mint,
-        revoke: async () => {
-          throw new Error('the git host is down');
-        },
-      }),
-      clock,
-      logger,
-      exportDir: path.join(dir, 'exports'),
-      retentionSweepMs: 60_000,
-    });
-
-    // The failure the caller sees is still the one that ended the start.
-    await expect(service.startRun(spec, request)).rejects.toThrow('injected failure in attach');
-    expect(warnings.map((warning) => warning.message)).toEqual([
-      'the credential of a failed start could not be revoked; a push token is live until it expires',
-    ]);
-    expect(warnings[0]?.fields).toEqual({
-      run_id: spec.runId,
-      error: 'Error: the git host is down',
-    });
   });
 
   it('leaves nothing running whichever step fails, for every step it performs', async () => {
@@ -329,7 +262,6 @@ describe('startRun leaves no container behind on any failure path', () => {
     for (let failAt = 1; failAt <= stepCount; failAt += 1) {
       const spec = workspace.workspaceSpecFixture({ runId: randomUUID() });
       const attempt = failingAtStep(provider, failAt);
-      const revokedBefore = revoked;
       const failure = await serviceWith(attempt.provider)
         .startRun(spec, request)
         .then(
@@ -341,8 +273,9 @@ describe('startRun leaves no container behind on any failure path', () => {
       expect(failure).toBeInstanceOf(Error);
       expect((failure as Error).message).toBe(`injected failure in ${attempt.steps()[failAt - 1]}`);
       expect(provider.isRunning(spec.runId)).toBe(false);
-      // The credential is the other thing that outlives a failed start (TD-021 mints it for a day).
-      expect(revoked).toBe(revokedBefore + 1);
+      // The credential is the other thing that outlives a failed start: the launcher forgets it
+      // here and the runner revokes it at the provider (WP-76, decision 5).
+      expect(broker.credentialFor(spec.runId)).toBeNull();
       const kinds = provider.events
         .filter((event) => event.runId === spec.runId)
         .map((event) => event.kind);
@@ -361,12 +294,15 @@ describe('startRun leaves no container behind on any failure path', () => {
 describe('endRun — the container stop happens on every path (WP-13 obligation 3)', () => {
   const exportRequest = { branch: 'agentic/task-1', commitMessage: 'wip:', tarball: true } as const;
 
-  it('exports, revokes and destroys, in that order', async () => {
+  it('exports with the held credential, forgets it and destroys, in that order', async () => {
     const { started } = await start();
+    const exported = vi.spyOn(provider, 'export');
     const ended = await service.endRun(started.handle, { export: exportRequest });
     expect(ended.failures).toEqual([]);
     expect(ended.exported?.pushed).toBe(true);
-    expect(revoked).toBe(1);
+    // The export pushed with the run's own credential, and it is gone afterwards.
+    expect(exported.mock.calls[0]?.[2]?.password).toBe(`${SECRET}-1`);
+    expect(broker.credentialFor(started.handle.runId)).toBeNull();
     expect(provider.isRunning(started.handle.runId)).toBe(false);
     const kinds = provider.events.map((event) => event.kind);
     expect(kinds.indexOf('export')).toBeLessThan(kinds.indexOf('remove'));
@@ -402,28 +338,6 @@ describe('endRun — the container stop happens on every path (WP-13 obligation 
     expect(ended.failures[0]).toContain('the git host is down');
     // The point of the whole work package: the shim signals one pid, so only the container's pid
     // namespace ending takes a detached grandchild with it.
-    expect(provider.isRunning(started.handle.runId)).toBe(false);
-  });
-
-  it('destroys the workspace even when the revocation throws', async () => {
-    const failing: workspace.RunCredentialSource = {
-      mint: credentials.mint,
-      async revoke() {
-        throw new Error('gitlab is down');
-      },
-    };
-    broker = new workspace.RunCredentialBroker(failing, silentLogger);
-    service = new LauncherService({
-      provider,
-      broker,
-      clock,
-      logger: silentLogger,
-      exportDir: path.join(dir, 'exports'),
-      retentionSweepMs: 60_000,
-    });
-    const { started } = await start();
-    const ended = await service.endRun(started.handle, { export: null });
-    expect(ended.failures[0]).toContain('gitlab is down');
     expect(provider.isRunning(started.handle.runId)).toBe(false);
   });
 
@@ -574,12 +488,7 @@ describe('retention sweep', () => {
       runId: randomUUID(),
       keepUntil: '1969-01-01T00:00:00.000Z',
     });
-    const started = await service.startRun(spec, {
-      project: 'acme/web',
-      host: 'vcs.example.com',
-      branchPatterns: ['agentic/*'],
-      ttlSeconds: 60,
-    });
+    const started = await service.startRun(spec, carried());
     await service.endRun(started.handle, { export: null });
 
     service.startRetentionSweep();

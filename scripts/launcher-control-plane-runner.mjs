@@ -70,8 +70,22 @@ const projectSource = {
   }),
 };
 
+/**
+ * The check's run is read-only against an anonymous `git://` fixture, so it asks for a `read`
+ * credential and is told there is none — the path a public repository takes (TD-028's WP-76
+ * amendment, decision 6): the create carries `credential: null` and the mirror fetch is anonymous.
+ * A minted credential against a credentialled server is `docker-workspace.e2e.test.ts`'s (WP-76).
+ */
+const credentials = {
+  mint: async () => ({
+    kind: 'unavailable',
+    reason: 'this check runs a read-only spec against an anonymous git:// fixture',
+  }),
+};
+
 const provisioner = launcherAdapters.createLauncherRunWorkspaceProvisioner({
   client,
+  credentials,
   projects: projectSource,
   controlRoot: CONTROL_ROOT,
   // No model host: the CLI is a local executable in the run container, so the allow-list is exactly
@@ -117,7 +131,7 @@ const report = {
   workdir: null,
   checkoutBranch: null,
   egressHosts: null,
-  credentialMinted: null,
+  credentialScope: undefined,
   replayed: null,
   replayedHandleMatches: null,
   spawnCommand: null,
@@ -205,7 +219,7 @@ try {
   report.socketPath = created?.response.attachment.socketPath ?? null;
   report.checkoutBranch = created?.spec.repo?.checkoutBranch ?? null;
   report.egressHosts = created?.spec.egress.hosts ?? null;
-  report.credentialMinted = created?.response.credentialMinted ?? null;
+  report.credentialScope = created?.response.credentialScope;
 
   /**
    * 4. TD-028 decision 4, against a real daemon: a second `create` for a run that already has a
@@ -234,6 +248,7 @@ try {
   if (badUrl !== undefined && badUrl.length > 0) {
     const badProvisioner = launcherAdapters.createLauncherRunWorkspaceProvisioner({
       client: launcherAdapters.createLauncherControlClient({ baseUrl: badUrl, token, logger }),
+      credentials,
       projects: projectSource,
       controlRoot: CONTROL_ROOT,
       modelEgressHosts: [],

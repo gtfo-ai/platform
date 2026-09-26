@@ -128,23 +128,33 @@ const workspaceExportSchema: z.ZodType<WorkspaceExport> = z.strictObject({
 // ── Requests ─────────────────────────────────────────────────────────────────
 
 /**
- * What the run needs from the git provider, beyond the spec — `LauncherService`'s
- * `RunCredentialRequest`, restated as a boundary schema.
+ * The run's git credential, **minted by the runner and carried to the launcher** — TD-028's WP-76
+ * amendment (2026-09-25), decision 3.
  *
- * The launcher **mints** through its own `RunCredentialSource`; the caller says what to mint for.
- * That is the direction TD-021 puts the Docker socket in and BD-002 puts a secret in: the runner
- * never holds a credential it did not need, and the launcher never invents a scope.
+ * This read *"The launcher **mints** through its own `RunCredentialSource`; the caller says what to
+ * mint for"* until WP-76, and the launcher could not: it holds no binding, no `APP_SECRET_KEY` and
+ * no database (TD-021), so its source refused and every writing run failed terminally at
+ * `startRun` (PROGRESS backlog 133). The second clause survives — **the scope is still decided
+ * platform-side**, by the spec's `readOnly` — and the first is reversed: the runner mints through
+ * `IntegrationActionExecutor` (one audit row per mint and per revoke, keyed by the git binding) and
+ * sends the material here.
+ *
+ * What that costs, stated rather than implied: **the runner holds the token for the life of the
+ * run**, not of one request — it answers the workspace's `cred.get` from its own copy and revokes
+ * after `endRun` returns — and the token crosses this hop, the same `internal: true`, authenticated
+ * network the run token already crosses the other way (`workspaceAttachmentSchema`). No `revokeId`
+ * travels: the launcher cannot use one. Neither end logs a body.
  */
-export const runCredentialRequestSchema = z.strictObject({
-  project: nonEmptyStringSchema.max(512),
+export const runCredentialSchema = z.strictObject({
+  /** The git host the credential is for. Lowercase, no port — {@link egressHostSchema}'s form. */
   host: nonEmptyStringSchema.max(253),
-  branchPatterns: z.array(nonEmptyStringSchema.max(255)).max(32),
-  ttlSeconds: z
-    .int()
-    .min(60)
-    .max(7 * 24 * 60 * 60),
+  username: nonEmptyStringSchema.max(255),
+  /** The secret. Standing rule 18: `nonEmptyStringSchema` refuses empty and blank. */
+  password: nonEmptyStringSchema.max(4_096),
+  scope: z.enum(['read', 'push']),
+  expiresAt: isoDateTimeSchema,
 });
-export type RunCredentialRequestPayload = z.infer<typeof runCredentialRequestSchema>;
+export type RunCredentialPayload = z.infer<typeof runCredentialSchema>;
 
 /**
  * `POST /v1/runs`.
@@ -153,23 +163,57 @@ export type RunCredentialRequestPayload = z.infer<typeof runCredentialRequestSch
  * `projects.repo_url`, the run's own tool policy and instance configuration, none of which the
  * launcher has (`compose.yml`'s launcher service joins neither the default network nor `db`).
  * `buildWorkspaceSpec` is the derivation and this is its first production consumer.
+ *
+ * The credential rules are TD-028's WP-76 amendment (decisions 3 and 6), refused here — on both
+ * ends, because both parse this schema — rather than reconciled:
+ *
+ *  - **no repository, no credential** (WP-74): a run with no checkout makes no mirror fetch and no
+ *    push;
+ *  - **a writing spec must carry one**: a binding that cannot mint refuses the run in the runner,
+ *    before this request exists, and never substitutes its own token;
+ *  - **a read-only spec carries a `read` credential or none** — none is an anonymous fetch, right
+ *    for a public repository — and a **`push` credential on a read-only spec is refused** (BD-021);
+ *  - **the credential names the spec's git host**, one of `spec.egress.hosts`, so the host the
+ *    workspace's `cred.get` is answered for is a host the run may reach at all;
+ *  - **the password is in no `spec.env` value** — the one carrier into the run container's
+ *    environment a caller controls. `#gitCredentialEnv` keeps the helpers' copy out of the run
+ *    container; this keeps the spec's.
  */
 export const createRunRequestSchema = z
   .strictObject({
     spec: workspaceSpecSchema,
-    /**
-     * `null` exactly when `spec.repo` is `null` (WP-74): a run with no checkout makes no mirror
-     * fetch and no push, so the runner does not **ask** for a credential and the launcher does not
-     * mint one. Refused in both mixed shapes rather than reconciled — a repo-ful spec with no
-     * credential request is a caller that forgot, and a repo-less spec with one is a caller asking
-     * the launcher to mint a token nothing will use.
-     */
-    credential: runCredentialRequestSchema.nullable(),
+    credential: runCredentialSchema.nullable(),
   })
-  .refine((request) => (request.spec.repo === null) === (request.credential === null), {
-    message:
-      'a credential request is sent exactly when the spec has a repository: null with null, an object with an object',
-    path: ['credential'],
+  .superRefine((request, context) => {
+    const { spec, credential } = request;
+    const refuse = (message: string): void => {
+      context.addIssue({ code: 'custom', message, path: ['credential'] });
+    };
+    if (spec.repo === null) {
+      if (credential !== null) {
+        refuse('a spec with no repository carries no credential: nothing will fetch or push');
+      }
+      return;
+    }
+    if (credential === null) {
+      if (!spec.readOnly) {
+        refuse(
+          'a spec that writes must carry a run credential; a binding that cannot mint refuses the run before it is created',
+        );
+      }
+      return;
+    }
+    if (spec.readOnly && credential.scope === 'push') {
+      refuse('a read-only spec may carry a read credential or none, never a push one (BD-021)');
+    }
+    if (!spec.egress.hosts.includes(credential.host)) {
+      refuse('the credential names a host that is not one of the spec’s egress hosts');
+    }
+    if (Object.values(spec.env).some((value) => value.includes(credential.password))) {
+      refuse(
+        'the credential appears in the spec’s container environment, which the agent can read',
+      );
+    }
   });
 export type CreateRunRequestPayload = z.infer<typeof createRunRequestSchema>;
 
@@ -208,8 +252,12 @@ export const createRunResponseSchema = z.strictObject({
    * puts it on the spec (`workspace-runner.ts` substitutes it beside `workspacePath`).
    */
   claudeCodePath: nonEmptyStringSchema.max(4_096),
-  /** Whether a run-scoped git credential was minted. `false` for a read-only run (BD-021). */
-  credentialMinted: z.boolean(),
+  /**
+   * The scope of the run credential the launcher **holds** for this run, or `null` when it holds
+   * none — a repo-less run, or a read-only one that fetches anonymously. It minted nothing: the
+   * runner did, and sent it (WP-76). Never the credential.
+   */
+  credentialScope: z.enum(['read', 'push']).nullable(),
   /** `true` when this create answered a handle it had already made (TD-028 decision 4). */
   replayed: z.boolean(),
 });

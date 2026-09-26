@@ -12,48 +12,21 @@
  * this file is excluded from coverage the way `apps/runlet/src/index.ts` and
  * `apps/server/src/migrate.ts` are.
  *
- * It has no credential source, and says so rather than inventing one: minting a run-scoped git token
- * is `GitProviderPort.mintCredential`, which the **server** composes through
- * `IntegrationActionExecutor` (shadow mode, idempotency, audit), and this process holds no
- * integration binding, no secret key and no database connection to read one with. So a launcher
- * started on its own refuses to mint rather than pretending a run is credentialled, and a run that
- * needs a git write credential fails at `startRun` with that refusal by name.
- *
- * **That is a real gap and WP-53 states it rather than closing it** (TD-028 answered the transport,
- * not the credential): a read-only stage runs end to end here, and a writing stage cannot push. The
- * shapes available are a `RunCredentialSource` that calls **back** to the platform over the control
- * plane, or a credential minted by the platform and carried on the create request; both put a git
- * token somewhere it is not today, which is a decision above this file. It is reported as discovered
- * work rather than chosen here.
+ * It mints nothing, and that is the design rather than a gap (TD-028's WP-76 amendment, closing
+ * PROGRESS backlog 133). Minting a run-scoped git token is `GitProviderPort.mintCredential`, a
+ * mutation keyed by a binding, and this process holds no integration binding, no secret key and no
+ * database connection to read one with (TD-021). So the **runner** mints through
+ * `IntegrationActionExecutor` and carries the value on the create request; this process holds it in
+ * its `RunCredentialBroker` for the mirror fetch and the take-over export push, and forgets it at
+ * the end of the run. Until WP-76 it composed a credential source that refused by name, citing Q52,
+ * and every writing run failed at `startRun`.
  */
 import process from 'node:process';
-import { WorkspaceError } from '@platform/application';
-import type { workspace } from '@platform/infrastructure';
 import { startLauncher } from './runtime.js';
-
-/**
- * The credential source of a launcher with no git provider wired to it.
- *
- * It refuses; it does not return an empty credential. Standing rule 18 — an empty credential is not
- * a credential, and a `''` here would produce a workspace whose pushes fail with an authentication
- * error nobody can trace back to configuration.
- */
-const unwiredCredentials: workspace.RunCredentialSource = {
-  async mint() {
-    throw new WorkspaceError(
-      'invalid_spec',
-      'this launcher has no git provider wired to it, so it cannot mint a run credential (Q52)',
-    );
-  },
-  async revoke() {
-    // Nothing was minted, so nothing is revoked. Not an error: `endRun` revokes unconditionally.
-  },
-};
 
 const main = async (): Promise<void> => {
   const runtime = await startLauncher({
     env: process.env,
-    credentials: unwiredCredentials,
     uid: process.getuid?.() ?? -1,
   });
   runtime.logger.info(

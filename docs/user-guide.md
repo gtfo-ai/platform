@@ -334,7 +334,10 @@ nothing is lost and nothing is escalated, but nothing moves either. The platform
 same queue and stop with it, which on such an instance you only meet through a human path: a
 hand-back to a gate stage, or a merge you make by hand.
 Everything around it — intake from a webhook, the board, the commands, the knowledge base, the audit
-and the cost ledger — works either way. What is still missing on *every* instance is the git write
-credential: the launcher has no git provider wired to it, so a read-only stage runs end to end and a
-stage that needs to push fails at start with that refusal by name. The
-[operator guide](operator-guide.md) §1 and §10 say the same thing from the other side.
+and the cost ledger — works either way. A stage that **writes** (implementation, conflict
+resolution, the librarian) also needs the GitLab integration to be allowed to mint short-lived
+tokens (`mint_credentials: true`): the platform gives each run its own token — read-only for a
+read-only stage, never one that pushes for a shadow task — and revokes it when the run ends. Without
+it such a stage fails at start naming the setting, and a read-only stage can check out only a
+repository GitLab serves without authentication. The [operator guide](operator-guide.md) §1 and §10
+say the same thing from the other side.

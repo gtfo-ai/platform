@@ -762,3 +762,236 @@ export const startEgressTarget = async (
     },
   };
 };
+
+/** One request the credentialled git server answered, as it logged it (WP-76). */
+export interface GitServerRequest {
+  readonly method: string;
+  readonly path: string;
+  readonly service: string | null;
+  readonly user: string | null;
+  /** The Basic-auth password the client sent — a minted **fake** value, which is why it is logged. */
+  readonly password: string | null;
+  readonly scope: 'read' | 'push' | null;
+  readonly granted: boolean;
+}
+
+export interface CredentialedGitServer {
+  readonly name: string;
+  /** `http://<name>/acme.git` — the platform's remote for the private project. */
+  readonly repoUrl: string;
+  /** What `cred.get` / a credential names: the container's DNS name on the fixture network. */
+  readonly host: string;
+  /** Makes a value a live credential of `scope`, as the provider's mint does. */
+  grant(value: string, scope: 'read' | 'push'): Promise<void>;
+  /** Makes a value dead, as the provider's revoke does. */
+  revoke(value: string): Promise<void>;
+  requests(): Promise<GitServerRequest[]>;
+  /** The refs of `acme.git`, read on the server's own disk. */
+  refs(): Promise<string>;
+  stop(): Promise<void>;
+}
+
+/**
+ * The server's program — `git http-backend` behind Basic auth, **refusing anonymous access**.
+ *
+ * Standing rule 82: a fixture that accepts any password proves nothing about a credential, so this
+ * one reads the credential on every request: the password must be a value the test *granted*
+ * (`/tmp/tokens.json`, re-read per request so a revoke takes effect at once), and its scope decides
+ * the service — `read` may fetch and is refused `git-receive-pack` with **403**, GitLab's answer for
+ * a token without `write_repository`; no password, or one that is not live, is **401**. Every request
+ * is logged with the password it carried, so a test can assert *which* credential reached the
+ * remote and *which* path it pushed to.
+ */
+const GIT_SERVER_PROGRAM = String.raw`
+const http = require('node:http');
+const fs = require('node:fs');
+const { spawn } = require('node:child_process');
+http.createServer((req, res) => {
+  const url = new URL(req.url, 'http://fixture');
+  const service = url.searchParams.get('service') ??
+    (url.pathname.endsWith('/git-receive-pack') ? 'git-receive-pack'
+      : url.pathname.endsWith('/git-upload-pack') ? 'git-upload-pack' : null);
+  const header = req.headers.authorization ?? '';
+  let user = null;
+  let password = null;
+  if (header.startsWith('Basic ')) {
+    const decoded = Buffer.from(header.slice(6), 'base64').toString('utf8');
+    const colon = decoded.indexOf(':');
+    user = decoded.slice(0, colon);
+    password = decoded.slice(colon + 1);
+  }
+  let tokens = {};
+  try { tokens = JSON.parse(fs.readFileSync('/tmp/tokens.json', 'utf8')); } catch {}
+  const scope = password !== null && Object.hasOwn(tokens, password) ? tokens[password] : null;
+  const needed = service === 'git-receive-pack' ? 'push' : 'read';
+  const granted = scope === 'push' || (scope === 'read' && needed === 'read');
+  fs.appendFileSync('/tmp/access.log', JSON.stringify({
+    method: req.method, path: url.pathname, service, user, password, scope, granted,
+  }) + '\n');
+  if (!granted) {
+    if (scope === null) {
+      res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="e2e"' });
+      res.end('authentication required');
+    } else {
+      res.writeHead(403);
+      res.end('You are not allowed to push code to this project.');
+    }
+    return;
+  }
+  const child = spawn('git', ['http-backend'], {
+    env: {
+      PATH: process.env.PATH,
+      GIT_PROJECT_ROOT: '/tmp/srv',
+      GIT_HTTP_EXPORT_ALL: '1',
+      PATH_INFO: url.pathname,
+      QUERY_STRING: url.search.slice(1),
+      REQUEST_METHOD: req.method,
+      CONTENT_TYPE: req.headers['content-type'] ?? '',
+      HTTP_CONTENT_ENCODING: req.headers['content-encoding'] ?? '',
+      GIT_PROTOCOL: req.headers['git-protocol'] ?? '',
+      REMOTE_USER: user ?? 'anonymous',
+      REMOTE_ADDR: '127.0.0.1',
+    },
+  });
+  req.pipe(child.stdin);
+  let head = Buffer.alloc(0);
+  let sent = false;
+  child.stdout.on('data', (chunk) => {
+    if (sent) { res.write(chunk); return; }
+    head = Buffer.concat([head, chunk]);
+    const end = head.indexOf('\r\n\r\n');
+    if (end === -1) return;
+    const lines = head.subarray(0, end).toString('utf8').split('\r\n');
+    let status = 200;
+    const headers = {};
+    for (const line of lines) {
+      const colon = line.indexOf(':');
+      const key = line.slice(0, colon).trim();
+      const value = line.slice(colon + 1).trim();
+      if (key.toLowerCase() === 'status') status = Number.parseInt(value, 10);
+      else headers[key] = value;
+    }
+    res.writeHead(status, headers);
+    sent = true;
+    res.write(head.subarray(end + 4));
+  });
+  child.stdout.on('end', () => res.end());
+  child.stderr.on('data', (chunk) => process.stderr.write(chunk));
+}).listen(80);
+`;
+
+/**
+ * A **credentialled** HTTP git server on the fixture network — WP-76 criterion (6), standing
+ * rule 82's server that actually reads the credential.
+ *
+ * `platform-runtime` rather than a purpose-built image: it has `node` and `git` (`git http-backend`
+ * is part of Debian's `git`), and it is already on the daemon, so nothing is pulled. It listens on
+ * port 80 as root inside its own container, which nothing else here does; the run and helper
+ * containers are the subjects, and this is the remote.
+ */
+export const startCredentialedGitServer = async (
+  fixture: DockerFixture,
+): Promise<CredentialedGitServer> => {
+  const name = `agentic-e2e-githttp-${uniqueSuffix()}`;
+  const seed = [
+    'set -e',
+    'export HOME=/tmp',
+    'mkdir -p /tmp/srv /tmp/seed',
+    `${VCS} init -q --bare --initial-branch=main /tmp/srv/acme.${VCS}`,
+    `${VCS} init -q --bare --initial-branch=main /tmp/srv/evil.${VCS}`,
+    `${VCS} -C /tmp/srv/acme.${VCS} config http.receivepack true`,
+    `${VCS} -C /tmp/srv/evil.${VCS} config http.receivepack true`,
+    'cd /tmp/seed',
+    `${VCS} init -q --initial-branch=main`,
+    `${VCS} config user.email fixture@example.invalid`,
+    `${VCS} config user.name fixture`,
+    'printf "# fixture repository\\n" > README.md',
+    `${VCS} add -A`,
+    `${VCS} commit -q -m fixture`,
+    `${VCS} push -q /tmp/srv/acme.${VCS} main`,
+    'printf "{}" > /tmp/tokens.json',
+    ': > /tmp/access.log',
+    'exec node -e "$SERVER"',
+  ].join('\n');
+  await docker([
+    'run',
+    '-d',
+    '--name',
+    name,
+    '--network',
+    fixture.network,
+    '--user',
+    '0:0',
+    '-e',
+    `SERVER=${GIT_SERVER_PROGRAM}`,
+    '--entrypoint',
+    'sh',
+    RUNTIME_IMAGE,
+    '-c',
+    seed,
+  ]);
+  const exec = async (script: string) =>
+    docker(['exec', name, 'sh', '-c', script], { allowFailure: false });
+  const readTokens = async (): Promise<Record<string, string>> =>
+    JSON.parse((await exec('cat /tmp/tokens.json')).stdout) as Record<string, string>;
+  const writeTokens = async (tokens: Record<string, string>) => {
+    const encoded = Buffer.from(JSON.stringify(tokens), 'utf8').toString('base64');
+    await exec(`printf %s '${encoded}' | base64 -d > /tmp/tokens.json`);
+  };
+  const server: CredentialedGitServer = {
+    name,
+    host: name,
+    repoUrl: `http://${name}/acme.${VCS}`,
+    grant: async (value, scope) => writeTokens({ ...(await readTokens()), [value]: scope }),
+    revoke: async (value) => {
+      const tokens = await readTokens();
+      delete tokens[value];
+      await writeTokens(tokens);
+    },
+    requests: async () =>
+      (await exec('cat /tmp/access.log')).stdout
+        .split('\n')
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line) as GitServerRequest),
+    refs: async () =>
+      (await exec(`${VCS} --git-dir=/tmp/srv/acme.${VCS} for-each-ref --format='%(refname)'`))
+        .stdout,
+    stop: async () => {
+      await docker(['rm', '-f', '-v', name], { allowFailure: true });
+    },
+  };
+  // Up when an anonymous request is answered 401 — the refusal is the readiness signal, and a
+  // server that answered 200 here would be the fixture this function exists not to be.
+  const deadline = Date.now() + 60_000;
+  for (;;) {
+    const probe = await docker(
+      [
+        'run',
+        '--rm',
+        '--network',
+        fixture.network,
+        '--entrypoint',
+        VCS,
+        GIT_IMAGE,
+        'ls-remote',
+        server.repoUrl,
+      ],
+      { allowFailure: true },
+    );
+    if (/401|Authentication failed|could not read Username/i.test(probe.stderr)) {
+      return server;
+    }
+    if (probe.ok) {
+      await server.stop();
+      throw new Error('the credentialled git server answered an anonymous ls-remote');
+    }
+    if (Date.now() > deadline) {
+      const logs = await docker(['logs', name], { allowFailure: true });
+      await server.stop();
+      throw new Error(
+        `the credentialled git server never came up: ${probe.stderr}\n${logs.stderr}`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+};

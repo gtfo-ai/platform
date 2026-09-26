@@ -23,8 +23,6 @@ export interface LauncherRuntime {
 
 export interface BuildLauncherOptions {
   readonly env: Record<string, string | undefined>;
-  /** The credential source the broker mints through. The server wires GitLab's here. */
-  readonly credentials: workspace.RunCredentialSource;
   /** `process.getuid()` in production. Q51: the runner and the run container share uid 1000. */
   readonly uid: number;
   readonly logger?: Logger;
@@ -109,7 +107,8 @@ export const buildLauncher = (options: BuildLauncherOptions): LauncherRuntime =>
   });
   const service = new LauncherService({
     provider,
-    broker: new workspace.RunCredentialBroker(options.credentials, logger),
+    // A holder, not a source (WP-76): the runner mints, the create request carries the value.
+    broker: new workspace.RunCredentialBroker(logger),
     clock: launcherClock,
     logger,
     exportDir: config.exportDir,

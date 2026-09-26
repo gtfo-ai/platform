@@ -274,7 +274,64 @@ export interface MutatingActionRequest<TResult> extends BaseActionRequest<TResul
   shadowResult(): TResult;
   /** The evidence recorded in the audit row (BD-003). Must contain no secret. */
   describeResult(result: TResult): JsonObject | null;
+  /**
+   * **The run-credential carve-out of shadow mode** — Q98 (a), WP-76. Absent for every other request.
+   *
+   * A shadow run still needs its checkout, and a private repository's mirror fetch needs a
+   * credential: without this a shadow task could run only on a public repository. So two
+   * mutations reach the provider for a shadow task, and nothing else it asks for does:
+   *
+   *  - **`mint_credential` with a `read` scope** — the one widening, and the narrowest one that gives
+   *    a shadow run its checkout;
+   *  - **`revoke_credential` of any scope** — revoking only removes access, so it is the one mutation
+   *    shadow mode must never suppress: a provider that answered a shadow task's `read` request with
+   *    a `push` token (WP-76 review round 2, measured) must still have that token revoked, and a
+   *    `would_have` there would leave it live for a day or two.
+   *
+   * It is a carve-out stated on the request and checked here rather than a request mislabelled
+   * `mutating: false`: the audit row still says a mutation was performed (`ok`, the task's mode in
+   * the caller's payload). The executor does not take the flag's word for it — {@link
+   * assertShadowCarveOut} requires one of those two shapes and no idempotency plan, and **refuses** a
+   * declaration on anything else in **every** mode, before anything is sent or recorded
+   * (`action-executor.test.ts` drives each refusal in both modes).
+   */
+  readonly shadowCarveOut?: typeof SHADOW_RUN_CREDENTIAL_CARVE_OUT;
 }
+
+/** The value of {@link MutatingActionRequest.shadowCarveOut}; there is exactly one (Q98 (a)). */
+export const SHADOW_RUN_CREDENTIAL_CARVE_OUT = 'run_credential' as const;
+
+/**
+ * Is a declared carve-out one of its two shapes? Checked in **every** mode, so a declaration on a
+ * `push` mint or on another action is a refusal whether or not the task is a shadow one.
+ *
+ * `false` for a request that declares none. A request that declares it and does not meet it is
+ * refused (`invalid_request`, no audit row — nothing provider-facing happened, the rule
+ * `assertActionName` follows).
+ */
+const assertShadowCarveOut = <TResult>(request: MutatingActionRequest<TResult>): boolean => {
+  if (request.shadowCarveOut === undefined) {
+    return false;
+  }
+  const shape =
+    request.action === 'mint_credential'
+      ? request.payload['scope'] === 'read'
+      : request.action === 'revoke_credential';
+  const meets =
+    request.shadowCarveOut === SHADOW_RUN_CREDENTIAL_CARVE_OUT &&
+    shape &&
+    request.idempotency === undefined;
+  if (!meets) {
+    throw new IntegrationError(
+      'invalid_request',
+      request.integration?.provider,
+      `mutating action "${request.action}" declares the shadow carve-out, which covers only a ` +
+        'read-scoped mint_credential or a revoke_credential, with no idempotency key (Q98 (a))',
+      { action: request.action },
+    );
+  }
+  return true;
+};
 
 export type IntegrationActionRequest<TResult> =
   | ReadActionRequest<TResult>
@@ -829,7 +886,11 @@ export const createIntegrationActionExecutor = (
     //     the request, never defaulted — `MutatingActionRequest` makes it required — and then
     //     *parsed*, so that neither an omission nor a mis-spelling at an untyped call site can
     //     skip this branch.
-    if (request.mutating && requireMutatingMode(request) === 'shadow') {
+    //     The exception is Q98 (a)'s run credential — a read-scoped mint, and every revoke —
+    //     declared on the request and checked by `assertShadowCarveOut` **before** the mode is
+    //     read, so a malformed declaration is refused in a normal task too.
+    const carvedOut = request.mutating && assertShadowCarveOut(request);
+    if (request.mutating && requireMutatingMode(request) === 'shadow' && !carvedOut) {
       const result = request.shadowResult();
       await record(
         buildEntry(request, {

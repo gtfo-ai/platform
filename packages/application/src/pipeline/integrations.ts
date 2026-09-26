@@ -29,11 +29,16 @@
  */
 import type { Id, JsonObject, TaskMode } from '@platform/contracts';
 import { assertOutsideTransaction } from '../events/open-transaction.js';
-import type {
-  IdempotencyPlan,
-  IntegrationActionExecutor,
+import {
+  type IdempotencyPlan,
+  type IntegrationActionExecutor,
+  SHADOW_RUN_CREDENTIAL_CARVE_OUT,
 } from '../integrations/action-executor.js';
-import type { InjectedSecret } from '../integrations/redaction.js';
+import {
+  exactSecretRedactor,
+  type InjectedSecret,
+  MIN_SECRET_LENGTH,
+} from '../integrations/redaction.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type { IntegrationRef } from '../ports/integrations/common.js';
 import type {
@@ -47,12 +52,14 @@ import type {
   CodeownersRules,
   CommitAction,
   CommitRef,
+  CredentialScope,
   Discussion,
   FileDiff,
   GitProviderPort,
   MergedMergeRequest,
   MergeRequest,
   MergeRequestRefInput,
+  MintedCredential,
   PipelineStatus,
   RepositoryCommit,
 } from '../ports/integrations/git-provider.js';
@@ -184,10 +191,13 @@ export interface IntegrationCallScope {
 /**
  * The scope of a call that is **not** inside a run, written out rather than defaulted.
  *
- * Every pipeline call site uses this today, and that is a statement about the build rather than
- * about the design: nothing on the pipeline's path holds a minted credential, because the runner
- * reaches the launcher's broker through a transport that does not exist yet (Q52). The moment one
- * does, the call sites that are inside a run are the ones that stop calling this.
+ * Every call site in this ring uses this, and since WP-76 that is a statement about *where* the
+ * run's credential lives rather than about whether one exists: the runner mints one per run with a
+ * checkout, and the one call made with a run's scope is its **revocation**
+ * (`apps/server/src/workspaces.ts`). Everything here runs in a job or a handler after the run, and
+ * what reaches it instead is the composition root's process-wide registry of the credentials that
+ * process minted, composed into each binding's platform redactor — which is out of reach of a
+ * process that did not mint (PROGRESS backlog 154).
  */
 export const noRunScopedSecrets = (): IntegrationCallScope => ({ runScopedSecrets: [] });
 
@@ -701,10 +711,12 @@ export const ticketWrites = (integrations: PipelineIntegrations) => ({
    * than what it sends, and doing it at the call means a second caller cannot forget it. The
    * redactor is the **task-management** binding's — TD-012 step 1 over that binding's own
    * credentials, then step 2's patterns — and the residual is the one Q55 leaves everywhere outside
-   * a run: this job holds no run-scoped secret set. On this build a lint run mints none, for the
-   * same measured reason a review-only run does not (`TOOLS_BY_ROLE.product_manager` is
-   * `['Read','Glob','Grep']`, so `runIsReadOnly` is true and `RunCredentialBroker.issue` answers
-   * `null` without calling the source).
+   * a run: this job holds no run-scoped secret set of its own. Since WP-76 a lint run **is** minted
+   * a credential — a `read` one, because `TOOLS_BY_ROLE.product_manager` is `['Read','Glob','Grep']`
+   * and `runIsReadOnly` is true — and it is revoked when the run ends; the composition root's
+   * platform redactor carries the run-scoped secrets **its own process** minted, so the residual is
+   * a deployment whose outbound job runs in a process that did not mint (PROGRESS backlog 154), and
+   * what it could leak there is a revoked read token.
    *
    * `idempotencyKey` is the caller's and identifies *the lint*, not the wake-up: product/19 § 17
    * says the comment is never re-posted, so a redelivery **and** a re-run of the stage must both
@@ -1094,15 +1106,17 @@ export const knowledgeWrites = (integrations: PipelineIntegrations) => ({
  * secret set: it runs after the run, in a process that may not be the one that held it (Q55's
  * unfinished half).
  *
- * **On this build that set is empty for a review, so there is nothing to leak.** The chain is
- * `packages/infrastructure/src/workspace/spec.test.ts` § "is none for a review-only run":
- * `REVIEW_ONLY_TEMPLATE`'s one agent stage is the reviewer's, `TOOLS_BY_ROLE.reviewer` has neither
- * `Write` nor `Edit` (it gained `Bash` at WP-54, which `runIsReadOnly` does not read), so
- * `runIsReadOnly` is true, the workspace is read-only, and
- * `RunCredentialBroker.issue` answers `null` **without calling the credential source** (BD-021) —
- * and `apps/launcher` has no other source to mint from (Q52). The residual is therefore narrower
- * than round 1 stated: it is not "a review's threads can carry the run's token", it is "the day a
- * role both mints a credential and posts provider text, this call site will need the run's scope".
+ * **Since WP-76 that set is not empty for a review, and this sentence said it was.** The chain is
+ * `packages/infrastructure/src/workspace/spec.test.ts` § "is at most a read credential for a
+ * review-only run": `REVIEW_ONLY_TEMPLATE`'s one agent stage is the reviewer's,
+ * `TOOLS_BY_ROLE.reviewer` has neither `Write` nor `Edit` (it gained `Bash` at WP-54, which
+ * `runIsReadOnly` does not read), so the run is read-only and the runner mints it a **`read`**
+ * credential (TD-028's WP-76 amendment, decision 2) — which its shell can read through the git
+ * credential helper, and which is **revoked when the run ends**, before this job runs. The
+ * composition root composes the run-scoped secrets **its own process** minted into every binding's
+ * platform redactor (`apps/server/src/pipeline.ts`), held until the token expires, so a thread
+ * posted from the process that ran the review has it replaced; one posted from a process that did
+ * not mint does not, and that residual — a revoked read token in a thread — is PROGRESS backlog 154.
  */
 export const reviewWrites = (integrations: PipelineIntegrations) => ({
   /**
@@ -1405,3 +1419,199 @@ export const communicationWrites = (integrations: PipelineIntegrations) => ({
     );
   },
 });
+
+// ── The run's git credential (WP-76, TD-028's WP-76 amendment) ──────────────
+
+/** What one run asks its project's git binding for. */
+export interface RunCredentialRequest {
+  readonly runId: Id;
+  readonly taskId: Id;
+  readonly projectId: Id;
+  /** `tasks.mode` — the task's own, never the run's richer mode (TD-028 amendment decision 1). */
+  readonly mode: TaskMode;
+  /** `push` for a writing run, `read` for a read-only one (decision 2). */
+  readonly scope: CredentialScope;
+  /** BD-025's namespace; empty for a `read` credential, which pushes nothing. */
+  readonly branchPatterns: readonly string[];
+  readonly ttlSeconds: number;
+}
+
+/**
+ * The answer: a credential, or the reason there is none.
+ *
+ * `unavailable` is an **answer**, not a failure — the caller decides what it means: a writing run is
+ * refused on it (decision 6) and a read-only run fetches anonymously. A binding that *fails* to
+ * mint (the provider refused, the network) throws instead, because that is not a fact about the
+ * project's configuration.
+ */
+export type RunCredentialMint =
+  | { readonly kind: 'minted'; readonly credential: MintedCredential; readonly ref: IntegrationRef }
+  | { readonly kind: 'unavailable'; readonly reason: string };
+
+/**
+ * Minting and revoking the run-scoped git credential — **through the executor, keyed by the git
+ * binding, with no idempotency key** (TD-028's WP-76 amendment, decisions 1, 5 and 7).
+ *
+ * No key, because the executor stores a *redacted* result and a replay would answer with
+ * `[REDACTED:…]` where the token was — its own docblock asks exactly this of "a minted credential".
+ * `describeResult` records `scope`, `expires_at` and `revoke_id` — the revocation address a crash
+ * path needs (standing rule 19), which is not secret — and never the value. The payload carries the
+ * run id, so a later sweep can find the row of a run whose process died between mint and revoke.
+ *
+ * **Shadow (Q98 (a), implemented).** A shadow task may mint a **`read`** credential, and **every**
+ * revoke is performed whatever the scope — revoking only removes access (review round 2): both
+ * declare the executor's run-credential carve-out, and the audit row is a performed mutation whose
+ * payload names the task's `shadow` mode. A shadow request to mint `push` is still a `would_have`
+ * with **no** credential (never a fake value — standing rule 18), which the caller sees as
+ * `unavailable`. A revoke that the executor did not perform (`would_have`, or a `false` result) is
+ * a **failure**, never reported as a revocation.
+ */
+/**
+ * A revocation's failure, fit to put in a refusal: redacted against the value just minted — which
+ * neither the binding's scope nor the process registry holds yet on a refusal path — and reduced to
+ * its class name when the value is too short to redact safely.
+ */
+const describeRevokeFailure = (error: unknown, value: string): string => {
+  const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  if (value.length < MIN_SECRET_LENGTH) {
+    return error instanceof Error ? error.name : 'an error';
+  }
+  return exactSecretRedactor([{ name: 'refused_run_credential', value }]).redactText(text).value;
+};
+
+export const runCredentialWrites = (integrations: PipelineIntegrations) => {
+  const writes = {
+    mint: async (request: RunCredentialRequest): Promise<RunCredentialMint> => {
+      const git = integrations.git;
+      if (git === null) {
+        return {
+          kind: 'unavailable',
+          reason: `project ${request.projectId} has no git binding, so no run credential can be minted for it`,
+        };
+      }
+      if (!git.port.capabilities().credentialMinting) {
+        return {
+          kind: 'unavailable',
+          reason:
+            `the git binding ${git.ref.integrationId} (${git.ref.provider}) cannot mint run credentials — ` +
+            'its minting setting is off (GitLab: `mint_credentials: true` on the integration, which needs ' +
+            'project access tokens: GitLab Premium on GitLab.com, any self-managed tier). The binding’s own ' +
+            'token is never sent instead (TD-028, WP-76 amendment decision 6)',
+        };
+      }
+      assertOutsideTransaction('the provider mutation "mint_credential"');
+      const readScoped = request.scope === 'read';
+      const outcome = await integrations.executor.execute<MintedCredential | null>({
+        integration: git.ref,
+        action: 'mint_credential',
+        payload: {
+          project: git.project,
+          scope: request.scope,
+          ttl_seconds: request.ttlSeconds,
+          run_id: request.runId,
+          task_mode: request.mode,
+        },
+        mutating: true,
+        mode: request.mode,
+        projectId: request.projectId,
+        taskId: request.taskId,
+        perform: async () =>
+          git.port.mintCredential({
+            project: git.project,
+            scope: request.scope,
+            ...(readScoped ? {} : { branchPatterns: [...request.branchPatterns] }),
+            ttlSeconds: request.ttlSeconds,
+          }),
+        shadowResult: () => null,
+        describeResult: (minted) =>
+          minted === null
+            ? null
+            : { scope: minted.scope, expires_at: minted.expiresAt, revoke_id: minted.revokeId },
+        ...(readScoped ? { shadowCarveOut: SHADOW_RUN_CREDENTIAL_CARVE_OUT } : {}),
+      });
+      const minted = outcome.result;
+      if (minted === null) {
+        return {
+          kind: 'unavailable',
+          reason: `a shadow task is never given a ${request.scope} credential (Q98 (a) admits only a read-scoped one)`,
+        };
+      }
+      // Standing rule 18: an empty credential is not a credential, and a short one cannot be kept out
+      // of a transcript (`exactSecretRedactor` refuses it). A scope the provider changed is a
+      // provider defect that would hand a read-only run a push token.
+      //
+      // **Revoked before the refusal is thrown** (WP-76 review round 1): the provider has already
+      // created the token, and a refusal that left it would leave a live credential nothing holds, in
+      // no redaction registry, until GitLab's expiry. The revocation runs with the value that was
+      // actually minted, whatever its scope, and a revocation that fails is named in the refusal.
+      if (minted.value.trim().length < MIN_SECRET_LENGTH || minted.scope !== request.scope) {
+        const reason =
+          minted.scope !== request.scope
+            ? `asked for ${request.scope}, got ${minted.scope}`
+            : `its value is shorter than ${MIN_SECRET_LENGTH} characters, so it could not be redacted`;
+        const revocation = await writes.revoke(minted, request).then(
+          () => 'it was revoked',
+          (error: unknown) =>
+            `its revocation failed (${describeRevokeFailure(error, minted.value)}), so it is live until ${minted.expiresAt}`,
+        );
+        throw new Error(
+          `the git binding ${git.ref.integrationId} minted a credential this platform will not use: ${reason}; ${revocation}`,
+        );
+      }
+      return { kind: 'minted', credential: minted, ref: git.ref };
+    },
+
+    /**
+     * Revokes a credential {@link mint} returned. Called **once** per credential by its owner (decision
+     * 5): a per-call adapter has no memory of an earlier revoke, so a second call is `not_found`
+     * rather than a no-op (GitLab divergence 6).
+     */
+    revoke: async (
+      credential: MintedCredential,
+      context: Pick<RunCredentialRequest, 'runId' | 'taskId' | 'projectId' | 'mode'>,
+    ): Promise<void> => {
+      const git = integrations.git;
+      if (git === null) {
+        throw new Error(
+          `project ${context.projectId} has no git binding any more, so run ${context.runId}'s credential cannot be revoked here; it lives until ${credential.expiresAt}`,
+        );
+      }
+      assertOutsideTransaction('the provider mutation "revoke_credential"');
+      const outcome = await integrations.executor.execute<boolean>({
+        integration: git.ref,
+        action: 'revoke_credential',
+        payload: {
+          scope: credential.scope,
+          revoke_id: credential.revokeId,
+          run_id: context.runId,
+          task_mode: context.mode,
+        },
+        mutating: true,
+        mode: context.mode,
+        projectId: context.projectId,
+        taskId: context.taskId,
+        perform: async () => {
+          await git.port.revokeCredential(credential);
+          return true;
+        },
+        // Reached only if the carve-out below stopped applying: `false` is "nothing was revoked",
+        // and the check after this call turns it into a failure rather than a success.
+        shadowResult: () => false,
+        describeResult: (revoked) => ({ revoked, revoke_id: credential.revokeId }),
+        // **Every** revoke declares it, whatever the scope (WP-76 review round 2): revoking only
+        // removes access, so a shadow task's revoke is never suppressed — including the `push`
+        // token a provider handed a shadow task that asked for `read`.
+        shadowCarveOut: SHADOW_RUN_CREDENTIAL_CARVE_OUT,
+      });
+      // A revoke is a success only when the provider was asked and answered: `would_have` or a
+      // `false` result means the token is still live, and saying "revoked" there is the defect
+      // review round 2 measured (0 provider revocations, a refusal that read "it was revoked").
+      if (outcome.status !== 'ok' || outcome.result !== true) {
+        throw new Error(
+          `run ${context.runId}'s credential was not revoked (the executor answered ${outcome.status}); it is live until ${credential.expiresAt}`,
+        );
+      }
+    },
+  };
+  return writes;
+};

@@ -22,7 +22,11 @@
  * erase ordinary text, and the fail-closed answer to "this run has an 8-character credential" is a
  * warning about the credential, not a run that cannot start.
  */
-import { exactSecretRedactor, MIN_SECRET_LENGTH } from '../integrations/redaction.js';
+import {
+  exactSecretRedactor,
+  type InjectedSecret,
+  MIN_SECRET_LENGTH,
+} from '../integrations/redaction.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type { Logger } from '../ports/logger.js';
 import type { RunSpec } from '../ports/runner.js';
@@ -80,4 +84,106 @@ export const injectedSecretRedactorForEnvironment = (
     return [{ name: name.toLowerCase(), value }];
   });
   return exactSecretRedactor(secrets);
+};
+
+/**
+ * The secrets a run was given **after** its redactors were built — TD-028's WP-76 amendment,
+ * decision 8.
+ *
+ * The run's git credential is minted inside `provision`, which runs after the stage executor has
+ * built the redactor it writes the run's prompt columns and — later — its artifact with, so a
+ * redactor that is a closure over the spec cannot hold it. This is a redactor that reads a
+ * **registry** at call time instead: the process that mints registers the value, and every
+ * redactor composed over {@link RunScopedSecrets.redactor} replaces it from that moment on.
+ *
+ * ## Process-wide, and why that is the right width
+ *
+ * It redacts every live run credential this process minted, not only one run's. A value is a
+ * credential whichever run's transcript echoes it, and a narrower scope would need a run id at
+ * every call site that already has a redactor and no run id (the artifact write, the loader's
+ * platform redactor). The placeholder names the run the credential belonged to.
+ *
+ * ## Kept until the credential expires, not until it is revoked
+ *
+ * The workspace is released — and the credential revoked — *before* the stage executor writes the
+ * run's artifact, so forgetting on revoke would let the one structured output that most plausibly
+ * quotes the token be stored unredacted. A revoked token is still a credential-shaped string an
+ * operator must not find in a row, and the entry is a few dozen bytes; it is pruned lazily once the
+ * provider's own expiry has passed.
+ *
+ * ## What it does not reach
+ *
+ * Another **process**: the registry is memory. A `pipeline.outbound` job run by a worker that did
+ * not mint (a `ROLE`-split deployment) does not know the value, so a CI log it reads while the
+ * token is live is redacted only by the pattern rules. Stated, and filed rather than solved here.
+ */
+export interface RunScopedSecrets {
+  /** Registers a value minted for `runId`. Refuses one too short to redact, rather than dropping it. */
+  add(runId: string, value: string, expiresAt: string): void;
+  /** The values registered for one run, named — for `IntegrationCallScope.runScopedSecrets` (Q55). */
+  secretsFor(runId: string): readonly InjectedSecret[];
+  /** A redactor over every live value, read at call time. */
+  readonly redactor: SecretRedactor;
+  /** How many values are held. Diagnostics; never the values. */
+  readonly size: number;
+}
+
+/** The placeholder name a run's git credential is redacted to. Unique per run, by construction. */
+export const runGitCredentialSecretName = (runId: string): string =>
+  `run_git_credential_${runId.toLowerCase()}`;
+
+export const createRunScopedSecrets = (clock: { readonly now: () => number }): RunScopedSecrets => {
+  const held = new Map<
+    string,
+    { readonly runId: string; readonly value: string; readonly until: number }
+  >();
+  const prune = (): void => {
+    const now = clock.now();
+    for (const [key, entry] of held) {
+      if (entry.until <= now) {
+        held.delete(key);
+      }
+    }
+  };
+  const current = (): SecretRedactor => {
+    prune();
+    return exactSecretRedactor(
+      [...held.values()].map((entry) => ({
+        name: runGitCredentialSecretName(entry.runId),
+        value: entry.value,
+      })),
+    );
+  };
+  return {
+    add: (runId, value, expiresAt) => {
+      if (value.length < MIN_SECRET_LENGTH) {
+        throw new TypeError(
+          `run ${runId}'s credential is shorter than ${MIN_SECRET_LENGTH} characters and could not be redacted; it is refused rather than used`,
+        );
+      }
+      const until = Date.parse(expiresAt);
+      // An unreadable expiry keeps the value for a week rather than for nothing: the failure
+      // direction of a redaction registry is "held too long", never "dropped early".
+      held.set(runGitCredentialSecretName(runId), {
+        runId,
+        value,
+        until: Number.isNaN(until) ? clock.now() + 7 * 24 * 60 * 60 * 1_000 : until,
+      });
+    },
+    secretsFor: (runId) => {
+      prune();
+      const entry = held.get(runGitCredentialSecretName(runId));
+      return entry === undefined
+        ? []
+        : [{ name: runGitCredentialSecretName(runId), value: entry.value }];
+    },
+    redactor: {
+      redactText: (text) => current().redactText(text),
+      redactJson: (value) => current().redactJson(value),
+    },
+    get size() {
+      prune();
+      return held.size;
+    },
+  };
 };

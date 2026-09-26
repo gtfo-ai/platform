@@ -53,7 +53,7 @@ const FAKE_CLI = '/repo/test/fixtures/runlet/fake-claude-cli';
 const { buildLauncher } = await import(
   new URL('../apps/launcher/src/runtime.ts', import.meta.url).href
 );
-const { noSecretsRedactor, WorkspaceError } = await import(
+const { noSecretsRedactor } = await import(
   new URL('../packages/application/src/index.ts', import.meta.url).href
 );
 const {
@@ -68,17 +68,6 @@ const logger = {
   info: () => undefined,
   warn: (fields, message) => notes.push(`warn: ${message} ${JSON.stringify(fields)}`),
   error: (fields, message) => notes.push(`error: ${message} ${JSON.stringify(fields)}`),
-};
-
-/** A launcher with no git provider wired to it; the run below is read-only, so nothing asks. */
-const refusingCredentials = {
-  async mint() {
-    throw new WorkspaceError(
-      'invalid_spec',
-      'this check mints no credential: the run is read-only',
-    );
-  },
-  async revoke() {},
 };
 
 const launcher = buildLauncher({
@@ -98,7 +87,6 @@ const launcher = buildLauncher({
     APP_WORKSPACE_EXPORT_DIR: '/tmp/exports',
     APP_WORKSPACE_RETENTION_SWEEP_MS: '3600000',
   },
-  credentials: refusingCredentials,
   /**
    * Q51, and here it is **not** a stand-in: this container runs as root, so the shim's `0600` socket
    * is reachable, and the uid the provider is told about is the uid the *run container* uses. A
@@ -110,7 +98,8 @@ const launcher = buildLauncher({
 
 const runSpec = runnerAdapters.runSpecFixture({
   runId: RUN_ID,
-  // Read-only, so the launcher mints no credential: `runIsReadOnly` reads `tools`.
+  // Read-only, so the run carries no credential (an anonymous fetch of the `git://` fixture):
+  // `runIsReadOnly` reads `tools`, and a read-only spec may carry a read credential or none (WP-76).
   tools: ['Read', 'Grep', 'Glob'],
   // The fake CLI's `result` carries no `structured_output`; asking for an artifact would be a
   // different ending (`error_max_structured_output_retries`) and a different subject.
@@ -138,12 +127,7 @@ let credential = 'not-minted';
 
 const provisioner = {
   provision: async () => {
-    const started = await launcher.service.startRun(workspaceSpec, {
-      project: 'acme/api',
-      host: required('CHECK_REPO_HOST'),
-      branchPatterns: ['agentic/*'],
-      ttlSeconds: 3600,
-    });
+    const started = await launcher.service.startRun(workspaceSpec, null);
     handle = started.handle;
     attachment = started.attachment;
     credential = started.credential === null ? 'none' : 'minted';

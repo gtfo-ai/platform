@@ -211,6 +211,6 @@ Custom project stages (product/04) register handlers on `task.stage.completed` f
 - A task has at most one active run at a time.
 - Iteration counters never exceed their limits without an `task.escalated` event.
 - No run starts when any applicable budget is exhausted; running runs are never killed by org/project budgets (BD-010).
-- Shadow tasks never produce `integration.action.performed` for mutating actions.
+- Shadow tasks never produce `integration.action.performed` for mutating actions — **with one declared exception since WP-76** (Q98 (a), TD-028 decision 7 as superseded): a `read`-scoped git credential mint, which a shadow run needs to fetch a private repository, and a git credential revoke of any scope (revoking only removes access). The carve-out is declared on the request, carries no idempotency key, and is checked in every mode: declared on any other action, or on a mint of any other scope, it is refused.
 - Only events from verified identities can trigger `question.answered`, `approval.decided`, `task.stage.returned` by human, `feedback.received` (BD-022).
 - Artifacts are versioned; a stage re-run creates a new version, never overwrites.

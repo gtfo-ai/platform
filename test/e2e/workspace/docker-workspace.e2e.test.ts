@@ -32,12 +32,26 @@ import { createHash, randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { readFile, rm, symlink } from 'node:fs/promises';
 import path from 'node:path';
+import {
+  allowAnyIntegrationHost,
+  createIntegrationActionExecutor,
+  createMemoryAuditLog,
+  createVirtualTimer,
+  type GitProviderPort,
+  type MintedCredential,
+  noSecretsRedactor,
+  runCredentialWrites,
+} from '@platform/application';
+import type { Id } from '@platform/contracts';
+import { fixedClock } from '@platform/domain';
 import { workspace } from '@platform/infrastructure';
+import { createFakeGitProvider } from '@platform/integrations';
 import { PLATFORM_SKILL_NAMES, PLATFORM_SKILLS } from '@platform/prompts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runWorkspaceProviderContractSuite } from '../../contract/support/workspace/provider-suite.js';
 import {
   ALPINE_IMAGE,
+  type CredentialedGitServer,
   controlSocketExists,
   type DockerFixture,
   docker,
@@ -53,6 +67,7 @@ import {
   RUNTIME_IMAGE,
   relaxControlDirectoryForHost,
   removeControlSocket,
+  startCredentialedGitServer,
   startDockerFixture,
   startEgressTarget,
 } from '../support/docker-workspace.js';
@@ -1621,6 +1636,404 @@ describe('one project’s mirror, not every project’s (WP-75)', () => {
     },
     240_000,
   );
+});
+
+/**
+ * **WP-76 — a minted run credential against a git server that reads it** (TD-028's WP-76
+ * amendment; criteria (3)–(6) and (9); PROGRESS backlog 133 and 152).
+ *
+ * The remote is {@link startCredentialedGitServer}: `git http-backend` behind Basic auth that
+ * **refuses anonymous access** and grants exactly the values the provider minted, by scope. The
+ * credential is minted the production way — `runCredentialWrites` through a real
+ * `IntegrationActionExecutor`, one audit row per mint and per revoke — over `FakeGitProvider`, whose
+ * mint and revoke are mirrored onto the server's token list, so the value the server checks is the
+ * value the provider handed out and nothing a test typed. The launcher's half is the production
+ * `RunCredentialBroker`, holding what the create request would carry.
+ *
+ * Every refusal is paired with the acceptance that differs from it by the credential alone
+ * (standing rule 42): the anonymous mirror fails where the read-credentialled one succeeds, and the
+ * read credential's push is refused where the push credential's lands.
+ */
+describe('a minted run credential against a credentialled git server (WP-76)', () => {
+  const PRIVATE_KEY = 'private';
+  let server: CredentialedGitServer;
+
+  beforeAll(async () => {
+    server = await startCredentialedGitServer(fixture);
+  }, 180_000);
+
+  afterAll(async () => {
+    await server?.stop();
+  }, 60_000);
+
+  /** The provider's mint and revoke, mirrored onto the server's token list. */
+  const minting = () => {
+    const git = createFakeGitProvider({
+      integrationId: '00000000-0000-4000-8000-00000000e761',
+      projects: [{ path: 'acme/api' }],
+    });
+    const port: GitProviderPort = Object.assign(Object.create(git) as GitProviderPort, {
+      mintCredential: async (request: Parameters<GitProviderPort['mintCredential']>[0]) => {
+        const minted = await git.mintCredential(request);
+        await server.grant(minted.value, minted.scope);
+        return minted;
+      },
+      revokeCredential: async (credential: MintedCredential) => {
+        await git.revokeCredential(credential);
+        await server.revoke(credential.value);
+      },
+    });
+    const auditLog = createMemoryAuditLog();
+    const writes = runCredentialWrites({
+      executor: createIntegrationActionExecutor({
+        egress: allowAnyIntegrationHost(),
+        auditLog,
+        redactor: noSecretsRedactor(),
+        timer: createVirtualTimer({ autoAdvance: true }),
+        clock: fixedClock('2026-06-01T09:00:00.000Z', 1000),
+      }),
+      git: { port, ref: git.ref, project: 'acme/api', redactor: noSecretsRedactor() },
+      taskManagement: null,
+      communication: null,
+    });
+    const mint = async (runId: string, scope: 'read' | 'push') => {
+      const answer = await writes.mint({
+        runId: runId as Id,
+        taskId: randomUUID() as Id,
+        projectId: randomUUID() as Id,
+        mode: 'normal',
+        scope,
+        branchPatterns: ['agentic/*'],
+        ttlSeconds: 86_400,
+      });
+      if (answer.kind !== 'minted') {
+        throw new Error(`expected a credential, got ${answer.reason}`);
+      }
+      return answer.credential;
+    };
+    const revoke = async (runId: string, credential: MintedCredential) =>
+      writes.revoke(credential, {
+        runId: runId as Id,
+        taskId: randomUUID() as Id,
+        projectId: randomUUID() as Id,
+        mode: 'normal',
+      });
+    return { git, auditLog, mint, revoke };
+  };
+
+  /** The launcher's broker, holding what the create request carried. */
+  const held = (runId: string, readOnly: boolean, credential: MintedCredential) => {
+    const broker = new workspace.RunCredentialBroker();
+    broker.hold({
+      runId,
+      readOnly,
+      credential: {
+        host: server.host,
+        username: credential.username ?? 'agentic',
+        password: credential.value,
+        scope: credential.scope,
+        expiresAt: credential.expiresAt,
+      },
+    });
+    return broker;
+  };
+
+  const privateSpec = (runId: string, readOnly: boolean) =>
+    workspace.workspaceSpecFixture({
+      runId,
+      readOnly,
+      repo: { url: server.repoUrl, cacheKey: PRIVATE_KEY },
+    });
+
+  /** Plain git in a copy of the run's tree, the run's own mirror mounted — the positive control. */
+  const underPlainGit = async (volume: string, commands: readonly string[]): Promise<void> => {
+    await docker([
+      'run',
+      '--rm',
+      '--network',
+      'none',
+      '--user',
+      '1000:1000',
+      '-e',
+      'HOME=/tmp',
+      '-v',
+      `${volume}:/work`,
+      '--mount',
+      `type=volume,src=${fixture.cacheVolume},dst=/cache/${PRIVATE_KEY}.git,readonly,volume-subpath=${PRIVATE_KEY}.git`,
+      '--entrypoint',
+      'sh',
+      GIT_IMAGE,
+      '-c',
+      [
+        "git config --global --add safe.directory '*'",
+        'git config --global user.email probe@example.invalid',
+        'git config --global user.name probe',
+        'cp -a /work/repo /work/pc && cd /work/pc',
+        ...commands.map((command) => `${command} >/dev/null 2>&1 || true`),
+      ].join('\n'),
+    ]);
+  };
+  const markers = async (volume: string): Promise<string[]> =>
+    (
+      await docker([
+        'run',
+        '--rm',
+        '--network',
+        'none',
+        '-v',
+        `${volume}:/work:ro`,
+        ALPINE_IMAGE,
+        'ls',
+        '-A',
+        '/work',
+      ])
+    ).stdout
+      .split('\n')
+      .filter((name) => name.startsWith('MARK-'));
+
+  it('mirrors a private repository with a minted read credential, and not anonymously', async () => {
+    const runId = randomUUID();
+    const spec = privateSpec(runId, true);
+    const { mint, revoke } = minting();
+    // The refusal first (rule 42): the same fetch with no credential is what a read-only run got
+    // before WP-76 (backlog 133 (2)), and the server refuses it.
+    await expect(
+      fixture.provider.updateMirror({
+        projectId: spec.projectId,
+        repo: spec.repo,
+        credential: null,
+      }),
+    ).rejects.toMatchObject({ code: 'workspace_failed' });
+    const credential = await mint(runId, 'read');
+    const broker = held(runId, true, credential);
+    await expect(
+      fixture.provider.updateMirror({
+        projectId: spec.projectId,
+        repo: spec.repo,
+        credential: broker.credentialFor(runId),
+      }),
+    ).resolves.toMatchObject({ updated: true });
+    const fetched = (await server.requests()).filter(
+      (request) => request.granted && request.service === 'git-upload-pack',
+    );
+    expect(fetched.length).toBeGreaterThan(0);
+    expect(fetched.every((request) => request.password === credential.value)).toBe(true);
+    await revoke(runId, credential);
+  }, 240_000);
+
+  it('refuses the read credential a push, lands the push credential’s branch, and revokes each once', async () => {
+    const { git, auditLog, mint, revoke } = minting();
+    const push = async (scope: 'read' | 'push') => {
+      const runId = randomUUID();
+      const spec = privateSpec(runId, scope === 'read');
+      const credential = await mint(runId, scope);
+      const broker = held(runId, scope === 'read', credential);
+      await fixture.provider.updateMirror({
+        projectId: spec.projectId,
+        repo: spec.repo,
+        credential: broker.credentialFor(runId),
+      });
+      const handle = await fixture.provider.create(spec);
+      try {
+        await plantInWorkspace(
+          fixture,
+          handle.volumeName,
+          'printf "agent work\\n" > /work/repo/AGENT.md',
+        );
+        const branch = `agentic/e2e-${scope}-${runId}`;
+        const result = await fixture.provider.export(
+          handle,
+          { branch, tarballPath: null, commitMessage: 'wip: e2e' },
+          broker.credentialFor(runId),
+        );
+        return { runId, credential, branch, result, handle };
+      } finally {
+        broker.forget(runId);
+        await fixture.provider.destroy(handle);
+        await revoke(runId, credential);
+      }
+    };
+
+    const read = await push('read');
+    expect(read.result.pushed).toBe(false);
+    expect(await server.refs()).not.toContain(read.branch);
+    const refused = (await server.requests()).filter(
+      (request) =>
+        request.password === read.credential.value && request.service === 'git-receive-pack',
+    );
+    expect(refused.length).toBeGreaterThan(0);
+    expect(refused.every((request) => !request.granted && request.scope === 'read')).toBe(true);
+
+    const written = await push('push');
+    expect(written.result.pushed).toBe(true);
+    expect(await server.refs()).toContain(`refs/heads/${written.branch}`);
+
+    // Criteria (2) and (3), counted: one audit row per mint and per revoke, and the provider saw
+    // exactly one revocation of each credential it minted.
+    expect(auditLog.entriesFor('mint_credential')).toHaveLength(2);
+    expect(auditLog.entriesFor('revoke_credential')).toHaveLength(2);
+    expect(git.credentials.map((record) => [record.scope, record.revocations])).toEqual([
+      ['read', 1],
+      ['push', 1],
+    ]);
+    // A revoked credential is refused by the server — the revocation is real, not a flag.
+    const dead = await docker(
+      [
+        'run',
+        '--rm',
+        '--network',
+        fixture.network,
+        '--entrypoint',
+        'git',
+        GIT_IMAGE,
+        'ls-remote',
+        server.repoUrl.replace('http://', `http://oauth2:${written.credential.value}@`),
+      ],
+      { allowFailure: true },
+    );
+    expect(dead.ok).toBe(false);
+  }, 480_000);
+
+  it('keeps the credential out of the run container’s environment and the launcher’s log (criterion 5)', async () => {
+    const runId = randomUUID();
+    const spec = privateSpec(runId, false);
+    const { mint, revoke } = minting();
+    const credential = await mint(runId, 'push');
+    const broker = held(runId, false, credential);
+    const warningsBefore = fixture.warnings.length;
+    await fixture.provider.updateMirror({
+      projectId: spec.projectId,
+      repo: spec.repo,
+      credential: broker.credentialFor(runId),
+    });
+    const handle = await fixture.provider.create(spec);
+    try {
+      const inspected = await docker([
+        'inspect',
+        '--format',
+        '{{json .Config.Env}}',
+        handle.containerId,
+      ]);
+      expect(inspected.stdout).toContain('PATH=');
+      expect(inspected.stdout).not.toContain(credential.value);
+      const exported = await fixture.provider.export(
+        handle,
+        { branch: `agentic/e2e-env-${runId}`, tarballPath: null, commitMessage: 'wip' },
+        broker.credentialFor(runId),
+      );
+      expect(exported.pushed).toBe(true);
+      expect(JSON.stringify(fixture.warnings.slice(warningsBefore))).not.toContain(
+        credential.value,
+      );
+    } finally {
+      broker.forget(runId);
+      await fixture.provider.destroy(handle);
+      await revoke(runId, credential);
+    }
+  }, 240_000);
+
+  /**
+   * Criterion (9), backlog 152's credential half: WP-75's planted vectors, re-run with the export
+   * **pushing under a minted credential** to a server that records which credential and which path
+   * each request carried. The positive control runs first, on a copy (WP-75's reason).
+   */
+  it('executes nothing the run planted and pushes with the platform’s helper to the platform’s URL', async () => {
+    const runId = randomUUID();
+    const spec = privateSpec(runId, false);
+    const { mint, revoke } = minting();
+    const credential = await mint(runId, 'push');
+    const broker = held(runId, false, credential);
+    await fixture.provider.updateMirror({
+      projectId: spec.projectId,
+      repo: spec.repo,
+      credential: broker.credentialFor(runId),
+    });
+    const handle = await fixture.provider.create(spec);
+    try {
+      const script = (name: string, body: string): string =>
+        `printf '#!/bin/sh\\n${body}\\n' > /work/v/${name} && chmod 755 /work/v/${name}`;
+      const evilUrl = server.repoUrl.replace('/acme.git', '/evil.git');
+      await plantInWorkspace(
+        fixture,
+        handle.volumeName,
+        [
+          'mkdir -p /work/v',
+          script('fsmonitor', 'touch /work/MARK-fsmonitor'),
+          script('clean', 'touch /work/MARK-filter\\ncat'),
+          script('gpg', 'touch /work/MARK-gpg\\nexit 1'),
+          script(
+            'cred',
+            'touch /work/MARK-credential\\necho username=planted\\necho password=planted-password',
+          ),
+          `printf '#!/bin/sh\\ntouch /work/MARK-hook-post-index-change\\n' > /work/repo/.git/hooks/post-index-change`,
+          'chmod 755 /work/repo/.git/hooks/post-index-change',
+          "printf '* filter=evil\\n' > /work/repo/.gitattributes",
+          "printf '%s\\n' '[core]' 'fsmonitor = /work/v/fsmonitor' '[filter \"evil\"]' 'clean = /work/v/clean' " +
+            "'[commit]' 'gpgSign = true' '[gpg]' 'program = /work/v/gpg' " +
+            `'[remote "origin"]' 'pushurl = ${evilUrl}' ` +
+            "'[credential]' 'helper = /work/v/cred' >> /work/repo/.git/config",
+          'printf "agent work\\n" > /work/repo/AGENT.md',
+        ].join(' && '),
+      );
+      // The positive (rule 42): every local vector fires under plain git in a copy of this tree.
+      await underPlainGit(handle.volumeName, [
+        'git status --porcelain',
+        'git add -A',
+        'git commit -q -m probe',
+        "printf 'protocol=http\\nhost=example.invalid\\n\\n' | git credential fill",
+      ]);
+      expect((await markers(handle.volumeName)).sort()).toEqual([
+        'MARK-credential',
+        'MARK-filter',
+        'MARK-fsmonitor',
+        'MARK-gpg',
+        'MARK-hook-post-index-change',
+      ]);
+      await docker([
+        'run',
+        '--rm',
+        '--network',
+        'none',
+        '-v',
+        `${handle.volumeName}:/work`,
+        ALPINE_IMAGE,
+        'sh',
+        '-c',
+        'rm -rf /work/pc /work/MARK-*',
+      ]);
+      const requestsBefore = (await server.requests()).length;
+
+      const branch = `agentic/e2e-planted-${runId}`;
+      const result = await fixture.provider.export(
+        handle,
+        { branch, tarballPath: null, commitMessage: 'wip' },
+        broker.credentialFor(runId),
+      );
+      expect(result.pushed).toBe(true);
+      expect(await markers(handle.volumeName)).toEqual([]);
+      expect(await server.refs()).toContain(`refs/heads/${branch}`);
+      const during = (await server.requests()).slice(requestsBefore);
+      // The push URL is the platform's: nothing reached the planted `pushurl`.
+      expect(during.some((request) => request.path.startsWith('/evil.git'))).toBe(false);
+      // The credential helper is the platform's: every authenticated request carried the minted
+      // value, and the planted helper's password reached nothing.
+      const authenticated = during.filter((request) => request.password !== null);
+      expect(authenticated.length).toBeGreaterThan(0);
+      expect(
+        authenticated.every(
+          (request) =>
+            request.password === credential.value &&
+            request.path.startsWith('/acme.git/') &&
+            request.granted,
+        ),
+      ).toBe(true);
+      expect(during.some((request) => request.password === 'planted-password')).toBe(false);
+    } finally {
+      broker.forget(runId);
+      await fixture.provider.destroy(handle);
+      await revoke(runId, credential);
+    }
+  }, 240_000);
 });
 
 describe('teardown ends the pid namespace (WP-13 obligation 3)', () => {

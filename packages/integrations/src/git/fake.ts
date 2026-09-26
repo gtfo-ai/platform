@@ -125,6 +125,15 @@
  *     of three inputs and every proposal it keeps cites a merge request or a ticket rather than a
  *     commit — but a later feature that decided something from "this commit is on the default
  *     branch" would be green here and wrong in production.
+ * 16. **Stricter — a `read` credential asked for with branch patterns is `invalid_request`** (WP-76).
+ *     GitLab would mint it and ignore them (`gitlab/credentials.ts`: a project access token has no
+ *     branch scoping at all). A caller that sends patterns with a read request has confused the two
+ *     scopes, which is the confusion that hands a read-only run a push token, so it fails here. And
+ *     **kinder, once**: one instance serves every call, so a second `revokeCredential` of a
+ *     credential it minted is the port's no-op — where the shipped loader builds GitLab's adapter
+ *     per call, whose registry has no memory of the first revoke and answers a second one
+ *     `not_found` (GitLab divergence 6). {@link FakeGitProvider.credentials} counts every call so a
+ *     test asserts *exactly once* rather than relying on the no-op.
  */
 import {
   type CodeownersRules,
@@ -299,6 +308,18 @@ interface StoredCredential {
   revoked: boolean;
   expiresAt: string;
   project: string;
+  scope: CredentialScope;
+  /** Every `revokeCredential` call for this credential, the no-op second one included. */
+  revocations: number;
+}
+
+/** One credential the fake minted, as a test reads it back (WP-76). Never a secret of anyone's. */
+export interface FakeCredentialRecord {
+  readonly value: string;
+  readonly scope: CredentialScope;
+  readonly project: string;
+  readonly revoked: boolean;
+  readonly revocations: number;
 }
 
 const mrEventBody = z.strictObject({
@@ -415,6 +436,12 @@ export interface FakeGitProvider extends GitProviderPort {
   moveDefaultBranch(project: string, newHead: string): void;
   /** Every commit `commitFiles` made, oldest first. */
   readonly commits: readonly FakeCommit[];
+  /**
+   * Every credential `mintCredential` issued, oldest first, with how many times it was revoked —
+   * WP-76's "a count of revocations the fake provider recorded", read off the provider rather than
+   * off the caller's own bookkeeping.
+   */
+  readonly credentials: readonly FakeCredentialRecord[];
   /**
    * A commit a **human** made, already in the past — WP-35's history bootstrap.
    *
@@ -886,6 +913,14 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       if (!Number.isInteger(request.ttlSeconds) || request.ttlSeconds <= 0) {
         throw invalidRequest(PROVIDER, 'mint_credential', 'ttlSeconds must be a positive integer');
       }
+      // Divergence 16: stricter than GitLab, which would mint the read token and ignore them.
+      if (request.scope === 'read' && (request.branchPatterns ?? []).length > 0) {
+        throw invalidRequest(
+          PROVIDER,
+          'mint_credential',
+          'a read credential pushes nothing, so it takes no branch patterns',
+        );
+      }
       credentialCounter += 1;
       // Divergence 7: shaped like nothing real, so no scanner can mistake it for a token.
       const value = `fake_credential_${credentialCounter}`;
@@ -898,6 +933,8 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
         revoked: false,
         expiresAt,
         project: request.project,
+        scope: request.scope,
+        revocations: 0,
       });
       const credential: MintedCredential = {
         username: 'oauth2',
@@ -920,6 +957,7 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
         // a teardown built against it ship code that never handles the refusal (rule 1).
         throw notFound(PROVIDER, 'revoke_credential', 'credential this provider never minted');
       }
+      stored.revocations += 1;
       stored.revoked = true;
     },
 
@@ -1315,6 +1353,15 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
     seedUser,
     seedFile,
     commits,
+    get credentials() {
+      return [...credentials.values()].map((stored) => ({
+        value: stored.value,
+        scope: stored.scope,
+        project: stored.project,
+        revoked: stored.revoked,
+        revocations: stored.revocations,
+      }));
+    },
     fileAt: (project: string, branch: string, path: string) =>
       branchOf(project, branch)?.files.get(path) ?? null,
 

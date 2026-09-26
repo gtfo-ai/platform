@@ -19,6 +19,16 @@
  * rather than silently treated as "no launcher" — standing rule 18: an operator who set the URL and
  * forgot the token must not get the same silence as one who set neither.
  *
+ * ## It mints the run's git credential (WP-76)
+ *
+ * TD-028's WP-76 amendment, closing PROGRESS backlog 133: the launcher cannot mint — it holds no
+ * binding, no secret key and no database — so **this process** does, in
+ * {@link createRunGitCredentialMinter}: the project's git binding through the binding loader, the
+ * mint and the revoke through `IntegrationActionExecutor` (`runCredentialWrites`), the scope the
+ * spec's (`read` for a read-only run, `push` otherwise) and `read` for any run of a **shadow** task
+ * (Q98 (a)). The value is registered with the process's run-scoped secrets the moment it exists, so
+ * the transcript, the artifact and every audit row this process writes redact it (decision 8).
+ *
  * ## It constructs no Docker client
  *
  * Everything here is a `fetch` and a Unix socket. `apps/launcher/src/docker-access.test.ts` reads
@@ -26,21 +36,38 @@
  * "exactly one component reaches the daemon" a checkable property of this repository rather than a
  * sentence in a decision record.
  */
-import type { Logger, RunSpec } from '@platform/application';
+import type {
+  Logger,
+  PipelineIntegrationsPort,
+  RunScopedSecrets,
+  RunSpec,
+} from '@platform/application';
+import {
+  integrationsForProject,
+  noRunScopedSecrets,
+  runCredentialWrites,
+  runGitCredentialSecretName,
+} from '@platform/application';
+import { taskModeSchema } from '@platform/contracts';
 import {
   launcher as launcherAdapters,
   runner as runnerAdapters,
   workspace as workspaceAdapters,
 } from '@platform/infrastructure';
 import type pg from 'pg';
-import { repositoryPathOf } from './pipeline.js';
+import {
+  createProjectIntegrationsPort,
+  type IntegrationStack,
+  repositoryPathOf,
+} from './pipeline.js';
 
 /**
  * TD-021: *"a run-scoped credential that expires next day"*.
  *
  * A constant rather than a knob: it is a security property of a minted push token, and the only
- * operator interest in changing it points the wrong way. `LauncherService.startRun` is what passes
- * it to the broker.
+ * operator interest in changing it points the wrong way. The provisioner passes it to
+ * `mintCredential` (WP-76); GitLab grants it in whole days, so the token lives up to two
+ * (`gitlab/credentials.ts`, TD-028's WP-76 amendment residuals).
  */
 const RUN_CREDENTIAL_TTL_SECONDS = 24 * 60 * 60;
 
@@ -99,6 +126,82 @@ export const createRunWorkspaceProjectSource = (
   },
 });
 
+/**
+ * The run's git credential, minted through the executor — TD-028's WP-76 amendment, decisions 1,
+ * 2, 5, 7 and 8, composed.
+ *
+ * `tasks.mode` is read here rather than taken from `RunSpec.mode`, which is the run's richer mode
+ * (`review_only`, `discovery`, …): the executor's shadow guard is about the **task**, and decision 1
+ * says so. A shadow task's run is minted `read` whatever the spec asks, because a shadow task must
+ * never push (Q98 (a) — a `read` mint is the one mutation the executor lets it perform). The
+ * provisioner accepts that narrower answer for a writing spec and would refuse a wider one.
+ *
+ * Both calls resolve the bindings per call (Q55): the revoke's scope carries the run's own
+ * credential as a run-scoped secret, so an error a provider returns on revocation is redacted.
+ */
+export const createRunGitCredentialMinter = (options: {
+  readonly pool: pg.Pool;
+  readonly integrations: PipelineIntegrationsPort;
+  readonly runSecrets: RunScopedSecrets;
+}): launcherAdapters.RunGitCredentialMinter => ({
+  mint: async ({ spec, project, scope, ttlSeconds }) => {
+    const { rows } = await options.pool.query<{ mode: string }>(
+      'select mode from tasks where id = $1',
+      [spec.taskId],
+    );
+    if (rows[0] === undefined) {
+      throw new Error(
+        `task ${spec.taskId} has no row, so run ${spec.runId}'s credential cannot be minted under its mode`,
+      );
+    }
+    const mode = taskModeSchema.parse(rows[0].mode);
+    const context = {
+      runId: spec.runId,
+      taskId: spec.taskId,
+      projectId: spec.projectId,
+      mode,
+    };
+    const minted = await runCredentialWrites(
+      await integrationsForProject(options.integrations, spec.projectId, noRunScopedSecrets()),
+    ).mint({
+      ...context,
+      scope: mode === 'shadow' ? 'read' : scope,
+      branchPatterns: project.branchPatterns,
+      ttlSeconds,
+    });
+    if (minted.kind === 'unavailable') {
+      return minted;
+    }
+    const { credential } = minted;
+    const revoke = async (): Promise<void> =>
+      runCredentialWrites(
+        // The value itself, not a registry lookup: the revocation's own scope must name the token
+        // whatever the registry holds by then (review round 2).
+        await integrationsForProject(options.integrations, spec.projectId, {
+          runScopedSecrets: [
+            { name: runGitCredentialSecretName(spec.runId), value: credential.value },
+          ],
+        }),
+      ).revoke(credential, context);
+    // Before anything else can see it: from this line every redactor over the registry replaces it.
+    // It cannot refuse here: the registry's one refusal is a value shorter than `MIN_SECRET_LENGTH`,
+    // and `runCredentialWrites.mint` has already refused — and revoked — such a value before
+    // returning (review round 2 deleted an untested revoke that this line could never reach).
+    options.runSecrets.add(spec.runId, credential.value, credential.expiresAt);
+    return {
+      kind: 'minted',
+      credential: {
+        // GitLab: "any non-blank value as a username"; a provider that names none gets one.
+        username: credential.username ?? 'agentic',
+        password: credential.value,
+        scope: credential.scope,
+        expiresAt: credential.expiresAt,
+        revoke,
+      },
+    };
+  },
+});
+
 export interface ComposeRunWorkspacesOptions {
   readonly pool: pg.Pool;
   /** `APP_LAUNCHER_URL`. */
@@ -109,6 +212,15 @@ export interface ComposeRunWorkspacesOptions {
   readonly controlRoot: string;
   /** `APP_MODEL_EGRESS_HOSTS`. */
   readonly modelEgressHosts: readonly string[];
+  /**
+   * The process's one integration stack (WP-76). The run's git credential is minted through its
+   * executor against the project's git binding, and registered with **its** `runSecrets` — the
+   * registry its executor, its loaders and the artifact write redact with. Taken whole rather than
+   * as a loader and a registry, so the two cannot come from different places (review round 2).
+   */
+  readonly stack: IntegrationStack;
+  /** `APP_SECRET_KEY` — the binding loader decrypts the git binding's credential with it. */
+  readonly secretKey: string;
   readonly logger: Logger;
 }
 
@@ -149,6 +261,15 @@ export const composeRunWorkspaces = (
       logger: options.logger,
     }),
     projects: createRunWorkspaceProjectSource(options.pool),
+    credentials: createRunGitCredentialMinter({
+      pool: options.pool,
+      integrations: createProjectIntegrationsPort({
+        pool: options.pool,
+        secretKey: options.secretKey,
+        stack: options.stack,
+      }),
+      runSecrets: options.stack.runSecrets,
+    }),
     controlRoot: options.controlRoot,
     modelEgressHosts: options.modelEgressHosts,
     credentialTtlSeconds: RUN_CREDENTIAL_TTL_SECONDS,

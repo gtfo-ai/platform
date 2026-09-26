@@ -32,6 +32,7 @@ import {
   type IntegrationActionExecutor,
   type MutatingActionRequest,
   redactErrorInPlace,
+  SHADOW_RUN_CREDENTIAL_CARVE_OUT,
 } from './action-executor.js';
 import {
   allowAnyIntegrationHost,
@@ -287,6 +288,99 @@ describe('IntegrationActionExecutor', () => {
 
       expect(outcome.status, 'a correct mode still takes the shadow branch').toBe('would_have');
       expect(performed).toBe(0);
+    });
+  });
+
+  /**
+   * Q98 (a), WP-76: the one mutation a shadow task performs. Each refusal is paired with the
+   * acceptance it differs from by one field (standing rule 43), so a carve-out that ignored that
+   * field would pass the acceptance and fail the refusal.
+   */
+  describe('the shadow carve-out for a run credential (Q98 (a))', () => {
+    const mint = (overrides: Record<string, unknown> = {}) => ({
+      ...addComment(),
+      action: 'mint_credential',
+      mode: 'shadow' as TaskMode,
+      payload: { project: 'acme/api', scope: 'read', ttl_seconds: 86_400 },
+      shadowCarveOut: SHADOW_RUN_CREDENTIAL_CARVE_OUT,
+      ...overrides,
+    });
+
+    it('performs a read-scoped mint for a shadow task and audits it as performed', async () => {
+      const outcome = await executor.execute(mint());
+
+      expect(performed).toBe(1);
+      expect(outcome.status).toBe('ok');
+      expect(auditLog.entriesFor('mint_credential').map((entry) => entry.status)).toEqual(['ok']);
+      expect(auditLog.events.map((event) => event.type)).toEqual(['integration.action.performed']);
+    });
+
+    it.each(['read', 'push'])(
+      'performs a shadow task’s revoke of a %s credential — revoking is never suppressed',
+      async (scope) => {
+        const outcome = await executor.execute(
+          mint({ action: 'revoke_credential', payload: { scope, revoke_id: 'acme/api#1' } }),
+        );
+
+        expect(performed).toBe(1);
+        expect(outcome.status).toBe('ok');
+      },
+    );
+
+    it('still answers would_have for the same mint without the carve-out declared', async () => {
+      const outcome = await executor.execute(mint({ shadowCarveOut: undefined }));
+
+      expect(performed).toBe(0);
+      expect(outcome.status).toBe('would_have');
+    });
+
+    it.each([
+      ['a push scope', { payload: { project: 'acme/api', scope: 'push', ttl_seconds: 86_400 } }],
+      ['another action', { action: 'add_comment' }],
+      [
+        'an idempotency key',
+        {
+          idempotency: {
+            key: 'k-1',
+            encode: (result: unknown) => result as never,
+            decode: (stored: unknown) => stored as never,
+          },
+        },
+      ],
+    ])('refuses the declared carve-out on %s, sending and recording nothing', async (_c, over) => {
+      const settled = await outcomeOf(executor.execute(mint(over)));
+
+      expect(settled.rejected).toBe(true);
+      expect(settled.error).toBeInstanceOf(IntegrationError);
+      expect((settled.error as IntegrationError).code).toBe('invalid_request');
+      expect(performed).toBe(0);
+      expect(auditLog.entries).toEqual([]);
+    });
+
+    /** Review round 2 (rule 78): the declaration is checked before the mode, so in every mode. */
+    it.each([
+      ['a push mint', { payload: { project: 'acme/api', scope: 'push', ttl_seconds: 60 } }],
+      ['another action', { action: 'add_comment' }],
+    ])('refuses the declared carve-out on %s for a normal task too', async (_c, over) => {
+      const settled = await outcomeOf(executor.execute(mint({ mode: 'normal', ...over })));
+
+      expect(settled.rejected).toBe(true);
+      expect((settled.error as IntegrationError).code).toBe('invalid_request');
+      expect(performed).toBe(0);
+      expect(auditLog.entries).toEqual([]);
+    });
+
+    it('changes nothing for a normal task’s push mint that declares no carve-out', async () => {
+      const outcome = await executor.execute(
+        mint({
+          mode: 'normal',
+          shadowCarveOut: undefined,
+          payload: { project: 'acme/api', scope: 'push', ttl_seconds: 60 },
+        }),
+      );
+
+      expect(performed).toBe(1);
+      expect(outcome.status).toBe('ok');
     });
   });
 

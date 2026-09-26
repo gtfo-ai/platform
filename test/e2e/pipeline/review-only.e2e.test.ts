@@ -36,11 +36,11 @@ import { GIT_PROJECT, type PipelineE2E, startPipeline } from '../support/pipelin
  *
  * **The residual, restated to what was measured** (review round 2): a credential that is neither one
  * of the binding's own nor pattern-shaped would survive into a posted thread, because the posting
- * job runs outside the run and holds no run-scoped secret set (Q55). On this build **a review-only
- * run has no run-scoped credential at all** — the reviewer's tools make the run read-only and
- * `RunCredentialBroker.issue` mints nothing (BD-021), measured in
- * `packages/infrastructure/src/workspace/spec.test.ts` § "is none for a review-only run" — so the
- * hole is a future one: a role that both mints and posts. `PLANTED_MODEL_KEY` (the
+ * job runs outside the run and holds no run-scoped secret set of its own (Q55). Since WP-76 **a
+ * review-only run is minted a `read` credential** — revoked when the run ends — and the composition
+ * root composes the run-scoped secrets its own process minted into the binding redactor, so the
+ * hole is a posting job in a process that did not mint: PROGRESS backlog 154 (this read *"a
+ * review-only run has no run-scoped credential at all"* until the runner minted one). `PLANTED_MODEL_KEY` (the
  * `ANTHROPIC_API_KEY` the instance is started with) is deliberately *not* pattern-shaped, which is
  * why the assertion below plants an `sk-ant-…` shape instead: a real model credential is a pattern
  * match and is covered.

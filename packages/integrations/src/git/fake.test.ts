@@ -99,6 +99,26 @@ describe('FakeGitProvider credentials', () => {
       port.revokeCredential(credential),
       'the idempotency the port asks for survives divergence 8',
     ).resolves.toBeUndefined();
+    // …and both calls are counted, so "revoked exactly once" is a claim a test can make (WP-76).
+    expect(port.credentials).toEqual([
+      { value: credential.value, scope: 'push', project: PROJECT, revoked: true, revocations: 2 },
+    ]);
+  });
+
+  it('refuses a read credential asked for with branch patterns (divergence 16)', async () => {
+    const port = build();
+    await expect(
+      port.mintCredential({
+        project: PROJECT,
+        scope: 'read',
+        branchPatterns: ['agentic/*'],
+        ttlSeconds: 60,
+      }),
+    ).rejects.toMatchObject({ code: 'invalid_request' });
+    await expect(
+      port.mintCredential({ project: PROJECT, scope: 'read', ttlSeconds: 60 }),
+    ).resolves.toMatchObject({ scope: 'read', branchPatterns: [] });
+    expect(port.credentials.map((record) => record.scope)).toEqual(['read']);
   });
 
   it('refuses a clone URL once the credential has expired (divergence 1)', async () => {

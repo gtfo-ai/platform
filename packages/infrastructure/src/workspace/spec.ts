@@ -134,8 +134,8 @@ export const mirrorCacheKeyFor = (projectId: string): string =>
  * Does this run need a git write credential?
  *
  * Read off the run's **own tool policy** rather than from a table of roles: `readOnly` decides
- * whether the launcher mints a token at all (BD-021 — "a read-only stage gets no git write
- * credential, so the broker mints nothing and `cred.get` has nothing to answer"), and the honest
+ * which scope the runner mints (TD-028's WP-76 amendment, decision 2 — `read` for a read-only run,
+ * `push` otherwise; BD-021's "a read-only stage gets no git write credential"), and the honest
  * question is whether this run can change the checkout. A run with no `Write` and no `Edit` cannot,
  * whatever its role is called. Deriving it from the spec also means a role whose tools are narrowed
  * later gets the narrower workspace automatically.

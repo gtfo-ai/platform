@@ -3,8 +3,8 @@
  * socket).
  *
  * It is the thin thing on top of `WorkspaceProvider` that owns a run's **whole** life: mirror,
- * credential, workspace, attachment, export, revocation, teardown, and the retention sweep that
- * runs on a timer between runs. The provider knows how to make a container; this knows the order
+ * credential (held, never minted — WP-76), workspace, attachment, export, teardown, and the
+ * retention sweep that runs on a timer between runs. The provider knows how to make a container; this knows the order
  * and what must happen even when a step fails.
  *
  * ## This is the layer that owns "a live container is always named by a handle"
@@ -24,7 +24,8 @@
  * down, the branch can be rejected, the archive can be too big — and none of that may leave the
  * run container up: the shim signals one pid, so a detached grandchild outlives it, and only the
  * container's pid namespace ending takes it with it (`docs/research/12-run-shim-verification.md`).
- * So `destroy` runs in a `finally`, the credential is revoked in a `finally` of its own, and the
+ * So `destroy` runs in a `finally`, the credential is forgotten before it (the runner revokes it at
+ * the provider once this returns — TD-028's WP-76 amendment, decision 5), and the
  * export's failure is reported *after* both. `service.test.ts` drives each of those failures and
  * asserts the container was stopped anyway.
  *
@@ -57,23 +58,23 @@ import type {
 import { WorkspaceError } from '@platform/application';
 import type { workspace } from '@platform/infrastructure';
 
-/** What the run needs from the git provider, beyond the spec. */
-export interface RunCredentialRequest {
-  /** The provider's project handle (`acme/web`), not the platform's project id. */
-  readonly project: string;
-  /** The git host the workspace may ask for a credential for. Lowercase, no port. */
-  readonly host: string;
-  /** BD-025's namespace. */
-  readonly branchPatterns: readonly string[];
-  /** TD-021: "expires next day". */
-  readonly ttlSeconds: number;
-}
+/**
+ * The run's git credential as the create request carried it — minted by the **runner** through
+ * `IntegrationActionExecutor` (TD-028's WP-76 amendment). This service mints nothing and revokes
+ * nothing at the provider: it holds the value in the broker for the mirror fetch and the take-over
+ * export push, and forgets it when the run ends.
+ */
+export type RunCredential = workspace.CarriedRunCredential;
 
 export interface StartedRun {
   readonly handle: WorkspaceHandle;
   readonly attachment: WorkspaceAttachment;
-  /** `null` for a read-only stage, which gets no git write token at all (BD-021). */
+  /**
+   * What the broker holds for this run: `null` for a run with no checkout, or a read-only run that
+   * fetches anonymously. A read-only run that holds one holds a `read` credential (BD-021).
+   */
   readonly credential: WorkspaceGitCredential | null;
+  readonly credentialScope: workspace.RunCredentialScope | null;
 }
 
 export interface EndRunRequest {
@@ -123,41 +124,38 @@ export class LauncherService {
   }
 
   /**
-   * Updates the mirror, mints the run's credential, creates the workspace and attaches.
+   * Holds the run's credential, updates the mirror, creates the workspace and attaches.
    *
-   * The mirror comes first because the clone reads from it with no network of its own; the
-   * credential comes before the workspace because a run that cannot get one should not have a
-   * container.
+   * The credential comes first because the mirror fetch uses it — a private remote cannot be
+   * mirrored anonymously (backlog 133 (2)) — and the mirror before the workspace because the clone
+   * reads from it with no network of its own.
    *
-   * **A spec with no repository skips both** (WP-74): there is no clone to feed, so no mirror
-   * fetch — the one call a read-only run of a private repository has no credential for (backlog
-   * 133) — and nothing to push, so the broker is never asked and `credential` must be `null`. The
-   * container, the socket and the skills are created as for any run. A repo-ful spec with a `null`
-   * credential request is refused rather than run without one.
+   * **A spec with no repository skips both** (WP-74): no mirror fetch, nothing to push, and a
+   * credential beside it is refused rather than held. A **writing** spec with no credential is
+   * refused too (TD-028's WP-76 amendment, decision 3): the runner refuses such a run before it
+   * asks, so one arriving here is a caller that forgot, and running it would fail at the push.
    */
-  async startRun(
-    spec: WorkspaceSpec,
-    credential: RunCredentialRequest | null,
-  ): Promise<StartedRun> {
+  async startRun(spec: WorkspaceSpec, credential: RunCredential | null): Promise<StartedRun> {
     const { provider, broker, logger } = this.#options;
-    if ((spec.repo === null) !== (credential === null)) {
+    if (spec.repo === null && credential !== null) {
       throw new WorkspaceError(
         'invalid_spec',
-        'a credential request must accompany a spec with a repository, and only such a spec',
+        'a spec with no repository carries no credential: nothing will fetch or push',
         { runId: spec.runId },
       );
     }
-    const issued =
-      spec.repo === null || credential === null
+    if (spec.repo !== null && !spec.readOnly && credential === null) {
+      throw new WorkspaceError(
+        'invalid_spec',
+        'a spec that writes must carry a run credential (TD-028, WP-76 amendment decision 3)',
+        { runId: spec.runId },
+      );
+    }
+    // `hold` refuses a push credential on a read-only spec and a blank one (BD-021, rule 18).
+    const held =
+      credential === null
         ? null
-        : await broker.issue({
-            runId: spec.runId,
-            project: credential.project,
-            host: credential.host,
-            readOnly: spec.readOnly,
-            branchPatterns: credential.branchPatterns,
-            ttlSeconds: credential.ttlSeconds,
-          });
+        : broker.hold({ runId: spec.runId, readOnly: spec.readOnly, credential });
     // The handle lives outside the `try` because a step *after* `create` can fail with the
     // container already up: `attach` reads the control volume and throws `not_found` on a
     // mis-mounted one, and it builds a socket path that a long control root makes too long for
@@ -169,43 +167,28 @@ export class LauncherService {
         await provider.updateMirror({
           projectId: spec.projectId,
           repo: spec.repo,
-          credential: issued,
+          credential: held,
         });
       }
       handle = await provider.create(spec);
       const attachment = await provider.attach(handle);
-      logger.info({ run_id: spec.runId, project_id: spec.projectId }, 'workspace started');
-      return { handle, attachment, credential: issued };
+      logger.info(
+        {
+          run_id: spec.runId,
+          project_id: spec.projectId,
+          credential_scope: credential?.scope ?? null,
+        },
+        'workspace started',
+      );
+      return { handle, attachment, credential: held, credentialScope: credential?.scope ?? null };
     } catch (error) {
-      // A run that never started must not leave a live push token behind: the credential outlives
-      // the failure by a day otherwise (TD-021 mints it with `expires_at` tomorrow).
-      await this.#revokeQuietly(spec.runId);
+      // Forgotten here; **revoked by the runner**, which sees this create fail and owns the
+      // credential it minted (decision 5). The launcher can no longer hand it to anything.
+      broker.forget(spec.runId);
       if (handle !== null) {
         await this.#destroyQuietly(handle);
       }
       throw error;
-    }
-  }
-
-  /**
-   * Revocation on the failed-start path, which must not become the failure the caller sees — and
-   * must not be silent either.
-   *
-   * Both halves matter and only the first was here: `.catch(() => undefined)` kept the original
-   * error, and threw away the only signal that a **run-scoped git push token is still live**. The
-   * run is dead, nothing will revoke it again (`endRun` needs a handle this path never returns),
-   * and the token stands until `ttlSeconds` expires it — a day, by TD-021's default. Its two
-   * neighbours on this path, `#destroyQuietly` and `endRun`'s `revoke`, both log; this now matches
-   * them.
-   */
-  async #revokeQuietly(runId: string): Promise<void> {
-    try {
-      await this.#options.broker.revoke(runId);
-    } catch (error) {
-      this.#options.logger.warn(
-        { run_id: runId, error: describe(error) },
-        'the credential of a failed start could not be revoked; a push token is live until it expires',
-      );
     }
   }
 
@@ -229,8 +212,8 @@ export class LauncherService {
   }
 
   /**
-   * Ends a run: optional export, then the retention window, then revoke, then stop and remove — in
-   * that order, and the last two happen whatever the first two do.
+   * Ends a run: optional export, then the retention window, then forget the credential, then stop
+   * and remove — in that order, and the last two happen whatever the first two do.
    *
    * **The retention extension is attempted even when the export failed**, and that is the whole
    * reason it is a step of its own rather than part of the export. The two failures are different
@@ -274,12 +257,9 @@ export class LauncherService {
           );
         }
       }
-      try {
-        await broker.revoke(handle.runId);
-      } catch (error) {
-        failures.push(`revoke: ${describe(error)}`);
-        logger.warn({ run_id: handle.runId }, 'run credential could not be revoked');
-      }
+      // Forgotten, not revoked: the runner revokes after this returns (decision 5), so the export
+      // above has already pushed with it and nothing after this line can.
+      broker.forget(handle.runId);
       // The container stop is the guarantee. Nothing above may skip it.
       await provider.destroy(handle);
     }

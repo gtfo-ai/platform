@@ -189,7 +189,8 @@ export const platformSkillOfQualified = (qualified: string): string | null => {
  * A workspace to create.
  *
  * `readOnly` is BD-021's least privilege at the workspace level: a read-only stage gets **no git
- * write credential at all**, so the broker mints nothing and `cred.get` has nothing to answer.
+ * write credential at all** — the runner mints it a `read` credential or none, and the control
+ * plane refuses a `push` one for it (TD-028's WP-76 amendment, decision 3).
  */
 export const workspaceSpecSchema = z.strictObject({
   runId: runIdSchema,

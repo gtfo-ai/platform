@@ -58,13 +58,14 @@
  *
  * A finding is model output on its way to a third party, so it goes through the **git binding's**
  * redactor at `reviewWrites.thread` — TD-012 step 1 over the binding's own credentials, then step
- * 2's pattern rules. This job runs after the run, so it holds no **run-scoped** secret set (Q55's
- * unfinished half) — and **a review-only run has none to hold**, which is measured rather than
- * assumed: the reviewer's tools are `['Read','Glob','Grep']`, so `runIsReadOnly` is true, the
- * workspace is read-only and `RunCredentialBroker.issue` answers `null` without calling the
- * credential source (BD-021), asserted end to end in
- * `packages/infrastructure/src/workspace/spec.test.ts` § "is none for a review-only run". The gap
- * opens only for a future role that both mints a credential and posts provider text. The model's own
+ * 2's pattern rules. This job runs after the run, so it holds no **run-scoped** secret set of its
+ * own (Q55's unfinished half). **A review-only run has one since WP-76**: the reviewer's tools make
+ * the run read-only, and the runner mints it a `read` credential that its shell can read through
+ * the git credential helper — revoked when the run ends (TD-028's WP-76 amendment). This used to
+ * read *"a review-only run has none to hold"*, which was true only because nothing minted anything.
+ * The composition root composes the run-scoped secrets its **own process** minted into the binding
+ * redactor, so the residual is a posting job in a process that did not mint (PROGRESS backlog 154),
+ * and what could leak there is a revoked read token. The model's own
  * key is covered whatever happens, because `sk-ant-…` is a pattern rule. `artifacts.data` stored
  * the verdict **unredacted** when this was written (PROGRESS backlog 35) and is redacted at the
  * write since WP-52; this module's redaction is unchanged and still the load-bearing one here,

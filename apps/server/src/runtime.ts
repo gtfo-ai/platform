@@ -389,6 +389,12 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
             launcherToken: config.launcherToken,
             controlRoot: config.workspaceControlRoot,
             modelEgressHosts: config.modelEgressHosts,
+            // WP-76: the run's git credential is minted against the project's git binding, through
+            // this process's one executor. `stack` is non-null here for the reason given below.
+            // The stack whole: the minter uses its executor, its loader and its own registry —
+            // the one its executor, loaders and the artifact write redact with (review round 2).
+            stack: stack as NonNullable<typeof stack>,
+            secretKey: config.secretKey,
             logger: loggerPort,
           });
         const pipeline = await composePipeline({
@@ -672,8 +678,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           integrations: createProjectIntegrationsPort({
             pool: database.pool,
             secretKey: config.secretKey,
-            registry: (stack as NonNullable<typeof stack>).registry,
-            executor: (stack as NonNullable<typeof stack>).executor,
+            stack: stack as NonNullable<typeof stack>,
           }),
           logger: loggerPort,
         })

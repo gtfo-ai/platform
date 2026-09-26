@@ -27,20 +27,6 @@ const required = (name) => {
 const { startLauncher } = await import(
   new URL('../apps/launcher/src/runtime.ts', import.meta.url).href
 );
-const { WorkspaceError } = await import(
-  new URL('../packages/application/src/index.ts', import.meta.url).href
-);
-
-/** No git provider is wired to a launcher; the run below is read-only, so nothing asks. */
-const refusingCredentials = {
-  async mint() {
-    throw new WorkspaceError(
-      'invalid_spec',
-      'this check mints no credential: the run is read-only',
-    );
-  },
-  async revoke() {},
-};
 
 const logger = {
   debug: () => undefined,
@@ -75,7 +61,6 @@ const runtime = await startLauncher({
     // The path the run image really carries; the runner asserts it came from here.
     APP_WORKSPACE_RUNTIME_CLI_PATH: process.env['CHECK_CLI_PATH'] ?? '/usr/local/bin/claude',
   },
-  credentials: refusingCredentials,
   /** Q51: the uid the *run container* runs as. This container runs as root so it can reach `0600`. */
   uid: 1000,
   logger,

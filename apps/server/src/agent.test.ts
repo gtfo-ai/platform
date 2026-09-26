@@ -23,6 +23,7 @@ import {
   composeAgentRunner,
   injectedSecretRedactorFor,
   injectedSecretRedactorForEnvironment,
+  runTranscriptRedactorFor,
   unattendedToolApprovals,
 } from './agent.js';
 
@@ -57,6 +58,8 @@ const broadcast = {
   },
 } satisfies Broadcast;
 const tools = runnerAdapters.recordingTools();
+const runSecrets = applicationRunRedaction.createRunScopedSecrets({ now: () => 0 });
+
 const provisioner: runnerAdapters.RunWorkspaceProvisioner = {
   provision: async () => {
     throw new Error('not used in this test');
@@ -70,6 +73,7 @@ describe('composing the agent runner', () => {
       pool,
       broadcast,
       provisioner,
+      runSecrets,
       tools,
       providerMode: 'api',
       modelApiKey: 'FAKE-anthropic-key-not-a-real-secret-000',
@@ -84,6 +88,7 @@ describe('composing the agent runner', () => {
       pool,
       broadcast,
       provisioner: undefined,
+      runSecrets,
       tools,
       providerMode: 'api',
       modelApiKey: 'FAKE-anthropic-key-not-a-real-secret-000',
@@ -104,6 +109,7 @@ describe('composing the agent runner', () => {
       pool,
       broadcast,
       provisioner,
+      runSecrets,
       tools,
       providerMode: 'api',
       modelApiKey: null,
@@ -130,6 +136,7 @@ describe('composing the agent runner', () => {
       pool,
       broadcast,
       provisioner,
+      runSecrets,
       tools,
       providerMode: 'local',
       modelApiKey: null,
@@ -145,6 +152,7 @@ describe('composing the agent runner', () => {
       pool,
       broadcast,
       provisioner,
+      runSecrets,
       tools,
       providerMode: 'local',
       modelApiKey: null,
@@ -160,6 +168,7 @@ describe('composing the agent runner', () => {
       pool,
       broadcast,
       provisioner: undefined,
+      runSecrets,
       tools,
       providerMode: 'api',
       modelApiKey: null,
@@ -290,5 +299,34 @@ describe('the approvals port', () => {
     expect(decision).toMatchObject({ decision: 'deny', questionId: null });
     expect(decision.reason).toContain('cannot ask a human');
     expect(lines).toHaveLength(1);
+  });
+});
+
+/**
+ * TD-028's WP-76 amendment decision 8: the transcript redactor of a run is built when the run
+ * starts, and its git credential is minted while its workspace is provisioned — so the redactor has
+ * to learn a value that did not exist when it was built.
+ */
+describe('the run transcript redactor (WP-76)', () => {
+  it('replaces a credential registered after it was built, and the spec’s own secrets too', () => {
+    const secrets = applicationRunRedaction.createRunScopedSecrets({
+      now: () => Date.parse('2026-01-01T00:00:00Z'),
+    });
+    const spec = {
+      runId: '11111111-1111-4111-8111-111111111111',
+      env: { ANTHROPIC_API_KEY: 'FAKE-anthropic-key-not-a-real-secret-000' },
+      secretEnvNames: ['ANTHROPIC_API_KEY'],
+    } as unknown as RunSpec;
+    const redactor = runTranscriptRedactorFor(spec, secrets, recordingLogger().logger);
+    const token = 'fake_run_credential_push_000001';
+    expect(redactor.redactText(`git push with ${token}`).count).toBe(0);
+
+    secrets.add(spec.runId, token, '2026-01-03T00:00:00.000Z');
+
+    const later = redactor.redactText(
+      `git push with ${token} and FAKE-anthropic-key-not-a-real-secret-000`,
+    );
+    expect(later.count).toBe(2);
+    expect(later.value).not.toContain(token);
   });
 });

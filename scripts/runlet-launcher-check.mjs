@@ -163,7 +163,7 @@ try {
       `${report.socketPath} in ${report.workdir}`,
     );
     record(
-      'the run is read-only, so the launcher minted no git credential',
+      'the run is read-only and carried no credential, so the launcher holds none',
       report.credential === 'none',
       `credential: ${report.credential}`,
     );

@@ -12,7 +12,7 @@ job logs, repository files). GitLab accepts it in the `PRIVATE-TOKEN` header.
 | Token kind | Can the binding mint workspace credentials with it? | Notes |
 |---|---|---|
 | Personal access token of a bot user | **Yes** | The only kind that can create project access tokens: *"You must use a personal access token with this endpoint. You cannot authenticate with a project access token."* |
-| Project or group access token | No | Everything else works; leave `mint_credentials` off. |
+| Project or group access token | No | Everything else works; leave `mint_credentials` off — and no stage that writes can run. |
 
 Scopes: `api` (the platform reads and writes merge requests, discussions and notes).
 The token's user needs at least the **Maintainer** role on the project to create project access
@@ -31,7 +31,7 @@ tokens, and **Developer** for everything else.
 | `webhook_secret_token` | see step 3 | Secret. Legacy `X-Gitlab-Token` value. |
 | `webhook_signing_token` | see step 3 | Secret. `whsec_…` signing token (GitLab 19.0+). |
 | `webhook_tolerance_seconds` | no (300) | How old a signed delivery may be before it is treated as a replay. |
-| `mint_credentials` | no (off) | Whether the platform may mint short-lived project access tokens. See step 5. |
+| `mint_credentials` | no (off) | Whether the platform may mint short-lived project access tokens. **Required for any stage that writes**, and for a private repository. See step 5. |
 | `read_access_level` / `push_access_level` | no (20 / 30) | Role given to a minted credential: 20 Reporter, 30 Developer, 40 Maintainer. |
 
 Environment names for the bundled `glab` CLI follow TD-020: `GITLAB_HOST`, `GITLAB_TOKEN`.
@@ -85,11 +85,14 @@ helper and by *your* protected-branch rules, not by the token. The platform chec
 Add `agentic/*` as a protected branch only if you want to restrict who may delete those branches;
 the platform does not need it.
 
-## 5. Optional: let the platform mint short-lived credentials
+## 5. Let the platform mint short-lived credentials (needed for any stage that writes)
 
-With `mint_credentials` on, each workspace gets its own project access token
-(`POST /projects/:id/access_tokens`) scoped to `read_repository` (+ `write_repository` for a push
-credential), revoked when the workspace is destroyed.
+With `mint_credentials` on, each agent run with a checkout gets its own project access token
+(`POST /projects/:id/access_tokens`): `read_repository` for a read-only stage, `read_repository` +
+`write_repository` for a stage that writes, revoked when the run ends. **Without it, a stage that
+writes — implementation, conflict resolution, the librarian — is refused before its workspace is
+created**, naming this setting; read-only stages still run, but only against a repository GitLab
+serves without authentication.
 
 Prerequisites:
 
@@ -112,8 +115,9 @@ If any prerequisite is missing, the platform refuses the mint with a message nam
 the token kind rather than surfacing GitLab's 404 — GitLab answers 404 both for "no such project"
 and for a feature you may not see.
 
-Leave `mint_credentials` off to use the binding's own token for cloning. That token is then
-long-lived and as broad as its scopes, which is the trade.
+The binding's own token is **never** handed to a workspace instead: it is the token that *mints*,
+the most powerful secret an instance holds, and a run's container is the one place the platform does
+not trust. With `mint_credentials` off, a private repository cannot be checked out by any stage.
 
 ## 6. Verify
 

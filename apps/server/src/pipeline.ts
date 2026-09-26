@@ -62,9 +62,12 @@ import type {
   PlatformToolPort,
   ProjectSettings,
   ProjectSettingsPort,
+  RunScopedSecrets,
+  SecretRedactor,
   WebhookIngress,
 } from '@platform/application';
 import {
+  composeSecretRedactors,
   costHandlers,
   createAskRunPlanner,
   createBudgetGuard,
@@ -74,6 +77,7 @@ import {
   createIntegrationEgressPolicy,
   createLateCostRecorder,
   createPipelineRuntime,
+  createRunScopedSecrets,
   createRunStopReasons,
   createStageRunPlanner,
   createWebhookIngress,
@@ -343,7 +347,31 @@ export interface IntegrationStack {
   readonly executor: IntegrationActionExecutor;
   readonly registry: IntegrationRegistry;
   readonly auditLog: IntegrationAuditLog;
+  /**
+   * The run credentials this process minted (WP-76, TD-028's WP-76 amendment decision 8) — one
+   * registry per process, composed into the executor's redactor here, the binding loader's platform
+   * redactor, the run transcript and the artifact write, so a value minted *after* each of those
+   * redactors was built is still replaced by all of them.
+   */
+  readonly runSecrets: RunScopedSecrets;
+  /**
+   * {@link platformRedactorFor} over {@link runSecrets}, built **once, here** — the redactor the
+   * executor, every binding loader built from this stack and the stage executor's artifact write
+   * are given. Built from the stack's own registry so the three sinks and the minter cannot be
+   * handed two different registries (WP-76 review round 2).
+   */
+  readonly platformRedactor: SecretRedactor;
 }
+
+/**
+ * TD-012 step 2 plus the run credentials this process minted (WP-76, TD-028's WP-76 amendment
+ * decision 8) — the one redactor the executor, the binding loader's platform half and the stage
+ * executor's artifact write are given. The registry is read at call time, so a credential minted
+ * after any of the three was built is still replaced; `run-secrets-composition.test.ts` holds each
+ * of the three call sites to this function and drives the executor's end to end.
+ */
+export const platformRedactorFor = (runSecrets: RunScopedSecrets): SecretRedactor =>
+  composeSecretRedactors(runSecrets.redactor, redactionAdapters.patternRedactor());
 
 export interface ComposeIntegrationStackOptions {
   readonly pool: pg.Pool;
@@ -366,6 +394,15 @@ export const composeIntegrationStack = (
   options: ComposeIntegrationStackOptions,
 ): IntegrationStack => {
   const ids = { next: (): Id => randomUUID() as Id };
+  /**
+   * The run credentials this process mints (WP-76, TD-028's WP-76 amendment decision 8) — **the
+   * one registry of the process**, built here and nowhere else (`run-secrets-composition.test.ts`
+   * counts the construction sites), so the minter (`composeRunWorkspaces`, handed
+   * `stack.runSecrets`) and every redactor below read the same values. Memory: it reaches nothing
+   * another process writes (backlog 154).
+   */
+  const runSecrets = createRunScopedSecrets({ now: () => Date.now() });
+  const platformRedactor = platformRedactorFor(runSecrets);
 
   /**
    * BD-003's audit sink, built here and **not** accepted from a caller (standing rule 31/35).
@@ -410,8 +447,11 @@ export const composeIntegrationStack = (
      * loader and applied by the adapter that emits the string, step 2 is applied here over the
      * audit row's payload, result and error. Passing a no-op would be the defect standing rule 31
      * is named for, one ring further out than WP-11 put it.
+     *
+     * Plus the run credentials this process minted (WP-76): a revoke that fails with the token in
+     * the provider's answer, or any other row that quotes one, is redacted to the run's name.
      */
-    redactor: redactionAdapters.patternRedactor(),
+    redactor: platformRedactor,
     timer: {
       now: () => Date.now(),
       sleep: async (ms) =>
@@ -437,7 +477,13 @@ export const composeIntegrationStack = (
   });
 
   const registryOf = options.registry ?? createPipelineProviderRegistry;
-  return { executor, auditLog, registry: registryOf({ executor, clock: { now: nowIso } }) };
+  return {
+    executor,
+    auditLog,
+    registry: registryOf({ executor, clock: { now: nowIso } }),
+    runSecrets,
+    platformRedactor,
+  };
 };
 
 /**
@@ -621,8 +667,8 @@ export interface ComposedPipeline {
 export const createProjectIntegrationsPort = (options: {
   readonly pool: pg.Pool;
   readonly secretKey: string;
-  readonly registry: IntegrationRegistry;
-  readonly executor: IntegrationActionExecutor;
+  /** The process's one stack: its registry, its executor and its `platformRedactor` (WP-76). */
+  readonly stack: IntegrationStack;
 }): PipelineIntegrationsPort =>
   createPipelineIntegrationsLoader({
     repository: secretAdapters.createPostgresBindingRepository(options.pool),
@@ -630,12 +676,14 @@ export const createProjectIntegrationsPort = (options: {
       sql: options.pool,
       key: secretAdapters.deriveSecretKey(options.secretKey),
     }),
-    registry: options.registry,
-    executor: options.executor,
+    registry: options.stack.registry,
+    executor: options.stack.executor,
     // TD-012 step 2, beside each binding's own exact-match redactor — the same line
     // `composeWebhookIngress` passes, and now for the second sink: WP-15f writes the ticket's text
     // to `tasks.ticket_snapshot`, which is read into every prompt. No task DTO serves it yet.
-    platformRedactor: redactionAdapters.patternRedactor(),
+    // WP-76: and the run credentials this process minted, so a CI log or a review thread handled
+    // here while one is live has it replaced (another process's are out of reach: backlog 154).
+    platformRedactor: options.stack.platformRedactor,
     gitProjectPath: async (projectId) => {
       const { rows } = await options.pool.query<{ repo_url: string }>(
         'select repo_url from projects where id = $1',
@@ -654,7 +702,6 @@ export const composePipeline = async (
 ): Promise<ComposedPipeline> => {
   const { composition, stack } = options;
   const ids = { next: (): Id => randomUUID() as Id };
-  const { executor, registry } = stack;
   /**
    * The `Jobs` everything below enqueues through.
    *
@@ -671,8 +718,7 @@ export const composePipeline = async (
   const integrations = createProjectIntegrationsPort({
     pool: options.pool,
     secretKey: options.secretKey,
-    registry,
-    executor,
+    stack,
   });
 
   const stopReasons = createRunStopReasons();
@@ -699,6 +745,7 @@ export const composePipeline = async (
   const agent = composeAgentRunner({
     pool: options.pool,
     provisioner: composition.workspaces,
+    runSecrets: stack.runSecrets,
     tools: platformTools,
     providerMode: options.agent.providerMode,
     modelApiKey: options.agent.modelApiKey,
@@ -773,8 +820,13 @@ export const composePipeline = async (
      * runs inside the dispatcher's transaction, where no binding — and therefore no step-1
      * exact-match redactor — can be resolved. `epic-split.ts` states what that leaves and where it
      * is caught.
+     *
+     * WP-76: plus the run credentials this process minted. The stage executor builds a run's
+     * redactor before the workspace — and its credential — exists, and writes the artifact after
+     * the workspace was released; the registry is read at call time and holds a value until it
+     * expires, so the artifact of the run that was handed a token cannot store it.
      */
-    redactor: redactionAdapters.patternRedactor(),
+    redactor: stack.platformRedactor,
     unitOfWork: options.eventing.unitOfWork,
     logger: options.logger,
     stageConcurrency: options.stageConcurrency,

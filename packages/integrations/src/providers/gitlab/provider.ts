@@ -51,7 +51,9 @@
  *     revoked while it lives until midnight UTC. Nothing in the response distinguishes the two,
  *     and the alternative — refusing every `404` — would fail every honest second teardown, which
  *     is the failure the port's idempotency exists to prevent. The compensating controls are the
- *     token's own expiry (a day at most, `credentials.ts`) and the protected default branch (Q40).
+ *     token's own expiry — **between 24 and 48 hours** for the platform's 24-hour request, because
+ *     GitLab's `expires_at` is a date and the token dies at midnight UTC on it (`credentials.ts`,
+ *     `expiryForTtl`) — and the protected default branch (Q40).
  *  7. **Rate limiting cannot be reproduced in replay.** GitLab.com allows 2,000 authenticated API
  *     requests a minute and answers `429` with `Retry-After` in seconds; the *mapping* of that
  *     response is exercised by a recorded 429 fixture driven through the executor, but no test

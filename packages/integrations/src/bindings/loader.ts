@@ -61,9 +61,11 @@
  * binding time, because the token that matters most is minted per run and did not exist then; so
  * the adapters are built per call and the scope is an argument. What WP-15a does **not** do is
  * change what the CI gate returns — it still returns the failing job's *names* rather than
- * `getJobLog`'s body — because nothing on the pipeline's path holds a minted credential yet: the
- * runner reaches the launcher's broker over a transport that does not exist (Q52). The mechanism is
- * closed here; the gate's cut stays where WP-15 put it, pinned by `gates.test.ts`.
+ * `getJobLog`'s body. Since WP-76 a run's credential **is** minted — by the runner, through this
+ * loader — and the one call made with a run's scope is its revocation; the gate runs after the
+ * run, with the process-wide registry of minted credentials in its platform redactor rather than a
+ * run scope (`apps/server/src/pipeline.ts`, PROGRESS backlog 154 for the process that did not mint).
+ * The mechanism is closed here; the gate's cut stays where WP-15 put it, pinned by `gates.test.ts`.
  *
  * ## Cost, stated rather than optimised away
  *

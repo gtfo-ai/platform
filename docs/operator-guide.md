@@ -590,7 +590,10 @@ and it allows only the hosts the project's configuration lists.
 
 **No integration credential is inside a run container.** The SDK runs on the platform side and spawns
 the CLI in the container over a per-run control socket; git gets a run-scoped token from a credential
-helper that asks back across that socket. Integration secrets are encrypted at rest with AES-256-GCM
+helper that asks back across that socket — the `runner` answers it, for the run's own git host and
+only while the run is live — and the token is never in the container's environment. The token is
+readable by code in the run for the run's lifetime (BD-025 §3 permits it), is `read`-only for a
+read-only stage, and is revoked when the run ends. Integration secrets are encrypted at rest with AES-256-GCM
 under `APP_SECRET_KEY`, and the read API strips every provider-declared credential field from what it
 publishes.
 
@@ -656,10 +659,21 @@ Stated here so an operator meets them in a document rather than in production:
 
 - **An agent run needs `APP_LAUNCHER_TOKEN`, and without it nothing runs one.** WP-53 built the
   transport (§1, "the runner"), so a stock instance *with* a token in `.env` runs agent stages in the
-  `runner` container; one without a token queues them. What is still missing is the **git write
-  credential**: the launcher has no git provider wired to it, so a read-only stage runs end to end
-  and a stage that needs to push fails at start with that refusal by name. Everything else — intake,
-  the board, the knowledge base, the commands, the cost ledger, the audit — runs either way.
+  `runner` container; one without a token queues them. Everything else — intake, the board, the
+  knowledge base, the commands, the cost ledger, the audit — runs either way.
+- **A stage that writes needs a git binding that can mint** (WP-76). The `runner` mints one
+  short-lived GitLab project access token per run with a checkout, through the integration executor —
+  `read` for a read-only stage, `read` + `write` for one that writes, revoked when the run ends, one
+  audit row each — and hands it to the launcher on the create request. So the GitLab integration
+  needs **`mint_credentials: true`**, which needs a personal access token that may create project
+  access tokens (GitLab Premium or Ultimate on GitLab.com; any self-managed tier) — the GitLab setup
+  guide's step 5. Without it, a stage that writes (implementation, conflict resolution, the
+  librarian) fails at start **naming the binding and the setting**, and a read-only stage fetches
+  anonymously, which works only for a repository GitLab serves without authentication: **a private
+  repository needs `mint_credentials: true` for every stage.** The binding's own token is never
+  handed to a run instead. A token whose revocation fails (the `runner` logs it by name) or whose
+  `runner` died mid-run lives until GitLab expires it — up to two days, because GitLab grants whole
+  days. A **shadow** task's runs get a `read` token, never a push one.
 - **`docker compose up` cannot pull the published images** without the retagging step in §2, because
   `compose.yml` names them without a registry.
 - **`compose.yml` passes the `app` service a fixed list of variables**, so `.env` is not the app's

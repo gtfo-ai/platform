@@ -301,9 +301,9 @@ try {
       `checkoutBranch: ${report.checkoutBranch}`,
     );
     record(
-      'the run is read-only, so the launcher minted no git credential',
-      report.credentialMinted === false,
-      `credentialMinted: ${report.credentialMinted}`,
+      'the run is read-only and was minted nothing, so the launcher holds no git credential',
+      report.credentialScope === null,
+      `credentialScope: ${report.credentialScope}`,
     );
     record(
       'a run started, streamed and ended through the control plane and the shim’s socket',

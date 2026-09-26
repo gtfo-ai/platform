@@ -217,7 +217,7 @@ export const startControlPlane = async (options: ControlPlaneOptions): Promise<C
         handle: started.handle,
         attachment: started.attachment,
         claudeCodePath: options.claudeCodePath,
-        credentialMinted: started.credential !== null,
+        credentialScope: started.credentialScope,
         replayed: false,
       };
     })();

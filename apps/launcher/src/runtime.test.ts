@@ -1,19 +1,7 @@
 import type { LogFields, Logger } from '@platform/application';
-import { runner, type workspace } from '@platform/infrastructure';
+import { runner } from '@platform/infrastructure';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildLauncher, type LauncherRuntime, launcherClock } from './runtime.js';
-
-const credentials: workspace.RunCredentialSource = {
-  async mint() {
-    return {
-      username: 'x',
-      value: 'y'.repeat(32),
-      expiresAt: '2026-09-11T00:00:00.000Z',
-      revokeId: null,
-    };
-  },
-  async revoke() {},
-};
 
 const recordingLogger = (): { logger: Logger; lines: { fields: LogFields; message: string }[] } => {
   const lines: { fields: LogFields; message: string }[] = [];
@@ -40,7 +28,7 @@ afterEach(() => {
 describe('buildLauncher', () => {
   it('builds a launcher from the environment and arms the retention sweep', () => {
     const { logger } = recordingLogger();
-    runtime = buildLauncher({ env: DAEMON, credentials, uid: 1000, logger });
+    runtime = buildLauncher({ env: DAEMON, uid: 1000, logger });
     expect(runtime.config.controlRoot).toBe('/run/agentic/ctl');
     expect(runtime.provider).toBeDefined();
     // `stop()` is what a graceful shutdown calls; calling it twice must be safe.
@@ -54,16 +42,15 @@ describe('buildLauncher', () => {
    * `EACCES` three minutes in, which reads like a fault in the frame protocol.
    */
   it('refuses to start on any uid but 1000, naming both numbers', () => {
-    expect(() =>
-      buildLauncher({ env: DAEMON, credentials, uid: 0, logger: recordingLogger().logger }),
-    ).toThrow(/must run as uid 1000.*this process is uid 0/s);
+    expect(() => buildLauncher({ env: DAEMON, uid: 0, logger: recordingLogger().logger })).toThrow(
+      /must run as uid 1000.*this process is uid 0/s,
+    );
   });
 
   it('warns loudly when run containers mount the repository instead of an image', () => {
     const { logger, lines } = recordingLogger();
     runtime = buildLauncher({
       env: { ...DAEMON, APP_WORKSPACE_RUNTIME_SOURCE_DIR: '/srv/repo' },
-      credentials,
       uid: 1000,
       logger,
     });
@@ -74,7 +61,7 @@ describe('buildLauncher', () => {
 
   it('says nothing about a bind mount when there is none', () => {
     const { logger, lines } = recordingLogger();
-    runtime = buildLauncher({ env: DAEMON, credentials, uid: 1000, logger });
+    runtime = buildLauncher({ env: DAEMON, uid: 1000, logger });
     expect(lines.map((line) => line.message).join('\n')).not.toContain('development configuration');
   });
 
@@ -129,7 +116,6 @@ describe('buildLauncher', () => {
     expect(() =>
       buildLauncher({
         env: { DOCKER_HOST: 'ssh://build-host' },
-        credentials,
         uid: 1000,
         logger: recordingLogger().logger,
       }),
@@ -139,8 +125,8 @@ describe('buildLauncher', () => {
   it('refuses an absent DOCKER_HOST here too, where the engine is actually built', () => {
     // The parser's refusal reaches the composition root: nothing between them re-introduces a
     // default, which is the half a unit test of `parseDockerHost` alone cannot state.
-    expect(() =>
-      buildLauncher({ env: {}, credentials, uid: 1000, logger: recordingLogger().logger }),
-    ).toThrow(/DOCKER_HOST is required/);
+    expect(() => buildLauncher({ env: {}, uid: 1000, logger: recordingLogger().logger })).toThrow(
+      /DOCKER_HOST is required/,
+    );
   });
 });

@@ -55,12 +55,15 @@ import type {
   ClaudeRunner,
   Logger,
   PlatformToolPort,
+  RunSpec,
   ToolApprovalPort,
 } from '@platform/application';
 import {
+  composeSecretRedactors,
   injectedSecretRedactorFor,
   injectedSecretRedactorForEnvironment,
   RUN_TRANSCRIPT_TOPIC,
+  type RunScopedSecrets,
 } from '@platform/application';
 import { runner as runnerAdapters } from '@platform/infrastructure';
 import type pg from 'pg';
@@ -111,6 +114,17 @@ export const unattendedToolApprovals = (logger: Logger): ToolApprovalPort => ({
  */
 export { injectedSecretRedactorFor, injectedSecretRedactorForEnvironment };
 
+/**
+ * The transcript's TD-012 step 1 for one run: the secrets its spec injected **and** the run
+ * credentials this process minted (WP-76) — the second read at call time, because the credential is
+ * minted while the workspace is provisioned, after this redactor exists.
+ */
+export const runTranscriptRedactorFor = (
+  spec: RunSpec,
+  runSecrets: RunScopedSecrets,
+  logger: Logger,
+) => composeSecretRedactors(injectedSecretRedactorFor(spec, logger), runSecrets.redactor);
+
 export interface AgentRunnerOptions {
   readonly pool: pg.Pool;
   /**
@@ -123,6 +137,15 @@ export interface AgentRunnerOptions {
   readonly broadcast: Broadcast;
   /** Absent means "this process runs no agent" — the Q59(b) default. */
   readonly provisioner: runnerAdapters.RunWorkspaceProvisioner | undefined;
+  /**
+   * The run credentials this process mints (WP-76, TD-028's WP-76 amendment decision 8).
+   *
+   * The runner's redactor is built from the spec when the run starts; the git credential is minted
+   * while the workspace is provisioned. Composing the registry — read at call time — into the
+   * transcript's redactor is what lets a value minted after the closure was built be replaced in
+   * every row. Required: an optional redaction input is an absent one (standing rule 31).
+   */
+  readonly runSecrets: RunScopedSecrets;
   /** The nine in-process MCP tools this process composed (`platform-tools.ts`). */
   readonly tools: PlatformToolPort;
   /**
@@ -198,7 +221,8 @@ export const composeAgentRunner = (options: AgentRunnerOptions): ComposedAgentRu
           tools: options.tools,
           clock: runnerAdapters.systemClock,
           logger: options.logger,
-          injectedSecretRedactorFor: (spec) => injectedSecretRedactorFor(spec, options.logger),
+          injectedSecretRedactorFor: (spec) =>
+            runTranscriptRedactorFor(spec, options.runSecrets, options.logger),
           spawnClaudeCodeProcess: spawn,
         }),
     }),

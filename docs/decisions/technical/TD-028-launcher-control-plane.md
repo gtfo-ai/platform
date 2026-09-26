@@ -209,6 +209,24 @@ answer is *"runlet has no credential responder; refusing"* (`runlet/spawn-adapte
 7. **Shadow mode is unchanged**: the executor answers `would_have` and the shadow result is **no
    credential** (never a fake value — rule 18), so a shadow run fetches anonymously. Whether a shadow
    task may mint a read token is **Q98**.
+   **Superseded by the orchestrator's ruling on Q98 (a), 2026-09-26, at WP-76's review round 1:** a
+   shadow task **may** mint a **`read`**-scoped credential, and nothing else. It is the one declared
+   carve-out in the executor's shadow guard (`SHADOW_RUN_CREDENTIAL_CARVE_OUT`,
+   `packages/application/src/integrations/action-executor.ts`), and it admits exactly two requests: a
+   `mint_credential` whose scope is `read`, and a `revoke_credential` of **any** scope — revoking only
+   removes access, so it is the one mutation shadow mode must never suppress (WP-76 review round 2
+   measured a shadow revoke of a provider-widened `push` token answered `would_have` and the token left
+   live). Neither may carry an idempotency key. The declaration is checked **before** the task's mode is
+   read, so a malformed one is refused (`invalid_request`, nothing sent or recorded) in a normal task as
+   well; an admitted request is performed and its row's status is `ok` (the event is
+   `integration.action.performed`) with the task's `shadow` mode in the row; every other mutating action
+   of a shadow task, a `push` mint included, stays `would_have`. A revoke counts as done only on an `ok`
+   outcome with a `true` result — anything else is a failure naming the token's expiry. The reasoning is Q98's: without it shadow mode — a quiet trial on a
+   real project — cannot fetch a private repository at all. **What it costs, stated**: on GitLab the mint
+   creates a project access token **and a bot user visible in the project's settings** for the run's
+   lifetime (up to 48 h — the expiry is a date), so a shadow trial is not invisible to a project
+   maintainer who looks there; nothing is pushed, commented or transitioned. Q98 (b) — no minting on
+   GitLab.com Free — is unchanged: a writing run there is refused.
 8. **The value joins the run's redactors**: the run's injected-secret redactor (TD-012 step 1,
    `apps/server/src/agent.ts`) and `IntegrationCallScope.runScopedSecrets` (Q55) for that run's
    provider calls, so a transcript row, an artifact or a CI log that echoes it is redacted. The

@@ -16,7 +16,7 @@
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
-import { silentLogger, type WorkspaceSpec } from '@platform/application';
+import { silentLogger, WorkspaceError, type WorkspaceSpec } from '@platform/application';
 import { launcher as launcherAdapters, workspace } from '@platform/infrastructure';
 import { PLATFORM_SKILLS } from '@platform/prompts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -24,7 +24,7 @@ import { bearerOf, type ControlPlane, startControlPlane, tokenMatches } from './
 import { LauncherService } from './service.js';
 
 const TOKEN = 'FAKE-launcher-token-0000000000000000';
-const SECRET = 'FAKE-mint';
+const SECRET = 'FAKE-carried';
 
 let dir: string;
 let provider: workspace.FakeWorkspaceProvider;
@@ -32,24 +32,26 @@ let service: LauncherService;
 let plane: ControlPlane;
 
 /** Flipped by the one case that needs a create to fail; reset in `beforeEach`. */
-let mintFails = false;
+let mirrorFails = false;
 
-const credentials: workspace.RunCredentialSource = {
-  async mint(request) {
-    if (mintFails) {
-      throw new Error('the git provider refused to mint');
+/**
+ * The fake provider with one failure the launcher cannot refuse by schema: the mirror fetch.
+ *
+ * A subclass rather than a `Proxy` (the note on {@link createdRuns} says why). Until WP-76 this case
+ * failed the create through the launcher's own credential source, which no longer exists — the
+ * runner mints and the request carries the value — so the first real step that can fail is the
+ * fetch the carried credential is for.
+ */
+class MirrorFailingProvider extends workspace.FakeWorkspaceProvider {
+  override async updateMirror(
+    input: Parameters<workspace.FakeWorkspaceProvider['updateMirror']>[0],
+  ): ReturnType<workspace.FakeWorkspaceProvider['updateMirror']> {
+    if (mirrorFails) {
+      throw new WorkspaceError('workspace_failed', 'the mirror fetch failed');
     }
-    return {
-      username: 'agentic',
-      value: `${SECRET}-${request.project}`,
-      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
-      revokeId: null,
-    };
-  },
-  async revoke() {
-    // Nothing is minted outside this process.
-  },
-};
+    return super.updateMirror(input);
+  }
+}
 
 const clientFor = (token = TOKEN): launcherAdapters.LauncherControlClient =>
   launcherAdapters.createLauncherControlClient({
@@ -58,7 +60,13 @@ const clientFor = (token = TOKEN): launcherAdapters.LauncherControlClient =>
   });
 
 const specFor = (runId: string, overrides: workspace.WorkspaceSpecOverrides = {}): WorkspaceSpec =>
-  workspace.workspaceSpecFixture({ runId, readOnly: false, ...overrides });
+  workspace.workspaceSpecFixture({
+    runId,
+    readOnly: false,
+    ...overrides,
+    // The credential's host must be one the run may reach (`createRunRequestSchema`).
+    egress: { hosts: ['api.anthropic.com', 'vcs.example.com'], ...overrides.egress },
+  });
 
 /**
  * The run ids the provider was asked to **create** a workspace for, in order.
@@ -71,23 +79,25 @@ const specFor = (runId: string, overrides: workspace.WorkspaceSpecOverrides = {}
 const createdRuns = (): string[] =>
   provider.events.filter((event) => event.kind === 'create').map((event) => event.runId);
 
+/** What the runner mints and carries (WP-76) — obviously fake (BD-002). */
 const credentialRequest = {
-  project: 'acme/web',
   host: 'vcs.example.com',
-  branchPatterns: ['agentic/*'],
-  ttlSeconds: 86_400,
-};
+  username: 'oauth2',
+  password: `${SECRET}-run-credential`,
+  scope: 'push',
+  expiresAt: '2026-09-11T00:00:00.000Z',
+} as const;
 
 beforeEach(async () => {
-  mintFails = false;
+  mirrorFails = false;
   dir = await workspace.shortTempDir('agentic-control-plane-');
-  provider = new workspace.FakeWorkspaceProvider({
+  provider = new MirrorFailingProvider({
     controlRoot: path.join(dir, 'ctl'),
     skills: PLATFORM_SKILLS,
   });
   service = new LauncherService({
     provider,
-    broker: new workspace.RunCredentialBroker(credentials, silentLogger),
+    broker: new workspace.RunCredentialBroker(silentLogger),
     clock: { now: () => Date.now(), setTimer: () => () => undefined },
     logger: silentLogger,
     exportDir: path.join(dir, 'exports'),
@@ -159,25 +169,24 @@ describe('create (TD-028 decision 4: idempotent on the run id)', () => {
     expect(created.handle.runId).toBe(runId);
     expect(created.attachment.socketPath).toContain(runId);
     expect(created.attachment.workdir).toBe('/work/repo');
-    expect(created.credentialMinted).toBe(true);
+    expect(created.credentialScope).toBe('push');
     expect(created.replayed).toBe(false);
     expect(createdRuns()).toEqual([runId]);
   });
 
   /**
-   * WP-74 criterion (5): a spec with no repository crosses the wire with no credential request,
-   * the launcher runs no mirror update and mints nothing, and the handle — `cacheKey: null` —
+   * WP-74 criterion (5): a spec with no repository crosses the wire with no credential, the
+   * launcher runs no mirror update and holds nothing, and the handle — `cacheKey: null` —
    * survives the create-then-end round trip unchanged through both ends' schemas.
    */
   it('creates and ends a workspace with no checkout, and its handle crosses the wire unchanged', async () => {
     const runId = randomUUID();
     // Even a writable spec: what decides the credential here is the missing repository, not
-    // `readOnly` — a broker asked for this one would mint.
+    // `readOnly` — a writing spec *with* a repository must carry one.
     const spec = { ...workspace.repoLessWorkspaceSpecFixture({ runId }), readOnly: false };
-    mintFails = true;
     const created = await clientFor().createRun({ spec, credential: null });
     expect(created.handle.cacheKey).toBeNull();
-    expect(created.credentialMinted).toBe(false);
+    expect(created.credentialScope).toBeNull();
     expect(provider.events.map((event) => event.kind)).toEqual(['create', 'attach']);
     const ended = await clientFor().endRun(runId, { handle: created.handle, export: null });
     expect(ended.failures).toEqual([]);
@@ -224,14 +233,14 @@ describe('create (TD-028 decision 4: idempotent on the run id)', () => {
   it('lets a run be created again after a create that failed', async () => {
     // A failed create left nothing behind (`LauncherService.startRun` destroys what it made), so
     // replaying the rejection for ever would park a task on a fault that has passed. The failure
-    // is a real one: the credential source refuses, which is `startRun`'s first step.
+    // is a real one: the mirror fetch fails, which is `startRun`'s first provider step.
     const runId = randomUUID();
-    mintFails = true;
+    mirrorFails = true;
     await expect(
       clientFor().createRun({ spec: specFor(runId), credential: credentialRequest }),
     ).rejects.toMatchObject({ code: 'workspace_failed' });
     expect(createdRuns()).toEqual([]);
-    mintFails = false;
+    mirrorFails = false;
     await expect(
       clientFor().createRun({ spec: specFor(runId), credential: credentialRequest }),
     ).resolves.toMatchObject({ replayed: false });
