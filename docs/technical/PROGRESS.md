@@ -18,7 +18,7 @@
 > **"Architect ruling (M4, session 6)"** at the end of this file. This session is started with `/orchestrate`,
 > which loads `docs/technical/15-orchestrator-prompt.md`; that document, not a pasted prompt, is now the loop.
 
-**Session 8 — 2026-09-25.** `main` opened at **`c1cc951`**, tree clean, and every run on the last three heads read **completed success** — WP-53's `ci` `35879384310` and `image` `35879384479` (PENDING in session 7's note) included, with zero `release` runs. **WP-54 is DONE at `3288496`** (its `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success**; its docs commit `bdcfbe2` read `ci` `36165713727` and `image` `36165713682` **completed success**). **WP-74 is DONE at `91e0140`** (`ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs; the docs commit that carries this sentence has its own runs, **PENDING — read to `completed` before the next row**) — backlog 82 and 147 closed, `verify:e2e` green on this machine again. **Two majors had no owner and now do**: backlog **148** (a run's `/cache` is the whole mirror volume) as **WP-75** and **133** (the launcher cannot authenticate to git) as **WP-76**, both placed right after WP-74. Machine baseline: `docker volume ls | wc -l` = **102** (the two new volumes are the user's own `speedpuzzlingcz` postgres containers, not this repository's). **Three things for the next session.** (1) **The load gate, not the work, set the pace**: one-minute load was 20–175 for most of the day (Spotlight's `mds_stores` at ~250 % and the user's containers; this session's own processes were ~6 %), so the implementer spent six of its seven hours waiting — and its waits were **unbounded `until` loops** that each tool timeout orphaned: 25 of them, killed by the orchestrator after the user asked why 24 shells were running. **Every brief now says: a load check is five readings a minute apart, then a report — never an unbounded loop, never a background shell left behind.** (2) **`verify:e2e` is red on this machine for a reason that is not the tree**: backlog **147**, reproduced on a clean `main` worktree; until WP-74 closes it, every row's e2e verdict carries that one named failure and the rest is read as the verdict. A likely cause (the refiner's, unmeasured) is macOS writing into the bind-backed control volume between the two teardown helpers. (3) **A floor list is an enumeration**: WP-54's review found seven, then five, spellings past it, and BD-025 now says so rather than claiming a boundary. **WP-75 is DONE at `1b0af26`** (`ci` `36200943398` and `image` `36200943454` **completed success**; WP-74's docs commit `6972cbc` read `ci` `36175963207` and `image` `36175963205` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 148 and 152 closed. **The TD-028 amendment WP-76 needed exists** (the architect's, session 8: the runner mints a run-scoped credential through `IntegrationActionExecutor` and passes it on the create request; Q98 filed). **WP-76 is DONE at `52495cb`** (`ci` `36208771351` and `image` `36208771353` **completed success**; WP-75's docs commit `355f444` read `ci` `36201525827` and `image` `36201525825` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 133 closed: a private repository mirrors, the developer stage can push, and the run's credential is minted, audited and revoked. **WP-55 is DONE at `a72aaa2`** (`ci` `36216963170` and `image` `36216963211` **completed success**). **CI went red on WP-77's docs commit `2ab70eb`** (`ci` `36213166240`, `integration` job; `image` `36213166173` success): `test/integration/stats/stats-backfill.integration.test.ts`, untouched since WP-41, pins a row order sorted by day, and its story started three hours before *now* — a run between 03:00 and 03:30 UTC (this one: 02:55) splits it across midnight. **Deterministic by time of day, not by load**; fixed at `ae65e2f` by anchoring the story to noon UTC (`ci` `36217053525` and `image` `36217053489` **completed success**). **Two machine-rule breaches by the orchestrator this session, recorded rather than hidden**: WP-77's last `verify` started at a one-minute load of 34, and this fix's single integration file at 20 — both without the gate. **WP-77 is DONE at `2481f09`** (`ci` `36212658371` and `image` `36212658429` **completed success**; WP-76's docs commit `e0d2790` read `ci` `36209347069` and `image` `36209347052` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 155 closed. **WP-56 is DONE at `e0e877d`** (`ci` `36221858072` and `image` `36221858076` **completed success**; WP-55's docs commit `6083512` read `ci` `36217921241` and `image` `36217921292` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-57 is DONE at `933c58f`** (`image` success; `ci` success after one `--failed` rerun of an Alpine-mirror outage; WP-56's docs commit `f7c09c1` read `ci` `36222374356` and `image` `36222374355` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-58 is DONE at `c2f15f3`** (`ci` `36230652056` and `image` `36230652049` **completed success**; WP-57's docs commit `715320b` read `ci` `36226205654` and `image` `36226205639` **completed success**; this docs commit's runs **PENDING**). **WP-59 is DONE at `5910ecf`** (`ci` `36236800859` and `image` `36236800844` **completed success**; WP-58's docs commit `90f431c` read `ci` `36231164931` and `image` `36231164932` **completed success**; this docs commit's runs **PENDING**) — and standing rule **91** recorded. **WP-60 is DONE at `eb7ee6a`** (`ci` `36243497973` and `image` `36243497972` **completed success**; WP-59's docs commit `9a5fbbf` read `ci` `36237315363` and `image` `36237315492` **completed success**; this docs commit's runs **PENDING**). **WP-61 is DONE at `8dbebd9`** (`ci` `36248633792` and `image` `36248633812` **completed success**; WP-60's docs commit `ce074f4` read `ci` `36243993210` and `image` `36243993219` **completed success**; this docs commit's runs **PENDING**). **WP-43 is DONE at `b4c23bc`** (`ci` `36253785415` and `image` `36253785435` **completed success**; WP-61's docs commit `16d7082` read `ci` `36249210359` and `image` `36249210391` **completed success**; this docs commit's runs **PENDING**). **WP-44 is DONE at `7ebdc93`** (`ci` `36260154407` and `image` `36260154412` **completed success**; WP-43's docs commit `b6c7159` read `ci` `36254398544` and `image` `36254398567` **completed success**; this docs commit's runs **PENDING**). **WP-46 is DONE at `8407605`** (`ci` `36264648150` and `image` `36264648144` **completed success**; WP-44's docs commit `bcef1f8` read `ci` `36260965347` and `image` `36260965363` **completed success**; this docs commit's runs **PENDING**). **WP-45 is DONE at `0962369`** (`ci` `36269315614` and `image` `36269315658` **completed success**; WP-46's docs commit `c8b3af3` read `ci` `36265244106` and `image` `36265244132` **completed success**; this docs commit's runs **PENDING**). **WP-62 is DONE at `544340e`** (`ci` `36274035697` and `image` `36274035706` **completed success**; WP-45's docs commit `1cc3dff` read `ci` `36269907267` and `image` `36269907305` **completed success**; this docs commit's runs **PENDING**). **Next: WP-63**, then WP-64 … WP-73 — eleven rows remain in M4. **Session pace**: seventeen rows in about 57 h. **Session pace**: sixteen rows in about 54 h. **Session pace**: fifteen rows in about 51 h. **Session pace**: fourteen rows in about 48 h. **For the M5 architect pass, collected this session**: backlog 195 (chat thread replies and answers), 199 (chat `human_actions`), 187 (no Jira poller, four documents say there is), 173 (the Czech token under-count), 171 (retrieval precision after the floor). **Session pace**: thirteen rows in about 45 h. **Session pace**: twelve rows in about 42 h. **Session pace**: eleven rows in about 38 h. **Session pace**: ten rows (WP-54, 74, 75, 76, 77, 55, 56, 57, 58, 59) in about 34 h. **Session pace**: seven rows (WP-54, 74, 75, 76, 77, 55, 56) in about 28 h, roughly half of it the load gate. **Pace this session**: four rows (WP-54, 74, 75, 76) plus the architect's WP-76 decision in about 17 h 30 min, of which the load gate held the tiers for roughly half; the three security rows each took three review rounds because each round found a way past the one before. Pace: WP-54 took about 8 h 20 min, most of it waiting on load; WP-74 about 2 h 30 min at a load that allowed its tiers.
+**Session 8 — 2026-09-25.** `main` opened at **`c1cc951`**, tree clean, and every run on the last three heads read **completed success** — WP-53's `ci` `35879384310` and `image` `35879384479` (PENDING in session 7's note) included, with zero `release` runs. **WP-54 is DONE at `3288496`** (its `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success**; its docs commit `bdcfbe2` read `ci` `36165713727` and `image` `36165713682` **completed success**). **WP-74 is DONE at `91e0140`** (`ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs; the docs commit that carries this sentence has its own runs, **PENDING — read to `completed` before the next row**) — backlog 82 and 147 closed, `verify:e2e` green on this machine again. **Two majors had no owner and now do**: backlog **148** (a run's `/cache` is the whole mirror volume) as **WP-75** and **133** (the launcher cannot authenticate to git) as **WP-76**, both placed right after WP-74. Machine baseline: `docker volume ls | wc -l` = **102** (the two new volumes are the user's own `speedpuzzlingcz` postgres containers, not this repository's). **Three things for the next session.** (1) **The load gate, not the work, set the pace**: one-minute load was 20–175 for most of the day (Spotlight's `mds_stores` at ~250 % and the user's containers; this session's own processes were ~6 %), so the implementer spent six of its seven hours waiting — and its waits were **unbounded `until` loops** that each tool timeout orphaned: 25 of them, killed by the orchestrator after the user asked why 24 shells were running. **Every brief now says: a load check is five readings a minute apart, then a report — never an unbounded loop, never a background shell left behind.** (2) **`verify:e2e` is red on this machine for a reason that is not the tree**: backlog **147**, reproduced on a clean `main` worktree; until WP-74 closes it, every row's e2e verdict carries that one named failure and the rest is read as the verdict. A likely cause (the refiner's, unmeasured) is macOS writing into the bind-backed control volume between the two teardown helpers. (3) **A floor list is an enumeration**: WP-54's review found seven, then five, spellings past it, and BD-025 now says so rather than claiming a boundary. **WP-75 is DONE at `1b0af26`** (`ci` `36200943398` and `image` `36200943454` **completed success**; WP-74's docs commit `6972cbc` read `ci` `36175963207` and `image` `36175963205` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 148 and 152 closed. **The TD-028 amendment WP-76 needed exists** (the architect's, session 8: the runner mints a run-scoped credential through `IntegrationActionExecutor` and passes it on the create request; Q98 filed). **WP-76 is DONE at `52495cb`** (`ci` `36208771351` and `image` `36208771353` **completed success**; WP-75's docs commit `355f444` read `ci` `36201525827` and `image` `36201525825` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 133 closed: a private repository mirrors, the developer stage can push, and the run's credential is minted, audited and revoked. **WP-55 is DONE at `a72aaa2`** (`ci` `36216963170` and `image` `36216963211` **completed success**). **CI went red on WP-77's docs commit `2ab70eb`** (`ci` `36213166240`, `integration` job; `image` `36213166173` success): `test/integration/stats/stats-backfill.integration.test.ts`, untouched since WP-41, pins a row order sorted by day, and its story started three hours before *now* — a run between 03:00 and 03:30 UTC (this one: 02:55) splits it across midnight. **Deterministic by time of day, not by load**; fixed at `ae65e2f` by anchoring the story to noon UTC (`ci` `36217053525` and `image` `36217053489` **completed success**). **Two machine-rule breaches by the orchestrator this session, recorded rather than hidden**: WP-77's last `verify` started at a one-minute load of 34, and this fix's single integration file at 20 — both without the gate. **WP-77 is DONE at `2481f09`** (`ci` `36212658371` and `image` `36212658429` **completed success**; WP-76's docs commit `e0d2790` read `ci` `36209347069` and `image` `36209347052` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 155 closed. **WP-56 is DONE at `e0e877d`** (`ci` `36221858072` and `image` `36221858076` **completed success**; WP-55's docs commit `6083512` read `ci` `36217921241` and `image` `36217921292` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-57 is DONE at `933c58f`** (`image` success; `ci` success after one `--failed` rerun of an Alpine-mirror outage; WP-56's docs commit `f7c09c1` read `ci` `36222374356` and `image` `36222374355` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-58 is DONE at `c2f15f3`** (`ci` `36230652056` and `image` `36230652049` **completed success**; WP-57's docs commit `715320b` read `ci` `36226205654` and `image` `36226205639` **completed success**; this docs commit's runs **PENDING**). **WP-59 is DONE at `5910ecf`** (`ci` `36236800859` and `image` `36236800844` **completed success**; WP-58's docs commit `90f431c` read `ci` `36231164931` and `image` `36231164932` **completed success**; this docs commit's runs **PENDING**) — and standing rule **91** recorded. **WP-60 is DONE at `eb7ee6a`** (`ci` `36243497973` and `image` `36243497972` **completed success**; WP-59's docs commit `9a5fbbf` read `ci` `36237315363` and `image` `36237315492` **completed success**; this docs commit's runs **PENDING**). **WP-61 is DONE at `8dbebd9`** (`ci` `36248633792` and `image` `36248633812` **completed success**; WP-60's docs commit `ce074f4` read `ci` `36243993210` and `image` `36243993219` **completed success**; this docs commit's runs **PENDING**). **WP-43 is DONE at `b4c23bc`** (`ci` `36253785415` and `image` `36253785435` **completed success**; WP-61's docs commit `16d7082` read `ci` `36249210359` and `image` `36249210391` **completed success**; this docs commit's runs **PENDING**). **WP-44 is DONE at `7ebdc93`** (`ci` `36260154407` and `image` `36260154412` **completed success**; WP-43's docs commit `b6c7159` read `ci` `36254398544` and `image` `36254398567` **completed success**; this docs commit's runs **PENDING**). **WP-46 is DONE at `8407605`** (`ci` `36264648150` and `image` `36264648144` **completed success**; WP-44's docs commit `bcef1f8` read `ci` `36260965347` and `image` `36260965363` **completed success**; this docs commit's runs **PENDING**). **WP-45 is DONE at `0962369`** (`ci` `36269315614` and `image` `36269315658` **completed success**; WP-46's docs commit `c8b3af3` read `ci` `36265244106` and `image` `36265244132` **completed success**; this docs commit's runs **PENDING**). **WP-62 is DONE at `544340e`** (`ci` `36274035697` and `image` `36274035706` **completed success**; WP-45's docs commit `1cc3dff` read `ci` `36269907267` and `image` `36269907305` **completed success**; this docs commit's runs **PENDING**). **WP-63 is DONE at `0f55153`** (`ci` `36280255016` and `image` `36280255019` **completed success**; WP-62's docs commit `e1aa8fd` read `ci` `36274592131` and `image` `36274592160` **completed success**; this docs commit's runs **PENDING**). **Next: WP-64**, then WP-65 … WP-73 — ten rows remain in M4. **Session pace**: eighteen rows in about 60 h. **The founder has five open questions from this session to answer or reverse**: Q95 (approvals expire), Q97, Q98 (a), Q101 (the repository file tightens only) — each implemented per its recommendation and recorded — and Q99/Q100 (not built). **Session pace**: seventeen rows in about 57 h. **Session pace**: sixteen rows in about 54 h. **Session pace**: fifteen rows in about 51 h. **Session pace**: fourteen rows in about 48 h. **For the M5 architect pass, collected this session**: backlog 195 (chat thread replies and answers), 199 (chat `human_actions`), 187 (no Jira poller, four documents say there is), 173 (the Czech token under-count), 171 (retrieval precision after the floor). **Session pace**: thirteen rows in about 45 h. **Session pace**: twelve rows in about 42 h. **Session pace**: eleven rows in about 38 h. **Session pace**: ten rows (WP-54, 74, 75, 76, 77, 55, 56, 57, 58, 59) in about 34 h. **Session pace**: seven rows (WP-54, 74, 75, 76, 77, 55, 56) in about 28 h, roughly half of it the load gate. **Pace this session**: four rows (WP-54, 74, 75, 76) plus the architect's WP-76 decision in about 17 h 30 min, of which the load gate held the tiers for roughly half; the three security rows each took three review rounds because each round found a way past the one before. Pace: WP-54 took about 8 h 20 min, most of it waiting on load; WP-74 about 2 h 30 min at a load that allowed its tiers.
 
 **Session 7 so far.** `main` opened at **`cc80fc3`**, tree clean, its `ci` `35114407808` and `image`
 `35114407731` both **completed success** with **zero `release` runs on the sha** — the first head to show
@@ -8144,7 +8144,8 @@ head sha)` read rather than adding a fifth.
 **Depends on / owner.** **No work package owns it**; WP-59 (the coalesced diff read) is where it
 would land. Related: **83** (closed at WP-54), **64**.
 
-### 146. **No organisation command layer is composed in production, so an admin cannot set a stricter command maximum — and composing one under Q97's narrowing would hand back a git verb the organisation removed** (TODO, small — latent; found by WP-54's review round 2, session 8)
+### 146. **No organisation command layer is composed in production, so an admin cannot set a stricter command maximum — and composing one under Q97's narrowing would hand back a git verb the organisation removed** (**first half RESOLVED** at `0f55153`, WP-63, session 8 (the organisation layer composed and intersected before any narrowing; the admin write surface is 223) — TODO, small — latent; found by WP-54's review round 2, session 8)
+> **Refiner (session 8):** half (1) implemented at WP-63 (commit pending; `intersectWithOrganisationMaximum`); half (2), the admin write surface, was **not** built and is carried — with the organisation autonomy maximum — as backlog **223**, unowned.
 
 **What is wrong.** Two halves of one cause: the `org` layer of technical/12:170's
 `merge(defaults, org, project, repo)` has no production producer.
@@ -10604,6 +10605,143 @@ chore runs to a merge request with no scoping stop, and at **Observe** — *"No 
 definition is *"no agent MRs"*. **Done** is the answer to **Q100** (recommendation there) implemented at the
 scheduler and stated on the maintenance feature card. **Depends on** Q100, Q99. Related: **Q99**.
 
+### 223. **The organisation layer WP-63 composes has no writer but SQL, and the organisation autonomy maximum BD-025 §2 and technical/12 promise has neither a writer nor a reader** (TODO, **small** — **the remainder of backlog 146 (2)**, which WP-63 was assigned and did not build, plus one new half; **latent**: nothing is wrong at runtime while `organizations.settings` is empty, which is every instance; **read off the tree, not measured**; **no M4 row owns it** — for the M5 architect pass; found by WP-63, session 8)
+
+**What is wrong.** Two halves. **(1) Commands.** Since WP-63 the organisation maximum is *read* — `organisationCommandsFrom`
+(`apps/server/src/config-layers.ts:41`) composes `organizations.settings.commands`, strictly, and
+`intersectWithOrganisationMaximum` (`packages/domain/src/policies/command-policy.ts:1667`) applies it to every
+verb before a project narrows — but no endpoint, screen or command writes it. The implementer, quoted: *"no admin
+surface writes `organizations.settings.commands`, so the organisation layer WP-63 composes can be set only by
+SQL"*. technical/12:179 already says so (*"no surface writes it yet, PROGRESS backlog 146 (2)"*). **(2) Autonomy.**
+BD-025 §2 (*"the organisation sets the maximum autonomy"*) and technical/12:177 (*"Org maximum for autonomy and
+command policy caps what project/repo may set"*) have no producer at all: the published view is capped at a
+constant, `PUBLISHED_AUTONOMY_MAXIMUM = 'autonomous'` (`apps/server/src/routes/projects.ts:266`), whose docblock
+(`:255-265`) states *"no surface sets an organisation autonomy maximum"*, and the dial's four positions are all
+selectable (WP-30). BD-027's WP-62 clarification (the cap limits the **level**, not the document keys) says what
+the cap would govern, not where it comes from.
+
+**Cost to leave.** Two documented admin controls do not exist, and nobody is told: an organisation that wants a
+stricter command list must write JSON into a column (a value that does not parse refuses **every** run of every
+project in the organisation, by design — `config-layers.ts:27-33` — so the SQL path is also the dangerous one), and
+an organisation cannot stop a maintainer selecting `autonomous`. **What would make it urgent:** the first
+multi-team instance, or the first operator who reads BD-025 §2 and looks for the setting.
+
+**Done.** (1) An admin-only `GET/PUT` for the organisation's `commands`, validated by the same strict schema the
+reader uses (so a value the reader would refuse is refused at the write, `409` naming the key path), one
+`human_actions` row per write, and a planner-level assertion that a written maximum dropping `git push *` removes it
+from a developer run. (2) An organisation autonomy maximum stored beside it, read by the dial's selection command
+(refuse a level above it, a typed `409`) **and** by `GET …/config` in place of the constant, with the docblock at
+`projects.ts:255-265` rewritten (rule 83). Whether a project **already** above a newly lowered cap is moved down
+or only refused its next selection is a product call — ask it at the row, not here. **Depends on** WP-63 (commit
+pending), WP-30, WP-62. Related: **146**, **Q97**, **Q69**.
+
+### 224. **The settings page's *WIP limits* card tells a maintainer the limits are keys of `.agentic/config.yml`; no such key exists, and a maintainer who writes one stops every run of the project** (**RESOLVED** at `0f55153`, WP-63, session 8 (folded by the orchestrator: the card's sentence, because this row made following it refuse every run) — TODO, **small** — the numbers the card shows are **right**, its sentence is **wrong**; **live** for anyone who acts on the sentence; the per-project WIP configuration BD-010 describes is a separate, older gap; sentences owned by **WP-73**, the configuration itself **unowned** — for the M5 architect pass; found by WP-63, session 8)
+
+**What is wrong.** `project-settings.tsx:77-79` reads `config.pipeline.wip`, falling back to `{}`, and renders
+*"Max parallel tasks 2 · max tasks in pipeline 5 (BD-010's defaults when the document sets none)"* (`:236-238`)
+followed by *"Read-only here: both are keys of the project's `.agentic/config.yml`"* (`:241`); the module
+docblock says the same (`:26-31`). `pipelineConfigSchema` is strict and has three keys — `template_overrides`,
+`custom_stages`, `limits` (`packages/contracts/src/config.ts:128-132`) — so `pipeline.wip` is refused; the
+implementer measured it, quoted: *"`Unrecognized key: "wip"`, measured"*. The settings-screen test fixture carried
+the refused key and was corrected in WP-63 (`apps/web/src/features/project-settings.test.tsx:165-166`).
+
+**Graded — is it showing users a wrong value? No.** Refiner read of the production path: the settings port builds
+`defaultProjectSettings(projectId, {...})` with no `wip` override (`apps/server/src/pipeline.ts:651`), so every
+project runs on `DEFAULT_WIP_LIMITS` (`packages/application/src/pipeline/settings.ts:223`; 2 / 5 / 4 at
+`packages/domain/src/policies/wip.ts:20-24`), which is what admission enforces (`saga.ts:515`, `:1504`). The card's
+fallback therefore prints exactly the enforced numbers, always. What is false is the **affordance**: the page says
+the limits are set in the file. **And since WP-63 acting on it is costly** — derived, not measured end to end: a
+repository file carrying `pipeline.wip` fails the strict schema, the reading is recorded `invalid`, and WP-63's
+criterion 4 refuses **every run** of the project until the file is fixed (the refusal names the key path, so it is
+diagnosable). The underlying gap is older than the card: BD-010:8 (*"Projects define `max_parallel_tasks` (default
+2) and `max_tasks_in_pipeline` (default 5)"*) has no schema key and no reader — WP-03/04's scheduled follow-up,
+never numbered, said *"WIP limits have no schema anywhere"* (this file, under WP-03/04), and WP-30 wrote the card's
+assumption on top of it (*"both are keys of a document the repository also owns"*, under WP-30).
+
+**Done.** **WP-73 (sentences):** the card and the docblock say the limits are the platform's fixed BD-010 defaults
+on this build and are not configurable, and stop naming a key (rule 83); the card stops reading `pipeline.wip`
+(it prints the constants the admission check uses, or a published field — never a key the schema refuses).
+**Unowned (the feature):** `pipeline.wip.{max_parallel_tasks,max_tasks_in_pipeline}` added to the schema,
+technical/12 and `schemas/`, read by the settings port into `ProjectSettings.wip`, asserted by a countable effect
+(a project with `max_parallel_tasks: 1` admits one active task, read back at both values); the org's
+`max_parallel_runs` stays backlog **127**'s. **Depends on** nothing unbuilt. Related: **127**, **58**.
+
+### 225. **A configuration export's merge request is shown once, in the button's response, and nothing lists it again — so a second press opens a second merge request** (TODO, **small** — **read off the tree, not measured**; **live** since WP-63; **no M4 row owns it** — for the M5 architect pass; found by WP-63, session 8)
+
+**What is wrong.** The implementer, quoted: *"An export's result is visible only in the response, the
+`human_actions` row and the `integration_actions` audit: no screen lists past exports or the open configuration
+merge request."* Refiner read: the settings card renders the branch and `merge_request_url` from the mutation's
+own state (`apps/web/src/features/project-settings.tsx:301-321`), which a reload discards, and there is no read
+endpoint for past exports (technical/08:16 lists `export` and `refresh`, no list). **One consequence found while
+filing (a hypothesis from the code, not run):** the export branch is `agentic/config/<hash12>-<export id>`
+(`packages/application/src/config/export.ts:97-109`) and the only "nothing to do" answer is when the **default
+branch** already carries the document (`:262-263`) — nothing looks for an open export merge request — so pressing
+the button again with a fresh `Idempotency-Key` while the first merge request is unmerged opens a **second** one
+for the same document. The docblock at `:101-102` describes the second-branch case only for *"after the first
+merge request was closed"*.
+
+**Cost to leave.** Small: a maintainer loses the link on reload and can create duplicate configuration merge
+requests a reviewer must reconcile. **Done** — the settings card shows the open configuration merge request (or
+the last export's outcome) from a read the server answers from `human_actions`, and either the export answers
+the open merge request instead of opening a second (a `status: 'open'` result naming it) or the card says a second
+press will open another. **Needs measurement** only to confirm the second-MR behaviour against the fake provider.
+**Depends on** WP-63 (commit pending). Related: **44**.
+
+### 226. **A project's own `.agentic/pipeline.yml` and `prompts/<stage>.md` are still unread — and the `.agentic/config.yml` keys that point at them (`stages.<id>.prompt`, `prompt_append`, `pipeline.custom_stages`) parse, now also from the repository, and change nothing** (TODO — **numbers the WP-18a discovered-work bullet**, which had no number and no owner; the unread keys are backlog **220**'s class; **live** for any project whose settings or repository file carries those keys; **no M4 row owns it** — a work package of its own, for the M5 architect pass; re-reported by WP-63, session 8)
+
+**What is wrong.** product/12:10-11 lists `pipeline.yml` (*"optional full pipeline definition"*) and `prompts/`
+(*"optional prompt overrides or appendices per stage/role"*); technical/12 § `.agentic/pipeline.yml` (`:121`) and
+§ Prompt versioning (`:173`, *"a project override or append is hashed with it"*) specify both. Nothing reads
+either. The WP-18a bullet (this file, "Discovered work — session 5") gave the reason then — the vault answered only
+the four indexed paths, and *"a template a project declared and the platform could not read parks every task one
+stage short of `done`"*. WP-63 built the reader it named but widened it to **exactly two** paths
+(`.agentic/config.yml`, `CLAUDE.md`); the settings port says so (`apps/server/src/pipeline.ts:618-624`, *"`pipeline.yml`
+is not one of them: settling a project's pipeline from it is still a work package of its own"*). **Found while
+filing:** the configuration half is the unread-key class — `stageAgentSettingsSchema` accepts `prompt` and
+`prompt_append` (`packages/contracts/src/config.ts:141-142`) and `pipelineConfigSchema` accepts `custom_stages`
+(`:130`); the planner reads only `max_turns` and `budget_usd` of a stage's settings (`planner.ts:654-658`), and a
+refiner grep for `prompt_append`/`custom_stages` outside `packages/contracts` finds the interpreter's **template**
+fields and a retrieval comment, no reader of the configuration keys. Since WP-63 these arrive from the repository
+file too, which is where technical/12's example puts them.
+
+**Cost to leave.** A team that writes a stage prompt override or a custom stage — both documented with worked
+examples — gets a `200` (or a `valid` reading) and the shipped behaviour, with no signal; `prompt_version` then
+claims a prompt the project did not get (the digest is of the shipped prompt, which is at least honest about
+what ran). **Done** — (1) `createGitRepositoryFileSource`'s path list widened **by name** to `pipeline.yml` and the
+prompt files a configuration references (never a glob), bounded as today; (2) a declared template that fails to
+read or parse is a **named refusal** at admission like WP-63's invalid config, never a silent fall-back to the
+shipped template; (3) `stages.<id>.prompt`/`prompt_append` reach the assembled system prompt **inside a data block**
+(CLAUDE.md: a prompt never carries untrusted text outside one — a repository prompt file is repository content)
+with the override's digest in `prompt_version`, asserted by a countable effect at both values; (4) until then,
+technical/12 says which of these keys are read (the **WP-73** sentence half, alongside 220's). The data-block
+question in (3) — whether a project's *override* may replace the platform's role prompt at all, given the
+assembler's rule — is a decision the row must take first. **Depends on** WP-63 (the reader), WP-17 (the
+assembler). Related: **220**, **44**, **Q67**.
+
+### 227. **The repository's `.agentic/config.yml` is re-read after an index run, not when a task starts — so a task can run on the previous reading, and technical/12's *"computed at task start and frozen into `Run.settings_snapshot`"* is true of neither half** (TODO, **small** — mostly a documentation defect; **live** for the window between a merge and the next index run; **read off the tree, not measured**; sentence owned by **WP-73**, the behaviour **unowned**; found by WP-63, session 8)
+
+**What is wrong.** The implementer, quoted: *"The repository reading is refreshed on index triggers and on
+demand, not on the settings port's read; a task that starts before the first index run after a merge runs on the
+previous reading."* Refiner read: the reading is refreshed by `afterIndex` at the end of a `knowledge.index` job
+(`packages/application/src/knowledge/index-job.ts:199-208`) and by `POST …/config/refresh`; the index job is
+enqueued **after commit** by `task.created` (`:257`) and by `mr.merged`/`default_branch.moved` (`:271`), so the
+task that triggers an index run is itself planned from whatever reading the table holds when its first stage runs
+— a race, not an ordering. The settings port reads the stored row per call (`apps/server/src/pipeline.ts:630-661`),
+so the reading is also **not frozen**: a later stage of the same task sees a newer reading. And `runs.settings_snapshot`
+has **no writer** (the WP-15h bullet, *"`runs` is written with eleven of its ~30 columns"*, this file) — so
+technical/12:177's *"frozen into `Run.settings_snapshot`"* describes nothing this build does.
+
+**Cost to leave.** Small: one index run's lag, and a stage-to-stage change within a task that no audit row records.
+It matters when the change is a narrowing (a `block` added in the file takes effect one index run late). **Done**
+— **WP-73:** technical/12:177 says what is true (the last valid reading, refreshed after each index run and on
+demand, read per stage; no snapshot is stored). **Unowned:** either the stage executor refreshes the reading at
+admission between its transactions when the default branch has moved (a fetch per stage — outside any
+transaction, never in the settings port, which is called from handler transactions, backlog **221**), or
+`settings_snapshot`/`settings_hash` get a writer so the task at least records which reading it ran on — the
+second is the cheaper and is the audit technical/12 promises. **Depends on** WP-63 (commit pending). Related:
+**221**, **19**; the mirror-contention risk the same WP-63 note raises is `docs/TODO.md`'s *"Concurrent fetch into
+one mirror"* item, updated there rather than numbered here.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -13050,7 +13188,7 @@ producer of it is worth an entry rather than a note.
 it. Related: entry **1** (no production load, so no producer today), and WP-15c's own unbounded-retry
 fix, which closed this shape for the **inbound** path only.
 
-### 44. **The wizard's step 5 commits the drafted knowledge pages and never the configuration, and nothing can fill the `repo` layer the API publishes** (TODO — **no work package owns it**; found by WP-21, session 5)
+### 44. **The wizard's step 5 commits the drafted knowledge pages and never the configuration, and nothing can fill the `repo` layer the API publishes** (**RESOLVED** at `0f55153`, WP-63, session 8 — TODO — **no work package owns it**; found by WP-21, session 5)
 > **M4 (architect, session 6): folded into WP-63.**
 
 **What is wrong.** product/06 § "Step 5" asks for one merge request carrying two artefacts:
@@ -14185,7 +14323,7 @@ file, or the first work package that touches upgrade behaviour.
 | WP-46 | **The merge-readiness Checks panel** | DONE | `8407605` | **Folded backlog 95's remaining items, the refiner's 158, 159's human half, 160, and at review 211 and 212.** The Checks panel answers **ten of product/10's eleven** — review threads (narrow `tasks.review_threads`, migration **0048**), the business verdict and acceptance criteria from the latest acceptance verdict's own fields — with the tamper check named absent (BD-024's gate) and the eleven held both ways in a test. A stage row closes at **every** ending (re-entry superseded/left, completion, cancel paused or not), with a census pairing each site with the close — review found a take-over-then-hand-back orphan the first invariant's wording denied. A human-comment return carries the reviewers' words to the Developer, redacted, one line per comment, **inside the feedback block and nowhere else** (a canary placing them outside survived until the exactly-once assertion existed); the chat notification carries only the thread count, because a comment's markdown link would otherwise have been posted under the platform's identity (211). **One review round** (REQUEST_CHANGES). The orchestrator amended product/04's comment-return sentence. **Orchestrator verification**: `PASS: verify` (415 files, 7877 passed), `PASS: verify:integration` (575), `PASS: verify:e2e` **twice** (212/212), `PASS: verify:ui` (368), `PASS: verify:web-e2e` (47). CI on `8407605`: `ci` `36264648150` and `image` `36264648144` **completed success**, zero `release` runs. Discovered work: backlog **209**, **210**, **213**, and the implementer's **214** (the platform's own conflict-warning thread counts as a human thread) and **215** (an agent return's first line is model text in chat) — the last two listed in its notes for the refiner | Depends on **WP-55**, **WP-52**, WP-38, WP-24, WP-26; run after WP-44 (shared file). Folds backlog **95**'s remaining items. The tamper check is **explicitly not in it** — BD-024's gate is a work package and stays named absent. **Refiner (session 8): also folds backlog 158, 159 and 160** — WP-55's leftovers on the rows this panel reads: a `human` stage left forward by `mr.merged` is never closed (158) and a gate that **escalates** keeps its row `running` at three sites, one of them `saga.ts`'s convergence escalation outside `applyEscalation` (160) — one invariant, *a row is open iff the task is at that stage and not parked*; and a **human-comment** return's reason is a thread **count**, so a human reviewer's words may reach the Developer nowhere (159's human half, **major if** the `glab` route is measured closed — the agent half was folded into WP-55 by the orchestrator). Each entry has its criteria; 159's stale-artifact decision stays unowned |
 | WP-45 | **Review checklists, and the Reviewer pass a shadow report needs** | DONE | `0962369` | **Folded backlog 91 and 100; implemented Q83.** All six risk classes proposed (`public_api` offered, `payments` with both requirements); named review checklists (`policies.review_checklists`, `checklist:<name>`, an undefined list refused at write and read) delivered to the Reviewer inside `review_checklist` data blocks with a total cap; `checklists_applied` recorded and **overwritten by the executor**; reviewer prompt **v3** with three eval cases (the eval check exits 1 by design — no model credential); one shadow review task per ticket over the **human** MR, findings stored and posted nowhere, the comparison two sides or nothing and labelled as measured against the agent's own specification (**product/19 §13 amended by the orchestrator**). **One review round** (APPROVE-with-nits; the missing test graded major — a review that escalated left its report unwritten with every test green — added and re-canaried). **Orchestrator verification**: `PASS: verify` (415 files, 7920 passed), `PASS: verify:integration` (575), `PASS: verify:e2e` **twice** (212/212), `PASS: verify:ui` (371), `PASS: verify:web-e2e` (47). CI on `0962369`: `ci` `36269315614` and `image` `36269315658` **completed success**, zero `release` runs. Criterion (8) (the review pass's cost) stays unmeasured in `docs/TODO.md`. Discovered work: backlog **216**–**219** | Depends on WP-37, WP-24, WP-34, WP-17, TD-016. Folds backlog **91** (major), **100**; implements **Q83**. The only M4 row that opens the reviewer's prompt and its eval cases. Telling the truth about `payments` lands first and needs no answer |
 | WP-62 | **The dial's remaining policies get readers** | DONE | `544340e` | **Folded backlog 72 (a) and (b) and 208; implemented Q78 and Q79.** The dial's value applies where the project document is silent and a document key wins where it speaks (**BD-027 amended by the orchestrator**: overridable where something reads the override; the organisation cap limits the level, not the keys — a clarification, the reviewer found no ceiling in BD-027 or product/19); thirteen policies read, two stated unread and marked; business review and the scope halt reach the pipeline through a dial **frozen on the task** (migration **0049**), none of the **24** `compilePipeline` call sites (a census; the row said fifteen) asking the settings port; Assist parks in `needs_human` after architecture, continued by hand-back. **Review found the plan-approval gate standing aside on Assist on a misread of product/19 §11** (the "—" is Observe's) — a member's hand-back could have taken an unapproved `auth/**` plan into implementation; the gate runs again, and **fixing it exposed an older hole**: hand-back accepted a task waiting for plan approval at every dial position — now 409, with a test that failed before the fix. **One review round** (REQUEST_CHANGES: that gate; a false user-guide sentence about frozen vs live policies; a census regex accepting any receiver; a malformed dial taking down other tasks' list reads). **Orchestrator verification**: `PASS: verify` (418 files, 7957 passed), `PASS: verify:integration` (577), `PASS: verify:e2e` **twice** (212/212), `PASS: verify:ui` (376), `PASS: verify:web-e2e` (47). CI on `544340e`: `ci` `36274035697` and `image` `36274035706` **completed success**, zero `release` runs. Discovered work: backlog **220**, **221** (folded into 19), **Q99**, **Q100**; for the M5 pass, the reviewer's founder note — after an Assist hand-back, business review cannot be chosen at all | Depends on WP-30, WP-28, WP-18b, WP-05; BD-027:14. Folds backlog **72** (a) and (b) (major); implements **Q78**, **Q79**. `businessReview` builds the carrier, `stopAfterStage` rides on it; the compile-step signature change reaches fifteen call sites |
-| WP-63 | **`.agentic/config.yml` reaches the repository, and the `repo` layer is read back** | TODO | — | Depends on WP-21, WP-18b, WP-18a, WP-30. Folds backlog **44** (major). **Q94** decides precedence and whether a direct commit is ever allowed |
+| WP-63 | **`.agentic/config.yml` reaches the repository, and the `repo` layer is read back** | DONE | `0f55153` | **Folded backlog 44, 146's first half and 224; implemented Q94.** A configuration export (an `agentic/config/*` MR through the executor, never a direct commit — now a mechanical `agentic/` check) and the repository's default-branch `.agentic/config.yml` read back as the `repo` layer: bounded YAML (aliases capped, duplicate keys, `__proto__` and every explicit tag refused, nothing on stderr), re-checked on read, never recorded over a newer reading; an invalid file refuses the project's runs by key path (migration **0050**, dependency `yaml@2.9.0`). **Review measured that the file — writable by merge rights — accepted admin-only settings** (`protected_paths: []` dropped BD-024's tamper protection); **the orchestrator ruled tighten-only and filed Q101 for the founder**: every key graded, held to the schema by a structural drift test; protected paths, reviewers, risk classes and checklists are unions; the dial, its override keys and every review-relaxing policy not applied; the file narrows commands again after the settings, tested on both planners' run paths. **BD-025 amended by the orchestrator** (the organisation layer is composed since WP-63), technical/12 and product/06 corrected. **Three review rounds**; the orchestrator's canaries after R2 (protected paths by replace, a weaker same-name risk class, tags accepted) all dead by name. **Orchestrator verification**: `PASS: verify` (424 files, 8039 passed), `PASS: verify:integration` (579), `PASS: verify:e2e` **twice** (213/213), `PASS: verify:ui` (378), `PASS: verify:web-e2e` (47). CI on `0f55153`: `ci` `36280255016` and `image` `36280255019` **completed success**, zero `release` runs. Discovered work: backlog **223**, **225**–**227**, **Q101**; for the M5 pass, the reviewer-ordering defect review found (a file's reviewers can displace a class's required reviewer when the settings are silent) | Depends on WP-21, WP-18b, WP-18a, WP-30. Folds backlog **44** (major). **Q94** decides precedence and whether a direct commit is ever allowed |
 | WP-64 | **Readiness stops being frozen at discovery, and the wizard's step 3 exists** | TODO | — | Depends on WP-21, WP-18a/b, WP-17; Q68 is answered. Folds backlog **46** (major), **45** (major). The completeness must move **as a number**: *"the pages were drafted"* and *"the score moved"* are different claims |
 | WP-65 | **The organisation's own channel, the undelivered metric, the maintenance report, and the storage gauge** | TODO | — | Depends on WP-32, WP-30, WP-36, WP-18a. Folds backlog **80** (major), **81**, **107**, and **Q63**'s operator-facing half. Backlog 80 takes answer (c), the account's channel; the migration carries `nulls not distinct` |
 | WP-66 | **The history bootstrap says how much it read** | TODO | — | Depends on WP-35, WP-18b. Folds backlog **102**, **103**. One column, one `set` clause, one line on the panel — deliberately **not** behind the statistics row. **Refiner (session 6): also folds backlog 124's first half** — `docs/technical/03-data-model.md` has no entry for `history_bootstrap_batches` or `history_bootstrap_chunks` at all, so this row's own migration would otherwise add a second undocumented column to a table with no documented home; the page is amended **before** the migration (criterion (8)). The rest of 124 — the other ten tables with no entry, and the check that would stop the drift — stays unowned and must **not** go to WP-73, which would then be editing the same page |
@@ -31689,3 +31827,210 @@ plan gate no longer asks when architecture finishes; the assertion was already s
 - **222** Maintenance tasks open merge requests and carry no dial, so an Assist project's scheduled
   dependency bumps run to a merge request with business review on. Decided here as *the dial shapes
   picked-up tickets* (stated at the site); whether maintenance should honour Assist is a product call.
+
+#### WP-63
+
+**Implemented** (implementer, session 8): backlog **44** (both halves) and backlog **146**'s half (1),
+Q94 answered per its recommendation. Five criteria, where each lands:
+
+1. **Export.** `POST /api/projects/:project_id/config/export` (`apps/server/src/routes/project-config.ts`,
+   `packages/application/src/config/export.ts`): the **settings layer** (`projects.config`) rendered as
+   `.agentic/config.yml` — YAML read back through the same codec and the strict schema before it is
+   proposed — plus a one-line `CLAUDE.md` pointer to `<knowledge_dir>/index.md`, as **one commit on
+   `agentic/config/<hash12>-<export id>` and a merge request** through `knowledgeWrites` (the knowledge
+   apply path's two writes, one executor, labels `agentic, configuration`). **No direct commit, ever**
+   (Q94 (b)); there is no flag that asks for one. `Idempotency-Key` required, permission
+   `project.config.export` (maintainer, already in the table), one `human_actions` row per performed
+   export written **after** the provider answered, a replay answered from that row with
+   `performed: false` and no provider call, a different body under a used key `409
+   idempotency_key_reused`, `base_hash` refusing a stale export `409 config_conflict`. Create versus
+   update is **read** from the default branch (the provider refuses the wrong one), a file that already
+   says it is left out, a symlink/oversized file at the path is refused rather than replaced.
+2. **The `repo` layer.** `createGitRepositoryFileSource` (`packages/infrastructure/src/knowledge/git-vault.ts`)
+   is the stated widening of WP-18a's vault read: **exactly two paths** (`REPOSITORY_FILE_PATHS`:
+   `.agentic/config.yml`, `CLAUDE.md` — the latter already indexed, so no new exposure), any other path
+   refused before git runs, mode/size listed with `ls-tree -r -l` before a byte is read (64 KiB bound),
+   and the commit rules shared with the vault by extracting `prepareMirrorRead` (default branch only;
+   a pinned commit must be an ancestor). `refreshRepositoryConfig` parses it (YAML 1.2 core schema,
+   alias ceiling, duplicate keys and `<<` refused, `prettyErrors: false` so no source line reaches a
+   refusal) against the strict schema and records `project_repository_config` (migration **0050**).
+   It runs after every knowledge index run pinned to that run's commit (`afterIndex`) and on
+   `POST …/config/refresh`. `GET …/config` merges it through `mergeProjectConfig` — **its first
+   production caller** — and publishes `effective` + per-leaf `sources` (so a key answers `repo`) +
+   `repository` (the reading), beside `config`, which stays the settings layer the screens round-trip.
+3. **Precedence, both directions,** with a project whose repository and settings disagree:
+   `routes/projects.test.ts` › "lets the repository win where it states a key, and the settings where it does not"
+   and › "gives the settings their keys back when the repository has no file or was never read";
+   against a real reading in the e2e below.
+4. **Named refusal.** An invalid file records `invalid` with the **key paths** (never the values;
+   redacted, then bounded at 600 chars): `GET …/config` answers `409 invalid_repository_config`, and
+   **every run is refused** — a stage escalates to `needs_human` at admission with the key paths in the
+   blocker (no `runs` row), an ask is refused. *Decision:* refuse rather than run on the last good
+   reading, because the file on the default branch is the project's statement of its rules and a run
+   on an older reading executes under rules it no longer states (a `block` added in the same broken
+   edit would be ignored). Cost: one bad merge stops the project's runs until fixed; every refusal says
+   where. Readers that are not runs (gates, notifications) see the settings without the layer.
+5. **e2e:** `test/e2e/onboarding/config-export.e2e.test.ts` › "exports the settings, reads the edited file back, and moves the effective configuration"
+   — a real repository on disk through the platform's mirror; export → the fake provider's branch
+   and files, replay, one audit row; the file merged *with an edit* onto `main` → re-read → the
+   repository's keys win, the settings answer where it is silent, `policies.autonomy` listed as not
+   applied; then an invalid file → `409` naming `stages.refinement.max_turns`.
+
+**Backlog 146 (1).** `intersectWithOrganisationMaximum` (`packages/domain/src/policies/command-policy.ts`)
+applies the organisation maximum to the run's baseline **for every verb, before** Q97's narrowing:
+a baseline entry is kept only if the organisation's `allow` grants it (verbatim, or a literal the
+maximum runs), an organisation literal inside a baseline glob is kept, and `ask`/`block` only grow.
+`runCommandPolicy` is the one order (baseline → organisation → project declaration) both planners
+use. `command-policy.test.ts` › "keeps it removed after a project narrows — the defect Q97 alone would have reopened"
+and the planner case › "keeps a git verb the organisation removed out of a developer run, after the project narrows"
+are the rule-42 pair. The organisation layer is composed from `organizations.settings.commands`
+(`apps/server/src/config-layers.ts`, strict, a value that does not parse is **refused**, not read as
+absent). **Half (2) — an admin write surface — is not built** (see discovered work).
+
+**Decisions and assumptions.**
+- **Commands merge list by list, the repository winning, then narrow once** (`projectCommandDeclaration`).
+  `mergeProjectConfig` used to narrow twice (settings, then repository), so a settings list was one the
+  file could never undo — the silent divergence Q94 (a) answers. The file still cannot widen past the
+  role baseline ∩ organisation maximum (`routes/projects.test.ts` › "never lets the repository widen the commands past the organisation, and publishes what it drops").
+  `effective-config.test.ts`'s *"lets a project narrow and the repository narrow again"* became the
+  both-directions case › "lets the repository state the project’s list, narrower or wider than the settings".
+- **`policies.autonomy` in the file is not applied**, reported in `not_applied`
+  (`REPOSITORY_AUTONOMY_NOT_APPLIED`): the dial is materialised when a human selects it (BD-027:14);
+  the Q78 override keys *are* applied from the file, as Q78 already says.
+- **The published view is capped at `autonomous`** (`mergeProjectConfig`'s new `autonomyMaximum`):
+  its old silent-organisation cap would have published `supervised` for a project running
+  `autonomous`. The domain's default reading is unchanged for every other caller.
+- **The settings port merges settings + repository without defaults** (`mergeConfigLayers`): defaults
+  in `pipeline.limits`/`policies.probation_tasks` would override the materialised dial (Q78).
+- **The export runs in the request**, not a queue: the provider calls happen with no transaction open
+  (the `pipeline.outbound` rule), the human who pressed the button gets the merge request or the
+  reason, and no new worker is added to `POOL_RESERVATIONS`. Stated at `exportProjectConfig`.
+- The Librarian's `auto_apply` thresholds now read the merged layer too (`knowledge.ts`).
+- The mirror is shared by the API process's export/re-read and the worker's index; two fetches into
+  one bare mirror at once can make one fail with a git lock, which is reported `unavailable` and
+  changes nothing (a retry succeeds). Not measured under contention.
+- `yaml@2.9.0` (ISC, no dependencies) added to `@platform/infrastructure`; it was already in the
+  lockfile, and `THIRD_PARTY_NOTICES.md` was already counting it (unchanged, 318 packages).
+
+**Sentences falsified.** Changed: `routes/projects.ts` module docblock (*"still unbuilt is `POST
+…/config/export` … recomputing the merge"*) and `describeConfigIssues`' *"`projects.config` is partly
+the repository's own document"*; `app.ts`'s matching comment; `pipeline.ts`'s settings-port docblock
+(*"reads it rather than recomputing it"*, *"that read answers the four indexed vault paths"*);
+`effective-config.ts` rule 3 (*"`block` only ever grows, at every layer"*); `project-panels.tsx`'s
+*"export-to-repo command land with WP-15"*; technical/12, /08 (the unbuilt list and the Projects row),
+/03 (`projects.config`, new table); user guide §1 step 5, §8, §13; the wizard's step 5 now links the
+export; Q94 marked implemented. **Left, for the orchestrator (decision/product documents):**
+- **BD-025**'s WP-54 amendment: *"An organisation layer that replaces the maximum is not composed on
+  this build: `organisationCommandMaximum` is called only from `mergeProjectConfig`, which no
+  production path calls"* — now false: proposed text *"Since WP-63 the organisation layer
+  (`organizations.settings.commands`) is composed, and a run's baseline is intersected with it for
+  every verb before a project narrows (`intersectWithOrganisationMaximum`); no surface writes it yet
+  (backlog 146 (2))."*
+- **product/06 § Step 5** — the orchestrator's amendment is already in the tree; it matches what was
+  built (MR only, repository wins, a button that stays).
+- **technical/13's WP-63 row** says *"never a direct commit onto the default branch unless the project
+  allows it"* — per Q94 (b) the "unless" clause is not built and should be struck.
+- Backlog 44's and 146's own text (historical entries; their status lines are the ledger's).
+
+**Verification.** `pnpm run -s verify` **PASS** (8024 passed, 14 skipped; new files marked
+intent-to-add first, rule 91); `verify:integration` **PASS** (579 — `migrations.integration.test.ts`
+now lists the table and its `read_write` policy); `verify:e2e` **PASS** (213); `verify:ui` **PASS**
+(378); `verify:web-e2e` **PASS** (47); `scripts/citations.test.ts` green over these notes. Each tier
+after a bounded load check (readings 11.96, 3.9, 6.2, 9.2, 8.5, 7.6, 9.4, 9.1, 10.9, then 14.9 → 10.1
+before web-e2e; `sleep` not used, readings spaced with work). After the Docker tiers: no container of
+this repository's left but the Testcontainers reaper, `docker volume ls` 101 (baseline 102).
+
+**Mutations (each on a copy, md5-confirmed revert).** Intersection disabled → 6 fail (domain,
+planner, route); `repositoryConfigRefusal` always `null` → 2 fail (executor, ask); `repo` ordered
+below `project` → 4 fail (route precedence, domain).
+
+**Discovered work** (for the refiner; next free backlog number **223**, none fixed here).
+- **223** Backlog 146 (2) is still open: no admin surface writes `organizations.settings.commands`,
+  so the organisation layer WP-63 composes can be set only by SQL; and no surface sets an
+  organisation **autonomy** maximum at all (the published view caps at `autonomous` and says why).
+- **224** `project-settings.tsx`'s *WIP limits* card reads `config.pipeline.wip`, a key the strict
+  schema refuses (`Unrecognized key: "wip"`, measured) — so the card can only ever show BD-010's
+  defaults, and the settings-screen test fixture carried the refused key (fixed in the fixture here,
+  not in the product).
+- **225** An export's result is visible only in the response, the `human_actions` row and the
+  `integration_actions` audit: no screen lists past exports or the open configuration merge request.
+- **226** A project's `.agentic/pipeline.yml` and `prompts/<stage>.md` are still unread (the WP-18a
+  bullet); `createGitRepositoryFileSource` is the reader to widen, deliberately and by name.
+- **227** The repository reading is refreshed on index triggers and on demand, not on the settings
+  port's read; a task that starts before the first index run after a merge runs on the previous
+  reading. technical/12's *"computed at task start"* is therefore approximate by one index run.
+
+**Review round 1 (REQUEST_CHANGES: one major, five minors, a nit), addressed.**
+1. *[major — the orchestrator's interim ruling: the file may tighten, never loosen]* Every key the
+   file can state is graded in `REPOSITORY_KEY_GRADES` (`packages/application/src/config/repository-grades.ts`),
+   held to `agenticConfigSchema` in both directions by `repository-grades.test.ts` › "grades every key the schema accepts, and nothing it does not".
+   **Tighten-only:** `protected_paths` and `reviewers` are unions with the settings (or the platform
+   default), a risk class may gain classes, paths and requirements, checklists gain items, and
+   `commands` **narrow again after the settings** — the round-0 decision *"commands merge list by list,
+   the repository winning"* is reversed (`runCommandPolicy` takes the layers in turn;
+   `mergeProjectConfig` narrows sequentially again; `projectCommandDeclaration` is gone; the file's
+   lists travel as `ProjectSettings.repositoryCommands`). **Not applied, reported:** the dial and
+   every `AUTONOMY_POLICY_OVERRIDE_KEYS` path (checked by › "never applies a key that overrides a policy of the autonomy dial (Q78)"),
+   the dependency/coverage/drift policies, `pipeline.template_overrides`/`custom_stages`, the
+   per-stage prompt files, **all of `features`**, and `project.default_branch`. **Operational** —
+   stage `model`/`effort`/`max_turns`/`budget_usd`, the other iteration limits, the knowledge
+   directory, context budget, language, commit convention, status mapping — with the bound stated:
+   `taskBudgetUsd` is `DEFAULT_TASK_BUDGET_USD`, not a file key, and `taskBudgetExhausted` parks a
+   task whose next stage budget would cross it before the run (confirmed, `stage-executor.ts`); the
+   organisation and project budgets are `BudgetGuard`'s. Tests: `repository-grades.test.ts` (each
+   loosening — emptied protected paths, probation 0, auto_apply, a weakened risk class — no effect and
+   reported; each tightening in force), `routes/projects.test.ts` › "applies what the file tightens and reports, without applying, what it loosens",
+   and the e2e now merges a file that tries both.
+2. *[minor]* A pinned re-read older than the recorded one is not recorded: the store is read first,
+   the adapter answers `behindRecorded` (`merge-base --is-ancestor <read> <recorded>`, strict; a
+   recorded commit the mirror lacks — a rewritten branch — is not "newer"), and the refresh returns
+   `stale`. Residual: two readings racing between the read and the write; the index queue is one job
+   per project. Tests in `repository-config.test.ts` and `git-vault.test.ts`.
+3. *[minor]* A `__proto__` key anywhere in the parsed document is refused with its path before the
+   schema runs.
+4. *[minor]* The codec uses `parseDocument` with `logLevel: 'error'` and refuses **every explicit
+   tag** (`!custom`, `!!js/function`, and also `!!binary`/`!!set`/`!!str`, which the core schema
+   would otherwise turn into a `Buffer`, an object or a coerced string) and any collected warning;
+   `process.emitWarning` is asserted not called.
+5. *[minor]* `repositorySnapshotFrom` re-validates a stored reading under the current schema and
+   grades (`revalidateRepositorySnapshot`): a stored row that no longer parses is the same named
+   refusal, and a key graded *not applied* since is dropped and reported without a re-read.
+6. *[nit]* `knowledgeWrites.commit`/`openMergeRequest` refuse a branch outside `agentic/`
+   (`assertPlatformBranch`), tested.
+7. *[backlog 224, folded]* The WIP card no longer reads `pipeline.wip` or tells anyone to set it: it
+   says BD-010's limits are fixed on this build and a file inventing the key is refused.
+
+**Sentences falsified in round 1.** Changed: technical/12 (the grading table; *"Commands are one
+declaration, then one narrowing"* rewritten), the user guide's *"The file cannot move the autonomy
+dial …"* bullet and *"wherever the file sets a key"*, Q94's implemented note, the round-0 decision
+bullet above (reversed here rather than edited), `effective-config.ts` rule 3,
+`repository-config.ts`'s *"one key a file may state and not apply"*, the WIP card and its docblock.
+Left: technical/12:177 and product/06 (the orchestrator amends them).
+
+
+**Round 1 verification.** `pnpm run -s verify` **PASS** (8036 passed, 14 skipped; the two new files
+marked intent-to-add first); `config-export.e2e.test.ts` **PASS**; `scripts/citations.test.ts` green.
+**Not run:** `verify:ui` for the WIP card's text change — the reading after verify was 66.3, so it
+waits for the orchestrator's tiers.
+
+**Review round 2 (REQUEST_CHANGES: one major, one minor, two nits, one rule-83), addressed.**
+1. *[major]* The run path now has tests for the repository file's commands, both directions,
+   against the same settings with the file absent: `planner.test.ts` › "applies the repository file’s block and ask to a developer run, and never its re-grant"
+   and `ask-planner.test.ts` › "applies the repository file’s block and ask to the run, and never its re-grant".
+   Mutation (copy, md5-confirmed revert): dropping `settings.repositoryCommands` from either planner
+   fails exactly its test.
+2. *[minor]* `repository-grades.test.ts` reads the top-level keys off `agenticConfigSchema` (minus
+   `version`); a planted `planted` key fails › "grades every key the schema accepts, and nothing it does not" (measured, reverted).
+3. *[nit]* `project.knowledge_dir` from the file is held to the API's rule (relative, no `.`/`..`),
+   a refusal by path — at the read and when a stored reading is re-validated
+   (`isRepositoryRelativeDirectory`).
+4. *[nit]* technical/12's table says `status_mapping` can map an early stage to a tracker "Done" —
+   misleading to people, no authority: nothing gates on a ticket status.
+5. *[rule 83]* The user guide's dial paragraph now says the **settings** override those four keys and
+   the repository file overrides none (all four are *not applied* from the file); it also says every
+   explicit YAML tag, `!!str` included, a duplicated key or a `__proto__` key makes the file invalid.
+
+**Round 2 verification.** `pnpm run -s verify` **PASS** (8039 passed, 14 skipped), after five load
+readings (14.8 → 11.9, spaced with typecheck, lint and the touched unit files);
+`scripts/citations.test.ts` green. Not run: the Docker and UI tiers (no change reaches them beyond
+the unit-tested read path; the orchestrator's tiers follow).
