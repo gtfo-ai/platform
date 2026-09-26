@@ -39,8 +39,16 @@ const APP_ROLE = 'platform_app';
  * The story's instants are relative to **now**, not fixed dates — which the database insists on:
  * `events` is monthly-partitioned and `assertInPartitionWindow` refuses anything older than the
  * previous month. Rounded down to the second so two renderings of the same instant compare equal.
+ *
+ * **Anchored to noon UTC**, never to *now minus a few hours*: the counters are bucketed by day, and
+ * a story that starts three hours before a run made between 03:00 and 03:30 UTC straddles midnight
+ * — measured on CI run 36213166240 (02:55 UTC), where `rebase.resolved` landed on the previous day
+ * and the row order this test pins moved. Noon of the latest UTC day that began at least 13 hours
+ * ago keeps the whole 30-minute story on one day, at least an hour in the past, and inside the
+ * partition window.
  */
-const BASE_MS = Math.floor((Date.now() - 3 * 60 * 60_000) / 1000) * 1000;
+const DAY_MS = 24 * 60 * 60_000;
+const BASE_MS = Math.floor((Date.now() - 13 * 60 * 60_000) / DAY_MS) * DAY_MS + 12 * 60 * 60_000;
 
 const at = (minutes: number): string => new Date(BASE_MS + minutes * 60_000).toISOString();
 
