@@ -235,6 +235,18 @@ export interface KbProposalRow {
   readonly rejected: number;
 }
 
+/**
+ * The runs `kb_usage` is a ratio over, per civil day they started (WP-57, PROGRESS backlog 112).
+ *
+ * `eligible` is the denominator the metric's own definition names; `cited` is how many of them cite
+ * at least one document their recorded pack admitted.
+ */
+export interface KbUsageRow {
+  readonly day: string;
+  readonly eligible: number;
+  readonly cited: number;
+}
+
 export interface StatsSources {
   readonly startedTasks: readonly StartedTaskRow[];
   readonly deliveredTasks: readonly DeliveredTaskRow[];
@@ -244,6 +256,7 @@ export interface StatsSources {
   readonly questions: readonly QuestionRow[];
   readonly humanMinutes: readonly HumanMinutesRow[];
   readonly kbProposals: readonly KbProposalRow[];
+  readonly kbUsage: readonly KbUsageRow[];
   readonly stageReturns: readonly StatStageReturn[];
 }
 
@@ -430,15 +443,15 @@ export const STATS_CATALOGUE: Readonly<Record<StatMetricId, MetricDefinition>> =
   kb_usage: {
     label: 'Knowledge usage',
     definition:
-      'product/16: “% runs whose context pack included a KB document that the agent cited”.',
+      'product/16’s “% runs whose context pack included a KB document that the agent cited”, over a **named subset of runs**: the denominator is the runs started in the period that produced a RefinedSpec or a ResearchReport — the only two artifacts that carry `kb_citations`, so refinement and spike runs — and whose recorded context pack admitted at least one tier-1 knowledge document. The numerator is those whose artifact cites, by its exact vault path, at least one of the tier-1 documents the pack admitted. product/16’s ≥ 80 % target is a target about this subset, not about all runs.',
     unit: 'ratio',
     aggregation: 'ratio',
-    absent: {
-      reason:
-        'The numerator exists and nothing reads it; the denominator does not exist. A run’s citations are `kb_citations` on the RefinedSpec and ResearchReport artifacts, joined to the run by `artifacts.produced_by_run_id`, with no production reader; the runs whose pack *included* a document would be `run_context_pack`, and nothing has ever written a row to it.',
-      owner:
-        'PROGRESS backlog 112, owned by backlog 31 (the context-pack writer): once a pack is recorded, this is one join, not a new signal.',
-    },
+    caveats: [
+      'Not every run: implementation, review and the other roles produce no artifact with `kb_citations`, so a pack they were shown can never count as cited and they are left out of both sides rather than counted as misses (PROGRESS backlog 112).',
+      'A cited page the pack did not carry — one the agent reached with `kb_search` — counts as no citation, because product/16’s sentence is about the pack. A page whose vault path the prompt could not carry verbatim (it degrades an attribute outside `A–Z a–z 0–9 . _ - /`) cannot match either; both under-count.',
+      'A citation is the model’s own claim that it used the page; nothing verifies it read what it cites.',
+      'Runs created before migration 0041 have no recorded pack and are in neither side.',
+    ],
   },
   rebase_conflicts_resolved: {
     label: 'Conflicts resolved automatically',
@@ -815,6 +828,14 @@ export const foldStats = (input: StatsFoldInput): OrgStatsResponse => {
       numerator: row.applied,
       denominator: row.applied + row.rejected,
       samples: row.applied + row.rejected,
+    });
+  }
+
+  for (const row of sources.kbUsage) {
+    fold.add('kb_usage', row.day, {
+      numerator: row.cited,
+      denominator: row.eligible,
+      samples: row.eligible,
     });
   }
 

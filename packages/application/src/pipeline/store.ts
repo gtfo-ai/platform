@@ -25,6 +25,7 @@ import type {
   AcceptanceCriterion,
   Actor,
   ArtifactType,
+  ContextPackRecord,
   EstimateBasis,
   HistorySample,
   Id,
@@ -704,6 +705,19 @@ export type NewRun = StoredRun & {
    * and the artifact's is on the artifact row. A prompt with nothing to redact writes `0`.
    */
   readonly redactionCount: number;
+  /**
+   * The context pack the run was planned with — `StageRunPlan.contextPack`, the record `run.started`
+   * carries — stored as `run_context_pack` rows plus the header columns on `runs` (migration 0041,
+   * WP-57, PROGRESS backlog 31).
+   *
+   * Written in the **same statement batch as the row**, so a run and its pack commit together or
+   * not at all. `null` is *"no pack was recorded"*, which no production path produces — both
+   * `runs.insert` call sites pass their plan's record — and which the reader refuses by name
+   * (409 `context_pack_not_recorded`); an **empty** pack is a record with empty tiers, never `null`.
+   * Write-only for the reason the prompt columns are: the pipeline never reads it back, and the API
+   * projection selects it itself.
+   */
+  readonly contextPack: ContextPackRecord | null;
 };
 
 export interface RunRepository {

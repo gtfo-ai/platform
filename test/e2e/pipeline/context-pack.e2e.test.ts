@@ -1,5 +1,9 @@
 /**
- * WP-17's two composition criteria, against a running `apps/server` instance:
+ * WP-17's two composition criteria, against a running `apps/server` instance — and WP-57's first:
+ *
+ *  - **`GET /api/runs/:id/context-pack` serves the pack this repository's own planner produced** —
+ *    for every run, equal to the record `run.started` carried, read back out of the rows the
+ *    production `RunRepository.insert` wrote (PROGRESS backlog 31);
  *
  *  - **a stage run writes a `ContextPackRecord` that is not zeroed** — read back out of the
  *    `run.started` event the instance appended, not out of the planner's return value;
@@ -27,11 +31,12 @@ import {
   FIXTURE_VAULT,
   vaultRelativePath,
 } from '@platform/application';
-import type { ContextPackRecord, Id } from '@platform/contracts';
+import { type ContextPackRecord, contextPackRecordSchema, type Id } from '@platform/contracts';
 import { parseKbDocument, readDataBlocks } from '@platform/domain';
 import { knowledge } from '@platform/infrastructure';
 import pg from 'pg';
 import { afterEach, describe, expect, it } from 'vitest';
+import { BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD, Client } from '../support/instance.js';
 import { inboundEvent, type PipelineE2E, startPipeline } from '../support/pipeline.js';
 import { featureScenarios, TICKETS } from '../support/scenarios.js';
 
@@ -66,6 +71,7 @@ const seedVault = async (pipeline: PipelineE2E): Promise<void> => {
         commitSha: 'f1c7ea4',
         documents,
         removedPaths: [],
+        refused: [],
       },
     );
   } finally {
@@ -73,17 +79,32 @@ const seedVault = async (pipeline: PipelineE2E): Promise<void> => {
   }
 };
 
-const runStartedPacks = async (pipeline: PipelineE2E): Promise<ContextPackRecord[]> => {
+interface StartedPack {
+  readonly runId: string;
+  readonly pack: ContextPackRecord;
+}
+
+const runStartedPacks = async (pipeline: PipelineE2E): Promise<StartedPack[]> => {
   const client = new pg.Client({ connectionString: pipeline.database.connectionString });
   await client.connect();
   try {
-    const { rows } = await client.query<{ payload: { context_pack: ContextPackRecord } }>(
-      "select payload from events where type = 'run.started' order by position",
-    );
-    return rows.map((row) => row.payload.context_pack);
+    const { rows } = await client.query<{
+      payload: { run_id: string; context_pack: ContextPackRecord };
+    }>("select payload from events where type = 'run.started' order by position");
+    return rows.map((row) => ({ runId: row.payload.run_id, pack: row.payload.context_pack }));
   } finally {
     await client.end();
   }
+};
+
+const signIn = async (baseUrl: string): Promise<Client> => {
+  const client = new Client(baseUrl);
+  const response = await client.post('/api/auth/sign-in/email', {
+    email: BOOTSTRAP_EMAIL,
+    password: BOOTSTRAP_PASSWORD,
+  });
+  expect(response.status, JSON.stringify(response.body)).toBe(200);
+  return client;
 };
 
 describe('the context pack a composed instance builds', () => {
@@ -116,13 +137,39 @@ describe('the context pack a composed instance builds', () => {
     await harness.settle('ready_for_merge', (task) => task.state === 'ready_for_merge');
 
     // 1. the record — the thing WP-15 wrote as five zeroes.
-    const packs = await runStartedPacks(harness);
+    const started = await runStartedPacks(harness);
+    const packs = started.map((entry) => entry.pack);
     expect(packs.length).toBeGreaterThan(0);
     const first = packs[0] as ContextPackRecord;
     expect(first.budget_tokens).toBe(12_000);
     expect(first.tier0.length).toBeGreaterThan(0);
     expect(first.total_tokens).toBeGreaterThan(0);
     expect(packs.every((pack) => pack.budget_tokens > 0)).toBe(true);
+
+    // 1b. the audit — WP-57, criterion 1. `GET /api/runs/:id/context-pack` serves, for every run,
+    // exactly the record this instance's own planner built and `run.started` carried: read back
+    // out of `run_context_pack` and the run row, which the production `RunRepository.insert`
+    // wrote in the transaction that created the run. Never a seeded table (standing rule 82).
+    const client = await signIn(harness.instance.baseUrl);
+    for (const { runId, pack } of started) {
+      const served = await client.json<ContextPackRecord>(`/api/runs/${runId}/context-pack`);
+      expect(served.status, JSON.stringify(served.body)).toBe(200);
+      expect(contextPackRecordSchema.parse(served.body)).toEqual(pack);
+    }
+    // Not vacuous: at least one served pack names documents, so the rows were written and read.
+    expect(packs.some((pack) => pack.tier0.length + pack.tier1.length > 0)).toBe(true);
+    const counted = new pg.Client({ connectionString: harness.database.connectionString });
+    await counted.connect();
+    try {
+      const { rows } = await counted.query<{ count: string }>(
+        'select count(*) from run_context_pack',
+      );
+      expect(Number(rows[0]?.count)).toBe(
+        packs.reduce((total, pack) => total + pack.tier0.length + pack.tier1.length, 0),
+      );
+    } finally {
+      await counted.end();
+    }
 
     // 2. the prompt — every document inside the delimiter, nothing left in the platform's voice.
     const specs = harness.specs.filter((spec) => spec.contextPack.length > 0);

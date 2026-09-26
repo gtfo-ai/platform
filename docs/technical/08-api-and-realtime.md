@@ -36,6 +36,17 @@
 > **`kb/health` is the one endpoint it cannot see**: no screen calls it, so the census is blind to it
 > by construction and `routes/kb.ts` carries the assertion by hand.
 >
+> **Two refusals changed shape at WP-57.** `GET …/kb/health` answered a bare **404** for a project
+> whose nightly pass has not run yet — the same status and code as a project that does not exist — so
+> *"no report yet"* was told apart from *"no such project"* only by prose. It now answers **409
+> `kb_health_not_reported`**, and **200 with `findings: []`** is a report that found nothing (rule 18).
+> A report can carry a sixth finding kind, `invalid`: a document the parser refused, which is in no
+> pack (technical/07 § "Source of truth and sync"). And `GET /api/runs/:id/context-pack` has a
+> **success branch**: it answers the record the run's planner built (migration 0041 gave
+> `run_context_pack` a writer and the run row the pack's header), **200 with empty tiers** for a run
+> whose pack was empty, and keeps **409 `context_pack_not_recorded`**, with the row count, only for a
+> run created before that migration.
+>
 > **The rest of the read surface is served since WP-15h**: the four run reads, `GET /api/tasks/:id`
 > and `GET /api/org/{users,audit}` at part 1, and at part 2 `GET /api/org/agents`,
 > `GET /api/org/inbox`, `GET /api/integrations`, `GET /api/integrations/:id/setup-guide`,

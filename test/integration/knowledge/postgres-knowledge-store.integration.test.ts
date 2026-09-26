@@ -107,9 +107,9 @@ runKnowledgeStoreContract({
  * `where` clause here and a TypeScript function there, and the suite runs the function over the
  * rows and demands this store return exactly what it selects (standing rule 41).
  *
- * The health seeding is **rows**, not a stub: `readHealthInputs` is three queries over
- * `kb_documents`, `kb_links` and `kb_index_state`, so seeding it any other way would assert the
- * harness instead of the adapter.
+ * The health seeding is **rows**, not a stub: `readHealthInputs` is four queries over
+ * `kb_documents`, `kb_links`, `kb_index_state` and (since WP-57) `kb_index_refusals`, so seeding it
+ * any other way would assert the harness instead of the adapter.
  */
 runKnowledgeProposalsContract({
   name: 'postgres',
@@ -151,6 +151,13 @@ runKnowledgeProposalsContract({
           await client.query(
             `insert into kb_links (from_document_id, to_path, kind) values ($1, $2, 'wikilink')`,
             [ids.get(link.fromPath), link.toPath],
+          );
+        }
+        for (const refusal of inputs.refusals) {
+          await client.query(
+            `insert into kb_index_refusals (project_id, path, reason, line, commit_sha)
+             values ($1, $2, $3, $4, $5)`,
+            [project, refusal.path, refusal.reason, refusal.line, inputs.commitSha ?? 'unknown'],
           );
         }
       },
@@ -219,6 +226,7 @@ describe('PostgresKnowledgeStore — what only a real database shows', () => {
         commitSha: 'abc1234',
         documents: parsedFixture(),
         removedPaths: [],
+        refused: [],
       });
 
       const result = await store.search({
@@ -256,6 +264,7 @@ describe('PostgresKnowledgeStore — what only a real database shows', () => {
         commitSha: 'abc1234',
         documents: parsedFixture(),
         removedPaths: [],
+        refused: [],
       });
       const { rows } = await client.query<{ generated: boolean; nonempty: number }>(
         `select (select is_generated from information_schema.columns
@@ -283,6 +292,7 @@ describe('PostgresKnowledgeStore — what only a real database shows', () => {
         commitSha: 'abc1234',
         documents: parsedFixture(),
         removedPaths: [],
+        refused: [],
       });
       const { rows } = await client.query<{
         confidence: number;
@@ -322,6 +332,7 @@ describe('PostgresKnowledgeStore — what only a real database shows', () => {
           })(),
         ],
         removedPaths: [],
+        refused: [],
       });
       const { rows } = await client.query<{ to_path: string; resolved: string | null }>(
         `select l.to_path, l.resolved_document_id as resolved
@@ -349,6 +360,7 @@ describe('PostgresKnowledgeStore — what only a real database shows', () => {
         commitSha: 'abc1234',
         documents: parsedFixture(),
         removedPaths: [],
+        refused: [],
       });
       await first.query('commit');
     } finally {
@@ -364,6 +376,7 @@ describe('PostgresKnowledgeStore — what only a real database shows', () => {
         commitSha: 'def5678',
         documents: [],
         removedPaths: [],
+        refused: [],
       });
       await attempted.query('rollback');
     } finally {

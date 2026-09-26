@@ -510,12 +510,20 @@ export const createMemoryPipelineStore = (
         (row) =>
           row.taskId === run.taskId && row.stage === run.stage && row.attempt === run.attempt,
       );
-      // The three write-only columns of `NewRun` are **dropped**, for the same rule-1 reason the
+      // The write-only columns of `NewRun` are **dropped**, for the same rule-1 reason the
       // stage link is narrowed: the SQL adapter's `load` does not select `system_prompt`,
       // `user_prompt` or `redaction_count`, so keeping them here would let a test read back a
       // prompt no production caller of `load` can see. The reader that wants them is the API
       // projection, and it has its own integration coverage.
-      const { systemPrompt: _s, userPrompt: _u, redactionCount: _r, ...stored } = run;
+      // `contextPack` (WP-57) is dropped for the same reason: `load` answers no pack, and the
+      // reader that wants one is the API projection over `run_context_pack`.
+      const {
+        systemPrompt: _s,
+        userPrompt: _u,
+        redactionCount: _r,
+        contextPack: _c,
+        ...stored
+      } = run;
       runs.set(run.id, clone({ ...stored, stage: linked ? run.stage : null }));
     },
     /** Conditional on the run still being live, exactly as the SQL adapter's `where` clause is. */

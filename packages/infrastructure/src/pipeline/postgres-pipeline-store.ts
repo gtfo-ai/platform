@@ -37,6 +37,7 @@ import type {
 } from '@platform/application';
 import { TAKE_OVER_BOUNDARY_EVENTS, TaskConcurrentModificationError } from '@platform/application';
 import type {
+  ContextPackRecord,
   EstimateBasis,
   HistorySample,
   Id,
@@ -812,11 +813,12 @@ export const createPostgresPipelineStore = (
         // question. `runs.redaction_count` is what the redactor replaced *in those two columns*.
         `insert into runs (id, task_id, project_id, task_stage_id, role, mode, attempt, model,
                            effort, prompt_version, status, started_at,
-                           system_prompt, user_prompt, redaction_count)
+                           system_prompt, user_prompt, redaction_count,
+                           context_budget_tokens, context_total_tokens, context_kb_commit)
          values ($1, $2, $3,
                  (select id from task_stages
                    where task_id = $2 and stage = $11 and attempt = $6),
-                 $4, $5, $6, $7, $8, $9, $10, $12, $13, $14, $15)`,
+                 $4, $5, $6, $7, $8, $9, $10, $12, $13, $14, $15, $16, $17, $18)`,
         [
           run.id,
           run.taskId,
@@ -838,8 +840,16 @@ export const createPostgresPipelineStore = (
           // rather than stored — which is why the caller's type makes the count required for a row
           // that carries a prompt (see `StoredRun.redactionCount`).
           run.redactionCount,
+          // The pack's header (migration 0041). All three null is "no pack was recorded", which
+          // the reader refuses by name; a pack with empty tiers still writes its budget.
+          run.contextPack?.budget_tokens ?? null,
+          run.contextPack?.total_tokens ?? null,
+          run.contextPack?.kb_commit ?? null,
         ],
       );
+      if (run.contextPack !== null) {
+        await insertContextPackRows(sqlOf(tx), run.id, run.contextPack);
+      }
     },
     /**
      * Conditional on the run still being live — the port's own contract, and the reasoning is
@@ -1370,6 +1380,69 @@ interface RunRow extends Record<string, unknown> {
 }
 
 /** `is_estimate: false` fills `usd_reported`; `true` fills `usd_estimated`; `null` fills neither. */
+/**
+ * One `run_context_pack` row per entry of the record, in one statement (migration 0041, WP-57).
+ *
+ * `ordinal` is the entry's index within its tier, because the record is ordered and nothing else in
+ * the row reproduces that order. A tier-0 row has no `reason` and no `score` — the published tier-0
+ * entry has neither — and a tier-1 row always has both, which `run_context_pack_row_complete`
+ * holds the database to. `validated` is written for tier 0 as `true`: a tier-0 document is
+ * unconditional and nothing validated it away, which is the column's default and its meaning.
+ *
+ * The primary key is `(run_id, source_path)`, and the assembler never lists a path twice — a
+ * tier-0 document is removed from the tier-1 candidates, and candidates are keyed by path — so a
+ * duplicate here is a defect in the assembler and is refused by the database rather than merged.
+ */
+const insertContextPackRows = async (
+  sql: SqlExecutor,
+  runId: Id,
+  pack: ContextPackRecord,
+): Promise<void> => {
+  const rows = [
+    ...pack.tier0.map((entry, ordinal) => ({
+      tier: 0,
+      path: entry.path,
+      reason: null,
+      score: null,
+      tokens: entry.tokens,
+      validated: true,
+      ordinal,
+    })),
+    ...pack.tier1.map((entry, ordinal) => ({
+      tier: 1,
+      path: entry.path,
+      reason: entry.reason,
+      score: entry.score,
+      tokens: entry.tokens,
+      validated: entry.validated,
+      ordinal,
+    })),
+  ];
+  if (rows.length === 0) {
+    return;
+  }
+  await sql.query(
+    `insert into run_context_pack
+            (run_id, tier, source_path, reason, score, tokens, validated, kb_commit_sha, ordinal)
+     select $1, r.tier, r.path, r.reason::context_pack_reason, r.score, r.tokens, r.validated, $2,
+            r.ordinal
+       from unnest($3::smallint[], $4::text[], $5::text[], $6::double precision[], $7::integer[],
+                   $8::boolean[], $9::integer[])
+            as r(tier, path, reason, score, tokens, validated, ordinal)`,
+    [
+      runId,
+      pack.kb_commit ?? null,
+      rows.map((row) => row.tier),
+      rows.map((row) => row.path),
+      rows.map((row) => row.reason),
+      rows.map((row) => row.score),
+      rows.map((row) => row.tokens),
+      rows.map((row) => row.validated),
+      rows.map((row) => row.ordinal),
+    ],
+  );
+};
+
 const reportedUsd = (cost: RunCost | null): number | null =>
   cost === null || cost.is_estimate ? null : cost.usd;
 

@@ -37,8 +37,10 @@ describe('Drizzle schema', () => {
     // request merged (no table holds a merge time) and the daily counters of the four metric
     // events nothing read (migration 0034, WP-41), plus `knowledge_curations` — that a curation of
     // one artifact happened, which no table recorded and without which the lost-wake-up recovery
-    // cannot tell a curation that proposed nothing from one that never ran (migration 0036, WP-48).
-    expect(tables.length).toBe(60);
+    // cannot tell a curation that proposed nothing from one that never ran (migration 0036, WP-48),
+    // plus `kb_index_refusals` — the documents the parser refused at the last index run, which were
+    // in no table and therefore in no health report (migration 0041, WP-57, PROGRESS backlog 37).
+    expect(tables.length).toBe(61);
   });
 
   it('names every table and column in snake_case, matching the wire format', () => {

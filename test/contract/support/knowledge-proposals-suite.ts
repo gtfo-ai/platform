@@ -305,6 +305,19 @@ export const runKnowledgeProposalsContract = (harness: KnowledgeProposalsHarness
         danglingLinks: [
           { fromPath: '.agentic/knowledge/lessons/L-new.md', toPath: 'lessons/gone.md' },
         ],
+        // WP-57: what the parser refused, which is in no index table by construction.
+        refusals: [
+          {
+            path: '.agentic/knowledge/lessons/L-broken.md',
+            reason: 'frontmatter: a tab character; YAML indentation must be spaces',
+            line: 3,
+          },
+          {
+            path: '.agentic/knowledge/lessons/L-vocab.md',
+            reason: 'frontmatter "kind": bad',
+            line: null,
+          },
+        ],
       };
       await context.seedHealth(context.projectId, inputs);
       const read = await store.readHealthInputs(context.projectId);
@@ -313,10 +326,12 @@ export const runKnowledgeProposalsContract = (harness: KnowledgeProposalsHarness
         [...inputs.documents].sort((a, b) => (a.path < b.path ? -1 : 1)),
       );
       expect(read.danglingLinks).toEqual(inputs.danglingLinks);
+      expect(read.refusals).toEqual(inputs.refusals);
       // …and a project with nothing indexed is an empty report, not a missing one.
       const empty = await store.readHealthInputs(context.otherProjectId);
       expect(empty.documents).toEqual([]);
       expect(empty.danglingLinks).toEqual([]);
+      expect(empty.refusals).toEqual([]);
     });
 
     it('stores a health report with its findings', async () => {

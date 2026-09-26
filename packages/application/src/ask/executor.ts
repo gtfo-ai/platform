@@ -502,6 +502,8 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         systemPrompt: systemPrompt.value,
         userPrompt: userPrompt.value,
         redactionCount: systemPrompt.count + userPrompt.count,
+        // WP-57: the second `runs.insert` call site stores its pack the same way (standing rule 49).
+        contextPack: plan.contextPack,
       });
       /**
        * The lease, claimed in the **same transaction as the row** — the stage executor's rule and

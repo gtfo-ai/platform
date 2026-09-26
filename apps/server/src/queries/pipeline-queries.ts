@@ -28,12 +28,13 @@
  *    because the nonce is drawn per prompt and the pack is a point-in-time read, so `findRunPrompt`
  *    still reports `recorded: false` for it. Answering `{system_prompt: "", user_prompt: ""}` would
  *    render as "this run had no prompt", which is a claim about the agent rather than about the row.
- *  - **`run_context_pack`** — no insert exists anywhere in the tree either, *and* the table cannot
- *    express `ContextPackRecord.budget_tokens` (there is no such column) or the non-null `reason`
- *    and `score` the published tier-1 entry requires. So `findRunContextPack` has **no success
- *    branch at all**: filling those three from the rows would be three invented values, and the
- *    first one — `budget_tokens = total_tokens` — is rendered as a fact by
- *    `apps/web/src/features/run-detail.tsx`.
+ *  - **`run_context_pack`** — **written since WP-57** (PROGRESS backlog 31, migration 0041): both
+ *    `runs.insert` call sites store the planner's record as rows, with the pack's header
+ *    (`budget_tokens`, `total_tokens`, `kb_commit`) on the run row. Until then no insert existed
+ *    and the table could not have held the record, so `findRunContextPack` had no success branch at
+ *    all. The refusal stayed for a run whose header is null — every run created before that
+ *    migration — and it carries the row count, so "never recorded" and "rows written outside the
+ *    writer" stay distinguishable; an **empty** pack is served as one.
  *  - **`run_messages.blob_id`** — technical/03 says a payload over 1 MB goes to `blobs`; nothing
  *    writes one, so no reader has ever been exercised against a row where `payload` is a stub.
  *    A page containing such a row is refused rather than served from the `payload` column, whose
@@ -50,6 +51,7 @@
 import type {
   AgentsResponse,
   ArtifactBodyResponse,
+  ContextPackRecord,
   HumanTimeSummary,
   Id,
   InboxResponse,
@@ -64,7 +66,12 @@ import type {
   TaskState,
   TranscriptEvent,
 } from '@platform/contracts';
-import { artifactBodyPath, taskStageStateSchema, transcriptEventSchema } from '@platform/contracts';
+import {
+  artifactBodyPath,
+  contextPackRecordSchema,
+  taskStageStateSchema,
+  transcriptEventSchema,
+} from '@platform/contracts';
 import { estimateAccuracy, resumeCommands } from '@platform/domain';
 import { db as dbAdapters } from '@platform/infrastructure';
 import { and, asc, desc, eq, gt, inArray, ne, notInArray, sql, sum } from 'drizzle-orm';
@@ -489,47 +496,116 @@ export type RunContextPack =
   | {
       readonly found: true;
       readonly recorded: false;
-      /** How many `run_context_pack` rows the run has; `0` while nothing writes them. */
+      /**
+       * How many `run_context_pack` rows the run has. `0` for every run created before migration
+       * 0041; a non-zero count with no header is a row somebody wrote outside `RunRepository.insert`,
+       * and the count is what makes the two distinguishable (standing rule 18).
+       */
       readonly rows: number;
-    };
+    }
+  | { readonly found: true; readonly recorded: true; readonly pack: ContextPackRecord };
 
 /**
- * `GET /api/runs/:run_id/context-pack` — and it has **no success branch**, deliberately.
+ * `GET /api/runs/:run_id/context-pack` — the record the run's planner built (WP-57, PROGRESS
+ * backlog 31).
  *
- * `ContextPackRecord.budget_tokens` has **no column**: `run_context_pack` stores one row per source
- * document (`tier`, `source_path`, `reason`, `score`, `tokens`, `validated`, `kb_commit_sha`) and
- * nothing anywhere holds the budget the pack was assembled against. So the published record cannot
- * be filled from this table *however many rows it has*, and an implementation that summed the rows
- * into `budget_tokens` would ship "budget equals total" as a fact about every run — rendered as
- * such by `apps/web/src/features/run-detail.tsx`, and silently wrong the day a real producer lands.
- * The first version of this function did exactly that, and its own test pinned it.
+ * **Three answers, and the header decides between them.** `runs.context_budget_tokens` is written
+ * by the statement that creates the run, from the same `ContextPackRecord` `run.started` carries
+ * (migration 0041), so:
  *
- * Two nullable columns say the same thing one layer down: `reason` and `score` are `null`able here
- * and **required** in the published tier-1 entry, so a projection would have to invent `'paths'`
- * and `0` for them too. Nothing is invented; the refusal is the answer, and the row count goes with
- * it so an operator can tell "no producer yet" from "a producer exists and the schema gap remains".
+ *  - a **null** budget is *"no pack was recorded for this run"* — every run created before 0041 —
+ *    and is refused with the row count rather than projected, because `budget_tokens` and
+ *    `total_tokens` would be invented (the first version of this function summed the rows into
+ *    `budget_tokens`, and `apps/web/src/features/run-detail.tsx` renders it as a fact);
+ *  - a budget with **no rows** is an **empty** pack — a project whose index was never built, or a
+ *    vault with nothing to say — and is served as one, with empty tiers;
+ *  - a budget with rows is the pack, in the order it was recorded (`ordinal` per tier).
  *
- * What it takes to give this endpoint a success branch is therefore a **schema** change and a
- * writer, not a reader: somewhere to put the budget, and `reason`/`score` either filled or made
- * nullable in `@platform/contracts`. Both are recorded as discovered work.
+ * **Nothing is defaulted.** `total_tokens` is read, not summed (the assembler does not count a
+ * tier-1 entry recorded `validated: false`, and re-deriving that rule here would be a second
+ * spelling of it). A row without an `ordinal`, or a tier-1 row without a `reason` or a `score`, can
+ * only predate 0041's check, and it is refused by name rather than filled with `'paths'` and `0`.
+ * The result is parsed through the published schema, so a row the DTO cannot describe is a
+ * {@link UnprojectableRowError} and never a 500.
  */
 export const findRunContextPack = async (
   database: Database,
   runId: string,
 ): Promise<RunContextPack> => {
-  const exists = await database
-    .select({ id: runs.id })
+  const header = await database
+    .select({
+      budget: runs.contextBudgetTokens,
+      total: runs.contextTotalTokens,
+      kbCommit: runs.contextKbCommit,
+    })
     .from(runs)
     .where(eq(runs.id, runId))
     .limit(1);
-  if (exists.length === 0) {
+  const run = header[0];
+  if (run === undefined) {
     return { found: false };
   }
   const rows = await database
-    .select({ runId: runContextPack.runId })
+    .select({
+      tier: runContextPack.tier,
+      path: runContextPack.sourcePath,
+      reason: runContextPack.reason,
+      score: runContextPack.score,
+      tokens: runContextPack.tokens,
+      validated: runContextPack.validated,
+      ordinal: runContextPack.ordinal,
+    })
     .from(runContextPack)
-    .where(eq(runContextPack.runId, runId));
-  return { found: true, recorded: false, rows: rows.length };
+    .where(eq(runContextPack.runId, runId))
+    .orderBy(asc(runContextPack.tier), asc(runContextPack.ordinal));
+  if (run.budget === null || run.total === null) {
+    return { found: true, recorded: false, rows: rows.length };
+  }
+  const tier0: ContextPackRecord['tier0'] = [];
+  const tier1: unknown[] = [];
+  for (const row of rows) {
+    if (row.ordinal === null) {
+      throw new UnprojectableRowError(
+        `context pack of run ${runId}`,
+        `its ${row.tier === 0 ? 'tier-0' : 'tier-1'} row has no ordinal, so it predates migration 0041 and its position in the pack is unknown`,
+      );
+    }
+    if (row.tier === 0) {
+      tier0.push({ path: row.path, tokens: row.tokens });
+    } else if (row.tier === 1) {
+      // `reason`/`score` go through the schema as they are: a null here is refused below by the
+      // parse, never replaced.
+      tier1.push({
+        path: row.path,
+        reason: row.reason,
+        score: row.score,
+        tokens: row.tokens,
+        validated: row.validated,
+      });
+    } else {
+      throw new UnprojectableRowError(
+        `context pack of run ${runId}`,
+        `it has a tier-${row.tier} row, and the published record has tiers 0 and 1 only`,
+      );
+    }
+  }
+  const parsed = contextPackRecordSchema.safeParse({
+    tier0,
+    tier1,
+    budget_tokens: run.budget,
+    total_tokens: run.total,
+    kb_commit: run.kbCommit,
+  });
+  if (!parsed.success) {
+    // The issue *paths*, never the values: a path is a vault path somebody committed (BD-022).
+    throw new UnprojectableRowError(
+      `context pack of run ${runId}`,
+      `its stored shape does not match the published record at ${parsed.error.issues
+        .map((issue) => issue.path.join('.') || '(root)')
+        .join(', ')}`,
+    );
+  }
+  return { found: true, recorded: true, pack: parsed.data };
 };
 
 /**

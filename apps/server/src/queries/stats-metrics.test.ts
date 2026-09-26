@@ -32,6 +32,7 @@ const EMPTY: StatsSources = {
   questions: [],
   humanMinutes: [],
   kbProposals: [],
+  kbUsage: [],
   stageReturns: [],
 };
 
@@ -88,7 +89,6 @@ describe('the catalogue', () => {
     // The anchor first (rule 4): a fold that produced no absent metrics would pass the loop below
     // without asserting anything.
     expect(absent.map((entry) => entry.id)).toEqual([
-      'kb_usage',
       'tickets_edited_after_lint',
       'shadow_similarity',
       'clean_first_mr_rate_by_author',
@@ -107,6 +107,42 @@ describe('the catalogue', () => {
       expect(entry.absent?.reason.length ?? 0, entry.id).toBeGreaterThan(40);
       expect(entry.absent?.owner.length ?? 0, entry.id).toBeGreaterThan(5);
     }
+  });
+
+  /**
+   * **`kb_usage` is computed, and its denominator is in its own definition** (WP-57, criterion 6;
+   * PROGRESS backlog 112). A "runs that searched the knowledge base" number must never ship under
+   * this name, so the definition is asserted to name the subset and the citation, and *not* to be
+   * about searching.
+   */
+  it('computes knowledge usage over the subset of runs its definition names', () => {
+    const response = fold({
+      kbUsage: [
+        { day: '2026-06-02', eligible: 3, cited: 2 },
+        { day: '2026-06-05', eligible: 1, cited: 0 },
+      ],
+    });
+    const usage = metric(response, 'kb_usage');
+    expect(usage.absent).toBeNull();
+    // Summed numerator over summed denominator, never the mean of the buckets' ratios.
+    expect(usage.value).toBe(0.5);
+    expect(usage.samples).toBe(4);
+    expect(usage.buckets.find((bucket) => bucket.start === '2026-06-02')?.value).toBeCloseTo(2 / 3);
+    // A day with no eligible run has no ratio — `null`, never `0` (standing rule 16).
+    expect(usage.buckets.find((bucket) => bucket.start === '2026-06-03')?.value).toBeNull();
+    expect(usage.definition).toContain('RefinedSpec');
+    expect(usage.definition).toContain('ResearchReport');
+    expect(usage.definition).toContain('denominator');
+    expect(usage.definition).toContain('tier-1');
+    expect(usage.definition).not.toMatch(/searched|kb_search/);
+    expect(usage.caveats.join(' ')).toContain('kb_search');
+
+    // No eligible run anywhere in the range: the metric is computed and has no value, which is a
+    // different statement from the absence it used to publish.
+    const quiet = metric(fold(), 'kb_usage');
+    expect(quiet.absent).toBeNull();
+    expect(quiet.value).toBeNull();
+    expect(quiet.samples).toBe(0);
   });
 
   it('never adds minutes to dollars (Q73)', () => {

@@ -1,17 +1,18 @@
 /**
  * The rows `GET /api/org/stats` is folded from (WP-41, product/19 §10).
  *
- * Eight reads and no arithmetic worth the name: every ratio, cap, mean and stated absence is
+ * Ten reads and no arithmetic worth the name: every ratio, cap, mean and stated absence is
  * `./stats-metrics.ts`, which needs no database to reach. The split is `human-time-summary.ts`'s
  * and is what lets the definitions be asserted in the unit tier and the SQL in the integration one.
  *
- * ## Two of the eight read a projection this build writes; six read rows that already existed
+ * ## Two of the ten read a projection this build writes; eight read rows that already existed
  *
  * `stats_task_delivery` and `stats_event_daily` (migration 0034) are the statistics projector's,
  * and they hold the two kinds of fact whose only other record was an event. Everything else is read
  * where it lives — `tasks`, `task_stages`, `questions`, `human_time_entries`, `cost_rollup_daily`,
- * `cost_entries`, `kb_proposals` — because a rollup that copied those would be a second number to
- * keep in step with the first (standing rule 41).
+ * `cost_entries`, `kb_proposals`, and since WP-57 `run_context_pack` joined to `artifacts` —
+ * because a rollup that copied those would be a second number to keep in step with the first
+ * (standing rule 41).
  *
  * ## The day is cut in the database, in the organisation's zone
  *
@@ -38,6 +39,7 @@ import type {
   EstimatedSpendRow,
   HumanMinutesRow,
   KbProposalRow,
+  KbUsageRow,
   QuestionRow,
   ResolvedRange,
   StartedTaskRow,
@@ -394,6 +396,65 @@ const kbProposals = async (
 };
 
 /**
+ * The runs `kb_usage` is defined over, and which of them cited their pack (WP-57, PROGRESS backlog
+ * 112). One join, no new signal: the run's **recorded** pack (`run_context_pack`, written since
+ * migration 0041) against `kb_citations` on the artifact the run produced.
+ *
+ * The denominator is the catalogue's, word for word: a run that **started** in the range, whose pack
+ * was recorded (`context_budget_tokens is not null` — a pre-0041 run is in neither side), that
+ * admitted at least one tier-1 document (`validated`; a tier-1 row recorded `validated = false` was
+ * never shown to the agent), and that produced one of the two artifact types carrying
+ * `kb_citations`. A citation matches on the **exact** vault path — the `path` attribute of the
+ * document's data block is that path — so a page reached through `kb_search` rather than the pack
+ * counts as no citation, which is what product/16's sentence is about.
+ *
+ * `jsonb_typeof` guards the array read: both schemas require `kb_citations`, but an artifact row is
+ * data written by a model through a validator this query cannot see, and a non-array there must be
+ * "no citations" rather than an error that takes the whole statistics answer down.
+ */
+const kbUsage = async (database: Database, bounds: RangeBounds): Promise<readonly KbUsageRow[]> => {
+  const { rows } = await database.execute<{
+    day: string;
+    eligible: string | number;
+    cited: string | number;
+  }>(sql`
+    with eligible as (
+      select r.id, r.started_at
+        from runs r
+       where r.context_budget_tokens is not null
+         and r.started_at is not null
+         and ${dayFilter('r.started_at', bounds, 'r.project_id')}
+         and exists (select 1 from run_context_pack p
+                      where p.run_id = r.id and p.tier = 1 and p.validated)
+         and exists (select 1 from artifacts a
+                      where a.produced_by_run_id = r.id
+                        and a.type in ('RefinedSpec', 'ResearchReport'))
+    )
+    select ${civilDay('e.started_at', bounds)} as day,
+           count(*) as eligible,
+           count(*) filter (where exists (
+             select 1
+               from artifacts a
+               cross join lateral jsonb_array_elements(
+                 case when jsonb_typeof(a.data -> 'kb_citations') = 'array'
+                      then a.data -> 'kb_citations' else '[]'::jsonb end) as c(citation)
+               join run_context_pack p
+                 on p.run_id = e.id and p.tier = 1 and p.validated
+                and p.source_path = c.citation ->> 'path'
+              where a.produced_by_run_id = e.id
+                and a.type in ('RefinedSpec', 'ResearchReport')
+           )) as cited
+      from eligible e
+     group by 1
+  `);
+  return rows.map((row) => ({
+    day: row.day,
+    eligible: number(row.eligible),
+    cited: number(row.cited),
+  }));
+};
+
+/**
  * product/19 §10's *"returns into stage ÷ stage entries"*, over the whole range rather than per
  * bucket: it is a comparison **between stages**, and a per-day series of it is nine sparse lines
  * nobody reads.
@@ -439,7 +500,7 @@ const stageReturns = async (
  *
  * They are independent reads of independent tables and none of them is a write, so they are issued
  * together and the pool's own limit is what bounds them (`POOL_RESERVATIONS`). A statistics request
- * that serialised eight reads would hold a connection for their sum, which is the shape that makes
+ * that serialised ten reads would hold a connection for their sum, which is the shape that makes
  * a dashboard tab feel like an outage on a busy instance.
  */
 export const readStatsSources = async (
@@ -448,18 +509,29 @@ export const readStatsSources = async (
   options: { readonly timezone: string; readonly projectId: string | null },
 ): Promise<StatsSources> => {
   const bounds = boundsOf(range, options.timezone, options.projectId);
-  const [started, delivered, counted, cost, estimated, questions, minutes, proposals, stages] =
-    await Promise.all([
-      startedTasks(database, bounds),
-      deliveredTasks(database, bounds),
-      counters(database, bounds),
-      costByDay(database, bounds),
-      estimatedSpend(database, bounds),
-      questionLatency(database, bounds),
-      humanMinutes(database, bounds),
-      kbProposals(database, bounds),
-      stageReturns(database, bounds),
-    ]);
+  const [
+    started,
+    delivered,
+    counted,
+    cost,
+    estimated,
+    questions,
+    minutes,
+    proposals,
+    usage,
+    stages,
+  ] = await Promise.all([
+    startedTasks(database, bounds),
+    deliveredTasks(database, bounds),
+    counters(database, bounds),
+    costByDay(database, bounds),
+    estimatedSpend(database, bounds),
+    questionLatency(database, bounds),
+    humanMinutes(database, bounds),
+    kbProposals(database, bounds),
+    kbUsage(database, bounds),
+    stageReturns(database, bounds),
+  ]);
   return {
     startedTasks: started,
     deliveredTasks: delivered,
@@ -469,6 +541,7 @@ export const readStatsSources = async (
     questions,
     humanMinutes: minutes,
     kbProposals: proposals,
+    kbUsage: usage,
     stageReturns: stages,
   };
 };

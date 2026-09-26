@@ -14,7 +14,7 @@ import {
   artifactRefSchema,
   artifactSchema,
   askAnswerCitationSchema,
-  kbHealthFindingSchema,
+  kbHealthReportFindingSchema,
   MAX_BREAKDOWN_CHILDREN,
   shadowReportDataSchema,
 } from './artifacts.js';
@@ -1232,7 +1232,7 @@ export const kbHealthResponseSchema = z.strictObject({
   project_id: idSchema,
   commit_sha: nonEmptyStringSchema.nullable(),
   documents: z.int().nonnegative(),
-  findings: z.array(kbHealthFindingSchema),
+  findings: z.array(kbHealthReportFindingSchema),
   /** Which pass produced it: the nightly hygiene sweep, or a Librarian run's own report. */
   source: z.enum(['hygiene', 'librarian']),
   created_at: isoDateTimeSchema,

@@ -15,9 +15,15 @@
  * plan row names ("never against a seeded table"). What a seeded table buys *here* is the cases
  * that tier cannot reach — a `blob_id` nothing writes, a run linked to no stage, a page boundary.
  */
-import { RUN_TRANSCRIPT_TOPIC, runTopic } from '@platform/application';
-import type { IsoDateTime, TranscriptEvent } from '@platform/contracts';
-import { broadcast as broadcastAdapter, db, runner } from '@platform/infrastructure';
+import { RUN_TRANSCRIPT_TOPIC, runTopic, type Transaction } from '@platform/application';
+import type { ContextPackRecord, Id, IsoDateTime, TranscriptEvent } from '@platform/contracts';
+import { SHIPPED_TEMPLATES } from '@platform/domain';
+import {
+  broadcast as broadcastAdapter,
+  db,
+  pipeline as pipelineAdapters,
+  runner,
+} from '@platform/infrastructure';
 import { findShippedProvider } from '@platform/integrations';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
@@ -312,7 +318,10 @@ describe('the transcript page', () => {
  * column is a thing only a database can produce honestly, which is why this is the integration tier
  * and not a stub: `pipeline-queries.test.ts`'s own docblock refuses a stubbed Drizzle handle, and
  * no integration test builds the real router, so the query's branches are asserted here and the
- * **route's 409** in `test/e2e/server/run-api.e2e.test.ts`.
+ * **route's 409** in `apps/server/src/routes/tasks.test.ts`, which drives the real router against
+ * plain functions (it moved there from `test/e2e/server/run-api.e2e.test.ts` at WP-52 round 4 —
+ * that file's own note says why). The run-api e2e now carries a different 409, `/context-pack`'s
+ * `context_pack_not_recorded` (WP-57).
  *
  * The pre-0038 row is produced the only honest way: the same drop / insert / re-add-`NOT VALID`
  * dance `migrations.integration.test.ts` already establishes, which reproduces exactly what an
@@ -392,7 +401,7 @@ describe('one artifact’s body', () => {
   });
 });
 
-describe('the two reads whose columns nothing writes', () => {
+describe('the prompt and context-pack reads, and the rows that predate their writers', () => {
   it('reports a run with no stored prompt as unrecorded, not as a run with an empty prompt', async () => {
     expect(await findRunPrompt(drizzled, runId)).toEqual({ found: true, recorded: false });
     expect(await findRunPrompt(drizzled, '00000000-0000-4000-8000-00000000dead')).toEqual({
@@ -401,16 +410,14 @@ describe('the two reads whose columns nothing writes', () => {
   });
 
   /**
-   * **Rows do not make the pack readable, and the first version of this case pinned the opposite.**
-   *
-   * It asserted `budget_tokens: 200` — the *sum of the rows* — for a record whose budget has no
-   * column anywhere. That is a fabricated field, published by an endpoint whose own refusal says it
-   * cannot be filled, and `apps/web/src/features/run-detail.tsx` renders it as a fact: the first
-   * real producer would have shipped "budget equals total" for every run with nothing to contradict
-   * it. The honest behaviour is the one asserted below, and it is asserted **with rows present**,
-   * which is the direction a test can get wrong silently (standing rule 42).
+   * **The refusal survives for the case it was written for, with its row count** (WP-57, criterion
+   * 2). A run whose header is null — every run created before migration 0041 — is unrecorded however
+   * many rows it has, and the count is what separates "never recorded" (`0`) from "rows written
+   * outside `RunRepository.insert`" (`2`). The first version of this case asserted `budget_tokens`
+   * as the *sum of the rows*, which is the fabricated field this refusal exists to prevent; it is
+   * still asserted **with rows present**, the direction a test can get wrong silently (rule 42).
    */
-  it('cannot read a context pack even when the rows exist, because the budget has no column', async () => {
+  it('refuses a pack whose run has no recorded header, with the row count, even when rows exist', async () => {
     expect(await findRunContextPack(drizzled, runId)).toEqual({
       found: true,
       recorded: false,
@@ -419,14 +426,12 @@ describe('the two reads whose columns nothing writes', () => {
 
     await pool.query(
       `insert into run_context_pack (run_id, tier, source_path, reason, score, tokens, validated,
-                                     kb_commit_sha)
-       values ($1, 0, 'knowledge/index.md', null, null, 120, true, 'abc123'),
-              ($1, 1, 'knowledge/payments.md', 'paths', 0.5, 80, false, 'abc123')`,
+                                     kb_commit_sha, ordinal)
+       values ($1, 0, 'knowledge/index.md', null, null, 120, true, 'abc123', 0),
+              ($1, 1, 'knowledge/payments.md', 'paths', 0.5, 80, false, 'abc123', 0)`,
       [runId],
     );
     try {
-      // Still unrecorded — and the count is what tells an operator which of the two reasons they
-      // are looking at: 0 is "no producer yet", 2 is "a producer exists and the schema gap remains".
       expect(await findRunContextPack(drizzled, runId)).toEqual({
         found: true,
         recorded: false,
@@ -438,6 +443,150 @@ describe('the two reads whose columns nothing writes', () => {
     expect(await findRunContextPack(drizzled, '00000000-0000-4000-8000-00000000dead')).toEqual({
       found: false,
     });
+  });
+
+  it('refuses a new tier-1 row without a reason or a score, and any row without an ordinal', async () => {
+    // 0041's `NOT VALID` check is enforced on every insert after it: the two nulls a projection
+    // would otherwise have to invent cannot be written any more.
+    await expect(
+      pool.query(
+        `insert into run_context_pack (run_id, tier, source_path, reason, score, tokens, ordinal)
+         values ($1, 1, 'knowledge/a.md', null, null, 10, 0)`,
+        [runId],
+      ),
+    ).rejects.toThrow(/run_context_pack_row_complete/);
+    await expect(
+      pool.query(
+        `insert into run_context_pack (run_id, tier, source_path, tokens)
+         values ($1, 0, 'knowledge/index.md', 10)`,
+        [runId],
+      ),
+    ).rejects.toThrow(/run_context_pack_row_complete/);
+    // The header is a pair: a budget without a total is refused rather than stored.
+    await expect(
+      pool.query('update runs set context_budget_tokens = 100 where id = $1', [runId]),
+    ).rejects.toThrow(/runs_context_pack_header_paired/);
+  });
+
+  /**
+   * **What the store writes is what the endpoint serves, byte for byte** — written through the
+   * production `RunRepository.insert`, read through the production projection. The planner-built
+   * half of criterion 1 is `test/e2e/pipeline/context-pack.e2e.test.ts`; this case owns the values a
+   * fixture vault does not produce: a score with more digits than a `real` keeps, a tier-1 entry
+   * recorded `validated: false` that is **not** in the total, an order that is neither by path nor
+   * by score, and a commit.
+   */
+  it('serves the record RunRepository.insert stored, in order, and an empty pack as empty', async () => {
+    const store = pipelineAdapters.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES });
+    const pack: ContextPackRecord = {
+      tier0: [
+        { path: '.agentic/knowledge/index.md', tokens: 300 },
+        { path: 'CLAUDE.md', tokens: 120 },
+      ],
+      tier1: [
+        {
+          path: '.agentic/knowledge/zeta.md',
+          reason: 'trigger',
+          score: 0.123456789012345,
+          tokens: 900,
+          validated: true,
+        },
+        {
+          path: '.agentic/knowledge/alpha.md',
+          reason: 'paths',
+          score: 1,
+          tokens: 400,
+          validated: false,
+        },
+      ],
+      budget_tokens: 12_000,
+      total_tokens: 1_320,
+      kb_commit: 'f1c7ea4',
+    };
+    const empty: ContextPackRecord = {
+      tier0: [],
+      tier1: [],
+      budget_tokens: 12_000,
+      total_tokens: 0,
+      kb_commit: null,
+    };
+    const written = [
+      '00000000-0000-4000-8000-0000000c0a01',
+      '00000000-0000-4000-8000-0000000c0a02',
+    ];
+    // An organisation, a project and a task of its own, and runs that are already `completed`: the
+    // list projections the other cases assert count the shared project's rows (the take-over block
+    // below says what a fixture that moves another test's arithmetic costs).
+    const org = await pool.query<{ id: string }>(
+      "insert into organizations (name) values ('context-pack') returning id",
+    );
+    const ownProject = await pool.query<{ id: string }>(
+      `insert into projects (org_id, key, name, repo_url)
+       values ($1, 'pack', 'Pack', 'https://git.example.test/acme/pack.git') returning id`,
+      [org.rows[0]?.id],
+    );
+    const ownProjectId = ownProject.rows[0]?.id as string;
+    const own = await pool.query<{ id: string }>(
+      `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state,
+                          current_stage)
+       values ($1, 'fake-jira', 'ACME-57', 'https://jira.example.test/browse/ACME-57', 'feature',
+               'cancelled', 'refinement') returning id`,
+      [ownProjectId],
+    );
+    const ownTaskId = own.rows[0]?.id as string;
+    const client = await pool.connect();
+    try {
+      await client.query('begin');
+      const tx = { adapter: 'postgres', client } as unknown as Transaction;
+      for (const [index, record] of [pack, empty].entries()) {
+        await store.runs.insert(tx, {
+          id: written[index] as Id,
+          taskId: ownTaskId as Id,
+          projectId: ownProjectId as Id,
+          stage: null,
+          role: 'developer',
+          mode: 'normal',
+          attempt: 1,
+          model: 'claude-opus-5',
+          effort: 'high',
+          promptVersion: 'test',
+          status: 'completed',
+          terminalReason: null,
+          sessionId: null,
+          numTurns: 0,
+          usage: null,
+          cost: null,
+          wallMs: 0,
+          createdAt: AT as IsoDateTime,
+          startedAt: AT as IsoDateTime,
+          systemPrompt: null,
+          userPrompt: null,
+          redactionCount: 0,
+          contextPack: record,
+        });
+      }
+      await client.query('commit');
+    } finally {
+      client.release();
+    }
+
+    expect(await findRunContextPack(drizzled, written[0] as string)).toEqual({
+      found: true,
+      recorded: true,
+      pack,
+    });
+    // Empty is not unwritten: a budget and no rows is a pack, and it is served as one.
+    expect(await findRunContextPack(drizzled, written[1] as string)).toEqual({
+      found: true,
+      recorded: true,
+      pack: empty,
+    });
+    // And the difference is in the rows, not only in the header.
+    const { rows } = await pool.query<{ run_id: string; count: string }>(
+      `select run_id, count(*) from run_context_pack where run_id = any($1::uuid[]) group by run_id`,
+      [written],
+    );
+    expect(rows.map((row) => [row.run_id, Number(row.count)])).toEqual([[written[0], 4]]);
   });
 });
 
@@ -1074,26 +1223,39 @@ describe('the list projections', () => {
     ).toBeUndefined();
   });
 
-  it('reads the newest knowledge health report, and null when no pass has run', async () => {
+  it('reads the newest knowledge health report, an empty one as empty, and null when no pass has run', async () => {
     expect(await findKbHealth(drizzled, projectId)).toBeNull();
+    // A report that found nothing is a report, not an absent one (WP-57, criterion 5): the route
+    // answers the first with 200 and `findings: []`, the null above with 409.
     await pool.query(
       `insert into kb_health_reports (project_id, commit_sha, documents, findings, source, created_at)
-       values ($1, 'older', 1, '[]'::jsonb, 'hygiene', '2026-09-01T00:00:00Z'),
-              ($1, 'newer', 4, $2::jsonb, 'hygiene', '2026-09-02T00:00:00Z')`,
-      [
-        projectId,
-        JSON.stringify([
-          { kind: 'expired', path: 'knowledge/payments.md', detail: 'not touched since March' },
-        ]),
-      ],
+       values ($1, 'older', 1, '[]'::jsonb, 'hygiene', '2026-09-01T00:00:00Z')`,
+      [projectId],
+    );
+    const clean = await findKbHealth(drizzled, projectId);
+    expect(clean?.findings).toEqual([]);
+    expect(clean?.documents).toBe(1);
+
+    // `invalid` (WP-57) is a kind of the stored report, which the Librarian artifact does not carry.
+    const findings = [
+      {
+        kind: 'invalid',
+        path: 'knowledge/broken.md',
+        detail:
+          'the parser refused it at line 3, so no context pack includes it: frontmatter: a tab character',
+      },
+      { kind: 'expired', path: 'knowledge/payments.md', detail: 'not touched since March' },
+    ];
+    await pool.query(
+      `insert into kb_health_reports (project_id, commit_sha, documents, findings, source, created_at)
+       values ($1, 'newer', 4, $2::jsonb, 'hygiene', '2026-09-02T00:00:00Z')`,
+      [projectId, JSON.stringify(findings)],
     );
 
     const report = await findKbHealth(drizzled, projectId);
     expect(report?.commit_sha).toBe('newer');
     expect(report?.documents).toBe(4);
-    expect(report?.findings).toEqual([
-      { kind: 'expired', path: 'knowledge/payments.md', detail: 'not touched since March' },
-    ]);
+    expect(report?.findings).toEqual(findings);
     expect(report?.source).toBe('hygiene');
 
     // A row whose stored findings no longer match the published shape is refused by name rather

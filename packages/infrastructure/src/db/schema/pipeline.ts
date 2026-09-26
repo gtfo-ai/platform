@@ -28,12 +28,12 @@ import {
   bigint,
   boolean,
   date,
+  doublePrecision,
   integer,
   jsonb,
   numeric,
   pgTable,
   primaryKey,
-  real,
   smallint,
   text,
   timestamp,
@@ -226,6 +226,15 @@ export const runs = pgTable('runs', {
   priceListId: uuid('price_list_id'),
   wallMs: bigint('wall_ms', { mode: 'number' }).notNull().default(0),
   redactionCount: integer('redaction_count').notNull().default(0),
+  /**
+   * The context pack's header — `ContextPackRecord.budget_tokens`, `total_tokens` and `kb_commit`
+   * — written by `RunRepository.insert` since migration 0041 (WP-57, PROGRESS backlog 31).
+   * `contextBudgetTokens` null is *"no pack was recorded for this run"*; non-null with no
+   * {@link runContextPack} rows is an **empty** pack.
+   */
+  contextBudgetTokens: integer('context_budget_tokens'),
+  contextTotalTokens: integer('context_total_tokens'),
+  contextKbCommit: text('context_kb_commit'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -257,11 +266,15 @@ export const runContextPack = pgTable(
     runId: uuid('run_id').notNull(),
     tier: smallint('tier').notNull(),
     sourcePath: text('source_path').notNull(),
+    /** Filled on every tier-1 row since migration 0041; a tier-0 row has none. */
     reason: contextPackReasonEnum('reason'),
-    score: real('score'),
+    /** `double precision` since migration 0041: a `real` rounded the planner's score. */
+    score: doublePrecision('score'),
     tokens: integer('tokens').notNull().default(0),
     validated: boolean('validated').notNull().default(true),
     kbCommitSha: text('kb_commit_sha'),
+    /** The entry's position within its tier — the record is ordered (migration 0041). */
+    ordinal: integer('ordinal'),
   },
   (table) => [primaryKey({ columns: [table.runId, table.sourcePath] })],
 );

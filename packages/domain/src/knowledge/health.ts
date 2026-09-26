@@ -13,8 +13,12 @@
  *
  * ## What is computed here, and the one thing that cannot be
  *
- * Four kinds, all derivable from the index alone:
+ * Five kinds, all derivable from the index and what the index run stored beside it:
  *
+ *  - **`invalid`** — a document the parser refused at the last index run (WP-57, PROGRESS backlog
+ *    37). It is in no context pack, and before `kb_index_refusals` existed it was in no table
+ *    either, so a project could commit a page and never learn that no agent is shown it. First in
+ *    the order, because it is the one finding that means *the page does not exist for an agent*.
  *  - **`expired`** — the page's own `expires` date has passed and nothing re-confirmed it. It is a
  *    *soft* expiry (product/05): the page stays indexed and stays retrievable.
  *  - **`dangling`** — a wikilink whose target the indexer could not resolve.
@@ -23,12 +27,14 @@
  *  - **`oversized`** — a page over the token budget a context pack can afford to spend on one item.
  *
  * **"Deprecate candidates (included N times, never cited)" is not computed, and saying so is the
- * point.** It needs two things this build does not have: `run_context_pack` rows, which nothing
- * writes (PROGRESS backlog 31), and citation detection over `run_messages.search_text`. A finding
- * invented from the half that exists would say "never cited" about every page in every vault, which
- * is worse than an absent finding — so the pass reports what it can see and the gap is filed.
+ * point.** *Included N times* has had its rows since WP-57 (`run_context_pack`). *Never cited* has
+ * not: the only citation signal is `kb_citations`, which two artifact types carry, so a page that
+ * only implementation or review runs are shown would read "never cited" because nobody who read it
+ * was asked to cite. A finding built on that would be a statement about the role rather than the
+ * page, which is worse than an absent finding — so the pass reports what it can see and the gap is
+ * filed.
  */
-import type { KbHealthFinding } from '@platform/contracts';
+import type { KbHealthReportFinding } from '@platform/contracts';
 
 /** One indexed document, as the health pass reads it back. */
 export interface HealthDocument {
@@ -46,9 +52,19 @@ export interface HealthLink {
   readonly toPath: string;
 }
 
+/** One document the parser refused at the last index run, as `kb_index_refusals` records it. */
+export interface HealthRefusal {
+  readonly path: string;
+  /** The parser's diagnosis — untrusted text, it can quote a frontmatter key (BD-022). */
+  readonly reason: string;
+  /** The 1-based frontmatter line the parser stopped at, when it knows one. */
+  readonly line: number | null;
+}
+
 export interface HealthInputs {
   readonly documents: readonly HealthDocument[];
   readonly danglingLinks: readonly HealthLink[];
+  readonly refusals: readonly HealthRefusal[];
 }
 
 export interface HealthOptions {
@@ -77,7 +93,8 @@ export const MAX_HEALTH_DOCUMENT_TOKENS = 4_000;
  */
 export const MAX_HEALTH_FINDINGS = 100;
 
-const KIND_ORDER: readonly KbHealthFinding['kind'][] = [
+const KIND_ORDER: readonly KbHealthReportFinding['kind'][] = [
+  'invalid',
   'expired',
   'dangling',
   'duplicate',
@@ -86,13 +103,21 @@ const KIND_ORDER: readonly KbHealthFinding['kind'][] = [
 ];
 
 export interface HealthReport {
-  readonly findings: readonly KbHealthFinding[];
+  readonly findings: readonly KbHealthReportFinding[];
   /** How many findings the cap left out — a number for the log, never a silent zero. */
   readonly dropped: number;
 }
 
 export const computeKbHealth = (inputs: HealthInputs, options: HealthOptions): HealthReport => {
-  const findings: KbHealthFinding[] = [];
+  const findings: KbHealthReportFinding[] = [];
+
+  for (const refusal of inputs.refusals) {
+    findings.push({
+      kind: 'invalid',
+      path: refusal.path,
+      detail: `the parser refused it${refusal.line === null ? '' : ` at line ${refusal.line}`}, so no context pack includes it: ${refusal.reason}`,
+    });
+  }
 
   for (const document of inputs.documents) {
     if (document.expires !== null && document.expires < options.today) {

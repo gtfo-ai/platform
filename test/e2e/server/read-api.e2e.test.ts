@@ -278,11 +278,13 @@ describe('the project, agent and integration reads, over a pipeline that ran', (
     ).toBe(404);
 
     // ── /api/projects/:id/kb/health, after the pass that writes it ──────────
-    // Before the pass there is no report, and the 404 says which of the two it is.
+    // Before the pass there is no report, and the refusal has a code of its own (WP-57): a 404 was
+    // also what a project that does not exist answers, so the two differed only in prose.
     const missing = await client.json<{ error: { code: string; message: string } }>(
       `/api/projects/${pipeline.projectId}/kb/health`,
     );
-    expect(missing.status).toBe(404);
+    expect(missing.status).toBe(409);
+    expect(missing.body.error.code).toBe('kb_health_not_reported');
     expect(missing.body.error.message).toContain('hygiene');
 
     // The nightly pass, fired now rather than waited for: the handler is the production one this

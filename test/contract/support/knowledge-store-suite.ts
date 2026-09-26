@@ -87,6 +87,7 @@ export const runKnowledgeStoreContract = (harness: KnowledgeStoreHarness): void 
         commitSha: 'abc1234',
         documents,
         removedPaths: [],
+        refused: [],
         ...overrides,
       });
     };

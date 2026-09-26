@@ -36,6 +36,7 @@ import {
 import type {
   CodeMapStore,
   IndexWrite,
+  InvalidDocument,
   KbChunkHit,
   KbIndexState,
   KbSearchRequest,
@@ -93,6 +94,8 @@ interface StoredRow {
 export interface MemoryKnowledgeStore extends KnowledgeStore {
   /** Rows currently indexed, for assertions that do not go through a port method. */
   snapshot(projectId: Id): readonly StoredKbDocument[];
+  /** `kb_index_refusals` as the last write left it (WP-57). */
+  refusals(projectId: Id): readonly InvalidDocument[];
 }
 
 export const memoryKnowledgeStore = (
@@ -100,6 +103,7 @@ export const memoryKnowledgeStore = (
 ): MemoryKnowledgeStore => {
   const rows = new Map<Id, Map<string, StoredRow>>();
   const state = new Map<Id, KbIndexState>();
+  const refused = new Map<Id, readonly InvalidDocument[]>();
   let nextId = 1;
 
   const project = (projectId: Id): Map<string, StoredRow> => {
@@ -112,6 +116,7 @@ export const memoryKnowledgeStore = (
 
   return {
     snapshot: (projectId) => [...project(projectId).values()].map((row) => row.document),
+    refusals: (projectId) => refused.get(projectId) ?? [],
 
     write: async (tx: Transaction, input: IndexWrite): Promise<void> => {
       assertOwnTransaction(tx);
@@ -142,6 +147,11 @@ export const memoryKnowledgeStore = (
           },
         });
       }
+      // A replace, as the SQL adapter's `delete` + `insert` is.
+      refused.set(
+        input.projectId,
+        input.refused.map((refusal) => ({ ...refusal })),
+      );
       state.set(input.projectId, {
         projectId: input.projectId,
         commitSha: input.commitSha,

@@ -218,6 +218,25 @@ describe('the prompt a run was started with', () => {
     expect(rows[0]?.userPrompt).toBe(spec?.userPrompt);
   });
 
+  /**
+   * **The pack is handed to the row's own insert, and it is the record `run.started` carries**
+   * (WP-57, PROGRESS backlog 31). The SQL half — that the rows and the header land and read back —
+   * is `test/integration/server/read-api.integration.test.ts` and the planner-built pack over HTTP is
+   * `test/e2e/pipeline/context-pack.e2e.test.ts`; this case pins the seam between them: the
+   * executor passes the plan's record, not `null` and not a re-assembly.
+   */
+  it('hands runs.insert the context pack run.started carries', async () => {
+    const harness = harnessWith({ runs: scripted });
+    const rows = await capturedRun(harness);
+    const started = harness.events().find((entry) => entry.type === 'run.started') as
+      | { payload: { run_id: string; context_pack: unknown } }
+      | undefined;
+    expect(started, 'no run.started').toBeDefined();
+    expect(rows[0]?.id).toBe(started?.payload.run_id);
+    expect(rows[0]?.contextPack).not.toBeNull();
+    expect(rows[0]?.contextPack).toEqual(started?.payload.context_pack);
+  });
+
   it('counts what it replaced, and 0 means the redactor ran and found nothing', async () => {
     // Criterion (2)'s first direction. Exact rather than `>= 0`, which a non-negative integer
     // column satisfies vacuously: a writer that double-counted would fail here.

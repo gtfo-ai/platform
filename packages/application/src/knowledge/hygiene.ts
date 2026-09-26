@@ -5,7 +5,8 @@
  *
  * Two things, per project, and both are deliberately small:
  *
- *  1. **It writes a health report** (`kb_health_reports`, migration 0018) from the index —
+ *  1. **It writes a health report** (`kb_health_reports`, migration 0018) from the index and from
+ *     what the last index run refused (`kb_index_refusals`, migration 0041, WP-57) —
  *     `computeKbHealth` in the domain ring decides what a finding is, and its docblock says which
  *     of technical/07's kinds cannot be computed in this build and why.
  *  2. **It re-asks for an apply pass** for every project with a proposal that was decided and never
@@ -88,7 +89,11 @@ export const runKnowledgeHygiene = async (
   for (const projectId of projects) {
     const inputs = await options.proposals.readHealthInputs(projectId);
     const report = computeKbHealth(
-      { documents: inputs.documents, danglingLinks: inputs.danglingLinks },
+      {
+        documents: inputs.documents,
+        danglingLinks: inputs.danglingLinks,
+        refusals: inputs.refusals,
+      },
       {
         today,
         maxDocumentTokens: MAX_HEALTH_DOCUMENT_TOKENS,

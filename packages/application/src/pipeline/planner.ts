@@ -522,7 +522,10 @@ export interface StageRunPlannerOptions {
    * Absent in this build and **said so out loud** rather than defaulted to `[]` in silence: there
    * is no checkout at plan time (the pipeline does not compose `WorkspaceProvider` yet), so a
    * knowledge document carrying a `paths:` glob is recorded `validated: false` and never admitted.
-   * That is visible in `run_context_pack` and logged once per run here.
+   * That is visible in `run_context_pack` — **since WP-57**, when the table got its writer
+   * (`RunRepository.insert`, migration 0041); before that this sentence named a table nothing had
+   * ever written, and the record lived only in the `run.started` payload (PROGRESS backlog 31) —
+   * and logged once per run here, at `debug`.
    *
    * **Still absent after WP-18a, and the reason changed.** That work package gave the platform a
    * default-branch read that needs no checkout — `VaultSource.read` over a bare mirror, whose

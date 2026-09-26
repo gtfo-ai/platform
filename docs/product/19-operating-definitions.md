@@ -105,7 +105,7 @@ Ship skeletons with headings and one-line guidance: `index.md` (map, ≤ 200 lin
 | Reviewer minutes | first human MR activity → merge, capped at 8 h per day of activity | human_time_entries |
 | Clean-first-MR rate per ticket author | tasks reaching Ready with 0 questions and 0 returns / tasks by author | tasks |
 | KB proposal acceptance | applied / (applied + rejected) | kb_proposals |
-| KB usage | runs whose tier-1 items were cited / runs with tier-1 items | run_context_pack |
+| KB usage | refinement and spike runs (the two roles whose artifact carries kb_citations) whose recorded context pack admitted ≥ 1 tier-1 document and whose artifact cites one of those documents by vault path / refinement and spike runs whose recorded context pack admitted ≥ 1 tier-1 document; runs of every other role are in neither side (narrowed at WP-57, backlog 169) | run_context_pack (admitted tier-1 rows) joined to artifacts.kb_citations |
 | Readiness-attributed returns | returns tagged with a readiness criterion / returns | retro reports |
 | Cost estimate accuracy | median abs(estimate − actual)/actual by size | tasks |
 | LOC | additions/deletions from MR diff stats at merge | mr events |

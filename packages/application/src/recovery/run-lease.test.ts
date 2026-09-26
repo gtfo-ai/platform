@@ -118,6 +118,7 @@ const sweep = async (options: {
       systemPrompt: null,
       userPrompt: null,
       redactionCount: 0,
+      contextPack: null,
       status: 'running',
       terminalReason: null,
       sessionId: 'session-1',

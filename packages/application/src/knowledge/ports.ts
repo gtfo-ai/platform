@@ -20,7 +20,7 @@ import type {
   IsoDateTime,
   JsonObject,
   KbFrontmatter,
-  KbHealthFinding,
+  KbHealthReportFinding,
   KnowledgeProposalKind,
   KnowledgeProposalSource,
   KnowledgeProposalStatus,
@@ -30,6 +30,7 @@ import type {
   CodeFileSymbols,
   HealthDocument,
   HealthLink,
+  HealthRefusal,
   KbChunk,
   KbLayer,
   ParsedKbDocument,
@@ -93,7 +94,13 @@ export interface IndexableDocument {
   readonly blobSha: string;
 }
 
-/** A document the parser refused — kept so the KB health report can name it (product/05). */
+/**
+ * A document the parser refused — kept so the KB health report can name it (product/05).
+ *
+ * Stored since WP-57 (`kb_index_refusals`, migration 0041): it used to live for the length of one
+ * index job. `reason` is the parser's diagnosis and can quote a frontmatter key a human wrote, so it
+ * is untrusted text (BD-022).
+ */
 export interface InvalidDocument {
   readonly path: string;
   readonly reason: string;
@@ -106,7 +113,23 @@ export interface IndexWrite {
   readonly documents: readonly IndexableDocument[];
   /** Paths present in the index that the snapshot no longer has. */
   readonly removedPaths: readonly string[];
+  /**
+   * What the parser refused at this commit — **replaces** the project's stored refusals, in the
+   * same transaction as the documents (WP-57, PROGRESS backlog 37). Required rather than optional:
+   * a write that omitted it would leave the previous commit's refusals standing beside this
+   * commit's documents, and an empty list is how "the parser refused nothing" is spelled.
+   * Every `reason` is already bounded by the indexer ({@link MAX_REFUSAL_REASON_CHARS}).
+   */
+  readonly refused: readonly InvalidDocument[];
 }
+
+/**
+ * The longest parser diagnosis the index stores, in characters — `kb_index_refusals_reason_bounded`
+ * holds the database to the same number. A diagnosis is a sentence plus, at most, a quoted key, so
+ * the bound only ever bites on a key somebody made enormous; the cut is declared with a trailing
+ * `…` rather than silent.
+ */
+export const MAX_REFUSAL_REASON_CHARS = 1_000;
 
 export interface KbIndexState {
   readonly projectId: Id;
@@ -340,7 +363,7 @@ export interface KbHealthReportWrite {
   readonly projectId: Id;
   readonly commitSha: string | null;
   readonly documents: number;
-  readonly findings: readonly KbHealthFinding[];
+  readonly findings: readonly KbHealthReportFinding[];
   readonly source: 'hygiene' | 'librarian';
   readonly createdAt: IsoDateTime;
 }
@@ -433,6 +456,8 @@ export interface KbHealthInputs {
   readonly commitSha: string | null;
   readonly documents: readonly HealthDocument[];
   readonly danglingLinks: readonly HealthLink[];
+  /** `kb_index_refusals` — what the parser refused at the indexed commit (WP-57). */
+  readonly refusals: readonly HealthRefusal[];
 }
 
 /**

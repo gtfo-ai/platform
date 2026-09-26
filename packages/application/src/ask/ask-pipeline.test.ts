@@ -29,6 +29,7 @@ import {
 } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { exactSecretRedactor } from '../integrations/redaction.js';
+import type { NewRun } from '../pipeline/store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import { createMemoryAskStore } from '../testing/memory-ask.js';
@@ -195,6 +196,36 @@ describe('an ask is a run with a task and no stage (criterion 1)', () => {
     expect(ask?.status).toBe('answered');
     expect(ask?.answer).toBe(ANSWER.answer);
     expect(ask?.runId).not.toBeNull();
+  });
+
+  it('hands runs.insert the context pack its run.started carries (WP-57, standing rule 49)', async () => {
+    // The second `runs.insert` call site: an ask's pack is recorded the way a stage's is, so its
+    // `GET /api/runs/:id/context-pack` answers rather than refusing as "never recorded".
+    const harness = harnessWith();
+    await seedTask(harness);
+    const inserted: NewRun[] = [];
+    const repository = harness.store.runs as { insert: typeof harness.store.runs.insert };
+    const original = repository.insert.bind(harness.store.runs);
+    repository.insert = async (tx, run) => {
+      inserted.push(run);
+      await original(tx, run);
+    };
+    await askThroughHttp(harness);
+
+    const [ask] = harness.asks.all();
+    const row = inserted.find((run) => run.id === ask?.runId);
+    const started = harness
+      .events()
+      .find(
+        (entry) =>
+          entry.type === 'run.started' &&
+          (entry.payload as { run_id: string }).run_id === ask?.runId,
+      );
+    expect(row, 'the ask inserted no run').toBeDefined();
+    expect(row?.contextPack).not.toBeNull();
+    expect(row?.contextPack).toEqual(
+      (started?.payload as { context_pack: unknown } | undefined)?.context_pack,
+    );
   });
 
   it('claims this process’s run lease, so the sweep reaches it at the lease bound (backlog 120)', async () => {

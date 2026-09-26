@@ -82,6 +82,7 @@ beforeAll(async () => {
     commitSha: 'abc1234',
     documents: parsedFixture(),
     removedPaths: [],
+    refused: [],
   });
 }, 180_000);
 

@@ -7,6 +7,27 @@
 - `KnowledgeIndexer` job (pg-boss, singleton per project): `git diff --name-only <last_indexed>..<head>` restricted to `knowledge_dir`, `.agentic/rules`, `CLAUDE.md`, `AGENTS.md` → parse frontmatter (schema in product/05) → split into chunks by heading (each chunk prefixed with `project / path / H1 > H2`) → upsert `kb_documents`, `kb_chunks`, `kb_links` → update `kb_index_state`. Full rebuild on demand or when the parser version changes.
 - Validation on index: frontmatter schema, dangling wikilinks, expired items, duplicated ids; results feed the KB health report.
 
+> **How the results feed the report — decided at WP-57 (PROGRESS backlog 37), and it narrows the line
+> above.** Two of the four checks are made *at* index time and two *over* the index, and all four
+> reach the report through the **nightly pass**, not through the index run. A **frontmatter-schema
+> refusal** is decided by the parser while the index run reads the vault; such a document is never
+> indexed, so the run **stores the refusal** — `kb_index_refusals`, replaced in the same transaction
+> as the documents, so it always describes the commit `kb_index_state` names — and the nightly pass
+> reports each one as an `invalid` finding. Dangling wikilinks, expired items and duplicated ids are
+> computed by the pass from the index rows it reads. The alternative, running the pass inside the index
+> run, was rejected: the report would then be written by the job that is least often run (an index run
+> is skipped whenever the default branch has not moved), and a project whose pages expired overnight
+> would see nothing until somebody merged. So a refusal reaches the health report **at the next nightly
+> pass after the index run that found it**, not at the moment of indexing; `GET …/kb/health` shows
+> `created_at` so the lag is visible.
+>
+> **On upgrade**, a project indexed before migration 0041 has no stored refusals and would keep none
+> while its default branch stood still, because the index run skips a commit it has already indexed.
+> 0041 therefore nulls `kb_index_state.commit_sha` (and leaves `fts_built_at`, so packs keep reading
+> the index): the project's next index run — its next task, merge or default-branch move — is a full
+> rebuild. Until that run its health report carries `commit_sha: null` and no `invalid` finding, and
+> the null commit is what says the refusals have not been read yet.
+
 > **Where the tree the indexer reads comes from — decided at TD-026, built at WP-18a.**
 > This section says the platform "reads it from the default branch" and never said *from what*. The
 > answer is a **platform-side bare mirror** of the project, one per project, cloned and fetched by the
@@ -58,6 +79,12 @@ Inputs: task text (ticket + spec), touched paths (from plan/diff when available)
 1. **Path match:** documents whose `paths` globs match any touched path → score 1.0.
 2. **Trigger/full-text match:** `websearch_to_tsquery('simple', <task keywords>)` over `kb_chunks.search`, boosted by document `kind` (stage-specific weights: business pages for Refinement, technical/decisions for Architecture and Review, lessons/pitfalls for Implementation) and by `confidence`/`status`.
 3. **Validate on read:** drop items whose cited paths/symbols no longer exist at HEAD; record `validated=false` in `run_context_pack` and flag the document.
+
+   > **WP-57:** the `validated=false` record is **written** — `run_context_pack` held no row until then
+   > (PROGRESS backlog 31), so this step's audit existed only in the `run.started` payload. *"Flag the
+   > document"* is **not** done: no health finding is made from a failed validation, and in this build
+   > it would flag every `paths:`-scoped page, because the planner has no HEAD path listing
+   > (`StageRunPlannerOptions.headPaths` is absent) and validates every such page `false`.
 4. Fill the token budget (default 12 k for tiers 0–1): tier 0 always (index, rules, repo map for code stages), then tier 1 by score until the budget is reached; write files into the workspace `.agentic-run/context/` and list them in the prompt with 2–3-line summaries.
 5. `kb_search` MCP tool exposes the same query for tier 2 (returns `path#heading` + snippet + score; never whole documents unless asked by path).
 
@@ -125,7 +152,10 @@ Inputs: task text (ticket + spec), touched paths (from plan/diff when available)
 > alone exceeds the budget, the pack keeps every tier-0 document, admits no tier-1 document, and
 > records `total_tokens > budget_tokens`. Dropping a tier-0 document would make "always" false and
 > ignoring the budget would make it decoration; the third option is the only honest one, and it is
-> visible in `run_context_pack` rather than absorbed.
+> visible in the run's recorded pack rather than absorbed — since WP-57 (migration 0041), as
+> `runs.context_total_tokens > runs.context_budget_tokens` and on `GET /api/runs/:id/context-pack`.
+> *(Until WP-57 this sentence said "visible in `run_context_pack`", a table with no budget column and
+> no writer; PROGRESS backlog 31.)*
 >
 > **The code map needs `universal-ctags`, which the platform does not ship — see
 > `docs/OPEN-QUESTIONS.md` Q57.** The extractor **probes** and refuses anything that is not
@@ -183,9 +213,12 @@ Inputs: task text (ticket + spec), touched paths (from plan/diff when available)
 > rewrote it from the file list would overwrite whatever a human wrote there.
 >
 > **Step 6's "deprecate candidates (included N times, never cited)" is not computed**, and the
-> nightly pass says so rather than approximating it: it needs `run_context_pack` rows, which
-> nothing writes (PROGRESS backlog 31), and citation detection over `run_messages.search_text`. The
-> pass reports `expired`, `dangling`, `duplicate` and `oversized` into `kb_health_reports`, makes
+> nightly pass says so rather than approximating it. *Included N times* has had its rows since
+> WP-57 (`run_context_pack`, migration 0041). *Never cited* has not: the only citation signal is
+> `kb_citations`, which two artifact types carry (RefinedSpec, ResearchReport), so a page that only
+> implementation or review runs are shown would read "never cited" because nobody who read it was
+> asked to cite — the finding would be a statement about the role, not the page. The
+> pass reports `invalid` (since WP-57), `expired`, `dangling`, `duplicate` and `oversized` into `kb_health_reports`, makes
 > **no** git call at all, and deletes nothing — the strongest thing it may do to a page a human
 > wrote is mention it in a report.
 >

@@ -173,11 +173,9 @@ export const registerRunRoutes = async (
       schema: {
         summary: 'The context pack a run was assembled with',
         description:
-          'Refuses with 409 `context_pack_not_recorded` while nothing writes `run_context_pack`.',
+          'The record the run’s planner built — the same one `run.started` carries — stored when the run was created (migration 0041). An empty pack answers 200 with empty tiers. Refuses with 409 `context_pack_not_recorded`, carrying the row count, for a run created before that migration, whose pack was never recorded. Every `path` is a vault path somebody committed (BD-022).',
         tags: ['runs'],
         params: runParamsSchema,
-        // `200` is the shape this endpoint will answer with once the schema can hold a pack; today
-        // it answers `409` and nothing else, so both are published.
         response: { 200: contextPackRecordSchema, 409: apiErrorSchema },
       },
     },
@@ -186,20 +184,23 @@ export const registerRunRoutes = async (
       if (!pack.found) {
         throw new NotFoundError(`run ${request.params.run_id}`);
       }
+      if (pack.recorded) {
+        return pack.pack;
+      }
       /**
-       * **This endpoint always refuses, and the refusal is a statement about the schema.**
+       * **The refusal is now a statement about the row, not about the build** (WP-57).
        *
-       * `run_context_pack` has no column for `budget_tokens` and stores `reason`/`score` as
-       * nullable where the published tier-1 entry requires them, so the record cannot be filled
-       * from the table *however many rows exist* — summing the rows into `budget_tokens` would
-       * publish "budget equals total" as a fact, and `apps/web/src/features/run-detail.tsx` renders
-       * it as one. The row count is in the message so the reason is diagnosable: `0` is "no
-       * producer yet", anything else is "a producer exists and the schema gap is still open".
+       * Until migration 0041 this endpoint always refused, because `run_context_pack` could not
+       * hold the record and nothing wrote it. Both are fixed; what is left is a run whose header
+       * (`runs.context_budget_tokens`) is null — created before the writer existed — and answering
+       * it would mean inventing the budget and the total. The row count is in the message so `0`
+       * ("never recorded") and a non-zero count ("rows written outside `RunRepository.insert`")
+       * stay distinguishable (standing rule 18).
        */
       throw new HttpError(
         409,
         'context_pack_not_recorded',
-        `run ${request.params.run_id} has no readable context pack (${pack.rows} run_context_pack rows): the table has no column for the pack's budget_tokens and stores reason/score as nullable where the published record requires them, so it cannot be projected from rows alone, and nothing in this repository inserts into it yet. Giving this endpoint an answer is a schema change plus a writer, not a reader. The pack is built per run (WP-17) and currently lives only in the prompt it produced`,
+        `run ${request.params.run_id} has no recorded context pack (${pack.rows} run_context_pack rows and no budget_tokens on the run): it was created before migration 0041 gave the pack a writer, and the budget and total it was assembled against cannot be recovered from rows alone`,
       );
     },
   );

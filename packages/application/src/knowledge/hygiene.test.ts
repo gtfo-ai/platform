@@ -80,6 +80,14 @@ describe('the nightly pass', () => {
       danglingLinks: [
         { fromPath: '.agentic/knowledge/lessons/L-copy.md', toPath: 'lessons/gone.md' },
       ],
+      // WP-57: a page the parser refused reaches the report through the pass, not only the log.
+      refusals: [
+        {
+          path: '.agentic/knowledge/lessons/L-broken.md',
+          reason: 'frontmatter: a tab character; YAML indentation must be spaces',
+          line: 2,
+        },
+      ],
     });
 
     const report = await runKnowledgeHygiene(options);
@@ -96,7 +104,17 @@ describe('the nightly pass', () => {
       'duplicate',
       'duplicate',
       'expired',
+      'invalid',
     ]);
+    // Refused pages lead the report, and name the page and the parser's reason.
+    expect(written?.findings[0]).toEqual({
+      kind: 'invalid',
+      path: '.agentic/knowledge/lessons/L-broken.md',
+      detail:
+        'the parser refused it at line 2, so no context pack includes it: frontmatter: a tab character; YAML indentation must be spaces',
+    });
+    // `documents` stays the indexed count: a refused page was never indexed.
+    expect(written?.documents).toBe(2);
   });
 
   it('writes a report for a project with nothing indexed, rather than skipping it', async () => {
@@ -143,6 +161,7 @@ describe('the nightly pass', () => {
     const { options, proposals } = harness();
     proposals.seedHealthInputs(PROJECT, {
       commitSha: 'c0ffee1',
+      refusals: [],
       documents: [
         {
           path: '.agentic/knowledge/handbook.md',

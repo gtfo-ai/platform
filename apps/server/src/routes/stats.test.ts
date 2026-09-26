@@ -52,6 +52,7 @@ const SOURCES: StatsSources = {
   questions: [{ answeredDay: '2026-06-03', minutes: 30 }],
   humanMinutes: [{ day: '2026-06-03', kind: 'review', minutes: 45 }],
   kbProposals: [{ day: '2026-06-03', applied: 3, rejected: 1 }],
+  kbUsage: [{ day: '2026-06-03', eligible: 2, cited: 1 }],
   stageReturns: [{ stage: 'code_review', entries: 4, returns: 1, rate: null }],
 };
 

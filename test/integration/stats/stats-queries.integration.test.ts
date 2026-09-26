@@ -353,6 +353,85 @@ describe('the statistics reads (PostgreSQL)', () => {
     expect(sources.startedTasks).toHaveLength(MAX_TASK_ROWS);
   }, 120_000);
 
+  /**
+   * **`kb_usage` is one join, and its denominator is the subset its definition names** (WP-57,
+   * criterion 6; PROGRESS backlog 112). Five runs, one per branch of the predicate, on a project of
+   * their own and on **fixed** dates read with a fixed range (standing rule 86) — the rest of this
+   * file's "24 hours ago" clock is not used here, so no case can straddle a midnight.
+   */
+  it('counts knowledge usage over runs whose recorded pack admitted a document and whose artifact carries citations', async () => {
+    const project = await seedProject('kb-usage');
+    const taskId = await seedTask({ project, createdAt: '2026-03-10T07:00:00.000Z' });
+    const run = async (header: boolean): Promise<string> => {
+      const row = await pool.query<{ id: string }>(
+        `insert into runs (task_id, project_id, role, model, prompt_version, status, started_at,
+                           context_budget_tokens, context_total_tokens)
+         values ($1, $2, 'product_manager', 'claude', 'v1', 'completed', '2026-03-10T10:00:00Z',
+                 $3, $4)
+         returning id`,
+        [taskId, project, header ? 12_000 : null, header ? 500 : null],
+      );
+      return row.rows[0]?.id as string;
+    };
+    const pack = async (runId: string, path: string, validated: boolean): Promise<void> => {
+      await pool.query(
+        `insert into run_context_pack (run_id, tier, source_path, reason, score, tokens, validated,
+                                       ordinal)
+         values ($1, 0, '.agentic/knowledge/index.md', null, null, 100, true, 0),
+                ($1, 1, $2, 'trigger', 0.8, 400, $3, 0)`,
+        [runId, path, validated],
+      );
+    };
+    let version = 0;
+    const artifact = async (runId: string, type: string, cited: readonly string[]) => {
+      version += 1;
+      await pool.query(
+        `insert into artifacts (task_id, type, version, data, schema_version, produced_by_run_id,
+                                redaction_count)
+         values ($1, $2, $3, $4::jsonb, '1', $5, 0)`,
+        [
+          taskId,
+          type,
+          version,
+          JSON.stringify({ kb_citations: cited.map((path) => ({ path })) }),
+          runId,
+        ],
+      );
+    };
+
+    // In the denominator and the numerator: it cites the page its pack admitted.
+    const cited = await run(true);
+    await pack(cited, '.agentic/knowledge/a.md', true);
+    await artifact(cited, 'RefinedSpec', ['.agentic/knowledge/a.md']);
+    // In the denominator only: it cites a page its pack did not carry (reached through kb_search).
+    const searched = await run(true);
+    await pack(searched, '.agentic/knowledge/b.md', true);
+    await artifact(searched, 'ResearchReport', ['.agentic/knowledge/elsewhere.md']);
+    // In neither: its only tier-1 entry was validated away, so the agent was never shown it.
+    const dropped = await run(true);
+    await pack(dropped, '.agentic/knowledge/c.md', false);
+    await artifact(dropped, 'RefinedSpec', ['.agentic/knowledge/c.md']);
+    // In neither: its artifact type carries no citations, whatever its pack held.
+    const implementer = await run(true);
+    await pack(implementer, '.agentic/knowledge/d.md', true);
+    await artifact(implementer, 'ImplementationNotes', []);
+    // In neither: no recorded pack (a run created before migration 0041).
+    const unrecorded = await run(false);
+    await artifact(unrecorded, 'RefinedSpec', ['.agentic/knowledge/a.md']);
+
+    const sources = await readStatsSources(db, resolveRange('7d', 'day', '2026-03-12'), {
+      timezone: ZONE,
+      projectId: project,
+    });
+    expect(sources.kbUsage).toEqual([{ day: '2026-03-10', eligible: 2, cited: 1 }]);
+    // The project filter holds: another project's read sees none of these runs.
+    const other = await readStatsSources(db, resolveRange('7d', 'day', '2026-03-12'), {
+      timezone: ZONE,
+      projectId: otherProjectId,
+    });
+    expect(other.kbUsage).toEqual([]);
+  });
+
   it('folds what it read into a document the contract accepts', async () => {
     // The two halves together, once: the SQL's rows through the pure fold, so a shape the queries
     // can produce and the fold cannot is a failure here rather than a 500 on an instance.

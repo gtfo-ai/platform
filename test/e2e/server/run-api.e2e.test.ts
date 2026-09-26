@@ -25,15 +25,18 @@
  */
 import type {
   ArtifactBodyResponse,
+  ContextPackRecord,
   RunMessagesResponse,
   RunRecord,
   TaskDetailResponse,
 } from '@platform/contracts';
 import {
   artifactBodyResponseSchema,
+  contextPackRecordSchema,
   runMessagesResponseSchema,
   runRecordSchema,
 } from '@platform/contracts';
+import pg from 'pg';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   PLANTED_MODEL_KEY,
@@ -69,6 +72,40 @@ const ticketMatched = (pipeline: PipelineE2E) =>
     epic: null,
     links: [],
   });
+
+/** The `ContextPackRecord` the run's own `run.started` event carried — the planner's record. */
+const runStartedPack = async (pipeline: PipelineE2E, runId: string): Promise<ContextPackRecord> => {
+  const client = new pg.Client({ connectionString: pipeline.database.connectionString });
+  await client.connect();
+  try {
+    const { rows } = await client.query<{ payload: { context_pack: ContextPackRecord } }>(
+      "select payload from events where type = 'run.started' and payload->>'run_id' = $1",
+      [runId],
+    );
+    expect(rows).toHaveLength(1);
+    return (rows[0] as { payload: { context_pack: ContextPackRecord } }).payload.context_pack;
+  } finally {
+    await client.end();
+  }
+};
+
+/** Writes (or nulls) a run's context-pack header directly, as a pre-0041 row would have it. */
+const setPackHeader = async (
+  pipeline: PipelineE2E,
+  runId: string,
+  pack: ContextPackRecord | null,
+): Promise<void> => {
+  const client = new pg.Client({ connectionString: pipeline.database.connectionString });
+  await client.connect();
+  try {
+    await client.query(
+      'update runs set context_budget_tokens = $2, context_total_tokens = $3 where id = $1',
+      [runId, pack?.budget_tokens ?? null, pack?.total_tokens ?? null],
+    );
+  } finally {
+    await client.end();
+  }
+};
 
 const signIn = async (baseUrl: string): Promise<Client> => {
   const client = new Client(baseUrl);
@@ -208,14 +245,32 @@ describe('the run read API, over a transcript this pipeline wrote', () => {
     const served = `${prompt.body.system_prompt}\n${prompt.body.user_prompt}`;
     expect(served).not.toContain(PLANTED_MODEL_KEY);
 
-    const pack = await client.json<{ error: { code: string; message: string } }>(
-      `/api/runs/${runId}/context-pack`,
-    );
-    expect(pack.status).toBe(409);
-    expect(pack.body.error.code).toBe('context_pack_not_recorded');
-    // The message names the schema gap rather than only the missing rows, because rows alone would
-    // not make this endpoint answerable.
-    expect(pack.body.error.message).toContain('budget_tokens');
+    // WP-57: the pack is written at run creation, so the live run answers **200**. This instance
+    // has no knowledge index, so the planner's pack is **empty** — and an empty pack is served as
+    // one (a budget, no documents), never as the 409 that means "no pack was recorded". What is
+    // served is exactly the record `run.started` carried for this run.
+    const pack = await client.json<ContextPackRecord>(`/api/runs/${runId}/context-pack`);
+    expect(pack.status, JSON.stringify(pack.body)).toBe(200);
+    const servedPack = contextPackRecordSchema.parse(pack.body);
+    expect(servedPack).toEqual(await runStartedPack(pipeline, runId));
+    expect(servedPack.budget_tokens).toBe(12_000);
+    expect(servedPack.tier0).toEqual([]);
+    expect(servedPack.tier1).toEqual([]);
+    // …and the other direction, through the same route: a run whose header is null — what every run
+    // created before migration 0041 looks like — is **refused**, with the row count, never served
+    // as an empty pack. Written to the row the only way such a row exists (by hand, as an upgrade
+    // leaves it), then put back.
+    await setPackHeader(pipeline, runId, null);
+    try {
+      const unrecorded = await client.json<{ error: { code: string; message: string } }>(
+        `/api/runs/${runId}/context-pack`,
+      );
+      expect(unrecorded.status, JSON.stringify(unrecorded.body)).toBe(409);
+      expect(unrecorded.body.error.code).toBe('context_pack_not_recorded');
+      expect(unrecorded.body.error.message).toContain('(0 run_context_pack rows');
+    } finally {
+      await setPackHeader(pipeline, runId, servedPack);
+    }
 
     // ── the task screen's read ──
     const task = await client.json<TaskDetailResponse>(`/api/tasks/${waiting.id}`);

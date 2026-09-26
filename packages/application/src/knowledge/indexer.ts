@@ -31,19 +31,27 @@
  * left out; it is not written as a document with no frontmatter, because that spelling makes
  * `paths:`-scoped injection stop happening with nothing to show for it.
  *
- * **The invalid list is still only logged, and WP-18b's health report is not built from it.** That
- * work package created `kb_health_reports` and the nightly pass that writes one, and the pass reads
- * the *index* — expired pages, dangling links, duplicated ids, oversized pages. A document the
- * parser refused is in none of those, because it is in no table: `IndexReport.invalid` lives for
- * the length of one job. Joining the two means either storing the refusals or running the pass
- * inside the index run, and neither was WP-18b's to decide.
+ * **The invalid list is stored, and the health report is built from it** (WP-57, PROGRESS backlog
+ * 37). Until then `IndexReport.invalid` lived for the length of one job and reached a log line, so a
+ * document the parser refused was in no table and in no health report, although technical/07:8 says
+ * validation results feed it. The refusals now travel on the {@link IndexWrite} as `refused` and
+ * **replace** the project's `kb_index_refusals` in the same transaction as the documents, so the
+ * table always describes the commit `kb_index_state` names; the nightly pass reads it and reports an
+ * `invalid` finding per row. Running the pass inside the index run was the other option and was not
+ * taken — technical/07's amendment under "Source of truth and sync" says why.
  */
 import { type Id, knowledgeIndexRebuiltEvent } from '@platform/contracts';
 import { type Clock, type IdSource, parseKbDocument } from '@platform/domain';
 import type { EventStore } from '../ports/event-store.js';
 import type { Logger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
-import type { IndexableDocument, InvalidDocument, KnowledgeStore, VaultSource } from './ports.js';
+import {
+  type IndexableDocument,
+  type InvalidDocument,
+  type KnowledgeStore,
+  MAX_REFUSAL_REASON_CHARS,
+  type VaultSource,
+} from './ports.js';
 
 /**
  * Bumped whenever {@link parseKbDocument} changes what it produces from the same bytes.
@@ -196,6 +204,10 @@ export const createKnowledgeIndexer = (
         commitSha: snapshot.commitSha,
         documents,
         removedPaths: removed,
+        refused: invalid.map((refusal) => ({
+          ...refusal,
+          reason: boundedRefusalReason(refusal.reason),
+        })),
       });
       await scope.events.append([
         knowledgeIndexRebuiltEvent.parse({
@@ -238,6 +250,19 @@ export const createKnowledgeIndexer = (
     };
   },
 });
+
+/**
+ * The parser's diagnosis, cut to {@link MAX_REFUSAL_REASON_CHARS} characters with the cut declared.
+ *
+ * By code point rather than by UTF-16 unit, because the database's bound is `char_length` and a cut
+ * through a surrogate pair would store a character nobody wrote.
+ */
+export const boundedRefusalReason = (reason: string): string => {
+  const characters = Array.from(reason);
+  if (characters.length === 0) return 'refused by the parser';
+  if (characters.length <= MAX_REFUSAL_REASON_CHARS) return reason;
+  return `${characters.slice(0, MAX_REFUSAL_REASON_CHARS - 1).join('')}…`;
+};
 
 /** Whether a repository path belongs to the vault technical/07 indexes. */
 export const isIndexedVaultPath = (path: string, knowledgeDir: string): boolean =>

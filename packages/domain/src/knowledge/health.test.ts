@@ -12,6 +12,7 @@ const document = (overrides: Partial<HealthDocument> = {}): HealthDocument => ({
 const inputs = (overrides: Partial<HealthInputs> = {}): HealthInputs => ({
   documents: [],
   danglingLinks: [],
+  refusals: [],
   ...overrides,
 });
 
@@ -80,6 +81,32 @@ describe('computeKbHealth', () => {
     );
     expect(report.findings.map((finding) => finding.path)).toEqual(['a.md', 'b.md']);
     expect(report.findings[0]?.detail).toContain('b.md');
+  });
+
+  it('reports a document the parser refused, first, with the line when there is one', () => {
+    const report = computeKbHealth(
+      inputs({
+        documents: [document({ expires: '2020-01-01' })],
+        refusals: [
+          { path: 'z-broken.md', reason: 'frontmatter: duplicate key "id"', line: 4 },
+          { path: 'a-vocab.md', reason: 'frontmatter "kind": bad value', line: null },
+        ],
+      }),
+      options,
+    );
+    // `invalid` leads the report — it is the one kind that means an agent is never shown the page —
+    // and within the kind the order is by path, as for every other kind.
+    expect(report.findings.map((finding) => [finding.kind, finding.path])).toEqual([
+      ['invalid', 'a-vocab.md'],
+      ['invalid', 'z-broken.md'],
+      ['expired', '.agentic/knowledge/lessons/L-1.md'],
+    ]);
+    expect(report.findings[0]?.detail).toBe(
+      'the parser refused it, so no context pack includes it: frontmatter "kind": bad value',
+    );
+    expect(report.findings[1]?.detail).toBe(
+      'the parser refused it at line 4, so no context pack includes it: frontmatter: duplicate key "id"',
+    );
   });
 
   it('caps the findings and says how many it left out', () => {

@@ -131,6 +131,23 @@ export const readinessEvaluations = pgTable('readiness_evaluations', {
   source: text('source').notNull(),
 });
 
+/**
+ * What the parser refused at the last index run — migration 0041 (WP-57, PROGRESS backlog 37).
+ * Replaced per index run in the transaction that writes the documents; `reason` is untrusted text.
+ */
+export const kbIndexRefusals = pgTable(
+  'kb_index_refusals',
+  {
+    projectId: uuid('project_id').notNull(),
+    path: text('path').notNull(),
+    reason: text('reason').notNull(),
+    line: integer('line'),
+    commitSha: text('commit_sha').notNull(),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.projectId, table.path] })],
+);
+
 /** technical/07 § "Librarian pipeline" step 6, created by migration 0018. */
 export const kbHealthReports = pgTable('kb_health_reports', {
   id: uuid('id').primaryKey().default(uuidv7),
@@ -290,6 +307,7 @@ export type CodeFile = typeof codeFiles.$inferSelect;
 export type CodeMap = typeof codeMaps.$inferSelect;
 export type ReadinessEvaluation = typeof readinessEvaluations.$inferSelect;
 export type KbHealthReport = typeof kbHealthReports.$inferSelect;
+export type KbIndexRefusal = typeof kbIndexRefusals.$inferSelect;
 export type ShadowReport = typeof shadowReports.$inferSelect;
 export type ShadowBatch = typeof shadowBatches.$inferSelect;
 export type ShadowBatchTicket = typeof shadowBatchTickets.$inferSelect;

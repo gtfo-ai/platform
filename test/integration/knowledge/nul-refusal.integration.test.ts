@@ -113,6 +113,7 @@ describe('a NUL byte, and what stands between the two stores', () => {
           commitSha: 'abc1234',
           documents: [{ document: withNul, blobSha: 'raw-nul-1' }],
           removedPaths: [],
+          refused: [],
         }),
       ).rejects.toThrow(/0x00|invalid byte sequence/i);
     });
@@ -127,6 +128,7 @@ describe('a NUL byte, and what stands between the two stores', () => {
         commitSha: 'abc1234',
         documents: [{ document, blobSha: 'raw-nul-2' }],
         removedPaths: [],
+        refused: [],
       });
       const { rows } = await client.query<{ count: string }>(
         'select count(*)::text as count from kb_documents where project_id = $1 and path = $2',

@@ -59,6 +59,7 @@
 
 import type { ProposalCursor, StoredKnowledgeProposal } from '@platform/application';
 import {
+  apiErrorSchema,
   decideKbProposalRequestSchema,
   type Id,
   type IsoDateTime,
@@ -243,17 +244,25 @@ export const registerKbRoutes = async (
       schema: {
         summary: 'The project’s most recent knowledge-base health report',
         description:
-          'What the nightly hygiene pass last saw (technical/07 § "Librarian pipeline" step 6): how many documents were indexed, and what is wrong with them. A finding is an **observation** — nothing in the platform deletes or rewrites a page because one names it (product/05) — and `commit_sha` is the commit the *index* was at, not the repository’s head. 404 when no pass has run for this project yet, because a report that has never been written and a vault with nothing wrong with it are different facts. Every `path` and `detail` quotes a committed page and is untrusted content (BD-022).',
+          'What the nightly hygiene pass last saw (technical/07 § "Librarian pipeline" step 6): how many documents were indexed, and what is wrong with them — including `invalid`, a document the parser refused at the last index run, which no context pack includes. A finding is an **observation** — nothing in the platform deletes or rewrites a page because one names it (product/05) — and `commit_sha` is the commit the *index* was at, not the repository’s head. Refuses with 409 `kb_health_not_reported` when no pass has run for this project yet, because a report that has never been written and a vault with nothing wrong with it (200, `findings: []`) are different facts, and neither is a project that does not exist. Every `path` and `detail` quotes a committed page and is untrusted content (BD-022).',
         tags: ['knowledge'],
         params: projectParamsSchema,
-        response: { 200: kbHealthResponseSchema },
+        response: { 200: kbHealthResponseSchema, 409: apiErrorSchema },
       },
     },
     async (request) => {
       const report = await findKbHealth(options.database, request.params.project_id);
       if (report === null) {
-        throw new NotFoundError(
-          `knowledge health report for project ${request.params.project_id}: the nightly hygiene pass writes one, and none has run for it yet`,
+        /**
+         * **409 with a code of its own, not 404** (WP-57, criterion 5; standing rule 18). A 404
+         * `not_found` was what a project that does not exist also answers to a caller who may see
+         * it, so *"no report yet"* was told apart from *"no such project"* only by prose. The
+         * readiness read made the same call (`readiness_not_evaluated`).
+         */
+        throw new HttpError(
+          409,
+          'kb_health_not_reported',
+          `no knowledge health report for project ${request.params.project_id} yet: the nightly hygiene pass writes one, and none has run for this project`,
         );
       }
       return report;

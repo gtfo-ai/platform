@@ -19,7 +19,9 @@
  * **`readHealthInputs` reads the index, not the vault.** `expires` is a `date` column the indexer
  * wrote from the page's frontmatter, and the frontmatter `id` is inside the `frontmatter` jsonb —
  * so a page with no frontmatter contributes nothing to the duplicate check rather than colliding
- * with every other page that also has none.
+ * with every other page that also has none. The one input that is *not* the index is
+ * `kb_index_refusals` — the documents the parser kept out of it — which the index run writes beside
+ * the documents (WP-57).
  */
 
 import type {
@@ -34,13 +36,13 @@ import type {
 import type {
   Id,
   IsoDateTime,
-  KbHealthFinding,
+  KbHealthReportFinding,
   KnowledgeProposalKind,
   KnowledgeProposalSource,
   KnowledgeProposalStatus,
   KnowledgeProposalType,
 } from '@platform/contracts';
-import type { HealthDocument, HealthLink } from '@platform/domain';
+import type { HealthDocument, HealthLink, HealthRefusal } from '@platform/domain';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
 
@@ -291,8 +293,24 @@ export class PostgresProposalStore implements KnowledgeProposalStore {
         order by d.path, l.to_path`,
       [projectId],
     );
+    // What the last index run refused (WP-57, migration 0041). The index run replaces these rows
+    // in the transaction that writes the documents, so they describe the same commit.
+    const refusals = await this.#sql.query<{ path: string; reason: string; line: number | null }>(
+      `select path, reason, line
+         from kb_index_refusals
+        where project_id = $1
+        order by path`,
+      [projectId],
+    );
     return {
       commitSha: state.rows[0]?.commit_sha ?? null,
+      refusals: refusals.rows.map(
+        (row): HealthRefusal => ({
+          path: row.path,
+          reason: row.reason,
+          line: row.line === null ? null : Number(row.line),
+        }),
+      ),
       documents: documents.rows.map(
         (row): HealthDocument => ({
           path: row.path,
@@ -317,7 +335,7 @@ export class PostgresProposalStore implements KnowledgeProposalStore {
         report.projectId,
         report.commitSha,
         report.documents,
-        JSON.stringify(report.findings satisfies readonly KbHealthFinding[]),
+        JSON.stringify(report.findings satisfies readonly KbHealthReportFinding[]),
         report.source,
         report.createdAt,
       ],

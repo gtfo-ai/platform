@@ -34,7 +34,12 @@ export interface MemoryProposalStore extends KnowledgeProposalStore {
   seedHealthInputs(projectId: Id, inputs: KbHealthInputs): void;
 }
 
-const EMPTY_INPUTS: KbHealthInputs = { commitSha: null, documents: [], danglingLinks: [] };
+const EMPTY_INPUTS: KbHealthInputs = {
+  commitSha: null,
+  documents: [],
+  danglingLinks: [],
+  refusals: [],
+};
 
 export const memoryProposalStore = (): MemoryProposalStore => {
   const rows: StoredKnowledgeProposal[] = [];

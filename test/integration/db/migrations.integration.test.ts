@@ -45,6 +45,9 @@ const EXPECTED_TABLES = [
   'kb_chunks',
   'kb_documents',
   'kb_health_reports',
+  // WP-57, migration 0041: what the parser refused at the last index run. A refused document is
+  // never indexed, so it was in no table and in no health report (PROGRESS backlog 37).
+  'kb_index_refusals',
   'kb_index_state',
   'kb_links',
   'kb_proposals',
@@ -214,6 +217,9 @@ describe('migrate on an empty PostgreSQL 18', () => {
       // recovery pass and then updated at most twice — its attempt, then its curation or its
       // ending — and registered rather than defaulted so the "registry lists every table"
       // invariant above stays true.
+      // WP-57 (migration 0041): the parser's refusals. `read_write` because an index run deletes
+      // the project's rows and writes the new set in the transaction that writes its documents.
+      row('kb_index_refusals', 'read_write', null),
       row('knowledge_curations', 'read_write', null),
       // WP-32 (migration 0023): the notification outbox. `read_write` because a row is updated
       // twice at most — claimed by a digest, then delivered — and registered rather than defaulted

@@ -202,6 +202,25 @@ export class PostgresKnowledgeStore implements KnowledgeStore {
       [input.projectId],
     );
 
+    // What the parser refused at this commit replaces what it refused at the last one (WP-57,
+    // migration 0041), in this transaction, so the table never describes a commit the index is not
+    // at. The reasons arrive bounded by the indexer; the database's check is the same number.
+    await sql.query('delete from kb_index_refusals where project_id = $1', [input.projectId]);
+    if (input.refused.length > 0) {
+      await sql.query(
+        `insert into kb_index_refusals (project_id, path, reason, line, commit_sha)
+         select $1, r.path, r.reason, r.line, $2
+           from unnest($3::text[], $4::text[], $5::integer[]) as r(path, reason, line)`,
+        [
+          input.projectId,
+          input.commitSha,
+          input.refused.map((refusal) => refusal.path),
+          input.refused.map((refusal) => refusal.reason),
+          input.refused.map((refusal) => refusal.line),
+        ],
+      );
+    }
+
     await sql.query(
       `insert into kb_index_state (project_id, commit_sha, fts_built_at)
          values ($1, $2, now())

@@ -830,6 +830,10 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         // artifact's is on the artifact row; a column that mixed the three could not be read back
         // as "the redactor ran over this prompt and replaced nothing".
         redactionCount: systemPrompt.count + userPrompt.count,
+        // WP-57 (PROGRESS backlog 31): the record `run.started` carries, stored as rows in the
+        // transaction that commits the run — the pack was planned between the two transactions,
+        // so this is the first moment the row it belongs to exists.
+        contextPack: plan.contextPack,
       });
       /**
        * The lease, claimed in the **same transaction as the row** (WP-47).

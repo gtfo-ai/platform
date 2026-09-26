@@ -256,6 +256,23 @@ export const kbHealthFindingSchema = z.strictObject({
   detail: nonEmptyStringSchema,
 });
 
+/**
+ * One finding of a **stored** health report (`kb_health_reports`, `GET …/kb/health`) — the
+ * Librarian's vocabulary plus `invalid` (WP-57, PROGRESS backlog 37).
+ *
+ * `invalid` is a document the parser refused at the last index run: it is in no pack, and nothing
+ * else says so. It is a kind only the nightly pass can produce — it reads `kb_index_refusals` — so
+ * {@link kbHealthFindingSchema}, which is also the `LibrarianProposals` artifact's output contract,
+ * is deliberately **not** widened: a Librarian reads indexed pages and cannot observe a refusal, and
+ * offering it the kind would invite a model to guess one. `detail` quotes the parser's diagnosis,
+ * which can quote a frontmatter key somebody wrote (BD-022).
+ */
+export const kbHealthReportFindingSchema = z.strictObject({
+  kind: z.enum(['invalid', 'expired', 'dangling', 'duplicate', 'contradiction', 'oversized']),
+  path: pathPatternSchema,
+  detail: nonEmptyStringSchema,
+});
+
 export const librarianProposalsDataSchema = z.strictObject({
   proposals: z.array(librarianProposalSchema),
   health: z.array(kbHealthFindingSchema),
@@ -816,6 +833,7 @@ export type RetroReportData = z.infer<typeof retroReportDataSchema>;
 export type LibrarianAction = z.infer<typeof librarianActionSchema>;
 export type LibrarianProposal = z.infer<typeof librarianProposalSchema>;
 export type KbHealthFinding = z.infer<typeof kbHealthFindingSchema>;
+export type KbHealthReportFinding = z.infer<typeof kbHealthReportFindingSchema>;
 export type LibrarianProposalsData = z.infer<typeof librarianProposalsDataSchema>;
 export type ShadowReportData = z.infer<typeof shadowReportDataSchema>;
 export type ReadinessReportData = z.infer<typeof readinessReportDataSchema>;

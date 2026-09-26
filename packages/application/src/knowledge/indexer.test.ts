@@ -17,11 +17,13 @@ import {
   vaultSnapshotOf,
 } from '../testing/memory-knowledge.js';
 import {
+  boundedRefusalReason,
   createKnowledgeIndexer,
   isIndexedVaultPath,
   KB_PARSER_VERSION,
   vaultRelativePath,
 } from './indexer.js';
+import { MAX_REFUSAL_REASON_CHARS } from './ports.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1' as Id;
 
@@ -94,6 +96,87 @@ describe('KnowledgeIndexer — the three statuses are three different facts', ()
     expect(store.snapshot(projectId).map((document) => document.path)).not.toContain(
       FIXTURE_INVALID_PATH,
     );
+  });
+
+  /**
+   * **The refusal is stored, not only reported** (WP-57, PROGRESS backlog 37): `IndexReport.invalid`
+   * lives for one job, and the nightly pass reads the store. Replaced per index run — a document
+   * fixed at the next commit leaves no refusal behind — and untouched by a run that changed nothing.
+   */
+  it('stores what the parser refused beside the documents, and replaces it at the next commit', async () => {
+    const broken = `${FIXTURE_KNOWLEDGE_DIR}/lessons/broken.md`;
+    const store = memoryKnowledgeStore();
+    const at = (commitSha: string, source: string) =>
+      indexerOver(
+        memoryVaultSource({
+          status: 'ok',
+          snapshot: vaultSnapshotOf([{ path: broken, source, contentHash: commitSha }], {
+            commitSha,
+            knowledgeDir: FIXTURE_KNOWLEDGE_DIR,
+            repoPaths: [],
+          }),
+        }),
+        store,
+      );
+    const tab = '---\ntitle: x\n\tkind: lesson\n---\n# Broken\n';
+    const first = await at('c0000001', tab).indexer.index(request);
+    expect(first.invalid).toHaveLength(1);
+    expect(store.refusals(PROJECT)).toEqual([
+      { path: broken, reason: first.invalid[0]?.reason, line: first.invalid[0]?.line },
+    ]);
+    expect(store.refusals(PROJECT)[0]?.line).toBe(3);
+
+    // The same commit again: `unchanged`, and the stored refusal is left exactly as it was.
+    const again = await at('c0000001', tab).indexer.index(request);
+    expect(again.status).toBe('unchanged');
+    expect(store.refusals(PROJECT)).toHaveLength(1);
+
+    // Fixed at the next commit: the refusal is gone, and the page is indexed.
+    await at('c0000002', '# Fixed\n\nbody\n').indexer.index(request);
+    expect(store.refusals(PROJECT)).toEqual([]);
+    expect(store.snapshot(PROJECT).map((document) => document.path)).toEqual([broken]);
+  });
+
+  it('rebuilds an index whose commit is unknown, which is how 0041 hands an upgraded project its refusals', async () => {
+    // Migration 0041 nulls `kb_index_state.commit_sha` and keeps `fts_built_at`: an index built
+    // before refusals were stored must be re-read once, or its refusals read as "none" until the
+    // default branch moves (WP-57 review round 1, rule 18).
+    const store = memoryKnowledgeStore();
+    const vault = memoryVaultSource({
+      status: 'ok',
+      snapshot: vaultSnapshotOf(FIXTURE_VAULT, {
+        commitSha: 'f1c7ea4',
+        knowledgeDir: FIXTURE_KNOWLEDGE_DIR,
+        repoPaths: FIXTURE_REPO_PATHS,
+      }),
+    });
+    await indexerOver(vault, store).indexer.index(request);
+    const upgraded = {
+      ...store,
+      write: store.write,
+      readIndexState: async (projectId: Id) => {
+        const state = await store.readIndexState(projectId);
+        return state === null ? null : { ...state, commitSha: null };
+      },
+    };
+    const report = await indexerOver(vault, upgraded as typeof store).indexer.index(request);
+    expect(report.status).toBe('indexed');
+    expect(store.refusals(PROJECT).map((refusal) => refusal.path)).toEqual([FIXTURE_INVALID_PATH]);
+  });
+
+  it('bounds a stored diagnosis and declares the cut', () => {
+    expect(boundedRefusalReason('short')).toBe('short');
+    expect(boundedRefusalReason('')).toBe('refused by the parser');
+    const long = 'é'.repeat(MAX_REFUSAL_REASON_CHARS + 5);
+    const bounded = boundedRefusalReason(long);
+    expect(Array.from(bounded)).toHaveLength(MAX_REFUSAL_REASON_CHARS);
+    expect(bounded.endsWith('…')).toBe(true);
+    // Exactly at the bound is not cut.
+    const exact = 'a'.repeat(MAX_REFUSAL_REASON_CHARS);
+    expect(boundedRefusalReason(exact)).toBe(exact);
+    // A surrogate pair is never split: the cut is by character, as the database counts.
+    const emoji = '😀'.repeat(MAX_REFUSAL_REASON_CHARS + 1);
+    expect(Array.from(boundedRefusalReason(emoji))).toHaveLength(MAX_REFUSAL_REASON_CHARS);
   });
 
   it('emits knowledge.index.rebuilt with the counts it reported', async () => {
