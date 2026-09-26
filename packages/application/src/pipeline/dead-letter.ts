@@ -52,6 +52,7 @@ import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { TransactionScope } from '../ports/unit-of-work.js';
 import type { PipelineStore } from './store.js';
+import { closeParkedStageRow } from './transitions.js';
 
 export interface DeadLetterEscalationOptions {
   readonly store: PipelineStore;
@@ -142,6 +143,7 @@ export const createDeadLetterEscalation = (
       options.context(stored.task.id, record.event.event.id),
     );
     await options.store.tasks.save(scope.tx, { ...stored, task: escalated.aggregate });
+    await closeParkedStageRow(options.store, scope.tx, escalated, 'dead_lettered');
     await scope.events.append(escalated.events);
     logger.error(
       {

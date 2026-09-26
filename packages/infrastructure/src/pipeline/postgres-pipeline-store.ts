@@ -51,6 +51,7 @@ import type {
   TaskCoverage,
   TaskDependencies,
   TaskReviewers,
+  TaskReviewThreads,
   TaskState,
   TicketSnapshot,
   WorkpadRef,
@@ -60,6 +61,7 @@ import {
   taskCoverageSchema,
   taskDependenciesSchema,
   taskReviewersSchema,
+  taskReviewThreadsSchema,
   taskStageExitStateSchema,
   taskStageStateSchema,
   workpadRefSchema,
@@ -118,6 +120,7 @@ interface TaskRow extends Record<string, unknown> {
   coverage: TaskCoverage | null;
   dependencies: TaskDependencies | null;
   required_reviewers: TaskReviewers | null;
+  review_threads: TaskReviewThreads | null;
   requested_by_user_id: string | null;
   version: number;
   created_at: Date;
@@ -130,7 +133,7 @@ const TASK_COLUMNS = `t.id, t.project_id, t.ticket_provider, t.ticket_key, t.tic
     t.estimate_usd, t.estimate_basis, t.estimate_samples,
     t.ticket_snapshot, t.ticket_snapshot_at, t.ticket_signal_at, t.review_subject, t.history_sample,
     t.risk_classes, t.coverage,
-    t.dependencies, t.required_reviewers,
+    t.dependencies, t.required_reviewers, t.review_threads,
     t.requested_by_user_id, t.version,
     t.created_at,
     (select max(e.stream_seq) from events e where e.stream_type = 'task' and e.stream_id = t.id)
@@ -180,6 +183,7 @@ const toStoredTask = (row: TaskRow, template: PipelineTemplate): StoredTask => (
   coverage: row.coverage,
   dependencies: row.dependencies,
   requiredReviewers: row.required_reviewers,
+  reviewThreads: row.review_threads,
   requestedByUserId: (row.requested_by_user_id ?? null) as Id | null,
   version: Number(row.version),
 });
@@ -568,6 +572,21 @@ export const createPostgresPipelineStore = (
       }
     },
 
+    /**
+     * `review_threads` — the same shape, written by BD-007's review window (WP-46, migration 0048).
+     * Parsed before it is written, for the reason every `jsonb` column on `tasks` is.
+     */
+    saveReviewThreads: async (tx, taskId, threads) => {
+      const parsed = taskReviewThreadsSchema.parse(threads);
+      const result = await sqlOf(tx).query(
+        'update tasks set review_threads = $2::jsonb, updated_at = now() where id = $1',
+        [taskId, JSON.stringify(parsed)],
+      );
+      if (result.rowCount === 0) {
+        throw new PipelineRowMissingError(`task ${taskId} does not exist`);
+      }
+    },
+
     saveCoverage: async (tx, taskId, coverage) => {
       const parsed = taskCoverageSchema.parse(coverage);
       const result = await sqlOf(tx).query(
@@ -739,6 +758,28 @@ export const createPostgresPipelineStore = (
           entry.returnReason,
           state,
           entry.returnedTo,
+        ],
+      );
+    },
+
+    /**
+     * `where state = 'running'`: an escalation closes only a row nothing closed first (WP-46,
+     * backlog 160). A row that is already closed keeps what its stage decided; see the port.
+     */
+    closeOpenStage: async (tx, entry) => {
+      await sqlOf(tx).query(
+        `update task_stages
+            set state = $4, exited_at = clock_timestamp(), outcome = $5, return_reason = $6,
+                returned_to = null
+          where task_id = $1 and stage = $2 and attempt = $3 and state = $7`,
+        [
+          entry.taskId,
+          entry.stage,
+          entry.attempt,
+          taskStageExitStateSchema.parse('failed'),
+          entry.outcome,
+          entry.reason,
+          taskStageStateSchema.parse('running'),
         ],
       );
     },

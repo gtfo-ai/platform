@@ -798,6 +798,10 @@ const toTaskRecord = (
   // handles it could not resolve — which the `set_reviewers` audit row cannot say, because no call
   // is made when nothing resolved.
   required_reviewers: row.requiredReviewers,
+  // WP-46, backlog 95 item 3: the review window's own reading of the merge request's human threads,
+  // written by the job that computed the count (`saveReviewThreads`). Read straight off the column:
+  // nothing here re-counts, and `null` — the window has not read them — is published as `null`.
+  review_threads: row.reviewThreads,
   // WP-41, backlog 63: **not** a column — the latest `task.conflict.warned` off the task's own
   // stream (`conflictsFor`). `null` is "no warning has been appended for this task". Since WP-59
   // (backlog 65) the gate that finds an overlap appends on **both** streams, so a warned pair

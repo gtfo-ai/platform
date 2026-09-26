@@ -66,7 +66,7 @@ import type { LiveRun, LiveRuns } from './live-runs.js';
 import type { StageExecutionJob } from './stage-executor.js';
 import type { PipelineStore, StoredRun, StoredTask } from './store.js';
 import { retryOnTaskConflict } from './task-conflict.js';
-import { applyDecision } from './transitions.js';
+import { applyDecision, CANCELLED_OUTCOME, closeCurrentStageRow } from './transitions.js';
 
 export interface TaskCommandDependencies {
   readonly unitOfWork: UnitOfWork;
@@ -703,6 +703,14 @@ export const cancelTaskCommand = async (
       context,
     );
     await deps.store.tasks.save(scope.tx, { ...stored, task: decision.aggregate });
+    // The attempt the task was at can never resume now, paused or not (WP-46, backlog 212).
+    await closeCurrentStageRow(
+      deps.store,
+      scope.tx,
+      stored.task,
+      CANCELLED_OUTCOME,
+      'the task was cancelled by a human',
+    );
     await scope.events.append(decision.events);
     return { result: undefined, work: null };
   });

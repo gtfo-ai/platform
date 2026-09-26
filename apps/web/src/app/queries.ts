@@ -7,6 +7,7 @@
  * notice and worst to debug. If the stream is down, the connection badge in the header says so.
  */
 import { type UseQueryResult, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { ApiError } from '../api/http.js';
 import { queryKeys } from '../api/keys.js';
 import type { SessionResponse } from '../auth/session.js';
 import type { MintKey } from './idempotency.js';
@@ -339,6 +340,11 @@ export const useArtifactBody = (taskId: string, artifactId: string | null) => {
     queryKey: queryKeys.artifact(taskId, artifactId ?? 'none'),
     queryFn: () => endpoints.artifact(artifactId as string),
     enabled: artifactId !== null,
+    // An answer from the server — the 409 `artifact_not_redacted` above all, and a 403 or a 404 —
+    // is not retried: the body is immutable and the refusal is permanent, and since WP-46 the
+    // Checks panel reads this query on every task page, where three retries were three seconds of
+    // "reading…" in front of a refusal that had already arrived. A transport failure still is.
+    retry: (failures, error) => !(error instanceof ApiError) && failures < 3,
     ...FOREVER,
   });
 };

@@ -32,6 +32,7 @@ import {
   taskCoverageSchema,
   taskDependenciesSchema,
   taskReviewersSchema,
+  taskReviewThreadsSchema,
   taskStageExitStateSchema,
   taskStageStateSchema,
   workpadRefSchema,
@@ -261,8 +262,9 @@ export const createMemoryPipelineStore = (
       }
       // `ticketSignalAt` is not the insert's (WP-60): the SQL insert does not name the column, so a
       // row is born with none whatever the caller's snapshot carried — and a fake that kept it would
-      // answer a question PostgreSQL cannot be asked (standing rule 1).
-      tasks.set(stored.task.id, clone({ ...stored, ticketSignalAt: null }));
+      // answer a question PostgreSQL cannot be asked (standing rule 1). `reviewThreads` is the same
+      // case (WP-46): only `saveReviewThreads` writes the column.
+      tasks.set(stored.task.id, clone({ ...stored, ticketSignalAt: null, reviewThreads: null }));
     },
     /**
      * The same columns the SQL `update tasks set …` names, and the same optimistic check (WP-15e).
@@ -270,6 +272,7 @@ export const createMemoryPipelineStore = (
      * Written as a projection of `current` rather than as `clone(stored)` on purpose: the fields it
      * does **not** list (`workpad`, `ticketSnapshot`, `ticketSnapshotAt`, `reviewSubject`,
      * `riskClasses` (WP-37), `coverage` (WP-39), `dependencies` and `requiredReviewers` (WP-38),
+     * `reviewThreads` (WP-46),
      * `costActualUsd` (WP-31: `addSpend` owns it),
      * `estimateUsd`, `estimateBasis`, `estimateSamples`, `priorityRank`, `createdAt`, `template`)
      * belong to the narrow writers — or, for
@@ -441,6 +444,16 @@ export const createMemoryPipelineStore = (
         clone({ ...current, requiredReviewers: taskReviewersSchema.parse(reviewers) }),
       );
     },
+    saveReviewThreads: async (_tx, taskId, threads) => {
+      const current = tasks.get(taskId);
+      if (current === undefined) {
+        throw new PipelineStoreError(`task ${taskId} does not exist`);
+      }
+      tasks.set(
+        taskId,
+        clone({ ...current, reviewThreads: taskReviewThreadsSchema.parse(threads) }),
+      );
+    },
     addSpend: async (_tx, taskId, usd) => {
       const current = tasks.get(taskId);
       if (current === undefined) {
@@ -516,6 +529,26 @@ export const createMemoryPipelineStore = (
       row.outcome = entry.outcome;
       row.returnReason = entry.returnReason;
       row.returnedTo = entry.returnedTo;
+      row.exitedAt = sequence;
+    },
+    /** The SQL's `where state = 'running'`, and nothing for a row that is closed (WP-46). */
+    closeOpenStage: async (_tx, entry) => {
+      const row = [...stages]
+        .reverse()
+        .find(
+          (candidate) =>
+            candidate.taskId === entry.taskId &&
+            candidate.stage === entry.stage &&
+            candidate.attempt === entry.attempt,
+        );
+      if (row === undefined || row.state !== 'running') {
+        return;
+      }
+      sequence += 1;
+      row.state = taskStageExitStateSchema.parse('failed');
+      row.outcome = entry.outcome;
+      row.returnReason = entry.reason;
+      row.returnedTo = null;
       row.exitedAt = sequence;
     },
     recordStageSignature: async (_tx, entry) => {

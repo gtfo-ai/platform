@@ -80,6 +80,7 @@ const stored = (
   coverage: null,
   dependencies: null,
   requiredReviewers: null,
+  reviewThreads: null,
   requestedByUserId: null,
   version: INITIAL_TASK_VERSION,
 });

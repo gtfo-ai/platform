@@ -90,6 +90,8 @@ describe('records', () => {
         truncated: false,
         routed_at: AT,
       },
+      // WP-46: the review window's reading of the merge request's human threads.
+      review_threads: { open: 2, resolved: 1, checked_at: AT },
       // WP-41, backlog 63: the latest conflict warning, or `null`. Not a column — a projection
       // over the task's own event stream — and asymmetric by construction, so the *absence* of a
       // warning says nothing about the other task of a pair.
@@ -179,6 +181,24 @@ describe('records', () => {
     expect(taskRecordSchema.safeParse(withoutDependencies).success).toBe(false);
     const { required_reviewers: _noReviewers, ...withoutReviewers } = task;
     expect(taskRecordSchema.safeParse(withoutReviewers).success).toBe(false);
+    // WP-46: `null` is "the window has not read the threads", and it is spelled, never absent; a
+    // negative count or an unknown key is refused at the boundary.
+    const unread = { ...task, review_threads: null };
+    expect(taskRecordSchema.parse(unread)).toEqual(unread);
+    const { review_threads: _noThreads, ...withoutThreads } = task;
+    expect(taskRecordSchema.safeParse(withoutThreads).success).toBe(false);
+    expect(
+      taskRecordSchema.safeParse({
+        ...task,
+        review_threads: { open: -1, resolved: 0, checked_at: AT },
+      }).success,
+    ).toBe(false);
+    expect(
+      taskRecordSchema.safeParse({
+        ...task,
+        review_threads: { open: 0, resolved: 0, checked_at: AT, total: 0 },
+      }).success,
+    ).toBe(false);
     const clean = {
       ...task,
       dependencies: { ...task.dependencies, decision: 'none' as const, added: [], unread: [] },

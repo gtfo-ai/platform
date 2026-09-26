@@ -138,6 +138,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       coverage: null,
       dependencies: null,
       requiredReviewers: null,
+      reviewThreads: null,
       requestedByUserId: null,
       version: INITIAL_TASK_VERSION,
       ...overrides,
@@ -715,6 +716,30 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         ).rejects.toThrow();
       });
 
+      it('writes the review window’s thread counts whole, and a new task has none (WP-46)', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        // `null` is "the window has not read the threads", and a row is born with it.
+        expect((await store.tasks.load(tx, stored.task.id))?.reviewThreads).toBeNull();
+        const first = { open: 2, resolved: 1, checked_at: '2026-06-01T09:00:00.000Z' };
+        await store.tasks.saveReviewThreads(tx, stored.task.id, first);
+        expect((await store.tasks.load(tx, stored.task.id))?.reviewThreads).toEqual(first);
+        // Each window is a new reading: the counts and the instant move together.
+        const later = { open: 0, resolved: 3, checked_at: '2026-06-01T10:00:00.000Z' };
+        await store.tasks.saveReviewThreads(tx, stored.task.id, later);
+        expect((await store.tasks.load(tx, stored.task.id))?.reviewThreads).toEqual(later);
+        // Narrow: it is not a `save`, so the version token does not move.
+        expect((await store.tasks.load(tx, stored.task.id))?.version).toBe(stored.version);
+        await expect(
+          store.tasks.saveReviewThreads(tx, stored.task.id, {
+            open: -1,
+            resolved: 0,
+            checked_at: '2026-06-01T10:00:00.000Z',
+          }),
+        ).rejects.toThrow();
+        await expect(store.tasks.saveReviewThreads(tx, nextId(), later)).rejects.toThrow();
+      });
+
       it('refuses to write coverage for a task that does not exist', async () => {
         await expect(
           store.tasks.saveCoverage(tx, nextId(), {
@@ -1056,6 +1081,71 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(await store.tasks.lastReturnReason(tx, stored.task.id, 'implementation', 2)).toBe(
           'pipeline for sha-3 failed',
         );
+      });
+
+      /**
+       * WP-46 (backlog 160): an escalation closes only a row nothing closed first. Observable
+       * through the port as the return reason a row carries: a return the escalation came after
+       * is still the finding the target is served, and the escalation's own reason on an open row
+       * is never served as feedback to anybody.
+       */
+      it('closes a parked stage only while it is open, and never as a return', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        await store.tasks.recordStageEntered(tx, {
+          taskId: stored.task.id,
+          stage: 'code_review',
+          attempt: 1,
+          causedByEventId: null,
+        });
+        await store.tasks.recordStageExited(tx, {
+          taskId: stored.task.id,
+          stage: 'code_review',
+          attempt: 1,
+          state: 'returned',
+          outcome: 'returned',
+          returnReason: 'the footer rounds twice',
+          returnedTo: 'implementation',
+        });
+        // Already closed: the escalation leaves it as it was.
+        await store.tasks.closeOpenStage(tx, {
+          taskId: stored.task.id,
+          stage: 'code_review',
+          attempt: 1,
+          outcome: 'escalated',
+          reason: 'the loop is spent',
+        });
+        await store.tasks.recordStageEntered(tx, {
+          taskId: stored.task.id,
+          stage: 'implementation',
+          attempt: 2,
+          causedByEventId: null,
+        });
+        expect(await store.tasks.lastReturnReason(tx, stored.task.id, 'implementation', 2)).toBe(
+          'the footer rounds twice',
+        );
+
+        // Open: closed `failed` with the escalation's reason — which is not a return.
+        await store.tasks.recordStageEntered(tx, {
+          taskId: stored.task.id,
+          stage: 'ci_gate',
+          attempt: 1,
+          causedByEventId: null,
+        });
+        await store.tasks.closeOpenStage(tx, {
+          taskId: stored.task.id,
+          stage: 'ci_gate',
+          attempt: 1,
+          outcome: 'undecided',
+          reason: 'the gate could not be decided',
+        });
+        await store.tasks.recordStageEntered(tx, {
+          taskId: stored.task.id,
+          stage: 'ci_gate',
+          attempt: 2,
+          causedByEventId: null,
+        });
+        expect(await store.tasks.lastReturnReason(tx, stored.task.id, 'ci_gate', 2)).toBeNull();
       });
 
       it('has no signatures and no reason for a stage that has not run', async () => {

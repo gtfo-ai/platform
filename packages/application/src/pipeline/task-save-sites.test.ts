@@ -209,3 +209,133 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     expect(all).toContain('packages/application/src/pipeline/task-save-sites.test.ts');
   });
 });
+
+/**
+ * **Every escalation closes the row of the stage it parks the task at** — the census half of the
+ * invariant `transitions.ts` states at `closeLeftStage` (WP-46, PROGRESS backlog 160).
+ *
+ * Backlog 160 found three gate escalations that left their row `running` under a `needs_human`
+ * task, and the escalation sites are many and spread across seven modules, so "remember to close
+ * the row" is exactly the sentence rule 44 says must be checked rather than written. The check is
+ * syntactic and per file: every `escalateTask(` call in a production module is matched by a
+ * `closeParkedStageRow(` call in the same module, one for one — so a new escalation that forgets
+ * fails here, naming its file.
+ *
+ * **Two modules close the row themselves and are exempt by name, with the reason**, rather than
+ * made to call a helper that would do nothing: `stage-executor.ts` writes `recordStageExited`
+ * `failed` beside each of its escalations (it knows the run's reason and has always recorded it),
+ * and `recovery/run-lease.ts` does the same for a run nothing is driving (WP-47). A third exemption
+ * is a decision somebody writes here.
+ *
+ * What it cannot see is what the save census above cannot: an escalation reached through an alias,
+ * and a `closeParkedStageRow` placed on a different branch from the escalation it answers — the
+ * count is per file, not per call. The per-site behaviour is asserted in `saga.test.ts`.
+ */
+const ESCALATE_CALL = /\bescalateTask\s*\(/g;
+const CLOSE_PARKED_CALL = /\bcloseParkedStageRow\s*\(/g;
+
+const ROW_CLOSED_BY_ITS_OWN_WRITE: ReadonlyMap<string, string> = new Map([
+  [
+    'packages/application/src/pipeline/stage-executor.ts',
+    'every escalation writes recordStageExited failed with the run’s reason',
+  ],
+  [
+    'packages/application/src/recovery/run-lease.ts',
+    'the sweep writes recordStageExited failed for the run it ends',
+  ],
+]);
+
+const escalationCensus = (): Map<string, { escalations: number; closes: number }> => {
+  const found = new Map<string, { escalations: number; closes: number }>();
+  for (const file of sources()) {
+    if (isTestTier(file) || !file.startsWith('packages/application/src/')) {
+      continue;
+    }
+    const body = withoutComments(readFileSync(path.join(REPO_ROOT, file), 'utf8'));
+    const escalations = body.match(ESCALATE_CALL)?.length ?? 0;
+    const closes = body.match(CLOSE_PARKED_CALL)?.length ?? 0;
+    if (escalations > 0 || closes > 0) {
+      found.set(file, { escalations, closes });
+    }
+  }
+  return found;
+};
+
+describe('every escalation closes the parked stage’s row (WP-46, backlog 160)', () => {
+  it('matches each `escalateTask` with a `closeParkedStageRow`, file by file', () => {
+    const census = escalationCensus();
+    const unmatched = [...census]
+      .filter(([file]) => !ROW_CLOSED_BY_ITS_OWN_WRITE.has(file))
+      .filter(([, counts]) => counts.escalations !== counts.closes)
+      .map(
+        ([file, counts]) => `${file}: ${counts.escalations} escalations, ${counts.closes} closes`,
+      );
+    expect(unmatched).toEqual([]);
+  });
+
+  it('finds the escalations it claims to, so a vacuous census cannot pass', () => {
+    // Calibrate the instrument (standing rule 21): the modules backlog 160 named, plus the saga's
+    // own six, are all in the census with a close for each escalation.
+    const census = escalationCensus();
+    expect(census.get('packages/application/src/pipeline/transitions.ts')).toEqual({
+      escalations: 1,
+      closes: 1,
+    });
+    expect(census.get('packages/application/src/pipeline/saga.ts')).toEqual({
+      escalations: 6,
+      closes: 6,
+    });
+    for (const file of ROW_CLOSED_BY_ITS_OWN_WRITE.keys()) {
+      expect(census.get(file)?.escalations, file).toBeGreaterThan(0);
+    }
+  });
+});
+
+/**
+ * **Every other ending of an attempt closes its row too** — the sibling of the escalation census
+ * (WP-46 review round 1, PROGRESS backlog 212). An attempt also ends when a stage is entered (a new
+ * attempt of it, or another stage), when the task completes and when it is cancelled; each of
+ * those sites — `.recordStageEntered(`, `completeTask(`, `cancelTask(` in a production module — is
+ * matched one for one by a `closeCurrentStageRow(` in the same module. Round 1 had none of them,
+ * and a take-over handed back at `ci_gate` left attempt 1 `running` for ever. Same syntactic limits
+ * as the census above; the behaviour per site is asserted in `saga.test.ts`.
+ */
+const ENDING_CALL = /\.recordStageEntered\s*\(|\bcompleteTask\s*\(|\bcancelTask\s*\(/g;
+const CLOSE_CURRENT_CALL = /\bcloseCurrentStageRow\s*\(/g;
+
+describe('every entry, completion and cancellation closes the attempt it ends (WP-46, backlog 212)', () => {
+  const census = (): Map<string, { endings: number; closes: number }> => {
+    const found = new Map<string, { endings: number; closes: number }>();
+    for (const file of sources()) {
+      if (isTestTier(file) || !file.startsWith('packages/application/src/')) {
+        continue;
+      }
+      const body = withoutComments(readFileSync(path.join(REPO_ROOT, file), 'utf8'));
+      const endings = body.match(ENDING_CALL)?.length ?? 0;
+      const closes = body.match(CLOSE_CURRENT_CALL)?.length ?? 0;
+      if (endings > 0 || closes > 0) {
+        found.set(file, { endings, closes });
+      }
+    }
+    return found;
+  };
+
+  it('matches each ending with a `closeCurrentStageRow`, file by file', () => {
+    const unmatched = [...census()]
+      .filter(([, counts]) => counts.endings !== counts.closes)
+      .map(([file, counts]) => `${file}: ${counts.endings} endings, ${counts.closes} closes`);
+    expect(unmatched).toEqual([]);
+  });
+
+  it('finds the endings it claims to, so a vacuous census cannot pass', () => {
+    // One entry and two completions in the transitions, one cancellation in the commands.
+    expect(census().get('packages/application/src/pipeline/transitions.ts')).toEqual({
+      endings: 3,
+      closes: 3,
+    });
+    expect(census().get('packages/application/src/pipeline/commands.ts')).toEqual({
+      endings: 1,
+      closes: 1,
+    });
+  });
+});

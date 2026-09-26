@@ -218,9 +218,16 @@ export const reviewFindingSignature = (data: JsonValue | null): string => {
 // `\v` and `\f` are vertical tab and form feed, spelled as escapes (biome refuses `\u000b`).
 const LINE_SEPARATORS = /[\r\n\v\f\u0085\u2028\u2029]+/g;
 
+/**
+ * Untrusted text on one line: every run of line separators becomes a space. Exported for the
+ * human half of backlog 159 (`review-threads.ts`, WP-46), which puts a reviewer's comments into the
+ * same feedback block under the same rule — one line per item, every line opening with a tag the
+ * platform wrote.
+ */
+export const collapseLines = (text: string): string => text.replaceAll(LINE_SEPARATORS, ' ');
+
 /** One model-written field, on one line. */
-const oneLine = (value: JsonValue | undefined): string =>
-  String(value ?? '').replaceAll(LINE_SEPARATORS, ' ');
+const oneLine = (value: JsonValue | undefined): string => collapseLines(String(value ?? ''));
 
 const SEVERITY_ORDER: Readonly<Record<string, number>> = {
   blocker: 0,

@@ -17,6 +17,7 @@
  */
 import { RUN_TRANSCRIPT_TOPIC, runTopic, type Transaction } from '@platform/application';
 import type { ContextPackRecord, Id, IsoDateTime, TranscriptEvent } from '@platform/contracts';
+import { acceptanceVerdictDataSchema } from '@platform/contracts';
 import { SHIPPED_TEMPLATES } from '@platform/domain';
 import {
   broadcast as broadcastAdapter,
@@ -1376,5 +1377,141 @@ describe('the list projections', () => {
       [projectId, JSON.stringify([{ kind: 'stale', path: 'knowledge/a.md', detail: 'x' }])],
     );
     await expect(findKbHealth(drizzled, projectId)).rejects.toThrow(/findings/);
+  });
+});
+
+/**
+ * **The Checks panel's two new reads, against the SQL** (WP-46, criterion 5).
+ *
+ * Each record is written by its **production writer** — `saveReviewThreads`, the artifact
+ * repository's `insert`, and the stage bookkeeping the gate settlement and the escalation use — and
+ * read back through the projection the task screen is served from; only the task row they hang off
+ * is seeded, and in a project of its own so the list projections above keep their arithmetic. That
+ * the pipeline itself produces these records is asserted where it runs: the review window in
+ * `packages/application/src/pipeline/saga.test.ts`, the Acceptance Verdict body and the closed rows
+ * of a merged task in `test/e2e/pipeline/stage-rows.e2e.test.ts` (rule 82).
+ */
+describe('the Checks panel’s reads (WP-46)', () => {
+  it('publishes the review window’s counts, each gate’s closed row and the verdict’s own body', async () => {
+    const store = pipelineAdapters.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES });
+    const org = await pool.query<{ id: string }>(
+      "insert into organizations (name) values ('checks') returning id",
+    );
+    const ownProject = await pool.query<{ id: string }>(
+      `insert into projects (org_id, key, name, repo_url)
+       values ($1, 'checks', 'Checks', 'https://git.example.test/acme/checks.git') returning id`,
+      [org.rows[0]?.id],
+    );
+    const own = await pool.query<{ id: string }>(
+      `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state,
+                          current_stage)
+       values ($1, 'fake-jira', 'ACME-46', 'https://jira.example.test/browse/ACME-46', 'feature',
+               'needs_human', 'rebase_gate') returning id`,
+      [ownProject.rows[0]?.id],
+    );
+    const ownTaskId = own.rows[0]?.id as Id;
+
+    // Before any window has read the threads, the projection says so — `null`, never `0 open`.
+    expect((await findTaskDetail(drizzled, ownTaskId))?.task.review_threads).toBeNull();
+
+    const verdictIds = [
+      '00000000-0000-4000-8000-0000000c4601',
+      '00000000-0000-4000-8000-0000000c4602',
+    ] as Id[];
+    const verdict = {
+      verdict: 'request_changes',
+      criteria: [
+        { id: 'AC-1', status: 'met', evidence: 'totals add up' },
+        { id: 'AC-2', status: 'not_met', evidence: 'the footer rounds twice' },
+      ],
+      scope_creep: [],
+      missing: [],
+      ux_notes: [],
+    };
+    const client = await pool.connect();
+    try {
+      await client.query('begin');
+      const tx = { adapter: 'postgres', client } as unknown as Transaction;
+      await store.tasks.saveReviewThreads(tx, ownTaskId, {
+        open: 2,
+        resolved: 1,
+        checked_at: AT as IsoDateTime,
+      });
+      for (const [index, id] of verdictIds.entries()) {
+        await store.artifacts.insert(tx, {
+          id,
+          taskId: ownTaskId,
+          type: 'AcceptanceVerdict',
+          version: index + 1,
+          markdown: null,
+          data: index === 0 ? { ...verdict, verdict: 'approve' } : verdict,
+          schemaVersion: '1',
+          producedByRunId: null,
+          redactionCount: 0,
+          createdAt: AT as IsoDateTime,
+        });
+      }
+      // The CI gate settled and closed with its verdict; the rebase gate was parked, and closed by
+      // the escalation — and a second escalation over the closed CI row changes nothing.
+      for (const stage of ['ci_gate', 'rebase_gate']) {
+        await store.tasks.recordStageEntered(tx, {
+          taskId: ownTaskId,
+          stage,
+          attempt: 1,
+          causedByEventId: null,
+        });
+      }
+      await store.tasks.recordStageExited(tx, {
+        taskId: ownTaskId,
+        stage: 'ci_gate',
+        attempt: 1,
+        state: 'completed',
+        outcome: 'pass',
+        returnReason: null,
+        returnedTo: null,
+      });
+      for (const stage of ['ci_gate', 'rebase_gate']) {
+        await store.tasks.closeOpenStage(tx, {
+          taskId: ownTaskId,
+          stage,
+          attempt: 1,
+          outcome: 'undecided',
+          reason: 'the gate could not be decided',
+        });
+      }
+      await client.query('commit');
+    } finally {
+      client.release();
+    }
+
+    const detail = await findTaskDetail(drizzled, ownTaskId);
+    expect(detail?.task.review_threads).toEqual({ open: 2, resolved: 1, checked_at: AT });
+    expect(
+      detail?.stages.map((row) => [row.stage, row.state, row.outcome, row.exited_at === null]),
+    ).toEqual([
+      ['ci_gate', 'completed', 'pass', false],
+      ['rebase_gate', 'failed', 'undecided', false],
+    ]);
+    // The panel picks the newest version off this list and opens it through the artifact route.
+    expect(
+      detail?.artifacts
+        .filter((artifact) => artifact.artifact_type === 'AcceptanceVerdict')
+        .map((artifact) => [artifact.id, artifact.version])
+        .sort((a, b) => Number(a[1]) - Number(b[1])),
+    ).toEqual([
+      [verdictIds[0], 1],
+      [verdictIds[1], 2],
+    ]);
+    const body = await findArtifactBody(drizzled, verdictIds[1] as string);
+    expect(body.found === true && body.redacted).toBe(true);
+    if (body.found === true && body.redacted === true) {
+      // The field the panel reads, parsed with the schema the panel parses it with.
+      const parsed = acceptanceVerdictDataSchema.parse(body.body.data);
+      expect(parsed.verdict).toBe('request_changes');
+      expect(parsed.criteria.map((criterion) => [criterion.id, criterion.status])).toEqual([
+        ['AC-1', 'met'],
+        ['AC-2', 'not_met'],
+      ]);
+    }
   });
 });

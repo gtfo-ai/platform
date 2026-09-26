@@ -173,9 +173,24 @@ nothing twice.
 
 ### The checks panel, and what it cannot show
 
-The product defines thirteen merge-readiness checks. The task endpoint publishes **four** —
-questions, approvals, risk classes and cost — so the panel shows those four and says plainly that
-the rest are not measured yet, rather than drawing empty ticks that read as "passed".
+The product defines eleven merge-readiness checks, and the panel shows **ten** of them:
+
+- **Acceptance criteria** and **Business verdict** — read from the latest Acceptance Verdict the
+  business review wrote: how many criteria were met, not met or untestable (each with the
+  reviewer's evidence), and whether it approved or asked for changes. No verdict yet says
+  *no verdict*; a verdict the server refuses to serve says *unavailable* and why.
+- **CI status** and **Rebase status** — the latest attempt of each gate: green or red, up to date
+  or conflicts, *checking* while it decides, *not reached* before the task gets there, and
+  *escalated (…)* with the reason when the gate stopped for a person.
+- **Review threads** — open and resolved human threads on the merge request, as the review window
+  last counted them. It counts when somebody comments while the task waits for merge; until then
+  it says *not read*, never zero.
+- **Coverage delta**, **Dependencies**, **Risk classes**, **Required reviewers**, the **Estimate**
+  against what the task has spent, and **Questions pending**.
+
+The eleventh, the **tamper check**, is named as absent with its reason: it needs the platform to
+compare the paths a change touches with the exceptions its plan declared and to store the result,
+and this build does not do that yet. It is never drawn as an empty tick that reads as "passed".
 
 ### What is not on this screen
 

@@ -74,11 +74,21 @@ test('the task detail shows the stage timeline, the runs and the checks panel', 
   await expect(page.getByText('npm:left-pad', { exact: true })).toBeVisible();
   await expect(page.getByText('Required reviewers', { exact: true })).toBeVisible();
   await expect(page.getByText('1 of 2 assigned, 1 unresolved')).toBeVisible();
-  // …and the six product/10:38 items this panel does **not** answer are named on the screen rather
-  // than drawn as empty ticks (WP-38 criterion 5; `checks-panel.test.tsx` holds the whole census).
-  await expect(
-    page.getByText(/Not on this panel: acceptance criteria met, CI green/),
-  ).toBeVisible();
+  /**
+   * WP-46's five items, in the browser: the review window's counts off `tasks.review_threads`, a
+   * gate this fixture's task has not reached said as such rather than ticked, and no Acceptance
+   * Verdict said as such rather than drawn as approved.
+   */
+  await expect(page.getByText('Review threads', { exact: true })).toBeVisible();
+  await expect(page.getByText('2 open · 1 resolved')).toBeVisible();
+  await expect(page.getByText('CI status', { exact: true })).toBeVisible();
+  await expect(page.getByText('This task has not entered ci_gate.')).toBeVisible();
+  await expect(page.getByText('Business verdict', { exact: true })).toBeVisible();
+  await expect(page.getByText('no verdict', { exact: true })).toBeVisible();
+  // …and the one product/10:38 item this panel does **not** answer is named on the screen with its
+  // reason rather than drawn as an empty tick (WP-38 criterion 5, WP-46 criterion 4;
+  // `checks-panel.test.tsx` holds the whole census).
+  await expect(page.getByText(/Not on this panel: tamper check\. It is BD-024/)).toBeVisible();
 });
 
 test('a task whose gate has not run says so, rather than saying nothing was added', async ({

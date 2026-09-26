@@ -79,6 +79,12 @@ const money = (usd: number): string => `$${usd.toFixed(2)}`;
  * Exported for its own unit test: the mapping from an event to a class is the half a reviewer
  * should be able to read without a bus, a queue and a fake provider in the way.
  */
+/** A return reason's first line — see the `task.stage.returned` case. */
+const firstLine = (reason: string): string => {
+  const end = reason.indexOf('\n');
+  return end === -1 ? reason : reason.slice(0, end);
+};
+
 export const decideNotification = (event: DomainEvent): Decided | null => {
   switch (event.type) {
     case 'task.created':
@@ -95,7 +101,15 @@ export const decideNotification = (event: DomainEvent): Decided | null => {
         projectId: event.payload.project_id,
         taskId: event.payload.task_id,
         subject: null,
-        detail: `${event.payload.from_stage} → ${event.payload.to_stage}: ${event.payload.reason}`,
+        // **The reason's first line only** (WP-46 review round 1, PROGRESS backlog 211). A return
+        // reason can carry somebody else's text — a human reviewer's MR comments since WP-46, a
+        // model's findings since WP-55 — and chat renders markup: `toMrkdwn` escapes `& < >`, but a
+        // `[label](url)` becomes a link with the commenter's label, posted under the platform's
+        // identity. The first line is the one the platform controls for a human-comment return —
+        // the thread count, every comment below it being collapsed onto a line of its own
+        // (`review-threads.ts`) — so the chat says *that* the task went back and how many threads,
+        // and the words stay on the task, behind its link.
+        detail: `${event.payload.from_stage} → ${event.payload.to_stage}: ${firstLine(event.payload.reason)}`,
       };
     case 'task.question.asked':
       return {

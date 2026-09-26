@@ -7,17 +7,20 @@
  * > rebase status, review threads open/resolved, business verdict, tamper check, coverage delta,
  * > dependency status, risk classes and required reviewers, budget vs estimate, questions pending"*
  *
- * Five of the eleven are rendered and six are not, and the list of which is which lives **here**
+ * Ten of the eleven are rendered and one is not — the tamper check, BD-024's gate, which WP-46
+ * deliberately does not build — and the list of which is which lives **here**
  * rather than in a comment on the screen — the shape `apps/server/src/routes/client-census.test.ts`
  * uses, and for the same reason: a prose caveat is a claim nobody re-checks, and this one had
  * already gone stale once (it named WP-15 and WP-38 as *"the pipeline that produces them"* after
  * both had shipped).
  *
  * **Both directions** (standing rule 42): a shown item must appear on the panel *and not* in the
- * "not on this panel" sentence, and an absent item must appear in that sentence *and not* as a
- * label. A one-sided test would pass a panel that both rendered an item and apologised for it, and
- * — much worse — one that quietly stopped rendering an item while the sentence still called it
- * present.
+ * "not on this panel" sentence, and the sentence's list of absent items is **compared** with the
+ * census rather than searched for each entry (standing rule 3: a list is compared, not pinned) —
+ * so an item that starts working and stays listed absent fails, and so does one that stops
+ * rendering without being listed. A one-sided test would pass a panel that both rendered an item
+ * and apologised for it, and — much worse — one that quietly stopped rendering an item while the
+ * sentence still called it present.
  *
  * The fixture is **typed** rather than an untyped literal (PROGRESS backlog 93): a required field
  * added to `taskRecordSchema` fails at this line rather than three layers away as a missing heading.
@@ -56,6 +59,7 @@ const TASK_ROW: TaskRecord = {
   iteration_counters: {},
   risk_classes: ['auth'],
   coverage: null,
+  review_threads: null,
   dependencies: {
     head_sha: 'b'.repeat(40),
     decision: 'ask',
@@ -133,21 +137,19 @@ const CHECKS: readonly {
   readonly shown?: string;
   readonly absent?: string;
 }[] = [
-  // Absent: a Refined Spec carries the criteria and a Business Review Verdict judges them; nothing
-  // projects "met / not met" onto the task. **No work package owns it.**
-  { item: 'acceptance criteria met', absent: 'acceptance criteria met' },
-  // Absent: the CI gate settles from `ci.pipeline.finished` (WP-15) and records the outcome on
-  // `task_stages`; no field of this screen's DTO carries it. **No work package owns it.**
-  { item: 'CI green', absent: 'CI green' },
-  // Absent: the rebase gate records `task.rebase.checked` on every entry (WP-26); same gap.
-  { item: 'rebase status', absent: 'rebase status' },
-  // Absent: the review window counts unresolved threads to decide a return (BD-007); it stores no
-  // count.
-  { item: 'review threads open/resolved', absent: 'review threads' },
-  // Absent as a *check*: the verdict is an artifact and is openable in the artifacts tab.
-  { item: 'business verdict', absent: 'business verdict' },
-  // Absent with no producer at all: BD-024's test-integrity check exists in the Reviewer's prompt
-  // and nowhere in the platform's data.
+  // WP-46: the latest Acceptance Verdict's own `criteria[]`, read through WP-52's artifact route.
+  { item: 'acceptance criteria met', shown: 'Acceptance criteria' },
+  // WP-46 on WP-55's rows: the CI gate's latest `task_stages` row, closed with its verdict.
+  { item: 'CI green', shown: 'CI status' },
+  // The same, for the rebase gate.
+  { item: 'rebase status', shown: 'Rebase status' },
+  // WP-46: `tasks.review_threads`, written by BD-007's review window where it counts them.
+  { item: 'review threads open/resolved', shown: 'Review threads' },
+  // WP-46: the same Acceptance Verdict's `verdict`.
+  { item: 'business verdict', shown: 'Business verdict' },
+  // Absent with no producer at all: BD-024's gate compares the change's paths with the plan's
+  // declared exceptions and stores a result, and nothing in this build does. **Not WP-46's** — a
+  // work package of its own — and named on the screen with that reason.
   { item: 'tamper check', absent: 'tamper check' },
   { item: 'coverage delta', shown: 'Coverage delta' },
   { item: 'dependency status', shown: 'Dependencies' },
@@ -203,10 +205,20 @@ describe('the Checks panel against product/10:38', () => {
       if (check.shown !== undefined) {
         expect(text, `${check.item} is rendered`).toContain(check.shown);
         expect(absentSentence, `${check.item} is not apologised for`).not.toContain(check.shown);
-        continue;
       }
-      expect(absentSentence, `${check.item} is named absent`).toContain(check.absent);
     }
+    // The sentence's own list — everything between "Not on this panel:" and the first full stop —
+    // **compared** with the census's absent entries, so the list cannot hold an item the panel now
+    // answers, nor lose one it does not.
+    const listed = (absentSentence.match(/^Not on this panel:([^.]*)\./)?.[1] ?? '')
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+    expect(listed.sort()).toEqual(
+      CHECKS.flatMap((check) => (check.absent === undefined ? [] : [check.absent])).sort(),
+    );
+    // Criterion 4: the one absence says why, and names the decision it is waiting on.
+    expect(absentSentence).toContain('BD-024');
   });
 
   it('shows what the dependency gate found, as text and with its licence', async () => {
@@ -260,5 +272,161 @@ describe('the Checks panel against product/10:38', () => {
       expect(container.textContent).toContain('<img src=x onerror=alert(1)>');
     });
     expect(container.querySelector('img')).toBeNull();
+  });
+});
+
+/**
+ * **The five items WP-46 brought onto the panel**, each from the record its producer wrote — the
+ * gates' `task_stages` rows, `tasks.review_threads`, and the latest Acceptance Verdict's body
+ * through `GET /api/artifacts/:id`. The fixtures are the DTO shapes those producers write; that the
+ * producers write them is asserted in the tiers that run them (the saga harness for the rows and the
+ * review window, the e2e for the verdict body), which is where rule 82 puts it.
+ */
+describe('the Checks panel’s gate, thread and verdict items (WP-46)', () => {
+  const VERDICT_V1 = '00000000-0000-4000-8000-0000000000d1';
+  const VERDICT_V2 = '00000000-0000-4000-8000-0000000000d2';
+  const AT = '2026-09-13T05:00:00.000Z';
+
+  const stage = (
+    name: string,
+    attempt: number,
+    state: TaskDetailResponse['stages'][number]['state'],
+    outcome: string | null,
+  ): TaskDetailResponse['stages'][number] => ({
+    stage: name,
+    attempt,
+    state,
+    entered_at: AT,
+    exited_at: state === 'running' ? null : AT,
+    outcome,
+  });
+
+  const detailWith = (overrides: Partial<TaskDetailResponse>): TaskDetailResponse => ({
+    ...TASK_DETAIL,
+    task: { ...TASK_ROW, review_threads: { open: 2, resolved: 1, checked_at: AT } },
+    stages: [
+      stage('ci_gate', 1, 'returned', 'returned'),
+      stage('ci_gate', 2, 'completed', 'pass'),
+      stage('rebase_gate', 1, 'failed', 'undecided'),
+    ],
+    artifacts: [
+      { id: VERDICT_V1, artifact_type: 'AcceptanceVerdict', version: 1, url: null },
+      { id: VERDICT_V2, artifact_type: 'AcceptanceVerdict', version: 2, url: null },
+    ],
+    ...overrides,
+  });
+
+  const verdictBody = (id: string, version: number, data: unknown) => ({
+    id,
+    task_id: TASK,
+    artifact_type: 'AcceptanceVerdict',
+    version,
+    schema_version: '1',
+    produced_by_run_id: null,
+    created_at: AT,
+    redaction_count: 0,
+    markdown: null,
+    data,
+  });
+
+  const V2_DATA = {
+    verdict: 'request_changes',
+    criteria: [
+      { id: 'AC-1', status: 'met', evidence: 'totals add up' },
+      {
+        id: 'AC-2',
+        status: 'not_met',
+        evidence: '<img src=x onerror=alert(2)> footer rounds twice',
+      },
+      { id: 'AC-3', status: 'untestable', evidence: 'needs a real printer' },
+    ],
+    scope_creep: [],
+    missing: [],
+    ux_notes: [],
+  };
+
+  const render$ = async (
+    detail: TaskDetailResponse,
+    artifact: (url: string) => Response | null = () => null,
+  ): Promise<{ text: () => string; container: HTMLElement; requested: string[] }> => {
+    const requested: string[] = [];
+    const fetchWith = (async (input: RequestInfo | URL): Promise<Response> => {
+      const url = String(input);
+      if (url.includes('/api/artifacts/')) {
+        requested.push(url);
+        return artifact(url) ?? json({ error: { code: 'not_found', message: 'no' } }, 404);
+      }
+      if (url.endsWith(`/api/tasks/${TASK}`)) return json(detail);
+      return fetchImpl(input);
+    }) as typeof fetch;
+    const { container } = render(createApp({ fetchImpl: fetchWith, realtime: false }).element);
+    await screen.findByText('Checks');
+    return { text: () => container.textContent ?? '', container, requested };
+  };
+
+  it('reads each gate’s latest attempt, and names an escalation by its word', async () => {
+    const view = await render$(detailWith({ artifacts: [] }));
+    await waitFor(() => expect(view.text()).toContain('CI status'));
+    // ci_gate: attempt 1 sent the task back, attempt 2 passed — the latest is what the head is.
+    expect(view.text()).toContain('green');
+    expect(view.text()).toContain('ci_gate, attempt 2, decided');
+    // rebase_gate: parked, closed `failed` with the escalation's own word (backlog 160).
+    expect(view.text()).toContain('escalated (undecided)');
+  });
+
+  it('says a gate the task never reached is not reached, never a tick', async () => {
+    const view = await render$(detailWith({ stages: [], artifacts: [] }));
+    await waitFor(() => expect(view.text()).toContain('CI status'));
+    expect(view.text()).toContain('This task has not entered ci_gate.');
+    expect(view.text()).toContain('This task has not entered rebase_gate.');
+    expect(view.text()).not.toContain('green');
+  });
+
+  it('shows the review window’s counts, and "not read" when it has read nothing', async () => {
+    const read = await render$(detailWith({ artifacts: [] }));
+    await waitFor(() => expect(read.text()).toContain('2 open · 1 resolved'));
+    cleanup();
+    const unread = await render$(
+      detailWith({ task: { ...TASK_ROW, review_threads: null }, artifacts: [] }),
+    );
+    await waitFor(() => expect(unread.text()).toContain('Review threads'));
+    expect(unread.text()).toContain('not read');
+    expect(unread.text()).not.toContain('0 open');
+  });
+
+  it('reads the business verdict and the criteria from the latest Acceptance Verdict, as text', async () => {
+    const view = await render$(detailWith({}), (url) =>
+      url.endsWith(VERDICT_V2)
+        ? json(verdictBody(VERDICT_V2, 2, V2_DATA))
+        : json(verdictBody(VERDICT_V1, 1, { ...V2_DATA, verdict: 'approve' })),
+    );
+    await waitFor(() => expect(view.text()).toContain('changes requested'));
+    // Only the newest version is read: v1's `approve` never reaches the screen.
+    expect(view.requested.every((url) => url.endsWith(VERDICT_V2))).toBe(true);
+    expect(view.text()).not.toContain('approved');
+    expect(view.text()).toContain('1 of 3 met, 1 not met, 1 untestable');
+    expect(view.text()).toContain('Acceptance Verdict v2.');
+    expect(view.text()).toContain('AC-2 — <img src=x onerror=alert(2)> footer rounds twice');
+    // Model output is text, markup and all (BD-022).
+    expect(view.container.querySelector('img')).toBeNull();
+  });
+
+  it('names a verdict the route refuses, rather than drawing it as no verdict', async () => {
+    const view = await render$(detailWith({}), () =>
+      json(
+        { error: { code: 'artifact_not_redacted', message: 'stored before migration 0038' } },
+        409,
+      ),
+    );
+    await waitFor(() => expect(view.text()).toContain('was not served'));
+    expect(view.text()).toContain('unavailable');
+    expect(view.text()).not.toContain('no verdict');
+  });
+
+  it('says no business review has judged the task when there is no verdict, and asks for none', async () => {
+    const view = await render$(detailWith({ artifacts: [] }));
+    await waitFor(() => expect(view.text()).toContain('no verdict'));
+    expect(view.text()).toContain('not judged');
+    expect(view.requested).toEqual([]);
   });
 });

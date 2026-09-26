@@ -15,9 +15,18 @@
  *    `ci_gate` and `rebase_gate` rows read `state: entered`, `outcome: null`, `exited_at: null`.
  *    The case now asserts the row **and** what `GET /api/tasks/:id` publishes for it (criteria 4
  *    and 5), both ways: a passed gate is closed, and the stage the task is still at is not.
+ *
+ * WP-46 carries the second case on past the human merge: the Acceptance Verdict the business review
+ * produced is opened through `GET /api/artifacts/:id` and read for the two fields the Checks panel
+ * renders, and after `mr.merged` **no row of the `done` task is open** — PROGRESS backlog 158,
+ * where `ready_for_merge` was left `running` on every merged task.
  */
 import type { RunSpec } from '@platform/application';
-import { taskDetailResponseSchema } from '@platform/contracts';
+import {
+  acceptanceVerdictDataSchema,
+  artifactBodyResponseSchema,
+  taskDetailResponseSchema,
+} from '@platform/contracts';
 import { readDataBlocks } from '@platform/domain';
 import { afterEach, describe, expect, it } from 'vitest';
 import { BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD, Client } from '../support/instance.js';
@@ -51,6 +60,24 @@ const ticketMatched = (pipeline: PipelineE2E) =>
     issue_type: 'Story',
     epic: null,
     links: [],
+  });
+
+const merged = (pipeline: PipelineE2E) =>
+  inboundEvent('mr.merged', {
+    project_id: pipeline.projectId,
+    task_id: null,
+    mr: {
+      provider: 'fake-git',
+      project_path: GIT_PROJECT,
+      iid: pipeline.world.mr.iid,
+      url: pipeline.world.mr.url,
+      branch: pipeline.world.branch,
+      head_sha: pipeline.world.mr.headSha,
+    },
+    draft: false,
+    head_sha: pipeline.world.mr.headSha,
+    diff_stats: null,
+    merge_commit_sha: 'c'.repeat(40),
   });
 
 const signIn = async (baseUrl: string): Promise<Client> => {
@@ -178,7 +205,7 @@ describe('the return channel, on the next run’s prompt (WP-55, backlog 67)', (
   });
 });
 
-describe('a gate the pipeline walked through (WP-55, backlog 95 items 1 and 2)', () => {
+describe('a gate the pipeline walked through (WP-55, backlog 95 items 1 and 2; WP-46)', () => {
   it('is closed with its verdict and published as completed; the stage the task is at is not', async () => {
     const pipeline = await startPipeline({
       scenarios: featureScenarios,
@@ -220,5 +247,49 @@ describe('a gate the pipeline walked through (WP-55, backlog 95 items 1 and 2)',
     expect(published.filter((row) => row.state === 'running').map((row) => row.stage)).toEqual([
       'ready_for_merge',
     ]);
+
+    /**
+     * WP-46, criterion 2 and rule 82: the Checks panel's *business verdict* and *acceptance
+     * criteria met* are the latest Acceptance Verdict's own fields, and that verdict is the one the
+     * **business review stage produced** on this instance — read through the route the panel reads
+     * it through, and parsed with the schema the panel parses it with.
+     */
+    const verdicts = taskDetailResponseSchema
+      .parse(detail.body)
+      .artifacts.filter((artifact) => artifact.artifact_type === 'AcceptanceVerdict');
+    expect(verdicts.map((artifact) => artifact.version)).toEqual([1]);
+    const opened = await client.json(`/api/artifacts/${verdicts[0]?.id}`, { method: 'GET' });
+    expect(opened.status, JSON.stringify(opened.body)).toBe(200);
+    const body = artifactBodyResponseSchema.parse(opened.body);
+    const acceptance = acceptanceVerdictDataSchema.parse(body.data);
+    expect(acceptance.verdict).toBe('approve');
+    expect(acceptance.criteria.map((criterion) => [criterion.id, criterion.status])).toEqual([
+      ['ac1', 'met'],
+    ]);
+
+    /**
+     * WP-46, backlog 158: the human merge moves the task **forward** out of `ready_for_merge`,
+     * and until WP-46 nothing closed that row — every merged task published it `running` for
+     * ever. After the merge, **no row of a `done` task is open**, and the one the merge left says
+     * which event moved it.
+     */
+    await pipeline.publish([merged(pipeline)]);
+    const finished = await pipeline.settle('done', (task) => task.state === 'done');
+    const after = await stageRows(pipeline);
+    expect(after.filter((row) => row.state === 'running').map((row) => row.stage)).toEqual([]);
+    expect(after.find((row) => row.stage === 'ready_for_merge')).toMatchObject({
+      state: 'completed',
+      outcome: 'mr.merged',
+      returned_to: null,
+    });
+    expect(after.find((row) => row.stage === 'ready_for_merge')?.exited_at).toBeInstanceOf(Date);
+    const done = await client.json(`/api/tasks/${finished.id}`, { method: 'GET' });
+    expect(done.status).toBe(200);
+    expect(
+      taskDetailResponseSchema
+        .parse(done.body)
+        .stages.filter((row) => row.state === 'running')
+        .map((row) => row.stage),
+    ).toEqual([]);
   });
 });

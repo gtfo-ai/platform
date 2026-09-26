@@ -20,6 +20,7 @@ import type {
   TaskCoverage,
   TaskDependencies,
   TaskReviewers,
+  TaskReviewThreads,
   TicketSnapshot,
   WorkpadRef,
 } from '@platform/contracts';
@@ -144,6 +145,15 @@ export const tasks = pgTable('tasks', {
    * cannot answer that question.
    */
   requiredReviewers: jsonb('required_reviewers').$type<TaskReviewers>(),
+  /**
+   * The merge request's human review threads, open and resolved, as BD-007's review window last
+   * read them (WP-46, migration 0048) — product/10:38's *"review threads open/resolved"*.
+   *
+   * `null` until the window has read them (no human has commented while the task waited at
+   * `ready_for_merge`), which is a different fact from a record whose `open` is zero. Every write is
+   * parsed against `taskReviewThreadsSchema`.
+   */
+  reviewThreads: jsonb('review_threads').$type<TaskReviewThreads>(),
   blockedBy: text('blocked_by').array().notNull().default(emptyArray),
   /**
    * The row's optimistic-concurrency token (WP-15e, migration 0019).

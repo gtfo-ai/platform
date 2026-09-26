@@ -126,11 +126,19 @@ export interface ApplyOptions {
   readonly onIllegalTransition?: 'escalate' | 'throw';
   /**
    * The signal `decision` was interpreted from, when the caller has one. Read for one thing: a
-   * `gate_settled` signal whose decision walks past the gate closes that gate's `task_stages` row
-   * with the verdict (`closeSettledGate`, WP-55). Optional because most callers build a decision
-   * that no signal produced — a human command, a dependency block, a batch.
+   * decision that walks the task **forward** out of the stage the signal was about closes that
+   * stage's `task_stages` row — a `gate_settled` signal with the gate's verdict (WP-55), an `event`
+   * signal at a human stage with the event's name (WP-46, backlog 158). See {@link closeLeftStage}.
+   * Optional because most callers build a decision that no signal produced — a human command, a
+   * dependency block, a batch.
    */
   readonly signal?: PipelineSignal;
+  /**
+   * The `outcome` word an **escalation** closes the parked stage's open row with (WP-46, backlog
+   * 160) — `undecided`, `unsupported` and `converged` from the gate settlement, `escalated` when the
+   * caller does not say. Read only when the decision escalates; see {@link closeParkedStageRow}.
+   */
+  readonly escalationOutcome?: string;
 }
 
 /**
@@ -169,6 +177,12 @@ const applyEscalation = async (
       ...stored,
       task: escalated.aggregate,
     });
+    await closeParkedStageRow(
+      options.store,
+      options.tx,
+      escalated,
+      options.escalationOutcome ?? ESCALATED_OUTCOME,
+    );
     return { stored: saved, events: escalated.events, work: null };
   } catch (error) {
     if (!(error instanceof IllegalTransitionError)) {
@@ -194,7 +208,14 @@ const apply = async (options: ApplyOptions): Promise<AppliedDecision> => {
       return applyEscalation(options, decision.reason, decision.blockerBrief);
 
     case 'complete': {
-      await closeSettledGate(options, null);
+      await closeLeftStage(options, null);
+      await closeCurrentStageRow(
+        store,
+        tx,
+        stored.task,
+        TASK_COMPLETED_OUTCOME,
+        'the task completed',
+      );
       const finished = completeTask(
         stored.task,
         { outcome: 'completed', totals: await totalsOf(options) },
@@ -247,36 +268,61 @@ const apply = async (options: ApplyOptions): Promise<AppliedDecision> => {
     }
 
     case 'enter':
-      await closeSettledGate(options, decision.stage);
+      await closeLeftStage(options, decision.stage);
       return enter(options, decision.stage);
   }
 };
 
 /**
- * Closes the row of a gate the decision is walking **past** (WP-55, PROGRESS backlog 95 items 1
- * and 2).
+ * **The invariant every `task_stages` writer is held to** (WP-46, PROGRESS backlogs 158, 160 and
+ * 212):
  *
- * A gate that fails backwards is a `return` and its row is closed on that path, with the target;
- * a gate that passes is an `enter` of the next stage (or a `complete`), and until WP-55 nothing on
- * that path touched the gate's own row. Measured before the fix on a real PostgreSQL: after a
- * passing CI gate the `ci_gate` and `rebase_gate` rows were `entered`, with no `exited_at` and no
- * `outcome`, and the task screen published both as **running**.
+ * > *A row is open (`running`) exactly while its attempt can still resume.*
  *
- * The verdict is the signal's, not the decision's — `enter` carries no `from` — so this acts only
- * when the caller says which gate settled ({@link ApplyOptions.signal}) **and** the task is still at
- * it: a settlement that arrives for a task a human already moved is not this gate's row to close.
- * `pass` and `fail` are `stageVerdictSchema`'s gate words, the same the interpreter decided on; a
- * gate whose `fail_to` points *forward* closes `completed` with `fail`, which is what happened.
- * A gate that does not settle — pending, escalated, waiting — is left open, so a task still **at**
- * a gate has neither an `outcome` nor an `exited_at`.
+ * An attempt can resume while the task is at that stage, on that attempt, and neither parked
+ * (`needs_human`), cancelled nor done. `paused` and `waiting_answers` do **not** end an attempt by
+ * themselves — the row stays open — but nothing resumes an attempt either: every way back in
+ * (`resume`, `retry-stage`, a hand-back after a take-over, a question answered) enters the stage as
+ * a **new** attempt, so the old one is ended by that entry. Review round 1 measured the gap the
+ * first wording (*"a paused task keeps its row because the attempt resumes where it stopped"*) hid:
+ * take over at `ci_gate`, hand back, and attempt 1 stayed `running` for ever. Each ending closes
+ * the row with an `outcome` that says which, and this is the census of them, so a new ending has
+ * somewhere to be written down:
+ *
+ *  - **an agent stage** ends inside the stage executor, which closes its row with the verdict (or
+ *    `failed`) in the transaction that ends the run; the lease sweep does the same for a run
+ *    nothing is driving;
+ *  - **a return** closes the returning row `returned`, with its target (`apply`'s `return` case);
+ *  - **a `system` stage** closes on entry (`enter`);
+ *  - **a gate the platform settled** and **a human stage an event moved forward** close in
+ *    {@link closeLeftStage} — the gate with its verdict (WP-55), the human stage with the event's
+ *    name (WP-46; before it, `ready_for_merge` was published `running` on every merged task);
+ *  - **an escalation** closes the parked stage's row `failed` in {@link closeParkedStageRow};
+ *  - **any entry** closes the row the task was still at in {@link closeCurrentStageRow} —
+ *    `superseded` when the entry is a new attempt of the same stage, `left` when it is another
+ *    stage — and so does **completion** (`task.completed`) and **cancellation** (`cancelled`,
+ *    paused or not).
+ *
+ * Every close of the last three kinds is conditional on the row still being `running` (the store's
+ * `closeOpenStage`), so it never overwrites what a stage decided; and every site that ends a task
+ * or enters a stage calls one — `task-save-sites.test.ts` counts them off disk, so a new ending
+ * that forgets fails a test rather than a reader. The converse — a row the task *is* at is open —
+ * holds because every entry opens one (`recordStageEntered` upserts `running`).
  */
-const closeSettledGate = async (options: ApplyOptions, next: Slug | null): Promise<void> => {
+const closeLeftStage = async (options: ApplyOptions, next: Slug | null): Promise<void> => {
   const { signal, stored } = options;
   if (
-    signal?.kind !== 'gate_settled' ||
+    signal === undefined ||
+    (signal.kind !== 'gate_settled' && signal.kind !== 'event') ||
     stored.task.currentStage !== signal.stage ||
     next === signal.stage
   ) {
+    return;
+  }
+  if (signal.kind === 'event' && stageOf(options.pipeline, signal.stage)?.kind !== 'human') {
+    // The interpreter escalates an event for a stage that is not human, so this is unreachable
+    // through `apply`; guarded rather than trusted, because closing an agent stage's row here would
+    // overwrite the verdict its executor wrote.
     return;
   }
   await options.store.tasks.recordStageExited(options.tx, {
@@ -284,9 +330,88 @@ const closeSettledGate = async (options: ApplyOptions, next: Slug | null): Promi
     stage: signal.stage,
     attempt: stored.task.stageAttempts[signal.stage] ?? 1,
     state: 'completed',
-    outcome: signal.passed ? 'pass' : 'fail',
+    // A gate's outcome is `stageVerdictSchema`'s gate word, the one the interpreter decided on (a
+    // gate whose `fail_to` points *forward* closes `completed` with `fail`, which is what
+    // happened). A human stage's is the event that moved it — `mr.merged` on every shipped
+    // template — because a human stage has no verdict, and the event is what the reader of the row
+    // needs to know (WP-46, backlog 158).
+    outcome: signal.kind === 'gate_settled' ? (signal.passed ? 'pass' : 'fail') : signal.event,
     returnReason: null,
     returnedTo: null,
+  });
+};
+
+/** A new attempt of the same stage was entered while the old one was still open (WP-46). */
+export const SUPERSEDED_OUTCOME = 'superseded' as const;
+/** Another stage was entered while this one's attempt was still open (WP-46). */
+export const LEFT_OUTCOME = 'left' as const;
+/** The task completed while this attempt was still open (WP-46). */
+export const TASK_COMPLETED_OUTCOME = 'task.completed' as const;
+/** The task was cancelled while this attempt was still open (WP-46, backlog 212). */
+export const CANCELLED_OUTCOME = 'cancelled' as const;
+
+/** The `outcome` an escalation writes when its caller names no more specific word (WP-46). */
+export const ESCALATED_OUTCOME = 'escalated' as const;
+
+/**
+ * Closes the row of the stage a task was **parked** at, if it is still open (WP-46, backlog 160):
+ * the escalation half of the invariant stated at {@link closeLeftStage}.
+ *
+ * Call it with the escalation's decision — the task after it and the `task.escalated` it emitted,
+ * whose `reason` becomes the row's. It does nothing unless that task is `needs_human` at a stage,
+ * and the store closes the row only while it is `running` — so an agent
+ * stage whose executor already wrote its verdict, and a gate that settled before its move was
+ * refused, keep what they decided. What is left is exactly the rows nothing else closes: a gate
+ * the platform could not decide (`undecided`), could not evaluate (`unsupported`) or stopped on a
+ * repeated failure (`converged`), and a human stage whose merge request was closed (`mr.closed`).
+ * Before WP-46 all of those stayed `running` under a `needs_human` task, and the task screen told
+ * the person reading the stage list that the gate was still working.
+ *
+ * The reason is recorded as the row's `return_reason` with no target — what the executor's
+ * `failed` rows already do — and it is the escalation's own `reason`, read off its event.
+ */
+export const closeParkedStageRow = async (
+  store: PipelineStore,
+  tx: import('../ports/transaction.js').Transaction,
+  escalation: { readonly aggregate: Task; readonly events: readonly DomainEvent[] },
+  outcome: string,
+): Promise<void> => {
+  const task = escalation.aggregate;
+  if (task.state !== 'needs_human' || task.currentStage === null) {
+    return;
+  }
+  const escalated = escalation.events.find((event) => event.type === 'task.escalated');
+  await store.tasks.closeOpenStage(tx, {
+    taskId: task.id,
+    stage: task.currentStage,
+    attempt: task.stageAttempts[task.currentStage] ?? 1,
+    outcome,
+    reason: escalated?.type === 'task.escalated' ? escalated.payload.reason : outcome,
+  });
+};
+
+/**
+ * Closes the row of the stage `task` is at — its current attempt — if it is still open (WP-46,
+ * review round 1 and PROGRESS backlog 212): the half of the invariant at {@link closeLeftStage}
+ * that no stage decides. Pass the task **as it was before** the command that ends the attempt; the
+ * store writes `failed` with `outcome` only while the row is `running`.
+ */
+export const closeCurrentStageRow = async (
+  store: PipelineStore,
+  tx: import('../ports/transaction.js').Transaction,
+  task: Task,
+  outcome: string,
+  reason: string,
+): Promise<void> => {
+  if (task.currentStage === null) {
+    return;
+  }
+  await store.tasks.closeOpenStage(tx, {
+    taskId: task.id,
+    stage: task.currentStage,
+    attempt: task.stageAttempts[task.currentStage] ?? 1,
+    outcome,
+    reason,
   });
 };
 
@@ -294,6 +419,13 @@ const closeSettledGate = async (options: ApplyOptions, next: Slug | null): Promi
 const enter = async (options: ApplyOptions, stage: Slug): Promise<AppliedDecision> => {
   const { stored, context, store, tx } = options;
   if (stage === DONE_STAGE) {
+    await closeCurrentStageRow(
+      store,
+      tx,
+      stored.task,
+      TASK_COMPLETED_OUTCOME,
+      'the task completed',
+    );
     const finished = completeTask(
       stored.task,
       { outcome: 'completed', totals: await totalsOf(options) },
@@ -317,6 +449,15 @@ const enter = async (options: ApplyOptions, stage: Slug): Promise<AppliedDecisio
       : command(stored.task, context);
 
   const attempt = decision.aggregate.stageAttempts[stage] ?? 1;
+  // The attempt the task is leaving can no longer resume: every way back into a stage is a new
+  // attempt. A row something already closed — a verdict, a return, a settled gate — is kept.
+  await closeCurrentStageRow(
+    store,
+    tx,
+    stored.task,
+    stored.task.currentStage === stage ? SUPERSEDED_OUTCOME : LEFT_OUTCOME,
+    `the task entered ${stage} (attempt ${String(attempt)})`,
+  );
   await store.tasks.recordStageEntered(tx, {
     taskId: stored.task.id,
     stage,

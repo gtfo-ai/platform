@@ -7,14 +7,18 @@
  * **What the Checks panel shows, and what it cannot.** product/10:38 lists **eleven**
  * merge-readiness checks — acceptance criteria met, CI green, rebase status, review threads
  * open/resolved, business verdict, tamper check, coverage delta, dependency status, risk classes and
- * required reviewers, budget vs estimate, questions pending. This panel renders **five**: the
+ * required reviewers, budget vs estimate, questions pending. This panel renders **ten**: the
  * coverage delta (WP-39), the dependency status (WP-38), risk classes **and required reviewers**
  * (WP-37's routing, WP-38's record of it), cost against the estimate — product/10's *"budget vs
- * estimate"* (WP-28) — and questions pending, with approvals beside it. The other six are named on
- * the screen with what exists for each, and the whole list is held to product/10:38 by
+ * estimate"* (WP-28) — questions pending with approvals beside it, and since WP-46 the five that
+ * were named absent before it: CI and rebase status off the gates' own `task_stages` rows (WP-55
+ * closes them with the verdict), review threads off the review window's `tasks.review_threads`, and
+ * the business verdict and acceptance criteria off the latest Acceptance Verdict's body (WP-52's
+ * route). The **tamper check** is the one left, named on the screen with its reason — it is
+ * BD-024's gate, a work package of its own — and the whole list is held to product/10:38 by
  * `apps/web/src/features/checks-panel.test.tsx` › "the Checks panel against product/10:38" **in
  * both directions**, so neither this paragraph nor that sentence can go stale on its own (WP-38,
- * criterion 5).
+ * criterion 5; WP-46).
  *
  * **Which commands are here.** technical/09's screens table gives this screen `answer, approve,
  * retry, take over, feedback`; product/10 adds return-to-stage and rework. All of them are present:
@@ -33,15 +37,19 @@
  * implied: an ask is answered by a run that takes a minute, on its own schedule.
  */
 import type {
+  AcceptanceVerdictData,
   ApprovalRecord,
   HumanTimeKind,
   HumanTimeSummary,
   QuestionRecord,
   TaskCoverage,
   TaskDependencies,
+  TaskDetailResponse,
   TaskRecord,
   TaskReviewers,
+  TaskReviewThreads,
 } from '@platform/contracts';
+import { acceptanceVerdictDataSchema } from '@platform/contracts';
 import { Link, useSearch } from '@tanstack/react-router';
 import { type ReactElement, useState } from 'react';
 import {
@@ -327,6 +335,199 @@ export const reviewersBasisText = (reviewers: TaskReviewers | null): string => {
     ? ' More were routed than one merge request may carry.'
     : '';
   return `${reviewers.handles.join(', ')}, from ${source}.${unresolved}${truncated}`;
+};
+
+type StageRow = TaskDetailResponse['stages'][number];
+
+/**
+ * The row of a stage's **latest** attempt, or `null` when the task never entered it (WP-46).
+ *
+ * The Checks panel's *CI green* and *rebase status* are the two gates' own rows: WP-55 closes a
+ * gate's row with its verdict when it settles, and WP-46 closes it `failed` when it escalates, so
+ * the row is the verdict and nothing here re-derives one from events. The latest attempt, because a
+ * gate is re-entered after every implementation loop and after every move of the default branch —
+ * an earlier attempt's `pass` says nothing about the head the merge request has now.
+ */
+export const latestStageRow = (stages: readonly StageRow[], stage: string): StageRow | null =>
+  stages
+    .filter((row) => row.stage === stage)
+    .reduce<StageRow | null>(
+      (latest, row) => (latest === null || row.attempt >= latest.attempt ? row : latest),
+      null,
+    );
+
+/**
+ * One gate's row as a value (WP-46). Five answers and none of them a tick drawn for a gate that
+ * never ran: `not reached` is no row at all, `checking` a row still open, and an escalation names
+ * the word its row was closed with (`undecided`, `unsupported`, `converged`) rather than reading
+ * as a failure of the change.
+ */
+export const gateValueText = (
+  row: StageRow | null,
+  words: { readonly pass: string; readonly fail: string },
+): string => {
+  if (row === null) {
+    return 'not reached';
+  }
+  switch (row.state) {
+    case 'running':
+      return 'checking';
+    case 'completed':
+      return row.outcome === 'pass' ? words.pass : row.outcome === 'fail' ? words.fail : 'passed';
+    case 'returned':
+      return `${words.fail}, sent back`;
+    case 'failed':
+      return `escalated${row.outcome === null ? '' : ` (${row.outcome})`}`;
+    default:
+      return row.state;
+  }
+};
+
+/** Which attempt the value is about, and when it was decided — platform facts only. */
+export const gateBasisText = (row: StageRow | null, gate: string): string => {
+  if (row === null) {
+    return `This task has not entered ${gate}.`;
+  }
+  const attempt = row.attempt > 1 ? `attempt ${row.attempt}` : 'first attempt';
+  return row.exited_at === null
+    ? `${gate}, ${attempt}, still deciding.`
+    : `${gate}, ${attempt}, decided ${formatDateTime(row.exited_at)}.`;
+};
+
+/**
+ * The review window's reading of the merge request's human threads (WP-46, backlog 95 item 3).
+ * `null` is *the window has not read them*, which is never drawn as `0 open`.
+ */
+export const reviewThreadsValueText = (threads: TaskReviewThreads | null): string =>
+  threads === null ? 'not read' : `${threads.open} open · ${threads.resolved} resolved`;
+
+export const reviewThreadsBasisText = (threads: TaskReviewThreads | null): string =>
+  threads === null
+    ? 'The review window reads the merge request’s threads when a human comments on it while the task waits for merge; nobody has yet.'
+    : `Read by the review window at ${formatDateTime(threads.checked_at)}; a thread is open while it is resolvable, unresolved and has a human note.`;
+
+/** The latest `AcceptanceVerdict` among the task's artifacts — the newest version wins. */
+export const latestAcceptanceVerdict = (
+  artifacts: TaskDetailResponse['artifacts'],
+): TaskDetailResponse['artifacts'][number] | null =>
+  artifacts
+    .filter((artifact) => artifact.artifact_type === 'AcceptanceVerdict')
+    .reduce<TaskDetailResponse['artifacts'][number] | null>(
+      (latest, artifact) =>
+        latest === null || artifact.version > latest.version ? artifact : latest,
+      null,
+    );
+
+/** `k of n met`, with the other two statuses named when there are any. */
+export const criteriaValueText = (verdict: AcceptanceVerdictData): string => {
+  const count = (status: string) =>
+    verdict.criteria.filter((criterion) => criterion.status === status).length;
+  if (verdict.criteria.length === 0) {
+    return 'none judged';
+  }
+  const others = [
+    count('not_met') === 0 ? null : `${count('not_met')} not met`,
+    count('untestable') === 0 ? null : `${count('untestable')} untestable`,
+  ].filter((part) => part !== null);
+  return `${count('met')} of ${verdict.criteria.length} met${others.length === 0 ? '' : `, ${others.join(', ')}`}`;
+};
+
+/**
+ * Each criterion with a key for the list. A criterion id is model output and may repeat, so the key
+ * is its position in the verdict — stable, because an artifact version is immutable (technical/02).
+ */
+const keyedCriteria = (verdict: AcceptanceVerdictData) =>
+  verdict.criteria.map((criterion, position) => ({ key: `criterion-${position}`, criterion }));
+
+const CRITERION_STATUS: Readonly<Record<string, string>> = {
+  met: 'met',
+  not_met: 'not met',
+  untestable: 'untestable',
+};
+
+/**
+ * **Business verdict** and **acceptance criteria met** (WP-46, backlog 95 items 4 and 5): the
+ * latest `AcceptanceVerdict`'s own `verdict` and `criteria[]`, read through the artifact route
+ * WP-52 built (`GET /api/artifacts/:id`) — a field that already exists, not a derivation.
+ *
+ * The body is model output (BD-022): each criterion's id and evidence is rendered through
+ * `UntrustedText`. A body the route refuses — an artifact stored before redaction existed, answered
+ * `409 artifact_not_redacted` — is named as such rather than drawn as "no verdict", and a body that
+ * does not parse as an `AcceptanceVerdict` says so rather than guessing at its fields.
+ */
+const AcceptanceChecks = ({
+  taskId,
+  artifacts,
+}: {
+  readonly taskId: string;
+  readonly artifacts: TaskDetailResponse['artifacts'];
+}): ReactElement => {
+  const latest = latestAcceptanceVerdict(artifacts);
+  const body = useArtifactBody(taskId, latest?.id ?? null);
+  const verdictDefinition =
+    'The business review’s verdict on this change, from its latest Acceptance Verdict (product/04).';
+  const criteriaDefinition =
+    'The acceptance criteria the business review judged, from the same verdict, each with the reviewer’s evidence.';
+  if (latest === null) {
+    return (
+      <>
+        <Metric label="Business verdict" value="no verdict" definition={verdictDefinition} />
+        <Metric label="Acceptance criteria" value="not judged" definition={criteriaDefinition} />
+        <p className="-mt-2 text-[11px] text-fg-muted">
+          No business review has produced an Acceptance Verdict on this task.
+        </p>
+      </>
+    );
+  }
+  if (body.isPending) {
+    return (
+      <>
+        <Metric label="Business verdict" value="reading…" definition={verdictDefinition} />
+        <Metric label="Acceptance criteria" value="reading…" definition={criteriaDefinition} />
+      </>
+    );
+  }
+  const parsed = body.isError ? null : acceptanceVerdictDataSchema.safeParse(body.data.data);
+  if (parsed === null || !parsed.success) {
+    const why = body.isError
+      ? `The Acceptance Verdict v${latest.version} was not served: ${String(body.error)}`
+      : `The Acceptance Verdict v${latest.version} does not read as one, so nothing is shown from it.`;
+    return (
+      <>
+        <Metric label="Business verdict" value="unavailable" definition={verdictDefinition} />
+        <Metric label="Acceptance criteria" value="unavailable" definition={criteriaDefinition} />
+        <p className="-mt-2 text-[11px] text-fg-muted">
+          <UntrustedText value={why} />
+        </p>
+      </>
+    );
+  }
+  const verdict = parsed.data;
+  return (
+    <>
+      <Metric
+        label="Business verdict"
+        value={verdict.verdict === 'approve' ? 'approved' : 'changes requested'}
+        definition={verdictDefinition}
+      />
+      <p className="-mt-2 text-[11px] text-fg-muted">{`Acceptance Verdict v${latest.version}.`}</p>
+      <Metric
+        label="Acceptance criteria"
+        value={criteriaValueText(verdict)}
+        definition={criteriaDefinition}
+      />
+      {verdict.criteria.length === 0 ? null : (
+        <ul className="-mt-1 flex flex-col gap-0.5">
+          {keyedCriteria(verdict).map(({ key, criterion }) => (
+            <li key={key} className="text-[11px] text-fg-muted">
+              {`${CRITERION_STATUS[criterion.status] ?? criterion.status} · `}
+              <UntrustedText value={`${criterion.id} — ${criterion.evidence}`} />
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
 };
 
 /** Seven characters, the way git prints one; the full sha is on the merge request. */
@@ -719,6 +920,8 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
   // task's own artifacts, and a link that outlived the row is a closed panel.
   const openArtifactId = artifacts.find((artifact) => artifact.id === search.artifact)?.id ?? null;
   const openQuestions = questions.filter((question) => question.status === 'open');
+  const ciGate = latestStageRow(stages, 'ci_gate');
+  const rebaseGate = latestStageRow(stages, 'rebase_gate');
   const pendingApprovals = approvals.filter((approval) => approval.status === 'pending');
 
   return (
@@ -1047,6 +1250,35 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
             definition="Plan, budget, knowledge or rework approvals awaiting a maintainer."
           />
           {/*
+            **The two gates' own verdicts** (WP-46, backlog 95 items 1 and 2, on WP-55's rows). The
+            value is the latest attempt's row — `completed` with the gate's word, `returned` when it
+            sent the task back, `failed` with the word an escalation closed it with — and never a
+            tick for a gate the task has not reached.
+          */}
+          <Metric
+            label="CI status"
+            value={gateValueText(ciGate, { pass: 'green', fail: 'red' })}
+            definition="The CI gate's verdict on the merge request's head, from the provider's own pipeline (product/04 S4); an escalation names the reason the gate could not decide."
+          />
+          <p className="-mt-2 text-[11px] text-fg-muted">{gateBasisText(ciGate, 'ci_gate')}</p>
+          <Metric
+            label="Rebase status"
+            value={gateValueText(rebaseGate, { pass: 'up to date', fail: 'conflicts' })}
+            definition="The rebase gate's verdict: whether the merge request merges cleanly onto the default branch as it is now (BD-030). It is checked again every time the default branch moves."
+          />
+          <p className="-mt-2 text-[11px] text-fg-muted">
+            {gateBasisText(rebaseGate, 'rebase_gate')}
+          </p>
+          <Metric
+            label="Review threads"
+            value={reviewThreadsValueText(task.review_threads)}
+            definition="Human review threads on the merge request, as BD-007's review window last read them: open threads send the task back to Implementation with the reviewers' comments."
+          />
+          <p className="-mt-2 text-[11px] text-fg-muted">
+            {reviewThreadsBasisText(task.review_threads)}
+          </p>
+          <AcceptanceChecks taskId={taskId} artifacts={artifacts} />
+          {/*
             **The coverage delta** (WP-39, product/18:38 and product/10:38's Checks item). The value
             is four different answers and never a zero standing in for a missing number
             (`coverageValueText`); the line beneath names the base it was measured against, because a
@@ -1132,31 +1364,24 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
             </div>
           </div>
           {/*
-            **The census of what this panel does not answer** (WP-38, criterion 5).
+            **The census of what this panel does not answer** (WP-38, criterion 5; WP-46).
 
-            product/10:38 lists eleven merge-readiness checks and this panel renders five of them:
-            coverage delta, dependencies, risk classes and required reviewers, budget against the
-            estimate, and questions pending. The other six are named here **with what exists for
-            each** — rather than drawn as empty ticks that read as passed (standing rule 16) — and
-            the list is held to product/10:38 **in a test** rather than in this comment, so it
-            cannot go stale the way the sentence it replaces did:
-            `apps/web/src/features/checks-panel.test.tsx` › "the Checks panel against product/10:38".
+            product/10:38 lists eleven merge-readiness checks and this panel renders ten of them.
+            The one it does not is named here **with its reason** rather than drawn as an empty tick
+            that reads as passed (standing rule 16), and the list is held to product/10:38 **in a
+            test** rather than in this comment, compared both ways — an item that starts working and
+            stays listed here fails it: `apps/web/src/features/checks-panel.test.tsx`.
 
-            That sentence said the pipeline producing CI and rebase status "lands with WP-15 and
-            WP-38". Both shipped — the CI gate settles from `ci.pipeline.finished` (WP-15) and the
-            rebase gate records `task.rebase.checked` (WP-26) — so what is missing is not a pipeline
-            but a **projection**: nothing on this screen's DTO carries either, and no work package
-            owns adding one (standing rule 83: a fix is what makes the old sentence false).
+            The tamper check is **not** a projection somebody forgot: it is BD-024's gate — a
+            comparison of the change's paths against the plan's declared exceptions, with a stored
+            result — and nothing in this build produces that result. It is a work package of its
+            own, and WP-46, which brought the other five items onto this panel, deliberately does
+            not build it.
           */}
           <p className="text-[11px] text-fg-muted">
-            Not on this panel: acceptance criteria met, CI green, rebase status, review threads
-            open/resolved, business verdict, tamper check. The pipeline produces four of them and
-            this screen does not read them — the CI gate settles from the provider's own pipeline
-            event (WP-15), the rebase gate records every check (WP-26), the review window counts
-            unresolved threads (BD-007), and both verdicts are artifacts in the tab beside this one.
-            Acceptance criteria are written into the Refined Spec and judged in a verdict, and the
-            tamper check (BD-024) has no producer at all. They are absent rather than shown as
-            passing.
+            Not on this panel: tamper check. It is BD-024’s gate — comparing the paths this change
+            touches with the exceptions its plan declared, and storing the result — and nothing in
+            this build produces that result yet, so it is absent rather than shown as passing.
           </p>
         </Card>
 

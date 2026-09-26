@@ -65,6 +65,7 @@ import {
   retryOnTaskConflict,
   TaskConflictExhaustedError,
 } from './task-conflict.js';
+import { closeParkedStageRow } from './transitions.js';
 
 /**
  * The floor under a re-arm, in milliseconds.
@@ -296,6 +297,7 @@ const expireTakeOver = async (
             context,
           );
           await options.store.tasks.save(scope.tx, { ...stored, task: escalated.aggregate });
+          await closeParkedStageRow(options.store, scope.tx, escalated, 'take_over.expired');
           await scope.events.append(escalated.events);
           return { kind: 'expired' };
         }),

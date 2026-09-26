@@ -44,6 +44,7 @@ import type {
   TaskDependencies,
   TaskMode,
   TaskReviewers,
+  TaskReviewThreads,
   TaskStageExitState,
   TicketRef,
   TicketSnapshot,
@@ -157,6 +158,15 @@ export interface StoredTask {
    * record, because no call is made when nothing resolved.
    */
   readonly requiredReviewers: TaskReviewers | null;
+  /**
+   * The merge request's human review threads, open and resolved, as BD-007's review window last read
+   * them (product/10:38, WP-46, migration 0048).
+   *
+   * Written by {@link TaskRepository.saveReviewThreads} from the `mr.comment.debounce` job and by
+   * nothing else. `null` means **the window has not read them** — no human has commented while the
+   * task waited at `ready_for_merge` — which is a different fact from a record whose `open` is zero.
+   */
+  readonly reviewThreads: TaskReviewThreads | null;
   /**
    * The human who asked for this task — step **three** of product/19:138's reviewer precedence.
    *
@@ -565,6 +575,21 @@ export interface TaskRepository {
    */
   saveRequiredReviewers(tx: Transaction, taskId: Id, reviewers: TaskReviewers): Promise<void>;
   /**
+   * Writes **only** `review_threads` — the eighth narrow writer (WP-46, migration 0048).
+   *
+   * Written by BD-007's review window (`mr.comment.debounce`), which read every discussion on the
+   * merge request and until WP-46 kept only a sentence about them. The window is a job that runs
+   * beside the stage executor's transactions, so a whole-row `save` from there would put back the
+   * state, the stage and the cost as they were when it started (standing rule 79). One column, one
+   * statement, no version bump — `save` does not name this column.
+   *
+   * Whole-record replacement: each window is a new reading of the same threads, and the two counts
+   * and the instant have to move together.
+   *
+   * @throws when the task does not exist, like `save` and the other narrow writes.
+   */
+  saveReviewThreads(tx: Transaction, taskId: Id, threads: TaskReviewThreads): Promise<void>;
+  /**
    * Adds a run's spend to `tasks.cost_actual` — the third narrow writer, and the first that is
    * **not** a read-modify-write at all (WP-31).
    *
@@ -621,6 +646,33 @@ export interface TaskRepository {
       readonly outcome: string;
       readonly returnReason: string | null;
       readonly returnedTo: Slug | null;
+    },
+  ): Promise<void>;
+  /**
+   * Closes a stage row **that is still open** as `failed`, because its attempt can no longer
+   * resume — the task was parked there, a new attempt was entered, the task was cancelled or
+   * finished (WP-46, PROGRESS backlogs 160 and 212) — and does nothing to a row that is already
+   * closed. The `outcome` says which ending it was.
+   *
+   * The conditional is the whole difference from {@link recordStageExited}: such an ending is the
+   * last word on an attempt only when nothing closed it first. An agent stage's row is closed by
+   * the stage executor (with its verdict, or `failed`) before any escalation that follows, and a
+   * gate the platform settled and then could not move past (an illegal transition, caught and
+   * escalated) has already recorded its verdict — overwriting either would replace what the stage
+   * decided with what the task did next. So the write is `where state = 'running'`, and a closed
+   * row keeps its outcome. `return_reason` carries the escalation's reason with no target, as the
+   * executor's `failed` rows do; `lastReturnReason` never reads a row that is not a return.
+   *
+   * The invariant this serves is stated once, at `closeLeftStage` in `transitions.ts`.
+   */
+  closeOpenStage(
+    tx: Transaction,
+    entry: {
+      readonly taskId: Id;
+      readonly stage: Slug;
+      readonly attempt: number;
+      readonly outcome: string;
+      readonly reason: string;
     },
   ): Promise<void>;
   /**

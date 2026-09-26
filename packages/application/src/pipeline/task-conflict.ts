@@ -36,6 +36,7 @@ import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import type { PipelineStore } from './store.js';
+import { closeParkedStageRow } from './transitions.js';
 
 /**
  * How many times a refused write is re-read and re-decided before the task is escalated.
@@ -154,6 +155,7 @@ export const escalateTaskAfterConflict = async (
             options.context(stored.task.id),
           );
           await options.store.tasks.save(scope.tx, { ...stored, task: escalated.aggregate });
+          await closeParkedStageRow(options.store, scope.tx, escalated, 'write_conflict');
           await scope.events.append(escalated.events);
         } catch (error) {
           if (!(error instanceof IllegalTransitionError)) {

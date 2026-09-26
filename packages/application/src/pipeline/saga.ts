@@ -92,7 +92,7 @@ import {
 import type { PipelineStore, StoredTask } from './store.js';
 import { INITIAL_TASK_VERSION, PIPELINE_ACTOR } from './store.js';
 import { readTicketSnapshot } from './ticket-snapshot.js';
-import { applyDecision } from './transitions.js';
+import { applyDecision, closeParkedStageRow, ESCALATED_OUTCOME } from './transitions.js';
 import { reviewFindingSignature, verdictReturnReason } from './verdicts.js';
 import { statusMappingHandler, workpadHandler } from './workpad.js';
 
@@ -186,7 +186,8 @@ const step = async (
  * is the returning stage's **latest** of its declared type: the stage executor stored it in the
  * transaction that completed the stage, which is what appended the event this step reacts to.
  * `verdictReturnReason` states the cap and the redaction; a verdict with nothing to say keeps the
- * interpreter's words. The human-comment half of 159 (a count of threads, not their text) is WP-46's.
+ * interpreter's words. The human-comment half of 159 is WP-46's, in the review window: its reason is
+ * the threads' own text, not their count (`review-threads.ts`).
  */
 const withVerdictFindings = async (
   options: PipelineSagaOptions,
@@ -481,6 +482,7 @@ export const runIntakeCheck = async (
       coverage: null,
       dependencies: null,
       requiredReviewers: null,
+      reviewThreads: null,
       // `tasks.requested_by_user_id` has no writer: a ticket the pick-up rule matched was not
       // requested by anybody the platform can name (`StoredTask.requestedByUserId` says what that
       // costs the reviewer fallback).
@@ -500,6 +502,7 @@ export const runIntakeCheck = async (
         contextFor(options, created.aggregate.id, causeEventId),
       );
       await options.store.tasks.save(scope.tx, { ...stored, task: escalated.aggregate });
+      await closeParkedStageRow(options.store, scope.tx, escalated, ESCALATED_OUTCOME);
       await scope.events.append([...created.events, ...escalated.events]);
       return null;
     }
@@ -694,6 +697,7 @@ const convergenceEscalation = async (
     contextFor(options, stored.task.id, context.event.event.id),
   );
   await options.store.tasks.save(context.scope.tx, { ...stored, task: escalated.aggregate });
+  await closeParkedStageRow(options.store, context.scope.tx, escalated, 'converged');
   await context.emit(escalated.events);
   return true;
 };
@@ -1120,6 +1124,7 @@ const questionHandler = (options: PipelineSagaOptions): EventHandler => ({
         commandContext,
       );
       await options.store.tasks.save(context.scope.tx, { ...stored, task: escalated.aggregate });
+      await closeParkedStageRow(options.store, context.scope.tx, escalated, 'question.expired');
       await context.emit(escalated.events);
       return;
     }
@@ -1215,6 +1220,7 @@ const approvalHandler = (options: PipelineSagaOptions): EventHandler => ({
         commandContext,
       );
       await options.store.tasks.save(context.scope.tx, { ...stored, task: refused.aggregate });
+      await closeParkedStageRow(options.store, context.scope.tx, refused, 'budget.rejected');
       await context.emit(refused.events);
       return;
     }
@@ -1271,6 +1277,7 @@ const approvalHandler = (options: PipelineSagaOptions): EventHandler => ({
       commandContext,
     );
     await options.store.tasks.save(context.scope.tx, { ...stored, task: escalated.aggregate });
+    await closeParkedStageRow(options.store, context.scope.tx, escalated, 'approval.expired');
     await context.emit(escalated.events);
   },
 });
@@ -1366,6 +1373,7 @@ const mergeRequestHandler = (options: PipelineSagaOptions): EventHandler => ({
         contextFor(options, stored.task.id, event.id),
       );
       await options.store.tasks.save(context.scope.tx, { ...stored, task: escalated.aggregate });
+      await closeParkedStageRow(options.store, context.scope.tx, escalated, 'mr.closed');
       await context.emit(escalated.events);
       return;
     }

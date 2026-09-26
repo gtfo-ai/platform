@@ -233,6 +233,7 @@ export const startProjectDiscovery = async (
       coverage: null,
       dependencies: null,
       requiredReviewers: null,
+      reviewThreads: null,
       requestedByUserId: null,
     };
     await options.store.tasks.insert(scope.tx, stored);

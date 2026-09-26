@@ -122,6 +122,10 @@ const EXPECTED_OWNERSHIP: Readonly<Record<string, readonly string[]>> = {
     // `saveRequiredReviewers` — who the routing asked for a review from, including the handles it
     // could not resolve (WP-38, the record WP-37's duty had nowhere to put).
     'required_reviewers',
+    // `saveReviewThreads` — the merge request's human review threads, open and resolved, as BD-007's
+    // review window counted them (WP-46, migration 0048). The eighth narrow writer, same reason
+    // again: the window is the `mr.comment.debounce` job, which runs beside the stage executor.
+    'review_threads',
     // `addSpend` — the one column two *processes* write, and therefore the one whose statement is
     // an increment rather than an assignment (WP-31). It left `save`'s list with this row: the ask
     // executor adds a run's spend from a process that runs beside the stage executor, and the

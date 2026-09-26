@@ -1,0 +1,25 @@
+-- 0048 — the merge request's human review threads, open and resolved (WP-46, PROGRESS backlog 95
+-- item 3): product/10:38's *"review threads open/resolved"* on the Checks panel.
+--
+-- BD-007's review window (`mr.comment.debounce`) reads every discussion on the merge request when
+-- it closes and has always counted the unresolved ones — the count decided whether the task went
+-- back to Implementation, and then it became a sentence and was stored nowhere a task screen could
+-- read. This column is where the window leaves it, written by the job that already computed it.
+--
+-- What the column holds (`taskReviewThreadsSchema`, parsed before every write, for the reason every
+-- `jsonb` column on `tasks` is — the column accepts any document and the disagreement would
+-- surface at the reader):
+--
+--   {"open": 2, "resolved": 1, "checked_at": "…"}
+--
+-- `null` is a third answer beside the record's own: **the window has not read the threads**, because
+-- no human has commented on this task's merge request while it waited at `ready_for_merge`. It is
+-- not `{"open": 0, …}`, which is the window saying it read them and found none open (standing rule
+-- 18). Only counts are stored here — the threads' text is untrusted provider text (BD-022) and goes,
+-- redacted and bounded, into the return reason the window writes when it sends the task back.
+--
+-- **One writer** (`TaskRepository.saveReviewThreads`), and not the whole-row `save`: the partition
+-- `tasks-column-ownership.test.ts` holds off disk. The window runs as a job beside the stage
+-- executor's transactions, which is the reason every narrow writer before it exists (standing rule
+-- 79). Nullable with no default: `null` is the truth for every row this migration finds.
+alter table tasks add column review_threads jsonb;

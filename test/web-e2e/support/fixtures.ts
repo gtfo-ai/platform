@@ -233,6 +233,8 @@ const baseTask = {
     truncated: false,
     routed_at: now,
   },
+  /** WP-46: the review window's reading of the merge request's human threads. */
+  review_threads: { open: 2, resolved: 1, checked_at: now },
   /**
    * WP-41, PROGRESS backlog 63: the board's conflict badge, with a peer ticket key that carries a
    * script tag — the key is provider text (BD-022) and the badge renders it *and* puts it in a
@@ -289,6 +291,7 @@ export const bugTask = taskRecordSchema.parse({
   // request has not been routed, so *"not checked"* and *"not routed"* are rendered somewhere.
   dependencies: null,
   required_reviewers: null,
+  review_threads: null,
   // …and the same both-ways rule for WP-41's field: this task was never compared, so its card
   // carries no badge. Since WP-59 a warned *pair* carries one on both cards (PROGRESS backlog 65),
   // so a card with none is a task no gate has compared against an overlapping one.

@@ -453,6 +453,34 @@ export const taskReviewersSchema = z.strictObject({
 export type TaskReviewers = z.infer<typeof taskReviewersSchema>;
 
 /**
+ * The merge request's human review threads as the review window last read them — product/10:38's
+ * *"review threads open/resolved"* (WP-46, PROGRESS backlog 95 item 3, migration 0048).
+ *
+ * **Written where the count was already computed**: BD-007's review window
+ * (`mr.comment.debounce`, `packages/application/src/pipeline/jobs.ts`) reads every discussion on
+ * the merge request when it closes, and until WP-46 it turned the number into a sentence and
+ * stored it nowhere a task screen could read. It is the window's reading, not a live mirror of
+ * the provider: the window opens only when a human comment arrives on a task at `ready_for_merge`,
+ * so a task nobody has commented on carries `null` — *"the platform has not read the threads"* —
+ * which is a different fact from `{ open: 0, resolved: 0 }` (*"it read them and there were none"*,
+ * standing rule 18).
+ *
+ * The two counts use the window's own predicate, so the panel and the return decision cannot
+ * disagree: `open` is a thread that is resolvable, not resolved, and has at least one note a human
+ * wrote (a provider system note alone is not a review thread); `resolved` is a resolvable thread
+ * that is resolved. A plain, non-resolvable comment is in neither — it is a remark, not a thread a
+ * reviewer can close (`discussionSchema` states why the two flags are distinct).
+ */
+export const taskReviewThreadsSchema = z.strictObject({
+  open: z.int().nonnegative(),
+  resolved: z.int().nonnegative(),
+  /** When the window read them — the platform's clock, like every other `*_at` it writes. */
+  checked_at: isoDateTimeSchema,
+});
+
+export type TaskReviewThreads = z.infer<typeof taskReviewThreadsSchema>;
+
+/**
  * The peer merge request this task overlaps with — product/04 S6b's *"the board warns when two
  * active tasks touch the same files"* and product/18's *"touches the same files as PROJ-98"*
  * (WP-26's event, WP-41's field; PROGRESS backlog **63**).
@@ -527,6 +555,12 @@ export const taskRecordSchema = z.strictObject({
    * rather than about the platform.
    */
   required_reviewers: taskReviewersSchema.nullable(),
+  /**
+   * `tasks.review_threads` — the human review threads on the merge request, open and resolved, as
+   * BD-007's review window last read them (WP-46). `null` means **the window has not read them**:
+   * no human has commented on this task's merge request while it waited at `ready_for_merge`.
+   */
+  review_threads: taskReviewThreadsSchema.nullable(),
   /**
    * The latest `task.conflict.warned` for this task, or `null` (WP-41, PROGRESS backlog **63**).
    *

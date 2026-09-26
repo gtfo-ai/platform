@@ -41,6 +41,11 @@ import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
 import { createGateEvaluator, MAX_GATE_CHECKS } from './gates.js';
 import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
 import { REBASE_GATE_STAGE, recordRebaseCheck } from './rebase.js';
+import {
+  isOpenReviewThread,
+  reviewThreadCounts,
+  reviewThreadsReturnReason,
+} from './review-threads.js';
 import type { PipelineSagaOptions } from './saga.js';
 import type { StageExecutionJob, StageExecutor } from './stage-executor.js';
 import type { StoredTask } from './store.js';
@@ -576,6 +581,7 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
       if (checks >= MAX_GATE_CHECKS) {
         await settle(options, request, {
           kind: 'escalate',
+          outcome: 'undecided',
           reason: `the "${request.stage}" gate could not be decided after ${checks} attempts: ${result.detail}`,
           blockerBrief:
             `The "${request.stage}" gate for this task still has no answer after ${checks} checks (${result.detail}). ` +
@@ -596,6 +602,7 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
     if (result.kind === 'unsupported') {
       await settle(options, request, {
         kind: 'escalate',
+        outcome: 'unsupported',
         reason: result.detail,
         blockerBrief: `The platform cannot evaluate the "${request.stage}" gate: ${result.detail}. Decide it yourself and hand the task back at the stage that should run next.`,
       });
@@ -654,7 +661,16 @@ export type GateSettlement =
        */
       readonly ciSignature?: string;
     }
-  | { readonly kind: 'escalate'; readonly reason: string; readonly blockerBrief: string };
+  | {
+      readonly kind: 'escalate';
+      /**
+       * The word the gate's row is closed `failed` with (WP-46, backlog 160): `undecided` (still
+       * pending after `MAX_GATE_CHECKS`) or `unsupported` (the project's providers cannot answer).
+       */
+      readonly outcome: string;
+      readonly reason: string;
+      readonly blockerBrief: string;
+    };
 
 /** {@link settle}, for a duty that settles a gate outside `stage.execute` (`ci-settle.ts`). */
 export const settleGate = async (
@@ -718,6 +734,13 @@ const settle = async (
         stored,
         decision,
         ...(signal.kind === 'gate_settled' && converged === null ? { signal } : {}),
+        // What the gate's row is closed with when this settlement parks the task instead of moving
+        // it (WP-46, backlog 160) — all three of the gate's escalations come through here.
+        ...(signal.kind === 'escalate'
+          ? { escalationOutcome: signal.outcome }
+          : converged === null
+            ? {}
+            : { escalationOutcome: 'converged' }),
         context: {
           ids: options.ids,
           actor: { kind: 'system', component: 'pipeline' },
@@ -834,22 +857,37 @@ export const reviewWindowHandler = (options: PipelineJobOptions): JobHandler<Rev
     }
 
     // The window closes outside any run, so the call's scope holds no minted credential (Q55).
-    const reads = gitReads(
-      await integrationsForProject(
-        options.integrations,
-        stored.task.projectId,
-        noRunScopedSecrets(),
-      ),
+    const integrations = await integrationsForProject(
+      options.integrations,
+      stored.task.projectId,
+      noRunScopedSecrets(),
     );
-    const discussions = await reads.discussions(stored.mr, {
+    const git = integrations.git;
+    if (git === null) {
+      // Nothing to read, and nothing to record: `{open: 0}` would say the threads were read.
+      logger.debug({ task_id: job.data.task_id }, 'review window has no git binding to read');
+      return;
+    }
+    const discussions = await gitReads(integrations).discussions(stored.mr, {
       projectId: stored.task.projectId,
       taskId: stored.task.id,
     });
-    const unresolved = discussions.filter(
-      (discussion) =>
-        discussion.resolvable &&
-        !discussion.resolved &&
-        discussion.notes.some((note) => !note.system),
+    const unresolved = discussions.filter(isOpenReviewThread);
+
+    /**
+     * **The count, kept where it was computed** (WP-46, PROGRESS backlog 95 item 3): the Checks
+     * panel's *"review threads open/resolved"*. Written on **every** ending of the window — a
+     * window that finds everything resolved is the reading a maintainer most wants to see — in a
+     * transaction of its own, through the narrow writer, because this job runs beside the stage
+     * executor (standing rule 79). Written before the return below so the two endings that do not
+     * return still record what they read.
+     */
+    await options.unitOfWork.transaction(async (scope) =>
+      options.store.tasks.saveReviewThreads(
+        scope.tx,
+        job.data.task_id,
+        reviewThreadCounts(discussions, options.clock.now()),
+      ),
     );
     if (unresolved.length === 0) {
       return;
@@ -873,6 +911,13 @@ export const reviewWindowHandler = (options: PipelineJobOptions): JobHandler<Rev
       return;
     }
 
+    const feedback = reviewThreadsReturnReason(unresolved, git.redactor);
+    if (feedback.redactions > 0) {
+      logger.info(
+        { task_id: job.data.task_id, redactions: feedback.redactions },
+        'redacted secrets from review comments before storing them as a return reason',
+      );
+    }
     const work = await inTaskTransaction(
       options,
       job.data.task_id,
@@ -887,7 +932,9 @@ export const reviewWindowHandler = (options: PipelineJobOptions): JobHandler<Rev
           kind: 'event',
           stage: current.task.currentStage ?? 'ready_for_merge',
           event: 'mr.review.comment',
-          detail: `${unresolved.length} unresolved review thread${unresolved.length === 1 ? '' : 's'}`,
+          // The reviewer's own words, not only their number (WP-46, the human half of backlog
+          // 159): redacted, one line per comment and bounded — `review-threads.ts` has the rules.
+          detail: feedback.reason,
         });
         const applied = await applyDecision({
           store: options.store,

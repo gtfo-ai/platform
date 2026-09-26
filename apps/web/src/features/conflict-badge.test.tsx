@@ -53,6 +53,7 @@ const task = (overrides: Partial<TaskRecord>): TaskRecord =>
     coverage: null,
     dependencies: null,
     required_reviewers: null,
+    review_threads: null,
     conflict: null,
     cost_actual_usd: 0,
     cost_estimated_usd: 0,
