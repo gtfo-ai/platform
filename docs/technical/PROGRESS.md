@@ -18,7 +18,7 @@
 > **"Architect ruling (M4, session 6)"** at the end of this file. This session is started with `/orchestrate`,
 > which loads `docs/technical/15-orchestrator-prompt.md`; that document, not a pasted prompt, is now the loop.
 
-**Session 8 — 2026-09-25.** `main` opened at **`c1cc951`**, tree clean, and every run on the last three heads read **completed success** — WP-53's `ci` `35879384310` and `image` `35879384479` (PENDING in session 7's note) included, with zero `release` runs. **WP-54 is DONE at `3288496`** (its `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success**; its docs commit `bdcfbe2` read `ci` `36165713727` and `image` `36165713682` **completed success**). **WP-74 is DONE at `91e0140`** (`ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs; the docs commit that carries this sentence has its own runs, **PENDING — read to `completed` before the next row**) — backlog 82 and 147 closed, `verify:e2e` green on this machine again. **Two majors had no owner and now do**: backlog **148** (a run's `/cache` is the whole mirror volume) as **WP-75** and **133** (the launcher cannot authenticate to git) as **WP-76**, both placed right after WP-74. Machine baseline: `docker volume ls | wc -l` = **102** (the two new volumes are the user's own `speedpuzzlingcz` postgres containers, not this repository's). **Three things for the next session.** (1) **The load gate, not the work, set the pace**: one-minute load was 20–175 for most of the day (Spotlight's `mds_stores` at ~250 % and the user's containers; this session's own processes were ~6 %), so the implementer spent six of its seven hours waiting — and its waits were **unbounded `until` loops** that each tool timeout orphaned: 25 of them, killed by the orchestrator after the user asked why 24 shells were running. **Every brief now says: a load check is five readings a minute apart, then a report — never an unbounded loop, never a background shell left behind.** (2) **`verify:e2e` is red on this machine for a reason that is not the tree**: backlog **147**, reproduced on a clean `main` worktree; until WP-74 closes it, every row's e2e verdict carries that one named failure and the rest is read as the verdict. A likely cause (the refiner's, unmeasured) is macOS writing into the bind-backed control volume between the two teardown helpers. (3) **A floor list is an enumeration**: WP-54's review found seven, then five, spellings past it, and BD-025 now says so rather than claiming a boundary. **WP-75 is DONE at `1b0af26`** (`ci` `36200943398` and `image` `36200943454` **completed success**; WP-74's docs commit `6972cbc` read `ci` `36175963207` and `image` `36175963205` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 148 and 152 closed. **The TD-028 amendment WP-76 needed exists** (the architect's, session 8: the runner mints a run-scoped credential through `IntegrationActionExecutor` and passes it on the create request; Q98 filed). **WP-76 is DONE at `52495cb`** (`ci` `36208771351` and `image` `36208771353` **completed success**; WP-75's docs commit `355f444` read `ci` `36201525827` and `image` `36201525825` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 133 closed: a private repository mirrors, the developer stage can push, and the run's credential is minted, audited and revoked. **WP-55 is DONE at `a72aaa2`** (`ci` `36216963170` and `image` `36216963211` **completed success**). **CI went red on WP-77's docs commit `2ab70eb`** (`ci` `36213166240`, `integration` job; `image` `36213166173` success): `test/integration/stats/stats-backfill.integration.test.ts`, untouched since WP-41, pins a row order sorted by day, and its story started three hours before *now* — a run between 03:00 and 03:30 UTC (this one: 02:55) splits it across midnight. **Deterministic by time of day, not by load**; fixed at `ae65e2f` by anchoring the story to noon UTC (`ci` `36217053525` and `image` `36217053489` **completed success**). **Two machine-rule breaches by the orchestrator this session, recorded rather than hidden**: WP-77's last `verify` started at a one-minute load of 34, and this fix's single integration file at 20 — both without the gate. **WP-77 is DONE at `2481f09`** (`ci` `36212658371` and `image` `36212658429` **completed success**; WP-76's docs commit `e0d2790` read `ci` `36209347069` and `image` `36209347052` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 155 closed. **WP-56 is DONE at `e0e877d`** (`ci` `36221858072` and `image` `36221858076` **completed success**; WP-55's docs commit `6083512` read `ci` `36217921241` and `image` `36217921292` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **Next: WP-57**, then the M4 table's order. **Session pace**: seven rows (WP-54, 74, 75, 76, 77, 55, 56) in about 28 h, roughly half of it the load gate. **Pace this session**: four rows (WP-54, 74, 75, 76) plus the architect's WP-76 decision in about 17 h 30 min, of which the load gate held the tiers for roughly half; the three security rows each took three review rounds because each round found a way past the one before. Pace: WP-54 took about 8 h 20 min, most of it waiting on load; WP-74 about 2 h 30 min at a load that allowed its tiers.
+**Session 8 — 2026-09-25.** `main` opened at **`c1cc951`**, tree clean, and every run on the last three heads read **completed success** — WP-53's `ci` `35879384310` and `image` `35879384479` (PENDING in session 7's note) included, with zero `release` runs. **WP-54 is DONE at `3288496`** (its `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success**; its docs commit `bdcfbe2` read `ci` `36165713727` and `image` `36165713682` **completed success**). **WP-74 is DONE at `91e0140`** (`ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs; the docs commit that carries this sentence has its own runs, **PENDING — read to `completed` before the next row**) — backlog 82 and 147 closed, `verify:e2e` green on this machine again. **Two majors had no owner and now do**: backlog **148** (a run's `/cache` is the whole mirror volume) as **WP-75** and **133** (the launcher cannot authenticate to git) as **WP-76**, both placed right after WP-74. Machine baseline: `docker volume ls | wc -l` = **102** (the two new volumes are the user's own `speedpuzzlingcz` postgres containers, not this repository's). **Three things for the next session.** (1) **The load gate, not the work, set the pace**: one-minute load was 20–175 for most of the day (Spotlight's `mds_stores` at ~250 % and the user's containers; this session's own processes were ~6 %), so the implementer spent six of its seven hours waiting — and its waits were **unbounded `until` loops** that each tool timeout orphaned: 25 of them, killed by the orchestrator after the user asked why 24 shells were running. **Every brief now says: a load check is five readings a minute apart, then a report — never an unbounded loop, never a background shell left behind.** (2) **`verify:e2e` is red on this machine for a reason that is not the tree**: backlog **147**, reproduced on a clean `main` worktree; until WP-74 closes it, every row's e2e verdict carries that one named failure and the rest is read as the verdict. A likely cause (the refiner's, unmeasured) is macOS writing into the bind-backed control volume between the two teardown helpers. (3) **A floor list is an enumeration**: WP-54's review found seven, then five, spellings past it, and BD-025 now says so rather than claiming a boundary. **WP-75 is DONE at `1b0af26`** (`ci` `36200943398` and `image` `36200943454` **completed success**; WP-74's docs commit `6972cbc` read `ci` `36175963207` and `image` `36175963205` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 148 and 152 closed. **The TD-028 amendment WP-76 needed exists** (the architect's, session 8: the runner mints a run-scoped credential through `IntegrationActionExecutor` and passes it on the create request; Q98 filed). **WP-76 is DONE at `52495cb`** (`ci` `36208771351` and `image` `36208771353` **completed success**; WP-75's docs commit `355f444` read `ci` `36201525827` and `image` `36201525825` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 133 closed: a private repository mirrors, the developer stage can push, and the run's credential is minted, audited and revoked. **WP-55 is DONE at `a72aaa2`** (`ci` `36216963170` and `image` `36216963211` **completed success**). **CI went red on WP-77's docs commit `2ab70eb`** (`ci` `36213166240`, `integration` job; `image` `36213166173` success): `test/integration/stats/stats-backfill.integration.test.ts`, untouched since WP-41, pins a row order sorted by day, and its story started three hours before *now* — a run between 03:00 and 03:30 UTC (this one: 02:55) splits it across midnight. **Deterministic by time of day, not by load**; fixed at `ae65e2f` by anchoring the story to noon UTC (`ci` `36217053525` and `image` `36217053489` **completed success**). **Two machine-rule breaches by the orchestrator this session, recorded rather than hidden**: WP-77's last `verify` started at a one-minute load of 34, and this fix's single integration file at 20 — both without the gate. **WP-77 is DONE at `2481f09`** (`ci` `36212658371` and `image` `36212658429` **completed success**; WP-76's docs commit `e0d2790` read `ci` `36209347069` and `image` `36209347052` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 155 closed. **WP-56 is DONE at `e0e877d`** (`ci` `36221858072` and `image` `36221858076` **completed success**; WP-55's docs commit `6083512` read `ci` `36217921241` and `image` `36217921292` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-57 is DONE at `933c58f`** (`image` success; `ci` success after one `--failed` rerun of an Alpine-mirror outage; WP-56's docs commit `f7c09c1` read `ci` `36222374356` and `image` `36222374355` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **Next: WP-58**, then the M4 table's order. **Session pace**: seven rows (WP-54, 74, 75, 76, 77, 55, 56) in about 28 h, roughly half of it the load gate. **Pace this session**: four rows (WP-54, 74, 75, 76) plus the architect's WP-76 decision in about 17 h 30 min, of which the load gate held the tiers for roughly half; the three security rows each took three review rounds because each round found a way past the one before. Pace: WP-54 took about 8 h 20 min, most of it waiting on load; WP-74 about 2 h 30 min at a load that allowed its tiers.
 
 **Session 7 so far.** `main` opened at **`cc80fc3`**, tree clean, its `ci` `35114407808` and `image`
 `35114407731` both **completed success** with **zero `release` runs on the sha** — the first head to show
@@ -1761,7 +1761,7 @@ that row. The fallback rule is an engineering decision, not a product one; it ne
 > The compose-level statement **needs measurement** and needs a daemon (rule 66): nobody has yet requested
 > `/` against the built product image.
 
-### 37. **The KB health report is written nightly, ~~read by nobody~~ (read by `GET /api/projects/:id/kb/health` since WP-15h part 2 — an endpoint no screen calls yet), and cannot contain two of the findings its own documents promise** (the reader half **RESOLVED** at WP-15h part 2; the invalid-documents half TODO — **no work package owns it**; found by WP-18b and WP-18a, session 5)
+### 37. **The KB health report is written nightly, ~~read by nobody~~ (read by `GET /api/projects/:id/kb/health` since WP-15h part 2 — an endpoint no screen calls yet), and cannot contain two of the findings its own documents promise** (**RESOLVED** at `933c58f`, WP-57, session 8 (the remaining half) — the reader half **RESOLVED** at WP-15h part 2; the invalid-documents half TODO — **no work package owns it**; found by WP-18b and WP-18a, session 5)
 > **M4 (architect, session 6): folded into WP-57.**
 
 **What is wrong.** Two halves, both about the same report, and they have **different causes** — which is why
@@ -9182,6 +9182,135 @@ it builds the take-over and hand-back controls whose commands are signal (a), an
 **164**, the other *still taken over* definition — one row, one notion of a held task. Related: **69**,
 **164**.
 
+### 168. **The run-detail screen's "Documents" counts a tier-1 entry recorded `validated: false` as included and lists it unmarked beside the admitted ones — a second spelling of *admitted* that disagrees with the stats query and with the screen's own "Used"** (TODO, **small** — **read off the tree, not measured**; **live** since WP-57 (commit pending) for every run whose pack scored a `paths:`-scoped page, which in production is every such page — see **170**; latent before, because the endpoint never answered; proposed owner **WP-44** (refiner, session 8); found by WP-57, session 8)
+
+**What is wrong.** `apps/web/src/features/run-detail.tsx:296-311` renders `tier0.length + tier1.length`
+under the definition *"Knowledge-base documents included in this run's context."* and maps
+`[...tier0, ...tier1]` into one list with path and tokens and no other field. A tier-1 entry recorded
+`validated: false` was **never shown to the agent**: `assembleContextPack` records it and `continue`s
+before the count and budget checks (`packages/domain/src/knowledge/retrieval.ts:394-404`). Two readers
+of the same rows already say so: the stored `total_tokens` excludes it (WP-57's notes, *"the assembler
+does not count a tier-1 entry recorded `validated: false`"*), and the `kb_usage` query admits only
+`p.tier = 1 and p.validated` (`apps/server/src/queries/stats-queries.ts:427,441`). The screen is the
+third reader and the only one that counts it. Refiner addition, read off the same lines: a dropped
+entry is recorded **before** the `MAX_TIER1_DOCUMENTS` check, so the unvalidated rows are uncapped and
+the "Documents" figure can exceed the tier-1 cap; and the per-row tokens of the list no longer sum to
+"Used".
+
+**Evidence.** The WP-57 implementer, quoted: *"`apps/web/src/features/run-detail.tsx` renders `tier0.length +
+tier1.length` under "Knowledge-base documents included in this run's context"; a `validated: false`
+entry was never shown to the agent. Latent until WP-57 (the endpoint never answered); live now for every
+run with a `paths:`-scoped page, which in this build is **every** such page (no `headPaths`)."* Lines
+confirmed by the refiner; no tier renders an unvalidated entry (none was asked to).
+
+**What it costs to leave.** An operator judging a run's context — the purpose of the tab — is told a
+page was in the prompt that was not, on exactly the pages the author scoped most precisely. Small: the
+budget and "Used" figures are right, and the error is in the count and the list.
+
+**What "done" looks like.** **(1)** "Documents" counts tier 0 plus tier-1 entries with `validated: true`
+— the admitted set, the same rule the stats query uses (rule 41: one spelling), with the definition
+string saying so. **(2)** The unvalidated entries stay listed (they are the step-3 audit technical/07
+promises) but are **marked** *not admitted — its `paths:` did not resolve at HEAD*, and are not in the
+count. **(3)** ui tier: a pack with one tier-0, one validated and one unvalidated tier-1 entry renders
+"Documents" 2 and exactly one *not admitted* marker; the negative — an all-validated pack renders no
+marker. The `test/web-e2e` run-detail fixture gains one unvalidated entry.
+
+**Depends on / owner.** **WP-57** (commit pending, the endpoint that answers). **Proposed owner WP-44**
+(refiner, session 8): it already opens the run screen for criterion (2)'s take-over control and carries
+ui and web-e2e tiers; WP-73 would be the sweep's shape but promises to share no file with a screens row.
+Related: **170** (the cause of the liveness).
+
+### 169. **product/19 §10 defines KB usage over "runs with tier-1 items" and the build — deliberately, per WP-57's criterion 6 — measures it over refinement and spike runs only; the product row is the sentence that is wrong** (**RESOLVED** at `933c58f`, WP-57, session 8 (product/19:108 amended by the orchestrator) — TODO, **nit** — **working as designed**, the documentation is the defect; a product-doc amendment the **orchestrator** owns, no work package row; found by WP-57, session 8)
+
+**What is wrong.** `docs/product/19-operating-definitions.md:108` reads *"KB usage | runs whose tier-1
+items were cited / runs with tier-1 items | run_context_pack"*. `STATS_CATALOGUE.kb_usage`
+(`apps/server/src/queries/stats-metrics.ts:443-455`) computes it over *"the runs started in the period
+that produced a RefinedSpec or a ResearchReport — the only two artifacts that carry `kb_citations` …
+— and whose recorded context pack admitted at least one tier-1 knowledge document"*, and its first
+caveat says the other roles *"are left out of both sides rather than counted as misses (PROGRESS backlog
+112)"*. Two more differences the row does not state: *tier-1 items* in the build means **admitted**
+(`validated`) items, and the source is `run_context_pack` **joined to** `artifacts.kb_citations`, not
+the table alone. product/16:14's ≥ 80 % target is phrased over *"runs"* too; the metric's definition
+already says the target is about the subset.
+
+**Evidence.** The WP-57 implementer, quoted: *"`docs/product/19-operating-definitions.md:108` (KB usage =
+"runs whose tier-1 items were cited / runs with tier-1 items") is **narrower in the build** than in the
+product table — the denominator is only the runs that produce a citation-bearing artifact, per this
+row's criterion 6 — and the product row should say so."* The two strings above were read by the refiner.
+
+**What it costs to leave.** A reader of product/19 believes a published 80 % covers implementation and
+review runs; it covers two roles. Nit: the screen already carries the definition and the caveats.
+
+**What "done" looks like.** The orchestrator replaces the row's two right-hand cells. **Proposed text**
+(the refiner's; the recommendation is to amend, **not** to build a citation signal for the other roles
+— no document asks for one beyond this row's wording, and inferring citations from assistant text is
+technical/07 step 6's separate, unbuilt mechanism):
+
+> `| KB usage | refinement and spike runs (the two roles whose artifact carries kb_citations) whose recorded context pack admitted ≥ 1 tier-1 document and whose artifact cites one of those documents by vault path / refinement and spike runs whose recorded context pack admitted ≥ 1 tier-1 document; runs of every other role are in neither side | run_context_pack (admitted tier-1 rows) joined to artifacts.kb_citations |`
+
+and, optionally, product/16:14's target cell gains *"(over the subset product/19 §10 names)"*. Rule 83:
+nothing in code changes; `stats-metrics.ts`'s definition already says this.
+
+**Depends on / owner.** **WP-57** (commit pending). **No work package owns it**; it is the
+orchestrator's doc change and needs no row. Related: **112** (folded into WP-57).
+
+### 170. **technical/07 step 3's *"flag the document"* is not built — and it cannot be yet, because the planner hands the assembler no path at all: `headPaths` is absent and `touchedPaths` is `[]`, so in production a `paths:` glob neither scores a page (step 1) nor lets it survive validation (step 3)** (TODO, **small** for the flag, **small-to-major** for its cause — **read off the tree, not measured**; **live** on every run of every project whose vault carries a `paths:` frontmatter, which product/05's own lesson example does; **needs measurement** of how many pages in a real vault carry one; the cause is **not** in any earlier backlog entry — it lived in three sets of WP notes and a docblock; proposed owner **WP-58** (refiner, session 8); found by WP-57, session 8, the `touchedPaths` half added by the refiner)
+
+**What is wrong.** Three things, one consequence (product/05's *"glob used for precise injection"* is
+inert in production):
+- **The flag.** `docs/technical/07-knowledge-and-search.md:74` — *"drop items whose cited paths/symbols
+  no longer exist at HEAD; record `validated=false` in `run_context_pack` and flag the document."* WP-57
+  built the record; the amendment beneath it (`:76-80`) states *"Flag the document"* is **not** done: no
+  health finding is made from a failed validation.
+- **Why it cannot be done today — `headPaths`.** `createStageRunPlanner` passes `repoPaths` from
+  `options.headPaths`, which `apps/server` never supplies, so it is `[]`
+  (`packages/application/src/pipeline/planner.ts:835-841`, docblock `:519-535`), and
+  `validateAgainstHead` returns `false` for any candidate with a non-empty `paths`
+  (`packages/domain/src/knowledge/retrieval.ts:349-354`). Every `paths:`-scoped page is therefore
+  recorded unvalidated and never admitted; flagging it would flag **every** such page.
+- **The other empty input — `touchedPaths`** (refiner, read off the tree). The same call passes
+  `touchedPaths: []` unconditionally (`planner.ts:847`), so step 1's path match — *"documents whose
+  `paths` globs match any touched path → score 1.0"* (technical/07:72; inputs *"touched paths (from
+  plan/diff when available)"*, :71) — never fires in production, even at a stage whose plan artifact
+  names paths. A `paths:`-scoped page can reach the pack only by a trigger/text match, and is then
+  dropped by the bullet above. The retrieval tests populate `touchedPaths` (the WP-16 round-2 note:
+  *"the task's touched paths keep two `paths` matches in tier 1"*), so the tier that measures retrieval
+  runs a configuration production does not.
+
+**Evidence.** The WP-57 implementer, quoted: *"a failed validation produces no health finding. Blocked in
+substance on `StageRunPlannerOptions.headPaths` (absent in production), without which every
+`paths:`-scoped page would be flagged."* The `headPaths` absence was reported by WP-17 (*"a knowledge
+document carrying a `paths:` glob is recorded `validated: false` and never admitted"*) and again by
+WP-18a (*"What is missing is a caller, and it is not free — it is a second vault read per run, or a cache
+keyed by commit. Nobody owns it"*) — neither became a backlog entry. The fixture vault carries five
+`paths:` pages (`packages/application/src/testing/fixture-vault.ts:201,222,270,290,308`); product/05's
+lesson template carries one. **Not measured**: no tier runs the production planner over a vault with a
+`paths:` page and asserts it absent.
+
+**What it costs to leave.** The most precise targeting a knowledge author has is the one mechanism that
+never delivers, silently — the page is in git, in the index and in `kb_search`, and no agent is ever
+handed it unasked. The only trace is a `debug` log line and, since WP-57, an unvalidated row. Graded
+small-to-major because the size depends on how much of a real vault uses `paths:`, which is unmeasured.
+
+**What "done" looks like.** **(1)** `headPaths` has a production caller: the tracked set at the vault's
+indexed commit from `VaultSource.read`'s `repoPaths` (WP-18a), cached by `(project, commit)` so a run
+does not pay a second listing — the implementer states which, and the cost per run is measured, not
+assumed. **(2)** `touchedPaths` is filled where a source exists — the plan artifact's declared paths, a
+returned stage's diff — and the stages with none are **named** at the call rather than defaulted in
+silence. **(3)** Only then, the flag: a document recorded `validated: false` becomes a `kb_health_reports`
+finding (a new kind, or `invalid` with a reason — stated), at the nightly pass from `run_context_pack`,
+so the pass need not run in the planner. **(4)** Asserted at the boundary with the production planner
+over the fixture vault: a page whose glob resolves is **admitted** with `reason: 'paths'` when the plan
+names a matching path; a page whose glob resolves to nothing is recorded unvalidated **and** appears in
+the next health report; the negative — a resolving page is never flagged. **(5)** Rule 83: the
+`headPaths` docblock, technical/07's WP-57 note and **168**'s *"every such page"* all change with it.
+
+**Depends on / owner.** **WP-57** (commit pending, the record), WP-18a (`repoPaths`), WP-18b (the
+pass). **Proposed owner WP-58** (refiner, session 8): its whole subject is that retrieval's measurements
+must be able to fail, and today they are taken with inputs production never supplies; (1)–(2) change
+what it will calibrate, so they belong before its floor. WP-64 was considered and is the wrong home —
+it is readiness, not retrieval. Related: **168**, **37** (folded into WP-57, which added the `invalid` kind).
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -9230,7 +9359,7 @@ changes.
 **Depends on / owner.** None. **No work package owns it.** Cheapest home: whoever next edits
 `scripts/citations.ts` or `scripts/citations.test.ts`.
 
-### 112. **The citation half of product/16's knowledge-usage metric already exists on two artifact types and has no reader, while the half WP-41 calls present has never held a row — the absence is stated the wrong way round, and closing it is a join plus backlog 31, not a runner change** (TODO, small — **no work package owns it**; **WP-41 is the wrong home**, the metric ships correctly absent; found by WP-41, refined off the tree, session 5)
+### 112. **The citation half of product/16's knowledge-usage metric already exists on two artifact types and has no reader, while the half WP-41 calls present has never held a row — the absence is stated the wrong way round, and closing it is a join plus backlog 31, not a runner change** (**RESOLVED** at `933c58f`, WP-57, session 8 — TODO, small — **no work package owns it**; **WP-41 is the wrong home**, the metric ships correctly absent; found by WP-41, refined off the tree, session 5)
 > **M4 (architect, session 6): folded into WP-57.**
 
 
@@ -10267,7 +10396,7 @@ size, and the pack that fills it is spent per stage run. A nit today (the shippe
 and nothing else sets it), and the cheapest fix is a `.max()` at the boundary rather than a check at
 the assembler. Found by WP-16's review.
 
-### 31. **`run_context_pack` has never been written, and it could not hold the record if it were** (TODO — **no work package owns the writer**; found by the first reader, WP-15h)
+### 31. **`run_context_pack` has never been written, and it could not hold the record if it were** (**RESOLVED** at `933c58f`, WP-57, session 8 — TODO — **no work package owns the writer**; found by the first reader, WP-15h)
 > **M4 (architect, session 6): folded into WP-57.**
 
 Placed here because the two entries below it argue their cost from this table's contents.
@@ -12751,7 +12880,7 @@ file, or the first work package that touches upgrade behaviour.
 | WP-77 | **A run credential with no confirmed revocation is revoked from its audit row** | DONE | `2481f09` | **Folded backlog 155.** `revokeCredential` by address (`{revokeId}`, rule 18); a `run_credential` row of `recovery/stranded.ts` finds every terminal run with a `mint_credential` row and no successful revoke for its `revoke_id`, and a `pipeline.outbound` duty revokes it outside any transaction, through the executor, under the shadow carve-out; `would_have` a failure, `not_found` **unconfirmed**, one attempt per `revoke_id`; migration **0039** (`runs_ended_at_idx`). Countable on the fake provider: 0→1 lease-expired, 0→1 failed teardown, 1 stays 1 revoked normally. A grep, not a check, found the Docker e2e's revoke wrapper reading `.value` with `tsc` green — method-syntax port members are bivariant (backlog 157). **One review round**, APPROVE-with-nits: four canaries dead by name, two survivors explained — an equivalent mutant (noted at the SQL) and the terminal predicate in the duty's re-validation, which the orchestrator then asserted (a live run's credential refused, an ended one still found); the cancel path stated at the lines and the teardown log made honest. **Two of the orchestrator's own edits broke the tree before it verified**: a SQL comment with backticks inside a template literal (every tier failed at transform) and an exact-message test the log change invalidated — both caught by the tiers, not shipped. **Orchestrator verification**: `PASS: verify` (400 files, 7511 passed), `PASS: verify:integration` (508), `PASS: verify:e2e` **twice** (206/206), each exit 0; **the last `verify` was started without the load gate at a one-minute reading of 34** — a breach of the machine rule, recorded rather than hidden. CI on `2481f09`: `ci` `36212658371` and `image` `36212658429` **completed success**, zero `release` runs. Discovered work: backlog **156**, **157** (both to WP-73 in part) | Depends on WP-76, WP-47, TD-028's WP-76 amendment decision 5. Folds backlog **155** (small-to-major, live; refiner, session 8). Revoke by address with no invented value (rule 18); a recovery row over `mint_credential` rows with no successful revoke, after commit, through the executor; shadow's carve-out; `not_found` recorded as unconfirmed; 0 → 1 / 1 stays 1 on the fake provider |
 | WP-55 | **The return reason reaches the stage being asked to fix it, and a gate's stage row is closed** | DONE | `a72aaa2` | **Folded backlog 67, 32, 95 items 1–2, and — by the orchestrator's ruling at round 1 — the agent half of 159.** **Measured before the fix** (criterion 6): on `main` at `2ab70eb` a task that reached `ready_for_merge` left `ci_gate#1` and `rebase_gate#1` `entered` with no outcome and no exit. Migration **0040** (`task_stages.returned_to`, the legacy states rewritten, two check constraints); the stage vocabulary one schema in `@platform/contracts` parsed by both stores and the projection (an unknown word a typed error naming the row); the reader — ruling (a) — takes the newest return targeting this stage between its previous attempt and this one; a gate walked past is closed with its verdict; `failed` has writers, `skipped`/`pending` declared-unused. **An agent verdict's return carries the verdict's own findings**: `[summary]` then one line per finding, blockers first, each model-written field collapsed to one line, and **no cut or notice in the body** — the prompt block's own cut, announced as `truncated="true"` in its marker, is the only one. **Three review rounds**: R1 — a human rework to the stage the task is at lost its note (measured), `returned` unasserted on the wire, and the most common return (an agent reviewer's) carried the literal `requested changes`; R2 — the builder's own cut and notice were body text a reviewer model could forge (technical/04's marker contract); the orchestrator chose option (a) and ran the canaries after the last round (only LF collapsed, no collapse, blocker order removed, summary tag removed — **all dead by name**). **Orchestrator verification on the final tree**: `PASS: verify` (400 files, 7530 passed), `PASS: verify:integration` (519), `PASS: verify:e2e` **twice** (208/208), `PASS: verify:ui` (332), `PASS: verify:web-e2e` (42), each exit 0. CI on `a72aaa2`: `ci` `36216963170` and `image` `36216963211` **completed success**, zero `release` runs. Discovered work: backlog **158**, **159** (human half, WP-46), **160** | Depends on WP-15, WP-17, WP-26, WP-15h; run **before** WP-46. Folds backlog **67** (major, live on every return), **32**, and backlog **95**'s first two items. Backlog 67 ruled answer (a), reader-side, with a `returned_to` column |
 | WP-56 | **Three deadlines, one mechanism** | DONE | `e0e877d` | **Folded backlog 74, 76, 69, and at review 161, 162 and 163's briefs.** One `deadline.sweep` queue (the architect's ruling; **TD-004 amended by the orchestrator**), pool floor 21 → 22 derived from the constant everywhere; `pipeline.deadlines` (priority 15) arms each timer after commit from a deadline written in the aggregate's transaction; the job re-validates on fire (answered, decided, handed back, terminal task — nothing expires); the working calendar composed from `APP_WORKING_DAYS/HOURS/HOLIDAYS` for the first time (blank default, malformed a startup refusal); **Q95 answered per its recommendation and recorded in BD-006 by the orchestrator** (an approval expires on the question calendar at one working day); the workpad reads the take-over from state. **Two review rounds**: R1 REQUEST_CHANGES — the expiry briefs promised commands the aggregates refuse (163, live because of this row) and the dependency question's deadline was unasserted (a canary survived 542 tests); the orchestrator folded 161 (a recovery site for a lost arming) and 162 (a first deadline for pre-WP-56 rows, counted from the pass) into R1's fix, and **the new test refused the orchestrator's own suggestion** that a brief offer *return to a stage* — the aggregate refuses it on `needs_human`; R2 APPROVE-with-nits, fixed by the orchestrator (a per-row catch so a poison row cannot stop the lease sweep, a probe inside the grace, the brief check widened to any wording of a return, the fake ordered as PostgreSQL). The boundary arithmetic was measured across a weekend, a holiday and both DST changes. **Orchestrator verification**: `PASS: verify` (401 files, 7580 passed), `PASS: verify:integration` (532), `PASS: verify:e2e` **twice** (208/208), images rebuilt and `PASS: compose-stock-check`, each exit 0. CI on `e0e877d`: `ci` `36221858072` and `image` `36221858076` **completed success**, zero `release` runs. Discovered work: backlog **164**–**167** | Depends on WP-05, WP-15, WP-28, WP-27, WP-32; amends TD-004. Folds backlog **74** (major), **76** (major), **69**. Ruled **in the row**: one `deadline.sweep` queue, pool floor **+1** not **+4**. The working calendar is composed for the first time. **Q95** decides whether an approval expires at all |
-| WP-57 | **`run_context_pack` gets a writer, the health report its refusals, and `kb_usage` a denominator** | TODO | — | Depends on WP-17, WP-15h, WP-18a/b, and on **WP-52** (same file). Folds backlog **31** (major), **37**'s remaining half, **112**. Backlog 31 ruled answer (a), keep the table |
+| WP-57 | **`run_context_pack` gets a writer, the health report its refusals, and `kb_usage` a denominator** | DONE | `933c58f` | **Folded backlog 31, 37 (the remaining half), 112, and 169 (the orchestrator amended product/19:108).** Migration **0041**: both run-creation paths (stage executor, ask executor) write the planner's pack in the run row's transaction, its budget/total/commit on the run, `reason`/`score` filled from the planner (the contract not relaxed); an empty pack 200, a never-recorded one (every pre-0041 run) a typed 409 with its row count; `kb_index_refusals` replaced with the index in one transaction, the nightly report's `invalid` finding (the Librarian's contract deliberately not widened), `kb/health` 409 for no report; 0041 clears each project's indexed commit so the next index run rebuilds and records refusals; `kb_usage` a join with its denominator named in its definition. **One review round** (REQUEST_CHANGES: the diff had deleted the only HTTP test of the 409; the upgrade window read "nothing refused"); the orchestrator ran the canaries after the fix (409 answered as 200; the re-index removed from 0041 — both dead by name) and corrected two stale CLAUDE.md sentences (the `/context-pack` refusal and `system_prompt`'s writer, the second a WP-52 miss). **Orchestrator verification**: `PASS: verify` (401 files, 7587 passed), `PASS: verify:integration` (538), `PASS: verify:e2e` **twice** (208/208), `PASS: verify:ui` (332), `PASS: verify:web-e2e` (42). CI on `933c58f`: `image` `36225393924` success; `ci` `36225393932` **failed once upstream** — the `e2e-fake-claude` job could not build `platform-egress` because `dl-cdn.alpinelinux.org` answered an IO error on `apk add tinyproxy`, before any test ran — rerun with `--failed` to **completed success**. The first commit attempt was refused by commitlint (header 103 > 100) and nothing was pushed. Discovered work: backlog **168**, **170** | Depends on WP-17, WP-15h, WP-18a/b, and on **WP-52** (same file). Folds backlog **31** (major), **37**'s remaining half, **112**. Backlog 31 ruled answer (a), keep the table |
 | WP-58 | **Retrieval: the instrument first, then the query** | TODO | — | Depends on WP-16, WP-17, WP-15f. Folds backlog **16**, **15**, **12**'s surviving half, **13**, **14**, **61**; implements **Q58**. The negative corpus lands before any floor — a mechanism calibrated on a corpus that cannot falsify it is unreviewable |
 | WP-59 | **The git provider port: close a merge request, read a diff once, stop inventing diff stats** | TODO | — | Depends on WP-09, WP-26, WP-37, WP-38, WP-39, WP-35; rule 23. Folds backlog **51**, **64**, **65**, **113**. Cheap halves first: the fake's missing divergence, then the coalesced read, then the port additions. **Q92** decides the rework branch. **Refiner (session 6): also folds backlog 129** — no provider HTTP client sets `redirect: 'error'`, so WP-51's allow-list decides the first request and `fetch` follows a `3xx` to an undeclared host with the request's headers on it; one option and one case in each of five clients, **four of them outside this row's title and scheduled by no row at all** — take them, or decline them in the entry by number, and never close one of five (rule 63) |
 | WP-60 | **Two events the catalogue is missing: `ticket.updated` and `mr.approved`** | TODO | — | Depends on WP-08, WP-09, WP-25, WP-15f, WP-29; run **before** WP-61. Folds backlog **59**, **90**; implements **Q61 (b)**. One normaliser each — both entries correct the two-provider price two documents quote |
@@ -28150,3 +28279,153 @@ task found, a handed-back and a merely paused one not). Unit: `deadlines.test.ts
   handing back is escalated after five working days. Which signals count is a product question
   (`mr.updated` does not name the pusher). Recommendation: reset on `human_actions` by the user who
   took the task over, and on `mr.updated` only if the provider names that user.
+
+#### WP-57
+
+**Round 1 (implementer, session 8).** Backlog **31** (option (a), ruled), **37**'s second half and **112**,
+in the row's seven criteria. Commit pending.
+
+**What shipped.** Migration **0041** (`0041_context_pack_record_and_index_refusals.sql`, Drizzle beside it,
+parity by the existing suite). **31:** the pack's header lives on the run row —
+`runs.context_budget_tokens`, `context_total_tokens`, `context_kb_commit` (paired by a check) — and
+`run_context_pack` gains `ordinal` (the record is ordered; neither the PK nor a collation reproduces
+`localeCompare`), `score` becomes `double precision` (a `real` rounded the planner's score, so the served
+record differed from `run.started`'s in the seventh digit), and a `NOT VALID` check requires an ordinal on
+every row and `reason`/`score` on every tier-1 row. `NewRun.contextPack: ContextPackRecord | null` is
+**required**; both `runs.insert` call sites (stage executor, ask executor) pass `plan.contextPack`, and the
+Postgres adapter writes the header in the insert and the rows in one `unnest` statement in the same
+transaction. **37:** `kb_index_refusals(project_id, path, reason, line, commit_sha, recorded_at)`;
+`IndexWrite.refused` is required and **replaces** the project's rows in the index transaction; the nightly
+pass reads them (`KbHealthInputs.refusals`) and `computeKbHealth` reports each as an `invalid` finding,
+first in the order. **112:** `kb_usage` is computed (`stats-queries.ts` `kbUsage`, one join).
+
+**Decisions and assumptions.**
+- **`reason`/`score` are filled at the write, not relaxed in `@platform/contracts`.** Every tier-1 entry
+  the assembler produces has both; a tier-0 row has neither (its label — `index`, `rules`,
+  `root_instructions`, `code_map` — is not a `context_pack_reason`, and the tier-0 DTO entry has no such
+  fields). Consequence for the DTO: **none** — `contextPackRecordSchema` is unchanged, so the run-detail
+  screen and `test/web-e2e` fixtures do not move.
+- **The header is on `runs`, not in a new table.** One value per run, written by the statement that
+  creates the run, so *unwritten* (`context_budget_tokens is null`) and *empty* (a budget and no rows) are
+  two states of one row. `total_tokens` is **stored**, not summed: the assembler does not count a tier-1
+  entry recorded `validated: false`, and a reader that re-derived it would be a second spelling (rule 41).
+- **The reader refuses rather than defaults**: null header → 409 `context_pack_not_recorded` with the row
+  count (criterion 2); a row with no ordinal, a tier outside 0/1, or anything the published schema refuses
+  → `row_not_projectable` naming the issue paths, never the values (BD-022).
+- **Refusals are stored, the pass does not run inside the index run** (criterion 4). technical/07:8 is
+  amended in the same change because it **narrows**: a refusal reaches the report at the next nightly pass,
+  not at index time (the index run is skipped whenever the default branch has not moved, so running the
+  pass there would starve the other four kinds). `reason` is untrusted (it can quote a frontmatter key) and
+  bounded at 1 000 characters by code point, the cut declared with `…` (`boundedRefusalReason`), the same
+  number the database checks.
+- **`invalid` is a kind of the stored report only** (`kbHealthReportFindingSchema`); the
+  `LibrarianProposals` artifact's `kbHealthFindingSchema` is deliberately not widened — a Librarian reads
+  indexed pages and cannot observe a refusal, and offering it the kind would invite a guess. `schemas/` is
+  unchanged (the API DTOs are not generated there; `pnpm schemas` reports up to date).
+- **Criterion 5: `GET …/kb/health` answers 409 `kb_health_not_reported`** where it answered a bare 404
+  `not_found` — the same status and code as a project a caller may not see — so *no report yet* and *no
+  such project* differed only in prose. 200 with `findings: []` is a report that found nothing. The
+  readiness read's `readiness_not_evaluated` is the precedent. No screen calls this endpoint.
+- **Criterion 6: the denominator** is named in the metric's own `definition`: runs started in the period
+  that produced a RefinedSpec or ResearchReport (the two `kb_citations`-bearing artifacts) and whose
+  **recorded** pack admitted ≥ 1 tier-1 document (`validated`); numerator: those whose artifact cites one of
+  those documents by exact vault path. Four caveats ride in the DTO (other roles excluded; a page reached by
+  `kb_search`, or one whose path attribute the prompt degraded, counts as no citation; a citation is the
+  model's claim; pre-0041 runs are in neither side). The bucket day is `runs.started_at` in the org's zone.
+- The ask run is covered too (standing rule 49): an ask's pack is recorded the same way.
+
+**The criteria, where each is asserted.**
+1. `test/e2e/pipeline/context-pack.e2e.test.ts` › "is written to run.started, is not zeroed, and reaches the prompt as delimited data"
+   — for **every** run the instance's own planner built, `GET /api/runs/:id/context-pack` equals the
+   `run.started` payload, and `count(*) from run_context_pack` equals the packs' entries (non-vacuous: the
+   fixture vault is indexed). `test/e2e/server/run-api.e2e.test.ts` asserts the **empty** pack (no index):
+   200, budget 12 000, empty tiers, equal to `run.started`'s. The SQL round trip of values a fixture vault
+   does not produce (a 15-digit score, a `validated: false` entry outside the total, an order that is
+   neither by path nor by score, a commit) is `test/integration/server/read-api.integration.test.ts` ›
+   "serves the record RunRepository.insert stored, in order, and an empty pack as empty". The seam is
+   `packages/application/src/pipeline/stage-executor.test.ts` › "hands runs.insert the context pack run.started carries"
+   and, for asks, `packages/application/src/ask/ask-pipeline.test.ts` › "hands runs.insert the context pack its run.started carries (WP-57, standing rule 49)".
+   Mutation (md5-confirmed revert): the reader ordered by path instead of `ordinal` fails the
+   integration round trip.
+2. `test/integration/server/read-api.integration.test.ts` › "refuses a pack whose run has no recorded header, with the row count, even when rows exist"
+   (`0` and `2`), and "refuses a new tier-1 row without a reason or a score, and any row without an ordinal"
+   (the check, and the header pair).
+3. The planner's `headPaths` docblock (`validated: false` "visible in `run_context_pack`") and technical/07's
+   overflow sentence are both rewritten; technical/03 (`runs` columns, `run_context_pack`,
+   `kb_index_refusals`, `kb_health_reports`' vocabulary) and technical/07 (§ "Source of truth and sync", step
+   3, the WP-16 overflow note, the step-6 deprecate-candidates note) are amended; technical/08 records the
+   two changed refusals.
+4. The new integration file `index-refusals.integration.test.ts` (under `test/integration/knowledge/`,
+   untracked until the commit, so named here without a citation marker): its first case drives the
+   production indexer over `FIXTURE_VAULT` into `PostgresKnowledgeStore`, the production pass through
+   `PostgresProposalStore`, and reads the report through `findKbHealth` — nothing seeded; its second
+   removes the refused page at the next commit and the `invalid` finding goes with it. Unit:
+   `packages/application/src/knowledge/indexer.test.ts` › "stores what the parser refused beside the documents, and replaces it at the next commit"
+   (and `unchanged` leaves it),
+   `packages/domain/src/knowledge/health.test.ts` › "reports a document the parser refused, first, with the line when there is one",
+   and the hygiene and proposal-store contract cases. Mutation (md5-confirmed revert): the refusal
+   insert disabled in `PostgresKnowledgeStore.write` fails the first integration case.
+5. `test/e2e/server/read-api.e2e.test.ts` (409 `kb_health_not_reported` before the pass, 200 after) and
+   `test/integration/server/read-api.integration.test.ts` › "reads the newest knowledge health report, an empty one as empty, and null when no pass has run".
+6. `apps/server/src/queries/stats-metrics.test.ts` › "computes knowledge usage over the subset of runs its definition names"
+   (ratio of sums, `null` for a day with no eligible run, the definition names the subset and never
+   "searched") and `test/integration/stats/stats-queries.integration.test.ts` ›
+   "counts knowledge usage over runs whose recorded pack admitted a document and whose artifact carries citations"
+   — five runs, one per branch, fixed dates and a fixed range (rule 86).
+7. `STATS_CATALOGUE.kb_usage`'s `absent` (reason and owner) is **removed** because the metric is computed;
+   its definition and caveats replace them.
+
+**Sentences falsified (rule 83).** Changed: `apps/server/src/routes/runs.ts` (the always-refuses
+docblock and message), `apps/server/src/queries/pipeline-queries.ts` (module docblock bullet and
+`findRunContextPack`'s), `packages/application/src/pipeline/planner.ts` (`headPaths`),
+`packages/application/src/knowledge/indexer.ts` ("the invalid list is still only logged"),
+`packages/domain/src/knowledge/health.ts` ("nothing writes `run_context_pack`"),
+`packages/application/src/knowledge/hygiene.ts`, `apps/server/src/routes/kb.ts` (404 → 409),
+`stats-queries.ts` ("eight reads"), `stats-metrics.ts` (`kb_usage` absence), technical/03, /07, /08.
+**Left, and why:** OPEN-QUESTIONS **Q64** names backlog 31 as the same question — a record of what was
+true when asked. **Not mine to edit, named for the orchestrator:** `CLAUDE.md`'s read-API bullet —
+*"`/context-pack` has **no success branch at all**, because `run_context_pack` has no column for
+`ContextPackRecord.budget_tokens` and stores `reason`/`score` as nullable where the record requires them"*
+is now false (it serves the planner's record; the 409 is for a pre-0041 run), and *"`GET
+/api/projects/:id/kb/health` reads rows the nightly hygiene pass writes"* is still true but its refusal is
+now 409 `kb_health_not_reported`. `docs/product/19-operating-definitions.md:108` (KB usage = *"runs whose
+tier-1 items were cited / runs with tier-1 items"*) is **narrower in the build** than in the product
+table — the denominator is only the runs that produce a citation-bearing artifact, per this row's
+criterion 6 — and the product row should say so (a product-doc amendment; filed as 169).
+
+**Discovered work** (next free number 168).
+- **168 (small) — the run-detail screen's "Documents" counts a tier-1 entry recorded `validated: false`
+  as included, and lists it unmarked.** `apps/web/src/features/run-detail.tsx` renders `tier0.length +
+  tier1.length` under *"Knowledge-base documents included in this run's context"*; a `validated: false`
+  entry was never shown to the agent. Latent until WP-57 (the endpoint never answered); live now for every
+  run with a `paths:`-scoped page, which in this build is **every** such page (no `headPaths`). Fix: count
+  tier 0 plus validated tier 1, and mark the others *not admitted*.
+- **169 (nit, product doc) — product/19 §10's KB-usage row states a denominator the build narrows**
+  (above). Recommendation: amend the row to name the RefinedSpec/ResearchReport subset, or file the
+  citation signal for the other roles as its own work.
+- **170 (small) — technical/07 step 3's *"flag the document"* is not done**: a failed validation produces
+  no health finding. Blocked in substance on `StageRunPlannerOptions.headPaths` (absent in production),
+  without which every `paths:`-scoped page would be flagged.
+- The Docker-volume baseline read **101** before this row's tiers, not the brief's 102.
+
+**Round 2 (review round 1 findings).** (1) The HTTP-level `409 context_pack_not_recorded` is back in
+`test/e2e/server/run-api.e2e.test.ts`, beside the 200 empty-pack case: the live run's header is nulled
+by a plain `update` (no DDL — the WP-52 round-3 flake was a drop/re-add dance) and the route answers 409
+with the code and `(0 run_context_pack rows`, then the header is restored. The stale docblock in
+`read-api.integration.test.ts` (it pointed at a run-api 409 that moved to `routes/tasks.test.ts` at WP-52
+round 4) now says where each 409 lives. (2) **Upgrade window closed in 0041**: it nulls
+`kb_index_state.commit_sha` and keeps `fts_built_at` — nulling `fts_built_at` instead was rejected
+because packs would read `not_indexed` (empty) and onboarding "never built" until the rebuild. The next
+index run (next task, merge or default-branch move) is then a full rebuild and writes the refusals; in the
+window the report's `commit_sha` is null, which is the honest "not re-read yet". Tests: the new
+`test/integration/db/index-refusal-upgrade.integration.test.ts` (migrate to 0040, write the state, apply
+0041: commit null, `fts_built_at` unchanged) and
+`packages/application/src/knowledge/indexer.test.ts` › "rebuilds an index whose commit is unknown, which is how 0041 hands an upgraded project its refusals".
+technical/07 and /03 state the window. (3) `stats-queries.ts:13` wrapped.
+Round 2 verification: `verify` PASS (7 587); the five touched integration files 50/50 (one of those runs was started at a one-minute load of 28.7, just after `verify`, outside the bounded-check rule — stated rather than hidden); `run-api.e2e` 1/1 after a bounded check (9.29 at reading 3); citations PASS; Docker: reaper only, volumes 101.
+
+**Verification (round 1).** `verify` PASS (7 586 unit/contract tests); `verify:integration` PASS (537,
+50 files — the first run failed the new refusal file on the event store's back-dating guard, which reads
+the real clock, so its injected clock is a fixed **future** date with the partition created by the test);
+`verify:e2e` PASS (208); `verify:ui` PASS (332); `verify:web-e2e` PASS (42); `scripts/citations.test.ts`
+PASS. Docker after the tiers: only the Testcontainers reaper, volumes 101.
