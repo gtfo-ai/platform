@@ -58,6 +58,7 @@ const SOURCE_VARIABLE: Record<string, string> = {
   trustProxy: 'APP_TRUST_PROXY',
   providerMode: 'APP_PROVIDER_MODE',
   knowledgeMirrorRoot: 'APP_KNOWLEDGE_MIRROR_ROOT',
+  workspaceExportDir: 'APP_WORKSPACE_EXPORT_DIR',
   webRoot: 'APP_WEB_ROOT',
   integrationSecretEnv: 'APP_INTEGRATION_SECRET_ENV',
   integrationHosts: 'APP_INTEGRATION_HOSTS',
@@ -301,6 +302,26 @@ const serverConfigFields = z.strictObject({
     .refine(
       (value) => value.startsWith('/'),
       'must be an absolute path, e.g. /var/lib/app/knowledge: it names a data volume, not a place relative to the working directory',
+    )
+    .nullable(),
+
+  /**
+   * `APP_WORKSPACE_EXPORT_DIR` — where the launcher writes take-over tarballs, read here so
+   * `GET /api/runs/:run_id/export.tar` can hand one to a person (WP-44, PROGRESS backlog 68).
+   *
+   * **`null` has no default**, for the mirror root's reason: the directory is a volume the launcher
+   * and this process must *share* (`compose.yml`'s `exports`), and a default path on this side
+   * would serve an empty directory that looks exactly like "no tarball was written". Unset, the
+   * route refuses by name (`409 export_directory_not_configured`) rather than answering 404 for
+   * every run. The launcher's own default (`/var/lib/app/exports`) is a statement about *its*
+   * filesystem; this process only knows the directory if the operator says where it is mounted.
+   */
+  workspaceExportDir: z
+    .string()
+    .min(1)
+    .refine(
+      (value) => value.startsWith('/'),
+      'must be an absolute path, e.g. /var/lib/app/exports: it names the volume the launcher writes take-over tarballs to',
     )
     .nullable(),
 
@@ -851,6 +872,7 @@ export const loadServerConfig = (env: EnvLike = process.env): ServerConfig => {
         ? SERVER_CONFIG_DEFAULTS.modelEgressHosts
         : hostListFromEnv(env.APP_MODEL_EGRESS_HOSTS),
     knowledgeMirrorRoot: nullableString(env.APP_KNOWLEDGE_MIRROR_ROOT),
+    workspaceExportDir: nullableString(env.APP_WORKSPACE_EXPORT_DIR),
     webRoot: nullableString(env.APP_WEB_ROOT),
     integrationSecretEnv: nameListFromEnv(env.APP_INTEGRATION_SECRET_ENV),
     integrationHosts: hostListFromEnv(env.APP_INTEGRATION_HOSTS, { allowWildcard: true }),

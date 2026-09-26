@@ -44,6 +44,15 @@ export interface InboxDelivery {
   readonly redactionCount: number;
   /** Why the delivery produced no event, redacted — or `null` when it produced some. */
   readonly error: string | null;
+  /**
+   * The provider accounts this delivery was refused for as `unmapped_identity` (WP-44, PROGRESS
+   * backlog 198; migration 0047), de-duplicated and redacted — an id the binding's redactor would
+   * change is left out. What the identities screen offers as candidates to map. Empty when none.
+   */
+  readonly unmappedIdentities: readonly {
+    readonly provider: string;
+    readonly external_id: string;
+  }[];
   readonly receivedAt: IsoDateTime;
   /** When normalisation finished. Written at insert while the ingress normalises in-request. */
   readonly processedAt: IsoDateTime | null;

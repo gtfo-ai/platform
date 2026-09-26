@@ -57,6 +57,7 @@ import type {
 } from '@platform/application';
 import { WorkspaceError } from '@platform/application';
 import type { workspace } from '@platform/infrastructure';
+import { sweepExportDirectory } from './export-retention.js';
 
 /**
  * The run's git credential as the create request carried it — minted by the **runner** through
@@ -266,9 +267,34 @@ export class LauncherService {
     return { exported, keepUntil, failures };
   }
 
-  /** One retention pass. */
+  /**
+   * One retention pass: the workspace volumes, then the take-over export directory (WP-44, Q93).
+   *
+   * The export half runs **after** the volumes and whatever they did, and its failure is logged
+   * rather than thrown: a directory the launcher cannot read must not stop the volume purge, which
+   * is the half that holds disk and credentials-adjacent state. Both windows are the same fourteen
+   * days for a taken-over run (`export-retention.ts`).
+   */
   async sweep(now: Date = new Date(this.#options.clock.now())): Promise<PurgeReport> {
     const report = await this.#options.provider.purgeExpired(now);
+    try {
+      const exports = await sweepExportDirectory({ directory: this.#options.exportDir, now });
+      if (exports.examined > 0 || exports.failed > 0) {
+        this.#options.logger.info(
+          {
+            exports_examined: exports.examined,
+            exports_removed: exports.removed,
+            exports_unremoved: exports.failed,
+          },
+          'take-over export retention sweep',
+        );
+      }
+    } catch (error) {
+      this.#options.logger.warn(
+        { error: describe(error) },
+        'the take-over export directory could not be swept; its tarballs are kept until the next pass',
+      );
+    }
     const directories = report.controlDirectories;
     this.#options.logger.info(
       {

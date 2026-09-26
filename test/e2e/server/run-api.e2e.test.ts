@@ -89,7 +89,11 @@ const runStartedPack = async (pipeline: PipelineE2E, runId: string): Promise<Con
   }
 };
 
-/** Writes (or nulls) a run's context-pack header directly, as a pre-0041 row would have it. */
+/**
+ * Writes (or nulls) a run's context-pack header directly, as a pre-0041 row would have it — the
+ * text step's record with it (migration 0047), because a pre-0041 row has neither and
+ * `runs_context_text_search_needs_a_pack` refuses an outcome on a run with no header.
+ */
 const setPackHeader = async (
   pipeline: PipelineE2E,
   runId: string,
@@ -99,8 +103,15 @@ const setPackHeader = async (
   await client.connect();
   try {
     await client.query(
-      'update runs set context_budget_tokens = $2, context_total_tokens = $3 where id = $1',
-      [runId, pack?.budget_tokens ?? null, pack?.total_tokens ?? null],
+      `update runs set context_budget_tokens = $2, context_total_tokens = $3,
+                       context_text_search = $4::jsonb
+        where id = $1`,
+      [
+        runId,
+        pack?.budget_tokens ?? null,
+        pack?.total_tokens ?? null,
+        pack?.text_search == null ? null : JSON.stringify(pack.text_search),
+      ],
     );
   } finally {
     await client.end();

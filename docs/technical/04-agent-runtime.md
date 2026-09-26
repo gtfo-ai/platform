@@ -315,7 +315,7 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 ## Resume and take-over
 
 - Every run persists to the session store; `resume` with the same `CLAUDE_CODE_PROJECT_DIR_NAME` and workspace continues a run after a platform restart (runs interrupted by restart are resumed with a "you were interrupted" note, once).
-- Take-over: pipeline pauses; the workspace is exported (branch pushed, tarball of untracked files) and the ticket receives `claude --resume <session-id>` guidance with the exported session JSONL downloadable from the UI (the local Claude Code can import it: `[verify: import path for external transcripts]`).
+- Take-over: pipeline pauses; the workspace is exported (branch pushed, tarball of untracked files) and the ticket receives `claude --resume <session-id>` guidance with the exported session JSONL downloadable from the UI (the local Claude Code can import it: `[verify: import path for external transcripts]`). **Amended at WP-44:** what the UI downloads is the **platform's** transcript — `run_messages` rendered one entry per line at `GET /api/runs/:run_id/transcript.jsonl`, redacted at the write — and the optional tarball at `GET /api/runs/:run_id/export.tar`. It is **not** the CLI's own session file, which lives inside the run container and is not exported; whether `claude --resume` can continue from anything a human downloads is still the `[verify]` above, and the resume line on the panel names the session id only.
 
 ## Modes
 

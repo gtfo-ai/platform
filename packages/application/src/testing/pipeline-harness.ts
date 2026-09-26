@@ -375,6 +375,16 @@ export interface PipelineHarness {
   /** Every spec the runner was started with, in order. */
   readonly specs: readonly RunSpec[];
   /**
+   * Records a `human_actions` row the store's take-over activity rule reads (WP-44, PROGRESS
+   * backlog 167). The harness has no HTTP surface, so the row a command route would write is
+   * written here by the case that is about it.
+   */
+  recordHumanAction(input: {
+    readonly taskId: Id;
+    readonly userId: Id;
+    readonly at: IsoDateTime;
+  }): void;
+  /**
    * What `answerTaskQuestion` and friends need (`../pipeline/commands.js`), redactor included.
    *
    * The redactor is `exactSecretRedactor` over {@link HarnessOptions.commandSecrets} rather than a
@@ -696,7 +706,10 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
   // `TASK_COLUMNS` derives it (memory-pipeline.ts, divergence 7). Without it an event appended to a
   // task's stream by anything other than the aggregate leaves the fake's aggregate one behind, and
   // the *next* aggregate write clashes in production while this tier stays green.
+  const humanActions: { taskId: Id; userId: Id; at: IsoDateTime }[] = [];
   const store = createMemoryPipelineStore({
+    // WP-44: the activity rule's second input, as PostgreSQL reads `human_actions`.
+    humanActions: (taskId) => humanActions.filter((row) => row.taskId === taskId),
     streamSequence: (taskId) => memory._committedLastSeq('task', taskId) + 1,
     // WP-56: `takenOver` reads the task's own stream, as the SQL store does.
     taskEvents: (taskId) =>
@@ -1195,6 +1208,9 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     asks,
     heartbeats,
     specs,
+    recordHumanAction: (input) => {
+      humanActions.push({ ...input });
+    },
     script: (stage, run) => {
       scripts.set(stage, run);
     },

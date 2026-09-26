@@ -65,6 +65,7 @@ import {
   stageAgentDefaults,
 } from '@platform/domain';
 import type { ContextPackAssembler, ContextPackDocument } from '../knowledge/context-pack.js';
+import { NOT_SEARCHED } from '../knowledge/text-search-record.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { PlatformToolName, RunContextDocument, RunLimits, RunSpec } from '../ports/runner.js';
@@ -778,6 +779,8 @@ const emptyRecord = (budgetTokens: number): ContextPackRecord => ({
   budget_tokens: budgetTokens,
   total_tokens: 0,
   kb_commit: null,
+  // The project has no index, so no text search ran — the first of the five outcomes (WP-44).
+  text_search: NOT_SEARCHED,
 });
 
 interface ResolvedPack {

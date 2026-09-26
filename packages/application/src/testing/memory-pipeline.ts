@@ -16,7 +16,7 @@
  * | 6 | `save` refuses a write over a row whose `version` has moved, exactly as the SQL `where … and version = $n` does (WP-15e). | **same** | The fake compares a number where PostgreSQL compares a predicate, and both throw `TaskConcurrentModificationError`. Asserted for both by `pipeline-store-concurrency-suite.ts`, which drives two transactions over one committed row. The fake's `version` is still only as good as divergence 4: with no isolation, the interleaving it reproduces is the *ordering*, not the locking. |
  * | 4 | No transaction isolation: a `Transaction` handle is accepted and ignored, so a rolled-back "transaction" leaves its writes. | **kinder** | This is the one that matters, and the reason the same suite runs against PostgreSQL: rollback semantics cannot be faked in a Map. **Positive assertion**: `memory-pipeline.test.ts` asserts the divergence explicitly (`keeps writes a rolled-back scope made, which PostgreSQL does not`), so a reader meets it as a test rather than as a warning, and the e2e tier runs the pipeline on the real thing. |
  * | 7 | `task.sequence` was the number the stored aggregate carried; PostgreSQL derives it from the **event log** (`max(stream_seq) + 1`, `TASK_COLUMNS`). **Closed at WP-26** by {@link MemoryPipelineStoreOptions.streamSequence}: a harness that wires the event log in gets the derived number. | **same, when wired** | It was *kinder* and it hid a whole class: an event appended to a task's stream by anything other than the aggregate — `task.review.observed` (WP-24), `task.lint.posted` (WP-25), `task.rebase.checked` and `task.conflict.warned` (WP-26) — left the fake's aggregate one behind the log, so the **next** aggregate write would clash in production and not here. It only stayed invisible because the first three land on a task that has stopped. Unwired, the old behaviour remains, which is why the accessor takes the **maximum** of the two rather than replacing one with the other: a transaction's own staged appends are not committed yet, and the aggregate's number is the right answer for them. |
- * | 8 | `takenOver` reads the **committed** log through {@link MemoryPipelineStoreOptions.taskEvents}; PostgreSQL's query also sees the calling transaction's own staged appends (WP-56). Unwired, it answers `null`. | **same, when wired; kinder by one window** | Both readers of it — the workpad render and the take-over timer — run in a job's **own** transaction after the events they react to have committed, so the window this cannot see is one neither reader stands in. A caller that asked inside the transaction that appended the take-over would get `null` here and the record from PostgreSQL; nothing does, and the contract suite drives the committed case against both. |
+ * | 8 | `takenOver` reads the **committed** log through {@link MemoryPipelineStoreOptions.taskEvents}; PostgreSQL's query also sees the calling transaction's own staged appends (WP-56). Unwired, it answers `null`; its `lastActivityAt` reads {@link MemoryPipelineStoreOptions.humanActions} (WP-44), and unwired that is the take-over's own instant. | **same, when wired; kinder by one window** | Both readers of it — the workpad render and the take-over timer — run in a job's **own** transaction after the events they react to have committed, so the window this cannot see is one neither reader stands in. A caller that asked inside the transaction that appended the take-over would get `null` here and the record from PostgreSQL; nothing does, and the contract suite drives the committed case against both. |
  */
 import type {
   ArtifactType,
@@ -151,6 +151,13 @@ export interface MemoryPipelineStoreOptions {
    * *nobody does* rather than inventing one. `createPipelineHarness` wires it.
    */
   readonly taskEvents?: (taskId: Id) => readonly DomainEvent[];
+  /**
+   * The `human_actions` rows of a task, for `takenOver`'s activity rule (WP-44). PostgreSQL reads
+   * the table; the harness has none, so a test that wants a holder's command to count wires this.
+   */
+  readonly humanActions?: (
+    taskId: Id,
+  ) => readonly { readonly userId: Id; readonly at: IsoDateTime }[];
 }
 
 /** One `superseded_merge_requests` row, as the memory store keeps it. */
@@ -553,12 +560,22 @@ export const createMemoryPipelineStore = (
       if (newest === undefined || newest.type !== 'task.taken_over') {
         return null;
       }
+      const holder = newest.actor.kind === 'user' ? newest.actor.user_id : null;
+      // The SQL store's activity rule (WP-44): the holder's own `human_actions` rows after the
+      // take-over. Unwired, the take-over's own instant is the answer — divergence 8's shape.
+      const lastAction = (options.humanActions?.(taskId) ?? [])
+        .filter((row) => holder !== null && row.userId === holder && row.at > newest.occurred_at)
+        .map((row) => row.at)
+        .sort()
+        .at(-1);
       return {
         eventId: newest.id,
         at: newest.occurred_at,
         branch: newest.payload.branch,
         sessionId: newest.payload.session_id ?? null,
         stage: newest.payload.stage,
+        holderUserId: holder,
+        lastActivityAt: lastAction ?? newest.occurred_at,
       };
     },
     lastReturnReason: async (_tx, taskId, stage, attempt) => {
@@ -884,7 +901,11 @@ export const createMemoryPipelineStore = (
         }
         const takeOver = await taskRepository.takenOver(tx, stored.task.id);
         if (takeOver !== null) {
-          held.push({ taskId: stored.task.id, takenAt: takeOver.at });
+          held.push({
+            taskId: stored.task.id,
+            takenAt: takeOver.at,
+            lastActivityAt: takeOver.lastActivityAt,
+          });
         }
       }
       // Oldest take-over first, as the PostgreSQL store's `order by e.occurred_at` (a fake no kinder).

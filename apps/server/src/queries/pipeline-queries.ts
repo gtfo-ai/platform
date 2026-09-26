@@ -48,14 +48,18 @@
  * has no stage and is reported as {@link UnprojectableRowError} rather than as a 500 whose cause
  * the client never sees.
  */
+
+import { TAKE_OVER_BOUNDARY_EVENTS } from '@platform/application';
 import type {
   AgentsResponse,
   ArtifactBodyResponse,
   ContextPackRecord,
+  HumanTimeKind,
   HumanTimeSummary,
   Id,
   InboxResponse,
   ModelUsage,
+  PipelineTemplate,
   QuestionRecord,
   RunRecord,
   RunStatus,
@@ -72,10 +76,16 @@ import {
   taskStageStateSchema,
   transcriptEventSchema,
 } from '@platform/contracts';
-import { estimateAccuracy, resumeCommands } from '@platform/domain';
+import {
+  compilePipeline,
+  estimateAccuracy,
+  resumeCommands,
+  SHIPPED_TEMPLATES,
+} from '@platform/domain';
 import { db as dbAdapters } from '@platform/infrastructure';
 import { and, asc, desc, eq, gt, inArray, ne, notInArray, sql, sum } from 'drizzle-orm';
 import { HttpError } from '../errors.js';
+import { APPROVAL_TOUCHED, MACHINE_AUTHORED } from './human-time-predicates.js';
 import { perUserBreakdownEnabled, summariseHumanTime } from './human-time-summary.js';
 
 const {
@@ -83,7 +93,6 @@ const {
   artifacts,
   costEntries,
   events,
-  humanTimeEntries,
   projects,
   questions,
   runContextPack,
@@ -92,7 +101,6 @@ const {
   runs,
   taskStages,
   tasks,
-  users,
 } = dbAdapters.schema;
 
 export type Database = dbAdapters.Database;
@@ -537,6 +545,7 @@ export const findRunContextPack = async (
       budget: runs.contextBudgetTokens,
       total: runs.contextTotalTokens,
       kbCommit: runs.contextKbCommit,
+      textSearch: runs.contextTextSearch,
     })
     .from(runs)
     .where(eq(runs.id, runId))
@@ -595,6 +604,9 @@ export const findRunContextPack = async (
     budget_tokens: run.budget,
     total_tokens: run.total,
     kb_commit: run.kbCommit,
+    // WP-44 (migration 0047). A run written before it recorded no text step: the field is absent
+    // rather than one of the five outcomes, and the screen says "not recorded".
+    ...(run.textSearch === null ? {} : { text_search: run.textSearch }),
   });
   if (!parsed.success) {
     // The issue *paths*, never the values: a path is a vault path somebody committed (BD-022).
@@ -625,19 +637,28 @@ export const findHumanTime = async (
   taskId: string,
   projectId: string,
 ): Promise<HumanTimeSummary> => {
-  const [rows, projectRows] = await Promise.all([
-    database
-      .select({
-        kind: humanTimeEntries.kind,
-        userId: humanTimeEntries.userId,
-        userName: users.name,
-        externalAuthor: humanTimeEntries.externalAuthor,
-        minutes: humanTimeEntries.minutes,
-      })
-      .from(humanTimeEntries)
-      .leftJoin(users, eq(users.id, humanTimeEntries.userId))
-      .where(eq(humanTimeEntries.taskId, taskId))
-      .orderBy(asc(humanTimeEntries.startedAt)),
+  // The statistics' two predicates, **shared, not copied** (WP-44, PROGRESS backlog 190): a row
+  // written for an account since declared a machine is dropped here as it is there, and a review
+  // window an approval touched is read with a flag the fold turns into `withheld` rather than into
+  // minutes. `h` and `t` are the aliases both fragments are written over.
+  const [result, projectRows] = await Promise.all([
+    database.execute<{
+      kind: HumanTimeKind;
+      user_id: string | null;
+      user_name: string | null;
+      external_author: string | null;
+      minutes: string | number | null;
+      withheld: boolean;
+    }>(sql`
+      select h.kind, h.user_id, u.name as user_name, h.external_author, h.minutes,
+             ${APPROVAL_TOUCHED} as withheld
+        from human_time_entries h
+        join tasks t on t.id = h.task_id
+        left join users u on u.id = h.user_id
+       where h.task_id = ${taskId}
+         and not ${MACHINE_AUTHORED}
+       order by h.started_at
+    `),
     database
       .select({ config: projects.config })
       .from(projects)
@@ -645,9 +666,17 @@ export const findHumanTime = async (
       .limit(1),
   ]);
 
-  return summariseHumanTime(rows, {
-    perUserBreakdown: perUserBreakdownEnabled(projectRows[0]?.config),
-  });
+  return summariseHumanTime(
+    result.rows.map((row) => ({
+      kind: row.kind,
+      userId: row.user_id,
+      userName: row.user_name,
+      externalAuthor: row.external_author,
+      minutes: row.minutes,
+      withheld: row.withheld === true,
+    })),
+    { perUserBreakdown: perUserBreakdownEnabled(projectRows[0]?.config) },
+  );
 };
 
 /**
@@ -872,32 +901,37 @@ export class UnknownStageStateError extends Error {
  *
  * It has to: `tasks` records that a task is `paused` and not *why*, and the session id of the run a
  * take-over interrupted is on no row at all (`runs.session_id` is written when a run *ends*). The
- * log is the authority for both, and reading the newest of this task's `task.taken_over` and
- * `task.handed_back` answers the question in one indexed scan — including the withdrawal, because a
- * hand-back is the later event and therefore the answer.
+ * log is the authority for both.
  *
- * Two things it refuses to invent. A payload that does not carry a `branch` publishes **nothing**
- * rather than a blank one, because the branch is the whole point of the record; and a task that is
- * not `paused` publishes nothing either, because a take-over that is over is not a take-over —
- * `task.cancelled` and `task.completed` are not on the stream this reads, and the state is what
- * covers them.
+ * **Which events decide is `TAKE_OVER_BOUNDARY_EVENTS`, imported rather than restated, and there is
+ * no state guard** (WP-44, PROGRESS backlog 164). The workpad asks `TaskRepository.takenOver` the
+ * same question over the same list, so the ticket and this page cannot disagree about who holds a
+ * task: a hand-back, a resume, a stage entry, a completion or a cancellation withdraws it, and an
+ * escalation does not. Until WP-44 this read `task.taken_over`/`task.handed_back` only and published
+ * nothing unless the task was `paused`, so a take-over the inactivity timer escalated vanished from
+ * the page that carries the hand-back control while the workpad and the brief still named its
+ * branch.
+ *
+ * One thing it refuses to invent: a payload that does not carry a `branch` and a `stage` publishes
+ * **nothing** rather than a blank block, because the branch is the whole point of the record.
  */
 const findTakenOver = async (
   database: Database,
-  taskId: string,
-  state: TaskState,
+  task: { readonly id: string; readonly template: string; readonly templateSnapshot: unknown },
 ): Promise<TaskDetailResponse['taken_over']> => {
-  if (state !== 'paused') {
-    return null;
-  }
   const rows = await database
-    .select({ type: events.type, payload: events.payload, occurredAt: events.occurredAt })
+    .select({
+      type: events.type,
+      payload: events.payload,
+      occurredAt: events.occurredAt,
+      actor: events.actor,
+    })
     .from(events)
     .where(
       and(
         eq(events.streamType, 'task'),
-        eq(events.streamId, taskId),
-        inArray(events.type, ['task.taken_over', 'task.handed_back']),
+        eq(events.streamId, task.id),
+        inArray(events.type, [...TAKE_OVER_BOUNDARY_EVENTS]),
       ),
     )
     .orderBy(desc(events.streamSeq))
@@ -918,7 +952,39 @@ const findTakenOver = async (
     session_id: sessionId,
     stage,
     resume_commands: [...resumeCommands(branch, sessionId)],
+    held_by: row.actor.kind === 'user' ? row.actor.user_id : null,
+    hand_back_stages: handBackStagesOf(task),
   };
+};
+
+/**
+ * The stages a hand-back may name — the task's compiled pipeline, enabled stages only (WP-44).
+ *
+ * The same computation `handBackTaskCommand` refuses against (`compilePipeline` over the task's
+ * frozen template, falling back to the shipped one for a row written before snapshots, exactly as
+ * the pipeline store loads it), so the picker and the route cannot disagree. A template this build
+ * cannot compile answers `[]` — the screen then says the stages cannot be read — rather than a list
+ * the route would refuse (standing rule 20's read side: refuse, never invent).
+ */
+export const handBackStagesOf = (task: {
+  readonly template: string;
+  readonly templateSnapshot: unknown;
+}): string[] => {
+  const snapshot = task.templateSnapshot;
+  const template =
+    snapshot !== null && typeof snapshot === 'object' && 'stages' in snapshot
+      ? (snapshot as PipelineTemplate)
+      : SHIPPED_TEMPLATES[task.template];
+  if (template === undefined) {
+    return [];
+  }
+  try {
+    return compilePipeline(task.template, template)
+      .stages.filter((stage) => stage.enabled)
+      .map((stage) => stage.id);
+  } catch {
+    return [];
+  }
 };
 
 /** `GET /api/tasks/:task_id` — the task with its stages, artifacts, questions, approvals and runs. */
@@ -966,7 +1032,7 @@ export const findTaskDetail = async (
       database,
       runRows.map((row) => row.id),
     ),
-    findTakenOver(database, taskId, task.state),
+    findTakenOver(database, task),
     // The project id comes from the task row rather than from the request: the breakdown setting
     // belongs to the project that owns the task, and a caller cannot name a different one.
     findHumanTime(database, taskId, task.projectId),

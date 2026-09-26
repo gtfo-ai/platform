@@ -179,21 +179,35 @@ the rest are not measured yet, rather than drawing empty ticks that read as "pas
 
 ### What is not on this screen
 
-- **Take over** and **hand back**. The two endpoints exist and answer everything an operator needs —
-  taking over pauses the pipeline, interrupts the running agent, commits and pushes its work in
-  progress on `agentic/<ticket>`, and answers with the branch, the `claude --resume` command and
-  whether the workspace was exported — and the ticket's workpad is updated with the same
-  instructions, so the information reaches you there today. What is missing is the **buttons**: a
-  place on this screen to show those lines, and a stage picker for handing the task back. Until they
-  land, take over from the API (`POST /api/tasks/:id/take-over`) and read the workpad comment. A
-  task you took over and did not hand back moves to needing a human after **5 working days**; the
-  workpad keeps showing your branch and the resume command while it waits. What you push to the
+- ~~**Take over** and **hand back**~~ **are on this screen since WP-44** (and on the run screen,
+  for the run's task). **Take over** pauses the pipeline, interrupts the running agent, commits and
+  pushes its work in progress on `agentic/<ticket>` and answers with the branch, the
+  `claude --resume` command and whether the workspace was exported — the panel shows exactly those,
+  in the tense the platform means them (*requested* is "being pushed as the run winds down", not
+  "done"). Tick **Also archive the workspace** to get a tarball too. While you hold the task the
+  panel shows your branch and the resume lines, two downloads — **the transcript** of the run you
+  interrupted (`GET /api/runs/<run>/transcript.jsonl`, rendered from the stored transcript each time,
+  so it lasts as long as the transcript does) and **the workspace tarball** when you asked for one
+  (`GET /api/runs/<run>/export.tar`, kept for **14 days from the take-over, whether or not you have
+  handed back** — the taken-over workspace's own retention)
+  — and **Hand back**, whose stage list is the task's own pipeline, so it offers nothing the platform
+  would refuse. A task you took over and have not handed back moves to needing a human after
+  **5 working days without a command from you** — any command you issue on the task (a pause, an
+  answer, feedback, a question) restarts the count; somebody else's does not, and neither does a push
+  to the branch, because this build does not yet record who pushed. It stays yours when it escalates: the
+  panel and the workpad keep showing the branch and the resume command. What you push to the
   branch while you hold it is followed: on a GitLab binding the merge request's update moves the
   revision the platform records for the task, so the next conflict check between tasks reads your
   commit rather than the agent's last one; an update GitLab stamps earlier than the one already
   recorded never moves it back. The CI gate does not rely on that record at all: it asks GitLab for
   the merge request's current head each time and judges **that** commit's pipeline, so a green
   pipeline for an older commit never passes it.
+- An **epic split** task carries a **Proposed breakdown** panel: one row per child ticket the agent
+  proposed, with its acceptance criteria, a checkbox per child and one button. Accepting **creates
+  those tickets in your tracker** — one per accepted child, never twice — and rejecting keeps the row
+  with your reason. Only a maintainer sees the checkboxes; everybody who can read the task can read
+  the queue. The feature is off until a project turns on **Epic split** in its operating-mode
+  features.
 - **Ask the task a question.** The answers are a thread, and the task response has nowhere to carry
   one, so a question would post into a void.
 
@@ -331,7 +345,6 @@ In one place, so it is not spread across thirteen sections:
 | Not built | Where you meet it |
 |---|---|
 | Steering a live run | run detail — the only endpoint the application calls that the server does not serve |
-| Take over / hand back | task detail |
 | Ask the task a question | task detail |
 | The business interview | onboarding step 3 |
 | Committing `.agentic/` configuration from the wizard | onboarding step 5 |

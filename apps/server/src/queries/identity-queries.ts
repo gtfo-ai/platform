@@ -18,7 +18,7 @@
  * (`createPostgresIdentityDirectory`, behind `InboundIdentityDirectory`), because *that* one has two
  * callers and a fake.
  */
-import type { AuditEntry, UserRole, UserSummary } from '@platform/contracts';
+import type { AuditEntry, IdentityCandidate, UserRole, UserSummary } from '@platform/contracts';
 import { db as dbAdapters } from '@platform/infrastructure';
 import { and, asc, desc, eq, lt, sql } from 'drizzle-orm';
 
@@ -234,6 +234,47 @@ export const listIdentityMappings = async (
     .select(IDENTITY_MAPPING_COLUMNS)
     .from(userIdentities)
     .orderBy(asc(userIdentities.provider), asc(userIdentities.externalId));
+
+/**
+ * The provider accounts refused as `unmapped_identity` that nobody has mapped or declared a machine
+ * since — the candidates the identities screen offers (WP-44, PROGRESS backlog 198).
+ *
+ * Read off `inbox.unmapped_identities` (migration 0047); a row written before it recorded no list
+ * and contributes nothing, which is the honest limit of the read rather than an empty answer. Newest
+ * first, at most `limit` accounts: a debugging surface, not an archive.
+ */
+export const listIdentityCandidates = async (
+  database: Database,
+  limit = 50,
+): Promise<IdentityCandidate[]> => {
+  const { rows } = await database.execute<{
+    provider: string;
+    external_id: string;
+    deliveries: string | number;
+    last_seen_at: Date | string;
+  }>(sql`
+    select c.provider, c.external_id, count(*) as deliveries, max(i.received_at) as last_seen_at
+      from inbox i
+      cross join lateral jsonb_to_recordset(i.unmapped_identities)
+                 as c(provider text, external_id text)
+     where i.unmapped_identities is not null
+       and jsonb_typeof(i.unmapped_identities) = 'array'
+       and c.provider is not null and c.external_id is not null
+       and not exists (
+         select 1 from user_identities ui
+          where ui.provider = c.provider and ui.external_id = c.external_id
+       )
+     group by c.provider, c.external_id
+     order by max(i.received_at) desc, c.provider, c.external_id
+     limit ${limit}
+  `);
+  return rows.map((row) => ({
+    provider: row.provider,
+    external_id: row.external_id,
+    deliveries: Number(row.deliveries),
+    last_seen_at: new Date(row.last_seen_at).toISOString(),
+  }));
+};
 
 export const listUsers = async (database: Database): Promise<UserSummary[]> => {
   const rows = await database

@@ -37,6 +37,8 @@ import type { SseFrame } from '@platform/contracts';
 import {
   cancelRunRequestSchema,
   cancelTaskRequestSchema,
+  decideBreakdownRequestSchema,
+  handBackRequestSchema,
   pauseTaskRequestSchema,
   resumeTaskRequestSchema,
   retryRunRequestSchema,
@@ -45,6 +47,7 @@ import {
   reworkRequestSchema,
   steerRunRequestSchema,
   submitFeedbackRequestSchema,
+  takeOverRequestSchema,
 } from '@platform/contracts';
 import { CONTENT_SECURITY_POLICY } from '../../../apps/server/src/web/csp.js';
 import * as fixtures from './fixtures.js';
@@ -65,7 +68,34 @@ const TASK_COMMAND_SCHEMAS = {
   'return-to-stage': returnToStageRequestSchema,
   rework: reworkRequestSchema,
   feedback: submitFeedbackRequestSchema,
+  // WP-44: the take-over pair. Their answers are parsed by the client, so they get real ones below.
+  'take-over': takeOverRequestSchema,
+  'hand-back': handBackRequestSchema,
 } as const;
+
+/**
+ * What the two WP-44 commands answer — the client parses both (`takeOverResponseSchema`,
+ * `taskCommandResponseSchema`), so the fake's usual `{}` would be refused as a malformed answer.
+ */
+const commandAnswer = (path: string, command: string | undefined): unknown => {
+  const taskId = /^\/api\/tasks\/([^/]+)\//.exec(path)?.[1] ?? '';
+  if (command === 'take-over') {
+    return {
+      task_id: taskId,
+      state: 'paused',
+      current_stage: 'implementation',
+      performed: true,
+      branch: 'agentic/demo-1',
+      session_id: null,
+      resume_commands: ['git fetch && git checkout agentic/demo-1'],
+      workspace_export: 'requested',
+    };
+  }
+  if (command === 'hand-back') {
+    return { task_id: taskId, state: 'active', current_stage: 'code_review', performed: true };
+  }
+  return {};
+};
 
 /** Just enough of zod's surface to parse a body; `zod` itself is not a dependency of `test/`. */
 type SafeParse = (
@@ -464,7 +494,24 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
         return;
       }
       commands.push({ path, body: parsed.data });
-      json(response, 200, {});
+      json(response, 200, commandAnswer(path, taskCommand?.[1]));
+      return;
+    }
+    // WP-44: the breakdown decision — its own path shape, and an answer the client parses.
+    if (path === `/api/tasks/${fixtures.IDS.taskEpic}/breakdown/decide` && method === 'POST') {
+      const parsed = decideBreakdownRequestSchema.safeParse(await readBody(request));
+      if (!parsed.success) {
+        problem(response, 400, 'invalid_request', parsed.error.issues[0]?.message ?? 'invalid');
+        return;
+      }
+      commands.push({ path, body: parsed.data });
+      json(response, 200, {
+        task_id: fixtures.IDS.taskEpic,
+        performed: true,
+        accepted: parsed.data.decision === 'accept' ? parsed.data.item_ids.length : 0,
+        rejected: parsed.data.decision === 'reject' ? parsed.data.item_ids.length : 0,
+        remaining: 2 - parsed.data.item_ids.length,
+      });
       return;
     }
     if (/^\/api\/projects\/[^/]+\/kb\/proposals\/[^/]+\/(approve|reject|edit)$/.test(path)) {
@@ -512,6 +559,9 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
         [`/api/integrations/${fixtures.IDS.integration}/setup-guide`]: fixtures.setupGuide,
         [`/api/tasks/${fixtures.IDS.taskFeature}`]: withAnswers,
         [`/api/tasks/${fixtures.IDS.taskBug}`]: fixtures.bugTaskDetail,
+        [`/api/tasks/${fixtures.IDS.taskTaken}`]: fixtures.takenOverTaskDetail,
+        [`/api/tasks/${fixtures.IDS.taskEpic}`]: fixtures.epicTaskDetail,
+        [`/api/tasks/${fixtures.IDS.taskEpic}/breakdown`]: fixtures.epicBreakdown,
         [`/api/runs/${fixtures.IDS.run}`]: fixtures.run,
         [`/api/runs/${fixtures.IDS.run}/messages`]: fixtures.runMessages,
         [`/api/runs/${fixtures.IDS.run}/prompt`]: fixtures.runPrompt,

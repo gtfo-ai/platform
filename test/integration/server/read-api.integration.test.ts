@@ -502,6 +502,15 @@ describe('the prompt and context-pack reads, and the rows that predate their wri
       budget_tokens: 12_000,
       total_tokens: 1_320,
       kb_commit: 'f1c7ea4',
+      // WP-44 (migration 0047): the text step's outcome round-trips whole.
+      text_search: {
+        outcome: 'matched',
+        kept_terms: ['session', 'rollback'],
+        dropped_terms: ['demo'],
+        floor: 'applied',
+        matched_documents: 2,
+        omitted_terms: 0,
+      },
     };
     const empty: ContextPackRecord = {
       tier0: [],
@@ -509,6 +518,15 @@ describe('the prompt and context-pack reads, and the rows that predate their wri
       budget_tokens: 12_000,
       total_tokens: 0,
       kb_commit: null,
+      // The fifth outcome, and the one that is not about the words at all.
+      text_search: {
+        outcome: 'not_searched',
+        kept_terms: [],
+        dropped_terms: [],
+        floor: null,
+        matched_documents: 0,
+        omitted_terms: 0,
+      },
     };
     const written = [
       '00000000-0000-4000-8000-0000000c0a01',
@@ -644,6 +662,7 @@ describe('the task projection', () => {
       by_kind: { review: 0, question: 0, approval: 0, steer: 0 },
       by_user: null,
       entries: 0,
+      withheld: { entries: 0, minutes: 0 },
     });
     expect(await findTaskDetail(drizzled, '00000000-0000-4000-8000-00000000dead')).toBeNull();
   });
@@ -690,6 +709,7 @@ describe('the task projection', () => {
         // on and nobody has spent a minute.
         by_user: null,
         entries: 5,
+        withheld: { entries: 0, minutes: 0 },
       });
       // Every kind the enum has is a key, so a kind added later cannot be silently absent.
       expect(Object.keys(detail?.human_time.by_kind ?? {}).sort()).toEqual([...KINDS].sort());
@@ -714,6 +734,69 @@ describe('the task projection', () => {
         // total above holds all the same (WP-29 criterion 5).
         { user_id: null, user_name: null, external_author: 'gitlab:grace', minutes: 12.5 },
       ]);
+    });
+
+    it('applies the statistics’ two exclusions, shared rather than copied (WP-44, backlog 190)', async () => {
+      // A task of its own, in this project, with three review windows over the same hour: an
+      // ordinary comment window, one an approval by its own reviewer landed inside (withheld), and
+      // one written for an account declared a machine after the fact (dropped). Instants are around
+      // `now()` so every row lands in a partition the migrations created.
+      // A project of its own too: `listProjectTasks`' keyset cases and the project summary count
+      // the shared project's rows, and a task added here moved their arithmetic (the take-over
+      // block below says the same).
+      const ownOrg = await pool.query<{ id: string }>(
+        "insert into organizations (name) values ('human-time-exclusions') returning id",
+      );
+      const ownProject = await pool.query<{ id: string }>(
+        `insert into projects (org_id, key, name, repo_url)
+         values ($1, 'exclusions', 'Exclusions', 'https://git.example.test/acme/exclusions.git')
+         returning id`,
+        [ownOrg.rows[0]?.id],
+      );
+      const exclusionProject = ownProject.rows[0]?.id as string;
+      const own = await pool.query<{ id: string }>(
+        `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state,
+                            current_stage)
+         values ($1, 'fake-jira', 'ACME-190', 'https://jira.example.test/browse/ACME-190',
+                 'feature', 'active', 'code_review') returning id`,
+        [exclusionProject],
+      );
+      const exclusionTask = own.rows[0]?.id as string;
+      await pool.query(
+        `insert into human_time_entries
+           (task_id, kind, user_id, external_author, started_at, ended_at, minutes)
+         values ($1, 'review', null, 'gitlab:ada', now() - interval '1 hour', now() + interval '1 hour', 40),
+                ($1, 'review', null, 'gitlab:grace', now() - interval '1 hour', now() + interval '1 hour', 25),
+                ($1, 'review', null, 'gitlab:release-bot', now() - interval '1 hour', now() + interval '1 hour', 90)`,
+        [exclusionTask],
+      );
+      await pool.query(
+        `insert into events (stream_type, stream_id, stream_seq, type, payload, actor)
+         values ('project', $1, 1, 'mr.approved', $2::jsonb,
+                 '{"kind":"system","component":"test"}'::jsonb)`,
+        [
+          exclusionTask,
+          JSON.stringify({
+            project_id: exclusionProject,
+            approver: { provider: 'gitlab', external_id: 'grace' },
+          }),
+        ],
+      );
+      await pool.query(
+        `insert into user_identities (provider, external_id, user_id, kind)
+         values ('gitlab', 'release-bot', null, 'machine')`,
+      );
+      try {
+        const detail = await findTaskDetail(drizzled, exclusionTask);
+        expect(detail?.human_time.total_minutes).toBe(40);
+        expect(detail?.human_time.entries).toBe(1);
+        // Withheld is said, in entries and minutes; the machine's 90 are in neither figure.
+        expect(detail?.human_time.withheld).toEqual({ entries: 1, minutes: 25 });
+      } finally {
+        await pool.query(
+          "delete from user_identities where provider = 'gitlab' and external_id = 'release-bot'",
+        );
+      }
     });
 
     it('reads the breakdown as off when the stored configuration does not parse', async () => {
@@ -817,11 +900,26 @@ describe('the task projection', () => {
         session_id: 'sess-1',
         stage: 'refinement',
         resume_commands: ['git fetch && git checkout agentic/ACME-9', 'claude --resume sess-1'],
+        // A system actor holds nothing (WP-44); a take-over through the route names its user.
+        held_by: null,
+        // The task has no snapshot, so the shipped `feature` template is compiled — the list the
+        // hand-back route checks against (WP-44, criterion 2).
+        hand_back_stages: expect.arrayContaining(['refinement', 'implementation', 'code_review']),
       });
     });
 
+    it('is still published after an escalation — the workpad’s rule, not a state guard (WP-44, backlog 164)', async () => {
+      // The task row stays `paused` (the census refuses a second writer of `tasks.state` here), and
+      // it is the **event** that matters: `task.escalated` is not a boundary, so the newest boundary
+      // is still the take-over. Until WP-44 this read only taken_over/handed_back and a state guard.
+      await append(2, 'task.escalated', { reason: 'the take-over was inactive' });
+      expect((await findTaskDetail(drizzled, pausedTaskId))?.taken_over?.branch).toBe(
+        'agentic/ACME-9',
+      );
+    });
+
     it('is withdrawn by a later hand-back, because the newest of the two is the answer', async () => {
-      await append(2, 'task.handed_back', {
+      await append(3, 'task.handed_back', {
         branch: 'agentic/ACME-9',
         stage: 'code_review',
         summary: 'done by hand',
@@ -833,13 +931,25 @@ describe('the task projection', () => {
       // The branch is the whole point of the record; a blank one would send a reader to
       // `git checkout ` and would be worse than an absent card. Appended **after** the hand-back,
       // so this take-over is the newest event and the previous case's answer cannot be the reason.
-      await append(3, 'task.taken_over', { session_id: 'sess-2', stage: 'refinement' });
+      await append(4, 'task.taken_over', { session_id: 'sess-2', stage: 'refinement' });
       expect((await findTaskDetail(drizzled, pausedTaskId))?.taken_over).toBeNull();
     });
 
-    it('publishes nothing for a task that is not paused, whatever its log says', async () => {
-      // The `active` task the rest of this file uses, whose own log has never had a take-over.
+    it('publishes nothing for a task whose log never had a take-over, whatever its state', async () => {
+      // The `active` task the rest of this file uses. Since WP-44 the log alone decides (the
+      // workpad's rule), so this is the negative for "no take-over on the stream".
       expect((await findTaskDetail(drizzled, taskId))?.taken_over).toBeNull();
+    });
+
+    it('is withdrawn by a stage entry and a resume, which the workpad reads as boundaries too', async () => {
+      await append(5, 'task.taken_over', {
+        branch: 'agentic/ACME-9',
+        session_id: null,
+        stage: 'refinement',
+      });
+      expect((await findTaskDetail(drizzled, pausedTaskId))?.taken_over).not.toBeNull();
+      await append(6, 'task.resumed', {});
+      expect((await findTaskDetail(drizzled, pausedTaskId))?.taken_over).toBeNull();
     });
   });
 });

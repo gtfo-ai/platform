@@ -32,7 +32,7 @@ import type {
 } from '../ports/integrations/inbox.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
-import { createWebhookIngress, MAX_INBOX_ERROR_CHARS } from './inbound.js';
+import { createWebhookIngress, MAX_INBOX_ERROR_CHARS, unmappedIdentitiesOf } from './inbound.js';
 import type { InboundDecisionApplier, InboundDecisionOutcome } from './inbound-decisions.js';
 
 const INTEGRATION = '00000000-0000-4000-8000-0000000000c1' as Id;
@@ -800,5 +800,79 @@ describe('a human decision arriving from a provider', () => {
     ]);
     expect(harness.appended[0]).toMatchObject({ stream_id: PROJECT, stream_seq: 7 });
     expect(harness.appended[1]).toBe(aggregateEvent);
+  });
+});
+
+describe('the refused accounts a row records (WP-44, PROGRESS backlog 198)', () => {
+  const passThrough: SecretRedactor = {
+    redactText: (value: string): RedactionOutcome<string> => ({ value, count: 0 }),
+    redactJson: <T>(value: T): RedactionOutcome<T> => ({ value, count: 0 }),
+  } as unknown as SecretRedactor;
+
+  it('keeps each unmapped account once, and nothing from any other reason', () => {
+    const identities = unmappedIdentitiesOf(
+      [
+        {
+          events: [],
+          ignored: [
+            {
+              reason: 'unmapped_identity',
+              detail: 'x',
+              identity: { provider: 'slack', external_id: 'U1' },
+            },
+            {
+              reason: 'unmapped_identity',
+              detail: 'x again',
+              identity: { provider: 'slack', external_id: 'U1' },
+            },
+            { reason: 'unsupported_event', detail: 'y' },
+            // An unmapped entry with no identity (an adapter that does not say) adds nothing.
+            { reason: 'unmapped_identity', detail: 'z' },
+          ],
+        },
+        {
+          events: [],
+          ignored: [
+            {
+              reason: 'unmapped_identity',
+              detail: 'w',
+              identity: { provider: 'slack', external_id: 'U2' },
+            },
+          ],
+        },
+      ],
+      passThrough,
+    );
+    expect(identities).toEqual([
+      { provider: 'slack', external_id: 'U1' },
+      { provider: 'slack', external_id: 'U2' },
+    ]);
+  });
+
+  it('leaves out an id the redactor would change, rather than storing a placeholder', () => {
+    const redacting = {
+      redactText: (value: string) =>
+        value === 'plantedsecret0001'
+          ? { value: '[REDACTED:integration:x]', count: 1 }
+          : { value, count: 0 },
+      redactJson: <T>(value: T) => ({ value, count: 0 }),
+    } as unknown as SecretRedactor;
+    expect(
+      unmappedIdentitiesOf(
+        [
+          {
+            events: [],
+            ignored: [
+              {
+                reason: 'unmapped_identity',
+                detail: 'x',
+                identity: { provider: 'slack', external_id: 'plantedsecret0001' },
+              },
+            ],
+          },
+        ],
+        redacting,
+      ),
+    ).toEqual([]);
   });
 });

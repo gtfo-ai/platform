@@ -553,7 +553,7 @@ docker compose start app launcher
 |---|---|---|
 | `knowledge` | one bare git mirror per project (`APP_KNOWLEDGE_MIRROR_ROOT`, TD-026) | a **cache** of the project's git repository; the platform re-clones it. The knowledge base itself lives in the project's repository — that is the whole of [BD-012](decisions/business/BD-012-knowledge-in-repo.md) |
 | `agentic-ctl` | one directory per live run, holding that run's control socket and token | **live credentials** with the lifetime of a run. Backing them up copies secrets out of their scope, and restoring them restores nothing: the runs are gone |
-| `exports` | take-over export tarballs | the **user's** artefacts, downloaded when they are made. The branch is on the git host either way |
+| `exports` | take-over export tarballs | the **user's** artefacts, served to them at `GET /api/runs/<run>/export.tar` (the `app` container reads the volume through `APP_WORKSPACE_EXPORT_DIR`) and **removed after 14 days** by the launcher's retention sweep — the taken-over workspace's own window (WP-44, Q93). The branch is on the git host either way |
 | `agentic-repo-cache` | the launcher's per-project bare mirrors | a cache, re-created on the next run |
 
 And one thing to know at teardown time: `docker compose down -v` removes every volume compose
@@ -664,8 +664,10 @@ are off when unset.
 `APP_WORKING_DAYS`, `APP_WORKING_HOURS` and `APP_HOLIDAYS`, read in `TZ`, are the **working calendar**
 every deadline the platform holds a person to is counted on (WP-56): a blocking question and a plan
 or budget approval expire after the project's `pipeline.limits.question_timeout` (default
-`1 working day`, BD-006) and move the task to needing a human, and a taken-over task that nobody has
-handed back escalates after **5 working days** (product/19 §19). So a question asked at 16:00 on a
+`1 working day`, BD-006) and move the task to needing a human, and a taken-over task escalates after
+**5 working days with no command from the person holding it** (product/19 §19; since WP-44 a command
+they issue on the task restarts the count, while another user's command and a push to the branch do
+not — the normaliser does not yet carry who pushed, though GitLab's hook names them). So a question asked at 16:00 on a
 Friday with the defaults (Monday–Friday, 09:00–17:00) expires at 16:00 on Monday, not on Saturday.
 They are read at start-up: an empty value is the default in `.env.example`, and a malformed one
 refuses to start with the variable's name in the message. The platform never guesses public holidays

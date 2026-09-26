@@ -83,6 +83,7 @@ import {
   findRunProjectId,
   findTaskProjectId,
   findUserById,
+  listIdentityCandidates,
   listIdentityMappings,
   projectExists,
   upsertIdentityMapping,
@@ -99,6 +100,7 @@ import {
   findRunPosition,
   findTaskDetail,
   findTaskPosition,
+  listRunMessages,
 } from './queries/pipeline-queries.js';
 import { findProjectAutonomy, listProjectAudit } from './queries/project-queries.js';
 import {
@@ -112,6 +114,7 @@ import { registerAskRoutes } from './routes/asks.js';
 import { registerBootstrapRoutes } from './routes/bootstrap.js';
 import { registerBreakdownRoutes } from './routes/breakdown.js';
 import { registerCommandRoutes } from './routes/commands.js';
+import { registerDownloadRoutes } from './routes/downloads.js';
 import { registerIntegrationRoutes } from './routes/integrations.js';
 import { registerKbRoutes } from './routes/kb.js';
 import { registerOnboardingRoutes } from './routes/onboarding.js';
@@ -463,6 +466,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         findUser: async (userId) => findUserById(options.database, userId),
         upsertMapping: async (input) => upsertIdentityMapping(options.database, input),
         listMappings: async () => listIdentityMappings(options.database),
+        listCandidates: async () => listIdentityCandidates(options.database),
         recordAction: async (input) => recordHumanAction(options.database, input),
       },
     });
@@ -636,6 +640,23 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       commands: options.commands,
     });
     await registerRunRoutes(app, { database: options.database });
+    // WP-44: the transcript file and the take-over tarball, the two things product/19 §19 hands a
+    // person besides the branch. Reads of what exists — `run_messages` and the shared export
+    // volume — never a copy (Q93).
+    await registerDownloadRoutes(app, {
+      queries: {
+        runProjectId: async (runId) => findRunProjectId(options.database, runId),
+        projectRole: async (projectId, userId) =>
+          findProjectRole(options.database, projectId, userId),
+        transcriptPage: async (runId, after, limit) =>
+          listRunMessages(options.database, runId, {
+            limit,
+            partials: false,
+            ...(after === undefined ? {} : { after }),
+          }),
+      },
+      exportDir: options.config.workspaceExportDir,
+    });
     await registerSseRoutes(app, {
       hub: options.hub,
       metrics: options.metrics,

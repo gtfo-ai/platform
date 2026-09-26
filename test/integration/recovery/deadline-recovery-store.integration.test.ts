@@ -176,5 +176,60 @@ describe('the deadline recovery store (WP-56, backlog 161 and 162)', () => {
     const found = await store.heldTasks(tx, { limit: 50 });
     expect(found.map((row) => row.taskId)).toEqual([held]);
     expect(Number.isNaN(Date.parse(found[0]?.takenAt as string))).toBe(false);
+    // Nobody acted after the take-over: its own instant is the last activity.
+    expect(found[0]?.lastActivityAt).toBe(found[0]?.takenAt);
+  });
+
+  it('counts the holder’s own command as activity, and nobody else’s (WP-44, backlog 167)', async () => {
+    const users = await client.query<{ id: string }>(
+      `insert into users (email, name) values
+         ('holder@example.test', 'Holder'), ('bystander@example.test', 'Bystander')
+       returning id`,
+    );
+    const holder = users.rows[0]?.id as Id;
+    const bystander = users.rows[1]?.id as Id;
+    const task = await seedTask('paused');
+    // `events` is partitioned by month and migrations create the current month onwards; this case's
+    // instants are fixed (rule 86), so their month is created here and rolled back with the case —
+    // the shape `postgres-pipeline-store.integration.test.ts` uses.
+    const { rows: partition } = await client.query<{ name: string }>(
+      `select platform_partition_name('events', '2026-06-01'::date) as name`,
+    );
+    await client.query(
+      `create table if not exists public.${client.escapeIdentifier(partition[0]?.name as string)}
+         partition of events for values from ('2026-06-01') to ('2026-07-01')`,
+    );
+    await client.query(
+      `insert into events (stream_type, stream_id, stream_seq, type, payload, actor, occurred_at)
+       values ('task', $1, 1, 'task.taken_over', $2::jsonb, $3::jsonb, '2026-06-05T09:00:00Z')`,
+      [
+        task,
+        JSON.stringify({
+          project_id: projectId,
+          task_id: task,
+          branch: 'agentic/ACME-1',
+          session_id: null,
+          stage: 'implementation',
+        }),
+        JSON.stringify({ kind: 'user', user_id: holder }),
+      ],
+    );
+    const act = async (userId: Id, at: string): Promise<void> => {
+      await client.query(
+        `insert into human_actions (task_id, user_id, action, created_at)
+         values ($1, $2, 'task.pause', $3)`,
+        [task, userId, at],
+      );
+    };
+    await act(holder, '2026-06-10T11:00:00Z');
+    // Later, but somebody else's: it must not move the clock.
+    await act(bystander, '2026-06-11T11:00:00Z');
+    // Before the take-over: not activity *on the take-over*.
+    await act(holder, '2026-06-01T11:00:00Z');
+
+    const found = await store.heldTasks(tx, { limit: 50 });
+    const row = found.find((entry) => entry.taskId === task);
+    expect(row?.takenAt).toBe('2026-06-05T09:00:00.000Z');
+    expect(row?.lastActivityAt).toBe('2026-06-10T11:00:00.000Z');
   });
 });

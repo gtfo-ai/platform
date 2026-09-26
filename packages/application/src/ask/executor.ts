@@ -59,6 +59,7 @@ import {
 } from '../artifacts/redaction.js';
 import { type BudgetGuard, noBudgetGuard } from '../cost/guard.js';
 import { composeSecretRedactors } from '../integrations/redaction.js';
+import { redactTextSearchTerms } from '../knowledge/text-search-record.js';
 import {
   leaseExpiryAt,
   RUN_LEASE_TTL_MS,
@@ -460,6 +461,8 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
       );
       const systemPrompt = runRedactor.redactText(plan.spec.systemPromptAppend);
       const userPrompt = runRedactor.redactText(plan.spec.userPrompt);
+      // The pack's recorded search terms are the question's own words (WP-44): the same redactor.
+      const contextPack = redactTextSearchTerms(plan.contextPack, runRedactor);
       const created = createRun({
         id: runId,
         taskId: ask.taskId,
@@ -476,7 +479,7 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
       const starting = startRun(created, context);
       const running = markRunning(
         starting.aggregate,
-        { contextPack: plan.contextPack satisfies ContextPackRecord },
+        { contextPack: contextPack satisfies ContextPackRecord },
         context,
       );
       await options.store.runs.insert(scope.tx, {
@@ -503,7 +506,7 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         userPrompt: userPrompt.value,
         redactionCount: systemPrompt.count + userPrompt.count,
         // WP-57: the second `runs.insert` call site stores its pack the same way (standing rule 49).
-        contextPack: plan.contextPack,
+        contextPack,
       });
       /**
        * The lease, claimed in the **same transaction as the row** — the stage executor's rule and

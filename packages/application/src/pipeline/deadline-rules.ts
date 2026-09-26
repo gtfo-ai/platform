@@ -45,10 +45,17 @@ export const questionDeadlineRule =
       questionTimeoutOf(config),
     ).toISOString() as IsoDateTime;
 
-/** When a take-over taken at `takenAt` has been inactive for {@link TAKE_OVER_INACTIVITY_TIMEOUT}. */
-export const takeOverDeadline = (calendar: WorkingCalendar, takenAt: IsoDateTime): IsoDateTime =>
+/**
+ * When a take-over whose holder was last active at `lastActivityAt` has been inactive for
+ * {@link TAKE_OVER_INACTIVITY_TIMEOUT} — `TakeOverRecord.lastActivityAt`, the take-over itself or a
+ * later command of the holder's (WP-44, PROGRESS backlog 167).
+ */
+export const takeOverDeadline = (
+  calendar: WorkingCalendar,
+  lastActivityAt: IsoDateTime,
+): IsoDateTime =>
   resolveDeadline(
     calendar,
-    new Date(takenAt),
+    new Date(lastActivityAt),
     TAKE_OVER_INACTIVITY_TIMEOUT,
   ).toISOString() as IsoDateTime;

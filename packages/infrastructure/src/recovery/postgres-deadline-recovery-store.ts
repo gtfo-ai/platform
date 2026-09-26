@@ -16,6 +16,7 @@ import {
 import type { Id, IsoDateTime } from '@platform/contracts';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
+import { takeOverLastActivitySql } from '../pipeline/take-over-activity.js';
 
 const sqlOf = (tx: Transaction): SqlExecutor => postgresTransaction(tx).client;
 
@@ -54,11 +55,18 @@ export const createPostgresDeadlineRecoveryStore = (): DeadlineRecoveryStore => 
     return rows.map(toWaiting);
   },
   heldTasks: async (tx, query) => {
-    const { rows } = await sqlOf(tx).query<{ task_id: string; taken_at: Date | string }>(
-      `select t.id as task_id, e.occurred_at as taken_at
+    // The holder's last activity is `takeOverLastActivitySql`, the expression `tasks.takenOver`
+    // uses, so the recovery and the timer compute one instant (WP-44, PROGRESS backlog 167).
+    const { rows } = await sqlOf(tx).query<{
+      task_id: string;
+      taken_at: Date | string;
+      last_activity_at: Date | string;
+    }>(
+      `select t.id as task_id, e.occurred_at as taken_at,
+              ${takeOverLastActivitySql('t.id', 'e')} as last_activity_at
          from tasks t
          join lateral (
-           select type, occurred_at from events
+           select type, occurred_at, actor from events
             where stream_type = 'task' and stream_id = t.id and type = any($1::text[])
             order by stream_seq desc limit 1
          ) e on true
@@ -70,6 +78,7 @@ export const createPostgresDeadlineRecoveryStore = (): DeadlineRecoveryStore => 
     return rows.map((row) => ({
       taskId: row.task_id as Id,
       takenAt: new Date(row.taken_at).toISOString() as IsoDateTime,
+      lastActivityAt: new Date(row.last_activity_at).toISOString() as IsoDateTime,
     }));
   },
   undated: async (tx, query) => {

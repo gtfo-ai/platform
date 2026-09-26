@@ -711,11 +711,30 @@ export const TAKE_OVER_BOUNDARY_EVENTS = [
 export interface TakeOverRecord {
   /** The `task.taken_over` event's own id — which take-over this is, when there were several. */
   readonly eventId: Id;
-  /** When it was taken: the instant the inactivity timeout counts from (WP-56). */
+  /** When it was taken. */
   readonly at: IsoDateTime;
   readonly branch: string;
   readonly sessionId: string | null;
   readonly stage: Slug;
+  /** The user the `task.taken_over` event names as its actor — who holds the task. */
+  readonly holderUserId: Id | null;
+  /**
+   * The newest **activity** by the holder, and the instant the inactivity timeout counts from
+   * (WP-44, PROGRESS backlog 167; product/19 §19's *"5 working days of inactivity"*).
+   *
+   * Activity is, exactly: the take-over itself, and a `human_actions` row on this task written by
+   * {@link holderUserId} after it — any command they issue (a pause, an answer, feedback, a steer,
+   * an ask). **Not** a row by anybody else, and **not** `mr.updated`: the event reaches this ring
+   * with no author, because **our normalisers drop it** — GitLab's merge-request hook does name who
+   * triggered it (`user`), as GitHub's `sender` would — and the platform's own pushes produce the
+   * same event, so counting it unattributed would let a bot's push, or the platform's, keep a
+   * person's take-over alive. Carrying the author on `mr.updated` is a normaliser change (PROGRESS
+   * backlog 207); an `mr.updated` by the holder is then the second signal. Until then it is absent.
+   *
+   * One definition, read by both the timer (`expireTakeOver`) and its recovery row
+   * (`recovery/deadline.ts`), so the two cannot disagree about when a take-over went quiet.
+   */
+  readonly lastActivityAt: IsoDateTime;
 }
 
 export interface StoredArtifact {

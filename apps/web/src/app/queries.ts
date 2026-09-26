@@ -265,11 +265,13 @@ export const useKbProposals = (projectId: string | null) => {
   });
 };
 
-export const useTask = (taskId: string) => {
+export const useTask = (taskId: string, enabled = true) => {
   const { endpoints } = useServices();
   return useQuery({
     queryKey: queryKeys.task(taskId),
     queryFn: () => endpoints.task(taskId),
+    // `false` while a caller does not know the id yet — the run screen learns its task from the run.
+    enabled,
     ...FOREVER,
   });
 };
@@ -414,6 +416,31 @@ export const useOrgIdentities = () => {
   });
 };
 
+/**
+ * Accounts refused as `unmapped_identity` that nobody has mapped (WP-44, PROGRESS backlog 198) —
+ * admin-only like the list beside them, and under its key prefix, so saving a mapping refreshes it.
+ */
+export const useIdentityCandidates = (enabled: boolean) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: [...queryKeys.identityCandidates],
+    queryFn: () => endpoints.identityCandidates(),
+    enabled,
+    retry: false,
+  });
+};
+
+/** One integration's refused or ignored deliveries, fetched when a reader opens them (WP-44). */
+export const useRefusedDeliveries = (integrationId: string, enabled: boolean) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: queryKeys.refusedDeliveries(integrationId),
+    queryFn: () => endpoints.refusedDeliveries(integrationId),
+    enabled,
+    retry: false,
+  });
+};
+
 export const useOrgUsers = () => {
   const { endpoints } = useServices();
   return useQuery({
@@ -546,6 +573,103 @@ export const useTaskCommands = (taskId: string) => {
       onSuccess: invalidate,
     }),
   };
+};
+
+/**
+ * Take-over and hand-back (product/19 §19; WP-27's routes, WP-44's controls).
+ *
+ * Their own hook rather than members of {@link useTaskCommands}, because both carry the caller's
+ * **per-intent** `Idempotency-Key` (`app/idempotency.ts`, backlog 53): the hand-back route requires
+ * one — a hand-back creates a stage attempt and a run, so a double click would start two — and a
+ * take-over's key makes a retried request answer from the attempt that performed it rather than
+ * with the aggregate's refusal of a second one. Each key is released when its intent succeeds.
+ */
+export const useTakeOverCommands = (taskId: string, mint?: MintKey) => {
+  const { endpoints } = useServices();
+  const queryClient = useQueryClient();
+  const intents = useIntentKeys(mint);
+  const invalidate = async (): Promise<void> => {
+    await queryClient.invalidateQueries({ queryKey: queryKeys.task(taskId) });
+    await queryClient.invalidateQueries({ queryKey: [...queryKeys.inbox] });
+  };
+  return {
+    takeOver: useMutation({
+      mutationFn: (input: { tarball: boolean; reason?: string }) =>
+        endpoints.takeOverTask(
+          taskId,
+          {
+            tarball: input.tarball,
+            ...(input.reason === undefined || input.reason === '' ? {} : { reason: input.reason }),
+          },
+          intents.keyFor(['task.take_over', taskId, input]),
+        ),
+      onSuccess: async (_result, input) => {
+        intents.release(['task.take_over', taskId, input]);
+        await invalidate();
+      },
+    }),
+    handBack: useMutation({
+      mutationFn: (input: { stage: string; summary: string }) =>
+        endpoints.handBackTask(taskId, input, intents.keyFor(['task.hand_back', taskId, input])),
+      onSuccess: async (_result, input) => {
+        intents.release(['task.hand_back', taskId, input]);
+        await invalidate();
+      },
+    }),
+  };
+};
+
+/** The epic split's queue for one task (WP-40's route, WP-44's panel). */
+export const useTaskBreakdown = (taskId: string, enabled: boolean) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: queryKeys.taskBreakdown(taskId),
+    queryFn: () => endpoints.taskBreakdown(taskId),
+    enabled,
+    ...FOREVER,
+  });
+};
+
+/**
+ * Accept or reject some proposed children. The key is per **intent** — the decision, the reason and
+ * the exact set of children — because the route requires one and a repeat would file a second set
+ * of tickets in somebody else's tracker; a corrected selection is a new intent and a new key.
+ */
+export const useBreakdownDecision = (taskId: string, mint?: MintKey) => {
+  const { endpoints } = useServices();
+  const queryClient = useQueryClient();
+  const intents = useIntentKeys(mint);
+  return useMutation({
+    mutationFn: (input: {
+      decision: 'accept' | 'reject';
+      itemIds: readonly string[];
+      reason?: string;
+    }) => {
+      const body = {
+        decision: input.decision,
+        item_ids: [...input.itemIds].sort(),
+        ...(input.reason === undefined || input.reason === '' ? {} : { reason: input.reason }),
+      };
+      return endpoints.decideBreakdown(
+        taskId,
+        body,
+        intents.keyFor(['task.breakdown.decide', taskId, body]),
+      );
+    },
+    onSuccess: async (_result, input) => {
+      intents.release([
+        'task.breakdown.decide',
+        taskId,
+        {
+          decision: input.decision,
+          item_ids: [...input.itemIds].sort(),
+          ...(input.reason === undefined || input.reason === '' ? {} : { reason: input.reason }),
+        },
+      ]);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.taskBreakdown(taskId) });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.task(taskId) });
+    },
+  });
 };
 
 export const useRunCommands = (runId: string) => {

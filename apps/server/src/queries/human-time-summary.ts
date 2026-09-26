@@ -37,6 +37,11 @@ export interface HumanTimeRow {
   readonly externalAuthor: string | null;
   /** `numeric(10,2)` arrives as a string from `pg`; `null` is a window still open. */
   readonly minutes: string | number | null;
+  /**
+   * A review window an approval touched (`APPROVAL_TOUCHED`, WP-44): counted in `withheld` and in
+   * nothing else. Absent is `false`.
+   */
+  readonly withheld?: boolean;
 }
 
 /** `numeric(10,2)` sums exactly; repeated floating-point addition of them does not. */
@@ -77,10 +82,20 @@ export const summariseHumanTime = (
   >;
   const perUser = new Map<string, HumanTimeByUser>();
   let total = 0;
+  let entries = 0;
+  let withheldEntries = 0;
+  let withheldMinutes = 0;
 
   for (const row of rows) {
     // A window still open has no minutes yet; it is an entry and contributes nothing (rule 16).
     const minutes = row.minutes === null ? 0 : Number(row.minutes);
+    if (row.withheld === true) {
+      // Out of every figure below and into the one that says how much was left out (backlog 190).
+      withheldEntries += 1;
+      withheldMinutes += minutes;
+      continue;
+    }
+    entries += 1;
     total += minutes;
     byKind[row.kind] += minutes;
     // A uuid contains no colon, so the prefix cannot collide with a platform user's id.
@@ -108,6 +123,7 @@ export const summariseHumanTime = (
     by_user: options.perUserBreakdown
       ? [...perUser.values()].map((entry) => ({ ...entry, minutes: roundMinutes(entry.minutes) }))
       : null,
-    entries: rows.length,
+    entries,
+    withheld: { entries: withheldEntries, minutes: roundMinutes(withheldMinutes) },
   };
 };

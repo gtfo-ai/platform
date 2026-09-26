@@ -112,6 +112,7 @@ const TASK_DETAIL: TaskDetailResponse = {
     by_kind: { review: 0, question: 0, approval: 0, steer: 0 },
     by_user: null,
     entries: 0,
+    withheld: { entries: 0, minutes: 0 },
   },
   stages: [],
   artifacts: [],

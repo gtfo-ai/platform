@@ -239,6 +239,11 @@ export const runs = pgTable('runs', {
   contextBudgetTokens: integer('context_budget_tokens'),
   contextTotalTokens: integer('context_total_tokens'),
   contextKbCommit: text('context_kb_commit'),
+  /**
+   * `ContextPackRecord.text_search` — what the pack's text step did (migration 0047, WP-44). Null
+   * on a run written before it, which is "not recorded" rather than any of the five outcomes.
+   */
+  contextTextSearch: jsonb('context_text_search').$type<JsonObject>(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

@@ -34,11 +34,12 @@
  * inventing one for this is a second vocabulary"*. Reading the queue is `task.read` (viewer),
  * because that reads only what the caller can already see on the task page.
  *
- * ## The census cannot see these routes
+ * ## The screen that calls them
  *
- * `apps/server/src/routes/client-census.test.ts` compares the **client's** paths against the router
- * and no screen calls either of these yet, so they are asserted there by hand — the position
- * `GET …/kb/health`, `take-over` and `hand-back` are already in.
+ * The task page's breakdown panel (`apps/web/src/features/breakdown-panel.tsx`, WP-44) — so the
+ * client-driven census in `routes/client-census.test.ts` covers both, and the hand-written case that
+ * asserted them while no screen did is gone. The read tells the screen whether to draw the control
+ * at all (`can_decide`), because the SPA's session carries only the organisation role.
  */
 import type { JsonObject, TicketBreakdownItem, UserRole } from '@platform/contracts';
 import {
@@ -47,10 +48,11 @@ import {
   decideBreakdownResponseSchema,
   taskBreakdownSchema,
 } from '@platform/contracts';
+import { can } from '@platform/domain';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
-import { requirePermission } from '../auth/rbac.js';
+import { effectiveRole, requirePermission } from '../auth/rbac.js';
 import { commandRefusal, HttpError, NotFoundError } from '../errors.js';
 import { idempotentReplay, requireIdempotencyKey } from './idempotency.js';
 import { scopedProject, scopeToProject } from './scope.js';
@@ -144,8 +146,20 @@ export const registerBreakdownRoutes = async (
       },
     },
     async (request) => {
-      await projectOf(request.params.task_id);
-      return { items: [...(await options.queries.listBreakdown(request.params.task_id))] };
+      const projectId = await projectOf(request.params.task_id);
+      const actor = request.actor;
+      // The guard's own rule, asked for the write the screen would offer (WP-44, criterion 3): the
+      // effective role is the higher of the organisation role and a project membership.
+      const canDecide =
+        actor !== undefined &&
+        can(
+          effectiveRole(actor.role, await options.queries.projectRole(projectId, actor.userId)),
+          'task.approve_plan',
+        );
+      return {
+        items: [...(await options.queries.listBreakdown(request.params.task_id))],
+        can_decide: canDecide,
+      };
     },
   );
 

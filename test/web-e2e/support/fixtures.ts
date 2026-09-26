@@ -42,6 +42,7 @@ import {
   runPromptResponseSchema,
   runRecordSchema,
   setupGuideResponseSchema,
+  taskBreakdownSchema,
   taskDetailResponseSchema,
   taskRecordSchema,
   transcriptEventSchema,
@@ -64,6 +65,11 @@ export const IDS = {
   budget: id(70),
   orgBudget: id(71),
   audit: id(80),
+  // WP-44: a task a human holds, and an epic split with a breakdown queue.
+  taskTaken: id(22),
+  taskEpic: id(23),
+  childA: id(90),
+  childB: id(91),
 } as const;
 
 export const PROJECT_KEY = 'demo_service';
@@ -452,6 +458,9 @@ export const taskDetail = taskDetailResponseSchema.parse({
       },
     ],
     entries: 4,
+    // WP-44: one approval-touched review window withheld, as the statistics withhold it — the task
+    // page says so beneath the figure rather than printing a silently lower number.
+    withheld: { entries: 1, minutes: 30 },
   },
   stages: [
     {
@@ -499,12 +508,87 @@ export const bugTaskDetail = taskDetailResponseSchema.parse({
     by_kind: { review: 0, question: 0, approval: 0, steer: 0 },
     by_user: null,
     entries: 0,
+    withheld: { entries: 0, minutes: 0 },
   },
   stages: [],
   artifacts: [],
   questions: [],
   approvals: [],
   runs: [],
+});
+
+/**
+ * A task a human took over, and whose take-over the inactivity timer then escalated (WP-44,
+ * PROGRESS backlog 164): `needs_human`, and still held — the page shows the branch, the downloads
+ * and the hand-back picker. The stages offered are the compiled pipeline's, as the server sends
+ * them; the picker offers exactly these.
+ */
+export const takenOverTaskDetail = taskDetailResponseSchema.parse({
+  ...bugTaskDetail,
+  task: {
+    ...featureTask,
+    id: IDS.taskTaken,
+    ticket: { provider: 'jira', key: 'DEMO-3', url: HOSTILE.safeUrl },
+    mr_ref: null,
+    state: 'needs_human',
+    current_stage: 'implementation',
+  },
+  taken_over: {
+    at: now,
+    branch: 'agentic/demo-3',
+    session_id: 'sess-demo-3',
+    stage: 'implementation',
+    resume_commands: ['git fetch && git checkout agentic/demo-3', 'claude --resume sess-demo-3'],
+    held_by: IDS.user,
+    hand_back_stages: ['refinement', 'implementation', 'code_review'],
+  },
+  runs: [{ ...run, task_id: IDS.taskTaken }],
+});
+
+/** An epic-split task with a queue of two proposed children (WP-44, PROGRESS backlog 108). */
+export const epicTaskDetail = taskDetailResponseSchema.parse({
+  ...bugTaskDetail,
+  task: {
+    ...featureTask,
+    id: IDS.taskEpic,
+    ticket: { provider: 'jira', key: 'DEMO-4', url: HOSTILE.safeUrl },
+    mr_ref: null,
+    template: 'epic_split',
+    state: 'active',
+    current_stage: 'human_review',
+  },
+});
+
+const childOf = (itemId: string, position: number, title: string) => ({
+  id: itemId,
+  task_id: IDS.taskEpic,
+  position,
+  title,
+  description: `What ${title} does. ${HOSTILE.script}`,
+  acceptance_criteria: [
+    {
+      id: `AC-${position}`,
+      given: 'a signed-in user',
+      when: 'they open the page',
+      // biome-ignore lint/suspicious/noThenProperty: Given/When/Then is the criterion's own shape (technical/12); a plain object, never awaited.
+      then: 'it loads',
+      validation: { kind: 'manual', value: 'look at it' },
+    },
+  ],
+  size: 'S',
+  rationale: 'Separable.',
+  status: 'queued',
+  decided_by_user_id: null,
+  decided_at: null,
+  reason: null,
+  ticket_key: null,
+  ticket_url: null,
+  created_at: now,
+});
+
+export const epicBreakdown = taskBreakdownSchema.parse({
+  items: [childOf(IDS.childA, 0, 'Child A'), childOf(IDS.childB, 1, 'Child B')],
+  can_decide: true,
 });
 
 // ── Transcript ───────────────────────────────────────────────────────────────
@@ -625,10 +709,28 @@ export const runContextPack = contextPackRecordSchema.parse({
       tokens: 300,
       validated: true,
     },
+    // WP-44 (PROGRESS backlog 168): a page whose `paths:` glob resolved to nothing at the indexed
+    // commit — recorded, never shown to the agent, and not counted under "Documents".
+    {
+      path: 'lessons/legacy-importer.md',
+      reason: 'paths',
+      score: 1,
+      tokens: 250,
+      validated: false,
+    },
   ],
   budget_tokens: 8000,
   total_tokens: 1200,
   kb_commit: null,
+  // WP-44 (PROGRESS backlog 172): what the text step did, in the record.
+  text_search: {
+    outcome: 'matched',
+    kept_terms: ['retries'],
+    dropped_terms: ['demo'],
+    floor: 'applied',
+    matched_documents: 1,
+    omitted_terms: 0,
+  },
 });
 
 // ── Org-level lists ──────────────────────────────────────────────────────────

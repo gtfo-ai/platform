@@ -6,22 +6,26 @@
  *
  * **The commands technical/09's screens table gives this screen are all here**: steer, cancel,
  * retry with model/effort (`POST /api/runs/:id/retry`, which creates a *new* run rather than
- * changing this one) and feedback. **Take-over is not**, and the reason has changed since this
- * note was written: the route and `takeOverResponseSchema` both exist (WP-27), so what is missing
- * is the place to render the branch, the resume commands and the workspace's fate — a screen, not
- * a contract. It is a UI row of its own; the same list in `task-detail.tsx` says so too.
+ * changing this one), feedback — and, since WP-44, **take over and hand back** for the run's task
+ * (`features/take-over.tsx`, the same component the task screen renders) and the **transcript
+ * download** for this run. This note used to say the take-over was absent for want of a place to
+ * render the branch and the resume lines; that place is the panel below the header.
  *
  * This route is **lazily loaded** (`routes/tree.tsx`): the transcript renderer is the largest
  * component in the app and TD-013's budget is about the *initial* bundle. A user on the board has
  * not paid for it.
  */
+
+import type { ContextPackRecord } from '@platform/contracts';
 import { type ReactElement, useState, useSyncExternalStore } from 'react';
+import { transcriptDownloadPath } from '../api/endpoints.js';
 import {
   useRun,
   useRunCommands,
   useRunContextPack,
   useRunMessages,
   useRunPrompt,
+  useTask,
 } from '../app/queries.js';
 import { useServices } from '../app/services.js';
 import { useTopics } from '../realtime/provider.js';
@@ -38,10 +42,58 @@ import {
   Metric,
   SectionHeading,
 } from '../ui/kit.js';
-import { CodeText, UntrustedText } from '../ui/untrusted.js';
+import { CodeText, DownloadLink, UntrustedText } from '../ui/untrusted.js';
 import { FeedbackForm } from './feedback.js';
+import { TakeOverPanel } from './take-over.js';
 
 type Tab = 'transcript' | 'prompt' | 'context';
+
+/**
+ * The documents a run was **shown**: tier 0 and the tier-1 entries recorded `validated: true`
+ * (WP-44, PROGRESS backlog 168).
+ *
+ * A tier-1 entry recorded `validated: false` was dropped by the assembler before the count and the
+ * budget — its `paths:` glob resolved to nothing at the indexed commit — so it was never in the
+ * prompt. The stored `total_tokens` excludes it and the statistics' `kb_usage` admits only
+ * `validated` rows; this is the same rule, spelled once for the screen (standing rule 41). The
+ * unvalidated entries stay in the list, marked, because they are the audit technical/07 step 3
+ * promises.
+ */
+export const admittedDocuments = (pack: ContextPackRecord): number =>
+  pack.tier0.length + pack.tier1.filter((entry) => entry.validated).length;
+
+/**
+ * Why tier 1 has no text-matched document, in words — or what the text step did (WP-44, PROGRESS
+ * backlog 172). `null` for a pack recorded before the step was (migration 0047).
+ */
+export const textSearchText = (pack: ContextPackRecord): string | null => {
+  const search = pack.text_search;
+  if (search === null || search === undefined) {
+    return null;
+  }
+  const kept = search.kept_terms.join(', ');
+  const dropped = search.dropped_terms.join(', ');
+  const omitted =
+    search.omitted_terms === 0
+      ? ''
+      : ` ${search.omitted_terms} term${search.omitted_terms === 1 ? ' is' : 's are'} not shown (redacted or too long).`;
+  const statistics =
+    search.floor === 'no_statistics'
+      ? ' The index carries no word statistics yet, so no word was dropped as too common.'
+      : '';
+  switch (search.outcome) {
+    case 'not_searched':
+      return 'No text search ran: this project has no knowledge index yet, so only the path rules could match.';
+    case 'no_terms':
+      return `No text search ran: the task text had no keyword to search for.${omitted}`;
+    case 'all_uninformative':
+      return `Every keyword was dropped as too common in this project to mean anything: ${dropped}.${omitted}`;
+    case 'no_match':
+      return `Searched for ${kept}${dropped === '' ? '' : ` (dropped as too common: ${dropped})`} and nothing matched.${statistics}${omitted}`;
+    default:
+      return `Searched for ${kept}${dropped === '' ? '' : ` (dropped as too common: ${dropped})`}: ${search.matched_documents} document${search.matched_documents === 1 ? '' : 's'} matched.${statistics}${omitted}`;
+  }
+};
 
 const TABS: readonly { readonly id: Tab; readonly label: string }[] = [
   { id: 'transcript', label: 'Transcript' },
@@ -60,6 +112,8 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
   const [retryModel, setRetryModel] = useState('');
   const [retryEffort, setRetryEffort] = useState<'low' | 'medium' | 'high' | ''>('');
 
+  // The run's task, for the take-over control: `taken_over` lives on the task, not on a run.
+  const task = useTask(run.data?.task_id ?? '', run.data !== undefined);
   const prompt = useRunPrompt(runId, tab === 'prompt');
   const contextPack = useRunContextPack(runId, tab === 'context');
 
@@ -134,6 +188,23 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
           />
         </div>
       </Card>
+
+      <div className="flex flex-wrap items-center gap-3 text-xs">
+        <DownloadLink
+          path={transcriptDownloadPath(record.id)}
+          label="Download this run’s transcript (JSONL)"
+          className="text-accent underline"
+        />
+      </div>
+
+      {task.data === undefined ? null : (
+        <TakeOverPanel
+          taskId={task.data.task.id}
+          state={task.data.task.state}
+          takenOver={task.data.taken_over}
+          runs={task.data.runs}
+        />
+      )}
 
       <div className="flex items-center gap-2">
         <div role="tablist" aria-label="Run views" className="flex gap-1">
@@ -295,16 +366,37 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
                 />
                 <Metric
                   label="Documents"
-                  value={formatInteger(
-                    contextPack.data.tier0.length + contextPack.data.tier1.length,
-                  )}
-                  definition="Knowledge-base documents included in this run's context."
+                  value={formatInteger(admittedDocuments(contextPack.data))}
+                  definition="Knowledge-base documents this run was shown: the unconditional tier 0 and the tier-1 documents that were admitted. A tier-1 page whose paths: rule matched nothing in the repository is listed below as not admitted and is not counted."
                 />
               </div>
+              {textSearchText(contextPack.data) === null ? (
+                <p className="pb-2 text-xs text-fg-muted">
+                  This run’s pack was recorded before the text search’s outcome was.
+                </p>
+              ) : (
+                <p className="pb-2 text-xs text-fg-muted">
+                  {/* The terms are words of the ticket: somebody else's text (BD-022). */}
+                  <UntrustedText value={textSearchText(contextPack.data) ?? ''} />
+                </p>
+              )}
               <ul className="flex flex-col gap-1 text-xs">
-                {[...contextPack.data.tier0, ...contextPack.data.tier1].map((entry) => (
+                {contextPack.data.tier0.map((entry) => (
                   <li key={entry.path} className="flex gap-2 font-mono">
                     <UntrustedText value={entry.path} />
+                    <span className="ml-auto text-fg-muted">{formatInteger(entry.tokens)}</span>
+                  </li>
+                ))}
+                {contextPack.data.tier1.map((entry) => (
+                  <li key={entry.path} className="flex gap-2 font-mono">
+                    <UntrustedText value={entry.path} />
+                    {entry.validated ? null : (
+                      <span data-not-admitted="true">
+                        <Badge tone="warning">
+                          not admitted — its paths: did not resolve at the indexed commit
+                        </Badge>
+                      </span>
+                    )}
                     <span className="ml-auto text-fg-muted">{formatInteger(entry.tokens)}</span>
                   </li>
                 ))}

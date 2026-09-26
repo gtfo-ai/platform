@@ -2,9 +2,9 @@
  * The epic split's two routes, driven end to end through Fastify against plain functions (WP-40).
  *
  * **Why this file exists at all**: `routes/client-census.test.ts` compares the *client's* paths
- * against the router, and a route no screen calls is invisible to it by construction — the position
- * `kb/health`, `take-over` and `hand-back` are already in. So the two are named **positively** here,
- * with the auth, the key policy, the replay and the refusals each asserted from both sides.
+ * against the router and was blind to both routes until WP-44 gave them a screen (the task page's
+ * breakdown panel); it now sees them, and this file is where the auth, the key policy, the replay,
+ * the refusals and — since WP-44 — `can_decide` are each asserted from both sides.
  *
  * What this tier cannot see, stated rather than implied: whether accepting ever files a ticket. The
  * command port is a recorder, so *"N `createTicket` calls and none twice"* is the e2e's assertion
@@ -362,6 +362,8 @@ describe('who may do what', () => {
     world.role = 'viewer';
     const read = await world.app.inject({ method: 'GET', url: `/api/tasks/${TASK}/breakdown` });
     expect(read.statusCode).toBe(200);
+    // The read tells the screen to leave the control out (WP-44, criterion 3).
+    expect((read.json() as { can_decide: boolean }).can_decide).toBe(false);
 
     const write = await world.app.inject({
       method: 'POST',
@@ -377,6 +379,11 @@ describe('who may do what', () => {
     // Both sides of the boundary (standing rule 42): `member` is the role a decision is most likely
     // to be mistakenly granted to, and it is the one `task.ask` has.
     world.role = 'member';
+    const memberRead = await world.app.inject({
+      method: 'GET',
+      url: `/api/tasks/${TASK}/breakdown`,
+    });
+    expect((memberRead.json() as { can_decide: boolean }).can_decide).toBe(false);
     const refused = await world.app.inject({
       method: 'POST',
       url: `/api/tasks/${TASK}/breakdown/decide`,
@@ -386,6 +393,11 @@ describe('who may do what', () => {
     expect(refused.statusCode).toBe(403);
 
     world.role = 'maintainer';
+    const maintainerRead = await world.app.inject({
+      method: 'GET',
+      url: `/api/tasks/${TASK}/breakdown`,
+    });
+    expect((maintainerRead.json() as { can_decide: boolean }).can_decide).toBe(true);
     const allowed = await world.app.inject({
       method: 'POST',
       url: `/api/tasks/${TASK}/breakdown/decide`,

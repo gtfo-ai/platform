@@ -35,7 +35,27 @@ describe('the human-time summary', () => {
       by_kind: { review: 0, question: 0, approval: 0, steer: 0 },
       by_user: null,
       entries: 0,
+      withheld: { entries: 0, minutes: 0 },
     });
+  });
+
+  it('keeps a withheld window out of every figure and says how much it withheld (WP-44, backlog 190)', () => {
+    // The statistics withhold a review window an approval touched; the task page now does too, and
+    // says so — never silently lower (standing rule 16).
+    const summary = summariseHumanTime(
+      [
+        row({ minutes: '30.00' }),
+        row({ minutes: '45.00', withheld: true, externalAuthor: 'gitlab:grace' }),
+        row({ kind: 'question', minutes: '30.00' }),
+      ],
+      { perUserBreakdown: true },
+    );
+    expect(summary.total_minutes).toBe(60);
+    expect(summary.by_kind.review).toBe(30);
+    expect(summary.entries).toBe(2);
+    expect(summary.withheld).toEqual({ entries: 1, minutes: 45 });
+    // The withheld account is named nowhere: its minutes are not published at all.
+    expect(summary.by_user?.map((entry) => entry.external_author)).toEqual(['gitlab:ada']);
   });
 
   it('sums per kind and in total, over rows the driver hands back as strings', () => {

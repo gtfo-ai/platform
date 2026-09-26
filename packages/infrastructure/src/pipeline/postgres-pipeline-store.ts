@@ -69,6 +69,7 @@ import { ACTIVE_RUN_STATUSES, resolveIterationLimits } from '@platform/domain';
 import * as z from 'zod';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
+import { takeOverLastActivitySql } from './take-over-activity.js';
 
 /** Raised when a write that had to change a row changed none. */
 export class PipelineRowMissingError extends Error {
@@ -812,16 +813,22 @@ export const createPostgresPipelineStore = (
       // same projection `apps/server`'s read model makes over two of these types. A payload that
       // does not carry a branch and a stage answers **nothing** rather than a blank block, because
       // the branch is the whole point of the record.
+      //
+      // The holder's last activity (WP-44, backlog 167) is the shared expression, so the recovery
+      // row's query computes the same instant this one does.
       const { rows } = await sqlOf(tx).query<{
         id: string;
         type: string;
         payload: Record<string, unknown>;
         occurred_at: Date | string;
+        actor: { kind?: unknown; user_id?: unknown };
+        last_activity_at: Date | string;
       }>(
-        `select id, type, payload, occurred_at
-           from events
-          where stream_type = 'task' and stream_id = $1 and type = any($2::text[])
-          order by stream_seq desc
+        `select e.id, e.type, e.payload, e.occurred_at, e.actor,
+                ${takeOverLastActivitySql('$1', 'e')} as last_activity_at
+           from events e
+          where e.stream_type = 'task' and e.stream_id = $1 and e.type = any($2::text[])
+          order by e.stream_seq desc
           limit 1`,
         [taskId, [...TAKE_OVER_BOUNDARY_EVENTS]],
       );
@@ -839,6 +846,11 @@ export const createPostgresPipelineStore = (
         branch,
         sessionId: typeof sessionId === 'string' ? sessionId : null,
         stage: stage as Slug,
+        holderUserId:
+          row.actor.kind === 'user' && typeof row.actor.user_id === 'string'
+            ? (row.actor.user_id as Id)
+            : null,
+        lastActivityAt: isoOf(row.last_activity_at),
       };
     },
   };
@@ -921,11 +933,12 @@ export const createPostgresPipelineStore = (
         `insert into runs (id, task_id, project_id, task_stage_id, role, mode, attempt, model,
                            effort, prompt_version, status, started_at,
                            system_prompt, user_prompt, redaction_count,
-                           context_budget_tokens, context_total_tokens, context_kb_commit)
+                           context_budget_tokens, context_total_tokens, context_kb_commit,
+                           context_text_search)
          values ($1, $2, $3,
                  (select id from task_stages
                    where task_id = $2 and stage = $11 and attempt = $6),
-                 $4, $5, $6, $7, $8, $9, $10, $12, $13, $14, $15, $16, $17, $18)`,
+                 $4, $5, $6, $7, $8, $9, $10, $12, $13, $14, $15, $16, $17, $18, $19::jsonb)`,
         [
           run.id,
           run.taskId,
@@ -952,6 +965,8 @@ export const createPostgresPipelineStore = (
           run.contextPack?.budget_tokens ?? null,
           run.contextPack?.total_tokens ?? null,
           run.contextPack?.kb_commit ?? null,
+          // What the text step did (migration 0047, WP-44); null for a pack that recorded none.
+          run.contextPack?.text_search == null ? null : JSON.stringify(run.contextPack.text_search),
         ],
       );
       if (run.contextPack !== null) {

@@ -1,4 +1,4 @@
-import type { JsonObject, UserRole } from '@platform/contracts';
+import type { IdentityCandidate, JsonObject, UserRole } from '@platform/contracts';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -100,6 +100,7 @@ describe('the identity routes (WP-31 round 2)', () => {
     /** The users this instance knows about; anything else is the 409. */
     known: Set<string>;
     mappings: IdentityMappingRecord[];
+    candidates: IdentityCandidate[];
   }
 
   const build = async (): Promise<IdentityWorld> => {
@@ -112,6 +113,7 @@ describe('the identity routes (WP-31 round 2)', () => {
       signedIn: true,
       known: new Set([USER]),
       mappings: [],
+      candidates: [],
     } as unknown as IdentityWorld;
 
     const app = fastify();
@@ -159,6 +161,7 @@ describe('the identity routes (WP-31 round 2)', () => {
           return row;
         },
         listMappings: async () => world.mappings,
+        listCandidates: async () => world.candidates,
         recordAction: async (input) => {
           actions.push({ ...input });
         },
@@ -183,6 +186,29 @@ describe('the identity routes (WP-31 round 2)', () => {
     return async () => {
       await world.app.close();
     };
+  });
+
+  it('serves the unmapped candidates to an admin only, as the read returned them (WP-44)', async () => {
+    world.candidates = [
+      {
+        provider: 'slack',
+        external_id: 'U0FAKE01',
+        deliveries: 3,
+        last_seen_at: '2026-09-26T10:00:00.000Z',
+      },
+    ];
+    const ok = await world.app.inject({ method: 'GET', url: '/api/org/identities/candidates' });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json()).toEqual({ items: world.candidates });
+    // A proposal, never a write: reading the candidates audits nothing and maps nothing.
+    expect(world.upserts).toEqual([]);
+    expect(world.actions).toEqual([]);
+    world.role = 'maintainer';
+    const refused = await world.app.inject({
+      method: 'GET',
+      url: '/api/org/identities/candidates',
+    });
+    expect(refused.statusCode).toBe(403);
   });
 
   it('serves both halves of the pair', async () => {

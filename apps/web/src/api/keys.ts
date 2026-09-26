@@ -10,6 +10,10 @@ export const queryKeys = {
   session: ['session'] as const,
   version: ['version'] as const,
   orgUsers: ['org', 'users'] as const,
+  /** Refused accounts nobody has mapped (WP-44); under the identities prefix, so a mapping refreshes it. */
+  identityCandidates: ['org', 'identities', 'candidates'] as const,
+  refusedDeliveries: (integrationId: string) =>
+    ['integrations', integrationId, 'refused-deliveries'] as const,
   orgIdentities: ['org', 'identities'] as const,
   audit: (filters: Readonly<Record<string, unknown>> = {}) => ['org', 'audit', filters] as const,
   agents: ['org', 'agents'] as const,
@@ -61,6 +65,8 @@ export const queryKeys = {
   /** The ask-the-task thread and the task's own audit trail (WP-31). */
   taskAsks: (id: string) => ['task', id, 'asks'] as const,
   taskAudit: (id: string) => ['task', id, 'audit'] as const,
+  /** The epic split's queue (WP-44): under the task's prefix, so a `task:<id>` frame refreshes it. */
+  taskBreakdown: (id: string) => ['task', id, 'breakdown'] as const,
   run: (id: string) => ['run', id] as const,
   runMessages: (id: string) => ['run', id, 'messages'] as const,
   runPrompt: (id: string) => ['run', id, 'prompt'] as const,

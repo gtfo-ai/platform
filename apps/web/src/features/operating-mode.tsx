@@ -118,20 +118,38 @@ export type AutonomyChoice = (typeof AUTONOMY_CHOICES)[number]['level'];
  * it touches externally"*.
  *
  * Every entry names a key of `featuresConfigSchema`, because a card whose toggle wrote a key nothing
- * reads is the defect PROGRESS backlog 58 is about. The five adoption features product/18 lists with
- * **no** configuration key — steer, take-over, cost estimates, human time accounting,
- * ask-the-task — are not cards: they are listed under the cards as what they are, on-by-default
- * behaviours with nothing to toggle in this build.
+ * reads is the defect PROGRESS backlog 58 is about. **The list is compared with the platform's own
+ * tables** (WP-44, backlog 108 and 72) rather than trusted: `operating-mode.test.tsx` holds the cards
+ * plus {@link FEATURES_WITHOUT_A_SWITCH}'s keyed entries equal to `PLATFORM_DEFAULT_CONFIG.features`
+ * in both directions, each card's default to that key's shipped `enabled`, and says a card may carry
+ * an `unbuilt` line **exactly when** `FEATURE_READERS` names no reader for its key. That comparison
+ * is what the epic split's missing card and the digest's stale *"nothing in this build sends a
+ * notification"* each needed and did not have.
  */
 export interface FeatureCard {
-  readonly key: 'review_only' | 'shadow_mode' | 'ticket_linter' | 'maintenance' | 'digest';
+  readonly key:
+    | 'review_only'
+    | 'shadow_mode'
+    | 'ticket_linter'
+    | 'maintenance'
+    | 'digest'
+    | 'epic_split'
+    | 'spike'
+    | 'ask'
+    | 'history_bootstrap';
   readonly name: string;
   readonly value: string;
   readonly defaultState: string;
   readonly cost: string;
   readonly touches: string;
-  /** One line where two switches exist, or where the behaviour is not built. Never silent. */
+  /** One line where two switches exist, or a limit worth knowing before turning it on. */
   readonly caveat?: string;
+  /**
+   * The one place a card may say its feature does **nothing** in this build — and the comparison
+   * allows it only when `FEATURE_READERS` names no reader for the key. Every card is built today,
+   * so no card has one.
+   */
+  readonly unbuilt?: string;
 }
 
 export const FEATURE_CARDS: readonly FeatureCard[] = [
@@ -179,23 +197,80 @@ export const FEATURE_CARDS: readonly FeatureCard[] = [
     key: 'digest',
     name: 'Digest and quiet hours',
     value: 'One chat summary a day; urgent items still immediate.',
-    defaultState: 'digest on, quiet hours off',
+    defaultState: 'on (digest at 09:00, quiet hours off)',
     cost: 'none',
     touches: 'posts to the chat channel',
-    caveat: 'Stored; nothing in this build sends a notification of any kind (WP-32).',
+    caveat: 'Needs a chat integration bound to the project; without one there is nowhere to post.',
+  },
+  {
+    key: 'epic_split',
+    name: 'Epic split',
+    value:
+      'An epic becomes a proposed ticket breakdown with acceptance criteria, for a maintainer to accept child by child on the task page.',
+    defaultState: 'off',
+    cost: 'one agent run per epic, within the stage’s run budget',
+    touches: 'creates tickets in your tracker — one for each child you accept, never more',
+    caveat:
+      'Only tickets of the epic issue types are routed to it, and nothing is created until a maintainer accepts a child. Rejected children stay on the task with their reason.',
+  },
+  {
+    key: 'spike',
+    name: 'Spike template',
+    value:
+      'Tickets typed Spike get a research run that ends at a human with a report, not a merge request.',
+    defaultState: 'off',
+    cost: 'one agent run per spike, within the stage’s run budget',
+    touches: 'nothing external beyond the workpad comment',
+    caveat:
+      'Turning it on changes what an existing Spike-typed ticket gets: it stops going through the default pipeline.',
+  },
+  {
+    key: 'history_bootstrap',
+    name: 'History bootstrap',
+    value:
+      'Mine your last merged merge requests and closed tickets for conventions and recurring review requests, as knowledge-base proposals you review.',
+    defaultState: 'off',
+    cost: 'shown before it runs, capped by its own budget',
+    touches: 'nothing external — it reads your git host and tracker and writes proposals here',
+    caveat:
+      'Turning it on allows a batch; the batch itself is started from the History bootstrap step, with its estimate shown first.',
+  },
+  {
+    key: 'ask',
+    name: 'Ask the task',
+    value:
+      'Ask “why did you choose X?” on a task and get an answer from its audit trail and artifacts.',
+    defaultState: 'on',
+    cost: 'up to $0.50 per question by default',
+    touches: 'nothing external unless mirroring answers to the ticket is turned on',
   },
 ];
 
-/** The adoption features product/18 lists that have no configuration key to toggle. */
-export const FEATURES_WITHOUT_A_SWITCH: readonly { name: string; why: string }[] = [
+/**
+ * The adoption features product/18 lists that have no switch this screen can toggle — the declared
+ * **exemption list** the card comparison reads (WP-44). An entry with a `key` is a shipped
+ * `features.<key>` deliberately without a card, with the reason; an entry without one is a feature
+ * with no configuration key at all.
+ */
+export const FEATURES_WITHOUT_A_SWITCH: readonly {
+  readonly name: string;
+  readonly why: string;
+  readonly key?: 'human_time';
+}[] = [
   { name: 'Steer', why: 'on for members and maintainers; the run page carries the control' },
-  { name: 'Take over / hand back', why: 'on; the retention window is a platform setting' },
+  {
+    name: 'Take over / hand back',
+    why: 'on; the task and run pages carry the controls, and the retention window is a platform setting',
+  },
   {
     name: 'Cost estimate before spend',
     why: 'the estimate is on; its approval threshold is the dial’s',
   },
-  { name: 'Human time accounting', why: 'derived from events; nothing to switch' },
-  { name: 'Ask the task', why: 'not built in this release' },
+  {
+    name: 'Human time accounting',
+    key: 'human_time',
+    why: 'always recorded from events; the per-user breakdown is off by default and is set in the project’s configuration file (features.human_time.per_user_breakdown), not by a toggle',
+  },
 ];
 
 /** BD-010's windows, in the order a person thinks about them. */
@@ -434,6 +509,9 @@ export const FeatureToggles = ({ projectId }: { readonly projectId: string }): R
             </p>
             {card.caveat === undefined ? null : (
               <p className="text-xs text-fg-muted">{card.caveat}</p>
+            )}
+            {card.unbuilt === undefined ? null : (
+              <p className="text-xs text-warning">{card.unbuilt}</p>
             )}
           </Card>
         ))}

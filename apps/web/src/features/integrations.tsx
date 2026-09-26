@@ -23,7 +23,7 @@
  * `@platform/integrations` into the browser bundle would pull every adapter past TD-013's budget.
  */
 import { type ReactElement, useState } from 'react';
-import { useIntegrations, useOnboardingCommands } from '../app/queries.js';
+import { useIntegrations, useOnboardingCommands, useRefusedDeliveries } from '../app/queries.js';
 import { useServices } from '../app/services.js';
 import {
   Badge,
@@ -48,6 +48,70 @@ const HEALTH_TONE: Record<string, BadgeTone> = {
 
 /** The five integration types technical/03 defines; the server refuses a mismatch by name. */
 const INTEGRATION_TYPES = ['task_management', 'git', 'communication', 'logs', 'errors'] as const;
+
+/**
+ * What this integration's inbound half refused or ignored, and why (WP-44, PROGRESS backlog 198).
+ *
+ * A chat click refused as `unmapped_identity` or `decision_refused: not_permitted` used to be
+ * visible only in SQL and in the API process's log, so an operator debugging a dead button had no
+ * surface. Fetched when opened; every line is `inbox.error` — redacted at the write, provider-derived
+ * all the same (BD-022) — and the accounts named are the ones the identities screen offers to map.
+ */
+const RefusedDeliveries = ({ integrationId }: { readonly integrationId: string }): ReactElement => {
+  const [open, setOpen] = useState(false);
+  const refused = useRefusedDeliveries(integrationId, open);
+  return (
+    <div className="flex flex-col gap-1">
+      <div>
+        <Button
+          tone="ghost"
+          onClick={() => {
+            setOpen(!open);
+          }}
+        >
+          {open ? 'Hide refused deliveries' : 'Refused deliveries'}
+        </Button>
+      </div>
+      {!open ? null : refused.isPending ? (
+        <Loading label="Loading refused deliveries…" />
+      ) : refused.isError ? (
+        <ErrorNotice
+          title="The refused deliveries could not be loaded."
+          detail={String(refused.error)}
+        />
+      ) : refused.data.items.length === 0 ? (
+        <p className="text-xs text-fg-muted">Nothing this integration delivered was refused.</p>
+      ) : (
+        <ul className="flex flex-col gap-1 text-xs" aria-label="Refused deliveries">
+          {refused.data.items.map((delivery) => (
+            <li
+              key={delivery.delivery_id}
+              className="flex flex-col gap-0.5 border-t border-line pt-1"
+            >
+              <span className="text-fg-muted">{formatDateTime(delivery.received_at)}</span>
+              <UntrustedText value={delivery.error} />
+              {delivery.unmapped === null ? (
+                <span className="text-fg-muted">
+                  Received before the platform recorded which account was refused.
+                </span>
+              ) : delivery.unmapped.length === 0 ? null : (
+                <span>
+                  Unmapped:{' '}
+                  <UntrustedText
+                    value={delivery.unmapped
+                      .map((account) => `${account.provider}:${account.external_id}`)
+                      .join(', ')}
+                  />{' '}
+                  — map them under Settings, Provider identities.
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+};
 
 export const IntegrationsScreen = (): ReactElement => {
   const integrations = useIntegrations();
@@ -133,6 +197,7 @@ export const IntegrationsScreen = (): ReactElement => {
                 Setup guide
               </Button>
             </div>
+            <RefusedDeliveries integrationId={integration.id} />
           </Card>
         ))}
       </div>

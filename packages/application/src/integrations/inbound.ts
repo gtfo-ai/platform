@@ -180,6 +180,34 @@ const errorTextOf = (
   return { text: redacted.value.slice(0, MAX_INBOX_ERROR_CHARS), count: redacted.count };
 };
 
+/**
+ * The accounts a delivery was refused for as `unmapped_identity`, redacted and de-duplicated (WP-44,
+ * PROGRESS backlog 198). An id the binding's redactor would change is **left out** rather than
+ * stored as a placeholder: a placeholder is not an account anybody can map.
+ */
+export const unmappedIdentitiesOf = (
+  normalised: readonly NormalisedDelivery[],
+  redactor: SecretRedactor,
+): { provider: string; external_id: string }[] => {
+  const seen = new Map<string, { provider: string; external_id: string }>();
+  for (const result of normalised) {
+    for (const entry of result.ignored) {
+      const identity = entry.identity;
+      if (entry.reason !== 'unmapped_identity' || identity === undefined) {
+        continue;
+      }
+      if (redactor.redactText(identity.external_id).value !== identity.external_id) {
+        continue;
+      }
+      seen.set(`${identity.provider}\0${identity.external_id}`, {
+        provider: identity.provider,
+        external_id: identity.external_id,
+      });
+    }
+  }
+  return [...seen.values()];
+};
+
 /** One refused human decision, as the inbox row names it. */
 interface DecisionRefusalLine {
   readonly reason: InboundDecisionRefusal;
@@ -440,6 +468,7 @@ export const createWebhookIngress = (options: WebhookIngressOptions): WebhookIng
         verified: true,
         redactionCount: headers.count + payload.count + failure.count,
         error: failure.text,
+        unmappedIdentities: unmappedIdentitiesOf(normalised, resolved.redactor),
         receivedAt: at,
         processedAt: at,
       });

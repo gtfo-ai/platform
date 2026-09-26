@@ -11,7 +11,7 @@
  * | what it finds | what it does | why that and not something else |
  * |---|---|---|
  * | an open question / pending approval whose `deadline_at` passed more than a grace ago | {@link settleDeadline} — the job's own path, re-validating | a timer that was armed has fired inside the grace and moved the row off `open`/`pending`, so the query cannot find it; the one it finds is the one whose timer was lost |
- * | a paused task still taken over whose five working days passed more than a grace ago | the same | a take-over has no stored deadline; it is recomputed from the `task.taken_over` event on the calendar, as the job does |
+ * | a paused task still taken over whose five working days of inactivity passed more than a grace ago | the same | a take-over has no stored deadline; it is recomputed from the holder's last activity (the take-over, or a later `human_actions` row of theirs — WP-44) on the calendar, as the job does |
  * | an open question / pending approval with **no** deadline | writes one **counted from now**, then arms it | below |
  *
  * **Counted from the backfill, not from `asked_at`** (the refiner's recommendation, taken). A
@@ -57,8 +57,13 @@ export interface WaitingAggregate {
 /** A paused task whose newest take-over boundary is `task.taken_over`. */
 export interface HeldTask {
   readonly taskId: Id;
-  /** The `task.taken_over` instant the inactivity timeout counts from. */
+  /** The `task.taken_over` instant. */
   readonly takenAt: IsoDateTime;
+  /**
+   * The holder's last activity — `TakeOverRecord.lastActivityAt`'s rule, computed by the same
+   * expression — and the instant the inactivity timeout counts from (WP-44, PROGRESS backlog 167).
+   */
+  readonly lastActivityAt: IsoDateTime;
 }
 
 export interface DeadlineRecoveryStore {
@@ -134,7 +139,9 @@ export const recoverDeadlines = async (
   const lost: DeadlineSweepData[] = [
     ...found.overdue.map(dataOf),
     ...found.held
-      .filter((held) => takeOverDeadline(site.sweep.calendar, held.takenAt) < dueBefore)
+      // From the holder's last activity, never from the take-over alone: a person who issued a
+      // command on Wednesday is not five working days quiet on the Friday after taking it (WP-44).
+      .filter((held) => takeOverDeadline(site.sweep.calendar, held.lastActivityAt) < dueBefore)
       .map(
         (held): DeadlineSweepData => ({
           aggregate: 'task',

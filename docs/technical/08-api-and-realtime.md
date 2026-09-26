@@ -11,11 +11,11 @@
 | Area | Endpoints |
 |---|---|
 | Auth | Better Auth routes under `/api/auth/*` (sign-in, sign-out, session, password reset, API keys, admin user management) |
-| Org | `GET/PATCH /api/org`, `GET /api/org/budgets`, `PUT /api/org/budgets/:id`, `GET /api/org/stats?range=…`, `GET /api/org/audit?…`, `GET /api/org/users`, `POST /api/org/users/invite` |
-| Integrations | `GET/POST /api/integrations`, `PATCH /api/integrations/:id`, `POST /api/integrations/:id/test`, `GET /api/integrations/:id/setup-guide` |
+| Org | `GET/PATCH /api/org`, `GET /api/org/budgets`, `PUT /api/org/budgets/:id`, `GET /api/org/stats?range=…`, `GET /api/org/audit?…`, `GET /api/org/users`, `POST /api/org/users/invite`, `GET/POST /api/org/identities`, `GET /api/org/identities/candidates` (**WP-44**: refused accounts nobody has mapped — a proposal for the mapping form, never a write; `org.users.manage`) |
+| Integrations | `GET/POST /api/integrations`, `PATCH /api/integrations/:id`, `POST /api/integrations/:id/test`, `GET /api/integrations/:id/setup-guide`, `GET /api/integrations/:id/refused-deliveries` (**WP-44**: the newest inbound deliveries whose `inbox.error` is set, with the accounts refused as `unmapped_identity`; `integration.read`) |
 | Projects | `GET/POST /api/projects`, `GET/PATCH /api/projects/:id`, `GET /api/projects/:id/config` (effective, with sources), `PUT /api/projects/:id/config`, `POST /api/projects/:id/config/export` (to repo MR), `GET /api/projects/:id/readiness`, `POST /api/projects/:id/discovery`, `GET/PUT /api/projects/:id/bindings`, `GET/PUT /api/projects/:id/budgets`, `GET /api/projects/:id/stats` |
 | Tasks | `GET /api/projects/:id/tasks?state=…`, `POST /api/projects/:id/tasks` (manual start from ticket key), `GET /api/tasks/:id` (with stages, artifacts, checks), `POST /api/tasks/:id/{pause,resume,cancel,retry-stage,return-to-stage,take-over,hand-back,rework}`, `GET /api/tasks/:id/events`, `GET /api/tasks/:id/export` (JSON), `POST /api/tasks/:id/questions/:qid/answer`, `POST /api/tasks/:id/approvals/:aid/decide`, `POST /api/tasks/:id/feedback`, `POST /api/tasks/:id/ask` (ask-the-task), `GET /api/artifacts/:id` (one artifact's body, gated at `artifact.read`; **added at WP-52**, and until then `GET /api/tasks/:id` published every artifact with a literal `null` `url` and no route served a body) |
-| Runs | `GET /api/runs/:id`, `GET /api/runs/:id/messages?after=<seq>&limit=`, `GET /api/runs/:id/prompt`, `GET /api/runs/:id/context-pack`, `POST /api/runs/:id/{steer,cancel}`, `POST /api/runs/:id/retry` (model/effort override) |
+| Runs | `GET /api/runs/:id`, `GET /api/runs/:id/messages?after=<seq>&limit=`, `GET /api/runs/:id/prompt`, `GET /api/runs/:id/context-pack`, `POST /api/runs/:id/{steer,cancel}`, `POST /api/runs/:id/retry` (model/effort override), `GET /api/runs/:id/transcript.jsonl` and `GET /api/runs/:id/export.tar` (**WP-44**, the take-over's two downloads — **served, not copied** (Q93): the transcript is `run_messages` rendered one entry per line through the `/messages` projection, as an attachment, gated at `transcript.read`; the tarball is the launcher's file on the shared export volume read through the SPA's realpath guard, gated at `task.take_over`, kept fourteen days) |
 | Agents | `GET /api/org/agents` (running runs) |
 | Inbox | `GET /api/org/inbox` (questions + approvals pending for the caller) |
 | Knowledge | `GET /api/projects/:id/kb/tree`, `GET /api/projects/:id/kb/doc?path=`, `PUT /api/projects/:id/kb/doc` (creates commit/MR), `GET /api/projects/:id/kb/search?q=`, `GET /api/projects/:id/kb/proposals`, `POST /api/projects/:id/kb/proposals/:pid/{approve,reject,edit}`, `GET /api/projects/:id/kb/health`, `POST /api/projects/:id/kb/bootstrap` |
@@ -170,11 +170,12 @@
 > client's calls and the routes landed in one change, so there was nothing to admit, and they are
 > asserted **positively** in the census instead, as the eleven commands of WP-15i and WP-27's steer
 > now are. The reads above, the writes no screen fires, and any route served but uncalled are
-> outside it **by construction**, not by omission — there are **three** of those today: `kb/health`
-> (WP-18b's report, which no screen asks for) and WP-27's `take-over` and `hand-back`, whose buttons
-> are a UI row of their own. All three are asserted by hand in the census beside the automatic half.
-> This paragraph is the only record of that class, so it is the one to correct when one of them
-> gains a caller.
+> outside it **by construction**, not by omission — there is **one** of those today: `kb/health`
+> (WP-18b's report, which no screen asks for), asserted by hand in the census beside the automatic
+> half. WP-27's `take-over` and `hand-back` and WP-40's breakdown pair were the other four until
+> **WP-44** gave them a screen (the task page's take-over control and breakdown panel), and their
+> hand-written census cases were deleted in the same change. This paragraph is the only record of
+> that class, so it is the one to correct when one of them gains a caller.
 >
 > **The two reads answer from the index, not from git.** `kb/tree` is the pages the platform has
 > indexed at `kb_index_state.commit_sha` and `kb/doc` is a document's chunks re-joined, sanitised at

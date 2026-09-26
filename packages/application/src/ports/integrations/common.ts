@@ -371,6 +371,13 @@ export interface IgnoredDelivery {
    * has already cut in half.
    */
   readonly detail: string;
+  /**
+   * For `unmapped_identity` only: **which** provider account was refused (WP-44, PROGRESS backlog
+   * 198), so an operator can map it without reading SQL. The adapter's own words for its own
+   * account id — untrusted provider text (BD-022) that the ingress redacts before storing, and the
+   * identities screen offers as a candidate to map, never writes. Absent on every other reason.
+   */
+  readonly identity?: { readonly provider: string; readonly external_id: string };
 }
 
 /**

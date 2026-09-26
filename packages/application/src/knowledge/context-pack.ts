@@ -49,6 +49,7 @@ import {
   RULES_PREFIX,
   type StoredKbDocument,
 } from './ports.js';
+import { textSearchRecordOf } from './text-search-record.js';
 
 /** Where a pack's files land in the workspace (technical/04 § "Prompt assembly"). */
 export const CONTEXT_DIRECTORY = '.agentic-run/context';
@@ -268,7 +269,19 @@ export const createContextPackAssembler = (
     return {
       status: 'ok',
       pack: {
-        record: assembly.record,
+        // The text step's outcome rides on the record (WP-44, backlog 172), so the audit that
+        // `run_context_pack` and `run.started` carry can say why tier 1 is empty. The terms are
+        // redacted by the executor, which holds the run's redactor.
+        record: {
+          ...assembly.record,
+          text_search: textSearchRecordOf({
+            queryTerms,
+            kept: search.terms.kept,
+            uninformative: search.terms.uninformative,
+            floor: search.terms.floor,
+            matchedDocuments: ranks.size,
+          }),
+        },
         documents,
         queryTerms,
         searchedTerms: search.terms.kept,

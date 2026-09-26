@@ -644,8 +644,16 @@ export const createTaskRequestSchema = z.strictObject({
  * It is published on the task rather than on a command's answer alone because the person who took
  * the task over is not the only person who needs it: the next operator to open the task page has to
  * be able to see where the work went. `tasks` records that a task is `paused` and not **why**, so
- * the projection reads it off the append-only log — the newest of this task's `task.taken_over` and
- * `task.handed_back`, which is also what makes it disappear the moment the task is handed back.
+ * the projection reads it off the append-only log.
+ *
+ * **Which log events decide it is one list, shared with the workpad** (WP-44, PROGRESS backlog 164):
+ * the newest of `TAKE_OVER_BOUNDARY_EVENTS` (`packages/application/src/pipeline/store.ts`) being
+ * `task.taken_over`, with **no state guard**. So a hand-back, a resume, a stage entry, a completion
+ * or a cancellation withdraws it, and an **escalation does not** — a take-over the inactivity timer
+ * parked in `needs_human` is still held, and the page that carries the hand-back control keeps
+ * saying where the branch is, as the ticket's workpad does. Until WP-44 this read two event types
+ * and published nothing unless the task was `paused`, so the two surfaces disagreed on exactly the
+ * task whose escalation brief says *"the work is on `<branch>`"*.
  */
 export const takenOverSchema = z.strictObject({
   at: isoDateTimeSchema,
@@ -657,6 +665,19 @@ export const takenOverSchema = z.strictObject({
   stage: stageIdSchema,
   /** The same lines the take-over command answered with, composed by the platform, not the client. */
   resume_commands: z.array(nonEmptyStringSchema),
+  /**
+   * The user who took the task over, from the `task.taken_over` event's actor (WP-44). `null` for a
+   * take-over recorded by something other than a person, which no route produces.
+   */
+  held_by: idSchema.nullable(),
+  /**
+   * Every stage a hand-back may name: the task's **compiled** pipeline, enabled stages only, in
+   * pipeline order (WP-44, criterion 2). The same list `POST …/hand-back` checks against —
+   * `compilePipeline` over the task's frozen template — so the picker offers nothing the route
+   * would refuse with `409 stage_not_in_template`. Empty when the task's template cannot be
+   * compiled on this build, which the screen says rather than offering a free-text field.
+   */
+  hand_back_stages: z.array(stageIdSchema),
 });
 
 /**
@@ -705,6 +726,19 @@ export const humanTimeSummarySchema = z.strictObject({
    * touched has no entry at all. One number, two very different states (standing rule 16).
    */
   entries: z.int().nonnegative(),
+  /**
+   * What the total **leaves out on purpose**, so the page is never silently lower (WP-44, PROGRESS
+   * backlog 190): the review windows an `mr.approved` touched, which the statistics withhold for the
+   * same reason (backlog 188 — the approval's `user` is an inference until a real GitLab confirms
+   * it). Neither `entries` nor any bucket above counts them. The rows of an account declared a
+   * **machine** after the fact are not here at all: they are not human time, and the statistics drop
+   * them the same way. The two predicates are one module, shared with the statistics read
+   * (`apps/server/src/queries/human-time-predicates.ts`).
+   */
+  withheld: z.strictObject({
+    entries: z.int().nonnegative(),
+    minutes: z.number().nonnegative(),
+  }),
 });
 
 export const taskDetailResponseSchema = z.strictObject({
@@ -951,6 +985,16 @@ export const ticketBreakdownItemSchema = z.strictObject({
 
 export const taskBreakdownSchema = z.strictObject({
   items: z.array(ticketBreakdownItemSchema),
+  /**
+   * Whether **this caller** may accept or reject children — `task.approve_plan` at their effective
+   * role in the task's project, decided by the server's own `can()` (WP-44, criterion 3).
+   *
+   * The screen reads it to leave the control **out** for a member and a viewer rather than drawing a
+   * button that answers 403; the SPA's session carries only the organisation role, and a project
+   * membership can raise it, so the answer has to come from where the guard is. It is advice about
+   * the control, never the permission: the decide route checks the same thing again.
+   */
+  can_decide: z.boolean(),
 });
 
 /**
@@ -1065,6 +1109,53 @@ export const identityMappingSchema = z.strictObject({
 export const identityMappingListSchema = z.strictObject({
   items: z.array(identityMappingSchema),
 });
+
+/**
+ * A provider account the platform refused a delivery for because nobody mapped it — a candidate
+ * for `POST /api/org/identities` (WP-44, PROGRESS backlog 198).
+ *
+ * Read off `inbox.unmapped_identities` (migration 0047), excluding every account already mapped or
+ * declared a machine. **A proposal, never a write**: the identities screen offers it to fill the
+ * form, and an admin still decides who the account is. `external_id` is the provider's own account
+ * id — untrusted text (BD-022), rendered, never parsed.
+ */
+export const identityCandidateSchema = z.strictObject({
+  provider: nonEmptyStringSchema,
+  external_id: nonEmptyStringSchema,
+  /** How many refused deliveries named this account. */
+  deliveries: z.int().positive(),
+  last_seen_at: isoDateTimeSchema,
+});
+
+export const identityCandidateListSchema = z.strictObject({
+  items: z.array(identityCandidateSchema),
+});
+
+/**
+ * One inbound delivery that produced no event, or was partly refused — `GET
+ * /api/integrations/:integration_id/refused-deliveries` (WP-44, PROGRESS backlog 198).
+ *
+ * `error` is `inbox.error`: the adapter's and the aggregate's reasons, one per line, **redacted at
+ * the write** and bounded there (`MAX_INBOX_ERROR_CHARS`). It is provider-derived text (BD-022).
+ * `unmapped` is the accounts the delivery was refused for as `unmapped_identity` — `null` for a row
+ * written before migration 0047, which recorded no list ("not recorded" is not "none").
+ */
+export const refusedDeliverySchema = z.strictObject({
+  delivery_id: z.string(),
+  received_at: isoDateTimeSchema,
+  error: z.string(),
+  unmapped: z
+    .array(z.strictObject({ provider: nonEmptyStringSchema, external_id: nonEmptyStringSchema }))
+    .nullable(),
+});
+
+export const refusedDeliveriesResponseSchema = z.strictObject({
+  /** Newest first, at most {@link MAX_REFUSED_DELIVERIES}. */
+  items: z.array(refusedDeliverySchema),
+});
+
+/** The most refused deliveries one read returns: a debugging surface, not an archive. */
+export const MAX_REFUSED_DELIVERIES = 50;
 
 export const takeOverResponseSchema = z.strictObject({
   task_id: idSchema,
@@ -1568,6 +1659,8 @@ export type TasksResponse = z.infer<typeof tasksResponseSchema>;
 export type CreateTaskRequest = z.infer<typeof createTaskRequestSchema>;
 export type TaskDetailResponse = z.infer<typeof taskDetailResponseSchema>;
 export type TakenOver = z.infer<typeof takenOverSchema>;
+export type IdentityCandidate = z.infer<typeof identityCandidateSchema>;
+export type RefusedDelivery = z.infer<typeof refusedDeliverySchema>;
 export type HumanTimeSummary = z.infer<typeof humanTimeSummarySchema>;
 export type HumanTimeByUser = z.infer<typeof humanTimeByUserSchema>;
 export type AnswerQuestionRequest = z.infer<typeof answerQuestionRequestSchema>;

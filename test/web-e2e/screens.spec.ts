@@ -378,3 +378,96 @@ test('a queued task says there is no stage to act on rather than offering a brok
   await expect(page.getByText('No stage to act on yet')).toBeVisible();
   await expect(page.getByLabel('Stage')).toHaveCount(0);
 });
+
+test('the task screen takes a task over and renders what the response carries (WP-44)', async ({
+  page,
+  request,
+}) => {
+  await page.goto(`/projects/${PROJECT_KEY}/tasks/${IDS.taskFeature}`);
+  await expect(page.getByRole('heading', { name: 'DEMO-1' })).toBeVisible();
+  await page.getByLabel('Why you are taking it over').fill('the agent is looping');
+  await page.getByRole('checkbox', { name: /archive the workspace/ }).check();
+  await page.getByRole('button', { name: 'Take over', exact: true }).click();
+
+  await expect(page.getByText('git fetch && git checkout agentic/demo-1')).toBeVisible();
+  await expect(
+    page.getByText(/is being committed as a work-in-progress hand-over commit/),
+  ).toBeVisible();
+  const log = await commandLog(request);
+  expect(log.find((entry) => entry.path.endsWith('/take-over'))).toEqual({
+    path: `/api/tasks/${IDS.taskFeature}/take-over`,
+    body: { tarball: true, reason: 'the agent is looping' },
+  });
+});
+
+test('a taken-over task that escalated still shows the branch, the downloads and the hand-back (WP-44)', async ({
+  page,
+  request,
+}) => {
+  await page.goto(`/tasks/${IDS.taskTaken}`);
+  await expect(page.getByRole('heading', { name: 'DEMO-3' })).toBeVisible();
+  await expect(page.getByText('Taken over by a human')).toBeVisible();
+  await expect(page.getByText('escalated — still held')).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Download the transcript (JSONL)' })).toHaveAttribute(
+    'href',
+    `/api/runs/${IDS.run}/transcript.jsonl`,
+  );
+  await expect(page.getByRole('link', { name: 'Download the workspace tarball' })).toHaveAttribute(
+    'href',
+    `/api/runs/${IDS.run}/export.tar`,
+  );
+
+  const picker = page.getByLabel('Resume at');
+  await expect(picker.locator('option')).toHaveText([
+    'refinement',
+    'implementation',
+    'code_review',
+  ]);
+  await picker.selectOption('code_review');
+  await page.getByLabel('What you did').fill('fixed it by hand');
+  await page.getByRole('button', { name: 'Hand back' }).click();
+  await expect
+    .poll(async () => (await commandLog(request)).map((entry) => entry.path))
+    .toContain(`/api/tasks/${IDS.taskTaken}/hand-back`);
+  const log = await commandLog(request);
+  expect(log.find((entry) => entry.path.endsWith('/hand-back'))?.body).toEqual({
+    stage: 'code_review',
+    summary: 'fixed it by hand',
+  });
+});
+
+test('the epic split’s breakdown panel accepts a chosen child with one request (WP-44)', async ({
+  page,
+  request,
+}) => {
+  await page.goto(`/tasks/${IDS.taskEpic}`);
+  await expect(page.getByText('Proposed breakdown')).toBeVisible();
+  await expect(page.getByText('Child A', { exact: true })).toBeVisible();
+  await page.getByRole('checkbox', { name: 'Select child 2' }).check();
+  await page.getByRole('button', { name: /Accept 1 — creates a ticket in your tracker/ }).click();
+  await expect
+    .poll(async () => (await commandLog(request)).map((entry) => entry.path))
+    .toContain(`/api/tasks/${IDS.taskEpic}/breakdown/decide`);
+  const log = await commandLog(request);
+  expect(log.find((entry) => entry.path.endsWith('/breakdown/decide'))?.body).toEqual({
+    decision: 'accept',
+    item_ids: [IDS.childB],
+  });
+});
+
+test('the run screen counts only admitted documents and marks the one that was not (WP-44)', async ({
+  page,
+}) => {
+  await page.goto(`/runs/${IDS.run}`);
+  await expect(page.getByRole('heading', { name: 'implementation · developer' })).toBeVisible();
+  await page.getByRole('tab', { name: 'Context pack' }).click();
+  // Tier 0 and the one validated tier-1 page: two, not three (PROGRESS backlog 168).
+  await expect(
+    page.getByText('Documents', { exact: true }).locator('xpath=following-sibling::*[1]'),
+  ).toHaveText('2');
+  await expect(page.locator('[data-not-admitted]')).toHaveCount(1);
+  // …and what the text step did, in words (backlog 172).
+  await expect(
+    page.getByText(/Searched for retries \(dropped as too common: demo\)/),
+  ).toBeVisible();
+});

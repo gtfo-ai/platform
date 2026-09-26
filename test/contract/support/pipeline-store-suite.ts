@@ -38,6 +38,18 @@ export interface PipelineStoreHarness {
      * `MemoryEventing`'s log.
      */
     appendTaskEvent(event: TaskStreamEvent): Promise<void>;
+    /** A second user, for the case that a command by somebody else is not the holder's (WP-44). */
+    readonly otherUserId: Id;
+    /**
+     * Records one `human_actions` row — what `tasks.takenOver`'s activity rule reads (WP-44,
+     * PROGRESS backlog 167). PostgreSQL inserts it in the case's transaction; the in-memory store is
+     * built over a list this appends to.
+     */
+    recordHumanAction(input: {
+      readonly taskId: Id;
+      readonly userId: Id;
+      readonly at: IsoDateTime;
+    }): Promise<void>;
     cleanup(): Promise<void>;
   }>;
 }
@@ -50,6 +62,8 @@ export interface TaskStreamEvent {
   readonly type: string;
   readonly payload: Readonly<Record<string, unknown>>;
   readonly occurredAt: IsoDateTime;
+  /** A person as the event's actor; absent is the pipeline's system actor. */
+  readonly actorUserId?: Id;
 }
 
 const TICKET = (key: string) => ({
@@ -71,6 +85,12 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
     let projectId: Id;
     let userId: Id;
     let appendTaskEvent: (event: TaskStreamEvent) => Promise<void>;
+    let otherUserId: Id;
+    let recordHumanAction: (input: {
+      readonly taskId: Id;
+      readonly userId: Id;
+      readonly at: IsoDateTime;
+    }) => Promise<void>;
 
     const task = (
       overrides: Partial<StoredTask> = {},
@@ -130,6 +150,8 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       projectId = context.projectId;
       userId = context.userId;
       appendTaskEvent = context.appendTaskEvent;
+      otherUserId = context.otherUserId;
+      recordHumanAction = context.recordHumanAction;
       return async () => {
         await context.cleanup();
       };
@@ -1882,6 +1904,43 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           branch: 'agentic/ACME-7',
           sessionId: 'session-0001',
           stage: 'implementation',
+          // A system actor holds nothing, and with nobody to have acted the take-over is the last
+          // activity (WP-44).
+          holderUserId: null,
+          lastActivityAt: '2026-06-05T09:00:02.000Z',
+        });
+      });
+
+      it('moves the last activity to the holder’s own later command, and to nobody else’s (WP-44)', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const taskId = stored.task.id;
+        await appendTaskEvent({
+          id: nextId(),
+          taskId,
+          seq: 1,
+          type: 'task.taken_over',
+          payload: takenOverPayload(taskId, projectId),
+          occurredAt: '2026-06-05T09:00:00.000Z' as IsoDateTime,
+          actorUserId: userId,
+        });
+        // Before the take-over: not activity on it.
+        await recordHumanAction({ taskId, userId, at: '2026-06-04T09:00:00.000Z' as IsoDateTime });
+        expect(await store.tasks.takenOver(tx, taskId)).toMatchObject({
+          holderUserId: userId,
+          lastActivityAt: '2026-06-05T09:00:00.000Z',
+        });
+        await recordHumanAction({ taskId, userId, at: '2026-06-10T11:00:00.000Z' as IsoDateTime });
+        // Later still, but a bystander's: the clock stays with the holder.
+        await recordHumanAction({
+          taskId,
+          userId: otherUserId,
+          at: '2026-06-11T11:00:00.000Z' as IsoDateTime,
+        });
+        expect(await store.tasks.takenOver(tx, taskId)).toMatchObject({
+          at: '2026-06-05T09:00:00.000Z',
+          holderUserId: userId,
+          lastActivityAt: '2026-06-10T11:00:00.000Z',
         });
       });
 

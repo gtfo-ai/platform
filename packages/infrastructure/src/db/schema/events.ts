@@ -112,6 +112,14 @@ export const inbox = pgTable(
     redactionCount: integer('redaction_count').notNull(),
     /** The signature verdict, stored because a redacted payload cannot reproduce it (0014). */
     verified: boolean('verified').notNull().default(false),
+    /**
+     * The accounts the delivery was refused for as `unmapped_identity`, redacted (migration 0047,
+     * WP-44). Null on a row written before it — "not recorded", never "none".
+     */
+    unmappedIdentities:
+      jsonb('unmapped_identities').$type<
+        readonly { readonly provider: string; readonly external_id: string }[]
+      >(),
   },
   (table) => [primaryKey({ columns: [table.provider, table.deliveryId] })],
 );

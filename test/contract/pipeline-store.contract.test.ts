@@ -16,9 +16,14 @@ runPipelineStoreContract({
   create: async () => {
     // The task streams `takenOver` reads (WP-56), wired as `createPipelineHarness` wires the log.
     const log: DomainEvent[] = [];
+    const actions: { taskId: string; userId: string; at: string }[] = [];
     return {
       store: createMemoryPipelineStore({
         taskEvents: (taskId) => log.filter((event) => event.stream_id === taskId),
+        humanActions: (taskId) =>
+          actions
+            .filter((row) => row.taskId === taskId)
+            .map((row) => ({ userId: row.userId as never, at: row.at as never })),
       }),
       tx: { adapter: 'memory' } as never,
       projectId: PROJECT,
@@ -29,11 +34,18 @@ runPipelineStoreContract({
           stream_type: 'task',
           stream_id: event.taskId,
           stream_seq: event.seq,
-          actor: { kind: 'system', component: 'pipeline' },
+          actor:
+            event.actorUserId === undefined
+              ? { kind: 'system', component: 'pipeline' }
+              : { kind: 'user', user_id: event.actorUserId },
           occurred_at: event.occurredAt,
           type: event.type,
           payload: event.payload,
         } as unknown as DomainEvent);
+      },
+      otherUserId: '00000000-0000-4000-8000-0000000000c2',
+      recordHumanAction: async (input) => {
+        actions.push(input);
       },
       cleanup: async () => {},
     };

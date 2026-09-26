@@ -35,6 +35,7 @@ import {
   skillSetVersionOf,
 } from '@platform/domain';
 import type { ContextPackAssembler } from '../knowledge/context-pack.js';
+import { NOT_SEARCHED } from '../knowledge/text-search-record.js';
 import {
   commandBaselineFor,
   platformToolsFor,
@@ -98,6 +99,8 @@ const emptyRecord = (budgetTokens: number): ContextPackRecord => ({
   budget_tokens: budgetTokens,
   total_tokens: 0,
   kb_commit: null,
+  // The project has no index, so no text search ran — the first of the five outcomes (WP-44).
+  text_search: NOT_SEARCHED,
 });
 
 /**

@@ -71,6 +71,47 @@ export const ExternalLink = ({
 };
 
 /**
+ * A same-origin download of a file **this platform** serves — the take-over's transcript and
+ * tarball (WP-44). The only other URL attribute this application writes, and it is here for the
+ * reason `ExternalLink` is: `no-html.test.ts` allows `href=` in this file and nowhere else.
+ *
+ * It takes a **path the client composed** (`api/endpoints.ts`' `transcriptDownloadPath` and
+ * `exportDownloadPath`, each segment `encodeURIComponent`-ed), never a DTO string, and it still
+ * refuses anything that is not a plain `/api/…` path on this origin: a path that would resolve
+ * elsewhere (`//host`, a backslash, a scheme) is rendered as text, the refusal `ExternalLink`
+ * gives. A link rather than a `fetch` because the browser then carries the session cookie and
+ * streams the file to disk, and a transcript can be larger than anything worth holding in memory.
+ */
+export const DownloadLink = ({
+  path,
+  label,
+  className,
+}: {
+  readonly path: string;
+  readonly label: string;
+  readonly className?: string;
+}): ReactElement => {
+  // A regular expression rather than a quoted prefix: the client census reads every quoted
+  // `/api/…` literal in the app as a path it calls (`routes/client-census.test.ts`).
+  const safe =
+    /^\/api\/[\w.%-]+(?:\/[\w.%-]+)*$/.test(path) &&
+    !path.includes('..') &&
+    new URL(path, 'http://platform.invalid').pathname === path;
+  if (!safe) {
+    return (
+      <span className={`text-fg-muted ${className ?? ''}`} data-link-refused="true">
+        {label}
+      </span>
+    );
+  }
+  return (
+    <a href={path} download className={className}>
+      {label}
+    </a>
+  );
+};
+
+/**
  * One line or paragraph of untrusted text, with bare `http(s)` URLs turned into links.
  *
  * `rel="noopener noreferrer nofollow"`: `noopener` stops the opened page reaching back through

@@ -20,6 +20,7 @@ import { createMigratedDatabase, type MigratedDatabase } from '../support/migrat
 let database: MigratedDatabase;
 let projectId: string;
 let userId: string;
+let otherUserId: string;
 
 beforeAll(async () => {
   database = await createMigratedDatabase('pipeline-store');
@@ -39,6 +40,10 @@ beforeAll(async () => {
       `insert into users (email, name) values ('operator@example.test', 'Operator') returning id`,
     );
     userId = user.rows[0]?.id as string;
+    const other = await client.query<{ id: string }>(
+      `insert into users (email, name) values ('bystander@example.test', 'Bystander') returning id`,
+    );
+    otherUserId = other.rows[0]?.id as string;
   } finally {
     await client.end();
   }
@@ -78,8 +83,7 @@ runPipelineStoreContract({
         await client.query(
           `insert into events (id, stream_type, stream_id, stream_seq, type, payload, actor,
                                occurred_at)
-           values ($1, 'task', $2, $3, $4, $5::jsonb, '{"kind":"system","component":"pipeline"}'::jsonb,
-                   $6)`,
+           values ($1, 'task', $2, $3, $4, $5::jsonb, $7::jsonb, $6)`,
           [
             event.id,
             event.taskId,
@@ -87,7 +91,20 @@ runPipelineStoreContract({
             event.type,
             JSON.stringify(event.payload),
             event.occurredAt,
+            JSON.stringify(
+              event.actorUserId === undefined
+                ? { kind: 'system', component: 'pipeline' }
+                : { kind: 'user', user_id: event.actorUserId },
+            ),
           ],
+        );
+      },
+      otherUserId,
+      recordHumanAction: async (input) => {
+        await client.query(
+          `insert into human_actions (task_id, user_id, action, created_at)
+           values ($1, $2, 'task.pause', $3)`,
+          [input.taskId, input.userId, input.at],
         );
       },
       cleanup: async () => {

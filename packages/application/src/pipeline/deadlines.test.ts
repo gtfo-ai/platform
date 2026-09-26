@@ -690,6 +690,60 @@ describe('a take-over’s inactivity timeout (product/19 §19, PROGRESS backlog 
     expect(taskOf(harness).task.state).toBe('ready_for_merge');
   });
 
+  it('resets on the holder’s own command, and not on anybody else’s (WP-44, PROGRESS backlog 167)', async () => {
+    const { harness } = await takenOverOnFriday();
+    const taskId = taskOf(harness).task.id;
+    const WEDNESDAY_1100 = '2026-06-10T11:00:00.000Z' as IsoDateTime;
+    // The negative first: a command by somebody who does not hold the task, on Thursday, after
+    // the holder's — it must not move the clock past the holder's own activity.
+    harness.recordHumanAction({ taskId, userId: USER, at: WEDNESDAY_1100 });
+    harness.recordHumanAction({
+      taskId,
+      userId: '00000000-0000-4000-8000-00000000beef' as Id,
+      at: '2026-06-11T11:00:00.000Z' as IsoDateTime,
+    });
+    const reset = takeOverDeadline(harness.calendar, WEDNESDAY_1100);
+    // Five working days from Wednesday 11:00 is the next Wednesday 11:00 — not Thursday's, which
+    // is what the bystander's row would have produced.
+    expect(reset).toBe('2026-06-17T11:00:00.000Z');
+
+    // The fire at the take-over's own deadline finds a take-over that is not quiet yet.
+    moveTo(harness, FIVE_WORKING_DAYS_LATER);
+    await harness.drain();
+    expect(taskOf(harness).task.state).toBe('paused');
+    expect(eventsOf(harness, 'task.escalated')).toHaveLength(0);
+    // …and re-armed for the holder's last activity, with no new arming path.
+    expect(
+      deadlineJobs(harness)
+        .filter((request) => (request.data as DeadlineSweepData).kind === 'take_over_inactivity')
+        .at(-1)
+        ?.startAfter?.toISOString(),
+    ).toBe(reset);
+
+    moveTo(harness, '2026-06-17T10:59:59.999Z');
+    await harness.drain();
+    expect(taskOf(harness).task.state).toBe('paused');
+
+    moveTo(harness, reset);
+    await harness.drain();
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    const brief = eventsOf(harness, 'task.escalated')[0]?.payload.blocker_brief ?? '';
+    expect(brief).toContain(`no command from them on this task since ${WEDNESDAY_1100}`);
+  });
+
+  it('is not reset by a bystander alone: the take-over’s own deadline still escalates', async () => {
+    const { harness } = await takenOverOnFriday();
+    const taskId = taskOf(harness).task.id;
+    harness.recordHumanAction({
+      taskId,
+      userId: '00000000-0000-4000-8000-00000000beef' as Id,
+      at: '2026-06-10T11:00:00.000Z' as IsoDateTime,
+    });
+    moveTo(harness, FIVE_WORKING_DAYS_LATER);
+    await harness.drain();
+    expect(taskOf(harness).task.state).toBe('needs_human');
+  });
+
   it('counts from the take-over the task holds now, not from one that was handed back', async () => {
     const { harness } = await takenOverOnFriday();
     const taskId = taskOf(harness).task.id;

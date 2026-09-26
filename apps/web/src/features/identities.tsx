@@ -12,9 +12,15 @@
  * The pairing is **stated**: a provider, the account's id *in that provider* (a Slack member id
  * such as `U0123ABCD`, which Slack sets and nobody can type into a message), and either the platform
  * user it belongs to or *machine* — a bot, which maps to nobody on purpose. There is no email match
- * and no suggestion: an identity the platform guessed would then be allowed to approve a plan,
- * which is the one thing the rule exists to refuse. `display_name` is a label for this list and
- * resolves nothing.
+ * and no suggested **person**: an identity the platform guessed would then be allowed to approve a
+ * plan, which is the one thing the rule exists to refuse. `display_name` is a label for this list
+ * and resolves nothing.
+ *
+ * **What it does offer, since WP-44, is the account** (PROGRESS backlog 198): the provider ids the
+ * platform refused as `unmapped_identity` and nobody has mapped since, read off the inbound
+ * deliveries. Choosing one fills the provider and the account id into the form — it writes nothing,
+ * and who the account is stays the admin's statement. Before this list the screen asked for an id
+ * the operator had no way to find short of SQL.
  *
  * Everything shown here came from somebody else — a provider's account id, a display name, an
  * email — so every string goes through `UntrustedText` (BD-022).
@@ -24,7 +30,12 @@
  */
 import type { IdentityMapping } from '@platform/contracts';
 import { type FormEvent, type ReactElement, useState } from 'react';
-import { useOrgIdentities, useOrgUsers, useSettingsCommands } from '../app/queries.js';
+import {
+  useIdentityCandidates,
+  useOrgIdentities,
+  useOrgUsers,
+  useSettingsCommands,
+} from '../app/queries.js';
 import {
   Badge,
   Button,
@@ -32,6 +43,7 @@ import {
   EmptyState,
   ErrorNotice,
   Field,
+  formatDateTime,
   Loading,
   SectionHeading,
 } from '../ui/kit.js';
@@ -61,6 +73,8 @@ export const IdentityMappings = (): ReactElement => {
   const [kind, setKind] = useState<Kind>('person');
   const [userId, setUserId] = useState('');
   const [displayName, setDisplayName] = useState('');
+  // Asked only once the admin-only list has answered, so a non-admin is not refused twice.
+  const candidates = useIdentityCandidates(identities.isSuccess);
 
   const userItems = users.data?.items ?? [];
   const emailOf = (id: string): string | null =>
@@ -139,6 +153,42 @@ export const IdentityMappings = (): ReactElement => {
           </li>
         ))}
       </ul>
+
+      {candidates.isSuccess && candidates.data.items.length > 0 ? (
+        <div className="mt-3 flex flex-col gap-1">
+          <p className="text-xs font-semibold">Refused accounts nobody has mapped</p>
+          <p className="text-xs text-fg-muted">
+            The platform refused a decision from each of these because the account is not mapped.
+            Choosing one fills the form below; it maps nothing until you say who the account is.
+          </p>
+          <ul className="flex flex-col gap-1" aria-label="Unmapped provider accounts">
+            {candidates.data.items.map((candidate) => (
+              <li key={`${candidate.provider}:${candidate.external_id}`}>
+                <Card className="flex flex-wrap items-center gap-2 text-sm">
+                  <Badge>
+                    <UntrustedText value={candidate.provider} />
+                  </Badge>
+                  <code className="font-mono text-xs">
+                    <UntrustedText value={candidate.external_id} />
+                  </code>
+                  <span className="text-xs text-fg-muted">
+                    {`${candidate.deliveries} refused · last ${formatDateTime(candidate.last_seen_at)}`}
+                  </span>
+                  <Button
+                    className="ml-auto"
+                    onClick={() => {
+                      setProvider(candidate.provider);
+                      setExternalId(candidate.external_id);
+                    }}
+                  >
+                    Use this account
+                  </Button>
+                </Card>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       {identities.isError ? null : (
         <form

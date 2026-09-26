@@ -16,19 +16,14 @@
  * both directions**, so neither this paragraph nor that sentence can go stale on its own (WP-38,
  * criterion 5).
  *
- * **Which commands are here, and which are named absences.** technical/09's screens table gives
- * this screen `answer, approve, retry, take over, feedback`; product/10 adds return-to-stage and
- * rework. Present: pause, resume, cancel, answer, decide, **retry-stage**, **return-to-stage**,
- * **rework** and **feedback**. Absent on purpose, and this list is the declaration rather than a
- * hope:
- *
- * - **take over** and **hand back**. The routes exist since WP-27 and so does the response this
- *   note used to say was missing: `takeOverResponseSchema` carries the branch, the session id, the
- *   resume commands and what became of the workspace, which is product/10's "pause pipeline, get
- *   branch + resume command, export workspace" in a shape a screen can render. What is absent is
- *   this screen's half — somewhere to show those four lines, and a stage picker for the hand-back —
- *   and it is a row of its own rather than a line in this file (standing rule 83: the sentence that
- *   described the gap is false the moment the gap closes, and this is that sentence).
+ * **Which commands are here.** technical/09's screens table gives this screen `answer, approve,
+ * retry, take over, feedback`; product/10 adds return-to-stage and rework. All of them are present:
+ * pause, resume, cancel, answer, decide, **retry-stage**, **return-to-stage**, **rework**,
+ * **feedback** and — since WP-44 — **take over** and **hand back** (`features/take-over.tsx`), which
+ * this note used to list as absences because nothing rendered the branch, the resume lines and the
+ * workspace's fate that `takeOverResponseSchema` carries (standing rule 83: the sentence that
+ * described the gap is false the moment the gap closes). An epic-split task also carries the
+ * breakdown panel (`features/breakdown-panel.tsx`), the acceptance surface WP-40 built no screen for.
  *
  * **Ask the task is here since WP-31** — `features/ask-thread.tsx`, between the approvals and the
  * artifacts. This note used to say that `taskDetailResponseSchema` had nowhere to carry a thread so
@@ -74,7 +69,9 @@ import {
 } from '../ui/kit.js';
 import { ExternalLink, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
 import { AskThread } from './ask-thread.js';
+import { BreakdownPanel } from './breakdown-panel.js';
 import { FeedbackForm } from './feedback.js';
+import { TakeOverPanel } from './take-over.js';
 
 /**
  * What the task's estimate rests on, as one sentence — the same four states the workpad prints.
@@ -122,6 +119,26 @@ export const humanTimeBreakdown = (humanTime: HumanTimeSummary): string => {
     ? `${entries}, none of which measured any time — a review with a single comment is a window of zero length.`
     : `${parts.join(' · ')} over ${entries}.`;
 };
+
+/**
+ * What the human-time figure leaves out on purpose, or `null` when it leaves nothing out (WP-44,
+ * PROGRESS backlog 190).
+ *
+ * The page applies the statistics' two exclusions: a machine's rows are not human time and are not
+ * mentioned, and a review window an approval touched is **withheld** — kept out of the total and
+ * said here, so the number is never silently lower than what was recorded (standing rule 16).
+ */
+export const humanTimeWithheldText = (humanTime: HumanTimeSummary): string | null => {
+  const { entries, minutes } = humanTime.withheld;
+  if (entries === 0) {
+    return null;
+  }
+  const windows = entries === 1 ? '1 review window' : `${entries} review windows`;
+  return `Not counted: ${windows} (${formatMinutes(minutes)}) an approval landed inside, withheld until the approval's author is confirmed — the statistics withhold the same.`;
+};
+
+/** The epic split's template id (`EPIC_SPLIT_TEMPLATE_ID` in the domain), the only task with a queue. */
+export const EPIC_SPLIT_TEMPLATE = 'epic_split';
 
 /**
  * The coverage delta, as the one figure the Checks panel prints — product/18:38, WP-39.
@@ -691,6 +708,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
     approvals,
     runs,
     human_time: humanTime,
+    taken_over: takenOver,
   } = detail.data;
   // The route may be entered without a project key (from the inbox or the agents view), so the
   // link back to the board is resolved from the task's own project rather than from the URL.
@@ -797,6 +815,10 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
           <SectionHeading>Stage commands</SectionHeading>
           <StageCommands stages={stages} commands={commands} />
         </div>
+
+        <TakeOverPanel taskId={task.id} state={task.state} takenOver={takenOver} runs={runs} />
+
+        <BreakdownPanel taskId={task.id} enabled={task.template === EPIC_SPLIT_TEMPLATE} />
 
         <div>
           <SectionHeading>Questions</SectionHeading>
@@ -991,6 +1013,9 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
             definition="Human minutes derived from events, never from tracking (product/19 §16): review from the first human comment on the merge request to the merge, capped at 8 h per calendar day and excluding gaps over 2 h; 30 min per question; 10 min flat per approval; 5 min flat per steer. The dollars and the minutes are shown side by side and are never added: that would need an hourly rate this platform does not have."
           />
           <p className="-mt-2 text-[11px] text-fg-muted">{humanTimeBreakdown(humanTime)}</p>
+          {humanTimeWithheldText(humanTime) === null ? null : (
+            <p className="-mt-2 text-[11px] text-fg-muted">{humanTimeWithheldText(humanTime)}</p>
+          )}
           {humanTime.by_user === null ? null : (
             <ul className="-mt-1 flex flex-col gap-0.5">
               {humanTime.by_user.map((entry) => (

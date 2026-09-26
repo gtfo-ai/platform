@@ -7,6 +7,7 @@ import {
   dependencyValueText,
   estimateBasisText,
   humanTimeBreakdown,
+  humanTimeWithheldText,
   reviewersBasisText,
   reviewersValueText,
 } from './task-detail.js';
@@ -84,6 +85,7 @@ const humanTime = (
   by_kind: { review: 0, question: 0, approval: 0, steer: 0 },
   by_user: null,
   entries: 0,
+  withheld: { entries: 0, minutes: 0 },
   ...over,
 });
 
@@ -335,5 +337,17 @@ describe('the required reviewers on the Checks panel', () => {
     expect(reviewersBasisText(routed({ source: 'requester' }))).toContain(
       'the human who asked for the task',
     );
+  });
+});
+
+describe('what the human-time figure withholds (WP-44, PROGRESS backlog 190)', () => {
+  it('says nothing when nothing was withheld', () => {
+    expect(humanTimeWithheldText(humanTime())).toBeNull();
+  });
+
+  it('names the withheld windows and their minutes, so the figure is never silently lower', () => {
+    const line = humanTimeWithheldText(humanTime({ withheld: { entries: 2, minutes: 90 } }));
+    expect(line).toContain('2 review windows');
+    expect(line).toContain('an approval landed inside');
   });
 });

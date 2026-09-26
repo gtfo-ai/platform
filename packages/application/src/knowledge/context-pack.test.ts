@@ -477,12 +477,36 @@ describe('the negative corpus — precision that is capable of failing (WP-58, b
     expect(pack.uninformativeTerms.slice().sort()).toEqual(overHalf);
     expect(pack.record.tier1).toEqual([]);
     expect(pack.documents.every((document) => document.tier === 0)).toBe(true);
+    // …and the record says **why** tier 1 is empty, naming the dropped words (WP-44, backlog 172):
+    // the same row used to read exactly like a stage that searched for nothing.
+    expect(pack.record.text_search).toEqual({
+      outcome: 'all_uninformative',
+      kept_terms: [],
+      dropped_terms: overHalf,
+      floor: 'applied',
+      matched_documents: 0,
+      omitted_terms: 0,
+    });
+  });
+
+  it('records a query with no keywords as its own case, distinct from the floor’s (WP-44)', async () => {
+    const pack = await textOnly('a an to of');
+    expect(pack.queryTerms).toEqual([]);
+    expect(pack.record.text_search?.outcome).toBe('no_terms');
+    expect(pack.record.text_search?.dropped_terms).toEqual([]);
   });
 
   it('keeps an informative term beside the dropped ones, and searches for it alone', async () => {
     const pack = await textOnly('demo drain');
     expect(pack.uninformativeTerms).toEqual(['demo']);
     expect(pack.searchedTerms).toEqual(['drain']);
+    expect(pack.record.text_search).toMatchObject({
+      outcome: 'matched',
+      kept_terms: ['drain'],
+      dropped_terms: ['demo'],
+      floor: 'applied',
+    });
+    expect(pack.record.text_search?.matched_documents).toBeGreaterThan(0);
     expect(pack.record.tier1.map((entry) => entry.path)).toContain(
       `${FIXTURE_KNOWLEDGE_DIR}/technical/runbook.md`,
     );

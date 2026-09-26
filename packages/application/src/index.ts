@@ -86,6 +86,7 @@ export * from './knowledge/librarian.js';
 export * from './knowledge/ports.js';
 export * from './knowledge/research.js';
 export * from './knowledge/runtime.js';
+export * from './knowledge/text-search-record.js';
 // The maintenance pipeline — product/18:31's scheduled chores (WP-36)
 export * from './maintenance/ports.js';
 export * from './maintenance/scheduler.js';

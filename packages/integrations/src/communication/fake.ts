@@ -351,6 +351,8 @@ export const createFakeCommunication = (options: FakeCommunicationOptions): Fake
             {
               reason: 'unmapped_identity',
               detail: `${body.author_id} is not mapped to a platform user`,
+              // Which account, as the Slack adapter says it (WP-44, PROGRESS backlog 198).
+              identity: { provider: identity.provider, external_id: identity.external_id },
             },
           ],
         };

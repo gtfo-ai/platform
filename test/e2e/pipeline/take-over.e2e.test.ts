@@ -334,8 +334,8 @@ describe('taking a task over and handing it back', () => {
     // ── the task read model carries it too, for whoever opens the page next ──
     //
     // product/18's *"posts the branch and a `claude --resume <session>` command to the ticket **and
-    // UI**"*. No screen renders it yet — the buttons are a UI row of their own — which is why
-    // `apps/server/src/routes/client-census.test.ts` names the two routes by hand.
+    // UI**"*. Since WP-44 the task and run screens render it (`apps/web/src/features/take-over.tsx`),
+    // so the census sees both routes through the client rather than by a hand-written case.
     const taken = await client.json<TaskDetailResponse>(`/api/tasks/${taskId}`);
     expect(taken.body.taken_over).toMatchObject({
       branch: 'agentic/ACME-1',
@@ -346,6 +346,24 @@ describe('taking a task over and handing it back', () => {
         'claude --resume fake-session-e2e',
       ],
     });
+    // WP-44: who holds it, and the stages a hand-back may name — the compiled pipeline's, which is
+    // the list the refusal below is made against (so `deployment` is not in it).
+    expect(taken.body.taken_over?.held_by).toEqual(expect.any(String));
+    expect(taken.body.taken_over?.hand_back_stages).toContain('implementation');
+    expect(taken.body.taken_over?.hand_back_stages).not.toContain('deployment');
+
+    // ── the transcript the person takes away (WP-44, Q93: served, not copied) ──
+    //
+    // The interrupted run's `run_messages`, one JSON document per line, as an attachment — through
+    // the real router, the real guard and the rows this instance's own transcript sink wrote.
+    const download = await client.request(`/api/runs/${runId}/transcript.jsonl`);
+    expect(download.status).toBe(200);
+    expect(download.headers.get('content-disposition')).toContain('attachment');
+    const lines = (await download.text()).split('\n').filter((line) => line.length > 0);
+    expect(lines.length).toBeGreaterThan(0);
+    for (const line of lines) {
+      expect((JSON.parse(line) as { run_id: string }).run_id).toBe(runId);
+    }
 
     // ── and the ticket says the same thing the response did ───────────────
     //

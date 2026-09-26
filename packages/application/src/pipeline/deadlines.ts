@@ -249,16 +249,15 @@ const contextFor = (options: DeadlineSweepOptions, taskId: Id): CommandContext =
  * take-over (taken, handed back, taken again inside the window, the second arm collapsing onto the
  * first) re-arms for the later one instead of expiring it early.
  *
- * **Inactivity is measured from the take-over itself, and that is a narrowing.** The platform can
- * observe some of what a person does on a taken-over task — a push to a branch with a merge request
- * arrives as `mr.updated`, and a command they issue leaves a `human_actions` row — and this timer
- * reads **neither**: it counts five working days from `task.taken_over` to the first of a hand-back,
- * a resume, a stage entry, a completion or a cancellation. So a person who is pushing every day
- * without handing back is escalated anyway. That is the cheaper direction (the escalation moves the
- * task to `needs_human` and keeps the take-over block on the workpad; it takes nothing from them),
- * and resetting the timer on those signals is filed as PROGRESS backlog 167 rather than guessed at
- * here — which signals count as activity is a product question, and `mr.updated` does not name the
- * pusher.
+ * **Inactivity is measured from the holder's last activity** (WP-44, PROGRESS backlog 167, closing
+ * WP-56's recorded narrowing). `TakeOverRecord.lastActivityAt` is the newest of the take-over and a
+ * `human_actions` row on this task by the user who took it over — a command they issue — so a person
+ * who pauses, answers, steers or asks on Wednesday is not escalated on the Friday five working days
+ * after the take-over. What does **not** count, and why, is stated where the rule lives
+ * (`store.ts`): another user's command, and a push to the branch — `mr.updated` reaches the
+ * pipeline with no author because the normalisers drop the one GitLab sends (backlog 207), and the
+ * platform's own pushes produce the same event. The job re-arms on a
+ * not-due fire, so a reset needs no new arming path: the fire recomputes from the newer instant.
  */
 const expireTakeOver = async (
   options: DeadlineSweepOptions,
@@ -278,7 +277,7 @@ const expireTakeOver = async (
           if (takeOver === null) {
             return { kind: 'settled' };
           }
-          const dueAt = takeOverDeadline(options.calendar, takeOver.at);
+          const dueAt = takeOverDeadline(options.calendar, takeOver.lastActivityAt);
           const context = contextFor(options, taskId);
           if (isBefore(context.clock.now(), dueAt)) {
             return { kind: 'not_due', dueAt };
@@ -288,10 +287,11 @@ const expireTakeOver = async (
             {
               reason: `the take-over was inactive for ${TAKE_OVER_INACTIVITY_TIMEOUT}`,
               blockerBrief:
-                `${stored.task.ticket.key} was taken over by a human at ${takeOver.at} and has not been ` +
-                `handed back in ${TAKE_OVER_INACTIVITY_TIMEOUT} (pushes to the branch do not count). ` +
-                `The work is on ${takeOver.branch}. Hand it back at the stage it should resume from, ` +
-                'or cancel it.',
+                `${stored.task.ticket.key} was taken over by a human at ${takeOver.at}, and the platform ` +
+                `has seen no command from them on this task since ${takeOver.lastActivityAt} — ` +
+                `${TAKE_OVER_INACTIVITY_TIMEOUT} (pushes to the branch do not count: the platform ` +
+                `does not yet record who pushed). The work is on ${takeOver.branch}. Hand it back at the ` +
+                'stage it should resume from, or cancel it.',
             },
             context,
           );

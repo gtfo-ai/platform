@@ -80,6 +80,7 @@ import { type BudgetGuard, noBudgetGuard } from '../cost/guard.js';
 import { type LateCostRecorder, noLateCostRecorder } from '../cost/late.js';
 import { type CapSpend, capIsSpent, capSpendDetail } from '../cost/pending.js';
 import { composeSecretRedactors } from '../integrations/redaction.js';
+import { redactTextSearchTerms } from '../knowledge/text-search-record.js';
 import type { MaintenanceSpendReader } from '../maintenance/ports.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type { Logger } from '../ports/logger.js';
@@ -779,6 +780,9 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       );
       const systemPrompt = redactor.redactText(spec.systemPromptAppend);
       const userPrompt = redactor.redactText(spec.userPrompt);
+      // The pack's recorded search terms are the prompt's own words in another shape, so the same
+      // redactor decides them before they reach `run.started` or `run_context_pack` (WP-44).
+      const contextPack = redactTextSearchTerms(plan.contextPack, redactor);
 
       // `created → starting → running`: two transitions, two catalogue events, and no observable
       // moment between them here — the platform has the spec and is handing it to the runner. The
@@ -800,7 +804,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       const starting = startRun(created, context);
       // The real record, since WP-17. It was a zeroed literal from WP-15 until the pack had a
       // producer *and* a delimiter (PROGRESS backlog 11 and 12).
-      const running = markRunning(starting.aggregate, { contextPack: plan.contextPack }, context);
+      const running = markRunning(starting.aggregate, { contextPack }, context);
       await store.runs.insert(scope.tx, {
         id: runId,
         taskId: task.id,
@@ -833,7 +837,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         // WP-57 (PROGRESS backlog 31): the record `run.started` carries, stored as rows in the
         // transaction that commits the run — the pack was planned between the two transactions,
         // so this is the first moment the row it belongs to exists.
-        contextPack: plan.contextPack,
+        contextPack,
       });
       /**
        * The lease, claimed in the **same transaction as the row** (WP-47).

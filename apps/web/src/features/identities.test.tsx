@@ -6,7 +6,7 @@
  * nothing in the SPA did until this row, so every chat decision stayed `unmapped_identity` — and
  * it renders a provider's strings as text (BD-022).
  */
-import type { IdentityMapping, UserSummary } from '@platform/contracts';
+import type { IdentityCandidate, IdentityMapping, UserSummary } from '@platform/contracts';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -53,11 +53,15 @@ const json = (body: unknown, status = 200): Response =>
 const fetchFor = (options: {
   readonly identities?: IdentityMapping[] | 'forbidden';
   readonly onMap?: (body: unknown, headers: Headers) => void;
+  readonly candidates?: IdentityCandidate[];
 }) => {
   const identities = options.identities ?? [MAPPED];
   return (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
     if (url.includes('/api/auth/get-session')) return json(SESSION);
+    if (url.endsWith('/api/org/identities/candidates')) {
+      return json({ items: options.candidates ?? [] });
+    }
     if (url.endsWith('/api/org/identities') && init?.method === 'POST') {
       const body = JSON.parse(String(init.body)) as IdentityMapping;
       options.onMap?.(body, new Headers(init.headers));
@@ -189,5 +193,41 @@ describe('provider identities on the settings page', () => {
     });
     expect(container.textContent).not.toContain('Nobody is mapped yet');
     expect(screen.queryByRole('button', { name: 'Save mapping' })).toBeNull();
+  });
+});
+
+describe('the refused accounts nobody has mapped (WP-44, PROGRESS backlog 198)', () => {
+  it('offers them, fills the form with one, and writes nothing until the admin saves', async () => {
+    const posted: unknown[] = [];
+    const user = userEvent.setup();
+    const { container } = render(
+      createApp({
+        fetchImpl: fetchFor({
+          identities: [],
+          candidates: [
+            {
+              provider: 'slack',
+              external_id: 'U0FAKE<i>NEW</i>',
+              deliveries: 2,
+              last_seen_at: '2026-09-26T09:00:00.000Z',
+            },
+          ],
+          onMap: (body) => {
+            posted.push(body);
+          },
+        }),
+        realtime: false,
+      }).element,
+    );
+    await screen.findByText('Refused accounts nobody has mapped');
+    // The provider's id is text (BD-022).
+    expect(container.textContent).toContain('U0FAKE<i>NEW</i>');
+    expect(container.querySelector('li i')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Use this account' }));
+    expect((screen.getByLabelText('Account id in the provider') as HTMLInputElement).value).toBe(
+      'U0FAKE<i>NEW</i>',
+    );
+    // Proposing, never writing: choosing a candidate posted nothing.
+    expect(posted).toEqual([]);
   });
 });

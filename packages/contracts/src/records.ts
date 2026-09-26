@@ -158,6 +158,54 @@ export const knowledgeProposalRecordSchema = z.strictObject({
 });
 
 /**
+ * What the context pack's **text step** did — technical/07 step 2, Q58 (a), WP-44 (PROGRESS backlog
+ * 172).
+ *
+ * A pack with no text-matched tier-1 document used to be one row shape for five different facts, so
+ * the one place an operator audits what an agent was shown (BD-003) could not explain its own
+ * emptiness. The five are told apart by `outcome` and `floor` together:
+ *
+ * | `outcome` | `floor` | what happened |
+ * |---|---|---|
+ * | `not_searched` | `null` | no text search ran: the project has no knowledge index yet. **No shipped stage opts out of the text step**, so this is the only way a run gets here on this build |
+ * | `no_terms` | set | the task text yielded no keyword (a degenerate query) |
+ * | `all_uninformative` | `applied` | every keyword was dropped by Q58's floor — `dropped_terms` names them |
+ * | `no_match` | `applied` | the kept keywords matched no document |
+ * | `no_match` | `no_statistics` | they matched nothing **and** the index carried no statistics, so nothing was dropped (an index built before migration 0042) |
+ * | `matched` | set | at least one document matched; whether it was *admitted* is tier 1's `validated` and the budget's business |
+ *
+ * `kept_terms` and `dropped_terms` are words extracted from the ticket, the spec and the feedback —
+ * untrusted text (BD-022) that has passed the run's redactor: a term the redactor would have changed
+ * is **left out** and counted in `omitted_terms`, never stored as a placeholder, because a
+ * placeholder is not a term and a partial one is a secret's prefix.
+ */
+export const contextPackTextOutcomeSchema = z.enum([
+  'not_searched',
+  'no_terms',
+  'all_uninformative',
+  'no_match',
+  'matched',
+]);
+
+/** The longest term the record keeps; a longer "word" is a pasted blob, not a keyword. */
+export const MAX_RECORDED_TERM_CHARS = 64;
+
+export const contextPackTextSearchSchema = z.strictObject({
+  outcome: contextPackTextOutcomeSchema,
+  kept_terms: z.array(nonEmptyStringSchema.max(MAX_RECORDED_TERM_CHARS)).max(64),
+  dropped_terms: z.array(nonEmptyStringSchema.max(MAX_RECORDED_TERM_CHARS)).max(64),
+  /** Q58's floor as the store applied it, or `null` when no search ran. */
+  floor: z.enum(['applied', 'no_statistics']).nullable(),
+  /** Documents the text query returned hits for, before scoring, budget and validation. */
+  matched_documents: z.int().nonnegative(),
+  /**
+   * Terms left out of the two lists: the run's redactor would have changed them, or they are longer
+   * than {@link MAX_RECORDED_TERM_CHARS}. Counted so a short list is never read as the whole query.
+   */
+  omitted_terms: z.int().nonnegative(),
+});
+
+/**
  * Context pack record stored per run (technical/12). `validated` is false for a tier-1 item the
  * validator dropped before the prompt was assembled.
  */
@@ -175,6 +223,12 @@ export const contextPackRecordSchema = z.strictObject({
   budget_tokens: tokenCountSchema,
   total_tokens: tokenCountSchema,
   kb_commit: shaSchema.nullish(),
+  /**
+   * The text step's outcome ({@link contextPackTextSearchSchema}, WP-44). **Nullish**, because a
+   * `run.started` event and a `runs` row written before WP-44 carry none, and "not recorded" is a
+   * different fact from any of the five outcomes (standing rule 18).
+   */
+  text_search: contextPackTextSearchSchema.nullish(),
 });
 
 export const diffStatsSchema = z.strictObject({
@@ -594,6 +648,8 @@ export type WorkspaceRecord = z.infer<typeof workspaceRecordSchema>;
 export type FeedbackRecord = z.infer<typeof feedbackRecordSchema>;
 export type KnowledgeProposalRecord = z.infer<typeof knowledgeProposalRecordSchema>;
 export type ContextPackRecord = z.infer<typeof contextPackRecordSchema>;
+export type ContextPackTextSearch = z.infer<typeof contextPackTextSearchSchema>;
+export type ContextPackTextOutcome = z.infer<typeof contextPackTextOutcomeSchema>;
 export type DiffStats = z.infer<typeof diffStatsSchema>;
 export type CiStatus = z.infer<typeof ciStatusSchema>;
 export type TaskTotals = z.infer<typeof taskTotalsSchema>;

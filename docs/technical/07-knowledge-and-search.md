@@ -162,8 +162,11 @@ Inputs: task text (ticket + spec), touched paths (from plan/diff when available)
 > past the line and the query still fills 11 153 of 12 000 tokens — and a **large** single-subject
 > vault can have a subject word significantly over half, which is dropped, so a query of that word
 > alone finds nothing by text (PROGRESS backlog 171). The readings are pinned by the tests. `kb_search` answers a
-> fourth status, `uninformative_terms`, naming the words it dropped; `ContextPackRecord` does not
-> yet record that the text step contributed nothing and why (Q58 (a), filed rather than done).
+> fourth status, `uninformative_terms`, naming the words it dropped; and since **WP-44** (migration
+> 0047, PROGRESS backlog 172) `ContextPackRecord.text_search` records what the text step did — the
+> outcome (`not_searched`, `no_terms`, `all_uninformative`, `no_match`, `matched`), the kept and the
+> dropped terms (through the run's redactor), the floor's state and the documents matched — so the
+> pack `run_context_pack` stores and the run screen shows can say why tier 1 is empty (Q58 (a)).
 >
 > **The fixture vault carries a negative corpus since WP-58** (PROGRESS backlog 16): six plausible
 > wrong answers — same vocabulary, different subject — so a precision assertion over the vault can

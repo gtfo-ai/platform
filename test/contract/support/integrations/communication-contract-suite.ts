@@ -341,6 +341,8 @@ export const runCommunicationContract = (harness: CommunicationContractHarness):
         expect(result.events).toEqual([]);
         expect(result.ignored.length).toBe(1);
         expect(result.ignored[0]?.reason).toBe('unmapped_identity');
+        // And **which** account, structurally, so an operator can map it (WP-44, backlog 198).
+        expect(result.ignored[0]?.identity?.external_id).toBe(context.unmappedAuthorId);
       });
 
       it('turns a mapped user decision into task.approval.decided', async () => {
@@ -379,6 +381,7 @@ export const runCommunicationContract = (harness: CommunicationContractHarness):
         );
         expect(result.events).toEqual([]);
         expect(result.ignored[0]?.reason).toBe('unmapped_identity');
+        expect(result.ignored[0]?.identity?.external_id).toBe(context.unmappedAuthorId);
       });
 
       it('ignores an event it does not understand instead of throwing (rule 20)', async () => {

@@ -16,20 +16,16 @@
  *   form, on a path of its own (`/api/org/stats.csv`) so that neither answer has to publish the
  *   other's schema. The screen no longer ships as an empty state (standing rule 83: closing a gap
  *   falsifies the sentence that described it).
- * - `POST /api/tasks/:id/{take-over,hand-back}`. **The reason this list gave has been answered, and
- *   the remaining absence is a smaller one.** It used to read *"each command's whole value is in a
- *   response no schema publishes"*; WP-27 built both routes and published `takeOverResponseSchema`,
- *   which carries the branch, the session, the resume commands and what became of the workspace —
- *   so the objection that kept the buttons out is gone (standing rule 83: closing a gap falsifies
- *   the sentence that described it). What is left is the **screen**: a take-over control needs
- *   somewhere to render those four things and a hand-back control needs a stage picker, which is a
- *   UI row rather than a client function. `apps/server/src/routes/client-census.test.ts` asserts
- *   both routes by hand for exactly this reason — a census driven by the client's calls cannot see
- *   an endpoint no screen calls.
- * - `POST /api/tasks/:id/ask` (WP-31). contracts publishes a *request* and technical/08 names the
- *   route, and the command's whole value is in a response no schema publishes: ask-the-task is a
- *   thread whose answers `taskDetailResponseSchema` has nowhere to carry. A button that fires the
- *   command and shows the operator nothing is worse than an absent one.
+ * - ~~`POST /api/tasks/:id/{take-over,hand-back}`~~ **are here since WP-44**, with the two downloads
+ *   a take-over hands a person (`transcriptDownloadPath`, `exportDownloadPath`) and the epic split's
+ *   breakdown queue. The census in `apps/server/src/routes/client-census.test.ts` now sees all of
+ *   them, which is why its hand-written cases for them are gone (standing rule 83: closing a gap
+ *   falsifies the sentence that described it).
+ * - ~~`POST /api/tasks/:id/ask`~~ **is here since WP-31** (`askTask`, with the thread read
+ *   `taskAsks` beside it); this bullet still said it was absent because nobody re-read the list
+ *   after the fix, and WP-44 corrected it while editing the bullet above (standing rule 83).
+ *
+ * Nothing is left on this list.
  */
 import {
   agentsResponseSchema,
@@ -46,9 +42,13 @@ import {
   createIntegrationRequestSchema,
   createProjectRequestSchema,
   decideApprovalRequestSchema,
+  decideBreakdownRequestSchema,
+  decideBreakdownResponseSchema,
   decideKbProposalRequestSchema,
   effectiveConfigResponseSchema,
+  handBackRequestSchema,
   historyBootstrapsResponseSchema,
+  identityCandidateListSchema,
   identityMappingListSchema,
   identityMappingSchema,
   inboxResponseSchema,
@@ -67,6 +67,7 @@ import {
   putBudgetsRequestSchema,
   putProjectBindingsRequestSchema,
   readinessResponseSchema,
+  refusedDeliveriesResponseSchema,
   resumeTaskRequestSchema,
   retryRunRequestSchema,
   retryStageRequestSchema,
@@ -86,8 +87,12 @@ import {
   startShadowBatchResponseSchema,
   steerRunRequestSchema,
   submitFeedbackRequestSchema,
+  takeOverRequestSchema,
+  takeOverResponseSchema,
   taskAskListSchema,
   taskAuditPageSchema,
+  taskBreakdownSchema,
+  taskCommandResponseSchema,
   taskDetailResponseSchema,
   tasksResponseSchema,
   testIntegrationResponseSchema,
@@ -115,6 +120,16 @@ export interface Endpoints {
    * list is what turns a click in Slack or a comment in Jira from `unmapped_identity` into a person.
    */
   readonly orgIdentities: () => Promise<z.output<typeof identityMappingListSchema>>;
+  /**
+   * `GET /api/org/identities/candidates` — accounts the platform refused as `unmapped_identity` that
+   * nobody has mapped since (WP-44, PROGRESS backlog 198). A proposal for the mapping form, never a
+   * write.
+   */
+  readonly identityCandidates: () => Promise<z.output<typeof identityCandidateListSchema>>;
+  /** The newest refused or ignored inbound deliveries of one integration (WP-44, backlog 198). */
+  readonly refusedDeliveries: (
+    integrationId: string,
+  ) => Promise<z.output<typeof refusedDeliveriesResponseSchema>>;
   readonly orgAudit: (query: {
     readonly cursor?: string;
     readonly limit?: number;
@@ -309,6 +324,37 @@ export interface Endpoints {
     taskId: string,
     body: z.input<typeof submitFeedbackRequestSchema>,
   ) => Promise<void>;
+  /**
+   * `POST /api/tasks/:id/take-over` — product/19 §19 (WP-27's route, WP-44's caller). The answer is
+   * **parsed**, because its whole value is in it: the branch, the session, the resume lines and what
+   * became of the workspace. The key is the caller's intent (`app/idempotency.ts`); the route
+   * accepts none, and a repeat is refused by the aggregate (`paused → paused` has no edge).
+   */
+  readonly takeOverTask: (
+    taskId: string,
+    body: z.input<typeof takeOverRequestSchema>,
+    idempotencyKey: string,
+  ) => Promise<z.output<typeof takeOverResponseSchema>>;
+  /**
+   * `POST /api/tasks/:id/hand-back`. The key is **required** by the route: a hand-back creates a
+   * stage attempt and a run, so a double-clicked button would start two.
+   */
+  readonly handBackTask: (
+    taskId: string,
+    body: z.input<typeof handBackRequestSchema>,
+    idempotencyKey: string,
+  ) => Promise<z.output<typeof taskCommandResponseSchema>>;
+  /** The epic split's queue (WP-40's route, WP-44's panel), with whether this caller may decide. */
+  readonly taskBreakdown: (taskId: string) => Promise<z.output<typeof taskBreakdownSchema>>;
+  /**
+   * Accept or reject some children. The key is **required**: accepting files tickets in somebody
+   * else's tracker, and a repeat would file them twice.
+   */
+  readonly decideBreakdown: (
+    taskId: string,
+    body: z.input<typeof decideBreakdownRequestSchema>,
+    idempotencyKey: string,
+  ) => Promise<z.output<typeof decideBreakdownResponseSchema>>;
   readonly steerRun: (runId: string, body: z.input<typeof steerRunRequestSchema>) => Promise<void>;
   readonly retryRun: (runId: string, body: z.input<typeof retryRunRequestSchema>) => Promise<void>;
   readonly cancelRun: (
@@ -324,6 +370,19 @@ export interface Endpoints {
 
 /** Encodes one path segment. A ticket key or a KB path is untrusted input (BD-022). */
 const seg = (value: string): string => encodeURIComponent(value);
+
+/**
+ * The run's transcript as a file (WP-44, Q93): a JSONL rendering of `run_messages`, served as an
+ * attachment and read through the same projection as `/messages`. A **path**, not a function of
+ * the client: a browser downloads it by following a link, which carries the session cookie that a
+ * `fetch` would have to re-implement as a blob. Rendered only through `ui/untrusted.tsx`'s
+ * `DownloadLink` (the one module that writes a URL attribute).
+ */
+export const transcriptDownloadPath = (runId: string): string =>
+  `/api/runs/${seg(runId)}/transcript.jsonl`;
+
+/** The workspace tarball a take-over exported for this run, when it asked for one (WP-44). */
+export const exportDownloadPath = (runId: string): string => `/api/runs/${seg(runId)}/export.tar`;
 
 export const createEndpoints = (client: ApiClient): Endpoints => {
   /**
@@ -349,6 +408,12 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
     version: () => client.get('/api/version', { schema: versionResponseSchema }),
     orgUsers: () => client.get('/api/org/users', { schema: orgUsersResponseSchema }),
     orgIdentities: () => client.get('/api/org/identities', { schema: identityMappingListSchema }),
+    identityCandidates: () =>
+      client.get('/api/org/identities/candidates', { schema: identityCandidateListSchema }),
+    refusedDeliveries: (integrationId) =>
+      client.get(`/api/integrations/${seg(integrationId)}/refused-deliveries`, {
+        schema: refusedDeliveriesResponseSchema,
+      }),
     orgAudit: (query) =>
       client.get('/api/org/audit', { schema: orgAuditResponseSchema, query: { ...query } }),
     orgStats: (query) =>
@@ -550,6 +615,29 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
       command(`/api/tasks/${seg(taskId)}/rework`, reworkRequestSchema, body, true),
     submitFeedback: (taskId, body) =>
       command(`/api/tasks/${seg(taskId)}/feedback`, submitFeedbackRequestSchema, body, true),
+
+    takeOverTask: (taskId, body, idempotencyKey) =>
+      client.command(`/api/tasks/${seg(taskId)}/take-over`, {
+        schema: takeOverResponseSchema,
+        body: takeOverRequestSchema.parse(body),
+        idempotencyKey,
+      }),
+    handBackTask: (taskId, body, idempotencyKey) =>
+      client.command(`/api/tasks/${seg(taskId)}/hand-back`, {
+        schema: taskCommandResponseSchema,
+        body: handBackRequestSchema.parse(body),
+        idempotent: true,
+        idempotencyKey,
+      }),
+    taskBreakdown: (taskId) =>
+      client.get(`/api/tasks/${seg(taskId)}/breakdown`, { schema: taskBreakdownSchema }),
+    decideBreakdown: (taskId, body, idempotencyKey) =>
+      client.command(`/api/tasks/${seg(taskId)}/breakdown/decide`, {
+        schema: decideBreakdownResponseSchema,
+        body: decideBreakdownRequestSchema.parse(body),
+        idempotent: true,
+        idempotencyKey,
+      }),
 
     steerRun: (runId, body) =>
       command(`/api/runs/${seg(runId)}/steer`, steerRunRequestSchema, body, true),

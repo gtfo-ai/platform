@@ -31,11 +31,12 @@
  * owns each one, in `routes/client-census.test.ts` — which fails if that list drifts from the
  * router in either direction.
  */
-import type { IsoDateTime, JsonObject } from '@platform/contracts';
+import type { IdentityCandidate, IsoDateTime, JsonObject } from '@platform/contracts';
 import {
   agentsResponseSchema,
   apiErrorSchema,
   createIdentityMappingRequestSchema,
+  identityCandidateListSchema,
   identityMappingListSchema,
   identityMappingSchema,
   inboxResponseSchema,
@@ -98,6 +99,11 @@ export interface IdentityQueries {
     readonly displayName: string | null;
   }) => Promise<IdentityMappingRecord>;
   readonly listMappings: () => Promise<readonly IdentityMappingRecord[]>;
+  /**
+   * Accounts refused as `unmapped_identity` that nobody has mapped since — the candidates the
+   * identities screen offers (WP-44, PROGRESS backlog 198). A read, never a write.
+   */
+  readonly listCandidates: () => Promise<readonly IdentityCandidate[]>;
   /**
    * The `human_actions` row every command writes — technical/08 § "Rate limits and safety".
    *
@@ -363,5 +369,22 @@ export const registerOrgRoutes = async (
     async () => ({
       items: (await options.identities.listMappings()).map(toWireIdentityMapping),
     }),
+  );
+
+  typed.get(
+    '/api/org/identities/candidates',
+    {
+      // The same gate as the list beside it, for its reason: this says which provider accounts
+      // tried to act on the platform, which is who somebody is on Slack.
+      preHandler: requirePermission(guard, 'org.users.manage'),
+      schema: {
+        summary: 'Provider accounts the platform refused because nobody has mapped them',
+        description:
+          'Read off the inbound deliveries refused as `unmapped_identity` since migration 0047, excluding every account already mapped or declared a machine; newest first. A **proposal** to fill the mapping form with — nothing here writes a mapping, and an admin still decides who the account is (WP-44, PROGRESS backlog 198). `external_id` is the provider’s own id: untrusted text (BD-022).',
+        tags: ['org'],
+        response: { 200: identityCandidateListSchema },
+      },
+    },
+    async () => ({ items: [...(await options.identities.listCandidates())] }),
   );
 };

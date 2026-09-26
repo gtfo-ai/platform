@@ -2,6 +2,7 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   CodeText,
+  DownloadLink,
   ExternalLink,
   JsonView,
   NumberedCode,
@@ -210,5 +211,29 @@ describe('the verbatim renderers', () => {
     cyclic['self'] = cyclic;
     const { container } = render(<JsonView value={cyclic} />);
     expect(container.querySelector('pre code')?.textContent).toBe('[object Object]');
+  });
+});
+
+describe('DownloadLink (WP-44)', () => {
+  it('renders a same-origin /api path as a download link', () => {
+    const { container } = render(
+      <DownloadLink path="/api/runs/abc/transcript.jsonl" label="Transcript" />,
+    );
+    const anchor = container.querySelector('a');
+    expect(anchor?.getAttribute('href')).toBe('/api/runs/abc/transcript.jsonl');
+    expect(anchor?.hasAttribute('download')).toBe(true);
+  });
+
+  it.each([
+    'https://evil.example/api/x',
+    '//evil.example/api/x',
+    '/api/../etc/passwd',
+    '/api/runs\\x',
+    'javascript:alert(1)',
+    '/other/path',
+  ])('refuses %s and keeps the label as text', (path) => {
+    const { container } = render(<DownloadLink path={path} label="Transcript" />);
+    expect(container.querySelector('a')).toBeNull();
+    expect(screen.getByText('Transcript').getAttribute('data-link-refused')).toBe('true');
   });
 });

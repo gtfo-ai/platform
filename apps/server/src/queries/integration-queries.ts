@@ -34,14 +34,20 @@
  * `checked_at: null` says *nobody has checked*, which is true. A stored value that is not the
  * published shape is refused by name rather than coerced.
  */
-import type { Id, IntegrationSummary, IntegrationType, JsonObject } from '@platform/contracts';
-import { integrationSummarySchema } from '@platform/contracts';
+import type {
+  Id,
+  IntegrationSummary,
+  IntegrationType,
+  JsonObject,
+  RefusedDelivery,
+} from '@platform/contracts';
+import { integrationSummarySchema, MAX_REFUSED_DELIVERIES } from '@platform/contracts';
 import { db as dbAdapters } from '@platform/infrastructure';
 import type { ProviderCatalogueEntry } from '@platform/integrations';
-import { asc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, isNotNull } from 'drizzle-orm';
 import { UnprojectableRowError } from './pipeline-queries.js';
 
-const { integrations } = dbAdapters.schema;
+const { inbox, integrations } = dbAdapters.schema;
 
 export type Database = dbAdapters.Database;
 
@@ -142,3 +148,44 @@ export const toIntegrationSummary = (
   config: publishableConfig(row.config, provider),
   health: healthOf(row),
 });
+
+/**
+ * The newest inbound deliveries of one integration that carry an `inbox.error` — what the platform
+ * refused or ignored, and why (WP-44, PROGRESS backlog 198).
+ *
+ * Until this read, a chat click refused as `unmapped_identity` or `decision_refused: not_permitted`
+ * was visible only in SQL and in the API process's log. Everything served here was redacted at the
+ * write — the error by the binding's redactor, the account ids too (`unmappedIdentitiesOf`) — and is
+ * still provider-derived text (BD-022). `unmapped` is `null` for a row from before migration 0047.
+ */
+export const listRefusedDeliveries = async (
+  database: Database,
+  integrationId: string,
+): Promise<RefusedDelivery[]> => {
+  const rows = await database
+    .select({
+      deliveryId: inbox.deliveryId,
+      receivedAt: inbox.receivedAt,
+      error: inbox.error,
+      unmapped: inbox.unmappedIdentities,
+    })
+    .from(inbox)
+    .where(and(eq(inbox.integrationId, integrationId), isNotNull(inbox.error)))
+    .orderBy(desc(inbox.receivedAt))
+    .limit(MAX_REFUSED_DELIVERIES);
+  return rows.map((row) => ({
+    delivery_id: row.deliveryId,
+    received_at: row.receivedAt.toISOString(),
+    error: row.error ?? '',
+    unmapped:
+      row.unmapped === null
+        ? null
+        : row.unmapped.filter(
+            (entry) =>
+              typeof entry?.provider === 'string' &&
+              entry.provider.length > 0 &&
+              typeof entry.external_id === 'string' &&
+              entry.external_id.length > 0,
+          ),
+  }));
+};

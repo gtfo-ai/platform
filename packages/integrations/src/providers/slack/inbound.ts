@@ -93,7 +93,11 @@ export interface SlackInboundDeps {
 const ignored = (
   reason: IgnoredDelivery['reason'],
   detail: string,
-): NormalisedDelivery<CommunicationInboundEvent> => ({ events: [], ignored: [{ reason, detail }] });
+  identity?: IgnoredDelivery['identity'],
+): NormalisedDelivery<CommunicationInboundEvent> => ({
+  events: [],
+  ignored: [{ reason, detail, ...(identity === undefined ? {} : { identity }) }],
+});
 
 /** Provider text in an `ignored.detail` is bounded: it is written to the inbox row (BD-022). */
 const brief = (value: unknown, limit = 64): string => JSON.stringify(String(value).slice(0, limit));
@@ -200,6 +204,8 @@ const normaliseBlockActions = (
     return ignored(
       'unmapped_identity',
       `${brief(payload.user.id)} is not mapped to a platform user`,
+      // Which account, structurally, so the identities screen can offer it (WP-44, backlog 198).
+      { provider: SLACK_PROVIDER_ID, external_id: payload.user.id },
     );
   }
   const author = identityFor(payload.user.id, true);
@@ -360,7 +366,10 @@ const normaliseMessageEvent = (
 
   if (questionId !== null) {
     if (userId === null) {
-      return ignored('unmapped_identity', `${brief(user)} is not mapped to a platform user`);
+      return ignored('unmapped_identity', `${brief(user)} is not mapped to a platform user`, {
+        provider: SLACK_PROVIDER_ID,
+        external_id: user,
+      });
     }
     const answered: NormalisedEvent<'task.question.answered'> = {
       type: 'task.question.answered',

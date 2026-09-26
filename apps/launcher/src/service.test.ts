@@ -7,7 +7,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { rm } from 'node:fs/promises';
+import { mkdir, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { type LogFields, silentLogger, type WorkspaceProvider } from '@platform/application';
 import { runner, workspace } from '@platform/infrastructure';
@@ -506,6 +506,22 @@ describe('retention sweep', () => {
     expect(clock.pending).toBe(1);
     service.stop();
     expect(clock.pending).toBe(0);
+  });
+
+  it('sweeps the take-over export directory on the same pass (WP-44, Q93)', async () => {
+    // The directory had no deleter at all before WP-44. The pass that purges the workspace volumes
+    // now also removes a tarball older than the taken-over workspace's own fourteen days.
+    const exports = path.join(dir, 'exports');
+    await mkdir(exports, { recursive: true });
+    const now = new Date('2026-09-26T12:00:00.000Z');
+    const old = path.join(exports, `${randomUUID()}.tar`);
+    const fresh = path.join(exports, `${randomUUID()}.tar`);
+    await writeFile(old, 'old');
+    await writeFile(fresh, 'fresh');
+    const fifteenDaysAgo = new Date(now.getTime() - 15 * 24 * 60 * 60 * 1_000);
+    await utimes(old, fifteenDaysAgo, fifteenDaysAgo);
+    await service.sweep(now);
+    expect(await readdir(exports)).toEqual([path.basename(fresh)]);
   });
 
   it('arms one timer however many times it is started', () => {

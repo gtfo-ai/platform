@@ -70,10 +70,10 @@ const ADMITTED_GAPS: Readonly<Record<string, string>> = {
   // to admit; they too are asserted positively below.
   //
   // What this census **cannot** see is unchanged and is asserted by hand further down: a route no
-  // screen calls. There are three paths — `GET /api/projects/:id/kb/health` (WP-15h part 2), and
-  // WP-27's `take-over` and `hand-back`, whose buttons are a UI row of their own. WP-31's
-  // `/api/org/identities` pair was the fourth until WP-43 gave it a screen (the settings page's
-  // "Provider identities"), so the comparison above now sees it; the per-method case below says so.
+  // screen calls. There is one path left — `GET /api/projects/:id/kb/health` (WP-15h part 2).
+  // WP-31's `/api/org/identities` pair left that list when WP-43 gave it a screen, and WP-27's
+  // `take-over`/`hand-back` and WP-40's breakdown pair left it when WP-44 did (the task page's
+  // take-over control and breakdown panel), so the comparison above now sees all of them.
 };
 
 /**
@@ -511,27 +511,6 @@ describe('the client’s endpoint list against the server’s router', () => {
     );
   });
 
-  it('serves take-over and hand-back, which no screen calls yet and this census cannot see', async () => {
-    // technical/08:17 names both and `apps/web/src/api/endpoints.ts` calls neither: the SPA's own
-    // docblock says why it declined to build the buttons, and WP-27 supplies the half it was
-    // waiting for (`takeOverResponseSchema`). A client-driven comparison is blind to a route with
-    // no caller, so — exactly like `kb/health` — they are asserted here by hand, with the 401 their
-    // siblings get automatically.
-    const paths = clientPaths(
-      webSourceFiles().map((path) => ({
-        path,
-        source: readFileSync(join(repositoryRoot, path), 'utf8'),
-      })),
-    );
-    for (const path of ['/api/tasks/{}/take-over', '/api/tasks/{}/hand-back']) {
-      const probed = await probe(path);
-      expect(probed.served, path).toBe(true);
-      expect(probed.status, path).toBe(401);
-      expect(probed.code, path).toBe('unauthenticated');
-      expect(paths, path).not.toContain(path);
-    }
-  });
-
   it('serves the three ask-the-task paths WP-31 added, and the client calls all three', async () => {
     // Criterion 7's other half. `POST /api/tasks/:id/ask` was the route this census was blind to by
     // construction — the SPA did not call it — and `features/ask-thread.tsx` is what changed that,
@@ -585,36 +564,45 @@ describe('the client’s endpoint list against the server’s router', () => {
     expect(paths).toContain('/api/org/identities');
   });
 
-  it('serves the two breakdown paths no screen calls, by each of their own methods', async () => {
-    // WP-40's acceptance surface. No SPA screen calls either yet, so the comparison above is blind
-    // to both by construction — the position `kb/health`, `take-over` and `hand-back` are in.
-    // Asked **by each method**, because `probe()` tries GET first and would otherwise judge the
-    // POST on its sibling's answer, and with **no body at all** on the write, because its guard is
-    // a `preValidation` hook: one that slipped back to `preHandler` would answer 400 describing the
-    // route's shape instead of 401 (the hole WP-21's review found for the wizard).
-    for (const path of ['/api/tasks/{}/breakdown', '/api/tasks/{}/breakdown/decide']) {
-      const probed = await probe(path);
-      expect(probed.served, path).toBe(true);
-    }
-    for (const [method, path] of [
-      ['GET', '/api/tasks/{}/breakdown'],
-      ['POST', '/api/tasks/{}/breakdown/decide'],
-    ] as const) {
-      const response = await app.inject({ method, url: probeUrl(path) });
-      const body = response.json() as ApiErrorBody;
-      expect(`${method} ${path} -> ${response.statusCode} ${body.error?.code ?? ''}`).toBe(
-        `${method} ${path} -> 401 unauthenticated`,
-      );
-    }
-
+  it('serves the take-over, hand-back, breakdown and download paths WP-44 gave a screen', async () => {
+    // **Two hand-written cases used to stand here** — take-over/hand-back (WP-27) and the breakdown
+    // pair (WP-40) — asserting routes no screen called, which a client-driven census cannot see.
+    // WP-44 gave all four a caller (`features/take-over.tsx`, `features/breakdown-panel.tsx`), so the
+    // comparison above covers them and **the deletion of those two cases is the assertion the row
+    // landed** (PROGRESS backlog 70 and 108). What stays is the positive naming every family here
+    // gets (standing rule 10), and the two downloads (backlog 68), which are new paths.
     const paths = clientPaths(
       webSourceFiles().map((path) => ({
         path,
         source: readFileSync(join(repositoryRoot, path), 'utf8'),
       })),
     );
-    expect(paths).not.toContain('/api/tasks/{}/breakdown');
-    expect(paths).not.toContain('/api/tasks/{}/breakdown/decide');
+    for (const path of [
+      '/api/tasks/{}/take-over',
+      '/api/tasks/{}/hand-back',
+      '/api/tasks/{}/breakdown',
+      '/api/tasks/{}/breakdown/decide',
+      '/api/runs/{}/transcript.jsonl',
+      '/api/runs/{}/export.tar',
+    ]) {
+      expect(paths, path).toContain(path);
+      const probed = await probe(path);
+      expect(probed.served, path).toBe(true);
+      expect(`${probed.status} ${probed.code}`, path).toBe('401 unauthenticated');
+    }
+    // The three commands by their own method and with no body at all: each guard is a
+    // `preValidation` hook, and one that slipped back to `preHandler` would answer 400.
+    for (const path of [
+      '/api/tasks/{}/take-over',
+      '/api/tasks/{}/hand-back',
+      '/api/tasks/{}/breakdown/decide',
+    ]) {
+      const response = await app.inject({ method: 'POST', url: probeUrl(path) });
+      const body = response.json() as ApiErrorBody;
+      expect(`POST ${path} -> ${response.statusCode} ${body.error?.code ?? ''}`).toBe(
+        `POST ${path} -> 401 unauthenticated`,
+      );
+    }
   });
 
   it('serves the kb health read no client calls, which is why the census cannot see it', async () => {

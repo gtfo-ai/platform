@@ -39,6 +39,7 @@
 import {
   apiErrorSchema,
   integrationsResponseSchema,
+  refusedDeliveriesResponseSchema,
   setupGuideResponseSchema,
 } from '@platform/contracts';
 import { findShippedProvider, readSetupGuide } from '@platform/integrations';
@@ -52,6 +53,7 @@ import { findProjectRole } from '../queries/identity-queries.js';
 import {
   findIntegrationRow,
   listIntegrationRows,
+  listRefusedDeliveries,
   toIntegrationSummary,
 } from '../queries/integration-queries.js';
 
@@ -154,6 +156,30 @@ export const registerIntegrationRoutes = async (
           ? webhookUrlFor(options.baseUrl, provider.id, integrationId)
           : null,
       };
+    },
+  );
+
+  typed.get(
+    '/api/integrations/:integration_id/refused-deliveries',
+    {
+      // `integration.read` (maintainer), the gate of the list and the guide beside it: this is the
+      // inbound half of the same integration, and the audience that debugs a dead button.
+      preHandler: requirePermission(guard, 'integration.read'),
+      schema: {
+        summary: 'The newest inbound deliveries of this integration that were refused or ignored',
+        description:
+          'Each carries `inbox.error` — the adapter’s and the aggregate’s reasons, one per line, redacted at the write — and, since migration 0047, the provider accounts it was refused for as `unmapped_identity` (`null` on an older row, which recorded none). Newest first, at most 50. Everything here is provider-derived text (BD-022): render it, never parse it (WP-44, PROGRESS backlog 198).',
+        tags: ['org'],
+        params: integrationParamsSchema,
+        response: { 200: refusedDeliveriesResponseSchema },
+      },
+    },
+    async (request) => {
+      const integrationId = request.params.integration_id;
+      if ((await findIntegrationRow(options.database, integrationId)) === undefined) {
+        throw new NotFoundError(`integration ${integrationId}`);
+      }
+      return { items: await listRefusedDeliveries(options.database, integrationId) };
     },
   );
 };

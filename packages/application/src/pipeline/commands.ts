@@ -1360,10 +1360,12 @@ export interface TakeOverOutcome extends AuditedReason {
  * volume's retention to fourteen days (technical/05 §5). All of that happens in the process that
  * holds the workspace, driven by {@link RunTakeOverExport} on the stop.
  *
- * It does **not** write the transcript JSONL that technical/05 §6 also names. `blobs` has no
- * writer, `workspaces` has no row and no endpoint serves a download — three pieces that belong to
- * one work package and none of which has an owner — while the transcript itself is already
- * readable, redacted, through `GET /api/runs/:run_id/messages`. Filed rather than half-built.
+ * It does **not** write the transcript JSONL that technical/05 §6 also names, and since WP-44 that
+ * is a decision rather than a gap (Q93: serve, do not copy). The transcript is rendered from
+ * `run_messages` on request (`GET /api/runs/:run_id/transcript.jsonl`) and the tarball this stop
+ * asks for is served from the shared export volume (`GET /api/runs/:run_id/export.tar`) and swept
+ * after the same fourteen days as the workspace — so `blobs` keeps no writer and `workspaces` no row
+ * (technical/03 says why).
  */
 export const takeOverTaskCommand = async (
   deps: HumanCommandDependencies,
