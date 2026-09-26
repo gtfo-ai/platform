@@ -28,6 +28,10 @@
  *    unit interval and `ts_rank_cd` is unbounded above. Normalisation flag `32`
  *    (`rank / (rank + 1)`) is applied by PostgreSQL itself rather than by arithmetic on this side,
  *    so the bound is the database's guarantee and not a claim made in TypeScript.
+ *  - **Q58's floor runs before the query** (WP-58): a term significantly more than half the project's documents
+ *    contain is dropped by `selectInformativeTerms`, over the frequencies `write` counted into
+ *    `kb_term_statistics` (migration 0042) with the same function the in-memory store uses. It is
+ *    a property of the port, not of this adapter; see `term-statistics.ts` in `@platform/domain`.
  *
  * ## `not_indexed`
  *
@@ -54,7 +58,14 @@ import {
   kbConfidenceWeight,
   kbFrontmatterSchema,
 } from '@platform/contracts';
-import { KB_LAYERS, type KbChunk, type KbLayer } from '@platform/domain';
+import {
+  KB_LAYERS,
+  type KbChunk,
+  type KbLayer,
+  pathWitnesses,
+  selectInformativeTerms,
+  termStatisticsOf,
+} from '@platform/domain';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
 
@@ -221,14 +232,71 @@ export class PostgresKnowledgeStore implements KnowledgeStore {
       );
     }
 
+    // Q58's statistics (migration 0042): counted by the domain function the in-memory store calls,
+    // over the chunks this write carries, and replaced in this transaction like everything above.
+    const statistics = termStatisticsOf(input.documents.map((entry) => entry.document));
+    await sql.query('delete from kb_term_statistics where project_id = $1', [input.projectId]);
+    if (statistics.frequencies.size > 0) {
+      await sql.query(
+        `insert into kb_term_statistics (project_id, term, documents)
+         select $1, s.term, s.documents
+           from unnest($2::text[], $3::integer[]) as s(term, documents)`,
+        [input.projectId, [...statistics.frequencies.keys()], [...statistics.frequencies.values()]],
+      );
+    }
+
     await sql.query(
-      `insert into kb_index_state (project_id, commit_sha, fts_built_at)
-         values ($1, $2, now())
+      `insert into kb_index_state (project_id, commit_sha, fts_built_at, term_documents, path_witnesses)
+         values ($1, $2, now(), $3, $4::text[])
          on conflict (project_id) do update set
            commit_sha = excluded.commit_sha,
-           fts_built_at = excluded.fts_built_at`,
-      [input.projectId, input.commitSha],
+           fts_built_at = excluded.fts_built_at,
+           term_documents = excluded.term_documents,
+           path_witnesses = excluded.path_witnesses`,
+      [
+        input.projectId,
+        input.commitSha,
+        statistics.documents,
+        // Witnesses, not the listing (backlog 175): bounded by the vault's globs.
+        [
+          ...pathWitnesses(
+            input.documents.flatMap((entry) => entry.document.frontmatter.paths ?? []),
+            input.repoPaths,
+          ),
+        ],
+      ],
     );
+  }
+
+  async readPathWitnesses(projectId: Id): Promise<readonly string[] | null> {
+    const { rows } = await this.#sql.query<{ path_witnesses: string[] | null }>(
+      'select path_witnesses from kb_index_state where project_id = $1',
+      [projectId],
+    );
+    return rows[0]?.path_witnesses ?? null;
+  }
+
+  /**
+   * Q58's inputs for one search: the denominator and the frequency of each requested term, or
+   * `null` when the index carries no statistics (written before migration 0042).
+   */
+  async #termStatistics(
+    projectId: Id,
+    terms: readonly string[],
+  ): Promise<{ documents: number; frequency: (term: string) => number } | null> {
+    const state = await this.#sql.query<{ term_documents: number | null }>(
+      'select term_documents from kb_index_state where project_id = $1',
+      [projectId],
+    );
+    const documents = state.rows[0]?.term_documents;
+    if (documents === undefined || documents === null) return null;
+    const { rows } = await this.#sql.query<{ term: string; documents: number }>(
+      `select term, documents from kb_term_statistics
+        where project_id = $1 and term = any($2::text[])`,
+      [projectId, [...terms]],
+    );
+    const frequencies = new Map(rows.map((row) => [row.term, Number(row.documents)]));
+    return { documents: Number(documents), frequency: (term) => frequencies.get(term) ?? 0 };
   }
 
   async readIndexState(projectId: Id): Promise<KbIndexState | null> {
@@ -270,7 +338,15 @@ export class PostgresKnowledgeStore implements KnowledgeStore {
     // comment invent the line. So the mechanism is named here and the **behaviour** is what is
     // pinned, by `knowledge-store-suite.ts` › "finds nothing — not everything — for a query with no
     // keywords", which runs against this store at the integration tier.
-    const expression = request.terms.join(' OR ');
+    //
+    // Q58's floor runs first (WP-58): the same `selectInformativeTerms` the in-memory store calls,
+    // over the statistics this store wrote with the same `termStatisticsOf`. A request whose every
+    // term is dropped reaches the empty-expression path above and finds nothing.
+    const terms = selectInformativeTerms(
+      request.terms,
+      await this.#termStatistics(request.projectId, request.terms),
+    );
+    const expression = terms.kept.join(' OR ');
 
     const { rows } = await this.#sql.query<{
       document_id: string;
@@ -292,6 +368,7 @@ export class PostgresKnowledgeStore implements KnowledgeStore {
 
     return {
       status: 'ok',
+      terms,
       hits: rows.map(
         (row): KbChunkHit => ({
           documentId: row.document_id as Id,

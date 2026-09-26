@@ -38,11 +38,15 @@
  *
  * ## Zero-width characters, measured rather than assumed
  *
- * `U+200B`, `U+FEFF`, `U+2060` and `U+00AD` pass the indexer's sanitiser untouched — measured on
- * this build: `sanitiseDocumentText('pre' + zw + 'post').removed === 0` for all four, where an ESC,
- * a BEL, a `U+202E` and a `U+2066` each become one `U+FFFD` and are counted
- * (`packages/domain/src/knowledge/sanitise.ts`). PROGRESS backlog 12 names the attack that follows:
- * *a delimiter a document could spoof by hiding a zero-width character inside the marker.*
+ * `U+200B`, `U+FEFF`, `U+2060` and `U+00AD` passed the indexer's sanitiser untouched until WP-58 —
+ * measured then: `sanitiseDocumentText('pre' + zw + 'post').removed === 0` for all four, where an
+ * ESC, a BEL, a `U+202E` and a `U+2066` each become one `U+FFFD` and are counted. Since WP-58 the
+ * sanitiser **deletes and counts** them, because they split the word they sit in and made a page
+ * unfindable by it (`packages/domain/src/knowledge/sanitise.ts`, PROGRESS backlog 12) — so a
+ * knowledge document no longer brings them here. Text from other sources (a ticket, an artifact)
+ * still can, and this module edits nothing, so the argument below is unchanged. PROGRESS backlog 12
+ * names the attack: *a delimiter a document could spoof by hiding a zero-width character inside the
+ * marker.*
  *
  * Under a fixed-marker scheme that attack works, because "does the body contain the marker?" is an
  * exact-string question and a `</untrusted-data>` with a `U+200B` between two of its letters is not

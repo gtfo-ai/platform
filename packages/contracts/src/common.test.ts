@@ -197,7 +197,7 @@ describe('built-in identifiers', () => {
     }
   });
 
-  it('lists the stages of the shipped templates and they are valid stage ids', () => {
+  it('lists the stages of the ticket flow and they are valid stage ids', () => {
     for (const id of BUILTIN_STAGE_IDS) {
       expect(stageIdSchema.safeParse(id).success).toBe(true);
     }

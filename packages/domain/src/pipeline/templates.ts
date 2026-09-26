@@ -725,6 +725,25 @@ export const SHIPPED_TEMPLATES: Readonly<Record<string, PipelineTemplate>> = {
 };
 
 /**
+ * Every stage id of every template the platform ships, sorted — **asked of the templates** rather
+ * than transcribed (standing rule 7), so a stage added to a shipped template is in this list the
+ * moment it exists.
+ *
+ * The key set `STAGE_EMPHASIS` (`knowledge/retrieval.ts`) is held to, key for key, by
+ * `retrieval.test.ts` (WP-58, PROGRESS backlog 61). Until WP-58 that table was held to
+ * `BUILTIN_STAGE_IDS` instead, which lists the ticket flow's stages and not `discovery`,
+ * `ticket_lint`, `history_mining` or the spike's `human_review` — so those four took the default
+ * emphasis without anybody having chosen it for them.
+ */
+export const SHIPPED_STAGE_IDS: readonly string[] = [
+  ...new Set(
+    Object.values(SHIPPED_TEMPLATES).flatMap((template) =>
+      template.stages.map((stage) => stage.id),
+    ),
+  ),
+].sort();
+
+/**
  * Validates a template the way the platform must before it runs a task on it: the *shape*
  * (`pipelineTemplateSchema`, which is where a gate that nothing can resolve is refused) and then
  * the *graph* (`pipelineGraphIssues`).

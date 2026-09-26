@@ -28,6 +28,7 @@ import type { Transaction } from '@platform/application';
 import {
   FIXTURE_KNOWLEDGE_DIR,
   FIXTURE_PROJECT_KEY,
+  FIXTURE_REPO_PATHS,
   FIXTURE_VAULT,
   vaultRelativePath,
 } from '@platform/application';
@@ -72,6 +73,7 @@ const seedVault = async (pipeline: PipelineE2E): Promise<void> => {
         documents,
         removedPaths: [],
         refused: [],
+        repoPaths: FIXTURE_REPO_PATHS,
       },
     );
   } finally {

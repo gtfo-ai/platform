@@ -35,9 +35,10 @@ import {
   assembleContextPack,
   type ContextPackAssembly,
   DEFAULT_CONTEXT_BUDGET_TOKENS,
-  extractQueryTerms,
   type KbLayer,
+  queryKeywords,
   type RetrievalCandidate,
+  type TermFloor,
   type Tier0Document,
 } from '@platform/domain';
 import type { Logger } from '../ports/logger.js';
@@ -81,6 +82,18 @@ export interface ContextPack {
    * about the vault, so it is reported rather than looking like a knowledge base with nothing in it.
    */
   readonly queryTerms: readonly string[];
+  /**
+   * Q58's floor, as the store applied it (WP-58): the extracted terms it actually searched, the ones
+   * it dropped because significantly more than half the project's documents contain them, and whether the index
+   * carried statistics at all. `queryTerms` minus `searchedTerms` is what the floor removed, so a
+   * pack with no tier-1 text match can say whether the query had no keywords, had only
+   * uninformative ones, or matched nothing.
+   */
+  readonly searchedTerms: readonly string[];
+  readonly uninformativeTerms: readonly string[];
+  readonly termFloor: TermFloor;
+  /** Invisible characters deleted from the task text before it was split (PROGRESS backlog 12). */
+  readonly queryInvisibleRemoved: number;
 }
 
 export type ContextPackResult =
@@ -169,7 +182,9 @@ export const createContextPackAssembler = (
     const { store } = dependencies;
     // technical/07 step 2 says "task **keywords**", and it matters: the raw text goes to
     // `websearch_to_tsquery` as an AND of every word, which measured zero hits in production.
-    const queryTerms = extractQueryTerms(request.taskText);
+    // The store then drops the terms that say nothing in this project (Q58, WP-58).
+    const keywords = queryKeywords(request.taskText);
+    const queryTerms = keywords.terms;
     const search = await store.search({
       projectId: request.projectId,
       terms: queryTerms,
@@ -183,6 +198,17 @@ export const createContextPackAssembler = (
       return { status: 'not_indexed' };
     }
 
+    if (search.terms.uninformative.length > 0 || keywords.invisibleRemoved > 0) {
+      dependencies.logger.debug(
+        {
+          project_id: request.projectId,
+          uninformative_terms: search.terms.uninformative.length,
+          searched_terms: search.terms.kept.length,
+          invisible_removed: keywords.invisibleRemoved,
+        },
+        'context pack query: terms significantly more than half of the project documents contain were not searched',
+      );
+    }
     const ranks = foldHits(search.hits);
     const pathScoped = await store.loadPathScoped(request.projectId);
     const textMatched = await store.loadDocuments(request.projectId, [...ranks.keys()]);
@@ -245,6 +271,10 @@ export const createContextPackAssembler = (
         record: assembly.record,
         documents,
         queryTerms,
+        searchedTerms: search.terms.kept,
+        uninformativeTerms: search.terms.uninformative,
+        termFloor: search.terms.floor,
+        queryInvisibleRemoved: keywords.invisibleRemoved,
         runContextPack: documents.map(
           (document): RunContextDocument => ({
             tier: document.tier,

@@ -766,6 +766,9 @@ export const composePipeline = async (
     logger: options.logger,
   });
   const runEnvironment = agentRunEnvironment(options.agent);
+  // One knowledge store for the two planners' packs and listings (WP-58): the pack's documents and
+  // the `paths:` listing it validates against are read from the same index.
+  const knowledgeStore = new knowledgeAdapters.PostgresKnowledgeStore(options.pool);
 
   const dependencyMetadata =
     options.dependencyRegistryHosts.length === 0
@@ -895,9 +898,10 @@ export const composePipeline = async (
         skills: PLATFORM_SKILLS,
         nonce: { next: () => randomUUID().replaceAll('-', '') },
         contextPacks: createContextPackAssembler({
-          store: new knowledgeAdapters.PostgresKnowledgeStore(options.pool),
+          store: knowledgeStore,
           logger: options.logger,
         }),
+        headPaths: (projectId: Id) => knowledgeStore.readPathWitnesses(projectId),
         clock: { now: nowIso },
         logger: options.logger,
       }),
@@ -960,9 +964,16 @@ export const composePipeline = async (
          */
         nonce: { next: () => randomUUID().replaceAll('-', '') },
         contextPacks: createContextPackAssembler({
-          store: new knowledgeAdapters.PostgresKnowledgeStore(options.pool),
+          store: knowledgeStore,
           logger: options.logger,
         }),
+        /**
+         * The path witnesses of the indexed commit (WP-58, PROGRESS backlogs 170 and 175): one
+         * tracked path per vault glob, stored beside the documents (`kb_index_state.path_witnesses`,
+         * migration 0042), so a `paths:`-scoped page validates against the commit it was indexed
+         * from. One small row read per run; `null` until the project's first index write after 0042.
+         */
+        headPaths: (projectId: Id) => knowledgeStore.readPathWitnesses(projectId),
         clock: { now: nowIso },
         logger: options.logger,
       }),

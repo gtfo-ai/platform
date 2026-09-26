@@ -262,15 +262,16 @@ export class PostgresProposalStore implements KnowledgeProposalStore {
   }
 
   async readHealthInputs(projectId: Id): Promise<KbHealthInputs> {
-    const state = await this.#sql.query<{ commit_sha: string | null }>(
-      'select commit_sha from kb_index_state where project_id = $1',
-      [projectId],
-    );
+    const state = await this.#sql.query<{
+      commit_sha: string | null;
+      path_witnesses: string[] | null;
+    }>('select commit_sha, path_witnesses from kb_index_state where project_id = $1', [projectId]);
     const documents = await this.#sql.query<{
       path: string;
       expires: string | null;
       frontmatter_id: string | null;
       tokens: number;
+      paths: string[] | null;
     }>(
       // `to_char`, not the `date` column itself: `pg` parses a `date` into a JavaScript `Date` at
       // **local** midnight, so `toISOString().slice(0, 10)` moves it a day backwards anywhere east
@@ -279,7 +280,8 @@ export class PostgresProposalStore implements KnowledgeProposalStore {
       `select path,
               to_char(expires, 'YYYY-MM-DD') as expires,
               nullif(frontmatter ->> 'id', '') as frontmatter_id,
-              tokens
+              tokens,
+              paths
          from kb_documents
         where project_id = $1
         order by path`,
@@ -304,6 +306,8 @@ export class PostgresProposalStore implements KnowledgeProposalStore {
     );
     return {
       commitSha: state.rows[0]?.commit_sha ?? null,
+      // WP-58 (migration 0042): the witnesses the `unresolved_paths` finding is judged against.
+      pathWitnesses: state.rows[0]?.path_witnesses ?? null,
       refusals: refusals.rows.map(
         (row): HealthRefusal => ({
           path: row.path,
@@ -317,6 +321,7 @@ export class PostgresProposalStore implements KnowledgeProposalStore {
           expires: row.expires,
           frontmatterId: row.frontmatter_id,
           tokens: Number(row.tokens),
+          paths: row.paths ?? [],
         }),
       ),
       danglingLinks: links.rows.map(

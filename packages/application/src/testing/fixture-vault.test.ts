@@ -9,7 +9,12 @@
  * enforces it, or the next edit makes it false again.
  */
 
-import { extractQueryTerms, MIN_QUERY_TERM_LENGTH, parseKbDocument } from '@platform/domain';
+import {
+  extractQueryTerms,
+  MIN_QUERY_TERM_LENGTH,
+  parseKbDocument,
+  textKeywords,
+} from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { vaultRelativePath } from '../knowledge/indexer.js';
 import {
@@ -17,6 +22,8 @@ import {
   FIXTURE_HOSTILE_PHRASES,
   FIXTURE_INVALID_PATH,
   FIXTURE_KNOWLEDGE_DIR,
+  FIXTURE_NEGATIVE_CORPUS,
+  FIXTURE_NEGATIVE_PATHS,
   FIXTURE_PROJECT_KEY,
   FIXTURE_VAULT,
   PADDING_PARAGRAPH,
@@ -65,6 +72,27 @@ describe('the padding paragraph cannot be the reason a document ranks', () => {
     // review's own tokenisation dropped. All three are sub-keyword, which is the claim.
     expect(shared.sort()).toEqual(['a', 'its', 'the']);
     for (const word of shared) expect(word.length).toBeLessThan(MIN_QUERY_TERM_LENGTH);
+  });
+});
+
+describe('the negative corpus is what its name says (WP-58, standing rule 45)', () => {
+  it('shares at least one keyword with the retrieval queries, page by page, so it can be retrieved', () => {
+    // A negative corpus that shared no vocabulary with the queries would be the padding again —
+    // unreachable by construction, and a precision assertion over it would measure nothing.
+    const queryTerms = new Set(RETRIEVAL_QUERIES.flatMap((query) => extractQueryTerms(query)));
+    for (const page of FIXTURE_NEGATIVE_CORPUS) {
+      const shared = [...textKeywords(page.source)].filter((term) => queryTerms.has(term));
+      expect(shared.length, page.path).toBeGreaterThan(0);
+    }
+  });
+
+  it('is part of the vault, carries no `paths:` glob and no padding', () => {
+    for (const page of FIXTURE_NEGATIVE_CORPUS) {
+      expect(FIXTURE_VAULT).toContain(page);
+      expect(page.source).not.toMatch(/^paths:/m);
+      expect(page.source).not.toContain(PADDING_PARAGRAPH);
+    }
+    expect(FIXTURE_NEGATIVE_PATHS).toHaveLength(6);
   });
 });
 

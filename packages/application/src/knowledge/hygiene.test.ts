@@ -63,18 +63,21 @@ describe('the nightly pass', () => {
     const { options, proposals } = harness();
     proposals.seedHealthInputs(PROJECT, {
       commitSha: 'c0ffee1',
+      pathWitnesses: null,
       documents: [
         {
           path: '.agentic/knowledge/lessons/L-old.md',
           expires: '2025-01-01',
           frontmatterId: 'L-1',
           tokens: 100,
+          paths: [],
         },
         {
           path: '.agentic/knowledge/lessons/L-copy.md',
           expires: null,
           frontmatterId: 'L-1',
           tokens: 100,
+          paths: [],
         },
       ],
       danglingLinks: [
@@ -161,6 +164,7 @@ describe('the nightly pass', () => {
     const { options, proposals } = harness();
     proposals.seedHealthInputs(PROJECT, {
       commitSha: 'c0ffee1',
+      pathWitnesses: null,
       refusals: [],
       documents: [
         {
@@ -168,6 +172,7 @@ describe('the nightly pass', () => {
           expires: '2020-01-01',
           frontmatterId: null,
           tokens: 10,
+          paths: [],
         },
       ],
       danglingLinks: [],

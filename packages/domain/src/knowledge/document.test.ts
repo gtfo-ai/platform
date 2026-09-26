@@ -247,6 +247,18 @@ describe('parseKbDocument — a document that attacks its consumers', () => {
     );
   });
 
+  it('deletes the four invisible characters inside a word and counts them (WP-58, backlog 12)', () => {
+    // Deleted, not replaced: a `U+FFFD` in the same place splits the word exactly as the original
+    // did, and the whole point is that `rollback` is findable by `rollback`.
+    const document = hostile(
+      'roll\u{200B}back, zero\u{FEFF}width, word\u{2060}joiner, soft\u{00AD}hyphen',
+    );
+    expect(document.sanitised).toBe(4);
+    expect(document.chunks[0]?.text).toContain('rollback, zerowidth, wordjoiner, softhyphen');
+    expect(document.chunks[0]?.text).not.toMatch(/[\u{200B}\u{FEFF}\u{2060}\u{00AD}]/u);
+    expect(document.chunks[0]?.text).not.toContain(SANITISED_MARKER);
+  });
+
   it('keeps the tab and the newline, which are document structure', () => {
     const document = ok('# Pitfall\n\n```sh\n\tmake test\n```');
     expect(document.sanitised).toBe(0);

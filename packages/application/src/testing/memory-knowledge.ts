@@ -14,6 +14,7 @@
  * | 3 | **No tsvector size limit.** Postgres refuses a tsvector over 1 MB; this store accepts any chunk. | **Kinder** | `MAX_CHUNK_BYTES` in the domain ring is what keeps a chunk two orders of magnitude below the limit, and `document.test.ts` asserts the cap by *producing* an over-long section and counting the pieces. The bound is enforced before the store, so neither store can reach the state. |
  * | 4 | **Writes are not transactional.** `write` mutates the maps immediately; the `Transaction` handle is validated and otherwise unused. | **Kinder** | A caller that relies on rollback is not exercised here. The transactional half is `postgres-knowledge-store.integration.test.ts`, which asserts a failed index run leaves the previous documents in place. |
  * | 5 | **`not_indexed` is decided by an explicit flag** rather than by reading a `kb_index_state` row. | *Equivalent* | `markIndexed` is what the indexer's write does in both, and the contract suite drives it through the indexer rather than setting the flag directly. |
+ * | 6 | **Q58's floor (WP-58) — none, by construction.** Both stores count document frequencies with `termStatisticsOf` inside `write` and decide with `selectInformativeTerms` inside `search`; this one keeps the numbers in a `Map`, PostgreSQL in `kb_term_statistics`. The counting reads the stored chunk text with the platform's splitter, *not* either store's matcher, so row 1c does not reach it. | *Equivalent* | `knowledge-store-suite.ts` › "drops a term past the floor line, in both stores, and says so" runs against both. |
  *
  * **How the rows are meant to be read.** "Kinder" means this store admits, accepts or returns
  * something the real adapter would not — the direction rule 1 forbids leaving undocumented, because
@@ -27,7 +28,16 @@
  * the real `ctags` adapter takes on this machine.
  */
 import type { Id, IsoDateTime } from '@platform/contracts';
-import { type CodeFileSymbols, fixedClock, type KbChunk, sequentialIds } from '@platform/domain';
+import {
+  type CodeFileSymbols,
+  fixedClock,
+  type KbChunk,
+  pathWitnesses,
+  selectInformativeTerms,
+  sequentialIds,
+  type TermStatistics,
+  termStatisticsOf,
+} from '@platform/domain';
 import {
   createKnowledgeIndexer,
   type IndexReport,
@@ -104,6 +114,10 @@ export const memoryKnowledgeStore = (
   const rows = new Map<Id, Map<string, StoredRow>>();
   const state = new Map<Id, KbIndexState>();
   const refused = new Map<Id, readonly InvalidDocument[]>();
+  // Q58's statistics and the tracked listing, written by `write` exactly as the SQL adapter writes
+  // `kb_term_statistics` and `kb_index_state.path_witnesses` — through the same domain function.
+  const statistics = new Map<Id, TermStatistics>();
+  const witnesses = new Map<Id, readonly string[]>();
   let nextId = 1;
 
   const project = (projectId: Id): Map<string, StoredRow> => {
@@ -147,6 +161,17 @@ export const memoryKnowledgeStore = (
           },
         });
       }
+      statistics.set(
+        input.projectId,
+        termStatisticsOf(input.documents.map((entry) => entry.document)),
+      );
+      witnesses.set(
+        input.projectId,
+        pathWitnesses(
+          input.documents.flatMap((entry) => entry.document.frontmatter.paths ?? []),
+          input.repoPaths,
+        ),
+      );
       // A replace, as the SQL adapter's `delete` + `insert` is.
       refused.set(
         input.projectId,
@@ -167,8 +192,18 @@ export const memoryKnowledgeStore = (
     search: async (request: KbSearchRequest): Promise<KbSearchResult> => {
       const indexed = state.get(request.projectId);
       if (indexed === undefined || indexed.ftsBuiltAt === null) return { status: 'not_indexed' };
-      const wanted = request.terms;
-      if (wanted.length === 0) return { status: 'ok', hits: [] };
+      const stored = statistics.get(request.projectId);
+      const terms = selectInformativeTerms(
+        request.terms,
+        stored === undefined
+          ? null
+          : {
+              documents: stored.documents,
+              frequency: (term) => stored.frequencies.get(term) ?? 0,
+            },
+      );
+      const wanted = terms.kept;
+      if (wanted.length === 0) return { status: 'ok', hits: [], terms };
       const hits: KbChunkHit[] = [];
       for (const row of project(request.projectId).values()) {
         for (const chunk of row.chunks) {
@@ -186,6 +221,7 @@ export const memoryKnowledgeStore = (
       }
       return {
         status: 'ok',
+        terms,
         hits: hits
           .sort((left, right) =>
             right.rank === left.rank ? left.path.localeCompare(right.path) : right.rank - left.rank,
@@ -193,6 +229,8 @@ export const memoryKnowledgeStore = (
           .slice(0, request.limit),
       };
     },
+
+    readPathWitnesses: async (projectId) => witnesses.get(projectId) ?? null,
 
     loadDocuments: async (projectId, paths) => {
       const target = project(projectId);
@@ -327,7 +365,14 @@ export const fakeSymbolExtractor = (
  * result is evidence about the corpus, and whoever built it is the worst judge of what it omits.
  */
 export const indexedFixtureVault = async (
-  options: { readonly force?: boolean } = {},
+  options: {
+    readonly force?: boolean;
+    /**
+     * A different vault composition — `FIXTURE_VAULT_WITH_BLIND_NEGATIVES` (WP-58) — so a corpus
+     * measured on its own does not move every figure pinned over {@link FIXTURE_VAULT}.
+     */
+    readonly documents?: readonly (typeof FIXTURE_VAULT)[number][];
+  } = {},
 ): Promise<{
   readonly projectId: Id;
   readonly store: MemoryKnowledgeStore;
@@ -340,7 +385,7 @@ export const indexedFixtureVault = async (
   const indexer = createKnowledgeIndexer({
     vault: memoryVaultSource({
       status: 'ok',
-      snapshot: vaultSnapshotOf(FIXTURE_VAULT, {
+      snapshot: vaultSnapshotOf(options.documents ?? FIXTURE_VAULT, {
         commitSha: 'f1c7ea4',
         knowledgeDir: FIXTURE_KNOWLEDGE_DIR,
         repoPaths: FIXTURE_REPO_PATHS,

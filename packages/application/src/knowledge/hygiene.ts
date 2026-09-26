@@ -93,6 +93,7 @@ export const runKnowledgeHygiene = async (
         documents: inputs.documents,
         danglingLinks: inputs.danglingLinks,
         refusals: inputs.refusals,
+        pathWitnesses: inputs.pathWitnesses,
       },
       {
         today,

@@ -517,23 +517,25 @@ export interface StageRunPlannerOptions {
   /** WP-16's assembler. Required; see the module docblock. */
   readonly contextPacks: ContextPackAssembler;
   /**
-   * Every tracked path at HEAD, for technical/07 step 3's validate-on-read.
+   * The paths at the **indexed** commit that technical/07 step 3's validate-on-read resolves
+   * `paths:` globs against — a full listing, or anything that answers as one does.
    *
-   * Absent in this build and **said so out loud** rather than defaulted to `[]` in silence: there
-   * is no checkout at plan time (the pipeline does not compose `WorkspaceProvider` yet), so a
-   * knowledge document carrying a `paths:` glob is recorded `validated: false` and never admitted.
-   * That is visible in `run_context_pack` — **since WP-57**, when the table got its writer
-   * (`RunRepository.insert`, migration 0041); before that this sentence named a table nothing had
-   * ever written, and the record lived only in the `run.started` payload (PROGRESS backlog 31) —
-   * and logged once per run here, at `debug`.
+   * **Required since WP-58** (PROGRESS backlog 170), and its production source is the index
+   * itself: from the tracked set the vault read produced at the commit it indexed (WP-18a), the
+   * index write keeps one **witness** per vault glob (`pathWitnesses`, backlog 175) in
+   * `kb_index_state.path_witnesses` (migration 0042), and `apps/server` composes this as
+   * `KnowledgeStore.readPathWitnesses`. Validation over the witnesses equals validation over the
+   * listing (a property in `globs.test.ts`); the row is bounded by the vault's globs, not the
+   * repository, and a run pays one small row read rather than a second vault listing. It describes
+   * the commit the pack's documents came from, which a fresh listing of the head would not.
    *
-   * **Still absent after WP-18a, and the reason changed.** That work package gave the platform a
-   * default-branch read that needs no checkout — `VaultSource.read` over a bare mirror, whose
-   * `repoPaths` *is* the tracked set at the commit — so what is missing is no longer a tree but a
-   * caller: the planner would have to read the vault a second time, per run, to get it. Filed as
-   * discovered work rather than wired here.
+   * `null` is "no listing stored" — a project indexed before 0042 and not rebuilt since — and is
+   * **not** read as `[]`: the pack is then built with no listing, every `paths:`-scoped page is
+   * recorded `validated: false` exactly as before this work package, and the planner says so at
+   * `debug`, once per run. Until WP-58 that was the state of **every** run, because nothing
+   * supplied this collaborator: the record has been visible in `run_context_pack` since WP-57.
    */
-  readonly headPaths?: (projectId: Id) => Promise<readonly string[]>;
+  readonly headPaths: (projectId: Id) => Promise<readonly string[] | null>;
   /** `api` or `local` (BD-004); the composition root knows which one the instance runs. */
   readonly providerMode?: 'api' | 'local';
   /** Environment handed to the CLI. Never inherited (technical/04). */
@@ -671,10 +673,10 @@ const latestArtifacts = (artifacts: readonly StoredArtifact[]): readonly StoredA
  *
  * Untrusted, every word of it — which is why it goes to `extractQueryTerms` and never into a
  * prompt's platform voice. A degenerate result (no keyword at all) is a fact the pack reports
- * rather than an error, and PROGRESS backlog 15 / **Q58** is the open question about what a *junk*
- * query costs: nothing rejects one, and with this planner the first junk query that costs anything
- * has arrived. The remedy needs a corpus-derived signal and a corpus that can falsify it
- * (backlog 16); it is deliberately not invented here.
+ * rather than an error. What a *junk* query costs was PROGRESS backlog 15 / **Q58**; since WP-58 the
+ * store drops a keyword significantly more than half the project's documents contain (`term-statistics.ts` in
+ * `@platform/domain`) — which narrows that class and, measured on the fixture vault's negative
+ * corpus, does not close it (`PROGRESS.md`, WP-58).
  *
  * ## The title comes first, and that is the whole of WP-15f's half of this function
  *
@@ -686,12 +688,13 @@ const latestArtifacts = (artifacts: readonly StoredArtifact[]): readonly StoredA
  * sits"*. The comments are **not** here: they are the largest and least-signal part of a snapshot,
  * and a thread that has drifted onto something else would take the query with it.
  *
- * **The residual, measured rather than implied** (PROGRESS backlog 12): a term is split at
- * anything that is not a letter, a number or an underscore, so an invisible character inside a word
- * splits it — `extractQueryTerms('sess​ions rollback')` is `["sess", "ions", "rollback"]`. A
- * title carrying a zero-width character is therefore still retrievable by its *other* words and not
- * by that one. Nothing here edits the text to fix it; an indexer that silently rewrote a document's
- * words would be a knowledge base nobody could trust (`data-block.ts` gives the same answer).
+ * **Invisible characters inside a word** (PROGRESS backlog 12, closed by WP-58): a term is split
+ * at anything that is not a letter, a number or an underscore, so a zero-width character used to cut
+ * a title's word in two — measured, `sess` + `U+200B` + `ions rollback` extracted to
+ * `["sess", "ions", "rollback"]`. `extractQueryTerms` now deletes `U+200B`, `U+FEFF`, `U+2060` and
+ * `U+00AD` before it splits, and the indexer deletes the same four, so both halves of the match see
+ * the word a human sees; the count is reported rather than absorbed (`queryKeywords`). The text
+ * this function returns is not edited — the deletion happens where the text becomes terms.
  */
 export const taskTextOf = (request: StageRunRequest): string =>
   [
@@ -703,6 +706,71 @@ export const taskTextOf = (request: StageRunRequest): string =>
   ]
     .join('\n')
     .slice(0, MAX_TASK_TEXT_CHARS);
+
+/** Where a run's touched paths came from — logged per run, so "none" is said rather than implied. */
+export type TouchedPathsSource = 'implementation_plan' | 'review_verdict' | 'both' | 'none';
+
+/** More paths than this in one plan is a plan that names a tree, not a change; the rest are cut. */
+export const MAX_TOUCHED_PATHS = 200;
+
+/**
+ * The paths a run is known to touch — technical/07 step 1's *"touched paths (from plan/diff when
+ * available)"* (WP-58, PROGRESS backlog 170).
+ *
+ * Two producers, both artifacts the task already carries, read from the latest version of each:
+ *
+ *  - **`ImplementationPlan`** — `files_to_change[].path` and `protected_path_changes[].path`: what
+ *    the Architect said the change touches. Every stage from `implementation` on has one.
+ *  - **`ReviewVerdict`** — `findings[].file`: what a reviewer pointed at, which is the "diff" half
+ *    for a stage the task was **returned** to.
+ *
+ * **Stages with none, named rather than defaulted:** `intake`, `refinement`, `investigation`,
+ * `architecture` on its first run, `ticket_lint`, `discovery`, the history bootstrap and the
+ * review-only `code_review` run before any plan exists, so their path match is empty and the source
+ * is logged as `none`. A merge request's own diff (`tasks.review_subject`) is not read here: it is
+ * a provider's text bounded for a *prompt*, not a path list, and parsing paths out of it is a
+ * decision left named rather than taken.
+ *
+ * The artifact data is **model output** (already redacted at the write). It is only ever compared
+ * with a document's `paths:` globs by `matchingRepoPaths`, which reads it as a string and nothing
+ * else, so nothing here can be steered by it beyond which page scores 1.0.
+ */
+export const touchedPathsOf = (
+  request: StageRunRequest,
+): { readonly paths: readonly string[]; readonly source: TouchedPathsSource } => {
+  const latest = latestArtifacts(request.artifacts);
+  const fromPlan: string[] = [];
+  const fromReview: string[] = [];
+  for (const artifact of latest) {
+    const data = artifact.data as Record<string, unknown> | null;
+    if (data === null || typeof data !== 'object') continue;
+    if (artifact.type === 'ImplementationPlan') {
+      for (const key of ['files_to_change', 'protected_path_changes']) {
+        const entries = data[key];
+        if (!Array.isArray(entries)) continue;
+        for (const entry of entries) {
+          const path = (entry as { path?: unknown } | null)?.path;
+          if (typeof path === 'string' && path !== '') fromPlan.push(path);
+        }
+      }
+    }
+    if (artifact.type === 'ReviewVerdict' && Array.isArray(data.findings)) {
+      for (const finding of data.findings) {
+        const file = (finding as { file?: unknown } | null)?.file;
+        if (typeof file === 'string' && file !== '') fromReview.push(file);
+      }
+    }
+  }
+  const source: TouchedPathsSource =
+    fromPlan.length > 0 && fromReview.length > 0
+      ? 'both'
+      : fromPlan.length > 0
+        ? 'implementation_plan'
+        : fromReview.length > 0
+          ? 'review_verdict'
+          : 'none';
+  return { paths: [...new Set([...fromPlan, ...fromReview])].slice(0, MAX_TOUCHED_PATHS), source };
+};
 
 const emptyRecord = (budgetTokens: number): ContextPackRecord => ({
   tier0: [],
@@ -832,20 +900,33 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
     stageId: string,
     budgetTokens: number,
   ): Promise<ResolvedPack> => {
-    const repoPaths = await (options.headPaths?.(request.task.task.projectId) ??
-      Promise.resolve([]));
-    if (options.headPaths === undefined) {
+    const listing = await options.headPaths(request.task.task.projectId);
+    if (listing === null) {
       logger.debug(
         { project_id: request.task.task.projectId, run_id: request.runId },
-        'no HEAD path listing for this run: a knowledge document scoped by `paths:` is recorded validated=false and not admitted',
+        'no path listing stored for the indexed commit: a knowledge document scoped by `paths:` is recorded validated=false and not admitted',
       );
     }
+    const touched = touchedPathsOf(request);
+    logger.debug(
+      {
+        project_id: request.task.task.projectId,
+        run_id: request.runId,
+        stage: stageId,
+        touched_paths: touched.paths.length,
+        touched_paths_source: touched.source,
+      },
+      'context pack path match inputs',
+    );
     const result = await options.contextPacks.assemble({
       projectId: request.task.task.projectId,
       stage: stageId,
       taskText: taskTextOf(request),
-      touchedPaths: [],
-      repoPaths,
+      // technical/07 step 1's *"touched paths (from plan/diff when available)"* — WP-58, backlog
+      // 170. `touchedPathsOf` names its source, and `none` for every stage that runs before a plan
+      // exists; see its docblock for the list.
+      touchedPaths: touched.paths,
+      repoPaths: listing ?? [],
       today: options.clock.now().slice(0, 10) as IsoDate,
       knowledgeDir: request.settings.config.project?.knowledge_dir ?? '.agentic/knowledge',
       budgetTokens,

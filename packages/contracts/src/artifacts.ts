@@ -266,9 +266,23 @@ export const kbHealthFindingSchema = z.strictObject({
  * is deliberately **not** widened: a Librarian reads indexed pages and cannot observe a refusal, and
  * offering it the kind would invite a model to guess one. `detail` quotes the parser's diagnosis,
  * which can quote a frontmatter key somebody wrote (BD-022).
+ *
+ * `unresolved_paths` (WP-58, PROGRESS backlog 170) is technical/07 step 3's *"flag the document"*:
+ * a page whose `paths:` globs match no tracked path at the indexed commit, so validate-on-read drops
+ * it from every pack it would otherwise score in. Also a nightly-pass-only kind, for the same reason
+ * as `invalid`: it is computed from the path witnesses the index stored (one tracked path per
+ * `paths:` glob), which a Librarian cannot see.
  */
 export const kbHealthReportFindingSchema = z.strictObject({
-  kind: z.enum(['invalid', 'expired', 'dangling', 'duplicate', 'contradiction', 'oversized']),
+  kind: z.enum([
+    'invalid',
+    'unresolved_paths',
+    'expired',
+    'dangling',
+    'duplicate',
+    'contradiction',
+    'oversized',
+  ]),
   path: pathPatternSchema,
   detail: nonEmptyStringSchema,
 });

@@ -38,6 +38,20 @@
  * document that quietly differs from its file, so each becomes one U+FFFD and the total travels on
  * `ParsedKbDocument.sanitised` into `IndexReport` — which is what lets a KB health report say
  * "this page contains control characters" instead of nobody ever finding out.
+ *
+ * **4. Invisible characters inside a word (stripped here, and counted — WP-58, PROGRESS backlog
+ * 12).** `U+200B` ZERO WIDTH SPACE, `U+FEFF` ZERO WIDTH NO-BREAK SPACE, `U+2060` WORD JOINER and
+ * `U+00AD` SOFT HYPHEN reorder nothing, so they sat outside item 1 by design until a measurement
+ * showed what they cost: every term splitter in this repository — `extractQueryTerms`, the
+ * in-memory store's, PostgreSQL's `simple` parser — breaks a word at them, so `sess` + `U+200B` +
+ * `ions` is indexed as two fragments and **no query can find the page by that word**. They are
+ * *deleted* rather than replaced, because a `U+FFFD` in the same position splits the word exactly as
+ * the original did; the count is the same count (`removed`), so a page carrying them is still
+ * visible in `IndexReport`. The same four are stripped on the **query** path
+ * ({@link stripInvisible}, called by `extractQueryTerms`), so a ticket title carrying one matches the
+ * page it names. The prompt's data blocks still carry any such character a *non-indexed* source
+ * brings — `assemblePrompt` edits nothing — and `data-block.ts` says why a nonce is indifferent to
+ * them.
  */
 
 /** U+FFFD REPLACEMENT CHARACTER — one visible codepoint per replaced character. */
@@ -59,17 +73,39 @@ const UNSAFE =
   // biome-ignore lint/suspicious/noControlCharactersInRegex: replacing them is the point of this module.
   /[\u{0000}-\u{0008}\u{000B}-\u{001F}\u{007F}-\u{009F}\u{200E}\u{200F}\u{202A}-\u{202E}\u{2066}-\u{2069}]/gu;
 
+/** Item 4 of the module docblock: invisible, split a word, reorder nothing — deleted, and counted. */
+const INVISIBLE = /[\u{200B}\u{FEFF}\u{2060}\u{00AD}]/gu;
+
 export interface SanitisedText {
   readonly text: string;
-  /** How many characters were replaced. Zero for the overwhelming majority of real documents. */
+  /**
+   * How many characters were replaced (items 1) or deleted (item 4). Zero for the overwhelming
+   * majority of real documents.
+   */
   readonly removed: number;
 }
 
+/**
+ * Item 4 alone: the four invisible characters deleted, and how many there were.
+ *
+ * The query path's half of backlog 12 — `extractQueryTerms` calls it before it splits, so a term
+ * cannot be cut in two by a character nobody can see.
+ */
+export const stripInvisible = (text: string): SanitisedText => {
+  let removed = 0;
+  const cleaned = text.replace(INVISIBLE, () => {
+    removed += 1;
+    return '';
+  });
+  return { text: cleaned, removed };
+};
+
 export const sanitiseDocumentText = (text: string): SanitisedText => {
   let removed = 0;
-  const cleaned = text.replace(UNSAFE, () => {
+  const replaced = text.replace(UNSAFE, () => {
     removed += 1;
     return SANITISED_MARKER;
   });
-  return { text: cleaned, removed };
+  const stripped = stripInvisible(replaced);
+  return { text: stripped.text, removed: removed + stripped.removed };
 };

@@ -923,6 +923,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
           skills: harnessSkills(),
           nonce: { next: () => nonceFor(ids.next()) },
           contextPacks: createContextPackAssembler({ store: knowledge, logger: silentLogger }),
+          headPaths: (projectId: Id) => knowledge.readPathWitnesses(projectId),
           clock: { now: () => clock.now() },
         }),
         options.whileAskPlans,
@@ -947,6 +948,8 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
         // the executor's own ids are already the harness's one source of "unique".
         nonce: { next: () => nonceFor(ids.next()) },
         contextPacks: createContextPackAssembler({ store: knowledge, logger: silentLogger }),
+        // The production shape (WP-58): the listing the index write stored for its commit.
+        headPaths: (projectId: Id) => knowledge.readPathWitnesses(projectId),
         clock: { now: () => clock.now() },
       }),
       stopReasons,

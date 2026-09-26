@@ -23,8 +23,9 @@
  *
  * **What is measured and what is not, stated rather than implied.** Measured here: the unit, and
  * that `estimateTokens` equals `ceil(utf8ByteLength(t) / 4)` for every string (`tokens.test.ts`, a
- * property, which is what makes an estimator with the *wrong ratio* fail rather than merely one
- * that is non-monotone). **Not** measured, by anyone, on this build: the ratio itself. Anthropic's
+ * property — which pins the constant but, as WP-58 noticed, cannot tell a right constant from a
+ * wrong one). The ratio itself was not measured by anyone until WP-58; the paragraph after next
+ * is that measurement. Anthropic's
  * own documentation gives one datum — *"1M tokens is roughly … 2.5M Unicode characters on the
  * current tokenizer"* ([models overview](https://platform.claude.com/docs/en/models/overview),
  * retrieved 2026-09-12) — which is **2.5 characters** per token for mixed prose, not 4 bytes; for
@@ -33,6 +34,21 @@
  * a real tokeniser rather than another constant. The honest reading of a budget today is *"about
  * this much, ±2×"*, and `MAX_CONTEXT_BUDGET_TOKENS` in `@platform/contracts` is what keeps the
  * consequence bounded.
+ *
+ * **The measured worst case** (WP-58, PROGRESS backlog 14 — the interim the row names). Counted on
+ * 2026-09-26 with `@anthropic-ai/tokenizer@0.0.4`, a tokeniser Anthropic published and **not**
+ * claimed to be the current models' (no credential for the counting API was available): this
+ * estimate is `0.575` of the real count on Czech prose — **2.30 bytes per token, an under-estimate
+ * of 1.74×**, the worst of everything measured — `0.76` on Japanese (3.03 bytes per token; CJK is
+ * three bytes a character and about one token each), `0.95` over 400 of this repository's
+ * TypeScript files and `0.97` over its 115 Markdown files under `docs/` (3.86 bytes per token), with
+ * the worst single file at 2.94. So on the mixed Czech/English a vault is written in, a pack that
+ * reports 12 000 tokens can be up to about 21 000 real ones. **The estimator is therefore not an
+ * upper bound**, and it was not made one: dividing by 2.30 would make it one on this evidence and
+ * would halve what every budget carries for English and code, on the strength of a tokeniser that
+ * is not the model's. Four of the counted texts are pinned in `tokens.test.ts`, whose band — a
+ * half to twice the real count — is what now **fails an estimator with the wrong ratio**; the
+ * exact-ratio property below it only restates the constant.
  *
  * A real tokeniser would have to be the one the model uses, would pin a vocabulary file into the
  * domain ring, and would still be an approximation for the mixed Czech/English a vault is written

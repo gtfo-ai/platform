@@ -95,7 +95,25 @@ export const kbIndexState = pgTable('kb_index_state', {
   ftsBuiltAt: timestamp('fts_built_at', { withTimezone: true }),
   embeddingsBuiltAt: timestamp('embeddings_built_at', { withTimezone: true }),
   embeddingModel: text('embedding_model'),
+  /** Q58's denominator — migration 0042 (WP-58). Null until an index write stores it. */
+  termDocuments: integer('term_documents'),
+  /** The tracked paths at `commit_sha` — migration 0042 (WP-58, PROGRESS backlog 170). */
+  pathWitnesses: text('path_witnesses').array(),
 });
+
+/**
+ * Q58's document frequencies, counted at index time by `termStatisticsOf` — migration 0042
+ * (WP-58). Replaced per index run in the transaction that writes the documents.
+ */
+export const kbTermStatistics = pgTable(
+  'kb_term_statistics',
+  {
+    projectId: uuid('project_id').notNull(),
+    term: text('term').notNull(),
+    documents: integer('documents').notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.projectId, table.term] })],
+);
 
 export const codeFiles = pgTable(
   'code_files',
@@ -308,6 +326,7 @@ export type CodeMap = typeof codeMaps.$inferSelect;
 export type ReadinessEvaluation = typeof readinessEvaluations.$inferSelect;
 export type KbHealthReport = typeof kbHealthReports.$inferSelect;
 export type KbIndexRefusal = typeof kbIndexRefusals.$inferSelect;
+export type KbTermStatistic = typeof kbTermStatistics.$inferSelect;
 export type ShadowReport = typeof shadowReports.$inferSelect;
 export type ShadowBatch = typeof shadowBatches.$inferSelect;
 export type ShadowBatchTicket = typeof shadowBatchTickets.$inferSelect;

@@ -149,6 +149,7 @@ export interface AskRunPlannerOptions
     | 'skills'
     | 'nonce'
     | 'contextPacks'
+    | 'headPaths'
     | 'providerMode'
     | 'env'
     | 'secretEnvNames'
@@ -178,8 +179,12 @@ export const createAskRunPlanner = (options: AskRunPlannerOptions): AskRunPlanne
         // about. It is untrusted text reaching a keyword extractor, which is the same exposure
         // `taskTextOf` already has and which `extractQueryTerms` bounds.
         taskText: ask.question,
+        // An ask has no plan of its own to take touched paths from: it is about the task, not a
+        // change (WP-58 names it rather than defaulting it — `touchedPathsOf` in the stage planner).
         touchedPaths: [],
-        repoPaths: [],
+        // The listing of the indexed commit, as the stage planner reads it (WP-58, backlog 170);
+        // null is "none stored" and validates nothing, exactly as `[]` did before.
+        repoPaths: (await options.headPaths(task.task.projectId)) ?? [],
         today: options.clock.now().slice(0, 10) as IsoDate,
         knowledgeDir: settings.config.project?.knowledge_dir ?? '.agentic/knowledge',
         budgetTokens,

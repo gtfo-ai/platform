@@ -6,6 +6,7 @@ const document = (overrides: Partial<HealthDocument> = {}): HealthDocument => ({
   expires: null,
   frontmatterId: null,
   tokens: 100,
+  paths: [],
   ...overrides,
 });
 
@@ -13,6 +14,7 @@ const inputs = (overrides: Partial<HealthInputs> = {}): HealthInputs => ({
   documents: [],
   danglingLinks: [],
   refusals: [],
+  pathWitnesses: null,
   ...overrides,
 });
 
@@ -38,6 +40,45 @@ describe('computeKbHealth', () => {
       options,
     );
     expect(today.findings).toEqual([]);
+  });
+
+  it('flags a page whose `paths:` resolve to nothing at the indexed commit, and never one that resolves (WP-58)', () => {
+    const report = computeKbHealth(
+      inputs({
+        pathWitnesses: ['src/api/session.ts', 'package.json'],
+        documents: [
+          document({ path: '.agentic/knowledge/lessons/gone.md', paths: ['src/legacy/**'] }),
+          document({ path: '.agentic/knowledge/lessons/live.md', paths: ['src/api/**'] }),
+          // One glob of two still resolving is enough — the same predicate the pack uses.
+          document({
+            path: '.agentic/knowledge/lessons/half.md',
+            paths: ['src/legacy/x.ts', 'package.json'],
+          }),
+          document({ path: '.agentic/knowledge/lessons/unscoped.md' }),
+        ],
+      }),
+      options,
+    );
+    expect(report.findings).toEqual([
+      {
+        kind: 'unresolved_paths',
+        path: '.agentic/knowledge/lessons/gone.md',
+        detail:
+          'its paths: src/legacy/** match no tracked file at the indexed commit, so no context pack admits it',
+      },
+    ]);
+  });
+
+  it('makes no `unresolved_paths` finding at all when no listing is stored', () => {
+    // Backlog 170: without a listing, every `paths:` page would be flagged — so none is.
+    const report = computeKbHealth(
+      inputs({
+        pathWitnesses: null,
+        documents: [document({ paths: ['src/legacy/**'] })],
+      }),
+      options,
+    );
+    expect(report.findings).toEqual([]);
   });
 
   it('reports an oversized page from both sides of the budget', () => {

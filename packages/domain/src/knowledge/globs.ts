@@ -36,6 +36,13 @@ const globToRegExp = (pattern: string): RegExp => {
   // `src/`, `src/**` and `src` are the same instruction — trimming the trailing `/**` is what makes
   // `src/**` cover `src` itself, which `path-guard.ts` learned the same way.
   const trimmed = pattern.replace(/\/+$/, '').replace(/^(.+)\/\*\*$/, '$1');
+  // A bare `**` (and `/**`, `**/`, which normalise to it) is every path. The staging below compiles
+  // it to `(?:.*/)?` followed by the directory suffix, which matches only an empty path — so until
+  // WP-58 a page scoped `paths: ['**']` scored nothing and failed validate-on-read everywhere,
+  // masked because every `paths:` page failed validation then (PROGRESS backlog 176).
+  if (trimmed === '**') {
+    return /^.+$/;
+  }
   const escaped = trimmed.replace(REGEX_METACHARACTERS, '\\$&');
   const body = escaped
     .replace(/\*\*\/?/g, CROSSING_WILDCARD)
@@ -69,4 +76,32 @@ export const matchingRepoPaths = (
     const normalised = normaliseRepoPath(candidate);
     return compiled.some((expression) => expression.test(normalised));
   });
+};
+
+/**
+ * One tracked path per glob that matches any — the **witnesses** validate-on-read needs, and
+ * nothing more (WP-58, PROGRESS backlog 175).
+ *
+ * technical/07 step 3 asks one question of a document's `paths:` globs: *does at least one of them
+ * match a tracked file at the indexed commit?* That answer is unchanged if the listing is replaced
+ * by, for every glob in the vault, the first tracked path it matches: a glob with a match keeps one
+ * (so a document citing it still validates), a glob with none gets none (so a document whose globs
+ * all fail still fails), and a witness kept for one glob can only make another glob match a path
+ * that really is tracked. `globs.test.ts` holds the equivalence as a property. What it buys: the
+ * stored listing is bounded by the vault's globs, not by the repository — a monorepo of 100 000
+ * files stores as many paths as its knowledge pages have distinct globs.
+ *
+ * Sorted and de-duplicated, so two stores writing the same vault store the same list.
+ */
+export const pathWitnesses = (
+  patterns: readonly string[],
+  repoPaths: readonly string[],
+): readonly string[] => {
+  const witnesses = new Set<string>();
+  for (const pattern of [...new Set(patterns)].sort()) {
+    const expression = globToRegExp(normaliseRepoPath(pattern));
+    const witness = repoPaths.find((candidate) => expression.test(normaliseRepoPath(candidate)));
+    if (witness !== undefined) witnesses.add(witness);
+  }
+  return [...witnesses].sort();
 };

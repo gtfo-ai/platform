@@ -204,6 +204,7 @@ export const createKnowledgeIndexer = (
         commitSha: snapshot.commitSha,
         documents,
         removedPaths: removed,
+        repoPaths: snapshot.repoPaths,
         refused: invalid.map((refusal) => ({
           ...refusal,
           reason: boundedRefusalReason(refusal.reason),

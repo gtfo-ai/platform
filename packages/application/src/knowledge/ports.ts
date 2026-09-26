@@ -31,6 +31,7 @@ import type {
   HealthDocument,
   HealthLink,
   HealthRefusal,
+  InformativeTerms,
   KbChunk,
   KbLayer,
   ParsedKbDocument,
@@ -121,6 +122,13 @@ export interface IndexWrite {
    * Every `reason` is already bounded by the indexer ({@link MAX_REFUSAL_REASON_CHARS}).
    */
   readonly refused: readonly InvalidDocument[];
+  /**
+   * Every tracked path at `commitSha` — the snapshot's `repoPaths`. The store keeps only its
+   * **witnesses** for the vault's globs (`pathWitnesses`, backlog 175), so a context pack validates
+   * `paths:` globs against the commit the index describes (backlog 170) without a per-run read the
+   * size of the repository. Required for the reason `VaultSnapshot.repoPaths` is.
+   */
+  readonly repoPaths: readonly string[];
 }
 
 /**
@@ -182,7 +190,20 @@ export interface KbSearchRequest {
 }
 
 export type KbSearchResult =
-  | { readonly status: 'ok'; readonly hits: readonly KbChunkHit[] }
+  | {
+      readonly status: 'ok';
+      readonly hits: readonly KbChunkHit[];
+      /**
+       * Q58's floor, as the store applied it (`selectInformativeTerms` in `@platform/domain`): which
+       * of the request's terms were searched, which were dropped because significantly more than half the
+       * project's documents contain them, and whether statistics existed at all. **Every adapter
+       * applies it inside `search`** — a property of this port rather than of one adapter, so the
+       * in-memory double cannot be kinder than PostgreSQL (standing rule 1) and no caller can skip
+       * it. When every term is dropped the hits are empty: an honest nothing, not ten pages that
+       * matched a word every page has.
+       */
+      readonly terms: InformativeTerms;
+    }
   /** `kb_index_state` has no row, or its `fts_built_at` is null — the index was never built. */
   | { readonly status: 'not_indexed' };
 
@@ -201,6 +222,16 @@ export interface KnowledgeStore {
   /** Every indexed path with its blob sha — what makes an incremental run possible. */
   readIndexedBlobs(projectId: Id): Promise<ReadonlyMap<string, string>>;
   search(request: KbSearchRequest): Promise<KbSearchResult>;
+  /**
+   * The **path witnesses** the last index write stored (WP-58, PROGRESS backlogs 170 and 175): for
+   * every `paths:` glob in the vault, the first tracked path at the indexed commit it matches
+   * (`pathWitnesses` in `@platform/domain`). Not a listing of the repository — a stand-in for one
+   * that answers validate-on-read exactly as the listing would, bounded by the vault's globs rather
+   * than the repository's size. `null` when no write has stored any: a project never indexed, or
+   * one indexed before migration 0042 and not rebuilt since. Never `[]` for "unknown": an empty
+   * list means no glob in the vault resolves.
+   */
+  readPathWitnesses(projectId: Id): Promise<readonly string[] | null>;
   /** Full documents by path, for the tier-0 and tier-1 text a pack writes into the workspace. */
   loadDocuments(projectId: Id, paths: readonly string[]): Promise<readonly StoredKbDocument[]>;
   /**
@@ -458,6 +489,13 @@ export interface KbHealthInputs {
   readonly danglingLinks: readonly HealthLink[];
   /** `kb_index_refusals` — what the parser refused at the indexed commit (WP-57). */
   readonly refusals: readonly HealthRefusal[];
+  /**
+   * `kb_index_state.path_witnesses` — one tracked path per vault glob that matches any at the
+   * indexed commit (`pathWitnesses`, WP-58, migration 0042), or `null` when no index write has
+   * stored them. What the `unresolved_paths` finding is judged against — it answers exactly as the
+   * whole listing would; `null` makes no finding, never one per `paths:` page.
+   */
+  readonly pathWitnesses: readonly string[] | null;
 }
 
 /**

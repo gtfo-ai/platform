@@ -49,6 +49,7 @@ export * from './knowledge/proposals.js';
 export * from './knowledge/query.js';
 export * from './knowledge/retrieval.js';
 export * from './knowledge/sanitise.js';
+export * from './knowledge/term-statistics.js';
 export * from './knowledge/tokens.js';
 // The maintenance pipeline's chore catalogue and its brief — product/18:31 (WP-36)
 export * from './maintenance/chores.js';

@@ -9,8 +9,9 @@
  *
  * The figure is pinned **separately** from the in-memory one rather than shared, because the two
  * rankers are free to disagree and the divergence register says so. Measured, on this corpus they
- * do **not**: both spend 10 552 tokens. That is a stronger result than the file was written
- * expecting and it is recorded as a measurement, not promoted into a guarantee — a vault change can
+ * do **not**: both spend 10 552 tokens (11 096 since WP-58, still equal). That is a stronger
+ * result than the file was written expecting and it is recorded as a measurement, not promoted
+ * into a guarantee — a vault change can
  * separate them, and then two independent expectations move independently instead of one shared
  * expectation hiding which store moved. What must agree in every case is everything that is not
  * the ranking:
@@ -83,6 +84,7 @@ beforeAll(async () => {
     documents: parsedFixture(),
     removedPaths: [],
     refused: [],
+    repoPaths: FIXTURE_REPO_PATHS,
   });
 }, 180_000);
 
@@ -152,7 +154,11 @@ describe('pack composition against PostgreSQL', () => {
     // entirely **em dashes** — six `U+2014` in `index.md` and one in `D-0001-postgres-sessions.md`.
     // It is *not* the hostile document, which this pack does not contain; WP-17's first comment
     // said it was, and rule 39 is why that had to be measured rather than assumed.
-    expect(pack.record.total_tokens).toBe(10_556);
+    // **11 096 since WP-58**, equal to the in-memory figure: the negative corpus moved it, and Q58's
+    // floor as ruled drops nothing from this query here as there — it is a property of the port,
+    // not of either store (criterion 2). (11 036 under the first, bare-half floor.)
+    expect(pack.uninformativeTerms).toEqual([]);
+    expect(pack.record.total_tokens).toBe(11_096);
   });
 
   it('makes the same four documents tier 0', async () => {
@@ -190,6 +196,9 @@ describe('pack composition against PostgreSQL', () => {
     expect(sessionPaths).toContain(
       `${FIXTURE_KNOWLEDGE_DIR}/lessons/L-2026-01-04-session-fixtures.md`,
     );
+    // WP-58's first, bare-half floor dropped `session` and admitted the billing page at the tail on
+    // both stores; the ruled line keeps `session` (13 of 23) and the reverse half holds again.
+    expect(session.uninformativeTerms).toEqual([]);
     expect(sessionPaths).not.toContain(`${FIXTURE_KNOWLEDGE_DIR}/technical/billing.md`);
   });
 

@@ -97,11 +97,14 @@ describe('kb_search — tier 2', () => {
     const search = createKbSearchTool({ store, logger: silentLogger });
     // Each of these carries at least one keyword, so it reaches the store — as a term list that
     // cannot express an operator.
+    // `runbook` rather than `session`: WP-58's first floor dropped `session` (13 of 23 pages), and
+    // a query word that can be dropped is a different answer from this test's. Under the ruled
+    // line it is searched again; the word here stays one the floor can never drop.
     for (const query of [
-      "' or 1=1 -- session",
-      'session & | ! ( )',
-      'session:*',
-      '"phrase" <-> x',
+      "' or 1=1 -- runbook",
+      'runbook & | ! ( )',
+      'runbook:*',
+      '"runbook" <-> x',
     ]) {
       const payload = payloadOf(await search(projectId, { query }));
       expect(payload.status).toBe('ok');
@@ -126,10 +129,34 @@ describe('kb_search — tier 2', () => {
     expect(genuine.hits).toEqual([]);
   });
 
+  it('answers "uninformative_terms", naming them, when every keyword is past the floor line (Q58)', async () => {
+    // A fourth answer. `demo` is the project key the indexer writes onto every chunk — in all 23
+    // of the fixture vault's indexed pages, past the line of 11.5 + √23 — so on its own it cannot
+    // tell one page from another, and Q58's recommendation is that such a query returns nothing
+    // rather than everything. The model is told which word to replace. (WP-58's first version used
+    // `session` here, 13 of 23; the ruled line keeps it.)
+    const { store, projectId } = await indexedFixtureVault();
+    const search = createKbSearchTool({ store, logger: silentLogger });
+    const payload = await search(projectId, { query: 'demo' });
+    expect(payload).toEqual({
+      status: 'uninformative_terms',
+      hits: [],
+      uninformative_terms: ['demo'],
+    });
+    // …and the same word beside a specific one is searched for the specific one alone.
+    const specific = payloadOf(await search(projectId, { query: 'demo drain' }));
+    expect(specific.status).toBe('ok');
+    expect(specific.hits.map((hit) => hit.path)).toContain(
+      '.agentic/knowledge/technical/runbook.md',
+    );
+  });
+
   it('builds the answer from typed fields, so a document cannot add or forge a key', async () => {
     const { store, projectId } = await indexedFixtureVault();
     const search = createKbSearchTool({ store, logger: silentLogger });
-    const payload = payloadOf(await search(projectId, { query: 'session' }));
+    const payload = payloadOf(await search(projectId, { query: 'runbook drain' }));
+    expect(payload.status).toBe('ok');
+    expect(payload.hits.length).toBeGreaterThan(0);
     expect(Object.keys(payload).sort()).toEqual(['hits', 'status']);
     for (const hit of payload.hits) {
       expect(Object.keys(hit).sort()).toEqual(['excerpt', 'heading_path', 'path', 'ref', 'score']);

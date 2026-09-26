@@ -28,6 +28,7 @@ import {
   HOSTILE_CONSTRUCTS,
   isProjectCommandEntry,
   PROJECT_COMMAND_ALLOW,
+  queryKeywords,
   type RolePromptDefinition,
   readDataBlocks,
   SANITISED_MARKER,
@@ -55,6 +56,7 @@ import {
   skillsFor,
   TOOLS_BY_ROLE,
   taskTextOf,
+  touchedPathsOf,
 } from './planner.js';
 import { CONFLICT_RESOLUTION_STAGE } from './rebase.js';
 import { REVIEW_ONLY_TEMPLATE_ID } from './review-only.js';
@@ -117,20 +119,109 @@ const testSkills: Readonly<Record<string, SkillDefinition>> = Object.fromEntries
 );
 
 const planWith = async (taskText: string, ticketSnapshot: TicketSnapshot | null = null) => {
+  const { store } = await indexedFixtureVault();
   const planner = createStageRunPlanner({
     workspacePath: (taskId) => `/workspaces/${taskId}`,
     prompts: prompts as never,
     skills: testSkills,
     boundSkills: async () => [],
     nonce: { next: () => NONCE },
-    contextPacks: createContextPackAssembler({
-      store: (await indexedFixtureVault()).store,
-      logger: silentLogger,
-    }),
+    contextPacks: createContextPackAssembler({ store, logger: silentLogger }),
+    // The production shape (WP-58): the listing the index write stored for its commit.
+    headPaths: (projectId) => store.readPathWitnesses(projectId),
     clock: { now: () => NOW },
   });
   return planner.plan(requestWith(taskText, ticketSnapshot));
 };
+
+/**
+ * A request at the Developer stage carrying an `ImplementationPlan` that names `files` — the
+ * production source of technical/07 step 1's touched paths since WP-58 (PROGRESS backlog 170).
+ */
+const implementationRequestNaming = (files: readonly string[]): StageRunRequest => {
+  const base = requestWith('legacy importer timestamps');
+  return {
+    ...base,
+    stage: {
+      id: 'implementation',
+      kind: 'agent',
+      role: 'developer',
+      produces: 'ImplementationNotes',
+    },
+    artifacts: [
+      {
+        id: '00000000-0000-4000-8000-0000000000a1',
+        taskId: TASK,
+        type: 'ImplementationPlan',
+        version: 1,
+        markdown: null,
+        data: { files_to_change: files.map((path) => ({ path, change: 'edit' })) },
+        schemaVersion: '1',
+        producedByRunId: null,
+      },
+    ],
+  } as unknown as StageRunRequest;
+};
+
+describe('`paths:` pages in production shape (WP-58, PROGRESS backlog 170)', () => {
+  const plannerOver = async () => {
+    const { store } = await indexedFixtureVault();
+    return createStageRunPlanner({
+      workspacePath: (taskId) => `/workspaces/${taskId}`,
+      prompts: prompts as never,
+      skills: testSkills,
+      boundSkills: async () => [],
+      nonce: { next: () => NONCE },
+      contextPacks: createContextPackAssembler({ store, logger: silentLogger }),
+      headPaths: (projectId) => store.readPathWitnesses(projectId),
+      clock: { now: () => NOW },
+    });
+  };
+
+  it('admits a page whose glob resolves, by `paths`, when the plan names a matching file', async () => {
+    const plan = await (await plannerOver()).plan(
+      implementationRequestNaming(['src/api/session.ts', 'src/legacy/importer.ts']),
+    );
+    const lesson = plan.contextPack.tier1.find(
+      (entry) => entry.path === '.agentic/knowledge/lessons/L-2026-01-04-session-fixtures.md',
+    );
+    expect(lesson).toMatchObject({ reason: 'paths', score: 1, validated: true });
+    // The page whose glob names a file the indexed commit does not have is recorded, not admitted.
+    const importer = plan.contextPack.tier1.find(
+      (entry) => entry.path === '.agentic/knowledge/lessons/L-2025-03-02-legacy-importer.md',
+    );
+    expect(importer).toMatchObject({ reason: 'paths', validated: false });
+    expect(plan.spec.contextPack.map((entry) => entry.path).join('\n')).not.toContain(
+      'L-2025-03-02-legacy-importer',
+    );
+  });
+
+  it('admits nothing by path when no listing is stored, which is the state before WP-58', async () => {
+    const { store } = await indexedFixtureVault();
+    const planner = createStageRunPlanner({
+      workspacePath: (taskId) => `/workspaces/${taskId}`,
+      prompts: prompts as never,
+      skills: testSkills,
+      boundSkills: async () => [],
+      nonce: { next: () => NONCE },
+      contextPacks: createContextPackAssembler({ store, logger: silentLogger }),
+      headPaths: async () => null,
+      clock: { now: () => NOW },
+    });
+    const plan = await planner.plan(implementationRequestNaming(['src/api/session.ts']));
+    const scoped = plan.contextPack.tier1.filter((entry) => entry.reason === 'paths');
+    expect(scoped.length).toBeGreaterThan(0);
+    expect(scoped.every((entry) => !entry.validated)).toBe(true);
+  });
+
+  it('names where the touched paths came from, and `none` before a plan exists', () => {
+    expect(touchedPathsOf(implementationRequestNaming(['src/api/session.ts']))).toEqual({
+      paths: ['src/api/session.ts'],
+      source: 'implementation_plan',
+    });
+    expect(touchedPathsOf(requestWith('ACME-1'))).toEqual({ paths: [], source: 'none' });
+  });
+});
 
 /** A query whose keywords are the hostile document's own words, so retrieval finds it. */
 const HOSTILE_QUERY = 'notes untrusted content maintenance runbook drain procedure';
@@ -216,29 +307,28 @@ describe('the hostile document in the assembled prompt', () => {
     expect(prose(hostile.platformVoice)).toBe(prose(benign.platformVoice));
   });
 
-  it('carries the four zero-width characters into the block byte-identical', async () => {
-    // **Rewritten at review round 1, which found this vacuous.** It asserted only that the platform
-    // voice contained no `U+200B` while the fixture vault contained none either — so it would have
-    // passed an implementation that stripped them, which is standing rule 3 meeting rule 45. The
-    // fix is the one WP-16 made when it put the hostile document in the vault: plant the thing, so
-    // the assertion can fail. `FIXTURE_ZERO_WIDTH` is now in `hostile-document.md`.
+  it('carries the page with its four zero-width characters deleted, the word whole', async () => {
+    // **Rewritten at review round 1, which found this vacuous**, and again at WP-58, which changed
+    // what it measures. Round 1's point stands: the characters are *planted* in
+    // `hostile-document.md` (`FIXTURE_ZERO_WIDTH`), so an assertion about them can fail.
     //
-    // What it measures: `sanitiseDocumentText` replaces C0 controls, DEL and the bidi overrides and
-    // leaves `U+200B`, `U+FEFF`, `U+2060` and `U+00AD` alone (backlog 12), and nothing between the
-    // parser and the prompt edits them either. What makes them harmless is *not* that they are
-    // absent — it is that the marker they would have to forge carries a nonce they cannot know
-    // (`data-block.ts`, whose round-trip property is the general case).
+    // What it measures now: `sanitiseDocumentText` **deletes and counts** `U+200B`, `U+FEFF`,
+    // `U+2060` and `U+00AD` (PROGRESS backlog 12 — they split the word they sit in, so the page
+    // was unfindable by it), so the pack block carries `prepost` and none of the four. Until WP-58
+    // this case asserted the opposite — all four arriving byte-identical — and what made them
+    // harmless then is still what would make them harmless in a block from a source that is not
+    // indexed: the marker they would have to forge carries a nonce they cannot know
+    // (`data-block.ts`).
     const plan = await planWith(HOSTILE_QUERY);
     const reading = readDataBlocks(plan.spec.userPrompt);
     expect(reading.nonce).toBe(NONCE);
     const bodies = reading.blocks.map((block) => block.body).join('\n');
 
-    // The positive half: all four arrived, in one piece, in a block (rule 43 — the negative below
-    // is worth nothing unless the characters were there to be stripped).
-    expect(bodies).toContain(FIXTURE_ZERO_WIDTH);
+    // The positive half: the page is there, the word is whole (rule 43).
+    expect(bodies).toContain('Zero width, deleted at index: prepost, four of them.');
+    expect(bodies).not.toContain(FIXTURE_ZERO_WIDTH);
     for (const character of ['\u{200B}', '\u{FEFF}', '\u{2060}', '\u{00AD}']) {
-      expect(bodies).toContain(character);
-      // …and the negative half: none of them reached the platform's own voice.
+      expect(bodies).not.toContain(character);
       expect(reading.platformVoice.join('')).not.toContain(character);
     }
     expect(HOSTILE_CONSTRUCTS.zero_width_characters).toContain('\u{200B}');
@@ -381,20 +471,18 @@ describe('the query terms a task yields (WP-15f)', () => {
   });
 
   /**
-   * The residual PROGRESS backlog 12 measured, **stated at the line rather than fixed**.
-   *
-   * A term breaks at anything that is not a letter, a number or an underscore, and a zero-width
-   * space is none of those — so a title carrying one is retrievable by its other words and by the
-   * two halves, and not by the word a human sees. Nothing rewrites the text: an indexer that
-   * silently edited a document's words would be a knowledge base nobody could trust
-   * (`data-block.ts` answers the same question the same way).
+   * PROGRESS backlog 12's query half, **closed by WP-58** where this case used to state it as the
+   * residual: measured before the change, `sess` + `U+200B` + `ions rollback` extracted to
+   * `["sess", "ions", "rollback"]`. The four invisible characters are now deleted (and counted)
+   * before the split, on this path and on the indexing path, so the title matches the word a human
+   * sees. The count is `queryKeywords(...).invisibleRemoved`, which the context pack reports.
    */
-  it('splits a word an invisible character divides, which is the stated residual', () => {
-    const terms = extractQueryTerms(
-      taskTextOf(requestWith('ACME-1', { ...SNAPSHOT, title: 'sess​ions rollback' })),
-    );
-    expect(terms.slice(0, 3)).toEqual(['sess', 'ions', 'rollback']);
-    expect(terms).not.toContain('sessions');
+  it('keeps a word an invisible character divides whole, and counts the character', () => {
+    const title = 'sess\u{200B}ions roll\u{00AD}back';
+    const terms = extractQueryTerms(taskTextOf(requestWith('ACME-1', { ...SNAPSHOT, title })));
+    expect(terms.slice(0, 2)).toEqual(['sessions', 'rollback']);
+    expect(terms).not.toContain('sess');
+    expect(queryKeywords(title).invisibleRemoved).toBe(2);
   });
 });
 
@@ -708,6 +796,7 @@ describe('the platform skills a stage is planned with', () => {
         store: (await indexedFixtureVault()).store,
         logger: silentLogger,
       }),
+      headPaths: async () => null,
       clock: { now: () => NOW },
     });
     const modes: Record<string, string> = {};
@@ -791,6 +880,7 @@ describe('the platform skills a stage is planned with', () => {
         store: (await indexedFixtureVault()).store,
         logger: silentLogger,
       }),
+      headPaths: async () => null,
       clock: { now: () => NOW },
     });
     const librarianStage = {
@@ -854,6 +944,7 @@ describe('the platform skills a stage is planned with', () => {
         boundSkills: async () => [],
         nonce: { next: () => NONCE },
         contextPacks: { assemble: async () => ({}) as never },
+        headPaths: async () => null,
         clock: { now: () => NOW },
       }),
     ).toThrow(/missing ask-human/);
@@ -906,6 +997,7 @@ describe('what the project decides about a run, within what the role allows', ()
         store: (await indexedFixtureVault()).store,
         logger: silentLogger,
       }),
+      headPaths: async () => null,
       clock: { now: () => NOW },
       logger: recordingLogger,
     });

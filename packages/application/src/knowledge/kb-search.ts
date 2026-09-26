@@ -18,6 +18,9 @@
  *     add a key, cannot set `status`, and cannot make the tool claim something the platform did not
  *     say — the shape is built here from typed fields (technical/07's note on a provider forging
  *     the platform's own voice).
+ *     The store then drops any keyword significantly more than half of the project's documents contain (Q58's
+ *     floor, a property of `KnowledgeStore.search` — WP-58), and when that leaves none the answer
+ *     is `uninformative_terms` rather than an empty `ok`.
  *  3. **Snippets, not documents.** An excerpt is capped at {@link MAX_EXCERPT_CHARS}; a model that
  *     wants a whole page reads it by path with its ordinary file tools, inside the workspace, where
  *     the path guard applies.
@@ -63,7 +66,19 @@ export type KbSearchToolPayload =
    * `not_indexed` is: a model told "no results" concludes the vault is silent on the subject, and a
    * model told its query had no usable terms can ask a better one.
    */
-  | { readonly status: 'no_query_terms'; readonly hits: readonly [] };
+  | { readonly status: 'no_query_terms'; readonly hits: readonly [] }
+  /**
+   * Every keyword was dropped by Q58's floor (WP-58): each one appears in significantly more than half of this
+   * project's documents, so none of them can tell one page from another. A fourth answer for the
+   * same reason as the third — the model is told *why* nothing came back, and the terms it may
+   * drop are named so it can ask with more specific ones. They are the model's own words, already
+   * reduced to `[\p{L}\p{N}_]+`.
+   */
+  | {
+      readonly status: 'uninformative_terms';
+      readonly hits: readonly [];
+      readonly uninformative_terms: readonly string[];
+    };
 
 /**
  * A chunk's text begins with the `project / path / H1 > H2` prefix the indexer wrote onto it
@@ -92,6 +107,13 @@ export const createKbSearchTool =
         'kb_search on a project with no knowledge index',
       );
       return { status: 'not_indexed', hits: [] } satisfies KbSearchToolPayload as JsonValue;
+    }
+    if (result.terms.kept.length === 0) {
+      return {
+        status: 'uninformative_terms',
+        hits: [],
+        uninformative_terms: [...result.terms.uninformative],
+      } satisfies KbSearchToolPayload as unknown as JsonValue;
     }
     const payload: KbSearchToolPayload = {
       status: 'ok',

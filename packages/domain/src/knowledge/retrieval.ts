@@ -28,6 +28,7 @@
  * number and this one.
  */
 import {
+  type BUILTIN_STAGE_IDS,
   type ContextPackRecord,
   type IsoDate,
   KB_CONFIDENCE_WEIGHTS,
@@ -46,10 +47,14 @@ export type ContextEmphasis = 'business' | 'technical' | 'implementation' | 'his
  * context and decisions; Implementation loads conventions, path-scoped rules and pitfalls;
  * Retrospective loads the task history."
  *
- * `satisfies` is doing real work: the record is checked against `BUILTIN_STAGE_IDS` as the
- * catalogue, so a stage added to the shipped templates is a **typecheck failure** here rather than
- * a stage that silently gets the default emphasis (rule 7 — ask the source, do not carry a copy).
- * `stage-emphasis.test.ts` iterates the same constant.
+ * **Every stage of every shipped template has a row, and each one was chosen** (WP-58, PROGRESS
+ * backlog 61). The key set is `SHIPPED_STAGE_IDS`, derived from the templates themselves, and
+ * `retrieval.test.ts` holds this record to it key for key, so a stage added to any shipped template
+ * fails that test until somebody decides its emphasis — rather than inheriting
+ * {@link DEFAULT_EMPHASIS} unasked, which is what `discovery` and `ticket_lint` did from WP-21 and
+ * WP-25 until this change. The `satisfies` below is the compile-time half: every id in
+ * `BUILTIN_STAGE_IDS` must have a row. (This docblock used to claim a `satisfies` against that list
+ * that the declaration did not carry — standing rule 83.)
  */
 export const STAGE_EMPHASIS = {
   intake: 'business',
@@ -68,19 +73,36 @@ export const STAGE_EMPHASIS = {
   retrospective: 'history',
   librarian: 'history',
   done: 'implementation',
-} as const;
+  /**
+   * The readiness lint (WP-25) is a light `refinement` — *does this ticket say what the business
+   * wants* — so it takes refinement's emphasis. Before WP-58 it took the default, `technical`, under
+   * which a business-layer page keeps half its rank (`EMPHASIS_LAYER_WEIGHTS`); what that changes
+   * for one lint is measured in `context-pack.test.ts` and recorded in `PROGRESS.md` under WP-58.
+   */
+  ticket_lint: 'business',
+  /**
+   * Onboarding discovery (WP-21) reads a repository to describe its technical shape, so
+   * `technical` — the same value it inherited before WP-58, now chosen rather than defaulted.
+   */
+  discovery: 'technical',
+  /** The history bootstrap mines merged merge requests into lessons (WP-35): task history. */
+  history_mining: 'history',
+  /**
+   * The spike's human stage runs no agent, so no pack is built for it; the row exists because the
+   * key set is every shipped stage, and `business` is what a person deciding on a spike reads.
+   */
+  human_review: 'business',
+} as const satisfies Record<(typeof BUILTIN_STAGE_IDS)[number], ContextEmphasis> &
+  Record<string, ContextEmphasis>;
 
 /**
  * A project's `custom_stages` (technical/12) are slugs the platform has never seen, so there is
  * always a stage with no entry above — and a run with no stage at all (ask-the-task, librarian
- * outside the pipeline) has no key to look up either. Two **shipped** stages are in the same
- * position and say so at `BUILTIN_STAGE_IDS`: `discovery` (WP-21) and `ticket_lint` (WP-25), which
- * this record is asserted key-for-key against and which therefore both take the default. For the
- * linter that is a real (small) loss — a readiness pass is a *business* question, like the
- * refinement stage it is a light version of — and it is recorded in `PROGRESS.md` rather than
- * closed by widening a list three other things are held to. `technical` is the neutral choice
- * and `emphasisFor` is where it is taken; the branch has its own named test, because a default
- * nothing exercises is a default nobody has read.
+ * outside the pipeline) has no key to look up either. **No shipped stage takes this default any
+ * more** (WP-58): until then `discovery` and `ticket_lint` did, because the record was held to
+ * `BUILTIN_STAGE_IDS`, which does not list them. `technical` is the neutral choice and
+ * `emphasisFor` is where it is taken; the branch has its own named test, because a default nothing
+ * exercises is a default nobody has read.
  */
 export const DEFAULT_EMPHASIS: ContextEmphasis = 'technical';
 
@@ -193,6 +215,16 @@ export const MAX_TIER1_DOCUMENTS = 10;
  * measurements, recommends deriving inverse document frequency from the project's own index, and
  * names the three things a human has to decide — including that the signal must live on the port so
  * the in-memory double cannot go back on the kind side of standing rule 1.
+ *
+ * **WP-58 implemented Q58's recommendation, and it is a floor on *terms*, not on this score**:
+ * `KnowledgeStore.search` drops a query term found in more than `N/2 + √N` of the project's `N`
+ * documents (the architect's ruled line) before it asks for a rank (`term-statistics.ts`), so
+ * nothing in this module thresholds anything still. Measured on the fixture vault with its
+ * negative corpus, the thirteen-word query above is **unchanged by it** — none of its words is
+ * past the line on that vault's short pages — and
+ * fills 11 153 of 12 000; on this repository's own Markdown the same floor drops four of the
+ * thirteen. The class is narrowed on a real corpus and open on the instrument, and the residual is
+ * pinned in `context-pack.test.ts` rather than tuned away.
  *
  * **What is left is a *good* query's tail**, and it is left in deliberately: for the session query
  * above, `technical/runbook.md` enters at 0.137 because it is the runbook *for the session

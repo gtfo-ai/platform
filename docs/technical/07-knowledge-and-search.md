@@ -85,6 +85,23 @@ Inputs: task text (ticket + spec), touched paths (from plan/diff when available)
    > document"* is **not** done: no health finding is made from a failed validation, and in this build
    > it would flag every `paths:`-scoped page, because the planner has no HEAD path listing
    > (`StageRunPlannerOptions.headPaths` is absent) and validates every such page `false`.
+   >
+   > **WP-58 (PROGRESS backlog 170): both inputs have a production source, and the document is
+   > flagged.** *HEAD* is read as **the commit the index describes**: from the tracked listing the
+   > vault read already produced (`VaultSnapshot.repoPaths`), the index write stores one **witness**
+   > per vault glob — the first tracked path it matches — in `kb_index_state.path_witnesses`
+   > (migration 0042; backlog 175: validation over the witnesses equals validation over the listing,
+   > and the row is bounded by the vault's globs, not the repository), and `headPaths` is required
+   > and composed as `KnowledgeStore.readPathWitnesses` — one small row read per run, never a second
+   > listing, and never an answer for a commit the pack's documents did not come from. `null` (none stored yet) is
+   > not `[]`: validation then behaves as before and the planner says so. *Touched paths* come from
+   > the task's latest `ImplementationPlan` (`files_to_change`, `protected_path_changes`) and
+   > `ReviewVerdict` (`findings[].file`); a stage with neither — everything before a plan exists,
+   > the lint, discovery, the history bootstrap — is named in the log as `none`. The flag is a new
+   > `kb_health_reports` kind, **`unresolved_paths`**, computed by the nightly pass from the stored
+   > witnesses with the same predicate the pack uses — **not** read back from `run_context_pack`,
+   > because a page no run happened to retrieve would then never be flagged and a month-old row
+   > would flag a glob somebody has since fixed. Nothing stored, no finding.
 4. Fill the token budget (default 12 k for tiers 0–1): tier 0 always (index, rules, repo map for code stages), then tier 1 by score until the budget is reached; write files into the workspace `.agentic-run/context/` and list them in the prompt with 2–3-line summaries.
 5. `kb_search` MCP tool exposes the same query for tier 2 (returns `path#heading` + snippet + score; never whole documents unless asked by path).
 
@@ -125,6 +142,38 @@ Inputs: task text (ticket + spec), touched paths (from plan/diff when available)
 > removed the measured harm is the keyword extraction above. The reasoning and the numbers are in
 > `packages/domain/src/knowledge/retrieval.ts`.
 >
+> **WP-58 implements Q58's recommendation — a floor on query *terms*, not on scores.** The index
+> write counts, per project, how many documents contain each keyword (`kb_term_statistics`,
+> `kb_index_state.term_documents`, migration 0042) with the same splitter the query side uses, and
+> `KnowledgeStore.search` drops a term found in at least two documents **and** in more than
+> `N/2 + √N` of the project's `N` (the architect's ruling, session 8, amending TD-008) before it
+> queries; a request whose every term is dropped returns **no documents**. It is a property of the
+> port: both adapters call `termStatisticsOf` at write and `selectInformativeTerms` at search, and
+> the shared contract suite holds them to the same split, boundary cases included (4 pages drop
+> nothing; 5 drop only a term in all five; 23 keep 16 and drop 17). The half is where
+> Robertson–Spärck Jones IDF stops being positive; the margin is two binomial standard errors,
+> because a share near half cannot be told from half on a small vault and a term splitting a
+> corpus near half is among the most informative. WP-58's first version dropped at the bare half
+> and dropped the fixture vault's subject word (`session`, 13 of 23), after which PostgreSQL ranked
+> a wrong lesson first. On this repository's 160 tracked Markdown files the line is 92.6 (0.58):
+> it drops `with`, `from`, `that` and `this` of Q58's thirteen function words and keeps every
+> subject word sampled; on the 23-page fixture vault it drops only the project key. **Residuals**:
+> it narrows the junk-query class and does not close it — on a small vault none of the thirteen is
+> past the line and the query still fills 11 153 of 12 000 tokens — and a **large** single-subject
+> vault can have a subject word significantly over half, which is dropped, so a query of that word
+> alone finds nothing by text (PROGRESS backlog 171). The readings are pinned by the tests. `kb_search` answers a
+> fourth status, `uninformative_terms`, naming the words it dropped; `ContextPackRecord` does not
+> yet record that the text step contributed nothing and why (Q58 (a), filed rather than done).
+>
+> **The fixture vault carries a negative corpus since WP-58** (PROGRESS backlog 16): six plausible
+> wrong answers — same vocabulary, different subject — so a precision assertion over the vault can
+> fail. It does: seven of the nine retrieval test queries admit at least one of them, and those
+> readings are pinned rather than tuned away. **A second, blind negative corpus** of eight pages —
+> written by a separate agent that saw only the correct fixture pages and no query or test, its
+> prompt recorded verbatim beside it — is measured in its own vault composition: once, under the
+> ruled floor, seven of the nine queries rank at least one of its pages inside the pack, and for
+> one query the only admitted page is a blind one. Pinned as it read.
+>
 > **Control characters and bidi overrides are replaced at parse; hostile *words* are not.** A vault
 > page is untrusted (BD-022) and this is the work package that puts one in a prompt. C0/C1 controls
 > and the Unicode bidi overrides are rendering instructions rather than text — and a literal `NUL`
@@ -135,6 +184,12 @@ Inputs: task text (ticket + spec), touched paths (from plan/diff when available)
 > structural — the prompt's delimiters (technical/04 § "Prompt assembly", WP-17) and the web app's
 > text-node rendering. `packages/domain/src/knowledge/sanitise.ts` states the boundary and the
 > fixture vault carries a document that attacks every consumer it can reach.
+>
+> **WP-58 adds a fourth class: `U+200B`, `U+FEFF`, `U+2060` and `U+00AD` are deleted and counted**,
+> at index **and** on the query path. They reorder nothing, which is why they were outside the
+> boundary above; they split the word they sit in, which made a page unfindable by its own subject
+> (PROGRESS backlog 12). Deleted rather than replaced, because a `U+FFFD` splits the word the same
+> way.
 
 > **Implemented at WP-16, with three decisions this section did not make.**
 >
@@ -218,7 +273,7 @@ Inputs: task text (ticket + spec), touched paths (from plan/diff when available)
 > `kb_citations`, which two artifact types carry (RefinedSpec, ResearchReport), so a page that only
 > implementation or review runs are shown would read "never cited" because nobody who read it was
 > asked to cite — the finding would be a statement about the role, not the page. The
-> pass reports `invalid` (since WP-57), `expired`, `dangling`, `duplicate` and `oversized` into `kb_health_reports`, makes
+> pass reports `invalid` (since WP-57), `unresolved_paths` (since WP-58), `expired`, `dangling`, `duplicate` and `oversized` into `kb_health_reports`, makes
 > **no** git call at all, and deletes nothing — the strongest thing it may do to a page a human
 > wrote is mention it in a report.
 >

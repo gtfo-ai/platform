@@ -294,17 +294,22 @@ export const runKnowledgeProposalsContract = (harness: KnowledgeProposalsHarness
             expires: '2025-01-01',
             frontmatterId: 'L-old',
             tokens: 120,
+            // WP-58: the globs the `unresolved_paths` finding is judged by, round-tripped.
+            paths: ['src/api/**', 'src/legacy/importer.ts'],
           },
           {
             path: '.agentic/knowledge/lessons/L-new.md',
             expires: null,
             frontmatterId: null,
             tokens: 80,
+            paths: [],
           },
         ],
         danglingLinks: [
           { fromPath: '.agentic/knowledge/lessons/L-new.md', toPath: 'lessons/gone.md' },
         ],
+        // WP-58: the tracked listing at the indexed commit, `null` for "none stored".
+        pathWitnesses: ['src/api/session.ts', 'package.json'],
         // WP-57: what the parser refused, which is in no index table by construction.
         refusals: [
           {
@@ -327,8 +332,10 @@ export const runKnowledgeProposalsContract = (harness: KnowledgeProposalsHarness
       );
       expect(read.danglingLinks).toEqual(inputs.danglingLinks);
       expect(read.refusals).toEqual(inputs.refusals);
+      expect(read.pathWitnesses).toEqual(inputs.pathWitnesses);
       // …and a project with nothing indexed is an empty report, not a missing one.
       const empty = await store.readHealthInputs(context.otherProjectId);
+      expect(empty.pathWitnesses).toBeNull();
       expect(empty.documents).toEqual([]);
       expect(empty.danglingLinks).toEqual([]);
       expect(empty.refusals).toEqual([]);

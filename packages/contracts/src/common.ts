@@ -560,14 +560,18 @@ export const templateIdSchema = slugSchema;
 export const stageIdSchema = slugSchema;
 
 /**
- * Stages of the shipped **ticket** templates (technical/12 `pipeline.yml`).
+ * The stages of the ticket flow (technical/12 `pipeline.yml`) — the ids the platform gives a meaning
+ * of its own across templates: `packages/application/src/pipeline/transitions.ts` maps
+ * `ready_for_merge`, `retrospective`, `librarian` and `done` onto task states, which is why a
+ * template must not rename them.
  *
- * Two shipped stages are deliberately **not** here — `discovery` (WP-21) and `ticket_lint`
- * (WP-25) — and the omission is load-bearing rather than an oversight: `STAGE_EMPHASIS`
- * (`packages/domain/src/knowledge/retrieval.ts`) is asserted key-for-key against this list, so a
- * name added here without an emphasis row fails that test, and both of those stages take the
- * neutral `DEFAULT_EMPHASIS`. The sentence used to read "the shipped templates", which stopped
- * being true when the first template outside the ticket flow shipped.
+ * **That is this list's one job since WP-58** (PROGRESS backlog 61). It used to have a second: the
+ * key set `STAGE_EMPHASIS` was held to — and because four shipped stages are not ticket-flow stages
+ * (`discovery`, `ticket_lint`, `history_mining` and the spike's `human_review`), they took the
+ * default emphasis without anyone choosing it, and this docblock called that omission
+ * load-bearing. The emphasis table is now held to `SHIPPED_STAGE_IDS` in `@platform/domain`, which
+ * is read off the templates, and every one of the four has a chosen row. So the omission here is
+ * now only a statement about the ticket flow; nothing else rests on it.
  */
 export const BUILTIN_STAGE_IDS = [
   'intake',

@@ -9,6 +9,7 @@
  */
 import { BUILTIN_STAGE_IDS, type IsoDate } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
+import { SHIPPED_STAGE_IDS } from '../pipeline/templates.js';
 import {
   type AssembleContextPackInput,
   assembleContextPack,
@@ -55,8 +56,11 @@ const tier0 = (path: string, tokens: number): Tier0Document => ({ path, tokens, 
 
 describe('the stage emphasis table is parameterised over the stage catalogue', () => {
   // Standing rule 68: a behaviour parameterised over a set gets a test parameterised over the same
-  // set, asked of the source rather than transcribed. `BUILTIN_STAGE_IDS` is the source.
-  it.each([...BUILTIN_STAGE_IDS])(
+  // set, asked of the source rather than transcribed. Since WP-58 the source is `SHIPPED_STAGE_IDS`
+  // — every stage of every shipped template, read off the templates — and no longer
+  // `BUILTIN_STAGE_IDS`, which lists the ticket flow's stages and let four shipped stages take the
+  // default emphasis unasked (PROGRESS backlog 61).
+  it.each([...SHIPPED_STAGE_IDS])(
     '%s resolves an emphasis with a complete weight table',
     (stage) => {
       const emphasis = emphasisFor(stage);
@@ -69,8 +73,23 @@ describe('the stage emphasis table is parameterised over the stage catalogue', (
     },
   );
 
-  it('covers exactly the builtin stages and nothing else', () => {
-    expect(Object.keys(STAGE_EMPHASIS).sort()).toEqual([...BUILTIN_STAGE_IDS].sort());
+  it('covers exactly the stages of the shipped templates and nothing else', () => {
+    expect(Object.keys(STAGE_EMPHASIS).sort()).toEqual([...SHIPPED_STAGE_IDS].sort());
+    // …which is the ticket flow's list plus the four stages it does not name. Pinned so that the
+    // difference is a fact somebody reads rather than a set nobody looks at.
+    expect(
+      SHIPPED_STAGE_IDS.filter((id) => !(BUILTIN_STAGE_IDS as readonly string[]).includes(id)),
+    ).toEqual(['discovery', 'history_mining', 'human_review', 'ticket_lint']);
+  });
+
+  it('gives the readiness lint the business emphasis and discovery a chosen technical one', () => {
+    // PROGRESS backlog 61: the lint is a light `refinement`, so it takes refinement's emphasis; it
+    // used to inherit `technical`, under which a business page keeps half its rank.
+    expect(emphasisFor('ticket_lint')).toBe(emphasisFor('refinement'));
+    expect(emphasisFor('ticket_lint')).toBe('business');
+    expect(Object.hasOwn(STAGE_EMPHASIS, 'discovery')).toBe(true);
+    expect(emphasisFor('discovery')).toBe('technical');
+    expect(emphasisFor('history_mining')).toBe('history');
   });
 
   it('falls back to the default emphasis for a custom stage and for a stageless run', () => {

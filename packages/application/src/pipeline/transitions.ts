@@ -11,7 +11,7 @@
  * product/04's task states are not one per stage: most stages are `active`, and five of them are
  * their own state (`ready_for_merge`, `merged`, `retro` — which both `retrospective` and
  * `librarian` run in — and `done`). The mapping is by stage id,
- * which is why those four ids are reserved in `BUILTIN_STAGE_IDS` — a template that renames
+ * which is why those four ids are listed in `BUILTIN_STAGE_IDS` — a template that renames
  * `ready_for_merge` gets a task that stays `active` through the human wait, and the board would
  * show it as running.
  *

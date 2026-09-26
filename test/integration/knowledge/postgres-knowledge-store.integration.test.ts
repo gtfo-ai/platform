@@ -108,8 +108,9 @@ runKnowledgeStoreContract({
  * rows and demands this store return exactly what it selects (standing rule 41).
  *
  * The health seeding is **rows**, not a stub: `readHealthInputs` is four queries over
- * `kb_documents`, `kb_links`, `kb_index_state` and (since WP-57) `kb_index_refusals`, so seeding it
- * any other way would assert the harness instead of the adapter.
+ * `kb_documents`, `kb_links`, `kb_index_state` and (since WP-57) `kb_index_refusals` — with the
+ * documents' `paths` and the state's `path_witnesses` since WP-58 — so seeding it any other way would
+ * assert the harness instead of the adapter.
  */
 runKnowledgeProposalsContract({
   name: 'postgres',
@@ -126,23 +127,30 @@ runKnowledgeProposalsContract({
       seedHealth: async (project, inputs) => {
         if (inputs.commitSha !== null) {
           await client.query(
-            `insert into kb_index_state (project_id, commit_sha, fts_built_at)
-             values ($1, $2, now())
-             on conflict (project_id) do update set commit_sha = excluded.commit_sha`,
-            [project, inputs.commitSha],
+            `insert into kb_index_state (project_id, commit_sha, fts_built_at, path_witnesses)
+             values ($1, $2, now(), $3::text[])
+             on conflict (project_id) do update set
+               commit_sha = excluded.commit_sha,
+               path_witnesses = excluded.path_witnesses`,
+            [
+              project,
+              inputs.commitSha,
+              inputs.pathWitnesses === null ? null : [...inputs.pathWitnesses],
+            ],
           );
         }
         const ids = new Map<string, string>();
         for (const document of inputs.documents) {
           const inserted = await client.query<{ id: string }>(
-            `insert into kb_documents (project_id, path, expires, frontmatter, tokens)
-             values ($1, $2, $3::date, $4::jsonb, $5) returning id`,
+            `insert into kb_documents (project_id, path, expires, frontmatter, tokens, paths)
+             values ($1, $2, $3::date, $4::jsonb, $5, $6::text[]) returning id`,
             [
               project,
               document.path,
               document.expires,
               JSON.stringify(document.frontmatterId === null ? {} : { id: document.frontmatterId }),
               document.tokens,
+              [...document.paths],
             ],
           );
           ids.set(document.path, inserted.rows[0]?.id as string);
@@ -227,6 +235,7 @@ describe('PostgresKnowledgeStore — what only a real database shows', () => {
         documents: parsedFixture(),
         removedPaths: [],
         refused: [],
+        repoPaths: [],
       });
 
       const result = await store.search({
@@ -246,7 +255,18 @@ describe('PostgresKnowledgeStore — what only a real database shows', () => {
       // Descending, which the query's `order by` promises and the in-memory store does not share.
       const ranks = result.hits.map((hit) => hit.rank);
       expect([...ranks].sort((left, right) => right - left)).toEqual(ranks);
-      expect(result.hits[0]?.path).toContain('lessons/L-2026-01-04-session-fixtures');
+      expect(result.hits.map((hit) => hit.path)).toContain(
+        '.agentic/knowledge/lessons/L-2026-01-04-session-fixtures.md',
+      );
+      // Since WP-58 a page in the vault can contradict this: the storefront lesson — seeded shopper,
+      // fixture loader, user fixtures, tests — is a plausible wrong answer (the negative corpus).
+      // Measured: under the first, bare-half floor `session` was dropped and the storefront lesson
+      // ranked first (0.412 vs 0.375); with `session` searched — the ruled line keeps it, 13 of
+      // 23 — the right lesson is first (0.474 vs 0.412).
+      expect(result.terms.uninformative).toEqual([]);
+      expect(result.hits[0]?.path).toBe(
+        '.agentic/knowledge/lessons/L-2026-01-04-session-fixtures.md',
+      );
     } finally {
       await client.query('rollback');
       await client.end();
@@ -265,6 +285,7 @@ describe('PostgresKnowledgeStore — what only a real database shows', () => {
         documents: parsedFixture(),
         removedPaths: [],
         refused: [],
+        repoPaths: [],
       });
       const { rows } = await client.query<{ generated: boolean; nonempty: number }>(
         `select (select is_generated from information_schema.columns
@@ -293,6 +314,7 @@ describe('PostgresKnowledgeStore — what only a real database shows', () => {
         documents: parsedFixture(),
         removedPaths: [],
         refused: [],
+        repoPaths: [],
       });
       const { rows } = await client.query<{
         confidence: number;
@@ -333,6 +355,7 @@ describe('PostgresKnowledgeStore — what only a real database shows', () => {
         ],
         removedPaths: [],
         refused: [],
+        repoPaths: [],
       });
       const { rows } = await client.query<{ to_path: string; resolved: string | null }>(
         `select l.to_path, l.resolved_document_id as resolved
@@ -361,6 +384,7 @@ describe('PostgresKnowledgeStore — what only a real database shows', () => {
         documents: parsedFixture(),
         removedPaths: [],
         refused: [],
+        repoPaths: [],
       });
       await first.query('commit');
     } finally {
@@ -377,6 +401,7 @@ describe('PostgresKnowledgeStore — what only a real database shows', () => {
         documents: [],
         removedPaths: [],
         refused: [],
+        repoPaths: [],
       });
       await attempted.query('rollback');
     } finally {

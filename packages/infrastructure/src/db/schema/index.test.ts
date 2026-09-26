@@ -39,8 +39,10 @@ describe('Drizzle schema', () => {
     // one artifact happened, which no table recorded and without which the lost-wake-up recovery
     // cannot tell a curation that proposed nothing from one that never ran (migration 0036, WP-48),
     // plus `kb_index_refusals` — the documents the parser refused at the last index run, which were
-    // in no table and therefore in no health report (migration 0041, WP-57, PROGRESS backlog 37).
-    expect(tables.length).toBe(61);
+    // in no table and therefore in no health report (migration 0041, WP-57, PROGRESS backlog 37),
+    // plus `kb_term_statistics` — Q58's per-project document frequencies, counted at index time
+    // so a query term every page contains can be dropped (migration 0042, WP-58).
+    expect(tables.length).toBe(62);
   });
 
   it('names every table and column in snake_case, matching the wire format', () => {

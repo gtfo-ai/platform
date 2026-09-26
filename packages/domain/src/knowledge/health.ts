@@ -13,12 +13,19 @@
  *
  * ## What is computed here, and the one thing that cannot be
  *
- * Five kinds, all derivable from the index and what the index run stored beside it:
+ * Six kinds, all derivable from the index and what the index run stored beside it:
  *
  *  - **`invalid`** — a document the parser refused at the last index run (WP-57, PROGRESS backlog
  *    37). It is in no context pack, and before `kb_index_refusals` existed it was in no table
  *    either, so a project could commit a page and never learn that no agent is shown it. First in
  *    the order, because it is the one finding that means *the page does not exist for an agent*.
+ *  - **`unresolved_paths`** — a page whose `paths:` globs match no tracked file at the indexed
+ *    commit (WP-58, PROGRESS backlog 170; technical/07 step 3's *"flag the document"*). Retrieval
+ *    drops it from every pack by the same predicate, so it is second: the page exists, and no agent
+ *    is handed it unasked. Computed here from the witnesses the index stored rather than read back
+ *    from `run_context_pack`: a page no run happened to retrieve would otherwise never be flagged,
+ *    and a row from a run a month ago would flag a glob somebody has since fixed. Nothing stored, no
+ *    finding — never "every `paths:` page".
  *  - **`expired`** — the page's own `expires` date has passed and nothing re-confirmed it. It is a
  *    *soft* expiry (product/05): the page stays indexed and stays retrievable.
  *  - **`dangling`** — a wikilink whose target the indexer could not resolve.
@@ -35,6 +42,7 @@
  * filed.
  */
 import type { KbHealthReportFinding } from '@platform/contracts';
+import { matchingRepoPaths } from './globs.js';
 
 /** One indexed document, as the health pass reads it back. */
 export interface HealthDocument {
@@ -44,6 +52,8 @@ export interface HealthDocument {
   /** `id:` from the frontmatter — what two pages share when one supersedes the other. */
   readonly frontmatterId: string | null;
   readonly tokens: number;
+  /** Frontmatter `paths:` globs — what validate-on-read resolves against the indexed commit. */
+  readonly paths: readonly string[];
 }
 
 /** One unresolved wikilink, as `kb_links` records it. */
@@ -65,6 +75,14 @@ export interface HealthInputs {
   readonly documents: readonly HealthDocument[];
   readonly danglingLinks: readonly HealthLink[];
   readonly refusals: readonly HealthRefusal[];
+  /**
+   * The path witnesses of the indexed commit (`kb_index_state.path_witnesses`, migration 0042) —
+   * one tracked path per vault glob, which answers this check exactly as the whole listing would
+   * (`pathWitnesses`) — or `null` when no index write has stored them, in which case no
+   * `unresolved_paths` finding is made at all, because nothing stored would flag every `paths:`
+   * page (PROGRESS backlogs 170, 175).
+   */
+  readonly pathWitnesses: readonly string[] | null;
 }
 
 export interface HealthOptions {
@@ -95,6 +113,7 @@ export const MAX_HEALTH_FINDINGS = 100;
 
 const KIND_ORDER: readonly KbHealthReportFinding['kind'][] = [
   'invalid',
+  'unresolved_paths',
   'expired',
   'dangling',
   'duplicate',
@@ -120,6 +139,19 @@ export const computeKbHealth = (inputs: HealthInputs, options: HealthOptions): H
   }
 
   for (const document of inputs.documents) {
+    // technical/07 step 3's "flag the document" (WP-58, backlog 170): the same predicate the pack
+    // drops the page by (`validateAgainstHead`), over the witnesses of the commit the index is at.
+    if (
+      inputs.pathWitnesses !== null &&
+      document.paths.length > 0 &&
+      matchingRepoPaths(document.paths, inputs.pathWitnesses).length === 0
+    ) {
+      findings.push({
+        kind: 'unresolved_paths',
+        path: document.path,
+        detail: `its paths: ${document.paths.join(', ')} match no tracked file at the indexed commit, so no context pack admits it`,
+      });
+    }
     if (document.expires !== null && document.expires < options.today) {
       findings.push({
         kind: 'expired',

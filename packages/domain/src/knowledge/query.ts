@@ -33,7 +33,14 @@
  * **What it buys, beyond retrieval:** every term that reaches the query is `[\p{L}\p{N}_]+` by
  * construction, so no byte of untrusted task text or model-written query text is ever concatenated
  * into a tsquery expression. The adapter joins terms it cannot be handed operators through.
+ *
+ * **What the length rule could not do, and what does it now** (WP-58, Q58): it keeps every function
+ * word of four letters or more, and a query made of thirteen of them filled 10 707 of 12 000 budget
+ * tokens. The corpus-derived half is `term-statistics.ts` — a term that appears in significantly more than half
+ * of a project's documents is dropped before the store is asked — and it is applied **at the
+ * `KnowledgeStore.search` port**, not here, because it needs the index.
  */
+import { stripInvisible } from './sanitise.js';
 
 /**
  * The shortest token kept as a keyword.
@@ -55,18 +62,54 @@ export const MAX_QUERY_TERMS = 24;
 
 const TOKEN = /[^\p{L}\p{N}_]+/u;
 
+export interface QueryKeywords {
+  readonly terms: readonly string[];
+  /**
+   * How many invisible characters (`U+200B`, `U+FEFF`, `U+2060`, `U+00AD`) were deleted before the
+   * text was split — PROGRESS backlog 12's query half. Reported so a caller can log that a query
+   * carried them; it changes nothing about which terms are searched.
+   */
+  readonly invisibleRemoved: number;
+}
+
 /**
- * The keywords of a piece of untrusted text, lowercased, de-duplicated, in first-seen order.
+ * The keywords of a piece of untrusted text, lowercased, de-duplicated, in first-seen order, and
+ * the count of invisible characters removed first.
  *
  * First-seen order rather than sorted: when {@link MAX_QUERY_TERMS} truncates, the terms kept are
  * the ones nearest the start of the ticket, which is where a title sits.
+ *
+ * **Invisible characters go before the split** (WP-58): measured before this change,
+ * `extractQueryTerms('sess' + U+200B + 'ions rollback')` was `["sess", "ions", "rollback"]`, so a
+ * title carrying one could not match the page it named. The indexer deletes the same four
+ * (`sanitiseDocumentText`), so both halves of the match see the same word.
  */
-export const extractQueryTerms = (text: string): readonly string[] => {
+export const queryKeywords = (text: string): QueryKeywords => {
+  const visible = stripInvisible(text);
   const seen = new Set<string>();
-  for (const raw of text.toLowerCase().split(TOKEN)) {
+  for (const raw of visible.text.toLowerCase().split(TOKEN)) {
     if (raw.length < MIN_QUERY_TERM_LENGTH) continue;
     seen.add(raw);
     if (seen.size >= MAX_QUERY_TERMS) break;
   }
-  return [...seen];
+  return { terms: [...seen], invisibleRemoved: visible.removed };
+};
+
+/** {@link queryKeywords}' terms alone — what every caller that does not report the count uses. */
+export const extractQueryTerms = (text: string): readonly string[] => queryKeywords(text).terms;
+
+/**
+ * Every keyword a stored text contains, under **the same rule** a query is reduced by — no
+ * {@link MAX_QUERY_TERMS} cap, because this describes a document rather than bounding a request.
+ *
+ * One rule on both sides is the point: a document frequency counted with a different splitter
+ * from the one that produced the query term would be the frequency of a different word
+ * (`term-statistics.ts`).
+ */
+export const textKeywords = (text: string): ReadonlySet<string> => {
+  const found = new Set<string>();
+  for (const raw of stripInvisible(text).text.toLowerCase().split(TOKEN)) {
+    if (raw.length >= MIN_QUERY_TERM_LENGTH) found.add(raw);
+  }
+  return found;
 };

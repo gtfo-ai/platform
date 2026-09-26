@@ -51,6 +51,9 @@ const EXPECTED_TABLES = [
   'kb_index_state',
   'kb_links',
   'kb_proposals',
+  // WP-58, migration 0042: Q58's per-project document frequencies, counted at index time so a
+  // query term significantly more than half the pages contain can be dropped before the store is asked.
+  'kb_term_statistics',
   // WP-48, migration 0036: that a curation of one artifact happened. Without it *"it ran and
   // proposed nothing"* and *"it never ran"* are the same query result (standing rule 18), which is
   // what kept the curation out of the lost-wake-up recovery table.
@@ -220,6 +223,8 @@ describe('migrate on an empty PostgreSQL 18', () => {
       // WP-57 (migration 0041): the parser's refusals. `read_write` because an index run deletes
       // the project's rows and writes the new set in the transaction that writes its documents.
       row('kb_index_refusals', 'read_write', null),
+      // WP-58 (migration 0042): Q58's statistics, replaced per index run like the refusals.
+      row('kb_term_statistics', 'read_write', null),
       row('knowledge_curations', 'read_write', null),
       // WP-32 (migration 0023): the notification outbox. `read_write` because a row is updated
       // twice at most — claimed by a digest, then delivered — and registered rather than defaulted

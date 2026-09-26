@@ -1,5 +1,31 @@
 import { describe, expect, it } from 'vitest';
-import { extractQueryTerms, MAX_QUERY_TERMS, MIN_QUERY_TERM_LENGTH } from './query.js';
+import {
+  extractQueryTerms,
+  MAX_QUERY_TERMS,
+  MIN_QUERY_TERM_LENGTH,
+  queryKeywords,
+  textKeywords,
+} from './query.js';
+
+describe('invisible characters on the query path (WP-58, PROGRESS backlog 12)', () => {
+  it('deletes them before the split, so the word survives whole, and counts them', () => {
+    // Measured before WP-58: `["sess", "ions", "rollback"]`.
+    expect(queryKeywords('sess\u{200B}ions rollback')).toEqual({
+      terms: ['sessions', 'rollback'],
+      invisibleRemoved: 1,
+    });
+    for (const character of ['\u{200B}', '\u{FEFF}', '\u{2060}', '\u{00AD}']) {
+      expect(extractQueryTerms(`roll${character}back`)).toEqual(['rollback']);
+    }
+    expect(queryKeywords('plain words only').invisibleRemoved).toBe(0);
+  });
+
+  it('reads a stored text with the same rule, so a frequency and a term are the same word', () => {
+    expect(
+      [...textKeywords('The SESSION service; the sess\u{200B}ion, a, of, tests')].sort(),
+    ).toEqual(['service', 'session', 'tests']);
+  });
+});
 
 describe('extractQueryTerms', () => {
   it('keeps the words a ticket is actually about', () => {

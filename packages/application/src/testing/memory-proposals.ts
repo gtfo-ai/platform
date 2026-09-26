@@ -39,6 +39,7 @@ const EMPTY_INPUTS: KbHealthInputs = {
   documents: [],
   danglingLinks: [],
   refusals: [],
+  pathWitnesses: null,
 };
 
 export const memoryProposalStore = (): MemoryProposalStore => {

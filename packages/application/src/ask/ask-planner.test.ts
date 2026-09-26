@@ -100,6 +100,7 @@ const plan = async (input: {
     skills,
     nonce: { next: () => NONCE },
     contextPacks: notIndexed,
+    headPaths: async () => null,
     clock: { now: () => '2026-06-01T09:00:00.000Z' as IsoDateTime },
   });
   return planner.plan({
