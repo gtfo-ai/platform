@@ -18,7 +18,7 @@
 > **"Architect ruling (M4, session 6)"** at the end of this file. This session is started with `/orchestrate`,
 > which loads `docs/technical/15-orchestrator-prompt.md`; that document, not a pasted prompt, is now the loop.
 
-**Session 8 — 2026-09-25.** `main` opened at **`c1cc951`**, tree clean, and every run on the last three heads read **completed success** — WP-53's `ci` `35879384310` and `image` `35879384479` (PENDING in session 7's note) included, with zero `release` runs. **WP-54 is DONE at `3288496`** (its `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success**; its docs commit `bdcfbe2` read `ci` `36165713727` and `image` `36165713682` **completed success**). **WP-74 is DONE at `91e0140`** (`ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs; the docs commit that carries this sentence has its own runs, **PENDING — read to `completed` before the next row**) — backlog 82 and 147 closed, `verify:e2e` green on this machine again. **Two majors had no owner and now do**: backlog **148** (a run's `/cache` is the whole mirror volume) as **WP-75** and **133** (the launcher cannot authenticate to git) as **WP-76**, both placed right after WP-74. Machine baseline: `docker volume ls | wc -l` = **102** (the two new volumes are the user's own `speedpuzzlingcz` postgres containers, not this repository's). **Three things for the next session.** (1) **The load gate, not the work, set the pace**: one-minute load was 20–175 for most of the day (Spotlight's `mds_stores` at ~250 % and the user's containers; this session's own processes were ~6 %), so the implementer spent six of its seven hours waiting — and its waits were **unbounded `until` loops** that each tool timeout orphaned: 25 of them, killed by the orchestrator after the user asked why 24 shells were running. **Every brief now says: a load check is five readings a minute apart, then a report — never an unbounded loop, never a background shell left behind.** (2) **`verify:e2e` is red on this machine for a reason that is not the tree**: backlog **147**, reproduced on a clean `main` worktree; until WP-74 closes it, every row's e2e verdict carries that one named failure and the rest is read as the verdict. A likely cause (the refiner's, unmeasured) is macOS writing into the bind-backed control volume between the two teardown helpers. (3) **A floor list is an enumeration**: WP-54's review found seven, then five, spellings past it, and BD-025 now says so rather than claiming a boundary. **WP-75 is DONE at `1b0af26`** (`ci` `36200943398` and `image` `36200943454` **completed success**; WP-74's docs commit `6972cbc` read `ci` `36175963207` and `image` `36175963205` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 148 and 152 closed. **The TD-028 amendment WP-76 needed exists** (the architect's, session 8: the runner mints a run-scoped credential through `IntegrationActionExecutor` and passes it on the create request; Q98 filed). **WP-76 is DONE at `52495cb`** (`ci` `36208771351` and `image` `36208771353` **completed success**; WP-75's docs commit `355f444` read `ci` `36201525827` and `image` `36201525825` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 133 closed: a private repository mirrors, the developer stage can push, and the run's credential is minted, audited and revoked. **WP-55 is DONE at `a72aaa2`** (`ci` `36216963170` and `image` `36216963211` **completed success**). **CI went red on WP-77's docs commit `2ab70eb`** (`ci` `36213166240`, `integration` job; `image` `36213166173` success): `test/integration/stats/stats-backfill.integration.test.ts`, untouched since WP-41, pins a row order sorted by day, and its story started three hours before *now* — a run between 03:00 and 03:30 UTC (this one: 02:55) splits it across midnight. **Deterministic by time of day, not by load**; fixed at `ae65e2f` by anchoring the story to noon UTC (`ci` `36217053525` and `image` `36217053489` **completed success**). **Two machine-rule breaches by the orchestrator this session, recorded rather than hidden**: WP-77's last `verify` started at a one-minute load of 34, and this fix's single integration file at 20 — both without the gate. **WP-77 is DONE at `2481f09`** (`ci` `36212658371` and `image` `36212658429` **completed success**; WP-76's docs commit `e0d2790` read `ci` `36209347069` and `image` `36209347052` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 155 closed. **WP-56 is DONE at `e0e877d`** (`ci` `36221858072` and `image` `36221858076` **completed success**; WP-55's docs commit `6083512` read `ci` `36217921241` and `image` `36217921292` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-57 is DONE at `933c58f`** (`image` success; `ci` success after one `--failed` rerun of an Alpine-mirror outage; WP-56's docs commit `f7c09c1` read `ci` `36222374356` and `image` `36222374355` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-58 is DONE at `c2f15f3`** (`ci` `36230652056` and `image` `36230652049` **completed success**; WP-57's docs commit `715320b` read `ci` `36226205654` and `image` `36226205639` **completed success**; this docs commit's runs **PENDING**). **WP-59 is DONE at `5910ecf`** (`ci` `36236800859` and `image` `36236800844` **completed success**; WP-58's docs commit `90f431c` read `ci` `36231164931` and `image` `36231164932` **completed success**; this docs commit's runs **PENDING**) — and standing rule **91** recorded. **WP-60 is DONE at `eb7ee6a`** (`ci` `36243497973` and `image` `36243497972` **completed success**; WP-59's docs commit `9a5fbbf` read `ci` `36237315363` and `image` `36237315492` **completed success**; this docs commit's runs **PENDING**). **WP-61 is DONE at `8dbebd9`** (`ci` `36248633792` and `image` `36248633812` **completed success**; WP-60's docs commit `ce074f4` read `ci` `36243993210` and `image` `36243993219` **completed success**; this docs commit's runs **PENDING**). **WP-43 is DONE at `b4c23bc`** (`ci` `36253785415` and `image` `36253785435` **completed success**; WP-61's docs commit `16d7082` read `ci` `36249210359` and `image` `36249210391` **completed success**; this docs commit's runs **PENDING**). **WP-44 is DONE at `7ebdc93`** (`ci` `36260154407` and `image` `36260154412` **completed success**; WP-43's docs commit `b6c7159` read `ci` `36254398544` and `image` `36254398567` **completed success**; this docs commit's runs **PENDING**). **Next: WP-46**, then the M4 table's order. **Session pace**: fourteen rows in about 48 h. **For the M5 architect pass, collected this session**: backlog 195 (chat thread replies and answers), 199 (chat `human_actions`), 187 (no Jira poller, four documents say there is), 173 (the Czech token under-count), 171 (retrieval precision after the floor). **Session pace**: thirteen rows in about 45 h. **Session pace**: twelve rows in about 42 h. **Session pace**: eleven rows in about 38 h. **Session pace**: ten rows (WP-54, 74, 75, 76, 77, 55, 56, 57, 58, 59) in about 34 h. **Session pace**: seven rows (WP-54, 74, 75, 76, 77, 55, 56) in about 28 h, roughly half of it the load gate. **Pace this session**: four rows (WP-54, 74, 75, 76) plus the architect's WP-76 decision in about 17 h 30 min, of which the load gate held the tiers for roughly half; the three security rows each took three review rounds because each round found a way past the one before. Pace: WP-54 took about 8 h 20 min, most of it waiting on load; WP-74 about 2 h 30 min at a load that allowed its tiers.
+**Session 8 — 2026-09-25.** `main` opened at **`c1cc951`**, tree clean, and every run on the last three heads read **completed success** — WP-53's `ci` `35879384310` and `image` `35879384479` (PENDING in session 7's note) included, with zero `release` runs. **WP-54 is DONE at `3288496`** (its `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success**; its docs commit `bdcfbe2` read `ci` `36165713727` and `image` `36165713682` **completed success**). **WP-74 is DONE at `91e0140`** (`ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs; the docs commit that carries this sentence has its own runs, **PENDING — read to `completed` before the next row**) — backlog 82 and 147 closed, `verify:e2e` green on this machine again. **Two majors had no owner and now do**: backlog **148** (a run's `/cache` is the whole mirror volume) as **WP-75** and **133** (the launcher cannot authenticate to git) as **WP-76**, both placed right after WP-74. Machine baseline: `docker volume ls | wc -l` = **102** (the two new volumes are the user's own `speedpuzzlingcz` postgres containers, not this repository's). **Three things for the next session.** (1) **The load gate, not the work, set the pace**: one-minute load was 20–175 for most of the day (Spotlight's `mds_stores` at ~250 % and the user's containers; this session's own processes were ~6 %), so the implementer spent six of its seven hours waiting — and its waits were **unbounded `until` loops** that each tool timeout orphaned: 25 of them, killed by the orchestrator after the user asked why 24 shells were running. **Every brief now says: a load check is five readings a minute apart, then a report — never an unbounded loop, never a background shell left behind.** (2) **`verify:e2e` is red on this machine for a reason that is not the tree**: backlog **147**, reproduced on a clean `main` worktree; until WP-74 closes it, every row's e2e verdict carries that one named failure and the rest is read as the verdict. A likely cause (the refiner's, unmeasured) is macOS writing into the bind-backed control volume between the two teardown helpers. (3) **A floor list is an enumeration**: WP-54's review found seven, then five, spellings past it, and BD-025 now says so rather than claiming a boundary. **WP-75 is DONE at `1b0af26`** (`ci` `36200943398` and `image` `36200943454` **completed success**; WP-74's docs commit `6972cbc` read `ci` `36175963207` and `image` `36175963205` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 148 and 152 closed. **The TD-028 amendment WP-76 needed exists** (the architect's, session 8: the runner mints a run-scoped credential through `IntegrationActionExecutor` and passes it on the create request; Q98 filed). **WP-76 is DONE at `52495cb`** (`ci` `36208771351` and `image` `36208771353` **completed success**; WP-75's docs commit `355f444` read `ci` `36201525827` and `image` `36201525825` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 133 closed: a private repository mirrors, the developer stage can push, and the run's credential is minted, audited and revoked. **WP-55 is DONE at `a72aaa2`** (`ci` `36216963170` and `image` `36216963211` **completed success**). **CI went red on WP-77's docs commit `2ab70eb`** (`ci` `36213166240`, `integration` job; `image` `36213166173` success): `test/integration/stats/stats-backfill.integration.test.ts`, untouched since WP-41, pins a row order sorted by day, and its story started three hours before *now* — a run between 03:00 and 03:30 UTC (this one: 02:55) splits it across midnight. **Deterministic by time of day, not by load**; fixed at `ae65e2f` by anchoring the story to noon UTC (`ci` `36217053525` and `image` `36217053489` **completed success**). **Two machine-rule breaches by the orchestrator this session, recorded rather than hidden**: WP-77's last `verify` started at a one-minute load of 34, and this fix's single integration file at 20 — both without the gate. **WP-77 is DONE at `2481f09`** (`ci` `36212658371` and `image` `36212658429` **completed success**; WP-76's docs commit `e0d2790` read `ci` `36209347069` and `image` `36209347052` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 155 closed. **WP-56 is DONE at `e0e877d`** (`ci` `36221858072` and `image` `36221858076` **completed success**; WP-55's docs commit `6083512` read `ci` `36217921241` and `image` `36217921292` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-57 is DONE at `933c58f`** (`image` success; `ci` success after one `--failed` rerun of an Alpine-mirror outage; WP-56's docs commit `f7c09c1` read `ci` `36222374356` and `image` `36222374355` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-58 is DONE at `c2f15f3`** (`ci` `36230652056` and `image` `36230652049` **completed success**; WP-57's docs commit `715320b` read `ci` `36226205654` and `image` `36226205639` **completed success**; this docs commit's runs **PENDING**). **WP-59 is DONE at `5910ecf`** (`ci` `36236800859` and `image` `36236800844` **completed success**; WP-58's docs commit `90f431c` read `ci` `36231164931` and `image` `36231164932` **completed success**; this docs commit's runs **PENDING**) — and standing rule **91** recorded. **WP-60 is DONE at `eb7ee6a`** (`ci` `36243497973` and `image` `36243497972` **completed success**; WP-59's docs commit `9a5fbbf` read `ci` `36237315363` and `image` `36237315492` **completed success**; this docs commit's runs **PENDING**). **WP-61 is DONE at `8dbebd9`** (`ci` `36248633792` and `image` `36248633812` **completed success**; WP-60's docs commit `ce074f4` read `ci` `36243993210` and `image` `36243993219` **completed success**; this docs commit's runs **PENDING**). **WP-43 is DONE at `b4c23bc`** (`ci` `36253785415` and `image` `36253785435` **completed success**; WP-61's docs commit `16d7082` read `ci` `36249210359` and `image` `36249210391` **completed success**; this docs commit's runs **PENDING**). **WP-44 is DONE at `7ebdc93`** (`ci` `36260154407` and `image` `36260154412` **completed success**; WP-43's docs commit `b6c7159` read `ci` `36254398544` and `image` `36254398567` **completed success**; this docs commit's runs **PENDING**). **WP-46 is DONE at `8407605`** (`ci` `36264648150` and `image` `36264648144` **completed success**; WP-44's docs commit `bcef1f8` read `ci` `36260965347` and `image` `36260965363` **completed success**; this docs commit's runs **PENDING**). **Next: WP-45**, then the M4 table's order (WP-62 onward). **Session pace**: fifteen rows in about 51 h. **Session pace**: fourteen rows in about 48 h. **For the M5 architect pass, collected this session**: backlog 195 (chat thread replies and answers), 199 (chat `human_actions`), 187 (no Jira poller, four documents say there is), 173 (the Czech token under-count), 171 (retrieval precision after the floor). **Session pace**: thirteen rows in about 45 h. **Session pace**: twelve rows in about 42 h. **Session pace**: eleven rows in about 38 h. **Session pace**: ten rows (WP-54, 74, 75, 76, 77, 55, 56, 57, 58, 59) in about 34 h. **Session pace**: seven rows (WP-54, 74, 75, 76, 77, 55, 56) in about 28 h, roughly half of it the load gate. **Pace this session**: four rows (WP-54, 74, 75, 76) plus the architect's WP-76 decision in about 17 h 30 min, of which the load gate held the tiers for roughly half; the three security rows each took three review rounds because each round found a way past the one before. Pace: WP-54 took about 8 h 20 min, most of it waiting on load; WP-74 about 2 h 30 min at a load that allowed its tiers.
 
 **Session 7 so far.** `main` opened at **`cc80fc3`**, tree clean, its `ci` `35114407808` and `image`
 `35114407731` both **completed success** with **zero `release` runs on the sha** — the first head to show
@@ -4850,7 +4850,7 @@ per merge request, and it must take it from `tasks.coverage` (WP-39's record, wr
 read) rather than from the delivery — a statistics row built on the payload field would publish zeros
 for every GitLab project.
 
-### 95. **Six of product/10:38's eleven Checks items are named absent on the merge-readiness screen, and they are not one piece of work: two have no stored verdict to project because no gate's stage row is ever closed, two are blocked on an artifact body no route serves, one needs a narrow column and one has no producer at all** (**RESOLVED** at `a72aaa2`, WP-55, session 8 (items 1–2; the rest stays open) — TODO — **no work package owns it**; found by WP-38, session 5; the cheapest owner **differs per item** and **WP-41 is the wrong home for all six**)
+### 95. **Six of product/10:38's eleven Checks items are named absent on the merge-readiness screen, and they are not one piece of work: two have no stored verdict to project because no gate's stage row is ever closed, two are blocked on an artifact body no route serves, one needs a narrow column and one has no producer at all** (**remaining items RESOLVED** at `8407605`, WP-46, session 8 — all but the tamper check, which stays named absent as BD-024's own gate — **RESOLVED** at `a72aaa2`, WP-55, session 8 (items 1–2; the rest stays open) — TODO — **no work package owns it**; found by WP-38, session 5; the cheapest owner **differs per item** and **WP-41 is the wrong home for all six**)
 > **M4 (architect, session 6): folded into **WP-46**, with its gate-row half (items 1 and 2) in **WP-55**.**
 
 **What is wrong.** The Checks panel answers five of product/10:38's eleven items and names the other
@@ -8754,7 +8754,7 @@ many of the 311 in `packages/application/src` outside `ports/` are ports in all 
 **Depends on / owner.** Nothing unbuilt. **Proposed owner WP-73** for (1)–(4) (refiner, session 8):
 one directory, one override. The wider rollout has **no owner**.
 
-### 158. **A human stage left by a forward event is never closed, so every task that reaches `done` publishes `ready_for_merge` as `running` for ever — backlog 95's open-gate defect one stage kind over, on the path WP-55's `closeSettledGate` deliberately does not take** (TODO, **small** — **read off the tree, not measured**; **live** on every feature, bug and chore task that merges, once WP-55 lands (before it, the row was published `running` too, under the old mapping); proposed owner **WP-46** (refiner, session 8); found by WP-55, session 8)
+### 158. **A human stage left by a forward event is never closed, so every task that reaches `done` publishes `ready_for_merge` as `running` for ever — backlog 95's open-gate defect one stage kind over, on the path WP-55's `closeSettledGate` deliberately does not take** (**RESOLVED** at `8407605`, WP-46, session 8 — TODO, **small** — **read off the tree, not measured**; **live** on every feature, bug and chore task that merges, once WP-55 lands (before it, the row was published `running` too, under the old mapping); proposed owner **WP-46** (refiner, session 8); found by WP-55, session 8)
 
 **What is wrong.** `ready_for_merge` is `kind: 'human'` with three `on:` transitions
 (`packages/domain/src/pipeline/templates.ts:182-189`): `mr.review.comment` → `implementation` and
@@ -8799,7 +8799,7 @@ them being true, and the change is one branch in `transitions.ts` beside WP-55's
 reopens, that round is the cheaper home. Related: **160** (the same invariant, the escalation path),
 **95** items 1–2 (resolved by WP-55).
 
-### 159. **An agent stage's return tells the returned stage only `requested changes` — the reviewer's and acceptance tester's findings reach it as the latest verdict *artifact*, unmarked as the cause and served again on later, unrelated loops — and a human-comment return tells it only a count, with the comments' text in no block of the prompt at all** (**split by the orchestrator, session 8: the agent half is folded into WP-55** (an agent verdict's return reason now carries the verdict's own findings, one line per finding, cut only by the assembler with the cut announced in the marker); **the human-comment half stays with WP-46**, and the stale-artifact half stays unowned — TODO, **small**, and **major if the `glab` route below is measured closed** — **live** on every `request_changes` and every mapped human's MR comment; the artifact half is **read**, the literal is **measured**; proposed owner **WP-46** (refiner, session 8); found by WP-55, session 8, widened and re-graded by the refiner)
+### 159. **An agent stage's return tells the returned stage only `requested changes` — the reviewer's and acceptance tester's findings reach it as the latest verdict *artifact*, unmarked as the cause and served again on later, unrelated loops — and a human-comment return tells it only a count, with the comments' text in no block of the prompt at all** (**human half RESOLVED** at `8407605`, WP-46, session 8 (the stale-artifact half stays unowned) — **split by the orchestrator, session 8: the agent half is folded into WP-55** (an agent verdict's return reason now carries the verdict's own findings, one line per finding, cut only by the assembler with the cut announced in the marker); **the human-comment half stays with WP-46**, and the stale-artifact half stays unowned — TODO, **small**, and **major if the `glab` route below is measured closed** — **live** on every `request_changes` and every mapped human's MR comment; the artifact half is **read**, the literal is **measured**; proposed owner **WP-46** (refiner, session 8); found by WP-55, session 8, widened and re-graded by the refiner)
 
 **What is wrong — what reaches the returned stage today, per return that an agent-facing stage can make.**
 Only two agent stages can return at all: `stageVerdict` maps `request_changes` only for
@@ -8882,7 +8882,7 @@ line in `jobs.ts` where the thread count — and the threads — are in hand, an
 verdict artifacts. (4) and measurement (ii) have **no owner**. Related: **67** (the channel, resolved
 by WP-55), **95** item 3.
 
-### 160. **A gate that escalates instead of settling leaves its row `running` under a `needs_human` task, where an agent stage's escalation closes its row `failed` — three gate escalation sites, and one of them bypasses `applyEscalation` entirely** (TODO, **small** — **read off the tree, not measured**; **live** whenever a gate is unsupported for the project's providers, CI stays pending through `MAX_GATE_CHECKS`, or CI fails identically three times; proposed owner **WP-46** (refiner, session 8); found by WP-55, session 8, the third site located by the refiner)
+### 160. **A gate that escalates instead of settling leaves its row `running` under a `needs_human` task, where an agent stage's escalation closes its row `failed` — three gate escalation sites, and one of them bypasses `applyEscalation` entirely** (**RESOLVED** at `8407605`, WP-46, session 8 — TODO, **small** — **read off the tree, not measured**; **live** whenever a gate is unsupported for the project's providers, CI stays pending through `MAX_GATE_CHECKS`, or CI fails identically three times; proposed owner **WP-46** (refiner, session 8); found by WP-55, session 8, the third site located by the refiner)
 
 **What is wrong.** WP-55 closes a gate's row only when the gate **settles** (`closeSettledGate`,
 `packages/application/src/pipeline/transitions.ts:273-291`, working tree) and says of the rest, in
@@ -10224,6 +10224,147 @@ and that constant is where backlog **72**'s second stale string lived. The limit
 reviewable, not caught. **Done:** the limit stated at the test and at `FeatureCard.caveat`; each unkeyed exemption
 names the route or control it claims is on, resolved against the client census rather than trusted. **Depends
 on** WP-44 (commit pending). Related: **72**, **108**.
+
+### 209. **A review-only task never fills `tasks.review_threads`, so its Checks panel reads *not read* for a merge request whose threads the platform itself posted and counted** (TODO, **nit** — **live** from WP-46 (commit pending) on every review-only task; working as WP-46 decided, stated in its notes, not a silent defect; the open half is **a decision** (whose threads the panel counts), not a repair; **read off the tree**; proposed owner **WP-73** (refiner, session 8); found by WP-46, session 8)
+
+**What is wrong.** The column's only writer is the review window (`saveReviewThreads`,
+`packages/application/src/pipeline/jobs.ts:886-889`), which a review-only task never reaches. Review-only mode
+counts its **own** posted findings into an event payload — `threads_unresolved: ours.length - resolved`
+(`packages/application/src/pipeline/review-only.ts:1022`) — and writes no column; backlog **95** item (3) named that
+payload as unreadable by the projection before WP-46, and it still is. The implementer, quoted: *"Review-only mode
+is not wired to the column: its `threads_unresolved` counts the platform's *own* posted findings, a different
+question"*, and *"Whether that panel should show the platform's threads or the human's is a decision."*
+**Cost to leave:** one panel item on one mode says *not read* where a number exists; nothing is wrong, a reader is
+under-told. **Done:** the decision stated at `taskReviewThreadsSchema` (the refiner's recommendation: the
+platform's own findings, since on a review-only task they are the only threads the platform is accountable for —
+and the panel labels them as such rather than reusing the human-review wording); the review-only duty writes the
+column through the same narrow writer when it counts; a ui case for a review-only task. **Depends on** WP-46
+(commit pending), WP-24. Related: **95**, **210**.
+
+### 210. **`review_threads.open` goes stale when a reviewer resolves threads, because a resolution reaches no handler that re-reads — and the panel shows `checked_at` but not that the number may be old** (TODO, **small** — **live** from WP-46 (commit pending) on every task at `ready_for_merge` whose reviewer resolves without then commenting; **read off the tree, not measured**; the producer half is **a hypothesis**, below; proposed owner **WP-73** (refiner, session 8); found by WP-46, session 8, the producer correction added by the refiner)
+
+**What is wrong.** The count is written only when the review window fires, and the window is armed only by
+`mr.review.comment` on an **unresolved** thread at `ready_for_merge`: the handler returns on
+`event.payload.resolved` (`packages/application/src/pipeline/saga.ts:1411-1413`), asserted by the saga test *ignores a
+comment on a resolved thread* (`packages/application/src/pipeline/saga.test.ts:1903`). The implementer, quoted:
+*"a human who *resolves* threads without writing emits `mr.review.comment` with `resolved: true`, which the saga
+ignores … so `review_threads.open` keeps the old number until the next comment."* **Refiner's correction (read off
+the tree; a hypothesis until cited):** GitLab's normaliser builds `mr.review.comment` only from a **Note** hook
+(`packages/integrations/src/providers/gitlab/inbound.ts:303-331`, `resolved: thread.resolved` read back from the
+discussions API), so `resolved: true` is a note *written into* an already-resolved thread; a resolution with **no**
+note most likely produces no Note hook at all, and so no event of any kind. Whether GitLab signals a bare
+resolution through the merge-request hook instead is **not cited** in `test/fixtures/http/gitlab/SOURCES.md` —
+**needs a citation or a real-GitLab measurement** before the producer is chosen. Either way the count is stale;
+the correction changes where the fix goes (a normaliser, not only the saga).
+
+**Cost to leave.** The panel says *2 open* for a merge request a reviewer has cleared; a human reading it before
+merging is told there is outstanding review. The return decision is unaffected (the window re-reads every
+discussion when it fires). **Done:** (1) the producer settled by citation — if a merge-request hook carries the
+resolution, its normaliser emits a signal the saga turns into a **count-only** re-read (never the return decision,
+which a resolution must not trigger); (2) otherwise the panel says the count is as of `checked_at` and is not
+refreshed by resolutions, in words, with a ui case; (3) the saga's resolved-comment branch refreshes the count too,
+since it is already a delivery from the right merge request. **Depends on** WP-46 (commit pending). Related:
+**209**, **188** (the same class of real-GitLab measurement).
+
+### 211. **Since WP-46 a merge-request commenter's own words reach the project's chat channel under the platform's bot identity; mentions and broadcasts are neutralised, but a markdown link keeps its attacker-chosen label, and nobody decided the audience** (**RESOLVED** at `8407605`, WP-46, session 8 (folded by the orchestrator at review: the chat notification carries only the thread count) — TODO, **small** — **not a BD-022 breach of the mention class** (defended, cited below); a **link-label residual** that pre-dates WP-46 for model-written and SPA-typed details and that WP-46 widened to verbatim text from any MR commenter; **live** from WP-46 (commit pending) on every project with a chat binding whose task gets a human-comment return; **read off the tree, not measured end to end**; proposed owner **WP-46 (orchestrator to decide at review)**; found by WP-46, session 8, graded by the refiner at the orchestrator's request)
+
+**The path, read.** A human-comment return's reason is the count line plus every human note of every open thread,
+each redacted, collapsed to one line and tagged `[thread N]`/`[reply N]`
+(`packages/application/src/pipeline/review-threads.ts:83-115`); its only filter on the author is `!note.system`
+(`:63-64`) — the note's author need not be a mapped or verified user. The notify handler makes it the detail —
+`` `${event.payload.from_stage} → ${event.payload.to_stage}: ${event.payload.reason}` ``
+(`packages/application/src/notify/handlers.ts:98`) — the duty redacts it again with the chat binding's redactor
+(`packages/application/src/notify/duty.ts:147-153`), the renderer bounds it at 1 000 characters and joins
+`**title**`, detail and URL as `markdown` — **never `blocks`** (`packages/application/src/notify/render.ts:167-172`) —
+and the Slack adapter renders every `markdown` body through `toMrkdwn`, both as the section block and as the
+fallback `text` (`packages/integrations/src/providers/slack/provider.ts:372-373`, `:393`).
+
+**Graded against the three things the orchestrator asked.**
+- **Mentions and broadcasts (`<!channel>`, `<!here>`, `<@U…>`, `<!subteam^…>`): neutralised.** `toMrkdwn`
+  escapes `&`, `<`, `>` before any transform (`packages/integrations/src/providers/slack/mrkdwn.ts:51-52`), and the
+  markdown-link rule — which could rebuild the brackets — wraps only `https:`, `http:` and `mailto:` targets
+  (`:56-90`), so `[x](!channel)` stays inert. Asserted: `packages/integrations/src/providers/slack/mrkdwn.test.ts:17`
+  and `:33`. `client.ts` sends no `link_names`/`parse` (`packages/integrations/src/providers/slack/client.ts:72-79`).
+- **Links: a residual, live.** `[Approve the release](https://attacker.example)` in a comment becomes
+  `<https://attacker.example|Approve the release>` — a clickable link whose **label the commenter chose**, in a
+  message the platform posts as itself; the conversion is asserted as a feature
+  (`packages/integrations/src/providers/slack/mrkdwn.test.ts:89`). A bare URL is linked by Slack itself. Whether
+  Slack **unfurls** such a link in a bot message is Slack's default (the request sets no `unfurl_*`) and is
+  **not cited** — needs a citation. This is the phishing shape, not a data-integrity one: nothing the platform
+  decides is changed, a human may be misled into a click the bot appears to vouch for.
+- **Formatting: cosmetic.** Slack's own `*`, `_`, `~` and backticks pass as formatting; a comment cannot open a
+  line (each opens with the platform's tag), so it cannot forge a platform sentence at line start.
+
+**What was already true, and what WP-46 changed.** The same detail path carried a **human** return's feedback typed
+in the SPA (redacted at `packages/application/src/pipeline/commands.ts:307-316`) and model-written text (question
+text, blocker briefs, WP-55's verdict findings) before WP-46. What is new is the **author set**: anyone who can
+comment on the merge request — on a public GitLab project, any signed-in account — with no model and no platform
+user between the comment and the channel. The implementer, quoted: *"Same audience in the common case, but it is a
+visibility change nobody decided — product/08 should say whether the detail carries reviewer text."* The refiner
+checked: product/08 says nothing about a notification's detail at all.
+
+**Cost to leave.** A misleading link in the team's channel under the bot's name, from a commenter who need not be a
+member; and a product surface (reviewer text in chat) nobody chose. **Done:** (1) a decision recorded — the refiner's
+recommendation: the notification carries the **count line only** for a human-comment return (the words are on the
+task page and in the merge request itself, which is where the reader acts), which removes the author-set widening
+rather than filtering it; (2) if the orchestrator keeps the words instead, the notification path renders untrusted
+links label-less (`<url>`, the URL as its own label) and a unit case drives a hostile comment —
+`<!channel>`, `<@U012AB3CD>`, `[Approve](https://attacker.example)` — from the window's reason through
+`notificationBody` into the Slack adapter's posted body and asserts all three inert; (3) either way product/08 or
+product/18 states what a chat notification's detail may carry. **Depends on** WP-46 (commit pending). Related:
+**159**, **195**.
+
+### 212. **A cancelled task keeps its gate, human-stage or paused row `running`, because cancel closes no `task_stages` row — and WP-46's invariant, as written, does not forbid it** (**RESOLVED** at `8407605`, WP-46, session 8 (folded by the orchestrator at review, with the paused-then-resumed orphan row review found) — TODO, **small** — **live** since WP-15i on every cancel; **read off the tree, not measured**; the refiner's grading: **the letter of WP-46's invariant is met, its purpose is not**; proposed owner **WP-46 (orchestrator to decide at review)**; found by WP-46, session 8, the paused/agent halves added by the refiner)
+
+**What is wrong.** `cancelTaskCommand` saves the aggregate and appends `task.cancelled`, and touches no stage row
+(`packages/application/src/pipeline/commands.ts:686-707`); `cancelTask` sets the state and **keeps
+`currentStage`** (`packages/domain/src/aggregates/task.ts:689-703`). It is the only producer of `task.cancelled` in
+`packages/application` (grep: one `cancelTask(` call). The implementer, quoted: *"a task cancelled at a gate or at
+`ready_for_merge` publishes that stage as running — 160's defect one ending over. The invariant as stated covers
+`needs_human`; whether a terminal task is "at" its stage is the decision."*
+
+**Is it WP-46's?** The invariant WP-46 wrote is *"A row is open (`running`) if and only if the task is at that stage
+and not parked"*, with *at that stage* defined as `tasks.current_stage` and *parked* as `needs_human`
+(`packages/application/src/pipeline/transitions.ts:272-276`). A cancelled task still has a `current_stage` and is
+not `needs_human`, so **the open row satisfies the invariant's letter**. But the plan row WP-46 folded 158 under
+names the cost as *"The task screen states something false about a finished task"*, and 158's done (2) is *"no row
+of a `done` task is open"* — `cancelled` is terminal exactly as `done` is (`isTaskFinished`). The refiner's reading:
+**the invariant is mis-stated rather than violated**, the fix is the same size as one of 160's sites (one
+`closeParkedStageRow`-shaped call with outcome `cancelled`, plus *"and not finished"* in the sentence and in
+technical/03's amendment), and WP-46 is the change that already holds the census (`task-save-sites.test.ts`), so
+it is the cheapest owner — but that is the orchestrator's call, not a folding this entry makes.
+
+**Refiner's additions (read, not run).** (1) Cancel from `paused` or `waiting_answers` leaves the row open too —
+those states keep their row **by design** (the attempt resumes), and cancel is the one exit where it never
+resumes. (2) Cancel while an **agent** stage's run is in flight: whether the stage executor closes the row when it
+finds the task terminal on its closing transaction is **not established** — needs reading of
+`stage-executor.ts`'s revalidation path, or a saga case. **Cost to leave:** the task screen, the Checks panel's
+gate items (`checking` for a cancelled task's gate) and any future open-row count state something false about a
+finished task — 158's cost, one terminal state over. **Done:** the invariant reads *"… at that stage, not parked
+and not finished"*; cancel closes the current attempt's row `failed`-or-`completed` (the word decided and stated;
+`closeParkedStage`'s *only while `running`* guard keeps an agent verdict), outcome `cancelled`; saga cases for cancel
+at a gate, at `ready_for_merge`, at `paused`; the site census extended to count `cancelTask(` beside `escalateTask(`.
+**Depends on** WP-46 (commit pending). Related: **158**, **160**.
+
+### 213. **`task_stages.outcome` has no declared vocabulary, and WP-46 put about a dozen new machine words on the task screen through it** (TODO, **nit** — **no injection path** (every word is platform-written and rendered as text); a legibility and drift risk; **read off the tree**; proposed owner **WP-73** (refiner, session 8); found by WP-46 as a stated risk, filed by the refiner at the orchestrator's request)
+
+**What is wrong.** `state` has one schema, parsed at both ends and checked by the database
+(`task_stages_state_known`, `packages/infrastructure/src/db/migrations/0040_task_stage_vocabulary.sql:49-50`);
+`outcome` has none — the DTO field is `z.string().nullable()` (`packages/contracts/src/api.ts:758`) and there is no
+check constraint. Its writers now produce at least: `pass`/`fail` and the event name, e.g. `mr.merged`
+(`packages/application/src/pipeline/transitions.ts:325`); `escalated` (`:332`); `undecided` and `unsupported`
+(`packages/application/src/pipeline/jobs.ts:584`, `:605`); `converged`, `question.expired`, `approval.expired`,
+`budget.rejected`, `mr.closed` (the saga's `closeParkedStageRow` calls); `write_conflict`, `dead_lettered`,
+`take_over.expired` (WP-46's notes); `completed`, `returned`, `system`, `failed`; and an agent stage's verdict or
+`unknown` (`packages/application/src/pipeline/stage-executor.ts:1292`). The screen prints them raw: the gate item as
+`escalated (undecided)` (`apps/web/src/features/task-detail.tsx:380`) and the stage list's outcome through
+`UntrustedText` (`:964-966`). **Cost to leave:** a person reads `take_over.expired` and `dead_lettered`; a reader
+that switches on the word (the gate item already does, `:376`) cannot be exhaustive, and a misspelt word at a new
+site is invisible. **Done:** one `taskStageOutcomeSchema` in `@platform/contracts` beside `taskStageStateSchema`
+(the agent verdict words included by reference to the artifact schema), parsed by the store before writing as
+`state` is; the DTO typed with it; one word→sentence table in the web app with an exhaustive switch; a check
+constraint only if added `NOT VALID` (rows from before WP-55 carry free-form words). **Depends on** WP-46 (commit
+pending). Related: **158**, **160**.
 
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
@@ -13802,7 +13943,7 @@ file, or the first work package that touches upgrade behaviour.
 | WP-61 | **The delivery metrics stop being wrong in two directions** | DONE | `8dbebd9` | **Folded backlog 88, 89, 94, 114, 179, 180, 186, 188, and 194 in part; implemented Q87.** Machine accounts declared by an operator only (migration **0045**, the audited org route) and refused by the human-time projector; the day cap **per review window** — the orchestrator's ruling, product/19 amended, WP-41's read-time cross-task cap removed and the consequence stated; approval-touched windows withheld until the real-GitLab check; the defect rate from the link half of WP-34's resolver only, published at ≥ ½ traceable coverage — **a chosen floor, criterion (5)'s "derived" recorded as not met**; lines changed from one diff-stats read per merged MR, first measurement per merge; distinct overlaps; the lint fold on summary/description edits. **One review round** (REQUEST_CHANGES: the floor mislabelled as derived; three of four statistics reads claimed to prune and scanned whole histories — now bounded, the lint read's `EXPLAIN` went from four partitions to one index scan; a redelivered measurement double-counted). The orchestrator amended product/16, /18 and /19 to match and canaried the dedupe (dead by name). **Orchestrator verification**: `PASS: verify` (407 files, 7765 passed), `PASS: verify:integration` (564), `PASS: verify:e2e` **twice** (209/209), `PASS: verify:ui` (332), `PASS: verify:web-e2e` (42). CI on `8dbebd9`: `ci` `36248633792` and `image` `36248633812` **completed success**, zero `release` runs. Discovered work: backlog **190**–**193** | Depends on WP-29, WP-41, WP-34, WP-60. Folds backlog **88** (major, live), **89**, **94**, **114**; implements **Q87** — publish the rate only with its coverage, absent below a declared floor |
 | WP-43 | **Slack Socket Mode** | DONE | `b4c23bc` | **Folded backlog 78, 79's remaining half, and 196 in part (by the orchestrator at review).** One Socket Mode connection per Slack integration, held by the process serving `/webhooks/*` (**TD-028 amended by the orchestrator** with the implementer's text, the role wording corrected at review), opened at composition and closed at shutdown; a worker-capable process without the ingress names each account it does not hold. Envelopes are wrapped into deliveries signed with the binding's own secret, so the **WebSocket host is the trust boundary** — refused unless the binding's allow-listed host or a subdomain of it. Chat decisions are decided by the aggregate in the ingress transaction (membership, role, identity mapping) — with that routing off the e2e showed a **member's** click moving a task to `ready_for_merge`; the review established it was **latent on `main`** (nothing posted an approval button), so no hotfix. Approval buttons only when a click can arrive (migration **0046**), the button's task id cross-checked; an identities settings screen. **One review round** (REQUEST_CHANGES: a socket opened while a stop was in flight leaked — measured); 199 deferred; the orchestrator added CLAUDE.md's held-connections bullet and ran the host-check canaries (dead by name). **Orchestrator verification**: `PASS: verify` (410 files, 7814 passed), `PASS: verify:integration` (564), `PASS: verify:e2e` **twice** (212/212), `PASS: verify:ui` (337), `PASS: verify:web-e2e` (43), images rebuilt and `PASS: compose-stock-check`. CI on `b4c23bc`: `ci` `36253785415` and `image` `36253785435` **completed success**, zero `release` runs. Discovered work: backlog **195**, **197**–**202** (195 needs a row of its own — for the M5 pass) | Depends on WP-10, WP-15c, WP-32, WP-31, TD-028's topology. Folds backlog **78** (major) with **79**'s remaining half. One assertion driven through **both** transports; a binding configured for a socket nobody opened must say so by name |
 | WP-44 | **The take-over export's delivery, the take-over and hand-back screen, and the breakdown panel** | DONE | `7ebdc93` | **Folded backlog 68, 70, 108, 72's caveats, and the refiner's 164, 167, 168, 172, 190, 198; implemented Q93 and Q85's surface half.** Take-over transcript and tarball **served, not copied** (project-scoped, attachment, `nosniff`, the tarball through the realpath guard, a refusal after page one aborting rather than truncating), a launcher-side 14-day retention; take-over, hand-back and breakdown controls; feature cards compared both ways with the platform's own table (`FEATURE_READERS` — found `history_bootstrap` uncarded too); the three census cases deleted; the take-over timer reset by the holder's commands; `ContextPackRecord.text_search` (migration **0047**); shared human-time predicates; an admin read of refused deliveries and unmapped ids. **One review round** (REQUEST_CHANGES: the download routes were correctly scoped but untested for another project's member — a canary survived all ten tests). The orchestrator amended technical/05's export sentence and product/19's take-over paragraph (the URLs, and *inactivity* as the holder's own commands). **Orchestrator verification**: `PASS: verify` (414 files, 7851 passed), `PASS: verify:integration` (572), `PASS: verify:e2e` **twice** (212/212), `PASS: verify:ui` (362), `PASS: verify:web-e2e` (47); `compose-stock-check` 17/17 on rebuilt images in the implementer's shell. CI on `7ebdc93`: `ci` `36260154407` and `image` `36260154412` **completed success**, zero `release` runs. Discovered work: backlog **203**–**208**. The implementer reported the harness refused `sleep 60`, so its load readings were spaced by work, and one run was chained at a load of 46 — recorded | Depends on WP-27, WP-15h, WP-15j, WP-40, WP-30, WP-20. Folds backlog **68** (major), **70**, **108** (major), backlog **72**'s caveat strings; implements **Q85**'s surface half. **Q93** decides whether an export outlives the transcript. Serve, do not copy — no `blobs` writer |
-| WP-46 | **The merge-readiness Checks panel** | TODO | — | Depends on **WP-55**, **WP-52**, WP-38, WP-24, WP-26; run after WP-44 (shared file). Folds backlog **95**'s remaining items. The tamper check is **explicitly not in it** — BD-024's gate is a work package and stays named absent. **Refiner (session 8): also folds backlog 158, 159 and 160** — WP-55's leftovers on the rows this panel reads: a `human` stage left forward by `mr.merged` is never closed (158) and a gate that **escalates** keeps its row `running` at three sites, one of them `saga.ts`'s convergence escalation outside `applyEscalation` (160) — one invariant, *a row is open iff the task is at that stage and not parked*; and a **human-comment** return's reason is a thread **count**, so a human reviewer's words may reach the Developer nowhere (159's human half, **major if** the `glab` route is measured closed — the agent half was folded into WP-55 by the orchestrator). Each entry has its criteria; 159's stale-artifact decision stays unowned |
+| WP-46 | **The merge-readiness Checks panel** | DONE | `8407605` | **Folded backlog 95's remaining items, the refiner's 158, 159's human half, 160, and at review 211 and 212.** The Checks panel answers **ten of product/10's eleven** — review threads (narrow `tasks.review_threads`, migration **0048**), the business verdict and acceptance criteria from the latest acceptance verdict's own fields — with the tamper check named absent (BD-024's gate) and the eleven held both ways in a test. A stage row closes at **every** ending (re-entry superseded/left, completion, cancel paused or not), with a census pairing each site with the close — review found a take-over-then-hand-back orphan the first invariant's wording denied. A human-comment return carries the reviewers' words to the Developer, redacted, one line per comment, **inside the feedback block and nowhere else** (a canary placing them outside survived until the exactly-once assertion existed); the chat notification carries only the thread count, because a comment's markdown link would otherwise have been posted under the platform's identity (211). **One review round** (REQUEST_CHANGES). The orchestrator amended product/04's comment-return sentence. **Orchestrator verification**: `PASS: verify` (415 files, 7877 passed), `PASS: verify:integration` (575), `PASS: verify:e2e` **twice** (212/212), `PASS: verify:ui` (368), `PASS: verify:web-e2e` (47). CI on `8407605`: `ci` `36264648150` and `image` `36264648144` **completed success**, zero `release` runs. Discovered work: backlog **209**, **210**, **213**, and the implementer's **214** (the platform's own conflict-warning thread counts as a human thread) and **215** (an agent return's first line is model text in chat) — the last two listed in its notes for the refiner | Depends on **WP-55**, **WP-52**, WP-38, WP-24, WP-26; run after WP-44 (shared file). Folds backlog **95**'s remaining items. The tamper check is **explicitly not in it** — BD-024's gate is a work package and stays named absent. **Refiner (session 8): also folds backlog 158, 159 and 160** — WP-55's leftovers on the rows this panel reads: a `human` stage left forward by `mr.merged` is never closed (158) and a gate that **escalates** keeps its row `running` at three sites, one of them `saga.ts`'s convergence escalation outside `applyEscalation` (160) — one invariant, *a row is open iff the task is at that stage and not parked*; and a **human-comment** return's reason is a thread **count**, so a human reviewer's words may reach the Developer nowhere (159's human half, **major if** the `glab` route is measured closed — the agent half was folded into WP-55 by the orchestrator). Each entry has its criteria; 159's stale-artifact decision stays unowned |
 | WP-45 | **Review checklists, and the Reviewer pass a shadow report needs** | TODO | — | Depends on WP-37, WP-24, WP-34, WP-17, TD-016. Folds backlog **91** (major), **100**; implements **Q83**. The only M4 row that opens the reviewer's prompt and its eval cases. Telling the truth about `payments` lands first and needs no answer |
 | WP-62 | **The dial's remaining policies get readers** | TODO | — | Depends on WP-30, WP-28, WP-18b, WP-05; BD-027:14. Folds backlog **72** (a) and (b) (major); implements **Q78**, **Q79**. `businessReview` builds the carrier, `stopAfterStage` rides on it; the compile-step signature change reaches fifteen call sites |
 | WP-63 | **`.agentic/config.yml` reaches the repository, and the `repo` layer is read back** | TODO | — | Depends on WP-21, WP-18b, WP-18a, WP-30. Folds backlog **44** (major). **Q94** decides precedence and whether a direct commit is ever allowed |
@@ -30798,3 +30939,201 @@ asserted. (3) A refusal on page 2+ is **measured** to abort: Fastify destroys th
 body stream errors, the injector rejects with *"response destroyed before completion"*, asserted with
 the page reads; the handler's comment says so, no residual. (4) 207's reason corrected above.
 (5) The user guide says 14 days from the take-over, handed back or not.
+
+#### WP-46
+
+**Round 1 (implementer, session 8).** Backlog **95** items 3–6 (review threads, business verdict,
+acceptance criteria met; the tamper check kept absent), the gate-row render of items 1–2 on WP-55's
+rows, and the refiner's addendum — **158**, **160** and **159**'s human half. Commit pending.
+
+**What shipped, criterion by criterion.**
+1. **Review threads: a narrow column where the count was computed.** Migration **0048** adds
+   `tasks.review_threads` (`{open, resolved, checked_at}`, `taskReviewThreadsSchema`), written only
+   by `TaskRepository.saveReviewThreads` (both stores; the eighth narrow writer, no version bump)
+   from the review window (`reviewWindowHandler`, `packages/application/src/pipeline/jobs.ts`) on
+   **every** ending of the window — including the two that return nothing — in a transaction of its
+   own. `open` is the window's own predicate (resolvable, unresolved, one human note), now one
+   function (`isOpenReviewThread` in the new `packages/application/src/pipeline/review-threads.ts`)
+   so the panel and the return decision cannot disagree. Drizzle column beside the SQL (the parity
+   test holds them), `tasks-column-ownership.test.ts`'s partition gained the column with its reason;
+   `task-save-sites.test.ts`'s save census is **unchanged** (a narrow writer is not a `save`) and
+   gained the escalation census below. `null` is published as "the window has not read them".
+2. **Business verdict and acceptance criteria met** read the latest `AcceptanceVerdict`'s own
+   `verdict` and `criteria[]` through WP-52's route (`useArtifactBody`), parsed on the client with
+   `acceptanceVerdictDataSchema`, each criterion's id and evidence through `UntrustedText`. A route
+   refusal (`409 artifact_not_redacted`) is named on the panel as *not served*, a body that does not
+   parse as *unavailable*, no verdict as *no verdict / not judged*. `useArtifactBody` no longer
+   retries an `ApiError` (a server answer on an immutable body is permanent; it retried three times
+   before, measured as a UI test timing out on "reading…" in front of the 409).
+3. **The census both ways, compared.** `checks-panel.test.tsx` now renders eleven of twelve rows;
+   the absent list is parsed out of the screen's sentence and **compared** with the census's absent
+   entries (rule 3), so an item that starts working and stays listed fails, and so does one that
+   stops rendering unlisted.
+4. **Tamper check stays absent with its reason on the screen** — *"It is BD-024's gate — comparing
+   the paths this change touches with the exceptions its plan declared, and storing the result — and
+   nothing in this build produces that result yet"* — and the test asserts `BD-024` in the sentence.
+   BD-024's gate is **not** in this row.
+5. **Tiers.** ui: `checks-panel.test.tsx` (the census, each gate's latest attempt, `not reached`,
+   `escalated (undecided)`, `2 open · 1 resolved` vs `not read`, the newest verdict version only,
+   `1 of 3 met, 1 not met, 1 untestable`, hostile evidence rendered as text with no `<img>`, the
+   409, no verdict and no request). Integration: `read-api.integration.test.ts` › "the Checks
+   panel’s reads (WP-46)" — `saveReviewThreads`, the artifact repository's `insert` and the stage
+   bookkeeping written by their production writers on PostgreSQL, read back through
+   `findTaskDetail`/`findArtifactBody`, and `closeParkedStage`'s `where state = 'running'` asserted
+   on the SQL (a second close over a `completed` row keeps `pass`). Contract (both stores):
+   `saveReviewThreads` whole-record, versionless, refused for a negative count and a missing task;
+   `closeParkedStage` keeps a closed return's reason as the target's feedback.
+6. **Rule 82.** The Acceptance Verdict body is the one the business-review stage **produced** on a
+   whole instance (`stage-rows.e2e.test.ts`'s second case opens it through `/api/artifacts/:id`);
+   the review-thread count and the comments are produced by the real window handler in the saga
+   harness. **The e2e tier does not drive the review window**: its two-minute window
+   (`DEFAULT_REVIEW_COMMENT_WINDOW_MS`) is not configuration a whole instance exposes, and
+   `apps/server/src/pipeline-census.test.ts` records that as decided — a composition knob was not
+   this row's to add.
+
+**The addendum.**
+- **158.** `closeSettledGate` became `closeLeftStage` in `transitions.ts`: a forward `event`
+  transition out of a **human** stage closes its row `completed` with the event as `outcome`
+  (`mr.merged`). Saga: "closes the human stage a merge moved forward, so a done task has no open
+  row" (both ways: before the merge `ready_for_merge` is the only open row; after it none). Canary:
+  the event branch removed → that case fails with `running`/null (md5-confirmed revert). e2e: the
+  second case of `stage-rows.e2e.test.ts` publishes `mr.merged`, settles `done`, and reads **no
+  `running` row** in `task_stages` and none on `GET /api/tasks/:id`.
+- **160.** The invariant — *a row is open iff the task is at that stage and not parked* — is stated
+  **once**, at `closeLeftStage`, with the census of every way a row closes. The escalation half is
+  `closeParkedStageRow(store, tx, escalation, outcome)` over a new store method
+  `closeParkedStage`, which writes `failed` **only while the row is `running`** (so an agent stage's
+  verdict and a settled gate's are kept). It is called at **every** escalation site in
+  `packages/application` — `applyEscalation` (all three of 160's gate sites: `undecided`,
+  `unsupported`, `converged`, through `ApplyOptions.escalationOutcome` and `GateSettlement.outcome`),
+  the saga's six direct sites (`mr.closed`, `question.expired`, `approval.expired`,
+  `budget.rejected`, review `converged`, intake), `escalateTaskAfterConflict` (`write_conflict`),
+  the dead-letter sink (`dead_lettered`) and the take-over expiry (`take_over.expired`) — and
+  `task-save-sites.test.ts` › "every escalation closes the parked stage’s row (WP-46, backlog 160)" holds each file's
+  `escalateTask(` count equal to its `closeParkedStageRow(` count, with `stage-executor.ts` and
+  `recovery/run-lease.ts` exempt by name (they write `recordStageExited` `failed` themselves), plus a
+  calibration case. Saga, per site: undecided (and open while still re-checking), unsupported (a
+  `command` gate), converged (rows `returned, returned, failed/converged`), `mr.closed` on the human
+  stage, a retry re-opening the gate (160 criterion 3: attempt 1 `failed/undecided`, attempt 2
+  `running`), and a question expiry at `refinement` leaving the executor's `completed/questions`
+  alone. Canaries (each md5-confirmed revert): the `applyEscalation` call removed → six failures (the
+  four gate cases and both census cases); the memory store's condition removed → the question-expiry
+  case (`failed/question.expired`) and the contract case fail.
+- **159, human half.** The window's return reason is now the count line in its old words followed
+  by every human note of every open thread, one line each tagged `[thread N]`/`[reply N]` (path and
+  line when the note has them), each field **redacted through the git binding's redactor, then
+  collapsed to one line** (`collapseLines`, exported from `verdicts.ts` — WP-55's helper), then
+  bounded at `MAX_REVIEW_FEEDBACK_CHARS` = 2 × `MAX_FEEDBACK_CHARS`. The text was already in hand —
+  the window's own `listDiscussions` read, made from its job outside any transaction — so **no new
+  provider read**. It reaches a prompt only as the `return_feedback` data block. Saga: the second
+  implementation run's block, read with `readDataBlocks`, is exactly three lines; a forged
+  `\n[thread 9] …` stays inside line 2; a planted `glpat-…` is `[REDACTED:integration:…]` in the
+  prompt, the stored `return_reason` and every event; resolved threads and plain remarks are absent.
+  Canary: redaction disabled → that case fails.
+
+**Decisions and assumptions.**
+- **"Parked" is `needs_human`.** `paused` and `waiting_answers` keep their row: the attempt resumes.
+  Stated at the invariant.
+- **The write cap is strictly larger than the prompt block's**, so a reason cut at the write is
+  always cut again by the assembler and announced on the marker — no body notice (WP-55 round 3's
+  rule). Residual, stated at the module: the marker's `original_chars` is then the stored length,
+  not the comments'.
+- **An escalation's reason goes into the parked row's `return_reason`** with no target, as the
+  executor's `failed` rows already do; `lastReturnReason` reads returns only.
+- **The panel's gate items read the latest attempt** of `ci_gate`/`rebase_gate` by `attempt`, from
+  the `stages` the DTO already carries — no new server read for items 1–2.
+- **Review-only mode is not wired** to the column: its `threads_unresolved` counts the platform's
+  *own* posted findings, a different question (discovered work 209).
+- **No git binding → nothing recorded** by the window: `{open: 0}` would claim a read.
+
+**Sentences falsified (rule 83).** Changed: `task-detail.tsx`'s module docblock (*"renders five"*),
+the panel's census comment and the absent sentence (six items → one); `checks-panel.test.tsx`'s
+docblock (*"Five of the eleven"*) and its census comments; `closeSettledGate`'s *"A gate that does
+not settle — pending, escalated, waiting — is left open"* (rewritten as the invariant: escalated is
+closed); `ApplyOptions.signal`'s docblock (gate-only); `withVerdictFindings`' *"The human-comment
+half of 159 (a count of threads, not their text) is WP-46's"* (now names where it is done);
+technical/03's `tasks` column list and partition, and `task_stages`' `failed`/`completed` writers
+(amended). **Falsified by the tree, not by this change**: backlog 160's *"`saga.ts:1255-1269` calls
+`escalateTask` and `save` directly"* — WP-60 review round 2 already moved the CI convergence into
+`jobs.ts`'s `settle`, so all three gate sites go through `applyEscalation`; the saga line it cited is
+now the approval expiry. Left, with why: backlog 95/158/159/160 and the plan row (the orchestrator's
+to close); 0040's migration notes (applied migrations are never edited).
+
+**Verification** (this tree, 2026-09-26; every tier started on a one-minute load reading under 12,
+readings spaced by work because a timed minute was not needed — no tier had to wait more than one
+reading, and one first reading of 14.5 deferred the Docker tiers): `pnpm run -s verify` **PASS**
+(415 files, 7869 passed, 14 skipped; bundle 190 120 B of 300 000); `verify:ui` **PASS** (32 files, 368); `verify:web-e2e` **PASS** (47) — its first
+run failed `screens.spec.ts`'s old absent-list regex (*"Not on this panel: acceptance criteria met,
+CI green"*), a sentence this row falsified, now asserting the WP-46 items and the tamper-check
+sentence; `verify:integration` **PASS** (55 files, 575); `verify:e2e` **PASS** (40 files, 212).
+Docker after each: nothing of this repository left but Ryuk, `docker volume ls | wc -l` = **102**.
+New files marked intent-to-add before every verify (rule 91). `scripts/citations.test.ts` over these
+notes **PASS** (12) — its first run caught two citations spelled with a straight apostrophe.
+
+**Discovered work** (for the refiner; next free backlog number 209, none fixed here).
+- **209 (nit) — review-only tasks never fill `review_threads`.** `review-only.ts` counts the
+  platform's own posted threads into `task.review.observed` and writes no column, so a review-only
+  task's panel reads *not read*. Whether that panel should show the platform's threads or the
+  human's is a decision.
+- **210 (small) — the count goes stale on resolution.** The window runs only when a comment arrives
+  on a task at `ready_for_merge`; a human who *resolves* threads without writing emits
+  `mr.review.comment` with `resolved: true`, which the saga ignores (`saga.test.ts` › "ignores a
+  comment on a resolved thread"), so `review_threads.open` keeps the old number until the next
+  comment. `checked_at` is on the panel; the staleness is not. Read off the tree.
+- **211 (small) — a human's MR comments now reach the project's chat channel.** The notify band
+  posts `task.stage.returned`'s reason as the notification detail (`notify/handlers.ts`), bounded
+  and redacted there; before WP-46 that was a thread count. Same audience in the common case, but it
+  is a visibility change nobody decided — product/08 should say whether the detail carries reviewer
+  text.
+- **212 (small) — a cancelled task keeps its gate or human row `running`.** `cancelTaskCommand`
+  closes no `task_stages` row (read off `commands.ts`), so a task cancelled at a gate or at
+  `ready_for_merge` publishes that stage as running — 160's defect one ending over. The invariant as
+  stated covers `needs_human`; whether a terminal task is "at" its stage is the decision.
+
+**Review round 1 (implementer, session 8)** — the reviewer's findings, with backlog **211** and
+**212** folded in by the orchestrator.
+1. **The invariant is restated for every ending** (`closeLeftStage`'s docblock, technical/03): *a
+   row is open exactly while its attempt can still resume*. Round 1's *"a paused task keeps its row
+   because the attempt resumes where it stopped"* was false — every way back in (resume, retry,
+   hand-back, an answer) enters a **new** attempt. Enforced by `closeCurrentStageRow` (conditional,
+   through the store method renamed `closeOpenStage`, since it now serves more than parking) at
+   **every stage entry** (`superseded` for the same stage, `left` for another), both completion
+   paths (`task.completed`) and `cancelTaskCommand` (`cancelled`, paused or not). A sibling census in
+   `task-save-sites.test.ts` › "every entry, completion and cancellation closes the attempt it ends
+   (WP-46, backlog 212)" matches each `.recordStageEntered(`/`completeTask(`/`cancelTask(` with a
+   close, file by file, with a calibration case. Saga › "the endings no stage decides (WP-46 review
+   round 1, backlog 212)": take over at `ci_gate` → hand back to it (`1 failed/superseded, 2
+   running`), hand back elsewhere (`left`), pause → resume, cancel at `ready_for_merge`, cancel
+   while paused. Canaries (md5-confirmed revert): the entry close removed → five failures, the
+   reviewer's reading reproduced (`[[1, running, null], [2, running, null]]`); the cancel close
+   removed → both cancel cases.
+2. **Backlog 211**: `decideNotification` posts only the return reason's **first line** — for a
+   human-comment return the platform's thread count. Saga › "tells the chat channel only the thread
+   count, so a comment cannot post a link (backlog 211)": a comment carrying `[Open the task](https://evil.example/x)`
+   and `*act now*` reaches no posted message; canary (full reason restored) fails it. Consequence,
+   stated: an agent verdict's return now posts its first line too (`[summary] …`), which is still
+   model text — discovered work 215.
+3. The 159 test asserts each comment occurs **exactly once** in the assembled prompt, inside the
+   `return_feedback` block.
+4. `docs/user-guide.md`'s checks-panel section: ten of eleven, the tamper check absent with its reason.
+
+**Sentences falsified (round 1 review).** Changed: the invariant's docblock and technical/03's
+amendment (above); `closeOpenStage`'s port docblock (parking only → every ending); the user guide's
+*"thirteen … publishes four"*. Left: round 1's notes above name the store method `closeParkedStage`
+— history, renamed here.
+
+**Verification (round 1 review)**, 2026-09-26, each run on a one-minute reading under 12:
+`pnpm run -s verify` **PASS** (415 files, 7877 passed, 14 skipped; citations included); the touched
+unit files re-run on their own first (`packages/application/src`, 1719 → green after one test fix).
+`verify:integration` and `verify:e2e` were **not** re-run this round: the next reading was 19.6.
+Nothing in `apps/web` changed this round, so `verify:ui`/`verify:web-e2e` stand from round 1.
+
+**Discovered work (round 1 review; next free backlog number 214).**
+- **214 (small) — the platform's own conflict-warning thread counts as a human review thread.**
+  `isOpenReviewThread` (the window's pre-existing predicate) accepts any resolvable, unresolved
+  thread with a non-system note, and the rebase gate's un-anchored conflict warning is one — so it
+  counts on the panel and, since WP-46, its text reaches the Developer as reviewer feedback. Read
+  off the tree (reviewer's finding), not measured.
+- **215 (small) — an agent return's first line is model text in chat.** The notification now
+  carries only a return reason's first line; for an agent verdict that is `[summary] <model text>`,
+  which can hold a markdown link `toMrkdwn` renders. Pre-existing since WP-55; narrowed, not closed.
