@@ -199,12 +199,19 @@ test('the project settings page mirrors every wizard step', async ({ page }) => 
   /**
    * …and the risk-class step, which stopped being a named gap at **WP-37**: the offer is a control
    * that does something (accepting it writes `policies.risk_classes` through the configuration
-   * endpoint), and the one row of product/19 §14 this build still cannot express is rendered with
-   * its reason instead. Standing rule 83 — the sentence this assertion used to pin described the
-   * gap that work package closed.
+   * endpoint). Since **WP-45** every row of product/19 §14 is proposed, and the `payments`
+   * checklist the offer selects is asked for by name — the accept button waits for its items,
+   * because the configuration schema refuses a class naming a list nobody wrote. Standing rule 83:
+   * the *"Not proposed, and why"* panel this assertion used to pin described the gap WP-45 closed.
    */
-  await expect(page.getByRole('button', { name: 'Accept these classes' })).toBeVisible();
-  await expect(page.getByText(/Not proposed, and why/)).toBeVisible();
+  const accept = page.getByRole('button', { name: 'Accept these classes' });
+  await expect(accept).toBeVisible();
+  await expect(accept).toBeDisabled();
+  const items = page.getByRole('textbox', { name: 'Items for checklist payments' });
+  await expect(items).toBeVisible();
+  await items.fill('Amounts are integer minor units');
+  await expect(accept).toBeEnabled();
+  await expect(page.getByText(/Not proposed, and why/)).toHaveCount(0);
 });
 
 test('the integrations screen carries the create and test controls', async ({ page }) => {

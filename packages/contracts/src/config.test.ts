@@ -71,6 +71,13 @@ const DOC_EXAMPLE = {
         require: ['plan_approval', 'reviewer:@security'],
       },
       migrations: { paths: ['**/migrations/**'], require: ['plan_approval'] },
+      payments: { paths: ['**/payment*/**'], require: ['plan_approval', 'checklist:payments'] },
+    },
+    review_checklists: {
+      payments: [
+        'Amounts are integer minor units, never floats',
+        'Every charge path is idempotent on a caller-supplied key',
+      ],
     },
   },
   commands: {
@@ -159,14 +166,14 @@ describe('.agentic/config.yml', () => {
     expect(parsed.stages?.my_custom_stage?.effort).toBe('low');
   });
 
-  describe('a risk requirement is refused by name when this build cannot act on it (WP-37)', () => {
+  describe('a risk requirement is refused by name when this build cannot act on it (WP-37, WP-45)', () => {
     const withRequirement = (requirement: string) =>
       agenticConfigSchema.safeParse({
         version: 1,
         policies: { risk_classes: { payments: { paths: ['**/pay/**'], require: [requirement] } } },
       });
 
-    it('accepts the two that have a consumer', () => {
+    it('accepts the ones that have a consumer', () => {
       expect(withRequirement('plan_approval').success).toBe(true);
       expect(withRequirement('reviewer:@security').success).toBe(true);
       expect(withRequirement('reviewer:@team/security').success).toBe(true);
@@ -177,13 +184,13 @@ describe('.agentic/config.yml', () => {
       expect(withRequirement('reviewer:person@example.test').success).toBe(false);
     });
 
-    it('refuses `checklist:<name>` with the reason and the open question', () => {
+    it('refuses `checklist:<name>` when the document defines no such list, with the key path and the value (WP-45)', () => {
       const result = withRequirement('checklist:payments');
       expect(result.success).toBe(false);
-      // The message is the whole point of refusing here rather than in a union: an operator whose
-      // `payments` class silently did nothing is exactly who must not get `invalid_union`.
-      expect(result.error?.issues[0]?.message).toContain('Q83');
+      // The message is the whole point of refusing here rather than in the reader: an operator
+      // whose `payments` class silently did nothing is exactly who must not get a pass.
       expect(result.error?.issues[0]?.message).toContain('checklist:payments');
+      expect(result.error?.issues[0]?.message).toContain('policies.review_checklists.payments');
       expect(result.error?.issues[0]?.path).toEqual([
         'policies',
         'risk_classes',
@@ -193,14 +200,61 @@ describe('.agentic/config.yml', () => {
       ]);
     });
 
+    it('accepts `checklist:<name>` when the list is defined beside it', () => {
+      const result = agenticConfigSchema.safeParse({
+        version: 1,
+        policies: {
+          risk_classes: {
+            payments: { paths: ['**/pay/**'], require: ['plan_approval', 'checklist:payments'] },
+          },
+          review_checklists: { payments: ['Amounts are integer minor units'] },
+        },
+      });
+      expect(result.success, JSON.stringify(result.error?.issues)).toBe(true);
+    });
+
+    it('names every undefined list, not only the first', () => {
+      const result = agenticConfigSchema.safeParse({
+        version: 1,
+        policies: {
+          risk_classes: {
+            payments: { paths: ['**/pay/**'], require: ['checklist:payments'] },
+            public_api: { paths: ['**/api/**'], require: ['plan_approval', 'checklist:compat'] },
+          },
+          review_checklists: { other: ['An unrelated item'] },
+        },
+      });
+      expect(result.error?.issues.map((issue) => issue.path.join('.'))).toEqual([
+        'policies.risk_classes.payments.require.0',
+        'policies.risk_classes.public_api.require.1',
+      ]);
+    });
+
+    it('refuses a checklist name that is not a slug, and an empty or oversized list', () => {
+      expect(withRequirement('checklist:Payments').success).toBe(false);
+      expect(withRequirement('checklist:').success).toBe(false);
+      const lists = (review_checklists: unknown) =>
+        agenticConfigSchema.safeParse({ version: 1, policies: { review_checklists } }).success;
+      expect(lists({ payments: [] })).toBe(false);
+      expect(lists({ payments: [''] })).toBe(false);
+      expect(lists({ payments: ['x'.repeat(501)] })).toBe(false);
+      expect(lists({ payments: Array.from({ length: 31 }, (_, i) => `item ${i}`) })).toBe(false);
+      expect(
+        lists(Object.fromEntries(Array.from({ length: 21 }, (_, i) => [`list_${i}`, ['x']]))),
+      ).toBe(false);
+      expect(lists({ payments: ['x'.repeat(500)] })).toBe(true);
+    });
+
     it('refuses `budget_approval`, naming the gate that cannot read it', () => {
       const result = withRequirement('budget_approval');
       expect(result.success).toBe(false);
       expect(result.error?.issues[0]?.message).toContain('budget_approval_threshold_usd');
     });
 
-    it('refuses anything else with the two forms it does accept', () => {
-      expect(withRequirement('approve').error?.issues[0]?.message).toContain('plan_approval');
+    it('refuses anything else with the three forms it does accept', () => {
+      const message = withRequirement('approve').error?.issues[0]?.message;
+      expect(message).toContain('plan_approval');
+      expect(message).toContain('checklist:<name>');
     });
   });
 

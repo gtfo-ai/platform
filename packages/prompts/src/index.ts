@@ -62,7 +62,9 @@ export const ROLE_PROMPT_VERSIONS = {
   // WP-40: the spike template's `ResearchReport` section.
   architect: '2',
   developer: '1',
-  reviewer: '2',
+  // WP-45: the project's `review_checklist` blocks, and `criteria` when a human's merge request is
+  // compared against a RefinedSpec (the shadow report's review of the human MR).
+  reviewer: '3',
   acceptance_tester: '1',
   facilitator: '1',
   librarian: '2',

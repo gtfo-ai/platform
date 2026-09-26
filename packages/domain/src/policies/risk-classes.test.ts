@@ -5,11 +5,13 @@
  * one that answered "no class" would each pass half of this file and fail the other.
  */
 import type { RiskClass } from '@platform/contracts';
+import { agenticConfigSchema, checklistNameOf } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { PLATFORM_DEFAULT_CONFIG } from '../config/effective-config.js';
 import {
+  PROPOSED_REVIEW_CHECKLISTS,
   PROPOSED_RISK_CLASSES,
-  RISK_CLASS_REQUIREMENTS_AWAITING_CHECKLIST,
+  reviewChecklistsFor,
   reviewersRequiredByClasses,
   riskClassesForPaths,
   riskClassesRequiringPlanApproval,
@@ -97,11 +99,64 @@ describe('the platform’s proposal (product/19 §14, WP-37)', () => {
       expect(declared.paths.length, name).toBeGreaterThan(0);
       for (const requirement of declared.require) {
         expect(
-          requirement === 'plan_approval' || requirement.startsWith('reviewer:'),
+          requirement === 'plan_approval' ||
+            requirement.startsWith('reviewer:') ||
+            checklistNameOf(requirement) !== null,
           `${name} requires ${requirement}`,
         ).toBe(true);
       }
     }
+  });
+
+  it('proposes all six of product/19 §14’s classes with every requirement the document names (WP-45)', () => {
+    expect(Object.keys(PROPOSED_RISK_CLASSES).sort()).toEqual([
+      'agent_config',
+      'auth',
+      'data',
+      'infra',
+      'payments',
+      'public_api',
+    ]);
+    // "plan approval + stricter checklist" — both halves, where WP-37 shipped the first only.
+    expect(PROPOSED_RISK_CLASSES.payments?.require).toEqual([
+      'plan_approval',
+      'checklist:payments',
+    ]);
+    // "stricter checklist (compatibility)" — the only requirement, and no invented plan approval.
+    expect(PROPOSED_RISK_CLASSES.public_api?.require).toEqual(['checklist:public_api']);
+  });
+
+  it('names every checklist the proposal selects, with a purpose and no items', () => {
+    const selected = Object.values(PROPOSED_RISK_CLASSES)
+      .flatMap((declared) => declared.require.map(checklistNameOf))
+      .filter((name): name is string => name !== null);
+    expect(Object.keys(PROPOSED_REVIEW_CHECKLISTS).sort()).toEqual([...new Set(selected)].sort());
+    for (const [name, entry] of Object.entries(PROPOSED_REVIEW_CHECKLISTS)) {
+      expect(entry.purpose, name).toContain('Q83');
+      expect(entry).not.toHaveProperty('items');
+    }
+  });
+
+  it('is refused by the configuration schema until the operator writes the lists, and accepted once they do', () => {
+    // The published proposal is config-shaped, so accepting it without the lists must fail at the
+    // document — never be stored with a requirement nothing can read.
+    const bare = agenticConfigSchema.safeParse({
+      version: 1,
+      policies: { risk_classes: PROPOSED_RISK_CLASSES },
+    });
+    expect(bare.success).toBe(false);
+    expect(bare.error?.issues.map((issue) => issue.path.join('.')).sort()).toEqual([
+      'policies.risk_classes.payments.require.1',
+      'policies.risk_classes.public_api.require.0',
+    ]);
+    const written = agenticConfigSchema.safeParse({
+      version: 1,
+      policies: {
+        risk_classes: PROPOSED_RISK_CLASSES,
+        review_checklists: { payments: ['a'], public_api: ['b'] },
+      },
+    });
+    expect(written.success, JSON.stringify(written.error?.issues)).toBe(true);
   });
 
   it('classifies a migration as `data` and a doc change as nothing (standing rule 42)', () => {
@@ -110,16 +165,39 @@ describe('the platform’s proposal (product/19 §14, WP-37)', () => {
     ]);
     expect(riskClassesForPaths(PROPOSED_RISK_CLASSES, ['docs/readme.md'])).toEqual([]);
   });
+});
 
-  it('names the row it cannot propose, with its reason and its paths', () => {
-    // Data rather than prose, because the settings screen renders it: product/19 §14's sixth class
-    // has only a checklist requirement, and `checklist:` is refused until Q83 is answered.
-    const names = RISK_CLASS_REQUIREMENTS_AWAITING_CHECKLIST.map((entry) => entry.name);
-    expect(names).toEqual(['public_api']);
-    expect(Object.keys(PROPOSED_RISK_CLASSES)).not.toContain('public_api');
-    for (const entry of RISK_CLASS_REQUIREMENTS_AWAITING_CHECKLIST) {
-      expect(entry.paths.length).toBeGreaterThan(0);
-      expect(entry.reason).toContain('Q83');
-    }
+describe('the Reviewer’s checklists (Q83, WP-45)', () => {
+  const classes: Readonly<Record<string, RiskClass>> = {
+    auth: { paths: ['src/auth/**'], require: ['plan_approval', 'checklist:security'] },
+    payments: { paths: ['src/pay/**'], require: ['checklist:payments', 'checklist:security'] },
+    data: { paths: ['db/**'], require: ['plan_approval'] },
+  };
+  const lists = { security: ['No secret is logged'], payments: ['Minor units', 'Idempotent'] };
+
+  it('returns the lists the matched classes select, once each, with every selecting class', () => {
+    expect(reviewChecklistsFor(classes, lists, ['auth', 'payments'])).toEqual({
+      applied: [
+        { name: 'security', items: ['No secret is logged'], requiredBy: ['auth', 'payments'] },
+        { name: 'payments', items: ['Minor units', 'Idempotent'], requiredBy: ['payments'] },
+      ],
+      missing: [],
+    });
+  });
+
+  it('returns nothing for a class that selects no list, and for no match at all', () => {
+    expect(reviewChecklistsFor(classes, lists, ['data'])).toEqual({ applied: [], missing: [] });
+    expect(reviewChecklistsFor(classes, lists, [])).toEqual({ applied: [], missing: [] });
+    expect(reviewChecklistsFor(undefined, lists, ['auth'])).toEqual({ applied: [], missing: [] });
+  });
+
+  it('names a selected list the configuration does not define instead of dropping it', () => {
+    expect(reviewChecklistsFor(classes, { security: ['x'] }, ['payments'])).toEqual({
+      applied: [{ name: 'security', items: ['x'], requiredBy: ['payments'] }],
+      missing: ['payments'],
+    });
+    // A key inherited from Object.prototype is not a list somebody wrote.
+    const proto = { p: { paths: ['a/**'], require: ['checklist:constructor'] } };
+    expect(reviewChecklistsFor(proto, {}, ['p']).missing).toEqual(['constructor']);
   });
 });

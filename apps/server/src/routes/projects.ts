@@ -24,23 +24,23 @@
 import type { SecretRedactor } from '@platform/application';
 import { ignoredProjectAllow } from '@platform/application';
 import {
+  type AgenticConfig,
   agenticConfigSchema,
   apiErrorSchema,
   budgetsResponseSchema,
+  checklistNameOf,
   type EffectiveConfigResponse,
   effectiveConfigResponseSchema,
   type IsoDateTime,
   listTasksQuerySchema,
   projectsResponseSchema,
+  type RiskClass,
   readinessResponseSchema,
   riskClassSchema,
   slugSchema,
   tasksResponseSchema,
 } from '@platform/contracts';
-import {
-  PROPOSED_RISK_CLASSES,
-  RISK_CLASS_REQUIREMENTS_AWAITING_CHECKLIST,
-} from '@platform/domain';
+import { PROPOSED_REVIEW_CHECKLISTS, PROPOSED_RISK_CLASSES } from '@platform/domain';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
@@ -160,7 +160,7 @@ const valueAt = (document: unknown, path: readonly PropertyKey[]): unknown => {
 };
 
 /**
- * What the wizard is offered for `policies.risk_classes` — product/18:52 (WP-37).
+ * What the wizard is offered for `policies.risk_classes` — product/18:52 (WP-37, WP-45).
  *
  * A discovery run's proposal when there is one, and product/19 §14's own table when there is not.
  * **Both are parsed before they are published**, and a stored proposal that does not parse is
@@ -169,21 +169,65 @@ const valueAt = (document: unknown, path: readonly PropertyKey[]): unknown => {
  * (PROGRESS backlog 58's distinction — fail closed on the write, open on the read). The stored value
  * is model output about somebody's repository, which is the other reason it is re-validated here
  * (BD-022).
+ *
+ * **A stored class's `require` is the platform table's, read now** (WP-45). What a class forces was
+ * never the model's (`proposedClassesFrom` copies it from `PROPOSED_RISK_CLASSES` at the write), so
+ * a proposal a Discovery run stored before `payments` gained its checklist would otherwise go on
+ * offering the half-class this row exists to retire — the stored copy is a snapshot of a platform
+ * policy, and the policy is the one to publish. Only the paths are the proposal's.
+ *
+ * `checklists` is every `checklist:<name>` the offered classes select, with the classes that select
+ * it, product/19's words for it and whether `config` already defines it — the thing accepting asks
+ * the operator to write, on the published document rather than in a docblock (PROGRESS backlog 91).
  */
 export const riskClassProposalOf = (
   stored: Record<string, unknown> | null,
+  config: AgenticConfig | null = null,
 ): EffectiveConfigResponse['risk_class_proposal'] => {
   const parsed = stored === null ? null : z.record(slugSchema, riskClassSchema).safeParse(stored);
   const proposed = parsed?.success === true && Object.keys(parsed.data).length > 0;
+  const classes: Record<string, RiskClass> = proposed
+    ? Object.fromEntries(
+        Object.entries(parsed.data).map(([name, declared]) => [
+          name,
+          {
+            paths: declared.paths,
+            require: [
+              ...(Object.hasOwn(PROPOSED_RISK_CLASSES, name)
+                ? (PROPOSED_RISK_CLASSES[name] as RiskClass).require
+                : declared.require),
+            ],
+          },
+        ]),
+      )
+    : Object.fromEntries(
+        Object.entries(PROPOSED_RISK_CLASSES).map(([name, declared]) => [
+          name,
+          { paths: [...declared.paths], require: [...declared.require] },
+        ]),
+      );
+  const defined = config?.policies?.review_checklists ?? {};
+  const checklists = new Map<string, string[]>();
+  for (const [name, declared] of Object.entries(classes)) {
+    for (const requirement of declared.require) {
+      const checklist = checklistNameOf(requirement);
+      if (checklist !== null) {
+        checklists.set(checklist, [...(checklists.get(checklist) ?? []), name]);
+      }
+    }
+  }
   return {
     source: proposed ? 'discovery' : 'platform',
-    classes: proposed
-      ? (parsed.data as EffectiveConfigResponse['risk_class_proposal']['classes'])
-      : (PROPOSED_RISK_CLASSES as EffectiveConfigResponse['risk_class_proposal']['classes']),
-    not_expressible: RISK_CLASS_REQUIREMENTS_AWAITING_CHECKLIST.map((entry) => ({
-      name: entry.name,
-      paths: [...entry.paths],
-      reason: entry.reason,
+    classes: classes as EffectiveConfigResponse['risk_class_proposal']['classes'],
+    checklists: [...checklists.entries()].map(([name, requiredBy]) => ({
+      name,
+      required_by: requiredBy,
+      purpose:
+        (Object.hasOwn(PROPOSED_REVIEW_CHECKLISTS, name)
+          ? PROPOSED_REVIEW_CHECKLISTS[name]?.purpose
+          : undefined) ??
+        'a review checklist a proposed class selects; the platform ships no items (Q83), so the list is yours to write',
+      defined: Object.hasOwn(defined, name),
     })),
   };
 };
@@ -277,7 +321,7 @@ export const registerProjectRoutes = async (
         // WP-54: what the project declared and no role's baseline grants — dropped, never widened
         // (BD-025), and published here rather than dropped in silence.
         ignored_allow_commands: [...ignoredProjectAllow(parsed.data.commands)],
-        risk_class_proposal: riskClassProposalOf(row.proposedRiskClasses),
+        risk_class_proposal: riskClassProposalOf(row.proposedRiskClasses, parsed.data),
       };
     },
   );

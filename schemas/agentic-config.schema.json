@@ -170,122 +170,34 @@
       "type": "object",
       "properties": {
         "autonomy": {
-          "$ref": "#/$defs/AutonomyLevel"
+          "$ref": "#/$defs/anon_0af369b3"
         },
         "probation_tasks": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 1000
+          "$ref": "#/$defs/anon_8c0975b2"
         },
         "knowledge_apply": {
-          "type": "object",
-          "properties": {
-            "auto_apply": {
-              "type": "boolean"
-            },
-            "discard_below": {
-              "$ref": "#/$defs/UnitInterval"
-            },
-            "proposal_above": {
-              "$ref": "#/$defs/UnitInterval"
-            }
-          },
-          "additionalProperties": false
+          "$ref": "#/$defs/anon_af2a2ac0"
         },
         "dependency_policy": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/anon_02e7dfb8"
-            },
-            {
-              "type": "object",
-              "properties": {
-                "default": {
-                  "$ref": "#/$defs/anon_02e7dfb8"
-                },
-                "ecosystems": {
-                  "type": "object",
-                  "propertyNames": {
-                    "type": "string",
-                    "enum": [
-                      "npm",
-                      "pypi",
-                      "go",
-                      "cargo"
-                    ]
-                  },
-                  "additionalProperties": {
-                    "$ref": "#/$defs/anon_02e7dfb8"
-                  }
-                },
-                "allowlist": {
-                  "maxItems": 500,
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/$defs/anon_ca92bbb4"
-                  }
-                }
-              },
-              "additionalProperties": false
-            }
-          ]
+          "$ref": "#/$defs/anon_88378b47"
         },
         "coverage_source": {
-          "type": "string",
-          "enum": [
-            "pipeline",
-            "none"
-          ]
+          "$ref": "#/$defs/anon_f5e4ca83"
         },
         "drift_without_direction": {
-          "type": "string",
-          "enum": [
-            "disabled",
-            "label_unknown"
-          ]
+          "$ref": "#/$defs/anon_b684c526"
         },
         "protected_paths": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/PathPattern"
-          }
+          "$ref": "#/$defs/anon_e1145ccd"
         },
         "risk_classes": {
-          "type": "object",
-          "propertyNames": {
-            "$ref": "#/$defs/Slug"
-          },
-          "additionalProperties": {
-            "type": "object",
-            "properties": {
-              "paths": {
-                "minItems": 1,
-                "type": "array",
-                "items": {
-                  "$ref": "#/$defs/PathPattern"
-                }
-              },
-              "require": {
-                "minItems": 1,
-                "type": "array",
-                "items": {
-                  "$ref": "#/$defs/anon_eee548eb"
-                }
-              }
-            },
-            "required": [
-              "paths",
-              "require"
-            ],
-            "additionalProperties": false
-          }
+          "$ref": "#/$defs/anon_2d7167fd"
+        },
+        "review_checklists": {
+          "$ref": "#/$defs/anon_3dcdad2e"
         },
         "reviewers": {
-          "maxItems": 8,
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/NonEmptyString"
-          }
+          "$ref": "#/$defs/anon_4d06a3cf"
         }
       },
       "additionalProperties": false
@@ -720,8 +632,69 @@
     "anon_0a99e8c4": {
       "$ref": "#/$defs/Slug"
     },
+    "anon_0af369b3": {
+      "$ref": "#/$defs/AutonomyLevel"
+    },
     "anon_0d176875": {
       "$ref": "#/$defs/ArtifactType"
+    },
+    "anon_21c2c7a0": {
+      "minItems": 1,
+      "maxItems": 30,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/anon_45ab7723"
+      }
+    },
+    "anon_2d7167fd": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/Slug"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "paths": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/PathPattern"
+            }
+          },
+          "require": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/anon_9d3d8175"
+            }
+          }
+        },
+        "required": [
+          "paths",
+          "require"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "anon_3dcdad2e": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/Slug"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/anon_21c2c7a0"
+      }
+    },
+    "anon_45ab7723": {
+      "maxLength": 500,
+      "$ref": "#/$defs/NonEmptyString"
+    },
+    "anon_4d06a3cf": {
+      "maxItems": 8,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/NonEmptyString"
+      }
     },
     "anon_4e205306": {
       "$ref": "#/$defs/AgentRole"
@@ -733,20 +706,98 @@
         "gate"
       ]
     },
+    "anon_88378b47": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/anon_02e7dfb8"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "default": {
+              "$ref": "#/$defs/anon_02e7dfb8"
+            },
+            "ecosystems": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "enum": [
+                  "npm",
+                  "pypi",
+                  "go",
+                  "cargo"
+                ]
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/anon_02e7dfb8"
+              }
+            },
+            "allowlist": {
+              "maxItems": 500,
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/anon_ca92bbb4"
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "anon_8c0975b2": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000
+    },
     "anon_903202da": {
       "$ref": "#/$defs/NonEmptyString"
+    },
+    "anon_9d3d8175": {
+      "type": "string",
+      "description": "A risk class requirement: \"plan_approval\", \"reviewer:@handle\" or \"checklist:<name>\" (a key of policies.review_checklists). \"budget_approval\" is refused by name — see the schema docblock.",
+      "pattern": "^(plan_approval|reviewer:@?[A-Za-z0-9._\\-/]+|checklist:[a-z][a-z0-9_]*)$"
+    },
+    "anon_af2a2ac0": {
+      "type": "object",
+      "properties": {
+        "auto_apply": {
+          "type": "boolean"
+        },
+        "discard_below": {
+          "$ref": "#/$defs/UnitInterval"
+        },
+        "proposal_above": {
+          "$ref": "#/$defs/UnitInterval"
+        }
+      },
+      "additionalProperties": false
+    },
+    "anon_b684c526": {
+      "type": "string",
+      "enum": [
+        "disabled",
+        "label_unknown"
+      ]
     },
     "anon_ca92bbb4": {
       "type": "string",
       "description": "An allow-listed package as \"<ecosystem>:<name>\", e.g. \"npm:@scope/pkg\" or \"pypi:requests\"."
     },
+    "anon_e1145ccd": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PathPattern"
+      }
+    },
     "anon_e6c200cc": {
       "$ref": "#/$defs/PathPattern"
     },
-    "anon_eee548eb": {
+    "anon_f5e4ca83": {
       "type": "string",
-      "description": "A risk class requirement: \"plan_approval\" or \"reviewer:@handle\". \"budget_approval\" and \"checklist:<name>\" are refused by name — see the schema docblock.",
-      "pattern": "^(plan_approval|reviewer:@?[A-Za-z0-9._\\-/]+)$"
+      "enum": [
+        "pipeline",
+        "none"
+      ]
     }
   }
 }

@@ -187,7 +187,15 @@ export const ARTIFACT_FIELD_POLICIES = {
     // a re-review repeated itself and escalates the task (product/04 S5); the confirmed paths are
     // compared with the plan's protected-path declarations.
     identifiers: ['findings[].file', 'findings[].id', 'protected_path_changes_confirmed[]'],
+    // WP-45: `checklists_applied` is the platform's own record (the executor overwrites the
+    // model's), and nothing addresses anything with it. `criteria[].id` is joined by the shadow
+    // report with the agent's AcceptanceVerdict — see that entry for why a join for a published
+    // comparison is still prose.
     prose: [
+      'checklists_applied[].name',
+      'checklists_applied[].required_by[]',
+      'criteria[].evidence',
+      'criteria[].id',
       'findings[].category',
       'findings[].explanation',
       'findings[].suggestion',
@@ -196,8 +204,11 @@ export const ARTIFACT_FIELD_POLICIES = {
     ],
   },
   AcceptanceVerdict: {
-    // `criteria[].id` refers to a criterion in the RefinedSpec the *model* was shown, and nothing
-    // in this build joins the two — so it is read, not resolved.
+    // `criteria[].id` refers to a criterion in the RefinedSpec the *model* was shown. Since WP-45
+    // the shadow report **joins** it with a ReviewVerdict's `criteria[].id` to publish a comparison
+    // — and it stays prose, because the identifier class is where a wrong answer is a wrong
+    // *action*: a redacted id fails the join, and the comparison is withheld (two sides or not at
+    // all), which is a missing number rather than a write to the wrong place.
     identifiers: [],
     prose: ['criteria[].evidence', 'criteria[].id', 'missing[]', 'scope_creep[]', 'ux_notes[]'],
   },
@@ -248,6 +259,13 @@ export const ARTIFACT_FIELD_POLICIES = {
       'agent_review_of_human_mr[].category',
       'agent_review_of_human_mr[].explanation',
       'agent_review_of_human_mr[].suggestion',
+      // WP-45: joined across two artifacts for the comparison, never used to address anything.
+      // The three labels are single-valued literals (`const` in the derived JSON Schema, which the
+      // completeness check does not read as an enum), so re-validation refuses any other value.
+      'criteria_comparison.criteria[].id',
+      'criteria_comparison.judged_by.agent',
+      'criteria_comparison.judged_by.human',
+      'criteria_comparison.yardstick',
       'notes',
     ],
   },

@@ -6,8 +6,10 @@
  * ## The task shape, decided
  *
  * A review is **a task on the one-stage `REVIEW_ONLY_TEMPLATE`**, in `mode: 'normal'`, carrying a
- * platform-issued ticket reference built from the merge request. Three reasons, in the order they
- * bind:
+ * platform-issued ticket reference built from the merge request. (Since WP-45 the shadow report
+ * creates the same kind of task, through the same {@link insertReviewTask}, in `mode: 'shadow'` over
+ * a **human** merge request it compares against — `shadow/human-review.ts` — so its threads are
+ * `would_have` rows.) Three reasons, in the order they bind:
  *
  *  1. `runs.task_id` is `not null` (migration 0004) and `RunSpec.taskId` is required, so a review
  *     run needs a task whatever else is decided — exactly the argument `onboarding/discovery.ts`
@@ -78,6 +80,7 @@ import type {
   MergeRequestSnapshot,
   ReviewFinding,
   Severity,
+  TaskMode,
   TicketRef,
 } from '@platform/contracts';
 import { mergeRequestSnapshotSchema } from '@platform/contracts';
@@ -97,7 +100,7 @@ import type { EventHandler, HandlerContext } from '../events/handler.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type { FileDiff, MergeRequest } from '../ports/integrations/git-provider.js';
 import { silentLogger } from '../ports/logger.js';
-import type { UnitOfWork } from '../ports/unit-of-work.js';
+import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
 import {
   gitReads,
   integrationsForProject,
@@ -143,6 +146,21 @@ export const REVIEW_ONLY_TICKET_PROVIDER = 'platform';
  * is what the other keys in this column are, because no provider issues a key containing `!`.
  */
 export const reviewTicketKeyFor = (iid: number): string => `mr!${iid}`;
+
+/**
+ * The merge request a review task's key names — `mr!<iid>`, and `mr!<iid>/shadow/<task>` for the
+ * shadow report's review of a human merge request (WP-45, `shadow/human-review.ts`).
+ *
+ * Read with a pattern rather than `Number(key.slice(3))`, which answered `NaN` for the second form
+ * and would have posted nothing — the first spelling assumed there was one kind of review key.
+ */
+export const reviewedIidOf = (ticketKey: string): number => {
+  const match = /^mr!(\d+)(?:\/|$)/.exec(ticketKey);
+  if (match === null) {
+    throw new Error(`${JSON.stringify(ticketKey)} is not a review task's ticket key`);
+  }
+  return Number(match[1]);
+};
 
 /**
  * The branch namespace the platform's own work lives in — BD-025's `push:agentic/*`, which is what
@@ -744,84 +762,123 @@ export const runReviewOnlyCheck = async (
     if (again !== null) {
       return null;
     }
-    const commandContext = {
-      ids: options.ids,
-      actor: actorFor(),
-      clock: options.clock as never,
-      correlationId: null,
+    const inserted = await insertReviewTask(options, scope, {
+      projectId,
+      ticket,
+      mode: 'normal',
+      snapshot,
+      settings,
       causeEventId,
-    };
-    const created = createTask(
-      {
-        id: options.ids.next(),
-        projectId,
-        ticket,
-        template: REVIEW_ONLY_TEMPLATE_ID,
-        mode: 'normal',
-        limits: resolveIterationLimits(settings.config.pipeline?.limits),
-      },
-      commandContext,
-    );
-    const stored: StoredTask = {
-      task: created.aggregate,
-      template: settings.templates[REVIEW_ONLY_TEMPLATE_ID] as StoredTask['template'],
-      priorityRank: priorityRankOf(null),
-      createdAt: options.clock.now(),
-      branch: null,
-      // Deliberately not the merge request — see the module docblock.
-      mr: null,
-      workpad: null,
-      costActualUsd: 0,
-      estimateUsd: null,
-      estimateBasis: null,
-      estimateSamples: null,
-      version: INITIAL_TASK_VERSION,
-      ticketSnapshot: null,
-      ticketSnapshotAt: null,
-      ticketSignalAt: null,
-      reviewSubject: snapshot,
-      historySample: null,
-      // A review-only task never opens a merge request of its own, so the `risk_route` duty never
-      // runs for it and this list stays empty (WP-37).
-      riskClasses: [],
-      coverage: null,
-      dependencies: null,
-      requiredReviewers: null,
-      reviewThreads: null,
-      requestedByUserId: null,
-    };
-    await options.store.tasks.insert(scope.tx, stored);
-
-    /**
-     * **No WIP admission and no protected-branch check**, and both are decisions.
-     *
-     * The branch check exists because the agent will be given a push credential with no branch
-     * scoping (Q40); a review-only run pushes nothing, so refusing it would park a human's merge
-     * request for a reason that cannot apply to it. The WIP limits bound *delivery* work in
-     * progress (BD-010) and a queued review task has no producer to dequeue it — `schedulerHandler`
-     * dequeues on `task.completed`, which would make a review wait behind a feature. What bounds
-     * the spend is the budget guard the run goes through like every other, and product/18's own
-     * `max_findings`. `onboarding/discovery.ts` made the same call for the same reason.
-     */
-    const pipeline = compilePipeline(stored.task.template, stored.template);
-    const applied = await applyDecision({
-      store: options.store,
-      pipeline,
-      tx: scope.tx,
-      stored,
-      decision: interpret(pipeline, { kind: 'start' }),
-      context: { ...commandContext, correlationId: stored.task.id },
-      causedByEventId: causeEventId,
-      ...(options.logger === undefined ? {} : { logger: options.logger }),
     });
-    await scope.events.append([...created.events, ...applied.events]);
-    return applied.work;
+    return inserted.work;
   });
 
   if (work !== null) {
     logger.info({ project_id: projectId, iid, reason: match.reason }, 'review-only: reviewing');
     await enqueueStage(options.jobs, work);
   }
+};
+
+/** What {@link insertReviewTask} creates a review task from. */
+export interface ReviewTaskInput {
+  readonly projectId: Id;
+  readonly ticket: TicketRef;
+  /**
+   * `normal` for review-only mode; `shadow` for the shadow report's review of a human merge request
+   * (WP-45), which is what makes every thread the review would post a `would_have` row.
+   */
+  readonly mode: TaskMode;
+  readonly snapshot: MergeRequestSnapshot;
+  readonly settings: ProjectSettings;
+  /** The event that caused the creation, or `null` for a wake-up that carries none. */
+  readonly causeEventId: Id | null;
+}
+
+/**
+ * Creates a one-stage review task on {@link REVIEW_ONLY_TEMPLATE_ID} and starts it, in the caller's
+ * transaction — the part of {@link runReviewOnlyCheck} WP-45's shadow review of a human merge
+ * request shares, so there is one way a review task comes to exist.
+ *
+ * Returns the stage work to enqueue after the commit; the caller has already asked whether the
+ * task exists, under the `unique (project_id, ticket_key, mode)` that makes the creation idempotent.
+ */
+export const insertReviewTask = async (
+  options: ReviewOnlyOptions,
+  scope: TransactionScope,
+  input: ReviewTaskInput,
+) => {
+  const commandContext = {
+    ids: options.ids,
+    actor: actorFor(),
+    clock: options.clock as never,
+    correlationId: null,
+    causeEventId: input.causeEventId,
+  };
+  const created = createTask(
+    {
+      id: options.ids.next(),
+      projectId: input.projectId,
+      ticket: input.ticket,
+      template: REVIEW_ONLY_TEMPLATE_ID,
+      mode: input.mode,
+      limits: resolveIterationLimits(input.settings.config.pipeline?.limits),
+    },
+    commandContext,
+  );
+  const stored: StoredTask = {
+    task: created.aggregate,
+    template: input.settings.templates[REVIEW_ONLY_TEMPLATE_ID] as StoredTask['template'],
+    priorityRank: priorityRankOf(null),
+    createdAt: options.clock.now(),
+    branch: null,
+    // Deliberately not the merge request — see the module docblock.
+    mr: null,
+    workpad: null,
+    costActualUsd: 0,
+    estimateUsd: null,
+    estimateBasis: null,
+    estimateSamples: null,
+    version: INITIAL_TASK_VERSION,
+    ticketSnapshot: null,
+    ticketSnapshotAt: null,
+    ticketSignalAt: null,
+    reviewSubject: input.snapshot,
+    historySample: null,
+    // A review-only task never opens a merge request of its own, so the `risk_route` duty never
+    // runs for it and this list stays empty (WP-37).
+    riskClasses: [],
+    coverage: null,
+    dependencies: null,
+    requiredReviewers: null,
+    reviewThreads: null,
+    requestedByUserId: null,
+  };
+  await options.store.tasks.insert(scope.tx, stored);
+
+  /**
+   * **No WIP admission and no protected-branch check**, and both are decisions.
+   *
+   * The branch check exists because the agent will be given a push credential with no branch
+   * scoping (Q40); a review-only run pushes nothing, so refusing it would park a human's merge
+   * request for a reason that cannot apply to it. The WIP limits bound *delivery* work in
+   * progress (BD-010) and a queued review task has no producer to dequeue it — `schedulerHandler`
+   * dequeues on `task.completed`, which would make a review wait behind a feature. What bounds
+   * the spend is the budget guard the run goes through like every other, and product/18's own
+   * `max_findings`. `onboarding/discovery.ts` made the same call for the same reason.
+   */
+  const pipeline = compilePipeline(stored.task.template, stored.template);
+  const applied = await applyDecision({
+    store: options.store,
+    pipeline,
+    tx: scope.tx,
+    stored,
+    decision: interpret(pipeline, { kind: 'start' }),
+    context: { ...commandContext, correlationId: stored.task.id },
+    causedByEventId: input.causeEventId,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
+  });
+  await scope.events.append([...created.events, ...applied.events]);
+  return { stored, work: applied.work };
 };
 
 /**
@@ -885,7 +942,7 @@ export const runReviewOnlyPost = async (
     noRunScopedSecrets(),
   );
   const writes = reviewWrites(integrations);
-  const iid = Number(stored.task.ticket.key.slice('mr!'.length));
+  const iid = reviewedIidOf(stored.task.ticket.key);
   const ref = refFor(stored, iid);
   const context = {
     projectId: stored.task.projectId,

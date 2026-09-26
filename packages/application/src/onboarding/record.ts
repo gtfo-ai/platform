@@ -198,9 +198,11 @@ const EMPTY: DiscoveryRecordReport = {
  * **Three rules, and each is the reason a model's answer is a suggestion rather than a setting.**
  *
  *  1. **The name must be one the platform knows.** `PROPOSED_RISK_CLASSES` is product/19 §14's own
- *     table; a name outside it is dropped rather than created, so a repository cannot invent a class
- *     (and `public_api`, which this build cannot express, is dropped with the rest — see
- *     `RISK_CLASS_REQUIREMENTS_AWAITING_CHECKLIST`). Dashes and case are folded on the way in,
+ *     table; a name outside it is dropped rather than created, so a repository cannot invent a class.
+ *     `public_api` has been in that table since WP-45, so a model that names it is kept — but the
+ *     Discovery prompt's own table still lists five names and tells the model a sixth belongs in
+ *     `questions`, so on this build it is proposed from the platform's table and not from a
+ *     repository (PROGRESS, WP-45's discovered work). Dashes and case are folded on the way in,
  *     because a model writes `agent-config` for the key an operator writes as `agent_config`.
  *  2. **`require` is never taken from the model.** What a class *forces* is a platform policy: a
  *     model that could write the requirement could also write an empty one, and a `payments` class

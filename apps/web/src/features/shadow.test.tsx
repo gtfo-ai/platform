@@ -20,7 +20,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
-import { missingSimilarityReason } from './shadow.js';
+import { HumanSideOfReport, missingSimilarityReason } from './shadow.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
 const BATCH = '00000000-0000-4000-8000-0000000000b1';
@@ -334,5 +334,74 @@ describe('the Shadow screen', () => {
     // and the refusal is visible rather than silent.
     expect(container.querySelector('[data-link-refused="true"]')).not.toBeNull();
     expect(container.querySelector('a[href^="javascript:"]')).toBeNull();
+  });
+});
+
+/**
+ * WP-45 criterion 7: whose criteria are the yardstick is **on the screen, before the count**, and a
+ * comparison the report withheld draws nothing at all (the notes say why).
+ */
+describe('the human side of a shadow report (WP-45)', () => {
+  const report = (overrides: Record<string, unknown>) =>
+    ({ ...(ticket().report as object), ...overrides }) as NonNullable<ShadowBatchTicket['report']>;
+
+  it('labels the comparison as the agent’s own criteria before it prints a number', () => {
+    const { container } = render(
+      <HumanSideOfReport
+        report={report({
+          agent_review_of_human_mr: [
+            {
+              id: 'h1',
+              severity: 'major',
+              category: 'tests',
+              file: null,
+              line: null,
+              explanation: 'x',
+              suggestion: null,
+            },
+          ],
+          criteria_comparison: {
+            yardstick: 'agent_refined_spec',
+            judged_by: { agent: 'acceptance_tester', human: 'reviewer' },
+            criteria: [
+              { id: 'ac1', agent: 'met', human: 'not_met' },
+              { id: HOSTILE_KEY, agent: 'met', human: 'met' },
+            ],
+          },
+        })}
+      />,
+    );
+    const text = container.textContent ?? '';
+    expect(text).toContain('1 finding(s) it would have raised — stored here, posted nowhere');
+    const label = text.indexOf('measured against the agent’s own specification');
+    const count = text.indexOf('human MR met 1 of 2');
+    expect(label).toBeGreaterThanOrEqual(0);
+    expect(count).toBeGreaterThan(label);
+    expect(text).toContain('(of the agent’s criteria)');
+    expect(text).toContain('judged by its Acceptance Tester');
+    // Never the unlabelled sentence the row forbids.
+    expect(text).not.toMatch(/human missed/i);
+    // A criterion id is model text: it is characters on the page, never markup.
+    expect(text).toContain(HOSTILE_KEY);
+    expect(container.querySelector('script')).toBeNull();
+  });
+
+  it('draws nothing when no reviewer verdict and no comparison exist', () => {
+    const { container } = render(
+      <HumanSideOfReport
+        report={report({ agent_review_of_human_mr: null, criteria_comparison: null })}
+      />,
+    );
+    expect(container.textContent).toBe('');
+  });
+
+  it('draws the findings alone when the comparison was withheld', () => {
+    const { container } = render(
+      <HumanSideOfReport
+        report={report({ agent_review_of_human_mr: [], criteria_comparison: null })}
+      />,
+    );
+    expect(container.textContent).toContain('0 finding(s)');
+    expect(container.textContent).not.toContain('Acceptance criteria');
   });
 });

@@ -10,7 +10,7 @@
  * `created_at` is `now()`, so two tasks created in one transaction share the timestamp exactly, and
  * a cursor of the timestamp alone would silently skip whichever fell after a page boundary.
  */
-import { agenticConfigSchema } from '@platform/contracts';
+import { agenticConfigSchema, effectiveConfigResponseSchema } from '@platform/contracts';
 import { redaction as redactionAdapters } from '@platform/infrastructure';
 import { describe, expect, it } from 'vitest';
 import { HttpError } from '../errors.js';
@@ -115,6 +115,21 @@ describe('an unreadable stored configuration', () => {
     expect(described).toContain('"manual"');
   });
 
+  it('names a class whose checklist the document does not define, by key path and value (WP-45)', () => {
+    // Criterion 2 at the read: a stored document that lost its list is refused with the pair an
+    // operator can act on, never read as a class that silently requires less.
+    const stored = {
+      version: 1,
+      policies: {
+        risk_classes: {
+          payments: { paths: ['**/billing/**'], require: ['plan_approval', 'checklist:payments'] },
+        },
+      },
+    };
+    const described = describeConfigIssues(stored, issuesOf(stored), redactText);
+    expect(described).toBe('policies.risk_classes.payments.require.1: "checklist:payments"');
+  });
+
   it('bounds the value it renders, because stored state came from outside', () => {
     const stored = { version: 1, project: { communication_language: 'x'.repeat(500) } };
     const described = describeConfigIssues(stored, issuesOf(stored), redactText);
@@ -179,21 +194,66 @@ describe('an unreadable stored configuration', () => {
   });
 });
 
-describe('the risk-class proposal the configuration read publishes (WP-37)', () => {
-  it('offers the platform’s own table when no discovery run has proposed one', () => {
+describe('the risk-class proposal the configuration read publishes (WP-37, WP-45)', () => {
+  it('offers the platform’s own table — all six classes — when no discovery run has proposed one', () => {
     const offer = riskClassProposalOf(null);
     expect(offer.source).toBe('platform');
-    expect(Object.keys(offer.classes)).toContain('data');
-    // The row this build cannot propose travels **with its reason**, because the screen renders it.
-    expect(offer.not_expressible.map((entry) => entry.name)).toEqual(['public_api']);
-    expect(offer.not_expressible[0]?.reason).toContain('Q83');
+    expect(Object.keys(offer.classes).sort()).toEqual([
+      'agent_config',
+      'auth',
+      'data',
+      'infra',
+      'payments',
+      'public_api',
+    ]);
+  });
+
+  it('tells the truth about `payments` on the published document: both requirements, and the list it needs (backlog 91)', () => {
+    const offer = effectiveConfigResponseSchema.shape.risk_class_proposal.parse(
+      riskClassProposalOf(null),
+    );
+    expect(offer.classes.payments?.require).toEqual(['plan_approval', 'checklist:payments']);
+    expect(offer.classes.public_api?.require).toEqual(['checklist:public_api']);
+    // What accepting asks the operator to write, by name, with the classes that select it — never
+    // a docblock sentence.
+    expect(offer.checklists).toEqual([
+      expect.objectContaining({ name: 'payments', required_by: ['payments'], defined: false }),
+      expect.objectContaining({ name: 'public_api', required_by: ['public_api'], defined: false }),
+    ]);
+    expect(offer.checklists[0]?.purpose).toContain('stricter checklist');
+    expect(offer.checklists[1]?.purpose).toContain('compatibility');
+  });
+
+  it('says which lists the project’s own document already defines', () => {
+    const offer = riskClassProposalOf(null, {
+      version: 1,
+      policies: { review_checklists: { payments: ['Minor units'] } },
+    });
+    expect(offer.checklists.map((entry) => [entry.name, entry.defined])).toEqual([
+      ['payments', true],
+      ['public_api', false],
+    ]);
   });
 
   it('offers what a discovery run proposed, and says it was the agent', () => {
-    const stored = { payments: { paths: ['src/billing/**'], require: ['plan_approval'] } };
+    const stored = { data: { paths: ['db/**'], require: ['plan_approval'] } };
     const offer = riskClassProposalOf(stored);
     expect(offer.source).toBe('discovery');
     expect(offer.classes).toEqual(stored);
+    expect(offer.checklists).toEqual([]);
+  });
+
+  it('publishes the platform’s current requirements over a stored proposal written before them', () => {
+    // A Discovery run before WP-45 stored `payments` with the plan approval only; the paths are the
+    // proposal's and what the class forces is the platform's, read now.
+    const offer = riskClassProposalOf({
+      payments: { paths: ['src/billing/**'], require: ['plan_approval'] },
+    });
+    expect(offer.classes.payments).toEqual({
+      paths: ['src/billing/**'],
+      require: ['plan_approval', 'checklist:payments'],
+    });
+    expect(offer.checklists.map((entry) => entry.name)).toEqual(['payments']);
   });
 
   it('falls back to the platform’s table for a stored proposal it cannot parse', () => {
@@ -207,7 +267,7 @@ describe('the risk-class proposal the configuration read publishes (WP-37)', () 
     for (const stored of [
       {},
       { payments: { paths: [], require: ['plan_approval'] } },
-      { payments: { paths: ['src/**'], require: ['checklist:payments'] } },
+      { payments: { paths: ['src/**'], require: ['budget_approval'] } },
       { 'Not A Slug': { paths: ['src/**'], require: ['plan_approval'] } },
     ]) {
       expect(riskClassProposalOf(stored).source, JSON.stringify(stored)).toBe('platform');

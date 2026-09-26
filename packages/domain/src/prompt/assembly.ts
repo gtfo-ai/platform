@@ -231,6 +231,26 @@ export interface PromptTask {
    * client-supplied JSON carrying a caller-chosen `Idempotency-Key`, so every byte is untrusted.
    */
   readonly record: readonly PromptRecordBlock[];
+  /**
+   * The project's review checklists the matched risk classes select — Q83, WP-45.
+   *
+   * Empty for every run that is not a Reviewer's and for a review whose paths match no class that
+   * names one, which is why it is a required array rather than an optional field: a caller that
+   * meant *"no checklist"* has to say so. Each entry becomes one `review_checklist` data block,
+   * because the items are **project text** (BD-022) — a hostile item is delimited like every other
+   * untrusted string, and a project's own list changes no `ROLE_PROMPT_VERSIONS`.
+   */
+  readonly reviewChecklists: readonly PromptReviewChecklist[];
+}
+
+/** One review checklist, as the Reviewer is given it (WP-45). */
+export interface PromptReviewChecklist {
+  /** The key under `policies.review_checklists`. Project-chosen, so it goes in the body. */
+  readonly name: string;
+  /** The project's items, verbatim. Untrusted (BD-022). */
+  readonly items: readonly string[];
+  /** The matched risk classes that selected it. Project-chosen names, in the body. */
+  readonly requiredBy: readonly string[];
 }
 
 /** One block of the platform's own record of a task (WP-31). */
@@ -616,7 +636,7 @@ const derivedNameAttribute = (name: string, value: string): Record<string, strin
  *
  * | attribute | kind | on refusal |
  * |---|---|---|
- * | `tier`, `tokens`, `version`, `original_chars`, `comments`, `comment_count`, `files`, `file_count` | platform integers | cannot refuse |
+ * | `tier`, `tokens`, `version`, `original_chars`, `comments`, `comment_count`, `files`, `file_count`, `items`, `item_count` | platform integers | cannot refuse |
  * | `reason`, `artifact_type`, `truncated`, `text`, `kind` | platform vocabulary (a closed enum or a literal) | **throws** — a platform bug |
  * | `file` | derived from an untrusted vault path by a total fold | degrades |
  * | `path` | an untrusted vault path | degrades |
@@ -852,6 +872,88 @@ const recordBlock = (entry: PromptRecordBlock): DataBlock => ({
   body: entry.body,
 });
 
+/** How much of one checklist reaches a prompt — above the schema's own bound for a whole list. */
+export const MAX_CHECKLIST_BLOCK_CHARS = 16_000;
+
+/**
+ * How much of **all** a run's checklists reaches its prompt together (WP-45 review round 1).
+ *
+ * The schema allows 20 lists of 30 items of 500 characters — about 300 000 characters — and none
+ * of it is counted against the context pack's budget, so without a total a project could fill a
+ * Reviewer prompt with checklists alone. 32 000 characters is roughly 8 000 tokens: twice one full
+ * list, above the largest single artifact block ({@link MAX_ARTIFACT_CHARS}), and of the order of a
+ * default context pack — enough for the one or two lists a change's classes select in practice.
+ * The cut is at **item** granularity and announced in the marker, so the record of what the
+ * Reviewer was given (`checklists_applied`) can count exactly the items it received.
+ */
+export const MAX_CHECKLIST_TOTAL_CHARS = 32_000;
+
+/** One checklist after the bound: the items actually delivered, and whether any were cut. */
+export interface BoundedReviewChecklist extends PromptReviewChecklist {
+  /** How many items the project declared — `items.length` when nothing was cut. */
+  readonly declaredItems: number;
+  readonly truncated: boolean;
+}
+
+const checklistHeader = (checklist: PromptReviewChecklist): string =>
+  [
+    `checklist: ${checklist.name}`,
+    `required by risk class(es): ${checklist.requiredBy.join(', ')}`,
+    '',
+  ].join('\n');
+
+/**
+ * The checklists a prompt carries, cut whole-item by whole-item at {@link MAX_CHECKLIST_BLOCK_CHARS}
+ * per list and {@link MAX_CHECKLIST_TOTAL_CHARS} across all of them, in the order given.
+ *
+ * Exported because the planner records what the Reviewer was given from the **same** function the
+ * assembler renders with — two computations of one cut would be two answers (standing rule 41).
+ */
+export const boundReviewChecklists = (
+  checklists: readonly PromptReviewChecklist[],
+): readonly BoundedReviewChecklist[] => {
+  let remaining = MAX_CHECKLIST_TOTAL_CHARS;
+  return checklists.map((checklist) => {
+    let used = checklistHeader(checklist).length;
+    const items: string[] = [];
+    for (const item of checklist.items) {
+      const line = `\n- ${item}`.length;
+      if (used + line > MAX_CHECKLIST_BLOCK_CHARS || used + line > remaining) {
+        break;
+      }
+      items.push(item);
+      used += line;
+    }
+    remaining = Math.max(0, remaining - used);
+    return {
+      ...checklist,
+      items,
+      declaredItems: checklist.items.length,
+      truncated: items.length < checklist.items.length,
+    };
+  });
+};
+
+/**
+ * One review checklist — the project's items for a risk class it matched (WP-45, Q83).
+ *
+ * **Nothing here derives an attribute from the project**: the list's name and the classes that
+ * selected it are project-chosen keys, so they stay in the body with the items, and the marker
+ * carries only the platform's counts — how many items the Reviewer was given, which is what the
+ * Review Verdict records as `checklists_applied`, and, when {@link boundReviewChecklists} cut the
+ * list, `truncated` and how many the project declared — which the list itself must not be able to
+ * forge (technical/07). The per-item `- ` prefix is platform text *inside* the block, which is where
+ * it belongs: an item that writes its own `- ` line misnumbers a list and can do nothing else.
+ */
+const checklistBlock = (checklist: BoundedReviewChecklist): DataBlock => ({
+  kind: 'review_checklist',
+  attributes: {
+    items: checklist.items.length,
+    ...(checklist.truncated ? { truncated: 'true', item_count: checklist.declaredItems } : {}),
+  },
+  body: [checklistHeader(checklist), ...checklist.items.map((item) => `- ${item}`)].join('\n'),
+});
+
 const feedbackBlock = (feedback: string): DataBlock => {
   const capped = cap(feedback, MAX_FEEDBACK_CHARS);
   return { kind: 'return_feedback', attributes: cappedAttributes(capped), body: capped.text };
@@ -941,6 +1043,9 @@ export const assemblePrompt = (input: AssemblePromptInput): AssembledPrompt => {
     // `?? null` for the same reason: a caller that lost the field through a cast emits no block.
     ...(input.task.historySample == null ? [] : [historyBlock(input.task.historySample)]),
     ...input.task.artifacts.map(artifactBlock),
+    // WP-45: `?? []` for the reason `ticketBlock` uses `?? null` — a caller that lost the field
+    // through a cast emits no block rather than throwing.
+    ...boundReviewChecklists(input.task.reviewChecklists ?? []).map(checklistBlock),
     ...(input.task.returnFeedback === null ? [] : [feedbackBlock(input.task.returnFeedback)]),
     ...input.task.record.map(recordBlock),
     // Last, so it is the nearest thing to the output contract the model reads next.

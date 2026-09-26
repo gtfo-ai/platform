@@ -11,7 +11,7 @@
  * that matters most: the duty is at-least-once and the event is not.
  */
 import type { DomainEvent, Id, IsoDateTime, MergeRequestRef } from '@platform/contracts';
-import { materialiseAutonomy } from '@platform/domain';
+import { materialiseAutonomy, readDataBlocks } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { staticPipelineIntegrations } from '../pipeline/integrations.js';
 import { staticProjectSettings } from '../pipeline/settings.js';
@@ -24,8 +24,14 @@ import type {
 import type { Ticket } from '../ports/integrations/task-management.js';
 import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
 import { startShadowBatch } from './batch.js';
+import { shadowReviewTicketKeyFor, shadowTaskOfReviewKey } from './human-review.js';
 import type { ShadowBatchTicketRow } from './ports.js';
-import { buildShadowReport, runShadowReport } from './report.js';
+import {
+  buildShadowReport,
+  CRITERIA_YARDSTICK_NOTE,
+  compareCriteria,
+  runShadowReport,
+} from './report.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000f1' as Id;
 const USER = '00000000-0000-4000-8000-0000000000f2' as Id;
@@ -67,6 +73,13 @@ const patch = (path: string, added: number, removed: number): FileDiff => ({
   omitted: false,
 });
 
+const VERDICT = {
+  verdict: 'approve' as const,
+  findings: [],
+  summary: 'Reads well.',
+  protected_path_changes_confirmed: [],
+};
+
 const AGENT_FILES = [patch('src/totals.ts', 20, 2), patch('src/totals.test.ts', 10, 0)];
 const HUMAN_FILES = [
   patch('src/totals.ts', 30, 4),
@@ -88,17 +101,17 @@ describe('buildShadowReport', () => {
     ...overrides,
   });
 
-  const both = () =>
-    buildShadowReport({
-      ticketKey: 'ACME-1',
-      humanMr: HUMAN_MR,
-      ticketRow: row(),
-      agentFiles: AGENT_FILES,
-      humanFiles: HUMAN_FILES,
-      discussions: [],
-      predictedCostUsd: 12,
-      shadowCostUsd: 9.5,
-    });
+  const bothInput = () => ({
+    ticketKey: 'ACME-1',
+    humanMr: HUMAN_MR,
+    ticketRow: row(),
+    agentFiles: AGENT_FILES,
+    humanFiles: HUMAN_FILES,
+    discussions: [],
+    predictedCostUsd: 12,
+    shadowCostUsd: 9.5,
+  });
+  const both = () => buildShadowReport(bothInput());
 
   it('carries every field product/19 §13 asks for when both diffs were read', () => {
     const report = both();
@@ -116,11 +129,51 @@ describe('buildShadowReport', () => {
     expect(report.notes).toContain(BASE);
   });
 
-  it('says "not looked at" rather than "nothing found" for the human merge request’s review', () => {
-    // `null`, never `[]`: nothing on this build reviews somebody else's diff during a shadow task,
-    // and an empty array would claim a reviewer looked (standing rule 16).
-    expect(both().agent_review_of_human_mr).toBeNull();
-    expect(both().notes).toContain('no reviewer looked at the human merge request');
+  it('says "not looked at" rather than "nothing found" when the review ended without a verdict', () => {
+    // `null`, never `[]`: an empty array would claim a reviewer looked (standing rule 16).
+    const report = buildShadowReport({
+      ...bothInput(),
+      humanReview: { kind: 'ended_without_verdict', state: 'needs_human' },
+    });
+    expect(report.agent_review_of_human_mr).toBeNull();
+    expect(report.notes).toContain('ended needs_human without a verdict');
+    expect(report.notes).toContain('this is not "no findings"');
+    // A paused review may be resumed after the report is written, and the report says it will not
+    // be folded in (backlog 219's residual, on the document rather than only in a docblock).
+    const paused = buildShadowReport({
+      ...bothInput(),
+      humanReview: { kind: 'ended_without_verdict', state: 'paused' },
+    });
+    expect(paused.notes).toContain('ended paused without a verdict');
+    expect(paused.notes).toContain('is not folded into this report');
+    expect(report.notes).not.toContain('folded');
+    const unreadable = buildShadowReport({ ...bothInput(), humanReview: { kind: 'unreadable' } });
+    expect(unreadable.agent_review_of_human_mr).toBeNull();
+    expect(unreadable.notes).toContain('no reviewer looked at it');
+  });
+
+  it('stores the findings a reviewer raised on the human merge request, and says they were posted nowhere (WP-45)', () => {
+    const finding = {
+      id: 'h1',
+      severity: 'major' as const,
+      category: 'tests',
+      file: 'src/format.ts',
+      line: 3,
+      explanation: 'The rounding has no test.',
+      suggestion: null,
+    };
+    const report = buildShadowReport({
+      ...bothInput(),
+      humanReview: { kind: 'reviewed', verdict: { ...VERDICT, findings: [finding] } },
+    });
+    expect(report.agent_review_of_human_mr).toEqual([finding]);
+    expect(report.notes).toContain('1 finding(s) are stored here and were posted nowhere');
+    // …and an empty review is `[]`, which *is* "a reviewer looked and found nothing".
+    const clean = buildShadowReport({
+      ...bothInput(),
+      humanReview: { kind: 'reviewed', verdict: VERDICT },
+    });
+    expect(clean.agent_review_of_human_mr).toEqual([]);
   });
 
   it('carries no overlap block at all when the ticket has no human merge request', () => {
@@ -400,6 +453,10 @@ const REVIEW = {
   findings: [],
   summary: 'ok',
   protected_path_changes_confirmed: [],
+  // WP-45: what the reviewer over the human merge request returns when it is given the agent's
+  // RefinedSpec. The scripted runs are keyed by stage, so the shadow task's own review returns it
+  // too — harmless, because only the report reads `criteria` off a review.
+  criteria: [{ id: 'ac1', status: 'not_met', evidence: 'src/totals.ts still sums the view' }],
 };
 
 const ACCEPTANCE = {
@@ -413,7 +470,13 @@ const ACCEPTANCE = {
 const completedRun = (structuredOutput: unknown) =>
   ({ status: 'completed', terminalReason: 'success', structuredOutput }) as const;
 
-const walkedHarness = (options: { readonly merged?: readonly MergedMergeRequest[] } = {}) =>
+const walkedHarness = (
+  options: {
+    readonly merged?: readonly MergedMergeRequest[];
+    /** Extra scripts, e.g. `code_review+merge_request` for the human-MR review alone. */
+    readonly runs?: Readonly<Record<string, ReturnType<typeof completedRun>>>;
+  } = {},
+) =>
   createPipelineHarness({
     projectId: PROJECT,
     settings: {
@@ -426,6 +489,7 @@ const walkedHarness = (options: { readonly merged?: readonly MergedMergeRequest[
       implementation: completedRun(NOTES),
       code_review: completedRun(REVIEW),
       business_review: completedRun(ACCEPTANCE),
+      ...options.runs,
     },
     git: {
       getMergeRequest: async (ref: { iid: number }) =>
@@ -502,6 +566,10 @@ describe('the shadow report, through the whole walk', () => {
      * the store still refused the second row, and the duty went on to write a second artifact and
      * append a second `shadow.report.created`. So the wake-up is delivered twice here, which is the
      * only way the early return is exercised at all (standing rules 3 and 68).
+     *
+     * **Since WP-45 the duty asks first whether the report exists**, which would mask the branch
+     * this case is about — so the store's `reports` is blinded here, which is the race of two
+     * wake-ups that both passed that check before either wrote.
      */
     const harness = walkedHarness();
     await startBatch(harness, ['ACME-1']);
@@ -512,7 +580,7 @@ describe('the shadow report, through the whole walk', () => {
       {
         unitOfWork: harness.memory,
         store: harness.store,
-        shadow: harness.shadow,
+        shadow: { ...harness.shadow, reports: async () => [] },
         settings: staticProjectSettings(() => harness.settings),
         integrations: staticPipelineIntegrations(harness.integrations),
         jobs: harness.jobs,
@@ -535,6 +603,38 @@ describe('the shadow report, through the whole walk', () => {
       harness.store.artifacts.listFor(scope.tx, taskId),
     );
     expect(artifacts.filter((entry) => entry.type === 'ShadowReport')).toHaveLength(1);
+  });
+
+  it('reads nothing and starts no review when a late wake-up finds the report written (WP-45)', async () => {
+    const harness = walkedHarness();
+    await startBatch(harness, ['ACME-1']);
+    await harness.drain();
+    const taskId = harness.shadow.reportRows[0]?.taskId as Id;
+    const calls = harness.audit.entries.length;
+    const tasks = harness.store.snapshot().length;
+
+    await runShadowReport(
+      {
+        unitOfWork: harness.memory,
+        store: harness.store,
+        shadow: harness.shadow,
+        settings: staticProjectSettings(() => harness.settings),
+        integrations: staticPipelineIntegrations(harness.integrations),
+        jobs: harness.jobs,
+        calendar: harness.calendar,
+        ids: harness.ids,
+        clock: { now: () => harness.clock.now() },
+      },
+      {
+        duty: 'shadow_report',
+        project_id: PROJECT,
+        task_id: taskId,
+        cause_event_id: harness.ids.next(),
+      },
+    );
+
+    expect(harness.audit.entries).toHaveLength(calls);
+    expect(harness.store.snapshot()).toHaveLength(tasks);
   });
 
   it('performs nothing twice when the store already has the row', async () => {
@@ -578,5 +678,189 @@ describe('the shadow report, through the whole walk', () => {
     // The planner maps `tasks.mode` onto `RunSpec.mode` and no tier had ever driven it.
     expect(harness.specs.length).toBeGreaterThan(0);
     expect(harness.specs.every((spec) => spec.mode === 'shadow')).toBe(true);
+  });
+});
+
+describe('the review of the human merge request, through the whole walk (WP-45)', () => {
+  const reviewTaskOf = (harness: PipelineHarness) =>
+    harness.store.snapshot().find((entry) => entry.task.template === 'review_only');
+
+  it('runs one reviewer over the human merge request, in shadow mode, before the report is written', async () => {
+    const harness = walkedHarness();
+    await startBatch(harness, ['ACME-1']);
+    await harness.drain();
+
+    const shadowTask = harness.shadow.reportRows[0]?.taskId as Id;
+    const review = reviewTaskOf(harness);
+    expect(review?.task.mode).toBe('shadow');
+    expect(review?.task.state).toBe('done');
+    expect(review?.task.ticket.key).toBe(shadowReviewTicketKeyFor(HUMAN_MR.iid, shadowTask));
+    expect(shadowTaskOfReviewKey(review?.task.ticket.key ?? '')).toBe(shadowTask);
+    // Exactly one: the second wake-up of the report duty found it rather than creating another.
+    expect(
+      harness.store.snapshot().filter((entry) => entry.task.template === 'review_only'),
+    ).toHaveLength(1);
+
+    // The Reviewer was given the human's merge request **and** the agent's specification.
+    const spec = harness.specs.find((entry) => entry.taskId === review?.task.id);
+    expect(spec?.role).toBe('reviewer');
+    expect(spec?.mode).toBe('shadow');
+    const blocks = readDataBlocks(spec?.userPrompt ?? '').blocks;
+    expect(blocks.find((block) => block.kind === 'merge_request')?.body).toContain('src/format.ts');
+    expect(
+      blocks.find(
+        (block) => block.kind === 'artifact' && block.attributes.artifact_type === 'RefinedSpec',
+      )?.body,
+    ).toContain('the footer sums the lines');
+  });
+
+  it('posts nothing on the human merge request: every thread is a `would_have` row', async () => {
+    const harness = walkedHarness();
+    await startBatch(harness, ['ACME-1']);
+    await harness.drain();
+    const review = reviewTaskOf(harness);
+    const threads = harness.audit.entries.filter(
+      (entry) => entry.action === 'create_discussion' && entry.taskId === review?.task.id,
+    );
+    // The positive half first (standing rule 29): the posting duty really ran for this task.
+    expect(threads.length).toBeGreaterThan(0);
+    expect(threads.every((entry) => entry.status === 'would_have')).toBe(true);
+  });
+
+  it('stores the review’s findings on the report and labels whose criteria the comparison uses', async () => {
+    const harness = walkedHarness();
+    await startBatch(harness, ['ACME-1']);
+    await harness.drain();
+    const comparison = harness.shadow.reportRows[0]?.comparison as {
+      agent_review_of_human_mr: unknown;
+      criteria_comparison: unknown;
+      notes: string;
+    };
+    // A reviewer read it and found nothing: `[]`, which is now a claim a run made.
+    expect(comparison.agent_review_of_human_mr).toEqual([]);
+    expect(comparison.notes).toContain('posted nowhere');
+    expect(comparison.criteria_comparison).toEqual({
+      yardstick: 'agent_refined_spec',
+      judged_by: { agent: 'acceptance_tester', human: 'reviewer' },
+      criteria: [{ id: 'ac1', agent: 'met', human: 'not_met' }],
+    });
+    expect(comparison.notes).toContain(CRITERIA_YARDSTICK_NOTE);
+  });
+
+  it('writes the report when the review escalates instead of waiting for ever — and says so', async () => {
+    /**
+     * WP-45 review round 1: the wait is bounded only by the ending events, so this drives one that
+     * is not `task.completed`. The review run returns no artifact, the executor escalates the review
+     * task to `needs_human`, `task.escalated` wakes the report, and the batch completes.
+     */
+    const harness = walkedHarness({
+      runs: { 'code_review+merge_request': completedRun(undefined) },
+    });
+    await startBatch(harness, ['ACME-1']);
+    await harness.drain();
+
+    expect(reviewTaskOf(harness)?.task.state).toBe('needs_human');
+    expect(harness.shadow.reportRows).toHaveLength(1);
+    const comparison = harness.shadow.reportRows[0]?.comparison as {
+      agent_review_of_human_mr: unknown;
+      criteria_comparison: unknown;
+      notes: string;
+    };
+    expect(comparison.agent_review_of_human_mr).toBeNull();
+    expect(comparison.criteria_comparison).toBeNull();
+    expect(comparison.notes).toContain('ended needs_human without a verdict');
+    expect(harness.shadow.batches[0]?.completedAt).not.toBeNull();
+  });
+
+  it('asks no reviewer anything for a ticket with no human merge request', async () => {
+    const harness = walkedHarness({ merged: [] });
+    await startBatch(harness, ['ACME-1']);
+    await harness.drain();
+    expect(reviewTaskOf(harness)).toBeUndefined();
+    expect(harness.shadow.reportRows).toHaveLength(1);
+  });
+});
+
+describe('the acceptance-criteria comparison — two sides or not at all (WP-45)', () => {
+  const spec = {
+    ...REFINED_SPEC,
+    acceptance_criteria: [
+      { ...REFINED_SPEC.acceptance_criteria[0], id: 'ac1' },
+      { ...REFINED_SPEC.acceptance_criteria[0], id: 'ac2' },
+    ],
+  } as never;
+  const acceptance = {
+    ...ACCEPTANCE,
+    criteria: [
+      { id: 'ac1', status: 'met', evidence: '' },
+      { id: 'ac2', status: 'untestable', evidence: '' },
+    ],
+  } as never;
+  const reviewed = (criteria: readonly { id: string; status: string }[] | null) =>
+    ({
+      kind: 'reviewed',
+      verdict: {
+        ...VERDICT,
+        criteria: criteria?.map((entry) => ({ ...entry, evidence: '' })) ?? null,
+      },
+    }) as never;
+
+  it('publishes both sides per criterion of the agent’s own list, with the label', () => {
+    const result = compareCriteria(
+      spec,
+      acceptance,
+      reviewed([
+        { id: 'ac2', status: 'met' },
+        { id: 'ac1', status: 'not_met' },
+        // Judged by the reviewer and not in the yardstick: not a criterion of this comparison.
+        { id: 'invented', status: 'met' },
+      ]),
+    );
+    expect(result.value?.criteria).toEqual([
+      { id: 'ac1', agent: 'met', human: 'not_met' },
+      { id: 'ac2', agent: 'untestable', human: 'met' },
+    ]);
+    expect(result.value?.yardstick).toBe('agent_refined_spec');
+    expect(result.note).toBe(CRITERIA_YARDSTICK_NOTE);
+  });
+
+  it.each([
+    ['no specification', null, acceptance, reviewed([{ id: 'ac1', status: 'met' }]), 'no list'],
+    ['no agent verdict', spec, null, reviewed([{ id: 'ac1', status: 'met' }]), 'agent’s side'],
+    ['no review', spec, acceptance, null, 'human’s side'],
+    ['a review with no criteria', spec, acceptance, reviewed(null), 'judged no criteria'],
+    [
+      'a criterion the reviewer skipped',
+      spec,
+      acceptance,
+      reviewed([{ id: 'ac1', status: 'met' }]),
+      'did not judge ac2',
+    ],
+    [
+      'a review that ended without a verdict',
+      spec,
+      acceptance,
+      { kind: 'ended_without_verdict', state: 'cancelled' } as never,
+      'human’s side',
+    ],
+  ])('publishes nothing for %s, and says which side is missing', (_case, s, a, r, words) => {
+    const result = compareCriteria(s as never, a as never, r as never);
+    expect(result.value).toBeNull();
+    expect(result.note).toContain('no acceptance-criteria comparison');
+    expect(result.note).toContain(words);
+  });
+
+  it('withholds rather than half-publishes when the agent skipped a criterion', () => {
+    const partial = { ...ACCEPTANCE, criteria: [{ id: 'ac1', status: 'met', evidence: '' }] };
+    const result = compareCriteria(
+      spec,
+      partial as never,
+      reviewed([
+        { id: 'ac1', status: 'met' },
+        { id: 'ac2', status: 'met' },
+      ]),
+    );
+    expect(result.value).toBeNull();
+    expect(result.note).toContain('Acceptance Tester did not judge ac2');
   });
 });

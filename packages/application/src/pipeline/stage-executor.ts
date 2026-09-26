@@ -149,6 +149,25 @@ export interface StageRunPlan {
    * spec could not carry the second.
    */
   readonly contextPack: ContextPackRecord;
+  /**
+   * The review checklists this run's prompt carried — `ReviewVerdict.checklists_applied` (WP-45,
+   * Q83).
+   *
+   * Set by a planner for a **Reviewer** run and absent for every other: the executor stamps it onto
+   * the verdict the run returns, replacing whatever the model wrote there, because *"which
+   * checklist was applied"* is a fact about the prompt the platform built and not something a
+   * model may report about itself. Absent means *not recorded* (the field is stored as `null`),
+   * which is a different fact from `[]`, *"the Reviewer was given no checklist"*.
+   */
+  readonly reviewChecklists?: readonly AppliedChecklistRecord[];
+}
+
+/** One `ReviewVerdict.checklists_applied` entry, as the planner decides it. */
+export interface AppliedChecklistRecord {
+  readonly name: string;
+  readonly item_count: number;
+  readonly required_by: readonly string[];
+  readonly truncated: boolean;
 }
 
 /**
@@ -473,6 +492,8 @@ type Prepared =
        * constructions are three chances to disagree.
        */
       readonly redactor: SecretRedactor;
+      /** {@link StageRunPlan.reviewChecklists}, carried to the artifact write. */
+      readonly reviewChecklists: readonly AppliedChecklistRecord[] | null;
     };
 
 type Admitted = {
@@ -855,7 +876,15 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         });
       }
       await scope.events.append([...starting.events, ...running.events]);
-      return { kind: 'ready', spec, stage: valid.stage, stored, run: running.aggregate, redactor };
+      return {
+        kind: 'ready',
+        spec,
+        stage: valid.stage,
+        stored,
+        run: running.aggregate,
+        redactor,
+        reviewChecklists: plan.reviewChecklists ?? null,
+      };
     });
 
   /**
@@ -1027,6 +1056,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         stopReason,
         options,
         redactor: prepared.redactor,
+        reviewChecklists: prepared.reviewChecklists,
       }),
     );
   };
@@ -1062,7 +1092,42 @@ interface RecordInput {
   readonly options: StageExecutorOptions;
   /** The run's own redactor — TD-012 at the artifact write (WP-52). */
   readonly redactor: SecretRedactor;
+  /** What the planner gave a Reviewer run, or `null` when it recorded nothing (WP-45). */
+  readonly reviewChecklists: readonly AppliedChecklistRecord[] | null;
 }
+
+/**
+ * The platform's record on a `ReviewVerdict`, over whatever the model wrote there (WP-45).
+ *
+ * `checklists_applied` is a fact about the prompt the platform assembled, so a model's value for it
+ * is **discarded** rather than trusted or merged — a Reviewer that claimed a checklist it was never
+ * given would otherwise put *"stricter"* on the record for free. Every other artifact type is
+ * returned untouched.
+ */
+export const withPlatformReviewRecord = (
+  artifactType: string,
+  data: JsonValue,
+  applied: readonly AppliedChecklistRecord[] | null,
+): JsonValue => {
+  if (artifactType !== 'ReviewVerdict' || typeof data !== 'object' || data === null) {
+    return data;
+  }
+  if (Array.isArray(data)) {
+    return data;
+  }
+  return {
+    ...data,
+    checklists_applied:
+      applied === null
+        ? null
+        : applied.map((entry) => ({
+            name: entry.name,
+            item_count: entry.item_count,
+            required_by: [...entry.required_by],
+            truncated: entry.truncated,
+          })),
+  };
+};
 
 /**
  * Transaction 2: everything the run produced, written once.
@@ -1181,7 +1246,15 @@ const record = async (
      */
     let redacted: RedactedArtifact;
     try {
-      redacted = redactArtifactData(stage.produces, outcome.structuredOutput, input.redactor);
+      redacted = redactArtifactData(
+        stage.produces,
+        withPlatformReviewRecord(
+          stage.produces,
+          outcome.structuredOutput as JsonValue,
+          input.reviewChecklists,
+        ),
+        input.redactor,
+      );
     } catch (error) {
       if (!(error instanceof ArtifactIdentifierSecretError)) {
         throw error;

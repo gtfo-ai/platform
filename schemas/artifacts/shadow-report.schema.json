@@ -116,6 +116,53 @@
         }
       ]
     },
+    "criteria_comparison": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "yardstick": {
+              "type": "string",
+              "const": "agent_refined_spec"
+            },
+            "judged_by": {
+              "type": "object",
+              "properties": {
+                "agent": {
+                  "type": "string",
+                  "const": "acceptance_tester"
+                },
+                "human": {
+                  "type": "string",
+                  "const": "reviewer"
+                }
+              },
+              "required": [
+                "agent",
+                "human"
+              ],
+              "additionalProperties": false
+            },
+            "criteria": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/anon_2313e6a8"
+              }
+            }
+          },
+          "required": [
+            "yardstick",
+            "judged_by",
+            "criteria"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "predicted_cost": {
       "anyOf": [
         {
@@ -295,6 +342,34 @@
     "Usd": {
       "type": "number",
       "minimum": 0
+    },
+    "anon_2313e6a8": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "agent": {
+          "$ref": "#/$defs/anon_613aecc4"
+        },
+        "human": {
+          "$ref": "#/$defs/anon_613aecc4"
+        }
+      },
+      "required": [
+        "id",
+        "agent",
+        "human"
+      ],
+      "additionalProperties": false
+    },
+    "anon_613aecc4": {
+      "type": "string",
+      "enum": [
+        "met",
+        "not_met",
+        "untestable"
+      ]
     }
   }
 }

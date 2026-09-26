@@ -905,12 +905,17 @@ export const effectiveConfig = effectiveConfigResponseSchema.parse({
   // project's `policies.risk_classes` is absent above — proposed is not applied.
   risk_class_proposal: {
     source: 'platform',
-    classes: { data: { paths: ['**/migrations/**'], require: ['plan_approval'] } },
-    not_expressible: [
+    classes: {
+      data: { paths: ['**/migrations/**'], require: ['plan_approval'] },
+      payments: { paths: ['**/billing/**'], require: ['plan_approval', 'checklist:payments'] },
+    },
+    // WP-45: the list accepting asks the operator to write — the platform ships no items.
+    checklists: [
       {
-        name: 'public_api',
-        paths: ['**/api/**'],
-        reason: 'no review checklist exists in this build (Q83)',
+        name: 'payments',
+        required_by: ['payments'],
+        purpose: 'product/19 §14 asks for a "stricter checklist" on payments (Q83)',
+        defined: false,
       },
     ],
   },

@@ -127,9 +127,20 @@ describe('response DTOs', () => {
       // "proposed, not applied" (product/18:52).
       risk_class_proposal: {
         source: 'discovery' as const,
-        classes: { payments: { paths: ['src/billing/**'], require: ['plan_approval'] } },
-        not_expressible: [
-          { name: 'public_api', paths: ['**/api/**'], reason: 'no checklist mechanism (Q83)' },
+        classes: {
+          payments: {
+            paths: ['src/billing/**'],
+            require: ['plan_approval', 'checklist:payments'],
+          },
+        },
+        // WP-45: the list accepting asks the operator to write, by name and with its purpose.
+        checklists: [
+          {
+            name: 'payments',
+            required_by: ['payments'],
+            purpose: 'product/19 §14 asks for a "stricter checklist" (Q83)',
+            defined: false,
+          },
         ],
       },
     };
@@ -141,7 +152,7 @@ describe('response DTOs', () => {
         ...response,
         risk_class_proposal: {
           ...response.risk_class_proposal,
-          classes: { payments: { paths: ['src/billing/**'], require: ['checklist:payments'] } },
+          classes: { payments: { paths: ['src/billing/**'], require: ['budget_approval'] } },
         },
       }).success,
     ).toBe(false);

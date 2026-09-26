@@ -23,7 +23,10 @@ export const isoDateTimeSchema = z.iso.datetime({ offset: true });
 export const isoDateSchema = z.iso.date();
 
 /** Stage ids, template ids, chore ids, risk-class names — lower snake_case identifiers. */
-export const slugSchema = z.string().regex(/^[a-z][a-z0-9_]*$/, 'expected a lower_snake_case slug');
+/** The pattern {@link slugSchema} holds a key to — exported so a schema that embeds a slug builds on it. */
+export const SLUG_PATTERN = /^[a-z][a-z0-9_]*$/;
+
+export const slugSchema = z.string().regex(SLUG_PATTERN, 'expected a lower_snake_case slug');
 
 export const nonEmptyStringSchema = z.string().min(1);
 

@@ -30,6 +30,9 @@
  * Each gets its own sentence rather than an em dash, because "we have not measured this yet" and
  * "there is nothing to measure" are different facts about a project (standing rule 18). The report
  * carries `notes`, which is the platform's own prose about the third and fourth.
+ *
+ * Since WP-45 a report also carries the two judgements about the **human's** work — see
+ * {@link HumanSideOfReport} for why its label always precedes its count.
  */
 import type { ShadowBatchTicket } from '@platform/contracts';
 import { Link } from '@tanstack/react-router';
@@ -81,6 +84,66 @@ export const missingSimilarityReason = (ticket: ShadowBatchTicket): string | nul
     return 'no human merge request to compare with';
   }
   return 'this run produced no merge request, so there is no diff to compare';
+};
+
+type ShadowReport = NonNullable<ShadowBatchTicket['report']>;
+
+/**
+ * product/19 §13's two judgements about the human's work (WP-45): what a reviewer would have said
+ * about the human merge request, and which acceptance criteria each side met.
+ *
+ * **The label comes before the count, always** (criterion 7). The criteria are the agent's own
+ * RefinedSpec list — the only structured one the platform holds, written by the run being
+ * measured — so the screen says so on the line the numbers are on, and it never prints *"the human
+ * missed N"* on its own. The two sides were judged by two different runs, and that is said too.
+ * When the report withheld the comparison (one side missing), nothing is drawn here and the
+ * report's notes say why (standing rule 16).
+ */
+export const HumanSideOfReport = ({
+  report,
+}: {
+  readonly report: ShadowReport;
+}): ReactElement | null => {
+  const findings = report.agent_review_of_human_mr ?? null;
+  const comparison = report.criteria_comparison ?? null;
+  if (findings === null && comparison === null) {
+    return null;
+  }
+  const met = (side: 'agent' | 'human'): number =>
+    (comparison?.criteria ?? []).filter((entry) => entry[side] === 'met').length;
+  const total = comparison?.criteria.length ?? 0;
+  return (
+    <div className="flex flex-col gap-1 text-xs">
+      {findings === null ? null : (
+        <span>
+          reviewer on the human MR: {formatInteger(findings.length)} finding(s) it would have raised
+          — stored here, posted nowhere
+        </span>
+      )}
+      {comparison === null ? null : (
+        <div className="flex flex-col gap-0.5">
+          <span className="text-fg-muted">
+            Acceptance criteria, measured against the agent’s own specification — the only
+            structured list the platform holds, written by the run being measured, not the ticket’s
+            own words. The agent’s side was judged by its Acceptance Tester, the human’s by a
+            reviewer run over the human merge request.
+          </span>
+          <span>
+            agent met {formatInteger(met('agent'))} of {formatInteger(total)} · human MR met{' '}
+            {formatInteger(met('human'))} of {formatInteger(total)} (of the agent’s criteria)
+          </span>
+          <ul className="flex flex-col gap-0.5 text-fg-muted">
+            {comparison.criteria.map((entry) => (
+              <li key={entry.id}>
+                <UntrustedText value={entry.id} />: agent {entry.agent.replace('_', ' ')}, human{' '}
+                {entry.human.replace('_', ' ')}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
 };
 
 const TicketRow = ({ ticket }: { readonly ticket: ShadowBatchTicket }): ReactElement => {
@@ -175,6 +238,7 @@ const TicketRow = ({ ticket }: { readonly ticket: ShadowBatchTicket }): ReactEle
           )}
         </div>
       )}
+      {ticket.report === null ? null : <HumanSideOfReport report={ticket.report} />}
       {ticket.report === null || ticket.report.notes === '' ? null : (
         <UntrustedProse className="text-fg-muted text-xs" value={ticket.report.notes} />
       )}

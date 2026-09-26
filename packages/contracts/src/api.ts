@@ -226,18 +226,28 @@ export const effectiveConfigResponseSchema = z.strictObject({
    *    *"here is the standard set"* are different claims, and a screen that conflated them would be
    *    putting words in the agent's mouth.
    *
-   * `not_expressible` is the row of product/19 §14 this build cannot propose, **with the reason** —
-   * data rather than prose, because the screen renders it and an operator does not read docblocks
-   * (standing rule 18: the absent case must not be the quiet one).
+   * **`checklists` is what accepting asks the operator to write** (WP-45, PROGRESS backlog 91). Two
+   * of product/19 §14's classes require a *"stricter checklist"*, the platform ships no checklist
+   * items (Q83), and the configuration schema refuses a class naming a list the document does not
+   * define — so every `checklist:<name>` the proposed classes carry is listed here with the classes
+   * that select it, product/19's own words for what it is for, and whether this project's document
+   * already defines it. Data rather than prose, because the screen renders it: until WP-45 the
+   * `payments` class was offered with one of its two documented requirements, and the other was
+   * written only in a docblock (standing rule 18: the absent case must not be the quiet one). The
+   * `not_expressible` list this replaced named `public_api`, which is now proposed.
    */
   risk_class_proposal: z.strictObject({
     source: z.enum(['discovery', 'platform']),
     classes: z.record(slugSchema, riskClassSchema),
-    not_expressible: z.array(
+    checklists: z.array(
       z.strictObject({
-        name: nonEmptyStringSchema,
-        paths: z.array(pathPatternSchema),
-        reason: nonEmptyStringSchema,
+        name: slugSchema,
+        /** The proposed classes whose `require` names this list, in declaration order. */
+        required_by: z.array(slugSchema).min(1),
+        /** Platform text: what product/19 §14 says the list is for. Never an item. */
+        purpose: nonEmptyStringSchema,
+        /** Whether this project's configuration already defines `policies.review_checklists.<name>`. */
+        defined: z.boolean(),
       }),
     ),
   }),

@@ -21,6 +21,7 @@ import {
   pathPatternSchema,
   severitySchema,
   sizeSchema,
+  slugSchema,
   stageIdSchema,
   unitIntervalSchema,
   urlSchema,
@@ -153,6 +154,33 @@ export const reviewFindingSchema = z.strictObject({
   suggestion: z.string().nullish(),
 });
 
+/**
+ * One acceptance criterion judged against a change — `AcceptanceVerdict.criteria` since WP-01 and
+ * `ReviewVerdict.criteria` since WP-45. The `id` is the `RefinedSpec.acceptance_criteria[].id` it
+ * judges.
+ */
+export const criterionJudgementSchema = z.strictObject({
+  id: nonEmptyStringSchema,
+  status: z.enum(['met', 'not_met', 'untestable']),
+  evidence: z.string(),
+});
+
+/**
+ * One review checklist the platform gave the Reviewer — Q83, WP-45 criterion 4.
+ *
+ * *"Stricter"* is observable only as *"the reviewer was given N additional items"*, so that is what
+ * is recorded: the list's name, how many of its items the prompt actually carried (and whether the
+ * prompt's bound cut it) and which matched risk classes selected it. Never a claim that the items were met — the verdict is still the model's.
+ */
+export const appliedChecklistSchema = z.strictObject({
+  name: slugSchema,
+  /** The items the Reviewer was **given** — fewer than the list declares when `truncated`. */
+  item_count: z.int().nonnegative(),
+  required_by: z.array(slugSchema),
+  /** The prompt's checklist bound cut this list (`boundReviewChecklists`, announced in its marker). */
+  truncated: z.boolean(),
+});
+
 export const reviewVerdictDataSchema = z.strictObject({
   verdict: z.enum(['approve', 'request_changes']),
   findings: z.array(reviewFindingSchema),
@@ -160,17 +188,26 @@ export const reviewVerdictDataSchema = z.strictObject({
   /** BD-022: the reviewer records prompt-injection-shaped input it noticed, and ignores it. */
   suspicious_inputs_noted: z.array(nonEmptyStringSchema).nullish(),
   protected_path_changes_confirmed: z.array(pathPatternSchema),
+  /**
+   * **The platform's record, not the model's**: the review checklists this run's prompt carried
+   * (WP-45, Q83). The stage executor overwrites whatever the model wrote here with what the planner
+   * put in the prompt (`withPlatformReviewRecord`), so a Reviewer cannot claim a checklist it was
+   * never given. `[]` is *"given none"*; `null` or absent is *"not recorded"* — every verdict written
+   * before WP-45, and a run whose planner recorded nothing.
+   */
+  checklists_applied: z.array(appliedChecklistSchema).nullish(),
+  /**
+   * The RefinedSpec's acceptance criteria, judged against the reviewed change — asked for **only**
+   * when the Reviewer is given a specification *and* a human's merge request, which is the shadow
+   * comparison's review of the human merge request (product/19 §13, WP-45). Absent on every other
+   * review: a pipeline review's criteria are the Acceptance Tester's to judge.
+   */
+  criteria: z.array(criterionJudgementSchema).nullish(),
 });
 
 export const acceptanceVerdictDataSchema = z.strictObject({
   verdict: z.enum(['approve', 'request_changes']),
-  criteria: z.array(
-    z.strictObject({
-      id: nonEmptyStringSchema,
-      status: z.enum(['met', 'not_met', 'untestable']),
-      evidence: z.string(),
-    }),
-  ),
+  criteria: z.array(criterionJudgementSchema),
   scope_creep: z.array(nonEmptyStringSchema),
   missing: z.array(nonEmptyStringSchema),
   ux_notes: z.array(nonEmptyStringSchema),
@@ -300,23 +337,23 @@ export const librarianProposalsDataSchema = z.strictObject({
  * would have received (posted nowhere); predicted cost vs shadow cost; reviewer minutes estimate
  * (from MR events); confidence note"* (WP-34).
  *
- * ## What is absent, and why each absence is a refusal rather than an omission
+ * ## The two judgements about the human's work — and whose criteria are the yardstick
  *
- * Three of the document's fields are answerable on this build and are here — `tests_added_ratio`
- * inside {@link shadowReportDataSchema.shape.overlap}, `shadow_cost` beside `predicted_cost`, and
- * `reviewer_minutes_estimate`. The fourth is **not**, and it is named rather than invented (standing
- * rule 16, and WP-15h's `/context-pack` precedent — summing rows into a budget publishes a fact):
+ * Until WP-45 two of the document's items had no producer: *"acceptance criteria the human MR covers
+ * vs the agent's"* was refused by name (no field), and *"Reviewer findings the human MR would have
+ * received"* was a field that was `null` on every report. Both wanted one missing thing, a Reviewer
+ * run over the **human** merge request (PROGRESS backlog 100), and since WP-45 the report duty
+ * creates one per shadow ticket (`shadow/human-review.ts`): a one-stage review task in `shadow` mode,
+ * so every thread it would post is a `would_have` audit row and nothing reaches the merge request.
  *
- * > *"acceptance criteria the human MR covers vs the agent's"*
- *
- * The agent's half exists (`AcceptanceVerdict.criteria`, one status per criterion). The **human's**
- * half is a semantic judgement about somebody else's diff against a ticket's acceptance criteria,
- * and nothing on this build makes it: no stage reviews the human merge request against the ticket,
- * no artifact records such a judgement, and deriving it from file overlap would be publishing a
- * similarity number under a coverage heading. A field carrying only the agent's side would read as
- * a comparison when it is a single measurement, so there is no field. The work is a Reviewer run
- * over the human merge request with the ticket's criteria in its prompt, which is a stage this
- * template does not have.
+ * **The yardstick is the agent's own list, and the report says so** (WP-45 criterion 7). The only
+ * structured list of criteria the platform holds is `RefinedSpec.acceptance_criteria` — written by
+ * the run being measured — while the ticket's own criteria are unstructured text inside
+ * `tasks.ticket_snapshot`. So {@link shadowReportDataSchema.shape.criteria_comparison} carries the
+ * yardstick as data (`yardstick: 'agent_refined_spec'`) and who judged each side, the `notes` say it
+ * in words, and nothing on this build publishes *"the human missed N criteria"* without that label.
+ * It is published **two sides or not at all** (standing rule 16): a criterion either side did not
+ * judge withholds the whole comparison and `notes` names the side.
  *
  * ## Two fields that became nullable, and the rule is the same one
  *
@@ -373,15 +410,43 @@ export const shadowReportDataSchema = z.strictObject({
   /**
    * product/19 §13's *"Reviewer findings the human MR would have received (posted nowhere)"*.
    *
-   * `null` on this build, and the distinction is the point: `[]` would say *"a reviewer read the
-   * human merge request and found nothing"*, which is a claim no run has made. Nothing reviews the
-   * **human's** diff during a shadow task — the shadow task's own `code_review` stage reviews what
-   * the *agent* wrote — and the feature that does review a human merge request is review-only mode
-   * (product/18, WP-24), which is a different task on a different template. Producing this field
-   * means giving the shadow batch a Reviewer run over the human merge request; until then the
-   * report says *"not looked at"* rather than *"nothing found"* (standing rules 16, 18).
+   * The findings of the Reviewer run the report duty started over the **human** merge request
+   * (WP-45) — stored here and posted nowhere, because that run's task is in `shadow` mode and the
+   * executor records every thread it would have posted as `would_have`. `null` when no reviewer
+   * looked at it (no human merge request, or the review task ended without a verdict — `notes` says
+   * which), and the distinction is the point: `[]` says *"a reviewer read the human merge request
+   * and found nothing"*, which is a claim only a completed review makes (standing rules 16, 18).
    */
   agent_review_of_human_mr: z.array(reviewFindingSchema).nullish(),
+  /**
+   * product/19 §13's *"acceptance criteria the human MR covers vs the agent's"* — two sides or
+   * nothing (WP-45).
+   *
+   * **Measured against the agent's own list, and labelled so as data**: `yardstick` is
+   * `agent_refined_spec` because `RefinedSpec.acceptance_criteria` is the only structured list the
+   * platform holds, and it was written by the run being measured. `judged_by` says who read each
+   * side — the agent's work by its own Acceptance Tester stage, the human's by the Reviewer run over
+   * the human merge request — because two different runs made the two judgements and a reader must
+   * not take them for one. `null` when either side is missing, never a half.
+   */
+  criteria_comparison: z
+    .strictObject({
+      yardstick: z.literal('agent_refined_spec'),
+      judged_by: z.strictObject({
+        agent: z.literal('acceptance_tester'),
+        human: z.literal('reviewer'),
+      }),
+      criteria: z
+        .array(
+          z.strictObject({
+            id: nonEmptyStringSchema,
+            agent: criterionJudgementSchema.shape.status,
+            human: criterionJudgementSchema.shape.status,
+          }),
+        )
+        .min(1),
+    })
+    .nullish(),
   /** `tasks.estimate_usd` — WP-28's point estimate, or `null` for a task that never got one. */
   predicted_cost: usdSchema.nullish(),
   /** What the shadow run actually spent (`tasks.cost_actual`), so the pair can be compared. */
@@ -486,7 +551,8 @@ export const discoveryDraftDataSchema = z.strictObject({
    * `PUT /api/projects/:id/config` (product/06: nothing is committed without acceptance).
    *
    * Optional, so a draft written before this field existed still parses — an absent proposal is
-   * "the agent proposed nothing", which leaves the platform's own five on the screen.
+   * "the agent proposed nothing", which leaves the platform's own six on the screen (five until
+   * WP-45 proposed `public_api`).
    */
   risk_classes: z
     .array(

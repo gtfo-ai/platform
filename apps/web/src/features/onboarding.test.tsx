@@ -184,12 +184,20 @@ const fetchFor = (readiness: 'recorded' | 'absent') =>
         // the offer is not empty, which is the whole shape of "proposed, not applied".
         risk_class_proposal: {
           source: 'platform',
-          classes: { data: { paths: ['**/migrations/**'], require: ['plan_approval'] } },
-          not_expressible: [
+          classes: {
+            data: { paths: ['**/migrations/**'], require: ['plan_approval'] },
+            payments: {
+              paths: ['**/billing/**'],
+              require: ['plan_approval', 'checklist:payments'],
+            },
+          },
+          // WP-45: the list accepting asks the operator to write — the platform ships no items.
+          checklists: [
             {
-              name: 'public_api',
-              paths: ['**/api/**'],
-              reason: 'no review checklist exists in this build (Q83)',
+              name: 'payments',
+              required_by: ['payments'],
+              purpose: 'product/19 §14 asks for a "stricter checklist" on payments (Q83)',
+              defined: false,
             },
           ],
         },
@@ -380,9 +388,12 @@ describe('the wizard’s step 4', () => {
     // a `textContent` assertion taken before it resolves passes for the wrong reason.
     await screen.findByRole('button', { name: 'Accept these classes' });
     expect(container.textContent).toContain('The platform’s suggested set');
-    // …and the row that genuinely cannot be proposed is named with its reason rather than left out.
-    expect(container.textContent).toContain('public_api');
-    expect(container.textContent).toContain('Not proposed, and why');
+    // …and the checklist the `payments` class needs is asked for by name, with what it is for —
+    // on the screen, where the dropped half used to be written only in a docblock (backlog 91).
+    expect(container.textContent).toContain('Checklists these classes need, in your words');
+    expect(container.textContent).toContain('stricter checklist');
+    expect(screen.getByRole('textbox', { name: 'Items for checklist payments' })).toBeTruthy();
+    expect(container.textContent).not.toContain('Not proposed, and why');
     expect(container.textContent).not.toContain('A channel belongs to a chat integration');
   });
 
@@ -409,16 +420,41 @@ describe('the wizard’s step 4', () => {
     expect(container.textContent).toContain('No risk classes configured');
     expect(sent).toEqual([]);
 
+    // WP-45: the `payments` class names a checklist the project has not written, and the schema
+    // refuses a class naming an undefined list — so the button waits for the items rather than
+    // sending a document the server would refuse (or, worse, one it accepted and ignored).
+    expect((accept as HTMLButtonElement).disabled).toBe(true);
+    expect(container.textContent).toContain('Write at least one item for payments first');
+    fireEvent.click(accept);
+    expect(sent).toEqual([]);
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Items for checklist payments' }), {
+      target: { value: 'Amounts are integer minor units\n\n  Charges are idempotent  \n' },
+    });
+    await waitFor(() => {
+      expect((accept as HTMLButtonElement).disabled).toBe(false);
+    });
     fireEvent.click(accept);
     await waitFor(() => {
       expect(sent.some((entry) => entry.url.includes('/config'))).toBe(true);
     });
     const body = sent.find((entry) => entry.url.includes('/config'))?.body as {
-      config: { policies?: { risk_classes?: unknown; protected_paths?: string[] } };
+      config: {
+        policies?: {
+          risk_classes?: unknown;
+          review_checklists?: unknown;
+          protected_paths?: string[];
+        };
+      };
       base_hash?: string;
     };
     expect(body.config.policies?.risk_classes).toEqual({
       data: { paths: ['**/migrations/**'], require: ['plan_approval'] },
+      payments: { paths: ['**/billing/**'], require: ['plan_approval', 'checklist:payments'] },
+    });
+    // One item per non-empty line, trimmed: the operator's words and nothing the platform added.
+    expect(body.config.policies?.review_checklists).toEqual({
+      payments: ['Amounts are integer minor units', 'Charges are idempotent'],
     });
     // The rest of the document survives, and the write is optimistic — the two properties the
     // feature toggle's own test pins, asserted here because this is a second writer of the document.

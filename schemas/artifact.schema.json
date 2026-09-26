@@ -644,6 +644,58 @@
               "items": {
                 "$ref": "#/$defs/PathPattern"
               }
+            },
+            "checklists_applied": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "$ref": "#/$defs/Slug"
+                      },
+                      "item_count": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "required_by": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/$defs/Slug"
+                        }
+                      },
+                      "truncated": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "item_count",
+                      "required_by",
+                      "truncated"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "criteria": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/anon_b54c33b5"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
@@ -705,29 +757,7 @@
             "criteria": {
               "type": "array",
               "items": {
-                "type": "object",
-                "properties": {
-                  "id": {
-                    "$ref": "#/$defs/NonEmptyString"
-                  },
-                  "status": {
-                    "type": "string",
-                    "enum": [
-                      "met",
-                      "not_met",
-                      "untestable"
-                    ]
-                  },
-                  "evidence": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "id",
-                  "status",
-                  "evidence"
-                ],
-                "additionalProperties": false
+                "$ref": "#/$defs/anon_b54c33b5"
               }
             },
             "scope_creep": {
@@ -1219,6 +1249,53 @@
                   "items": {
                     "$ref": "#/$defs/ReviewFinding"
                   }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "criteria_comparison": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "yardstick": {
+                      "type": "string",
+                      "const": "agent_refined_spec"
+                    },
+                    "judged_by": {
+                      "type": "object",
+                      "properties": {
+                        "agent": {
+                          "type": "string",
+                          "const": "acceptance_tester"
+                        },
+                        "human": {
+                          "type": "string",
+                          "const": "reviewer"
+                        }
+                      },
+                      "required": [
+                        "agent",
+                        "human"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "criteria": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/$defs/anon_2313e6a8"
+                      }
+                    }
+                  },
+                  "required": [
+                    "yardstick",
+                    "judged_by",
+                    "criteria"
+                  ],
+                  "additionalProperties": false
                 },
                 {
                   "type": "null"
@@ -2230,6 +2307,26 @@
       "type": "string",
       "maxLength": 1000
     },
+    "anon_2313e6a8": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "agent": {
+          "$ref": "#/$defs/anon_613aecc4"
+        },
+        "human": {
+          "$ref": "#/$defs/anon_613aecc4"
+        }
+      },
+      "required": [
+        "id",
+        "agent",
+        "human"
+      ],
+      "additionalProperties": false
+    },
     "anon_2ab70f90": {
       "type": "string",
       "enum": [
@@ -2243,6 +2340,14 @@
     },
     "anon_4682db72": {
       "type": "string"
+    },
+    "anon_613aecc4": {
+      "type": "string",
+      "enum": [
+        "met",
+        "not_met",
+        "untestable"
+      ]
     },
     "anon_838f2997": {
       "type": "object",
@@ -2384,6 +2489,26 @@
     "anon_b33e40fa": {
       "maxLength": 2000,
       "$ref": "#/$defs/NonEmptyString"
+    },
+    "anon_b54c33b5": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "status": {
+          "$ref": "#/$defs/anon_613aecc4"
+        },
+        "evidence": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "evidence"
+      ],
+      "additionalProperties": false
     },
     "anon_b54c3534": {
       "maxLength": 200,

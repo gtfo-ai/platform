@@ -119,7 +119,9 @@ const materialiseObserve = async (pipeline: PipelineE2E): Promise<void> => {
         plan_approval_for_risk_classes: true,
         probation: true,
         probation_tasks: 5,
-        business_review: false,
+        // WP-45: on, so the agent's own Acceptance Tester judges its criteria and the report has
+        // both sides of the criteria comparison to publish.
+        business_review: true,
         question_timeout: '1 working day',
         human_mr_rounds: 3,
         knowledge_auto_apply: false,
@@ -158,6 +160,14 @@ const start = async (options: { readonly budgetUsd?: number } = {}): Promise<Pip
       if (spec.mode !== 'shadow') {
         return undefined;
       }
+      /**
+       * WP-45: the Reviewer run over the **human** merge request — the one shadow run whose prompt
+       * carries a `merge_request` block. Chosen off the prompt the platform built (standing rule
+       * 82), so a build that stopped giving the reviewer the human's diff would script no such run.
+       */
+      if (spec.stage === 'code_review' && spec.userPrompt.includes('kind="merge_request"')) {
+        return { structuredOutput: HUMAN_REVIEW };
+      }
       const scenarios: Readonly<Record<string, { structuredOutput: unknown }>> =
         featureScenarios(world);
       return scenarios[spec.stage ?? ''];
@@ -165,6 +175,25 @@ const start = async (options: { readonly budgetUsd?: number } = {}): Promise<Pip
   });
   await materialiseObserve(pipeline);
   return pipeline;
+};
+
+/** What the reviewer over the human merge request returns: one finding, and the criterion judged. */
+const HUMAN_REVIEW = {
+  verdict: 'request_changes',
+  findings: [
+    {
+      id: 'h1',
+      severity: 'major',
+      category: 'tests',
+      file: 'src/totals.ts',
+      line: 1,
+      explanation: 'The new footer arithmetic has no test.',
+      suggestion: 'Add a test for the empty invoice.',
+    },
+  ],
+  summary: 'One untested change.',
+  protected_path_changes_confirmed: [],
+  criteria: [{ id: 'ac1', status: 'not_met', evidence: 'no test covers the footer sum' }],
 };
 
 /** Seeds the human history the comparison is made against. */
@@ -241,12 +270,30 @@ describe('a shadow batch on closed tickets', () => {
       return Number(rows[0]?.count ?? 0) === 2;
     });
 
-    const tasks = await pipeline.query<{ mode: string; ticket_key: string }>(
-      'select mode, ticket_key from tasks where project_id = $1 order by ticket_key',
+    const tasks = await pipeline.query<{
+      id: string;
+      mode: string;
+      ticket_key: string;
+      template: string;
+    }>(
+      'select id, mode, ticket_key, template from tasks where project_id = $1 order by ticket_key',
       [pipeline.projectId],
     );
-    expect(tasks.map((task) => task.ticket_key)).toEqual(['ACME-11', 'ACME-12']);
+    const ticketTasks = tasks.filter((task) => task.template !== 'review_only');
+    expect(ticketTasks.map((task) => task.ticket_key)).toEqual(['ACME-11', 'ACME-12']);
     expect(tasks.every((task) => task.mode === 'shadow')).toBe(true);
+    /**
+     * WP-45 criterion 6: **one** reviewer task per shadow ticket, over that ticket's human merge
+     * request, keyed by both — and in `shadow` mode, like the rest of the batch.
+     */
+    const reviews = tasks.filter((task) => task.template === 'review_only');
+    expect(reviews).toHaveLength(2);
+    for (const shadowTask of ticketTasks) {
+      expect(
+        reviews.filter((review) => review.ticket_key.endsWith(`/shadow/${shadowTask.id}`)),
+        shadowTask.ticket_key,
+      ).toHaveLength(1);
+    }
 
     // `runs.mode` — the planner maps it and, until this work package, no tier had driven it.
     const runs = await pipeline.query<{ mode: string }>(
@@ -297,6 +344,27 @@ describe('a shadow batch on closed tickets', () => {
     expect(reported?.similarity).toBeCloseTo(0.5, 10);
     expect(reported?.report?.agent_diff_stats?.files_changed).toBe(2);
     expect(reported?.report?.overlap?.human_test_files).toBe(0);
+    // WP-45: the reviewer's finding on the human merge request is on the report and posted nowhere
+    // — every thread its review task would have opened is a `would_have` row (asserted above for
+    // every mutating row, and here for this task's own).
+    expect(reported?.report?.agent_review_of_human_mr?.map((finding) => finding.id)).toEqual([
+      'h1',
+    ]);
+    const reviewOf11 = reviews.find((review) =>
+      review.ticket_key.endsWith(`/shadow/${reported?.task_id ?? ''}`),
+    );
+    const reviewThreads = audit.filter(
+      (row) => row.action === 'create_discussion' && row.task_id === reviewOf11?.id,
+    );
+    expect(reviewThreads.length).toBeGreaterThan(0);
+    expect(reviewThreads.every((row) => row.status === 'would_have')).toBe(true);
+    // Criterion 7: two sides, and the yardstick labelled as the agent's own list.
+    expect(reported?.report?.criteria_comparison).toEqual({
+      yardstick: 'agent_refined_spec',
+      judged_by: { agent: 'acceptance_tester', human: 'reviewer' },
+      criteria: [{ id: 'ac1', agent: 'met', human: 'not_met' }],
+    });
+    expect(reported?.report?.notes).toContain('compared against the agent’s own RefinedSpec');
 
     // The refused ticket is on the batch with its reason and **no** task.
     const refused = detail.body.tickets.find((entry) => entry.ticket_key === 'ACME-13');

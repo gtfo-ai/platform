@@ -107,6 +107,22 @@ The autonomy dial ([product/19](product/19-operating-definitions.md) §11), four
 
 Choosing one writes the project's configuration.
 
+The same step offers **risk classes** — product/19 §14's six (auth, payments, data, infra,
+agent-config, public-api) or what the discovery agent proposed — and applies none until you accept.
+Two of them, payments and public-api, require a **review checklist**: a list of review items *you*
+write (the platform ships none), given to the reviewer beside its own checks whenever a change
+touches that class's paths. The screen asks for each list's items before *Accept* is enabled, because
+a class naming a checklist the configuration does not define is refused; the review then records
+which lists it was given (`checklists_applied` on the Review Verdict).
+
+**Shadow mode** (the Observe position) runs the pipeline on closed tickets you pick and posts
+nothing. For each ticket that has a human merge request it also runs **one reviewer over that human
+merge request**, and that review is a task of its own: a card on the board keyed
+`mr!<iid>/shadow/<task id>`, in shadow mode, with its own spend counted against the shadow budget. It
+posts nothing on the merge request — every comment it would have written is recorded in the audit
+log as *would have* — and its findings, with a comparison of which of the agent's own acceptance
+criteria each side met, appear on the ticket's shadow report once it ends.
+
 ### Step 5 — Commit the knowledge
 
 The proposal queue. The discovery agent's drafts are proposals with source `bootstrap`; approving one

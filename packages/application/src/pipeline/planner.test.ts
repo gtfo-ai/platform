@@ -52,6 +52,7 @@ import {
   platformToolsFor,
   RUN_MODE_BY_STAGE,
   RUN_MODE_BY_TEMPLATE,
+  reviewChecklistsOf,
   SKILLS_BY_ROLE,
   skillsFor,
   TOOLS_BY_ROLE,
@@ -1110,5 +1111,154 @@ describe('what the project decides about a run, within what the role allows', ()
     ).toEqual(['curl https://example.test']);
     expect(ignoredProjectAllow(undefined)).toEqual([]);
     expect(ignoredProjectAllow({ ask: ['npm test'] })).toEqual([]);
+  });
+});
+
+/**
+ * WP-45 (Q83): the Reviewer is given the project's checklists for the classes the review matched —
+ * in data blocks, recorded on the plan for the verdict, and **only** the Reviewer.
+ */
+describe('the review checklists a run is given (WP-45)', () => {
+  const CONFIG = {
+    policies: {
+      risk_classes: {
+        payments: { paths: ['src/billing/**'], require: ['plan_approval', 'checklist:payments'] },
+        public_api: { paths: ['src/api/**'], require: ['checklist:compat'] },
+        data: { paths: ['db/**'], require: ['plan_approval'] },
+      },
+      review_checklists: {
+        payments: ['Amounts are integer minor units', 'Charges are idempotent'],
+        compat: ['No field is removed from a published response'],
+      },
+    },
+  };
+  const reviewStage = {
+    id: 'code_review',
+    kind: 'agent',
+    role: 'reviewer',
+    produces: 'ReviewVerdict',
+  };
+
+  const reviewRequest = (options: {
+    readonly stage?: Record<string, unknown>;
+    readonly planFiles?: readonly string[];
+    readonly subjectFiles?: readonly string[];
+    readonly riskClasses?: readonly string[];
+    readonly config?: Record<string, unknown>;
+  }): StageRunRequest => {
+    const base = implementationRequestNaming(options.planFiles ?? []);
+    return {
+      ...base,
+      stage: options.stage ?? reviewStage,
+      artifacts: options.planFiles === undefined ? [] : base.artifacts,
+      task: {
+        ...base.task,
+        riskClasses: options.riskClasses ?? [],
+        reviewSubject:
+          options.subjectFiles === undefined
+            ? null
+            : {
+                title: 'A human change',
+                description: '',
+                source_branch: 'feature/x',
+                target_branch: 'main',
+                head_sha: 'a'.repeat(40),
+                labels: [],
+                files: options.subjectFiles.map((path) => ({
+                  path,
+                  diff: '+x',
+                  truncated: false,
+                  omitted: false,
+                })),
+                file_count: options.subjectFiles.length,
+                truncated: false,
+              },
+      },
+      settings: { projectId: PROJECT, config: options.config ?? CONFIG },
+    } as unknown as StageRunRequest;
+  };
+
+  const plannerOf = () =>
+    (async () =>
+      createStageRunPlanner({
+        workspacePath: (taskId) => `/workspaces/${taskId}`,
+        prompts: prompts as never,
+        skills: testSkills,
+        boundSkills: async () => [],
+        nonce: { next: () => NONCE },
+        contextPacks: createContextPackAssembler({
+          store: (await indexedFixtureVault()).store,
+          logger: silentLogger,
+        }),
+        headPaths: async () => null,
+        clock: { now: () => NOW },
+      }))();
+
+  const checklistBlocks = (userPrompt: string) =>
+    readDataBlocks(userPrompt).blocks.filter((block) => block.kind === 'review_checklist');
+
+  it('matches the plan’s paths on a pipeline review and gives the reviewer the selected list', async () => {
+    const plan = await (await plannerOf()).plan(
+      reviewRequest({ planFiles: ['src/billing/charge.ts', 'README.md'] }),
+    );
+    const [block, ...rest] = checklistBlocks(plan.spec.userPrompt);
+    expect(rest).toEqual([]);
+    expect(block?.body).toContain('checklist: payments');
+    expect(block?.body).toContain('- Charges are idempotent');
+    expect(block?.attributes.items).toBe('2');
+    // …and what the verdict will record is the same list, counted.
+    expect(plan.reviewChecklists).toEqual([
+      { name: 'payments', item_count: 2, required_by: ['payments'], truncated: false },
+    ]);
+  });
+
+  it('reads the merge request’s own files for a review of a merge request, not the plan', async () => {
+    const reading = reviewChecklistsOf(
+      reviewRequest({ planFiles: ['src/billing/charge.ts'], subjectFiles: ['src/api/users.ts'] }),
+    );
+    expect(reading.source).toBe('review_subject');
+    expect(reading.classes).toEqual(['public_api']);
+    expect(reading.applied.map((entry) => entry.name)).toEqual(['compat']);
+  });
+
+  it('adds the classes the rebase gate already stored, which a returned review can see', () => {
+    const reading = reviewChecklistsOf(
+      reviewRequest({ planFiles: ['README.md'], riskClasses: ['payments', 'no_longer_declared'] }),
+    );
+    expect(reading.classes).toEqual(['payments']);
+    expect(reading.applied.map((entry) => entry.name)).toEqual(['payments']);
+  });
+
+  it('gives no checklist when nothing matched — and says `none` when there were no paths', async () => {
+    const plan = await (await plannerOf()).plan(reviewRequest({ planFiles: ['README.md'] }));
+    expect(checklistBlocks(plan.spec.userPrompt)).toEqual([]);
+    // Recorded as "given none", which is a different fact from "not recorded".
+    expect(plan.reviewChecklists).toEqual([]);
+    expect(reviewChecklistsOf(reviewRequest({})).source).toBe('none');
+  });
+
+  it('gives no checklist to any role but the reviewer, and records nothing for it', async () => {
+    const plan = await (await plannerOf()).plan(
+      reviewRequest({
+        stage: {
+          id: 'implementation',
+          kind: 'agent',
+          role: 'developer',
+          produces: 'ImplementationNotes',
+        },
+        planFiles: ['src/billing/charge.ts'],
+      }),
+    );
+    expect(checklistBlocks(plan.spec.userPrompt)).toEqual([]);
+    expect(plan.reviewChecklists).toBeUndefined();
+  });
+
+  it('changes no byte of the system prompt, whatever the project’s list says', async () => {
+    // The list is project text in a data block, so a project editing it bumps no prompt version.
+    const planner = await plannerOf();
+    const withList = await planner.plan(reviewRequest({ planFiles: ['src/billing/a.ts'] }));
+    const without = await planner.plan(reviewRequest({ planFiles: ['README.md'] }));
+    expect(withList.spec.systemPromptAppend).toBe(without.spec.systemPromptAppend);
+    expect(withList.spec.promptVersion).toBe(without.spec.promptVersion);
   });
 });

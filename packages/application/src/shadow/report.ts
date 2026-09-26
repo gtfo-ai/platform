@@ -17,31 +17,41 @@
  *
  * Everything the report needs exists by then: the merge request the Developer stage reported
  * (`tasks.mr_ref`), the task's estimate (WP-28) and its recorded spend, and the human merge request
- * the batch resolved when it created the task.
+ * the batch resolved when it created the task — except, since WP-45, the review of that human merge
+ * request, which this moment is what starts; the report is written when it ends.
  *
  * ## It is a `pipeline.outbound` duty, for WP-15d's reason
  *
  * It makes up to three provider reads — the agent's diff, the human's diff and the human's
- * discussions, and nothing else — so it cannot be a handler: a handler that called a provider would hold a
- * database connection across somebody else's latency. The handler decides, the job calls
- * (`events/open-transaction.ts` refuses the other arrangement mechanically).
+ * discussions — plus, the first time for a ticket with a human merge request, the two reads that
+ * create the review of it (`human-review.ts`, WP-45), so it cannot be a handler: a handler that
+ * called a provider would hold a database connection across somebody else's latency. The handler
+ * decides, the job calls (`events/open-transaction.ts` refuses the other arrangement mechanically).
  *
  * ## Idempotency
  *
  * `shadow_reports` is keyed by `task_id` and `insertReport` is an `on conflict do nothing` that
- * answers whether it wrote. A job that arrives twice — and a job always can (TD-004) — performs the
- * reads again and then writes nothing and appends nothing, so there is exactly one
- * `shadow.report.created` per task however many times the wake-up is delivered.
+ * answers whether it wrote. A job that arrives twice — and a job always can (TD-004) — writes nothing
+ * and appends nothing, so there is exactly one `shadow.report.created` per task however many times
+ * the wake-up is delivered. Since WP-45 a wake-up for a task whose report exists returns before any
+ * read (so it cannot start a review of the human merge request nothing would report), and
+ * `insertReport` is still the guard for two wake-ups that race past that check together.
  */
 import type {
+  AcceptanceVerdictData,
   Id,
   IsoDateTime,
   JsonValue,
   MergeRequestRef,
+  RefinedSpecData,
   ReviewFinding,
   ShadowReportData,
 } from '@platform/contracts';
-import { shadowReportDataSchema } from '@platform/contracts';
+import {
+  acceptanceVerdictDataSchema,
+  refinedSpecDataSchema,
+  shadowReportDataSchema,
+} from '@platform/contracts';
 import {
   buildEvent,
   compareShadowDiffs,
@@ -60,6 +70,7 @@ import type { Discussion, FileDiff } from '../ports/integrations/git-provider.js
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
+import { type HumanReview, humanReviewOf, shadowHumanReviewEndedHandler } from './human-review.js';
 import type { ShadowBatchTicketRow, ShadowStore } from './ports.js';
 import { reviewerMinutesFromDiscussions } from './reviewer-minutes.js';
 
@@ -157,6 +168,8 @@ const shadowBatchCompletionHandler = (options: ShadowReportOptions): EventHandle
 export const shadowHandlers = (options: ShadowReportOptions): readonly EventHandler[] => [
   shadowReportHandler(options),
   shadowBatchCompletionHandler(options),
+  // WP-45: the review of the human merge request ended — the report it was waiting for can go.
+  shadowHumanReviewEndedHandler(options),
 ];
 
 /**
@@ -166,6 +179,11 @@ export const shadowHandlers = (options: ShadowReportOptions): readonly EventHand
  * no report yet. Nothing else — a shadow task that was paused or escalated after reaching the human
  * stage still deserves its report, because the report is about what it produced rather than about
  * where it ended up.
+ *
+ * **Since WP-45 it runs twice for a ticket with a human merge request.** The first time it creates
+ * the Reviewer run over that merge request (`human-review.ts`) and writes nothing; the review's
+ * ending wakes it again, and the second run writes the report with the review's findings and the
+ * criteria comparison. A ticket with no human merge request is reported on the first run, as before.
  */
 export const runShadowReport = async (
   options: ShadowReportOptions,
@@ -184,15 +202,44 @@ export const runShadowReport = async (
     }
     const batch = await options.shadow.batchOfTask(scope.tx, taskId);
     const tickets = batch === null ? [] : await options.shadow.tickets(scope.tx, batch.id);
-    return {
-      stored,
-      ticket: tickets.find((entry) => entry.taskId === taskId) ?? null,
-    };
+    // WP-45: a task already reported is done with — above all, a late wake-up must not start a
+    // review of the human merge request that no report will ever read.
+    const reported =
+      batch !== null &&
+      (await options.shadow.reports(scope.tx, batch.id)).some((row) => row.taskId === taskId);
+    return reported
+      ? null
+      : {
+          stored,
+          ticket: tickets.find((entry) => entry.taskId === taskId) ?? null,
+        };
   });
   if (loaded === null) {
     return;
   }
   const { stored, ticket } = loaded;
+  const humanMrRef: MergeRequestRef | null = ticket?.humanMr ?? null;
+
+  // WP-45: the report waits for the review of the human merge request, which the first run starts.
+  const humanReview =
+    humanMrRef === null
+      ? null
+      : await humanReviewOf(options, {
+          shadow: stored,
+          humanMr: humanMrRef,
+          causeEventId: (data.cause_event_id as Id | undefined) ?? null,
+        });
+  if (humanReview === 'waiting') {
+    logger.debug(
+      { task_id: stored.task.id, human_mr: humanMrRef?.iid ?? null },
+      'shadow: the review of the human merge request has not ended; the report waits for it',
+    );
+    return;
+  }
+  const judged = await options.unitOfWork.transaction(async (scope) => ({
+    spec: await options.store.artifacts.latest(scope.tx, stored.task.id, 'RefinedSpec'),
+    acceptance: await options.store.artifacts.latest(scope.tx, stored.task.id, 'AcceptanceVerdict'),
+  }));
 
   const integrations = await integrationsForProject(
     options.integrations,
@@ -201,7 +248,7 @@ export const runShadowReport = async (
   );
   const reads = gitReads(integrations);
   const context = { projectId: stored.task.projectId, taskId: stored.task.id };
-  const humanMr: MergeRequestRef | null = ticket?.humanMr ?? null;
+  const humanMr = humanMrRef;
 
   const agentFiles =
     stored.mr === null
@@ -221,6 +268,9 @@ export const runShadowReport = async (
     discussions,
     predictedCostUsd: stored.estimateUsd,
     shadowCostUsd: stored.costActualUsd,
+    humanReview,
+    agentSpec: parsedOrNull(refinedSpecDataSchema, judged.spec?.data),
+    agentAcceptance: parsedOrNull(acceptanceVerdictDataSchema, judged.acceptance?.data),
   });
 
   const artifactId = options.ids.next();
@@ -401,6 +451,12 @@ export const buildShadowReport = (input: {
   readonly discussions: readonly Discussion[];
   readonly predictedCostUsd: number | null;
   readonly shadowCostUsd: number;
+  /** WP-45: the review of the human merge request, or `null` when there is no human merge request. */
+  readonly humanReview?: HumanReview | null;
+  /** WP-45: the shadow task's own RefinedSpec — the yardstick — or `null` when it has none. */
+  readonly agentSpec?: RefinedSpecData | null;
+  /** WP-45: the shadow task's Acceptance Tester verdict — the agent's side — or `null`. */
+  readonly agentAcceptance?: AcceptanceVerdictData | null;
 }): ShadowReportData => {
   const agent = input.agentFiles === null ? null : summarise(input.agentFiles);
   const human = input.humanFiles === null ? null : summarise(input.humanFiles);
@@ -480,11 +536,33 @@ export const buildShadowReport = (input: {
       'the human merge request carries no human note, so no reviewer minutes could be derived from it',
     );
   }
-  notes.push(
-    'no reviewer looked at the human merge request: nothing in this build reviews somebody else’s diff during a shadow task',
+  const review = input.humanReview ?? null;
+  const findings: readonly ReviewFinding[] | null =
+    review?.kind === 'reviewed' ? review.verdict.findings : null;
+  if (review?.kind === 'reviewed') {
+    notes.push(
+      `a reviewer run read the human merge request and its ${review.verdict.findings.length} finding(s) are stored here and were posted nowhere`,
+    );
+  } else if (review?.kind === 'ended_without_verdict') {
+    notes.push(
+      `the reviewer run over the human merge request ended ${review.state} without a verdict, so there are no findings to report — this is not "no findings"${
+        review.state === 'paused'
+          ? '; if that review is resumed later, what it finds is not folded into this report, which is written once'
+          : ''
+      }`,
+    );
+  } else if (review?.kind === 'unreadable') {
+    notes.push(
+      'the provider did not return the human merge request, so no reviewer looked at it and there are no findings to report',
+    );
+  }
+  const comparison = compareCriteria(
+    input.agentSpec ?? null,
+    input.agentAcceptance ?? null,
+    review,
   );
+  notes.push(comparison.note);
 
-  const findings: readonly ReviewFinding[] | null = null;
   return shadowReportDataSchema.parse({
     ticket: input.ticketKey,
     human_mr: input.humanMr,
@@ -498,9 +576,102 @@ export const buildShadowReport = (input: {
           },
     overlap,
     agent_review_of_human_mr: findings,
+    criteria_comparison: comparison.value,
     predicted_cost: input.predictedCostUsd,
     shadow_cost: input.shadowCostUsd,
     reviewer_minutes_estimate: minutes,
     notes: notes.join('; '),
   });
+};
+
+/** The artifact's data through its schema, or `null` — a row this build cannot read is not a side. */
+const parsedOrNull = <T>(
+  schema: { safeParse: (value: unknown) => { success: boolean; data?: T } },
+  data: unknown,
+): T | null => {
+  if (data === undefined || data === null) {
+    return null;
+  }
+  const parsed = schema.safeParse(data);
+  return parsed.success ? (parsed.data as T) : null;
+};
+
+/**
+ * What the report says in words when it publishes the comparison — the label criterion 7 asks for,
+ * so a reader is told whose criteria the yardstick is before they read a count (standing rule 86).
+ */
+export const CRITERIA_YARDSTICK_NOTE =
+  'acceptance criteria are compared against the agent’s own RefinedSpec — the only structured list of criteria the platform holds, written by the run being measured, not the ticket’s own words — with the agent’s side judged by its Acceptance Tester stage and the human’s by a reviewer run over the human merge request';
+
+/**
+ * product/19 §13's *"acceptance criteria the human MR covers vs the agent's"* — **two sides or
+ * not at all** (standing rule 16, WP-45 criterion 6).
+ *
+ * The yardstick is the agent's RefinedSpec (criterion 7): every one of its criterion ids must have
+ * a judgement on **both** sides, or nothing is published and the note names what was missing. A
+ * criterion one side judged and the other did not would otherwise become a count with a hole in it,
+ * which reads as a measurement. Ids either side judged that the specification does not have are
+ * ignored: they are not criteria of this ticket's yardstick.
+ */
+export const compareCriteria = (
+  spec: RefinedSpecData | null,
+  acceptance: AcceptanceVerdictData | null,
+  review: HumanReview | null,
+): { readonly value: ShadowReportData['criteria_comparison']; readonly note: string } => {
+  const withheld = (why: string) => ({
+    value: null,
+    note: `no acceptance-criteria comparison: ${why}`,
+  });
+  const yardstick = spec?.acceptance_criteria.map((criterion) => criterion.id) ?? [];
+  if (yardstick.length === 0) {
+    return withheld(
+      'the agent wrote no RefinedSpec with acceptance criteria, so there is no list to compare against',
+    );
+  }
+  if (acceptance === null) {
+    return withheld(
+      'the agent’s side is missing — no Acceptance Tester verdict was recorded for this task (business review did not run)',
+    );
+  }
+  if (review === null || review.kind !== 'reviewed') {
+    return withheld(
+      'the human’s side is missing — no reviewer verdict over the human merge request',
+    );
+  }
+  const human = review.verdict.criteria ?? null;
+  if (human === null) {
+    return withheld(
+      'the human’s side is missing — the reviewer over the human merge request judged no criteria',
+    );
+  }
+  const agentById = new Map(acceptance.criteria.map((entry) => [entry.id, entry.status]));
+  const humanById = new Map(human.map((entry) => [entry.id, entry.status]));
+  const missingAgent = yardstick.filter((id) => !agentById.has(id));
+  const missingHuman = yardstick.filter((id) => !humanById.has(id));
+  if (missingAgent.length > 0 || missingHuman.length > 0) {
+    return withheld(
+      [
+        missingAgent.length === 0
+          ? null
+          : `the agent’s Acceptance Tester did not judge ${missingAgent.join(', ')}`,
+        missingHuman.length === 0
+          ? null
+          : `the reviewer over the human merge request did not judge ${missingHuman.join(', ')}`,
+      ]
+        .filter((part) => part !== null)
+        .join('; '),
+    );
+  }
+  return {
+    value: {
+      yardstick: 'agent_refined_spec',
+      judged_by: { agent: 'acceptance_tester', human: 'reviewer' },
+      criteria: yardstick.map((id) => ({
+        id,
+        agent: agentById.get(id) as 'met' | 'not_met' | 'untestable',
+        human: humanById.get(id) as 'met' | 'not_met' | 'untestable',
+      })),
+    },
+    note: CRITERIA_YARDSTICK_NOTE,
+  };
 };

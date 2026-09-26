@@ -1112,18 +1112,19 @@ export const knowledgeWrites = (integrations: PipelineIntegrations) => ({
  * `assertOutsideTransaction` is on the path — and because putting it here is what makes "the
  * pipeline cannot forget the executor" a property of the code.
  *
- * **`mode` is the task's**, unlike `knowledgeWrites` — and on this build that is always `normal`,
- * which is a statement about review-only mode rather than about this call. `runReviewOnlyCheck`
- * creates every review task with `mode: 'normal'` (`review-only.ts` § "the task shape": `tasks.mode`
- * stays the two-valued shadow switch and `review_only` is a **run** mode), and nothing else creates
- * one — so **review-only mode has no shadow mode**, the executor's `would_have` branch is
- * unreachable from here, and the round-1 sentence claiming a shadow review "records a `would_have`
- * row and posts nothing" described a path that does not exist. It is measured rather than asserted
- * by reading: `packages/application/src/pipeline/review-only.test.ts` › "creates the review task in
- * `normal` mode, so every thread it posts is a real one" reads the stored task and the audit rows the
- * review left. Passing the task's mode is still the right shape —
- * the day a shadow review is decided, the guard is already on the path — but until then what makes a
- * review-only task's writes real is the mode its creator wrote, not this argument.
+ * **`mode` is the task's**, unlike `knowledgeWrites`, and since WP-45 both values reach it.
+ * `runReviewOnlyCheck` creates every review-only task with `mode: 'normal'` (`review-only.ts` § "the
+ * task shape": `tasks.mode` stays the two-valued shadow switch and `review_only` is a **run** mode),
+ * so its threads are real — measured by
+ * `packages/application/src/pipeline/review-only.test.ts` › "creates the review task in `normal`
+ * mode, so every thread it posts is a real one". The shadow report's review of a **human** merge
+ * request (`shadow/human-review.ts`) creates the same kind of task in `mode: 'shadow'`, so every
+ * thread it would post is recorded `would_have` and nothing reaches the merge request — measured by
+ * `packages/application/src/shadow/report.test.ts` › "posts nothing on the human merge request:
+ * every thread is a `would_have` row". The sentence that stood here
+ * until WP-45 — *"review-only mode has no shadow mode … the executor's `would_have` branch is
+ * unreachable from here"* — was true of that build and is not of this one; the guard was already on
+ * the path, as it said it would be.
  *
  * **The markdown is redacted here, at the call**, not by the caller and not by the executor. The
  * executor redacts what it *stores* (the audit row, the idempotency value, the thrown error) and

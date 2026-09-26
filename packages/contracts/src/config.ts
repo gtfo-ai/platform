@@ -27,6 +27,7 @@ import {
   nonEmptyStringSchema,
   notificationClassSchema,
   pathPatternSchema,
+  SLUG_PATTERN,
   severitySchema,
   sizeSchema,
   slugSchema,
@@ -150,13 +151,28 @@ export const knowledgeApplyPolicySchema = z.strictObject({
   proposal_above: unitIntervalSchema.optional(),
 });
 
+/** A pattern's source without its anchors, so two patterns can be composed into one. */
+const unanchored = (pattern: RegExp): string => pattern.source.replace(/^\^|\$$/g, '');
+
 /** `reviewer:@handle`, `reviewer:@group/sub`, `reviewer:person@example.com`. */
 export const REVIEWER_REQUIREMENT = /^reviewer:@?[A-Za-z0-9._\-/]+$/;
 
 /**
- * What a risk class requires before the task may proceed — product/19 §14, WP-37.
+ * `checklist:<name>` — a key of `policies.review_checklists` (Q83, WP-45).
  *
- * **Every value this accepts has a consumer, and the two it refuses are refused by name.** That is
+ * The name half is {@link slugSchema}'s own pattern, built from its source rather than typed out a
+ * second time (standing rule 41), because the name must be a key the checklist record can hold.
+ */
+export const CHECKLIST_REQUIREMENT = new RegExp(`^checklist:${unanchored(SLUG_PATTERN)}$`);
+
+/** The checklist a `checklist:<name>` requirement selects, or `null` for any other requirement. */
+export const checklistNameOf = (requirement: string): string | null =>
+  CHECKLIST_REQUIREMENT.test(requirement) ? requirement.slice('checklist:'.length) : null;
+
+/**
+ * What a risk class requires before the task may proceed — product/19 §14, WP-37, WP-45.
+ *
+ * **Every value this accepts has a consumer, and the one it refuses is refused by name.** That is
  * the rule this schema was changed to keep (PROGRESS backlog 73 (d)): before WP-37 it accepted two
  * requirements nothing acted on, which is the worst direction for this feature to fail in — a
  * `payments` class that looks gated and is not.
@@ -165,49 +181,74 @@ export const REVIEWER_REQUIREMENT = /^reviewer:@?[A-Za-z0-9._\-/]+$/;
  *  - `reviewer:@handle` — WP-37's reviewer routing (`packages/domain/src/policies/reviewer-routing.ts`
  *    and the `risk_route` outbound duty), which *adds* the handle to whatever CODEOWNERS or the
  *    project's `reviewers` key produced.
+ *  - `checklist:<name>` — WP-45 (Q83): the named list under `policies.review_checklists`, which the
+ *    stage planner hands the **Reviewer** as a data block when the class matches the paths it can
+ *    see (`reviewChecklistsFor` in `packages/domain/src/policies/risk-classes.ts`) and which the
+ *    Review Verdict records as `checklists_applied`. A name with no list is refused at the
+ *    document, by {@link policiesConfigSchema}'s refinement, with the key path and the value — a
+ *    silently ignored requirement on a payments path is what this row exists to prevent.
  *  - `budget_approval` — **refused**, with the reason. WP-28's budget gate is asked exactly once
  *    per task, at the stage that produces the `RefinedSpec` (`spendIsStillAhead`), and a risk class
  *    is computed from paths that do not exist until the Implementation Plan two stages later — so
  *    there is no moment at which this gate could read one. It is refused rather than parsed-and-
  *    ignored; the project's spend gate is the autonomy dial's `budget_approval_threshold_usd`.
- *  - `checklist:<name>` — **refused**, with the reason. product/19 §14 asks for it twice and
- *    nothing in the product defines what a checklist *is* (Q83, filed with a recommendation): the
- *    only checklist that exists is prose inside the reviewer's own prompt. Accepting the string
- *    without the reviewer-side consumer would recreate exactly the defect the first two bullets
- *    close.
  *
  * A refusal carries the offending value, and the read side prints the key path beside it
  * (`describeConfigIssues`, the shape PROGRESS backlog 58's 409 uses).
  *
  * **It is a refinement rather than a union, and that costs the generated schema its `pattern`** —
- * so the pattern is put back through `.meta()`, built from {@link REVIEWER_REQUIREMENT}'s own source
- * rather than typed out a second time (standing rule 41: a value expressed twice is two things that
- * disagree later). A union cannot say *why* a value was refused — zod answers `invalid_union`, and
- * *"this is not a risk requirement"* is exactly the message an operator whose `payments` class
- * silently did nothing needs not to get.
+ * so the pattern is put back through `.meta()`, built from {@link REVIEWER_REQUIREMENT}'s and
+ * {@link CHECKLIST_REQUIREMENT}'s own sources rather than typed out a second time (standing rule
+ * 41: a value expressed twice is two things that disagree later). A union cannot say *why* a value
+ * was refused — zod answers `invalid_union`, and *"this is not a risk requirement"* is exactly the
+ * message an operator whose `payments` class silently did nothing needs not to get.
  */
 export const riskRequirementSchema = z
   .string()
   .meta({
     description:
-      'A risk class requirement: "plan_approval" or "reviewer:@handle". "budget_approval" and "checklist:<name>" are refused by name — see the schema docblock.',
-    pattern: `^(plan_approval|${REVIEWER_REQUIREMENT.source.replace(/^\^|\$$/g, '')})$`,
+      'A risk class requirement: "plan_approval", "reviewer:@handle" or "checklist:<name>" (a key of policies.review_checklists). "budget_approval" is refused by name — see the schema docblock.',
+    pattern: `^(plan_approval|${unanchored(REVIEWER_REQUIREMENT)}|${unanchored(CHECKLIST_REQUIREMENT)})$`,
   })
   .superRefine((value, ctx) => {
-    if (value === 'plan_approval' || REVIEWER_REQUIREMENT.test(value)) {
+    if (
+      value === 'plan_approval' ||
+      REVIEWER_REQUIREMENT.test(value) ||
+      CHECKLIST_REQUIREMENT.test(value)
+    ) {
       return;
     }
     const detail =
       value === 'budget_approval'
         ? "budget approval cannot be forced by a risk class on this build: the budget gate is asked at refinement and a class is known only from the Implementation Plan. Use the autonomy dial's budget_approval_threshold_usd"
         : value.startsWith('checklist:')
-          ? 'a review checklist is not a thing this build has (docs/OPEN-QUESTIONS.md Q83): no reviewer-side consumer exists, so the requirement would be silently ignored'
-          : 'expected "plan_approval" or "reviewer:@handle"';
+          ? 'a checklist name is a lower_snake_case key of policies.review_checklists'
+          : 'expected "plan_approval", "reviewer:@handle" or "checklist:<name>"';
     ctx.addIssue({
       code: 'custom',
       message: `${JSON.stringify(value)} is not a risk requirement this build can act on — ${detail}`,
     });
   });
+
+/** How many items one review checklist may carry — each is a line of the Reviewer's prompt. */
+export const MAX_REVIEW_CHECKLIST_ITEMS = 30;
+/** How long one item may be: an item is a check, never a document. */
+export const MAX_REVIEW_CHECKLIST_ITEM_CHARS = 500;
+/** How many named checklists one project may declare. */
+export const MAX_REVIEW_CHECKLISTS = 20;
+
+/**
+ * One named review checklist — **items, never prose** (Q83's recommendation, WP-45).
+ *
+ * Project text: it reaches the Reviewer inside a data block (`assemblePrompt`'s
+ * `review_checklist` kind), so a hostile item is delimited like every other untrusted string
+ * (BD-022) and adding one bumps no `ROLE_PROMPT_VERSIONS`. At least one item, because an empty list
+ * would let `checklist:<name>` look like a requirement while adding nothing to the review.
+ */
+export const reviewChecklistSchema = z
+  .array(nonEmptyStringSchema.max(MAX_REVIEW_CHECKLIST_ITEM_CHARS))
+  .min(1)
+  .max(MAX_REVIEW_CHECKLIST_ITEMS);
 
 export const riskClassSchema = z.strictObject({
   paths: z.array(pathPatternSchema).min(1),
@@ -294,57 +335,107 @@ export const dependencyPolicyConfigSchema = z.union(
   },
 );
 
-export const policiesConfigSchema = z.strictObject({
-  autonomy: autonomyLevelSchema.optional(),
-  probation_tasks: z.int().min(0).max(1000).optional(),
-  knowledge_apply: knowledgeApplyPolicySchema.optional(),
-  dependency_policy: dependencyPolicyConfigSchema.optional(),
+export const policiesConfigSchema = z
+  .strictObject({
+    autonomy: autonomyLevelSchema.optional(),
+    probation_tasks: z.int().min(0).max(1000).optional(),
+    knowledge_apply: knowledgeApplyPolicySchema.optional(),
+    dependency_policy: dependencyPolicyConfigSchema.optional(),
+    /**
+     * Where the coverage number on the Checks panel comes from — product/18:38's one configuration
+     * key, *"coverage source"* (WP-39).
+     *
+     * The feature is *"Test coverage change of the MR shown in Checks **when the project's CI reports
+     * coverage**"*, default *"on when available"*, and `'pipeline'` **is** that default: the platform
+     * asks the git provider for the pipeline of a commit and reads the one number it reports
+     * (`PipelineStatus.coverage_pct`). A project whose pipeline reports none renders *"not reported"*
+     * rather than a zero, which is what "when available" means and is the failure mode standing rule
+     * 16 exists for — `+0.0` would read to a maintainer as *"the agent added no coverage"*.
+     *
+     *  - `'pipeline'` — the provider's own per-commit coverage. One provider read for the head
+     *    revision and one for the base, bounded by the cache `pipeline/coverage.ts` states.
+     *  - `'none'` — off. Nothing is read, nothing is stored, and no provider call is made for it: the
+     *    switch a project that pays per API request turns.
+     *
+     * **There is deliberately no `'artifact'` value, and that is this build's honest limit.** Per-file
+     * coverage needs the coverage *artifact* downloaded and parsed — which is what
+     * `GitProviderCapabilities.coverageArtifacts` is about, and nothing in this repository downloads
+     * one. So *"coverage delta"* here is **one percentage point for the whole change**, never a
+     * per-file figure, and accepting a value that promised otherwise would be a key with no reader
+     * (PROGRESS backlog 58's defect, which is exactly what this row was written to close for
+     * `coverage source` itself).
+     */
+    coverage_source: z.enum(['pipeline', 'none']).optional(),
+    /** product/05 (Q7): what drift detection does when no `business/direction.md` exists. */
+    drift_without_direction: z.enum(['disabled', 'label_unknown']).optional(),
+    protected_paths: z.array(pathPatternSchema).optional(),
+    risk_classes: z.record(slugSchema, riskClassSchema).optional(),
+    /**
+     * Named review checklists a risk class selects with `checklist:<name>` — product/19 §14's
+     * *"stricter checklist"*, as Q83 recommends it (WP-45).
+     *
+     * **Add-only**: a checklist is given to the Reviewer *beside* its own default focus
+     * (product/04:63, in `packages/prompts/roles/reviewer/prompt.md`), never instead of it — the same
+     * answer TD-027 gave the command layer. **The platform ships none**: product/18:52 makes risk
+     * classes a proposal an operator accepts, and a list a project never wrote would silently change
+     * what its reviews say. So *"stricter"* means exactly *"the Reviewer was given these N additional
+     * items"*, which is what the Review Verdict records (`checklists_applied`), and never a claim that
+     * a stricter standard was met.
+     */
+    review_checklists: z
+      .record(slugSchema, reviewChecklistSchema)
+      .refine((lists) => Object.keys(lists).length <= MAX_REVIEW_CHECKLISTS, {
+        message: `at most ${MAX_REVIEW_CHECKLISTS} review checklists`,
+      })
+      .optional(),
+    /**
+     * The project's default reviewers — step **two** of product/19:138's precedence, *"CODEOWNERS
+     * match first, then project `reviewers` config, then the requesting human as fallback"* (WP-37).
+     *
+     * The document tells an operator to write this and until WP-37 there was no key to write it in:
+     * a strict schema refused the middle step of its own precedence (PROGRESS backlog 73).
+     *
+     * **The values are the git provider's own account identifiers, not display names.** GitLab's
+     * merge-request API takes `reviewer_ids` and nothing else, so a handle has to be resolved to an
+     * id before it can be assigned; `readCodeowners` produces handles and the platform resolves those
+     * through `GitProviderPort.resolveUserId`, but a value written here is used **as it stands** —
+     * which is why an operator may write either (a numeric id passes straight through, a handle is
+     * resolved like a CODEOWNERS owner). Anything that cannot be resolved is reported by name and
+     * assigned to nobody, never silently dropped.
+     */
+    reviewers: z.array(nonEmptyStringSchema).max(MAX_ROUTED_REVIEWERS).optional(),
+  })
   /**
-   * Where the coverage number on the Checks panel comes from — product/18:38's one configuration
-   * key, *"coverage source"* (WP-39).
+   * **A class naming a checklist the document does not define is refused here** — Q83, WP-45
+   * criterion 2.
    *
-   * The feature is *"Test coverage change of the MR shown in Checks **when the project's CI reports
-   * coverage**"*, default *"on when available"*, and `'pipeline'` **is** that default: the platform
-   * asks the git provider for the pipeline of a commit and reads the one number it reports
-   * (`PipelineStatus.coverage_pct`). A project whose pipeline reports none renders *"not reported"*
-   * rather than a zero, which is what "when available" means and is the failure mode standing rule
-   * 16 exists for — `+0.0` would read to a maintainer as *"the agent added no coverage"*.
+   * At the document rather than at the reader, because the reader is the Reviewer's prompt and a
+   * missing list there would be a requirement silently ignored on a payments path — the one
+   * direction this feature must not fail in. The issue carries the key path
+   * (`policies.risk_classes.<class>.require.<i>`) and the message the value, which is the pair
+   * `describeConfigIssues` prints in PROGRESS backlog 58's `409 invalid_stored_config` and what the
+   * `PUT` answers with. Both sides of `PUT/GET …/config` parse through here, so a stored document
+   * that loses a list is refused on the read as well.
    *
-   *  - `'pipeline'` — the provider's own per-commit coverage. One provider read for the head
-   *    revision and one for the base, bounded by the cache `pipeline/coverage.ts` states.
-   *  - `'none'` — off. Nothing is read, nothing is stored, and no provider call is made for it: the
-   *    switch a project that pays per API request turns.
-   *
-   * **There is deliberately no `'artifact'` value, and that is this build's honest limit.** Per-file
-   * coverage needs the coverage *artifact* downloaded and parsed — which is what
-   * `GitProviderCapabilities.coverageArtifacts` is about, and nothing in this repository downloads
-   * one. So *"coverage delta"* here is **one percentage point for the whole change**, never a
-   * per-file figure, and accepting a value that promised otherwise would be a key with no reader
-   * (PROGRESS backlog 58's defect, which is exactly what this row was written to close for
-   * `coverage source` itself).
+   * Scoped to **one document**: `projects.config` is the merged configuration (technical/03), and a
+   * list defined in a layer the document does not carry is a list this reader would not see.
    */
-  coverage_source: z.enum(['pipeline', 'none']).optional(),
-  /** product/05 (Q7): what drift detection does when no `business/direction.md` exists. */
-  drift_without_direction: z.enum(['disabled', 'label_unknown']).optional(),
-  protected_paths: z.array(pathPatternSchema).optional(),
-  risk_classes: z.record(slugSchema, riskClassSchema).optional(),
-  /**
-   * The project's default reviewers — step **two** of product/19:138's precedence, *"CODEOWNERS
-   * match first, then project `reviewers` config, then the requesting human as fallback"* (WP-37).
-   *
-   * The document tells an operator to write this and until WP-37 there was no key to write it in:
-   * a strict schema refused the middle step of its own precedence (PROGRESS backlog 73).
-   *
-   * **The values are the git provider's own account identifiers, not display names.** GitLab's
-   * merge-request API takes `reviewer_ids` and nothing else, so a handle has to be resolved to an
-   * id before it can be assigned; `readCodeowners` produces handles and the platform resolves those
-   * through `GitProviderPort.resolveUserId`, but a value written here is used **as it stands** —
-   * which is why an operator may write either (a numeric id passes straight through, a handle is
-   * resolved like a CODEOWNERS owner). Anything that cannot be resolved is reported by name and
-   * assigned to nobody, never silently dropped.
-   */
-  reviewers: z.array(nonEmptyStringSchema).max(MAX_ROUTED_REVIEWERS).optional(),
-});
+  .superRefine((policies, ctx) => {
+    const defined = policies.review_checklists ?? {};
+    for (const [name, declared] of Object.entries(policies.risk_classes ?? {})) {
+      declared.require.forEach((requirement, index) => {
+        const checklist = checklistNameOf(requirement);
+        if (checklist === null || Object.hasOwn(defined, checklist)) {
+          return;
+        }
+        ctx.addIssue({
+          code: 'custom',
+          path: ['risk_classes', name, 'require', index],
+          message: `${JSON.stringify(requirement)} names a review checklist this configuration does not define — add policies.review_checklists.${checklist} (a list of review items), or remove the requirement`,
+        });
+      });
+    }
+  });
 
 // ── commands (BD-025) ────────────────────────────────────────────────────────
 

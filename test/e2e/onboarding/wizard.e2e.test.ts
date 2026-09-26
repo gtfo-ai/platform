@@ -43,7 +43,11 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import type { DiscoveryDraftData, ReadinessResponse } from '@platform/contracts';
+import type {
+  DiscoveryDraftData,
+  EffectiveConfigResponse,
+  ReadinessResponse,
+} from '@platform/contracts';
 import { FAKE_TASK_MANAGEMENT_PROVIDER_ID } from '@platform/integrations';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD, Client } from '../support/instance.js';
@@ -635,6 +639,61 @@ describe('the onboarding wizard', () => {
     );
     expect(disagreeing.status).toBe(400);
 
+    // ── Step 4's risk classes, on the published document (WP-45) ───────────
+
+    /**
+     * Criterion 1, asserted on what the server **publishes** rather than on a docblock: `payments`
+     * is offered with both of product/19 §14's requirements and the checklist it needs is named, by
+     * the classes that select it, as not yet defined here.
+     */
+    const offered = await client.json<EffectiveConfigResponse>(`/api/projects/${projectId}/config`);
+    const proposal = offered.body.risk_class_proposal;
+    expect(proposal.classes.payments?.require).toEqual(['plan_approval', 'checklist:payments']);
+    expect(proposal.classes.public_api?.require).toEqual(['checklist:public_api']);
+    expect(
+      proposal.checklists.map((entry) => [entry.name, entry.required_by, entry.defined]),
+    ).toEqual([
+      ['payments', ['payments'], false],
+      ['public_api', ['public_api'], false],
+    ]);
+    // Criterion 2: accepting the classes without the lists is refused at the configuration write,
+    // with the key path and the value — and writes no audit row, because nothing was done.
+    const bare = await command<{ error: { details?: { path: string; message: string }[] } }>(
+      client,
+      `/api/projects/${projectId}/config`,
+      { config: { version: 1, policies: { autonomy: 'assist', risk_classes: proposal.classes } } },
+      { method: 'PUT' },
+    );
+    expect(bare.status).toBe(400);
+    const refused = bare.body.error.details ?? [];
+    expect(refused.map((issue) => issue.path).sort()).toEqual([
+      '/config/policies/risk_classes/payments/require/1',
+      '/config/policies/risk_classes/public_api/require/0',
+    ]);
+    expect(refused.map((issue) => issue.message).join(' ')).toContain('"checklist:payments"');
+    // …and with the operator's own items, the same classes are accepted and the offer says so.
+    const accepted = await command<{ hash: string }>(
+      client,
+      `/api/projects/${projectId}/config`,
+      {
+        config: {
+          version: 1,
+          policies: {
+            autonomy: 'assist',
+            risk_classes: proposal.classes,
+            review_checklists: {
+              payments: ['Amounts are integer minor units'],
+              public_api: ['No field is removed from a published response'],
+            },
+          },
+        },
+      },
+      { method: 'PUT' },
+    );
+    expect(accepted.status, JSON.stringify(accepted.body)).toBe(200);
+    const reread = await client.json<EffectiveConfigResponse>(`/api/projects/${projectId}/config`);
+    expect(reread.body.risk_class_proposal.checklists.every((entry) => entry.defined)).toBe(true);
+
     // Every command the wizard ran is audited (technical/08 § "Rate limits and safety").
     const actions = await pipeline.query<{ action: string }>(
       'select action from human_actions order by created_at',
@@ -646,6 +705,8 @@ describe('the onboarding wizard', () => {
       'integration.test',
       'project.bindings.write',
       'project.discovery.start',
+      'project.config.write',
+      // WP-45: the accepted risk classes and their checklists; the refused write left no row.
       'project.config.write',
     ]);
 

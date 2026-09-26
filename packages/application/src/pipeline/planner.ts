@@ -38,11 +38,14 @@ import type {
   Id,
   IsoDate,
   IsoDateTime,
+  RiskClass,
   Slug,
 } from '@platform/contracts';
 import { communicationLanguageSchema } from '@platform/contracts';
 import {
+  type AppliedReviewChecklist,
   assemblePrompt,
+  boundReviewChecklists,
   CONFLICT_RESOLUTION_EXTRA_ALLOW,
   DEFAULT_COMMAND_POLICY,
   DEFAULT_CONTEXT_BUDGET_TOKENS,
@@ -59,6 +62,8 @@ import {
   type ResolvedCommandPolicy,
   type RolePromptDefinition,
   resolveRunCapUsd,
+  reviewChecklistsFor,
+  riskClassesForPaths,
   type SkillDefinition,
   STAGE_PROMPT_FOCUS,
   skillSetVersionOf,
@@ -773,6 +778,66 @@ export const touchedPathsOf = (
   return { paths: [...new Set([...fromPlan, ...fromReview])].slice(0, MAX_TOUCHED_PATHS), source };
 };
 
+/** Where a Reviewer run's risk classes were read from — logged per run, so "none" is said. */
+export type ReviewClassSource = 'review_subject' | 'implementation_plan' | 'none';
+
+/**
+ * The review checklists a **Reviewer** run is given — Q83, WP-45 criterion 3.
+ *
+ * Which classes a review matched, from the paths it can see:
+ *
+ *  - a review of a merge request the platform read (`tasks.review_subject` — review-only mode, and
+ *    the shadow comparison's review of a human merge request): **that merge request's files**,
+ *    which is the authoritative source product/19 §14 names;
+ *  - every other review: the Implementation Plan's paths ({@link touchedPathsOf}), **plus** the
+ *    classes `tasks.risk_classes` already holds. The rebase gate that writes that column runs after
+ *    code review, so on a first review it is empty and the plan is the source — with the plan
+ *    approval gate's residual, stated in `risk-classes.ts`: a path the plan did not name escapes
+ *    the class. A review after a return from the gate sees the gate's reading too.
+ *
+ * `missing` is a list a class names and the configuration does not define; the schema refuses such
+ * a document, so this is empty unless `projects.config` was written around it, and the planner
+ * logs it rather than dropping it.
+ */
+export const reviewChecklistsOf = (
+  request: StageRunRequest,
+): {
+  readonly applied: readonly AppliedReviewChecklist[];
+  readonly missing: readonly string[];
+  readonly classes: readonly string[];
+  readonly source: ReviewClassSource;
+} => {
+  const policies = request.settings.config.policies;
+  const classes = policies?.risk_classes as Readonly<Record<string, RiskClass>> | undefined;
+  const subject = request.task.reviewSubject ?? null;
+  const planPaths = subject === null ? touchedPathsOf(request) : null;
+  const paths =
+    subject !== null
+      ? subject.files.map((file) => file.path)
+      : planPaths?.source === 'implementation_plan' || planPaths?.source === 'both'
+        ? planPaths.paths
+        : [];
+  const matched = new Set(riskClassesForPaths(classes, paths));
+  for (const name of request.task.riskClasses ?? []) {
+    if (classes !== undefined && Object.hasOwn(classes, name)) {
+      matched.add(name);
+    }
+  }
+  // Declaration order, whichever reading produced the name.
+  const names = Object.keys(classes ?? {}).filter((name) => matched.has(name));
+  const { applied, missing } = reviewChecklistsFor(
+    classes,
+    policies?.review_checklists as Readonly<Record<string, readonly string[]>> | undefined,
+    names,
+  );
+  return {
+    applied,
+    missing,
+    classes: names,
+    source: subject !== null ? 'review_subject' : paths.length > 0 ? 'implementation_plan' : 'none',
+  };
+};
+
 const emptyRecord = (budgetTokens: number): ContextPackRecord => ({
   tier0: [],
   tier1: [],
@@ -998,6 +1063,39 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
       const skills = skillNames.map((name) => options.skills[name] as SkillDefinition);
 
       const pack = await resolvePack(request, stage.id, budgetTokens);
+      // WP-45: only a Reviewer is given the project's checklists — a checklist is a review item,
+      // and `ReviewVerdict.checklists_applied` is the one artifact that records it.
+      const review = role === 'reviewer' ? reviewChecklistsOf(request) : null;
+      if (review !== null) {
+        logger.info(
+          {
+            project_id: task.task.projectId,
+            task_id: task.task.id,
+            run_id: request.runId,
+            stage: stage.id,
+            risk_class_source: review.source,
+            risk_classes: review.classes,
+            checklists: review.applied.map((entry) => entry.name),
+          },
+          'review checklists for this run',
+        );
+        if (review.missing.length > 0) {
+          logger.warn(
+            {
+              project_id: task.task.projectId,
+              task_id: task.task.id,
+              run_id: request.runId,
+              missing: review.missing,
+            },
+            "a matched risk class names a review checklist this project's configuration does not define; the reviewer was not given it (the configuration schema refuses such a document — re-save it)",
+          );
+        }
+      }
+      const checklistsInPrompt = (review?.applied ?? []).map((entry) => ({
+        name: entry.name,
+        items: entry.items,
+        requiredBy: entry.requiredBy,
+      }));
       const prompt = assemblePrompt({
         nonce: options.nonce,
         role: options.prompts[role],
@@ -1026,6 +1124,8 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
           // A stage is not shown the audit trail (WP-31): the record blocks are the ask's, and a
           // stage that carried them would be paying context for the platform talking to itself.
           record: [],
+          // WP-45: project text, so it rides in data blocks and bumps no role-prompt version.
+          reviewChecklists: checklistsInPrompt,
         },
         artifactType: stage.produces,
         // The stage's narrower instruction, when it has one: platform text, typed as a closed set
@@ -1095,7 +1195,22 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
         claudeCodePath: options.claudeCodePath ?? null,
         resumeSessionId: null,
       };
-      return { spec, contextPack: pack.record };
+      return {
+        spec,
+        contextPack: pack.record,
+        ...(review === null
+          ? {}
+          : {
+              // What the prompt carried, from the assembler's own bound (review round 1): a list
+              // the bound cut is recorded with the items actually delivered, never the declared.
+              reviewChecklists: boundReviewChecklists(checklistsInPrompt).map((entry) => ({
+                name: entry.name,
+                item_count: entry.items.length,
+                required_by: [...entry.requiredBy],
+                truncated: entry.truncated,
+              })),
+            }),
+      };
     },
   };
 };

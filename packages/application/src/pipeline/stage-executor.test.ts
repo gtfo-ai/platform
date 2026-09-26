@@ -20,6 +20,7 @@ import {
   MAX_RUN_START_ATTEMPTS,
   runBudgetUsd,
   taskBudgetExhausted,
+  withPlatformReviewRecord,
 } from './stage-executor.js';
 import { type NewRun, TaskConcurrentModificationError } from './store.js';
 import { MAX_TASK_CONFLICT_ATTEMPTS } from './task-conflict.js';
@@ -851,5 +852,34 @@ describe('a task a human stopped while its stage was running', () => {
     // Claimed in the **same transaction as the insert**: a `running` row with no lease is exactly
     // the row the sweep's wall-clock backstop takes an hour to reach.
     expect(harness.store.leaseOf(started as unknown as Id)?.owner).toBe('harness');
+  });
+});
+
+/**
+ * WP-45 criterion 4: *which checklist was applied* is the platform's record, stamped over the
+ * model's. The walk through the executor is `review-only.test.ts`; these are the three answers.
+ */
+describe('the platform’s record on a review verdict', () => {
+  const MODEL = { verdict: 'approve', checklists_applied: [{ name: 'forged', item_count: 9 }] };
+
+  it('replaces the model’s claim with what the planner put in the prompt', () => {
+    const applied = [
+      { name: 'payments', item_count: 2, required_by: ['payments'], truncated: false },
+    ];
+    expect(withPlatformReviewRecord('ReviewVerdict', MODEL, applied)).toEqual({
+      verdict: 'approve',
+      checklists_applied: applied,
+    });
+  });
+
+  it('records "not recorded" as null when the planner said nothing — never the model’s value', () => {
+    expect(withPlatformReviewRecord('ReviewVerdict', MODEL, null)).toEqual({
+      verdict: 'approve',
+      checklists_applied: null,
+    });
+  });
+
+  it('leaves every other artifact type exactly as the model wrote it', () => {
+    expect(withPlatformReviewRecord('AcceptanceVerdict', MODEL, [])).toBe(MODEL);
   });
 });

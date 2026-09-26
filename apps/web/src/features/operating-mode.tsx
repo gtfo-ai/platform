@@ -12,7 +12,7 @@
  *
  * 1. **The autonomy dial** (BD-027) — including *Custom*, the differences, and "re-apply preset".
  * 2. **Feature toggles**, each carrying product/19:124's five card fields.
- * 3. **Risk classes** — the configured set, the proposal, and one row that is named as a gap.
+ * 3. **Risk classes** — the configured set, the proposal, and the checklists accepting asks for.
  * 4. **Budgets**, including the separate shadow and maintenance budgets.
  * 5. **Notifications** — digest and quiet hours; the channel is *named as a gap*.
  *
@@ -21,10 +21,10 @@
  * A control that silently does nothing is worse than an absent one (the shape step 3 already uses
  * at `onboarding.tsx`), so the item this build cannot honestly carry says so where an operator
  * reads it. **Risk classes left this list at WP-37**: the proposal is real (the server sends one,
- * a Discovery run can produce it and accepting it writes the configuration document), and the one
- * row of product/19 §14 that still cannot be expressed — `public_api`, whose only requirement is a
- * checklist nothing in the product defines (Q83) — is rendered *by name with its reason* rather
- * than left out quietly.
+ * a Discovery run can produce it and accepting it writes the configuration document). Since WP-45
+ * all six of product/19 §14's rows are proposed, and the two *"stricter checklist"* rows ask the
+ * operator for the checklist's items by name before the accept button is enabled — the platform
+ * ships none (Q83), and a class naming an undefined list is refused by the configuration schema.
  *
  * - **The notification channel.** A channel is a property of a `communication` binding, and this
  *   build resolves `git` and `task_management` only — `CommunicationPort` has no caller anywhere
@@ -561,27 +561,54 @@ export const FeatureToggles = ({ projectId }: { readonly projectId: string }): R
 export const RiskClasses = ({ projectId }: { readonly projectId: string }): ReactElement => {
   const config = useProjectConfig(projectId);
   const commands = useOnboardingCommands();
-  const classes =
-    (
-      config.data?.config as
-        | { policies?: { risk_classes?: Record<string, { paths: string[]; require: string[] }> } }
-        | undefined
-    )?.policies?.risk_classes ?? {};
+  const policiesOf = config.data?.config as
+    | {
+        policies?: {
+          risk_classes?: Record<string, { paths: string[]; require: string[] }>;
+          review_checklists?: Record<string, string[]>;
+        };
+      }
+    | undefined;
+  const classes = policiesOf?.policies?.risk_classes ?? {};
+  const configuredLists = policiesOf?.policies?.review_checklists ?? {};
   const names = Object.keys(classes);
   const proposal = config.data?.risk_class_proposal;
   const proposed = Object.entries(proposal?.classes ?? {});
+  // The lists accepting would leave undefined — each needs the operator's own items (Q83: the
+  // platform ships none), because the configuration schema refuses a class naming a missing list.
+  const toWrite = (proposal?.checklists ?? []).filter((entry) => !entry.defined);
+  const [drafts, setDrafts] = useState<Readonly<Record<string, string>>>({});
+  // `Object.hasOwn`, because a list name is a project-chosen slug and `constructor` is one.
+  const draftOf = (name: string): string =>
+    Object.hasOwn(drafts, name) ? (drafts[name] ?? '') : '';
+  const itemsOf = (name: string): string[] =>
+    draftOf(name)
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line !== '');
+  const unwritten = toWrite.filter((entry) => itemsOf(entry.name).length === 0);
 
   const accept = (): void => {
-    if (!config.isSuccess || proposal === undefined) {
+    if (!config.isSuccess || proposal === undefined || unwritten.length > 0) {
       return;
     }
     const document = config.data.config as Record<string, unknown>;
     const policies = (document.policies ?? {}) as Record<string, unknown>;
+    const written = Object.fromEntries(toWrite.map((entry) => [entry.name, itemsOf(entry.name)]));
     // The **whole** document plus the hash it was read at, like every other write on this screen:
     // a fragment would discard every other key.
     commands.writeConfig.mutate({
       projectId,
-      config: { ...document, policies: { ...policies, risk_classes: proposal.classes } },
+      config: {
+        ...document,
+        policies: {
+          ...policies,
+          risk_classes: proposal.classes,
+          ...(toWrite.length === 0
+            ? {}
+            : { review_checklists: { ...configuredLists, ...written } }),
+        },
+      },
       base_hash: config.data.hash,
     });
   };
@@ -591,7 +618,7 @@ export const RiskClasses = ({ projectId }: { readonly projectId: string }): Reac
       {names.length === 0 ? (
         <EmptyState
           title="No risk classes configured"
-          hint="A risk class is a set of paths (auth, payments, migrations, infra) that forces a plan approval and can route the review to named people when a change touches them."
+          hint="A risk class is a set of paths (auth, payments, migrations, infra) that forces a plan approval, can route the review to named people and can give the reviewer a checklist of your own when a change touches them."
         />
       ) : (
         <ul className="flex flex-col gap-1 text-xs">
@@ -609,6 +636,23 @@ export const RiskClasses = ({ projectId }: { readonly projectId: string }): Reac
             </li>
           ))}
         </ul>
+      )}
+
+      {Object.keys(configuredLists).length === 0 ? null : (
+        <div className="flex flex-col gap-1">
+          <p className="text-xs font-semibold">Review checklists</p>
+          <ul className="flex flex-col gap-0.5 text-xs text-fg-muted">
+            {Object.entries(configuredLists).map(([name, items]) => (
+              <li key={name}>
+                <strong>
+                  <UntrustedText value={name} />
+                </strong>{' '}
+                — {items.length} item(s) the reviewer is given, beside its own default checks, when
+                a class that names it matches
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {proposed.length === 0 ? null : (
@@ -633,19 +677,62 @@ export const RiskClasses = ({ projectId }: { readonly projectId: string }): Reac
               </li>
             ))}
           </ul>
+          {(proposal?.checklists ?? []).length === 0 ? null : (
+            <div className="flex flex-col gap-2">
+              <p className="text-xs font-semibold">Checklists these classes need, in your words</p>
+              {(proposal?.checklists ?? []).map((entry) => (
+                <div key={entry.name} className="flex flex-col gap-1 text-xs">
+                  <span>
+                    <code>
+                      checklist:
+                      <UntrustedText value={entry.name} />
+                    </code>{' '}
+                    (required by <UntrustedText value={entry.required_by.join(', ')} />) —{' '}
+                    <UntrustedText value={entry.purpose} />
+                  </span>
+                  {entry.defined ? (
+                    <span className="text-fg-muted">
+                      Already defined in this project’s configuration; accepting keeps it.
+                    </span>
+                  ) : (
+                    <textarea
+                      aria-label={`Items for checklist ${entry.name}`}
+                      value={draftOf(entry.name)}
+                      onChange={(event) => {
+                        setDrafts({ ...drafts, [entry.name]: event.target.value });
+                      }}
+                      placeholder="One review item per line"
+                      className="min-h-16 rounded-md border border-line bg-surface px-2 py-1 text-sm"
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
           <div>
             <Button
               type="button"
               onClick={accept}
-              disabled={!config.isSuccess || commands.writeConfig.isPending}
+              disabled={!config.isSuccess || commands.writeConfig.isPending || unwritten.length > 0}
             >
               {names.length === 0 ? 'Accept these classes' : 'Replace with these classes'}
             </Button>
           </div>
+          {unwritten.length === 0 ? null : (
+            <p className="text-xs text-fg-muted">
+              Write at least one item for{' '}
+              <UntrustedText value={unwritten.map((entry) => entry.name).join(', ')} /> first: a
+              class that names a checklist the configuration does not define is refused, so that a
+              requirement is never accepted and then silently ignored.
+            </p>
+          )}
           <p className="text-xs text-fg-muted">
             Nothing is applied until you accept. Accepting writes <code>policies.risk_classes</code>{' '}
-            into this project’s configuration and records who did it; you can edit the set
-            afterwards in <code>.agentic/config.yml</code>.
+            (and the checklists you wrote, as <code>policies.review_checklists</code>) into this
+            project’s configuration and records who did it; you can edit both afterwards in{' '}
+            <code>.agentic/config.yml</code>. The platform ships no checklist items: a checklist is
+            added to the reviewer’s own default checks, never instead of them, and the review
+            records which lists it was given.
           </p>
         </div>
       )}
@@ -657,28 +744,11 @@ export const RiskClasses = ({ projectId }: { readonly projectId: string }): Reac
         />
       ) : null}
 
-      {(proposal?.not_expressible ?? []).length === 0 ? null : (
-        <div className="flex flex-col gap-1">
-          <p className="text-xs font-semibold">Not proposed, and why</p>
-          <ul className="flex flex-col gap-0.5 text-xs text-fg-muted">
-            {(proposal?.not_expressible ?? []).map((entry) => (
-              <li key={entry.name}>
-                <strong>
-                  <UntrustedText value={entry.name} />
-                </strong>{' '}
-                (<UntrustedText value={entry.paths.join(', ')} />) —{' '}
-                <UntrustedText value={entry.reason} />
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
       <p className="text-xs text-fg-muted">
-        A class can force a plan approval and add a named reviewer. Reviewers are routed at the
-        rebase gate: a <code>CODEOWNERS</code> match first, then this project’s{' '}
-        <code>policies.reviewers</code>, then the human who asked for the task — and a handle the
-        git provider does not know is reported rather than assigned to somebody else.
+        A class can force a plan approval, add a named reviewer and give the reviewer a checklist.
+        Reviewers are routed at the rebase gate: a <code>CODEOWNERS</code> match first, then this
+        project’s <code>policies.reviewers</code>, then the human who asked for the task — and a
+        handle the git provider does not know is reported rather than assigned to somebody else.
       </p>
     </Section>
   );

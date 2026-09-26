@@ -885,8 +885,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
   const runner: ClaudeRunner = {
     start: (spec) => {
       specs.push(spec);
-      const key = harnessScriptKey(spec);
-      const scripted = scripts.get(key);
+      const { key, scripted } = scriptFor(scripts, spec);
       if (scripted === undefined) {
         throw new Error(`the test scripted no run for "${key}"`);
       }
@@ -1237,6 +1236,29 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
  * `ask:why did you choose X?` is scripting against bytes the planner actually produced: an empty
  * prompt, a missing block or a question the platform never put there all fail to find a script.
  */
+/**
+ * The script for one run: `<key>+merge_request` when the prompt carries a `merge_request` block and
+ * the test scripted that key, else `<key>` (WP-45 review round 1).
+ *
+ * The shadow report's review of a human merge request runs the same `code_review` stage as the
+ * shadow task's own review, so a stage-keyed table cannot make one of them fail and the other pass.
+ * The variant is chosen off the prompt the planner built (standing rule 82), never off a task id.
+ */
+const scriptFor = (
+  scripts: ReadonlyMap<string, ScriptedRun>,
+  spec: RunSpec,
+): { readonly key: string; readonly scripted: ScriptedRun | undefined } => {
+  const key = harnessScriptKey(spec);
+  const variant = `${key}+merge_request`;
+  if (
+    scripts.has(variant) &&
+    readDataBlocks(spec.userPrompt).blocks.some((block) => block.kind === 'merge_request')
+  ) {
+    return { key: variant, scripted: scripts.get(variant) };
+  }
+  return { key, scripted: scripts.get(key) };
+};
+
 export const harnessScriptKey = (spec: RunSpec): string => {
   if (spec.stage !== null) {
     return spec.stage;
@@ -1258,7 +1280,7 @@ const wrapRunner = (
   sink: RunTranscriptSink,
 ): ClaudeRunner => ({
   start: (spec) => {
-    const scripted = scripts.get(harnessScriptKey(spec));
+    const { scripted } = scriptFor(scripts, spec);
     if (scripted?.throwsOnStart !== undefined) {
       throw scripted.throwsOnStart;
     }

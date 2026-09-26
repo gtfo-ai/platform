@@ -7,19 +7,26 @@
  * was its first reader (WP-30), for the one requirement the pipeline had a gate for —
  * `plan_approval`, through `planApprovalGate`.
  *
- * **Since WP-37 every requirement `riskRequirementSchema` accepts has a consumer, and the ones that
- * do not are refused rather than parsed** (PROGRESS backlog 73 (d)). The sentence that stood here
+ * **Since WP-37 every requirement `riskRequirementSchema` accepts has a consumer, and the one that
+ * does not is refused rather than parsed** (PROGRESS backlog 73 (d)). The sentence that stood here
  * — *"`reviewer:@handle` and `checklist:<name>` are parsed by `riskRequirementSchema` and have no
  * consumer"* — was **wrong about the second half when it was written**: `checklist:<name>` was not
- * parsed, it was refused by a strict union that had no branch for it, so product/19 §14's two
- * checklist rows could not be written in a configuration file at all. Both halves are now closed
- * from the other end: `reviewer:@handle` is read by {@link reviewersRequiredByClasses} and assigned
- * by the `risk_route` duty, and `checklist:` (with `budget_approval`) is refused **by name**, with
- * the reason, at the schema. See `riskRequirementSchema`'s docblock for which consumer each one has.
+ * parsed, it was refused by a strict union that had no branch for it. `reviewer:@handle` is read by
+ * {@link reviewersRequiredByClasses} and assigned by the `risk_route` duty; since **WP-45** (Q83)
+ * `checklist:<name>` is accepted when the document defines the list, read by
+ * {@link reviewChecklistsFor} and handed to the Reviewer as a data block; `budget_approval` is still
+ * refused **by name**, with the reason, at the schema. See `riskRequirementSchema`'s docblock for
+ * which consumer each one has.
  *
  * ## Which paths, and the residual that comes with them
  *
  * The paths are **whatever the caller has**, and the two callers have different ones on purpose.
+ *
+ * The **Reviewer's checklists** (WP-45) read what the review can see: the merge request's own
+ * files for a review of a human merge request (`tasks.review_subject`), and otherwise the
+ * Implementation Plan's paths plus whatever `tasks.risk_classes` already holds — the rebase gate
+ * runs *after* code review, so on a first review that column is empty and the plan is the source,
+ * with the plan-approval gate's residual below. The planner states which source it used.
  *
  * The **plan-approval gate** reads the Implementation Plan's `files_to_change[].path` — the first
  * moment the platform knows what a task will touch, and the moment plan approval is decided, so the
@@ -38,6 +45,7 @@
  * an approval that is not asked for, never a write that should not happen.
  */
 import type { RiskClass } from '@platform/contracts';
+import { checklistNameOf } from '@platform/contracts';
 import { pathMatchesPattern } from './path-patterns.js';
 
 /** Which of a project's declared risk classes the given paths fall into, in declaration order. */
@@ -98,6 +106,70 @@ export const reviewersRequiredByClasses = (
   return handles;
 };
 
+/** One checklist the Reviewer is given, and the classes that selected it. */
+export interface AppliedReviewChecklist {
+  /** The key under `policies.review_checklists` — project-chosen, a slug. */
+  readonly name: string;
+  /** The project's items, verbatim. Project text: it reaches a prompt only inside a data block. */
+  readonly items: readonly string[];
+  /** The matched classes whose `require` named it, in declaration order. */
+  readonly requiredBy: readonly string[];
+}
+
+/**
+ * The checklists the matched classes select — product/19 §14's *"stricter checklist"*, as Q83
+ * recommends it (WP-45).
+ *
+ * Takes **class names** for {@link reviewersRequiredByClasses}'s reason. Each list is returned
+ * once, however many classes select it, with every selecting class in `requiredBy` — so
+ * *"stricter"* is observable as *"the Reviewer was given these N items because of these
+ * classes"*, which is what the Review Verdict records.
+ *
+ * `missing` is a `checklist:<name>` whose list the configuration does not define. The schema
+ * refuses that document at the write and at the read (`policiesConfigSchema`), so on a document
+ * that went through either it is empty; it is **returned rather than dropped** because the
+ * pipeline reads `projects.config` by cast, and a requirement that vanished without a word is the
+ * failure this row exists to prevent.
+ */
+export const reviewChecklistsFor = (
+  classes: Readonly<Record<string, RiskClass>> | undefined,
+  checklists: Readonly<Record<string, readonly string[]>> | undefined,
+  names: readonly string[],
+): { readonly applied: readonly AppliedReviewChecklist[]; readonly missing: readonly string[] } => {
+  const applied = new Map<string, { items: readonly string[]; requiredBy: string[] }>();
+  const missing: string[] = [];
+  for (const name of names) {
+    for (const requirement of classes?.[name]?.require ?? []) {
+      const checklist = checklistNameOf(requirement);
+      if (checklist === null) {
+        continue;
+      }
+      const items = Object.hasOwn(checklists ?? {}, checklist)
+        ? (checklists as Readonly<Record<string, readonly string[]>>)[checklist]
+        : undefined;
+      if (items === undefined || items.length === 0) {
+        if (!missing.includes(checklist)) {
+          missing.push(checklist);
+        }
+        continue;
+      }
+      const entry = applied.get(checklist) ?? { items, requiredBy: [] };
+      if (!entry.requiredBy.includes(name)) {
+        entry.requiredBy.push(name);
+      }
+      applied.set(checklist, entry);
+    }
+  }
+  return {
+    applied: [...applied.entries()].map(([name, entry]) => ({
+      name,
+      items: [...entry.items],
+      requiredBy: [...entry.requiredBy],
+    })),
+    missing,
+  };
+};
+
 /**
  * product/19 §14's table, as a **proposal an operator accepts** — never as a shipped default
  * (WP-37, criterion 1).
@@ -111,17 +183,27 @@ export const reviewersRequiredByClasses = (
  * are the acceptance path.
  *
  * The paths are the document's own, transcribed. The `require` lists are the document's *"default
- * policy"* column, minus what this build refuses:
+ * policy"* column, **all six rows and every requirement in them** since WP-45:
  *
  *  - **auth** — *"plan approval + named reviewer group `security` if defined"*. Both, and *"if
  *    defined"* is honoured by the routing rather than by the proposal: a `@security` that resolves
  *    to no provider account is reported by name and assigned to nobody.
- *  - **payments** — *"plan approval + stricter checklist"*: the plan approval only. The checklist
- *    half is {@link RISK_CLASS_REQUIREMENTS_AWAITING_CHECKLIST}.
+ *  - **payments** — *"plan approval + stricter checklist"*: both, the second as
+ *    `checklist:payments`. Until WP-45 it was the plan approval only, and the dropped half was
+ *    written in this docblock and nowhere an operator reads (PROGRESS backlog 91).
  *  - **data**, **infra**, **agent-config** — as written. `infra`'s *"reviewer from CODEOWNERS"* is
  *    what the routing does for every class, so it adds no `reviewer:` entry of its own;
  *    `agent-config`'s *"flagged in review (BD-025)"* is the label itself, which is now a stored
  *    column and a rendered field.
+ *  - **public-api** — *"stricter checklist (compatibility)"*, as `checklist:public_api`. It was not
+ *    proposed at all before WP-45, because its only requirement could not be written.
+ *
+ * **The two checklists are named and not filled.** The platform ships no checklist items (Q83's
+ * recommendation: a list a project never saw would silently change what its reviews say), so a
+ * `checklist:` requirement here is a list the operator writes when they accept — which is why the
+ * proposal publishes {@link PROPOSED_REVIEW_CHECKLISTS} beside the classes, and why accepting a
+ * class whose list is not written is refused at the configuration document rather than accepted
+ * and ignored.
  */
 export const PROPOSED_RISK_CLASSES: Readonly<Record<string, RiskClass>> = {
   auth: {
@@ -130,7 +212,7 @@ export const PROPOSED_RISK_CLASSES: Readonly<Record<string, RiskClass>> = {
   },
   payments: {
     paths: ['**/payment*/**', '**/billing/**', '**/invoice*/**', '**/checkout/**'],
-    require: ['plan_approval'],
+    require: ['plan_approval', 'checklist:payments'],
   },
   data: { paths: ['**/migrations/**', '**/schema*', '**/*.sql'], require: ['plan_approval'] },
   infra: {
@@ -148,28 +230,29 @@ export const PROPOSED_RISK_CLASSES: Readonly<Record<string, RiskClass>> = {
     paths: ['.agentic/**', '.claude/**', 'CLAUDE.md', 'AGENTS.md', '.mcp.json'],
     require: ['plan_approval'],
   },
+  public_api: {
+    paths: ['**/api/**', '**/openapi*', '**/graphql/**'],
+    require: ['checklist:public_api'],
+  },
 };
 
 /**
- * The row of product/19 §14 this build cannot propose, and the exact reason — data rather than
- * prose, because the screen renders it and a sentence in a docblock is not something an operator
- * reads (standing rule 18: the absent case must not be the quiet one).
+ * The checklists {@link PROPOSED_RISK_CLASSES} select, each with **what product/19 §14 says it is
+ * for** — and no items (WP-45).
  *
- * `public-api` is the one class whose *only* documented requirement is *"stricter checklist
- * (compatibility)"*, and `riskRequirementSchema` refuses `checklist:<name>` until Q83 is answered —
- * so proposing it would mean either inventing a requirement the document does not ask for or
- * writing a class that requires nothing. Its paths are kept here so that answering Q83 is an edit
- * of one table rather than a re-transcription.
+ * The purpose is the document's own words, quoted, because it is the only thing the platform
+ * knows about these lists: *"stricter"* for payments and *"(compatibility)"* for the public API.
+ * The items are the operator's to write (Q83: the platform ships no default checklist), and the
+ * proposal publishes this table so the screen can ask for them by name rather than offering a class
+ * whose acceptance the configuration schema would refuse.
  */
-export const RISK_CLASS_REQUIREMENTS_AWAITING_CHECKLIST: readonly {
-  readonly name: string;
-  readonly paths: readonly string[];
-  readonly reason: string;
-}[] = [
-  {
-    name: 'public_api',
-    paths: ['**/api/**', '**/openapi*', '**/graphql/**'],
-    reason:
-      'product/19 §14 asks for a "stricter checklist (compatibility)" and nothing in the product defines what a review checklist is (Q83), so this class would have no requirement this build can act on',
+export const PROPOSED_REVIEW_CHECKLISTS: Readonly<Record<string, { readonly purpose: string }>> = {
+  payments: {
+    purpose:
+      'product/19 §14 asks for a "stricter checklist" on payments; the platform ships no items (Q83), so the list is yours to write',
   },
-];
+  public_api: {
+    purpose:
+      'product/19 §14 asks for a "stricter checklist (compatibility)" on the public API; the platform ships no items (Q83), so the list is yours to write',
+  },
+};

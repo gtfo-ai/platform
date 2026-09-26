@@ -388,6 +388,62 @@ describe('a human merge request opening', () => {
     expect(reading.platformVoice.join('')).not.toContain('Sum the invoice footer');
   });
 
+  it('gives the reviewer the project’s checklist for the class the merge request matched, and records it on the verdict (WP-45)', async () => {
+    /**
+     * Criteria 3 and 4 through the executor: the class is matched on the merge request's **own**
+     * files, the list reaches the prompt in a data block, and the stored verdict carries the
+     * platform's record — the model's claim to a checklist it was never given is discarded.
+     */
+    const { harness } = reviewHarness({
+      files: [fileDiff('src/billing/charge.ts')],
+      review: REVIEW({
+        checklists_applied: [{ name: 'invented', item_count: 99, required_by: ['nobody'] }],
+      }),
+      harness: {
+        settings: {
+          config: {
+            features: { review_only: { enabled: true, trigger: 'label', label: 'agentic-review' } },
+            policies: {
+              risk_classes: {
+                payments: { paths: ['src/billing/**'], require: ['checklist:payments'] },
+                data: { paths: ['db/**'], require: ['plan_approval'] },
+              },
+              review_checklists: { payments: ['Amounts are integer minor units'] },
+            },
+          },
+        },
+      },
+    });
+    await harness.publish([mrEvent('mr.opened')]);
+    const blocks = readDataBlocks(harness.specs[0]?.userPrompt ?? '').blocks.filter(
+      (entry) => entry.kind === 'review_checklist',
+    );
+    expect(blocks.map((entry) => entry.body)).toEqual([
+      'checklist: payments\nrequired by risk class(es): payments\n\n- Amounts are integer minor units',
+    ]);
+    const task = reviewTask(harness);
+    const verdict = await harness.memory.transaction(async (scope) =>
+      harness.store.artifacts.latest(scope.tx, task?.task.id as Id, 'ReviewVerdict'),
+    );
+    expect(
+      (verdict?.data as { checklists_applied?: unknown } | undefined)?.checklists_applied,
+    ).toEqual([{ name: 'payments', item_count: 1, required_by: ['payments'], truncated: false }]);
+  });
+
+  it('records "given none" on a verdict whose review matched no class, never the model’s claim', async () => {
+    const { harness } = reviewHarness({
+      review: REVIEW({ checklists_applied: [{ name: 'x', item_count: 1, required_by: [] }] }),
+    });
+    await harness.publish([mrEvent('mr.opened')]);
+    const task = reviewTask(harness);
+    const verdict = await harness.memory.transaction(async (scope) =>
+      harness.store.artifacts.latest(scope.tx, task?.task.id as Id, 'ReviewVerdict'),
+    );
+    expect(
+      (verdict?.data as { checklists_applied?: unknown } | undefined)?.checklists_applied,
+    ).toEqual([]);
+  });
+
   it('does nothing at all when the project has not enabled the mode', async () => {
     const { harness, posted } = reviewHarness({ enabled: false });
     await harness.publish([mrEvent('mr.opened')]);

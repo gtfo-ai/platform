@@ -38,6 +38,80 @@
       "items": {
         "$ref": "#/$defs/PathPattern"
       }
+    },
+    "checklists_applied": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "$ref": "#/$defs/Slug"
+              },
+              "item_count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "required_by": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Slug"
+                }
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "name",
+              "item_count",
+              "required_by",
+              "truncated"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "criteria": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/NonEmptyString"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "met",
+                  "not_met",
+                  "untestable"
+                ]
+              },
+              "evidence": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "status",
+              "evidence"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [
@@ -117,6 +191,10 @@
         "minor",
         "nit"
       ]
+    },
+    "Slug": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
     }
   }
 }
