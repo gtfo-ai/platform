@@ -18,7 +18,7 @@
 > **"Architect ruling (M4, session 6)"** at the end of this file. This session is started with `/orchestrate`,
 > which loads `docs/technical/15-orchestrator-prompt.md`; that document, not a pasted prompt, is now the loop.
 
-**Session 8 — 2026-09-25.** `main` opened at **`c1cc951`**, tree clean, and every run on the last three heads read **completed success** — WP-53's `ci` `35879384310` and `image` `35879384479` (PENDING in session 7's note) included, with zero `release` runs. **WP-54 is DONE at `3288496`** (its `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success**; its docs commit `bdcfbe2` read `ci` `36165713727` and `image` `36165713682` **completed success**). **WP-74 is DONE at `91e0140`** (`ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs; the docs commit that carries this sentence has its own runs, **PENDING — read to `completed` before the next row**) — backlog 82 and 147 closed, `verify:e2e` green on this machine again. **Two majors had no owner and now do**: backlog **148** (a run's `/cache` is the whole mirror volume) as **WP-75** and **133** (the launcher cannot authenticate to git) as **WP-76**, both placed right after WP-74. Machine baseline: `docker volume ls | wc -l` = **102** (the two new volumes are the user's own `speedpuzzlingcz` postgres containers, not this repository's). **Three things for the next session.** (1) **The load gate, not the work, set the pace**: one-minute load was 20–175 for most of the day (Spotlight's `mds_stores` at ~250 % and the user's containers; this session's own processes were ~6 %), so the implementer spent six of its seven hours waiting — and its waits were **unbounded `until` loops** that each tool timeout orphaned: 25 of them, killed by the orchestrator after the user asked why 24 shells were running. **Every brief now says: a load check is five readings a minute apart, then a report — never an unbounded loop, never a background shell left behind.** (2) **`verify:e2e` is red on this machine for a reason that is not the tree**: backlog **147**, reproduced on a clean `main` worktree; until WP-74 closes it, every row's e2e verdict carries that one named failure and the rest is read as the verdict. A likely cause (the refiner's, unmeasured) is macOS writing into the bind-backed control volume between the two teardown helpers. (3) **A floor list is an enumeration**: WP-54's review found seven, then five, spellings past it, and BD-025 now says so rather than claiming a boundary. **WP-75 is DONE at `1b0af26`** (`ci` `36200943398` and `image` `36200943454` **completed success**; WP-74's docs commit `6972cbc` read `ci` `36175963207` and `image` `36175963205` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 148 and 152 closed. **The TD-028 amendment WP-76 needed exists** (the architect's, session 8: the runner mints a run-scoped credential through `IntegrationActionExecutor` and passes it on the create request; Q98 filed). **WP-76 is DONE at `52495cb`** (`ci` `36208771351` and `image` `36208771353` **completed success**; WP-75's docs commit `355f444` read `ci` `36201525827` and `image` `36201525825` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 133 closed: a private repository mirrors, the developer stage can push, and the run's credential is minted, audited and revoked. **WP-55 is DONE at `a72aaa2`** (`ci` `36216963170` and `image` `36216963211` **completed success**). **CI went red on WP-77's docs commit `2ab70eb`** (`ci` `36213166240`, `integration` job; `image` `36213166173` success): `test/integration/stats/stats-backfill.integration.test.ts`, untouched since WP-41, pins a row order sorted by day, and its story started three hours before *now* — a run between 03:00 and 03:30 UTC (this one: 02:55) splits it across midnight. **Deterministic by time of day, not by load**; fixed at `ae65e2f` by anchoring the story to noon UTC (`ci` `36217053525` and `image` `36217053489` **completed success**). **Two machine-rule breaches by the orchestrator this session, recorded rather than hidden**: WP-77's last `verify` started at a one-minute load of 34, and this fix's single integration file at 20 — both without the gate. **WP-77 is DONE at `2481f09`** (`ci` `36212658371` and `image` `36212658429` **completed success**; WP-76's docs commit `e0d2790` read `ci` `36209347069` and `image` `36209347052` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 155 closed. **WP-56 is DONE at `e0e877d`** (`ci` `36221858072` and `image` `36221858076` **completed success**; WP-55's docs commit `6083512` read `ci` `36217921241` and `image` `36217921292` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-57 is DONE at `933c58f`** (`image` success; `ci` success after one `--failed` rerun of an Alpine-mirror outage; WP-56's docs commit `f7c09c1` read `ci` `36222374356` and `image` `36222374355` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-58 is DONE at `c2f15f3`** (`ci` `36230652056` and `image` `36230652049` **completed success**; WP-57's docs commit `715320b` read `ci` `36226205654` and `image` `36226205639` **completed success**; this docs commit's runs **PENDING**). **Next: WP-59**, then the M4 table's order. **Session pace**: seven rows (WP-54, 74, 75, 76, 77, 55, 56) in about 28 h, roughly half of it the load gate. **Pace this session**: four rows (WP-54, 74, 75, 76) plus the architect's WP-76 decision in about 17 h 30 min, of which the load gate held the tiers for roughly half; the three security rows each took three review rounds because each round found a way past the one before. Pace: WP-54 took about 8 h 20 min, most of it waiting on load; WP-74 about 2 h 30 min at a load that allowed its tiers.
+**Session 8 — 2026-09-25.** `main` opened at **`c1cc951`**, tree clean, and every run on the last three heads read **completed success** — WP-53's `ci` `35879384310` and `image` `35879384479` (PENDING in session 7's note) included, with zero `release` runs. **WP-54 is DONE at `3288496`** (its `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success**; its docs commit `bdcfbe2` read `ci` `36165713727` and `image` `36165713682` **completed success**). **WP-74 is DONE at `91e0140`** (`ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs; the docs commit that carries this sentence has its own runs, **PENDING — read to `completed` before the next row**) — backlog 82 and 147 closed, `verify:e2e` green on this machine again. **Two majors had no owner and now do**: backlog **148** (a run's `/cache` is the whole mirror volume) as **WP-75** and **133** (the launcher cannot authenticate to git) as **WP-76**, both placed right after WP-74. Machine baseline: `docker volume ls | wc -l` = **102** (the two new volumes are the user's own `speedpuzzlingcz` postgres containers, not this repository's). **Three things for the next session.** (1) **The load gate, not the work, set the pace**: one-minute load was 20–175 for most of the day (Spotlight's `mds_stores` at ~250 % and the user's containers; this session's own processes were ~6 %), so the implementer spent six of its seven hours waiting — and its waits were **unbounded `until` loops** that each tool timeout orphaned: 25 of them, killed by the orchestrator after the user asked why 24 shells were running. **Every brief now says: a load check is five readings a minute apart, then a report — never an unbounded loop, never a background shell left behind.** (2) **`verify:e2e` is red on this machine for a reason that is not the tree**: backlog **147**, reproduced on a clean `main` worktree; until WP-74 closes it, every row's e2e verdict carries that one named failure and the rest is read as the verdict. A likely cause (the refiner's, unmeasured) is macOS writing into the bind-backed control volume between the two teardown helpers. (3) **A floor list is an enumeration**: WP-54's review found seven, then five, spellings past it, and BD-025 now says so rather than claiming a boundary. **WP-75 is DONE at `1b0af26`** (`ci` `36200943398` and `image` `36200943454` **completed success**; WP-74's docs commit `6972cbc` read `ci` `36175963207` and `image` `36175963205` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 148 and 152 closed. **The TD-028 amendment WP-76 needed exists** (the architect's, session 8: the runner mints a run-scoped credential through `IntegrationActionExecutor` and passes it on the create request; Q98 filed). **WP-76 is DONE at `52495cb`** (`ci` `36208771351` and `image` `36208771353` **completed success**; WP-75's docs commit `355f444` read `ci` `36201525827` and `image` `36201525825` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 133 closed: a private repository mirrors, the developer stage can push, and the run's credential is minted, audited and revoked. **WP-55 is DONE at `a72aaa2`** (`ci` `36216963170` and `image` `36216963211` **completed success**). **CI went red on WP-77's docs commit `2ab70eb`** (`ci` `36213166240`, `integration` job; `image` `36213166173` success): `test/integration/stats/stats-backfill.integration.test.ts`, untouched since WP-41, pins a row order sorted by day, and its story started three hours before *now* — a run between 03:00 and 03:30 UTC (this one: 02:55) splits it across midnight. **Deterministic by time of day, not by load**; fixed at `ae65e2f` by anchoring the story to noon UTC (`ci` `36217053525` and `image` `36217053489` **completed success**). **Two machine-rule breaches by the orchestrator this session, recorded rather than hidden**: WP-77's last `verify` started at a one-minute load of 34, and this fix's single integration file at 20 — both without the gate. **WP-77 is DONE at `2481f09`** (`ci` `36212658371` and `image` `36212658429` **completed success**; WP-76's docs commit `e0d2790` read `ci` `36209347069` and `image` `36209347052` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 155 closed. **WP-56 is DONE at `e0e877d`** (`ci` `36221858072` and `image` `36221858076` **completed success**; WP-55's docs commit `6083512` read `ci` `36217921241` and `image` `36217921292` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-57 is DONE at `933c58f`** (`image` success; `ci` success after one `--failed` rerun of an Alpine-mirror outage; WP-56's docs commit `f7c09c1` read `ci` `36222374356` and `image` `36222374355` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-58 is DONE at `c2f15f3`** (`ci` `36230652056` and `image` `36230652049` **completed success**; WP-57's docs commit `715320b` read `ci` `36226205654` and `image` `36226205639` **completed success**; this docs commit's runs **PENDING**). **WP-59 is DONE at `5910ecf`** (`ci` `36236800859` and `image` `36236800844` **completed success**; WP-58's docs commit `90f431c` read `ci` `36231164931` and `image` `36231164932` **completed success**; this docs commit's runs **PENDING**) — and standing rule **91** recorded. **Next: WP-60**, then the M4 table's order. **Session pace**: ten rows (WP-54, 74, 75, 76, 77, 55, 56, 57, 58, 59) in about 34 h. **Session pace**: seven rows (WP-54, 74, 75, 76, 77, 55, 56) in about 28 h, roughly half of it the load gate. **Pace this session**: four rows (WP-54, 74, 75, 76) plus the architect's WP-76 decision in about 17 h 30 min, of which the load gate held the tiers for roughly half; the three security rows each took three review rounds because each round found a way past the one before. Pace: WP-54 took about 8 h 20 min, most of it waiting on load; WP-74 about 2 h 30 min at a load that allowed its tiers.
 
 **Session 7 so far.** `main` opened at **`cc80fc3`**, tree clean, its `ci` `35114407808` and `image`
 `35114407731` both **completed success** with **zero `release` runs on the sha** — the first head to show
@@ -304,6 +304,8 @@ here**: the pre-push hook rejected a status row tonight because I attributed a t
 ## Standing rules earned by evidence
 
 Each of these cost at least one review round to learn; all are evidenced in the notes below.
+
+91. **The tree's own guards read `git ls-files`, so a new file is invisible to them until it is committed — and a verify that passed over it has not checked it.** WP-59's `test/integration/recovery/superseded-mr-recovery.integration.test.ts` opened a citation of `human-commands.test.ts` followed by prose rather than a test name; the orchestrator's `PASS: verify` (405 files, 7691) was green because the file was **untracked**, and the citation guard's scope is tracked files. The pre-push hook refused the push the moment the commit made it tracked; the fix was one line, amended into the unpushed commit. WP-77's implementer had already worked around exactly this with `git add -N` (intent-to-add) so the guard would see its new files; that is now the rule, not a habit: **before a verify that is meant to certify a change, new files are marked intent-to-add**, so every census that reads `git ls-files` — citations, NUL, conflict markers, ignored paths, the provider-directory scans — sees them. The same shape as rule 30's NUL byte, one guard later.
 
 86. **A prediction copied into the tree becomes an observation, and the tree is where nobody re-derives it.**
    Backlog 7 predicted, from documentation, that tinyproxy could not start as uid 1000 with `cap_drop ALL`
@@ -2015,7 +2017,7 @@ remedy for a pinned cap turns it into an under-charged one. Nothing else changes
 question is untouched, and taking 109 with this entry is cheaper than taking either alone, because both
 want the same thing — a run that ends outside its own process still reaching `chargeBudgets`.*
 
-### 51. **`rework` resets the task and leaves the merge request open on the provider — and the port it would need has no way to close one** (TODO, latent — **no work package owns it**; found by WP-15i, session 5)
+### 51. **`rework` resets the task and leaves the merge request open on the provider — and the port it would need has no way to close one** (**RESOLVED** at `5910ecf`, WP-59, session 8 — TODO, latent — **no work package owns it**; found by WP-15i, session 5)
 > **M4 (architect, session 6): folded into WP-59.**
 
 **What is wrong.** product/04:86 makes human rejection a reset with two halves, and only the first is
@@ -2653,7 +2655,7 @@ carries the board field in criterion 3 together with entries **64** and **65**'s
 this entry is still its brief; what changed is only that the M3 default now has a home instead of
 none.
 
-### 64. **The conflict warning downloads every peer merge request's patches to read their file names, and the paths-only remedy the discovered-work bullet names is not on the endpoint it names** (TODO, small — **no work package owns it**; nothing is wrong today; found by WP-26, session 5; **the cost is restated at the end of this entry — WP-37 added a second duty that reads the same diff again, WP-39 a third duty that re-reads the pipeline status the CI gate reads, and WP-38 a fourth diff read at a trigger of its own, so a task's diff is now downloaded four times**)
+### 64. **The conflict warning downloads every peer merge request's patches to read their file names, and the paths-only remedy the discovered-work bullet names is not on the endpoint it names** (**RESOLVED** at `5910ecf`, WP-59, session 8 — TODO, small — **no work package owns it**; nothing is wrong today; found by WP-26, session 5; **the cost is restated at the end of this entry — WP-37 added a second duty that reads the same diff again, WP-39 a third duty that re-reads the pipeline status the CI gate reads, and WP-38 a fourth diff read at a trigger of its own, so a task's diff is now downloaded four times**)
 > **M4 (architect, session 6): folded into WP-59.**
 
 **What is wrong.** `changedPathsOf` (`packages/application/src/pipeline/conflict-warning.ts:180-205`)
@@ -2786,7 +2788,7 @@ git adapter. Trigger that would make it urgent: a project with a busy default br
 live merge requests, where the `K²` reads land on the provider's rate limit that the pipeline's own
 calls share.
 
-### 65. **A conflict warning is posted on the merge request of whichever task entered the rebase gate second, and the other task of the pair is never told** (TODO, small — stated as a design property by WP-26 and filed because the promise is about the pair; **no work package owns it**; found by WP-26, session 5)
+### 65. **A conflict warning is posted on the merge request of whichever task entered the rebase gate second, and the other task of the pair is never told** (**RESOLVED** at `5910ecf`, WP-59, session 8 — TODO, small — stated as a design property by WP-26 and filed because the promise is about the pair; **no work package owns it**; found by WP-26, session 5)
 > **M4 (architect, session 6): folded into WP-59.**
 
 **What is wrong.** The trigger is `task.stage.entered` filtered to the rebase gate, so a task learns
@@ -6843,7 +6845,7 @@ unauthenticated, which is the worse of the two states. Related: **34** (same lat
 **110** (`local` mode's spend is always an estimate — the other place this mode is half-built),
 **127** (the neighbouring class: a documented knob with no reader), **Q14**.
 
-### 129. **The egress allow-list decides the first request and `fetch` decides the rest: no provider adapter refuses a redirect, and the one client in this repository that does is the one carrying no credential** (TODO, small-to-major — one cause, five files; the exposure's precondition is stated and is **not** reachable by the caller the allow-list was built against; folded into **WP-59**; found by WP-51, measured off the tree by the refiner, session 6)
+### 129. **The egress allow-list decides the first request and `fetch` decides the rest: no provider adapter refuses a redirect, and the one client in this repository that does is the one carrying no credential** (**RESOLVED** at `5910ecf`, WP-59, session 8 — TODO, small-to-major — one cause, five files; the exposure's precondition is stated and is **not** reachable by the caller the allow-list was built against; folded into **WP-59**; found by WP-51, measured off the tree by the refiner, session 6)
 
 **What is wrong.** `assertEgressAllowed` is asked **once per action**, on the URL the platform built
 out of `integrations.config`. What the adapter's HTTP client does with a `3xx` is nobody's decision:
@@ -9566,6 +9568,173 @@ not the matcher. WP-58's own round would be cheapest, but as with 174 that row s
 commits first, the trigger that makes it urgent is the first vault page written with the spelling.
 Related: **170**, **175**.
 
+### 177. **A paths-only read of a merge request now has a documented surface — GraphQL `MergeRequest.diffStats(path)` — so backlog 64's remedy (b) is buildable; but since WP-59's coalescer it saves bytes, not reads, and in the ordinary case it would *add* a request** (TODO, **nit-to-small** — bandwidth only, no wrong behaviour; the surface is **documented**, its bounds on a large merge request are **not**; carries backlog **64**'s half (b) forward when WP-59 resolves 64 at commit, so 64's evidence is not split; proposed owner **WP-60** (refiner, session 8); found by WP-59, session 8)
+
+**What is wrong.** The conflict warning and the risk routing still download each merge request's
+patches to keep its file names (`changedPathsOf`, `packages/application/src/pipeline/conflict-warning.ts:188`).
+Backlog 64 (b) was parked on one question — does GitLab answer paths without patches — and WP-59
+answered it.
+
+**Evidence.** The WP-59 implementer, quoted: *"GraphQL `MergeRequest.diffStats(path)` answers per-file
+`path`/`additions`/`deletions` with no patch (read 2026-09-26, `SOURCES.md`). The conflict warning and
+the risk routing download patches they discard; a `getChangedPaths` port method over it is backlog 64
+(b) with its documentation question answered. The dependency gate must keep the patches."* The record
+is `test/fixtures/http/gitlab/SOURCES.md:149-154` (`[DiffStats!]` of `path`, `additions`, `deletions`),
+and `docs/TODO.md`'s paths question is ticked with the same answer. **Refiner, read off the tree:** the
+WP-59 coalescer (`packages/application/src/pipeline/diff-coalescer.ts`) now serves the risk routing's
+and the task's own conflict-warning read from the dependency gate's patch read whenever the gate is
+reached at the same head sha inside 15 minutes — the ordinary case, per the implementer's criterion 2.
+A paths-only read is a **different** request, so for the task's own merge request it replaces a
+coalesced (free) answer with a new one; it saves only on **peer** reads and on reads outside the
+window. **Not established:** whether `diffStats` is paginated or capped for a merge request with more
+files than `MAX_CONFLICT_FILES` (100) — the WP-59 note records the type, not its bounds.
+
+**What it costs to leave.** Patch bytes nobody reads, on peer reads and late gate entries; somebody
+else's rate limit. Nothing wrong follows (64's own grading).
+
+**What "done" looks like.** `getChangedPaths(ref, {limit})` on the git port — a method, the fake, a
+shared contract-suite case, the GitLab adapter over `POST /api/graphql` (the WP-59 GraphQL client) and a
+`documented-adapted` fixture — used by the conflict warning and the risk routing **only when the
+coalescer holds no patch answer for the same key**, never by the dependency gate; a read-count case in
+`conflict-warning.test.ts` showing the peer read is paths-only and the own read still coalesced; the
+truncation signal (`files.length` vs a count) preserved. **Needs a documentation check first**:
+`diffStats`'s pagination/cap for a large merge request, recorded in `SOURCES.md`. If it is unbounded or
+uncapped, (b) closes as *"refused, and here is why"* (64's own clause).
+
+**Depends on / owner.** WP-59 (the coalescer, the GraphQL client). **Proposed owner WP-60** (refiner,
+session 8): the next row that opens the GitLab adapter, its fixtures and the shared git suite (rule 23);
+not WP-59 itself, whose round should not grow. Related: **64**, **181**.
+
+### 178. **The rework's close wake-up is at-most-once: a process that dies between `reworkStageCommand`'s commit and its enqueue leaves the rejected merge request open with no comment, and nothing can find it again, because the same commit cleared the only row that named it** (**RESOLVED** at `5910ecf`, WP-59, session 8 — TODO, **small** — the window is one `afterCommit` enqueue, so the probability per rework is low, and the loss is **silent**; **live** from WP-59 on every rework of a task with a merge request; the residual of backlog **51**, stated in the docblock and not solved; **read off the tree, not measured**; proposed owner **WP-59's own review round** (refiner, session 8), the orchestrator's call — otherwise **no remaining M4 row owns it**, the recovery rows being DONE, as for **161**; found by WP-59, session 8)
+
+**What is wrong.** `reworkStageCommand` writes `tasks.mr_ref = null` in its transaction and enqueues the
+`close_superseded_mr` `pipeline.outbound` duty after it
+(`packages/application/src/pipeline/commands.ts:832-881`). Its own docblock states the gap
+(`commands.ts:815-820`): *"a process that dies between the two loses the wake-up and leaves the old merge
+request open — `afterCommit`'s at-most-once residual, stated rather than solved: the task has already
+let go of it, so nothing re-derives it later."* This is the lost-wake-up class `recovery/stranded.ts`
+tabulates (seven sites, `packages/application/src/recovery/stranded.ts:14-24`), and it is not a row.
+
+**Evidence.** The WP-59 implementer, quoted: *"a process that dies between the rework's commit and its
+enqueue leaves the rejected merge request open, and nothing re-derives it because the task has let go of
+the ref. A recovery row (the shape of `recovery/stranded.ts`) would need the superseded ref persisted
+somewhere — an event carrying it is the cheapest candidate."* **Refiner, read off the tree:** the
+decision appends `task.stage.returned` (it is the duty's `cause_event_id`), and that event's payload
+(`packages/contracts/src/events.ts:209-216`) carries stages, reason and iteration — **no** merge
+request. So today no row and no event holds the iid once the transaction commits.
+
+**What it costs to leave.** A merge request a person rejected stays **open, uncommented, and detached
+from every task** — the platform will no longer react to its `mr.closed` or `mr.merged` — so a reviewer
+who has not seen the rework can merge the rejected approach, which is exactly what product/04:86's
+*"the old MR is closed"* exists to prevent. Also on an enqueue that **throws** (same path).
+
+**What "done" looks like.** The superseded reference persisted in the command's transaction — the
+implementer's candidate, the `task.stage.returned` payload (or a dedicated event) gaining the old
+`mr` ref, is the cheapest — and an eighth row of `stranded.ts`'s table: a rework whose superseded
+merge request has **no** `integration_actions` row under `supersededCloseKey(task, iid)` after the
+grace period is re-enqueued, bounded by that same audit row (the platform-owned key is already the
+"done" mark, which is why no `recovery_attempted_at` is needed). One recovery case: commit the rework,
+drop the enqueue, run the pass, count one close and one comment on the old merge request; and the
+negative, a task that re-adopted the iid, closes nothing (the duty's existing re-validation).
+`commands.ts:815-820` then changes (rule 83).
+
+**Depends on / owner.** WP-59 (the duty), WP-48 (the table). **Proposed owner: WP-59's review round**,
+because it is the row that produced the site and a contracts field is cheapest before the event ships;
+if WP-59 merges without it, **no remaining M4 row owns it**. Related: **51**, **161**, **184**.
+
+### 179. **`loc_changed` is computable now and still published absent: the diff-stats read exists, and nothing makes it when a merge request is merged** (TODO, **small** — a stats row, a product/16 metric; **working as documented** (the metric's own `absent` block names the gap); **live** on every instance; proposed owner **WP-61** (refiner, session 8); found by WP-59, session 8)
+
+**What is wrong / evidence.** The WP-59 implementer, quoted: *"`loc_changed` can now be computed: the
+diff-stats read exists, and WP-41's metric needs it made once per merged merge request and recorded
+(its `absent.owner` text now says so)."* The metric's block (`apps/server/src/queries/stats-metrics.ts:545-556`)
+reads *"Since WP-59 the counts have a read of their own (GraphQL's `diffStatsSummary`), which only the
+history bootstrap calls; nothing reads it when a merge request is merged"*, owner *"Unowned — filed as
+discovered work by WP-41"*. GitLab's `mr.*` events carry `diff_stats: null` and the fake fills them
+(the fake's divergence 17), so reading the **event** would be green in every tier and null in
+production — backlog **113**'s trap.
+
+**What it costs to leave.** One product/16 metric (information, not a target) absent on every instance.
+
+**What "done" looks like.** On `mr.merged` for a task's merge request, a `pipeline.outbound` duty
+calls `getMergeRequestDiffStats` once and records the counts (the shape — an event the stats reader
+maps, or a column — is the implementer's, stated); the metric's `absent` block is removed; the proving
+case runs the fake with `setDiffStats` **null on the event** and a value on the read, so the number can
+only have come from the read. **A decision to state, not assume:** whether the metric covers the
+platform's own merge requests only or every merge request the binding reports (product/16 says *"per
+merged MR"*); the cost is one GraphQL read per counted merge.
+
+**Depends on / owner.** WP-59 (the read), WP-41 (the metric). **Proposed owner WP-61** (refiner, session
+8), the row that corrects the delivery metrics and already consumes the git provider's merge events.
+Related: **113**.
+
+### 180. **`task.conflict.warned` is appended on every gate entry that re-finds an overlap, replayed thread or not, so `concurrent_task_overlaps` counts re-comparisons — two events per entry per warned pair since WP-59** (TODO, **nit** — the definition says so honestly; the question is whether product/16's *"concurrent-task overlaps"* means comparisons; pre-existing since WP-26 at one per entry, doubled by WP-59; **read off the tree**; proposed owner **WP-61** (refiner, session 8); found by WP-59, session 8)
+
+**Evidence.** The implementer, quoted: *"Conflict-warning events are appended on every gate entry,
+replayed thread or not, so `concurrent_task_overlaps` counts re-comparisons (now two events per entry
+per warned pair). The executor's `replayed` status is the signal a dedupe would use; `mutate` does not
+return it today."* Read: the append is unconditional once `warned` is non-empty
+(`packages/application/src/pipeline/conflict-warning.ts:346-396`); `mutate` returns `outcome.result`
+only (`packages/application/src/pipeline/integrations.ts:278-303`); the definition
+(`apps/server/src/queries/stats-metrics.ts:470-476`) says *"every warned pair counts twice per gate entry
+that compared it"*. A pair of tasks waiting through five default-branch moves counts ten.
+
+**What "done" looks like.** Either product/16 gains the sentence that the metric counts comparisons, or
+the query counts **distinct** `(task, other task, head sha)` — the refiner's recommendation over the
+`replayed` signal, because a shadow peer's write is `would_have` on every entry and would never read as
+replayed. One stats case: two gate entries at one revision count one pair.
+
+**Depends on / owner.** WP-59, WP-41. **Proposed owner WP-61** (refiner, session 8). Related: **65**.
+
+### 181. **The diff coalescer is per process, so on the shipped topology the app and the runner each make the read once** (TODO, **nit** — bandwidth only, stated in the module's docblock (`packages/application/src/pipeline/diff-coalescer.ts:30-34`); the implementer's claim that both processes take `pipeline.outbound` is **as reported** — `compose.yml:226` does run the runner as a worker; **needs measurement** of the split; proposed owner **WP-72** (refiner, session 8); found by WP-59, session 8)
+
+The implementer, quoted: *"two processes running `pipeline.outbound` (the app and the runner, WP-53)
+each read once. Cross-process coalescing would need a store and is only bandwidth."* **Done**: WP-72's
+two-process tier counts `get_merge_request_diff` for one gate entry and the figure is stated at the
+docblock; a shared store is **not** proposed unless a rate limit is measured to bind. Related: **64**, **177**.
+
+### 182. **`tasks.mr_ref.head_sha` moves only when a pushing stage reports `ImplementationNotes`, so a human's push to the agent branch — including the product's own take-over — is invisible to every identity keyed on it** (TODO, **small** — pre-existing, WP-59 added a third reader; **read off the tree, not measured**; **live** whenever a person pushes to an `agentic/*` branch, which take-over (WP-27) invites; proposed owner **WP-60** (refiner, session 8); found by WP-59, session 8)
+
+**Evidence.** The implementer, quoted: *"`tasks.mr_ref.head_sha` moves only when a pushing stage reports
+`ImplementationNotes`, so a human's push to the agent branch is invisible to every identity keyed on it
+(the warning key, the coalescer key, `tasks.dependencies.head_sha`) — pre-existing, now one more
+reader."* The coalescer states the consequence (`diff-coalescer.ts:40-45`). **Refiner, read off the
+tree:** the signal exists and is dropped — `mr.updated` carries `head_sha` (`packages/contracts/src/events.ts:533-543`)
+and is declared `'unconsumed'` for having no author (`packages/application/src/events/consumption.ts:220`),
+a reason that does not apply to a revision. No hand-back path in `commands.ts` writes `head_sha`;
+whether the stage a hand-back re-enters always reports `ImplementationNotes` before the rebase gate is
+**not established**.
+
+**What it costs to leave.** At a moved revision the conflict warning replays its old thread (same key)
+instead of warning about the new files; for up to 15 minutes the coalescer answers the old files; the
+dependency record names a revision that is no longer the branch's.
+
+**What "done" looks like.** `mr.updated` for a task's merge request moves `head_sha` through a narrow
+write (the WP-15e column-ownership census gains the writer), its `EVENT_CONSUMPTION` row names the
+consumer, and one saga case: a human push at a new sha, then a gate entry reads the diff again rather
+than the coalesced one. Backlog **167**'s inactivity question reads the same event.
+
+**Depends on / owner.** WP-15e, WP-27. **Proposed owner WP-60** (refiner, session 8), the row deciding
+the git provider's event consumption. Related: **64**, **65**, **167**.
+
+### 183. **`human-commands.test.ts`'s `harnessWith` still lets a caller's partial `runs` replace the merged defaults** (TODO, **nit** — test hygiene, **read off the tree**; a workaround already exists; proposed owner **WP-69** (refiner, session 8); found by WP-59, session 8)
+
+`runs: runs(options.runs)` (`packages/application/src/pipeline/human-commands.test.ts:184`) is overwritten
+by the trailing spread of every key but `git` (`:222`), so `asking()` (`:289-291`) gets only
+`refinement` plus its overrides; a later case works around it by hand (`:837-840`, *"`harnessWith`
+spreads `options` last"*). **Done**: exclude `runs` from the spread as WP-59 excluded `git`, and drop the
+workaround comment.
+
+### 184. **The command-api e2e's rework re-reports the merge request the rework just superseded, so the close duty and the task's re-adoption race, and the task can end on a closed merge request — green either way today** (TODO, **nit-to-small** — **a fidelity defect, not yet a flake**: read off the tree, neither ordering changes a current assertion, because the fake's `closeMergeRequest` emits no `mr.closed` (`packages/integrations/src/git/fake.ts:1170-1184`) and no gate reads a merge request's `state`; **probability of reddening CI today: low**, and it turns red the day either of those changes or an assertion on the merge request is added — the first ordering then fails, the second passes, so it fails **intermittently**; which ordering occurs is **not measured**; proposed owner **WP-69** (refiner, session 8); found by WP-59, session 8)
+
+The implementer, quoted: *"The command-api e2e's rework re-reports the same merge request (its scripted
+CLI has no spec to key on), so after WP-59 the close duty and the re-adoption race: the task may end on
+a closed merge request in that fixture. Nothing it asserts depends on it; `rework-close.e2e.test.ts` is
+the faithful case."* The rework is at `test/e2e/server/command-api.e2e.test.ts:249-263`, followed by a
+settle on `ready_for_merge` and the no-`task.escalated` assertion at the end — the one a future
+`mr.closed` from the fake would break. **Done**: the scenario reports a **new** merge request on the
+reworked branch (the production shape), so the close is deterministic; or the case asserts the ending
+it gets. Related: **178**.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -9696,7 +9865,7 @@ explicitly the wrong home — the statistics row made the right call and publish
 owner; this is knowledge-side work. Cheapest home: whoever takes backlog 31, since steps 1 and 2 are
 one migration and one query apart.
 
-### 113. **The one git provider this build ships publishes no diff stats and the fake fills them on all three surfaces, so the field is measured in every tier and `null` on every instance — the fake's fifteen-item divergence register does not name it, and the follow-up that two documents say was *“recorded as discovered work”* never was** (TODO, small — one cause, three consequences, one of them **live** in WP-35's history bootstrap; **no work package owns it**; found by WP-41, confirmed off the tree by the refiner, session 5)
+### 113. **The one git provider this build ships publishes no diff stats and the fake fills them on all three surfaces, so the field is measured in every tier and `null` on every instance — the fake's fifteen-item divergence register does not name it, and the follow-up that two documents say was *“recorded as discovered work”* never was** (**RESOLVED** at `5910ecf`, WP-59, session 8 — TODO, small — one cause, three consequences, one of them **live** in WP-35's history bootstrap; **no work package owns it**; found by WP-41, confirmed off the tree by the refiner, session 5)
 > **M4 (architect, session 6): folded into WP-59.**
 
 
@@ -13138,7 +13307,7 @@ file, or the first work package that touches upgrade behaviour.
 | WP-56 | **Three deadlines, one mechanism** | DONE | `e0e877d` | **Folded backlog 74, 76, 69, and at review 161, 162 and 163's briefs.** One `deadline.sweep` queue (the architect's ruling; **TD-004 amended by the orchestrator**), pool floor 21 → 22 derived from the constant everywhere; `pipeline.deadlines` (priority 15) arms each timer after commit from a deadline written in the aggregate's transaction; the job re-validates on fire (answered, decided, handed back, terminal task — nothing expires); the working calendar composed from `APP_WORKING_DAYS/HOURS/HOLIDAYS` for the first time (blank default, malformed a startup refusal); **Q95 answered per its recommendation and recorded in BD-006 by the orchestrator** (an approval expires on the question calendar at one working day); the workpad reads the take-over from state. **Two review rounds**: R1 REQUEST_CHANGES — the expiry briefs promised commands the aggregates refuse (163, live because of this row) and the dependency question's deadline was unasserted (a canary survived 542 tests); the orchestrator folded 161 (a recovery site for a lost arming) and 162 (a first deadline for pre-WP-56 rows, counted from the pass) into R1's fix, and **the new test refused the orchestrator's own suggestion** that a brief offer *return to a stage* — the aggregate refuses it on `needs_human`; R2 APPROVE-with-nits, fixed by the orchestrator (a per-row catch so a poison row cannot stop the lease sweep, a probe inside the grace, the brief check widened to any wording of a return, the fake ordered as PostgreSQL). The boundary arithmetic was measured across a weekend, a holiday and both DST changes. **Orchestrator verification**: `PASS: verify` (401 files, 7580 passed), `PASS: verify:integration` (532), `PASS: verify:e2e` **twice** (208/208), images rebuilt and `PASS: compose-stock-check`, each exit 0. CI on `e0e877d`: `ci` `36221858072` and `image` `36221858076` **completed success**, zero `release` runs. Discovered work: backlog **164**–**167** | Depends on WP-05, WP-15, WP-28, WP-27, WP-32; amends TD-004. Folds backlog **74** (major), **76** (major), **69**. Ruled **in the row**: one `deadline.sweep` queue, pool floor **+1** not **+4**. The working calendar is composed for the first time. **Q95** decides whether an approval expires at all |
 | WP-57 | **`run_context_pack` gets a writer, the health report its refusals, and `kb_usage` a denominator** | DONE | `933c58f` | **Folded backlog 31, 37 (the remaining half), 112, and 169 (the orchestrator amended product/19:108).** Migration **0041**: both run-creation paths (stage executor, ask executor) write the planner's pack in the run row's transaction, its budget/total/commit on the run, `reason`/`score` filled from the planner (the contract not relaxed); an empty pack 200, a never-recorded one (every pre-0041 run) a typed 409 with its row count; `kb_index_refusals` replaced with the index in one transaction, the nightly report's `invalid` finding (the Librarian's contract deliberately not widened), `kb/health` 409 for no report; 0041 clears each project's indexed commit so the next index run rebuilds and records refusals; `kb_usage` a join with its denominator named in its definition. **One review round** (REQUEST_CHANGES: the diff had deleted the only HTTP test of the 409; the upgrade window read "nothing refused"); the orchestrator ran the canaries after the fix (409 answered as 200; the re-index removed from 0041 — both dead by name) and corrected two stale CLAUDE.md sentences (the `/context-pack` refusal and `system_prompt`'s writer, the second a WP-52 miss). **Orchestrator verification**: `PASS: verify` (401 files, 7587 passed), `PASS: verify:integration` (538), `PASS: verify:e2e` **twice** (208/208), `PASS: verify:ui` (332), `PASS: verify:web-e2e` (42). CI on `933c58f`: `image` `36225393924` success; `ci` `36225393932` **failed once upstream** — the `e2e-fake-claude` job could not build `platform-egress` because `dl-cdn.alpinelinux.org` answered an IO error on `apk add tinyproxy`, before any test ran — rerun with `--failed` to **completed success**. The first commit attempt was refused by commitlint (header 103 > 100) and nothing was pushed. Discovered work: backlog **168**, **170** | Depends on WP-17, WP-15h, WP-18a/b, and on **WP-52** (same file). Folds backlog **31** (major), **37**'s remaining half, **112**. Backlog 31 ruled answer (a), keep the table |
 | WP-58 | **Retrieval: the instrument first, then the query** | DONE | `c2f15f3` | **Folded backlog 16, 15, 12 (surviving half), 13, 14 (in part), 61, 170, 175 and — fixed by the orchestrator because this row unmasked it — 176; implemented Q58.** The instrument first, as ruled: a negative corpus under which 7 of 9 queries admitted a wrong page before any fix, then — because its author had read the queries — a **blind corpus** written by a separate agent that saw only the 16 correct pages (prompt quoted in the fixture with the orchestrator's machine paths replaced by placeholders; pages byte-for-byte), measured once and pinned exactly: **7 of 9 queries still rank a blind page inside the pack** — backlog 171's residual, stated rather than tuned. Per-project document frequencies at index time (migration **0042**) and a term dropped only when `df ≥ 2` and `df > N/2 + √N` — **the architect's ruling** (TD-008 amended, Q58 annotated) after the implementer measured the first rule (more than half) dropping a small vault's subject word and ranking a wrong page first (0.412 vs 0.375); invisible characters stripped and counted on both paths; `headPaths` from per-glob path witnesses bounded by the vault's globs (175 fixed before 0042 shipped); `unresolved_paths` health finding; `ticket_lint` → business; the estimator's measured figures and a band property (not an upper bound — 173). **One review round** (APPROVE-with-nits, nine of ten canaries dead, the survivor implied by the formula); the orchestrator added a two-write recount case (calibrated against a store that keeps its first counts), fixed the bare-`**` matcher (176 — masked since WP-16), three stale sentences. **Orchestrator verification**: `PASS: verify` (7639 passed after the `**` fix), `PASS: verify:integration` (550; the knowledge files again after the fix, 66), `PASS: verify:e2e` **twice** (208/208), `PASS: verify:ui` (332), `PASS: verify:web-e2e` (42). CI on `c2f15f3`: `ci` `36230652056` and `image` `36230652049` **completed success**, zero `release` runs. Discovered work: backlog **171**–**176** | Depends on WP-16, WP-17, WP-15f. Folds backlog **16**, **15**, **12**'s surviving half, **13**, **14**, **61**; implements **Q58**. The negative corpus lands before any floor — a mechanism calibrated on a corpus that cannot falsify it is unreviewable |
-| WP-59 | **The git provider port: close a merge request, read a diff once, stop inventing diff stats** | TODO | — | Depends on WP-09, WP-26, WP-37, WP-38, WP-39, WP-35; rule 23. Folds backlog **51**, **64**, **65**, **113**. Cheap halves first: the fake's missing divergence, then the coalesced read, then the port additions. **Q92** decides the rework branch. **Refiner (session 6): also folds backlog 129** — no provider HTTP client sets `redirect: 'error'`, so WP-51's allow-list decides the first request and `fetch` follows a `3xx` to an undeclared host with the request's headers on it; one option and one case in each of five clients, **four of them outside this row's title and scheduled by no row at all** — take them, or decline them in the entry by number, and never close one of five (rule 63) |
+| WP-59 | **The git provider port: close a merge request, read a diff once, stop inventing diff stats** | DONE | `5910ecf` | **Folded backlog 51, 64, 65, 113, 129, and at review 178; implemented Q92 per its recommendation.** A rework takes a new branch (`agentic/<ticket>-r<n>`) and the old MR is closed from a `pipeline.outbound` duty — idempotent, through the executor — with a comment naming the new branch; the superseded MR persisted in the rework's transaction (migration **0043**) and re-driven once by a `stranded.ts` row, then marked abandoned at error. One coalesced diff read per `(merge request, head sha)` — never caching an empty diff — takes a gate entry from four provider reads to **three** (**criterion (2) amended by the orchestrator**: the row missed the rebase gate's own read). A warning reaches both tasks' streams and threads once per MR; the peer append bumps each written task's `version` first, **in sorted order**, so a peer writer mid-stage retries rather than fails and two gates cannot deadlock. GitLab diff stats from GraphQL `diffStatsSummary` (`documented-adapted`); the fake's divergence 17. **All five provider HTTP clients refuse redirects** (`redirect: 'error'`), held by a test that finds every provider directory on disk — and **measured on Node 25.1.0 that a followed cross-origin redirect carried GitLab's `private-token` to the second host** before the fix. **Two review rounds and a closing batch**: R1 (major, read) — the peer append on a live stream failed the peer's transaction with an unretried `StreamConflictError`; R2 APPROVE-with-nits — lock order, `recordRebaseCheck` losing its measurement, the settle unasserted at three of five endings (two canaries survived until the tests existed). **The first push was refused by the pre-push hook**: a new integration file's citation, unseen by `verify` because the file was untracked — standing rule **91**; amended into the unpushed commit. **Orchestrator verification**: `PASS: verify` (405 files, 7691 passed), `PASS: verify:integration` (556), `PASS: verify:e2e` **twice** (209/209), `PASS: verify:ui` (332), `PASS: verify:web-e2e` (42). CI on `5910ecf`: `ci` `36236800859` and `image` `36236800844` **completed success**, zero `release` runs. Discovered work: backlog **177**, **179**–**184** | Depends on WP-09, WP-26, WP-37, WP-38, WP-39, WP-35; rule 23. Folds backlog **51**, **64**, **65**, **113**. Cheap halves first: the fake's missing divergence, then the coalesced read, then the port additions. **Q92** decides the rework branch. **Refiner (session 6): also folds backlog 129** — no provider HTTP client sets `redirect: 'error'`, so WP-51's allow-list decides the first request and `fetch` follows a `3xx` to an undeclared host with the request's headers on it; one option and one case in each of five clients, **four of them outside this row's title and scheduled by no row at all** — take them, or decline them in the entry by number, and never close one of five (rule 63) |
 | WP-60 | **Two events the catalogue is missing: `ticket.updated` and `mr.approved`** | TODO | — | Depends on WP-08, WP-09, WP-25, WP-15f, WP-29; run **before** WP-61. Folds backlog **59**, **90**; implements **Q61 (b)**. One normaliser each — both entries correct the two-provider price two documents quote |
 | WP-61 | **The delivery metrics stop being wrong in two directions** | TODO | — | Depends on WP-29, WP-41, WP-34, WP-60. Folds backlog **88** (major, live), **89**, **94**, **114**; implements **Q87** — publish the rate only with its coverage, absent below a declared floor |
 | WP-43 | **Slack Socket Mode** | TODO | — | Depends on WP-10, WP-15c, WP-32, WP-31, TD-028's topology. Folds backlog **78** (major) with **79**'s remaining half. One assertion driven through **both** transports; a binding configured for a socket nobody opened must say so by name |
@@ -28983,3 +29152,257 @@ is now a new cause of that emptiness and a `debug` log is not BD-003's audit.
   shell command as its load reading and started although that reading was **18.12** (the rule's
   line is 12) — the reading was not gated before the run. It was one unit file (12 cases, under a
   second). Every other run followed a passing reading.
+
+#### WP-59
+
+**Round 1 (implementer, session 8).** Backlog **51**, **64**, **65**, **113** and **129**, in the row's
+eight criteria and the brief's order (the fake's divergence, the coalesced read, the port additions).
+Commit pending.
+
+**What shipped, criterion by criterion.**
+1. **The fake's register gains divergence 17** (`packages/integrations/src/git/fake.ts`), in divergence
+   13's words and with its warning: `diff_stats` is filled on `getMergeRequest`, the `mr.*` payload and
+   `listMergedMergeRequests`, and GitLab answers `null` on all three. The positive assertion is
+   `packages/integrations/src/git/fake.test.ts` › "publishes diff stats on the three surfaces GitLab answers null on (divergence 17)",
+   which also shows the new read agreeing and `null` reachable (`setDiffStats`). **The row's count of the register was stale**: it said fifteen, WP-76 had made it
+   sixteen, so this is 17.
+2. **One coalesced read per `(merge request, head sha)`** — `packages/application/src/pipeline/diff-coalescer.ts`,
+   used by the three diff readers (dependency gate, conflict warning, risk routing). Process-local memo
+   keyed off the long-lived `PipelineIntegrationsPort` (a `WeakMap`, so there is no wiring to forget),
+   single-flight, a 15-minute window and 64 entries as the memory bound, a failure never remembered, and a
+   ref with no head sha never coalesced. The key is `(binding, repository, iid, head sha, limit)` — no task
+   id, which is what removes the `K²` factor (the first case of the new `diff-coalescer.test.ts` asks
+   for one revision from two tasks and counts one read). **The saving as a count** (`conflict-warning.test.ts`): the peer case
+   `[IID, IID, IID, PEER_IID]` → `[IID, PEER_IID]`, the no-peer walk `[IID, IID]` → `[IID]`, and a new case
+   pins **one gate entry on a project with no peer at three provider reads** (`get_merge_request`,
+   `get_default_branch_head`, `read_codeowners`) and no diff read. **Measured before**: the same case with
+   the coalescer bypassed (on a copy, md5-confirmed revert) counts **four** (the three plus
+   `get_merge_request_diff`). **The row's "four → two" is falsified in its second half**: the conflict
+   warning makes no diff read at all when a project has no peer (it returns on the empty peer list first),
+   and the floor includes the rebase gate's own mergeability read, which the row's arithmetic did not
+   count — so coalescing takes the floor from four to **three**, and "two" is not reachable by coalescing.
+   The risk routing's diff read is answered from the dependency gate's read only when the gate is reached
+   at the same revision inside the window — the ordinary case in the harness and in the fake-Claude tier,
+   and not after a slow review in production; stated in the coalescer's docblock.
+3. **The pipeline-status read is not coalesced**, and the reason is at the line (`gitReads.pipelineStatus`
+   in `integrations.ts`): a status for a fixed sha moves from `running` to terminal and a re-run reports a
+   different outcome — `coverage.ts`'s reason for never caching the head.
+4. **`closeMergeRequest`** on the port (property syntax, rule 157), idempotent, `conflict` for a merged
+   merge request, `not_found` for a missing one — a separate operation rather than a `state` field so the
+   two failure modes are distinguishable. The fake, the shared contract-suite case ("closes a merge
+   request, succeeds when it is already closed, and refuses a merged one") run against the fake **and** the
+   GitLab replay runner; GitLab reads first and sends `state_event=close` only when there is something to
+   close (the page documents the attribute and says nothing about closing a closed merge request), and a
+   merge that races the write is refused on the answer. Four fixtures in `merge-requests.json` (merge
+   requests 21 and 22), `documented-adapted` with notes; provenance contract green.
+5. **Q92 answered per its recommendation and marked implemented** (`docs/OPEN-QUESTIONS.md`).
+   `reworkStageCommand` lets go of the merge request in its transaction (`tasks.mr_ref = null`) and moves
+   the task to `reworkBranchName` = `agentic/<ticket>-r<n>` (`n` from `human_rounds`); after the commit a
+   `close_superseded_mr` `pipeline.outbound` duty (`superseded-mr.ts`) comments on the old merge request
+   naming the new branch and closes it, both through the executor with platform-owned keys. **Why the task
+   must let go in the transaction, found while building it**: the close makes the provider send
+   `mr.closed`, and `pipeline.merge.request` escalates any live task whose `mr_ref` names that merge
+   request to `needs_human` (product/04 S7) — so a rework that kept the ref would park the task it had just
+   restarted. Asserted in `human-commands.test.ts` (the command's two writes, the one wake-up, the close,
+   the comment naming the branch, the next run's `checkoutRef`, a retried wake-up that replays, and a task
+   that re-adopted the merge request is left alone — the last one mutation-checked) and in the e2e tier,
+   `test/e2e/pipeline/rework-close.e2e.test.ts`, through the real route, pg-boss and the production loader.
+6. **Both tasks of a warned pair** (`conflict-warning.ts`): the gate that finds the overlap appends
+   `task.conflict.warned` on **both** streams (the peer re-loaded in the appending transaction for its
+   sequence — WP-26's divergence 7) at no extra provider read. **Decided: the peer gets a thread too**, and
+   the cost is stated at `warnPeer` — one more provider write and audit row per warned pair. Its key is the
+   **peer's own identity**, `conflictWarningIdempotencyKey(peer, peerHead, task)`, which is exactly what the
+   peer's own gate computes for the same pair, so whichever gate runs first posts both threads and the other
+   replays both. Under the peer's mode (a shadow peer records `would_have`). The stats definition, the event
+   docblock, technical/02's row, the board's tooltip and comment and three test comments move with it.
+7. **The diff-stats read lands**: a documented surface answers it — GraphQL `MergeRequest.diffStatsSummary`
+   (`additions`, `deletions`, `fileCount`, all `Int!`, nullable object), read from
+   `docs.gitlab.com/api/graphql/reference/` on 2026-09-26 and recorded in
+   `test/fixtures/http/gitlab/SOURCES.md` with the endpoint and `Authorization: Bearer` page. The deprecated
+   `…/changes` does **not** answer it (patches and `changes_count`), recorded under "Pages read for WP-59
+   that produced no fixture". `getMergeRequestDiffStats` on the port (fake, suite case, GitLab over
+   `POST /api/graphql` with the path and iid as GraphQL variables, `graphql.json` fixture
+   `documented-adapted` — the page publishes types and no example response). Its consumer is WP-35's
+   bootstrap: a mined merge request whose listing carried no stats gets them from this read, and the batch's
+   reason says how many stayed sizeless; a non-retryable refusal leaves them sizeless rather than failing
+   the collection. **Cost, stated in `batch.ts`**: up to **453** reads at N = 200 on GitLab (was 253).
+8. **Five clients or none — five.** `redirect: 'error'` on GitLab, Jira (ky), Loki, Sentry and Slack; the
+   four hand-written clients' request-init types make it a required literal. Each has a case in
+   `packages/integrations/src/providers/redirect-refusal.test.ts`, driven by an injected `fetch`
+   (`support/redirecting-fetch.ts`) that answers `302` to an undeclared host and then does what the
+   request's mode says — so a client that dropped the option fails with the header names that followed —
+   and the file compares its cases with the provider directories on disk in both directions. Sentry's
+   same-host trailing-slash 301 is decided at its field and in its setup guide (refused; its paths already
+   carry the slash). `egress.ts`'s redirect bullet moved; `egress-host.test.ts`'s honest limit **stays**,
+   reworded to say redirects are now held elsewhere and pagination links are held by no test. **Measured,
+   not assumed** (scratch script, not committed): on **Node v25.1.0** (this machine; `engines` is `>=24`,
+   so this is not a Node 24 measurement) a followed cross-origin `302` carried `private-token` and a custom
+   header to the second host and stripped `authorization` and `cookie`; `ky` 2.1.0 stripped
+   `authorization` and still made the second request; `redirect: 'error'` rejected both with nothing sent.
+   `docs/TODO.md`'s item is updated with this and left open for the `git` clone half.
+
+**Decided in passing, each stated at its line.**
+- `reviewWrites.thread`'s `describeResult` read `result.id` off the shadow result `null` and threw inside
+  the executor — every shadow caller of a thread would have failed its job. Reached by the shadow-peer case
+  and fixed at the line (the same shape WP-37 round 2 fixed in `reviewers`). Latent before: a shadow task
+  never has a merge request.
+- `human-commands.test.ts`'s `harnessWith` spread `...options` last, so a caller passing `git` lost the
+  defaults; it now merges `git` over them.
+- The GitLab client's docblock said "nineteen" endpoints and there were twenty-four; now twenty-six.
+- GraphQL authenticates with `Authorization: Bearer` (its documented header), REST keeps `PRIVATE-TOKEN`.
+- Setup guides (GitLab, Jira, Sentry, Slack, Loki) say a redirect now fails the call; GitLab's says the
+  token reaches `/api/graphql` and that a rework closes a merge request; the user guide's *Rework* row says
+  what happens on the provider.
+
+**Sentences falsified — changed:** GitLab divergence 1 (*"recorded as discovered work"*, never was);
+`egress.ts`'s redirect bullet; `egress-host.test.ts`'s limit (reworded, kept); `conflict-warning.ts`'s
+*"It warns one side of the pair"*, its cost paragraph and *"neither is the board"* (stale since WP-41);
+`risk-routing.ts`'s *"one more `get_merge_request_diff`"* and *"three reads"*; the two read-count
+assertions and their docblocks in `conflict-warning.test.ts`; the rework command's *"Neither happens
+here"*; `events.ts`'s *"The pair is not symmetric"*; the `concurrent_task_overlaps` definition and
+`metrics.ts`'s comment; `pipeline-queries.ts`'s badge comment; `board.tsx`'s comment and tooltip; the
+conflict-badge test's docblock and comment; the web-e2e fixture comment; technical/02's event row;
+technical/06's *"no adapter re-checks a redirect"* and its GitProvider list; `batch.ts`/`collect.ts`/
+`runtime.ts`'s *"253 reads"*; `stats-metrics.ts`'s `loc_changed` reason and owner; the GitLab client's
+count; `SOURCES.md`'s *"`merge-request-diffs.json` is the only file using it"* (stale, four files did);
+`sample.test.ts`'s `additions` (not a field of the strict schema; now `insertions`); `http.ts` property 1's
+token header. **Left, and why:** `gitlab/inbound.ts`'s *"nothing honest to put here"* (still true of the
+webhook); `registry-metadata.ts`'s redirect comment (true); the plan row's *"four → two"* (the row is not
+this implementer's to edit — the measured figure is above); backlog 51/64/65/113/129's own text (the
+orchestrator resolves entries at commit).
+
+**The e2e tier moved with it** (`test/e2e/pipeline/rebase-gate.e2e.test.ts`, rule 83): the warning case
+now asserts one event on each stream of the pair, a thread on the peer's merge request naming ACME-1, a
+badge on **both** cards, and the diff reads as **one of this task's own** plus one per peer — **three**,
+where the assertion read four. The docblock that stood there decomposed the four as *"three of this
+task's own merge request … the fourth is the peer's"*; the test has **two** peers and both are read, so
+that decomposition cannot have been right (two own reads, not three, reached the audit in that tier —
+which of the three duties did not read there was not established). The own-diff count is now its own
+assertion rather than a sentence.
+
+**Verification.** Baseline `pnpm run -s verify` PASS on `90f431c`. After the change, each run after a
+passing bounded load reading (every reading 3.75–9.36 except the ones that were waited out: 21.87 at
+start, 16.09 and 47.44 during; no tier started on a failing reading): `pnpm run -s verify` PASS (7 680
+passed, 14 skipped); `verify:integration` PASS (550, 53 files); `verify:e2e` **FAIL** on its first run —
+`rebase-gate.e2e.test.ts`'s pinned count, the rule-83 move above — then PASS (209, 39 files, including
+`rework-close.e2e.test.ts`); `verify:ui` PASS (332); `verify:web-e2e` PASS (42); `verify` again after
+the e2e edit **FAIL** on `scripts/citations.test.ts` — three citations in these notes (two of an
+ambiguous `fake.test.ts`, one of the untracked `diff-coalescer.test.ts`, which the guard's `git ls-files`
+cannot see before the commit) — fixed in the notes, then `scripts/citations.test.ts` PASS (12) and
+`verify` PASS (7 680 passed, 14 skipped). A last unit case was added after that for the duty's merged
+ending (`human-commands.test.ts`, the close refused with `conflict` resolves the job and audits a
+`failed` close), and the final `verify` is PASS (7 681 passed, 14 skipped); the integration and e2e
+tiers were not re-run for that unit-only case. **One breach, recorded:** the last
+`scripts/citations.test.ts` run (after this paragraph's final edit) was chained in the same shell
+command as its load reading and started although that reading was **23.93** — WP-58's breach repeated,
+not gated. One unit file, 12 cases, under a second; every other run followed a passing reading. Docker after every
+Docker tier: the Testcontainers reaper only (the `speedpuzzlingcz-*` containers are another project's
+and were up before this row started), volumes **101** (baseline 102).
+
+**Discovered work for the refiner** (next free backlog number 177; none fixed here):
+- **A paths-only read now has a documented surface**: GraphQL `MergeRequest.diffStats(path)` answers
+  per-file `path`/`additions`/`deletions` with no patch (read 2026-09-26, `SOURCES.md`). The conflict
+  warning and the risk routing download patches they discard; a `getChangedPaths` port method over it is
+  backlog 64 (b) with its documentation question answered. The dependency gate must keep the patches.
+- **The close wake-up is at-most-once**: a process that dies between the rework's commit and its enqueue
+  leaves the rejected merge request open, and nothing re-derives it because the task has let go of the
+  ref. A recovery row (the shape of `recovery/stranded.ts`) would need the superseded ref persisted
+  somewhere — an event carrying it is the cheapest candidate.
+- **`loc_changed` can now be computed**: the diff-stats read exists, and WP-41's metric needs it made once
+  per merged merge request and recorded (its `absent.owner` text now says so).
+- **Conflict-warning events are appended on every gate entry**, replayed thread or not, so
+  `concurrent_task_overlaps` counts re-comparisons (now two events per entry per warned pair). The
+  executor's `replayed` status is the signal a dedupe would use; `mutate` does not return it today.
+- **The diff coalescer is per process**: two processes running `pipeline.outbound` (the app and the
+  runner, WP-53) each read once. Cross-process coalescing would need a store and is only bandwidth.
+- **`tasks.mr_ref.head_sha` moves only when a pushing stage reports `ImplementationNotes`**, so a human's
+  push to the agent branch is invisible to every identity keyed on it (the warning key, the coalescer key,
+  `tasks.dependencies.head_sha`) — pre-existing, now one more reader.
+- **`human-commands.test.ts`'s `harnessWith` still clobbers `runs`**: `runs: runs(options.runs)` is
+  overwritten by `...options`, so a caller passing a partial `runs` gets only its partial map.
+- **The command-api e2e's rework re-reports the same merge request** (its scripted CLI has no spec to key
+  on), so after WP-59 the close duty and the re-adoption race: the task may end on a closed merge request
+  in that fixture. Nothing it asserts depends on it; `rework-close.e2e.test.ts` is the faithful case.
+
+**Review round 1 → round 2 (implementer, session 8).** One major, three minors, and backlog **178**
+folded in by the orchestrator.
+1. **[major] The peer's append on a live stream.** Confirmed as reported: `StreamConflictError` carries
+   no `concurrencyConflict`, so the docblock's *"whose transaction retries"* was false. Fixed the way the
+   reviewer suggested: a new narrow `TaskRepository.bumpVersion` (property syntax; `update tasks set
+   version = version + 1` and nothing else, memory twin), called **first** for every stream the duty's
+   append transaction writes — the task's own as well as each peer's — then the load, then the append.
+   First, because the statement takes the row lock (a peer transaction that already saved is waited out
+   and the load after it reads the committed sequence); the effect is that a peer writer that loaded
+   before this commit meets `TaskConcurrentModificationError` at its `save`, which the bus and
+   `retryOnTaskConflict` already retry. `version` is added **deliberately** to the column-ownership
+   census's shared columns, with the reason (it moves the token and writes no aggregate column), and
+   removed from `save`'s owned list. Proven by `conflict-warning.test.ts` › "makes a peer writer that
+   loaded before the warning retry at its save, and complete" — the peer's writer loads, the other task's
+   gate warns it, the writer saves and appends: two attempts, both events on the peer's stream at
+   sequences 1 and 2 — and by a mutation (peer bump removed, on a copy, md5-confirmed revert) that fails
+   it with exactly `StreamConflictError … at sequence 1`. The shared pipeline-store suite gains two cases
+   (bump then stale save refuses, fresh save lands; unknown task refused), run on both stores. The
+   docblock states the residual: a writer that appends to the peer's stream **without** a `save`
+   (another out-of-band appender) still meets `StreamConflictError`, and each of those is a retried job.
+2. **[minor] Events per task.** The module docblock now says it: threads are one per merge request,
+   events are appended on both streams **per gate entry that finds the overlap**, so A's gate and then
+   B's give each task two, and a re-entry two more.
+3. **[folded, backlog 178] The lost close wake-up.** Migration **0043** adds
+   `superseded_merge_requests` (PK `(task_id, iid)`, `mr_ref`, `new_branch`, `cause_event_id`,
+   `superseded_at`, `settled_at`/`outcome`/`detail`, `recovery_attempted_at`, a partial index on the
+   unsettled rows, registered `read_write`), with its Drizzle mirror, the schema count (63), the
+   migration test's lists and technical/03's entry. The rework writes it **in its own transaction**
+   through `TaskRepository.recordSupersededMergeRequest` — an insert into its own table, so no new writer
+   of the task row. The duty settles it at every ending it reaches (`closed`, `merged`, `readopted`,
+   `unbound`, `shadow`) and leaves it unsettled only when the close failed another way. An eighth row of
+   `recovery/stranded.ts`'s table, `superseded_mr` (`recovery/superseded-mr.ts`, PG store
+   `postgres-superseded-mr-store.ts`, composed in `apps/server/src/pipeline.ts`), uses the
+   attempt-or-end shape: **one** re-enqueue of the duty from the row's payload after the grace, then —
+   still unsettled a whole ending window later — settled `abandoned` with the reason and logged at
+   **error** ("close it by hand"). That, the `abandoned` row and the attempts' `failed` audit rows are
+   the visibility; the task is **not** escalated (it is working on its new branch; the operator acts).
+   Asserted both ways in `human-commands.test.ts` › "the lost close wake-up (PROGRESS backlog 178)": a dropped wake-up is found
+   only past the grace, re-driven once and closed (and a later pass finds nothing); a merge request the
+   duty closed on its own wake-up is never touched again; a close that keeps failing is abandoned once
+   with one error line. The SQL is held by `test/integration/recovery/superseded-mr-recovery.integration.test.ts`
+   (grace in both directions, a settled row never found and never re-written, attempt then ending, a
+   re-supersession unsettled again), and the rework e2e now asserts the row settled `closed`.
+4. **[minor] An empty diff is not coalesced**: GitLab computes a diff asynchronously after a push, so a
+   `[]` is served to whoever asked with it and then dropped; `diff-coalescer.test.ts` holds it.
+5. **[nit] `-r<n>` skips**: stated at `reworkBranchName` — `human_rounds` counts plain returns too, and
+   that is chosen, because deriving from the current branch's suffix could reuse the branch of a closed
+   merge request; the user guide says the numbers can skip.
+
+**Round 2 verification**, every run after a passing bounded reading (the ones waited out: 43.25 and
+18.68 before the integration tier, 12.50 before the e2e files): `pnpm run -s verify` PASS (7 688
+passed, 14 skipped); `verify:integration` PASS (556, 54 files); the e2e files `rework-close`,
+`rebase-gate` and `command-api` PASS (10); the full `verify:e2e`, `verify:ui` and `verify:web-e2e` were
+not re-run this round (no web change). Docker after: the reaper only, volumes 101.
+
+**Review round 2 → nits (implementer, session 8).** Five, all fixed.
+1. **Lock order**: the warning now bumps **every** stream it will append to — its own and each peer's —
+   in **sorted id order**, all before any load, so two gates warning each other at once wait rather than
+   deadlock (`40P01`); stated at the line. `conflict-warning.test.ts` › "bumps every stream it appends to
+   in sorted id order, before loading any of them" traces bumps and loads; a mutation reversing the sort
+   (on a copy, md5-confirmed revert) fails it.
+2. **`recordRebaseCheck`** now bumps its task's `version` before its load, so it takes the row lock and
+   serialises with a peer warning instead of racing it — its `StreamConflictError` came after the gate had
+   settled, and the retry found the task past the gate, so the measurement was lost. The docblock's
+   general claim (*"each of those is a job, whose failure pg-boss retries"*) is replaced by the per-writer
+   statement: the other out-of-band appenders (review-only, the linter, the epic split, the shadow report)
+   append on tasks with no merge request, so no pair warning reaches them — read off the tree (`mr: null`
+   at creation for review-only and the linter; no `ImplementationNotes` stage in the epic split's
+   template), not measured.
+3. **One assertion per ending**: `merged`, `unbound` and `shadow` now each assert the settled `outcome`
+   (`human-commands.test.ts`), beside `closed` and `readopted`. The `unbound` case removes the binding on
+   the harness's integrations between the rework and its duty (a test-only mutation of the composed
+   object, stated at the line).
+4. `bumpVersion`'s docblocks now say it also writes `updated_at`.
+5. technical/03's `tasks.version` note names `bumpVersion` as the second writer. **Deviation, named:**
+   backlog 178's *"what done looks like"* proposed bounding the recovery by the **audit row** under
+   `supersededCloseKey`; the change bounds it by `superseded_merge_requests.recovery_attempted_at`
+   instead — the attempt-or-end shape of the other rows — because the duty has endings that write no
+   close audit row (`readopted`, `unbound`), which an audit-row bound would re-drive for ever, and
+   because a permanently failing close needs an **ending** (the error line and `abandoned`), which a
+   bound alone does not give.
+
