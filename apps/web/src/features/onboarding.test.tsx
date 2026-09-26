@@ -175,6 +175,16 @@ const fetchFor = (readiness: 'recorded' | 'absent') =>
     if (url.includes('/api/projects/') && url.includes('/config')) {
       return json({
         config: { version: 1, policies: { protected_paths: ['tests/**'] } },
+        // WP-63: the merged document and the repository reading that fed its `repo` layer.
+        effective: { version: 1 },
+        repository: {
+          path: '.agentic/config.yml',
+          status: 'unread',
+          commit_sha: null,
+          read_at: null,
+          detail: null,
+          not_applied: [],
+        },
         sources: { '*': 'project' },
         hash: 'deadbeef',
         computed_at: '2026-09-13T04:00:00.000Z',

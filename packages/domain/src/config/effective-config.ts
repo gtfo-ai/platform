@@ -14,10 +14,12 @@
  *     never up (BD-027).
  *  3. **The command policy only narrows below the organisation maximum** (BD-025). The
  *     organisation's own lists replace the shipped defaults for `allow`/`ask`; `block` only ever
- *     grows, at every layer.
+ *     grows, at every layer. The repository's lists narrow what the settings left (WP-63): the file
+ *     may tighten the command policy and never loosen it.
  *
  * The repository layer is read from the project's **default branch**, never from the task branch
- * (BD-025) — that is the caller's job; this module only merges what it is handed.
+ * (BD-025) — that is the caller's job (`packages/application/src/config/repository-config.ts`
+ * since WP-63); this module only merges what it is handed.
  */
 import type { AgenticConfig, AutonomyLevel, ConfigSource } from '@platform/contracts';
 import { DEFAULT_ASK_BUDGET_USD, DEFAULT_ASK_MODEL } from '../ask/ask.js';
@@ -234,13 +236,60 @@ export const organisationCommandMaximum = (
 const LAYER_ORDER: readonly ConfigSource[] = ['default', 'org', 'project', 'repo'];
 
 /**
+ * The deep merge alone, over whichever layers are given and **without** the platform defaults —
+ * what the pipeline's settings port reads (WP-63).
+ *
+ * The settings port cannot take {@link mergeProjectConfig}'s values: those carry every default,
+ * and several readers treat a key's *presence* as a project's override — `pipeline.limits` and
+ * `policies.probation_tasks` override the materialised autonomy dial (Q78), so a default written
+ * into them would silently pin a dial the project moved. So this is the same merge, the same
+ * precedence and the same provenance, with only the layers a project or its repository declared.
+ * A caller merging a repository layer passes it **without** `commands`: those narrow in sequence
+ * (`runCommandPolicy`'s layers) rather than replace.
+ */
+export const mergeConfigLayers = (
+  layers: readonly ConfigLayer[],
+): { readonly values: ConfigValues; readonly sources: ConfigProvenance } => {
+  const bySource = new Map<ConfigSource, ConfigValues>();
+  for (const layer of layers) {
+    bySource.set(layer.source, layer.values);
+  }
+  const values: Record<string, unknown> = {};
+  const sources: Record<string, ConfigSource> = {};
+  for (const source of LAYER_ORDER) {
+    const layer = bySource.get(source);
+    if (layer !== undefined) {
+      mergeInto(values, layer as Record<string, unknown>, source, '', sources);
+    }
+  }
+  return { values: values as ConfigValues, sources };
+};
+
+export interface MergeProjectConfigOptions {
+  /**
+   * The autonomy position no layer may exceed, when the caller knows it.
+   *
+   * Omitted, the cap is the organisation layer's `policies.autonomy` and, when it is silent, the
+   * shipped default — the reading below, which keeps a repository from handing itself
+   * `autonomous`. `GET /api/projects/:id/config` passes `autonomous` (WP-63): the repository
+   * cannot state the dial there (its `policies.autonomy` is not applied), no surface sets an
+   * organisation maximum on this build, and the dial's four positions are all selectable — so a
+   * cap would publish `supervised` for a project that runs `autonomous`.
+   */
+  readonly autonomyMaximum?: AutonomyLevel;
+}
+
+/**
  * Computes the effective configuration.
  *
  * Layers are applied in `default < org < project < repo` order regardless of the order they are
  * given in, so a caller cannot reorder precedence by accident. A layer may be omitted; `default`
  * is always present, seeded from `PLATFORM_DEFAULT_CONFIG` unless the caller supplies its own.
  */
-export const mergeProjectConfig = (layers: readonly ConfigLayer[]): EffectiveConfig => {
+export const mergeProjectConfig = (
+  layers: readonly ConfigLayer[],
+  options: MergeProjectConfigOptions = {},
+): EffectiveConfig => {
   const bySource = new Map<ConfigSource, ConfigValues>();
   bySource.set('default', PLATFORM_DEFAULT_CONFIG);
   for (const layer of layers) {
@@ -265,6 +314,8 @@ export const mergeProjectConfig = (layers: readonly ConfigLayer[]): EffectiveCon
   // `ignoredProjectAllow` (`@platform/application`, beside the role baselines it is judged
   // against), which the effective-configuration DTO publishes. The org-maximum reading this merge
   // used to report beside it had no production reader and disagreed with it, so it is gone.
+  // Each layer narrows what the one before it left (BD-025) — the repository included, which may
+  // tighten what the settings allow and never loosen it (WP-63 review round 1's ruling).
   let commands = maximum;
   for (const source of ['project', 'repo'] as const) {
     commands = narrowCommandPolicy(commands, bySource.get(source)?.commands).policy;
@@ -294,10 +345,12 @@ export const mergeProjectConfig = (layers: readonly ConfigLayer[]): EffectiveCon
   // — so a silent organisation must not mean *unlimited*, or a repository could hand itself
   // `autonomous` by editing a file in its own tree (which BD-025 already distrusts). The cap is
   // therefore the organisation's value when it has one and the platform default otherwise; an
-  // admin raises it by setting it, visibly and audibly (`config.changed`).
+  // admin raises it by setting it, visibly and audibly (`config.changed`). A caller that knows the
+  // maximum passes it (`options.autonomyMaximum`), and the source it records is then the layer that
+  // stated the capped value's replacement — the organisation's, as before.
   const capSource: ConfigSource =
     bySource.get('org')?.policies?.autonomy === undefined ? 'default' : 'org';
-  const cap = bySource.get(capSource)?.policies?.autonomy;
+  const cap = options.autonomyMaximum ?? bySource.get(capSource)?.policies?.autonomy;
   const merged = values as ConfigValues;
   const requested = merged.policies?.autonomy;
   let cappedAutonomy: EffectiveConfig['cappedAutonomy'] = null;

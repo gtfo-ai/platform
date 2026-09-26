@@ -841,6 +841,28 @@ export const useOnboardingCommands = (mint?: MintKey) => {
         await queryClient.invalidateQueries({ queryKey: [...queryKeys.projects] });
       },
     }),
+    /**
+     * WP-63, Q94 (c): the button that stays. One key per intent — pressing it twice for the same
+     * configuration is one export; the key is released on success, so a later press after a
+     * settings change is a new one.
+     */
+    exportConfig: useMutation({
+      mutationFn: (input: { projectId: string; base_hash?: string }) =>
+        endpoints.exportProjectConfig(
+          input.projectId,
+          input.base_hash === undefined ? {} : { base_hash: input.base_hash },
+          intents.keyFor(['config.export', input]),
+        ),
+      onSuccess: (_result, input) => {
+        intents.release(['config.export', input]);
+      },
+    }),
+    refreshConfig: useMutation({
+      mutationFn: (projectId: string) => endpoints.refreshProjectConfig(projectId),
+      onSuccess: async (_result, projectId) => {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.projectConfig(projectId) });
+      },
+    }),
     startDiscovery: useMutation({
       mutationFn: (projectId: string) =>
         endpoints.startDiscovery(projectId, intents.keyFor(['discovery.run', projectId])),

@@ -400,6 +400,9 @@ importers:
       pg-boss:
         specifier: 12.30.0
         version: 12.30.0
+      yaml:
+        specifier: 2.9.0
+        version: 2.9.0
       zod:
         specifier: 4.5.4
         version: 4.5.4

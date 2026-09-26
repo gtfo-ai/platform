@@ -70,6 +70,12 @@ import process from 'node:process';
 import {
   isIndexedVaultPath,
   type Logger,
+  MAX_REPOSITORY_FILE_BYTES,
+  REPOSITORY_FILE_PATHS,
+  type RepositoryFileEntry,
+  type RepositoryFilePath,
+  type RepositoryFileSource,
+  type RepositoryFilesResult,
   silentLogger,
   type VaultDocumentSource,
   type VaultReadRequest,
@@ -433,7 +439,12 @@ export const parseCatFileBatch = (stdout: Buffer): readonly BatchObject[] => {
 
 // ── The adapter ──────────────────────────────────────────────────────────────
 
-const unavailable = (reason: string): VaultReadResult => ({ status: 'unavailable', reason });
+const unavailable = (
+  reason: string,
+): { readonly status: 'unavailable'; readonly reason: string } => ({
+  status: 'unavailable',
+  reason,
+});
 
 const failureDetail = (result: GitProcessResult): string => {
   const stderr = result.stderr.trim().replaceAll('\n', ' ');
@@ -448,167 +459,205 @@ const directoryExists = async (target: string): Promise<boolean> => {
   }
 };
 
+/** A process that runs `git` inside the project's mirror, without the credential. */
+type MirrorRunner = (
+  args: readonly string[],
+  extra?: { readonly input?: string; readonly maxStdoutBytes?: number },
+) => Promise<GitProcessResult>;
+
+type PreparedMirror =
+  | { readonly status: 'unavailable'; readonly reason: string }
+  | {
+      readonly status: 'ok';
+      /** The commit to read: the pinned one, or the default branch's head. */
+      readonly commit: string;
+      readonly refreshed: boolean;
+      readonly inMirror: MirrorRunner;
+    };
+
+/**
+ * Everything a read of the default branch shares, whichever paths it then reads: the checks on the
+ * untrusted inputs, the clone or the fetch (with the credential, and only for those two commands),
+ * the default-branch head and the ancestry rule for a pinned commit.
+ *
+ * Factored out at WP-63, when a second reader of the same mirror arrived
+ * ({@link createGitRepositoryFileSource}); two copies of "which commit may be read" would be one
+ * copy that drifts (standing rule 41). The vault read below is unchanged in what it does.
+ */
+const prepareMirrorRead = async (
+  options: GitVaultOptions,
+  git: GitProcessRunner,
+  request: { readonly projectId: Id; readonly commitSha?: string },
+): Promise<PreparedMirror> => {
+  if (request.commitSha !== undefined && !COMMIT_SHA.test(request.commitSha)) {
+    return unavailable(
+      `the requested commit is not a commit sha; it reached the index job from a provider event and is not used as an argument (BD-022)`,
+    );
+  }
+  if (!path.isAbsolute(options.mirrorRoot)) {
+    return unavailable(
+      `APP_KNOWLEDGE_MIRROR_ROOT ${JSON.stringify(options.mirrorRoot)} is not an absolute path`,
+    );
+  }
+  if (!(await directoryExists(options.mirrorRoot))) {
+    // Not created here: a root that does not exist is a misconfigured volume, and silently
+    // making one would put every project's mirror somewhere nobody is looking (rule 18).
+    return unavailable(
+      `APP_KNOWLEDGE_MIRROR_ROOT ${JSON.stringify(options.mirrorRoot)} is not a directory on this process' filesystem; the knowledge mirror needs a writable data volume`,
+    );
+  }
+
+  let target: GitVaultTarget | null;
+  try {
+    target = await options.target(request.projectId);
+  } catch (cause) {
+    return unavailable(`the project's git binding could not be read: ${(cause as Error).message}`);
+  }
+  if (target === null) {
+    return unavailable(
+      'the project has no git binding, so there is no repository to mirror; the knowledge index is left alone',
+    );
+  }
+  if (!ALLOWED_URL_SCHEME.test(target.repoUrl)) {
+    return unavailable(
+      `projects.repo_url ${JSON.stringify(target.repoUrl)} is not an http(s) or file URL; git remote helpers such as "ext::" run commands, so the scheme is an allow-list, and git's scp-style "git@host:path" form is outside it (see the pattern's docblock)`,
+    );
+  }
+  if (!isSafeBranchName(target.defaultBranch)) {
+    return unavailable(
+      `projects.default_branch ${JSON.stringify(target.defaultBranch)} is not a branch name this adapter will build a ref from`,
+    );
+  }
+
+  const mirrorKey = mirrorCacheKeyFor(request.projectId);
+  if (!MIRROR_KEY.test(mirrorKey)) {
+    return unavailable(
+      `the mirror directory name derived from project ${JSON.stringify(request.projectId)} is not a plain directory name; it is not joined to a path`,
+    );
+  }
+
+  const ref = `refs/heads/${target.defaultBranch}`;
+  const mirror = path.join(options.mirrorRoot, mirrorKey);
+  const credential = target.credential;
+  const repoUrl = target.repoUrl;
+
+  /**
+   * The credential goes to the **two network commands only**, not to every child.
+   *
+   * `rev-parse`, `ls-tree`, `cat-file` and `merge-base` are local object-database reads: they
+   * open no connection, so a credential in their environment is a secret in four more process
+   * environments for nothing (least privilege, and the same reasoning `RunSpec.secretEnvNames`
+   * is written to). It also keeps the tests honest — an assertion that "the password really is
+   * supplied" can only be satisfied here by a command that would actually send it.
+   */
+  const run = (
+    args: readonly string[],
+    extra: {
+      readonly cwd?: string;
+      readonly input?: string;
+      readonly maxStdoutBytes?: number;
+      readonly withCredential?: boolean;
+    } = {},
+  ): Promise<GitProcessResult> =>
+    git.run(args, {
+      env: extra.withCredential === true ? gitCredentialEnvironment(credential) : {},
+      maxStdoutBytes: extra.maxStdoutBytes ?? MAX_VAULT_BYTES,
+      ...(extra.cwd === undefined ? {} : { cwd: extra.cwd }),
+      ...(extra.input === undefined ? {} : { input: extra.input }),
+    });
+
+  const inMirror = (args: readonly string[], extra: Parameters<typeof run>[1] = {}) =>
+    run(['-C', mirror, ...args], extra);
+
+  const present = await directoryExists(mirror);
+
+  /**
+   * Skip the fetch only when the pinned commit is already **on the default branch** here.
+   *
+   * TD-026 says "skipped when the requested commit is already present"; present is not
+   * enough on its own, because a sha can be in the mirror as an MR head while the branch has
+   * not moved — and answering `unavailable` for a merge commit the remote already has would
+   * turn the after-merge trigger into a refusal.
+   */
+  let refreshed = false;
+  const pinnedIsReady =
+    present &&
+    request.commitSha !== undefined &&
+    (await inMirror(['cat-file', '-e', `${request.commitSha}^{commit}`])).code === 0 &&
+    (await inMirror(['merge-base', '--is-ancestor', request.commitSha, ref])).code === 0;
+
+  if (!pinnedIsReady) {
+    if (present) {
+      const url = await inMirror(['remote', 'set-url', 'origin', repoUrl]);
+      if (url.code !== 0) {
+        return unavailable(`the mirror's remote could not be set: ${failureDetail(url)}`);
+      }
+      const update = await inMirror(['remote', 'update', '--prune'], {
+        withCredential: true,
+      });
+      if (update.code !== 0) {
+        return unavailable(`the mirror could not be refreshed: ${failureDetail(update)}`);
+      }
+    } else {
+      /**
+       * The mirror is created here and **nothing ever removes it** (Q63).
+       *
+       * One bare clone per project appears on that project's first index run, on the operator's
+       * data volume, and there is no ceiling, no eviction and no gauge: BD-012 makes it a
+       * derived cache that is safe to delete by hand, and Q63's recommendation is explicitly to
+       * *not* build a ceiling that would silently evict an active project's mirror at the worst
+       * moment. The residual is therefore disk growth proportional to the sum of the customers'
+       * repositories, stated here because this line is where it happens.
+       */
+      const clone = await run(['clone', '--mirror', '--', repoUrl, mirror], {
+        withCredential: true,
+      });
+      if (clone.code !== 0) {
+        return unavailable(`the mirror could not be cloned: ${failureDetail(clone)}`);
+      }
+    }
+    refreshed = true;
+  }
+
+  const head = await inMirror(['rev-parse', '--verify', '--end-of-options', ref]);
+  if (head.code !== 0) {
+    return unavailable(
+      `the mirror has no ${ref}; the project's default branch is what the knowledge base is read from (BD-025): ${failureDetail(head)}`,
+    );
+  }
+  const headSha = head.stdout.toString('utf8').trim();
+
+  let commit = headSha;
+  if (request.commitSha !== undefined) {
+    const exists = await inMirror(['cat-file', '-e', `${request.commitSha}^{commit}`]);
+    if (exists.code !== 0) {
+      return unavailable(
+        `commit ${request.commitSha} is not in the mirror after a fetch; it is not read (BD-022)`,
+      );
+    }
+    const ancestor = await inMirror(['merge-base', '--is-ancestor', request.commitSha, ref]);
+    if (ancestor.code !== 0) {
+      return unavailable(
+        `commit ${request.commitSha} is not an ancestor of ${ref}; the knowledge base is read from the default branch only (BD-025)`,
+      );
+    }
+    commit = request.commitSha;
+  }
+  return { status: 'ok', commit, refreshed, inMirror };
+};
+
 export const createGitVaultSource = (options: GitVaultOptions): VaultSource => {
   const git = options.git ?? nodeGitProcessRunner;
   const logger = options.logger ?? silentLogger;
 
   return {
     read: async (request: VaultReadRequest): Promise<VaultReadResult> => {
-      if (request.commitSha !== undefined && !COMMIT_SHA.test(request.commitSha)) {
-        return unavailable(
-          `the requested commit is not a commit sha; it reached the index job from a provider event and is not used as an argument (BD-022)`,
-        );
-      }
-      if (!path.isAbsolute(options.mirrorRoot)) {
-        return unavailable(
-          `APP_KNOWLEDGE_MIRROR_ROOT ${JSON.stringify(options.mirrorRoot)} is not an absolute path`,
-        );
-      }
-      if (!(await directoryExists(options.mirrorRoot))) {
-        // Not created here: a root that does not exist is a misconfigured volume, and silently
-        // making one would put every project's mirror somewhere nobody is looking (rule 18).
-        return unavailable(
-          `APP_KNOWLEDGE_MIRROR_ROOT ${JSON.stringify(options.mirrorRoot)} is not a directory on this process' filesystem; the knowledge mirror needs a writable data volume`,
-        );
-      }
-
-      let target: GitVaultTarget | null;
       try {
-        target = await options.target(request.projectId);
-      } catch (cause) {
-        return unavailable(
-          `the project's git binding could not be read: ${(cause as Error).message}`,
-        );
-      }
-      if (target === null) {
-        return unavailable(
-          'the project has no git binding, so there is no repository to mirror; the knowledge index is left alone',
-        );
-      }
-      if (!ALLOWED_URL_SCHEME.test(target.repoUrl)) {
-        return unavailable(
-          `projects.repo_url ${JSON.stringify(target.repoUrl)} is not an http(s) or file URL; git remote helpers such as "ext::" run commands, so the scheme is an allow-list, and git's scp-style "git@host:path" form is outside it (see the pattern's docblock)`,
-        );
-      }
-      if (!isSafeBranchName(target.defaultBranch)) {
-        return unavailable(
-          `projects.default_branch ${JSON.stringify(target.defaultBranch)} is not a branch name this adapter will build a ref from`,
-        );
-      }
-
-      const mirrorKey = mirrorCacheKeyFor(request.projectId);
-      if (!MIRROR_KEY.test(mirrorKey)) {
-        return unavailable(
-          `the mirror directory name derived from project ${JSON.stringify(request.projectId)} is not a plain directory name; it is not joined to a path`,
-        );
-      }
-
-      const ref = `refs/heads/${target.defaultBranch}`;
-      const mirror = path.join(options.mirrorRoot, mirrorKey);
-
-      /**
-       * The credential goes to the **two network commands only**, not to every child.
-       *
-       * `rev-parse`, `ls-tree`, `cat-file` and `merge-base` are local object-database reads: they
-       * open no connection, so a credential in their environment is a secret in four more process
-       * environments for nothing (least privilege, and the same reasoning `RunSpec.secretEnvNames`
-       * is written to). It also keeps the tests honest — an assertion that "the password really is
-       * supplied" can only be satisfied here by a command that would actually send it.
-       */
-      const run = (
-        args: readonly string[],
-        extra: {
-          readonly cwd?: string;
-          readonly input?: string;
-          readonly maxStdoutBytes?: number;
-          readonly withCredential?: boolean;
-        } = {},
-      ): Promise<GitProcessResult> =>
-        git.run(args, {
-          env: extra.withCredential === true ? gitCredentialEnvironment(target.credential) : {},
-          maxStdoutBytes: extra.maxStdoutBytes ?? MAX_VAULT_BYTES,
-          ...(extra.cwd === undefined ? {} : { cwd: extra.cwd }),
-          ...(extra.input === undefined ? {} : { input: extra.input }),
-        });
-
-      const inMirror = (args: readonly string[], extra: Parameters<typeof run>[1] = {}) =>
-        run(['-C', mirror, ...args], extra);
-
-      try {
-        const present = await directoryExists(mirror);
-
-        /**
-         * Skip the fetch only when the pinned commit is already **on the default branch** here.
-         *
-         * TD-026 says "skipped when the requested commit is already present"; present is not
-         * enough on its own, because a sha can be in the mirror as an MR head while the branch has
-         * not moved — and answering `unavailable` for a merge commit the remote already has would
-         * turn the after-merge trigger into a refusal.
-         */
-        let refreshed = false;
-        const pinnedIsReady =
-          present &&
-          request.commitSha !== undefined &&
-          (await inMirror(['cat-file', '-e', `${request.commitSha}^{commit}`])).code === 0 &&
-          (await inMirror(['merge-base', '--is-ancestor', request.commitSha, ref])).code === 0;
-
-        if (!pinnedIsReady) {
-          if (present) {
-            const url = await inMirror(['remote', 'set-url', 'origin', target.repoUrl]);
-            if (url.code !== 0) {
-              return unavailable(`the mirror's remote could not be set: ${failureDetail(url)}`);
-            }
-            const update = await inMirror(['remote', 'update', '--prune'], {
-              withCredential: true,
-            });
-            if (update.code !== 0) {
-              return unavailable(`the mirror could not be refreshed: ${failureDetail(update)}`);
-            }
-          } else {
-            /**
-             * The mirror is created here and **nothing ever removes it** (Q63).
-             *
-             * One bare clone per project appears on that project's first index run, on the operator's
-             * data volume, and there is no ceiling, no eviction and no gauge: BD-012 makes it a
-             * derived cache that is safe to delete by hand, and Q63's recommendation is explicitly to
-             * *not* build a ceiling that would silently evict an active project's mirror at the worst
-             * moment. The residual is therefore disk growth proportional to the sum of the customers'
-             * repositories, stated here because this line is where it happens.
-             */
-            const clone = await run(['clone', '--mirror', '--', target.repoUrl, mirror], {
-              withCredential: true,
-            });
-            if (clone.code !== 0) {
-              return unavailable(`the mirror could not be cloned: ${failureDetail(clone)}`);
-            }
-          }
-          refreshed = true;
+        const prepared = await prepareMirrorRead(options, git, request);
+        if (prepared.status === 'unavailable') {
+          return prepared;
         }
-
-        const head = await inMirror(['rev-parse', '--verify', '--end-of-options', ref]);
-        if (head.code !== 0) {
-          return unavailable(
-            `the mirror has no ${ref}; the project's default branch is what the knowledge base is read from (BD-025): ${failureDetail(head)}`,
-          );
-        }
-        const headSha = head.stdout.toString('utf8').trim();
-
-        let commit = headSha;
-        if (request.commitSha !== undefined) {
-          const exists = await inMirror(['cat-file', '-e', `${request.commitSha}^{commit}`]);
-          if (exists.code !== 0) {
-            return unavailable(
-              `commit ${request.commitSha} is not in the mirror after a fetch; it is not read (BD-022)`,
-            );
-          }
-          const ancestor = await inMirror(['merge-base', '--is-ancestor', request.commitSha, ref]);
-          if (ancestor.code !== 0) {
-            return unavailable(
-              `commit ${request.commitSha} is not an ancestor of ${ref}; the knowledge base is read from the default branch only (BD-025)`,
-            );
-          }
-          commit = request.commitSha;
-        }
+        const { commit, refreshed, inMirror } = prepared;
 
         const tree = await inMirror(['ls-tree', '-r', '-l', '-z', '--full-tree', commit]);
         if (tree.code !== 0) {
@@ -731,4 +780,126 @@ export const probeGit = async (
  */
 export const unavailableVaultSource = (reason: string): VaultSource => ({
   read: async (): Promise<VaultReadResult> => ({ status: 'unavailable', reason }),
+});
+
+/**
+ * `RepositoryFileSource` over the same mirror — **the widening of this adapter**, stated (WP-63).
+ *
+ * The vault read above answers the four indexed kinds of path and nothing else; this answers the
+ * paths `REPOSITORY_FILE_PATHS` names — `.agentic/config.yml` and `CLAUDE.md` — and **refuses any
+ * other path it is handed**, so the allow-list is enforced where the bytes are read and not only in
+ * the type. Everything that decides *which commit* is shared with the vault read
+ * ({@link prepareMirrorRead}): the same fetch with the same credential, the default branch only
+ * (BD-025 §1), and a pinned commit only when it is an ancestor of it.
+ *
+ * Each path is listed with `ls-tree -r -l` first, so its mode and size are known before a byte is
+ * read: a symlink, a submodule or a directory at the path is `not_a_file` and is never followed
+ * (TD-026 decision 9), and a blob over `MAX_REPOSITORY_FILE_BYTES` is `oversized` and never
+ * buffered. The bodies travel through one `cat-file --batch`, requested on stdin, as the vault's do.
+ */
+export const createGitRepositoryFileSource = (options: GitVaultOptions): RepositoryFileSource => {
+  const git = options.git ?? nodeGitProcessRunner;
+  const logger = options.logger ?? silentLogger;
+  const permitted: readonly string[] = REPOSITORY_FILE_PATHS;
+
+  return {
+    read: async (request): Promise<RepositoryFilesResult> => {
+      const refused = request.paths.filter((entry) => !permitted.includes(entry));
+      if (refused.length > 0 || request.paths.length === 0) {
+        return unavailable(
+          `this reader answers ${permitted.join(' and ')} only; ${JSON.stringify(refused)} is outside what the platform reads from a repository`,
+        );
+      }
+      try {
+        const prepared = await prepareMirrorRead(options, git, request);
+        if (prepared.status === 'unavailable') {
+          return prepared;
+        }
+        const { commit, inMirror } = prepared;
+        const listing = await inMirror(
+          ['ls-tree', '-r', '-l', '-z', '--full-tree', commit, '--', ...request.paths],
+          { maxStdoutBytes: 1_024 * 1_024 },
+        );
+        if (listing.code !== 0 || listing.truncated) {
+          return unavailable(
+            `the paths at ${commit} could not be listed: ${listing.truncated ? 'the listing exceeded its bound' : failureDetail(listing)}`,
+          );
+        }
+        const entries = parseTreeEntries(listing.stdout.toString('utf8'));
+        const files: Partial<Record<RepositoryFilePath, RepositoryFileEntry>> = {};
+        const wanted: { readonly path: RepositoryFilePath; readonly entry: TreeEntry }[] = [];
+        for (const wantedPath of request.paths) {
+          const exact = entries.find((entry) => entry.path === wantedPath);
+          if (exact === undefined) {
+            // A directory at the path lists its children under `-r`; it is not a file either.
+            const nested = entries.some((entry) => entry.path.startsWith(`${wantedPath}/`));
+            files[wantedPath] = nested
+              ? { kind: 'not_a_file', mode: '040000' }
+              : { kind: 'absent' };
+            continue;
+          }
+          if (exact.type !== 'blob' || !READABLE_MODES.includes(exact.mode)) {
+            files[wantedPath] = { kind: 'not_a_file', mode: exact.mode };
+            continue;
+          }
+          if (exact.size > MAX_REPOSITORY_FILE_BYTES) {
+            files[wantedPath] = { kind: 'oversized', bytes: exact.size };
+            continue;
+          }
+          wanted.push({ path: wantedPath, entry: exact });
+        }
+        if (wanted.length > 0) {
+          const batch = await inMirror(['cat-file', '--batch'], {
+            input: `${wanted.map(({ entry }) => entry.objectId).join('\n')}\n`,
+            maxStdoutBytes: wanted.length * (MAX_REPOSITORY_FILE_BYTES + 256),
+          });
+          if (batch.code !== 0 || batch.truncated) {
+            return unavailable(
+              `the repository files could not be read: ${batch.truncated ? 'output exceeded the bound' : failureDetail(batch)}`,
+            );
+          }
+          const objects = parseCatFileBatch(batch.stdout);
+          for (const [index, { path: wantedPath, entry }] of wanted.entries()) {
+            const object = objects[index];
+            if (object === undefined || object.objectId !== entry.objectId) {
+              return unavailable(
+                `git answered for ${String(object?.objectId)} where ${wantedPath} was asked for; the mirror changed under the read`,
+              );
+            }
+            files[wantedPath] = {
+              kind: 'file',
+              text: object.content.toString('utf8'),
+              blobSha: entry.objectId,
+            };
+          }
+        }
+        logger.debug(
+          { project_id: request.projectId, commit_sha: commit, paths: request.paths },
+          'repository files read from the platform mirror',
+        );
+        // WP-63 review round 1: is this commit strictly older than the reading already recorded?
+        // Only a *strict ancestor* is older: a recorded commit this mirror no longer has (a
+        // force-pushed default branch) answers "not an ancestor", so the new reading is recorded.
+        const recorded = request.recordedCommit;
+        const behindRecorded =
+          recorded !== undefined &&
+          COMMIT_SHA.test(recorded) &&
+          recorded !== commit &&
+          (await inMirror(['merge-base', '--is-ancestor', commit, recorded])).code === 0;
+        return {
+          status: 'ok',
+          commitSha: commit,
+          files: files as Record<RepositoryFilePath, RepositoryFileEntry | undefined>,
+          behindRecorded,
+        };
+      } catch (cause) {
+        return unavailable(`the repository files could not be read: ${(cause as Error).message}`);
+      }
+    },
+  };
+};
+
+/** The file reader's refusal for a process that composed no mirror — named, like the vault's. */
+export const unavailableRepositoryFileSource = (reason: string): RepositoryFileSource => ({
+  read: async (): Promise<RepositoryFilesResult> => ({ status: 'unavailable', reason }),
 });

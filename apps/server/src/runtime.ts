@@ -74,7 +74,11 @@ import { composeBreakdown } from './breakdown.js';
 import { createTaskCommands } from './commands.js';
 import { loadServerConfig, type ServerConfig } from './config.js';
 import { composeInboundConnections } from './inbound-connections.js';
-import { composeKnowledgeIndexing, createKnowledgeCommands } from './knowledge.js';
+import {
+  composeKnowledgeIndexing,
+  composeKnowledgeMirror,
+  createKnowledgeCommands,
+} from './knowledge.js';
 import { asLoggerPort, createLogger, type PinoLogger } from './logging.js';
 import { createMetrics, type Metrics } from './metrics.js';
 import { composeOnboardingRecording, createOnboardingCommands } from './onboarding.js';
@@ -86,6 +90,7 @@ import {
   createProjectSettingsPort,
   type PipelineComposition,
 } from './pipeline.js';
+import { createProjectConfigCommands } from './project-config.js';
 import { listRunMessages } from './queries/pipeline-queries.js';
 import { createReadinessCheck } from './readiness.js';
 import { roleCapabilities, roleIsIdle } from './role.js';
@@ -730,6 +735,35 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       ? createHistoryBootstrapGate({ pool: database.pool, database: database.db, eventing })
       : null;
 
+    /**
+     * The configuration export and the repository re-read (WP-63, Q94).
+     *
+     * Composed for every process that serves the API, over its own mirror of the repositories (the
+     * index's, `composeKnowledgeMirror`) and the process's one executor. A process with no mirror
+     * still composes it: the reader refuses by name and the routes answer that sentence.
+     */
+    const projectConfig =
+      capabilities.api && stack !== null
+        ? createProjectConfigCommands({
+            pool: database.pool,
+            integrations: createProjectIntegrationsPort({
+              pool: database.pool,
+              secretKey: config.secretKey,
+              stack,
+            }),
+            files: (
+              await composeKnowledgeMirror({
+                pool: database.pool,
+                secretKey: config.secretKey,
+                registry: stack.registry,
+                mirrorRoot: config.knowledgeMirrorRoot,
+                logger: loggerPort,
+              })
+            ).files,
+            logger: loggerPort,
+          })
+        : null;
+
     const knowledgeCommands = capabilities.api
       ? createKnowledgeCommands({
           pool: database.pool,
@@ -871,6 +905,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       knowledge: knowledgeCommands,
       onboarding: onboardingCommands,
       shadow: shadowCommands,
+      projectConfig,
       shadowGate,
       historyBootstrap: bootstrapCommands,
       historyBootstrapGate: bootstrapGate,

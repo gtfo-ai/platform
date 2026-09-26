@@ -19,10 +19,15 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import type { VaultReadResult } from '@platform/application';
+import {
+  MAX_REPOSITORY_FILE_BYTES,
+  type RepositoryFilesResult,
+  type VaultReadResult,
+} from '@platform/application';
 import type { Id } from '@platform/contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  createGitRepositoryFileSource,
   createGitVaultSource,
   type GitProcessOptions,
   type GitProcessResult,
@@ -33,6 +38,7 @@ import {
   parseCatFileBatch,
   parseTreeEntries,
   probeGit,
+  unavailableRepositoryFileSource,
   unavailableVaultSource,
 } from './git-vault.js';
 
@@ -493,5 +499,122 @@ describe('gitEnvironment', () => {
       HOME: '/home/agentic',
       HTTPS_PROXY: 'http://proxy.example.test:3128',
     });
+  });
+});
+
+/**
+ * The widening (WP-63): two named paths outside the four indexed ones, read through the same mirror
+ * and the same default-branch rule — and nothing else.
+ */
+describe('createGitRepositoryFileSource', () => {
+  const files = (
+    paths: readonly ('.agentic/config.yml' | 'CLAUDE.md')[],
+    options: { readonly commitSha?: string; readonly runner?: GitProcessRunner } = {},
+  ): Promise<RepositoryFilesResult> =>
+    createGitRepositoryFileSource({
+      mirrorRoot,
+      ...(options.runner === undefined ? {} : { git: options.runner }),
+      target: async () => target(),
+    }).read({
+      projectId: PROJECT as Id,
+      paths,
+      ...(options.commitSha === undefined ? {} : { commitSha: options.commitSha }),
+    });
+
+  const expectFiles = (result: RepositoryFilesResult) => {
+    if (result.status !== 'ok') throw new Error(`expected ok, got: ${result.reason}`);
+    return result;
+  };
+
+  it('reads the configuration file and CLAUDE.md at the default branch, absent when missing', async () => {
+    const before = expectFiles(await files(['.agentic/config.yml', 'CLAUDE.md']));
+    expect(before.files['.agentic/config.yml']).toEqual({ kind: 'absent' });
+    expect(before.files['CLAUDE.md']).toMatchObject({ kind: 'file', text: '# Claude\n' });
+
+    await write(origin, '.agentic/config.yml', 'version: 1\n');
+    await git(['-C', origin, 'add', '-A']);
+    await commit(origin, 'the configuration');
+    const after = expectFiles(await files(['.agentic/config.yml']));
+    expect(after.files['.agentic/config.yml']).toMatchObject({
+      kind: 'file',
+      text: 'version: 1\n',
+    });
+    expect(after.commitSha).not.toBe(before.commitSha);
+  });
+
+  /** Review round 1: a pinned read says whether it is strictly older than the recorded reading. */
+  it('says whether the commit read is older than the recorded one', async () => {
+    const older = await git(['-C', origin, 'rev-parse', 'HEAD']);
+    await write(origin, '.agentic/config.yml', 'version: 1\n');
+    await git(['-C', origin, 'add', '-A']);
+    await commit(origin, 'newer');
+    const newer = await git(['-C', origin, 'rev-parse', 'HEAD']);
+    const read = (commitSha: string, recordedCommit: string) =>
+      createGitRepositoryFileSource({ mirrorRoot, target: async () => target() }).read({
+        projectId: PROJECT as Id,
+        paths: ['.agentic/config.yml'],
+        commitSha,
+        recordedCommit,
+      });
+    expect(expectFiles(await read(older, newer)).behindRecorded).toBe(true);
+    expect(expectFiles(await read(newer, older)).behindRecorded).toBe(false);
+    expect(expectFiles(await read(newer, newer)).behindRecorded).toBe(false);
+    // A recorded commit the mirror does not have (a rewritten branch) is not "newer".
+    expect(expectFiles(await read(newer, 'f'.repeat(40))).behindRecorded).toBe(false);
+  });
+
+  it('never reads a branch other than the default one', async () => {
+    await git(['-C', origin, 'checkout', '-qb', 'agentic/feature']);
+    await write(origin, '.agentic/config.yml', 'version: 1\ncommands: { allow: ["curl *"] }\n');
+    await git(['-C', origin, 'add', '-A']);
+    await commit(origin, 'a branch that would widen its own rules');
+    const branchHead = await git(['-C', origin, 'rev-parse', 'HEAD']);
+    const read = expectFiles(await files(['.agentic/config.yml']));
+    expect(read.files['.agentic/config.yml']).toEqual({ kind: 'absent' });
+    // …and pinning the branch's commit is refused rather than read (BD-025 §1).
+    const pinned = await files(['.agentic/config.yml'], { commitSha: branchHead });
+    expect(pinned.status).toBe('unavailable');
+  });
+
+  it('refuses a path outside the two it may read, before any git runs', async () => {
+    const runner = recordingRunner();
+    const result = await createGitRepositoryFileSource({
+      mirrorRoot,
+      git: runner,
+      target: async () => target(),
+    }).read({ projectId: PROJECT as Id, paths: ['src/app.ts' as never] });
+    expect(result.status).toBe('unavailable');
+    expect(runner.calls).toEqual([]);
+  });
+
+  it('lists a symlink, a directory and an oversized blob without reading their bodies', async () => {
+    await mkdir(path.join(origin, '.agentic'), { recursive: true });
+    await symlink(secretFile, path.join(origin, '.agentic/config.yml'));
+    await write(origin, 'CLAUDE.md', 'x'.repeat(MAX_REPOSITORY_FILE_BYTES + 1));
+    await git(['-C', origin, 'add', '-A']);
+    await commit(origin, 'hostile shapes');
+    const read = expectFiles(await files(['.agentic/config.yml', 'CLAUDE.md']));
+    expect(read.files['.agentic/config.yml']).toEqual({ kind: 'not_a_file', mode: '120000' });
+    expect(read.files['CLAUDE.md']).toEqual({
+      kind: 'oversized',
+      bytes: MAX_REPOSITORY_FILE_BYTES + 1,
+    });
+    expect(JSON.stringify(read)).not.toContain(SECRET_MARKER);
+
+    await git(['-C', origin, 'rm', '-q', '.agentic/config.yml']);
+    await write(origin, '.agentic/config.yml/inner.yml', 'version: 1\n');
+    await git(['-C', origin, 'add', '-A']);
+    await commit(origin, 'a directory where the file should be');
+    const directory = expectFiles(await files(['.agentic/config.yml']));
+    expect(directory.files['.agentic/config.yml']).toEqual({ kind: 'not_a_file', mode: '040000' });
+  });
+
+  it('refuses by name when no mirror was composed', async () => {
+    expect(
+      await unavailableRepositoryFileSource('APP_KNOWLEDGE_MIRROR_ROOT is not set').read({
+        projectId: PROJECT as Id,
+        paths: ['.agentic/config.yml'],
+      }),
+    ).toEqual({ status: 'unavailable', reason: 'APP_KNOWLEDGE_MIRROR_ROOT is not set' });
   });
 });

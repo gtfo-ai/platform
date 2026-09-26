@@ -46,6 +46,8 @@ import {
   decideBreakdownResponseSchema,
   decideKbProposalRequestSchema,
   effectiveConfigResponseSchema,
+  exportProjectConfigRequestSchema,
+  exportProjectConfigResponseSchema,
   handBackRequestSchema,
   historyBootstrapsResponseSchema,
   identityCandidateListSchema,
@@ -67,6 +69,7 @@ import {
   putBudgetsRequestSchema,
   putProjectBindingsRequestSchema,
   readinessResponseSchema,
+  refreshProjectConfigResponseSchema,
   refusedDeliveriesResponseSchema,
   resumeTaskRequestSchema,
   retryRunRequestSchema,
@@ -244,6 +247,19 @@ export interface Endpoints {
     projectId: string,
     idempotencyKey?: string,
   ) => Promise<z.output<typeof startDiscoveryResponseSchema>>;
+  /**
+   * `POST …/config/export` (WP-63, Q94 (c)): propose the settings as `.agentic/config.yml` in a
+   * merge request. It creates a branch, so the key is required and belongs to the intent.
+   */
+  readonly exportProjectConfig: (
+    projectId: string,
+    body: z.input<typeof exportProjectConfigRequestSchema>,
+    idempotencyKey: string,
+  ) => Promise<z.output<typeof exportProjectConfigResponseSchema>>;
+  /** `POST …/config/refresh` (WP-63): re-read the repository's own file from the default branch. */
+  readonly refreshProjectConfig: (
+    projectId: string,
+  ) => Promise<z.output<typeof refreshProjectConfigResponseSchema>>;
 
   /**
    * The settings commands (WP-30). Each takes the caller's `Idempotency-Key` — the key belongs to
@@ -538,6 +554,17 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
         method: 'PUT',
         schema: z.object({ hash: z.string(), autonomy_level: z.string() }),
         body: updateProjectConfigRequestSchema.parse(body),
+      }),
+    exportProjectConfig: (projectId, body, idempotencyKey) =>
+      client.command(`/api/projects/${seg(projectId)}/config/export`, {
+        schema: exportProjectConfigResponseSchema,
+        body: exportProjectConfigRequestSchema.parse(body),
+        idempotencyKey,
+      }),
+    refreshProjectConfig: (projectId) =>
+      client.command(`/api/projects/${seg(projectId)}/config/refresh`, {
+        schema: refreshProjectConfigResponseSchema,
+        body: {},
       }),
     startDiscovery: (projectId, idempotencyKey) =>
       client.command(`/api/projects/${seg(projectId)}/discovery`, {

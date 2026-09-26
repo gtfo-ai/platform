@@ -35,7 +35,9 @@
  *   build cannot honestly carry named as gaps **on the screen**.
  * - **Step 5 (commit)** is the proposal queue: the Discovery agent's drafted pages are `kb_proposals`
  *   with source `bootstrap`, and approving one commits it on an `agentic/knowledge/*` branch with a
- *   merge request — never onto the default branch. This step links there rather than duplicating it.
+ *   merge request — never onto the default branch. This step links there rather than duplicating it,
+ *   and to the project settings page, whose export proposes the step-4 configuration as
+ *   `.agentic/config.yml` the same way (WP-63, Q94).
  *
  * ## Every string from the server is data
  *
@@ -389,11 +391,23 @@ export const OnboardingScreen = (): ReactElement => {
             hint="Step 1 is what the queue belongs to."
           />
         ) : (
-          <p className="text-sm">
-            <Link to="/projects/$key/knowledge" params={{ key: project.key }}>
-              Review the drafted pages
-            </Link>
-          </p>
+          <>
+            <p className="text-sm">
+              <Link to="/projects/$key/knowledge" params={{ key: project.key }}>
+                Review the drafted pages
+              </Link>
+            </p>
+            {/* WP-63, Q94 (c): the configuration's merge request is a button that stays. */}
+            <p className="text-sm">
+              <Link to="/projects/$key/settings" params={{ key: project.key }}>
+                Propose the step-4 settings to the repository
+              </Link>{' '}
+              <span className="text-xs text-fg-muted">
+                — as <code>.agentic/config.yml</code> and a <code>CLAUDE.md</code> pointer, in a
+                merge request; once merged, the file wins over these settings.
+              </span>
+            </p>
+          </>
         )}
       </Step>
 

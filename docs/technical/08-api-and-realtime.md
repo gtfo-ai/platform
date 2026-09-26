@@ -13,7 +13,7 @@
 | Auth | Better Auth routes under `/api/auth/*` (sign-in, sign-out, session, password reset, API keys, admin user management) |
 | Org | `GET/PATCH /api/org`, `GET /api/org/budgets`, `PUT /api/org/budgets/:id`, `GET /api/org/stats?range=…`, `GET /api/org/audit?…`, `GET /api/org/users`, `POST /api/org/users/invite`, `GET/POST /api/org/identities`, `GET /api/org/identities/candidates` (**WP-44**: refused accounts nobody has mapped — a proposal for the mapping form, never a write; `org.users.manage`) |
 | Integrations | `GET/POST /api/integrations`, `PATCH /api/integrations/:id`, `POST /api/integrations/:id/test`, `GET /api/integrations/:id/setup-guide`, `GET /api/integrations/:id/refused-deliveries` (**WP-44**: the newest inbound deliveries whose `inbox.error` is set, with the accounts refused as `unmapped_identity`; `integration.read`) |
-| Projects | `GET/POST /api/projects`, `GET/PATCH /api/projects/:id`, `GET /api/projects/:id/config` (effective, with sources), `PUT /api/projects/:id/config`, `POST /api/projects/:id/config/export` (to repo MR), `GET /api/projects/:id/readiness`, `POST /api/projects/:id/discovery`, `GET/PUT /api/projects/:id/bindings`, `GET/PUT /api/projects/:id/budgets`, `GET /api/projects/:id/stats` |
+| Projects | `GET/POST /api/projects`, `GET/PATCH /api/projects/:id`, `GET /api/projects/:id/config` (effective, with sources), `PUT /api/projects/:id/config`, `POST /api/projects/:id/config/export` (to repo MR, **served since WP-63**), `POST /api/projects/:id/config/refresh` (**WP-63**: re-read the default branch's `.agentic/config.yml`), `GET /api/projects/:id/readiness`, `POST /api/projects/:id/discovery`, `GET/PUT /api/projects/:id/bindings`, `GET/PUT /api/projects/:id/budgets`, `GET /api/projects/:id/stats` |
 | Tasks | `GET /api/projects/:id/tasks?state=…`, `POST /api/projects/:id/tasks` (manual start from ticket key), `GET /api/tasks/:id` (with stages, artifacts, checks), `POST /api/tasks/:id/{pause,resume,cancel,retry-stage,return-to-stage,take-over,hand-back,rework}`, `GET /api/tasks/:id/events`, `GET /api/tasks/:id/export` (JSON), `POST /api/tasks/:id/questions/:qid/answer`, `POST /api/tasks/:id/approvals/:aid/decide`, `POST /api/tasks/:id/feedback`, `POST /api/tasks/:id/ask` (ask-the-task), `GET /api/artifacts/:id` (one artifact's body, gated at `artifact.read`; **added at WP-52**, and until then `GET /api/tasks/:id` published every artifact with a literal `null` `url` and no route served a body) |
 | Runs | `GET /api/runs/:id`, `GET /api/runs/:id/messages?after=<seq>&limit=`, `GET /api/runs/:id/prompt`, `GET /api/runs/:id/context-pack`, `POST /api/runs/:id/{steer,cancel}`, `POST /api/runs/:id/retry` (model/effort override), `GET /api/runs/:id/transcript.jsonl` and `GET /api/runs/:id/export.tar` (**WP-44**, the take-over's two downloads — **served, not copied** (Q93): the transcript is `run_messages` rendered one entry per line through the `/messages` projection, as an attachment, gated at `transcript.read`; the tarball is the launcher's file on the shared export volume read through the SPA's realpath guard, gated at `task.take_over`, kept fourteen days) |
 | Agents | `GET /api/org/agents` (running runs) |
@@ -124,8 +124,18 @@
 > bound are both answered to the caller rather than parking the task in `needs_human`.
 >
 > What is still unbuilt on those rows: `PATCH /api/org`,
-> `PATCH /api/integrations/:id`, `PATCH /api/projects/:id` and
-> `POST /api/projects/:id/config/export`. **WP-27 removed three
+> `PATCH /api/integrations/:id` and `PATCH /api/projects/:id`. **WP-63 removed
+> `POST /api/projects/:id/config/export`**: the settings layer as `.agentic/config.yml` plus the
+> `CLAUDE.md` pointer, one commit on an `agentic/config/*` branch and a merge request through the
+> knowledge apply path's two writes — never a direct commit (Q94 (b)) — with a required
+> `Idempotency-Key` whose replay answers the first attempt from its `human_actions` row, and
+> `base_hash` refusing a stale export `409 config_conflict`. It added
+> `POST /api/projects/:id/config/refresh`, the re-read of the default branch's file, and
+> `GET /api/projects/:id/config` now answers `effective` (the merge of the organisation's command
+> maximum, the settings and the repository's file, the repository winning — Q94 (a)) and
+> `repository` (the reading) beside `config`, which stays the settings layer; a repository file
+> that does not parse makes it **409 `invalid_repository_config`** naming the key paths.
+> **WP-27 removed three
 > of them** — `POST /api/runs/:id/steer` and `POST /api/tasks/:id/{take-over,hand-back}` are served,
 > and `POST /api/runs/:id/steer` is the one endpoint this document gives a rate limit to (below).
 > **WP-31 removed `POST /api/tasks/:id/ask`** and added two reads this table did not name:

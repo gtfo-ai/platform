@@ -23,6 +23,7 @@
 export * as ask from './ask/index.js';
 export * as bootstrap from './bootstrap/index.js';
 export * as broadcast from './broadcast/index.js';
+export * as config from './config/index.js';
 export * as cost from './cost/index.js';
 export * as db from './db/index.js';
 export * as dependencies from './dependencies/index.js';

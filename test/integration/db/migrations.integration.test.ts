@@ -64,6 +64,9 @@ const EXPECTED_TABLES = [
   'platform_table_policy',
   'price_list',
   'project_members',
+  // WP-63 (migration 0050): the last reading of a project's own `.agentic/config.yml` on its
+  // default branch — the `repo` layer technical/12's merge names and nothing produced (backlog 44).
+  'project_repository_config',
   'projects',
   'questions',
   'readiness_evaluations',
@@ -233,6 +236,9 @@ describe('migrate on an empty PostgreSQL 18', () => {
       // twice at most — claimed by a digest, then delivered — and registered rather than defaulted
       // so the "registry lists every table" invariant above stays true.
       row('notifications', 'read_write', null),
+      // WP-63 (migration 0050): `read_write` because a project's row is replaced on every reading
+      // of the repository's file — derived state, rebuilt by the next reading (BD-012).
+      row('project_repository_config', 'read_write', null),
       row('redaction_log', 'append_only', 'created_at'),
       row('run_messages', 'append_only', 'created_at', 'transcripts'),
       row('sessions', 'read_write', null),

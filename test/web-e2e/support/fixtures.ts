@@ -896,6 +896,16 @@ export const projectAudit = projectAuditResponseSchema.parse({
 
 export const effectiveConfig = effectiveConfigResponseSchema.parse({
   config: { version: 1 },
+  // WP-63: the merged document and the repository reading that fed its `repo` layer.
+  effective: { version: 1 },
+  repository: {
+    path: '.agentic/config.yml',
+    status: 'unread',
+    commit_sha: null,
+    read_at: null,
+    detail: null,
+    not_applied: [],
+  },
   sources: { version: 'default' },
   hash: 'fakehash1',
   computed_at: now,

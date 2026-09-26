@@ -1631,3 +1631,106 @@ export const narrowCommandPolicy = (
 
   return { policy: { allow: unique(allow), ask, block }, ignoredAllow };
 };
+
+// ── the organisation maximum over a run's baseline (PROGRESS backlog 146, WP-63) ──
+
+export interface OrganisationNarrowing {
+  readonly policy: ResolvedCommandPolicy;
+  /** The baseline's `allow` entries the organisation maximum does not grant — removed, and named. */
+  readonly removed: readonly string[];
+}
+
+/**
+ * A run's starting policy judged against the **organisation maximum**, for every verb — before any
+ * project layer narrows it (BD-025 §2, PROGRESS backlog 146).
+ *
+ * Q97's narrowing ({@link narrowCommandPolicy}) touches only the project-command class, which is
+ * right against a role baseline and wrong against an organisation: a baseline `git push …` entry an
+ * organisation left out of its `allow` would otherwise survive every later layer, because nothing
+ * downstream removes an entry outside the class. So the organisation is applied **first**, as an
+ * intersection:
+ *
+ *  - `allow` — when the organisation states one, a baseline entry is kept only if that maximum
+ *    grants it, by {@link grantsAllowEntry}'s two rules (verbatim, or a literal line the maximum
+ *    evaluates to `allow`), and an organisation **literal** is added when the baseline grants it
+ *    (the same two rules, the other way round). A glob the organisation did not list verbatim is
+ *    removed, which is the direction a coverage question between two globs has to fail in. A stage's and a skill's
+ *    additions (TD-027) are part of the baseline here and meet the same test. When the organisation
+ *    states no `allow`, nothing is removed from it: the maximum is then the platform's own, which
+ *    every baseline already sits under by construction.
+ *  - `ask` and `block` — the organisation's entries are **added**; neither list can shrink, and an
+ *    allow entry named verbatim in either is removed.
+ *
+ * The result can only be narrower than the baseline, never wider — asserted over arbitrary inputs
+ * in the tests.
+ */
+export const intersectWithOrganisationMaximum = (
+  baseline: ResolvedCommandPolicy,
+  organisation: CommandPolicy | undefined,
+): OrganisationNarrowing => {
+  if (organisation === undefined) {
+    return { policy: baseline, removed: [] };
+  }
+  const block = unique([...baseline.block, ...(organisation.block ?? [])]);
+  const ask = unique([...baseline.ask, ...(organisation.ask ?? [])]).filter(
+    (entry) => !block.includes(entry),
+  );
+  const declaredAllow = organisation.allow;
+  const maximum: ResolvedCommandPolicy = {
+    allow: declaredAllow ?? baseline.allow,
+    // The combined list, not the organisation's alone: a literal is granted only if the stricter of
+    // the two would still run it.
+    ask,
+    block,
+  };
+  // The intersection read from both sides: a baseline entry the organisation grants, and an
+  // organisation **literal** the baseline grants — `make test` listed by an organisation is inside
+  // a baseline's `make *` and must survive the glob being removed. An organisation glob the
+  // baseline does not list verbatim is not admitted: coverage between two globs is not decided.
+  const bounded: ResolvedCommandPolicy = { ...baseline, ask, block };
+  const granted =
+    declaredAllow === undefined
+      ? baseline.allow
+      : [
+          ...baseline.allow.filter((entry) => grantsAllowEntry(maximum, entry)),
+          ...declaredAllow.filter(
+            (entry) => !baseline.allow.includes(entry) && grantsAllowEntry(bounded, entry),
+          ),
+        ];
+  const allow = granted.filter((entry) => !ask.includes(entry) && !block.includes(entry));
+  return {
+    policy: { allow: unique(allow), ask, block },
+    removed: baseline.allow.filter((entry) => !allow.includes(entry)),
+  };
+};
+
+export interface RunCommandPolicy extends NarrowedCommandPolicy {
+  /** {@link OrganisationNarrowing.removed}: what the organisation took from this run's baseline. */
+  readonly removedByOrganisation: readonly string[];
+}
+
+/**
+ * The policy a run is given: its baseline, intersected with the organisation maximum, then narrowed
+ * by each project layer in turn — the settings, then the repository's `.agentic/config.yml` — in
+ * that order, and only in that order (backlog 146, WP-63).
+ *
+ * Every layer narrows what the one before it left, so the repository may tighten what the settings
+ * allow and never loosen it (WP-63 review round 1's ruling), and nothing can widen past the
+ * organisation. `ignoredAllow` is every layer's, in order: a repository entry the settings had
+ * removed is reported there rather than re-granted.
+ */
+export const runCommandPolicy = (
+  baseline: ResolvedCommandPolicy,
+  organisation: CommandPolicy | undefined,
+  ...layers: readonly (CommandPolicy | undefined)[]
+): RunCommandPolicy => {
+  const bounded = intersectWithOrganisationMaximum(baseline, organisation);
+  let policy = bounded.policy;
+  const ignored: string[] = [];
+  for (const layer of layers) {
+    const narrowed = narrowCommandPolicy(policy, layer);
+    policy = narrowed.policy;
+    ignored.push(...narrowed.ignoredAllow);
+  }
+  return { policy, ignoredAllow: unique(ignored), removedByOrganisation: bounded.removed };
+};

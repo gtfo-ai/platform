@@ -69,16 +69,20 @@ import type { HistoryBootstrapCommands, HistoryBootstrapGateResult } from './boo
 import type { BreakdownComposition } from './breakdown.js';
 import type { TaskCommands } from './commands.js';
 import type { ServerConfig } from './config.js';
+import { repositorySnapshotFrom } from './config-layers.js';
 import { toApiError } from './errors.js';
 import type { KnowledgeCommands } from './knowledge.js';
 import { type PinoLogger, withLogContext } from './logging.js';
 import type { Metrics } from './metrics.js';
 import { routeLabel } from './metrics.js';
 import type { OnboardingCommands } from './onboarding.js';
+import type { ProjectConfigCommands } from './project-config.js';
 import { listHistoryBootstraps } from './queries/bootstrap-queries.js';
 import { listOrgBudgets, writeBudget } from './queries/cost-queries.js';
 import type { Database } from './queries/identity-queries.js';
 import {
+  findConfigLayers,
+  findExportableProject,
   findProjectRole,
   findRunProjectId,
   findTaskProjectId,
@@ -120,6 +124,7 @@ import { registerKbRoutes } from './routes/kb.js';
 import { registerOnboardingRoutes } from './routes/onboarding.js';
 import { type ReadinessReport, registerOpsRoutes } from './routes/ops.js';
 import { registerOrgRoutes } from './routes/org.js';
+import { registerProjectConfigRoutes } from './routes/project-config.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { registerRunRoutes } from './routes/runs.js';
 import { registerSettingsRoutes } from './routes/settings.js';
@@ -197,6 +202,11 @@ export interface BuildAppOptions {
    * the `ROLE`, and the route answers `503` by name rather than disappearing.
    */
   readonly shadow: ShadowCommands | null;
+  /**
+   * The configuration export and the repository re-read (WP-63), or `null` for a process that
+   * composed none. Nullable like `shadow`; the routes answer `503` by name.
+   */
+  readonly projectConfig?: ProjectConfigCommands | null;
   /**
    * Whether a project may start a shadow batch — the same predicate the command refuses with.
    *
@@ -479,9 +489,24 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
     }
     await registerProjectRoutes(app, {
       database: options.database,
-      // The `invalid_stored_config` refusal quotes `projects.config` back at the caller, and that
-      // column is partly the repository's own document (`describeConfigIssues`).
+      // The `invalid_stored_config` refusal quotes `projects.config` back at the caller — text an
+      // operator typed, which can carry a pasted credential (`describeConfigIssues`).
       redactor: redactionAdapters.patternRedactor(),
+    });
+    // WP-63: the configuration export and the repository re-read (Q94). The five database reads
+    // are bound here so the route module names none of them (`ProjectConfigQueries`).
+    await registerProjectConfigRoutes(app, {
+      queries: {
+        projectRole: async (projectId, userId) =>
+          findProjectRole(options.database, projectId, userId),
+        exportableProject: async (projectId) => findExportableProject(options.database, projectId),
+        previousAttempt: async (query) => findIdempotentAttempt(options.database, query),
+        recordAction: async (input) => recordHumanAction(options.database, input),
+        readRepository: async (projectId) =>
+          repositorySnapshotFrom((await findConfigLayers(options.database, projectId)) ?? {}),
+      },
+      commands: options.projectConfig ?? null,
+      redactText: (value) => redactionAdapters.patternRedactor().redactText(value).value,
     });
     await registerOnboardingRoutes(app, {
       database: options.database,

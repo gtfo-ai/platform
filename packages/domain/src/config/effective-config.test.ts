@@ -7,6 +7,7 @@ import { PROPERTY_TEST_TIMEOUT_MS } from '../testing/property.js';
 import {
   type ConfigLayer,
   commandVerdictFor,
+  mergeConfigLayers,
   mergeProjectConfig,
   organisationCommandMaximum,
   PLATFORM_DEFAULT_CONFIG,
@@ -220,14 +221,34 @@ describe('BD-025 — the command policy only narrows', () => {
     expect(commandVerdictFor(effective, 'curl https://example.invalid')).toBe('ask');
   });
 
-  it('lets a project narrow and the repository narrow again', () => {
-    const effective = mergeProjectConfig([
-      // Project-command entries: since Q97 a declared `allow` narrows that class only (WP-54).
-      layer('org', { commands: { allow: ['make a', 'make b', 'make c'], ask: [], block: [] } }),
+  /**
+   * WP-63 review round 1: the repository **narrows again**, it never re-grants — both directions
+   * (standing rule 42): a narrower list takes effect, a wider one does not.
+   */
+  it('lets a project narrow and the repository narrow again, never re-grant', () => {
+    const org = layer('org', {
+      commands: { allow: ['make a', 'make b', 'make c'], ask: [], block: [] },
+    });
+    const narrower = mergeProjectConfig([
+      org,
       layer('project', { commands: { allow: ['make a', 'make b'] } }),
       layer('repo', { commands: { allow: ['make a'] } }),
     ]);
-    expect(effective.commands.allow).toEqual(['make a']);
+    expect(narrower.commands.allow).toEqual(['make a']);
+    const wider = mergeProjectConfig([
+      org,
+      layer('project', { commands: { allow: ['make a'] } }),
+      layer('repo', { commands: { allow: ['make a', 'make b'] } }),
+    ]);
+    expect(wider.commands.allow).toEqual(['make a']);
+  });
+
+  it('never lets an empty repository block unblock what the settings blocked', () => {
+    const effective = mergeProjectConfig([
+      layer('project', { commands: { block: ['nc *'] } }),
+      layer('repo', { commands: { block: [] } }),
+    ]);
+    expect(effective.commands.block).toContain('nc *');
   });
 
   it('keeps every block from every layer', () => {
@@ -253,5 +274,45 @@ describe('BD-025 — the command policy only narrows', () => {
     const effective = mergeProjectConfig([]);
     expect(commandVerdictFor(effective, 'npm ci')).toBe('allow');
     expect(commandVerdictFor(effective, 'dckr ps', 'docker ps')).toBe('block');
+  });
+});
+
+describe('mergeConfigLayers — the declared layers alone (WP-63)', () => {
+  it('merges project and repository with the repository winning, and writes no default', () => {
+    const merged = mergeConfigLayers([
+      layer('repo', { stages: { refinement: { model: 'claude-sonnet-5' } } }),
+      layer('project', {
+        stages: { refinement: { model: 'claude-opus-5', budget_usd: 2 } },
+        pipeline: { limits: { human_rounds: 2 } },
+      }),
+    ]);
+    expect(merged.values).toEqual({
+      stages: { refinement: { model: 'claude-sonnet-5', budget_usd: 2 } },
+      pipeline: { limits: { human_rounds: 2 } },
+    });
+    expect(merged.sources).toEqual({
+      'stages.refinement.model': 'repo',
+      'stages.refinement.budget_usd': 'project',
+      'pipeline.limits.human_rounds': 'project',
+    });
+    // No default leaked in: `policies.probation_tasks` would override the materialised dial (Q78).
+    expect(merged.values.policies).toBeUndefined();
+  });
+});
+
+describe('mergeProjectConfig — a caller that knows the autonomy maximum (WP-63)', () => {
+  it('caps at the stated maximum instead of the shipped default, in both directions', () => {
+    const autonomous = mergeProjectConfig(
+      [layer('project', { policies: { autonomy: 'autonomous' } })],
+      { autonomyMaximum: 'autonomous' },
+    );
+    expect(autonomous.values.policies?.autonomy).toBe('autonomous');
+    expect(autonomous.cappedAutonomy).toBeNull();
+    const capped = mergeProjectConfig(
+      [layer('project', { policies: { autonomy: 'autonomous' } })],
+      { autonomyMaximum: 'assist' },
+    );
+    expect(capped.values.policies?.autonomy).toBe('assist');
+    expect(capped.cappedAutonomy).toEqual({ requested: 'autonomous', applied: 'assist' });
   });
 });

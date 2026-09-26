@@ -44,8 +44,11 @@ describe('Drizzle schema', () => {
     // so a query term every page contains can be dropped (migration 0042, WP-58), plus
     // `superseded_merge_requests` — the merge request a rework let go of, which after the rework's
     // commit no other row names, and which the recovery pass has to be able to find if the close's
-    // wake-up is lost (migration 0043, WP-59 review round 1, PROGRESS backlog 178).
-    expect(tables.length).toBe(63);
+    // wake-up is lost (migration 0043, WP-59 review round 1, PROGRESS backlog 178), plus
+    // `project_repository_config` — the last reading of a project's own `.agentic/config.yml` on
+    // its default branch, the `repo` layer technical/12's merge names and nothing produced
+    // (migration 0050, WP-63, PROGRESS backlog 44).
+    expect(tables.length).toBe(64);
   });
 
   it('names every table and column in snake_case, matching the wire format', () => {

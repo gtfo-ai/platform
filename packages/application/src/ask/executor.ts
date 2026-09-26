@@ -67,7 +67,7 @@ import {
   startRunHeartbeat,
 } from '../pipeline/lease.js';
 import { injectedSecretRedactorFor } from '../pipeline/run-redaction.js';
-import type { ProjectSettings } from '../pipeline/settings.js';
+import { type ProjectSettings, repositoryConfigRefusal } from '../pipeline/settings.js';
 import type { RunStopReasons } from '../pipeline/stop-reasons.js';
 import type { PipelineStore, StoredTask } from '../pipeline/store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
@@ -327,6 +327,12 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         kind: 'refused',
         reason: 'this project has turned ask-the-task off (`features.ask.enabled`)',
       };
+    }
+    // WP-63: an ask is a run, so an invalid repository file refuses it exactly as it refuses a
+    // stage — the task is not touched (an ask never moves it), the ask is refused with the key paths.
+    const repository = repositoryConfigRefusal(settings);
+    if (repository !== null) {
+      return { kind: 'refused', reason: repository };
     }
     if (askBudgetExhausted(task, settings, feature.budgetUsd)) {
       return {

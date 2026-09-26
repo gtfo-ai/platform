@@ -193,12 +193,49 @@ export const testIntegrationResponseSchema = z.strictObject({
 // ── Projects and configuration ───────────────────────────────────────────────
 
 /**
+ * The platform's last reading of a project's own `.agentic/config.yml` on its default branch — the
+ * `repo` layer's producer (WP-63, Q94, BD-025 §1).
+ *
+ *  - `unread` — nothing has read it: no knowledge mirror on this instance, no git binding, or no
+ *    read has happened yet. The effective configuration then has no `repo` layer, and says so here.
+ *  - `absent` — the default branch has no such file.
+ *  - `valid` — it parsed and is merged over the settings, winning wherever it states a key (Q94 (a)).
+ *  - `invalid` — it did not. `GET …/config` **refuses** with `409 invalid_repository_config` naming
+ *    the key paths rather than answering without the layer, and no run of the project starts; the
+ *    reading itself (with `detail`) is what `POST …/config/refresh` answers.
+ *
+ * `not_applied` names the keys the file stated that the platform does not apply, with the reason —
+ * today only `policies.autonomy`, because the dial is moved in the platform (BD-027:14). Never a
+ * silent drop.
+ */
+export const repositoryConfigReadingSchema = z.strictObject({
+  path: z.literal('.agentic/config.yml'),
+  status: z.enum(['unread', 'absent', 'valid', 'invalid']),
+  /** The default-branch commit the reading describes; `null` when `unread`. */
+  commit_sha: nonEmptyStringSchema.nullable(),
+  read_at: isoDateTimeSchema.nullable(),
+  /** The key paths an `invalid` file failed on — redacted, bounded, platform-worded. */
+  detail: z.string().nullable(),
+  not_applied: z.array(z.strictObject({ key: nonEmptyStringSchema, reason: nonEmptyStringSchema })),
+});
+
+/**
  * `GET /api/projects/:id/config` — the effective configuration with per-key provenance
  * (technical/12 § "Effective configuration"). `sources` is keyed by dotted config path.
+ *
+ * **Two documents since WP-63, and they answer different questions.** `config` is the **settings
+ * layer** — the document `PUT …/config` writes and the screens edit, unchanged in meaning so a
+ * round trip through the settings screens never copies a default or a repository value into it.
+ * `effective` is what the platform runs on: `default < org < project < repo`, the repository
+ * winning wherever it states a key (Q94 (a)), with `sources` naming the layer of every leaf — so a
+ * key can answer `repo` now that something produces that layer.
  */
 export const effectiveConfigResponseSchema = z.strictObject({
   config: agenticConfigSchema,
+  /** The merged configuration, every layer applied; `version` is the file format's. */
+  effective: agenticConfigSchema,
   sources: z.record(z.string(), configSourceSchema),
+  repository: repositoryConfigReadingSchema,
   hash: nonEmptyStringSchema,
   computed_at: isoDateTimeSchema,
   /**
@@ -273,6 +310,36 @@ export const updateProjectConfigRequestSchema = z.strictObject({
   /** Optimistic concurrency: the hash the client last read. */
   base_hash: nonEmptyStringSchema.optional(),
   autonomy_level: autonomyLevelSchema.optional(),
+});
+
+/**
+ * `POST /api/projects/:id/config/export` — propose the settings layer as `.agentic/config.yml` (and
+ * the `CLAUDE.md` pointer) in a merge request on an `agentic/*` branch (WP-63, Q94 (b) and (c)).
+ *
+ * `base_hash` pins the export to the document the operator was looking at: a settings write made
+ * since is refused `409 config_conflict` rather than exported unseen.
+ */
+export const exportProjectConfigRequestSchema = z.strictObject({
+  base_hash: nonEmptyStringSchema.optional(),
+});
+
+export const exportProjectConfigResponseSchema = z.strictObject({
+  /** `exported` opened (or, on a replay, had opened) a merge request; `unchanged` needed none. */
+  status: z.enum(['exported', 'unchanged']),
+  /** `false` when this `Idempotency-Key` had already performed the export: nothing was sent again. */
+  performed: z.boolean(),
+  config_hash: nonEmptyStringSchema,
+  branch: nonEmptyStringSchema.nullable(),
+  commit_sha: nonEmptyStringSchema.nullable(),
+  merge_request_url: urlSchema.nullable(),
+  paths: z.array(nonEmptyStringSchema),
+  /** Platform text: what the export left out and why, and why nothing was needed. */
+  notes: z.array(nonEmptyStringSchema),
+});
+
+/** `POST /api/projects/:id/config/refresh` — re-read the default branch's file now (WP-63). */
+export const refreshProjectConfigResponseSchema = z.strictObject({
+  repository: repositoryConfigReadingSchema,
 });
 
 export const projectSummarySchema = projectRecordSchema.extend({
@@ -1656,6 +1723,10 @@ export type CreateIntegrationRequest = z.infer<typeof createIntegrationRequestSc
 export type TestIntegrationResponse = z.infer<typeof testIntegrationResponseSchema>;
 export type EffectiveConfigResponse = z.infer<typeof effectiveConfigResponseSchema>;
 export type UpdateProjectConfigRequest = z.infer<typeof updateProjectConfigRequestSchema>;
+export type RepositoryConfigReading = z.infer<typeof repositoryConfigReadingSchema>;
+export type ExportProjectConfigRequest = z.infer<typeof exportProjectConfigRequestSchema>;
+export type ExportProjectConfigResponse = z.infer<typeof exportProjectConfigResponseSchema>;
+export type RefreshProjectConfigResponse = z.infer<typeof refreshProjectConfigResponseSchema>;
 export type ProjectSummary = z.infer<typeof projectSummarySchema>;
 export type ProjectsResponse = z.infer<typeof projectsResponseSchema>;
 export type ReadinessResponse = z.infer<typeof readinessResponseSchema>;

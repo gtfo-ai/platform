@@ -226,6 +226,54 @@ describe('the index job handler', () => {
     ]);
   });
 
+  /**
+   * WP-63: the repository configuration is re-read at the commit the index run read — after a run
+   * that read the vault, never after one that could not, and a failure of the re-read does not
+   * fail the index job (both directions of each, standing rule 42).
+   */
+  it('re-reads the repository configuration at the indexed commit, and only after a read', async () => {
+    const reread: [Id, string][] = [];
+    const afterIndex = async (projectId: Id, commitSha: string) => {
+      reread.push([projectId, commitSha]);
+    };
+    await knowledgeIndexHandler({
+      indexer: { index: async () => report({ commitSha: 'cafe123' }) },
+      project: async () => project,
+      afterIndex,
+    })(job({ project_id: PROJECT, reason: 'merged' }));
+    expect(reread).toEqual([[PROJECT, 'cafe123']]);
+
+    await knowledgeIndexHandler({
+      indexer: {
+        index: async () =>
+          report({ status: 'vault_unavailable', commitSha: null, reason: 'no mirror' }),
+      },
+      project: async () => project,
+      afterIndex,
+    })(job({ project_id: PROJECT, reason: 'merged' }));
+    expect(reread).toHaveLength(1);
+
+    const errors: string[] = [];
+    await expect(
+      knowledgeIndexHandler({
+        indexer: { index: async () => report({ commitSha: 'cafe124' }) },
+        project: async () => project,
+        afterIndex: async () => {
+          throw new Error('the mirror is locked');
+        },
+        logger: {
+          debug: () => {},
+          info: () => {},
+          warn: () => {},
+          error: (_fields, message) => {
+            errors.push(message);
+          },
+        },
+      })(job({ project_id: PROJECT, reason: 'merged' })),
+    ).resolves.toBeUndefined();
+    expect(errors[0]).toMatch(/previous reading stands/);
+  });
+
   it('leaves the commit out when the wake-up did not name one', async () => {
     const requests: IndexRequest[] = [];
     await knowledgeIndexHandler({

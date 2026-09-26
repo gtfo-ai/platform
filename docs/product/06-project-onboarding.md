@@ -40,7 +40,7 @@ One screen, all optional, all mirrored in settings later (BD-028): the **autonom
 "Finish later" leaves a checklist on the project page; nothing is reachable only through the wizard.
 
 ### Step 5 — Commit
-One MR to the repository adding `.agentic/` with the accepted content (or a direct commit if the project allows), plus a one-line pointer in `CLAUDE.md` to the KB index (proposed). The platform builds the index.
+An MR to the repository adding `.agentic/` with the accepted knowledge pages, plus a one-line pointer in `CLAUDE.md` to the KB index (proposed); the configuration is exported as its own MR from the project settings page — **never a direct commit** (Q94 (b), amended at WP-63: the same answer the knowledge apply path gives, for the same reason). The platform builds the index. After onboarding, the repository's own `.agentic/config.yml` on the default branch **wins** over what the UI stores (Q94 (a)) — but only in the direction of *tightening*: it can add protected paths, risk requirements and command restrictions, never remove what the UI or the platform sets, and the autonomy settings are not taken from it at all (Q101; the full grading is technical/12); the project settings page keeps an **export** button that proposes the UI's configuration as another MR, so the two can be brought back together at any time (Q94 (c)).
 
 ## Completeness score
 

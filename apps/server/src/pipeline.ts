@@ -86,8 +86,10 @@ import {
   defaultProjectSettings,
   humanTimeHandlers,
   PIPELINE_ACTOR,
+  projectConfigWithRepository,
   RUN_CREDENTIAL_TTL_SECONDS,
   registerMaintenanceSchedule,
+  repositoryConfigStateOf,
   runCredentialRecoveryHorizonMs,
   runLimitsDefaults,
   silentLogger,
@@ -131,6 +133,12 @@ import {
 import { PLATFORM_SKILLS, ROLE_PROMPTS } from '@platform/prompts';
 import type pg from 'pg';
 import { agentRunEnvironment, composeAgentRunner } from './agent.js';
+import {
+  organisationCommandsFrom,
+  REPOSITORY_CONFIG_COLUMNS,
+  type RepositoryConfigColumns,
+  repositorySnapshotFrom,
+} from './config-layers.js';
 import { composePlatformTools } from './platform-tools.js';
 
 /**
@@ -596,17 +604,24 @@ export const repositoryPathOf = (repoUrl: string): string => {
 };
 
 /**
- * `ProjectSettingsPort` over `projects.config`.
+ * `ProjectSettingsPort` over the project's configuration layers (WP-63).
  *
- * technical/03 calls that column "effective configuration … per key, which layer of the precedence
- * chain produced it", so the merge technical/12 describes has already happened by the time a row
- * exists; this reads it rather than recomputing it. The templates are the shipped three: a
- * project's own `.agentic/pipeline.yml` is read from the default branch, and a template a project
- * declared but this process could not read would park every task one stage short of `done` — so it
- * is absent rather than guessed. **Since WP-18a the missing piece is a caller, not a tree**: this
- * process can read the default branch without a checkout (`knowledge.ts` composes a `VaultSource`
- * over a bare mirror), but that read answers the four *indexed vault* paths and nothing else, and
- * settling a project's pipeline from it is a work package of its own.
+ * `config` is the **settings layer** (`projects.config`) with the repository's own
+ * `.agentic/config.yml` over it — the last reading of the default branch's file
+ * (`project_repository_config`), merged only when that reading is `valid`, and under the
+ * tighten-only ruling (`repository-grades.ts`: the file may tighten, never loosen) — and no
+ * platform default written in (`mergeConfigLayers` says why). The file's `commands` narrow again
+ * after the settings' (`repositoryCommands`). `organisationCommands` is the organisation's command maximum, which every run's
+ * baseline is intersected with before the project narrows it (backlog 146). `repository` is the
+ * reading's state, which a run is refused on when it is `invalid` (`repositoryConfigRefusal`).
+ * `config-layers.ts` reads the two new layers, for this port and for `GET …/config` alike.
+ *
+ * The templates are the shipped three: a project's own `.agentic/pipeline.yml` is read from the
+ * default branch, and a template a project declared but this process could not read would park
+ * every task one stage short of `done` — so it is absent rather than guessed. The repository file
+ * reader WP-63 added (`createGitRepositoryFileSource`) is widened to exactly two named paths, and
+ * `pipeline.yml` is not one of them: settling a project's pipeline from it is still a work package
+ * of its own.
  */
 export const createProjectSettingsPort = (
   pool: pg.Pool,
@@ -614,17 +629,35 @@ export const createProjectSettingsPort = (
   logger: Logger = silentLogger,
 ): ProjectSettingsPort => ({
   forProject: async (projectId: Id): Promise<ProjectSettings> => {
-    const { rows } = await pool.query<{ config: unknown; autonomy_policies: unknown }>(
-      'select config, autonomy_policies from projects where id = $1',
+    const { rows } = await pool.query<
+      {
+        config: unknown;
+        autonomy_policies: unknown;
+        org_settings: unknown;
+      } & Partial<RepositoryConfigColumns>
+    >(
+      `select p.config, p.autonomy_policies, o.settings as org_settings, ${REPOSITORY_CONFIG_COLUMNS}
+         from projects p
+         join organizations o on o.id = p.org_id
+         left join project_repository_config r on r.project_id = p.id
+        where p.id = $1`,
       [projectId],
     );
     const row = rows[0];
     if (row === undefined) {
       throw new Error(`project ${projectId} has no row; the pipeline cannot settle its settings`);
     }
+    const snapshot = repositorySnapshotFrom(row);
+    const organisationCommands = organisationCommandsFrom(row.org_settings);
+    const layered = projectConfigWithRepository((row.config ?? {}) as ConfigValues, snapshot);
     return defaultProjectSettings(projectId, {
       templates: SHIPPED_TEMPLATES,
-      config: (row.config ?? {}) as ConfigValues,
+      config: layered.values,
+      ...(organisationCommands === undefined ? {} : { organisationCommands }),
+      ...(layered.repositoryCommands === undefined
+        ? {}
+        : { repositoryCommands: layered.repositoryCommands }),
+      repository: repositoryConfigStateOf(snapshot),
       // Parsed, not cast — this column decides whether a plan waits for a human, and a document
       // that does not match the current schema must not be read as one that does. A row that fails
       // is `null`, which is the *stated* "never materialised" branch the gate names, and it is

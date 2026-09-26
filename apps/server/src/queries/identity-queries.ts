@@ -22,8 +22,17 @@ import type { AuditEntry, IdentityCandidate, UserRole, UserSummary } from '@plat
 import { db as dbAdapters } from '@platform/infrastructure';
 import { and, asc, desc, eq, lt, sql } from 'drizzle-orm';
 
-const { configAudit, projectMembers, projects, runs, tasks, userIdentities, users } =
-  dbAdapters.schema;
+const {
+  configAudit,
+  organizations,
+  projectMembers,
+  projectRepositoryConfig,
+  projects,
+  runs,
+  tasks,
+  userIdentities,
+  users,
+} = dbAdapters.schema;
 
 export type Database = dbAdapters.Database;
 
@@ -130,6 +139,67 @@ export const findProjectConfig = async (
         updatedAt: row.updatedAt,
         proposedRiskClasses: (row.proposedRiskClasses ?? null) as Record<string, unknown> | null,
       };
+};
+
+/** What `POST …/config/export` reads about the project (WP-63). */
+export const findExportableProject = async (
+  database: Database,
+  projectId: string,
+): Promise<{
+  readonly config: Record<string, unknown>;
+  readonly configHash: string | null;
+  readonly defaultBranch: string;
+  readonly knowledgeDir: string;
+} | null> => {
+  const rows = await database
+    .select({
+      config: projects.config,
+      configHash: projects.configHash,
+      defaultBranch: projects.defaultBranch,
+      knowledgeDir: projects.knowledgeDir,
+    })
+    .from(projects)
+    .where(eq(projects.id, projectId))
+    .limit(1);
+  const row = rows[0];
+  return row === undefined ? null : { ...row, config: row.config as Record<string, unknown> };
+};
+
+/**
+ * The two layers `GET …/config` merges beside `projects.config` (WP-63): the organisation's
+ * `settings` and the last reading of the repository's `.agentic/config.yml`. Raw columns — the
+ * route reads them through `config-layers.ts`, the same functions the pipeline's settings port uses.
+ */
+export interface ConfigLayerColumns {
+  readonly orgSettings: unknown;
+  readonly repo_status: string | null;
+  readonly repo_commit_sha: string | null;
+  readonly repo_config: unknown;
+  readonly repo_not_applied: unknown;
+  readonly repo_detail: string | null;
+  readonly repo_read_at: Date | null;
+}
+
+export const findConfigLayers = async (
+  database: Database,
+  projectId: string,
+): Promise<ConfigLayerColumns | null> => {
+  const rows = await database
+    .select({
+      orgSettings: organizations.settings,
+      repo_status: projectRepositoryConfig.status,
+      repo_commit_sha: projectRepositoryConfig.commitSha,
+      repo_config: projectRepositoryConfig.config,
+      repo_not_applied: projectRepositoryConfig.notApplied,
+      repo_detail: projectRepositoryConfig.detail,
+      repo_read_at: projectRepositoryConfig.readAt,
+    })
+    .from(projects)
+    .innerJoin(organizations, eq(organizations.id, projects.orgId))
+    .leftJoin(projectRepositoryConfig, eq(projectRepositoryConfig.projectId, projects.id))
+    .where(eq(projects.id, projectId))
+    .limit(1);
+  return rows[0] ?? null;
 };
 
 /**

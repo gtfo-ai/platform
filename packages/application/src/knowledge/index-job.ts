@@ -97,6 +97,18 @@ export interface KnowledgeIndexJobOptions {
    * `PipelineIntegrationsLoaderOptions.gitProjectPath` uses for the same reason).
    */
   readonly project: (projectId: Id) => Promise<KnowledgeIndexProject | null>;
+  /**
+   * Re-reads the repository's `.agentic/config.yml` at the commit this run just read (WP-63).
+   *
+   * The configuration is read from the same default branch, through the same mirror, on the same
+   * triggers — a task starting, a merge, the branch moving — and **pinned to the index run's
+   * commit**, so the effective configuration and the vault describe one commit and the mirror is
+   * not fetched a second time (the adapter skips the fetch for a pinned commit it already has on
+   * the branch). It runs after the index and never instead of it: a failure is logged and the
+   * index run's outcome stands, because a configuration that could not be re-read keeps its
+   * previous reading (`refreshRepositoryConfig`).
+   */
+  readonly afterIndex?: (projectId: Id, commitSha: string) => Promise<void>;
   readonly logger?: Logger;
 }
 
@@ -184,6 +196,16 @@ export const knowledgeIndexHandler =
       return;
     }
     logger.info(fields, 'knowledge index run finished');
+    if (options.afterIndex !== undefined && report.commitSha !== null) {
+      try {
+        await options.afterIndex(projectId, report.commitSha);
+      } catch (error) {
+        logger.error(
+          { project_id: projectId, commit_sha: report.commitSha, err: error },
+          'the repository configuration could not be re-read after the index run; the previous reading stands',
+        );
+      }
+    }
   };
 
 /** TD-005's core band, behind the pipeline's own transitions: the index is a projection. */

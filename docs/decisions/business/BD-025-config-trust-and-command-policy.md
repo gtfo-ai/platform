@@ -21,12 +21,13 @@ maximum, not the maximum itself: each role's shipped baseline (`COMMAND_BASELINE
 **ceiling** a project's narrowing is judged against (`DEFAULT_COMMAND_POLICY`: a project's literal is
 granted only if the maximum already allows it), and a project's `commands.allow` **narrows** the
 baseline — only the project-command verbs, since Q97 (PROGRESS backlog 139); the baseline's git,
-read-only and lockfile verbs are removed with `ask` or `block`, never by omission. **An organisation
-layer that replaces the maximum is not composed on this build**: `organisationCommandMaximum` is
-called only from `mergeProjectConfig`, which no production path calls, so an admin has no way to
-set a stricter list today; when one is composed, the narrowing must be judged against *that* list
-for the non-project verbs as well, or Q97's rule keeps a baseline git verb the organisation
-removed — it can never reach a verb the
+read-only and lockfile verbs are removed with `ask` or `block`, never by omission. **An organisation layer is composed since WP-63** (it was not when this amendment was written):
+`organizations.settings.commands` is read, and a run's baseline is intersected with it for every verb
+**before** a project narrows (`intersectWithOrganisationMaximum`), so a verb the organisation removed stays
+removed whatever the project's `commands.allow` says — the case this sentence once warned of. No surface
+writes that layer yet (PROGRESS backlog 146 (2) / 223). A repository's own `.agentic/config.yml`
+(the `repo` layer, Q94) is narrowed the same way: it can undo a UI list but never widen past baseline ∩
+organisation maximum. A project, likewise, can never reach a verb the
 role's baseline does not grant, and an entry it declares that the platform discards is reported (a
 log line per run and `ignored_allow_commands` on the effective-configuration DTO), never dropped in
 silence. This is Q69's answer (ii); before WP-54 the shipped default *was* the maximum and named no

@@ -16,13 +16,23 @@
  * `POST …/discovery` are served by `routes/onboarding.ts` since WP-21 — a command needs an audit
  * row and an `Idempotency-Key` a read does not — and `GET/PUT …/autonomy`, `PUT …/budgets` and
  * `GET …/audit` by `routes/settings.ts` since WP-30, which is the same settings reached from the
- * other side of onboarding. What is still unbuilt is `POST …/config/export` (the configuration as a
- * merge request on the repository) and recomputing the merge from a repository's own
- * `.agentic/config.yml`; `packages/domain`'s `mergeProjectConfig` is there for both.
+ * other side of onboarding. `POST …/config/export` and `POST …/config/refresh` are
+ * `routes/project-config.ts`'s since WP-63, which also made `GET …/config` merge what technical/12
+ * names — the organisation's command maximum, the settings, and the repository's own
+ * `.agentic/config.yml` from the default branch — through `mergeProjectConfig`, its first production
+ * caller ({@link effectiveConfigResponseOf}).
  */
 
-import type { SecretRedactor } from '@platform/application';
-import { ignoredProjectAllow } from '@platform/application';
+import type {
+  RepositoryConfigNotApplied,
+  RepositoryConfigSnapshot,
+  SecretRedactor,
+} from '@platform/application';
+import {
+  ignoredProjectAllow,
+  REPOSITORY_CONFIG_PATH,
+  tightenRepositoryLayer,
+} from '@platform/application';
 import {
   type AgenticConfig,
   agenticConfigSchema,
@@ -34,21 +44,37 @@ import {
   type IsoDateTime,
   listTasksQuerySchema,
   projectsResponseSchema,
+  type RepositoryConfigReading,
   type RiskClass,
   readinessResponseSchema,
   riskClassSchema,
   slugSchema,
   tasksResponseSchema,
 } from '@platform/contracts';
-import { PROPOSED_REVIEW_CHECKLISTS, PROPOSED_RISK_CLASSES } from '@platform/domain';
+import {
+  mergeProjectConfig,
+  PROPOSED_REVIEW_CHECKLISTS,
+  PROPOSED_RISK_CLASSES,
+} from '@platform/domain';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
+import {
+  OrganisationSettingsInvalidError,
+  organisationCommandsFrom,
+  repositorySnapshotFrom,
+} from '../config-layers.js';
 import { HttpError, NotFoundError } from '../errors.js';
 import { findProjectTimezone, listProjectBudgets } from '../queries/cost-queries.js';
 import type { Database } from '../queries/identity-queries.js';
-import { findProjectConfig, findProjectRole } from '../queries/identity-queries.js';
+import {
+  type ConfigLayerColumns,
+  findConfigLayers,
+  findProjectConfig,
+  findProjectRole,
+  type ProjectConfigRow,
+} from '../queries/identity-queries.js';
 import { listProjectTasks, type TaskCursor } from '../queries/pipeline-queries.js';
 import { findProjectReadiness, listProjectSummaries } from '../queries/project-queries.js';
 
@@ -120,8 +146,9 @@ export const MAX_STORED_VALUE_CHARS = 120;
  * own validation errors (`errors.ts`), so the two refusals read alike.
  *
  * **Every clause goes through the caller's redactor** (TD-012, BD-022), and all three of its parts
- * do: `projects.config` is partly the repository's own document (layer `repo`, merged from
- * `.agentic/config.yml`), the value is whatever was stored there, and a *strict* schema puts an
+ * do: `projects.config` is text an operator typed (the repository's own file is a separate layer
+ * since WP-63, refused with its key paths by `describeRepositoryConfigIssues`, which quotes no
+ * value), the value is whatever was stored there, and a *strict* schema puts an
  * unrecognised **key** into both the path and zod's own message — so a credential pasted into a
  * config file reaches this string by three routes, not one. It is the same composition
  * `routes/settings.ts` gives `override_reason` and `routes/commands.ts` gives every task command,
@@ -232,6 +259,138 @@ export const riskClassProposalOf = (
   };
 };
 
+/**
+ * The organisation autonomy maximum the published view is capped at: **none**, stated.
+ *
+ * `mergeProjectConfig` caps `policies.autonomy` at the organisation's value, or at the shipped
+ * default when the organisation is silent — the reading that keeps a repository from handing itself
+ * `autonomous`. On this build the repository cannot state the dial at all (its `policies.autonomy`
+ * is not applied, `REPOSITORY_AUTONOMY_NOT_APPLIED`), no surface sets an organisation autonomy
+ * maximum (the WP-63 notes' discovered work), and the dial's four positions are all selectable
+ * (WP-30) — so a cap here would publish `supervised` for a project that runs `autonomous`, which is
+ * a lie about the running system.
+ */
+const PUBLISHED_AUTONOMY_MAXIMUM = 'autonomous' as const;
+
+/**
+ * `GET …/config`'s answer — pure, so every refusal and both directions of precedence are driven
+ * without a database (WP-63).
+ *
+ * Three refusals, each a `409` naming what to fix, none a silently missing layer (standing rule 20):
+ * the stored settings layer does not parse (`invalid_stored_config`, backlog 58); the organisation's
+ * `settings.commands` does not (`invalid_organisation_config`); or the repository's file on the
+ * default branch does not (`invalid_repository_config`, WP-63 criterion 4) — the last with the key
+ * paths the reading recorded, already redacted and bounded where it was stored.
+ */
+export const effectiveConfigResponseOf = (input: {
+  readonly projectId: string;
+  readonly row: ProjectConfigRow;
+  readonly layers: ConfigLayerColumns | null;
+  readonly redactText: (value: string) => string;
+}): EffectiveConfigResponse => {
+  const { projectId, row } = input;
+  // A project that has never been configured stores `{}`. The settings layer of "no
+  // configuration" is the schema's own minimum — version 1 — not an empty object, which would not
+  // validate.
+  const raw = Object.keys(row.config).length === 0 ? { version: 1 } : row.config;
+  const parsed = agenticConfigSchema.safeParse(raw);
+  if (!parsed.success) {
+    /**
+     * **Named, and a 409 rather than a 500** — PROGRESS backlog 58.
+     *
+     * Boundary schemas are strict, so a value a *previous* release accepted is refused rather
+     * than dropped. That is right on the write side, where the platform is about to act, and
+     * wrong on the read side, where it is being told what it stored itself: a whole document
+     * failing over one key, with a 500 that named no key and offered an import endpoint that
+     * does not exist, made wizard step 4 and the project panel unopenable and gave an operator
+     * nothing to act on (standing rule 20 splits the two sides).
+     *
+     * It stays a **refusal** — nothing is dropped, so strictness is preserved and a silently
+     * pruned document cannot be re-saved without the key the operator never saw — but it names
+     * every key it could not parse and the value it found there, which is a `PUT` an operator
+     * can make. The value is stringified, **redacted** and bounded because it is stored state,
+     * and stored state came from outside (BD-022) — `describeConfigIssues` has the order and
+     * the reason for it.
+     */
+    throw new HttpError(
+      409,
+      'invalid_stored_config',
+      `the stored configuration of project ${projectId} has ${parsed.error.issues.length} key(s) this release does not accept: ` +
+        `${describeConfigIssues(raw, parsed.error.issues, input.redactText)}. ` +
+        `Send a corrected document to PUT /api/projects/${projectId}/config`,
+    );
+  }
+
+  let organisationCommands: ReturnType<typeof organisationCommandsFrom>;
+  try {
+    organisationCommands = organisationCommandsFrom(input.layers?.orgSettings);
+  } catch (error) {
+    if (error instanceof OrganisationSettingsInvalidError) {
+      throw new HttpError(409, 'invalid_organisation_config', error.message);
+    }
+    throw error;
+  }
+
+  const snapshot = repositorySnapshotFrom(input.layers ?? {});
+  if (snapshot?.status === 'invalid') {
+    throw new HttpError(
+      409,
+      'invalid_repository_config',
+      `the repository's .agentic/config.yml on the default branch (commit ${snapshot.commitSha}) does not parse: ${snapshot.detail}. ` +
+        'The effective configuration is not computed without it, and no run of this project starts until it parses. ' +
+        `Correct the file on the default branch, or propose the settings over it (POST /api/projects/${projectId}/config/export), then re-read it (POST /api/projects/${projectId}/config/refresh)`,
+    );
+  }
+
+  const { version: _version, ...project } = parsed.data;
+  // WP-63 review round 1: the file may tighten, never loosen (`repository-grades.ts`). Its
+  // tighten-only keys are merged against the settings here, so the merge below can only add.
+  const tightened =
+    snapshot?.status === 'valid' ? tightenRepositoryLayer(project, snapshot.values) : undefined;
+  const repo = tightened?.values;
+  const effective = mergeProjectConfig(
+    [
+      ...(organisationCommands === undefined
+        ? []
+        : [{ source: 'org' as const, values: { commands: organisationCommands } }]),
+      { source: 'project' as const, values: project },
+      ...(repo === undefined ? [] : [{ source: 'repo' as const, values: repo }]),
+    ],
+    { autonomyMaximum: PUBLISHED_AUTONOMY_MAXIMUM },
+  );
+
+  return {
+    config: parsed.data,
+    effective: { version: 1, ...effective.values },
+    sources: { ...effective.sources },
+    repository: repositoryReadingOf(snapshot, tightened?.notApplied ?? []),
+    hash: row.configHash ?? 'unconfigured',
+    computed_at: row.updatedAt.toISOString(),
+    // WP-54: what the project declared and no role's baseline grants — dropped, never widened
+    // (BD-025), and published here rather than dropped in silence. Since WP-63 it is judged after
+    // the organisation maximum, and the repository file's entries after the settings' — so a file
+    // trying to re-grant what the settings removed is listed here too.
+    ignored_allow_commands: [
+      ...ignoredProjectAllow(project.commands, organisationCommands, repo?.commands),
+    ],
+    risk_class_proposal: riskClassProposalOf(row.proposedRiskClasses, parsed.data),
+  };
+};
+
+/** The reading as the DTO publishes it (`repositoryConfigReadingSchema`). */
+export const repositoryReadingOf = (
+  snapshot: RepositoryConfigSnapshot | null,
+  /** What the tighten-only merge kept from the settings over the file (WP-63 review round 1). */
+  merged: readonly RepositoryConfigNotApplied[] = [],
+): RepositoryConfigReading => ({
+  path: REPOSITORY_CONFIG_PATH,
+  status: snapshot?.status ?? 'unread',
+  commit_sha: snapshot?.commitSha ?? null,
+  read_at: snapshot?.readAt ?? null,
+  detail: snapshot?.status === 'invalid' ? snapshot.detail : null,
+  not_applied: snapshot?.status === 'valid' ? [...snapshot.notApplied, ...merged] : [],
+});
+
 export const registerProjectRoutes = async (
   app: FastifyInstance,
   options: ProjectRoutesOptions,
@@ -280,49 +439,12 @@ export const registerProjectRoutes = async (
       if (row === null) {
         throw new NotFoundError(`project ${projectId}`);
       }
-
-      // A project that has never been configured stores `{}`. The effective configuration of "no
-      // configuration" is the schema's own minimum — version 1 and platform defaults for the rest
-      // — not an empty object, which would not validate.
-      const raw = Object.keys(row.config).length === 0 ? { version: 1 } : row.config;
-      const parsed = agenticConfigSchema.safeParse(raw);
-      if (!parsed.success) {
-        /**
-         * **Named, and a 409 rather than a 500** — PROGRESS backlog 58.
-         *
-         * Boundary schemas are strict, so a value a *previous* release accepted is refused rather
-         * than dropped. That is right on the write side, where the platform is about to act, and
-         * wrong on the read side, where it is being told what it stored itself: a whole document
-         * failing over one key, with a 500 that named no key and offered an import endpoint that
-         * does not exist, made wizard step 4 and the project panel unopenable and gave an operator
-         * nothing to act on (standing rule 20 splits the two sides).
-         *
-         * It stays a **refusal** — nothing is dropped, so strictness is preserved and a silently
-         * pruned document cannot be re-saved without the key the operator never saw — but it names
-         * every key it could not parse and the value it found there, which is a `PUT` an operator
-         * can make. The value is stringified, **redacted** and bounded because it is stored state,
-         * and stored state came from outside (BD-022) — `describeConfigIssues` has the order and
-         * the reason for it.
-         */
-        throw new HttpError(
-          409,
-          'invalid_stored_config',
-          `the stored configuration of project ${projectId} has ${parsed.error.issues.length} key(s) this release does not accept: ` +
-            `${describeConfigIssues(raw, parsed.error.issues, (value) => options.redactor.redactText(value).value)}. ` +
-            `Send a corrected document to PUT /api/projects/${projectId}/config`,
-        );
-      }
-
-      return {
-        config: parsed.data,
-        sources: row.configSource as Record<string, 'default' | 'org' | 'project' | 'repo'>,
-        hash: row.configHash ?? 'unconfigured',
-        computed_at: row.updatedAt.toISOString(),
-        // WP-54: what the project declared and no role's baseline grants — dropped, never widened
-        // (BD-025), and published here rather than dropped in silence.
-        ignored_allow_commands: [...ignoredProjectAllow(parsed.data.commands)],
-        risk_class_proposal: riskClassProposalOf(row.proposedRiskClasses, parsed.data),
-      };
+      return effectiveConfigResponseOf({
+        projectId,
+        row,
+        layers: await findConfigLayers(options.database, projectId),
+        redactText: (value) => options.redactor.redactText(value).value,
+      });
     },
   );
 

@@ -29,8 +29,8 @@ import {
   DEFAULT_ASK_MODEL,
   DEFAULT_CONTEXT_BUDGET_TOKENS,
   isPromptExcludedArtifact,
-  narrowCommandPolicy,
   type PromptContextPack,
+  runCommandPolicy,
   type SkillDefinition,
   skillSetVersionOf,
 } from '@platform/domain';
@@ -257,9 +257,12 @@ export const createAskRunPlanner = (options: AskRunPlannerOptions): AskRunPlanne
         ask: { question: ask.question, askedBy: request.askedByLabel },
       });
 
-      const policy = narrowCommandPolicy(
+      // The stage planner's order (backlog 146): baseline, organisation maximum, project.
+      const policy = runCommandPolicy(
         commandBaselineFor(role, ASK_PSEUDO_STAGE, skillNames),
+        settings.organisationCommands,
         settings.config.commands,
+        settings.repositoryCommands,
       );
 
       logger.debug(

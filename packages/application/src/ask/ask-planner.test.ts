@@ -9,7 +9,12 @@
  * no human actions, and which model and cap the project's own `features.ask` chooses.
  */
 import type { AgentRole, Id, IsoDateTime } from '@platform/contracts';
-import { DEFAULT_ASK_BUDGET_USD, DEFAULT_ASK_MODEL, readDataBlocks } from '@platform/domain';
+import {
+  DEFAULT_ASK_BUDGET_USD,
+  DEFAULT_ASK_MODEL,
+  evaluateCommand,
+  readDataBlocks,
+} from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import type { ContextPackAssembler } from '../knowledge/context-pack.js';
 import { defaultProjectSettings } from '../pipeline/settings.js';
@@ -90,6 +95,8 @@ const ask = (question = 'why a column?'): StoredAsk =>
 
 const plan = async (input: {
   readonly config?: Record<string, unknown>;
+  /** WP-63: the repository file's `commands`, which narrow again after the settings'. */
+  readonly repositoryCommands?: Record<string, unknown>;
   readonly runs?: readonly AskRunLine[];
   readonly audit?: readonly AskAuditLine[];
   readonly artifacts?: readonly StoredArtifact[];
@@ -110,6 +117,9 @@ const plan = async (input: {
     task: task(),
     settings: defaultProjectSettings(PROJECT, {
       config: (input.config ?? {}) as never,
+      ...(input.repositoryCommands === undefined
+        ? {}
+        : { repositoryCommands: input.repositoryCommands as never }),
     }),
     artifacts: input.artifacts ?? [],
     runs: input.runs ?? [],
@@ -265,6 +275,29 @@ describe('the ask run plan', () => {
       (block) => block.kind === 'artifact',
     );
     expect(blocks.map((block) => block.attributes.artifact_type)).toEqual(['ImplementationPlan']);
+  });
+
+  /**
+   * WP-63 review round 2: the repository file's commands reach the ask run's policy — its `block`
+   * and `ask` take effect, and its `allow` of an entry the settings took away does not. Both
+   * directions, against the same settings with the file absent.
+   */
+  it('applies the repository file’s block and ask to the run, and never its re-grant', async () => {
+    const at = (policy: Parameters<typeof evaluateCommand>[1]) => (command: string) =>
+      evaluateCommand({ command }, policy, 'ask').verdict;
+    const settings = { commands: { block: ['cat *'] } };
+    const without = (await plan({ config: settings })).spec.commandPolicy;
+    expect(at(without)('git log -5')).toBe('allow');
+    expect(at(without)('ls src')).toBe('allow');
+    const withFile = (
+      await plan({
+        config: settings,
+        repositoryCommands: { block: ['git log*'], ask: ['ls *'], allow: ['cat *'] },
+      })
+    ).spec.commandPolicy;
+    expect(at(withFile)('git log -5')).toBe('block');
+    expect(at(withFile)('ls src')).toBe('ask');
+    expect(at(withFile)('cat README.md')).toBe('block');
   });
 
   it('bounds the run to one question: a turn limit and the per-question cap', async () => {

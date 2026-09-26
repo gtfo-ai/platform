@@ -102,7 +102,7 @@ import {
   startRunHeartbeat,
 } from './lease.js';
 import { injectedSecretRedactorFor } from './run-redaction.js';
-import type { ProjectSettings } from './settings.js';
+import { type ProjectSettings, repositoryConfigRefusal } from './settings.js';
 import type { RunStopReasons } from './stop-reasons.js';
 import type { PipelineStore, StoredArtifact, StoredTask } from './store.js';
 import {
@@ -110,6 +110,7 @@ import {
   retryOnTaskConflict,
   TaskConflictExhaustedError,
 } from './task-conflict.js';
+import { closeParkedStageRow } from './transitions.js';
 import { artifactQuestions, rawVerdict, stageVerdict } from './verdicts.js';
 
 export interface StageRunRequest {
@@ -476,6 +477,8 @@ export const taskBudgetExhausted = (
 type Prepared =
   | { readonly kind: 'skipped'; readonly reason: string }
   | { readonly kind: 'paused'; readonly reason: string }
+  /** Refused before any run exists, and the task parked for a human (WP-63's invalid repo file). */
+  | { readonly kind: 'escalated'; readonly reason: string }
   | {
       readonly kind: 'ready';
       readonly spec: RunSpec;
@@ -595,6 +598,23 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       if (valid.kind === 'skipped') return valid;
       const { stored } = valid;
       const { task } = stored;
+
+      /**
+       * WP-63 criterion 4: a repository `.agentic/config.yml` that does not parse **refuses the
+       * run** rather than running on the settings alone or on an older reading
+       * (`repositoryConfigRefusal` has the argument). Asked first, before any budget question,
+       * because no answer to those makes this run's rules knowable. No `runs` row is created — the
+       * run never existed — and the task is parked where a human is asked to act, naming the key
+       * paths, which is the escalation every other unrunnable stage already ends in.
+       */
+      const refusal = repositoryConfigRefusal(settings);
+      if (refusal !== null) {
+        const escalated = escalate(stored, options.context(task.id), job.stage, refusal);
+        await store.tasks.save(scope.tx, { ...stored, task: escalated.aggregate });
+        await closeParkedStageRow(store, scope.tx, escalated, 'repository_config_invalid');
+        await scope.events.append(escalated.events);
+        return { kind: 'escalated', reason: refusal };
+      }
 
       if (taskBudgetExhausted(stored, settings, job.stage)) {
         return pause(

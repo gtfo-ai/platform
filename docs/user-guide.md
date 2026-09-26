@@ -120,9 +120,10 @@ chore) parks before anything runs, since there is no point at which it could sto
 written. Assist also turns the business-review stage off, so a task handed back past the park skips
 it. **Autonomous** allows five human review rounds on a merge request where the other positions
 allow three, and auto-applies knowledge proposals in the middle significance band. The project's
-configuration file wins wherever it sets one of `pipeline.limits.human_rounds`,
+**settings** override the dial wherever they set one of `pipeline.limits.human_rounds`,
 `pipeline.limits.question_timeout`, `policies.knowledge_apply.auto_apply` or
-`policies.probation_tasks`; nothing else in it overrides the dial. The policy list under the dial
+`policies.probation_tasks`; nothing else overrides it. The repository's own `.agentic/config.yml`
+overrides **none** of the four: from the file they are *not applied* (step 5 below says why). The policy list under the dial
 marks the two that set nothing by themselves: `review_only` (the Review-only card is the switch) and
 `suggested_readiness_min`.
 
@@ -148,7 +149,35 @@ The proposal queue. The discovery agent's drafts are proposals with source `boot
 commits it on an `agentic/knowledge/*` branch and opens a merge request — **never onto the default
 branch**. Nothing the agent drafted is in your repository until you accept it and merge it.
 
-What step 5 does **not** do is commit the *configuration* (`.agentic/`); that is drafted nowhere yet.
+The *configuration* reaches the repository the same way, from the project's **Settings** page
+rather than from the wizard: **Propose these settings to the repository** writes them as
+`.agentic/config.yml`, adds a one-line pointer to the knowledge index in `CLAUDE.md`, and opens a
+merge request on an `agentic/config/*` branch — never a direct commit onto the default branch. The
+button stays on the page, so a settings change made months later is reviewable the same way.
+
+**Once that file is on the default branch, it wins — within limits.** The platform reads the
+repository's own `.agentic/config.yml` from the default branch (after every knowledge index run,
+and when you press **Re-read the repository**). Wherever the file sets an operational key, the
+file's value is the one runs use, and the settings answer for keys the file leaves out; the pipeline
+screen shows which layer every key came from. Two things to know:
+
+- **A file that does not parse stops the project's runs.** The reading names the key paths it failed
+  on, the configuration screen refuses to show a configuration it cannot compute, and a stage that
+  would start is parked for a human with the same sentence — until a corrected file is merged and
+  re-read. The platform does not quietly run on the settings alone.
+- **The file can tighten, never loosen, what agents and reviewers are held to.** It can add
+  protected paths, reviewers, risk classes and requirements, checklist items and blocked commands;
+  it cannot remove any of those, re-allow a command the settings took away, move the autonomy dial
+  or any of its policies (probation, knowledge auto-apply, human rounds, question timeout), relax
+  the dependency or coverage policy, override a template's stages, or switch a feature on or off —
+  those stay on the settings page, and the file's attempt is listed as *not applied* on the
+  pipeline screen. What it may set freely is operational: stage models, effort, turns and budgets
+  (every run is still held to the task cap and the organisation and project budgets), the
+  iteration limits, the knowledge directory, the context budget, the language, the commit
+  convention and the ticket status names.
+- **The file is plain YAML.** An explicit tag — `!custom`, `!!js/function`, even `!!str` — a
+  duplicated key or a `__proto__` key makes the file invalid, with its position or
+  key path named.
 
 ## 2. Dashboard
 
@@ -336,8 +365,9 @@ needs an editor the application does not yet include, so the panel is read-only 
 ## 8. Pipeline and budgets
 
 **A project → pipeline** shows the effective configuration with the source of every key (a default,
-the organisation, the project, or the repository's `.agentic/`). Read-only: editing validates and
-exports to the repository, which needs the same missing editor.
+the organisation, the project, or the repository's `.agentic/config.yml`) and when the repository's
+file was last read. Read-only here: the settings are edited on the project's settings page, which
+also proposes them to the repository (section 1, step 5); a YAML editor in the browser is not built.
 
 **A project → budgets** shows the budget bars. A budget stops a *new* run from starting: the check
 happens when a run is admitted, so a run already under way finishes and is accounted for. There are
@@ -397,7 +427,7 @@ In one place, so it is not spread across thirteen sections:
 | Steering a live run | run detail — the only endpoint the application calls that the server does not serve |
 | Ask the task a question | task detail |
 | The business interview | onboarding step 3 |
-| Committing `.agentic/` configuration from the wizard | onboarding step 5 |
+| Committing `.agentic/` configuration from the wizard itself (the project settings page does it) | onboarding step 5 |
 | Re-evaluating readiness after a task merges | onboarding step 2 |
 | Editing a knowledge document or the pipeline in the browser | knowledge, pipeline |
 | Organisation settings (autonomy defaults, provider mode, global budgets, flags) | settings |

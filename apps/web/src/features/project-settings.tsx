@@ -19,9 +19,14 @@
  * mirror stays true without somebody remembering. `apps/server/src/routes/settings-mirror.test.ts`
  * is the check, and it fails in both directions.
  *
+ * **The repository's own `.agentic/config.yml`** (WP-63, Q94) has a card of its own: the reading the
+ * platform last took of it on the default branch, a button that proposes these settings to it as a
+ * merge request, and a button that re-reads it.
+ *
  * product/10:21 also lists **WIP limits** and **policies** on this page. They are read-only here and
- * say so: both are keys of `.agentic/config.yml` (`pipeline.wip`, `policies.*`) with no per-key
- * editor, and the pipeline screen already renders the merged document with the source of every key.
+ * say so: the WIP limits are BD-010's, fixed on this build with no configuration key at all, and the
+ * policies are keys of `.agentic/config.yml` (`policies.*`) with no per-key editor, and the
+ * pipeline screen already renders the merged document with the source of every key.
  * A form that wrote one key by re-sending the whole document would be a second writer of a document
  * the repository also owns.
  */
@@ -46,9 +51,19 @@ import {
   Loading,
   SectionHeading,
 } from '../ui/kit.js';
-import { UntrustedText } from '../ui/untrusted.js';
+import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
 import { HistoryBootstrap } from './history-bootstrap.js';
 import { bindingConfigOf, OperatingMode } from './operating-mode.js';
+
+/**
+ * BD-010's WIP limits — `DEFAULT_WIP_LIMITS` in `@platform/domain`, restated rather than imported so
+ * the page does not pull the domain ring into the bundle. Fixed on this build: the card used to read
+ * `config.pipeline.wip`, a key the strict schema refuses — so following its advice to set the
+ * limits in `.agentic/config.yml` would make the repository file invalid and stop every run
+ * (WP-63 review round 1, backlog 224).
+ */
+const DEFAULT_MAX_PARALLEL_TASKS = 2;
+const DEFAULT_MAX_TASKS_IN_PIPELINE = 5;
 
 export const ProjectSettingsScreen = ({
   projectKey,
@@ -70,9 +85,6 @@ export const ProjectSettingsScreen = ({
       setSelected(bound.map((binding) => binding.integration_id));
     }
   }, [bindings.isSuccess, bound, selected]);
-  const wip =
-    (config.data?.config as { pipeline?: { wip?: Record<string, number> } } | undefined)?.pipeline
-      ?.wip ?? {};
 
   if (isPending) {
     return <Loading label="Loading the project…" />;
@@ -229,18 +241,112 @@ export const ProjectSettingsScreen = ({
       <Card className="flex flex-col gap-1">
         <SectionHeading>WIP limits and policies</SectionHeading>
         <p className="text-xs text-fg-muted">
-          Max parallel tasks {formatInteger(wip.max_parallel_tasks ?? 2)} · max tasks in pipeline{' '}
-          {formatInteger(wip.max_tasks_in_pipeline ?? 5)} (BD-010’s defaults when the document sets
-          none).
+          Max parallel tasks {formatInteger(DEFAULT_MAX_PARALLEL_TASKS)} · max tasks in pipeline{' '}
+          {formatInteger(DEFAULT_MAX_TASKS_IN_PIPELINE)} — BD-010’s limits, fixed on this build:
+          neither the settings nor <code>.agentic/config.yml</code> has a key for them, and a file
+          that invents one is refused.
         </p>
         <p className="text-xs text-fg-muted">
-          Read-only here: both are keys of the project’s <code>.agentic/config.yml</code>, which the
-          repository also owns, so a per-key form would be a second writer of one document. The{' '}
+          The policies are keys of the configuration; the{' '}
           <Link to="/projects/$key/pipeline" params={{ key: project.key }}>
             pipeline screen
           </Link>{' '}
           shows the merged configuration and where every key came from.
         </p>
+      </Card>
+
+      {/**
+       * WP-63, Q94: the repository's own `.agentic/config.yml` wins over these settings once it is
+       * merged (a), it is only ever written through a merge request (b), and this button stays on
+       * the page so a settings change six months from now is reviewable too (c).
+       */}
+      <Card className="flex flex-col gap-2">
+        <SectionHeading>Repository configuration</SectionHeading>
+        {config.data === undefined ? null : (
+          <p className="flex flex-wrap items-center gap-2 text-xs">
+            <Badge tone={config.data.repository.status === 'valid' ? 'success' : 'neutral'}>
+              .agentic/config.yml: {config.data.repository.status}
+            </Badge>
+            {config.data.repository.commit_sha === null ? null : (
+              <span className="font-mono text-fg-muted">
+                at <UntrustedText value={config.data.repository.commit_sha.slice(0, 12)} />
+              </span>
+            )}
+          </p>
+        )}
+        {(config.data?.repository.not_applied ?? []).map((item) => (
+          <p key={item.key} className="text-xs text-fg-muted">
+            Not applied: <code>{item.key}</code> — <UntrustedText value={item.reason} />
+          </p>
+        ))}
+        <p className="text-xs text-fg-muted">
+          The file on the default branch wins over the settings on this page wherever it states a
+          key. Changes made here reach the repository as a merge request — never a direct commit —
+          together with a one-line pointer to the knowledge index in <code>CLAUDE.md</code>.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            tone="primary"
+            disabled={commands.exportConfig.isPending || config.data === undefined}
+            onClick={() => {
+              commands.exportConfig.mutate({
+                projectId: project.id,
+                ...(config.data === undefined ? {} : { base_hash: config.data.hash }),
+              });
+            }}
+          >
+            Propose these settings to the repository
+          </Button>
+          <Button
+            disabled={commands.refreshConfig.isPending}
+            onClick={() => {
+              commands.refreshConfig.mutate(project.id);
+            }}
+          >
+            Re-read the repository
+          </Button>
+        </div>
+        {commands.exportConfig.isSuccess ? (
+          <p className="text-xs">
+            {commands.exportConfig.data.status === 'unchanged'
+              ? 'The repository already carries these settings; nothing was proposed.'
+              : 'Merge request opened on '}
+            {commands.exportConfig.data.branch === null ? null : (
+              <code>
+                <UntrustedText value={commands.exportConfig.data.branch} />
+              </code>
+            )}
+            {commands.exportConfig.data.merge_request_url === null ? null : (
+              <>
+                {' — '}
+                <ExternalLink
+                  url={commands.exportConfig.data.merge_request_url}
+                  label="open the merge request"
+                  className="text-accent underline"
+                />
+              </>
+            )}
+          </p>
+        ) : null}
+        {commands.exportConfig.isError ? (
+          <ErrorNotice
+            title="The settings were not proposed."
+            detail={String(commands.exportConfig.error)}
+          />
+        ) : null}
+        {commands.refreshConfig.isSuccess &&
+        commands.refreshConfig.data.repository.status === 'invalid' ? (
+          <ErrorNotice
+            title="The repository’s .agentic/config.yml does not parse — no run starts until it does."
+            detail={commands.refreshConfig.data.repository.detail ?? ''}
+          />
+        ) : null}
+        {commands.refreshConfig.isError ? (
+          <ErrorNotice
+            title="The repository could not be re-read."
+            detail={String(commands.refreshConfig.error)}
+          />
+        ) : null}
       </Card>
 
       <Card className="flex flex-col gap-1">

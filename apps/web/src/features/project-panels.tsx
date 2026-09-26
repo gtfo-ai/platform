@@ -315,12 +315,22 @@ export const PipelineScreen = ({ projectKey }: { readonly projectKey: string }):
           </Card>
           <Card>
             <SectionHeading>Merged configuration</SectionHeading>
-            <JsonView value={config.data.config} />
+            <p className="text-xs text-fg-muted">
+              The repository’s <code>.agentic/config.yml</code>: {config.data.repository.status}
+              {config.data.repository.commit_sha === null ? null : (
+                <>
+                  {' at '}
+                  <UntrustedText value={config.data.repository.commit_sha.slice(0, 12)} />
+                </>
+              )}
+              . Where it states a key, it wins over the project settings.
+            </p>
+            <JsonView value={config.data.effective} />
           </Card>
           <p className="text-xs text-fg-muted">
-            Editing is read-only here. <code>PUT /api/projects/:id/config</code> and the
-            export-to-repo command land with WP-15, and the editor TD-013 names (CodeMirror 6 with
-            the YAML schema) arrives with them.
+            Read-only here. The settings are edited on the project settings page, which also
+            proposes them to the repository as a merge request; the editor TD-013 names (CodeMirror
+            6 with the YAML schema) is not built.
           </p>
         </>
       )}

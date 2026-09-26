@@ -115,6 +115,8 @@ const harnessWith = (
     readonly identities?: Record<string, Record<string, string>>;
     readonly askRedactor?: SecretRedactor;
     readonly settings?: Record<string, unknown>;
+    /** WP-63: the repository layer's reading, beside the configuration. */
+    readonly repository?: Record<string, unknown>;
     /** The ledger, for the one case that reads `cost_entries` (criterion 9). */
     readonly cost?: boolean;
     /** Something that commits while the ask's prompt is assembled (round 2, TD-004). */
@@ -125,7 +127,10 @@ const harnessWith = (
     projectId: PROJECT,
     ...(options.cost === true ? { cost: true } : {}),
     ...(options.whileAskPlans === undefined ? {} : { whileAskPlans: options.whileAskPlans }),
-    settings: { config: (options.settings ?? {}) as never },
+    settings: {
+      config: (options.settings ?? {}) as never,
+      ...(options.repository === undefined ? {} : { repository: options.repository as never }),
+    },
     ...(options.identities === undefined ? {} : { askIdentities: options.identities }),
     ...(options.askRedactor === undefined ? {} : { askRedactor: options.askRedactor }),
     runs: {
@@ -880,6 +885,30 @@ describe('an ask that never runs', () => {
     expect(ask?.status).toBe('refused');
     expect(ask?.refusalReason).toContain('features.ask.enabled');
     expect(ask?.runId).toBeNull();
+  });
+
+  /**
+   * WP-63: an ask is a run, so an invalid repository `.agentic/config.yml` refuses it by name — the
+   * key path in the reason — and creates no run. The task is not touched (an ask never moves it).
+   */
+  it('is refused, naming the key path, while the repository configuration does not parse', async () => {
+    const harness = harnessWith({
+      repository: {
+        status: 'invalid',
+        commitSha: null,
+        detail: 'features.ask.budget_usd (too big)',
+      },
+    });
+    await seedTask(harness);
+    const before = harness.specs.length;
+    const state = harness.store.snapshot()[0]?.task.state;
+    await askThroughHttp(harness);
+    expect(harness.specs.slice(before).some((spec) => spec.role === ASK_ROLE)).toBe(false);
+    const [ask] = harness.asks.all();
+    expect(ask?.status).toBe('refused');
+    expect(ask?.refusalReason).toContain('features.ask.budget_usd');
+    expect(ask?.runId).toBeNull();
+    expect(harness.store.snapshot()[0]?.task.state).toBe(state);
   });
 
   it('is skipped rather than run twice when the wake-up is delivered again', async () => {

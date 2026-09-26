@@ -55,7 +55,6 @@ import {
   DISCOVERY_TEMPLATE_ID,
   HISTORY_BOOTSTRAP_TEMPLATE_ID,
   isPromptExcludedArtifact,
-  narrowCommandPolicy,
   PLATFORM_DEFAULT_CONFIG,
   type PromptContextPack,
   type PromptNonceSource,
@@ -64,6 +63,7 @@ import {
   resolveRunCapUsd,
   reviewChecklistsFor,
   riskClassesForPaths,
+  runCommandPolicy,
   type SkillDefinition,
   STAGE_PROMPT_FOCUS,
   skillSetVersionOf,
@@ -622,8 +622,18 @@ const widestShippedPolicy = (): ResolvedCommandPolicy => ({
  * investigator not getting `npm test` is the read-only baseline working, not a declaration being
  * ignored — and the per-run answer, which is role-specific, is the planner's log line.
  */
-export const ignoredProjectAllow = (commands: CommandPolicy | undefined): readonly string[] =>
-  narrowCommandPolicy(widestShippedPolicy(), commands).ignoredAllow;
+export const ignoredProjectAllow = (
+  commands: CommandPolicy | undefined,
+  /**
+   * The organisation's `commands` (backlog 146, WP-63): an entry the organisation maximum does not
+   * grant is ignored for every role, so it is judged against the widest policy **after** the
+   * intersection — the same order a run's policy is built in.
+   */
+  organisation?: CommandPolicy,
+  /** The repository file's lists, which narrow again after the settings' (WP-63). */
+  repository?: CommandPolicy,
+): readonly string[] =>
+  runCommandPolicy(widestShippedPolicy(), organisation, commands, repository).ignoredAllow;
 
 /**
  * The language the project's agents write to humans in — `project.communication_language`.
@@ -1029,12 +1039,29 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
       // project's bindings do not name (WP-54). Read first, because the skills also bring their
       // own command patterns.
       const skillNames = skillsFor(role, await options.boundSkills(task.task.projectId));
-      // Role baseline, then the stage's and the skills' extra `allow` patterns, then the project's
-      // narrowing — in that order, so a project still narrows what the layers added (TD-027).
-      const policy = narrowCommandPolicy(
+      // Role baseline, then the stage's and the skills' extra `allow` patterns, then the
+      // organisation maximum over all of it (backlog 146), then the project's narrowing — in that
+      // order, so a project still narrows what the layers added (TD-027) and can never re-grant
+      // what the organisation took away. The settings' lists narrow first and the repository
+      // file's narrow again (WP-63): the file may tighten, never loosen.
+      const policy = runCommandPolicy(
         commandBaselineFor(role, stage.id, skillNames),
+        settings.organisationCommands,
         settings.config.commands,
+        settings.repositoryCommands,
       );
+      if (policy.removedByOrganisation.length > 0) {
+        logger.info(
+          {
+            project_id: task.task.projectId,
+            run_id: request.runId,
+            role,
+            stage: stage.id,
+            removed_by_organisation: policy.removedByOrganisation,
+          },
+          "the organisation's command maximum removed entries from this run's baseline (BD-025 §2)",
+        );
+      }
       if (policy.ignoredAllow.length > 0) {
         // The reader `ignoredAllow` never had (PROGRESS backlog 49): a declaration the platform
         // drops is reported, per run, with the role whose baseline did not grant it.

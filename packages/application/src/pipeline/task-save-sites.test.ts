@@ -103,7 +103,9 @@ const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
   // gate settlement both paths share (`jobs.ts` § `ciConvergence`), which writes through
   // `applyDecision` rather than a `save` of its own.
   ['packages/application/src/pipeline/saga.ts', 12],
-  ['packages/application/src/pipeline/stage-executor.ts', 5],
+  // 6 since WP-63: the admission refusal of a run whose repository `.agentic/config.yml` does not
+  // parse, inside the executor's own admission transaction and under its `retryOnTaskConflict`.
+  ['packages/application/src/pipeline/stage-executor.ts', 6],
   ['packages/application/src/pipeline/transitions.ts', 5],
   ['packages/application/src/pipeline/task-conflict.ts', 1],
 ]);
@@ -169,7 +171,7 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     );
   });
 
-  it('counts thirty-one, which is the number the change states', () => {
+  it('counts thirty-two, which is the number the change states', () => {
     // Twenty-one inherited from WP-15d (`saga.ts` 11, `transitions.ts` 5, `stage-executor.ts` 5 —
     // backlog 18 counted twenty before `stage-executor.ts` gained its fifth) plus the one
     // `escalateTaskAfterConflict` adds, which is the ending for the other twenty-one; plus four
@@ -195,8 +197,11 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     // with the job's retry and `escalateTaskAfterConflict` as its ending.
     // **Minus one at WP-60 review round 2**: the CI handler's three-identical-failures escalation
     // moved into the gate settlement (`jobs.ts`), where it is a decision `applyDecision` applies.
+    // **Plus one at WP-63**: the stage executor's admission refusal — a repository configuration
+    // that does not parse escalates the task before any run exists, in `admit`'s own transaction,
+    // with the executor's retry and `escalateOnConflict` as its ending.
     const total = [...census().values()].reduce((sum, count) => sum + count, 0);
-    expect(total).toBe(31);
+    expect(total).toBe(32);
     expect([...EXPECTED_SITES.values()].reduce((sum, count) => sum + count, 0)).toBe(total);
   });
 

@@ -18,6 +18,7 @@ import {
   HAZARDOUS_ARGUMENTS,
   hasOutputRedirection,
   hazardousArgument,
+  intersectWithOrganisationMaximum,
   isProjectCommandEntry,
   matchesBlockPattern,
   matchesCommandPattern,
@@ -25,6 +26,7 @@ import {
   normaliseCommand,
   PROJECT_COMMAND_ALLOW,
   type ResolvedCommandPolicy,
+  runCommandPolicy,
   splitCommandSegments,
   UNCERTAINTY,
   UNPATTERNABLE_BLOCK_ITEMS,
@@ -1215,4 +1217,120 @@ describe('a declared `allow` narrows the project commands and leaves the baselin
     }).policy;
     expect(verdict('git push origin agentic/x', narrowed)).toBe('block');
   });
+});
+
+/**
+ * PROGRESS backlog 146 (WP-63): the organisation maximum is applied to a run's baseline for
+ * **every** verb, before the project narrows — otherwise Q97's class-only narrowing keeps a git
+ * verb the organisation removed. Both directions (standing rule 42): the removed verb is gone, and
+ * a verb the organisation kept is still there.
+ */
+describe('the organisation maximum over a run baseline (backlog 146)', () => {
+  const developer: ResolvedCommandPolicy = DEFAULT_COMMAND_POLICY;
+  const withoutPush = {
+    allow: DEFAULT_IMPLEMENTATION_ALLOW.filter((entry) => !entry.startsWith('git push')),
+  };
+
+  it('removes a baseline git verb the organisation did not grant, and keeps the rest', () => {
+    const bounded = intersectWithOrganisationMaximum(developer, withoutPush);
+    expect(bounded.policy.allow).not.toContain('git push origin agentic/*');
+    expect(bounded.removed).toEqual(['git push origin agentic/*']);
+    expect(bounded.policy.allow).toContain('git commit *');
+    expect(evaluateCommand({ command: 'git push origin agentic/x' }, bounded.policy).verdict).toBe(
+      'ask',
+    );
+    expect(evaluateCommand({ command: 'git commit -m x' }, bounded.policy).verdict).toBe('allow');
+  });
+
+  it('keeps it removed after a project narrows — the defect Q97 alone would have reopened', () => {
+    // A project `allow` touches only the project-command class, so before the intersection the
+    // push survived this narrowing: exactly the latent half of backlog 146.
+    const project = { allow: ['npm test'] };
+    const unbounded = narrowCommandPolicy(developer, project).policy;
+    expect(unbounded.allow).toContain('git push origin agentic/*');
+    const run = runCommandPolicy(developer, withoutPush, project);
+    expect(run.policy.allow).not.toContain('git push origin agentic/*');
+    expect(run.policy.allow).toContain('npm test');
+    expect(run.removedByOrganisation).toEqual(['git push origin agentic/*']);
+    // Nor can a project literal re-grant a line the organisation's list no longer allows.
+    const regrant = runCommandPolicy(developer, withoutPush, {
+      allow: ['npm test', 'git push origin agentic/x'],
+    });
+    expect(regrant.policy.allow).not.toContain('git push origin agentic/x');
+    expect(regrant.ignoredAllow).toEqual(['git push origin agentic/x']);
+  });
+
+  it('is the identity when the organisation states nothing', () => {
+    expect(intersectWithOrganisationMaximum(developer, undefined)).toEqual({
+      policy: developer,
+      removed: [],
+    });
+    // …and when it states only ask/block, allow is judged by those alone.
+    const blocked = intersectWithOrganisationMaximum(developer, { block: ['git commit *'] });
+    expect(blocked.policy.allow).not.toContain('git commit *');
+    expect(blocked.policy.block).toContain('git commit *');
+    expect(blocked.policy.allow).toContain('git add *');
+  });
+
+  it('grants a literal the organisation’s glob covers, and a stage addition only verbatim', () => {
+    const baseline: ResolvedCommandPolicy = {
+      ...developer,
+      allow: ['npm test', ...CONFLICT_RESOLUTION_EXTRA_ALLOW],
+    };
+    const bounded = intersectWithOrganisationMaximum(baseline, { allow: ['npm *'] });
+    expect(bounded.policy.allow).toContain('npm test');
+    // …and the other way round: an organisation literal inside a baseline glob survives the glob.
+    const literal = intersectWithOrganisationMaximum(developer, { allow: ['make test'] });
+    expect(literal.policy.allow).toEqual(['make test']);
+    expect(literal.removed).toContain('make *');
+    for (const entry of CONFLICT_RESOLUTION_EXTRA_ALLOW) {
+      expect(bounded.policy.allow).not.toContain(entry);
+    }
+  });
+
+  it(
+    'never grants what the baseline did not, for any organisation lists',
+    () => {
+      const entry = fc.constantFrom(
+        ...DEFAULT_IMPLEMENTATION_ALLOW,
+        'curl *',
+        'make deploy',
+        'git push *',
+        'npm publish',
+      );
+      fc.assert(
+        fc.property(
+          fc.option(fc.array(entry, { maxLength: 8 }), { nil: undefined }),
+          fc.option(fc.array(entry, { maxLength: 4 }), { nil: undefined }),
+          fc.option(fc.array(entry, { maxLength: 4 }), { nil: undefined }),
+          (allow, ask, block) => {
+            const organisation = {
+              ...(allow === undefined ? {} : { allow }),
+              ...(ask === undefined ? {} : { ask }),
+              ...(block === undefined ? {} : { block }),
+            };
+            const bounded = intersectWithOrganisationMaximum(developer, organisation).policy;
+            // Every entry is one the baseline lists, or a single line the baseline already runs.
+            for (const granted of bounded.allow) {
+              expect(
+                developer.allow.includes(granted) ||
+                  (!/[*?]/.test(granted) &&
+                    evaluateCommand({ command: granted }, developer).verdict === 'allow'),
+                granted,
+              ).toBe(true);
+            }
+            for (const blockedEntry of developer.block) {
+              expect(bounded.block).toContain(blockedEntry);
+            }
+            for (const askedEntry of developer.ask) {
+              expect(bounded.ask.includes(askedEntry) || bounded.block.includes(askedEntry)).toBe(
+                true,
+              );
+            }
+          },
+        ),
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
 });

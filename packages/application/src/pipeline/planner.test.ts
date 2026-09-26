@@ -983,6 +983,7 @@ describe('what the project decides about a run, within what the role allows', ()
     stage: Record<string, unknown>,
     bound: readonly string[],
     config: Record<string, unknown> = {},
+    settings: Record<string, unknown> = {},
   ) => {
     const planner = createStageRunPlanner({
       workspacePath: (taskId) => `/workspaces/${taskId}`,
@@ -1007,7 +1008,7 @@ describe('what the project decides about a run, within what the role allows', ()
       await planner.plan({
         ...request,
         stage: stage as never,
-        settings: { projectId: PROJECT, config },
+        settings: { projectId: PROJECT, config, ...settings },
       } as unknown as StageRunRequest)
     ).spec;
   };
@@ -1101,6 +1102,77 @@ describe('what the project decides about a run, within what the role allows', ()
     warnings.length = 0;
     await planFor(investigatorStage, [], { commands: { allow: ['git log'] } });
     expect(warnings.filter((entry) => 'ignored_allow' in entry.fields)).toEqual([]);
+  });
+
+  /**
+   * PROGRESS backlog 146 at the planner (WP-63): an organisation maximum that drops `git push`
+   * leaves a developer run with nothing it did not grant — after a project narrows, and whatever a
+   * project or its repository declares. Both directions: the organisation silent, the push is there.
+   */
+  it('keeps a git verb the organisation removed out of a developer run, after the project narrows', async () => {
+    const organisationCommands = {
+      allow: DEFAULT_IMPLEMENTATION_ALLOW.filter((entry) => !entry.startsWith('git push')),
+    };
+    const at =
+      (policy: { allow: readonly string[]; ask: readonly string[]; block: readonly string[] }) =>
+      (command: string) =>
+        evaluateCommand({ command }, policy, 'ask').verdict;
+
+    const bounded = await planFor(
+      developerStage,
+      [],
+      { commands: { allow: ['npm test', 'git push origin agentic/x'] } },
+      { organisationCommands },
+    );
+    expect(bounded.commandPolicy.allow).not.toContain('git push origin agentic/*');
+    expect(at(bounded.commandPolicy)('git push origin agentic/x')).toBe('ask');
+    for (const granted of bounded.commandPolicy.allow) {
+      expect(organisationCommands.allow).toContain(granted);
+    }
+    // What the organisation kept, the run keeps.
+    expect(at(bounded.commandPolicy)('git commit -m x')).toBe('allow');
+    expect(at(bounded.commandPolicy)('npm test')).toBe('allow');
+
+    const silent = await planFor(developerStage, [], { commands: { allow: ['npm test'] } });
+    expect(at(silent.commandPolicy)('git push origin agentic/x')).toBe('allow');
+  });
+
+  /**
+   * WP-63 review round 2: the repository file's commands (`ProjectSettings.repositoryCommands`) are
+   * the planner's fourth argument, and nothing else carries them to a run — so a planner that
+   * dropped it would show `make deploy*` blocked on the pipeline screen and let every run run it.
+   * Both directions against the same settings with the file absent.
+   */
+  it('applies the repository file’s block and ask to a developer run, and never its re-grant', async () => {
+    const at =
+      (policy: { allow: readonly string[]; ask: readonly string[]; block: readonly string[] }) =>
+      (command: string) =>
+        evaluateCommand({ command }, policy, 'ask').verdict;
+    const settings = { commands: { allow: ['npm test', 'make deploy'] } };
+    const without = (await planFor(developerStage, [], settings)).commandPolicy;
+    expect(at(without)('make deploy')).toBe('allow');
+    expect(at(without)('npm test')).toBe('allow');
+    expect(at(without)('make test')).toBe('ask');
+    const withFile = (
+      await planFor(developerStage, [], settings, {
+        repositoryCommands: {
+          block: ['make deploy*'],
+          ask: ['npm test'],
+          allow: ['npm test', 'make deploy', 'make test'],
+        },
+      })
+    ).commandPolicy;
+    expect(at(withFile)('make deploy')).toBe('block');
+    expect(at(withFile)('npm test')).toBe('ask');
+    // The settings removed `make *` from the project commands; the file cannot put `make test` back.
+    expect(at(withFile)('make test')).toBe('ask');
+  });
+
+  it('judges what no role would be granted after the organisation maximum', () => {
+    expect(ignoredProjectAllow({ allow: ['npm test'] }, { allow: ['make test'] })).toEqual([
+      'npm test',
+    ]);
+    expect(ignoredProjectAllow({ allow: ['npm test'] }, undefined)).toEqual([]);
   });
 
   it('publishes what no role would be granted, and not what some role is', () => {

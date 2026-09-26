@@ -59,6 +59,7 @@ import type {
   Logger,
   PipelineIntegrationsPort,
   ProposalCursor,
+  RepositoryFileSource,
   StoredKnowledgeProposal,
   VaultSource,
 } from '@platform/application';
@@ -68,11 +69,15 @@ import {
   createKnowledgeIndexRuntime,
   createLibrarianRuntime,
   decideKnowledgeProposal,
+  projectConfigWithRepository,
+  refreshRepositoryConfig,
   thresholdsFromConfig,
 } from '@platform/application';
 import type { Id, IsoDateTime, TaskMode } from '@platform/contracts';
 import { materialisedAutonomySchema } from '@platform/contracts';
+import type { ConfigValues } from '@platform/domain';
 import {
+  config as configAdapters,
   type eventing as eventingAdapters,
   knowledge as knowledgeAdapters,
   redaction as redactionAdapters,
@@ -82,6 +87,11 @@ import type { IntegrationRegistry } from '@platform/integrations';
 import { createGitMirrorCredentials } from '@platform/integrations';
 import type pg from 'pg';
 import { injectedSecretRedactorForEnvironment } from './agent.js';
+import {
+  REPOSITORY_CONFIG_COLUMNS,
+  type RepositoryConfigColumns,
+  repositorySnapshotFrom,
+} from './config-layers.js';
 
 export interface ComposeKnowledgeOptions {
   readonly pool: pg.Pool;
@@ -209,62 +219,134 @@ const readProject = async (pool: pg.Pool, projectId: Id): Promise<ProjectVaultRo
   return rows[0] ?? null;
 };
 
+/** What {@link composeKnowledgeMirror} needs: the pool, the credential store and the root. */
+export interface ComposeKnowledgeMirrorOptions {
+  readonly pool: pg.Pool;
+  readonly secretKey: string;
+  readonly registry: IntegrationRegistry;
+  readonly mirrorRoot: string | null;
+  readonly logger: Logger;
+}
+
+export interface ComposedKnowledgeMirror {
+  /** The knowledge vault read — the four indexed kinds of path. */
+  readonly vault: VaultSource;
+  /** The two named files outside them (WP-63): `.agentic/config.yml` and `CLAUDE.md`. */
+  readonly files: RepositoryFileSource;
+  /** What could not be composed, by name; empty when both are real. */
+  readonly missing: readonly string[];
+}
+
+/**
+ * The platform's bare mirror, composed once per process for its two readers (TD-026, WP-63).
+ *
+ * Extracted at WP-63 because a second reader arrived: the repository layer of the effective
+ * configuration and the configuration export read `.agentic/config.yml` and `CLAUDE.md` through the
+ * **same** mirror, credential and default-branch rule as the index. Both readers refuse by the same
+ * names when the mirror cannot be composed.
+ */
+export const composeKnowledgeMirror = async (
+  options: ComposeKnowledgeMirrorOptions,
+): Promise<ComposedKnowledgeMirror> => {
+  if (options.mirrorRoot === null) {
+    const reason =
+      'APP_KNOWLEDGE_MIRROR_ROOT is not set, so this process composed no knowledge vault source: it has nowhere to keep the per-project bare mirror the index is read from (TD-026). Nothing was indexed and nothing was removed; set the variable to a writable data volume.';
+    return {
+      vault: knowledgeAdapters.unavailableVaultSource(reason),
+      files: knowledgeAdapters.unavailableRepositoryFileSource(
+        'APP_KNOWLEDGE_MIRROR_ROOT is not set, so this process has no mirror of the repository to read .agentic/config.yml or CLAUDE.md from (TD-026); set the variable to a writable data volume',
+      ),
+      missing: ['APP_KNOWLEDGE_MIRROR_ROOT'],
+    };
+  }
+  // TD-026 makes the `git` binary a dependency of the platform process. Probed once at
+  // composition and named when it is absent, rather than surfacing as an `ENOENT` inside the
+  // first index run (standing rule 18; the shape `createCtagsSymbolExtractor` uses).
+  const probe = await knowledgeAdapters.probeGit();
+  if (!probe.available) {
+    return {
+      vault: knowledgeAdapters.unavailableVaultSource(
+        `the knowledge index needs the "git" binary on this process' PATH and it is not usable: ${probe.detail}. Nothing was indexed and nothing was removed.`,
+      ),
+      files: knowledgeAdapters.unavailableRepositoryFileSource(
+        `reading the repository needs the "git" binary on this process' PATH and it is not usable: ${probe.detail}`,
+      ),
+      missing: ['git'],
+    };
+  }
+  const credentials = createGitMirrorCredentials({
+    repository: secretAdapters.createPostgresBindingRepository(options.pool),
+    secrets: secretAdapters.createPostgresSecretStore({
+      sql: options.pool,
+      key: secretAdapters.deriveSecretKey(options.secretKey),
+    }),
+    registry: options.registry,
+  });
+  options.logger.info(
+    { git: probe.detail, mirror_root: options.mirrorRoot },
+    'knowledge mirror ready',
+  );
+  const mirror = {
+    mirrorRoot: options.mirrorRoot,
+    logger: options.logger,
+    target: async (projectId: Id) => {
+      const project = await readProject(options.pool, projectId);
+      if (project === null) {
+        throw new Error(`project ${projectId} has no row; its repository is unknown`);
+      }
+      const credential = await credentials.forProject(projectId);
+      // `null` is "no git binding", which the adapter reports as a refusal of its own. A
+      // binding that cannot be read throws, and the two must not be spelled alike.
+      return credential === null
+        ? null
+        : {
+            repoUrl: project.repo_url,
+            defaultBranch: project.default_branch,
+            credential,
+          };
+    },
+  };
+  return {
+    vault: knowledgeAdapters.createGitVaultSource(mirror),
+    files: knowledgeAdapters.createGitRepositoryFileSource(mirror),
+    missing: [],
+  };
+};
+
+/** The repository-configuration refresher over this process' mirror (WP-63). */
+export const createRepositoryConfigRefresher = (options: {
+  readonly pool: pg.Pool;
+  readonly files: RepositoryFileSource;
+  readonly logger: Logger;
+}) => {
+  // TD-012 step 2: the pattern rules. A reading carries no run-scoped credential (Q55), and the
+  // only text it stores is a refusal's key paths — which a strict schema fills with typed keys.
+  const redactor = redactionAdapters.patternRedactor();
+  return (request: { readonly projectId: Id; readonly commitSha?: string }) =>
+    refreshRepositoryConfig(
+      {
+        source: options.files,
+        codec: configAdapters.yamlConfigCodec,
+        store: configAdapters.createPostgresRepositoryConfigStore(options.pool),
+        redactText: (value) => redactor.redactText(value).value,
+        clock: { now: () => new Date().toISOString() as IsoDateTime },
+        logger: options.logger,
+      },
+      request,
+    );
+};
+
 export const composeKnowledgeIndexing = async (
   options: ComposeKnowledgeOptions,
 ): Promise<ComposedKnowledgeIndexing> => {
-  const missing: string[] = [];
-  let vault: VaultSource;
-
-  if (options.mirrorRoot === null) {
-    missing.push('APP_KNOWLEDGE_MIRROR_ROOT');
-    vault = knowledgeAdapters.unavailableVaultSource(
-      'APP_KNOWLEDGE_MIRROR_ROOT is not set, so this process composed no knowledge vault source: it has nowhere to keep the per-project bare mirror the index is read from (TD-026). Nothing was indexed and nothing was removed; set the variable to a writable data volume.',
-    );
-  } else {
-    // TD-026 makes the `git` binary a dependency of the platform process. Probed once at
-    // composition and named when it is absent, rather than surfacing as an `ENOENT` inside the
-    // first index run (standing rule 18; the shape `createCtagsSymbolExtractor` uses).
-    const probe = await knowledgeAdapters.probeGit();
-    if (!probe.available) {
-      missing.push('git');
-      vault = knowledgeAdapters.unavailableVaultSource(
-        `the knowledge index needs the "git" binary on this process' PATH and it is not usable: ${probe.detail}. Nothing was indexed and nothing was removed.`,
-      );
-    } else {
-      const credentials = createGitMirrorCredentials({
-        repository: secretAdapters.createPostgresBindingRepository(options.pool),
-        secrets: secretAdapters.createPostgresSecretStore({
-          sql: options.pool,
-          key: secretAdapters.deriveSecretKey(options.secretKey),
-        }),
-        registry: options.registry,
-      });
-      options.logger.info(
-        { git: probe.detail, mirror_root: options.mirrorRoot },
-        'knowledge mirror ready',
-      );
-      vault = knowledgeAdapters.createGitVaultSource({
-        mirrorRoot: options.mirrorRoot,
-        logger: options.logger,
-        target: async (projectId) => {
-          const project = await readProject(options.pool, projectId);
-          if (project === null) {
-            throw new Error(`project ${projectId} has no row; its repository is unknown`);
-          }
-          const credential = await credentials.forProject(projectId);
-          // `null` is "no git binding", which the adapter reports as a refusal of its own. A
-          // binding that cannot be read throws, and the two must not be spelled alike.
-          return credential === null
-            ? null
-            : {
-                repoUrl: project.repo_url,
-                defaultBranch: project.default_branch,
-                credential,
-              };
-        },
-      });
-    }
-  }
+  const composedMirror = await composeKnowledgeMirror(options);
+  const missing = [...composedMirror.missing];
+  const vault = composedMirror.vault;
+  const refreshConfig = createRepositoryConfigRefresher({
+    pool: options.pool,
+    files: composedMirror.files,
+    logger: options.logger,
+  });
 
   const indexer = createKnowledgeIndexer({
     vault,
@@ -285,6 +367,10 @@ export const composeKnowledgeIndexing = async (
       return project === null
         ? null
         : { projectKey: project.key, knowledgeDir: project.knowledge_dir };
+    },
+    // WP-63: the repository layer re-read at the commit the index run read.
+    afterIndex: async (projectId, commitSha) => {
+      await refreshConfig({ projectId, commitSha });
     },
   });
 
@@ -308,15 +394,29 @@ export const composeKnowledgeIndexing = async (
   );
 
   const librarianProject = async (projectId: Id) => {
-    const { rows } = await options.pool.query<{
-      knowledge_dir: string;
-      config: unknown;
-      autonomy_policies: unknown;
-    }>('select knowledge_dir, config, autonomy_policies from projects where id = $1', [projectId]);
+    // The settings with the repository's own file over them (WP-63): `knowledge_apply` is a key
+    // the repository may state, and the Librarian must read the layer every run reads.
+    const { rows } = await options.pool.query<
+      {
+        knowledge_dir: string;
+        config: unknown;
+        autonomy_policies: unknown;
+      } & Partial<RepositoryConfigColumns>
+    >(
+      `select p.knowledge_dir, p.config, p.autonomy_policies, ${REPOSITORY_CONFIG_COLUMNS}
+         from projects p
+         left join project_repository_config r on r.project_id = p.id
+        where p.id = $1`,
+      [projectId],
+    );
     const row = rows[0];
     if (row === undefined) {
       return null;
     }
+    const config = projectConfigWithRepository(
+      (row.config ?? {}) as ConfigValues,
+      repositorySnapshotFrom(row),
+    ).values;
     // The dial decides `auto_apply` where the document is silent (WP-62). Parsed, never cast, and a
     // row that fails is read as "never materialised" — the platform default, which is *off* — with
     // a named line, the same answer `createProjectSettingsPort` gives the pipeline.
@@ -330,7 +430,7 @@ export const composeKnowledgeIndexing = async (
     return {
       knowledgeDir: row.knowledge_dir,
       thresholds: thresholdsFromConfig(
-        (row.config ?? {}) as Parameters<typeof thresholdsFromConfig>[0],
+        config as Parameters<typeof thresholdsFromConfig>[0],
         autonomy.success ? autonomy.data : null,
       ),
     };

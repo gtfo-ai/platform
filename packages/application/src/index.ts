@@ -42,6 +42,10 @@ export * from './bootstrap/ports.js';
 export * from './bootstrap/record.js';
 export * from './bootstrap/runtime.js';
 export * from './bootstrap/sample.js';
+// The repository layer of the effective configuration and the configuration export (WP-63)
+export * from './config/export.js';
+export * from './config/repository-config.js';
+export * from './config/repository-grades.js';
 export * from './cost/estimate.js';
 export * from './cost/guard.js';
 export * from './cost/late.js';

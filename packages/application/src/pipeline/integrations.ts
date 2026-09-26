@@ -1004,6 +1004,21 @@ export const ticketWrites = (integrations: PipelineIntegrations) => ({
  * reaches a commit is a maintainer approving it — a human's action attributed to the platform's bot
  * identity (BD-025 §4), not the shadow run's.
  */
+/** The branch namespace the platform writes into (BD-025 §3). */
+export const PLATFORM_BRANCH_PREFIX = 'agentic/';
+
+/** Refuses a commit or a merge request from a branch outside {@link PLATFORM_BRANCH_PREFIX}. */
+export const assertPlatformBranch = (branch: string): void => {
+  if (
+    !branch.startsWith(PLATFORM_BRANCH_PREFIX) ||
+    branch.length <= PLATFORM_BRANCH_PREFIX.length
+  ) {
+    throw new Error(
+      `the platform commits only to branches under ${PLATFORM_BRANCH_PREFIX} (BD-025); ${JSON.stringify(branch.slice(0, 80))} is not one`,
+    );
+  }
+};
+
 export const knowledgeWrites = (integrations: PipelineIntegrations) => ({
   /** One commit carrying whole files, on a branch of its own (never the default branch). */
   commit: async (
@@ -1019,6 +1034,10 @@ export const knowledgeWrites = (integrations: PipelineIntegrations) => ({
     },
     context: CallContext,
   ): Promise<CommitRef | null> => {
+    // BD-025's namespace, **checked** rather than promised (WP-63 review round 1): both callers of
+    // this door build `agentic/…` names, and a third that did not would be committing onto a
+    // branch the platform does not own — the default branch included.
+    assertPlatformBranch(input.branch);
     const git = integrations.git;
     if (git === null) {
       return null;
@@ -1064,9 +1083,15 @@ export const knowledgeWrites = (integrations: PipelineIntegrations) => ({
       readonly title: string;
       readonly description: string;
       readonly idempotencyKey: string;
+      /**
+       * The merge request's labels; `['agentic', 'knowledge']` when omitted. WP-63's configuration
+       * export is the second caller of this door and labels its merge request `configuration`.
+       */
+      readonly labels?: readonly string[];
     },
     context: CallContext,
   ): Promise<MergeRequest | null> => {
+    assertPlatformBranch(input.branch);
     const git = integrations.git;
     if (git === null) {
       return null;
@@ -1085,7 +1110,7 @@ export const knowledgeWrites = (integrations: PipelineIntegrations) => ({
       // add — the whole change is in the commit, and a draft would need a second call to
       // undraft it before a human could merge (BD-007).
       draft: false,
-      labels: ['agentic', 'knowledge'],
+      labels: [...(input.labels ?? ['agentic', 'knowledge'])],
       reviewers: [],
       remove_source_branch: true,
     });

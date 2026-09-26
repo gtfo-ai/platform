@@ -8,6 +8,8 @@ import {
   decideApprovalRequestSchema,
   effectiveConfigResponseSchema,
   eventsQuerySchema,
+  exportProjectConfigRequestSchema,
+  exportProjectConfigResponseSchema,
   integrationsResponseSchema,
   kbHealthResponseSchema,
   listTasksQuerySchema,
@@ -117,7 +119,21 @@ describe('response DTOs', () => {
   it('reports the effective config with a source per key (technical/12)', () => {
     const response = {
       config: { version: 1 as const, policies: { autonomy: 'supervised' as const } },
-      sources: { 'policies.autonomy': 'repo' as const, version: 'default' as const },
+      // WP-63: the merged document beside the settings layer, and the reading that fed `repo`.
+      effective: {
+        version: 1 as const,
+        policies: { autonomy: 'supervised' as const },
+        stages: { refinement: { model: 'claude-sonnet-5' } },
+      },
+      sources: { 'stages.refinement.model': 'repo' as const, version: 'default' as const },
+      repository: {
+        path: '.agentic/config.yml' as const,
+        status: 'valid' as const,
+        commit_sha: 'a'.repeat(40),
+        read_at: AT,
+        detail: null,
+        not_applied: [{ key: 'policies.autonomy', reason: 'the dial is moved in the platform' }],
+      },
       hash: 'sha256:abc',
       computed_at: AT,
       // WP-54: a declared `allow` entry no role's baseline grants, published rather than dropped.
@@ -159,6 +175,29 @@ describe('response DTOs', () => {
     expect(
       effectiveConfigResponseSchema.safeParse({ ...response, sources: { x: 'guess' } }).success,
     ).toBe(false);
+    // The reading names one file and nothing else.
+    expect(
+      effectiveConfigResponseSchema.safeParse({
+        ...response,
+        repository: { ...response.repository, path: '.agentic/pipeline.yml' },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('answers an export with the merge request it opened, and refuses an unknown key (WP-63)', () => {
+    const exported = {
+      status: 'exported' as const,
+      performed: true,
+      config_hash: '0123456789abcdef',
+      branch: 'agentic/config/0123456789ab-fedcba987654',
+      commit_sha: 'abc1234',
+      merge_request_url: 'https://git.example.test/acme/api/-/merge_requests/9',
+      paths: ['.agentic/config.yml', 'CLAUDE.md'],
+      notes: [],
+    };
+    expect(exportProjectConfigResponseSchema.parse(exported)).toEqual(exported);
+    expect(exportProjectConfigRequestSchema.safeParse({ direct_commit: true }).success).toBe(false);
+    expect(exportProjectConfigRequestSchema.parse({})).toEqual({});
   });
 
   it('records a webhook delivery as opaque, untrusted data (BD-022)', () => {

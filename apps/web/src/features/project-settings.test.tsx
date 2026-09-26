@@ -128,10 +128,20 @@ const fetchFor = (
   options: {
     readonly bindings?: ProjectBindingsResponse['items'];
     readonly onPut?: (url: string, body: unknown) => void;
+    /** WP-63: the export and the re-read, with the headers so the key can be asserted. */
+    readonly onPost?: (url: string, body: unknown, headers: Headers) => Response | undefined;
   } = {},
 ) =>
   (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
+    if (init?.method === 'POST' && url.includes('/config/')) {
+      const answered = options.onPost?.(
+        url,
+        JSON.parse(String(init.body ?? '{}')),
+        new Headers(init.headers),
+      );
+      if (answered !== undefined) return answered;
+    }
     if (init?.method === 'PUT' && url.includes('/bindings')) {
       options.onPut?.(url, JSON.parse(String(init.body)));
       return json({ items: options.bindings ?? [] });
@@ -152,12 +162,25 @@ const fetchFor = (
     if (url.includes('/bindings')) return json({ items: options.bindings ?? [] });
     if (url.includes('/config')) {
       return json({
-        config: { version: 1, pipeline: { wip: { max_parallel_tasks: 3 } } },
+        // `pipeline.wip` is not a key the strict schema accepts (the WP-63 notes' discovered
+        // work), so a fixture carrying it made every read of this document fail to parse.
+        config: { version: 1 },
+        // WP-63: the merged document and the repository reading that fed its `repo` layer.
+        effective: { version: 1 },
+        repository: {
+          path: '.agentic/config.yml',
+          status: 'unread',
+          commit_sha: null,
+          read_at: null,
+          detail: null,
+          not_applied: [],
+        },
         sources: { '*': 'project' },
         hash: 'deadbeef',
         computed_at: '2026-09-13T04:00:00.000Z',
         // WP-54: nothing the project declared is outside every role's command baseline.
         ignored_allow_commands: [],
+        risk_class_proposal: { source: 'platform', classes: {}, checklists: [] },
       });
     }
     if (url.endsWith('/api/projects')) return json({ items: [PROJECT_ROW] });
@@ -173,6 +196,87 @@ afterEach(() => {
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
   window.history.pushState({}, '', '/projects/acme_api/settings');
+});
+
+/**
+ * WP-63, Q94 (c): the export is a button that stays on this page, and what it sends is the
+ * command's contract — an `Idempotency-Key` and the hash of the configuration the operator saw.
+ */
+describe('the repository configuration card', () => {
+  it('proposes the settings with a key and the hash that was read, and shows the merge request', async () => {
+    const posts: { url: string; body: unknown; key: string | null }[] = [];
+    render(
+      createApp({
+        fetchImpl: fetchFor(
+          {},
+          {
+            onPost: (url, body, headers) => {
+              posts.push({ url, body, key: headers.get('idempotency-key') });
+              return url.endsWith('/config/export')
+                ? json({
+                    status: 'exported',
+                    performed: true,
+                    config_hash: 'deadbeef',
+                    branch: 'agentic/config/deadbeef0000-0123456789ab',
+                    commit_sha: 'abc1234',
+                    merge_request_url: 'https://git.example.test/acme/api/-/merge_requests/9',
+                    paths: ['.agentic/config.yml', 'CLAUDE.md'],
+                    notes: [],
+                  })
+                : undefined;
+            },
+          },
+        ),
+        realtime: false,
+      }).element,
+    );
+    expect(await screen.findByText('Repository configuration')).toBeTruthy();
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('.agentic/config.yml: unread');
+    });
+    await userEvent.click(screen.getByText('Propose these settings to the repository'));
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('agentic/config/deadbeef0000-0123456789ab');
+    });
+    expect(posts).toHaveLength(1);
+    expect(posts[0]?.url).toContain(`/api/projects/${PROJECT}/config/export`);
+    expect(posts[0]?.body).toEqual({ base_hash: 'deadbeef' });
+    expect(posts[0]?.key).toMatch(/.+/);
+    expect(screen.getByText('open the merge request').getAttribute('href')).toBe(
+      'https://git.example.test/acme/api/-/merge_requests/9',
+    );
+  });
+
+  it('shows the key paths when the re-read finds a file that does not parse', async () => {
+    render(
+      createApp({
+        fetchImpl: fetchFor(
+          {},
+          {
+            onPost: (url) =>
+              url.endsWith('/config/refresh')
+                ? json({
+                    repository: {
+                      path: '.agentic/config.yml',
+                      status: 'invalid',
+                      commit_sha: 'e'.repeat(40),
+                      read_at: '2026-09-13T04:00:00.000Z',
+                      detail: 'stages.refinement.max_turns (expected number)',
+                      not_applied: [],
+                    },
+                  })
+                : undefined,
+          },
+        ),
+        realtime: false,
+      }).element,
+    );
+    await userEvent.click(await screen.findByText('Re-read the repository'));
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('stages.refinement.max_turns');
+    });
+    expect(document.body.textContent).toContain('no run starts until it does');
+  });
 });
 
 describe('the project settings page', () => {

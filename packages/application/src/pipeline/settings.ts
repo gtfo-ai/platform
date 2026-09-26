@@ -11,6 +11,7 @@
  */
 
 import type {
+  CommandPolicy,
   Id,
   MaterialisedAutonomy,
   PipelineTemplate,
@@ -68,7 +69,66 @@ export interface ProjectSettings {
    * for such a project and names that branch.
    */
   readonly autonomy: MaterialisedAutonomy | null;
+  /**
+   * The organisation's `commands` — the maximum every run's baseline is intersected with before
+   * the project narrows it (BD-025 §2, PROGRESS backlog 146, WP-63). Absent is *"the organisation
+   * states no list"*, which leaves the baseline as shipped.
+   */
+  readonly organisationCommands?: CommandPolicy;
+  /**
+   * The repository file's `commands` (WP-63): not merged into {@link ProjectSettings.config}, but
+   * applied as a **second** narrowing after the settings' — so the file may tighten the command
+   * policy and never loosen it (review round 1's ruling). Absent when the file states none.
+   */
+  readonly repositoryCommands?: CommandPolicy;
+  /**
+   * What the platform last read of the repository's own `.agentic/config.yml` on the default
+   * branch (WP-63, BD-025 §1). {@link ProjectSettings.config} already has the file merged over the
+   * settings when it was `valid`; this field is what a run is **refused** on when it was `invalid`
+   * ({@link repositoryConfigRefusal}). Absent means the composition did not read one — every test
+   * harness, and a process whose settings port has no repository layer.
+   */
+  readonly repository?: RepositoryConfigState;
 }
+
+/**
+ * The repository layer's state as a run sees it — a projection of
+ * `packages/application/src/config/repository-config.ts`'s stored snapshot.
+ *
+ *  - `unread` — nothing has read the file yet (no mirror, no git binding, or no read has happened);
+ *  - `absent` — the default branch has no `.agentic/config.yml`, which is a legitimate project;
+ *  - `valid` — the file parsed, and it is merged into `config`;
+ *  - `invalid` — it did not, and `detail` names the key paths (standing rule 20).
+ */
+export interface RepositoryConfigState {
+  readonly status: 'unread' | 'absent' | 'valid' | 'invalid';
+  readonly commitSha: string | null;
+  /** Redacted and bounded where it was stored; `null` unless `invalid`. */
+  readonly detail: string | null;
+}
+
+/**
+ * Why a run of this project may not start, or `null` — WP-63 criterion 4's run half.
+ *
+ * **An invalid repository file refuses the run; it does not run on the last good configuration.**
+ * Both were on the table and the refusal is the one that cannot lie: the file on the default branch
+ * *is* the project's statement of its configuration (Q94 (a)), so a run on an older reading would
+ * execute under rules the repository no longer states — including a `block` entry somebody has just
+ * added in the same edit that broke the file. The cost is that one bad merge stops the project's
+ * runs until it is fixed, and the refusal says where. Everything that is not a run (a gate, a
+ * notification) reads the settings without the repository layer; this is the one place that asks.
+ */
+export const repositoryConfigRefusal = (settings: ProjectSettings): string | null => {
+  const repository = settings.repository;
+  if (repository?.status !== 'invalid') {
+    return null;
+  }
+  return (
+    `the repository's .agentic/config.yml on the default branch${repository.commitSha === null ? '' : ` (commit ${repository.commitSha})`} ` +
+    `does not parse: ${repository.detail ?? 'no detail was recorded'}. No run starts on this project until it is fixed — ` +
+    'correct the file on the default branch, or export the settings over it (POST /api/projects/:project_id/config/export), then re-read it'
+  );
+};
 
 /**
  * The policies actually in force for a project, or `null` when its dial was never materialised.

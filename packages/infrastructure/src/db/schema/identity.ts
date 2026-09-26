@@ -220,3 +220,20 @@ export type Project = typeof projects.$inferSelect;
 export type Integration = typeof integrations.$inferSelect;
 export type Binding = typeof bindings.$inferSelect;
 export type ConfigAuditRow = typeof configAudit.$inferSelect;
+
+/**
+ * The last reading of a project's own `.agentic/config.yml` on its default branch — migration 0050,
+ * WP-63. One row per project, replaced on every reading; no row is *"never read"*.
+ */
+export const projectRepositoryConfig = pgTable('project_repository_config', {
+  projectId: uuid('project_id').primaryKey(),
+  status: text('status').$type<'absent' | 'valid' | 'invalid'>().notNull(),
+  commitSha: text('commit_sha').notNull(),
+  config: jsonb('config').$type<JsonObject>(),
+  notApplied: jsonb('not_applied')
+    .$type<readonly { readonly key: string; readonly reason: string }[]>()
+    .notNull()
+    .default([]),
+  detail: text('detail'),
+  readAt: timestamp('read_at', { withTimezone: true }).notNull(),
+});

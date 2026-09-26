@@ -370,6 +370,48 @@ describe('a run the platform stopped', () => {
   });
 });
 
+/**
+ * WP-63 criterion 4, the run half: an invalid repository `.agentic/config.yml` **refuses the run**
+ * and parks the task, naming the key path — never runs on the settings alone. Both directions
+ * (standing rule 42): the same settings with a `valid` or an `absent` reading run.
+ */
+describe('an invalid repository configuration', () => {
+  it('refuses the run before it exists and escalates, naming the key path', async () => {
+    const harness = harnessWith({
+      settings: {
+        repository: {
+          status: 'invalid',
+          commitSha: 'e'.repeat(40),
+          detail: 'stages.refinement.max_turns (Invalid input: expected number, received string)',
+        },
+      },
+      runs: {
+        refinement: { status: 'completed', terminalReason: 'success', structuredOutput: {} },
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    expect(harness.specs).toHaveLength(0);
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    const reason = escalationOf(harness)?.payload.reason ?? '';
+    expect(reason).toContain('stages.refinement.max_turns');
+    expect(reason).toContain('.agentic/config.yml');
+    expect(reason).toContain('e'.repeat(40));
+  });
+
+  it('runs on a valid or an absent reading', async () => {
+    for (const status of ['valid', 'absent', 'unread'] as const) {
+      const harness = harnessWith({
+        settings: { repository: { status, commitSha: null, detail: null } },
+        runs: {
+          refinement: { status: 'completed', terminalReason: 'success', structuredOutput: {} },
+        },
+      });
+      await harness.publish([ticketMatched()]);
+      expect(harness.specs.length, status).toBeGreaterThan(0);
+    }
+  });
+});
+
 describe('the task budget', () => {
   it('pauses before the run rather than after it', async () => {
     const harness = harnessWith({

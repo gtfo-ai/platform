@@ -17,6 +17,7 @@ import { HttpError } from '../errors.js';
 import {
   decodeTaskCursor,
   describeConfigIssues,
+  effectiveConfigResponseOf,
   encodeTaskCursor,
   MAX_STORED_VALUE_CHARS,
   riskClassProposalOf,
@@ -272,5 +273,172 @@ describe('the risk-class proposal the configuration read publishes (WP-37, WP-45
     ]) {
       expect(riskClassProposalOf(stored).source, JSON.stringify(stored)).toBe('platform');
     }
+  });
+});
+
+/**
+ * WP-63 criterion 3: a project whose repository and whose settings **disagree**, asserted in both
+ * directions (standing rule 42). The repository wins where it states a key (Q94 (a)); the settings
+ * win where the repository is silent; and a repository that is removed or never read gives the
+ * settings their keys back.
+ */
+describe('the effective configuration’s layers (WP-63)', () => {
+  const SHA = '0123456789abcdef0123456789abcdef01234567';
+  const READ_AT = new Date('2026-09-26T10:00:00.000Z');
+  const row = (config: Record<string, unknown>) => ({
+    config,
+    configSource: {},
+    configHash: 'h1',
+    updatedAt: READ_AT,
+    proposedRiskClasses: null,
+  });
+  const repo = (
+    status: 'valid' | 'invalid' | 'absent',
+    values: unknown,
+    detail: string | null = null,
+  ) => ({
+    orgSettings: {},
+    repo_status: status,
+    repo_commit_sha: SHA,
+    repo_config: status === 'valid' ? values : null,
+    repo_not_applied: [],
+    repo_detail: detail,
+    repo_read_at: READ_AT,
+  });
+  const SETTINGS = {
+    version: 1,
+    stages: { refinement: { model: 'claude-opus-5', budget_usd: 2 } },
+    features: { digest: { at: '08:00' } },
+  };
+  const answer = (layers: Parameters<typeof effectiveConfigResponseOf>[0]['layers']) =>
+    effectiveConfigResponseSchema.parse(
+      effectiveConfigResponseOf({ projectId: ID, row: row(SETTINGS), layers, redactText }),
+    );
+
+  it('lets the repository win where it states a key, and the settings where it does not', () => {
+    const response = answer(
+      repo('valid', {
+        stages: { refinement: { model: 'claude-sonnet-5' } },
+        features: { digest: { at: '09:30' } },
+        pipeline: { limits: { ci_fix_iterations: 5 } },
+      }),
+    );
+    // The repository's two keys…
+    expect(response.effective.stages?.refinement?.model).toBe('claude-sonnet-5');
+    expect(response.sources['stages.refinement.model']).toBe('repo');
+    expect(response.effective.pipeline?.limits?.ci_fix_iterations).toBe(5);
+    expect(response.sources['pipeline.limits.ci_fix_iterations']).toBe('repo');
+    // A feature switch is not the file's to set (review round 1): the settings' value stands.
+    expect(response.effective.features?.digest?.at).toBe('08:00');
+    expect(response.sources['features.digest.at']).toBe('project');
+    expect(response.repository.not_applied.map((item) => item.key)).toEqual(['features']);
+    // …the settings' key the repository is silent on…
+    expect(response.effective.stages?.refinement?.budget_usd).toBe(2);
+    expect(response.sources['stages.refinement.budget_usd']).toBe('project');
+    // …a default neither states…
+    expect(response.sources['pipeline.limits.human_rounds']).toBe('default');
+    // …and the settings layer itself is untouched, so a screen's round trip cannot copy either in.
+    expect(response.config).toEqual(SETTINGS);
+    expect(response.repository).toMatchObject({ status: 'valid', commit_sha: SHA });
+  });
+
+  it('gives the settings their keys back when the repository has no file or was never read', () => {
+    for (const layers of [repo('absent', null), null]) {
+      const response = answer(layers);
+      expect(response.effective.stages?.refinement?.model).toBe('claude-opus-5');
+      expect(response.sources['stages.refinement.model']).toBe('project');
+      expect(Object.values(response.sources)).not.toContain('repo');
+    }
+    expect(answer(null).repository).toMatchObject({ status: 'unread', commit_sha: null });
+  });
+
+  it('refuses, naming the key path, when the repository file does not parse — never answers without it', () => {
+    let thrown: unknown;
+    try {
+      effectiveConfigResponseOf({
+        projectId: ID,
+        row: row(SETTINGS),
+        layers: repo('invalid', null, 'stages.refinement.max_turns (expected number)'),
+        redactText,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(HttpError);
+    expect((thrown as HttpError).statusCode).toBe(409);
+    expect((thrown as HttpError).code).toBe('invalid_repository_config');
+    expect((thrown as Error).message).toContain('stages.refinement.max_turns');
+    expect((thrown as Error).message).toContain(SHA);
+  });
+
+  it('refuses an organisation command maximum it cannot parse rather than reading none', () => {
+    expect(() =>
+      effectiveConfigResponseOf({
+        projectId: ID,
+        row: row(SETTINGS),
+        layers: { ...repo('absent', null), orgSettings: { commands: { allow: 'git *' } } },
+        redactText,
+      }),
+    ).toThrow(/organizations\.settings\.commands/);
+  });
+
+  it('never lets the repository widen the commands past the organisation, and publishes what it drops', () => {
+    const response = answer({
+      ...repo('valid', { commands: { allow: ['make test', 'curl https://example.test'] } }),
+      orgSettings: { commands: { allow: ['make test'] } },
+    });
+    expect(response.effective.commands?.allow).toEqual(['make test']);
+    expect(response.sources['commands.allow']).toBe('repo');
+    expect(response.ignored_allow_commands).toEqual(['curl https://example.test']);
+  });
+
+  /**
+   * Review round 1's ruling at the read: the file may tighten, never loosen. An emptied
+   * `protected_paths`, a dial override and a re-granted command have no effect and are reported;
+   * an added protected path takes effect.
+   */
+  it('applies what the file tightens and reports, without applying, what it loosens', () => {
+    const response = effectiveConfigResponseSchema.parse(
+      effectiveConfigResponseOf({
+        projectId: ID,
+        row: row({ version: 1, commands: { allow: ['npm test'] } }),
+        layers: {
+          ...repo('valid', {
+            policies: { protected_paths: ['secrets/**'] },
+            commands: { allow: ['npm test', 'make test'] },
+          }),
+          // As stored before the grading existed: re-validated on read, not trusted.
+          repo_config: {
+            policies: { protected_paths: ['secrets/**'], probation_tasks: 0 },
+            commands: { allow: ['npm test', 'make test'] },
+          },
+        },
+        redactText,
+      }),
+    );
+    const paths = response.effective.policies?.protected_paths ?? [];
+    expect(paths).toContain('secrets/**');
+    expect(paths).toContain('.agentic/**');
+    expect(response.effective.policies?.probation_tasks).toBe(5);
+    expect(response.effective.commands?.allow).toContain('npm test');
+    expect(response.effective.commands?.allow).not.toContain('make test');
+    expect(response.ignored_allow_commands).toEqual(['make test']);
+    expect(response.repository.not_applied.map((item) => item.key).sort()).toEqual([
+      'policies.probation_tasks',
+      'policies.protected_paths',
+    ]);
+  });
+
+  it('publishes the dial the project runs, not a cap nobody set', () => {
+    const response = effectiveConfigResponseSchema.parse(
+      effectiveConfigResponseOf({
+        projectId: ID,
+        row: row({ version: 1, policies: { autonomy: 'autonomous' } }),
+        layers: null,
+        redactText,
+      }),
+    );
+    expect(response.effective.policies?.autonomy).toBe('autonomous');
+    expect(response.sources['policies.autonomy']).toBe('project');
   });
 });
