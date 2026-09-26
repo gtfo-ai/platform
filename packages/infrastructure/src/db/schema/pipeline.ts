@@ -160,11 +160,18 @@ export const taskStages = pgTable('task_stages', {
   taskId: uuid('task_id').notNull(),
   stage: text('stage').notNull(),
   attempt: integer('attempt').notNull().default(1),
+  /** `taskStageStateSchema`'s six words, held by `task_stages_state_known` (migration 0040). */
   state: text('state').notNull(),
   enteredAt: timestamp('entered_at', { withTimezone: true }).notNull().defaultNow(),
   exitedAt: timestamp('exited_at', { withTimezone: true }),
   outcome: text('outcome'),
   returnReason: text('return_reason'),
+  /**
+   * The stage a return sent the task to (WP-55, migration 0040): null on every row that is not a
+   * return. What `lastReturnReason` reads by, so a re-run stage is served the finding it was sent
+   * back to fix rather than the complaint it last made itself.
+   */
+  returnedTo: text('returned_to'),
   /** Convergence detection's stable key; nothing else writes it (WP-15, migration 0012). */
   signature: text('signature'),
   causedByEventId: uuid('caused_by_event_id'),

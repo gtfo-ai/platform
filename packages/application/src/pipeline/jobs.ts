@@ -642,6 +642,7 @@ const settle = async (
         tx: scope.tx,
         stored,
         decision,
+        ...(signal.kind === 'gate_settled' ? { signal } : {}),
         context: {
           ids: options.ids,
           actor: { kind: 'system', component: 'pipeline' },

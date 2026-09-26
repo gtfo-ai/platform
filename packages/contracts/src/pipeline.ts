@@ -64,6 +64,49 @@ export const stageVerdictSchema = z.enum([
 
 export type StageVerdict = z.infer<typeof stageVerdictSchema>;
 
+/**
+ * **The one vocabulary of `task_stages.state`** (WP-55, PROGRESS backlog 32).
+ *
+ * Until migration 0040 the column held `entered`/`exited`, the task-detail DTO published these six,
+ * and `apps/server` bridged the two with a hand-written mapping that answered `pending` for any
+ * word it did not know — so a returned stage published as `completed` and three of the six were
+ * unreachable. Now the store writes these words and nothing else, `apps/server` publishes the
+ * column after **parsing** it with this schema (an unknown value is an error, never a default),
+ * and migration 0040's `check` constraint holds the database to the same list.
+ *
+ * Which of them have a writer, stated rather than implied (the row's criterion 7):
+ *  - `running` — `recordStageEntered`, and the signature write when it has to open a row;
+ *  - `completed` — an agent stage that produced a verdict, a system stage, a gate the pipeline
+ *    settled and walked past;
+ *  - `returned` — the attempt that sent the task back (`returned_to` names where);
+ *  - `failed` — an attempt that ended without a verdict and escalated: a run that failed, could not
+ *    start, or whose lease expired;
+ *  - `pending` and `skipped` — **declared and unused**. A row exists only for a stage the task
+ *    entered, so a not-yet-reached stage has no row to be `pending`, and a disabled stage is walked
+ *    over by the interpreter without one (`firstEnabledFrom`). They stay in the published enum
+ *    because the DTO has carried them since WP-15h and removing a value is a breaking change for
+ *    nothing; a writer for either is a decision about rows that do not exist today.
+ */
+export const taskStageStateSchema = z.enum([
+  'pending',
+  'running',
+  'completed',
+  'returned',
+  'skipped',
+  'failed',
+]);
+
+export type TaskStageState = z.infer<typeof taskStageStateSchema>;
+
+/** The three states an attempt can be **closed** with — the argument of `recordStageExited`. */
+export const taskStageExitStateSchema = taskStageStateSchema.extract([
+  'completed',
+  'returned',
+  'failed',
+]);
+
+export type TaskStageExitState = z.infer<typeof taskStageExitStateSchema>;
+
 /** A transition an event triggers from a `human` stage. */
 export const stageTransitionSchema = z.strictObject({
   on: domainEventTypeSchema,

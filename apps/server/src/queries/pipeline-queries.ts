@@ -60,10 +60,11 @@ import type {
   TaskConflict,
   TaskDetailResponse,
   TaskRecord,
+  TaskStageState,
   TaskState,
   TranscriptEvent,
 } from '@platform/contracts';
-import { artifactBodyPath, transcriptEventSchema } from '@platform/contracts';
+import { artifactBodyPath, taskStageStateSchema, transcriptEventSchema } from '@platform/contracts';
 import { estimateAccuracy, resumeCommands } from '@platform/domain';
 import { db as dbAdapters } from '@platform/infrastructure';
 import { and, asc, desc, eq, gt, inArray, ne, notInArray, sql, sum } from 'drizzle-orm';
@@ -751,27 +752,43 @@ const toQuestionRecord = (row: typeof questions.$inferSelect): QuestionRecord =>
   };
 };
 
-/** The states `TaskDetailResponse` publishes for a stage row; anything else is reported verbatim. */
-const STAGE_STATES = new Set(['pending', 'running', 'completed', 'returned', 'skipped', 'failed']);
+/**
+ * `task_stages.state`, **parsed** with the vocabulary the store writes it in (WP-55, PROGRESS
+ * backlog 32) — `taskStageStateSchema` in `@platform/contracts`, the one list the writer, this
+ * publisher and migration 0040's check constraint share.
+ *
+ * Until WP-55 this was a mapping from the store's `entered`/`exited` onto the DTO's six words that
+ * answered `pending` for anything it did not recognise, `completed` for a stage the pipeline had
+ * returned, and `running` for a gate the task had walked past (its row was never closed). There is
+ * nothing to map any more, and an unknown word is an **error**: a projection that defaults cannot
+ * fail when a new writer invents a word, and it is the screen that then states something false.
+ */
+export const stageStateOf = (row: {
+  readonly stage: string;
+  readonly attempt: number;
+  readonly state: string;
+}): TaskStageState => {
+  const parsed = taskStageStateSchema.safeParse(row.state);
+  if (!parsed.success) {
+    throw new UnknownStageStateError(row);
+  }
+  return parsed.data;
+};
 
 /**
- * `task_stages.state` is `text` and "free-form until WP-15 fixes the interpreter's vocabulary"
- * (migration 0004); the interpreter writes `entered` and `exited`, and the DTO publishes neither.
- * The two are mapped rather than passed through, and anything unrecognised becomes `pending` —
- * the reading that claims the least about a row this projection does not understand.
+ * A `task_stages` row whose `state` is outside `taskStageStateSchema` (WP-55). Fail-closed — the
+ * task page is not served a guess — but named: the row and the word, not a bare `ZodError`.
+ * Unreachable on a migrated database (`task_stages_state_known` refuses the write); it is the
+ * projection's answer to a database that is not.
  */
-const stageStateOf = (state: string, exitedAt: Date | null): string => {
-  if (STAGE_STATES.has(state)) {
-    return state;
+export class UnknownStageStateError extends Error {
+  override readonly name = 'UnknownStageStateError';
+  constructor(row: { readonly stage: string; readonly attempt: number; readonly state: string }) {
+    super(
+      `task_stages row ${row.stage}#${String(row.attempt)} has state ${JSON.stringify(row.state)}, which is not one of ${taskStageStateSchema.options.join(', ')}`,
+    );
   }
-  if (state === 'entered') {
-    return exitedAt === null ? 'running' : 'completed';
-  }
-  if (state === 'exited') {
-    return 'completed';
-  }
-  return 'pending';
-};
+}
 
 /**
  * The take-over in force on a task, or `null` — WP-27, and the one projection here that reads the
@@ -888,7 +905,7 @@ export const findTaskDetail = async (
     stages: stageRows.map((row) => ({
       stage: row.stage,
       attempt: row.attempt,
-      state: stageStateOf(row.state, row.exitedAt) as TaskDetailResponse['stages'][number]['state'],
+      state: stageStateOf(row),
       entered_at: isoRequired(row.enteredAt),
       exited_at: iso(row.exitedAt),
       outcome: row.outcome,

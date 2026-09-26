@@ -13,6 +13,8 @@ import {
   AUTONOMY_PRESETS,
   compilePipeline,
   DEFAULT_ITERATION_LIMITS,
+  FEATURE_TEMPLATE,
+  MAX_FEEDBACK_CHARS,
   materialiseAutonomy,
   readDataBlocks,
   SHIPPED_TEMPLATES,
@@ -1225,6 +1227,126 @@ describe('the CI gate', () => {
     expect(harness.specs.filter((spec) => spec.stage === 'implementation')).toHaveLength(2);
   });
 
+  /**
+   * WP-55 (PROGRESS backlog 67): the gate's finding reaches the run it was sent back to, inside the
+   * data block the role prompt presents as feedback — and the gate's row says where it went.
+   */
+  it('hands the failing jobs to the next implementation run, and closes the gate’s row as a return', async () => {
+    const harness = withPendingCi();
+    await harness.publish([ticketMatched()]);
+    const task = taskOf(harness);
+    await harness.publish([
+      event('ci.pipeline.finished', {
+        project_id: PROJECT,
+        task_id: task.task.id,
+        mr: mergeRequest(false).ref,
+        head_sha: 'b'.repeat(40),
+        status: 'failed',
+        failed_jobs: [{ name: 'test:unit', log_ref: 'log:1' }],
+        coverage_pct: null,
+      }),
+    ]);
+
+    const [first, second] = harness.specs.filter((spec) => spec.stage === 'implementation');
+    const feedbackOf = (prompt: string) =>
+      readDataBlocks(prompt).blocks.filter((block) => block.kind === 'return_feedback');
+    expect(feedbackOf(first?.userPrompt ?? '')).toEqual([]);
+    const [feedback] = feedbackOf(second?.userPrompt ?? '');
+    expect(feedback?.body).toContain('test:unit');
+
+    const gateRow = harness.store.stageRows.find(
+      (row) => row.stage === 'ci_gate' && row.attempt === 1,
+    );
+    expect(gateRow).toMatchObject({
+      state: 'returned',
+      outcome: 'returned',
+      returnedTo: 'implementation',
+    });
+    expect(gateRow?.returnReason).toContain('test:unit');
+  });
+
+  /** WP-55 (PROGRESS backlog 95, items 1 and 2): guarded both ways, on both settlement paths. */
+  it('closes a gate the event settled with its verdict, and leaves a gate still waiting open', async () => {
+    const harness = withPendingCi();
+    await harness.publish([ticketMatched()]);
+    const waiting = harness.store.stageRows.find((row) => row.stage === 'ci_gate');
+    // At the gate: neither an outcome nor an exit.
+    expect(waiting).toMatchObject({ state: 'running', outcome: null, exitedAt: null });
+
+    await harness.publish([
+      event('ci.pipeline.finished', {
+        project_id: PROJECT,
+        task_id: taskOf(harness).task.id,
+        mr: mergeRequest(false).ref,
+        head_sha: 'b'.repeat(40),
+        status: 'success',
+        failed_jobs: [],
+        coverage_pct: null,
+      }),
+    ]);
+    const passed = harness.store.stageRows.find((row) => row.stage === 'ci_gate');
+    expect(passed).toMatchObject({ state: 'completed', outcome: 'pass', returnedTo: null });
+    expect(passed?.exitedAt).not.toBeNull();
+  });
+
+  it('closes a gate that fails forward as completed with the fail verdict', async () => {
+    // No shipped template points a gate's `fail_to` forward; a project's own may, and the verdict
+    // the row carries must be the one the gate reached, not the direction the task went.
+    const feature = FEATURE_TEMPLATE;
+    const forward = {
+      ...feature,
+      stages: feature.stages.map((stage) =>
+        stage.id === 'ci_gate' ? { ...stage, fail_to: 'code_review' } : stage,
+      ),
+    };
+    const harness = harnessWith({
+      settings: { templates: { ...SHIPPED_TEMPLATES, feature: forward } as never },
+      git: {
+        getPipelineStatus: async () => ({
+          id: 'pipeline-1',
+          head_sha: 'b'.repeat(40),
+          status: 'running',
+          url: null,
+          jobs: [],
+          coverage_pct: null,
+          finished_at: null,
+        }),
+        getMergeRequest: async () => mergeRequest(false),
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    await harness.publish([
+      event('ci.pipeline.finished', {
+        project_id: PROJECT,
+        task_id: taskOf(harness).task.id,
+        mr: mergeRequest(false).ref,
+        head_sha: 'b'.repeat(40),
+        status: 'failed',
+        failed_jobs: [{ name: 'test:unit', log_ref: 'log:1' }],
+        coverage_pct: null,
+      }),
+    ]);
+    const row = harness.store.stageRows.find((candidate) => candidate.stage === 'ci_gate');
+    expect(row).toMatchObject({ state: 'completed', outcome: 'fail', returnedTo: null });
+    expect(harness.specs.map((spec) => spec.stage)).toContain('code_review');
+  });
+
+  it('closes every gate the job settled on the way to ready_for_merge', async () => {
+    const harness = harnessWith();
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).task.currentStage).toBe('ready_for_merge');
+    for (const stage of ['ci_gate', 'rebase_gate']) {
+      const row = harness.store.stageRows.find((candidate) => candidate.stage === stage);
+      expect(row, stage).toMatchObject({ state: 'completed', outcome: 'pass' });
+      expect(row?.exitedAt, stage).not.toBeNull();
+    }
+    // The human stage the task is at is still open — a gate's close is not a sweep.
+    expect(harness.store.stageRows.find((row) => row.stage === 'ready_for_merge')).toMatchObject({
+      state: 'running',
+      exitedAt: null,
+    });
+  });
+
   it('stops after three identical failures instead of burning the loop', async () => {
     const harness = withPendingCi();
     await harness.publish([ticketMatched()]);
@@ -1314,6 +1436,46 @@ describe('code-review convergence (product/04 S5)', () => {
     expect(stopped.task.iterationCounters.code_review).toBe(1);
     // Two reviews ran, and no third: the second one is what closed the task.
     expect(harness.specs.filter((spec) => spec.stage === 'code_review')).toHaveLength(2);
+    // WP-55: the implementation run the first review sent back was given the review's own findings
+    // in its feedback block — not the interpreter's literal "requested changes".
+    const rerun = harness.specs.filter((spec) => spec.stage === 'implementation')[1];
+    const feedback = readDataBlocks(rerun?.userPrompt ?? '').blocks.filter(
+      (block) => block.kind === 'return_feedback',
+    );
+    expect(feedback.map((block) => block.body)).toEqual([
+      '[summary] Reviewed.\n[major] src/totals.ts:12 — the footer sums the visible rows\n' +
+        '[major] src/totals.ts:12 — the footer sums the visible rows',
+    ]);
+  });
+
+  it('hands a review longer than the feedback cap to the next run cut in the marker, blockers intact', async () => {
+    // The builder cuts nothing (WP-55 round 3): the assembler's `MAX_FEEDBACK_CHARS` is the only
+    // cut, announced as `truncated="true"` on the block's marker — and blockers-first ordering is
+    // what keeps the blocker inside it, although the reviewer listed it last.
+    const long = (id: string) => ({
+      ...FINDING(id),
+      severity: 'minor',
+      explanation: 'y'.repeat(3_000),
+    });
+    const harness = withRepeatedFindings([
+      long('m1'),
+      long('m2'),
+      long('m3'),
+      long('m4'),
+      { ...FINDING('b1'), severity: 'blocker', explanation: 'the footer rounds twice' },
+    ]);
+    await harness.publish([ticketMatched()]);
+    const rerun = harness.specs.filter((spec) => spec.stage === 'implementation')[1];
+    const [block] = readDataBlocks(rerun?.userPrompt ?? '').blocks.filter(
+      (entry) => entry.kind === 'return_feedback',
+    );
+    expect(block?.attributes.truncated).toBe('true');
+    expect(Number(block?.attributes.original_chars)).toBeGreaterThan(MAX_FEEDBACK_CHARS);
+    expect(block?.body.length).toBe(MAX_FEEDBACK_CHARS);
+    expect(block?.body.split('\n').slice(0, 2)).toEqual([
+      '[summary] Reviewed.',
+      '[blocker] src/totals.ts:12 — the footer rounds twice',
+    ]);
   });
 
   it('keeps going when the second review reports different findings', async () => {

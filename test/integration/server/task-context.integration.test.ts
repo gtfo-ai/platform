@@ -93,9 +93,17 @@ const seedTask = async (projectId: string, tag: string): Promise<Seeded> => {
     ],
   );
   const stage = await one<{ id: string }>(
-    `insert into task_stages (task_id, stage, attempt, state, outcome, return_reason, exited_at)
-     values ($1, 'implementation', 1, 'exited', 'returned', $2, now()) returning id`,
+    `insert into task_stages (task_id, stage, attempt, state, outcome, return_reason,
+                             returned_to, exited_at)
+     values ($1, 'implementation', 1, 'returned', 'returned', $2, 'architecture', now())
+     returning id`,
     [task.id, `return reason ${tag}`],
+  );
+  // An escalation writes its reason into the same column; it is not a return (WP-55).
+  await pool.query(
+    `insert into task_stages (task_id, stage, attempt, state, outcome, return_reason, exited_at)
+     values ($1, 'implementation', 2, 'failed', 'failed', $2, now())`,
+    [task.id, `escalation ${tag}`],
   );
   const run = await one<{ id: string }>(
     `insert into runs (task_id, task_stage_id, project_id, role, model, prompt_version, status)
@@ -182,6 +190,22 @@ describe('get_task_context, scoped to the run’s own task', () => {
       expect(text).not.toContain('FOREIGN');
     },
   );
+
+  it('lists returns with their target, and not the escalation reason beside them (WP-55)', async () => {
+    const answer = await readTaskContext(drizzled, ['feedback'], mine);
+    expect(answer.sections.feedback).toEqual({
+      status: 'ok',
+      returns: [
+        {
+          stage: 'implementation',
+          attempt: 1,
+          returned_to: 'architecture',
+          reason: 'return reason MINE',
+          at: expect.any(String),
+        },
+      ],
+    });
+  });
 
   it('serves the latest version of each artifact type, not every version', async () => {
     const answer = await readTaskContext(drizzled, ['artifacts'], mine);

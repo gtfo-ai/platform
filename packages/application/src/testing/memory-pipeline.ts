@@ -17,11 +17,21 @@
  * | 4 | No transaction isolation: a `Transaction` handle is accepted and ignored, so a rolled-back "transaction" leaves its writes. | **kinder** | This is the one that matters, and the reason the same suite runs against PostgreSQL: rollback semantics cannot be faked in a Map. **Positive assertion**: `memory-pipeline.test.ts` asserts the divergence explicitly (`keeps writes a rolled-back scope made, which PostgreSQL does not`), so a reader meets it as a test rather than as a warning, and the e2e tier runs the pipeline on the real thing. |
  * | 7 | `task.sequence` was the number the stored aggregate carried; PostgreSQL derives it from the **event log** (`max(stream_seq) + 1`, `TASK_COLUMNS`). **Closed at WP-26** by {@link MemoryPipelineStoreOptions.streamSequence}: a harness that wires the event log in gets the derived number. | **same, when wired** | It was *kinder* and it hid a whole class: an event appended to a task's stream by anything other than the aggregate — `task.review.observed` (WP-24), `task.lint.posted` (WP-25), `task.rebase.checked` and `task.conflict.warned` (WP-26) — left the fake's aggregate one behind the log, so the **next** aggregate write would clash in production and not here. It only stayed invisible because the first three land on a task that has stopped. Unwired, the old behaviour remains, which is why the accessor takes the **maximum** of the two rather than replacing one with the other: a transaction's own staged appends are not committed yet, and the aggregate's number is the right answer for them. |
  */
-import type { ArtifactType, EstimateBasis, Id, IsoDateTime, Size, Slug } from '@platform/contracts';
+import type {
+  ArtifactType,
+  EstimateBasis,
+  Id,
+  IsoDateTime,
+  Size,
+  Slug,
+  TaskStageState,
+} from '@platform/contracts';
 import {
   taskCoverageSchema,
   taskDependenciesSchema,
   taskReviewersSchema,
+  taskStageExitStateSchema,
+  taskStageStateSchema,
   workpadRefSchema,
 } from '@platform/contracts';
 import type { Approval, Question, QueuedTask } from '@platform/domain';
@@ -50,7 +60,11 @@ interface StageRow {
   taskId: Id;
   stage: Slug;
   attempt: number;
+  /** `taskStageStateSchema`'s vocabulary, parsed on the way in exactly as the SQL store does. */
+  state: TaskStageState;
   outcome: string | null;
+  /** The stage a return targeted (WP-55); null on every row that is not a return. */
+  returnedTo: Slug | null;
   returnReason: string | null;
   signature: string | null;
   enteredAt: number;
@@ -332,7 +346,9 @@ export const createMemoryPipelineStore = (
         taskId: entry.taskId,
         stage: entry.stage,
         attempt: entry.attempt,
+        state: taskStageStateSchema.parse('running'),
         outcome: null,
+        returnedTo: null,
         returnReason: null,
         signature: null,
         enteredAt: sequence,
@@ -340,6 +356,12 @@ export const createMemoryPipelineStore = (
       });
     },
     recordStageExited: async (_tx, entry) => {
+      const state = taskStageExitStateSchema.parse(entry.state);
+      if ((state === 'returned') !== (entry.returnedTo !== null)) {
+        throw new PipelineStoreError(
+          `task_stages ${entry.taskId}/${entry.stage}#${String(entry.attempt)}: state "${state}" with returned_to ${JSON.stringify(entry.returnedTo)} — a return names its target and nothing else does`,
+        );
+      }
       sequence += 1;
       const row = [...stages]
         .reverse()
@@ -352,8 +374,10 @@ export const createMemoryPipelineStore = (
       if (row === undefined) {
         return;
       }
+      row.state = state;
       row.outcome = entry.outcome;
       row.returnReason = entry.returnReason;
+      row.returnedTo = entry.returnedTo;
       row.exitedAt = sequence;
     },
     recordStageSignature: async (_tx, entry) => {
@@ -371,7 +395,9 @@ export const createMemoryPipelineStore = (
           taskId: entry.taskId,
           stage: entry.stage,
           attempt: entry.attempt,
+          state: taskStageStateSchema.parse('running'),
           outcome: null,
+          returnedTo: null,
           returnReason: null,
           signature: entry.signature,
           enteredAt: sequence,
@@ -387,11 +413,31 @@ export const createMemoryPipelineStore = (
         .sort((a, b) => a.attempt - b.attempt)
         .slice(-limit)
         .map((row) => row.signature as string),
-    lastReturnReason: async (_tx, taskId, stage) =>
-      stages
-        .filter((row) => row.taskId === taskId && row.stage === stage && row.returnReason !== null)
-        .sort((a, b) => a.attempt - b.attempt)
-        .at(-1)?.returnReason ?? null,
+    lastReturnReason: async (_tx, taskId, stage, attempt) => {
+      // The SQL store's rule, over the write sequence where the SQL uses `clock_timestamp()`.
+      const previous = stages
+        .filter((row) => row.taskId === taskId && row.stage === stage && row.attempt < attempt)
+        // A return to this very stage counts by its entry: its exit is the return itself.
+        .map((row) => (row.returnedTo === stage ? row.enteredAt : (row.exitedAt ?? row.enteredAt)))
+        .reduce<number | null>((max, at) => (max === null || at > max ? at : max), null);
+      const current = stages.find(
+        (row) => row.taskId === taskId && row.stage === stage && row.attempt === attempt,
+      )?.enteredAt;
+      return (
+        stages
+          .filter(
+            (row) =>
+              row.taskId === taskId &&
+              row.returnedTo === stage &&
+              row.returnReason !== null &&
+              row.exitedAt !== null &&
+              (previous === null || row.exitedAt > previous) &&
+              (current === undefined || row.exitedAt <= current),
+          )
+          .sort((a, b) => (a.exitedAt ?? 0) - (b.exitedAt ?? 0))
+          .at(-1)?.returnReason ?? null
+      );
+    },
   };
 
   const artifactRepository: ArtifactRepository = {

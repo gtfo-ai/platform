@@ -17,9 +17,14 @@
  * `test/e2e/server/read-api.e2e.test.ts`; there is nothing a stubbed Drizzle handle could say about
  * them that either of those does not say better.
  */
-import { runStatusSchema, taskStateSchema } from '@platform/contracts';
+import { runStatusSchema, taskStageStateSchema, taskStateSchema } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
-import { CLOSED_TASK_STATES, TERMINAL_RUN_STATUSES } from './pipeline-queries.js';
+import {
+  CLOSED_TASK_STATES,
+  stageStateOf,
+  TERMINAL_RUN_STATUSES,
+  UnknownStageStateError,
+} from './pipeline-queries.js';
 
 describe('the run-status partition behind GET /api/org/agents', () => {
   it('covers every member of runStatusSchema exactly once', () => {
@@ -60,5 +65,25 @@ describe('the task-state partition behind ProjectSummary.open_tasks', () => {
     // with the pipeline about when a task is over.
     expect(CLOSED_TASK_STATES).not.toContain('merged');
     expect(CLOSED_TASK_STATES).not.toContain('retro');
+  });
+});
+
+/** WP-55: the stage state is parsed, never mapped — and a word outside the vocabulary is named. */
+describe('stageStateOf', () => {
+  it('publishes every word of the vocabulary as stored', () => {
+    for (const state of taskStageStateSchema.options) {
+      expect(stageStateOf({ stage: 'code_review', attempt: 1, state })).toBe(state);
+    }
+  });
+
+  it('refuses the pre-0040 words and anything else with a typed error naming the row', () => {
+    for (const state of ['entered', 'exited', '']) {
+      expect(() => stageStateOf({ stage: 'ci_gate', attempt: 2, state })).toThrow(
+        UnknownStageStateError,
+      );
+    }
+    expect(() => stageStateOf({ stage: 'ci_gate', attempt: 2, state: 'exited' })).toThrow(
+      /ci_gate#2 has state "exited"/,
+    );
   });
 });

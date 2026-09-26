@@ -804,8 +804,10 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
             taskId: stored.task.id,
             stage: 'ci_gate',
             attempt,
+            state: 'returned',
             outcome: 'returned',
             returnReason: `pipeline for sha-${attempt} failed`,
+            returnedTo: 'implementation',
           });
         }
 
@@ -818,7 +820,10 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(
           await store.tasks.recentStageSignatures(tx, stored.task.id, 'ci_gate', 2),
         ).toHaveLength(2);
-        expect(await store.tasks.lastReturnReason(tx, stored.task.id, 'ci_gate')).toBe(
+        // WP-55: this line used to expect `'pipeline for sha-3 failed'` — the gate's own complaint,
+        // served back to the gate. The reason is for the stage the return targeted.
+        expect(await store.tasks.lastReturnReason(tx, stored.task.id, 'ci_gate', 4)).toBeNull();
+        expect(await store.tasks.lastReturnReason(tx, stored.task.id, 'implementation', 2)).toBe(
           'pipeline for sha-3 failed',
         );
       });
@@ -829,7 +834,191 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(
           await store.tasks.recentStageSignatures(tx, stored.task.id, 'code_review', 3),
         ).toEqual([]);
-        expect(await store.tasks.lastReturnReason(tx, stored.task.id, 'code_review')).toBeNull();
+        expect(await store.tasks.lastReturnReason(tx, stored.task.id, 'code_review', 1)).toBeNull();
+      });
+    });
+
+    /**
+     * WP-55 (PROGRESS backlog 67): **which** reason a re-run stage is given.
+     *
+     * Every case is written as the pipeline writes rows — the returning stage's attempt closed with
+     * its target, then the target's next attempt entered — so the read is asked the question the
+     * stage executor asks: *the finding attempt `n` of this stage was sent back to fix*.
+     */
+    describe('the return reason a re-run stage is served', () => {
+      const enter = (taskId: Id, stage: string, attempt: number) =>
+        store.tasks.recordStageEntered(tx, { taskId, stage, attempt, causedByEventId: null });
+      const complete = (taskId: Id, stage: string, attempt: number) =>
+        store.tasks.recordStageExited(tx, {
+          taskId,
+          stage,
+          attempt,
+          state: 'completed',
+          outcome: 'approve',
+          returnReason: null,
+          returnedTo: null,
+        });
+      const returnFrom = (taskId: Id, stage: string, attempt: number, to: string, reason: string) =>
+        store.tasks.recordStageExited(tx, {
+          taskId,
+          stage,
+          attempt,
+          state: 'returned',
+          outcome: 'returned',
+          returnReason: reason,
+          returnedTo: to,
+        });
+
+      it('is the finding of the stage that returned, not this stage’s own last complaint', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const id = stored.task.id;
+        await enter(id, 'architecture', 1);
+        await complete(id, 'architecture', 1);
+        await enter(id, 'implementation', 1);
+        // Implementation complains about the plan: its own sentence, on its own row.
+        await returnFrom(id, 'implementation', 1, 'architecture', 'the plan names no migration');
+        await enter(id, 'architecture', 2);
+        expect(await store.tasks.lastReturnReason(tx, id, 'architecture', 2)).toBe(
+          'the plan names no migration',
+        );
+        await complete(id, 'architecture', 2);
+        await enter(id, 'implementation', 2);
+        await complete(id, 'implementation', 2);
+        await enter(id, 'code_review', 1);
+        await returnFrom(id, 'code_review', 1, 'implementation', 'the footer rounds twice');
+        await enter(id, 'implementation', 3);
+
+        // Before WP-55 this answered `'the plan names no migration'`: implementation's own words.
+        expect(await store.tasks.lastReturnReason(tx, id, 'implementation', 3)).toBe(
+          'the footer rounds twice',
+        );
+        expect(await store.tasks.lastReturnReason(tx, id, 'code_review', 2)).toBeNull();
+      });
+
+      it('is nothing for an attempt entered forward, after the loop that carried a finding', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const id = stored.task.id;
+        await enter(id, 'implementation', 1);
+        await complete(id, 'implementation', 1);
+        await enter(id, 'ci_gate', 1);
+        await returnFrom(id, 'ci_gate', 1, 'implementation', 'pipeline p-1 failed: test:unit');
+        await enter(id, 'implementation', 2);
+        expect(await store.tasks.lastReturnReason(tx, id, 'implementation', 2)).toBe(
+          'pipeline p-1 failed: test:unit',
+        );
+        // Implementation now sends the task back to architecture, and architecture advances: the
+        // third implementation attempt is entered **forward**, and the CI finding was answered.
+        await returnFrom(id, 'implementation', 2, 'architecture', 'the plan names no migration');
+        await enter(id, 'architecture', 1);
+        await complete(id, 'architecture', 1);
+        await enter(id, 'implementation', 3);
+        expect(await store.tasks.lastReturnReason(tx, id, 'implementation', 3)).toBeNull();
+      });
+
+      it('is the newest return when two loops targeted the same stage', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const id = stored.task.id;
+        await enter(id, 'implementation', 1);
+        await complete(id, 'implementation', 1);
+        await enter(id, 'ci_gate', 1);
+        await returnFrom(id, 'ci_gate', 1, 'implementation', 'pipeline p-1 failed: test:unit');
+        await enter(id, 'implementation', 2);
+        await complete(id, 'implementation', 2);
+        await enter(id, 'code_review', 1);
+        await returnFrom(id, 'code_review', 1, 'implementation', 'the footer rounds twice');
+        await enter(id, 'implementation', 3);
+        expect(await store.tasks.lastReturnReason(tx, id, 'implementation', 3)).toBe(
+          'the footer rounds twice',
+        );
+        // And the second attempt's question is still answered the way it was when it ran.
+        expect(await store.tasks.lastReturnReason(tx, id, 'implementation', 2)).toBe(
+          'pipeline p-1 failed: test:unit',
+        );
+      });
+
+      it('is the human’s note when the task is returned to the stage it is at', async () => {
+        // `returnToStageCommand`/`reworkStageCommand` take the current stage as `from`, and nothing
+        // refuses `to === from`: a task escalated at implementation, reworked there with a note.
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const id = stored.task.id;
+        await enter(id, 'implementation', 1);
+        await returnFrom(id, 'implementation', 1, 'implementation', 'use the existing helper');
+        await enter(id, 'implementation', 2);
+        expect(await store.tasks.lastReturnReason(tx, id, 'implementation', 2)).toBe(
+          'use the existing helper',
+        );
+        // And it is not resurrected by a later forward entry.
+        await complete(id, 'implementation', 2);
+        await enter(id, 'implementation', 3);
+        expect(await store.tasks.lastReturnReason(tx, id, 'implementation', 3)).toBeNull();
+      });
+
+      it('is never the reason an attempt failed with — that is an escalation, not feedback', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const id = stored.task.id;
+        await enter(id, 'implementation', 1);
+        await store.tasks.recordStageExited(tx, {
+          taskId: id,
+          stage: 'implementation',
+          attempt: 1,
+          state: 'failed',
+          outcome: 'failed',
+          returnReason: 'the run could not be started (LauncherUnavailable)',
+          returnedTo: null,
+        });
+        await enter(id, 'implementation', 2);
+        expect(await store.tasks.lastReturnReason(tx, id, 'implementation', 2)).toBeNull();
+      });
+
+      it('refuses a return with no target, and a target on a row that is not a return', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const id = stored.task.id;
+        await enter(id, 'code_review', 1);
+        await expect(
+          store.tasks.recordStageExited(tx, {
+            taskId: id,
+            stage: 'code_review',
+            attempt: 1,
+            state: 'returned',
+            outcome: 'returned',
+            returnReason: 'the footer rounds twice',
+            returnedTo: null,
+          }),
+        ).rejects.toThrow(/a return names its target/);
+        await expect(
+          store.tasks.recordStageExited(tx, {
+            taskId: id,
+            stage: 'code_review',
+            attempt: 1,
+            state: 'completed',
+            outcome: 'approve',
+            returnReason: null,
+            returnedTo: 'implementation',
+          }),
+        ).rejects.toThrow(/a return names its target/);
+      });
+
+      it('refuses a state outside the contracts’ vocabulary', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        await enter(stored.task.id, 'code_review', 1);
+        await expect(
+          store.tasks.recordStageExited(tx, {
+            taskId: stored.task.id,
+            stage: 'code_review',
+            attempt: 1,
+            state: 'exited' as never,
+            outcome: 'approve',
+            returnReason: null,
+            returnedTo: null,
+          }),
+        ).rejects.toThrow();
       });
     });
 

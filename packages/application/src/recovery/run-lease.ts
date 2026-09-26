@@ -344,8 +344,10 @@ const endOneRun = async (
           taskId: run.taskId,
           stage: run.stage,
           attempt: run.attempt,
+          state: 'failed',
           outcome: 'failed',
           returnReason: endingReason(run),
+          returnedTo: null,
         });
       }
       events.push(...escalated.events);

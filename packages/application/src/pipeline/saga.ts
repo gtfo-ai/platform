@@ -42,6 +42,7 @@ import type {
   AutonomyPreset,
   CommandContext,
   CompiledPipeline,
+  PipelineDecision,
   PipelineSignal,
 } from '@platform/domain';
 import {
@@ -91,7 +92,7 @@ import type { PipelineStore, StoredTask } from './store.js';
 import { INITIAL_TASK_VERSION, PIPELINE_ACTOR } from './store.js';
 import { readTicketSnapshot } from './ticket-snapshot.js';
 import { applyDecision } from './transitions.js';
-import { reviewFindingSignature } from './verdicts.js';
+import { reviewFindingSignature, verdictReturnReason } from './verdicts.js';
 import { statusMappingHandler, workpadHandler } from './workpad.js';
 
 export interface PipelineSagaOptions {
@@ -144,19 +145,59 @@ const step = async (
   signal: PipelineSignal,
 ): Promise<StoredTask> => {
   const pipeline = compilePipeline(stored.task.template, stored.template);
-  const decision = interpret(pipeline, signal);
+  const decision = await withVerdictFindings(
+    options,
+    context,
+    stored,
+    pipeline,
+    signal,
+    interpret(pipeline, signal),
+  );
   const applied = await applyDecision({
     store: options.store,
     pipeline,
     tx: context.scope.tx,
     stored,
     decision,
+    signal,
     context: contextFor(options, stored.task.id, context.event.event.id),
     causedByEventId: context.event.event.id,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
   });
   await emitAndSchedule(options, context, applied.events, applied.work);
   return applied.stored;
+};
+
+/**
+ * An agent stage's return carries **the verdict's own findings**, not the interpreter's literal
+ * `requested changes` (WP-55, the agent half of PROGRESS backlog 159).
+ *
+ * The interpreter is pure and cannot read the artifact; this is the first place the decision and the
+ * artifact are both at hand, and it is before `applyDecision` writes the reason onto the returning
+ * attempt's row — which is where the next run's `return_feedback` block is read from. The artifact
+ * is the returning stage's **latest** of its declared type: the stage executor stored it in the
+ * transaction that completed the stage, which is what appended the event this step reacts to.
+ * `verdictReturnReason` states the cap and the redaction; a verdict with nothing to say keeps the
+ * interpreter's words. The human-comment half of 159 (a count of threads, not their text) is WP-46's.
+ */
+const withVerdictFindings = async (
+  options: PipelineSagaOptions,
+  context: HandlerContext,
+  stored: StoredTask,
+  pipeline: CompiledPipeline,
+  signal: PipelineSignal,
+  decision: PipelineDecision,
+): Promise<PipelineDecision> => {
+  if (decision.kind !== 'return' || signal.kind !== 'stage_completed') {
+    return decision;
+  }
+  const produces = stageOf(pipeline, signal.stage)?.produces ?? null;
+  if (produces === null) {
+    return decision;
+  }
+  const artifact = await options.store.artifacts.latest(context.scope.tx, stored.task.id, produces);
+  const reason = artifact === null ? null : verdictReturnReason(produces, artifact.data);
+  return reason === null ? decision : { ...decision, reason };
 };
 
 const emitAndSchedule = async (

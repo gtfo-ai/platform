@@ -10,9 +10,11 @@
  *
  * What only a database can show, and what this file is therefore for:
  *
- *  - **the returns predicate**. `task_stages.state` only ever holds `entered`/`exited`; the return
- *    is in `outcome`. A predicate on `state = 'returned'` matches nothing and publishes a return
- *    rate of exactly zero on every instance — a silent zero no fake would have caught;
+ *  - **the returns predicate**. The return is read off `outcome`. Until WP-55 `task_stages.state`
+ *    only ever held `entered`/`exited`, so a predicate on `state = 'returned'` matched nothing and
+ *    published a return rate of exactly zero on every instance — a silent zero no fake would have
+ *    caught. Since migration 0040 a return's row is `state = 'returned'` too, and the predicate
+ *    stays on `outcome` because rows closed before WP-55 carried the return there first;
  *  - **the template filter**, which decides what "tasks started" means: a discovery task is
  *    `mode = 'normal'` and can never open a merge request;
  *  - **PROGRESS backlog 89's read-side cap**, which is a `least(sum(...), 480)` over a group key
@@ -189,8 +191,8 @@ describe('the statistics reads (PostgreSQL)', () => {
     // return is in `outcome`. A read that matched `state = 'returned'` sees zero here.
     await pool.query(
       `insert into task_stages (task_id, stage, attempt, state, outcome, entered_at, exited_at)
-       values ($1, 'code_review', 1, 'exited', 'returned', $2, $3),
-              ($1, 'code_review', 2, 'exited', 'passed', $3, $3)`,
+       values ($1, 'code_review', 1, 'returned', 'returned', $2, $3),
+              ($1, 'code_review', 2, 'completed', 'passed', $3, $3)`,
       [taskId, at(-60), at(-30)],
     );
     await pool.query(

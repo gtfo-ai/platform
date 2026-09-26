@@ -28,7 +28,13 @@
  * entirely, which is what makes the brief say what actually went wrong.
  */
 import type { DomainEvent, Id, Slug } from '@platform/contracts';
-import type { CommandContext, CompiledPipeline, PipelineDecision, Task } from '@platform/domain';
+import type {
+  CommandContext,
+  CompiledPipeline,
+  PipelineDecision,
+  PipelineSignal,
+  Task,
+} from '@platform/domain';
 import {
   completeStage,
   completeTask,
@@ -118,6 +124,13 @@ export interface ApplyOptions {
    * so the task is exactly where the human found it.
    */
   readonly onIllegalTransition?: 'escalate' | 'throw';
+  /**
+   * The signal `decision` was interpreted from, when the caller has one. Read for one thing: a
+   * `gate_settled` signal whose decision walks past the gate closes that gate's `task_stages` row
+   * with the verdict (`closeSettledGate`, WP-55). Optional because most callers build a decision
+   * that no signal produced — a human command, a dependency block, a batch.
+   */
+  readonly signal?: PipelineSignal;
 }
 
 /**
@@ -181,6 +194,7 @@ const apply = async (options: ApplyOptions): Promise<AppliedDecision> => {
       return applyEscalation(options, decision.reason, decision.blockerBrief);
 
     case 'complete': {
+      await closeSettledGate(options, null);
       const finished = completeTask(
         stored.task,
         { outcome: 'completed', totals: await totalsOf(options) },
@@ -202,12 +216,18 @@ const apply = async (options: ApplyOptions): Promise<AppliedDecision> => {
         },
         context,
       );
+      // The reason stays on the attempt that produced it, and `returned_to` names the stage it is
+      // for — which is what `lastReturnReason` reads the next run's feedback by (WP-55, backlog
+      // 67). Written even when `returnToStage` escalates below: the return was the stage's
+      // decision, and the stage a human hands the task back to is where its finding belongs.
       await store.tasks.recordStageExited(tx, {
         taskId: stored.task.id,
         stage: decision.from,
         attempt: stored.task.stageAttempts[decision.from] ?? 1,
+        state: 'returned',
         outcome: 'returned',
         returnReason: decision.reason,
+        returnedTo: decision.to,
       });
       if (returned.aggregate.state !== 'returned') {
         // `returnToStage` escalated instead: the loop is spent (BD-008). The counter stays where
@@ -227,8 +247,47 @@ const apply = async (options: ApplyOptions): Promise<AppliedDecision> => {
     }
 
     case 'enter':
+      await closeSettledGate(options, decision.stage);
       return enter(options, decision.stage);
   }
+};
+
+/**
+ * Closes the row of a gate the decision is walking **past** (WP-55, PROGRESS backlog 95 items 1
+ * and 2).
+ *
+ * A gate that fails backwards is a `return` and its row is closed on that path, with the target;
+ * a gate that passes is an `enter` of the next stage (or a `complete`), and until WP-55 nothing on
+ * that path touched the gate's own row. Measured before the fix on a real PostgreSQL: after a
+ * passing CI gate the `ci_gate` and `rebase_gate` rows were `entered`, with no `exited_at` and no
+ * `outcome`, and the task screen published both as **running**.
+ *
+ * The verdict is the signal's, not the decision's — `enter` carries no `from` — so this acts only
+ * when the caller says which gate settled ({@link ApplyOptions.signal}) **and** the task is still at
+ * it: a settlement that arrives for a task a human already moved is not this gate's row to close.
+ * `pass` and `fail` are `stageVerdictSchema`'s gate words, the same the interpreter decided on; a
+ * gate whose `fail_to` points *forward* closes `completed` with `fail`, which is what happened.
+ * A gate that does not settle — pending, escalated, waiting — is left open, so a task still **at**
+ * a gate has neither an `outcome` nor an `exited_at`.
+ */
+const closeSettledGate = async (options: ApplyOptions, next: Slug | null): Promise<void> => {
+  const { signal, stored } = options;
+  if (
+    signal?.kind !== 'gate_settled' ||
+    stored.task.currentStage !== signal.stage ||
+    next === signal.stage
+  ) {
+    return;
+  }
+  await options.store.tasks.recordStageExited(options.tx, {
+    taskId: stored.task.id,
+    stage: signal.stage,
+    attempt: stored.task.stageAttempts[signal.stage] ?? 1,
+    state: 'completed',
+    outcome: signal.passed ? 'pass' : 'fail',
+    returnReason: null,
+    returnedTo: null,
+  });
 };
 
 /** Enters a stage, choosing the command its id implies and scheduling whatever it needs. */
@@ -280,8 +339,10 @@ const enter = async (options: ApplyOptions, stage: Slug): Promise<AppliedDecisio
       taskId: stored.task.id,
       stage,
       attempt,
+      state: 'completed',
       outcome: 'system',
       returnReason: null,
+      returnedTo: null,
     });
   }
 

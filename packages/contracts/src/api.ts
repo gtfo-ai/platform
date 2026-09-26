@@ -47,6 +47,7 @@ import {
 } from './common.js';
 import { agenticConfigSchema, MAX_BOOTSTRAP_MERGE_REQUESTS, riskClassSchema } from './config.js';
 import { domainEventSchema, domainEventTypeSchema } from './events.js';
+import { taskStageStateSchema } from './pipeline.js';
 import {
   approvalRecordSchema,
   autonomyPoliciesSchema,
@@ -716,7 +717,8 @@ export const taskDetailResponseSchema = z.strictObject({
     z.strictObject({
       stage: stageIdSchema,
       attempt: z.int().positive(),
-      state: z.enum(['pending', 'running', 'completed', 'returned', 'skipped', 'failed']),
+      /** `task_stages.state`, parsed rather than mapped (WP-55): see {@link taskStageStateSchema}. */
+      state: taskStageStateSchema,
       entered_at: isoDateTimeSchema,
       exited_at: isoDateTimeSchema.nullable(),
       outcome: z.string().nullable(),

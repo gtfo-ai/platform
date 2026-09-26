@@ -716,7 +716,12 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         stored,
         stage: valid.stage,
         artifacts: await store.artifacts.listFor(scope.tx, job.taskId),
-        returnFeedback: await store.tasks.lastReturnReason(scope.tx, job.taskId, job.stage),
+        returnFeedback: await store.tasks.lastReturnReason(
+          scope.tx,
+          job.taskId,
+          job.stage,
+          job.attempt,
+        ),
         /**
          * Q82 (a) / PROGRESS backlog **71**: the commit this run's workspace starts from.
          *
@@ -1264,8 +1269,10 @@ const record = async (
     taskId: job.taskId,
     stage: job.stage,
     attempt: job.attempt,
+    state: 'completed',
     outcome: verdict ?? 'unknown',
     returnReason: null,
+    returnedTo: null,
   });
   await scope.events.append(events);
   return { kind: 'ran', runId: run.id, verdict };
@@ -1477,8 +1484,10 @@ const escalateOnRun = async (
     taskId: job.taskId,
     stage: job.stage,
     attempt: job.attempt,
+    state: 'failed',
     outcome: 'failed',
     returnReason: reason,
+    returnedTo: null,
   });
   await scope.events.append([...runEvents, ...escalated.events]);
   return { kind: 'failed', runId: run.id, reason };
@@ -1562,8 +1571,10 @@ const recordUnstarted = async (
     taskId: job.taskId,
     stage: job.stage,
     attempt: job.attempt,
+    state: 'failed',
     outcome: 'failed',
     returnReason: reason,
+    returnedTo: null,
   });
   await scope.events.append([...failed.events, ...escalated.events]);
   return { kind: 'failed', runId: run.id, reason };

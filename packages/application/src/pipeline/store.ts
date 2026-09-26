@@ -43,6 +43,7 @@ import type {
   TaskDependencies,
   TaskMode,
   TaskReviewers,
+  TaskStageExitState,
   TicketRef,
   TicketSnapshot,
   TokenUsage,
@@ -468,15 +469,24 @@ export interface TaskRepository {
       readonly causedByEventId: Id | null;
     },
   ): Promise<void>;
-  /** Closes the row `recordStageEntered` opened, with what the stage decided. */
+  /**
+   * Closes the row `recordStageEntered` opened, with what the stage decided.
+   *
+   * `state` is one of `taskStageExitStateSchema`'s three words and the store **parses** it before
+   * writing (WP-55): the column's vocabulary is the contracts', not whatever a caller spelled.
+   * `returnedTo` is the stage a return sent the task to — non-null exactly when `state` is
+   * `returned` — and it is what {@link lastReturnReason} reads by.
+   */
   recordStageExited(
     tx: Transaction,
     entry: {
       readonly taskId: Id;
       readonly stage: Slug;
       readonly attempt: number;
+      readonly state: TaskStageExitState;
       readonly outcome: string;
       readonly returnReason: string | null;
+      readonly returnedTo: Slug | null;
     },
   ): Promise<void>;
   /**
@@ -507,8 +517,27 @@ export interface TaskRepository {
     stage: Slug,
     limit: number,
   ): Promise<readonly string[]>;
-  /** The `return_reason` of the most recent closed attempt at `stage`, for the next run's prompt. */
-  lastReturnReason(tx: Transaction, taskId: Id, stage: Slug): Promise<string | null>;
+  /**
+   * The finding `stage`'s attempt `attempt` was sent back to fix, for that run's prompt — or `null`
+   * when this attempt was not entered by a return.
+   *
+   * **The reason is read off the attempt that produced it** (WP-55, PROGRESS backlog 67, ruling
+   * (a)): the newest closed row on this task whose `returned_to` is `stage` **and which closed after
+   * `stage`'s previous attempt did** (or was entered, for an attempt nobody closed, or for an
+   * attempt that is itself a return to `stage` — a human return or rework at the stage the task is
+   * at, whose exit *is* the return) — and, once
+   * attempt `attempt` has been entered, no later than that entry, so the question has one answer
+   * however many loops follow. The first two halves are load-bearing. Until WP-55 the read was *this stage's own* newest `return_reason`, which on
+   * every shipped edge is the complaint this stage made when *it* returned somewhere else — a wrong
+   * sentence inside the block the role prompt presents as feedback. And without the second half, a
+   * stage re-entered by a forward move would be handed the finding of a loop it already answered.
+   */
+  lastReturnReason(
+    tx: Transaction,
+    taskId: Id,
+    stage: Slug,
+    attempt: number,
+  ): Promise<string | null>;
 }
 
 export interface StoredArtifact {

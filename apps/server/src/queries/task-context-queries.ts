@@ -27,7 +27,7 @@
  * |---|---|---|
  * | `ticket` | `tasks.ticket_snapshot` (bounded and redacted at the write, WP-15f) | the platform has not read the ticket |
  * | `artifacts` | the latest version of each type, `findArtifactBody` | per artifact: stored before redaction existed (migration 0038) |
- * | `feedback` | `task_stages.return_reason` — why each return happened | never; an empty list is an answer |
+ * | `feedback` | `task_stages` rows with `state = 'returned'`: the stage, its target (`returned_to`) and the reason — escalations excluded (WP-55) | never; an empty list is an answer |
  * | `mr` | `tasks.mr_ref` and `tasks.branch` | the task has no merge request yet |
  * | `ci` | `tasks.coverage` — the one per-task CI figure the platform stores | no coverage was recorded; pipeline runs themselves are **not** projected per task |
  * | `runs` | `findTaskDetail`'s runs, newest {@link TASK_CONTEXT_RUN_LIMIT} | never |
@@ -200,17 +200,32 @@ const findTicketSnapshot = async (
   return { snapshot: row?.snapshot ?? null, readAt: iso(row?.readAt ?? null) };
 };
 
-/** Why each return of this task happened, oldest first — what a stage was sent back with. */
+/**
+ * Every return of this task, oldest first: the attempt that sent the task back, the stage it sent
+ * it to (`returned_to`) and the finding it sent it with.
+ *
+ * **Returns only** (WP-55): `state = 'returned'`, not "every row with a `return_reason`" — the
+ * stage executor and the lease sweep write their *escalation* reason into that column too, and an
+ * escalation is not something a stage was sent back with. `returned_to` is null for a return
+ * written before migration 0040, whose target the row never recorded.
+ */
 const listReturnFeedback = async (database: Database, taskId: string) =>
   database
     .select({
       stage: taskStages.stage,
       attempt: taskStages.attempt,
+      returnedTo: taskStages.returnedTo,
       reason: taskStages.returnReason,
       exitedAt: taskStages.exitedAt,
     })
     .from(taskStages)
-    .where(and(eq(taskStages.taskId, taskId), isNotNull(taskStages.returnReason)))
+    .where(
+      and(
+        eq(taskStages.taskId, taskId),
+        eq(taskStages.state, 'returned'),
+        isNotNull(taskStages.returnReason),
+      ),
+    )
     .orderBy(asc(taskStages.enteredAt), asc(taskStages.attempt));
 
 /**
@@ -314,6 +329,7 @@ export const readTaskContext = async (
           returns: rows.map((row) => ({
             stage: row.stage,
             attempt: row.attempt,
+            returned_to: row.returnedTo,
             reason: row.reason,
             at: iso(row.exitedAt),
           })),

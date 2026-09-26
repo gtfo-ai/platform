@@ -59,6 +59,8 @@ import {
   taskCoverageSchema,
   taskDependenciesSchema,
   taskReviewersSchema,
+  taskStageExitStateSchema,
+  taskStageStateSchema,
   workpadRefSchema,
 } from '@platform/contracts';
 import type { Approval, IterationCounters, IterationLimits, Question } from '@platform/domain';
@@ -581,32 +583,69 @@ export const createPostgresPipelineStore = (
       }));
     },
 
+    /**
+     * Every `state` this store writes is **parsed** with the contracts' vocabulary first (WP-55):
+     * the same schema `apps/server` parses the column with on the way out, and the same list
+     * migration 0040's `task_stages_state_known` holds the database to. A caller that spelled a
+     * word the vocabulary does not have is refused here, by name, rather than by the constraint.
+     */
     recordStageEntered: async (tx, entry) => {
       await sqlOf(tx).query(
-        `insert into task_stages (task_id, stage, attempt, state, caused_by_event_id)
-         values ($1, $2, $3, 'entered', $4)
+        `insert into task_stages (task_id, stage, attempt, state, caused_by_event_id, entered_at)
+         values ($1, $2, $3, $5, $4, clock_timestamp())
          on conflict (task_id, stage, attempt) do update
-            set state = 'entered', entered_at = now(), exited_at = null,
+            set state = excluded.state, entered_at = excluded.entered_at, exited_at = null,
+                returned_to = null,
                 caused_by_event_id = excluded.caused_by_event_id`,
-        [entry.taskId, entry.stage, entry.attempt, entry.causedByEventId],
+        [
+          entry.taskId,
+          entry.stage,
+          entry.attempt,
+          entry.causedByEventId,
+          taskStageStateSchema.parse('running'),
+        ],
       );
     },
 
     recordStageExited: async (tx, entry) => {
+      const state = taskStageExitStateSchema.parse(entry.state);
+      if ((state === 'returned') !== (entry.returnedTo !== null)) {
+        // `task_stages_returned_to_is_a_return` would refuse half of this; the other half — a
+        // return with no target — is a return the reader can never find, which is the defect
+        // WP-55 exists to close. Refused here for both, naming the row.
+        throw new RangeError(
+          `task_stages ${entry.taskId}/${entry.stage}#${String(entry.attempt)}: state "${state}" with returned_to ${JSON.stringify(entry.returnedTo)} — a return names its target and nothing else does`,
+        );
+      }
       await sqlOf(tx).query(
         `update task_stages
-            set state = 'exited', exited_at = now(), outcome = $4, return_reason = $5
+            set state = $6, exited_at = clock_timestamp(), outcome = $4, return_reason = $5,
+                returned_to = $7
           where task_id = $1 and stage = $2 and attempt = $3`,
-        [entry.taskId, entry.stage, entry.attempt, entry.outcome, entry.returnReason],
+        [
+          entry.taskId,
+          entry.stage,
+          entry.attempt,
+          entry.outcome,
+          entry.returnReason,
+          state,
+          entry.returnedTo,
+        ],
       );
     },
 
     recordStageSignature: async (tx, entry) => {
       await sqlOf(tx).query(
-        `insert into task_stages (task_id, stage, attempt, state, signature)
-         values ($1, $2, $3, 'entered', $4)
+        `insert into task_stages (task_id, stage, attempt, state, signature, entered_at)
+         values ($1, $2, $3, $5, $4, clock_timestamp())
          on conflict (task_id, stage, attempt) do update set signature = excluded.signature`,
-        [entry.taskId, entry.stage, entry.attempt, entry.signature],
+        [
+          entry.taskId,
+          entry.stage,
+          entry.attempt,
+          entry.signature,
+          taskStageStateSchema.parse('running'),
+        ],
       );
     },
 
@@ -620,12 +659,43 @@ export const createPostgresPipelineStore = (
       return rows.map((row) => row.signature).reverse();
     },
 
-    lastReturnReason: async (tx, taskId, stage) => {
+    /**
+     * The port's docblock has the rule; this is its SQL. `previous` is the instant `stage`'s latest
+     * **earlier** attempt stopped being current — its exit, or its entry for an attempt nobody
+     * closed — and only a return that closed strictly after it can be the one that caused this
+     * attempt. **An earlier attempt that is itself a return to this stage** (a human's return or
+     * rework at the stage the task is at: `from === to`) counts by its **entry**, because its exit
+     * *is* the return that caused this attempt and would otherwise exclude itself. `current` bounds it from above when the attempt has been entered, so the question
+     * about attempt `n` has one answer however many loops came after it.
+     *
+     * **Why the stage writes above stamp `clock_timestamp()` rather than `now()`** (WP-55). The rule
+     * orders a return against an entry, and the return that causes an attempt is closed *in the same
+     * transaction* that enters it — so under `now()`, the transaction's one instant, the two are
+     * equal, and so is every row a single transaction writes. The order the rule needs is the order
+     * the rows were written in, which is what `clock_timestamp()` records. The residual is the
+     * wall clock's: a step backwards between two transactions of the same task could misorder them.
+     */
+    lastReturnReason: async (tx, taskId, stage, attempt) => {
       const { rows } = await sqlOf(tx).query<{ return_reason: string }>(
-        `select return_reason from task_stages
-          where task_id = $1 and stage = $2 and return_reason is not null
-          order by attempt desc limit 1`,
-        [taskId, stage],
+        `with previous as (
+           select max(case when returned_to = $2 then entered_at
+                           else coalesce(exited_at, entered_at) end) as at
+             from task_stages
+            where task_id = $1 and stage = $2 and attempt < $3
+         ), current as (
+           select max(entered_at) as at
+             from task_stages
+            where task_id = $1 and stage = $2 and attempt = $3
+         )
+         select r.return_reason
+           from task_stages r, previous, current
+          where r.task_id = $1 and r.returned_to = $2
+            and r.return_reason is not null and r.exited_at is not null
+            and (previous.at is null or r.exited_at > previous.at)
+            and (current.at is null or r.exited_at <= current.at)
+          order by r.exited_at desc, r.entered_at desc
+          limit 1`,
+        [taskId, stage, attempt],
       );
       return rows[0]?.return_reason ?? null;
     },

@@ -399,11 +399,13 @@ const kbProposals = async (
  * nobody reads.
  */
 /**
- * **`outcome`, not `state`.** `task_stages.state` only ever holds `entered` or `exited` (the
- * interpreter's vocabulary, migration 0004), and the return is recorded in `outcome` by
- * `recordStageExited`. A predicate on `state = 'returned'` matches nothing and publishes a return
- * rate of exactly zero on every instance — which is the silent-zero this whole endpoint is written
- * against, so it is stated here and asserted in the integration tier against real returns.
+ * **`outcome`, not `state`.** Until WP-55 `task_stages.state` only ever held `entered` or `exited`,
+ * and the return was recorded in `outcome` alone, so a predicate on `state = 'returned'` matched
+ * nothing and published a return rate of exactly zero on every instance — the silent-zero this
+ * whole endpoint is written against. Migration 0040 gave `state` the contracts' vocabulary and
+ * rewrote every closed return to `state = 'returned'`, so the two predicates now agree; this one
+ * stays on `outcome`, which every writer of a return has set since WP-15, and the integration tier
+ * asserts it against real returns.
  */
 const stageReturns = async (
   database: Database,

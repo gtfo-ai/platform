@@ -87,7 +87,7 @@ const seedRun = async (run: SeededRun = {}): Promise<string> => {
   attempt += 1;
   const stage = await pool.query<{ id: string }>(
     `insert into task_stages (task_id, stage, attempt, state)
-     values ($1, 'implementation', $2, 'entered') returning id`,
+     values ($1, 'implementation', $2, 'running') returning id`,
     [taskId, attempt],
   );
   const inserted = await pool.query<{ id: string }>(

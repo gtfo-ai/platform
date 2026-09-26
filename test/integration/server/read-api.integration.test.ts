@@ -115,7 +115,7 @@ beforeAll(async () => {
   taskId = task.id;
   const stage = await one<{ id: string }>(
     `insert into task_stages (task_id, stage, attempt, state, outcome)
-     values ($1, 'refinement', 1, 'exited', 'completed') returning id`,
+     values ($1, 'refinement', 1, 'completed', 'approve') returning id`,
     [taskId],
   );
   const run = await one<{ id: string }>(
@@ -466,8 +466,10 @@ describe('the task projection', () => {
      */
     expect(detail?.task.cost_estimated_usd).toBe(0.06);
     expect(detail?.task.risk_classes).toEqual(['payments']);
-    // `task_stages.state` is free-form text; the DTO publishes a fixed vocabulary, so the mapping
-    // is asserted rather than assumed.
+    // `task_stages.state` is the contracts' vocabulary since WP-55 and is published as stored;
+    // the projection parses it rather than mapping it. An unknown word cannot reach this read on a
+    // migrated database — `task_stages_state_known` refuses it at the write, which
+    // `test/integration/db/task-stage-vocabulary.integration.test.ts` asserts.
     expect(detail?.stages).toEqual([
       {
         stage: 'refinement',
@@ -475,7 +477,7 @@ describe('the task projection', () => {
         state: 'completed',
         entered_at: expect.any(String),
         exited_at: null,
-        outcome: 'completed',
+        outcome: 'approve',
       },
     ]);
     expect([...(detail?.runs ?? [])].map((run) => run.id).sort()).toEqual(
@@ -746,7 +748,7 @@ describe('the transcript bridge, across two broadcast connections', () => {
       // A run of its own, so the rows this case publishes are its own.
       const stage = await pool.query<{ id: string }>(
         `insert into task_stages (task_id, stage, attempt, state)
-         values ($1, 'architecture', 1, 'entered') returning id`,
+         values ($1, 'architecture', 1, 'running') returning id`,
         [taskId],
       );
       const live = await pool.query<{ id: string }>(
@@ -863,7 +865,7 @@ describe('the list projections', () => {
 
     const stage = await pool.query<{ id: string }>(
       `insert into task_stages (task_id, stage, attempt, state)
-       values ($1, 'implementation', 1, 'entered') returning id`,
+       values ($1, 'implementation', 1, 'running') returning id`,
       [taskId],
     );
     await pool.query('update runs set task_stage_id = $2 where id = $1', [
