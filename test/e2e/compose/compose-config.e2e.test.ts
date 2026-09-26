@@ -425,16 +425,15 @@ const RESIDUAL: readonly { group: string; reason: string; matches: (name: string
     group: 'declared with no reader in this build',
     // Not this row's to fix: each is documented in `.env.example` and read by nothing. They are
     // listed by name so that a tenth is a decision somebody makes rather than a line somebody adds.
+    // `APP_WORKING_DAYS`, `APP_WORKING_HOURS` and `APP_HOLIDAYS` **left** at WP-56: the server
+    // reads them now (the working calendar), so they are in `namesServerReads()` instead.
     reason: 'documented in `.env.example`; no source reads them (PROGRESS, WP-50 discovered work)',
     matches: (name) =>
       [
         'APP_DISABLE_TELEMETRY',
-        'APP_HOLIDAYS',
         'APP_RUNNER_MAX_PARALLEL',
         'APP_TRANSCRIPT_STORE',
         'APP_WEBHOOK_PUBLIC_URL',
-        'APP_WORKING_DAYS',
-        'APP_WORKING_HOURS',
         'APP_WORKSPACE_ROOT',
       ].includes(name) || name.startsWith('APP_FEATURE_'),
   },

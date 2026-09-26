@@ -31,8 +31,25 @@ export interface PipelineStoreHarness {
     readonly projectId: Id;
     /** A user the store may reference: `answered_by_user_id` and `decided_by_user_id` are FKs. */
     readonly userId: Id;
+    /**
+     * Appends one **committed** event to a task's stream, in the order given (WP-56) — what
+     * `tasks.takenOver` reads. PostgreSQL inserts into `events` inside the case's transaction; the
+     * in-memory store is built over a list this appends to, as the pipeline harness builds it over
+     * `MemoryEventing`'s log.
+     */
+    appendTaskEvent(event: TaskStreamEvent): Promise<void>;
     cleanup(): Promise<void>;
   }>;
+}
+
+/** One event on a task's stream, as the contract's take-over cases write it. */
+export interface TaskStreamEvent {
+  readonly id: Id;
+  readonly taskId: Id;
+  readonly seq: number;
+  readonly type: string;
+  readonly payload: Readonly<Record<string, unknown>>;
+  readonly occurredAt: IsoDateTime;
 }
 
 const TICKET = (key: string) => ({
@@ -53,6 +70,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
     let tx: Transaction;
     let projectId: Id;
     let userId: Id;
+    let appendTaskEvent: (event: TaskStreamEvent) => Promise<void>;
 
     const task = (
       overrides: Partial<StoredTask> = {},
@@ -110,6 +128,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       tx = context.tx;
       projectId = context.projectId;
       userId = context.userId;
+      appendTaskEvent = context.appendTaskEvent;
       return async () => {
         await context.cleanup();
       };
@@ -1591,6 +1610,115 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(await store.questions.open(tx, stored.task.id)).toEqual([]);
         expect((await store.questions.load(tx, questionId))?.answer).toBe('EUR');
       });
+
+      it('stores the deadline it was created with and reads it back (WP-56)', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const questionId = nextId();
+        await store.questions.insert(tx, {
+          id: questionId,
+          taskId: stored.task.id,
+          projectId,
+          stage: 'refinement',
+          runId: null,
+          text: 'Which currency?',
+          options: null,
+          blocking: true,
+          status: 'open',
+          askedAt: '2026-06-05T16:00:00.000Z',
+          deadlineAt: '2026-06-08T16:00:00.000Z',
+          remindersSent: 0,
+          answer: null,
+          answeredByUserId: null,
+          answeredVia: null,
+          answeredAt: null,
+          sequence: 1,
+        });
+        expect((await store.questions.load(tx, questionId))?.deadlineAt).toBe(
+          '2026-06-08T16:00:00.000Z',
+        );
+      });
+    });
+
+    describe('the take-over a human still holds (WP-56)', () => {
+      const takenOverPayload = (taskId: Id, projectIdOf: Id) => ({
+        project_id: projectIdOf,
+        task_id: taskId,
+        branch: 'agentic/ACME-7',
+        session_id: 'session-0001',
+        stage: 'implementation',
+      });
+
+      /** Appends `types` to a fresh task's stream, one per second from 09:00, and reads it back. */
+      const streamOf = async (...types: string[]) => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const ids: Id[] = [];
+        for (const [index, type] of types.entries()) {
+          const id = nextId();
+          ids.push(id);
+          await appendTaskEvent({
+            id,
+            taskId: stored.task.id,
+            seq: index + 1,
+            type,
+            payload:
+              type === 'task.taken_over'
+                ? takenOverPayload(stored.task.id, projectId)
+                : { project_id: projectId, task_id: stored.task.id },
+            occurredAt: `2026-06-05T09:00:0${index}.000Z` as IsoDateTime,
+          });
+        }
+        return { taskId: stored.task.id, ids };
+      };
+
+      it('answers null for a task nobody took over', async () => {
+        const { taskId } = await streamOf('task.created', 'task.stage.entered');
+        expect(await store.tasks.takenOver(tx, taskId)).toBeNull();
+      });
+
+      it('answers the newest take-over, with its branch, session, stage and instant', async () => {
+        const { taskId, ids } = await streamOf(
+          'task.created',
+          'task.stage.entered',
+          'task.taken_over',
+        );
+        expect(await store.tasks.takenOver(tx, taskId)).toEqual({
+          eventId: ids[2],
+          at: '2026-06-05T09:00:02.000Z',
+          branch: 'agentic/ACME-7',
+          sessionId: 'session-0001',
+          stage: 'implementation',
+        });
+      });
+
+      it('still answers it after an escalation, because the person still holds the task', async () => {
+        const { taskId, ids } = await streamOf('task.created', 'task.taken_over', 'task.escalated');
+        expect((await store.tasks.takenOver(tx, taskId))?.eventId).toBe(ids[1]);
+      });
+
+      it.each([
+        'task.handed_back',
+        'task.resumed',
+        'task.stage.entered',
+        'task.completed',
+        'task.cancelled',
+      ])('answers null once %s follows the take-over', async (ending) => {
+        const { taskId } = await streamOf('task.created', 'task.taken_over', ending);
+        expect(await store.tasks.takenOver(tx, taskId)).toBeNull();
+      });
+
+      it('answers the second take-over when the first was handed back', async () => {
+        const { taskId, ids } = await streamOf(
+          'task.taken_over',
+          'task.handed_back',
+          'task.taken_over',
+        );
+        expect(await store.tasks.takenOver(tx, taskId)).toMatchObject({
+          eventId: ids[2],
+          at: '2026-06-05T09:00:02.000Z',
+        });
+      });
     });
 
     describe('approvals', () => {
@@ -1605,7 +1733,8 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           kind: 'plan' as const,
           status: 'pending' as const,
           requestedAt: '2026-06-01T09:00:00.000Z' as const,
-          deadlineAt: null,
+          // WP-56: every approval carries one now; the column round-trips.
+          deadlineAt: '2026-06-02T09:00:00.000Z' as const,
           decidedByUserId: null,
           decidedAt: null,
           reason: null,
@@ -1623,6 +1752,9 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
             })
           )?.approval.id,
         ).toBe(approvalId);
+        expect((await store.approvals.load(tx, approvalId))?.approval.deadlineAt).toBe(
+          '2026-06-02T09:00:00.000Z',
+        );
         // The second attempt at the same stage is a different question.
         expect(
           await store.approvals.forStageAttempt(tx, {

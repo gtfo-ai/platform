@@ -259,11 +259,12 @@ describe('pool sizing', () => {
       thrown = error;
     }
     expect(thrown).toBeInstanceOf(UndersizedPoolError);
-    // Twenty-one since WP-36: twenty (WP-15c's fourth pipeline worker, WP-18a's `knowledge.index`,
-    // WP-18b's three Librarian queues, WP-21's `onboarding.discovery`, WP-32's digest tick,
-    // WP-31's `task.ask` and WP-35's `bootstrap.history`) plus `maintenance.schedule`, the daily
-    // pass that creates product/18:31's chore tasks.
-    expect((thrown as UndersizedPoolError).required).toBe(21);
+    // Twenty-two since WP-56: twenty-one (WP-15c's fourth pipeline worker, WP-18a's
+    // `knowledge.index`, WP-18b's three Librarian queues, WP-21's `onboarding.discovery`, WP-32's
+    // digest tick, WP-31's `task.ask`, WP-35's `bootstrap.history` and WP-36's
+    // `maintenance.schedule`) plus `deadline.sweep` — **one** worker for the question, approval and
+    // take-over deadlines, which is the architect's ruling and the reason this moved by exactly one.
+    expect((thrown as UndersizedPoolError).required).toBe(22);
     expect((thrown as Error).message).toMatch(/APP_DB_POOL_MAX/);
     // PROGRESS backlog 22's **site 3**, derived rather than spelled since WP-31 round 2. The
     // message used to say "the pipeline's five job workers" beside a `POOL_RESERVATIONS.pipeline`
@@ -328,6 +329,70 @@ describe('pool sizing', () => {
  * same way, and an unparseable value must not silently become the default — an operator who set a
  * number and got another one has no way to find out.
  */
+/**
+ * The working calendar (WP-56): `APP_WORKING_DAYS`, `APP_WORKING_HOURS` and `APP_HOLIDAYS`, read
+ * in `TZ` — shipped in `.env.example` from WP-05 and parsed by nothing until this row.
+ */
+describe('the working calendar', () => {
+  it('is the documented default when nothing is set, and blank means absent', () => {
+    const defaults = {
+      timezone: 'UTC',
+      working_weekdays: [1, 2, 3, 4, 5],
+      working_hours: { start: '09:00', end: '17:00' },
+      holidays: [],
+    };
+    expect(load().workingCalendar).toEqual(defaults);
+    // `.env.example` ships `APP_HOLIDAYS=` empty, and an operator who blanks the other two gets
+    // the default rather than an empty calendar nothing could ever advance on (WP-53's rule).
+    expect(
+      load({ APP_WORKING_DAYS: '', APP_WORKING_HOURS: '  ', APP_HOLIDAYS: '' }).workingCalendar,
+    ).toEqual(defaults);
+  });
+
+  it('reads all four variables', () => {
+    expect(
+      load({
+        TZ: 'Europe/Prague',
+        APP_WORKING_DAYS: '1,2,3,4',
+        APP_WORKING_HOURS: '08:30-16:30',
+        APP_HOLIDAYS: '2026-12-24,2026-12-25',
+      }).workingCalendar,
+    ).toEqual({
+      timezone: 'Europe/Prague',
+      working_weekdays: [1, 2, 3, 4],
+      working_hours: { start: '08:30', end: '16:30' },
+      holidays: ['2026-12-24', '2026-12-25'],
+    });
+  });
+
+  it.each([
+    ['APP_WORKING_DAYS', 'monday'],
+    ['APP_WORKING_DAYS', '1,,2'],
+    ['APP_WORKING_HOURS', '9-17'],
+    ['APP_WORKING_HOURS', '17:00-09:00'],
+    ['APP_HOLIDAYS', 'christmas'],
+  ])('refuses to start on a malformed %s, naming it', (variable, value) => {
+    expect(() => load({ [variable]: value })).toThrow(
+      new RegExp(`invalid server configuration: .*${variable}`),
+    );
+  });
+
+  it('refuses a zone the runtime does not know, naming TZ', () => {
+    expect(() => load({ TZ: 'Europe/New_Yrok' })).toThrow(/TZ/);
+  });
+
+  it('reports a calendar mistake beside the others instead of one at a time', () => {
+    let thrown: unknown;
+    try {
+      load({ APP_WORKING_HOURS: '9-17', PORT: 'eighty' });
+    } catch (error) {
+      thrown = error;
+    }
+    expect((thrown as Error).message).toMatch(/APP_WORKING_HOURS/);
+    expect((thrown as Error).message).toMatch(/PORT/);
+  });
+});
+
 describe('the intake reconciliation interval', () => {
   it('defaults to a minute when nothing is set', () => {
     expect(load().intakeReconcileIntervalMs).toBe(60_000);

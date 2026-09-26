@@ -3,7 +3,8 @@
  *
  * TD-004 chose pg-boss as the adapter and named the workloads: `stage.execute` (singleton per
  * task), `question.timeout` / `question.reminder` (timers whose `startAfter` is computed on the
- * working-day calendar), `mr.comment.debounce` (coalesced, 2 minutes), `budget.window.reset` and
+ * working-day calendar — **one** queue, `deadline.sweep`, since WP-56; TD-004's amendment),
+ * `mr.comment.debounce` (coalesced, 2 minutes), `budget.window.reset` and
  * `poll.<provider>` (cron), index rebuilds and maintenance schedules. Dispatching a domain event
  * is **not** one of them: TD-004 was amended at WP-04a, and TD-005's `event_dispatch` table with
  * its per-process sweep stays the only queue events travel on.
@@ -98,8 +99,8 @@ export interface EnqueueRequest<TData extends JobData = JobData> {
   readonly data?: TData;
   /**
    * The instant the job becomes eligible to run — a *timer*. Absolute, never a relative number of
-   * seconds, so the caller has to have decided which clock it means. `question.timeout` passes the
-   * result of the working-day calendar here.
+   * seconds, so the caller has to have decided which clock it means. `deadline.sweep` passes the
+   * result of the working-day calendar here (WP-56).
    *
    * Cannot be combined with `coalesce`: the coalescing slot is chosen from the clock at enqueue,
    * not from `startAfter`, and the trailing job overwrites `startAfter` with a slot boundary — so
@@ -312,10 +313,26 @@ export const coalescingSlotStart = (at: Date, windowSeconds: number): number =>
 export const JOB_QUEUES = {
   /** One agent stage of one task; `stately` per `task:<id>`. */
   stageExecute: 'stage.execute',
-  /** Question deadline; `startAfter` from the working-day calendar. */
-  questionTimeout: 'question.timeout',
-  /** Question reminder; `startAfter` from the working-day calendar. */
-  questionReminder: 'question.reminder',
+  /**
+   * **Every deadline the platform holds a human to, on one queue** (WP-56) — a question nobody
+   * answered (BD-006), an approval nobody decided (BD-006's Q95 amendment) and a take-over nobody
+   * touched for five working days (product/19 §19).
+   *
+   * A deliberate deviation from TD-004, which named **two** queues, `question.timeout` and
+   * `question.reminder`, for the first of those; both names were declared here from WP-05 and
+   * enqueued by nothing. The architect's ruling for WP-56 is one queue whose payload says which
+   * `(aggregate, id, kind)` a wake-up is about, because every one of these timers has the same
+   * shape — `startAfter` from the working-day calendar, and a re-validation on fire that asks the
+   * aggregate whether it is still waiting — and a queue is a worker is a pooled connection: four
+   * workers for four timers would move `POOL_RESERVATIONS.pipeline` by four with nothing gained.
+   * TD-004 carries the amendment. A reminder, when one is built, is a fifth `kind` here and moves
+   * the pool floor by nothing.
+   *
+   * Policy `stately`, keyed per `(aggregate, id, kind)` by `enqueueDeadline`, so a redelivered arm
+   * collapses onto the timer already queued, and the running timer can re-arm itself (one queued
+   * plus one active per key) when it fires before its deadline.
+   */
+  deadlineSweep: 'deadline.sweep',
   /**
    * Merge-request comment batching (BD-007, technical/02 § ReviewCommentBatcher: batch for two
    * minutes per merge request, then emit **one** `task.stage.returned`).

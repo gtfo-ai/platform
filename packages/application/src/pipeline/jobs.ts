@@ -175,10 +175,11 @@ export interface PipelineOutboundData {
   /** `workpad` only: the brief lives on the event, not on the task row. */
   readonly blocker_brief?: string;
   /**
-   * `workpad` after a `task.taken_over` (WP-27): the branch a human continues on, and the session
-   * `claude --resume` continues. Neither is on the task row — `tasks` says a task is `paused` and
-   * not why, and `runs.session_id` is written when a run *ends* — so they travel on the wake-up,
-   * exactly as `blocker_brief` does and for the same reason.
+   * `workpad` after a `task.taken_over`, **written by builds before WP-56 and read by none since**:
+   * the branch and the session travelled on the wake-up, so only the render that event caused
+   * showed the take-over block (PROGRESS backlog 69). The render now reads the take-over from the
+   * task's stream (`TaskRepository.takenOver`). The fields stay declared so a job still queued
+   * across an upgrade parses; nothing enqueues them and the render ignores them.
    */
   readonly taken_over_branch?: string;
   readonly taken_over_session?: string | null;

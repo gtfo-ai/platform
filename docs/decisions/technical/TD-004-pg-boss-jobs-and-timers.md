@@ -39,3 +39,18 @@ BullMQ (Redis container), NATS JetStream (second stateful system; revisit for mu
 ## Consequences
 - Every timer job re-validates state when it fires (idempotent), so cancellation is optional.
 - pg-boss schema lives in the same database (`pgboss.*`); included in backups.
+
+## Amendment (WP-56, 2026-09-26, on the architect's ruling) — the timers are one queue
+
+`question.timeout` and `question.reminder` were declared from WP-05 and enqueued by nothing. Every
+deadline the platform holds a person to — a blocking question (BD-006), a plan or budget approval
+(BD-006's Q95 amendment) and a taken-over task's 5 working days (product/19 §19) — rides **one**
+queue, `deadline.sweep`, whose payload is `(aggregate, id, kind)`; `startAfter` is computed on the
+working-day calendar, the job is armed after commit by a handler (`pipeline.deadlines`, TD-005
+priority 15), and it re-validates on fire against the aggregate, re-arming itself at least 60 s later
+if it fires early. This is a deliberate deviation from the two named queues: a queue is a worker is a
+pooled connection, so four timers on four queues would raise the pool floor by four with nothing
+gained; one queue raises it by one (`POOL_RESERVATIONS.pipeline`, floor 21 → 22). Reminders, when
+built, are another `kind` on the same queue. Policy `stately`, keyed per `(aggregate, id, kind)`. The
+arming enqueue can be lost the way every after-commit enqueue can (PROGRESS backlog 161), and rows
+written before this change carry no deadline (backlog 162).

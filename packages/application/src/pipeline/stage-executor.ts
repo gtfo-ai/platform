@@ -92,6 +92,8 @@ import {
 } from '../ports/runner.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
+import type { WorkingCalendar } from '../scheduling/working-calendar.js';
+import { questionDeadlineRule } from './deadline-rules.js';
 import {
   leaseExpiryAt,
   RUN_LEASE_TTL_MS,
@@ -205,6 +207,12 @@ export interface StageExecutorOptions {
   /** A fresh `CommandContext` per command: ids, clock and the pipeline's system actor. */
   readonly context: (correlationId: Id) => CommandContext;
   readonly settings: (projectId: Id) => Promise<ProjectSettings>;
+  /**
+   * The organisation's working calendar (WP-56) — what a blocking question's `deadline_at` is
+   * computed on. Required: a question stored without one is a question nothing ever expires, which
+   * is exactly PROGRESS backlog 74, and `PipelineRuntimeOptions.calendar` hands it down.
+   */
+  readonly calendar: WorkingCalendar;
   /**
    * **TD-012 step 2** — the gitleaks-derived pattern rules — over what this executor *stores*
    * (WP-52 round 2).
@@ -1255,6 +1263,9 @@ const record = async (
         text: draft.text,
         blocking: true,
         ...(draft.options === null ? {} : { options: draft.options }),
+        // WP-56: `deadline_at` is written in this transaction, from `questionTimeoutAt` over the
+        // organisation's calendar at the project's `question_timeout` (BD-006).
+        deadlineFrom: questionDeadlineRule(input.options.calendar, input.settings.config),
       },
       context,
     );

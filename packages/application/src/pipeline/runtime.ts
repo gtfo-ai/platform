@@ -11,7 +11,8 @@
  * The dispatcher needs `2 × APP_DISPATCH_MAX_CONCURRENCY + 1` connections
  * (`InsufficientPoolError`), and since WP-15d the pipeline's term is **flat**: one per job worker
  * this runtime starts — `stage.execute`, `mr.comment.debounce`, `pipeline.outbound`, `notify.digest`
- * (WP-32) and `task.ask` (WP-31) — each holding one connection during each of its transactions.
+ * (WP-32), `task.ask` (WP-31) and `deadline.sweep` (WP-56, one worker for every deadline) — each
+ * holding one connection during each of its transactions.
  *
  * That is the whole of it because **no handler calls a provider any more**. Until WP-15d three did
  * (the intake branch check, the workpad, the status mapping), and each made its dispatch hold a
@@ -20,20 +21,14 @@
  * flat. `apps/server/src/config.ts` counted it as `POOL_RESERVATIONS.auditPerDispatch`; that
  * constant is **0** now, and it is the receipt — while it is 1, the shape is back.
  *
- * So a process running the pipeline needs
- * `2 × dispatchConcurrency + 1 + stageConcurrency + reviewConcurrency + outboundConcurrency +
- * digestConcurrency + askConcurrency + 1` at least, and the number is a floor rather than a budget — the HTTP layer and the projections
- * draw on the same pool.
- *
- * That trailing `+ 1` is the **sixth** worker, and it is not started here: WP-15c's
- * `pipeline.intake.reconcile` pass is composed by `apps/server/src/pipeline.ts`, because it is a
- * maintenance schedule the process owns rather than a queue this runtime drives. It is counted
- * unconditionally — including when `APP_INTAKE_RECONCILE_INTERVAL_MS=0` starts no worker at all —
- * because a reservation that shrank with a setting would be a floor an operator could lower by
- * accident. `POOL_RESERVATIONS.pipeline` is therefore **6** (4 until WP-32 added the digest tick, 5
- * until WP-31 added the `task.ask` worker), and this sentence is the reason a
- * reader of *this* file can reach that number: the term is the process's, not this function's
- * (standing rule 63 — an arithmetic claim cannot be maintained from inside one file).
+ * **The count is not restated here.** This ring may not import `POOL_RESERVATIONS` (`biome.json`'s
+ * application override), so the number lives in `apps/server/src/config.ts` alone, beside the two
+ * schedules the *process* owns and this runtime does not start (`pipeline.intake.reconcile` and
+ * `maintenance.schedule`, composed by `apps/server/src/pipeline.ts`). This paragraph used to carry
+ * its own sum and its own count — "`POOL_RESERVATIONS.pipeline` is therefore **6**" — which was
+ * already one stale (WP-36 made it 7) when WP-56 made it 8 (PROGRESS backlog 22's site 5; standing rule 63: an
+ * arithmetic claim cannot be maintained from inside one file). What a worker added here owes is
+ * one line in that constant, and `config.test.ts` is what notices.
  *
  * **One thing a handler still does inside its transaction is read `ProjectSettingsPort`**, which in
  * `apps/server` is a `projects` query on a connection borrowed inside the handler's. It is a
@@ -62,6 +57,7 @@ import type { ShadowStore } from '../shadow/ports.js';
 import { type ShadowReportOptions, shadowHandlers } from '../shadow/report.js';
 import { conflictWarningHandlers } from './conflict-warning.js';
 import { coverageHandlers } from './coverage.js';
+import { deadlineArmingHandler, deadlineSweepHandler, declareDeadlineQueue } from './deadlines.js';
 import { dependencyGateHandlers } from './dependency-gate.js';
 import { epicSplitHandlers } from './epic-split.js';
 import {
@@ -107,7 +103,7 @@ export interface PipelineRuntimeOptions extends PipelineSagaOptions, NotifyOptio
    */
   readonly execution: Omit<
     StageExecutorOptions,
-    'unitOfWork' | 'store' | 'settings' | 'logger' | 'context' | 'redactor'
+    'unitOfWork' | 'store' | 'settings' | 'logger' | 'context' | 'redactor' | 'calendar'
   > &
     Pick<StageExecutorOptions, 'context'>;
   /** How many stages this process runs at once. @default 1 */
@@ -227,6 +223,9 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
     unitOfWork,
     store: options.store,
     settings: async (projectId) => options.settings.forProject(projectId),
+    // WP-56: the calendar a blocking question's deadline is computed on — the saga's own, so the
+    // stage executor and the approval gates cannot resolve `1 working day` on two calendars.
+    calendar: options.calendar,
     // WP-52: TD-012 step 2 over the artifact this executor stores — the **same** redactor the epic
     // split and the ask executor get, supplied here rather than through `execution:` so a
     // composition root cannot give one writer the pattern rules and another writer none.
@@ -313,6 +312,9 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
       ...ask.handlers,
       // WP-40: the spike's report duty, the epic split's queue, and the decision that ends the wait.
       ...epicSplitHandlers({ ...options, unitOfWork }),
+      // WP-56: the three deadlines' timers, armed after commit at TD-005 priority 15 — the
+      // "timer (15)" technical/02's catalogue gives `task.question.asked`.
+      deadlineArmingHandler(options),
     ],
     executor,
     start: async () => {
@@ -320,6 +322,7 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
       // metric, and TD-028's honest consequence — "a deployment with no runner leaves
       // `stage.execute` jobs queued" — is only visible if the queue is there to hold them.
       await declarePipelineQueues(options.jobs);
+      await declareDeadlineQueue(options.jobs);
       await ask.declareQueue();
       if (options.runsAgents ?? true) {
         workers.push(
@@ -355,6 +358,20 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
       if (options.runsAgents ?? true) {
         workers.push(await ask.startWorker());
       }
+      /**
+       * WP-56: the deadline timers — one worker for every kind, one more pooled connection
+       * (`POOL_RESERVATIONS.pipeline`). Subscribed **unconditionally**, unlike `stage.execute`: an
+       * expiry is a row write and an escalation, never a run, so TD-028 decision 5's reason for
+       * gating the agent queues does not apply, and a process that runs no agent must still stop a
+       * question from waiting for ever.
+       */
+      workers.push(
+        await options.jobs.work({
+          queue: JOB_QUEUES.deadlineSweep,
+          handler: deadlineSweepHandler({ ...options, unitOfWork }),
+          concurrency: 1,
+        }),
+      );
       workers.push(
         await options.jobs.work<PipelineOutboundData>({
           queue: JOB_QUEUES.pipelineOutbound,

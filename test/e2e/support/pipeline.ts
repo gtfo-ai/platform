@@ -68,7 +68,7 @@ import {
   scriptedWorkspaces,
   type WorkspaceRelease,
 } from './agent-workspace.js';
-import { type Instance, startInstance } from './instance.js';
+import { type Instance, ROLE_ALL_POOL_FLOOR, startInstance } from './instance.js';
 
 export const GIT_INTEGRATION_ID = '00000000-0000-4000-8000-00000000a001' as Id;
 export const TICKETS_INTEGRATION_ID = '00000000-0000-4000-8000-00000000a002' as Id;
@@ -888,10 +888,10 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
       // Turn the instance's own timers down rather than sleeping in the assertions.
       APP_JOBS_POLL_INTERVAL_SECONDS: '0.5',
       APP_DISPATCH_POLL_INTERVAL_MS: '25',
-      // The dispatcher's floor plus the pipeline's job workers (`pipeline/runtime.ts`) — seven
-      // since WP-36's `maintenance.schedule`, which is why this is one above `instance.ts`'s exact
-      // floor.
-      APP_DB_POOL_MAX: '22',
+      // One connection above `instance.ts`'s exact floor, which that file reads off
+      // `requiredPoolConnections` (WP-56) — derived here from the same number rather than spelled,
+      // so a worker added to `POOL_RESERVATIONS` moves both lines at once.
+      APP_DB_POOL_MAX: String(ROLE_ALL_POOL_FLOOR + 1),
       // The credential `composeAgentRunner` refuses to compose a runner without in `api` mode. It is
       // planted rather than absent precisely so the redaction assertions have something to look for.
       ...(realRunner ? { ANTHROPIC_API_KEY: PLANTED_MODEL_KEY } : {}),

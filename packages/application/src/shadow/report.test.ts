@@ -516,6 +516,7 @@ describe('the shadow report, through the whole walk', () => {
         settings: staticProjectSettings(() => harness.settings),
         integrations: staticPipelineIntegrations(harness.integrations),
         jobs: harness.jobs,
+        calendar: harness.calendar,
         ids: harness.ids,
         clock: { now: () => harness.clock.now() },
       },

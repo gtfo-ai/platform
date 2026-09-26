@@ -35,7 +35,7 @@ import type {
   TaskRepository,
   Transaction,
 } from '@platform/application';
-import { TaskConcurrentModificationError } from '@platform/application';
+import { TAKE_OVER_BOUNDARY_EVENTS, TaskConcurrentModificationError } from '@platform/application';
 import type {
   EstimateBasis,
   HistorySample,
@@ -698,6 +698,40 @@ export const createPostgresPipelineStore = (
         [taskId, stage, attempt],
       );
       return rows[0]?.return_reason ?? null;
+    },
+    takenOver: async (tx, taskId) => {
+      // One indexed read of the task's own stream (WP-56): the newest boundary event decides, the
+      // same projection `apps/server`'s read model makes over two of these types. A payload that
+      // does not carry a branch and a stage answers **nothing** rather than a blank block, because
+      // the branch is the whole point of the record.
+      const { rows } = await sqlOf(tx).query<{
+        id: string;
+        type: string;
+        payload: Record<string, unknown>;
+        occurred_at: Date | string;
+      }>(
+        `select id, type, payload, occurred_at
+           from events
+          where stream_type = 'task' and stream_id = $1 and type = any($2::text[])
+          order by stream_seq desc
+          limit 1`,
+        [taskId, [...TAKE_OVER_BOUNDARY_EVENTS]],
+      );
+      const row = rows[0];
+      if (row === undefined || row.type !== 'task.taken_over') {
+        return null;
+      }
+      const { branch, stage, session_id: sessionId } = row.payload;
+      if (typeof branch !== 'string' || typeof stage !== 'string') {
+        return null;
+      }
+      return {
+        eventId: row.id as Id,
+        at: isoOf(row.occurred_at),
+        branch,
+        sessionId: typeof sessionId === 'string' ? sessionId : null,
+        stage: stage as Slug,
+      };
     },
   };
 

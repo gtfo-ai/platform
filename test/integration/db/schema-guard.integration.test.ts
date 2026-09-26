@@ -16,7 +16,7 @@
  * same database is used for both so the only difference between them is the planted row.
  */
 import { db } from '@platform/infrastructure';
-import { startRuntime } from '@platform/server';
+import { loadServerConfig, requiredPoolConnections, startRuntime } from '@platform/server';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
 import { withClient } from '../support/postgres.js';
@@ -40,17 +40,25 @@ afterAll(async () => {
  * `ROLE=all` on purpose — the refusal has to hold for the process an operator actually runs, and
  * the pool floor below is the one `requiredPoolConnections` computes for that role.
  */
-const environmentFor = (connectionString: string): Record<string, string> => ({
-  ROLE: 'all',
-  PORT: '0',
-  HOST: '127.0.0.1',
-  APP_BASE_URL: 'http://127.0.0.1:8080',
-  DATABASE_URL: connectionString,
-  APP_SECRET_KEY: 'schema-guard-integration-secret-not-a-real-secret-0000',
-  APP_DB_POOL_MAX: '21',
-  LOG_LEVEL: 'silent',
-  TZ: 'UTC',
-});
+const environmentFor = (connectionString: string): Record<string, string> => {
+  const environment = {
+    ROLE: 'all',
+    PORT: '0',
+    HOST: '127.0.0.1',
+    APP_BASE_URL: 'http://127.0.0.1:8080',
+    DATABASE_URL: connectionString,
+    APP_SECRET_KEY: 'schema-guard-integration-secret-not-a-real-secret-0000',
+    LOG_LEVEL: 'silent',
+    TZ: 'UTC',
+  };
+  // The floor itself, read off `requiredPoolConnections` rather than spelled (WP-56): this line said
+  // `'21'` and was the one site of PROGRESS backlog 22's arithmetic a `git grep` over `test/e2e`
+  // missed when `deadline.sweep` moved the floor to 22 — found by this tier refusing to boot.
+  const floor = requiredPoolConnections(
+    loadServerConfig({ ...environment, APP_DB_POOL_MAX: '1000' }),
+  );
+  return { ...environment, APP_DB_POOL_MAX: String(floor) };
+};
 
 const plantFutureMigration = async (): Promise<void> => {
   await withClient(database.connectionString, async (client) => {

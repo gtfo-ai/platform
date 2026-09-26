@@ -26,6 +26,8 @@ import { describe, expect, it } from 'vitest';
 import { exactSecretRedactor } from '../integrations/redaction.js';
 import type { DependencyMetadataPort } from '../ports/dependency-metadata.js';
 import type { FileDiff, MergeRequest } from '../ports/integrations/git-provider.js';
+import { JOB_QUEUES } from '../ports/jobs.js';
+import { questionTimeoutAt } from '../scheduling/working-calendar.js';
 import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000d1' as Id;
@@ -289,6 +291,24 @@ describe('the dependency gate (product/04:58, WP-38)', () => {
     ]);
     // The question belongs to the stage that added the package, so answering it resumes *that* run.
     expect(stored?.dependencies?.head_sha).toBe(HEAD);
+
+    // WP-56: it expires like every other question — its deadline is the calendar's answer for the
+    // instant it was asked, and a timer is armed for it. `deadlineFrom: () => null` at the gate
+    // survived the whole pipeline tier before this line.
+    const question = await harness.store.questions.load(
+      {} as never,
+      stored?.dependencies?.question_id as Id,
+    );
+    expect(question?.deadlineAt).toBe(
+      questionTimeoutAt(harness.calendar, new Date(question?.askedAt as string)).toISOString(),
+    );
+    expect(
+      harness.jobs.enqueued.filter(
+        (request) =>
+          request.queue === JOB_QUEUES.deadlineSweep &&
+          (request.data as { id?: string }).id === question?.id,
+      ),
+    ).toHaveLength(1);
   });
 
   it('asks nothing when the same walk produces a diff that touches no manifest', async () => {

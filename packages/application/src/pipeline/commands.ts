@@ -44,6 +44,8 @@ import {
   handBackTask,
   InvariantViolationError,
   isActiveRunStatus,
+  isBefore,
+  isTaskFinished,
   pauseTask,
   recordFeedback,
   resetAgentIterations,
@@ -132,23 +134,71 @@ export const answerTaskQuestion = async (
   });
 };
 
-/** The `question.timeout` timer fired (TD-004). The saga escalates on the event this emits. */
+/**
+ * What a deadline timer found when it fired (WP-56) — the three answers re-validation can give.
+ *
+ * - `expired`: the deadline had passed and the aggregate was still waiting, so it expired now;
+ * - `not_due`: the aggregate is still waiting and its deadline is **later** than this process's
+ *   clock — a timer that fired early (the queue's clock is the database's, the deadline is this
+ *   process's), which the caller re-arms at `dueAt` rather than acting on;
+ * - `settled`: there is nothing to do — answered, decided, handed back, deleted, or a row written
+ *   before WP-56 with no deadline at all. The normal case for a timer nobody can cancel (TD-004).
+ */
+export type DeadlineOutcome =
+  | { readonly kind: 'expired' }
+  | { readonly kind: 'not_due'; readonly dueAt: IsoDateTime }
+  | { readonly kind: 'settled' };
+
+const SETTLED: DeadlineOutcome = { kind: 'settled' };
+
+/**
+ * A task that is `done` or `cancelled` owes nobody an answer (WP-56 round 2): a question or an
+ * approval it left open is not expired, because an expiry on a finished task would append an event
+ * about a wait that ended with the task, and there is nobody the escalation could reach.
+ */
+const taskIsFinished = async (
+  deps: TaskCommandDependencies,
+  tx: Transaction,
+  taskId: Id,
+): Promise<boolean> => {
+  const stored = await deps.store.tasks.load(tx, taskId);
+  return stored === null || isTaskFinished(stored.task);
+};
+const EXPIRED: DeadlineOutcome = { kind: 'expired' };
+
+/**
+ * The `deadline.sweep` timer fired for a question (TD-004, WP-56). The saga escalates on the event
+ * this emits.
+ *
+ * **This is the whole of the re-validation**, and it asks two questions rather than the one it used
+ * to: *is the question still open* — the timer cannot be cancelled, so it fires for questions that
+ * were answered meanwhile — and *has its deadline passed on this process's clock*. The second is
+ * new: the job's `startAfter` is honoured by the queue's clock, so a timer can fire a moment before
+ * the deadline the row stores, and expiring then would expire a question at 15:59:59 that BD-006
+ * gave until 16:00. The boundary is **inclusive**: at the stored instant exactly, the deadline has
+ * passed — otherwise a timer armed *at* the deadline would find it "not yet" for ever.
+ */
 export const expireTaskQuestion = async (
   deps: TaskCommandDependencies,
   questionId: Id,
-): Promise<void> => {
-  await deps.unitOfWork.transaction(async (scope) => {
+): Promise<DeadlineOutcome> =>
+  deps.unitOfWork.transaction(async (scope) => {
     const question = await deps.store.questions.load(scope.tx, questionId);
-    if (question === null || question.status !== 'open') {
-      // The timer cannot be cancelled (TD-004), so it fires for questions that were answered in
-      // the meantime. Finding nothing to do is the normal case, not an error.
-      return;
+    if (question === null || question.status !== 'open' || question.deadlineAt === null) {
+      return SETTLED;
     }
-    const decision = expireQuestion(question, deps.context(question.taskId));
+    if (await taskIsFinished(deps, scope.tx, question.taskId)) {
+      return SETTLED;
+    }
+    const context = deps.context(question.taskId);
+    if (isBefore(context.clock.now(), question.deadlineAt)) {
+      return { kind: 'not_due', dueAt: question.deadlineAt };
+    }
+    const decision = expireQuestion(question, context);
     await deps.store.questions.save(scope.tx, decision.aggregate);
     await scope.events.append(decision.events);
+    return EXPIRED;
   });
-};
 
 /**
  * BD-006: only a mapped maintainer decides, which `decideApproval` enforces through `can()`.
@@ -188,20 +238,39 @@ export const decideTaskApproval = async (
   });
 };
 
+/**
+ * The `deadline.sweep` timer fired for an approval (WP-56, BD-006's Q95 amendment). The saga's
+ * `approvalHandler` escalates on the `expired` decision this emits.
+ *
+ * Re-validates exactly as {@link expireTaskQuestion} does: a decided approval is `settled`, and one
+ * whose deadline this process's clock has not reached is `not_due`. Until WP-56 this function had
+ * **no caller at all**, production or test (PROGRESS backlog 76).
+ */
 export const expireTaskApproval = async (
   deps: TaskCommandDependencies,
   approvalId: Id,
-): Promise<void> => {
-  await deps.unitOfWork.transaction(async (scope) => {
+): Promise<DeadlineOutcome> =>
+  deps.unitOfWork.transaction(async (scope) => {
     const stored = await deps.store.approvals.load(scope.tx, approvalId);
-    if (stored === null || stored.approval.status !== 'pending') {
-      return;
+    if (
+      stored === null ||
+      stored.approval.status !== 'pending' ||
+      stored.approval.deadlineAt === null
+    ) {
+      return SETTLED;
     }
-    const decision = expireApproval(stored.approval, deps.context(stored.approval.taskId));
+    if (await taskIsFinished(deps, scope.tx, stored.approval.taskId)) {
+      return SETTLED;
+    }
+    const context = deps.context(stored.approval.taskId);
+    if (isBefore(context.clock.now(), stored.approval.deadlineAt)) {
+      return { kind: 'not_due', dueAt: stored.approval.deadlineAt };
+    }
+    const decision = expireApproval(stored.approval, context);
     await deps.store.approvals.save(scope.tx, { ...stored, approval: decision.aggregate });
     await scope.events.append(decision.events);
+    return EXPIRED;
   });
-};
 
 // ── The human command surface (WP-15i) ───────────────────────────────────────
 

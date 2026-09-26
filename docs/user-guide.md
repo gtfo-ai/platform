@@ -185,7 +185,9 @@ the rest are not measured yet, rather than drawing empty ticks that read as "pas
   whether the workspace was exported — and the ticket's workpad is updated with the same
   instructions, so the information reaches you there today. What is missing is the **buttons**: a
   place on this screen to show those lines, and a stage picker for handing the task back. Until they
-  land, take over from the API (`POST /api/tasks/:id/take-over`) and read the workpad comment.
+  land, take over from the API (`POST /api/tasks/:id/take-over`) and read the workpad comment. A
+  task you took over and did not hand back moves to needing a human after **5 working days**; the
+  workpad keeps showing your branch and the resume command while it waits.
 - **Ask the task a question.** The answers are a thread, and the task response has nowhere to carry
   one, so a question would post into a void.
 
@@ -231,11 +233,14 @@ computed from whatever two samples the browser happened to see is a number with 
 place.
 
 A question the agent asks may also arrive in Slack, and all channels are equivalent — **the first
-answer wins**. So the inbox links to the task rather than pretending to be the only way in. An
-expired question is not silently dropped; it moves the task to needing a human.
+answer wins**. So the inbox links to the task rather than pretending to be the only way in. A
+question is due after the project's question timeout — **1 working day** by default, counted on the
+organisation's working calendar, so one asked late on a Friday is due on Monday — and an expired
+question is not silently dropped; it moves the task to needing a human.
 
 Approvals work the same way: the plan-approval gate is what the **Supervised** autonomy level turns
-on above a certain task size, and any maintainer can decide it.
+on above a certain task size, and any maintainer can decide it. An approval nobody decides expires on
+the same calendar and at the same timeout as a question, and moves the task to needing a human too.
 
 ## 7. Knowledge
 

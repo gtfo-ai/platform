@@ -83,7 +83,7 @@ export type DatabaseConfig = z.infer<typeof databaseConfigSchema>;
 export const DATABASE_CONFIG_DEFAULTS = {
   appRole: 'platform_app',
   /**
-   * 19 at WP-31, from 13 (WP-15b) and 10 before that.
+   * 22 at WP-56 (`deadline.sweep`), from 21 (WP-36), 19 (WP-31), 13 (WP-15b) and 10 before that.
    *
    * **The floor is not restated here** — it is `apps/server`'s `requiredPoolConnections`, computed
    * from `POOL_RESERVATIONS`, and this ring may not import it (`biome.json`: `infrastructure` may
@@ -92,19 +92,20 @@ export const DATABASE_CONFIG_DEFAULTS = {
    * the floor does not degrade, it **refuses to boot** with `UndersizedPoolError`, which is how
    * every work package that added a worker found this line.
    *
-   * Two facts a reader needs, both true at WP-36 and both checkable rather than restated. **This
+   * Two facts a reader needs, both true at WP-56 and both checkable rather than restated. **This
    * value equals the `ROLE=all` floor exactly, with no slack** — it was *"the floor plus one"* until
    * WP-31's `task.ask` worker raised the floor onto it, and the sentence claiming the slack was
-   * still here after the floor had moved, which is backlog 22's site 6. It has moved twice since,
-   * with `bootstrap.history` (WP-35) and `maintenance.schedule` (WP-36). And **the two shipped
-   * defaults for this one knob differ**: this one, which a process with no `.env` gets, and
-   * `.env.example`'s `APP_DB_POOL_MAX=22`, which an operator copies. Both are **held to the
+   * still here after the floor had moved, which is backlog 22's site 6. It has moved three times
+   * since, with `bootstrap.history` (WP-35), `maintenance.schedule` (WP-36) and `deadline.sweep`
+   * (WP-56). And **the two shipped defaults for this one knob differ**: this one, which a process
+   * with no `.env` gets, and `.env.example`'s `APP_DB_POOL_MAX`, which an operator copies and which
+   * stays one above this. Both are **held to the
    * floor** — `apps/server/src/config.test.ts` reads `APP_DB_POOL_MAX` out of `.env.example` and
    * asserts each value clears `requiredPoolConnections` — so neither can fall under it unnoticed.
    * What is still unstated is which of the two is *intended*, and that is backlog 22's remaining
    * half rather than a thing to guess at here.
    */
-  poolMax: 21,
+  poolMax: 22,
   connectionTimeoutMs: 10_000,
   partitionMonthsAhead: 3,
 } as const;

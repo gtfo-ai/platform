@@ -131,14 +131,15 @@ export interface WorkpadView {
   /** The last blocker brief, when the task is parked. */
   readonly blocker: string | null;
   /**
-   * The take-over in force, when this render was caused by one (WP-27, product/19 §19).
+   * The take-over a human still holds (WP-27, product/19 §19), or `null`.
    *
-   * Carried on the wake-up rather than re-derived, for the reason {@link WorkpadView.blocker} is:
-   * `tasks` records that a task is `paused` and not **why**, and the session id is not on the row
-   * at all (`runs.session_id` is written when a run *ends*, and a take-over interrupts one that has
-   * not). So it is the one thing here that a later render of the same comment cannot reproduce —
-   * stated rather than implied, and bounded by the fact that a paused task emits almost nothing:
-   * the workpad's other ten events are all pipeline motion, which a taken-over task has none of.
+   * **Read from state at render time since WP-56** (`TaskRepository.takenOver`, PROGRESS backlog
+   * 69), where WP-27 carried it on the wake-up: the handler copied the branch and the session onto
+   * the job only when the event it woke on was `task.taken_over`, so every *other* render of a
+   * task still taken over dropped the block. That was latent while a taken-over task emitted
+   * nothing; WP-56's inactivity timer made it certain, because the escalation it raises is a
+   * workpad event on a task a person is still holding — the one render where the branch line
+   * matters most.
    */
   readonly takenOver: {
     readonly branch: string;
@@ -277,9 +278,6 @@ interface TaskEventPayload {
   readonly task_id?: Id;
   readonly project_id?: Id;
   readonly blocker_brief?: string;
-  /** `task.taken_over` (WP-27): the two values the render cannot get from the task row. */
-  readonly branch?: string;
-  readonly session_id?: string | null;
 }
 
 export const workpadHandler = (options: WorkpadOptions): EventHandler => ({
@@ -293,20 +291,15 @@ export const workpadHandler = (options: WorkpadOptions): EventHandler => ({
     if (taskId === undefined || projectId === undefined) {
       return;
     }
-    const takenOver = context.event.event.type === 'task.taken_over';
     const data: PipelineOutboundData = {
       duty: 'workpad',
       project_id: projectId,
       task_id: taskId,
       cause_event_id: context.event.event.id,
-      // The one thing the render cannot re-derive from the task row.
+      // The one thing the render cannot re-derive from state. The take-over block used to ride
+      // here too, from `task.taken_over` only; since WP-56 the render reads it from the task's
+      // stream instead, so it is on every render of a task somebody is holding.
       ...(payload.blocker_brief === undefined ? {} : { blocker_brief: payload.blocker_brief }),
-      // …and the two the take-over adds (WP-27). Only from `task.taken_over`: reading `branch` off
-      // any task event would put the block on every render, and the block is a statement that a
-      // person is holding this task right now.
-      ...(takenOver && payload.branch !== undefined
-        ? { taken_over_branch: payload.branch, taken_over_session: payload.session_id ?? null }
-        : {}),
     };
     context.afterCommit(async () => {
       await enqueueOutbound(options.jobs, data);
@@ -386,25 +379,27 @@ export const runWorkpadRender = async (
   if (taskId === undefined) {
     return;
   }
-  const stored = await options.unitOfWork.transaction(async (scope) =>
-    options.store.tasks.load(scope.tx, taskId),
-  );
-  if (stored === null) {
+  // The take-over is read in the same transaction as the row, so the two describe one instant:
+  // the render follows **state**, not whichever event woke it (WP-56, criterion 6). A wake-up
+  // enqueued by an older build still carries `taken_over_branch`; it is ignored, because the
+  // stream is the authority and the payload is what went stale.
+  const read = await options.unitOfWork.transaction(async (scope) => {
+    const task = await options.store.tasks.load(scope.tx, taskId);
+    return task === null
+      ? null
+      : { stored: task, takenOver: await options.store.tasks.takenOver(scope.tx, taskId) };
+  });
+  if (read === null) {
     return;
   }
+  const { stored, takenOver } = read;
   const settings = await options.settings.forProject(stored.task.projectId);
-  const branch = data.taken_over_branch;
   const markdown = renderWorkpad(
     viewOf(
       stored,
       settings.taskBudgetUsd,
       data.blocker_brief ?? null,
-      typeof branch === 'string'
-        ? {
-            branch,
-            sessionId: typeof data.taken_over_session === 'string' ? data.taken_over_session : null,
-          }
-        : null,
+      takenOver === null ? null : { branch: takenOver.branch, sessionId: takenOver.sessionId },
     ),
   );
   // The workpad is written outside any run, so the call's scope holds no minted credential (Q55).

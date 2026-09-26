@@ -465,7 +465,7 @@ export const AUTONOMY_POLICY_READERS = {
   questionTimeout: {
     kind: 'unread',
     owner: 'none',
-    why: "BD-006's one working day. `questions.deadline_at` is written from the template's own limit and nothing sweeps it, so the dial has nothing to move",
+    why: "BD-006's one working day. Since WP-56 `questions.deadline_at` (and `approvals.deadline_at`) is written from the project's `pipeline.limits.question_timeout` on the organisation calendar and a `deadline.sweep` timer expires it — the configuration key is read, the dial's copy of it is not, so moving the dial moves nothing (PROGRESS backlog 72)",
   },
   humanMrRounds: {
     kind: 'unread',

@@ -11,7 +11,7 @@
  * a `task_asks` row `pending` for ever. Nothing re-emits it, nothing retries it, and nothing logs
  * it — `EventBus` logs only the case where a callback *threw*.
  *
- * ## Six sites, five of them here, and the sixth named rather than silently absent
+ * ## Seven sites, six of them here, and the seventh named rather than silently absent
  *
  * | site | entry | what is lost | where the recovery is |
  * |---|---|---|---|
@@ -21,6 +21,7 @@
  * | ask-the-task | **84** | one question, pending for ever | **here** — `task_ask` below |
  * | a run nothing is driving | **109** | the run's row *and its budget reservation*, for ever | **here** — `run_lease`, in `./run-lease.ts` |
  * | intake, a matched ticket | **20** | one task never starts | `pipeline/intake-reconcile.ts`, and it stays there |
+ * | a deadline's timer (WP-56) | **161** | a question, approval or take-over waits for ever | **here** — `deadline`, in `./deadline.ts`, which also backfills the rows **162** names |
  *
  * …plus two rows that are **not** lost wake-ups at all and ride the same pass because each is the
  * other half of one of them: `task_ask_run` (**121**), a question still `pending` whose run is
@@ -125,6 +126,7 @@ import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
+import { type DeadlineRecoverySite, recoverDeadlines } from './deadline.js';
 import {
   enqueueRunCredentialRevocation,
   type RunCredentialRecoverySite,
@@ -317,6 +319,15 @@ export interface StrandedRecoveryOptions {
    * pipeline has no `pipeline.outbound` worker to take the duty it enqueues.
    */
   readonly credentials?: RunCredentialRecoverySite;
+  /**
+   * The deadline site (WP-56 round 2, PROGRESS backlog **161** and **162**, `./deadline.ts`): a
+   * question, approval or take-over whose timer was lost, and a row written before deadlines existed.
+   *
+   * **Absent is "no deadline is recovered"** — a lost arm leaves its aggregate waiting for ever.
+   * Optional for the reason `runs` is: it expires through the pipeline's own path, so a composition
+   * with no pipeline has nothing to give it.
+   */
+  readonly deadlines?: DeadlineRecoverySite;
   readonly logger?: Logger;
 }
 
@@ -708,6 +719,24 @@ export const runStrandedRecovery = async (
       found: found.credentials.length,
       reEnqueued: found.credentials.length,
       ended: 0,
+    });
+  }
+
+  if (options.deadlines !== undefined) {
+    // After the query-shaped sites and before the run sweep, in its own transactions: it expires
+    // through the `deadline.sweep` job's path (`settleDeadline`), which owns its transactions.
+    const deadlines = await recoverDeadlines(options.deadlines, {
+      now,
+      graceMs: grace,
+      limit,
+      clock: options.clock,
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
+    });
+    sites.push({
+      site: 'deadline',
+      found: deadlines.found,
+      reEnqueued: deadlines.backfilled,
+      ended: deadlines.expired,
     });
   }
 

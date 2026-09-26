@@ -85,10 +85,18 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
  * for. Its **four** sites are pause, cancel, the pause a cancelled run leaves behind, and WP-27's
  * take-over — which is a pause with a branch and a session id on its event, and which therefore
  * shares that ending exactly.
+ *
+ * `deadlines.ts` joined them at **WP-56** with **one** site and the **job's** ending, spelled as the
+ * dependency gate spells it: the `deadline.sweep` job escalates a take-over nobody touched for five
+ * working days, in a transaction it owns, retrying through `retryOnTaskConflict` and handing an
+ * exhausted bound to `escalateTaskAfterConflict` — whose ending is the same state this one wanted.
+ * The question and approval expiries write **no** task row: they expire their own aggregate and the
+ * saga escalates on the event, inside the handler transaction `EventBus` owns.
  */
 const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
   ['packages/application/src/pipeline/commands.ts', 4],
   ['packages/application/src/pipeline/dead-letter.ts', 1],
+  ['packages/application/src/pipeline/deadlines.ts', 1],
   ['packages/application/src/recovery/run-lease.ts', 1],
   ['packages/application/src/pipeline/dependency-gate.ts', 1],
   ['packages/application/src/pipeline/saga.ts', 13],
@@ -158,7 +166,7 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     );
   });
 
-  it('counts thirty-one, which is the number the change states', () => {
+  it('counts thirty-two, which is the number the change states', () => {
     // Twenty-one inherited from WP-15d (`saga.ts` 11, `transitions.ts` 5, `stage-executor.ts` 5 —
     // backlog 18 counted twenty before `stage-executor.ts` gained its fifth) plus the one
     // `escalateTaskAfterConflict` adds, which is the ending for the other twenty-one; plus four
@@ -180,8 +188,10 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     // **Plus one at WP-49**: the dead-letter escalation, the first site that owns **no** transaction
     // — it writes on the dispatcher's — and therefore the first whose ending is to let the refusal
     // escape and roll the dead letter back with it, so the next sweep tries again.
+    // **Plus one at WP-56**: the take-over inactivity escalation, from the `deadline.sweep` job,
+    // with the job's retry and `escalateTaskAfterConflict` as its ending.
     const total = [...census().values()].reduce((sum, count) => sum + count, 0);
-    expect(total).toBe(31);
+    expect(total).toBe(32);
     expect([...EXPECTED_SITES.values()].reduce((sum, count) => sum + count, 0)).toBe(total);
   });
 

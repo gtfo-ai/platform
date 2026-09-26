@@ -38,7 +38,7 @@ const pending = (shared = world(), kind: Approval['kind'] = 'plan'): Approval =>
       taskId: TASK_ID,
       projectId: PROJECT_ID,
       kind,
-      deadlineAt: '2026-09-10T09:00:00.000Z',
+      deadlineFrom: () => '2026-09-10T09:00:00.000Z',
     },
     context(shared),
   );
@@ -74,11 +74,36 @@ describe('createApproval', () => {
 
   it('leaves the deadline open when there is none', () => {
     const approval = createApproval(
-      { id: APPROVAL_ID, taskId: TASK_ID, projectId: PROJECT_ID, kind: 'budget' },
+      {
+        id: APPROVAL_ID,
+        taskId: TASK_ID,
+        projectId: PROJECT_ID,
+        kind: 'budget',
+        deadlineFrom: () => null,
+      },
       context(world()),
     );
     expect(approval.deadlineAt).toBeNull();
     expect(isApprovalOverdue(approval, '2030-01-01T00:00:00.000Z')).toBe(false);
+  });
+
+  it('computes the deadline from the instant it stores as requestedAt', () => {
+    const seen: string[] = [];
+    const approval = createApproval(
+      {
+        id: APPROVAL_ID,
+        taskId: TASK_ID,
+        projectId: PROJECT_ID,
+        kind: 'plan',
+        deadlineFrom: (requestedAt) => {
+          seen.push(requestedAt);
+          return '2026-09-10T09:00:00.000Z';
+        },
+      },
+      context(world()),
+    );
+    expect(seen).toEqual([approval.requestedAt]);
+    expect(isApprovalOverdue(approval, '2026-09-10T09:00:00.001Z')).toBe(true);
   });
 });
 

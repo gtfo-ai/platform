@@ -80,35 +80,52 @@ export interface OpenQuestionInput {
   readonly options?: readonly string[];
   readonly blocking: boolean;
   /**
-   * When the question expires. Computed by the caller because `1 working day` (the default, Q8)
-   * needs the organisation's working-day calendar, which is a scheduling concern (WP-05).
+   * When the question expires, **as a function of the instant it is asked** (WP-56).
+   *
+   * The caller supplies the rule because `1 working day` (the default, BD-006, Q8) needs the
+   * organisation's working-day calendar, which is a scheduling concern (WP-05) this ring does not
+   * own; the aggregate supplies the instant, so the deadline is computed from exactly the `askedAt`
+   * the row stores rather than from a second reading of the clock. **Required**, where it used to
+   * be optional and defaulted to `null`: every question on this build was stored with no deadline
+   * because no site passed one (PROGRESS backlog 74), and a required rule makes the next site
+   * decide rather than inherit that. `() => null` is still expressible — a decision somebody writes
+   * down, not a default somebody forgets.
    */
-  readonly deadlineAt?: IsoDateTime;
+  readonly deadlineFrom: DeadlineRule;
 }
+
+/**
+ * A deadline as a function of the instant its clock starts (WP-56) — the working-day calendar
+ * applied to a configured duration, or `null` for "this never expires".
+ */
+export type DeadlineRule = (from: IsoDateTime) => IsoDateTime | null;
 
 /**
  * Creates the question. No event: `task.question.asked` is the task's, and it carries this
  * record — see `askQuestion` in `./task.ts`.
  */
-export const openQuestion = (input: OpenQuestionInput, context: CommandContext): Question => ({
-  id: input.id,
-  taskId: input.taskId,
-  projectId: input.projectId,
-  stage: input.stage,
-  runId: input.runId ?? null,
-  text: input.text,
-  options: input.options ?? null,
-  blocking: input.blocking,
-  status: 'open',
-  askedAt: context.clock.now(),
-  deadlineAt: input.deadlineAt ?? null,
-  remindersSent: 0,
-  answer: null,
-  answeredByUserId: null,
-  answeredVia: null,
-  answeredAt: null,
-  sequence: FIRST_STREAM_SEQ,
-});
+export const openQuestion = (input: OpenQuestionInput, context: CommandContext): Question => {
+  const askedAt = context.clock.now();
+  return {
+    id: input.id,
+    taskId: input.taskId,
+    projectId: input.projectId,
+    stage: input.stage,
+    runId: input.runId ?? null,
+    text: input.text,
+    options: input.options ?? null,
+    blocking: input.blocking,
+    status: 'open',
+    askedAt,
+    deadlineAt: input.deadlineFrom(askedAt),
+    remindersSent: 0,
+    answer: null,
+    answeredByUserId: null,
+    answeredVia: null,
+    answeredAt: null,
+    sequence: FIRST_STREAM_SEQ,
+  };
+};
 
 /** The wire shape (`questionRecordSchema`) the task's `task.question.asked` carries. */
 export const toQuestionRecord = (question: Question): QuestionRecord => ({

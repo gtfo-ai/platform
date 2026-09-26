@@ -538,6 +538,50 @@ export interface TaskRepository {
     stage: Slug,
     attempt: number,
   ): Promise<string | null>;
+  /**
+   * The take-over a human still holds on this task, or `null` — WP-56, PROGRESS backlog 69.
+   *
+   * A **narrow read of the task's own event stream**, not a column: `tasks` records that a task is
+   * `paused` and not *why*, and the session id of the run a take-over interrupted is on no row at
+   * all. The answer is the newest of the events that can start or end a take-over
+   * ({@link TAKE_OVER_BOUNDARY_EVENTS}), and it is a take-over exactly when that newest one is
+   * `task.taken_over`. So a hand-back withdraws it, and so do a resume, a stage entry, a completion
+   * and a cancellation — the pipeline moving again means nobody is holding the task — while an
+   * **escalation does not**: a taken-over task the inactivity timer parks in `needs_human` is still
+   * in the hands of the person who took it, and the workpad that tells everybody so must keep
+   * saying where the branch is (criterion 6).
+   *
+   * It is what the workpad render and the take-over timer both ask, so the block and the timer
+   * follow **state** rather than whichever wake-up happened to carry the payload.
+   */
+  takenOver(tx: Transaction, taskId: Id): Promise<TakeOverRecord | null>;
+}
+
+/**
+ * The events whose newest occurrence on a task's stream decides whether it is taken over (WP-56).
+ *
+ * One list for the SQL store and the in-memory one, so the two answer the same question; the
+ * contract suite asserts each ending. `task.escalated` is **deliberately absent**, for the reason
+ * {@link TaskRepository.takenOver} gives.
+ */
+export const TAKE_OVER_BOUNDARY_EVENTS = [
+  'task.taken_over',
+  'task.handed_back',
+  'task.resumed',
+  'task.stage.entered',
+  'task.completed',
+  'task.cancelled',
+] as const;
+
+/** A take-over in force, as `task.taken_over` recorded it (product/19 §19, WP-27). */
+export interface TakeOverRecord {
+  /** The `task.taken_over` event's own id — which take-over this is, when there were several. */
+  readonly eventId: Id;
+  /** When it was taken: the instant the inactivity timeout counts from (WP-56). */
+  readonly at: IsoDateTime;
+  readonly branch: string;
+  readonly sessionId: string | null;
+  readonly stage: Slug;
 }
 
 export interface StoredArtifact {

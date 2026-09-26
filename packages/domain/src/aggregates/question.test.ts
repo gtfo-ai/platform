@@ -50,7 +50,7 @@ const open = (shared = world(), blocking = true): Question =>
       text: 'Which locale should the export use?',
       options: ['the user locale', 'always en-GB'],
       blocking,
-      deadlineAt: '2026-09-10T09:00:00.000Z',
+      deadlineFrom: () => '2026-09-10T09:00:00.000Z',
     },
     context(shared),
   );
@@ -107,6 +107,7 @@ describe('openQuestion', () => {
         stage: 'refinement',
         text: 'anything?',
         blocking: false,
+        deadlineFrom: () => null,
       },
       context(world()),
     );
@@ -114,6 +115,29 @@ describe('openQuestion', () => {
     expect(minimal.options).toBeNull();
     expect(minimal.deadlineAt).toBeNull();
     expect(toQuestionRecord(minimal).options).toBeNull();
+  });
+
+  it('computes the deadline from the instant it stores as askedAt, not from a second clock read', () => {
+    // `fixedClock` steps a second per read (WP-56): a rule applied to a *second* reading would see
+    // 09:00:01 and the stored deadline would disagree with `asked_at + timeout` by exactly that.
+    const seen: string[] = [];
+    const question = openQuestion(
+      {
+        id: QUESTION_ID,
+        taskId: TASK_ID,
+        projectId: PROJECT_ID,
+        stage: 'refinement',
+        text: 'anything?',
+        blocking: true,
+        deadlineFrom: (askedAt) => {
+          seen.push(askedAt);
+          return `${askedAt.slice(0, 10)}T17:00:00.000Z`;
+        },
+      },
+      context(world()),
+    );
+    expect(seen).toEqual([question.askedAt]);
+    expect(question.deadlineAt).toBe('2026-09-09T17:00:00.000Z');
   });
 });
 

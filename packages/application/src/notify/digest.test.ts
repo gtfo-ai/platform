@@ -88,6 +88,7 @@ const optionsOf = (harness: PipelineHarness, now: string, timezone = 'UTC'): Not
     store: harness.store,
     settings: staticProjectSettings(() => harness.settings),
     jobs: harness.jobs,
+    calendar: harness.calendar,
     integrations: staticPipelineIntegrations(harness.integrations),
     ids: harness.ids,
     clock: { now: () => clock.now() },

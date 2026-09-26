@@ -16,9 +16,11 @@
  * | 6 | `save` refuses a write over a row whose `version` has moved, exactly as the SQL `where … and version = $n` does (WP-15e). | **same** | The fake compares a number where PostgreSQL compares a predicate, and both throw `TaskConcurrentModificationError`. Asserted for both by `pipeline-store-concurrency-suite.ts`, which drives two transactions over one committed row. The fake's `version` is still only as good as divergence 4: with no isolation, the interleaving it reproduces is the *ordering*, not the locking. |
  * | 4 | No transaction isolation: a `Transaction` handle is accepted and ignored, so a rolled-back "transaction" leaves its writes. | **kinder** | This is the one that matters, and the reason the same suite runs against PostgreSQL: rollback semantics cannot be faked in a Map. **Positive assertion**: `memory-pipeline.test.ts` asserts the divergence explicitly (`keeps writes a rolled-back scope made, which PostgreSQL does not`), so a reader meets it as a test rather than as a warning, and the e2e tier runs the pipeline on the real thing. |
  * | 7 | `task.sequence` was the number the stored aggregate carried; PostgreSQL derives it from the **event log** (`max(stream_seq) + 1`, `TASK_COLUMNS`). **Closed at WP-26** by {@link MemoryPipelineStoreOptions.streamSequence}: a harness that wires the event log in gets the derived number. | **same, when wired** | It was *kinder* and it hid a whole class: an event appended to a task's stream by anything other than the aggregate — `task.review.observed` (WP-24), `task.lint.posted` (WP-25), `task.rebase.checked` and `task.conflict.warned` (WP-26) — left the fake's aggregate one behind the log, so the **next** aggregate write would clash in production and not here. It only stayed invisible because the first three land on a task that has stopped. Unwired, the old behaviour remains, which is why the accessor takes the **maximum** of the two rather than replacing one with the other: a transaction's own staged appends are not committed yet, and the aggregate's number is the right answer for them. |
+ * | 8 | `takenOver` reads the **committed** log through {@link MemoryPipelineStoreOptions.taskEvents}; PostgreSQL's query also sees the calling transaction's own staged appends (WP-56). Unwired, it answers `null`. | **same, when wired; kinder by one window** | Both readers of it — the workpad render and the take-over timer — run in a job's **own** transaction after the events they react to have committed, so the window this cannot see is one neither reader stands in. A caller that asked inside the transaction that appended the take-over would get `null` here and the record from PostgreSQL; nothing does, and the contract suite drives the committed case against both. |
  */
 import type {
   ArtifactType,
+  DomainEvent,
   EstimateBasis,
   Id,
   IsoDateTime,
@@ -35,7 +37,12 @@ import {
   workpadRefSchema,
 } from '@platform/contracts';
 import type { Approval, Question, QueuedTask } from '@platform/domain';
-import { countsAsActive, countsInPipeline, isActiveRunStatus } from '@platform/domain';
+import {
+  countsAsActive,
+  countsInPipeline,
+  isActiveRunStatus,
+  isTerminalTaskState,
+} from '@platform/domain';
 import type {
   ApprovalRepository,
   ArtifactRepository,
@@ -50,7 +57,8 @@ import type {
   StoredTask,
   TaskRepository,
 } from '../pipeline/store.js';
-import { TaskConcurrentModificationError } from '../pipeline/store.js';
+import { TAKE_OVER_BOUNDARY_EVENTS, TaskConcurrentModificationError } from '../pipeline/store.js';
+import type { DeadlineRecoveryStore, HeldTask, WaitingAggregate } from '../recovery/deadline.js';
 
 export class PipelineStoreError extends Error {
   override readonly name = 'PipelineStoreError';
@@ -109,6 +117,8 @@ export interface MemoryPipelineStore extends PipelineStore {
    * this store refuses exactly what the database refuses.
    */
   readonly chargedRuns: Set<Id>;
+  /** The deadline recovery's store over these rows (WP-56 round 2, `recovery/deadline.ts`). */
+  readonly deadlineRecovery: DeadlineRecoveryStore;
   /** The lease a run currently holds, for a test that asserts the heartbeat wrote one (WP-47). */
   leaseOf(runId: Id): { readonly owner: string; readonly expiresAt: IsoDateTime } | null;
 }
@@ -122,6 +132,15 @@ export interface MemoryPipelineStoreOptions {
    * beside `MemoryEventing` should pass it, and `createPipelineHarness` does.
    */
   readonly streamSequence?: (taskId: Id) => number;
+  /**
+   * A task's committed events in stream order — what `TaskRepository.takenOver` reads (WP-56).
+   *
+   * Optional for {@link streamSequence}'s reason. **Unwired, `takenOver` answers `null`**, which is
+   * the pre-WP-56 behaviour of every render that was not woken by `task.taken_over` itself and is
+   * divergence 8 below: a store built without the log cannot say a human holds a task, and it says
+   * *nobody does* rather than inventing one. `createPipelineHarness` wires it.
+   */
+  readonly taskEvents?: (taskId: Id) => readonly DomainEvent[];
 }
 
 export const createMemoryPipelineStore = (
@@ -413,6 +432,23 @@ export const createMemoryPipelineStore = (
         .sort((a, b) => a.attempt - b.attempt)
         .slice(-limit)
         .map((row) => row.signature as string),
+    takenOver: async (_tx, taskId) => {
+      // The SQL store's rule over the harness's log: the newest boundary event decides.
+      const boundary: readonly string[] = TAKE_OVER_BOUNDARY_EVENTS;
+      const newest = (options.taskEvents?.(taskId) ?? [])
+        .filter((event) => boundary.includes(event.type))
+        .at(-1);
+      if (newest === undefined || newest.type !== 'task.taken_over') {
+        return null;
+      }
+      return {
+        eventId: newest.id,
+        at: newest.occurred_at,
+        branch: newest.payload.branch,
+        sessionId: newest.payload.session_id ?? null,
+        stage: newest.payload.stage,
+      };
+    },
     lastReturnReason: async (_tx, taskId, stage, attempt) => {
       // The SQL store's rule, over the write sequence where the SQL uses `clock_timestamp()`.
       const previous = stages
@@ -681,7 +717,91 @@ export const createMemoryPipelineStore = (
     },
   };
 
+  /** The deadline recovery's reads and its one write (WP-56 round 2), over this store's own rows. */
+  const unfinished = (taskId: Id): boolean => {
+    const stored = tasks.get(taskId);
+    return stored !== undefined && !isTerminalTaskState(stored.task.state);
+  };
+  const waiting = (): (WaitingAggregate & { readonly deadlineAt: IsoDateTime | null })[] => [
+    ...[...questions.values()]
+      .filter((question) => question.status === 'open' && unfinished(question.taskId))
+      .map((question) => ({
+        aggregate: 'question' as const,
+        id: question.id,
+        projectId: question.projectId,
+        taskId: question.taskId,
+        deadlineAt: question.deadlineAt,
+      })),
+    ...[...approvals.values()]
+      .filter(
+        (stored) => stored.approval.status === 'pending' && unfinished(stored.approval.taskId),
+      )
+      .map((stored) => ({
+        aggregate: 'approval' as const,
+        id: stored.approval.id,
+        projectId: stored.approval.projectId,
+        taskId: stored.approval.taskId,
+        deadlineAt: stored.approval.deadlineAt,
+      })),
+  ];
+  const strip = ({
+    deadlineAt: _deadlineAt,
+    ...row
+  }: WaitingAggregate & {
+    readonly deadlineAt: IsoDateTime | null;
+  }): WaitingAggregate => row;
+  const deadlineRecovery: DeadlineRecoveryStore = {
+    overdue: async (_tx, query) =>
+      waiting()
+        .filter((row) => row.deadlineAt !== null && row.deadlineAt < query.dueBefore)
+        .slice(0, query.limit * 2)
+        .map(strip),
+    heldTasks: async (tx, query) => {
+      const held: HeldTask[] = [];
+      for (const stored of tasks.values()) {
+        if (stored.task.state !== 'paused') {
+          continue;
+        }
+        const takeOver = await taskRepository.takenOver(tx, stored.task.id);
+        if (takeOver !== null) {
+          held.push({ taskId: stored.task.id, takenAt: takeOver.at });
+        }
+      }
+      // Oldest take-over first, as the PostgreSQL store's `order by e.occurred_at` (a fake no kinder).
+      return held.sort((a, b) => a.takenAt.localeCompare(b.takenAt)).slice(0, query.limit);
+    },
+    undated: async (_tx, query) =>
+      waiting()
+        .filter((row) => row.deadlineAt === null)
+        .slice(0, query.limit * 2)
+        .map(strip),
+    backfillDeadline: async (_tx, input) => {
+      if (input.aggregate === 'question') {
+        const question = questions.get(input.id);
+        if (question === undefined || question.status !== 'open' || question.deadlineAt !== null) {
+          return false;
+        }
+        questions.set(input.id, { ...question, deadlineAt: input.deadlineAt });
+        return true;
+      }
+      const stored = approvals.get(input.id);
+      if (
+        stored === undefined ||
+        stored.approval.status !== 'pending' ||
+        stored.approval.deadlineAt !== null
+      ) {
+        return false;
+      }
+      approvals.set(input.id, {
+        ...stored,
+        approval: { ...stored.approval, deadlineAt: input.deadlineAt },
+      });
+      return true;
+    },
+  };
+
   return {
+    deadlineRecovery,
     tasks: taskRepository,
     artifacts: artifactRepository,
     runs: runRepository,

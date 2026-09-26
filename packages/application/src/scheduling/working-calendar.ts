@@ -1,7 +1,8 @@
 /**
  * The working-day calendar that turns `limits.question_timeout` — technical/12 writes it as
- * `1 working day` — into an absolute deadline (TD-004: `question.timeout` and
- * `question.reminder` compute `startAfter` on this calendar).
+ * `1 working day` — into an absolute deadline (TD-004: the deadline timers compute `startAfter` on
+ * this calendar; since WP-56 that is one queue, `deadline.sweep`, for questions, approvals and
+ * take-overs, composed from `APP_WORKING_DAYS`/`APP_WORKING_HOURS`/`APP_HOLIDAYS` in `TZ`).
  *
  * Pure and total: given the same calendar, anchor and duration it returns the same instant on
  * every host, in every process time zone. The zone is a field of the calendar, never

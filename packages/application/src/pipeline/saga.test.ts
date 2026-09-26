@@ -470,7 +470,18 @@ describe('questions', () => {
       DomainEvent,
       { type: 'task.question.asked' }
     >;
-    await expireTaskQuestion(harness.commands, asked.payload.question.id);
+    // The timer re-validates on fire (WP-56): before the stored deadline it expires nothing…
+    expect(await expireTaskQuestion(harness.commands, asked.payload.question.id)).toEqual({
+      kind: 'not_due',
+      dueAt: asked.payload.question.deadline_at,
+    });
+    // …and at it, it does.
+    harness.clock.advance(
+      Date.parse(asked.payload.question.deadline_at as string) - harness.clock.epochMs,
+    );
+    expect(await expireTaskQuestion(harness.commands, asked.payload.question.id)).toEqual({
+      kind: 'expired',
+    });
     await harness.drain();
     expect(taskOf(harness).task.state).toBe('needs_human');
   });
@@ -492,7 +503,12 @@ describe('questions', () => {
       channel: 'ticket',
     });
     await harness.drain();
-    await expireTaskQuestion(harness.commands, asked.payload.question.id);
+    harness.clock.advance(
+      Date.parse(asked.payload.question.deadline_at as string) - harness.clock.epochMs,
+    );
+    expect(await expireTaskQuestion(harness.commands, asked.payload.question.id)).toEqual({
+      kind: 'settled',
+    });
     await harness.drain();
     expect(taskOf(harness).task.state).not.toBe('needs_human');
     expect(harness.types()).not.toContain('task.question.expired');

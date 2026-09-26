@@ -28,7 +28,8 @@
  *      `APP_INTEGRATION_HOSTS` empty-means-closed, this list did not learn it, and a stock
  *      instance stopped being able to create an integration at all — backlog 54's symptom,
  *      reopened one row after it was closed, and visible nowhere but here (rule 71);
- *   2. `printenv` inside the container shows the variables WP-23's dogfood run found missing;
+ *   2. `printenv` inside the container shows the variables WP-23's dogfood run found missing,
+ *      and — since WP-56, which gave them their first reader — the working calendar's;
  *   3. `/metrics` **can be authenticated**: 401 without the credential, 200 with it. Neither name
  *      was in the old eighteen-key map, so on a compose instance the endpoint was served
  *      unauthenticated and could not be made otherwise;
@@ -383,6 +384,23 @@ const main = async () => {
         printed[1] === METRICS_USER &&
         printed[6] === PROVIDER_HOST,
       printed.length === 7 ? `${printed.length} of 7 present` : printenv.stdout.trim(),
+    );
+
+    // 2b. The working calendar reaches the process (WP-56). `APP_WORKING_DAYS`/`APP_WORKING_HOURS`
+    // were shipped in `.env.example` from WP-05 and read by nothing; `loadServerConfig` reads them
+    // now, and a stock `.env` must carry the documented values into the container, not blanks.
+    const calendar = await compose([
+      'exec',
+      '-T',
+      'app',
+      'printenv',
+      'APP_WORKING_DAYS',
+      'APP_WORKING_HOURS',
+    ]).catch((error) => ({ stdout: String(error) }));
+    check(
+      'the container has the working calendar `.env.example` documents',
+      calendar.stdout.trim() === '1,2,3,4,5\n09:00-17:00',
+      JSON.stringify(calendar.stdout.trim()),
     );
 
     // 3. /metrics can be authenticated.

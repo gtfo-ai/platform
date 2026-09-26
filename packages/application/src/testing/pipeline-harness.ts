@@ -53,6 +53,7 @@ import type { CronScheduleDefinition, EnqueueRequest, JobHandler, Jobs } from '.
 import { JOB_QUEUES } from '../ports/jobs.js';
 import { silentLogger } from '../ports/logger.js';
 import type { ClaudeRunner, RunOutcome, RunSpec, RunTranscriptSink } from '../ports/runner.js';
+import { createWorkingCalendar, type WorkingCalendar } from '../scheduling/working-calendar.js';
 import { createMemoryAskStore, type MemoryAskStore } from './memory-ask.js';
 import {
   createMemoryHistoryBootstrapStore,
@@ -289,6 +290,12 @@ export interface HarnessOptions {
   readonly communication?: Partial<CommunicationPort> | null;
   /** The organisation's zone, which the digest and quiet hours are read in (Q38). */
   readonly timezone?: string;
+  /**
+   * The organisation's working calendar (WP-56) — every question, approval and take-over deadline
+   * is resolved on it. Defaults to `createWorkingCalendar()`: Monday–Friday, 09:00–17:00, UTC, no
+   * holidays, which is what an instance with none of `APP_WORKING_*` set gets.
+   */
+  readonly calendar?: WorkingCalendar;
   /** The binding's redactor, for a test that plants a secret in a ticket (WP-15f). */
   readonly ticketRedactor?: SecretRedactor;
   /** The **chat** binding's redactor, for a test that plants a secret in a notification (WP-32). */
@@ -335,6 +342,8 @@ export interface PipelineHarness {
   readonly jobs: RecordingJobs;
   readonly runtime: PipelineRuntime;
   readonly clock: TestClock;
+  /** The working calendar the pipeline was composed with (WP-56). */
+  readonly calendar: WorkingCalendar;
   readonly ids: { next(): Id };
   readonly projectId: Id;
   readonly settings: ProjectSettings;
@@ -648,6 +657,7 @@ const nonceFor = (id: Id): string => id.replaceAll('-', '').padEnd(32, '0').slic
 export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHarness => {
   const projectId = options.projectId ?? '00000000-0000-4000-8000-0000000000p1'.replace('p', 'b');
   const clock = testClock();
+  const calendar = options.calendar ?? createWorkingCalendar();
   const ids = testIds();
   const memory = new MemoryEventing();
   const bus = new EventBus({ unitOfWork: memory, retryDelayMs: 0, maxRetryDelayMs: 0 });
@@ -657,6 +667,11 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
   // the *next* aggregate write clashes in production while this tier stays green.
   const store = createMemoryPipelineStore({
     streamSequence: (taskId) => memory._committedLastSeq('task', taskId) + 1,
+    // WP-56: `takenOver` reads the task's own stream, as the SQL store does.
+    taskEvents: (taskId) =>
+      memory.log
+        .map((row) => row.event)
+        .filter((event) => event.stream_type === 'task' && event.stream_id === taskId),
   });
   const jobs = recordingJobs();
   const audit = createMemoryAuditLog();
@@ -873,6 +888,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     ...(options.runsAgents === undefined ? {} : { runsAgents: options.runsAgents }),
     notifications,
     timezone: options.timezone ?? 'UTC',
+    calendar,
     // One composed set for the harness's one project. Production reads the `bindings` table
     // through `createPipelineIntegrationsLoader` (WP-15a).
     integrations: staticPipelineIntegrations(integrations),
@@ -1075,7 +1091,9 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
         // WP-31: an ask is a run on a queue of its own, and it enqueues the ticket mirror back onto
         // `pipeline.outbound` — so it is drained in the same loop rather than by a second helper.
         (await runJobs(JOB_QUEUES.taskAsk)) +
-        (await runJobs(JOB_QUEUES.mrCommentDebounce));
+        (await runJobs(JOB_QUEUES.mrCommentDebounce)) +
+        // WP-56: a deadline fires when the test has moved the clock past it, and not before.
+        (await runJobs(JOB_QUEUES.deadlineSweep));
       if (dispatched === 0 && ran === 0) {
         return;
       }
@@ -1125,6 +1143,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     humanCommands,
     runtime,
     clock,
+    calendar,
     ids,
     projectId,
     settings,

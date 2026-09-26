@@ -46,6 +46,7 @@ import { randomUUID } from 'node:crypto';
 import type { Jobs, Logger, WebhookIngress } from '@platform/application';
 import {
   createLiveRuns,
+  createWorkingCalendar,
   SHADOW_BATCH_BLOCKED_DETAIL,
   shadowBatchBlocker,
   sweepReadiness,
@@ -423,6 +424,9 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           // quiet-hours comparison. `config.timezone` is `TZ`, defaulted to UTC and never to the
           // host clock.
           timezone: config.timezone,
+          // WP-56: the working calendar every deadline is resolved on — built from the configuration
+          // `loadServerConfig` already validated, so this cannot throw here.
+          calendar: createWorkingCalendar(config.workingCalendar),
           // `APP_BASE_URL` — the link an ask's mirrored ticket comment points back at (WP-31).
           baseUrl: config.baseUrl,
           // `APP_DEPENDENCY_REGISTRY_HOSTS` (WP-38, Q84): empty by default, and then the dependency

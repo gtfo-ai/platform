@@ -20,6 +20,7 @@ import { isBefore } from '../clock.js';
 import { IllegalTransitionError } from '../errors.js';
 import { type CommandContext, type Decision, eventRecorder, FIRST_STREAM_SEQ } from '../events.js';
 import { APPROVAL_ACTIONS, assertCan } from '../permissions.js';
+import type { DeadlineRule } from './question.js';
 
 export const APPROVAL_TRANSITIONS = {
   pending: ['approved', 'rejected', 'expired'],
@@ -64,23 +65,32 @@ export interface RequestApprovalInput {
   readonly taskId: Id;
   readonly projectId: Id;
   readonly kind: ApprovalKind;
-  readonly deadlineAt?: IsoDateTime;
+  /**
+   * When nobody deciding expires the approval, as a function of the instant it is requested
+   * (WP-56, BD-006's Q95 amendment: the question calendar, 1 working day by default). Required for
+   * the reason `OpenQuestionInput.deadlineFrom` gives — both gates used to pass nothing, so
+   * `deadline_at` was null on every row (PROGRESS backlog 76).
+   */
+  readonly deadlineFrom: DeadlineRule;
 }
 
 /** Creates the approval. The task emits `task.approval.requested` carrying its record. */
-export const createApproval = (input: RequestApprovalInput, context: CommandContext): Approval => ({
-  id: input.id,
-  taskId: input.taskId,
-  projectId: input.projectId,
-  kind: input.kind,
-  status: 'pending',
-  requestedAt: context.clock.now(),
-  deadlineAt: input.deadlineAt ?? null,
-  decidedByUserId: null,
-  decidedAt: null,
-  reason: null,
-  sequence: FIRST_STREAM_SEQ,
-});
+export const createApproval = (input: RequestApprovalInput, context: CommandContext): Approval => {
+  const requestedAt = context.clock.now();
+  return {
+    id: input.id,
+    taskId: input.taskId,
+    projectId: input.projectId,
+    kind: input.kind,
+    status: 'pending',
+    requestedAt,
+    deadlineAt: input.deadlineFrom(requestedAt),
+    decidedByUserId: null,
+    decidedAt: null,
+    reason: null,
+    sequence: FIRST_STREAM_SEQ,
+  };
+};
 
 export const toApprovalRecord = (approval: Approval): ApprovalRecord => ({
   id: approval.id,

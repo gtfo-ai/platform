@@ -73,6 +73,8 @@ import type { Jobs } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
+import type { WorkingCalendar } from '../scheduling/working-calendar.js';
+import { questionDeadlineRule } from './deadline-rules.js';
 import type { PipelineIntegrations, PipelineIntegrationsPort } from './integrations.js';
 import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
 import {
@@ -102,6 +104,13 @@ export interface PipelineSagaOptions {
   readonly integrations: PipelineIntegrationsPort;
   readonly ids: { next(): Id };
   readonly clock: { now(): string };
+  /**
+   * The organisation's working calendar (WP-56), composed from `APP_WORKING_DAYS`,
+   * `APP_WORKING_HOURS`, `APP_HOLIDAYS` and `TZ` — what every deadline the pipeline holds a human
+   * to is resolved on: a question's, an approval's and a take-over's. Required, because a pipeline
+   * composed without one is the pipeline PROGRESS backlog 74 measured, where nothing expires.
+   */
+  readonly calendar: WorkingCalendar;
   readonly logger?: Logger;
   /** BD-007's batch window for human merge-request comments. @default 2 minutes */
   readonly reviewCommentWindowMs?: number;
@@ -850,6 +859,8 @@ const planApprovalGate = async (
       taskId: stored.task.id,
       projectId: stored.task.projectId,
       kind: 'plan',
+      // WP-56, BD-006's Q95 amendment: an approval expires on the question calendar and limit.
+      deadlineFrom: questionDeadlineRule(options.calendar, settings.config),
     },
     commandContext,
   );
@@ -982,6 +993,8 @@ const budgetApprovalGate = async (
       taskId: stored.task.id,
       projectId: stored.task.projectId,
       kind: 'budget',
+      // The plan gate's expiry, for the reason WP-28 gave for sharing its decision shape.
+      deadlineFrom: questionDeadlineRule(options.calendar, settings.config),
     },
     commandContext,
   );
@@ -1087,9 +1100,18 @@ const questionHandler = (options: PipelineSagaOptions): EventHandler => ({
         stored.task,
         {
           reason: `the question asked at "${question.stage}" was not answered in time`,
+          // The brief names only commands the aggregates accept on this task **now** (WP-56 round 2,
+          // backlog 163): the question is `escalated`, whose transitions are `[]`, so answering it
+          // is refused — the old sentence ("answer it … and the task will carry on") promised the
+          // one thing that cannot happen. The task is `needs_human` at the asking stage, which
+          // `retryStageCommand` accepts; `returnToStageCommand` does **not** (`needs_human →
+          // returned` is not an edge — measured, it was this sentence's first draft), so it is not
+          // offered. `deadlines.test.ts` performs the retry on an expired question's task.
           blockerBrief:
-            `${stored.task.ticket.key} is waiting for an answer to: ${question.text}\n\n` +
-            'Answer it on the ticket, in Slack or in the UI and the task will carry on from where it stopped.',
+            `${stored.task.ticket.key} was waiting for an answer to: ${question.text}\n\n` +
+            'Nobody answered in time, and an expired question can no longer be answered. To go on, ' +
+            `retry "${question.stage}" from the task page — it runs again and asks afresh, and that ` +
+            'question can be answered — or cancel the task.',
         },
         commandContext,
       );
@@ -1228,9 +1250,19 @@ const approvalHandler = (options: PipelineSagaOptions): EventHandler => ({
       stored.task,
       {
         reason: 'the approval expired',
+        // Names only what is accepted now (WP-56 round 2, backlog 163): an `expired` approval has
+        // no transitions, so "approve or reject it" was refused, and `needs_human → returned` is not
+        // an edge either, so a return is not offered. Retrying the stage the approval interrupted
+        // is accepted on the `needs_human` task; for a **budget** approval it carries
+        // on without asking again (`latestOfKind` finds the expired one), which the sentence says,
+        // because a maintainer who retries is making the spend decision.
         blockerBrief:
-          `Nobody decided the ${record?.approval.kind ?? 'plan'} approval for ${stored.task.ticket.key} in time. ` +
-          'Approve or reject it in the UI, or hand the task back at the stage it should resume from.',
+          `Nobody decided the ${record?.approval.kind ?? 'plan'} approval for ${stored.task.ticket.key} in time, ` +
+          'and an expired approval can no longer be approved or rejected. To go on, ' +
+          (record?.approval.kind === 'budget'
+            ? `retry "${stage}" from the task page — the task then carries on without asking for the budget again, so retrying is the approval — `
+            : `retry "${stage}" from the task page to have the plan written and asked for again — `) +
+          'or cancel the task.',
       },
       commandContext,
     );

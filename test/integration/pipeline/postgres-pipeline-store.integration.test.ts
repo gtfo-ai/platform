@@ -60,6 +60,36 @@ runPipelineStoreContract({
       tx,
       projectId,
       userId,
+      // WP-56: `takenOver` reads `events`, so the case writes the stream it reads — inside the
+      // case's own transaction, which the rollback below removes with everything else.
+      appendTaskEvent: async (event) => {
+        // `events` is range-partitioned by month and migrations create the current month onwards;
+        // the suite's instants are fixed (rule 86), so the month they fall in is created here, in
+        // the case's transaction, and rolled back with it.
+        const month = `${event.occurredAt.slice(0, 7)}-01`;
+        const { rows } = await client.query<{ name: string }>(
+          `select platform_partition_name('events', $1::date) as name`,
+          [month],
+        );
+        await client.query(
+          `create table if not exists public.${client.escapeIdentifier(rows[0]?.name as string)}
+             partition of events for values from ('${month}') to (('${month}'::date + interval '1 month')::date)`,
+        );
+        await client.query(
+          `insert into events (id, stream_type, stream_id, stream_seq, type, payload, actor,
+                               occurred_at)
+           values ($1, 'task', $2, $3, $4, $5::jsonb, '{"kind":"system","component":"pipeline"}'::jsonb,
+                   $6)`,
+          [
+            event.id,
+            event.taskId,
+            event.seq,
+            event.type,
+            JSON.stringify(event.payload),
+            event.occurredAt,
+          ],
+        );
+      },
       cleanup: async () => {
         await client.query('rollback');
         await client.end();

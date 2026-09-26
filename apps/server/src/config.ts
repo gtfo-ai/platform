@@ -16,7 +16,11 @@
  *    HTTP process itself needs.
  */
 import process from 'node:process';
-import { CONNECTIONS_PER_DISPATCH } from '@platform/application';
+import {
+  CONNECTIONS_PER_DISPATCH,
+  defaultWorkingCalendarConfig,
+  workingCalendarSchema,
+} from '@platform/application';
 import { providerModeSchema } from '@platform/contracts';
 import { db, eventing, jobs } from '@platform/infrastructure';
 import * as z from 'zod';
@@ -396,6 +400,19 @@ const serverConfigFields = z.strictObject({
   database: db.databaseConfigSchema,
   dispatch: eventing.dispatchConfigSchema,
   jobs: jobs.jobsConfigSchema,
+  /**
+   * The organisation's working calendar (WP-56) — `APP_WORKING_DAYS`, `APP_WORKING_HOURS`,
+   * `APP_HOLIDAYS`, read in `TZ`. **Composed for the first time at WP-56**: the three variables
+   * were shipped to operators in `.env.example` from WP-05 and parsed by nothing (PROGRESS backlog
+   * 74 and 127), so every deadline they were documented to move moved nothing.
+   *
+   * `jobs.loadWorkingCalendar` is the loader, like the three sub-configurations above: it is where
+   * the four variables' grammar lives (`packages/infrastructure/src/jobs/config.ts`), blank means
+   * *absent* there (each variable empty is the default, never an empty calendar), and a malformed
+   * value is a start-up refusal that names the variable. The zone is `TZ`'s, the same one
+   * {@link serverConfigFields.shape.timezone} carries, read by the same loader rule.
+   */
+  workingCalendar: workingCalendarSchema,
 });
 
 /**
@@ -466,10 +483,10 @@ export const SERVER_CONFIG_DEFAULTS = {
  *
  * **The whole sum, at the shipped defaults** (`ROLE=all`, `APP_DISPATCH_MAX_CONCURRENCY=1`), so
  * that nobody has to reassemble it from six docblocks:
- * `2 × 1 + 1` dispatch `+ 2` pg-boss `+ 7` pipeline workers `+ 4` knowledge workers
- * `+ 1` onboarding worker `+ 1` bootstrap worker `+ 2` HTTP `+ 1` maintenance = **21**, against
- * `.env.example`'s `APP_DB_POOL_MAX=22`. The *shape* is **`2N + 19`** since WP-36 registered
- * `maintenance.schedule` beside them, and the changes behind it are
+ * `2 × 1 + 1` dispatch `+ 2` pg-boss `+ 8` pipeline workers `+ 4` knowledge workers
+ * `+ 1` onboarding worker `+ 1` bootstrap worker `+ 2` HTTP `+ 1` maintenance = **22**, against
+ * `.env.example`'s `APP_DB_POOL_MAX=23`. The *shape* is **`2N + 20`** since WP-56 registered
+ * `deadline.sweep` beside them, and the changes behind it are
  * worth keeping apart. WP-15b's arithmetic was `3N + 8` — a third connection per
  * dispatch, because the audit row opened a transaction inside the handler's; WP-15d removed that
  * nesting, so the term that scales with concurrency shrank from 3 to 2 and the shape became
@@ -482,8 +499,11 @@ export const SERVER_CONFIG_DEFAULTS = {
  * added `bootstrap.history`: `2N + 18` — 20 at N=1, **and this paragraph was not updated with it**,
  * which is why the sum above read 19 while the floor was 20 (backlog 22's site 1, stale a third
  * time). WP-36 added the maintenance schedule (`maintenance.schedule`):
- * **`2N + 19`** — **21 at N=1**, and **27 at N=4** where `3N + 8` would have been 20. The shape crossing over at high concurrency is the honest consequence of flat
- * workers: they do not scale with dispatch, and they are real.
+ * `2N + 19` — 21 at N=1. WP-56 added the deadline timers (`deadline.sweep`, **one** worker for
+ * the question, approval and take-over deadlines, by the architect's ruling rather than one per
+ * timer): **`2N + 20`** — **22 at N=1**, and **28 at N=4** where `3N + 8` would have been 20. The
+ * shape crossing over at high concurrency is the honest consequence of flat workers: they do not
+ * scale with dispatch, and they are real.
  *
  * **This paragraph is PROGRESS backlog 22's site 1, and it has now gone stale twice** — at WP-32
  * and at WP-31, both times with all three numbers wrong at once, in the paragraph written to stop
@@ -509,7 +529,11 @@ export const POOL_RESERVATIONS = {
    * (WP-31, one ask-the-task question answered, `stately` per ask). It is counted here because
    * every `worker` role composes the pipeline.
    *
-   * **Seven since WP-36**, and **two** of them are composed by `apps/server/src/pipeline.ts`
+   * **Eight since WP-56**, which added `deadline.sweep` — one worker for every deadline the
+   * platform holds a human to (a question, an approval, a take-over), started by
+   * `createPipelineRuntime` unconditionally because an expiry is never a run; the architect's ruling
+   * made it one queue rather than four, so this term moved by one. **Two** of the eight are composed
+   * by `apps/server/src/pipeline.ts`
    * rather than by `createPipelineRuntime`, because each is a schedule the *process* owns rather
    * than a step of a ticket's journey (`registerPartitionMaintenance`'s shape):
    * `pipeline.intake.reconcile`, the pass that re-emits a matched ticket whose intake enqueue was
@@ -525,7 +549,7 @@ export const POOL_RESERVATIONS = {
    * started from any of them therefore *replaces* the worker's connection rather than nesting
    * inside it.
    */
-  pipeline: 7,
+  pipeline: 8,
   /**
    * The knowledge workers — **one connection each, four of them** (WP-18a, recounted at WP-18b).
    *
@@ -757,6 +781,9 @@ export const loadServerConfig = (env: EnvLike = process.env): ServerConfig => {
   const database = collect(() => db.loadDatabaseConfig(env));
   const dispatch = collect(() => eventing.loadDispatchConfig(env));
   const jobsConfig = collect(() => jobs.loadJobsConfig(env));
+  // Built (and therefore validated, zone included) rather than only parsed, so a `TZ` the runtime
+  // does not know or a window that ends before it starts refuses at boot, naming the variable.
+  const workingCalendar = collect(() => jobs.loadWorkingCalendar(env).config);
 
   const result = serverConfigSchema.safeParse({
     role: env.ROLE?.trim() || SERVER_CONFIG_DEFAULTS.role,
@@ -850,6 +877,7 @@ export const loadServerConfig = (env: EnvLike = process.env): ServerConfig => {
     database: database ?? PLACEHOLDER.database,
     dispatch: dispatch ?? PLACEHOLDER.dispatch,
     jobs: jobsConfig ?? PLACEHOLDER.jobs,
+    workingCalendar: workingCalendar ?? defaultWorkingCalendarConfig(),
   });
 
   if (!result.success) {

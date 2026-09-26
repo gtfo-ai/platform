@@ -103,6 +103,8 @@ export * from './onboarding/runtime.js';
 // The pipeline (WP-15): interpreter-driven sagas, the stage executor and their ports
 export * from './pipeline/commands.js';
 export * from './pipeline/dead-letter.js';
+export * from './pipeline/deadline-rules.js';
+export * from './pipeline/deadlines.js';
 export * from './pipeline/epic-split.js';
 export * from './pipeline/gates.js';
 export * from './pipeline/intake-reconcile.js';
@@ -148,6 +150,7 @@ export * from './ports/transaction.js';
 export * from './ports/unit-of-work.js';
 export * from './ports/workspace.js';
 // The lost-wake-up recovery — PROGRESS backlog 101's table (WP-36)
+export * from './recovery/deadline.js';
 export * from './recovery/run-credential.js';
 export * from './recovery/run-lease.js';
 export * from './recovery/stranded.js';

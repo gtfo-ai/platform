@@ -65,6 +65,7 @@ import type {
   RunScopedSecrets,
   SecretRedactor,
   WebhookIngress,
+  WorkingCalendar,
 } from '@platform/application';
 import {
   composeSecretRedactors,
@@ -321,6 +322,12 @@ export interface ComposePipelineOptions {
    * with UTC as the documented fallback.
    */
   readonly timezone: string;
+  /**
+   * The organisation's working calendar (WP-56), from `ServerConfig.workingCalendar` — what every
+   * question, approval and take-over deadline is resolved on. Its zone is the same `TZ` as
+   * {@link timezone}'s, by the loader's own rule.
+   */
+  readonly calendar: WorkingCalendar;
   /** `APP_BASE_URL` — the link an ask's mirrored ticket comment points back at (WP-31). */
   readonly baseUrl: string;
   /**
@@ -820,6 +827,11 @@ export const composePipeline = async (
     maintenance: maintenanceStore,
     timezone: options.timezone,
     /**
+     * WP-56: the calendar a question's, an approval's and a take-over's deadline is resolved on —
+     * `APP_WORKING_DAYS`/`APP_WORKING_HOURS`/`APP_HOLIDAYS` in `TZ`, parsed by nothing before this.
+     */
+    calendar: options.calendar,
+    /**
      * TD-012 **step 2** over the untrusted text the pipeline's handlers store (WP-40 round 2).
      *
      * The same composition `routes/commands.ts`, `routes/settings.ts` and the ask executor are
@@ -1136,13 +1148,34 @@ export const composePipeline = async (
         store: runCredentialStore,
         horizonMs: runCredentialRecoveryHorizonMs(RUN_CREDENTIAL_TTL_SECONDS),
       },
+      /**
+       * WP-56 round 2, backlog **161** and **162**: a question, approval or take-over whose timer
+       * was lost (its `afterCommit` arm died with the process) is expired through the
+       * `deadline.sweep` job's own path, and a row written before deadlines existed is given its
+       * first one, counted from the pass rather than from when it was asked.
+       * `packages/application/src/recovery/deadline.ts` carries both choices.
+       */
+      deadlines: {
+        store: recoveryAdapters.createPostgresDeadlineRecoveryStore(),
+        settings,
+        sweep: {
+          unitOfWork: options.eventing.unitOfWork,
+          store,
+          jobs,
+          calendar: options.calendar,
+          ids,
+          // The expiry commands store no free text, so this is the type's requirement rather than
+          // a sink; the pattern rules are the composition `maintenance` below is given.
+          redactor: redactionAdapters.patternRedactor(),
+        },
+      },
     },
     logger: options.logger,
   });
   if (reconciler === null) {
     options.logger.warn(
       { setting: 'APP_INTAKE_RECONCILE_INTERVAL_MS=0' },
-      'the recovery pass is switched off: a matched ticket whose intake enqueue is lost is never started (PROGRESS backlog 20), a stranded history bootstrap (101) or pending ask (84) is never recovered, a run whose process died stays "running" for ever, holding its stage budget against every future window (109), and a run credential whose revoke never happened stays live to its expiry (155)',
+      'the recovery pass is switched off: a matched ticket whose intake enqueue is lost is never started (PROGRESS backlog 20), a stranded history bootstrap (101) or pending ask (84) is never recovered, a run whose process died stays "running" for ever, holding its stage budget against every future window (109), a run credential whose revoke never happened stays live to its expiry (155), and a question, approval or take-over whose timer was lost — or that predates deadlines — waits for ever (161, 162)',
     );
   }
 

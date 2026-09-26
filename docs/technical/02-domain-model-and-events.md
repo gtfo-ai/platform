@@ -89,8 +89,12 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 ### Question
 `open → answered | expired → (escalated)`; reminders at configurable offsets; `expired` after 1 working day by default (Q8).
 
+> **As built at WP-56.** `deadline_at` is written in the transaction that stores the question, from `pipeline.limits.question_timeout` on the organisation's working calendar (`APP_WORKING_DAYS`/`APP_WORKING_HOURS`/`APP_HOLIDAYS` in `TZ`); the timer is one `deadline.sweep` job armed after commit by the `pipeline.deadlines` handler — the catalogue's *timer (15)* below — on `task.question.asked`, and it re-validates on fire. **Reminders are not built**: `questionReminderTimes` computes them and nothing sends one.
+
 ### Approval
 `pending → approved | rejected | expired`.
+
+> **As built at WP-56 (BD-006's Q95 amendment).** A plan or budget approval expires on the question's calendar and limit — same key, same default, no dial cell — through the same `deadline.sweep` timer armed on `task.approval.requested`; `expired` is recorded as `task.approval.decided` with `decision: 'expired'`, and the saga escalates the task to `needs_human`. A taken-over task (product/19 §19) rides the same timer: 5 working days after `task.taken_over` with no hand-back, resume, stage entry, completion or cancellation since, the task escalates.
 
 ### KnowledgeProposal
 `scored → (discarded | queued | auto_applied) → (applied | rejected)`.
@@ -164,10 +168,10 @@ no author — the backlog entry that says why nothing will (TD-005's amendment r
 | `task.question.asked` | Stage executor | question | Ticket comment (110), Slack (210), UI inbox (220), timer (15) |
 | `task.question.answered` | Question | question, answer, author, channel | Pipeline resume (10), other channels update (110) |
 | `task.question.expired` | Timer | question | Escalation (10) |
-| `task.approval.requested` / `.decided` | Pipeline / Approval | approval | Slack buttons (210), pipeline (10) |
+| `task.approval.requested` / `.decided` | Pipeline / Approval (`.decided` with `expired` from the timer, WP-56) | approval | Slack buttons (210), pipeline (10), timer (15, `.requested` — WP-56) |
 | `task.escalated` | Pipeline | task, reason, blocker brief | Ticket (110), Slack (210) |
 | `task.paused` / `task.resumed` | Budget/Human | task, reason | UI, workpad |
-| `task.taken_over` / `task.handed_back` | Human | task, branch, session, stage | Workspace export (10), ticket (110) |
+| `task.taken_over` / `task.handed_back` | Human | task, branch, session, stage | Workspace export (10), ticket (110), timer (15, `.taken_over` — WP-56) |
 | `task.cancelled` / `task.completed` | Pipeline | task, outcome, totals | Ticket transition (110), Slack (210), stats (230) |
 | `task.review.observed` | Review-only (WP-24) | task, mr, head sha reviewed and now, threads posted/resolved/accepted/dismissed/unresolved | stats (230) |
 | `task.lint.posted` | Ticket readiness linter (WP-25) | task, ticket, score, missing elements, questions posted, the ticket's `updated_at` | stats (230) |

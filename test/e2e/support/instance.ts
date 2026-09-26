@@ -9,12 +9,26 @@
  */
 import { createServer } from 'node:http';
 import type { ServerRuntime, StartRuntimeOptions } from '@platform/server';
-import { startRuntime } from '@platform/server';
+import { loadServerConfig, requiredPoolConnections, startRuntime } from '@platform/server';
 import pg from 'pg';
 import {
   createMigratedDatabase,
   type MigratedDatabase,
 } from '../../integration/support/migrated.js';
+
+/**
+ * `requiredPoolConnections` for `ROLE=all` at the default concurrency (WP-56), computed from a
+ * configuration whose own pool is large enough to be accepted — the floor is a function of the
+ * workloads, not of the pool it is being compared with.
+ */
+export const ROLE_ALL_POOL_FLOOR = requiredPoolConnections(
+  loadServerConfig({
+    ROLE: 'all',
+    DATABASE_URL: 'postgres://127.0.0.1:5432/floor',
+    APP_SECRET_KEY: 'e2e-pool-floor-probe-not-a-real-secret-000',
+    APP_DB_POOL_MAX: '1000',
+  }),
+);
 
 /** A password that is obviously fake and long enough for the bootstrap check. */
 export const BOOTSTRAP_EMAIL = 'operator@example.test';
@@ -99,11 +113,12 @@ export const startInstance = async (options: StartInstanceOptions = {}): Promise
     APP_SECRET_KEY: 'e2e-test-secret-key-not-a-real-secret-0000',
     LOG_LEVEL: options.logLevel ?? 'silent',
     TZ: 'UTC',
-    // The floor `requiredPoolConnections` computes for `ROLE=all` at concurrency 1 — 21 since
-    // WP-36 added the `maintenance.schedule` worker to WP-35's `bootstrap.history`, WP-31's
-    // `task.ask`, WP-32's digest tick, WP-21's `onboarding.discovery`, WP-18b's three and WP-18a's
-    // index worker. A value below it is refused at boot, which is how this line keeps finding out.
-    APP_DB_POOL_MAX: '21',
+    // The floor `requiredPoolConnections` computes for `ROLE=all` at concurrency 1, **exactly** —
+    // read off the constant rather than written down (WP-56, PROGRESS backlog 22's rule). This
+    // line spelled the number for eight work packages and every one that added a worker found it
+    // by being refused at boot; the instance still runs at the floor with no slack, which is the
+    // point of it.
+    APP_DB_POOL_MAX: String(ROLE_ALL_POOL_FLOOR),
     APP_SSE_PING_INTERVAL_MS: '1000',
     ...(options.withoutBootstrapAdmin === true
       ? {}

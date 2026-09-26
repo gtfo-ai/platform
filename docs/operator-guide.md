@@ -460,6 +460,14 @@ wrong:
 docker compose exec -T db pg_dump -U app -Fc app > pre-upgrade-$(date +%F).dump
 ```
 
+**Upgrading past the build that introduced deadlines (WP-56).** Questions and plan or budget
+approvals that were open before it have no deadline. The recovery pass (the
+`APP_INTAKE_RECONCILE_INTERVAL_MS` timer) gives each its first one **counted from the pass, not from
+when it was asked** — the project's `question_timeout`, `1 working day` by default, on the working
+calendar — so nothing that was waiting on the day of the upgrade expires at once. A **take-over**
+has nowhere to store such a deadline, so one held for more than five working days on the day of the
+upgrade moves to needing a human on the first pass; the workpad keeps its branch and resume command.
+
 ### What a failed migration looks like
 
 The `migrate` service writes one JSON object per line and exits non-zero:
@@ -652,6 +660,16 @@ docker compose down -v                     # …and delete it; then: docker volu
 `request_id`, `task_id`, `run_id` and `trace_id` where they apply. Set
 `OTEL_EXPORTER_OTLP_ENDPOINT` to export traces and metrics, and `SENTRY_DSN` to report errors; both
 are off when unset.
+
+`APP_WORKING_DAYS`, `APP_WORKING_HOURS` and `APP_HOLIDAYS`, read in `TZ`, are the **working calendar**
+every deadline the platform holds a person to is counted on (WP-56): a blocking question and a plan
+or budget approval expire after the project's `pipeline.limits.question_timeout` (default
+`1 working day`, BD-006) and move the task to needing a human, and a taken-over task that nobody has
+handed back escalates after **5 working days** (product/19 §19). So a question asked at 16:00 on a
+Friday with the defaults (Monday–Friday, 09:00–17:00) expires at 16:00 on Monday, not on Saturday.
+They are read at start-up: an empty value is the default in `.env.example`, and a malformed one
+refuses to start with the variable's name in the message. The platform never guesses public holidays
+— list yours in `APP_HOLIDAYS`.
 
 ## 10. Known limits of this build
 

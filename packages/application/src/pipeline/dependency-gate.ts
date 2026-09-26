@@ -35,8 +35,10 @@
  *  - **ask** — one `questions` row, blocking, whose text names the packages with their licence and
  *    maintenance status, and the task moves to `waiting_answers`. It is the **existing** question
  *    gate: the same aggregate, the same `task.question.asked`, the same saga that resumes the stage
- *    when it is answered and escalates when it expires — including the same unbuilt half, that
- *    nothing arms the timer yet (PROGRESS backlog 74). No second mechanism is introduced here.
+ *    when it is answered and escalates when it expires — and, since WP-56, the same deadline: it
+ *    is created with `questionDeadlineRule` and `pipeline.deadlines` arms its timer, so it expires
+ *    after the project's `question_timeout` on the working calendar like any other question. No
+ *    second mechanism is introduced here.
  *  - **block** — one `task.stage.returned` back to the stage that produced the notes, carrying a
  *    reason that names the package, and it spends the **`dependency_policy`** loop (BD-008's
  *    family, default 2). A loop of its own rather than the leaving stage's, because this job fires
@@ -73,7 +75,12 @@ import type {
   TaskDependencies,
 } from '@platform/contracts';
 import { dependencyMetadataSchema, taskDependenciesSchema } from '@platform/contracts';
-import type { CommandContext, DependencyPolicyConfig, DetectedDependency } from '@platform/domain';
+import type {
+  CommandContext,
+  DeadlineRule,
+  DependencyPolicyConfig,
+  DetectedDependency,
+} from '@platform/domain';
 import {
   askQuestion,
   boundReportedDependencies,
@@ -96,6 +103,7 @@ import {
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import { MAX_CONFLICT_FILES } from './conflict-warning.js';
+import { questionDeadlineRule } from './deadline-rules.js';
 import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
 import { enqueueOutbound, enqueueStage, type PipelineOutboundData } from './jobs.js';
 import type { RebaseJobOptions } from './rebase.js';
@@ -314,7 +322,13 @@ export const runDependencyGate = async (
   );
 
   if (decision === 'ask') {
-    await askAboutDependencies(options, { stored, producedBy, record, logger });
+    await askAboutDependencies(
+      options,
+      { stored, producedBy, record, logger },
+      // WP-56: the question expires on the organisation's calendar at the project's limit, like
+      // every other question — the settings were read above, outside any transaction.
+      questionDeadlineRule(options.calendar, settings.config),
+    );
     return;
   }
   await save(options, stored.task.id, record);
@@ -462,6 +476,7 @@ const inTaskTransaction = async <T>(
 const askAboutDependencies = async (
   options: DependencyGateOptions,
   input: EndingInput,
+  deadlineFrom: DeadlineRule,
 ): Promise<void> => {
   const { stored, record, logger } = input;
   const lines = record.added
@@ -505,6 +520,7 @@ const askAboutDependencies = async (
           text,
           blocking: true,
           options: ['yes', 'no'],
+          deadlineFrom,
         },
         context,
       );
