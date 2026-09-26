@@ -175,11 +175,50 @@ export interface SlackProvider extends CommunicationPort {
    */
   socket(options: {
     onDelivery(delivery: WebhookDelivery): Promise<void>;
+    /**
+     * Wraps the one outbound call a connection makes — `apps.connections.open`, at start and at
+     * every reconnect — so it goes through `IntegrationActionExecutor` like every other call on
+     * behalf of this binding (egress allow-list, rate limit, audit row). **Required** (WP-43,
+     * standing rule 31): an optional wrapper is a composition root that forgot it. A test that
+     * means "no executor" writes `(_action, perform) => perform()` out in full.
+     */
+    execute<T>(action: string, perform: () => Promise<T>): Promise<T>;
     readonly maxReconnects?: number | null;
   }): SlackSocket;
   /** The thread ↔ task directory, so a composition root can share or inspect it. */
   readonly threads: SlackThreadDirectory;
 }
+
+/**
+ * **The `wss://` host is the real trust boundary of Socket Mode, so it is held to the binding's
+ * own host** (WP-43 review round 1, PROGRESS backlog 196).
+ *
+ * The socket signs every envelope it receives with this binding's signing secret so that
+ * `inbound.verify` is the single door — which means whatever answers at the URL
+ * `apps.connections.open` returned is trusted **by construction**. The executor checked the host
+ * that call went to (`base_url`'s, against `APP_INTEGRATION_HOSTS`), but not the host of the URL
+ * it answered with. So the answer must name that same host **or a subdomain of it**: Slack answers
+ * `wss-primary.slack.com` and its siblings for `slack.com`, and a proxy or replay host answers under
+ * its own. Anything else is refused, by name, before a connection is made — as `forbidden`, which
+ * no retry fixes and which the held-connection supervisor names in its log. A binding with no host
+ * (`ref.host === null`) has nothing to hold the answer to and is refused the same way.
+ */
+export const assertSocketHost = (url: string, bindingHost: string | null): string => {
+  const host = egressHostOf(url);
+  if (
+    bindingHost !== null &&
+    host !== null &&
+    (host === bindingHost || host.endsWith(`.${bindingHost}`))
+  ) {
+    return url;
+  }
+  throw new IntegrationError(
+    'forbidden',
+    SLACK_PROVIDER_ID,
+    `apps.connections.open answered a socket on host "${String(host).slice(0, 253)}", which is neither the binding's host "${String(bindingHost)}" nor a subdomain of it; refusing to connect, because every envelope that socket delivered would be signed as authentic`,
+    { action: 'open_socket' },
+  );
+};
 
 const invalidRequest = (action: string, detail: string): IntegrationError =>
   new IntegrationError('invalid_request', SLACK_PROVIDER_ID, detail, { action });
@@ -274,9 +313,22 @@ export const createSlackProvider = (options: SlackProviderOptions): SlackProvide
     host: egressHostOf(config.base_url),
   };
 
+  /**
+   * **`buttons` means a click can reach the platform**, not that Block Kit can draw one (WP-43).
+   *
+   * A button whose click reaches no door is a control that does nothing — the reason WP-32 posted
+   * no approval at all — so the adapter answers from the transport it is configured to receive on:
+   * Socket Mode needs the app-level token to open the connection and the signing secret to sign
+   * each envelope for `inbound.verify`; the HTTP transport needs the signing secret. Without them a
+   * caller posts text and names the task page instead. What this cannot know is whether a process
+   * is holding the socket at this moment — the process that serves `/webhooks/*` opens it and names
+   * it when it cannot — and that residual is stated in PROGRESS under WP-43.
+   */
+  const clickCanArrive = signingSecret !== null && (!config.socket_mode || appToken !== null);
+
   const capabilities: CommunicationCapabilities = {
     threads: true,
-    buttons: true,
+    buttons: clickCanArrive,
     messageUpdate: true,
     socketMode: config.socket_mode,
     digest: true,
@@ -469,7 +521,11 @@ export const createSlackProvider = (options: SlackProviderOptions): SlackProvide
         threadTs: thread.thread_id,
         body,
         blocks: (redacted) =>
-          approvalBlocks({ approvalId: approval.id, markdown: redacted.markdown }),
+          approvalBlocks({
+            approvalId: approval.id,
+            taskId: approval.task_id,
+            markdown: redacted.markdown,
+          }),
         action: 'post_approval',
       }),
 
@@ -574,7 +630,11 @@ export const createSlackProvider = (options: SlackProviderOptions): SlackProvide
         throw invalidRequest('open_socket', 'socket mode needs an injected timer for its backoff');
       }
       return createSlackSocket({
-        openConnection: () => client.openConnection(appToken),
+        openConnection: async () =>
+          assertSocketHost(
+            await socketOptions.execute('open_socket', () => client.openConnection(appToken)),
+            ref.host,
+          ),
         connect: options.connect ?? webSocketConnect,
         timer: options.timer,
         clock,

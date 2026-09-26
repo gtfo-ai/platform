@@ -152,6 +152,19 @@ test('org settings carries the organisation budgets WP-30 gave it a writer for',
   await expect(page.getByText('spent $3.25 of $40.00 this window')).toBeVisible();
 });
 
+test('org settings lists the provider identities and offers the mapping form (WP-43)', async ({
+  page,
+}) => {
+  // PROGRESS backlog 79: `POST /api/org/identities` was served and no screen called it, so every
+  // decision from Slack, Jira or GitLab stayed `unmapped_identity`.
+  await page.goto('/settings');
+  await expect(page.getByText('Provider identities', { exact: true })).toBeVisible();
+  await expect(page.getByText('U0FAKEOPERATOR')).toBeVisible();
+  // The display name is provider text: its markup is on the screen as characters, not an element.
+  await expect(page.getByText('<img src=x onerror=alert(1)>operator')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Save mapping' })).toBeVisible();
+});
+
 test('the project settings page mirrors every wizard step', async ({ page }) => {
   // product/18:55 — *"nothing is only reachable during onboarding"*. Driven against the built
   // bundle, so this is the one tier that shows the route exists and the page renders in a browser.

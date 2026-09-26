@@ -446,12 +446,14 @@ describe('slack adapter, beyond the shared suite', () => {
         onDelivery: async (delivery) => {
           delivered.push(delivery);
         },
+        // The adapter's own test: no executor, written out (production passes one — WP-43).
+        execute: async (_action, perform) => perform(),
         maxReconnects: 0,
       });
       await socket.start();
 
       expect(opened, 'the wss URL came from the recorded apps.connections.open').toEqual([
-        'wss://wss-fake.slack.com/link/?ticket=0000-fake&app_id=A0FAKEAPP01',
+        'wss://wss-fake.slack.example.test/link/?ticket=0000-fake&app_id=A0FAKEAPP01',
       ]);
       const open = context.replay.requests.at(-1);
       expect(open?.path).toBe('/apps.connections.open');
@@ -480,13 +482,50 @@ describe('slack adapter, beyond the shared suite', () => {
       await socket.stop();
     });
 
+    it('refuses a socket URL on a host that is not the binding’s, and never connects to it', async () => {
+      const opened: string[] = [];
+      const context = slackReplayContext({
+        timer: createVirtualTimer({ autoAdvance: true }),
+        connect: (url) => {
+          opened.push(url);
+          return { send: () => {}, close: () => {} };
+        },
+      });
+      context.replay.script({
+        method: 'POST',
+        path: '/apps.connections.open',
+        status: 200,
+        body: { ok: true, url: 'wss://attacker.example.invalid/link/?ticket=0000-fake' },
+        source: {
+          url: 'https://docs.slack.dev/reference/methods/apps.connections.open',
+          retrieved: '2026-09-10',
+          kind: 'documented-adapted',
+          note: "The page's example response with a host outside the binding's — adversarial, scripted inside the test rather than recorded.",
+        },
+      });
+      const socket = context.slack.socket({
+        onDelivery: async () => {},
+        execute: async (_action, perform) => perform(),
+        maxReconnects: 0,
+      });
+
+      await expectIntegrationError(() => socket.start(), 'forbidden');
+      expect(opened, 'whatever answers there would be trusted, so it is never dialled').toEqual([]);
+      await socket.stop();
+    });
+
     it('refuses to open a socket for a binding configured for webhooks', () => {
       const context = slackReplayContext({
         socketMode: false,
         timer: createVirtualTimer(),
         connect: () => ({ send: () => {}, close: () => {} }),
       });
-      expect(() => context.slack.socket({ onDelivery: async () => {} })).toThrow(/socket_mode/);
+      expect(() =>
+        context.slack.socket({
+          onDelivery: async () => {},
+          execute: async (_action, perform) => perform(),
+        }),
+      ).toThrow(/socket_mode/);
     });
   });
 });
@@ -865,7 +904,7 @@ describe("the binding composes its own three credentials on top of the caller's 
       method: 'POST',
       path: '/apps.connections.open',
       status: 200,
-      body: { ok: true, url: `wss://wss-fake.slack.com/link/?ticket=${FAKE_APP_TOKEN}` },
+      body: { ok: true, url: `wss://wss-fake.slack.example.test/link/?ticket=${FAKE_APP_TOKEN}` },
       source: {
         url: 'https://docs.slack.dev/reference/methods/apps.connections.open',
         retrieved: '2026-09-10',
@@ -873,11 +912,15 @@ describe("the binding composes its own three credentials on top of the caller's 
         note: "The page's example response with the binding's own app-level token in the ticket; scripted inside the test rather than recorded.",
       },
     });
-    const socket = context.slack.socket({ onDelivery: async () => {}, maxReconnects: 0 });
+    const socket = context.slack.socket({
+      onDelivery: async () => {},
+      execute: async (_action, perform) => perform(),
+      maxReconnects: 0,
+    });
     await socket.start();
 
     expect(opened).toEqual([
-      'wss://wss-fake.slack.com/link/?ticket=[REDACTED:integration:slack_app_token]',
+      'wss://wss-fake.slack.example.test/link/?ticket=[REDACTED:integration:slack_app_token]',
     ]);
     await socket.stop();
   });

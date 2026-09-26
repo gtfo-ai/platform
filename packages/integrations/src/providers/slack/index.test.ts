@@ -14,6 +14,7 @@ import {
   slackProviderRegistration,
   slackRateLimitPolicy,
 } from './index.js';
+import { assertSocketHost } from './provider.js';
 
 const INTEGRATION_ID = '00000000-0000-4000-8000-0000000000a5';
 
@@ -86,6 +87,52 @@ describe('slackProviderRegistration', () => {
       socketMode: true,
       digest: true,
     });
+  });
+
+  it('offers buttons only when a click can reach the platform (WP-43)', () => {
+    const buttons = (
+      overrides: { readonly config?: object; readonly secrets?: Record<string, string> } = {},
+    ): boolean =>
+      slackProviderRegistration
+        .create({
+          integrationId: INTEGRATION_ID,
+          config: { ...config, ...overrides.config },
+          secrets: overrides.secrets ?? secrets,
+          redactor: noSecrets(),
+        })
+        .capabilities().buttons;
+    const { app_token: _app, ...noAppToken } = secrets;
+    const { signing_secret: _signing, ...noSigningSecret } = secrets;
+
+    expect(buttons(), 'Socket Mode with both credentials').toBe(true);
+    expect(buttons({ secrets: noAppToken }), 'Socket Mode cannot open').toBe(false);
+    expect(buttons({ secrets: noSigningSecret }), 'no envelope could be verified').toBe(false);
+    expect(
+      buttons({ config: { socket_mode: false }, secrets: noAppToken }),
+      'the HTTP transport needs no app-level token',
+    ).toBe(true);
+    expect(
+      buttons({ config: { socket_mode: false }, secrets: noSigningSecret }),
+      'and it does need the signing secret',
+    ).toBe(false);
+  });
+
+  it('holds Socket Mode as an inbound connection, selected by default and refused without a signing secret', () => {
+    const support = slackProviderRegistration.inboundConnection;
+    expect(support?.selected({ channel: 'C0FAKECHAN1' })).toBe(true);
+    expect(support?.selected({ channel: 'C0FAKECHAN1', socket_mode: false })).toBe(false);
+    const { signing_secret: _signing, ...noSigningSecret } = secrets;
+    expect(() =>
+      support?.open(
+        {
+          integrationId: INTEGRATION_ID,
+          config,
+          secrets: noSigningSecret,
+          redactor: noSecrets(),
+        },
+        { onDelivery: async () => {}, execute: async (_ref, _action, perform) => perform() },
+      ),
+    ).toThrow(/SLACK_SIGNING_SECRET/);
   });
 
   it('refuses a binding with no bot token rather than failing at the first message', () => {
@@ -211,6 +258,33 @@ describe('slackConfigSchema', () => {
     ).toThrow(/must not end with a slash/);
     expect(() => slackConfigSchema.parse({ ...config, channel: '#two words' })).toThrow(
       /no spaces/,
+    );
+  });
+});
+
+describe('the Socket Mode host (WP-43 review round 1, backlog 196)', () => {
+  it('accepts the binding’s own host and a subdomain of it, as Slack answers for slack.com', () => {
+    for (const url of [
+      'wss://wss-primary.slack.com/link/?ticket=x',
+      'wss://slack.com/link/?ticket=x',
+      'wss://WSS-BACKUP.Slack.com./link/?ticket=x',
+    ]) {
+      expect(assertSocketHost(url, 'slack.com'), url).toBe(url);
+    }
+  });
+
+  it('refuses a foreign host, a lookalike suffix and a binding with no host, by name', () => {
+    for (const [url, host] of [
+      ['wss://attacker.example.test/link/?ticket=x', 'slack.com'],
+      // A suffix match without the dot would accept this one.
+      ['wss://evilslack.com/link/?ticket=x', 'slack.com'],
+      ['wss://slack.com.attacker.example.test/link', 'slack.com'],
+      ['wss://wss-primary.slack.com/link', null],
+    ] as const) {
+      expect(() => assertSocketHost(url, host), url).toThrow(/neither the binding's host/);
+    }
+    expect(() => assertSocketHost('wss://attacker.example.test/x', 'slack.com')).toThrow(
+      /"attacker\.example\.test"/,
     );
   });
 });

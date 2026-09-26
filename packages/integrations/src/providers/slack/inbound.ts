@@ -142,6 +142,14 @@ const answerValueSchema = z.object({ q: z.uuid(), o: z.string().min(1).max(2000)
 const approvalValueSchema = z.object({
   a: z.uuid(),
   d: z.enum(['approved', 'rejected']),
+  /**
+   * The task, written beside the approval since WP-43 (`blocks.ts`'s `approvalButtonValue`).
+   *
+   * Optional only so a button posted before it existed is read the old way, through the thread
+   * directory — and no production instance posted one: WP-32 withheld approval buttons because no
+   * click could arrive.
+   */
+  t: z.uuid().optional(),
 });
 
 interface RecognisedAction {
@@ -231,7 +239,20 @@ const normaliseBlockActions = (
   if (parsed.data.d !== fromAction) {
     return ignored('malformed_payload', 'approval button and its value disagree');
   }
-  const taskId = taskForPayload(payload, deps);
+  /**
+   * The task, from the button first and the thread directory second (WP-43).
+   *
+   * The directory is this adapter instance's memory, and the binding loader builds a fresh
+   * instance per delivery (Q55) — so on the inbound path it is empty, and a click resolved through
+   * it alone was always refused. When both answer they must agree: a disagreement means somebody
+   * rebuilt the message, and picking one would be picking an attacker's half.
+   */
+  const fromThread = taskForPayload(payload, deps);
+  const fromButton = parsed.data.t ?? null;
+  if (fromThread !== null && fromButton !== null && fromThread !== fromButton) {
+    return ignored('malformed_payload', 'approval button and its thread name different tasks');
+  }
+  const taskId = fromButton ?? fromThread;
   if (taskId === null) {
     return ignored('unsupported_event', 'approval for a thread this binding did not open');
   }
@@ -239,7 +260,7 @@ const normaliseBlockActions = (
     type: 'task.approval.decided',
     payload: {
       project_id: context.projectId,
-      task_id: taskId,
+      task_id: taskId as Id,
       approval_id: recognised.id,
       decision: fromAction,
       decided_by_user_id: userId,

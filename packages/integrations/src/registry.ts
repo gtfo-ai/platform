@@ -25,10 +25,13 @@ import type {
   AgentTooling,
   CommunicationPort,
   GitProviderPort,
+  InboundConnection,
+  IntegrationRef,
   ObservabilityErrorsPort,
   ObservabilityLogsPort,
   SecretRedactor,
   TaskManagementPort,
+  WebhookDelivery,
 } from '@platform/application';
 import type { Id, IntegrationType } from '@platform/contracts';
 import type * as z from 'zod';
@@ -124,6 +127,41 @@ export interface CommunicationChannelFields {
   readonly digestChannel?: string;
 }
 
+/**
+ * What the composition gives a held connection (WP-43): where its deliveries go, and the executor
+ * every outbound call it makes on the binding's behalf passes through.
+ */
+export interface InboundConnectionHooks {
+  onDelivery(delivery: WebhookDelivery): Promise<void>;
+  /**
+   * `IntegrationActionExecutor`, as a read — the egress allow-list, the rate limit and an audit
+   * row for each call the connection makes to be opened (Slack's `apps.connections.open`).
+   */
+  execute<T>(ref: IntegrationRef, action: string, perform: () => Promise<T>): Promise<T>;
+}
+
+/**
+ * A provider whose inbound half can arrive over a connection the platform **holds** rather than a
+ * URL the provider calls — Slack's Socket Mode (WP-43).
+ *
+ * On the registration rather than on the port, because it is about composition — which process
+ * opens it and when — and the port is what the pipeline sees (BD-017).
+ */
+export interface InboundConnectionSupport {
+  /**
+   * Whether this account's configuration selects the held connection, read off the **raw**
+   * account configuration: an account that selects it and then fails its schema must still be
+   * named as one that cannot be held, not skipped as one that did not ask.
+   */
+  selected(rawConfig: unknown): boolean;
+  /**
+   * Builds the connection over an adapter created exactly as `create` builds one. Opens nothing.
+   *
+   * @throws {IntegrationError} when this binding cannot hold one as configured.
+   */
+  open(input: ProviderCreateInput, hooks: InboundConnectionHooks): InboundConnection;
+}
+
 export interface ProviderRegistration<TType extends IntegrationType> {
   /** Stable slug: `jira-cloud`, `gitlab`, `slack`, `sentry`, `loki`. */
   readonly id: string;
@@ -152,6 +190,8 @@ export interface ProviderRegistration<TType extends IntegrationType> {
    * rather than as a boot error an operator can read.
    */
   readonly communicationChannels?: CommunicationChannelFields;
+  /** Present for a provider that can deliver over a held connection (WP-43). */
+  readonly inboundConnection?: InboundConnectionSupport;
   create(input: ProviderCreateInput): IntegrationPortByType[TType];
 }
 

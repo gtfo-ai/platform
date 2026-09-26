@@ -15,6 +15,14 @@
  * 4 what does it mean? normalise, per bound project → events, appended with the inbox row
  * ```
  *
+ * Since WP-43 step 4 has one exception, and it is the one that matters most: a **human decision**
+ * (`task.approval.decided`, `task.question.answered`) is not appended as the normaliser wrote it.
+ * It is handed to the Approval or Question aggregate through `InboundDecisionApplier`, in the same
+ * transaction as the inbox row, so `can()` decides whether this person may decide it and a refusal
+ * is written on the row (`inbound-decisions.ts` has the argument). The same method is called by
+ * the HTTP route and by the held Socket Mode connection (`inbound-connections.ts`), so both
+ * transports go through all four questions.
+ *
  * ## Why an unverified delivery leaves no row
  *
  * `inbox(provider, delivery_id)` is a **dedup** key: a row means "already performed, never again".
@@ -74,6 +82,11 @@ import type {
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
+import {
+  type InboundDecisionApplier,
+  type InboundDecisionRefusal,
+  isInboundDecisionType,
+} from './inbound-decisions.js';
 
 /**
  * How long an `inbox.error` may be. Redaction happens **before** the cut, never after: an
@@ -120,6 +133,14 @@ export interface WebhookIngressOptions {
   readonly inbox: InboxStore;
   readonly audit: InboundAuditLog;
   readonly identities: InboundIdentityDirectory;
+  /**
+   * Where a **human decision** goes instead of the project stream (WP-43).
+   *
+   * Required rather than optional (standing rule 31): the alternative to it is the raw append this
+   * option exists to replace, which moved a task without deciding its approval and without asking
+   * `can()`. `inbound-decisions.ts` carries the argument.
+   */
+  readonly decisions: InboundDecisionApplier;
   readonly unitOfWork: UnitOfWork;
   /** Read side, for `nextStreamSequence`; called outside the transaction, as the audit log does. */
   readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
@@ -143,16 +164,32 @@ export interface WebhookIngress {
 const errorTextOf = (
   normalised: readonly NormalisedDelivery[],
   redactor: SecretRedactor,
+  refusals: readonly DecisionRefusalLine[] = [],
 ): { text: string | null; count: number } => {
-  const lines = normalised.flatMap((result) =>
-    result.ignored.map((entry) => `${entry.reason}: ${entry.detail}`),
-  );
+  const lines = [
+    ...normalised.flatMap((result) =>
+      result.ignored.map((entry) => `${entry.reason}: ${entry.detail}`),
+    ),
+    // A decision the aggregate refused (WP-43): named like an ignored entry, and on the same row.
+    ...refusals.map((entry) => `decision_refused: ${entry.reason}: ${entry.detail}`),
+  ];
   if (lines.length === 0) {
     return { text: null, count: 0 };
   }
   const redacted = redactor.redactText(lines.join('\n'));
   return { text: redacted.value.slice(0, MAX_INBOX_ERROR_CHARS), count: redacted.count };
 };
+
+/** One refused human decision, as the inbox row names it. */
+interface DecisionRefusalLine {
+  readonly reason: InboundDecisionRefusal;
+  readonly detail: string;
+}
+
+/** Thrown inside the transaction to roll a lost race back: the other delivery's row landed. */
+class DuplicateDeliveryRollback extends Error {
+  override readonly name = 'DuplicateDeliveryRollback';
+}
 
 /**
  * The envelope the ingress puts around a `NormalisedEvent`.
@@ -390,17 +427,18 @@ export const createWebhookIngress = (options: WebhookIngressOptions): WebhookIng
 
       const headers = resolved.redactor.redactJson(delivery.headers as JsonObject);
       const payload = resolved.redactor.redactJson(parsedBody as JsonObject);
-      const failure = errorTextOf(normalised, resolved.redactor);
-      const redactionCount = headers.count + payload.count + failure.count;
 
-      const row = (at: IsoDateTime): InboxDelivery => ({
+      const row = (
+        at: IsoDateTime,
+        failure: { readonly text: string | null; readonly count: number },
+      ): InboxDelivery => ({
         provider,
         deliveryId,
         integrationId: resolved.ref.integrationId,
         headers: headers.value,
         payload: payload.value,
         verified: true,
-        redactionCount,
+        redactionCount: headers.count + payload.count + failure.count,
         error: failure.text,
         receivedAt: at,
         processedAt: at,
@@ -420,17 +458,29 @@ export const createWebhookIngress = (options: WebhookIngressOptions): WebhookIng
         }
 
         try {
-          const inserted = await options.unitOfWork.transaction(async (scope) => {
-            // The insert is the arbiter of "performs nothing twice": two racing deliveries both
-            // normalise, and only the one whose row lands appends.
-            const isNew = await options.inbox.record(scope.tx, row(at));
-            if (!isNew) {
-              return false;
-            }
+          const committed = await options.unitOfWork.transaction(async (scope) => {
             const events: DomainEvent[] = [];
+            const refusals: DecisionRefusalLine[] = [];
             for (const group of byProject) {
               let seq = sequences.get(group.projectId) ?? 1;
               for (const draft of group.drafts) {
+                /**
+                 * A human decision is the aggregate's to make (WP-43, `inbound-decisions.ts`): it
+                 * lands on the approval's or the question's own stream, decided by `can()`, or it
+                 * is refused onto this row. It never reaches the project stream as provider text.
+                 */
+                if (isInboundDecisionType(draft.type)) {
+                  const outcome = await options.decisions.apply(scope.tx, {
+                    projectId: group.projectId,
+                    draft: { type: draft.type, payload: draft.payload, actor: draft.actor },
+                  });
+                  if (outcome.kind === 'applied') {
+                    events.push(...outcome.events);
+                  } else {
+                    refusals.push({ reason: outcome.reason, detail: outcome.detail });
+                  }
+                  continue;
+                }
                 events.push(
                   envelope(draft, {
                     id: options.ids.next(),
@@ -442,13 +492,45 @@ export const createWebhookIngress = (options: WebhookIngressOptions): WebhookIng
                 seq += 1;
               }
             }
+            const failure = errorTextOf(normalised, resolved.redactor, refusals);
+            // The insert is the arbiter of "performs nothing twice": two racing deliveries both
+            // normalise, and only the one whose row lands appends. It comes **after** the
+            // decisions because the row carries their refusals; a lost race throws, and the
+            // rollback takes the decision writes with it.
+            const isNew = await options.inbox.record(scope.tx, row(at, failure));
+            if (!isNew) {
+              throw new DuplicateDeliveryRollback();
+            }
             if (events.length > 0) {
               await scope.events.append(events);
             }
-            return true;
+            return { failure, events: events.length, refused: refusals.length };
           });
 
-          if (!inserted) {
+          const redactionCount = headers.count + payload.count + committed.failure.count;
+          await audit(resolved, {
+            status: 'accepted',
+            projectId: resolved.bindings[0]?.projectId ?? null,
+            payload: {
+              delivery_id: deliveryId,
+              events: committed.events,
+              bindings: resolved.bindings.length,
+            },
+            error: committed.failure.text,
+            redactionCount,
+            startedAt,
+          });
+          return {
+            kind: 'accepted',
+            deliveryId,
+            events: committed.events,
+            ignored:
+              normalised.reduce((total, result) => total + result.ignored.length, 0) +
+              committed.refused,
+            redactionCount,
+          };
+        } catch (error) {
+          if (error instanceof DuplicateDeliveryRollback) {
             await audit(resolved, {
               status: 'duplicate',
               projectId: null,
@@ -459,28 +541,6 @@ export const createWebhookIngress = (options: WebhookIngressOptions): WebhookIng
             });
             return { kind: 'duplicate', deliveryId };
           }
-
-          const eventCount = byProject.reduce((total, group) => total + group.drafts.length, 0);
-          await audit(resolved, {
-            status: 'accepted',
-            projectId: resolved.bindings[0]?.projectId ?? null,
-            payload: {
-              delivery_id: deliveryId,
-              events: eventCount,
-              bindings: resolved.bindings.length,
-            },
-            error: failure.text,
-            redactionCount,
-            startedAt,
-          });
-          return {
-            kind: 'accepted',
-            deliveryId,
-            events: eventCount,
-            ignored: normalised.reduce((total, result) => total + result.ignored.length, 0),
-            redactionCount,
-          };
-        } catch (error) {
           if (!(error instanceof StreamConflictError) || attempt >= maxAttempts) {
             throw error;
           }

@@ -239,7 +239,11 @@ computed from whatever two samples the browser happened to see is a number with 
 place.
 
 A question the agent asks may also arrive in Slack, and all channels are equivalent — **the first
-answer wins**. So the inbox links to the task rather than pretending to be the only way in. A
+answer wins**. An approval arrives in Slack with **Approve / Request changes** buttons; a click
+counts only when an admin has mapped your Slack account to you on **Settings → Provider
+identities**, and only if your role may decide it — the same rule as the button on the task page. A
+reply *typed* in a Slack thread is not yet matched to its task on this build, so answer a question
+here or on the task page. So the inbox links to the task rather than pretending to be the only way in. A
 question is due after the project's question timeout — **1 working day** by default, counted on the
 organisation's working calendar, so one asked late on a Friday is due on Monday — and an expired
 question is not silently dropped; it moves the task to needing a human.

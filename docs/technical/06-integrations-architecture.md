@@ -411,6 +411,30 @@ the existing suite (BD-017).
     deliveries because nothing was configured looks exactly like one that works.
 - **Polling fallback** per binding when no public URL (`APP_WEBHOOK_PUBLIC_URL` unset) or as a safety net: Jira `search/jql` with `updated >= -Nm`, GitLab MR/pipeline listing since last cursor; same normaliser; dedup makes both paths safe together.
 - **Slack** uses Socket Mode (research/03): a long-lived connection in the API process (or a dedicated `slack` process when scaling), emitting the same domain events.
+  > **As built at WP-43.** The connection is held by **the process that serves `/webhooks/*`** —
+  > `ROLE=all` or `ROLE=api` — and by construction rather than by a flag: `startRuntime` hands the
+  > held-connection supervisor (`@platform/application`'s `inbound-connections.ts`) the process's
+  > webhook ingress, which exists exactly when the role serves the API, and every envelope is handed
+  > to that same `WebhookIngress.deliver` the HTTP route calls. There is no dedicated `slack`
+  > process in this build. One connection per `communication` account whose `integrations.config`
+  > selects Socket Mode (the default); it is opened at composition, re-read every minute, closed at
+  > shutdown, and an account the process will not hold — a worker role, no app-level token, no
+  > signing secret, a refused `apps.connections.open` — is **named** in the log. The open itself goes
+  > through `IntegrationActionExecutor` as a read (egress allow-list, rate limit, one audit row per
+  > open). The WebSocket it returns does not pass the executor, and **its host is the real trust
+  > boundary** — the socket signs each envelope with the binding's own secret, so whatever answers
+  > there is trusted by construction — so the adapter refuses (`forbidden`, by name, before
+  > connecting) a `wss://` host that is not the binding's allow-listed `base_url` host or a
+  > subdomain of it (`assertSocketHost`; Slack answers `wss-primary.slack.com` for `slack.com`). Two API replicas hold
+  > two connections; Slack sends each payload to one of them and may resend it to another, and the
+  > `inbox (provider, delivery_id)` key — built from the payload, not the connection — is the
+  > backstop. Slack delivers events and interactive payloads **only** over the socket while Socket
+  > Mode is on (<https://docs.slack.dev/apis/events-api/using-socket-mode>, retrieved 2026-09-26),
+  > so the two transports are an operator's either/or, and the setup guide says which to pick.
+  > **A human decision a provider delivers is decided by its aggregate**, not appended: the ingress
+  > hands `task.approval.decided` and `task.question.answered` to `inbound-decisions.ts`, which runs
+  > `decideApproval` / `answerQuestion` — `can()` against the decider's role in the project, first
+  > answer wins — in the delivery's own transaction, and records a refusal on the `inbox` row.
   - **The signature is not optional in Socket Mode** (WP-10). A Socket Mode payload arrives with no
     Slack signature on it, but the interactivity and events *HTTP* paths exist whether or not an
     operator enables them, so the adapter wraps every envelope into a `WebhookDelivery` signed with

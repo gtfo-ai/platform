@@ -109,6 +109,8 @@ const loaderFor = (options: LoaderOptions = {}) => {
         ? createPipelineProviderRegistry({
             executor: actions,
             clock: { now: () => '2026-06-01T09:00:00.000Z' as IsoDateTime },
+            // Socket Mode's backoff; nothing here opens a socket (WP-43).
+            timer: { now: () => 0, sleep: async () => {} },
           })
         : createIntegrationRegistry(options.registrations),
     executor: actions,

@@ -268,3 +268,19 @@ cites the answered Q52). TD-021's credentials bullet — amended there by cross-
 - **GitLab.com Free cannot run a writing stage at all** (project access tokens need Premium there).
 - **A launcher restart between create and a take-over export** loses the credential: the export
   answers `pushed: false` and the tarball is the only copy.
+
+## Amendment (WP-43, 2026-09-26) — held inbound connections
+
+A provider transport the platform holds open (Slack Socket Mode) is composed by the process that serves
+`/webhooks/*` (`ROLE=api`/`all`), decided by construction: the connection supervisor
+(`packages/application/src/integrations/inbound-connections.ts`) is handed that process's webhook ingress,
+and a worker-capable process without one holds nothing and names each account it is not holding (a role
+with neither capability composes no integration stack and names nothing; none exists in this build). N
+`api` replicas hold N connections (Slack: at most ten per app, each payload to one of them, a redelivery
+possibly to another); `inbox (provider, delivery_id)`, keyed by payload, is the backstop. There is no
+dedicated `slack` role. The socket signs each envelope with the binding's own signing secret so that
+`inbound.verify` stays the single authority — which makes the **WebSocket host the real trust boundary**:
+a host that is not the binding's allow-listed `base_url` host or a subdomain of it is refused, by name,
+before any connect (`assertSocketHost`, the folded half of PROGRESS backlog 196). Shutdown closes every
+held socket, including one whose open was still in flight when the stop began.
+

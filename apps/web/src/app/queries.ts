@@ -400,6 +400,20 @@ export const useInbox = () => {
   });
 };
 
+/**
+ * The provider-account mappings (WP-43). Admin-only on the server (`org.users.manage`), so a
+ * non-admin gets a 403 and the section says so rather than drawing an empty list.
+ */
+export const useOrgIdentities = () => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: [...queryKeys.orgIdentities],
+    queryFn: () => endpoints.orgIdentities(),
+    // A 403 for a non-admin is an answer, not a transport failure worth asking twice.
+    retry: false,
+  });
+};
+
 export const useOrgUsers = () => {
   const { endpoints } = useServices();
   return useQuery({
@@ -758,6 +772,13 @@ export const useSettingsCommands = (mint?: MintKey) => {
       onSuccess: async (_result, input) => {
         intents.release(['budget.write', input]);
         await queryClient.invalidateQueries({ queryKey: queryKeys.project(input.projectId) });
+      },
+    }),
+    mapIdentity: useMutation({
+      mutationFn: (input: Parameters<typeof endpoints.mapIdentity>[0]) =>
+        endpoints.mapIdentity(input),
+      onSuccess: async () => {
+        await queryClient.invalidateQueries({ queryKey: [...queryKeys.orgIdentities] });
       },
     }),
     setOrgBudget: useMutation({

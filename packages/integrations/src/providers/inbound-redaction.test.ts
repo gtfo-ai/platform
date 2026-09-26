@@ -378,6 +378,12 @@ const deliverThrough = async (testCase: InboundCase): Promise<Delivered> => {
     inbox,
     audit: auditLog,
     identities: { forProvider: async () => new Map() },
+    // Nobody is mapped, so no provider can produce a human decision here (WP-43).
+    decisions: {
+      apply: async () => {
+        throw new Error('an unmapped delivery produced a human decision');
+      },
+    },
     unitOfWork,
     eventStore: { nextStreamSequence: async () => 1 },
     ids: {

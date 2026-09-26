@@ -24,6 +24,7 @@ import {
 
 const QUESTION_ID = '00000000-0000-4000-8000-00000000d001';
 const APPROVAL_ID = '00000000-0000-4000-8000-00000000e001';
+const TASK_ID = '00000000-0000-4000-8000-00000000c001';
 
 const section = (text: string): unknown => ({ type: 'section', text: { type: 'mrkdwn', text } });
 
@@ -110,7 +111,11 @@ describe('questionBlocks', () => {
 
 describe('approvalBlocks', () => {
   it('renders exactly two decisions, styled and identified', () => {
-    const blocks = approvalBlocks({ approvalId: APPROVAL_ID, markdown: 'Approve the plan?' });
+    const blocks = approvalBlocks({
+      approvalId: APPROVAL_ID,
+      taskId: TASK_ID,
+      markdown: 'Approve the plan?',
+    });
     assertBlockKit(blocks, 'test');
     const actions = blocks.find((block) => block.type === 'actions');
     expect(actions?.block_id).toBe(approvalBlockId(APPROVAL_ID));
@@ -120,6 +125,18 @@ describe('approvalBlocks', () => {
       REJECT_ACTION_ID,
     ]);
     expect(elements.map((element) => element.style)).toEqual(['primary', 'danger']);
+  });
+
+  it('names the task in each value, so a click resolves without the adapter’s memory (WP-43)', () => {
+    const blocks = approvalBlocks({ approvalId: APPROVAL_ID, taskId: TASK_ID, markdown: 'x' });
+    const actions = blocks.find((block) => block.type === 'actions');
+    const values = ((actions?.elements ?? []) as { value: string }[]).map(
+      (element) => JSON.parse(element.value) as unknown,
+    );
+    expect(values).toEqual([
+      { a: APPROVAL_ID, d: 'approved', t: TASK_ID },
+      { a: APPROVAL_ID, d: 'rejected', t: TASK_ID },
+    ]);
   });
 });
 

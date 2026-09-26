@@ -228,7 +228,8 @@ describe('the declared table against the composed registrations', () => {
     const owned = notifyHandlers({} as never).flatMap((handler) =>
       handler.eventTypes === 'all' ? [] : [...handler.eventTypes],
     );
-    expect(owned.length).toBe(8);
+    // Nine since WP-43, which added `task.approval.requested` once a button could be pressed.
+    expect(owned.length).toBe(9);
     for (const type of owned) {
       expect({ type, consumption: EVENT_CONSUMPTION[type] }).toEqual({
         type,

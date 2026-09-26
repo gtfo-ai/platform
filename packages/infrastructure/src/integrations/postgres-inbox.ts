@@ -25,13 +25,15 @@
  */
 import type {
   InboundAuditLog,
+  InboundDeciderRoles,
   InboundDeliveryRecord,
   InboundIdentityDirectory,
   InboxDelivery,
   InboxStore,
   Transaction,
 } from '@platform/application';
-import type { Id, IsoDateTime, JsonObject } from '@platform/contracts';
+import type { Id, IsoDateTime, JsonObject, UserRole } from '@platform/contracts';
+import { ROLE_LEVELS } from '@platform/domain';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
 
@@ -161,15 +163,16 @@ export const createPostgresInboundAuditLog = (options: {
  * skips. The paragraph below is WP-32's reasoning for not writing one here, and it still holds.
  *
  * A row maps a **provider account** to a **platform user**, and the platform can only learn that
- * pairing from one of three places: an operator saying so (WP-31's endpoint; there is still no
- * screen), an OAuth sign-in with the provider (TD-022 ships email and password), or
- * a match by email through `CommunicationPort.resolveIdentity` — which has no caller either,
- * because this build starts no Socket Mode connection and the notification band is **outbound
- * only**. Writing rows from an email match without a human confirming it would also be the one
- * thing BD-022 and Q10 refuse: an identity the platform *guessed* would then be allowed to answer
- * questions and approve plans.
+ * pairing from one of three places: an operator saying so (WP-31's endpoint, and since WP-43 the
+ * settings page's *Provider identities* section that calls it), an OAuth sign-in with the provider
+ * (TD-022 ships email and password), or a match by email through
+ * `CommunicationPort.resolveIdentity` — which still has no caller: WP-43 opened the Socket Mode
+ * connection, but nothing asks the adapter to *propose* a mapping. Writing rows from an email match
+ * without a human confirming it would also be the one thing BD-022 and Q10 refuse: an identity the
+ * platform *guessed* would then be allowed to answer questions and approve plans.
  *
- * Filed as discovered work in `docs/technical/PROGRESS.md`.
+ * The map is **empty by default** on every instance and stays so until an operator writes it; the
+ * two automatic routes above stay refused on purpose.
  */
 export const createPostgresIdentityDirectory = (options: {
   readonly sql: SqlExecutor;
@@ -183,5 +186,40 @@ export const createPostgresIdentityDirectory = (options: {
       [provider],
     );
     return new Map(rows.map((row) => [row.external_id, row.user_id as Id]));
+  },
+});
+
+/**
+ * The role a person deciding from a provider holds **for the project** (WP-43).
+ *
+ * The same answer the HTTP guard gives a session (`apps/server/src/auth/rbac.ts`'s
+ * `effectiveRole`): the higher of the organisation role and a project membership. And the same
+ * refusal the session hook makes (`apps/server/src/auth/plugin.ts`): a **disabled** or **banned**
+ * account may not act, so it answers `null` here and its click is refused as `unknown_decider`
+ * rather than decided on the strength of a mapping nobody removed.
+ *
+ * In the caller's transaction, because the decision it gates commits in that transaction.
+ */
+export const createPostgresDeciderRoles = (): InboundDeciderRoles => ({
+  roleIn: async (tx, { userId, projectId }): Promise<UserRole | null> => {
+    const { rows } = await postgresTransaction(tx).client.query<{
+      org_role: UserRole;
+      project_role: UserRole | null;
+    }>(
+      `select u.role as org_role, m.role as project_role
+         from users u
+         left join project_members m on m.user_id = u.id and m.project_id = $2
+        where u.id = $1
+          and u.status <> 'disabled'
+          and coalesce(u.banned, false) = false`,
+      [userId, projectId],
+    );
+    const row = rows[0];
+    if (row === undefined) {
+      return null;
+    }
+    return row.project_role !== null && ROLE_LEVELS[row.project_role] > ROLE_LEVELS[row.org_role]
+      ? row.project_role
+      : row.org_role;
   },
 });

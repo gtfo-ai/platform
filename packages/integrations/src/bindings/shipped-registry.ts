@@ -37,12 +37,12 @@
  * and nothing here can fix it: the fix is Jira adopting GitLab's shape, which is an adapter change
  * with its own contract suite. It is filed in `docs/technical/PROGRESS.md` under discovered work.
  */
-import type { IntegrationActionExecutor } from '@platform/application';
+import type { IntegrationActionExecutor, IntegrationTimer } from '@platform/application';
 import type { Clock } from '@platform/domain';
 import { gitlabProviderRegistration } from '../providers/gitlab/index.js';
 import { fixedActionContext } from '../providers/jira-cloud/index.js';
 import { createJiraCloudRegistration } from '../providers/jira-cloud/registration.js';
-import { createSlackRegistration } from '../providers/slack/index.js';
+import { createSlackRegistration, type SocketConnect } from '../providers/slack/index.js';
 import { createIntegrationRegistry, type IntegrationRegistry } from '../registry.js';
 
 export interface PipelineProviderRegistryOptions {
@@ -54,6 +54,18 @@ export interface PipelineProviderRegistryOptions {
    */
   readonly executor: IntegrationActionExecutor;
   readonly clock: Clock;
+  /**
+   * Socket Mode's reconnect backoff (WP-43). Required: the Slack adapter refuses to open a socket
+   * without one, and a registry that forgot it would turn every held connection into a refusal at
+   * composition rather than a type error here.
+   */
+  readonly timer: IntegrationTimer;
+  /**
+   * **A labelled test seam**: the Socket Mode connector. Absent is production — Node's global
+   * `WebSocket` through `webSocketConnect`. The e2e tier injects one so a click is driven end to
+   * end without a Slack workspace (`test/e2e/pipeline/slack-socket.e2e.test.ts`).
+   */
+  readonly slackConnect?: SocketConnect;
 }
 
 export const createPipelineProviderRegistry = (
@@ -79,8 +91,14 @@ export const createPipelineProviderRegistry = (
      * which is worth nothing here, because the loader builds an adapter *per call* (Q55). The
      * durable answer to "does this task already have a thread" is the executor's idempotency store,
      * and `communicationWrites.taskThread` is the caller that finally gives that action a plan.
-     * The Socket Mode connector is **not** started from here: an outbound registration is not a
-     * consumer of inbound envelopes, and nothing in this build opens that connection.
+     * The Socket Mode connection is **not** started from here — a registry is not a lifecycle —
+     * but since WP-43 it is *opened* through this registration: `createHeldConnectionDirectory`
+     * reads `inboundConnection` off it and `apps/server/src/inbound-connections.ts` holds the
+     * socket in the process that serves `/webhooks/*`. Hence the timer and the connector.
      */
-    createSlackRegistration({ clock: options.clock }),
+    createSlackRegistration({
+      clock: options.clock,
+      timer: options.timer,
+      ...(options.slackConnect === undefined ? {} : { connect: options.slackConnect }),
+    }),
   ]);

@@ -272,6 +272,12 @@ export interface PipelineOutboundData {
   /** Platform text naming what the notification is about when there is no task — a budget window. */
   readonly notification_subject?: string;
   /**
+   * `notify` with class `approval` only (WP-43): which approval. The duty reloads the row and
+   * posts nothing for one that is no longer pending — a timer and a person may both have got there
+   * first, and a button on a decided approval is the dead control WP-32 refused to ship.
+   */
+  readonly approval_id?: string;
+  /**
    * `revoke_run_credential` (WP-77): the run whose credential it is, and the address the mint's
    * audit row recorded — `<project>#<token_id>` on GitLab, not a secret. The duty re-reads the rest.
    */

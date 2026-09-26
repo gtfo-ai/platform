@@ -42,6 +42,7 @@ import {
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import { IntegrationError, type IntegrationRef } from '../ports/integrations/common.js';
 import type {
+  ApprovalPost,
   CommunicationPort,
   DigestItem,
   MessageBody,
@@ -1398,6 +1399,50 @@ export const communicationWrites = (integrations: PipelineIntegrations) => ({
       { channel: input.thread.channel, thread_id: input.thread.thread_id },
       context,
       async () => chat.port.postMessage(input.thread, input.body),
+      () => ({
+        provider: chat.ref.provider,
+        channel: input.thread.channel,
+        message_id: `would-have-${input.idempotencyKey}`,
+        thread_id: input.thread.thread_id,
+        url: null,
+      }),
+      (result) => ({ channel: result.channel, message_id: result.message_id }),
+      replayable<MessageRef>(input.idempotencyKey),
+    );
+  },
+
+  /**
+   * An approval in the task's thread, **with its buttons** (WP-43) — `postApproval`, whose Block
+   * Kit carries the approval and the task in each button's value.
+   *
+   * The caller has already decided a click can arrive (`capabilities().buttons`); this is the call.
+   * Keyed like `message`, by the wake-up, so a retried job replays the stored `MessageRef` instead
+   * of posting a second pair of buttons for one approval.
+   */
+  approval: async (
+    input: {
+      readonly thread: ThreadRef;
+      readonly approval: ApprovalPost;
+      readonly body: MessageBody;
+      readonly idempotencyKey: string;
+    },
+    context: CallContext & { readonly mode: TaskMode },
+  ): Promise<MessageRef | null> => {
+    const chat = integrations.communication;
+    if (chat === null) {
+      return null;
+    }
+    return mutate(
+      integrations,
+      chat.ref,
+      'post_approval',
+      {
+        channel: input.thread.channel,
+        thread_id: input.thread.thread_id,
+        approval_id: input.approval.id,
+      },
+      context,
+      async () => chat.port.postApproval(input.thread, input.approval, input.body),
       () => ({
         provider: chat.ref.provider,
         channel: input.thread.channel,

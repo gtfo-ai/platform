@@ -70,9 +70,10 @@ const ADMITTED_GAPS: Readonly<Record<string, string>> = {
   // to admit; they too are asserted positively below.
   //
   // What this census **cannot** see is unchanged and is asserted by hand further down: a route no
-  // screen calls. There are four paths — `GET /api/projects/:id/kb/health` (WP-15h part 2), WP-27's
-  // `take-over` and `hand-back`, whose buttons are a UI row of their own, and WP-31's
-  // `/api/org/identities` pair (`POST` and `GET` on one path), which has no screen either.
+  // screen calls. There are three paths — `GET /api/projects/:id/kb/health` (WP-15h part 2), and
+  // WP-27's `take-over` and `hand-back`, whose buttons are a UI row of their own. WP-31's
+  // `/api/org/identities` pair was the fourth until WP-43 gave it a screen (the settings page's
+  // "Provider identities"), so the comparison above now sees it; the per-method case below says so.
 };
 
 /**
@@ -552,11 +553,12 @@ describe('the client’s endpoint list against the server’s router', () => {
     }
   });
 
-  it('serves the identity pair no screen calls, by each of its own methods', async () => {
+  it('serves the identity pair the settings page calls, by each of its own methods', async () => {
     // `POST /api/org/identities` is the writer `user_identities` had never had (WP-31, PROGRESS
-    // backlog 79) and `GET` is the list beside it. No screen calls either, so the comparison above
-    // is blind to both by construction — the same position `kb/health`, `take-over` and
-    // `hand-back` are in. Asked **by each method**, because `probe()` tries GET first and would
+    // backlog 79) and `GET` is the list beside it. **No screen called either until WP-43**, which
+    // is what left every chat decision `unmapped_identity`; the settings page's identity section
+    // (`features/identities.tsx`) calls both now, and the last assertion below is the inverted
+    // form of the one that used to hold it absent. Asked **by each method**, because `probe()` tries GET first and would
     // otherwise judge the POST on its sibling's answer (the hole WP-21's review found), and with
     // **no body at all**, because the write's guard is a `preValidation` hook: one that slipped
     // back to `preHandler` would answer `400` describing the route's shape instead of `401`.
@@ -578,7 +580,9 @@ describe('the client’s endpoint list against the server’s router', () => {
         source: readFileSync(join(repositoryRoot, path), 'utf8'),
       })),
     );
-    expect(paths).not.toContain('/api/org/identities');
+    // The screen calls it — the inverse of the pre-WP-43 assertion, so a screen that lost the call
+    // fails here rather than quietly returning the product to `unmapped_identity`.
+    expect(paths).toContain('/api/org/identities');
   });
 
   it('serves the two breakdown paths no screen calls, by each of their own methods', async () => {

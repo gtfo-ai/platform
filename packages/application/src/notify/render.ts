@@ -137,6 +137,7 @@ const TITLE_OF: Readonly<Record<NotificationClass, (name: string) => string>> = 
   task_cancelled: (name) => `${name} was cancelled`,
   budget_threshold: (name) => `${name} is close to its budget`,
   budget_exhausted: (name) => `${name} has spent its budget`,
+  approval: (name) => `${name} is waiting for an approval`,
 };
 
 export const notificationDraft = (input: {

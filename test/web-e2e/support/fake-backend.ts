@@ -499,6 +499,7 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
         [`/api/projects/${fixtures.IDS.project}/config`]: fixtures.effectiveConfig,
         [`/api/projects/${fixtures.IDS.project}/budgets`]: fixtures.budgets,
         '/api/org/budgets': fixtures.orgBudgets,
+        '/api/org/identities': fixtures.orgIdentities,
         // WP-41. The CSV twin is **not** served here: it is a download the browser tier does not
         // click, and the screen's link is asserted by its `href` (`apps/web/src/features/
         // statistics.test.tsx` drives the JSON half against this same shape).

@@ -30,7 +30,7 @@
  */
 import type { Id, IsoDateTime, NotificationClass, TaskMode } from '@platform/contracts';
 import { notificationClassSchema } from '@platform/contracts';
-import { isUrgentNotification, notificationDelivery } from '@platform/domain';
+import { isUrgentNotification, notificationDelivery, toApprovalRecord } from '@platform/domain';
 import {
   communicationWrites,
   integrationsForProject,
@@ -86,6 +86,29 @@ export const runNotification = async (
     logger.debug(
       { task_id: stored.task.id, notification_class: notificationClass },
       'notify: a platform-issued ticket has no lifecycle a channel needs to hear about',
+    );
+    return;
+  }
+
+  /**
+   * An approval is announced only while it is still pending (WP-43). The wake-up is at-least-once
+   * and minutes late, and by then a person may have decided it on the task page or the deadline may
+   * have expired it: a message with buttons for a decided approval is the dead control WP-32
+   * refused to ship, so a settled one is not announced at all — no row, no message.
+   */
+  const approval =
+    notificationClass === 'approval' && data.approval_id !== undefined
+      ? await options.unitOfWork.transaction(async (scope) =>
+          options.store.approvals.load(scope.tx, data.approval_id as Id),
+        )
+      : null;
+  if (
+    notificationClass === 'approval' &&
+    (approval === null || approval.approval.status !== 'pending')
+  ) {
+    logger.debug(
+      { task_id: data.task_id, approval_id: data.approval_id },
+      'notify: the approval is no longer pending, so there is nothing to ask',
     );
     return;
   }
@@ -213,7 +236,40 @@ export const runNotification = async (
     if (thread === null) {
       return;
     }
-    if (notificationClass !== 'task_started') {
+    if (approval !== null) {
+      /**
+       * **Buttons only once a click can arrive** (WP-43, criterion 6). The adapter answers
+       * `buttons` from its own configuration — for Slack, the transport it is set to receive on
+       * and the credentials that transport needs — so a binding that could never deliver a click
+       * gets the same notification as text, which names the task page as the place to decide.
+       * What no adapter can answer is whether a process is holding the socket *right now*; that
+       * residual is named in PROGRESS under WP-43 rather than implied here.
+       */
+      if (chat.port.capabilities().buttons) {
+        await chats.approval(
+          {
+            thread,
+            approval: toApprovalRecord(approval.approval),
+            body,
+            idempotencyKey,
+          },
+          context,
+        );
+      } else {
+        await chats.message(
+          {
+            thread,
+            body: notificationBody({
+              ...draft,
+              detail:
+                `${draft.detail ?? ''}\nDecide on the task page: this chat binding cannot receive a click.`.trim(),
+            }),
+            idempotencyKey,
+          },
+          context,
+        );
+      }
+    } else if (notificationClass !== 'task_started') {
       await chats.message({ thread, body, idempotencyKey }, context);
     }
   }

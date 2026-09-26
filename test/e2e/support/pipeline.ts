@@ -46,12 +46,13 @@ import {
   runner as runnerAdapters,
   secrets as secretAdapters,
 } from '@platform/infrastructure';
-import type { IntegrationRegistry } from '@platform/integrations';
+import type { IntegrationRegistry, PipelineProviderRegistryOptions } from '@platform/integrations';
 import {
   createFakeCommunication,
   createFakeGitProvider,
   createFakeTaskManagement,
   createIntegrationRegistry,
+  createSlackRegistration,
   FAKE_GIT_PROVIDER_ID,
   FAKE_TASK_MANAGEMENT_PROVIDER_ID,
   fakeCommunicationRegistration,
@@ -69,6 +70,7 @@ import {
   type WorkspaceRelease,
 } from './agent-workspace.js';
 import { type Instance, ROLE_ALL_POOL_FLOOR, startInstance } from './instance.js';
+import { type FakeSlack, SLACK_E2E_CONFIG, SLACK_E2E_HOST, SLACK_E2E_SECRETS } from './slack.js';
 
 export const GIT_INTEGRATION_ID = '00000000-0000-4000-8000-00000000a001' as Id;
 export const TICKETS_INTEGRATION_ID = '00000000-0000-4000-8000-00000000a002' as Id;
@@ -258,6 +260,15 @@ export interface PipelineE2E {
    * the same registry lookup; only the `:provider/:integrationId` pair differs.
    */
   deliverGit(delivery: {
+    readonly headers: Readonly<Record<string, string>>;
+    readonly body: string;
+  }): Promise<{ readonly status: number; readonly body: unknown }>;
+  /**
+   * The same door, for the **chat** integration (WP-43) — `POST /webhooks/slack/<id>` when the
+   * harness was started with {@link StartPipelineOptions.slack}: the HTTP half of the one assertion
+   * `slack-socket.e2e.test.ts` drives through both transports.
+   */
+  deliverChat(delivery: {
     readonly headers: Readonly<Record<string, string>>;
     readonly body: string;
   }): Promise<{ readonly status: number; readonly body: unknown }>;
@@ -557,6 +568,13 @@ export interface StartPipelineOptions {
    * derivation itself is `apps/server/src/pipeline.ts`'s and is untouched.
    */
   readonly gitProjects?: readonly string[];
+  /**
+   * WP-43: the chat binding is the **real** Slack registration, over this fake Web API and Socket
+   * Mode connection, instead of `fake-communication`. The seeded account is `provider: 'slack'`
+   * with Socket Mode on (its default) and three sealed credentials, and the instance's
+   * `APP_INTEGRATION_HOSTS` declares the fake's host so the executor lets the calls through.
+   */
+  readonly slack?: FakeSlack;
 }
 
 /**
@@ -570,6 +588,7 @@ export interface StartPipelineOptions {
 export const seedWorld = async (
   pool: pg.Pool,
   config: JsonObject,
+  chat: 'fake' | 'slack' = 'fake',
 ): Promise<{ projectId: Id; userId: Id }> => {
   const seed = await pool.query<{ project_id: string; user_id: string }>(
     `with org as (insert into organizations (name) values ('e2e') returning id),
@@ -586,7 +605,7 @@ export const seedWorld = async (
   );
   const projectId = seed.rows[0]?.project_id as Id;
   const userId = seed.rows[0]?.user_id as Id;
-  await seedIntegrations(pool, projectId);
+  await seedIntegrations(pool, projectId, false, chat);
   return { projectId, userId };
 };
 
@@ -604,6 +623,8 @@ export const seedIntegrations = async (
   projectId: Id,
   /** Leave `bindings` empty, so the wizard's own `PUT …/bindings` is what attaches them (WP-21). */
   skipBindings = false,
+  /** WP-43: seed the chat account as a real Slack binding rather than `fake-communication`. */
+  chat: 'fake' | 'slack' = 'fake',
 ): Promise<void> => {
   const key = secretAdapters.deriveSecretKey(APP_SECRET_KEY);
   const orgId = (
@@ -616,31 +637,26 @@ export const seedIntegrations = async (
     provider: string,
     name: string,
     integrationConfig: JsonObject,
-    token: string,
+    token: string | Readonly<Record<string, string>>,
   ): Promise<void> => {
-    // The id is generated here rather than by the column default: it is in the envelope's AAD, so
-    // it has to exist before the ciphertext does (`envelope.ts`).
-    const secretId = randomUUID();
-    const secret = await pool.query<{ id: string }>(
-      'insert into secrets (id, ciphertext, key_id) values ($1, $2, $3) returning id',
-      [
+    // One sealed document per field; a fake binding has one (`token`), Slack has three (WP-43).
+    const fields = typeof token === 'string' ? { token } : token;
+    const secretIds: string[] = [];
+    for (const [field, value] of Object.entries(fields)) {
+      // The id is generated here rather than by the column default: it is in the envelope's AAD,
+      // so it has to exist before the ciphertext does (`envelope.ts`).
+      const secretId = randomUUID();
+      await pool.query('insert into secrets (id, ciphertext, key_id) values ($1, $2, $3)', [
         secretId,
-        secretAdapters.sealSecret(key, secretAdapters.secretDocument('token', token), secretId),
+        secretAdapters.sealSecret(key, secretAdapters.secretDocument(field, value), secretId),
         key.keyId,
-      ],
-    );
+      ]);
+      secretIds.push(secretId);
+    }
     await pool.query(
       `insert into integrations (id, org_id, type, provider, name, config, secret_ids)
-       values ($1, $2, $3::integration_type, $4, $5, $6::jsonb, array[$7::uuid])`,
-      [
-        integrationId,
-        orgId,
-        type,
-        provider,
-        name,
-        JSON.stringify(integrationConfig),
-        secret.rows[0]?.id,
-      ],
+       values ($1, $2, $3::integration_type, $4, $5, $6::jsonb, $7::uuid[])`,
+      [integrationId, orgId, type, provider, name, JSON.stringify(integrationConfig), secretIds],
     );
     if (!skipBindings) {
       await pool.query('insert into bindings (project_id, integration_id) values ($1, $2)', [
@@ -674,6 +690,18 @@ export const seedIntegrations = async (
    * registration declares. Seeding it at the account is what makes the notification e2e exercise
    * the merge rather than only the overlay.
    */
+  if (chat === 'slack') {
+    // WP-43: the real Slack registration's account — Socket Mode on by default, three credentials.
+    await bind(
+      CHAT_INTEGRATION_ID,
+      'communication',
+      'slack',
+      'acme slack',
+      { ...SLACK_E2E_CONFIG },
+      SLACK_E2E_SECRETS,
+    );
+    return;
+  }
   await bind(
     CHAT_INTEGRATION_ID,
     'communication',
@@ -850,11 +878,20 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
 
   // The fakes reach the pipeline the way a real provider does: through the registry, resolved by
   // the `provider` column of the seeded `integrations` row (WP-15a).
-  const registry = (): IntegrationRegistry =>
+  const registry = (registryOptions: PipelineProviderRegistryOptions): IntegrationRegistry =>
     createIntegrationRegistry([
       fakeGitRegistration({ port: git, token: GIT_BINDING_TOKEN }),
       fakeTaskManagementRegistration({ port: tickets, token: TICKET_BINDING_TOKEN }),
-      fakeCommunicationRegistration({ port: chat, token: CHAT_BINDING_TOKEN }),
+      options.slack === undefined
+        ? fakeCommunicationRegistration({ port: chat, token: CHAT_BINDING_TOKEN })
+        : // WP-43: the production registration, with the process's clock and timer, over the
+          // fake's two network edges — exactly what `createPipelineProviderRegistry` builds.
+          createSlackRegistration({
+            clock: registryOptions.clock,
+            timer: registryOptions.timer,
+            fetch: options.slack.fetch,
+            connect: options.slack.connect,
+          }),
     ]);
 
   /**
@@ -895,6 +932,8 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
       // The credential `composeAgentRunner` refuses to compose a runner without in `api` mode. It is
       // planted rather than absent precisely so the redaction assertions have something to look for.
       ...(realRunner ? { ANTHROPIC_API_KEY: PLANTED_MODEL_KEY } : {}),
+      // WP-51's allow-list is closed by default; the fake Slack's host is declared, and nothing else.
+      ...(options.slack === undefined ? {} : { APP_INTEGRATION_HOSTS: SLACK_E2E_HOST }),
       ...options.env,
     },
     // No `auditLog` and no `idempotency`: the instance builds both from its own pool (WP-15b).
@@ -914,7 +953,11 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
         // with instead.
         { projectId: '' as Id, userId: '' as Id }
       : options.reuse === undefined
-        ? await seedWorld(pool, options.config ?? {})
+        ? await seedWorld(
+            pool,
+            options.config ?? {},
+            options.slack === undefined ? 'fake' : 'slack',
+          )
         : { projectId: options.reuse.projectId, userId: options.reuse.projectId };
 
   // An inbound adapter's half of the append: a webhook endpoint writes the normalised events in a
@@ -1177,6 +1220,12 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
     deliver: async (delivery) =>
       deliverTo(FAKE_TASK_MANAGEMENT_PROVIDER_ID, TICKETS_INTEGRATION_ID, delivery),
     deliverGit: async (delivery) => deliverTo(FAKE_GIT_PROVIDER_ID, GIT_INTEGRATION_ID, delivery),
+    deliverChat: async (delivery) =>
+      deliverTo(
+        options.slack === undefined ? 'fake-communication' : 'slack',
+        CHAT_INTEGRATION_ID,
+        delivery,
+      ),
     inbox: async () => {
       const { rows } = await pool.query<{
         provider: string;

@@ -28,6 +28,7 @@ import {
   budgetsResponseSchema,
   contextPackRecordSchema,
   effectiveConfigResponseSchema,
+  identityMappingListSchema,
   inboxResponseSchema,
   integrationSummarySchema,
   kbProposalsResponseSchema,
@@ -696,6 +697,23 @@ export const budgets = budgetsResponseSchema.parse({
       notify_pct: [50, 80],
       spent_usd: 12.5,
       window_start: now,
+    },
+  ],
+});
+
+/**
+ * `GET /api/org/identities` — one Slack account mapped to the operator (WP-43). The display name
+ * carries markup on purpose: the screen must render it as text (BD-022).
+ */
+export const orgIdentities = identityMappingListSchema.parse({
+  items: [
+    {
+      provider: 'slack',
+      external_id: 'U0FAKEOPERATOR',
+      kind: 'person',
+      user_id: IDS.user,
+      display_name: '<img src=x onerror=alert(1)>operator',
+      created_at: now,
     },
   ],
 });

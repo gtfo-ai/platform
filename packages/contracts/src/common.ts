@@ -176,6 +176,11 @@ export const notificationClassSchema = z.enum([
   'budget_threshold',
   /** A budget window is spent — product/18's "budget 100%" (`budget.exhausted`). */
   'budget_exhausted',
+  /**
+   * A plan or budget approval is waiting for a maintainer (`task.approval.requested`, WP-43).
+   * Posted with Approve / Request changes buttons when the binding can receive a click.
+   */
+  'approval',
 ]);
 
 export type NotificationClass = z.infer<typeof notificationClassSchema>;

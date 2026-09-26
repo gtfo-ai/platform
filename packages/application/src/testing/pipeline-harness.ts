@@ -478,7 +478,13 @@ const stubGit = (overrides: Partial<GitProviderPort> | null | undefined): GitPro
  * acceptance criterion puts it.
  */
 export interface HarnessCommunication {
-  readonly messages: { channel: string; thread: string | null; markdown: string }[];
+  readonly messages: {
+    channel: string;
+    thread: string | null;
+    markdown: string;
+    /** Set for an approval posted with its buttons (`postApproval`, WP-43). */
+    approval?: string;
+  }[];
   readonly port: CommunicationPort;
 }
 
@@ -525,6 +531,26 @@ const stubCommunication = (
         channel: thread.channel,
         thread: thread.thread_id,
         markdown: body.markdown,
+      });
+      return {
+        provider: 'fake-chat',
+        channel: thread.channel,
+        message_id: id,
+        thread_id: thread.thread_id,
+        url: null,
+      };
+    },
+    postApproval: async (
+      thread: { channel: string; thread_id: string },
+      approval: { id: string },
+      body: { markdown: string },
+    ) => {
+      const id = next();
+      messages.push({
+        channel: thread.channel,
+        thread: thread.thread_id,
+        markdown: body.markdown,
+        approval: approval.id,
       });
       return {
         provider: 'fake-chat',

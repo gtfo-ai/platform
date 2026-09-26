@@ -10,6 +10,7 @@ export const queryKeys = {
   session: ['session'] as const,
   version: ['version'] as const,
   orgUsers: ['org', 'users'] as const,
+  orgIdentities: ['org', 'identities'] as const,
   audit: (filters: Readonly<Record<string, unknown>> = {}) => ['org', 'audit', filters] as const,
   agents: ['org', 'agents'] as const,
   inbox: ['org', 'inbox'] as const,

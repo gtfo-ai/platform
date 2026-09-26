@@ -155,11 +155,12 @@ export interface CommunicationPort extends IntegrationPort<CommunicationCapabili
   /**
    * Maps a chat user onto a verified identity by email (product/08), or `null` when unknown.
    *
-   * **It has no caller in this build** (checked at WP-32, which built the outbound band): a chat
-   * identity is only needed for the *inbound* half — an answer or an approval arriving from a
-   * thread — and nothing starts a Socket Mode connection. Its destination, `user_identities`, is
-   * read by `InboundIdentityDirectory` and written by nothing; that file's docblock carries the
-   * three places a mapping could honestly come from and why guessing one is refused.
+   * **It has no caller in this build** (checked at WP-32, and again at WP-43). The inbound half
+   * it would serve exists since WP-43 — the process that serves `/webhooks/*` holds the Socket Mode
+   * connection, and a click is decided by its aggregate — but the mapping it would *propose* is
+   * written by an operator on the settings page (`POST /api/org/identities`, WP-31's route and
+   * WP-43's screen), and nothing yet asks this method to suggest one. Guessing a mapping from an
+   * email is refused (BD-022, Q10); `createPostgresIdentityDirectory`'s docblock carries why.
    */
   resolveIdentity(query: {
     readonly providerUserId?: string;

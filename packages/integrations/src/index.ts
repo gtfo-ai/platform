@@ -22,6 +22,7 @@
 export * from './bindings/bound-skills.js';
 export * from './bindings/fake-registrations.js';
 export * from './bindings/git-mirror.js';
+export * from './bindings/held-connections.js';
 export * from './bindings/inbound-loader.js';
 export * from './bindings/loader.js';
 export * from './bindings/prober.js';

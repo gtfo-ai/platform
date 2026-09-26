@@ -99,6 +99,8 @@ export const approvalClickBody = (
   authorId: string,
   approvalId: string,
   decision: 'approved' | 'rejected',
+  /** What the bot wrote into the button since WP-43 (`approvalButtonValue`). */
+  taskId?: string,
 ) => ({
   type: 'block_actions',
   team: { id: TEAM_ID, domain: 'agentic-fake' },
@@ -117,7 +119,11 @@ export const approvalClickBody = (
       action_id: decision === 'approved' ? APPROVE_ACTION_ID : REJECT_ACTION_ID,
       block_id: approvalBlockId(approvalId),
       text: { type: 'plain_text', text: decision === 'approved' ? 'Approve' : 'Request changes' },
-      value: JSON.stringify({ a: approvalId, d: decision }),
+      value: JSON.stringify({
+        a: approvalId,
+        d: decision,
+        ...(taskId === undefined ? {} : { t: taskId }),
+      }),
       type: 'button',
       action_ts: '1780000012.000800',
     },

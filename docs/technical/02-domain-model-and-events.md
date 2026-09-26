@@ -134,10 +134,12 @@ trade). `mr.updated` was the one entry that named a backlog entry instead — it
 > (`packages/application/src/notify/handlers.ts`), which **decides** and enqueues; the
 > `pipeline.outbound` duty makes the call, because a provider call inside a handler's transaction
 > holds a pooled connection and the dispatch slot for the length of an HTTP round trip (WP-15d).
-> Two consumers this column names are still absent and are named here rather than left to be
-> inferred: the **buttons** on `task.approval.requested` (the inbound half needs a Socket Mode
-> connection nothing starts, so a button would be dead) and the whole **UI band** at 220 (WP-20's
-> realtime projection). An **organisation**-scoped budget cannot be notified at all — a chat binding
+> One consumer this column names is still absent and is named here rather than left to be
+> inferred: the whole **UI band** at 220 (WP-20's realtime projection). The **buttons** on
+> `task.approval.requested` were the second until WP-43, which opened the Socket Mode connection the
+> inbound half needed: the same `notify.chat` handler now serves that type too (class `approval`),
+> posting Approve / Request changes when the binding can receive a click and text naming the task
+> page when it cannot, and a click is decided by the Approval aggregate rather than appended. An **organisation**-scoped budget cannot be notified at all — a chat binding
 > belongs to a project and that payload carries no `project_id` — which `decideNotification` says at
 > the line.
 

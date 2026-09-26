@@ -93,6 +93,13 @@ const ingressFor = () =>
     inbox: integrationAdapters.createPostgresInboxStore({ sql: pool }),
     audit: integrationAdapters.createPostgresInboundAuditLog({ sql: pool }),
     identities: integrationAdapters.createPostgresIdentityDirectory({ sql: pool }),
+    // GitLab produces no human decision (WP-43's applier is Slack's path, driven end to end in
+    // `test/e2e/pipeline/slack-socket.e2e.test.ts`); asked here, it would be a defect.
+    decisions: {
+      apply: async () => {
+        throw new Error('a GitLab delivery produced a human decision');
+      },
+    },
     unitOfWork: eventing.unitOfWork,
     eventStore: eventing.store,
     ids: { next: () => randomUUID() as Id },

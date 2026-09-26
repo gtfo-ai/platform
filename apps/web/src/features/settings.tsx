@@ -2,8 +2,10 @@
  * Org settings (product/10 § "Settings (org)").
  *
  * What is here is what the API answers today: the signed-in session, the theme, the instance
- * version, the user list with roles (`GET /api/org/users`, which needs `org.read`) and — since
- * WP-30 — **BD-010's organisation budgets**, which `GET/PUT /api/org/budgets` now serve.
+ * version, the user list with roles (`GET /api/org/users`, which needs `org.read`), — since
+ * WP-30 — **BD-010's organisation budgets**, which `GET/PUT /api/org/budgets` now serve, and —
+ * since WP-43 — the **provider identities** (`features/identities.tsx`), without which every
+ * decision arriving from Slack, Jira or GitLab is `unmapped_identity`.
  *
  * The budgets were in this file's "named as absent" list until that work package, and they were the
  * expensive absence: `insert into budgets` occurred in exactly two files and both were tests, so the
@@ -33,6 +35,7 @@ import {
 } from '../ui/kit.js';
 import { useTheme } from '../ui/theme.js';
 import { UntrustedText } from '../ui/untrusted.js';
+import { IdentityMappings } from './identities.js';
 import { Budgets } from './operating-mode.js';
 
 export const SettingsScreen = (): ReactElement => {
@@ -110,6 +113,10 @@ export const SettingsScreen = (): ReactElement => {
           ))}
         </ul>
       </section>
+
+      {/* WP-43: the screen `POST /api/org/identities` never had, so a decision from chat or a
+          ticket resolves to a person instead of `unmapped_identity`. */}
+      <IdentityMappings />
 
       <section>
         <SectionHeading>Instance</SectionHeading>

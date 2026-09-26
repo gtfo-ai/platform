@@ -143,6 +143,21 @@ export const slackReplayContext = (
    * the state a running deployment would be in — rather than the `create` doing it, which would
    * let "opens one thread per task" pass without ever reaching the provider.
    */
+  /**
+   * The same adapter built again with nothing remembered — what the binding loader hands the
+   * ingress for **every** delivery (Q55). The suite's `freshPort` obligation (WP-43).
+   */
+  const freshPort = registration.create({
+    integrationId: SLACK_INTEGRATION_ID,
+    config,
+    secrets: {
+      bot_token: FAKE_BOT_TOKEN,
+      app_token: FAKE_APP_TOKEN,
+      signing_secret: FAKE_SIGNING_SECRET,
+    },
+    redactor: overrides.redactor ?? noSecretsRedactor(),
+  });
+
   const rememberThread = (): void => {
     port.threads.rememberThread(SLACK_TASK_ID, { channel: CHANNEL, threadTs: THREAD_TS });
   };
@@ -153,6 +168,9 @@ export const slackReplayContext = (
     port,
     slack: port,
     unverifiablePort,
+    freshPort,
+    emitPostedApproval: (authorId, decision) =>
+      signedDelivery(approvalClickBody(authorId, SLACK_APPROVAL_ID, decision, SLACK_TASK_ID)),
     channel: CHANNEL,
     missingChannel: MISSING_CHANNEL,
     taskId: SLACK_TASK_ID,

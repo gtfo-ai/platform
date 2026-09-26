@@ -131,3 +131,16 @@ export const createPostgresBindingRepository = (sql: SqlExecutor): BindingReposi
     };
   },
 });
+
+/**
+ * Every `integrations.id`, oldest first — what WP-43's held-connection directory walks to find the
+ * accounts that select a held inbound connection. Kept beside the repository rather than added to
+ * the `BindingRepository` port: the pipeline never lists accounts, and a port method only one
+ * composition calls is a method every double has to implement for nothing.
+ */
+export const listIntegrationIds = async (sql: SqlExecutor): Promise<readonly Id[]> => {
+  const { rows } = await sql.query<{ id: string }>(
+    'select id from integrations order by created_at, id',
+  );
+  return rows.map((row) => row.id as Id);
+};

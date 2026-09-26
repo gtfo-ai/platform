@@ -69,6 +69,8 @@ export * from './human-time/runtime.js';
 export * from './integrations/action-executor.js';
 export * from './integrations/egress.js';
 export * from './integrations/inbound.js';
+export * from './integrations/inbound-connections.js';
+export * from './integrations/inbound-decisions.js';
 export * from './integrations/rate-limiter.js';
 export * from './integrations/redaction.js';
 // The knowledge base (WP-16): indexer, context packs, `kb_search`, code map
@@ -138,6 +140,7 @@ export * from './ports/integrations/bindings.js';
 export * from './ports/integrations/common.js';
 export * from './ports/integrations/communication.js';
 export * from './ports/integrations/git-provider.js';
+export * from './ports/integrations/inbound-connection.js';
 export * from './ports/integrations/inbox.js';
 export * from './ports/integrations/observability-errors.js';
 export * from './ports/integrations/observability-logs.js';

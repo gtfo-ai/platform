@@ -446,7 +446,8 @@
                   "task_completed",
                   "task_cancelled",
                   "budget_threshold",
-                  "budget_exhausted"
+                  "budget_exhausted",
+                  "approval"
                 ]
               }
             }

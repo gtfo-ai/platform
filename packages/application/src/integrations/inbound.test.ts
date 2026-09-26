@@ -33,6 +33,7 @@ import type {
 import type { Transaction } from '../ports/transaction.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
 import { createWebhookIngress, MAX_INBOX_ERROR_CHARS } from './inbound.js';
+import type { InboundDecisionApplier, InboundDecisionOutcome } from './inbound-decisions.js';
 
 const INTEGRATION = '00000000-0000-4000-8000-0000000000c1' as Id;
 const PROJECT = '00000000-0000-4000-8000-0000000000b1' as Id;
@@ -127,14 +128,17 @@ const normaliserDouble = (script: NormaliserScript = {}): InboundNormaliser => (
 /** Enforces the primary key, because that is what makes the insert the dedup arbiter. */
 const inboxDouble = () => {
   const rows = new Map<string, InboxDelivery>();
+  /** Which transaction wrote each row, so a rollback removes its own and nobody else's. */
+  const owners = new Map<string, Transaction>();
   let conflictsLeft = 0;
   const store: InboxStore = {
-    record: async (_tx: Transaction, delivery: InboxDelivery) => {
+    record: async (tx: Transaction, delivery: InboxDelivery) => {
       const key = `${delivery.provider} ${delivery.deliveryId}`;
       if (rows.has(key)) {
         return false;
       }
       rows.set(key, delivery);
+      owners.set(key, tx);
       return true;
     },
     find: async (provider, deliveryId) => rows.get(`${provider} ${deliveryId}`) ?? null,
@@ -142,6 +146,14 @@ const inboxDouble = () => {
   return {
     store,
     rows,
+    rollback: (tx: Transaction) => {
+      for (const [key, owner] of owners) {
+        if (owner === tx) {
+          rows.delete(key);
+          owners.delete(key);
+        }
+      }
+    },
     only: (): InboxDelivery => {
       const [first] = [...rows.values()];
       if (first === undefined) {
@@ -172,6 +184,53 @@ const auditDouble = () => {
   return { log, entries };
 };
 
+/**
+ * The aggregate half, as a double that records what it was asked and **writes into the same
+ * transaction the inbox row does** — so a rolled-back race takes its write with it, which is the
+ * property the ordering in `inbound.ts` exists for.
+ */
+const decisionsDouble = (answer: (projectId: Id) => InboundDecisionOutcome) => {
+  const applied: { projectId: Id; type: string }[] = [];
+  const applier: InboundDecisionApplier = {
+    apply: async (_tx, { projectId, draft }) => {
+      applied.push({ projectId, type: draft.type });
+      return answer(projectId);
+    },
+  };
+  return { applier, applied };
+};
+
+const approvalDecided = (projectId: Id) => ({
+  type: 'task.approval.decided' as const,
+  payload: {
+    project_id: projectId,
+    task_id: '00000000-0000-4000-8000-0000000000e1',
+    approval_id: '00000000-0000-4000-8000-0000000000e2',
+    decision: 'approved' as const,
+    decided_by_user_id: '00000000-0000-4000-8000-0000000000e3',
+    reason: null,
+  },
+  actor: {
+    kind: 'user' as const,
+    user_id: '00000000-0000-4000-8000-0000000000e3' as Id,
+    identity: {
+      provider: 'fake',
+      external_id: 'U-1',
+      email: null,
+      display_name: null,
+      verified: true,
+    },
+  },
+});
+
+/** What the approval aggregate would have appended, on its own stream. */
+const aggregateEvent = {
+  type: 'task.approval.decided',
+  payload: { decided_by: 'the aggregate' },
+  stream_id: '00000000-0000-4000-8000-0000000000e2',
+  stream_seq: 2,
+};
+
 interface IngressHarness {
   readonly deliver: (delivery?: WebhookDelivery) => ReturnType<ReturnType<typeof build>['deliver']>;
   readonly inbox: ReturnType<typeof inboxDouble>;
@@ -191,6 +250,7 @@ const build = (options: {
   readonly audit: ReturnType<typeof auditDouble>;
   readonly appended: IngressHarness['appended'];
   readonly sequenceReads: number[];
+  readonly decisions?: InboundDecisionApplier;
 }) => {
   let nextId = 0;
   const loader: InboundIntegrationLoader = {
@@ -207,16 +267,19 @@ const build = (options: {
    */
   const unitOfWork: UnitOfWork = {
     transaction: async (fn) => {
-      const rowsBefore = new Map(options.inbox.rows);
-      const appendedBefore = options.appended.length;
+      // One handle per transaction, so a rollback un-writes exactly what *this* one wrote — two
+      // racing deliveries each own their writes, as two database transactions would.
+      const tx = { adapter: 'memory' } as Transaction;
+      const mine: IngressHarness['appended'][number][] = [];
       const scope = {
-        tx: { adapter: 'memory' } as Transaction,
+        tx,
         events: {
           append: async (events: readonly { type: string; payload: unknown }[]) => {
             if (options.inbox.takeConflict()) {
               throw new StreamConflictError('project', PROJECT, 1);
             }
             for (const event of events) {
+              mine.push(event as IngressHarness['appended'][number]);
               options.appended.push(event as IngressHarness['appended'][number]);
             }
             return [];
@@ -226,11 +289,10 @@ const build = (options: {
       try {
         return await fn(scope);
       } catch (error) {
-        options.inbox.rows.clear();
-        for (const [key, value] of rowsBefore) {
-          options.inbox.rows.set(key, value);
+        options.inbox.rollback(tx);
+        for (const event of mine) {
+          options.appended.splice(options.appended.indexOf(event), 1);
         }
-        options.appended.length = appendedBefore;
         throw error;
       }
     },
@@ -240,6 +302,11 @@ const build = (options: {
     inbox: options.inbox.store,
     audit: options.audit.log,
     identities: { forProvider: async () => new Map([['U-1', PROJECT]]) },
+    decisions:
+      options.decisions ??
+      decisionsDouble(() => {
+        throw new Error('this test produced no decision, so the applier must not be asked');
+      }).applier,
     unitOfWork,
     eventStore: {
       nextStreamSequence: async () => {
@@ -260,7 +327,7 @@ const build = (options: {
 
 const harnessFor = (
   resolved: ResolvedInboundIntegration | null,
-  overrides: { readonly conflicts?: number } = {},
+  overrides: { readonly conflicts?: number; readonly decisions?: InboundDecisionApplier } = {},
 ): IngressHarness => {
   const inbox = inboxDouble();
   const audit = auditDouble();
@@ -269,7 +336,14 @@ const harnessFor = (
   if (overrides.conflicts !== undefined) {
     inbox.failNextAppends(overrides.conflicts);
   }
-  const ingress = build({ resolved, inbox, audit, appended, sequenceReads });
+  const ingress = build({
+    resolved,
+    inbox,
+    audit,
+    appended,
+    sequenceReads,
+    ...(overrides.decisions === undefined ? {} : { decisions: overrides.decisions }),
+  });
   return {
     deliver: (delivery = DELIVERY) =>
       ingress.deliver({ provider: 'fake', integrationId: INTEGRATION, delivery }),
@@ -622,5 +696,109 @@ describe('a stream sequence another writer took first', () => {
   it('gives up after its bound rather than looping inside a request', async () => {
     const harness = harnessFor(resolvedWith(), { conflicts: 99 });
     await expect(harness.deliver()).rejects.toBeInstanceOf(StreamConflictError);
+  });
+});
+
+// ── A human decision is the aggregate's (WP-43) ──────────────────────────────
+
+describe('a human decision arriving from a provider', () => {
+  const decisionScript: NormaliserScript = {
+    result: (context) => ({ events: [approvalDecided(context.projectId)], ignored: [] }),
+  };
+
+  it('is handed to the aggregate and never appended to the project stream as provider text', async () => {
+    const decisions = decisionsDouble(() => ({
+      kind: 'applied',
+      events: [aggregateEvent as never],
+    }));
+    const harness = harnessFor(resolvedWith(decisionScript), { decisions: decisions.applier });
+
+    const outcome = await harness.deliver();
+
+    expect(outcome).toMatchObject({ kind: 'accepted', events: 1, ignored: 0 });
+    expect(decisions.applied).toEqual([{ projectId: PROJECT, type: 'task.approval.decided' }]);
+    // The one event that landed is the aggregate's, on the approval's stream — the draft itself
+    // never reached `append`.
+    expect(harness.appended).toEqual([aggregateEvent]);
+    expect(harness.sequenceReads.length).toBe(1);
+    expect(harness.inbox.only().error).toBeNull();
+  });
+
+  it('records a refusal on the inbox row and performs nothing, rather than throwing (rule 20)', async () => {
+    const decisions = decisionsDouble(() => ({
+      kind: 'refused',
+      reason: 'not_permitted',
+      detail: 'a viewer cannot approve a plan',
+    }));
+    const harness = harnessFor(resolvedWith(decisionScript), { decisions: decisions.applier });
+
+    const outcome = await harness.deliver();
+
+    expect(outcome).toMatchObject({ kind: 'accepted', events: 0, ignored: 1 });
+    expect(harness.appended).toEqual([]);
+    expect(harness.inbox.only().error).toBe(
+      'decision_refused: not_permitted: a viewer cannot approve a plan',
+    );
+    expect(harness.audit.entries[0]?.error).toBe(
+      'decision_refused: not_permitted: a viewer cannot approve a plan',
+    );
+  });
+
+  it('redacts a refusal before the row stores it, like every other line there', async () => {
+    const decisions = decisionsDouble(() => ({
+      kind: 'refused',
+      reason: 'unknown_subject',
+      detail: `approval ${BINDING_SECRET} does not exist`,
+    }));
+    const harness = harnessFor(resolvedWith(decisionScript), { decisions: decisions.applier });
+
+    await harness.deliver();
+
+    expect(harness.inbox.only().error).not.toContain(BINDING_SECRET);
+    expect(harness.inbox.only().error).toContain(PLACEHOLDER);
+  });
+
+  it('rolls the decision back with the row when a racing delivery landed first', async () => {
+    const decisions = decisionsDouble(() => ({
+      kind: 'applied',
+      events: [aggregateEvent as never],
+    }));
+    const harness = harnessFor(resolvedWith(decisionScript), { decisions: decisions.applier });
+
+    const [first, second] = await Promise.all([harness.deliver(), harness.deliver()]);
+
+    expect([first.kind, second.kind].sort()).toEqual(['accepted', 'duplicate']);
+    // Both were decided inside their transactions; only the one whose row landed committed.
+    expect(decisions.applied).toHaveLength(2);
+    expect(harness.appended).toEqual([aggregateEvent]);
+    expect(harness.audit.entries.map((entry) => entry.status).sort()).toEqual([
+      'accepted',
+      'duplicate',
+    ]);
+  });
+
+  it('keeps a notification beside it on the project stream, in the same transaction', async () => {
+    const decisions = decisionsDouble(() => ({
+      kind: 'applied',
+      events: [aggregateEvent as never],
+    }));
+    const harness = harnessFor(
+      resolvedWith({
+        result: (context) => ({
+          events: [ticketMatched(context.projectId), approvalDecided(context.projectId)],
+          ignored: [],
+        }),
+      }),
+      { decisions: decisions.applier },
+    );
+
+    await harness.deliver();
+
+    expect(harness.appended.map((event) => event.type)).toEqual([
+      'ticket.matched',
+      'task.approval.decided',
+    ]);
+    expect(harness.appended[0]).toMatchObject({ stream_id: PROJECT, stream_seq: 7 });
+    expect(harness.appended[1]).toBe(aggregateEvent);
   });
 });

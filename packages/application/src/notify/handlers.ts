@@ -7,12 +7,12 @@
  * pointing at a **finished** work package (`budget.threshold.reached` and `budget.exhausted` named
  * *"Slack (210), WP-10"*, and WP-10 was DONE). `CommunicationPort` had no caller anywhere.
  *
- * ## One handler, eight event types, and why that is not a catch-all
+ * ## One handler, nine event types, and why that is not a catch-all
  *
  * `sweepReadiness` counts a type as covered only when something registered **for that type by
  * name** — a handler with `eventTypes: 'all'` does not count, because WP-19's audit projection
- * would otherwise have turned the gate green for every type in the catalogue. An array of eight
- * named types is a by-name registration eight times over, so the arbiter is satisfied and a
+ * would otherwise have turned the gate green for every type in the catalogue. An array of nine
+ * named types is a by-name registration nine times over, so the arbiter is satisfied and a
  * deployment that sweeps the outbox really can deliver these.
  *
  * ## The handler decides and never calls (WP-15d)
@@ -27,7 +27,7 @@
  * reason, a blocker brief, the question a model asked, the two numbers of a budget window. That is
  * the same rule `blocker_brief` has followed on this queue since WP-15d.
  */
-import type { DomainEvent, NotificationClass } from '@platform/contracts';
+import type { ApprovalKind, DomainEvent, NotificationClass } from '@platform/contracts';
 import type { EventHandler, HandlerContext } from '../events/handler.js';
 import { enqueueOutbound, type PipelineOutboundData } from '../pipeline/jobs.js';
 import type { PipelineSagaOptions } from '../pipeline/saga.js';
@@ -46,6 +46,8 @@ export const NOTIFIED_EVENT_TYPES = [
   'task.cancelled',
   'budget.threshold.reached',
   'budget.exhausted',
+  // WP-43: posted with buttons now that a click can reach the platform (see `notify/duty.ts`).
+  'task.approval.requested',
 ] as const satisfies readonly DomainEvent['type'][];
 
 interface Decided {
@@ -55,7 +57,18 @@ interface Decided {
   /** Platform text naming what this is about when there is no task to name it. */
   readonly subject: string | null;
   readonly detail: string | null;
+  /** The approval an `approval` notification is about; its buttons carry the id. */
+  readonly approvalId?: string;
 }
+
+/** Platform text for each approval kind — the only words the `approval` class carries. */
+const APPROVAL_DETAIL: Readonly<Record<ApprovalKind, string>> = {
+  plan: 'The implementation plan needs a maintainer’s approval before the task goes on.',
+  budget:
+    'The estimated cost is over this project’s threshold; a maintainer decides whether to spend it.',
+  knowledge: 'A knowledge-base change needs a maintainer’s approval.',
+  rework: 'A rework needs a maintainer’s approval.',
+};
 
 /** `$12.35 of $10.00` — two numbers the platform produced, never a provider string. */
 const money = (usd: number): string => `$${usd.toFixed(2)}`;
@@ -120,6 +133,17 @@ export const decideNotification = (event: DomainEvent): Decided | null => {
         subject: null,
         detail: event.payload.outcome,
       };
+    case 'task.approval.requested':
+      return {
+        notificationClass: 'approval',
+        projectId: event.payload.project_id,
+        taskId: event.payload.task_id,
+        subject: null,
+        // Platform text keyed by the approval's kind, never the plan's own words: the plan is an
+        // artifact on the task page, and a channel is not where a model's output is reviewed.
+        detail: APPROVAL_DETAIL[event.payload.approval.kind],
+        approvalId: event.payload.approval.id,
+      };
     case 'budget.threshold.reached':
     case 'budget.exhausted': {
       /**
@@ -171,6 +195,7 @@ export const notifyHandler = (options: PipelineSagaOptions): EventHandler => ({
       cause_event_id: event.id,
       notification_class: decided.notificationClass,
       ...(decided.subject === null ? {} : { notification_subject: decided.subject }),
+      ...(decided.approvalId === undefined ? {} : { approval_id: decided.approvalId }),
       ...(decided.detail === null
         ? {}
         : { notification_detail: boundText(decided.detail, NOTIFICATION_DETAIL_MAX) }),

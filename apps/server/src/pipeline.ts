@@ -74,6 +74,7 @@ import {
   createBudgetGuard,
   createContextPackAssembler,
   createDeadLetterEscalation,
+  createInboundDecisionApplier,
   createIntegrationActionExecutor,
   createIntegrationEgressPolicy,
   createLateCostRecorder,
@@ -84,6 +85,7 @@ import {
   createWebhookIngress,
   defaultProjectSettings,
   humanTimeHandlers,
+  PIPELINE_ACTOR,
   RUN_CREDENTIAL_TTL_SECONDS,
   registerMaintenanceSchedule,
   runCredentialRecoveryHorizonMs,
@@ -428,6 +430,15 @@ export const composeIntegrationStack = (
     logger: options.logger,
   });
 
+  /** The process's wall clock, shared by the executor's backoff and Socket Mode's (WP-43). */
+  const processTimer = {
+    now: () => Date.now(),
+    sleep: async (ms: number) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      }),
+  };
+
   const egress = createIntegrationEgressPolicy(options.integrationHosts);
   options.logger.info(
     { hosts: egress.declared, open: egress.open },
@@ -461,13 +472,7 @@ export const composeIntegrationStack = (
      * the provider's answer, or any other row that quotes one, is redacted to the run's name.
      */
     redactor: platformRedactor,
-    timer: {
-      now: () => Date.now(),
-      sleep: async (ms) =>
-        new Promise((resolve) => {
-          setTimeout(resolve, ms);
-        }),
-    },
+    timer: processTimer,
     clock: { now: nowIso },
     /**
      * Also unconditional. WP-07 made the executor's option optional and nothing ever supplied one,
@@ -489,7 +494,7 @@ export const composeIntegrationStack = (
   return {
     executor,
     auditLog,
-    registry: registryOf({ executor, clock: { now: nowIso } }),
+    registry: registryOf({ executor, clock: { now: nowIso }, timer: processTimer }),
     runSecrets,
     platformRedactor,
   };
@@ -527,6 +532,24 @@ export const composeWebhookIngress = (options: ComposeWebhookIngressOptions): We
     inbox: integrationAdapters.createPostgresInboxStore({ sql: options.pool }),
     audit: integrationAdapters.createPostgresInboundAuditLog({ sql: options.pool }),
     identities: integrationAdapters.createPostgresIdentityDirectory({ sql: options.pool }),
+    /**
+     * WP-43: a click on an approval button, or an answer from a thread, is decided by the Approval
+     * or the Question aggregate inside the delivery's transaction — `can()` against the decider's
+     * role for **this** project, first answer wins — and never appended as provider text. The
+     * actor the aggregate records is the delivery's own (the mapped person); `PIPELINE_ACTOR` here
+     * is only the placeholder `inbound-decisions.ts` replaces.
+     */
+    decisions: createInboundDecisionApplier({
+      store: pipelineAdapters.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES }),
+      roles: integrationAdapters.createPostgresDeciderRoles(),
+      context: (correlationId: Id) => ({
+        ids: { next: (): Id => randomUUID() as Id },
+        actor: PIPELINE_ACTOR,
+        clock: { now: nowIso },
+        correlationId,
+        causeEventId: null,
+      }),
+    }),
     unitOfWork: options.eventing.unitOfWork,
     eventStore: options.eventing.store,
     ids: { next: (): Id => randomUUID() as Id },

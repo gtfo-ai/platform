@@ -42,12 +42,15 @@ import {
   cancelRunRequestSchema,
   cancelTaskRequestSchema,
   contextPackRecordSchema,
+  createIdentityMappingRequestSchema,
   createIntegrationRequestSchema,
   createProjectRequestSchema,
   decideApprovalRequestSchema,
   decideKbProposalRequestSchema,
   effectiveConfigResponseSchema,
   historyBootstrapsResponseSchema,
+  identityMappingListSchema,
+  identityMappingSchema,
   inboxResponseSchema,
   integrationsResponseSchema,
   kbDocResponseSchema,
@@ -107,6 +110,11 @@ const acknowledgedSchema = z.unknown();
 export interface Endpoints {
   readonly version: () => Promise<z.output<typeof versionResponseSchema>>;
   readonly orgUsers: () => Promise<z.output<typeof orgUsersResponseSchema>>;
+  /**
+   * `GET /api/org/identities` — who each provider account is (WP-31's route, WP-43's screen). The
+   * list is what turns a click in Slack or a comment in Jira from `unmapped_identity` into a person.
+   */
+  readonly orgIdentities: () => Promise<z.output<typeof identityMappingListSchema>>;
   readonly orgAudit: (query: {
     readonly cursor?: string;
     readonly limit?: number;
@@ -241,6 +249,14 @@ export interface Endpoints {
     body: z.input<typeof putBudgetsRequestSchema>,
     idempotencyKey: string,
   ) => Promise<void>;
+  /**
+   * `POST /api/org/identities` — an admin states that a provider account is a person, or a
+   * machine. An upsert on `(provider, external_id)` with **no** `Idempotency-Key`: the route says
+   * why (a repeat writes the same row, and re-mapping an account is the operation, not a conflict).
+   */
+  readonly mapIdentity: (
+    body: z.input<typeof createIdentityMappingRequestSchema>,
+  ) => Promise<z.output<typeof identityMappingSchema>>;
 
   // Commands (technical/08 § Principles: imperative names, audited).
   /** The ask-the-task thread and the task's own audit trail (WP-31, product/10:57). */
@@ -332,6 +348,7 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
   return {
     version: () => client.get('/api/version', { schema: versionResponseSchema }),
     orgUsers: () => client.get('/api/org/users', { schema: orgUsersResponseSchema }),
+    orgIdentities: () => client.get('/api/org/identities', { schema: identityMappingListSchema }),
     orgAudit: (query) =>
       client.get('/api/org/audit', { schema: orgAuditResponseSchema, query: { ...query } }),
     orgStats: (query) =>
@@ -489,6 +506,11 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
         idempotencyKey,
       });
     },
+    mapIdentity: (body) =>
+      client.command('/api/org/identities', {
+        schema: identityMappingSchema,
+        body: createIdentityMappingRequestSchema.parse(body),
+      }),
 
     askTask: (taskId, body, idempotencyKey) =>
       client.command(`/api/tasks/${seg(taskId)}/ask`, {

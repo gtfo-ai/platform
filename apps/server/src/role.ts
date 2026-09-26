@@ -46,6 +46,18 @@
  *    role name.
  */
 
+/*
+ * ## A held inbound connection belongs to the role that serves `/webhooks/*` (WP-43)
+ *
+ * Slack's Socket Mode connection is an inbound door, so it lives where the other inbound doors
+ * live: `ROLE=api` and `ROLE=all` hold one per Slack account that selects it, and every other role
+ * holds none and **names** each such account in its log. It is decided by construction —
+ * `runtime.ts` hands the connection supervisor the webhook ingress, which exists exactly when
+ * `api` is true — so there is no flag here to keep in step. Two `api` replicas hold two
+ * connections; Slack sends each payload to one of them, and the `inbox` dedup key is the backstop
+ * for a payload it sends twice (`@platform/application`'s `inbound-connections.ts`).
+ */
+
 export const ROLES = ['all', 'api', 'worker', 'runner', 'indexer'] as const;
 
 export type Role = (typeof ROLES)[number];

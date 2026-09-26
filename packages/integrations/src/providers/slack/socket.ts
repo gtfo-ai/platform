@@ -53,7 +53,12 @@ import { slackSignatureHeaders, usableSigningSecret } from './signature.js';
 /** The half of a WebSocket this module uses. `globalThis.WebSocket` satisfies it via the adapter. */
 export interface SocketConnection {
   send(data: string): void;
-  close(): void;
+  /**
+   * Closes the connection. A connector that can tell when the close has *completed* returns a
+   * promise for it, and `stop` waits for it (WP-43, standing rule 85: a resolved close request is
+   * not a closed socket). `webSocketConnect` does.
+   */
+  close(): void | Promise<void>;
 }
 
 export interface SocketHandlers {
@@ -112,6 +117,15 @@ export const createSlackSocket = (options: SlackSocketOptions): SlackSocket => {
   let attempt = 0;
   let reconnects = 0;
   let queue: Promise<void> = Promise.resolve();
+  /**
+   * Resolved by `stop`, so a reconnect sleeping out its backoff wakes at once instead of holding
+   * shutdown for up to `reconnectMaxMs` (WP-43): `stop` drains the queue, and a queue whose tail is
+   * a thirty-second sleep is a shutdown that outlives a container's stop grace period.
+   */
+  let signalStop: () => void = () => {};
+  let stopSignal = new Promise<void>((resolve) => {
+    signalStop = resolve;
+  });
 
   const enqueue = (work: () => Promise<void>): void => {
     queue = queue.then(work).catch((error: unknown) => {
@@ -178,7 +192,17 @@ export const createSlackSocket = (options: SlackSocketOptions): SlackSocket => {
 
   const openSocket = async (secret: string): Promise<void> => {
     const url = await options.openConnection();
-    connection = options.connect(url, {
+    /**
+     * `stop` may have run while `apps.connections.open` was in flight (WP-43 review round 1,
+     * measured): connecting now would store a socket as current after `stop` cleared and closed the
+     * old one — a leaked connection handing envelopes to an ingress whose pool is already gone.
+     * Checked here, before connecting, and again after, for a connector that yields.
+     */
+    if (stopping) {
+      return;
+    }
+    let self: SocketConnection | null = null;
+    self = options.connect(url, {
       onOpen: () => {
         logger.debug({ provider: 'slack' }, 'slack socket opened');
       },
@@ -194,6 +218,16 @@ export const createSlackSocket = (options: SlackSocketOptions): SlackSocket => {
         enqueue(() => handleEnvelope(parsed.data, secret));
       },
       onClose: (reason) => {
+        /**
+         * Only the **current** connection's close is news (WP-43). A reconnect closes the old one
+         * itself and `stop` clears it before closing, so a close event from anything else is the
+         * echo of a decision already taken — and treating it as a drop scheduled a second
+         * reconnect for every first one, against a real `WebSocket` whose `close` event always
+         * follows `close()`. The fake connectors never fired it, which is how it stayed unseen.
+         */
+        if (connection !== self) {
+          return;
+        }
         connected = false;
         reconnect(reason);
       },
@@ -201,6 +235,11 @@ export const createSlackSocket = (options: SlackSocketOptions): SlackSocket => {
         logger.warn({ err: error, provider: 'slack' }, 'slack socket error');
       },
     });
+    if (stopping) {
+      await self.close();
+      return;
+    }
+    connection = self;
   };
 
   const reconnect = (reason: string): void => {
@@ -223,12 +262,23 @@ export const createSlackSocket = (options: SlackSocketOptions): SlackSocket => {
       connection?.close();
       connection = null;
       // The backoff runs on the injected timer: a reconnect storm in a test must not cost seconds.
-      await options.timer.sleep(delayMs);
+      await Promise.race([options.timer.sleep(delayMs), stopSignal]);
       if (stopping) {
         return;
       }
       logger.info({ provider: 'slack', reason, delayMs }, 'slack socket reconnecting');
-      await openSocket(secret);
+      try {
+        await openSocket(secret);
+      } catch (error) {
+        /**
+         * A reconnect whose `apps.connections.open` failed tries again on the next backoff step
+         * (WP-43). It used to end here — the queue logged the error and nothing scheduled another
+         * attempt — so one Slack outage during a reconnect left a process holding no connection
+         * until it restarted, which is the silent absence the held connection exists to end.
+         */
+        logger.warn({ err: error, provider: 'slack' }, 'slack socket reconnect failed; retrying');
+        reconnect('reconnect failed');
+      }
     });
   };
 
@@ -249,13 +299,18 @@ export const createSlackSocket = (options: SlackSocketOptions): SlackSocket => {
         );
       }
       stopping = false;
+      stopSignal = new Promise<void>((resolve) => {
+        signalStop = resolve;
+      });
       await openSocket(secret);
     },
     stop: async () => {
       stopping = true;
+      signalStop();
       connected = false;
-      connection?.close();
+      const closing = connection;
       connection = null;
+      await closing?.close();
       let previous: Promise<void> | null = null;
       while (previous !== queue) {
         previous = queue;
@@ -295,15 +350,47 @@ export const webSocketConnect: SocketConnect = (url, handlers) => {
     throw new SlackSocketError('slack: this runtime has no global WebSocket');
   }
   const socket = new WebSocketImpl(url);
+  let closed = false;
+  const waiting: (() => void)[] = [];
   socket.addEventListener('open', () => handlers.onOpen());
   socket.addEventListener('message', (event) => handlers.onMessage(String(event.data)));
-  socket.addEventListener('close', (event) => handlers.onClose(String(event.reason ?? 'closed')));
+  socket.addEventListener('close', (event) => {
+    closed = true;
+    for (const resolve of waiting.splice(0)) {
+      resolve();
+    }
+    handlers.onClose(String(event.reason ?? 'closed'));
+  });
   socket.addEventListener('error', (event) => handlers.onError(event));
   return {
     send: (data) => socket.send(data),
-    close: () => socket.close(),
+    /**
+     * Resolves on the `close` event — the closing handshake finished or the transport died — or
+     * after {@link WEBSOCKET_CLOSE_WAIT_MS}, whichever is first. Bounded, because a peer that never
+     * answers the close frame must not hold a process's shutdown open.
+     */
+    close: async () => {
+      if (closed) {
+        return;
+      }
+      const done = new Promise<void>((resolve) => {
+        waiting.push(resolve);
+      });
+      socket.close();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        done,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, WEBSOCKET_CLOSE_WAIT_MS);
+        }),
+      ]);
+      clearTimeout(timer);
+    },
   };
 };
+
+/** How long `close` waits for the closing handshake before giving up on a silent peer. */
+export const WEBSOCKET_CLOSE_WAIT_MS = 3_000;
 
 /** The structural half of the WHATWG `WebSocket` used above. */
 interface WebSocketLike {

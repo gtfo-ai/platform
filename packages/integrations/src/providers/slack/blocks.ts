@@ -185,9 +185,27 @@ export const questionBlocks = (input: {
   return blocks;
 };
 
+/**
+ * The value an approval button carries: `{a: approval, d: decision, t: task}`.
+ *
+ * **`t` is there because nothing else on the inbound path can say which task a click is about**
+ * (WP-43). The adapter's thread directory is in memory and the binding loader builds a fresh
+ * adapter for every delivery (Q55), so the directory is empty on exactly the path that reads it —
+ * a click resolved through it alone was always "an approval for a thread this binding did not
+ * open". The value is ours, posted by the bot and echoed by Slack inside a verified payload; the
+ * task it names is still re-checked against the approval row before anything is decided
+ * (`@platform/application`'s `inbound-decisions.ts`), so it is a pointer, never an authority.
+ */
+export const approvalButtonValue = (
+  approvalId: Id,
+  decision: 'approved' | 'rejected',
+  taskId: Id,
+): string => JSON.stringify({ a: approvalId, d: decision, t: taskId });
+
 /** An approval: Approve / Request changes, and nothing that could be mistaken for either. */
 export const approvalBlocks = (input: {
   readonly approvalId: Id;
+  readonly taskId: Id;
   readonly markdown: string;
 }): readonly SlackBlock[] => [
   mrkdwnSection(input.markdown),
@@ -198,13 +216,13 @@ export const approvalBlocks = (input: {
       button({
         actionId: APPROVE_ACTION_ID,
         text: 'Approve',
-        value: JSON.stringify({ a: input.approvalId, d: 'approved' }),
+        value: approvalButtonValue(input.approvalId, 'approved', input.taskId),
         style: 'primary',
       }),
       button({
         actionId: REJECT_ACTION_ID,
         text: 'Request changes',
-        value: JSON.stringify({ a: input.approvalId, d: 'rejected' }),
+        value: approvalButtonValue(input.approvalId, 'rejected', input.taskId),
         style: 'danger',
       }),
     ],

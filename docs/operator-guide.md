@@ -711,4 +711,9 @@ Stated here so an operator meets them in a document rather than in production:
   in a split deployment it answers `409 run_not_reachable` and take-over exports nothing.
 - **Chat notifications ship since WP-32**: a project bound to a Slack integration with a channel gets a
   thread per task and the org's quiet hours and daily digest apply; an organisation-level budget has
-  no channel yet, and Slack's buttons do nothing until the Socket Mode connection exists.
+  no channel yet. **Since WP-43 the process that serves the API (`ROLE=all` or `ROLE=api`) holds the
+  Slack Socket Mode connection** — a `ROLE=worker` process holds none and names the integration in
+  its log — so an approval is posted with Approve / Request changes, and a click from an account an
+  admin has mapped on **Settings → Provider identities** is decided like one on the task page (a
+  plan needs a maintainer). `APP_INTEGRATION_HOSTS` must name `slack.com` for the connection to
+  open. A *reply* in a Slack thread is not yet matched to its task (PROGRESS backlog 195).

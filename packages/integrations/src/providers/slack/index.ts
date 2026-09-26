@@ -13,11 +13,13 @@ import type {
   Logger,
   RateLimitPolicy,
 } from '@platform/application';
+import { IntegrationError } from '@platform/application';
 import type { Clock, IdSource } from '@platform/domain';
 import type { ProviderCreateInput, ProviderRegistration } from '../../registry.js';
 import { slackConfigSchema, slackSecretFields } from './config.js';
 import { SLACK_PROVIDER_ID, type SlackFetch } from './http.js';
 import { createSlackProvider, type SlackProvider, type SlackProviderOptions } from './provider.js';
+import { usableSigningSecret } from './signature.js';
 import type { SocketConnect } from './socket.js';
 import type { SlackThreadDirectory } from './threads.js';
 
@@ -96,20 +98,8 @@ export interface SlackProviderRegistration extends ProviderRegistration<'communi
   create(input: ProviderCreateInput): SlackProvider;
 }
 
-export const createSlackRegistration = (
-  deps: SlackRegistrationDeps,
-): SlackProviderRegistration => ({
-  id: SLACK_PROVIDER_ID,
-  type: 'communication',
-  displayName: 'Slack (Socket Mode)',
-  configSchema: slackConfigSchema,
-  secretFields: [...slackSecretFields],
-  setupGuidePath: 'packages/integrations/src/providers/slack/setup-guide.md',
-  agentTooling: slackAgentTooling,
-  // WP-32: the binding loader reads the channel out of the validated config, and this is what says
-  // which key holds it. `digest_channel` falls back to `channel` in the loader, not here.
-  communicationChannels: { channel: 'channel', digestChannel: 'digest_channel' },
-  create: (input) =>
+export const createSlackRegistration = (deps: SlackRegistrationDeps): SlackProviderRegistration => {
+  const create = (input: ProviderCreateInput): SlackProvider =>
     createSlackProvider({
       integrationId: input.integrationId,
       config: slackConfigSchema.parse(input.config),
@@ -125,8 +115,51 @@ export const createSlackRegistration = (
       ...(deps.connect === undefined ? {} : { connect: deps.connect }),
       ...(deps.timer === undefined ? {} : { timer: deps.timer }),
       ...(deps.logger === undefined ? {} : { logger: deps.logger }),
-    }),
-});
+    });
+  return {
+    id: SLACK_PROVIDER_ID,
+    type: 'communication',
+    displayName: 'Slack (Socket Mode)',
+    configSchema: slackConfigSchema,
+    secretFields: [...slackSecretFields],
+    setupGuidePath: 'packages/integrations/src/providers/slack/setup-guide.md',
+    agentTooling: slackAgentTooling,
+    // WP-32: the binding loader reads the channel out of the validated config, and this is what says
+    // which key holds it. `digest_channel` falls back to `channel` in the loader, not here.
+    communicationChannels: { channel: 'channel', digestChannel: 'digest_channel' },
+    /**
+     * Socket Mode as a held inbound connection (WP-43): selected by `socket_mode`, which defaults to
+     * **on** — the shipped manifest's own choice — so an account that says nothing is held.
+     *
+     * The signing secret is checked **here**, before anything opens: the socket signs every envelope
+     * with it so `inbound.verify` stays the single door, and without it every click would be refused
+     * downstream. `start` refuses the same thing, but as a plain error a supervisor would retry for
+     * ever; this is the refusal no retry fixes, raised where it is decided.
+     */
+    inboundConnection: {
+      selected: (rawConfig) =>
+        typeof rawConfig === 'object' &&
+        rawConfig !== null &&
+        (rawConfig as { socket_mode?: unknown }).socket_mode !== false,
+      open: (input, hooks) => {
+        if (usableSigningSecret(input.secrets.signing_secret ?? null) === null) {
+          throw new IntegrationError(
+            'invalid_request',
+            SLACK_PROVIDER_ID,
+            'socket mode needs the signing secret (SLACK_SIGNING_SECRET): every envelope is signed with it for inbound.verify, and without it every click would be refused',
+            { action: 'open_socket' },
+          );
+        }
+        const port = create(input);
+        return port.socket({
+          onDelivery: hooks.onDelivery,
+          execute: (action, perform) => hooks.execute(port.ref, action, perform),
+        });
+      },
+    },
+    create,
+  };
+};
 
 /** The system-clock registration a composition root uses when it has nothing to inject. */
 export const slackProviderRegistration: SlackProviderRegistration = createSlackRegistration({
@@ -137,6 +170,8 @@ export {
   ANSWER_ACTION_ID,
   APPROVE_ACTION_ID,
   approvalBlockId,
+  approvalBlocks,
+  approvalButtonValue,
   assertBlockKit,
   BLOCK_LIMITS,
   digestBlocks,
@@ -160,6 +195,7 @@ export {
 } from './manifest.js';
 export { escapeSlackText, toMrkdwn } from './mrkdwn.js';
 export {
+  assertSocketHost,
   createSlackProvider,
   type SlackProvider,
   type SlackProviderOptions,

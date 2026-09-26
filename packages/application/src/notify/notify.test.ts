@@ -255,7 +255,7 @@ describe('the handler decides and never calls', () => {
     });
   });
 
-  it('registers at TD-005 priority 210 for the eight types technical/02 names', () => {
+  it('registers at TD-005 priority 210 for the nine types technical/02 names', () => {
     const handler = notifyHandler({} as never);
     expect(handler.priority).toBe(210);
     expect(handler.eventTypes).toEqual([
@@ -267,6 +267,8 @@ describe('the handler decides and never calls', () => {
       'task.cancelled',
       'budget.threshold.reached',
       'budget.exhausted',
+      // WP-43: the buttons technical/02 names, now that a click can reach the platform.
+      'task.approval.requested',
     ]);
   });
 
@@ -566,5 +568,107 @@ describe('the digest settings a project reads', () => {
       urgent: undefined,
     });
     expect(digestSettingsOf({ features: { digest: { urgent: [] } } }).urgent).toEqual([]);
+  });
+});
+
+// ── An approval, with its buttons once a click can arrive (WP-43) ─────────────
+
+describe('an approval notification', () => {
+  const APPROVAL = '00000000-0000-4000-8000-0000000000e9' as Id;
+
+  /** A real pending approval on the harness's task, so the duty's reload has a row to read. */
+  const pendingApproval = async (
+    harness: PipelineHarness,
+    taskId: Id,
+    status: 'pending' | 'approved' = 'pending',
+  ): Promise<void> => {
+    await harness.memory.transaction(async (scope) => {
+      await harness.store.approvals.insert(scope.tx, {
+        approval: {
+          id: APPROVAL,
+          taskId,
+          projectId: PROJECT as Id,
+          kind: 'plan',
+          status,
+          requestedAt: '2026-06-01T09:00:00.000Z' as never,
+          deadlineAt: null,
+          decidedByUserId: null,
+          decidedAt: null,
+          reason: null,
+          sequence: 1,
+        },
+        stage: 'architecture' as never,
+        attempt: 1,
+      });
+    });
+  };
+
+  it('posts Approve / Request changes into the task thread when the binding can receive a click', async () => {
+    const harness = harnessWith();
+    const taskId = await taskOf(harness);
+    await pendingApproval(harness, taskId);
+    harness.communication?.messages.splice(0);
+
+    await notify(harness, {
+      task_id: taskId,
+      notification_class: 'approval',
+      notification_detail: 'The implementation plan needs a maintainer’s approval.',
+      approval_id: APPROVAL,
+    });
+
+    expect(harness.communication?.messages).toHaveLength(1);
+    expect(harness.communication?.messages[0]).toMatchObject({ approval: APPROVAL });
+    expect(harness.communication?.messages[0]?.markdown).toContain(
+      `${TICKET_KEY} is waiting for an approval`,
+    );
+    expect(harness.audit.entries.map((entry) => entry.action)).toContain('post_approval');
+    expect(
+      harness.notifications.rows.find((row) => row.notificationClass === 'approval'),
+    ).toMatchObject({ deliveredAs: 'immediate' });
+  });
+
+  it('posts text naming the task page when the binding cannot receive a click', async () => {
+    const harness = harnessWith({
+      communication: {
+        capabilities: () => ({
+          threads: true,
+          buttons: false,
+          messageUpdate: true,
+          socketMode: true,
+          digest: true,
+        }),
+      },
+    });
+    const taskId = await taskOf(harness);
+    await pendingApproval(harness, taskId);
+    harness.communication?.messages.splice(0);
+
+    await notify(harness, {
+      task_id: taskId,
+      notification_class: 'approval',
+      approval_id: APPROVAL,
+    });
+
+    expect(harness.communication?.messages).toHaveLength(1);
+    expect(harness.communication?.messages[0]?.approval).toBeUndefined();
+    expect(harness.communication?.messages[0]?.markdown).toContain('Decide on the task page');
+  });
+
+  it('announces nothing for an approval somebody already decided — no row, no message', async () => {
+    const harness = harnessWith();
+    const taskId = await taskOf(harness);
+    await pendingApproval(harness, taskId, 'approved');
+    harness.communication?.messages.splice(0);
+
+    await notify(harness, {
+      task_id: taskId,
+      notification_class: 'approval',
+      approval_id: APPROVAL,
+    });
+
+    expect(harness.communication?.messages).toEqual([]);
+    expect(
+      harness.notifications.rows.filter((row) => row.notificationClass === 'approval'),
+    ).toEqual([]);
   });
 });

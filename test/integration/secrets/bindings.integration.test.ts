@@ -251,6 +251,8 @@ describe('the shipped provider registrations, loaded from real rows', () => {
       registry: createPipelineProviderRegistry({
         executor,
         clock: { now: () => '2026-06-01T09:00:00.000Z' as IsoDateTime },
+        // Socket Mode's backoff; nothing here opens a socket (WP-43).
+        timer: { now: () => 0, sleep: async () => {} },
       }),
       executor,
       gitProjectPath: async () => 'acme/shipped',
@@ -310,6 +312,8 @@ describe('the shipped provider registrations, loaded from real rows', () => {
       registry: createPipelineProviderRegistry({
         executor,
         clock: { now: () => '2026-06-01T09:00:00.000Z' as IsoDateTime },
+        // Socket Mode's backoff; nothing here opens a socket (WP-43).
+        timer: { now: () => 0, sleep: async () => {} },
       }),
       executor,
       gitProjectPath: async () => 'acme/broken',

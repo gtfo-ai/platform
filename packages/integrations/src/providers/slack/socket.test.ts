@@ -251,4 +251,164 @@ describe('createSlackSocket', () => {
     await socket.settled();
     expect(opens, 'a stopped socket does not come back').toHaveLength(1);
   });
+
+  /**
+   * WP-43: the three lifecycle properties a held connection needs once a process *keeps* one.
+   * The connector below behaves as Node's `WebSocket` does — `close()` is followed by a `close`
+   * event, later — which the fakes above never did, and which is how the second one hid.
+   */
+  describe('as a connection a process holds (WP-43)', () => {
+    const realistic = (timer = createVirtualTimer({ autoAdvance: true })) => {
+      const opens: string[] = [];
+      const log: string[] = [];
+      const handlers: SocketHandlers[] = [];
+      const socket = createSlackSocket({
+        openConnection: async () => {
+          opens.push(WSS);
+          return WSS;
+        },
+        connect: (_url, received): SocketConnection => {
+          handlers.push(received);
+          return {
+            send: () => {},
+            close: async () => {
+              log.push('close requested');
+              await Promise.resolve();
+              log.push('closed');
+              // A real socket announces its own close — after the request, not inside it.
+              received.onClose('closed');
+            },
+          };
+        },
+        timer,
+        clock: fixedClock(NOW),
+        signingSecret: SECRET,
+        onDelivery: async () => {},
+        reconnectBaseMs: 1000,
+        reconnectMaxMs: 30_000,
+        maxReconnects: null,
+      });
+      return { socket, opens, log, handlers, timer };
+    };
+
+    it('does not resolve stop before the connection has finished closing (rule 85)', async () => {
+      const { socket, log } = realistic();
+      await socket.start();
+      await socket.stop();
+      expect(log).toEqual(['close requested', 'closed']);
+    });
+
+    it('treats the close event of a connection it replaced as an echo, not a second drop', async () => {
+      const { socket, opens, handlers, timer } = realistic();
+      await socket.start();
+      handlers[0]?.onMessage(JSON.stringify({ type: 'hello' }));
+      handlers[0]?.onMessage(JSON.stringify({ type: 'disconnect', reason: 'refresh_requested' }));
+      await socket.settled();
+
+      // One disconnect, one reconnect — before WP-43 the old socket's own close event scheduled a
+      // second one, so a single `refresh_requested` opened two connections.
+      expect(opens).toHaveLength(2);
+      expect(timer.sleeps).toEqual([1000]);
+      await socket.stop();
+      expect(opens, 'and stopping opens nothing').toHaveLength(2);
+    });
+
+    it('wakes a reconnect that is sleeping out its backoff, so shutdown does not wait for it', async () => {
+      // A timer that never advances on its own: the backoff would sleep for ever.
+      const { socket, opens, handlers } = realistic(createVirtualTimer());
+      await socket.start();
+      handlers[0]?.onClose('network dropped');
+
+      await socket.stop();
+
+      expect(opens, 'the sleeping reconnect gave up rather than opening').toHaveLength(1);
+    });
+
+    it('keeps trying when a reconnect cannot reach Slack, instead of holding nothing until a restart', async () => {
+      let failuresLeft = 1;
+      const opens: string[] = [];
+      const handlers: SocketHandlers[] = [];
+      const timer = createVirtualTimer({ autoAdvance: true });
+      const socket = createSlackSocket({
+        openConnection: async () => {
+          opens.push(WSS);
+          if (opens.length === 2 && failuresLeft > 0) {
+            failuresLeft -= 1;
+            throw new Error('slack.com could not be reached');
+          }
+          return WSS;
+        },
+        connect: (_url, received): SocketConnection => {
+          handlers.push(received);
+          return { send: () => {}, close: () => {} };
+        },
+        timer,
+        clock: fixedClock(NOW),
+        signingSecret: SECRET,
+        onDelivery: async () => {},
+        reconnectBaseMs: 1000,
+        reconnectMaxMs: 30_000,
+        maxReconnects: null,
+      });
+      await socket.start();
+      handlers[0]?.onClose('network dropped');
+      await socket.settled();
+
+      // The first reconnect failed; the second, a doubled backoff later, opened a connection.
+      expect(opens).toHaveLength(3);
+      expect(timer.sleeps).toEqual([1000, 2000]);
+      expect(handlers).toHaveLength(2);
+      await socket.stop();
+    });
+
+    it('leaves no socket open when stopped while a reconnect is asking Slack for its URL', async () => {
+      let release: () => void = () => {};
+      const opens: string[] = [];
+      const closed: boolean[] = [];
+      const handlers: SocketHandlers[] = [];
+      const socket = createSlackSocket({
+        openConnection: async () => {
+          opens.push(WSS);
+          if (opens.length === 2) {
+            // The reconnect's `apps.connections.open`, held open until the test releases it.
+            await new Promise<void>((resolve) => {
+              release = resolve;
+            });
+          }
+          return WSS;
+        },
+        connect: (_url, received): SocketConnection => {
+          const index = closed.push(false) - 1;
+          handlers.push(received);
+          return {
+            send: () => {},
+            close: () => {
+              closed[index] = true;
+            },
+          };
+        },
+        timer: createVirtualTimer({ autoAdvance: true }),
+        clock: fixedClock(NOW),
+        signingSecret: SECRET,
+        onDelivery: async () => {},
+        reconnectBaseMs: 1000,
+        reconnectMaxMs: 30_000,
+        maxReconnects: null,
+      });
+      await socket.start();
+      handlers[0]?.onClose('refresh_requested');
+      // Let the reconnect reach its in-flight open.
+      for (let round = 0; round < 20 && opens.length < 2; round += 1) {
+        await Promise.resolve();
+      }
+      expect(opens).toHaveLength(2);
+
+      const stopping = socket.stop();
+      release();
+      await stopping;
+
+      // Every socket that was ever connected is closed — or none was connected after the stop.
+      expect(closed.every((isClosed) => isClosed)).toBe(true);
+    });
+  });
 });

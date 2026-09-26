@@ -36,9 +36,21 @@ runCommunicationContract({
       webhookSecret: '',
     });
 
+    /** The same fake built again: it remembers nothing the first one posted (Q55, WP-43). */
+    const freshPort = createFakeCommunication({
+      integrationId: INTEGRATION_ID,
+      channels: ['#agentic'],
+      identities: [
+        { providerUserId: 'U-MAPPED', email: 'dev@example.test', displayName: 'Dev One' },
+      ],
+    });
+
     return {
       port,
       unverifiablePort,
+      freshPort,
+      emitPostedApproval: (authorId, decision) =>
+        port.emitApproval({ taskId: TASK_ID, approvalId: APPROVAL_ID, authorId, decision }),
       emitUnknownEvent: () => port.emitUnknownEvent(),
       signedWithNoCredential: () =>
         unverifiablePort.emitAnswer({

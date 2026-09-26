@@ -22,7 +22,8 @@
  *
  * ## Shutdown order (TD-002)
  * `readyz` 503 → Fastify `preClose` drains the SSE streams with a `shutdown` frame → Fastify closes
- * the server → the outbox worker and dispatcher drain → the partition-maintenance worker stops →
+ * the server → the held inbound connections close (WP-43: Slack's socket, the other inbound door)
+ * → the outbox worker and dispatcher drain → the partition-maintenance worker stops →
  * pg-boss stops → the pool closes. That is the reverse of start-up, which is the point: draining
  * the streams after closing the sockets drains nothing, stopping pg-boss before the dispatcher has
  * finished would strand an in-flight handler, and closing the pool before the workers stop turns a
@@ -43,7 +44,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { Jobs, Logger, WebhookIngress } from '@platform/application';
+import type { InboundConnectionsHandle, Jobs, Logger, WebhookIngress } from '@platform/application';
 import {
   createLiveRuns,
   createWorkingCalendar,
@@ -72,6 +73,7 @@ import {
 import { composeBreakdown } from './breakdown.js';
 import { createTaskCommands } from './commands.js';
 import { loadServerConfig, type ServerConfig } from './config.js';
+import { composeInboundConnections } from './inbound-connections.js';
 import { composeKnowledgeIndexing, createKnowledgeCommands } from './knowledge.js';
 import { asLoggerPort, createLogger, type PinoLogger } from './logging.js';
 import { createMetrics, type Metrics } from './metrics.js';
@@ -111,6 +113,12 @@ export interface ServerRuntime {
   readonly metrics: Metrics;
   readonly hub: SseHub;
   readonly pool: pg.Pool;
+  /**
+   * The held inbound connections this process opened (WP-43), or `null` for a role that composes
+   * no integration stack. A **labelled seam** like `jobs`: the e2e tier reads `status()` to wait
+   * for a socket to be open and calls `relist()` rather than sleeping out the interval.
+   */
+  readonly heldConnections: InboundConnectionsHandle | null;
   /** The address the HTTP server is listening on, once `listen()` has run. */
   listen(): Promise<string>;
   stop(): Promise<void>;
@@ -821,6 +829,37 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       );
     }
 
+    /**
+     * The held inbound connections — Slack's Socket Mode (WP-43, PROGRESS backlog 78).
+     *
+     * **Held by the process that serves `/webhooks/*`, decided by what it is handed**: `webhooks`
+     * is non-null exactly when this `ROLE` serves the API, so `ROLE=api` and `ROLE=all` open one
+     * socket per account that selects Socket Mode, and the worker-capable roles without the API
+     * (`ROLE=worker`/`runner`/`indexer`) open none and **name every such account** instead — a role
+     * with neither capability composes no stack and names nothing (none exists in this build) — the way the pipeline names the runner piece it
+     * lacks, because the silent version of this absence is the defect the row closed.
+     *
+     * Composed after the ingress it delivers into and registered for shutdown at once, so a
+     * start-up that fails further down still closes every socket (the `catch` runs
+     * `stopCallbacks`); stopping it is first among the callbacks (`unshift`), before the pipeline
+     * and the eventing a delivery writes through. Opening a socket is not awaited here — a Slack
+     * that is slow or down at boot is retried on a backoff and never delays the API.
+     */
+    const heldConnections =
+      stack === null
+        ? null
+        : await composeInboundConnections({
+            pool: database.pool,
+            secretKey: config.secretKey,
+            stack,
+            ingress: webhooks,
+            role: config.role,
+            logger: loggerPort,
+          });
+    if (heldConnections !== null) {
+      stopCallbacks.unshift({ name: 'inbound-connections', stop: heldConnections.stop });
+    }
+
     const app = await buildApp({
       config,
       logger,
@@ -871,6 +910,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       metrics,
       hub,
       pool: database.pool,
+      heldConnections,
       listen: async () => app.listen({ port: config.port, host: config.host }),
       stop: async () => {
         if (shuttingDown) {

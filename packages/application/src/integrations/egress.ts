@@ -84,7 +84,11 @@
  *  - **A host reached some other way.** The guard is on the executor's request and on the write, so
  *    it covers what a *binding* dials. A module that opens a socket by itself is outside it — which
  *    is exactly why the one such module names its own checklist (see
- *    `packages/infrastructure/src/dependencies/registry-metadata.ts`).
+ *    `packages/infrastructure/src/dependencies/registry-metadata.ts`). The Slack Socket Mode
+ *    WebSocket is the other one (WP-43): its URL is the *answer* to an executor call, so the host
+ *    this guard checked is `base_url`'s, and the adapter holds the answered host to that host or a
+ *    subdomain of it (`providers/slack/provider.ts`'s `assertSocketHost`) — a narrower rule than
+ *    this list, not this list.
  *  - **The scheme of a URL that never reaches a schema.** `httpUrlSchema` refuses a non-http(s)
  *    scheme at the five provider configs, and this module refuses one again **at the write**,
  *    because a config key can be added by a provider that forgets. It does **not** refuse one at

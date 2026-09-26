@@ -69,6 +69,20 @@ export interface CommunicationContractContext {
    * configures it when they forget the secret.
    */
   readonly unverifiablePort: CommunicationPort;
+  /**
+   * The same adapter built a second time, remembering nothing the first one posted (WP-43).
+   *
+   * It is what the platform actually normalises with: the binding loader builds an adapter **per
+   * delivery** (Q55), so whatever a provider keeps in memory — a thread directory, a map of posted
+   * buttons — is empty on the inbound path. The suite's other inbound cases run on the port that
+   * posted, which is the kind version.
+   */
+  readonly freshPort: CommunicationPort;
+  /**
+   * A click on an approval exactly as the port itself posted it — whatever the provider writes
+   * into the button, and nothing the harness remembered on the port's behalf.
+   */
+  emitPostedApproval(authorId: string, decision: 'approved' | 'rejected'): WebhookDelivery;
   /** A delivery signed with the empty credential — the signature an attacker can compute. */
   signedWithNoCredential(): WebhookDelivery;
   /**
@@ -341,6 +355,21 @@ export const runCommunicationContract = (harness: CommunicationContractHarness):
         );
         expect(payload.decision).toBe('approved');
         expect(payload.decided_by_user_id).toBe(userId);
+      });
+
+      it('resolves an approval’s task on an adapter that remembers nothing (Q55, WP-43)', async () => {
+        const result = await context.freshPort.inbound.normalise(
+          context.emitPostedApproval(context.mappedAuthor.providerUserId, 'approved'),
+          inboundContext(userId),
+        );
+        expect(result.ignored).toEqual([]);
+        const [event] = result.events;
+        const { payload } = expectCatalogueEvent(
+          event as NonNullable<typeof event>,
+          'task.approval.decided',
+        );
+        expect(payload.task_id).toBe(context.taskId);
+        expect(payload.approval_id).toBe(context.approvalId);
       });
 
       it('refuses an approval from an unmapped user', async () => {
