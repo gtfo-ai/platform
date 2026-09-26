@@ -18,7 +18,7 @@
 > **"Architect ruling (M4, session 6)"** at the end of this file. This session is started with `/orchestrate`,
 > which loads `docs/technical/15-orchestrator-prompt.md`; that document, not a pasted prompt, is now the loop.
 
-**Session 8 — 2026-09-25.** `main` opened at **`c1cc951`**, tree clean, and every run on the last three heads read **completed success** — WP-53's `ci` `35879384310` and `image` `35879384479` (PENDING in session 7's note) included, with zero `release` runs. **WP-54 is DONE at `3288496`** (its `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success**; its docs commit `bdcfbe2` read `ci` `36165713727` and `image` `36165713682` **completed success**). **WP-74 is DONE at `91e0140`** (`ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs; the docs commit that carries this sentence has its own runs, **PENDING — read to `completed` before the next row**) — backlog 82 and 147 closed, `verify:e2e` green on this machine again. **Two majors had no owner and now do**: backlog **148** (a run's `/cache` is the whole mirror volume) as **WP-75** and **133** (the launcher cannot authenticate to git) as **WP-76**, both placed right after WP-74. Machine baseline: `docker volume ls | wc -l` = **102** (the two new volumes are the user's own `speedpuzzlingcz` postgres containers, not this repository's). **Three things for the next session.** (1) **The load gate, not the work, set the pace**: one-minute load was 20–175 for most of the day (Spotlight's `mds_stores` at ~250 % and the user's containers; this session's own processes were ~6 %), so the implementer spent six of its seven hours waiting — and its waits were **unbounded `until` loops** that each tool timeout orphaned: 25 of them, killed by the orchestrator after the user asked why 24 shells were running. **Every brief now says: a load check is five readings a minute apart, then a report — never an unbounded loop, never a background shell left behind.** (2) **`verify:e2e` is red on this machine for a reason that is not the tree**: backlog **147**, reproduced on a clean `main` worktree; until WP-74 closes it, every row's e2e verdict carries that one named failure and the rest is read as the verdict. A likely cause (the refiner's, unmeasured) is macOS writing into the bind-backed control volume between the two teardown helpers. (3) **A floor list is an enumeration**: WP-54's review found seven, then five, spellings past it, and BD-025 now says so rather than claiming a boundary. **WP-75 is DONE at `1b0af26`** (`ci` `36200943398` and `image` `36200943454` **completed success**; WP-74's docs commit `6972cbc` read `ci` `36175963207` and `image` `36175963205` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 148 and 152 closed. **The TD-028 amendment WP-76 needed exists** (the architect's, session 8: the runner mints a run-scoped credential through `IntegrationActionExecutor` and passes it on the create request; Q98 filed). **WP-76 is DONE at `52495cb`** (`ci` `36208771351` and `image` `36208771353` **completed success**; WP-75's docs commit `355f444` read `ci` `36201525827` and `image` `36201525825` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 133 closed: a private repository mirrors, the developer stage can push, and the run's credential is minted, audited and revoked. **WP-55 is DONE at `a72aaa2`** (`ci` `36216963170` and `image` `36216963211` **completed success**). **CI went red on WP-77's docs commit `2ab70eb`** (`ci` `36213166240`, `integration` job; `image` `36213166173` success): `test/integration/stats/stats-backfill.integration.test.ts`, untouched since WP-41, pins a row order sorted by day, and its story started three hours before *now* — a run between 03:00 and 03:30 UTC (this one: 02:55) splits it across midnight. **Deterministic by time of day, not by load**; fixed at `ae65e2f` by anchoring the story to noon UTC (`ci` `36217053525` and `image` `36217053489` **completed success**). **Two machine-rule breaches by the orchestrator this session, recorded rather than hidden**: WP-77's last `verify` started at a one-minute load of 34, and this fix's single integration file at 20 — both without the gate. **WP-77 is DONE at `2481f09`** (`ci` `36212658371` and `image` `36212658429` **completed success**; WP-76's docs commit `e0d2790` read `ci` `36209347069` and `image` `36209347052` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 155 closed. **Next: WP-56**, then the M4 table's order. **Pace this session**: four rows (WP-54, 74, 75, 76) plus the architect's WP-76 decision in about 17 h 30 min, of which the load gate held the tiers for roughly half; the three security rows each took three review rounds because each round found a way past the one before. Pace: WP-54 took about 8 h 20 min, most of it waiting on load; WP-74 about 2 h 30 min at a load that allowed its tiers.
+**Session 8 — 2026-09-25.** `main` opened at **`c1cc951`**, tree clean, and every run on the last three heads read **completed success** — WP-53's `ci` `35879384310` and `image` `35879384479` (PENDING in session 7's note) included, with zero `release` runs. **WP-54 is DONE at `3288496`** (its `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success**; its docs commit `bdcfbe2` read `ci` `36165713727` and `image` `36165713682` **completed success**). **WP-74 is DONE at `91e0140`** (`ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs; the docs commit that carries this sentence has its own runs, **PENDING — read to `completed` before the next row**) — backlog 82 and 147 closed, `verify:e2e` green on this machine again. **Two majors had no owner and now do**: backlog **148** (a run's `/cache` is the whole mirror volume) as **WP-75** and **133** (the launcher cannot authenticate to git) as **WP-76**, both placed right after WP-74. Machine baseline: `docker volume ls | wc -l` = **102** (the two new volumes are the user's own `speedpuzzlingcz` postgres containers, not this repository's). **Three things for the next session.** (1) **The load gate, not the work, set the pace**: one-minute load was 20–175 for most of the day (Spotlight's `mds_stores` at ~250 % and the user's containers; this session's own processes were ~6 %), so the implementer spent six of its seven hours waiting — and its waits were **unbounded `until` loops** that each tool timeout orphaned: 25 of them, killed by the orchestrator after the user asked why 24 shells were running. **Every brief now says: a load check is five readings a minute apart, then a report — never an unbounded loop, never a background shell left behind.** (2) **`verify:e2e` is red on this machine for a reason that is not the tree**: backlog **147**, reproduced on a clean `main` worktree; until WP-74 closes it, every row's e2e verdict carries that one named failure and the rest is read as the verdict. A likely cause (the refiner's, unmeasured) is macOS writing into the bind-backed control volume between the two teardown helpers. (3) **A floor list is an enumeration**: WP-54's review found seven, then five, spellings past it, and BD-025 now says so rather than claiming a boundary. **WP-75 is DONE at `1b0af26`** (`ci` `36200943398` and `image` `36200943454` **completed success**; WP-74's docs commit `6972cbc` read `ci` `36175963207` and `image` `36175963205` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 148 and 152 closed. **The TD-028 amendment WP-76 needed exists** (the architect's, session 8: the runner mints a run-scoped credential through `IntegrationActionExecutor` and passes it on the create request; Q98 filed). **WP-76 is DONE at `52495cb`** (`ci` `36208771351` and `image` `36208771353` **completed success**; WP-75's docs commit `355f444` read `ci` `36201525827` and `image` `36201525825` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 133 closed: a private repository mirrors, the developer stage can push, and the run's credential is minted, audited and revoked. **WP-55 is DONE at `a72aaa2`** (`ci` `36216963170` and `image` `36216963211` **completed success**). **CI went red on WP-77's docs commit `2ab70eb`** (`ci` `36213166240`, `integration` job; `image` `36213166173` success): `test/integration/stats/stats-backfill.integration.test.ts`, untouched since WP-41, pins a row order sorted by day, and its story started three hours before *now* — a run between 03:00 and 03:30 UTC (this one: 02:55) splits it across midnight. **Deterministic by time of day, not by load**; fixed at `ae65e2f` by anchoring the story to noon UTC (`ci` `36217053525` and `image` `36217053489` **completed success**). **Two machine-rule breaches by the orchestrator this session, recorded rather than hidden**: WP-77's last `verify` started at a one-minute load of 34, and this fix's single integration file at 20 — both without the gate. **WP-77 is DONE at `2481f09`** (`ci` `36212658371` and `image` `36212658429` **completed success**; WP-76's docs commit `e0d2790` read `ci` `36209347069` and `image` `36209347052` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 155 closed. **WP-56 is DONE at `e0e877d`** (`ci` `36221858072` and `image` `36221858076` **completed success**; WP-55's docs commit `6083512` read `ci` `36217921241` and `image` `36217921292` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **Next: WP-57**, then the M4 table's order. **Session pace**: seven rows (WP-54, 74, 75, 76, 77, 55, 56) in about 28 h, roughly half of it the load gate. **Pace this session**: four rows (WP-54, 74, 75, 76) plus the architect's WP-76 decision in about 17 h 30 min, of which the load gate held the tiers for roughly half; the three security rows each took three review rounds because each round found a way past the one before. Pace: WP-54 took about 8 h 20 min, most of it waiting on load; WP-74 about 2 h 30 min at a load that allowed its tiers.
 
 **Session 7 so far.** `main` opened at **`cc80fc3`**, tree clean, its `ci` `35114407808` and `image`
 `35114407731` both **completed success** with **zero `release` runs on the sha** — the first head to show
@@ -3011,7 +3011,7 @@ for the directory, and the take-over/hand-back control that gives both a caller.
 `13-implementation-plan.md` § "Milestone M3" so the next orchestrator does not re-derive that no M3
 row owns it. Nothing is scheduled by this note.
 
-### 69. **`tasks` records that a task is paused and not *why*, so a workpad render while a human holds the task drops the take-over block — and the timeout that would trigger it is product/19 § 19's one unbuilt clause** (TODO, small, latent — **no work package owns either half**; found by WP-27, session 5)
+### 69. **`tasks` records that a task is paused and not *why*, so a workpad render while a human holds the task drops the take-over block — and the timeout that would trigger it is product/19 § 19's one unbuilt clause** (**RESOLVED** at `e0e877d`, WP-56, session 8 — TODO, small, latent — **no work package owns either half**; found by WP-27, session 5)
 > **M4 (architect, session 6): folded into WP-56.**
 
 **What is wrong.** The workpad's take-over block (branch, `claude --resume` line, how to hand back) is
@@ -3474,7 +3474,7 @@ request's reviewers are set by **id**.
 - **`tasks.requested_by_user_id` still has no writer, so the routing's third step resolves to nobody on
   every task — backlog 92**, with backlog **79** as the other half of the same step.
 
-### 74. **BD-006's one-working-day question timeout is unbuilt end to end — no deadline is written, no timer is armed, and the escalation that exists has no producer** (TODO — **no work package owns it**; found by the refiner while attributing WP-30's `questionTimeout` policy, session 5)
+### 74. **BD-006's one-working-day question timeout is unbuilt end to end — no deadline is written, no timer is armed, and the escalation that exists has no producer** (**RESOLVED** at `e0e877d`, WP-56, session 8 — TODO — **no work package owns it**; found by the refiner while attributing WP-30's `questionTimeout` policy, session 5)
 > **M4 (architect, session 6): folded into WP-56.**
 
 **What is wrong.** A blocking question parks a task for ever. Every piece of the timeout exists
@@ -3655,7 +3655,7 @@ statistics row cannot publish the constant — which is the outcome this entry a
 WP-41 must not be the row that discovers it. The entry still has **no owner** for the projection
 itself; the cheapest adjacency is unchanged.
 
-### 76. **Neither approval gate passes a deadline, so `approvals.deadline_at` is null on every row, `expireApproval` has no producer and `expireTaskApproval` has no caller at all — and unlike the question timeout, no document says an approval expires** (TODO, latent — **no work package owns it**; the third instance of the class entries **69** and **74** record; found by WP-28, session 5)
+### 76. **Neither approval gate passes a deadline, so `approvals.deadline_at` is null on every row, `expireApproval` has no producer and `expireTaskApproval` has no caller at all — and unlike the question timeout, no document says an approval expires** (**RESOLVED** at `e0e877d`, WP-56, session 8 — TODO, latent — **no work package owns it**; the third instance of the class entries **69** and **74** record; found by WP-28, session 5)
 > **M4 (architect, session 6): folded into WP-56.**
 
 **What is wrong.** The whole expiry mechanism is written — column, predicate, aggregate command,
@@ -8924,6 +8924,264 @@ open. **(3)** A hand-back to the gate reopens the row (the upsert above), assert
 158: its panel is the first reader that renders these rows as a verdict. If WP-55's review reopens,
 that round is the cheaper home. Related: **158**, **95** items 1–2.
 
+### 161. **Arming a deadline is an after-commit enqueue, so a process that dies after the dispatch commits — or an enqueue that throws — leaves an open question, a pending approval or a taken-over task with no timer, and nothing ever finds it: the site is not a row of `recovery/stranded.ts`** (**RESOLVED** at `e0e877d`, WP-56, session 8 — TODO, **small-to-major** — the probability per event is low, the consequence is backlog **74**'s (the task parks for ever holding a WIP slot, BD-006 unmet for that item) and the crash case is **silent**; **live** from WP-56 on every question, approval and take-over; **read off the tree, not measured**; **no remaining M4 row owns it** — the recovery rows (WP-36, WP-48) are DONE; cheapest home is WP-56's own review round, the orchestrator's call; found by WP-56, session 8, graded by the refiner)
+
+**What is wrong.** `deadlineArmingHandler` (`packages/application/src/pipeline/deadlines.ts`, committed
+at `e0e877d`) arms `deadline.sweep` through `context.afterCommit` for `task.question.asked`,
+`task.approval.requested` and `task.taken_over`. `EventBus` runs those callbacks only after the
+handler's transaction and its `handler_executions` record are durable, and a callback that throws is
+logged and **dropped** — *"an after-commit callback failed; the handler’s effect stands and the
+callback is lost"* (`packages/application/src/events/event-bus.ts:593-607`). The dispatch is then
+complete, so the event is never re-dispatched to `pipeline.deadlines`. Two ways in: the process dies in
+the window (no log line at all), or `Jobs.enqueue` throws (one `error` line, then nothing). Either way
+the question stays `open`, the approval `pending`, the task `paused`, with no job that will ever
+re-validate it. This is exactly the class `recovery/stranded.ts` exists for, and its site table
+(`packages/application/src/recovery/stranded.ts:16-23`) has no deadline row. The module states the
+residual itself at its header (`deadlines.ts:31-36`, *"this site is **not** yet a row of that table"*).
+
+**Evidence.** The WP-56 implementer, quoted: *"A process dying between the dispatch's commit and the
+`afterCommit` enqueue leaves an open question, a pending approval or a paused take-over with no timer —
+the class WP-48 closed for five other sites. The query is cheap for two kinds (`status =
+'open'/'pending' and deadline_at < now - grace`, bounded by the expiry itself) and needs the event-log
+read for the third."* The refiner added the second way in (the throwing enqueue, `event-bus.ts:596-606`)
+and confirmed the table has no row. **Not measured**; no tier drops the enqueue for this site.
+
+**What it costs to leave.** Per affected item, the whole of backlog **74** — the reason WP-56 exists: a
+blocking question or an approval that nobody acts on parks its task for ever while it holds a WIP slot,
+and nothing tells anyone the deadline did not fire. The user guide now promises the opposite (*"an
+expired question is not silently dropped"*, `docs/user-guide.md:236-238`). Rare per event, but every
+question, approval and take-over from now on passes the window.
+
+**What "done" looks like.** **(1)** A `deadline` row in `recovery/stranded.ts`'s table, on the existing
+pass and grace: questions `open` and approvals `pending` whose `deadline_at < now - grace` are re-armed
+(the job re-validates, so a double arm is harmless and `stately` collapses it); taken-over tasks read
+off the event log — `paused`, newest `TAKE_OVER_BOUNDARY_EVENTS` entry is `task.taken_over`
+(`packages/application/src/pipeline/store.ts:567-574`), and `takeOverDeadline` past plus grace. **(2)**
+Bounded per backlog **105**: one recovery attempt per item, recorded, with an ending when it is spent —
+though here the expiry *is* the ending, so the bound may be the re-arm itself; the implementer states
+which. **(3)** Asserted as the class's criterion mandates: **drop the enqueue** in the tier that runs
+the pass and read the recovery back from the question's/approval's status and the task's state (rule
+42), with the negative — an item whose timer is armed and not yet due is not touched. **(4)** The table
+row, `deadlines.ts`'s residual sentence and `stranded.ts`'s *"six sites"* header change together (rule
+83). **(5)** Entry **162**'s rows are the same query with `deadline_at is null`; one pass should close
+both.
+
+**Depends on / owner.** **WP-56** (commit pending), WP-48 (the table). **No remaining M4 row owns it**:
+WP-36 and WP-48 were the recovery rows and are DONE, WP-72 is topology and WP-73 is sentences. The
+cheapest home is **WP-56's own review round** (same files, uncommitted, and the implementer has the
+queries in hand); otherwise it needs a small row of its own, carrying **162** with it. Related: **74**,
+**76**, **69** (the deadlines), **101**/**105** (the class and its bound), **162**.
+
+### 162. **Questions, approvals and take-overs that were waiting when an instance upgrades to WP-56 have no deadline and no timer, and nothing will ever give them one — there is no backfill, no startup sweep, and the one replay mechanism has no production caller and would arm nothing for two of the three kinds anyway** (**RESOLVED** at `e0e877d`, WP-56, session 8 — TODO, **small-to-major** — the population is **bounded**: exactly the items waiting at the upgrade, and none after it; each of them is backlog **74**'s consequence, a task parked for ever holding a WIP slot, so this is 74's already-stuck tasks **not rescued** rather than a new way in; **needs measurement** for the size of the population on any real instance; **no remaining M4 row owns it**, same answer as **161**; found by WP-56, session 8, verified and widened to take-overs by the refiner)
+
+**What is wrong.** WP-56 writes `deadline_at` where a question or an approval is **created** and arms
+the timer from the creating event (`deadlines.ts`, arming handler). A row created before the upgrade has
+`deadline_at` null (backlog **74**/**76**: nothing wrote one), and both commands treat a null deadline as
+settled — `expireTaskQuestion` returns early on `question.deadlineAt === null`
+(`packages/application/src/pipeline/commands.ts:172`), `expireTaskApproval` the same (`:240`). A
+take-over has no column; its timer comes only from the arming handler seeing `task.taken_over`, and a
+pre-WP-56 `task.taken_over` was dispatched before that handler existed.
+
+**Evidence** (refiner, read off the tree; the orchestrator's brief asked whether any backfill or
+startup sweep exists — **none does**):
+- **No migration.** WP-56 ships none (*"No migration"*, its notes); the newest is
+  `0040_task_stage_vocabulary.sql`.
+- **No startup or periodic pass.** Outside `deadlines.ts` the only `deadline.sweep` references are the
+  queue declaration and the runtime's worker registration (`packages/application/src/pipeline/runtime.ts:315-371`);
+  `recovery/stranded.ts` has no deadline row (entry **161**).
+- **The replay would not do it.** `events/replay.ts` can serve a handler events dispatched before it was
+  registered, but it has **no production caller** (exported at `packages/application/src/index.ts:62`,
+  called by nothing under `apps/`), and for questions and approvals it would reach the arming handler's
+  null branch, which logs *"a question was asked with no deadline, so nothing will expire it"* and arms
+  nothing (`deadlines.ts:176-181`, `:191-196`). Only the take-over kind would be armed by a replay.
+- The implementer, quoted: *"rows written before WP-56 have `deadline_at is null` and nothing will ever
+  expire them. The timer settles a null deadline; a one-off backfill (compute from
+  `asked_at`/`requested_at` and arm) is a decision, not done here."*
+
+**What it costs to leave.** Every task that was already parked on a question, an approval or a
+take-over when the image was pulled stays parked — and after WP-56 merges, backlog **74**/**76**/**69**
+read as resolved and `docs/user-guide.md:236-242` says an unanswered question and an undecided approval
+escalate. On a continuously deployed `latest` (TD-019's amendment) that is every instance with a waiting
+task at the pull. **Needs measurement**: `select count(*) from questions where status = 'open' and
+deadline_at is null`, the same for `approvals` `pending`, and the paused taken-over tasks, on the
+dogfood instance — a database read, not a test, and not run here.
+
+**What "done" looks like.** **(1)** A decision, stated where the backfill lives: computing the deadline
+from `asked_at`/`requested_at` makes almost every such row **already overdue**, so the first pass
+escalates them all at once to people who were never told there was a deadline. **Recommendation**: give
+them a fresh deadline counted from the moment the backfill runs, on the same calendar and limit, and
+say so in the row's log line. **(2)** The mechanism is entry **161**'s pass with a `deadline_at is
+null` branch — write the narrow column on `questions`/`approvals`, then arm — plus the take-over kind,
+which needs no column; not a one-off script an operator has to know to run, and not a migration (a
+migration cannot read the project's `question_timeout` or the working calendar). **(3)** Asserted with
+a row seeded **as a pre-WP-56 build wrote it** (null deadline, open) in the tier that runs the pass: after
+one pass it carries a deadline and a timer, and after the deadline it expires — read back from status
+(rule 42); and a question created by the current code is not touched. **(4)** Whether the arming
+handler's *"nothing on this build writes"* null branch stays a warning or becomes unreachable, stated.
+
+**Depends on / owner.** **WP-56** (commit pending) and **161**. **No remaining M4 row owns it** — the
+same answer as 161, and the same cheapest home: WP-56's review round, or a small row carrying both.
+
+### 163. **Two escalation briefs tell a human to do something the state machines refuse: an expired question's says "answer it … and the task will carry on", an expired approval's says "approve or reject it in the UI" — and the inbox stops listing both the moment they expire** (**RESOLVED in part** at `e0e877d`, WP-56, session 8 (the expiry briefs; the inbox half stays with WP-73) — TODO, **small** — **read off the tree, not measured**; the texts predate WP-56 and WP-56 made them **reachable**, so **live** from WP-56 on every expiry; a text defect with a product question behind it, answered below by recommendation; proposed owner **WP-73** (refiner, session 8); found by WP-56, session 8, the inbox half added by the refiner)
+
+**What is wrong.** On `task.question.expired` the saga marks the question `escalated` and escalates the
+task with the brief *"Answer it on the ticket, in Slack or in the UI and the task will carry on from
+where it stopped."* (`packages/application/src/pipeline/saga.ts:1105`). But `escalated: []`
+(`packages/domain/src/aggregates/question.ts:32`) and `answerQuestion` asserts `→ answered` first
+(`:178`), so every channel's answer is refused. On an expired approval the brief is *"Approve or reject
+it in the UI, or hand the task back at the stage it should resume from."* (`saga.ts:1246`), but
+`expired: []` (`packages/domain/src/aggregates/approval.ts:29`) and `decideApproval` asserts the
+transition first (`:125`). And the UI the briefs point at no longer shows either: `listInbox` selects
+questions `status = 'open'` and approvals `status = 'pending'` only
+(`apps/server/src/queries/pipeline-queries.ts:1017-1025`).
+
+**Evidence.** The WP-56 implementer, quoted: *"An expired question's brief says 'Answer it … and the task
+will carry on', but the question is `escalated` and `answerQuestion` accepts only `open`; an expired
+approval's says 'Approve or reject it in the UI', but `decideApproval` accepts only `pending`. Read off
+the tree."* The refiner confirmed both transition tables and added the inbox filter. **Not measured**.
+
+**What it costs to leave.** The one message written for the person who must unstick the task sends them
+to a control that refuses them (an answer on the ticket is silently ignored; the UI has nothing to
+click). They will find the working exit — return or rework the stage, hand back, cancel — only by
+guessing. BD-006 says what happens *at* the timeout, not whether a late answer still counts, so the
+brief is promising a behaviour no document decided.
+
+**What "done" looks like.** **(1)** **Recommendation, implementable without a founder decision**: the
+briefs name the exits that exist on a `needs_human` task — return the task to the stage (with the
+answer as the note, for a question), hand it back, or cancel — and the question's text stays in the
+brief as it is now. **Do not** reopen an `escalated` question or an `expired` approval to make the
+old text true: that is a new transition on two aggregates and a product call (does a late answer
+revive a task a human already owns?), which is a Q to file only if somebody asks for it. **(2)** A
+unit case per brief that the text names no action the aggregate refuses — e.g. the brief does not
+contain *"Answer it"* when the question is `escalated` — so the next edit cannot restore it. **(3)**
+Rule 83 over any user-guide or technical/02 sentence that repeats the promise.
+
+**Depends on / owner.** **WP-56** (commit pending; it made the branches reachable). **Proposed owner
+WP-73** (refiner, session 8): two strings and two unit cases, the sweep's shape. If WP-56's review
+reopens, that round is cheaper.
+
+### 164. **After a take-over escalates, the workpad still says the task is taken over and the task page says it is not — two projections of one fact, with different event sets and different state guards** (TODO, **small** — **read off the tree, not measured**; **live** from WP-56, on every take-over the inactivity timer escalates; proposed owner **WP-44** (refiner, session 8); found by WP-56, session 8)
+
+**What is wrong.** The workpad asks `TaskRepository.takenOver`: the newest of `TAKE_OVER_BOUNDARY_EVENTS`
+— taken over, handed back, resumed, stage entered, completed, cancelled
+(`packages/application/src/pipeline/store.ts:567-574`) — being `task.taken_over`, with **escalation
+deliberately not a boundary**, so the block stays on a `needs_human` task (WP-56's criterion 6). The
+task page's `taken_over` field is `findTakenOver` (`apps/server/src/queries/pipeline-queries.ts:809-832`),
+which returns `null` unless the task is `paused` and reads only `task.taken_over`/`task.handed_back`. So
+after `expireTakeOver` escalates (`paused` → `needs_human`) the ticket's workpad shows the branch and the
+task page shows no take-over — and the two also disagree on a resume or a stage entry without a
+hand-back, which one reads as a boundary and the other does not.
+
+**Evidence.** The WP-56 implementer, quoted: *"`findTakenOver` … publishes nothing unless the task is
+`paused` and reads two event types; the workpad now reads `TAKE_OVER_BOUNDARY_EVENTS` and keeps the block
+through `needs_human`. One projection should be the other's."* Confirmed off the tree by the refiner.
+
+**What it costs to leave.** The escalation brief says *"The work is on `<branch>`. Hand it back …"*
+(`deadlines.ts`, `expireTakeOver`) while the screen that would carry the hand-back control says nobody
+holds the task — the moment the maintainer needs the branch is the moment the task page drops it.
+Small: the brief carries the branch.
+
+**What "done" looks like.** **(1)** One definition of *still taken over*: `findTakenOver` reads the
+same boundary set (the constant, not a copy) with no `paused` guard — or the workpad adopts the page's
+rule and criterion 6 is re-decided; the implementer states which, and product/19 §19 is the tie-breaker.
+**(2)** Asserted at the API boundary: a task escalated by the take-over timer answers `taken_over` with
+the branch on `GET /api/tasks/:id`, and a handed-back task answers `null` (rule 42's negative).
+
+**Depends on / owner.** **WP-56** (commit pending). **Proposed owner WP-44** (refiner, session 8): its
+criterion (2) builds the take-over and hand-back control that renders exactly this field.
+
+### 165. **BD-006's "with a reminder before escalation" is still unbuilt: `questionReminderTimes` and `recordReminder` have no caller, so a blocking question now escalates with no warning** (TODO, **small** — a decision record's clause unmet, not a nit; **live**, and newly *noticeable* since WP-56 made the escalation fire; **read off the tree**; **no work package owns it**; found by WP-56, session 8, re-graded by the refiner)
+
+**What is wrong.** BD-006: *"Unanswered questions escalate to `Needs human` after **1 working day** by
+default (configurable per project), with a reminder before escalation"*
+(`docs/decisions/business/BD-006-human-checkpoints.md:11`); product/04:37 *"Unanswered after 1 working
+day (configurable) → reminder, then `Needs human`"*. `questionReminderTimes`
+(`packages/application/src/scheduling/working-calendar.ts:302`) and `recordReminder`
+(`packages/domain/src/aggregates/question.ts:150`) have no production caller; `reminders_sent` is
+never incremented.
+
+**Evidence.** The WP-56 implementer, quoted: *"`questionReminderTimes` has no caller; it is one more
+`kind` on `deadline.sweep`, no pool change, but needs the notify band's delivery."* The refiner's grep
+over `packages/` and `apps/` (sources, not `dist/`) finds only the two declarations. The TD-004
+amendment WP-56 proposes already says *"Reminders, when built, are another `kind` on the same queue."*
+
+**What it costs to leave.** A person who missed the question first hears of it as an escalation. Filed
+**small** rather than nit because the clause is in a decision record and the machinery around it is
+now live.
+
+**What "done" looks like.** **(1)** A `question_reminder` kind on `deadline.sweep`, armed with the
+timeout at `questionReminderTimes`, re-validating on fire (`open` only — `recordReminder` already refuses
+otherwise), delivering through the notify band (WP-32) and incrementing `reminders_sent`. **(2)** The
+same Friday/Monday boundary case as WP-56's criterion 3, read back from `reminders_sent` and the
+notification row, plus the negative (answered before the reminder: nothing sent). **(3)** Whether
+approvals get a reminder too is a one-line decision to state; BD-006's Q95 amendment is silent.
+
+**Depends on / owner.** **WP-56** (the queue), WP-32 (delivery). **No work package owns it**; WP-65 is
+the nearest neighbour (notification delivery) and its criteria do not include it — not assigned there.
+
+### 166. **The inbox shows a question's due time and never an approval's, though every approval now has one** (TODO, nit — **read off the tree**; proposed owner **WP-73** (refiner, session 8); found by WP-56, session 8)
+
+`apps/web/src/features/inbox.tsx:84-88` renders ` · due …` from `question.deadline_at`; the approval
+card (`:116-128`) renders `requested_at` only, while the DTO already carries `deadline_at`
+(`apps/server/src/queries/pipeline-queries.ts:1038`). **Done**: the approval card renders the same
+suffix, with a ui-tier case for both the present and the null deadline (entry **162**'s rows). Depends
+on WP-56 (commit pending).
+
+### 167. **The take-over inactivity timer counts five working days from the take-over and never resets, so a person pushing to the branch every day without handing back is escalated on day five — product/19 §19 says *inactivity*, the build measures *time held*** (TODO, **small** — a **recorded narrowing**, stated at `expireTakeOver`'s docblock and in the escalation brief, not a silent defect; **live** from WP-56 on every take-over held past five working days; **read off the tree, not measured**; a product half (which signals count) answered below by recommendation; proposed owner **WP-44** (refiner, session 8); found by WP-56 round 2, session 8)
+
+**What is wrong.** product/19:156: *"Timeouts: a taken-over task escalates to `Needs human` after 5
+working days of inactivity"*. WP-56 computes the due instant as `takeOverDeadline(calendar, takeOver.at)`
+(`packages/application/src/pipeline/deadlines.ts:281`, rule at
+`packages/application/src/pipeline/deadline-rules.ts:49`), where `takeOver.at` is the newest
+`task.taken_over` — so only a hand-back, resume, stage entry, completion or cancellation ends the clock,
+and nothing a holder does *while* holding resets it. The recovery row repeats the same arithmetic off
+`held.takenAt` (`packages/application/src/recovery/deadline.ts:137`). The narrowing is honest at the
+line: *"The platform can observe some of what a person does on a taken-over task — a push to a branch
+with a merge request arrives as `mr.updated`, and a command they issue leaves a `human_actions` row —
+and this timer reads **neither**"* (`deadlines.ts:252-255`), and the brief says *"(pushes to the branch
+do not count)"* (`deadlines.ts:292`). product/19 itself was **not** amended, so the doc and the build
+disagree on the word *inactivity*.
+
+**Evidence.** The WP-56 implementer, round 2, quoted: *"the take-over inactivity timer does not reset on
+activity the platform can see. `mr.updated` on the task's merge request and a `human_actions` row by the
+holder are both observable; the timer counts from `task.taken_over` regardless, so a person pushing daily
+without handing back is escalated after five working days. Which signals count is a product question
+(`mr.updated` does not name the pusher). Recommendation: reset on `human_actions` by the user who took the
+task over, and on `mr.updated` only if the provider names that user."* The refiner confirmed the three
+sites above. That `mr.updated` carries no author is already on record twice: WP-29 refused it as a
+human-time anchor (*"no author, and it fires on the platform's own pushes"*) and backlog **90**'s shape
+keeps it `unconsumed`. **Not measured**; no tier drives a push during a take-over.
+
+**What it costs to leave.** A person actively working a taken-over task is told on day five that
+nobody touched it; the task moves to `needs_human`, which takes nothing from them (the workpad keeps
+the branch, and hand-back still works — WP-56 round 2 asserted it), but the signal is noise and trains
+maintainers to ignore take-over escalations. Small: a long take-over is the exception, and the brief
+now says what it measures.
+
+**What "done" looks like.** **(1)** **Recommendation, implementable without a founder decision** (the
+implementer's, adopted): *activity* is (a) a `human_actions` row on the task by the user who took it
+over, and (b) an `mr.updated` on the task's merge request **only** when the provider names that user
+as its author — never a push the platform made, and never an unattributed one. Until a provider names
+the pusher, (b) is absent and says so at the line; a push with no attribution does not reset the clock.
+**(2)** One definition of *last activity* — the newest of `task.taken_over` and the signals in (1) —
+read by **both** `expireTakeOver` and `recovery/deadline.ts`, so the timer and its recovery row cannot
+disagree (the arithmetic is duplicated today). The job already re-arms on a not-due fire, so a reset
+needs no new arming path: the fire recomputes from the newer instant. **(3)** Asserted at the fire, rule
+42's shape: taken over Friday, a holder command on Wednesday, the fire at the original deadline answers
+*not due* and the task stays `paused`; the escalation lands five working days after Wednesday; the
+negative — a `human_actions` row by a **different** user, and an `mr.updated` with no author, do not
+reset it. **(4)** Rule 83 together: `expireTakeOver`'s docblock paragraph and the brief's *"(pushes to
+the branch do not count)"*, `docs/user-guide.md:188-190`, `docs/operator-guide.md:667-668`; and
+product/19:156 amended to say which signals are *activity* — whichever way this lands, the product
+page is the one that currently says something the build does not do.
+
+**Depends on / owner.** **WP-56** (`e0e877d`, the timer). Half (b) depends on a provider naming the
+pusher on `mr.updated`, which no shipped normaliser does (backlog **90**'s neighbourhood, WP-60's
+normaliser shape); (a) and (2)–(4) do not wait for it. **Proposed owner WP-44** (refiner, session 8):
+it builds the take-over and hand-back controls whose commands are signal (a), and already carries
+**164**, the other *still taken over* definition — one row, one notion of a held task. Related: **69**,
+**164**.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -12492,7 +12750,7 @@ file, or the first work package that touches upgrade behaviour.
 | WP-76 | **The launcher authenticates to git: the mirror fetch and the push of a private repository** | DONE | `52495cb` | **Folded backlog 133 (major) and the credential half of 152; implemented Q98 (a), ruled by the orchestrator in TD-028 decision 7.** The runner mints one run-scoped credential per run with a checkout (read for a read-only run, push for a writing one, none without a checkout) through `IntegrationActionExecutor`, no idempotency key, outside any transaction; revokes it exactly once; refuses a writing run whose binding cannot mint and never falls back to the stored token; the create request carries it with five refusals; the launcher holds it for mirror and export only; **the runner answers `cred.get`**, which no process did (the consequence backlog 133 missed, found by the architect writing TD-028's amendment first). One process-wide run-secret registry, built once in the integration stack and censused, feeds the executor, the binding loader, the transcript and the artifact write. **Two review rounds**: R1 — the shadow carve-out ahead of its decision record (ruled and recorded by the orchestrator in TD-028 decision 7, technical/02's invariant and technical/06), two post-mint refusals that did not revoke, the redactor compositions untested; R2 (major, **measured**) — a shadow task handed a `push` token by the provider had its revoke suppressed as `would_have` while the refusal said *revoked*: now every revoke declares the carve-out and only an `ok` outcome counts. **Canaries by the orchestrator after R2**, all dead by name — the revoke's success guard, the revoke's carve-out, the carve-out checked in shadow mode only, an idempotency key admitted, a second registry — **the first survived** until the orchestrator added the test that holds it (an executor answering `would_have` for a revoke must produce *was not revoked … live until*). **Orchestrator verification on the final tree**: `PASS: verify` (399 files, 7488 passed), `PASS: verify:integration` (504), `PASS: verify:e2e` **twice** (206/206, four cases against a git server that refuses anonymous and wrong-password access), `launcher-control-plane-check` 18/18 and `runlet-launcher-check` 7/7 (with `DOCKER_HOST` pointed at Docker Desktop's socket — both refuse to guess it); `compose-stock-check` PASS in the implementer's shell after rebuilding the images and in CI's `image` run. CI on `52495cb`: `ci` `36208771351` and `image` `36208771353` **completed success**, zero `release` runs. Discovered work: backlog **154** (WP-72) and **155** (its own row, **WP-77**) | Depends on **WP-75**, a decision record on the credential's carrier (TD-028 amendment, before the row starts), WP-53, WP-15a, BD-025 §3. Folds backlog **133** (major, live). Run-scoped mint through `IntegrationActionExecutor`, a `read` scope with a producer, nothing in the agent's environment; a credentialed git server in the Docker e2e that refuses anonymous access; `scripts/compose-stock-check.mjs` if compose/env changes (rule 71) |
 | WP-77 | **A run credential with no confirmed revocation is revoked from its audit row** | DONE | `2481f09` | **Folded backlog 155.** `revokeCredential` by address (`{revokeId}`, rule 18); a `run_credential` row of `recovery/stranded.ts` finds every terminal run with a `mint_credential` row and no successful revoke for its `revoke_id`, and a `pipeline.outbound` duty revokes it outside any transaction, through the executor, under the shadow carve-out; `would_have` a failure, `not_found` **unconfirmed**, one attempt per `revoke_id`; migration **0039** (`runs_ended_at_idx`). Countable on the fake provider: 0→1 lease-expired, 0→1 failed teardown, 1 stays 1 revoked normally. A grep, not a check, found the Docker e2e's revoke wrapper reading `.value` with `tsc` green — method-syntax port members are bivariant (backlog 157). **One review round**, APPROVE-with-nits: four canaries dead by name, two survivors explained — an equivalent mutant (noted at the SQL) and the terminal predicate in the duty's re-validation, which the orchestrator then asserted (a live run's credential refused, an ended one still found); the cancel path stated at the lines and the teardown log made honest. **Two of the orchestrator's own edits broke the tree before it verified**: a SQL comment with backticks inside a template literal (every tier failed at transform) and an exact-message test the log change invalidated — both caught by the tiers, not shipped. **Orchestrator verification**: `PASS: verify` (400 files, 7511 passed), `PASS: verify:integration` (508), `PASS: verify:e2e` **twice** (206/206), each exit 0; **the last `verify` was started without the load gate at a one-minute reading of 34** — a breach of the machine rule, recorded rather than hidden. CI on `2481f09`: `ci` `36212658371` and `image` `36212658429` **completed success**, zero `release` runs. Discovered work: backlog **156**, **157** (both to WP-73 in part) | Depends on WP-76, WP-47, TD-028's WP-76 amendment decision 5. Folds backlog **155** (small-to-major, live; refiner, session 8). Revoke by address with no invented value (rule 18); a recovery row over `mint_credential` rows with no successful revoke, after commit, through the executor; shadow's carve-out; `not_found` recorded as unconfirmed; 0 → 1 / 1 stays 1 on the fake provider |
 | WP-55 | **The return reason reaches the stage being asked to fix it, and a gate's stage row is closed** | DONE | `a72aaa2` | **Folded backlog 67, 32, 95 items 1–2, and — by the orchestrator's ruling at round 1 — the agent half of 159.** **Measured before the fix** (criterion 6): on `main` at `2ab70eb` a task that reached `ready_for_merge` left `ci_gate#1` and `rebase_gate#1` `entered` with no outcome and no exit. Migration **0040** (`task_stages.returned_to`, the legacy states rewritten, two check constraints); the stage vocabulary one schema in `@platform/contracts` parsed by both stores and the projection (an unknown word a typed error naming the row); the reader — ruling (a) — takes the newest return targeting this stage between its previous attempt and this one; a gate walked past is closed with its verdict; `failed` has writers, `skipped`/`pending` declared-unused. **An agent verdict's return carries the verdict's own findings**: `[summary]` then one line per finding, blockers first, each model-written field collapsed to one line, and **no cut or notice in the body** — the prompt block's own cut, announced as `truncated="true"` in its marker, is the only one. **Three review rounds**: R1 — a human rework to the stage the task is at lost its note (measured), `returned` unasserted on the wire, and the most common return (an agent reviewer's) carried the literal `requested changes`; R2 — the builder's own cut and notice were body text a reviewer model could forge (technical/04's marker contract); the orchestrator chose option (a) and ran the canaries after the last round (only LF collapsed, no collapse, blocker order removed, summary tag removed — **all dead by name**). **Orchestrator verification on the final tree**: `PASS: verify` (400 files, 7530 passed), `PASS: verify:integration` (519), `PASS: verify:e2e` **twice** (208/208), `PASS: verify:ui` (332), `PASS: verify:web-e2e` (42), each exit 0. CI on `a72aaa2`: `ci` `36216963170` and `image` `36216963211` **completed success**, zero `release` runs. Discovered work: backlog **158**, **159** (human half, WP-46), **160** | Depends on WP-15, WP-17, WP-26, WP-15h; run **before** WP-46. Folds backlog **67** (major, live on every return), **32**, and backlog **95**'s first two items. Backlog 67 ruled answer (a), reader-side, with a `returned_to` column |
-| WP-56 | **Three deadlines, one mechanism** | TODO | — | Depends on WP-05, WP-15, WP-28, WP-27, WP-32; amends TD-004. Folds backlog **74** (major), **76** (major), **69**. Ruled **in the row**: one `deadline.sweep` queue, pool floor **+1** not **+4**. The working calendar is composed for the first time. **Q95** decides whether an approval expires at all |
+| WP-56 | **Three deadlines, one mechanism** | DONE | `e0e877d` | **Folded backlog 74, 76, 69, and at review 161, 162 and 163's briefs.** One `deadline.sweep` queue (the architect's ruling; **TD-004 amended by the orchestrator**), pool floor 21 → 22 derived from the constant everywhere; `pipeline.deadlines` (priority 15) arms each timer after commit from a deadline written in the aggregate's transaction; the job re-validates on fire (answered, decided, handed back, terminal task — nothing expires); the working calendar composed from `APP_WORKING_DAYS/HOURS/HOLIDAYS` for the first time (blank default, malformed a startup refusal); **Q95 answered per its recommendation and recorded in BD-006 by the orchestrator** (an approval expires on the question calendar at one working day); the workpad reads the take-over from state. **Two review rounds**: R1 REQUEST_CHANGES — the expiry briefs promised commands the aggregates refuse (163, live because of this row) and the dependency question's deadline was unasserted (a canary survived 542 tests); the orchestrator folded 161 (a recovery site for a lost arming) and 162 (a first deadline for pre-WP-56 rows, counted from the pass) into R1's fix, and **the new test refused the orchestrator's own suggestion** that a brief offer *return to a stage* — the aggregate refuses it on `needs_human`; R2 APPROVE-with-nits, fixed by the orchestrator (a per-row catch so a poison row cannot stop the lease sweep, a probe inside the grace, the brief check widened to any wording of a return, the fake ordered as PostgreSQL). The boundary arithmetic was measured across a weekend, a holiday and both DST changes. **Orchestrator verification**: `PASS: verify` (401 files, 7580 passed), `PASS: verify:integration` (532), `PASS: verify:e2e` **twice** (208/208), images rebuilt and `PASS: compose-stock-check`, each exit 0. CI on `e0e877d`: `ci` `36221858072` and `image` `36221858076` **completed success**, zero `release` runs. Discovered work: backlog **164**–**167** | Depends on WP-05, WP-15, WP-28, WP-27, WP-32; amends TD-004. Folds backlog **74** (major), **76** (major), **69**. Ruled **in the row**: one `deadline.sweep` queue, pool floor **+1** not **+4**. The working calendar is composed for the first time. **Q95** decides whether an approval expires at all |
 | WP-57 | **`run_context_pack` gets a writer, the health report its refusals, and `kb_usage` a denominator** | TODO | — | Depends on WP-17, WP-15h, WP-18a/b, and on **WP-52** (same file). Folds backlog **31** (major), **37**'s remaining half, **112**. Backlog 31 ruled answer (a), keep the table |
 | WP-58 | **Retrieval: the instrument first, then the query** | TODO | — | Depends on WP-16, WP-17, WP-15f. Folds backlog **16**, **15**, **12**'s surviving half, **13**, **14**, **61**; implements **Q58**. The negative corpus lands before any floor — a mechanism calibrated on a corpus that cannot falsify it is unreviewable |
 | WP-59 | **The git provider port: close a merge request, read a diff once, stop inventing diff stats** | TODO | — | Depends on WP-09, WP-26, WP-37, WP-38, WP-39, WP-35; rule 23. Folds backlog **51**, **64**, **65**, **113**. Cheap halves first: the fake's missing divergence, then the coalesced read, then the port additions. **Q92** decides the rework branch. **Refiner (session 6): also folds backlog 129** — no provider HTTP client sets `redirect: 'error'`, so WP-51's allow-list decides the first request and `fetch` follows a `3xx` to an undeclared host with the request's headers on it; one option and one case in each of five clients, **four of them outside this row's title and scheduled by no row at all** — take them, or decline them in the entry by number, and never close one of five (rule 63) |
@@ -23883,6 +24141,11 @@ the e2e rather than by mutation: `task_id: null` on `mr.merged`.
   its own entry, **74**, and this bullet's *"`questions.deadline_at` comes from the template's
   limit"* is **falsified**: `openQuestion` passes no deadline, so the column is **null** on every row
   and nothing arms the timeout at all. The overridability half is **Q78**.*
+  *WP-56 (session 8): the column **is** written now — from `pipeline.limits.question_timeout` on the
+  organisation's working calendar, in the transaction that stores the question — and a
+  `deadline.sweep` timer expires it, so both halves of the original sentence have flipped: the first
+  became true and "nothing sweeps it" became false. The dial's `questionTimeout` is still unread
+  (backlog 72); `AUTONOMY_POLICY_READERS` says so in its corrected `why`.*
 - **The task-scoped half of the settings audit has no reader** (WP-30; PROGRESS backlog **52**'s
   remainder). `GET /api/projects/:id/audit` serves the rows whose `params.project_id` is the
   project — the wizard's and the settings screens' writes — and a task command's row names a **task**
@@ -27681,3 +27944,209 @@ edited; 0040 states them stale); backlog 67/32/95 and the plan row (the orchestr
 
 Discovered work: backlog **159** above is now half-owned — its agent half is done here, its
 human-comment half is WP-46's; the prior-verdict-artifact half is unowned.
+
+#### WP-56
+
+**Round 1 (implementer, session 8).** Backlog **74**, **76** and **69**, in the row's eight criteria.
+Commit pending.
+
+**What shipped.** One mechanism for three deadlines. `packages/application/src/pipeline/deadlines.ts`
+is the arming handler `pipeline.deadlines` (TD-005 priority **15** — technical/02's catalogue already
+names a *"timer (15)"* consumer of `task.question.asked`) on `task.question.asked`,
+`task.approval.requested` and `task.taken_over`, and the `deadline.sweep` worker; the rules live in
+`deadline-rules.ts` so the three creation sites import no command module. `JOB_QUEUES.deadlineSweep`
+replaces TD-004's never-enqueued `questionTimeout`/`questionReminder`. The domain inputs
+`OpenQuestionInput`/`RequestApprovalInput` take a **required** `deadlineFrom: DeadlineRule` (a function
+of the instant the aggregate stores), so the next creation site must decide. `TaskRepository.takenOver`
+is the narrow store read (both stores, contract-tested); the workpad render and the timer both ask it.
+`loadServerConfig` composes the calendar (`ServerConfig.workingCalendar`) through
+`jobs.loadWorkingCalendar`, and `apps/server` hands it to `createPipelineRuntime`. No migration.
+
+**The criteria, where each is asserted** (`packages/application/src/pipeline/deadlines.test.ts` unless
+named).
+1. *"is written with the question, from questionTimeoutAt on the composed calendar, and armed after
+   commit"* — the row and the event agree, both equal `questionTimeoutAt(calendar, asked_at, …)`, one
+   timer at the deadline keyed `question:<id>:question_timeout`; *"never enqueues from inside the
+   handler"* drives the handler with collected `afterCommit` callbacks.
+2. *"expires nothing when the question was answered before the timer fired"* — the timer fires (the
+   queue empties) and the question stays `answered`, no `task.question.expired`, no escalation.
+3. *"expires on Monday and not on Saturday"* — asked Friday 2026-06-05 16:00 UTC, due Monday 16:00; a
+   fire at Saturday 16:00 and at Monday 15:59:59.999 re-validates into *not due* (question `open`, task
+   `waiting_answers`), the queue's own timer at 16:00 expires it: question `escalated`, task
+   `needs_human`, one `task.escalated` naming the question. A holiday case moves it to Tuesday; the
+   project's own `question_timeout` is read. Mutation (md5-confirmed revert): deleting the *not due*
+   branch of `expireTaskQuestion` fails the boundary case and the re-arm case.
+4. *"writes a plan approval’s deadline … and expires it on Monday, not Saturday"*, *"expires nothing
+   when a maintainer decided first"*, *"gives a budget approval the same deadline and the same
+   ending"* — approval `expired`/`deadline passed`, the `expired` decision value produced for the first
+   time, task `needs_human` with *"the approval expired"*.
+5. *"escalates after five working days, not five calendar days"* (Friday 16:00 → Friday 2026-06-12
+   16:00; Wednesday and one millisecond before do nothing), *"is cancelled by hand-back"*, and *"counts
+   from the take-over the task holds now"* (taken, handed back, taken again — the first timer re-arms
+   for the second take-over instead of expiring it).
+6. *"keeps the branch line on the render the take-over’s own escalation causes"* and *"drops the block
+   on the render after a hand-back"*. Mutation: the render put back on the payload fails both.
+7. `EVENT_CONSUMPTION`'s `task.question.expired` row names its producer (and `task.approval.decided`'s
+   `expired` value its); the two sentences are corrected (below).
+8. `POOL_RESERVATIONS.pipeline` 7 → **8**; `config.test.ts`' floor 21 → **22**. The sites, driven from
+   the constant's `git grep`: `config.ts`'s two docblocks (sum 22, shape `2N + 20`, 28 at N=4),
+   `.env.example` (sum and `APP_DB_POOL_MAX=23`), `db/config.ts` (`poolMax: 22` and its docblock),
+   `pipeline/runtime.ts` (**stops restating** — it said *6* at a real 7, backlog 22's site 5),
+   `test/e2e/support/instance.ts` and `pipeline.ts` — which now **derive** the floor from
+   `requiredPoolConnections(loadServerConfig(…))` instead of spelling `'21'`/`'22'` — and
+   `test/integration/db/schema-guard.integration.test.ts`, which spelled `'21'` too and which the
+   grep over `test/e2e` **missed**: the integration tier found it by refusing to boot
+   (`UndersizedPoolError … needs at least 22`), and it derives the same way now. So the sweep "driven
+   from the constant" was driven from a grep for the *value* in one directory, and the ninth site
+   was one directory over; `git grep -n APP_DB_POOL_MAX -- test apps scripts packages` is the query
+   that finds all of them. `UndersizedPoolError`'s message was already derived.
+
+**Decisions and assumptions.**
+- **The deadline is computed at creation and read off the row; the timer carries only
+  `(aggregate, id, kind)`.** Re-validation reads the question's/approval's `deadline_at` or recomputes
+  a take-over's from the `task.taken_over` event, so no due instant goes stale on the payload.
+- **The boundary is inclusive and early fires re-arm.** `expireTaskQuestion`/`expireTaskApproval` now
+  return `DeadlineOutcome` and refuse to expire before the stored deadline on this process's clock
+  (pg-boss honours `startAfter` on the database's). A re-arm is floored at `DEADLINE_REARM_FLOOR_MS`
+  (60 s) so two disagreeing clocks cannot spin the job; the cost is up to a minute late on a host
+  whose clock trails its database.
+- **Approvals use `pipeline.limits.question_timeout`**, the BD-006 amendment's *"read from the
+  template's limits, never from a new dial cell"*: no `approval_timeout` key.
+- **Take-over inactivity is measured from the take-over.** The platform observes nothing a person
+  does on a taken-over branch, so *5 working days of inactivity* is 5 working days after
+  `task.taken_over` with no hand-back since. `TAKE_OVER_INACTIVITY_TIMEOUT` is a constant: product/19
+  names no setting.
+- **"Still taken over" is the newest of `TAKE_OVER_BOUNDARY_EVENTS`** (taken over, handed back,
+  resumed, stage entered, completed, cancelled) being `task.taken_over` — **escalation is not a
+  boundary**, which is what keeps the block on the escalation's own render. The timer additionally
+  requires the task to be `paused`.
+- **`deadline.sweep` is subscribed unconditionally**, not behind `runsAgents` (TD-028 decision 5
+  gates agent runs; an expiry is a row write).
+- **`APP_WORKING_*` blank means absent** (the loader's existing rule); malformed values and an unknown
+  `TZ` are start-up refusals naming the variable, collected beside the other problems.
+- The old `taken_over_branch`/`taken_over_session` payload fields stay declared on
+  `PipelineOutboundData` so a job queued across an upgrade parses; nothing writes or reads them.
+
+**Tiers, each after a bounded load check (≤ 5 readings a minute apart, proceeding under 12).**
+`verify` PASS; `verify:integration` FAIL once (the schema-guard site in (8)), then PASS 48 files /
+529 tests — the store contract's take-over and deadline cases run against PostgreSQL (verbose run of
+`postgres-pipeline-store.integration.test.ts`: 64/64); `verify:e2e` PASS 38 files / 208 tests (once;
+the orchestrator's second run is owed). **Rule 71**: `node scripts/build-images.mjs base platform
+launcher`, then `node scripts/compose-stock-check.mjs` against `platform:dev` —
+**`PASS: compose-stock-check`**, every check `ok`, including one this row adds: *"the container has
+the working calendar `.env.example` documents"* (`printenv` in `app` answers `1,2,3,4,5` and
+`09:00-17:00`), so the new names reach the process on a stock `.env` and the instance boots on
+`APP_DB_POOL_MAX=23` at the new floor. Afterwards `docker ps` showed none of this checkout's
+containers and `docker volume ls | wc -l` was 102, the baseline.
+
+**TD-004 amendment — text for the orchestrator to apply** (append below the WP-04/WP-05 amendment):
+
+> **Amended at WP-56 (2026-09-26), on the architect's ruling. The two question timers are one queue.**
+> `question.timeout` and `question.reminder` were declared from WP-05 and enqueued by nothing. Every
+> deadline the platform holds a person to — a blocking question (BD-006), a plan or budget approval
+> (BD-006's Q95 amendment) and a taken-over task's 5 working days (product/19 §19) — rides **one**
+> queue, `deadline.sweep`, whose payload is `(aggregate, id, kind)`; `startAfter` is computed on the
+> working-day calendar, the job is armed after commit by a handler, and it re-validates on fire
+> against the aggregate. This is a deliberate deviation from the two named queues: a queue is a
+> worker is a pooled connection, so four timers on four queues would raise the pool floor by four
+> with nothing gained; one queue raises it by one (`POOL_RESERVATIONS.pipeline`). Reminders, when
+> built, are another `kind` on the same queue. Policy `stately` keyed per `(aggregate, id, kind)`.
+
+**Sentences falsified (rule 83).** *Changed*: `AUTONOMY_POLICY_READERS.questionTimeout.why` (*"written
+from the template's own limit and nothing sweeps it"*) and the WP-30 discovered-work bullet repeating it
+(annotated, above in this file); `EVENT_CONSUMPTION`'s `task.question.expired` and
+`task.approval.decided` rows (producer named); `JOB_QUEUES`' two timer entries and the port docblock's
+TD-004 summary and `startAfter` example; `working-calendar.ts`' header (queue names);
+`expireTaskQuestion`'s docblock (*"the `question.timeout` timer"*); `WorkpadView.takenOver` and
+`PipelineOutboundData.taken_over_*` (*"carried on the wake-up"*); `runtime.ts`' pool paragraph;
+`db/config.ts`' *"19 at WP-31"*; `.env.example`'s calendar section (*"It seeds the organisation
+setting"* — no organisation override is read on this build) and its worker list;
+`compose-config.e2e.test.ts`' no-reader list (the three names left it); `user-guide.md` §6 (the
+expired-question sentence was false until now; approvals and take-over added);
+technical/02's Question/Approval sections and catalogue rows (*"timer (15)"* added where it now
+exists); `operator-guide.md` §9 (the calendar). *Left, with why*: backlog **74**, **76**, **69** and the
+plan row (the orchestrator's to close); technical/03's `questions`/`approvals` column lists (true);
+the user guide's *"What is not on this screen — Take over"* (still true: no button).
+
+**Discovered work** (for the refiner; next free backlog number **161**, none fixed here — *161, 162 and 163 were folded back into this row at round 2; see below*).
+- **161 (small) — the deadline arming is a lost-wake-up site and not a row of `recovery/stranded.ts`.**
+  A process dying between the dispatch's commit and the `afterCommit` enqueue leaves an open question,
+  a pending approval or a paused take-over with no timer — the class WP-48 closed for five other sites.
+  The query is cheap for two kinds (`status = 'open'/'pending' and deadline_at < now - grace`, bounded
+  by the expiry itself) and needs the event-log read for the third.
+- **162 (small) — rows written before WP-56 have `deadline_at is null` and nothing will ever expire
+  them.** The timer settles a null deadline; a one-off backfill (compute from `asked_at`/`requested_at`
+  and arm) is a decision, not done here.
+- **163 (small) — two escalation briefs promise an action the state machines refuse.** An expired
+  question's brief says *"Answer it … and the task will carry on"*, but the question is `escalated` and
+  `answerQuestion` accepts only `open`; an expired approval's says *"Approve or reject it in the UI"*,
+  but `decideApproval` accepts only `pending`. Read off the tree (both pre-date WP-56, and WP-56 made
+  them reachable).
+- **164 (small) — the task read model and the workpad disagree on "taken over" after the timer
+  escalates.** `findTakenOver` (`apps/server/src/queries/pipeline-queries.ts`) publishes nothing unless
+  the task is `paused` and reads two event types; the workpad now reads `TAKE_OVER_BOUNDARY_EVENTS`
+  and keeps the block through `needs_human`. One projection should be the other's.
+- **165 (nit) — question reminders are still unbuilt** (technical/02 *"reminders at configurable
+  offsets"*): `questionReminderTimes` has no caller; it is one more `kind` on `deadline.sweep`, no pool
+  change, but needs the notify band's delivery.
+- **166 (nit) — the inbox shows a question's due time and never an approval's**
+  (`apps/web/src/features/inbox.tsx`), though every approval now has one.
+
+**Round 2 (implementer, session 8)** — the reviewer's round-1 findings, in order; the orchestrator
+folded backlog **161**, **162** and **163** into the row.
+1. **163 — the two briefs promise only what is accepted.** Measured before writing: an expired
+   question's task is `needs_human` and **`returnToStageCommand` is refused there**
+   (`needs_human → returned` is not an edge; my first draft offered it and the test caught it), so the
+   briefs name **retry the stage** and **cancel** only. The question brief: *"… can no longer be
+   answered. To go on, retry "refinement" from the task page — it runs again and asks afresh …"*. The
+   plan-approval brief: retry to have the plan written and asked for again; the **budget** brief says
+   the retry carries on without asking for the budget again (true: `latestOfKind` finds the expired
+   one), *"so retrying is the approval"*. The take-over brief's "hand it back" is performed too.
+   Tests (the `deadlines.test.ts` block *what an escalated wait tells a person to do, and that it
+   works* — cited by name only while the file is uncommitted, as the citation check reads git):
+   the old promises (`answerTaskQuestion`, `decideTaskApproval`, and a return) are **refused** on the
+   escalated task, and the named command is **accepted** — the question retried asks a second time,
+   the plan retried asks a second approval, the budget retry reaches `ready_for_merge` with one
+   approval, the escalated take-over handed back reaches `ready_for_merge`. No transition widened.
+2. **161 — the recovery row.** `packages/application/src/recovery/deadline.ts`, a site of
+   `recovery/stranded.ts` (report `site: 'deadline'`, `ended` = expired, `reEnqueued` = backfilled),
+   wired in `apps/server/src/pipeline.ts` with `recoveryAdapters.createPostgresDeadlineRecoveryStore()`.
+   It finds open questions / pending approvals of an unfinished task whose `deadline_at` passed more
+   than the grace ago, and paused tasks still taken over whose five working days did, and expires
+   each through **`settleDeadline`** — the job's own path, extracted from `deadlineSweepHandler`.
+   Bound: the expiry moves the row out of the query; a throwing expiry is an error log per pass. Both
+   directions asserted: a dropped arm is found 0 times at the deadline and expired at deadline + grace
+   (then found 0 again); a normally fired timer leaves the pass nothing (`found: 0`, one escalation);
+   a dropped take-over timer escalates.
+3. **162 — the backfill, counted from the pass.** An open/pending row with `deadline_at is null`
+   gets `questionDeadlineRule(calendar, project config)(now)` through a conditional write
+   (`where deadline_at is null and status = 'open'/'pending'`, so once) and is armed after it. Test:
+   a question asked Friday and backfilled on Wednesday 10:00 gets Thursday 10:00 and stays `open` —
+   from `asked_at` it would have been two days overdue — then expires at Thursday 10:00; a second
+   pass backfills nothing; an approval likewise. **Take-overs are the stated exception**: no column to
+   hold a backfilled deadline (a migration for a one-off), so one held more than five working days on
+   upgrade escalates on the first pass — which takes nothing from its holder. At the line in
+   `recovery/deadline.ts` and in the operator guide's §5 upgrade note.
+4. **The dependency question's deadline is asserted** (`dependency-gate.test.ts`: `deadline_at ===
+   questionTimeoutAt(calendar, asked_at)` and one timer armed for it); `dependency-gate.ts:37-39`'s
+   *"nothing arms the timer yet"* rewritten.
+5. **The take-over narrowing is stated truly**: `expireTakeOver`'s docblock now says the platform
+   *can* see pushes (`mr.updated`) and commands (`human_actions`) and that this timer reads neither,
+   and why; the brief says *"has not been handed back in 5 working days (pushes to the branch do not
+   count)"* instead of *"the platform has seen nothing since"*.
+6. `DEADLINE_REARM_FLOOR_MS`'s docblock: the floor bounds the **rate** (one fire a minute while the
+   skew lasts), not the count. `expireTaskQuestion`/`expireTaskApproval` settle on a **finished**
+   task (`done`/`cancelled`); the `deadlines.test.ts` block *a finished task owes nobody an answer* (question
+   and approval on a cancelled task, past the deadline: nothing expired).
+
+New integration file: `test/integration/recovery/deadline-recovery-store.integration.test.ts`
+(3/3 — overdue found and answered/current/cancelled not; undated found and backfilled once; a held
+task found, a handed-back and a merely paused one not). Unit: `deadlines.test.ts` also drives the site through `runStrandedRecovery` (reported as `deadline`, found 1, ended 1). `verify` PASS after round 2; the Docker tiers and the compose check are the orchestrator's.
+
+**Discovered work, updated.** 161, 162 and 163 are **folded and done** above. 164–166 stand.
+- **167 (small) — the take-over inactivity timer does not reset on activity the platform can see.**
+  `mr.updated` on the task's merge request and a `human_actions` row by the holder are both
+  observable; the timer counts from `task.taken_over` regardless, so a person pushing daily without
+  handing back is escalated after five working days. Which signals count is a product question
+  (`mr.updated` does not name the pusher). Recommendation: reset on `human_actions` by the user who
+  took the task over, and on `mr.updated` only if the provider names that user.
