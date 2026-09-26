@@ -405,6 +405,68 @@ describe('an approval is review activity', () => {
   });
 });
 
+/**
+ * PROGRESS backlog 88 (WP-61): somebody else's bot carries no platform marker, so until an operator
+ * could declare it a machine its comments opened and extended review windows like a person's.
+ */
+describe('an account an operator declared a machine', () => {
+  const withBot = (store: MemoryHumanTimeStore): void => {
+    store.seedIdentity({ provider: 'gitlab', externalId: 'renovate' }, null);
+  };
+
+  it('neither opens a window nor extends one, for a comment or an approval, and writes no zero row', async () => {
+    const projector = harness(withBot);
+    await projector.publish([
+      comment('2026-06-01T09:00:00.000Z', { externalId: 'renovate' }),
+      approved('2026-06-01T09:30:00.000Z', { externalId: 'renovate' }),
+      comment('2026-06-01T10:00:00.000Z', { externalId: 'renovate' }),
+      merged('2026-06-01T10:30:00.000Z'),
+    ]);
+    expect(projector.store.entries).toEqual([]);
+    expect(
+      projector.logs.filter((line) => line.message.includes('declared this account a machine')),
+    ).toHaveLength(3);
+  });
+
+  it('leaves a person’s window on the same merge request exactly as it was', async () => {
+    const projector = harness(withBot);
+    await projector.publish([
+      comment('2026-06-01T09:00:00.000Z', { externalId: 'ada' }),
+      comment('2026-06-01T09:20:00.000Z', { externalId: 'renovate' }),
+      comment('2026-06-01T09:45:00.000Z', { externalId: 'ada' }),
+      comment('2026-06-01T11:00:00.000Z', { externalId: 'renovate' }),
+    ]);
+    expect(projector.store.entries.map((entry) => [entry.externalAuthor, entry.minutes])).toEqual([
+      ['gitlab:ada', 45],
+    ]);
+  });
+
+  it('is an operator’s declaration and nothing else: a name that looks like a bot is still counted', async () => {
+    // No `[bot]` suffix is read, and no provider flag: a guess that is wrong here deletes a
+    // person's minutes (BD-022, Q10's argument against an email match).
+    const projector = harness();
+    await projector.publish([comment('2026-06-01T09:00:00.000Z', { externalId: 'renovate[bot]' })]);
+    expect(projector.store.entries.map((entry) => entry.externalAuthor)).toEqual([
+      'gitlab:renovate[bot]',
+    ]);
+  });
+
+  it('still refuses the platform’s own marked comment when that account is mapped to a person', async () => {
+    // The reason `PLATFORM_COMMENT_MARKERS` (domain `ask/ask.ts`) gives for keeping a marker check:
+    // it holds on the day somebody maps the platform's own bot account to a user.
+    const projector = harness((store) => {
+      store.seedIdentity({ provider: 'gitlab', externalId: 'agentic-bot' }, ADA);
+    });
+    await projector.publish([
+      comment('2026-06-01T09:00:00.000Z', {
+        externalId: 'agentic-bot',
+        text: '<!-- agentic:review:1 --> a finding',
+      }),
+    ]);
+    expect(projector.store.entries).toEqual([]);
+  });
+});
+
 describe('the review window’s two other shapes', () => {
   it('uses the task the payload already names, without asking the store', async () => {
     // `mr.review.comment` arrives from a normaliser with `task_id: null` — a webhook names a merge

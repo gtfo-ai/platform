@@ -148,6 +148,7 @@ describe('POST /api/org/identities, against the database it writes to', () => {
     expect(published).toMatchObject({
       provider: 'jira-cloud',
       external_id: 'acct-ada',
+      kind: 'person',
       user_id: ada,
       display_name: 'Ada Lovelace',
     });

@@ -900,6 +900,8 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     ids,
     clock: { now: () => clock.now() },
     unitOfWork: memory,
+    // WP-61: the project stream's sequence for the delivery-measure duties, from the same log.
+    eventStore: memory.store,
     baseUrl: 'https://agentic.example.test',
     /**
      * TD-012 step 2's stand-in for the handlers that **store** untrusted text (WP-40 round 2).

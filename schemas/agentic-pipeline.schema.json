@@ -148,6 +148,8 @@
         "task.lint.posted",
         "task.rebase.checked",
         "task.conflict.warned",
+        "task.mr.measured",
+        "ticket.bug.traced",
         "task.breakdown.decided",
         "run.created",
         "run.started",

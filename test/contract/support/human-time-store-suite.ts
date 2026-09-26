@@ -20,11 +20,11 @@ import { describe, expect, it } from 'vitest';
 export interface HumanTimeStoreSeed {
   /** A task of the suite's project, optionally owning the merge request with this `iid`. */
   task(input: { readonly id: Id; readonly mrIid?: number }): Promise<void>;
-  /** One `user_identities` row (WP-31's writer, in miniature). */
+  /** One `user_identities` row (WP-31's writer, in miniature); `userId: null` is a machine (WP-61). */
   identity(input: {
     readonly provider: string;
     readonly externalId: string;
-    readonly userId: Id;
+    readonly userId: Id | null;
   }): Promise<void>;
   /** A `questions` row with the instant it was asked. */
   question(input: {
@@ -97,24 +97,33 @@ export const runHumanTimeStoreContract = (harness: HumanTimeStoreHarness): void 
       }
     });
 
-    it('resolves a mapped provider account and answers null for an unmapped one', async () => {
+    it('resolves a mapped provider account, a declared machine, and an unmapped one', async () => {
       const world = await harness.create();
       try {
         const userId = nextId();
         await world.seed.user(userId);
         await world.seed.identity({ provider: 'gitlab', externalId: 'ada', userId });
+        await world.seed.identity({ provider: 'gitlab', externalId: 'ci-bot', userId: null });
         expect(
-          await world.store.resolveUser(world.tx, { provider: 'gitlab', externalId: 'ada' }),
-        ).toBe(userId);
+          await world.store.resolveAccount(world.tx, { provider: 'gitlab', externalId: 'ada' }),
+        ).toEqual({ kind: 'person', userId });
+        // WP-61, PROGRESS backlog 88: a declared machine is its own answer, not "unmapped" — the
+        // projector refuses its activity where it records an unmapped author's.
+        expect(
+          await world.store.resolveAccount(world.tx, { provider: 'gitlab', externalId: 'ci-bot' }),
+        ).toEqual({ kind: 'machine' });
         // The ordinary answer on a fresh instance: `user_identities` is empty until an operator
         // maps an account (WP-31), and an unmapped author is recorded rather than refused.
         expect(
-          await world.store.resolveUser(world.tx, { provider: 'gitlab', externalId: 'grace' }),
-        ).toBeNull();
+          await world.store.resolveAccount(world.tx, { provider: 'gitlab', externalId: 'grace' }),
+        ).toEqual({ kind: 'unmapped' });
         // Two providers can use the same account name; the key is the pair.
         expect(
-          await world.store.resolveUser(world.tx, { provider: 'github', externalId: 'ada' }),
-        ).toBeNull();
+          await world.store.resolveAccount(world.tx, { provider: 'github', externalId: 'ada' }),
+        ).toEqual({ kind: 'unmapped' });
+        expect(
+          await world.store.resolveAccount(world.tx, { provider: 'github', externalId: 'ci-bot' }),
+        ).toEqual({ kind: 'unmapped' });
       } finally {
         await world.cleanup();
       }

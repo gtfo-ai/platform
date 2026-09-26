@@ -175,7 +175,17 @@ export interface PipelineOutboundData {
      * ran on the merge request's **live** head — read from the provider here, outside every
      * transaction, because the handler that decided cannot (`ci-settle.ts`).
      */
-    | 'ci_settle';
+    | 'ci_settle'
+    /**
+     * WP-61, PROGRESS backlog 179: read the size of a merge request the platform merged, once, and
+     * record it as `task.mr.measured` — the delivery's own `diff_stats` is `null` on GitLab.
+     */
+    | 'merge_measure'
+    /**
+     * WP-61, PROGRESS backlog 114 (Q87): for a ticket the project calls a bug, run the link half of
+     * WP-34's resolver over its links and record `ticket.bug.traced` — found or not.
+     */
+    | 'bug_trace';
   readonly project_id: string;
   /** Absent for `intake_check`, which runs before there is a task. */
   readonly task_id?: string;
@@ -192,6 +202,8 @@ export interface PipelineOutboundData {
     readonly url: string;
   };
   readonly issue_type?: string | null;
+  /** `bug_trace` only (WP-61): the `ticket.created` instant the thirty days are measured back from. */
+  readonly filed_at?: string;
   readonly priority?: string | null;
   /** `workpad` only: the brief lives on the event, not on the task row. */
   readonly blocker_brief?: string;
@@ -237,12 +249,12 @@ export interface PipelineOutboundData {
    */
   readonly stage?: string;
   /**
-   * The three `review_only_*` duties and `close_superseded_mr` (WP-59): which merge request, and
-   * where it lives.
+   * The three `review_only_*` duties, `close_superseded_mr` (WP-59) and `merge_measure` (WP-61):
+   * which merge request, and where it lives.
    */
   readonly iid?: number;
   readonly mr_url?: string;
-  /** `close_superseded_mr` only: the repository path the ref recorded, when it recorded one. */
+  /** `close_superseded_mr` and `merge_measure`: the repository path the ref recorded, when it has one. */
   readonly mr_project_path?: string;
   /** `close_superseded_mr` only: the branch the reworked task continues on, named in the comment. */
   readonly new_branch?: string;

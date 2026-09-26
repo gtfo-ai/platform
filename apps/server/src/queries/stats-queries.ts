@@ -1,11 +1,11 @@
 /**
  * The rows `GET /api/org/stats` is folded from (WP-41, product/19 §10).
  *
- * Ten reads and no arithmetic worth the name: every ratio, cap, mean and stated absence is
+ * Fourteen reads and no arithmetic worth the name: every ratio, mean and stated absence is
  * `./stats-metrics.ts`, which needs no database to reach. The split is `human-time-summary.ts`'s
  * and is what lets the definitions be asserted in the unit tier and the SQL in the integration one.
  *
- * ## Two of the ten read a projection this build writes; eight read rows that already existed
+ * ## Two read a projection this build writes, five read the event log, the rest read rows that existed
  *
  * `stats_task_delivery` and `stats_event_daily` (migration 0034) are the statistics projector's,
  * and they hold the two kinds of fact whose only other record was an event. Everything else is read
@@ -13,6 +13,24 @@
  * `cost_entries`, `kb_proposals`, and since WP-57 `run_context_pack` joined to `artifacts` —
  * because a rollup that copied those would be a second number to keep in step with the first
  * (standing rule 41).
+ *
+ * **Five read `events` directly** (WP-61), and each is a question a counter folded from one event
+ * at a time cannot answer, because it compares two events: distinct conflict overlaps (the same
+ * pair warned at two gate entries is one overlap, PROGRESS backlog 180), a lint followed by an edit
+ * within 48 h (backlog 186), a bug traced to a merge that was delivered within the thirty days
+ * before it (backlog 114), the first measurement of each merge (backlog 179), and the approvals
+ * that touched a review window (backlog 188).
+ *
+ * **What bounds each, read per statement rather than claimed for all** (review round 1, backlog
+ * 194). Every one is limited to one event type by `events_type_occurred_at_idx`. Beyond that: the
+ * lint fold and the merge measurements carry a sargable instant window both ways
+ * ({@link eventInstantWindow}) — measured on the lint read, whose plan went from an `Append` over
+ * every partition with `type` as the only index condition to one partition with `occurred_at` in
+ * the index condition (PROGRESS, WP-61 round 2); the defect trace has a lower bound only (a trace
+ * may land after the range ends); **the overlaps read has an upper bound only and scans the type's
+ * history before it**, because "first warned" needs every earlier warning; and the approval and
+ * edit sub-reads are correlated on the outer row's instants, which bound the index. None has a
+ * projection's constant cost; a type with millions of rows would want one.
  *
  * ## The day is cut in the database, in the organisation's zone
  *
@@ -33,6 +51,7 @@ import { resolveBudgetTimezone } from '@platform/application';
 import { db as dbAdapters } from '@platform/infrastructure';
 import { sql } from 'drizzle-orm';
 import type {
+  BugTraceRow,
   CostDayRow,
   CounterRow,
   DeliveredTaskRow,
@@ -40,12 +59,20 @@ import type {
   HumanMinutesRow,
   KbProposalRow,
   KbUsageRow,
+  LintEditRow,
+  LocRow,
+  OverlapRow,
   QuestionRow,
   ResolvedRange,
   StartedTaskRow,
   StatsSources,
+  WithheldReviewMinutes,
 } from './stats-metrics.js';
-import { REVIEWER_DAY_CAP_MINUTES } from './stats-metrics.js';
+import {
+  DEFECT_ESCAPE_WINDOW_DAYS,
+  LINT_EDIT_WINDOW_HOURS,
+  LINT_IMPROVEMENT_FIELDS,
+} from './stats-metrics.js';
 
 const { organizations } = dbAdapters.schema;
 
@@ -92,19 +119,79 @@ interface RangeBounds {
   readonly until: string;
   readonly timezone: string;
   readonly projectId: string | null;
+  /**
+   * The instant the answer is computed at — the route's clock, injected so a test can pin it. Only
+   * the lint fold reads it: a lint whose 48 h have not yet run out is in neither side (see there).
+   */
+  readonly asOf: string;
 }
 
 const boundsOf = (
   range: ResolvedRange,
   timezone: string,
   projectId: string | null,
+  asOf: string,
 ): RangeBounds => {
   const [year, month, day] = range.to.split('-').map(Number);
   const until = new Date(Date.UTC(year ?? 1970, (month ?? 1) - 1, (day ?? 1) + 1))
     .toISOString()
     .slice(0, 10);
-  return { from: range.from, until, timezone, projectId };
+  return { from: range.from, until, timezone, projectId, asOf };
 };
+
+/**
+ * The **instant** bounds of a range, widened by a day on each side, as constants on the column —
+ * the sargable half of every read of the event log (WP-61 review round 1).
+ *
+ * A filter written as an expression on `occurred_at` — `(occurred_at at time zone $tz)::date`, or
+ * `occurred_at + interval <= $asOf` — can neither prune `events`' monthly partitions nor bound the
+ * `(type, occurred_at)` index, so the read scans the type's whole history (measured: the plan before
+ * this line appended every partition and the index condition was `type` alone). The civil-day filter
+ * stays beside this one and decides the bucket exactly; this one only says where to look, and a day
+ * of margin each side covers every UTC offset (±14 h).
+ */
+const eventInstantWindow = (column: string, bounds: RangeBounds) => sql`
+  ${sql.raw(column)} >= ((${bounds.from}::date - 1)::timestamp at time zone 'UTC')
+  and ${sql.raw(column)} < ((${bounds.until}::date + 1)::timestamp at time zone 'UTC')
+`;
+
+/**
+ * `human_time_entries h` was written for an account an operator has **since** declared a machine
+ * (WP-61, PROGRESS backlog 88).
+ *
+ * The projector refuses a declared machine's activity from the day it is declared; this is the
+ * other half, for the rows it wrote **before** — the `handler_executions` claim makes a replay a
+ * no-op for those events, so they would otherwise stay in every figure for the whole range. Matched
+ * on the account key the projector stores (`"<provider>:<external id>"`, `externalAuthorKey`).
+ */
+const MACHINE_AUTHORED = sql`exists (
+  select 1 from user_identities ui
+   where ui.kind = 'machine'
+     and h.external_author = ui.provider || ':' || ui.external_id
+)`;
+
+/**
+ * A **review** window an `mr.approved` touched — withheld from the published reviewer minutes
+ * until `docs/TODO.md`'s real-GitLab check of the approval `user` is taken (PROGRESS backlog 188).
+ *
+ * The projector folds an approval into the approver's window (WP-60), so a window's minutes cannot
+ * be split into "from comments" and "from the approval"; what can be said is whether an approval
+ * by the window's account, in the window's project, landed inside its span — and every such window
+ * is withheld **whole**. Deliberately not narrowed to the task's merge request: the task's
+ * `mr_ref` can name a later merge request than the one the approval was on (a rework), and
+ * matching on it would **publish** a window this rule exists to withhold. The residual runs the
+ * safe way: a window is withheld when its reviewer approved some other merge request of the project
+ * during it — an under-count, stated in the metric.
+ */
+const APPROVAL_TOUCHED = sql`(h.kind = 'review' and exists (
+  select 1 from events e
+   where e.type = 'mr.approved'
+     and e.occurred_at >= h.started_at
+     and e.occurred_at <= coalesce(h.ended_at, h.started_at)
+     and e.payload ->> 'project_id' = t.project_id::text
+     and (e.payload -> 'approver' ->> 'provider') || ':' || (e.payload -> 'approver' ->> 'external_id')
+         = h.external_author
+))`;
 
 /**
  * `where` on a civil-day column derived from a `timestamptz`, plus the optional project filter.
@@ -199,7 +286,8 @@ const deliveredTasks = async (
            (select count(*) from task_stages s where s.task_id = t.id and s.outcome = 'returned')
              as returns,
            (select count(*) from human_time_entries h
-             where h.task_id = t.id and h.kind = 'review') as human_review_entries,
+             where h.task_id = t.id and h.kind = 'review'
+               and not ${MACHINE_AUTHORED}) as human_review_entries,
            (select count(*) from questions q where q.task_id = t.id) as questions,
            (select coalesce(sum(c.usd), 0) from cost_entries c where c.task_id = t.id) as cost_usd,
            t.estimate_usd,
@@ -332,41 +420,311 @@ const questionLatency = async (
 };
 
 /**
- * Human minutes per civil day and kind — with PROGRESS backlog **89**'s cap applied **here**.
+ * Human minutes per civil day and kind, and the review minutes withheld from them.
  *
- * The projector caps eight hours per calendar day *per entry*, which is stateless and replayable
- * and is not what *"capped at 8 h per calendar day"* means once a figure sums across tasks. So the
- * inner query groups by `(identity, day, kind)` and clamps, and the outer one sums the clamped
- * values. The identity is `coalesce(user_id::text, external_author)`: an unmapped reviewer has a
- * provider account to be capped by, which is what migration 0025's column exists for. An entry with
- * **neither** — which no producer writes — would collapse every such row onto one bucket, so it is
- * given its own key by `id` rather than being merged into a cap nobody owns.
+ * **No second cap.** product/19 §16's eight hours per calendar day are applied **per review
+ * window** (per entry) by the projector, and that is the definition this figure publishes (WP-61
+ * criterion 3, PROGRESS backlog 89): one person can be credited more than eight hours in a day in
+ * the sum — two tasks, or one task in two windows a gap over 2 h apart — and the metric says so. WP-41 had applied a second cap here, over
+ * `(user or account, day, kind)`; it was removed rather than kept beside the per-entry reading,
+ * because two caps under one definition made the figure answer neither.
+ *
+ * Two exclusions, both stated in the metric: rows written for an account since declared a machine
+ * ({@link MACHINE_AUTHORED}) are **dropped** — they are not human time at all — and review windows
+ * an approval touched ({@link APPROVAL_TOUCHED}) are **withheld**: kept out of `minutes` and summed
+ * separately, so the metric can say how much it is not publishing and why.
  */
 const humanMinutes = async (
   database: Database,
   bounds: RangeBounds,
-): Promise<readonly HumanMinutesRow[]> => {
+): Promise<{
+  readonly rows: readonly HumanMinutesRow[];
+  readonly withheld: WithheldReviewMinutes;
+}> => {
   const { rows } = await database.execute<{
     day: string;
     kind: string;
-    minutes: string | number;
+    minutes: string | number | null;
+    withheld_minutes: string | number | null;
+    withheld_entries: string | number;
   }>(sql`
-    select day, kind, sum(capped) as minutes
+    select day, kind,
+           sum(minutes) filter (where not withheld) as minutes,
+           sum(minutes) filter (where withheld) as withheld_minutes,
+           count(*) filter (where withheld) as withheld_entries
       from (
         select ${civilDay('h.started_at', bounds)} as day,
                h.kind as kind,
-               least(sum(coalesce(h.minutes, 0)), ${REVIEWER_DAY_CAP_MINUTES}) as capped
+               coalesce(h.minutes, 0) as minutes,
+               ${APPROVAL_TOUCHED} as withheld
           from human_time_entries h
           join tasks t on t.id = h.task_id
          where ${dayFilter('h.started_at', bounds, 't.project_id')}
-         group by 1, 2, coalesce(h.user_id::text, h.external_author, h.id::text)
-      ) capped_per_identity
+           and not ${MACHINE_AUTHORED}
+      ) entries
      group by day, kind
+  `);
+  let withheldMinutes = 0;
+  let withheldEntries = 0;
+  const published: HumanMinutesRow[] = [];
+  for (const row of rows) {
+    withheldMinutes += number(row.withheld_minutes);
+    withheldEntries += number(row.withheld_entries);
+    published.push({ day: row.day, kind: row.kind, minutes: number(row.minutes) });
+  }
+  return { rows: published, withheld: { minutes: withheldMinutes, entries: withheldEntries } };
+};
+
+/**
+ * product/16's *"concurrent-task overlaps"* as **distinct overlaps**, not comparisons (WP-61,
+ * PROGRESS backlog 180).
+ *
+ * `task.conflict.warned` is appended at every gate entry that re-finds an overlap, and since WP-59
+ * for both orders of the pair, so the counter the projector keeps counts **comparisons** — a pair
+ * waiting through five default-branch moves counted ten. An overlap is one **unordered pair of
+ * tasks at one pair of revisions**: the two events one comparison appends share its cause event, so
+ * they are grouped on `(cause, lower task id, higher task id)` to recover both sides' head shas, and
+ * the overlap is the distinct `(lower, higher, lower's head, higher's head)`. The same pair at the
+ * same revisions compared again is the same overlap; a push to either side is a new one — the
+ * refiner's `(task, other, head sha)`, taken from both sides. It is counted on the day it was
+ * **first** warned, so it is in exactly one bucket, and one first warned before the range is not in
+ * it. A comparison whose peer got no event (the peer had finished, or had no merge request) has a
+ * `null` on that side, and repeats of it still collapse onto one.
+ */
+const overlaps = async (
+  database: Database,
+  bounds: RangeBounds,
+): Promise<readonly OverlapRow[]> => {
+  const { rows } = await database.execute<{ day: string; count: string | number }>(sql`
+    with sides as (
+      select e.cause_event_id as cause,
+             least(e.payload ->> 'task_id', e.payload ->> 'other_task_id') as lo,
+             greatest(e.payload ->> 'task_id', e.payload ->> 'other_task_id') as hi,
+             case when e.payload ->> 'task_id' < e.payload ->> 'other_task_id'
+                  then e.payload -> 'mr' ->> 'head_sha' end as head_lo,
+             case when e.payload ->> 'task_id' > e.payload ->> 'other_task_id'
+                  then e.payload -> 'mr' ->> 'head_sha' end as head_hi,
+             e.occurred_at
+        from events e
+       where e.type = 'task.conflict.warned'
+         -- An **upper** bound only, and deliberately: an overlap is counted on the day it was
+         -- *first* warned, so whether a warning inside the range is a first one needs every earlier
+         -- warning of the pair — the full lookback, which no lower bound may cut. Nothing after
+         -- the range can make a key's first warning earlier, so the upper bound is exact.
+         and e.occurred_at < ((${bounds.until}::date + 1)::timestamp at time zone 'UTC')
+         ${bounds.projectId === null ? sql`` : sql`and e.payload ->> 'project_id' = ${bounds.projectId}`}
+    ),
+    comparisons as (
+      select lo, hi, max(head_lo) as head_lo, max(head_hi) as head_hi, min(occurred_at) as at
+        from sides
+       group by cause, lo, hi
+    ),
+    distinct_overlaps as (
+      select min(at) as first_at
+        from comparisons
+       group by lo, hi, head_lo, head_hi
+    )
+    select ${civilDay('first_at', bounds)} as day, count(*) as count
+      from distinct_overlaps
+     where (first_at at time zone ${bounds.timezone})::date >= ${bounds.from}::date
+       and (first_at at time zone ${bounds.timezone})::date < ${bounds.until}::date
+     group by 1
+  `);
+  return rows.map((row) => ({ day: row.day, count: number(row.count) }));
+};
+
+/**
+ * product/16's lines changed per merged merge request, from `task.mr.measured` (WP-61, PROGRESS
+ * backlog 179).
+ *
+ * **The first measurement per cause event** — the `mr.merged` the `merge_measure` job was woken by —
+ * so a job redelivered after its append committed (a crash before the ack, an expiry mid-read)
+ * appends a second event and is still one merge here. That is why this is a read and not a counter
+ * the statistics projector folds: an additive counter cannot tell a second measurement of one merge
+ * from a second merge. A merge request reopened and merged again has a second `mr.merged`, and is
+ * two merges. `diff_stats: null` is counted as **unmeasured**, never as zero lines.
+ *
+ * Bounded both ways by {@link eventInstantWindow}: a redelivery follows its first append by the
+ * job's retry delay, far inside the day of margin, so the window cannot split a pair.
+ */
+const locMeasures = async (database: Database, bounds: RangeBounds): Promise<readonly LocRow[]> => {
+  const { rows } = await database.execute<{
+    day: string;
+    measured: string | number;
+    lines: string | number | null;
+    unmeasured: string | number;
+  }>(sql`
+    with firsts as (
+      select distinct on (coalesce(e.cause_event_id, e.id))
+             e.occurred_at,
+             e.payload ->> 'project_id' as project_id,
+             e.payload -> 'diff_stats' as stats
+        from events e
+       where e.type = 'task.mr.measured'
+         and ${eventInstantWindow('e.occurred_at', bounds)}
+       order by coalesce(e.cause_event_id, e.id), e.occurred_at, e.position
+    )
+    select ${civilDay('m.occurred_at', bounds)} as day,
+           count(*) filter (where jsonb_typeof(m.stats) = 'object') as measured,
+           sum(case when jsonb_typeof(m.stats) = 'object'
+                    then (m.stats ->> 'insertions')::bigint + (m.stats ->> 'deletions')::bigint
+               end) as lines,
+           count(*) filter (where jsonb_typeof(m.stats) is distinct from 'object') as unmeasured
+      from firsts m
+     where ${dayFilter('m.occurred_at', bounds, 'm.project_id::uuid')}
+     group by 1
   `);
   return rows.map((row) => ({
     day: row.day,
-    kind: row.kind,
-    minutes: number(row.minutes),
+    measured: number(row.measured),
+    lines: number(row.lines),
+    unmeasured: number(row.unmeasured),
+  }));
+};
+
+/**
+ * product/18:60's *"tickets improved after lint (edited within 48 h)"* — the fold of
+ * `ticket.updated` over `task.lint.posted` (WP-61, PROGRESS backlog 186).
+ *
+ * A lint counts as **improved** when an update to the same ticket (project, provider and key)
+ * arrived after it and within {@link LINT_EDIT_WINDOW_HOURS} hours, **named a field the lint is
+ * about** — {@link LINT_IMPROVEMENT_FIELDS} in the provider's changelog — and, when the lint
+ * recorded one, carried a provider `updated_at` later than the baseline the linter read. Three
+ * filters, each with its reason:
+ *
+ *  - **the field filter** is what keeps the platform's own status-mapping transition — which the
+ *    provider reports as an update authored by the binding's account — out of "improved", with a
+ *    rank change, a sprint move and a watcher. An **editor** filter was the other option and is not
+ *    available: `ticket.updated` carries no editor. So an edit of the summary or description by
+ *    anyone counts, and a status move by anyone does not;
+ *  - **the baseline** drops a delivery that arrives late for an edit made before the linter read
+ *    the ticket;
+ *  - **the window has to have closed**: a lint posted less than 48 h before the answer is computed
+ *    is in **neither** side, because counting it as "not improved yet" would make the last two days
+ *    of every chart fall.
+ *
+ * Bucketed by the lint's day. An update with no changelog (`changed_fields: []`) never counts — the
+ * list is empty rather than invented, and "we do not know what changed" is not "the description".
+ */
+const lintEditsSql = (bounds: RangeBounds) => {
+  const fields = sql.join(
+    LINT_IMPROVEMENT_FIELDS.map((field) => sql`${field}`),
+    sql`, `,
+  );
+  return sql`
+    select ${civilDay('l.occurred_at', bounds)} as day,
+           count(*) as linted,
+           count(*) filter (where exists (
+             select 1 from events u
+              where u.type = 'ticket.updated'
+                and u.occurred_at > l.occurred_at
+                and u.occurred_at <= l.occurred_at + make_interval(hours => ${LINT_EDIT_WINDOW_HOURS}::int)
+                and u.payload ->> 'project_id' = l.payload ->> 'project_id'
+                and u.payload -> 'ticket' ->> 'provider' = l.payload -> 'ticket' ->> 'provider'
+                and u.payload -> 'ticket' ->> 'key' = l.payload -> 'ticket' ->> 'key'
+                and exists (
+                  select 1 from jsonb_array_elements_text(u.payload -> 'changed_fields') as f(name)
+                   where lower(f.name) in (${fields})
+                )
+                and (l.payload ->> 'ticket_updated_at' is null
+                     or (u.payload ->> 'updated_at')::timestamptz
+                        > (l.payload ->> 'ticket_updated_at')::timestamptz)
+           )) as improved
+      from events l
+     where l.type = 'task.lint.posted'
+       and ${eventInstantWindow('l.occurred_at', bounds)}
+       and l.occurred_at <= ${bounds.asOf}::timestamptz - make_interval(hours => ${LINT_EDIT_WINDOW_HOURS}::int)
+       and ${dayFilter('l.occurred_at', bounds, "(l.payload ->> 'project_id')::uuid")}
+     group by 1
+  `;
+};
+
+/**
+ * The lint fold's statement for a range, exported so the integration tier can take its `EXPLAIN`
+ * (WP-61 review round 1: whether the log read is bounded by the index and the partitions).
+ */
+export const lintEditsQuery = (
+  range: ResolvedRange,
+  options: { readonly timezone: string; readonly projectId: string | null; readonly asOf: string },
+) => lintEditsSql(boundsOf(range, options.timezone, options.projectId, options.asOf));
+
+const lintEdits = async (
+  database: Database,
+  bounds: RangeBounds,
+): Promise<readonly LintEditRow[]> => {
+  const { rows } = await database.execute<{
+    day: string;
+    linted: string | number;
+    improved: string | number;
+  }>(lintEditsSql(bounds));
+  return rows.map((row) => ({
+    day: row.day,
+    linted: number(row.linted),
+    improved: number(row.improved),
+  }));
+};
+
+/**
+ * product/16's defect escape, from `ticket.bug.traced` (WP-61, PROGRESS backlog 114, Q87).
+ *
+ * One row per civil day a bug was **filed** on: how many bug tickets the platform traced, how many
+ * of those carried a merge-request link it could resolve (the coverage's numerator), and how many
+ * resolved to a merge request **the platform delivered** within {@link DEFECT_ESCAPE_WINDOW_DAYS}
+ * days before the bug was filed — a delivery being a `stats_task_delivery` row, the same instant
+ * every delivery metric counts by, on a `mode = 'normal'` task.
+ *
+ * A ticket traced twice (a duplicate wake-up) is one bug: its **first** trace is the one read. The
+ * thirty days are measured back from the trace's `filed_at` (the `ticket.created` instant) and
+ * never forward, so the merge request that *fixes* a bug — merged after it was filed, and the one
+ * a ticket most often links to — is never counted as the one it escaped from.
+ */
+const bugTraces = async (
+  database: Database,
+  bounds: RangeBounds,
+): Promise<readonly BugTraceRow[]> => {
+  const { rows } = await database.execute<{
+    day: string;
+    bugs: string | number;
+    linked: string | number;
+    escaped: string | number;
+  }>(sql`
+    with traces as (
+      select distinct on (e.payload ->> 'project_id', e.payload -> 'ticket' ->> 'provider',
+                          e.payload -> 'ticket' ->> 'key')
+             (e.payload ->> 'filed_at')::timestamptz as filed_at,
+             e.payload ->> 'project_id' as project_id,
+             e.payload ->> 'outcome' as outcome,
+             e.payload ->> 'task_id' as task_id
+        from events e
+       where e.type = 'ticket.bug.traced'
+         -- A **lower** bound only: a trace is appended after the ticket.created it follows, so a
+         -- bug filed in the range has its trace at or after the range's start. It may be appended
+         -- after the range's end (a retried job, a range ending today), so no upper bound. The
+         -- first-trace rule is unaffected: every duplicate of a bug in range is after its filing.
+         and e.occurred_at >= ((${bounds.from}::date - 1)::timestamp at time zone 'UTC')
+       order by e.payload ->> 'project_id', e.payload -> 'ticket' ->> 'provider',
+                e.payload -> 'ticket' ->> 'key', e.occurred_at, e.position
+    )
+    select ${civilDay('tr.filed_at', bounds)} as day,
+           count(*) as bugs,
+           count(*) filter (where tr.outcome = 'linked') as linked,
+           count(*) filter (where tr.outcome = 'linked' and exists (
+             select 1 from stats_task_delivery d
+               join tasks t on t.id = d.task_id
+              where d.task_id::text = tr.task_id
+                and t.mode = 'normal'
+                and d.merged_at <= tr.filed_at
+                and d.merged_at >= tr.filed_at - make_interval(days => ${DEFECT_ESCAPE_WINDOW_DAYS}::int)
+           )) as escaped
+      from traces tr
+     where ${dayFilter('tr.filed_at', bounds, 'tr.project_id::uuid')}
+     group by 1
+  `);
+  return rows.map((row) => ({
+    day: row.day,
+    bugs: number(row.bugs),
+    linked: number(row.linked),
+    escaped: number(row.escaped),
   }));
 };
 
@@ -500,15 +858,20 @@ const stageReturns = async (
  *
  * They are independent reads of independent tables and none of them is a write, so they are issued
  * together and the pool's own limit is what bounds them (`POOL_RESERVATIONS`). A statistics request
- * that serialised ten reads would hold a connection for their sum, which is the shape that makes
+ * that serialised thirteen reads would hold a connection for their sum, which is the shape that makes
  * a dashboard tab feel like an outage on a busy instance.
  */
 export const readStatsSources = async (
   database: Database,
   range: ResolvedRange,
-  options: { readonly timezone: string; readonly projectId: string | null },
+  options: {
+    readonly timezone: string;
+    readonly projectId: string | null;
+    /** The instant the answer is computed at (the lint fold's closed-window rule). */
+    readonly asOf: string;
+  },
 ): Promise<StatsSources> => {
-  const bounds = boundsOf(range, options.timezone, options.projectId);
+  const bounds = boundsOf(range, options.timezone, options.projectId, options.asOf);
   const [
     started,
     delivered,
@@ -520,6 +883,10 @@ export const readStatsSources = async (
     proposals,
     usage,
     stages,
+    overlapRows,
+    locRows,
+    lintRows,
+    bugRows,
   ] = await Promise.all([
     startedTasks(database, bounds),
     deliveredTasks(database, bounds),
@@ -531,6 +898,10 @@ export const readStatsSources = async (
     kbProposals(database, bounds),
     kbUsage(database, bounds),
     stageReturns(database, bounds),
+    overlaps(database, bounds),
+    locMeasures(database, bounds),
+    lintEdits(database, bounds),
+    bugTraces(database, bounds),
   ]);
   return {
     startedTasks: started,
@@ -539,9 +910,14 @@ export const readStatsSources = async (
     cost,
     estimatedSpend: estimated,
     questions,
-    humanMinutes: minutes,
+    humanMinutes: minutes.rows,
+    withheldReviewMinutes: minutes.withheld,
     kbProposals: proposals,
     kbUsage: usage,
     stageReturns: stages,
+    overlaps: overlapRows,
+    loc: locRows,
+    lintEdits: lintRows,
+    bugTraces: bugRows,
   };
 };

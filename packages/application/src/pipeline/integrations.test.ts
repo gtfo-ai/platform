@@ -98,6 +98,10 @@ const DOOR_SITES: Readonly<Record<string, number>> = {
   // binding, has no credential, and is the one outbound call the pipeline makes outside
   // `IntegrationActionExecutor` (`registry-metadata.ts` carries the measurement that decided it).
   'dependency-gate.ts': 1,
+  // WP-61's two duties: `merge_measure` resolves once for its one diff-stats read, `bug_trace`
+  // once for the ticket read and the link half's merge-request reads — neither inside a run, so
+  // neither holds a minted credential.
+  'delivery-measures.ts': 2,
   // WP-40's two duties: the spike's report before it comments, the epic split's creation before it
   // files the accepted children. One resolution each, and the second one files N tickets through it.
   'epic-split.ts': 2,

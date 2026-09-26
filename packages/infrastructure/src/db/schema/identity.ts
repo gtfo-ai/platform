@@ -98,10 +98,13 @@ export const userIdentities = pgTable(
   {
     provider: text('provider').notNull(),
     externalId: text('external_id').notNull(),
-    userId: uuid('user_id').notNull(),
+    /** `null` exactly when `kind` is `machine` (migration 0045's `user_identities_kind_has_user`). */
+    userId: uuid('user_id'),
     email: text('email'),
     displayName: text('display_name'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    /** WP-61, migration 0045: `person` or `machine` — an operator's declaration, never a guess. */
+    kind: text('kind').$type<'person' | 'machine'>().notNull().default('person'),
   },
   (table) => [primaryKey({ columns: [table.provider, table.externalId] })],
 );

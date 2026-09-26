@@ -146,9 +146,32 @@ describe('user_identities through drizzle', () => {
     expect(Object.keys(listed[0] ?? {})).toEqual([
       'provider',
       'external_id',
+      'kind',
       'user_id',
       'display_name',
       'created_at',
     ]);
+  });
+
+  it('declares a machine as the same row, with no user, and the table refuses the two apart', async () => {
+    // WP-61, migration 0045: `kind` follows from `user_id` in the writer, and the check constraint
+    // is what holds a writer that forgot — measured here rather than trusted.
+    const machine = await upsertIdentityMapping(drizzled, {
+      provider: 'gitlab',
+      externalId: 'renovate',
+      userId: null,
+      displayName: 'Renovate',
+    });
+    expect(machine).toMatchObject({ kind: 'machine', user_id: null });
+    await expect(
+      pool.query(
+        "insert into user_identities (provider, external_id, user_id, kind) values ('gitlab', 'half', null, 'person')",
+      ),
+    ).rejects.toThrow(/user_identities_kind_has_user/);
+    await expect(
+      pool.query(
+        "insert into user_identities (provider, external_id, user_id, kind) values ('gitlab', 'odd', null, 'robot')",
+      ),
+    ).rejects.toThrow(/user_identities_kind_known/);
   });
 });

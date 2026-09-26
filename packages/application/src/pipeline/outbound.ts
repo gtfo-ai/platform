@@ -52,6 +52,7 @@ import { runShadowReport, type ShadowReportOptions } from '../shadow/report.js';
 import { runCiSettle } from './ci-settle.js';
 import { runConflictWarning } from './conflict-warning.js';
 import { runCoverage } from './coverage.js';
+import { type DeliveryMeasuresOptions, runBugTrace, runMergeMeasure } from './delivery-measures.js';
 import { type DependencyGateOptions, runDependencyGate } from './dependency-gate.js';
 import { runBreakdownCreate, runSpikeReport } from './epic-split.js';
 import type { PipelineOutboundData } from './jobs.js';
@@ -69,7 +70,8 @@ export interface PipelineOutboundOptions
     Pick<DependencyGateOptions, 'dependencyMetadata'>,
     Pick<ShadowReportOptions, 'shadow'>,
     Pick<RiskRoutingOptions, 'identities'>,
-    Pick<RunCredentialRevocationOptions, 'runCredentials'> {
+    Pick<RunCredentialRevocationOptions, 'runCredentials'>,
+    Pick<DeliveryMeasuresOptions, 'eventStore'> {
   readonly unitOfWork: UnitOfWork;
   /** `APP_BASE_URL` — the link an ask's mirrored comment points back at. */
   readonly baseUrl: string;
@@ -150,6 +152,12 @@ export const pipelineOutboundHandler = (
         return;
       case 'close_superseded_mr':
         await runSupersededMergeRequestClose(options, data);
+        return;
+      case 'merge_measure':
+        await runMergeMeasure(options, data);
+        return;
+      case 'bug_trace':
+        await runBugTrace(options, data);
         return;
       default:
         logger.warn(

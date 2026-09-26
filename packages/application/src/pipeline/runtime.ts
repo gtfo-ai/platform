@@ -47,6 +47,7 @@ import { startDigestRuntime } from '../notify/digest.js';
 import { notifyHandlers } from '../notify/handlers.js';
 import type { NotifyOptions } from '../notify/options.js';
 import type { DependencyMetadataPort } from '../ports/dependency-metadata.js';
+import type { EventStore } from '../ports/event-store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type { JobWorker } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
@@ -58,6 +59,7 @@ import { type ShadowReportOptions, shadowHandlers } from '../shadow/report.js';
 import { conflictWarningHandlers } from './conflict-warning.js';
 import { coverageHandlers } from './coverage.js';
 import { deadlineArmingHandler, deadlineSweepHandler, declareDeadlineQueue } from './deadlines.js';
+import { deliveryMeasureHandlers } from './delivery-measures.js';
 import { dependencyGateHandlers } from './dependency-gate.js';
 import { epicSplitHandlers } from './epic-split.js';
 import {
@@ -196,6 +198,15 @@ export interface PipelineRuntimeOptions extends PipelineSagaOptions, NotifyOptio
    * given.
    */
   readonly redactor: SecretRedactor;
+  /**
+   * The project stream's next sequence (WP-61) — what the two delivery-measure duties append their
+   * events with (`delivery-measures.ts` says why the **project** stream).
+   *
+   * Required, for standing rule 31's reason (an optional collaborator is an absent one): the two
+   * handlers that enqueue those duties are registered unconditionally, so a runtime without it
+   * would enqueue wake-ups its own outbound worker could only fail.
+   */
+  readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
 }
 
 export interface PipelineRuntime {
@@ -319,6 +330,9 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
       // WP-60: two provider signals written down — an edited ticket marks the live tasks'
       // snapshots stale (Q61 (b)), and a push nobody on the platform made moves the recorded head.
       ...providerSignalHandlers(options),
+      // WP-61: the size of a merge the platform made, and the defect trace of a bug ticket — two
+      // measurements the delivery metrics need and no event carried (PROGRESS backlog 179, 114).
+      ...deliveryMeasureHandlers(options),
     ],
     executor,
     start: async () => {

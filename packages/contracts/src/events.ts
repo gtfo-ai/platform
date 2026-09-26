@@ -444,6 +444,72 @@ export const taskConflictWarnedEvent = defineEvent('task.conflict.warned', {
 });
 
 /**
+ * The size of a merge request **the platform merged**, read once from the provider when it merged —
+ * product/16's *"LOC added/removed/changed per merged MR … (from MR diff stats)"* (WP-61, PROGRESS
+ * backlog 179).
+ *
+ * Why an event of its own and not `mr.merged.diff_stats`: GitLab's merge-request events carry
+ * `diff_stats: null` on every delivery (its REST merge request has only `changes_count`, a string
+ * like `"5+"`), and the fake fills them (its divergence 17) — so a metric read off the delivery would
+ * be measured in every tier and null in production, backlog 113's trap. This is the answer of
+ * `getMergeRequestDiffStats` (WP-59's GraphQL `diffStatsSummary` read), made by the
+ * `pipeline.outbound` job `mr.merged` wakes, and it never reads the delivery's field.
+ *
+ * `diff_stats` is `null` when the provider answered no counts — recorded rather than skipped, so a
+ * merge the platform could not measure is **counted as unmeasured** instead of vanishing from the
+ * denominator, and never written as zeros (standing rule 16). Read at request time by the
+ * statistics query, which takes the **first** measurement per `cause_event_id` (the `mr.merged`),
+ * so a job redelivered after its append committed does not count one merge twice. Appended on the **project** stream
+ * (the task's own is live with the retrospective stage by then, and this event decides nothing about
+ * the task); `task_id` names which merge it is.
+ */
+export const taskMergeRequestMeasuredEvent = defineEvent('task.mr.measured', {
+  ...taskScoped,
+  mr: mergeRequestRefSchema,
+  diff_stats: diffStatsSchema.nullable(),
+});
+
+/**
+ * A ticket the project calls a **bug**, and the merge request its own links say it is about —
+ * product/16's defect-escape rate, **Q87** (WP-61, PROGRESS backlog 114).
+ *
+ * One event per bug ticket the platform is told about (`ticket.created` with an `issue_type` the
+ * project's own `templates` map routes to `bug`), whether or not anything was found, because the
+ * metric is published **only with its coverage** and the coverage is a count of these: how many bug
+ * tickets carried a merge-request link the platform could resolve at all.
+ *
+ * `found_by` is how the merge request was found, and only one way exists: **`ticket_link`**, the
+ * link half of WP-34's resolver (`shadow/human-merge-request.ts`) — a URL a human put on the ticket,
+ * parsed for its iid and accepted only when the provider's own `ref.url` for that iid matches it.
+ * The resolver's other half, the title scan, is the wrong half here (a bug ticket does not carry the
+ * key of the delivery ticket whose merge request caused it), and **adjacency is never a trace**: a
+ * merge followed by a bug within thirty days has no join key, and counting it would make the rate a
+ * statement about ticket volume (WP-61 criterion 6).
+ *
+ *  - `linked` — a link resolved to a merge request of this project; `mr` is it, and `task_id` is the
+ *    platform task whose merge request it is, or `null` for a human's.
+ *  - `no_link` — the ticket was read and none of its links resolved.
+ *  - `unreadable` — the ticket could not be read (no task-management binding, a provider refusal):
+ *    counted in the coverage's denominator, because a bug the platform could not look at is one it
+ *    could not attribute.
+ *
+ * `filed_at` is the `ticket.created` envelope's instant — when the platform learned of the bug —
+ * which is what the thirty days are measured back from. The link is read **once**, when the job
+ * fires after `ticket.created`; one a human adds later is not seen, and the coverage says so by
+ * counting that bug as unlinked. Appended on the **project** stream: a bug ticket usually has no
+ * task of its own.
+ */
+export const ticketBugTracedEvent = defineEvent('ticket.bug.traced', {
+  ...projectScoped,
+  ticket: ticketRefSchema,
+  filed_at: isoDateTimeSchema,
+  outcome: z.enum(['linked', 'no_link', 'unreadable']),
+  found_by: z.literal('ticket_link').nullable(),
+  mr: mergeRequestRefSchema.nullable(),
+  task_id: idSchema.nullable(),
+});
+
+/**
  * A human decided a proposed ticket breakdown — product/04:117's *"for the PM to accept"* (WP-40).
  *
  * One event per **decision**, not per child, because that is what a person did: a PM who accepts
@@ -647,6 +713,20 @@ export const ciPipelineFinishedEvent = defineEvent('ci.pipeline.finished', {
       log_ref: nonEmptyStringSchema.nullish(),
     }),
   ),
+  /**
+   * **No reader on this build — read this before reaching for it** (WP-61, PROGRESS backlog 94).
+   *
+   * The only git adapter this build ships writes `null` here on **every** delivery: GitLab's
+   * documented Pipeline Hook carries no coverage on `object_attributes` or `builds[]`
+   * (`gitlab/inbound.ts` says so at the line). `FakeGitProvider` writes a **number** — its declared
+   * divergence 13 — so a consumer built on this field is green in every tier and blank on every
+   * GitLab project. The read that has the number is `GitProviderPort.getPipelineStatus`, and the one
+   * consumer that wants it, the coverage delta, takes it from there and says why
+   * (`pipeline/coverage.ts`, WP-39: both sides of a delta from one instrument, and this field's
+   * `null` in production). A statistic needing coverage per merge request reads `tasks.coverage`,
+   * WP-39's record, never this. The field stays because it is the **port's** payload, not GitLab's:
+   * an adapter whose provider does publish coverage on its hook would fill it.
+   */
   coverage_pct: coveragePctSchema.nullish(),
 });
 
@@ -802,6 +882,8 @@ export const domainEventSchema = z.discriminatedUnion('type', [
   taskLintPostedEvent,
   taskRebaseCheckedEvent,
   taskConflictWarnedEvent,
+  taskMergeRequestMeasuredEvent,
+  ticketBugTracedEvent,
   taskBreakdownDecidedEvent,
   runCreatedEvent,
   runStartedEvent,

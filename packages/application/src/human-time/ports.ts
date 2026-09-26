@@ -29,6 +29,19 @@ export interface ExternalAccount {
   readonly externalId: string;
 }
 
+/**
+ * What `user_identities` says about a provider account (WP-61, PROGRESS backlog 88).
+ *
+ * Three answers, not two, because "nobody the operator has spoken about" and "a machine the operator
+ * declared" lead to different outcomes: an unmapped account's review minutes are recorded under its
+ * provider account (`external_author`), and a machine's are **refused** — never a zero-minute row
+ * (standing rule 16), because a row is a claim that somebody spent time.
+ */
+export type AccountResolution =
+  | { readonly kind: 'person'; readonly userId: Id }
+  | { readonly kind: 'machine' }
+  | { readonly kind: 'unmapped' };
+
 /** The identity a set of minutes is attributed to; both halves may be `null` (WP-31, Q10). */
 export interface HumanTimeIdentity {
   /** The platform user, when `user_identities` maps the account. */
@@ -73,12 +86,13 @@ export interface HumanTimeStore {
   ): Promise<Id | null>;
 
   /**
-   * The platform user a provider account is mapped to, or `null` (BD-006, Q10).
+   * What an operator has said about a provider account (BD-006, Q10, WP-61).
    *
    * One row of `user_identities`, which has had a writer since WP-31 and is empty until an operator
-   * maps an account — so `null` is the ordinary answer on a fresh instance, not an error.
+   * maps an account — so `unmapped` is the ordinary answer on a fresh instance, not an error. A
+   * `machine` is an operator's **declaration** (migration 0045), never an inference from a name.
    */
-  resolveUser(tx: Transaction, account: ExternalAccount): Promise<Id | null>;
+  resolveAccount(tx: Transaction, account: ExternalAccount): Promise<AccountResolution>;
 
   /**
    * Every `review` entry of a task, newest activity first.

@@ -69,9 +69,11 @@ describe('the memory human-time store', () => {
     ).rejects.toBeInstanceOf(HumanTimeStoreError);
   });
 
-  it('answers null for an unmapped account and for a project with no zone', async () => {
+  it('answers unmapped for an unmapped account and null for a project with no zone', async () => {
     const store = createMemoryHumanTimeStore();
-    expect(await store.resolveUser(TX, { provider: 'gitlab', externalId: 'ada' })).toBeNull();
+    expect(await store.resolveAccount(TX, { provider: 'gitlab', externalId: 'ada' })).toEqual({
+      kind: 'unmapped',
+    });
     expect(await store.organisationTimezone(TX, PROJECT)).toBeNull();
     // The two seams the pipeline harness uses are absent by default and answer null, rather than
     // throwing at a caller that has nothing to seed.

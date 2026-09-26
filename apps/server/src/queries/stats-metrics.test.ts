@@ -34,6 +34,11 @@ const EMPTY: StatsSources = {
   kbProposals: [],
   kbUsage: [],
   stageReturns: [],
+  withheldReviewMinutes: { minutes: 0, entries: 0 },
+  overlaps: [],
+  loc: [],
+  lintEdits: [],
+  bugTraces: [],
 };
 
 const fold = (sources: Partial<StatsSources> = {}, bucket: 'day' | 'week' | 'month' = 'day') =>
@@ -88,12 +93,12 @@ describe('the catalogue', () => {
     const absent = fold().metrics.filter((entry) => entry.absent !== null);
     // The anchor first (rule 4): a fold that produced no absent metrics would pass the loop below
     // without asserting anything.
+    // `defect_escape` is absent here because this fold traced no bug ticket — a **dynamic**
+    // absence (Q87), asserted on its own below; the other five are absent in every build.
     expect(absent.map((entry) => entry.id)).toEqual([
-      'tickets_edited_after_lint',
       'shadow_similarity',
       'clean_first_mr_rate_by_author',
       'readiness_attributed_returns',
-      'loc_changed',
       'defect_escape',
       'queue_wait_minutes',
       'total_cost_of_delivery',
@@ -160,9 +165,48 @@ describe('the catalogue', () => {
   it('carries the error directions of the reviewer figures rather than publishing them silently', () => {
     const caveats = metric(fold(), 'reviewer_minutes_per_delivered_task').caveats.join(' ');
     expect(caveats).toContain('backlog 88');
-    expect(caveats).toContain('backlog 90');
+    expect(caveats).toContain('backlog 188');
     expect(caveats).toContain('backlog 89');
     expect(caveats).toContain('do not cancel');
+  });
+
+  /**
+   * WP-61: the reviewer figures' **definitions** say what the caveats warn about — the per-task cap
+   * (criterion 3, backlog 89) and the check approval-derived minutes wait on (backlog 188), named
+   * in the metric's own definition rather than only in a caveat.
+   */
+  it('defines the day cap as per task and names the check approval minutes wait on', () => {
+    for (const id of ['reviewer_minutes_per_delivered_task', 'human_minutes'] as const) {
+      const entry = metric(fold(), id);
+      expect(entry.definition, id).toContain('docs/TODO.md');
+      expect(entry.definition, id).toContain('`approved`');
+      expect(entry.definition, id).toContain('machine');
+    }
+    expect(metric(fold(), 'reviewer_minutes_per_delivered_task').definition).toContain(
+      'per calendar day **per review window**',
+    );
+    expect(metric(fold(), 'reviewer_minutes_per_delivered_task').caveats.join(' ')).toContain(
+      'more than 8 h',
+    );
+  });
+
+  it('states the withheld approval windows as a count when there are any, and says nothing when there are none', () => {
+    const withheld = fold({ withheldReviewMinutes: { minutes: 95.5, entries: 3 } });
+    for (const id of ['reviewer_minutes_per_delivered_task', 'human_minutes'] as const) {
+      expect(metric(withheld, id).caveats.join(' '), id).toContain(
+        '3 review windows an approval touched, 95.5 minutes',
+      );
+    }
+    expect(metric(fold(), 'human_minutes').caveats.join(' ')).not.toContain('Withheld in');
+  });
+
+  it('no longer claims approving is invisible to first-pass acceptance', () => {
+    // Rule 83: the caveat said "approving produces no event on this build" from WP-41 until WP-61;
+    // `mr.approved` exists since WP-60 and opens a review window, so the sentence was false.
+    const caveats = metric(fold(), 'first_pass_acceptance').caveats.join(' ');
+    expect(caveats).not.toContain('produces no event');
+    expect(caveats).toContain('approved without commenting');
+    expect(caveats).toContain('not** first-pass');
   });
 });
 
@@ -241,6 +285,7 @@ describe('the arithmetic', () => {
         { day: '2026-06-02', metric: 'review_only.threads_dismissed', count: 2, total: 1 },
         { day: '2026-06-02', metric: 'rebase.resolved', count: 3, total: 0 },
         { day: '2026-06-02', metric: 'rebase.exhausted', count: 1, total: 0 },
+        // Counts comparisons; the metric counts distinct overlaps from `overlaps` (backlog 180).
         { day: '2026-06-02', metric: 'conflict.warned', count: 4, total: 12 },
         { day: '2026-06-02', metric: 'ticket_lint.posted', count: 6, total: 9 },
         // A counter no metric maps to is ignored rather than published under a guessed name.
@@ -251,8 +296,54 @@ describe('the arithmetic', () => {
     expect(metric(response, 'review_findings_dismissed').value).toBe(1);
     expect(metric(response, 'rebase_conflicts_resolved').value).toBe(3);
     expect(metric(response, 'rebase_conflicts_escalated').value).toBe(1);
-    expect(metric(response, 'concurrent_task_overlaps').value).toBe(4);
+    expect(metric(response, 'concurrent_task_overlaps').value).toBe(0);
     expect(metric(response, 'ticket_lint_comments').value).toBe(6);
+  });
+
+  it('counts concurrent-task overlaps from the distinct overlaps, not from the comparisons', () => {
+    const response = fold({
+      counters: [{ day: '2026-06-02', metric: 'conflict.warned', count: 10, total: 30 }],
+      overlaps: [
+        { day: '2026-06-02', count: 1 },
+        { day: '2026-06-04', count: 2 },
+      ],
+    });
+    expect(metric(response, 'concurrent_task_overlaps').value).toBe(3);
+    expect(metric(response, 'concurrent_task_overlaps').definition).toContain('Distinct overlaps');
+  });
+
+  it('folds lines changed per merged merge request, and never an unmeasured merge as zero lines', () => {
+    const response = fold({
+      loc: [
+        { day: '2026-06-02', measured: 2, lines: 150, unmeasured: 0 },
+        { day: '2026-06-03', measured: 0, lines: 0, unmeasured: 3 },
+      ],
+    });
+    const loc = metric(response, 'loc_changed');
+    expect(loc.absent).toBeNull();
+    // 150 lines over 2 measured merges — the three unmeasured ones are in neither side; folding
+    // them as zeros would have published 30.
+    expect(loc.value).toBe(75);
+    expect(loc.samples).toBe(2);
+    expect(loc.buckets.find((bucket) => bucket.start === '2026-06-03')?.value).toBeNull();
+    expect(loc.caveats.join(' ')).toContain('3 merged merge requests in the period had no counts');
+    // Nothing measured at all: no value, and no invented zero.
+    expect(metric(fold(), 'loc_changed').value).toBeNull();
+  });
+
+  it('folds tickets improved after lint over the lints whose window has closed', () => {
+    const response = fold({
+      lintEdits: [
+        { day: '2026-06-02', linted: 3, improved: 1 },
+        { day: '2026-06-03', linted: 1, improved: 1 },
+      ],
+    });
+    const edited = metric(response, 'tickets_edited_after_lint');
+    expect(edited.absent).toBeNull();
+    expect(edited.value).toBe(0.5);
+    expect(edited.samples).toBe(4);
+    expect(edited.definition).toContain('48 h');
+    expect(edited.caveats.join(' ')).toContain('platform’s own status transitions');
   });
 
   it('publishes the estimated share of spend from the ledger rather than from `tasks.cost_estimated`', () => {
@@ -348,7 +439,7 @@ describe('the CSV', () => {
     // One per metric plus one per stage — and *no* rows at all for an absent metric, which is what
     // keeps a spreadsheet from summing a cell the platform never measured.
     expect(totals.length).toBe(STATS_METRIC_IDS.length + 1);
-    expect(lines.filter((line) => line.startsWith('loc_changed,'))).toHaveLength(1);
+    expect(lines.filter((line) => line.startsWith('queue_wait_minutes,'))).toHaveLength(1);
     expect(lines.filter((line) => line.startsWith('tasks_delivered,'))).toHaveLength(8);
   });
 
@@ -358,11 +449,66 @@ describe('the CSV', () => {
     expect(absentRow).toBeDefined();
     // The value column is empty — never `0` — and the reason is in the row beside it.
     expect(absentRow).toContain(',,');
-    expect(absentRow).toContain('Unowned');
+    expect(absentRow).toContain('Q87');
     expect(csv()).toContain('"');
   });
 
   it('ends with a newline', () => {
     expect(csv().endsWith('\n')).toBe(true);
+  });
+});
+
+/**
+ * Q87's rule (WP-61 criteria 4 and 5, PROGRESS backlog 114): the defect-escape rate is published
+ * only with its coverage, and below the derived ½ floor it is absent with the coverage as the
+ * reason.
+ */
+describe('defect escape', () => {
+  const traced = (bugs: number, linked: number, escaped: number, day = '2026-06-04') => ({
+    day,
+    bugs,
+    linked,
+    escaped,
+  });
+
+  it('is absent, naming the coverage, when fewer than half the bug tickets could be attributed', () => {
+    const response = fold({
+      deliveredTasks: [delivered(), delivered()],
+      bugTraces: [traced(10, 4, 1)],
+    });
+    const defect = metric(response, 'defect_escape');
+    expect(defect.value).toBeNull();
+    expect(defect.buckets).toEqual([]);
+    expect(defect.absent?.reason).toContain('4 of 10 bug tickets');
+    expect(defect.absent?.reason).toContain('40 %');
+    expect(defect.absent?.reason).toContain('Coverage below the floor');
+  });
+
+  it('is published at exactly half, with the coverage as a caveat and the lower-bound warning', () => {
+    const response = fold({
+      deliveredTasks: [delivered(), delivered(), delivered(), delivered()],
+      bugTraces: [traced(2, 1, 1, '2026-06-02'), traced(2, 1, 0, '2026-06-05')],
+    });
+    const defect = metric(response, 'defect_escape');
+    expect(defect.absent).toBeNull();
+    // One escape over four deliveries: the numerator counted at filing, the denominator at merge.
+    expect(defect.value).toBe(0.25);
+    expect(defect.samples).toBe(4);
+    const caveats = defect.caveats.join(' ');
+    expect(caveats).toContain('2 of 4 bug tickets');
+    expect(caveats).toContain('50 %');
+    expect(caveats).toContain('lower bound');
+  });
+
+  it('is absent when no bug ticket was traced — "none filed" and "none seen" look the same', () => {
+    const defect = metric(fold({ deliveredTasks: [delivered()] }), 'defect_escape');
+    expect(defect.value).toBeNull();
+    expect(defect.absent?.reason).toContain('No bug ticket was traced');
+  });
+
+  it('defines itself by the ticket’s own link and never by timing or title', () => {
+    const { definition } = metric(fold(), 'defect_escape');
+    expect(definition).toContain('link on the bug ticket');
+    expect(definition).toContain('never by its title, never by timing');
   });
 });

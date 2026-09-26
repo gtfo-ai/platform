@@ -43,6 +43,12 @@
  *  - The platform's **own** merge-request comments. Every comment this platform posts carries an
  *    HTML marker (`<!-- agentic:… -->`, {@link PLATFORM_COMMENT_MARKER_PREFIX}), so a bot comment
  *    is not counted as a human reviewing. Two residuals, both stated at the constant.
+ *  - A comment or an approval by an account an operator **declared a machine** (WP-61, PROGRESS
+ *    backlog 88, `user_identities.kind`, migration 0045) — somebody else's bot, which carries no
+ *    marker. Declared, never guessed: nothing here reads a `[bot]` suffix or a provider's bot flag.
+ *    A bot declared **after** its activity was folded keeps the rows it already has — the
+ *    `handler_executions` claim makes a replay a no-op for them — and the statistics read excludes
+ *    those rows instead (`apps/server/src/queries/stats-queries.ts`).
  *  - An **expired** approval, and a decision with no decider: nobody spent ten minutes deciding.
  *  - A provider account id longer than {@link MAX_EXTERNAL_AUTHOR_CHARS}: refused rather than
  *    truncated, because truncation is many-to-one and would answer one reviewer's minutes with
@@ -101,8 +107,10 @@ export const HUMAN_TIME_PRIORITY = 230;
  * **Two residuals, in opposite directions.** A human who pastes this prefix into a review comment
  * loses that comment's contribution to their own window (they can only under-report themselves).
  * A *different* bot — CI, a dependency updater — has no marker, so its comments are counted as
- * human review activity; the platform cannot tell a robot from a person in somebody else's issue
- * tracker without being told which accounts are bots, which nothing in this build records.
+ * human review activity **until an operator declares its account a machine** (WP-61, PROGRESS
+ * backlog 88: `POST /api/org/identities` with `kind: "machine"`), after which the projector refuses
+ * them. The platform still cannot tell a robot from a person by itself, and does not try; an
+ * undeclared bot over-counts exactly as before.
  */
 export const PLATFORM_COMMENT_MARKER_PREFIX = '<!-- agentic:';
 
@@ -314,7 +322,20 @@ const foldAuthoredActivity = async (
     );
     return;
   }
-  const userId = await options.store.resolveUser(context.scope.tx, account);
+  const resolution = await options.store.resolveAccount(context.scope.tx, account);
+  if (resolution.kind === 'machine') {
+    // PROGRESS backlog 88 (WP-61): an operator declared this account a bot — CI, a dependency
+    // updater — so its comment or approval is not a person reviewing. Refused, not written as a
+    // zero-minute row: it neither opens a window nor extends one, and a row would be a claim that
+    // somebody spent time (standing rule 16). The marker check on comments stays beside this one,
+    // because it is the one that still holds for the platform's own bot account.
+    logger.debug(
+      { task_id: taskId, provider: account.provider },
+      'human time: an operator declared this account a machine, so its activity is not human review time; nothing is recorded',
+    );
+    return;
+  }
+  const userId = resolution.kind === 'person' ? resolution.userId : null;
   await foldReviewActivity(
     options,
     context,
@@ -332,7 +353,15 @@ const foldAuthoredActivity = async (
  * payload's `approved_at`: that is the provider's instant, `null` on a GitLab older than 18.10, and
  * two clocks inside one window would make its length depend on two machines agreeing. No marker
  * check: the platform never approves a merge request, so there is no bot approval of its own to
- * exclude — another bot's approval counts as a person's, backlog 88's residual.
+ * exclude — another bot's approval counts as a person's unless an operator declared its account a
+ * machine (WP-61), which {@link foldAuthoredActivity} refuses for approvals and comments alike.
+ *
+ * **Folded and stored, not published** (WP-61, PROGRESS backlog 188): which account GitLab names as
+ * the delivery's `user` for an approval, and whether `approved` arrives beside `approval`, are
+ * inferences from the documentation until `docs/TODO.md`'s real-GitLab check is taken. So the
+ * statistics read leaves every review window an approval touched **out** of the published reviewer
+ * minutes, and says so in the metric's definition; the rows stay, so the figure can include them
+ * the day the check answers without a replay.
  */
 const onApproved = async (
   options: HumanTimeProjectorOptions,

@@ -117,6 +117,14 @@ describe('the statistics endpoint, on numbers this instance really produced', ()
       'ready_for_merge',
       (task) => task.state === 'ready_for_merge',
     );
+    // WP-61, PROGRESS backlog 179 — the refiner's proving case: the merge event carries
+    // `diff_stats: null` (what GitLab sends; `merged` above) and the provider's **read** answers a
+    // number, so a `loc_changed` value can only have come from the read.
+    pipeline.git.setDiffStats({
+      project: GIT_PROJECT,
+      iid: pipeline.world.mr.iid,
+      stats: { files_changed: 2, insertions: 30, deletions: 10 },
+    });
     await pipeline.publish([merged(pipeline)]);
     await pipeline.settle('done', (task) => task.state === 'done');
 
@@ -126,6 +134,15 @@ describe('the statistics endpoint, on numbers this instance really produced', ()
     await pipeline.waitFor('the delivery to be projected', async () => {
       const rows = await pipeline.query<{ task_id: string }>(
         'select task_id from stats_task_delivery where task_id = $1',
+        [waiting.id],
+      );
+      return rows.length === 1;
+    });
+    // Rule 87 again: the measured size is the `task.mr.measured` the `merge_measure` job appends
+    // after its own provider read — neither `done` nor the delivery row implies it.
+    await pipeline.waitFor('the merged merge request’s size to be recorded', async () => {
+      const rows = await pipeline.query<{ type: string }>(
+        "select type from events where type = 'task.mr.measured' and payload ->> 'task_id' = $1",
         [waiting.id],
       );
       return rows.length === 1;
@@ -198,11 +215,16 @@ describe('the statistics endpoint, on numbers this instance really produced', ()
     // Every stage this template ran, with the returns it did not have.
     expect(body.returns_by_stage.map((stage) => stage.stage)).toContain('code_review');
     expect(body.returns_by_stage.every((stage) => stage.returns === 0)).toBe(true);
+    // Lines changed per merged merge request, from the provider's read (30 + 10 over one merge),
+    // though the merge event carried none (WP-61, backlog 179).
+    const loc = metricOf(body, 'loc_changed');
+    expect(loc.absent).toBeNull();
+    expect(loc.value).toBe(40);
     // …and the metrics this build cannot compute are absent with an owner, on a real answer rather
     // than only in the fold's unit test (standing rule 16).
-    const loc = metricOf(body, 'loc_changed');
-    expect(loc.value).toBeNull();
-    expect(loc.absent?.owner).toContain('WP-41');
+    const queueWait = metricOf(body, 'queue_wait_minutes');
+    expect(queueWait.value).toBeNull();
+    expect(queueWait.absent?.owner).toContain('task.dequeued');
 
     // `request` rather than `json`: the answer is `text/csv`, and reading it as JSON would be
     // asserting the wrong thing about the one route whose whole point is that it is not.
@@ -217,7 +239,7 @@ describe('the statistics endpoint, on numbers this instance really produced', ()
     );
     // An absent metric contributes a total row and no bucket rows, so nothing in a spreadsheet can
     // sum a cell the platform never measured.
-    expect(lines.filter((line) => line.startsWith('loc_changed,'))).toHaveLength(1);
+    expect(lines.filter((line) => line.startsWith('queue_wait_minutes,'))).toHaveLength(1);
   }, 240_000);
 
   it('counts the rebase gate’s settlement from the event the gate appended', async () => {

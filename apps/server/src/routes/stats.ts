@@ -59,7 +59,12 @@ export interface StatsQueries {
   readonly timezone: () => Promise<{ readonly timezone: string; readonly substituted: boolean }>;
   readonly sources: (
     range: ResolvedRange,
-    options: { readonly timezone: string; readonly projectId: string | null },
+    options: {
+      readonly timezone: string;
+      readonly projectId: string | null;
+      /** The instant the answer is computed at — the same clock `generated_at` publishes. */
+      readonly asOf: IsoDateTime;
+    },
   ) => Promise<StatsSources>;
 }
 
@@ -99,17 +104,20 @@ export const registerStatsRoutes = async (
       rollupDay(now(), zone.timezone),
     );
     const projectId = query.project_id ?? null;
+    // Read once: the lint fold's closed-window rule and `generated_at` must name the same instant.
+    const asOf = now();
     try {
       const sources = await options.queries.sources(range, {
         timezone: zone.timezone,
         projectId,
+        asOf,
       });
       return foldStats({
         range,
         timezone: zone.timezone,
         timezoneSubstituted: zone.substituted,
         projectId,
-        generatedAt: now(),
+        generatedAt: asOf,
         sources,
       });
     } catch (error) {

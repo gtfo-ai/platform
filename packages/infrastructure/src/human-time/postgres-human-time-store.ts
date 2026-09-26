@@ -81,12 +81,24 @@ export const createPostgresHumanTimeStore = (): HumanTimeStore => ({
     return (rows[0]?.id as Id | undefined) ?? null;
   },
 
-  resolveUser: async (tx: Transaction, account: ExternalAccount) => {
-    const { rows } = await sqlOf(tx).query<{ user_id: string }>(
-      'select user_id from user_identities where provider = $1 and external_id = $2',
+  /**
+   * One primary-key read. A row with `kind = 'machine'` carries no `user_id` by the table's own
+   * check (migration 0045), so the answer is decided by `kind` and never by a `null` alone — a
+   * `null` read as "unmapped" would record a declared bot's minutes under its account.
+   */
+  resolveAccount: async (tx: Transaction, account: ExternalAccount) => {
+    const { rows } = await sqlOf(tx).query<{ user_id: string | null; kind: string }>(
+      'select user_id, kind from user_identities where provider = $1 and external_id = $2',
       [account.provider, account.externalId],
     );
-    return (rows[0]?.user_id as Id | undefined) ?? null;
+    const row = rows[0];
+    if (row === undefined) {
+      return { kind: 'unmapped' as const };
+    }
+    if (row.kind === 'machine' || row.user_id === null) {
+      return { kind: 'machine' as const };
+    }
+    return { kind: 'person' as const, userId: row.user_id as Id };
   },
 
   reviewEntries: async (tx, taskId) => {

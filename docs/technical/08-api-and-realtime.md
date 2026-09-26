@@ -144,7 +144,12 @@
 > `(provider, external_id)`, so a retry creates nothing second, and a *different* body under a used
 > key is the re-mapping an operator performs when somebody leaves and must be allowed rather than
 > refused. Neither route has a screen, so both are asserted by hand — in `routes/org.test.ts` and,
-> for the auth, in the client census.
+> for the auth, in the client census. **Since WP-61** the same command also **declares an account a
+> machine** — `{provider, external_id, kind: "machine"}` with no `user_id` (PROGRESS backlog 88,
+> migration 0045): somebody else's bot, whose merge-request comments and approvals the human-time
+> projector then refuses rather than counting as a person reviewing, and which resolves to no user
+> anywhere else. It is an operator's statement, never an inference from a name; the published row
+> carries `kind` and a nullable `user_id`.
 > `POST /api/tasks/:id/ask` requires an `Idempotency-Key` — a repeat starts a second run the project
 > pays for — and asking is `task.ask` (**member**, the shipped capability map) while reading the
 > thread is `task.read` (viewer) and reading the task audit is `org.audit.read` (maintainer).

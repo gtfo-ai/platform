@@ -54,11 +54,21 @@ const SOURCES: StatsSources = {
   kbProposals: [{ day: '2026-06-03', applied: 3, rejected: 1 }],
   kbUsage: [{ day: '2026-06-03', eligible: 2, cited: 1 }],
   stageReturns: [{ stage: 'code_review', entries: 4, returns: 1, rate: null }],
+  withheldReviewMinutes: { minutes: 0, entries: 0 },
+  overlaps: [],
+  loc: [],
+  lintEdits: [],
+  bugTraces: [],
 };
 
 interface World {
   readonly app: FastifyInstance;
-  readonly asked: { range: ResolvedRange; projectId: string | null; timezone: string }[];
+  readonly asked: {
+    range: ResolvedRange;
+    projectId: string | null;
+    timezone: string;
+    asOf: string;
+  }[];
   role: UserRole;
   signedIn: boolean;
 }
@@ -92,7 +102,12 @@ const build = async (overrides: Partial<StatsQueries> = {}): Promise<World> => {
       projectRole: async () => null,
       timezone: async () => ({ timezone: 'UTC', substituted: false }),
       sources: async (range, options) => {
-        asked.push({ range, projectId: options.projectId, timezone: options.timezone });
+        asked.push({
+          range,
+          projectId: options.projectId,
+          timezone: options.timezone,
+          asOf: options.asOf,
+        });
         return SOURCES;
       },
       ...overrides,
@@ -151,11 +166,14 @@ describe('GET /api/org/stats', () => {
     expect(body.range.range).toBe('7d');
     expect(body.range.bucket).toBe('week');
     expect(body.project_id).toBe(PROJECT);
+    // `asOf` is the instant `generated_at` publishes: the lint fold's closed-window rule (WP-61)
+    // and the document must name one clock.
     expect(world.asked).toEqual([
       {
         range: { range: '7d', bucket: 'week', from: '2026-06-01', to: '2026-06-07' },
         projectId: PROJECT,
         timezone: 'UTC',
+        asOf: body.generated_at,
       },
     ]);
   });
@@ -228,6 +246,6 @@ describe('GET /api/org/stats.csv', () => {
     );
     // An absent metric has exactly one row — its total, carrying the reason — and no bucket rows,
     // so nothing in a spreadsheet can sum a cell the platform never measured.
-    expect(lines.filter((line) => line.startsWith('loc_changed,'))).toHaveLength(1);
+    expect(lines.filter((line) => line.startsWith('queue_wait_minutes,'))).toHaveLength(1);
   });
 });

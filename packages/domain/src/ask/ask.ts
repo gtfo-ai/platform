@@ -153,7 +153,8 @@ export type NotAnAskReason =
    * On a build where `user_identities` has no rows this is **every** ticket comment, and the change
    * that says so is the mapping endpoint beside this one (`POST /api/org/identities`): until an
    * operator maps the account, the fail-closed answer is that a stranger with a ticket-tracker
-   * login cannot spend a project's budget.
+   * login cannot spend a project's budget. An account an operator declared a **machine** (WP-61,
+   * migration 0045) lands here too: it maps to nobody on purpose, and the inbound directory skips it.
    */
   | 'unverified_identity';
 

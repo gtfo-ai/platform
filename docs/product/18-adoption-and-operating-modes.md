@@ -57,7 +57,7 @@ Every step is skippable; a "Finish later" leaves a checklist on the project page
 ## Metrics these features add (product/16)
 - Shadow mode: similarity to human MR (files overlap, size ratio), predicted cost per ticket.
 - Review-only: findings accepted (thread resolved with change) vs dismissed.
-- Ticket linter: tickets improved after lint (edited within 48 h), questions avoided downstream.
+- Ticket linter: tickets improved after lint (the summary or description edited within 48 h — the platform's own status transitions do not count, WP-61), questions avoided downstream.
 - Cost estimate accuracy (estimate vs actual, by size).
 - Human minutes per merged MR; total cost of delivery.
 - Rebase gate: conflicts resolved automatically vs escalated.

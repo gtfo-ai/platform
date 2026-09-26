@@ -225,6 +225,20 @@ const PAYLOADS: Record<DomainEventType, Record<string, unknown>> = {
     path_count: 1,
     truncated: false,
   },
+  'task.mr.measured': {
+    ...taskScoped,
+    mr,
+    diff_stats: { files_changed: 3, insertions: 40, deletions: 12 },
+  },
+  'ticket.bug.traced': {
+    ...projectScoped,
+    ticket,
+    filed_at: '2026-06-02T09:00:00.000Z',
+    outcome: 'linked',
+    found_by: 'ticket_link',
+    mr,
+    task_id: uuid(22),
+  },
   'run.created': {
     ...taskScoped,
     run_id: RUN,

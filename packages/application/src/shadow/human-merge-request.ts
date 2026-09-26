@@ -131,15 +131,22 @@ const isKeyChar = (char: string | undefined): boolean =>
 type GitReads = ReturnType<typeof gitReads>;
 type CallContext = Parameters<GitReads['mergeRequest']>[1];
 
-export const findHumanMergeRequest = async (
+/**
+ * **The link half on its own** — the first merge request a ticket's own links name, read from the
+ * provider and accepted only when the provider's `ref.url` for that iid matches the link (see the
+ * module docblock), or `null`.
+ *
+ * Exported for WP-61's defect-escape trace (PROGRESS backlog 114, `pipeline/delivery-measures.ts`),
+ * which wants this half and **only** this half: the title scan below finds a merge request that
+ * names a ticket's key, and a bug ticket does not carry the key of the delivery ticket whose merge
+ * request caused it — so the scan would attribute a bug to whatever merge request happened to
+ * mention the bug, which is usually its fix. Links are tried in the order the ticket lists them.
+ */
+export const findMergeRequestByTicketLinks = async (
   provider: { readonly reads: GitReads; readonly context: CallContext },
-  input: {
-    readonly ticketKey: string;
-    readonly links: readonly TicketLinkLike[];
-    readonly merged: readonly MergedMergeRequest[];
-  },
-): Promise<HumanMergeRequestMatch | null> => {
-  for (const link of input.links) {
+  links: readonly TicketLinkLike[],
+): Promise<Omit<HumanMergeRequestMatch, 'source' | 'candidates'> | null> => {
+  for (const link of links) {
     const url = link.url ?? null;
     if (url === null || url === '') {
       continue;
@@ -151,16 +158,25 @@ export const findHumanMergeRequest = async (
     const mr = await provider.reads.mergeRequest({ iid, url }, provider.context);
     if (mr === null || !sameUrl(mr.ref.url, url)) {
       // Either no git binding at all, or the iid resolved inside *this* project to a merge request
-      // that is not the one the link names. Both fall through to the scan.
+      // that is not the one the link names. Both fall through to the next link.
       continue;
     }
-    return {
-      mergeRequest: mr.ref,
-      source: 'ticket_link',
-      baseSha: mr.base_sha ?? null,
-      mergedAt: mr.merged_at ?? null,
-      candidates: 1,
-    };
+    return { mergeRequest: mr.ref, baseSha: mr.base_sha ?? null, mergedAt: mr.merged_at ?? null };
+  }
+  return null;
+};
+
+export const findHumanMergeRequest = async (
+  provider: { readonly reads: GitReads; readonly context: CallContext },
+  input: {
+    readonly ticketKey: string;
+    readonly links: readonly TicketLinkLike[];
+    readonly merged: readonly MergedMergeRequest[];
+  },
+): Promise<HumanMergeRequestMatch | null> => {
+  const linked = await findMergeRequestByTicketLinks(provider, input.links);
+  if (linked !== null) {
+    return { ...linked, source: 'ticket_link', candidates: 1 };
   }
 
   const matches = input.merged.filter(

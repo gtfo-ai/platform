@@ -1017,20 +1017,47 @@ export const taskAuditPageSchema = z.strictObject({ items: z.array(taskAuditEntr
  *
  * `admin`, because the mapping decides who may act as whom.
  */
-export const createIdentityMappingRequestSchema = z.strictObject({
+const identityAccountShape = {
   /** The provider id as the registry knows it (`jira-cloud`, `gitlab`, `slack`). */
   provider: nonEmptyStringSchema.max(64),
   /** The account's id **in the provider**, which is what a normaliser resolves against. */
   external_id: nonEmptyStringSchema.max(256),
-  user_id: idSchema,
   /** What the provider calls them, for an operator reading the list. Never used to resolve. */
   display_name: z.string().max(256).optional(),
-});
+} as const;
+
+/**
+ * The two statements an operator can make about a provider account (WP-61, PROGRESS backlog 88):
+ * it is a **person's** — `user_id` names them — or it is a **machine** — a CI bot, a dependency
+ * updater — which maps to nobody on purpose, so none of its merge-request activity is counted as a
+ * human reviewing and nothing it writes is acted on.
+ *
+ * `kind` may be omitted for a person, so every request WP-31's command accepted is still accepted
+ * and means what it meant. A machine carries **no** `user_id`: the union is two strict objects, so
+ * `{kind: 'machine', user_id: …}` is refused rather than half-honoured. It is declared, never
+ * inferred — the platform reads no `[bot]` suffix and no provider bot flag (BD-022, Q10).
+ */
+export const createIdentityMappingRequestSchema = z.union([
+  z.strictObject({
+    ...identityAccountShape,
+    kind: z.literal('person').optional(),
+    user_id: idSchema,
+  }),
+  z.strictObject({
+    ...identityAccountShape,
+    kind: z.literal('machine'),
+  }),
+]);
+
+export const identityKindSchema = z.enum(['person', 'machine']);
 
 export const identityMappingSchema = z.strictObject({
   provider: nonEmptyStringSchema,
   external_id: nonEmptyStringSchema,
-  user_id: idSchema,
+  /** `person` — `user_id` is set; `machine` — an operator declared the account a bot (WP-61). */
+  kind: identityKindSchema,
+  /** The platform user, or `null` exactly when `kind` is `machine`. */
+  user_id: idSchema.nullable(),
   display_name: z.string().nullable(),
   created_at: isoDateTimeSchema,
 });
@@ -1720,10 +1747,13 @@ export const statMetricSchema = z.strictObject({
   /**
    * What is known to be wrong with this number, in its own words.
    *
-   * Reviewer minutes carry three (PROGRESS backlog **88**, **89**, **90**) and they do not cancel:
-   * a bot that is not this platform inflates a review window, an approval without a comment is
-   * invisible, and the eight-hour day cap is applied per entry by the projector. A figure that
-   * published none of them would read as measured rather than as approximate.
+   * Reviewer minutes carry three (PROGRESS backlog **88**, **188**, **89**) and they do not cancel:
+   * a bot nobody declared a machine inflates a review window, every window an approval touched is
+   * withheld until the real-GitLab check of the approver is taken (an approval without a comment
+   * has been visible since WP-60, `mr.approved`), and the eight-hour day cap is applied per review
+   * window by the projector. A figure that published none of them would read as measured rather
+   * than as approximate. Since WP-61 some caveats also carry counts from the rows (the withheld
+   * windows, the defect rate's coverage).
    */
   caveats: z.array(nonEmptyStringSchema),
 });

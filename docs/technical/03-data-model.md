@@ -14,7 +14,7 @@
 ### Identity and configuration
 - `organizations(id, name, timezone, settings jsonb, created_at, updated_at)` — one row.
 - `users(id, email unique, name, role enum(admin|maintainer|member|viewer), password_hash nullable, status, created_at)`; `sessions(id, user_id, expires_at, …)`.
-- `user_identities(user_id, provider, external_id, email, display_name)` — PK `(provider, external_id)`.
+- `user_identities(user_id null, provider, external_id, email, display_name, **kind** text(person|machine))` — PK `(provider, external_id)`. A `person` row names its platform user; a `machine` row (WP-61, migration 0045) is an account an operator **declared** a bot and has `user_id null` by a check constraint — it resolves to nobody, so nothing it writes is acted on and its merge-request activity is never human review time. Declared, never inferred.
 - `projects(id, org_id, key unique, name, repo_url, default_branch, agentic_dir, knowledge_dir, config jsonb, config_source jsonb, config_hash, autonomy_level, autonomy_policies jsonb, readiness_level, status, created_at, updated_at)` — `autonomy_policies` is the materialised preset with its version (migration 0021, WP-30, BD-027:14); `null` means never materialised.
 - `project_members(project_id, user_id, role)`.
 - `integrations(id, org_id, type, provider, name, config jsonb, secret_ids uuid[], health jsonb, created_at, updated_at)`; `bindings(id, project_id, integration_id, config jsonb)`.

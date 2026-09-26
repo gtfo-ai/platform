@@ -152,19 +152,17 @@ export const createPostgresInboundAuditLog = (options: {
  * BD-006/Q10: an identity that is not here resolves to `null`, which every normaliser turns into
  * `verified: false` — recorded, never acted on.
  *
- * ## `user_identities` has a reader and **no writer**, and that is stated rather than implied
+ * ## Where the rows come from
  *
- * This query is the only thing in the tree that reads the table, and nothing anywhere inserts into
- * it (WP-32 looked: `git grep user_identities` finds this file, migration 0003 and the Drizzle
- * definition). So on a real instance the map is **empty**, every chat and ticket author is
- * unmapped, and every answer or approval that arrives from a provider is recorded as `ignored:
- * unmapped_identity` — which is the fail-closed direction and is why this is a gap rather than a
- * defect: nothing is *acted* on that should not be.
+ * WP-32 wrote this read with **no writer** anywhere in the tree, so on every instance the map was
+ * empty and every provider answer was `ignored: unmapped_identity`. WP-31's `POST
+ * /api/org/identities` is the writer now (an operator stating the mapping), and since WP-61 an
+ * operator may also declare an account a **machine** — a row with no `user_id`, which this read
+ * skips. The paragraph below is WP-32's reasoning for not writing one here, and it still holds.
  *
- * WP-32 did not write one, and the reason is worth reading before somebody adds an insert here.
  * A row maps a **provider account** to a **platform user**, and the platform can only learn that
- * pairing from one of three places: an operator saying so (an admin screen and an endpoint, which
- * no work package owns), an OAuth sign-in with the provider (TD-022 ships email and password), or
+ * pairing from one of three places: an operator saying so (WP-31's endpoint; there is still no
+ * screen), an OAuth sign-in with the provider (TD-022 ships email and password), or
  * a match by email through `CommunicationPort.resolveIdentity` — which has no caller either,
  * because this build starts no Socket Mode connection and the notification band is **outbound
  * only**. Writing rows from an email match without a human confirming it would also be the one
@@ -178,7 +176,10 @@ export const createPostgresIdentityDirectory = (options: {
 }): InboundIdentityDirectory => ({
   forProvider: async (provider: string): Promise<ReadonlyMap<string, Id>> => {
     const { rows } = await options.sql.query<{ external_id: string; user_id: string }>(
-      'select external_id, user_id from user_identities where provider = $1',
+      // `user_id is not null`: a **machine** (WP-61, migration 0045) maps to nobody on purpose, so
+      // it resolves exactly as an unmapped account does — `verified: false`, recorded, never acted
+      // on. It is the same answer the ask refusal (`unverified_identity`) then gives it.
+      'select external_id, user_id from user_identities where provider = $1 and user_id is not null',
       [provider],
     );
     return new Map(rows.map((row) => [row.external_id, row.user_id as Id]));

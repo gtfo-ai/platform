@@ -142,22 +142,27 @@ export const findProjectConfig = async (
 export interface IdentityMappingRow extends Record<string, unknown> {
   readonly provider: string;
   readonly external_id: string;
-  readonly user_id: string;
+  readonly kind: 'person' | 'machine';
+  /** `null` exactly for a `machine` (WP-61, migration 0045). */
+  readonly user_id: string | null;
   readonly display_name: string | null;
   readonly created_at: Date;
 }
 
-/** The four columns both functions publish; `email` is not one of them (see below). */
+/** The five columns both functions publish; `email` is not one of them (see below). */
 const IDENTITY_MAPPING_COLUMNS = {
   provider: userIdentities.provider,
   external_id: userIdentities.externalId,
+  kind: userIdentities.kind,
   user_id: userIdentities.userId,
   display_name: userIdentities.displayName,
   created_at: userIdentities.createdAt,
 } as const;
 
 /**
- * Maps a provider account to a platform user — the writer PROGRESS backlog **79** is about (WP-31).
+ * Maps a provider account to a platform user — the writer PROGRESS backlog **79** is about (WP-31) —
+ * or, since WP-61, declares it a **machine** (PROGRESS backlog 88), which is the same row with no
+ * user: re-declaring a person's account a machine, or the reverse, is the same upsert.
  *
  * An **upsert on the primary key** `(provider, external_id)`, because re-mapping an account to a
  * different person is the operation an operator actually performs when somebody leaves: an insert
@@ -192,21 +197,26 @@ export const upsertIdentityMapping = async (
   input: {
     readonly provider: string;
     readonly externalId: string;
-    readonly userId: string;
+    /** `null` declares the account a machine (WP-61): `kind` follows from it, never separately. */
+    readonly userId: string | null;
     readonly displayName: string | null;
   },
 ): Promise<IdentityMappingRow> => {
+  // One input decides both columns, so the row cannot be written half a person and half a machine;
+  // migration 0045's `user_identities_kind_has_user` would refuse it anyway, as a 500.
+  const kind = input.userId === null ? 'machine' : 'person';
   const rows = await database
     .insert(userIdentities)
     .values({
       provider: input.provider,
       externalId: input.externalId,
       userId: input.userId,
+      kind,
       displayName: input.displayName,
     })
     .onConflictDoUpdate({
       target: [userIdentities.provider, userIdentities.externalId],
-      set: { userId: input.userId, displayName: input.displayName },
+      set: { userId: input.userId, kind, displayName: input.displayName },
     })
     .returning(IDENTITY_MAPPING_COLUMNS);
   const row = rows[0];

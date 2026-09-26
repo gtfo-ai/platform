@@ -81,16 +81,18 @@ const STATS: OrgStatsResponse = {
       ],
     },
     {
-      id: 'loc_changed',
-      label: 'Lines changed per merged MR',
-      definition: 'LOC added/removed/changed per merged MR.',
-      unit: 'count',
+      // An absent metric of this build's (WP-61 made `loc_changed`, the one this used to be,
+      // computable — backlog 179).
+      id: 'queue_wait_minutes',
+      label: 'Queue wait',
+      definition: 'How long a task waited between being queued and being picked up.',
+      unit: 'minutes',
       value: null,
       samples: 0,
       buckets: [],
       absent: {
-        reason: 'The one git provider this build ships publishes no insertion/deletion counts.',
-        owner: 'Unowned — filed as discovered work by WP-41.',
+        reason: '`task.dequeued` is declared unconsumed and nothing projects it.',
+        owner: 'Nobody yet — a row that folds task.queued against task.dequeued owns it.',
       },
       caveats: [],
     },
@@ -153,13 +155,11 @@ describe('the statistics screen', () => {
     expect(text).toContain('no data in this range');
     // The absence, with its reason and its owner, in the section that exists for it.
     const absentSection = text.slice(text.indexOf('Not measured, and why'));
-    expect(absentSection).toContain('Lines changed per merged MR');
-    expect(absentSection).toContain('publishes no insertion/deletion counts');
-    expect(absentSection).toContain('Unowned');
+    expect(absentSection).toContain('Queue wait');
+    expect(absentSection).toContain('nothing projects it');
+    expect(absentSection).toContain('Nobody yet');
     // …and the absent metric is not drawn as a metric card, which would give it a value.
-    expect(text.slice(0, text.indexOf('Not measured, and why'))).not.toContain(
-      'Lines changed per merged MR',
-    );
+    expect(text.slice(0, text.indexOf('Not measured, and why'))).not.toContain('Queue wait');
   });
 
   it('shows the error directions of a figure that has them', async () => {

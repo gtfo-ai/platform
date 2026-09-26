@@ -80,9 +80,16 @@ runHumanTimeStoreContract({
           );
         },
         identity: async (input) => {
+          // A `null` user is a declared machine (WP-61, migration 0045): the `kind` column follows
+          // from it, and the table's check refuses the two written apart.
           await client.query(
-            'insert into user_identities (provider, external_id, user_id) values ($1, $2, $3)',
-            [input.provider, input.externalId, input.userId],
+            'insert into user_identities (provider, external_id, user_id, kind) values ($1, $2, $3, $4)',
+            [
+              input.provider,
+              input.externalId,
+              input.userId,
+              input.userId === null ? 'machine' : 'person',
+            ],
           );
         },
         question: async (input) => {

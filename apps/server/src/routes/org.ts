@@ -61,7 +61,9 @@ import { listInbox, listRunningAgents } from '../queries/pipeline-queries.js';
 export interface IdentityMappingRecord {
   readonly provider: string;
   readonly external_id: string;
-  readonly user_id: string;
+  /** WP-61, migration 0045: `machine` rows carry no `user_id` (the table's check says so). */
+  readonly kind: 'person' | 'machine';
+  readonly user_id: string | null;
   readonly display_name: string | null;
   readonly created_at: Date;
 }
@@ -85,10 +87,14 @@ export interface IdentityQueries {
    * 500 (`errors.ts` maps no driver code), and "no platform user has id …" is a client error.
    */
   readonly findUser: (userId: string) => Promise<{ readonly id: string } | null>;
+  /**
+   * `userId: null` declares the account a **machine** (WP-61, PROGRESS backlog 88) — one row, so an
+   * account is a person's or a machine and never both.
+   */
   readonly upsertMapping: (input: {
     readonly provider: string;
     readonly externalId: string;
-    readonly userId: string;
+    readonly userId: string | null;
     readonly displayName: string | null;
   }) => Promise<IdentityMappingRecord>;
   readonly listMappings: () => Promise<readonly IdentityMappingRecord[]>;
@@ -131,6 +137,7 @@ export interface OrgRoutesOptions {
 export const toWireIdentityMapping = (row: IdentityMappingRecord) => ({
   provider: row.provider,
   external_id: row.external_id,
+  kind: row.kind,
   user_id: row.user_id,
   display_name: row.display_name,
   created_at: row.created_at.toISOString() as IsoDateTime,
@@ -292,9 +299,9 @@ export const registerOrgRoutes = async (
     {
       preValidation: requirePermission(guard, 'org.users.manage'),
       schema: {
-        summary: 'Map a provider account to a platform user',
+        summary: 'Map a provider account to a platform user, or declare it a machine',
         description:
-          'PROGRESS backlog 79. Until a mapping exists, an author arriving from Jira, GitLab or Slack is `unmapped_identity` and nothing they write is ever acted on (BD-022, Q10) — a ticket comment cannot ask the task, answer a question or approve a plan. Upsert on `(provider, external_id)`: re-sending it moves the account to another person, which is what happens when somebody leaves. `email` is deliberately not taken: a match the platform performed itself is the route this endpoint exists to replace.',
+          'A `kind: "machine"` body with no `user_id` declares the account a bot — CI, a dependency updater — which maps to nobody on purpose: none of its merge-request activity is counted as human review time, and nothing it writes is acted on (WP-61, PROGRESS backlog 88). It is an operator\'s statement and is never inferred from a name or a provider flag. Otherwise: PROGRESS backlog 79. Until a mapping exists, an author arriving from Jira, GitLab or Slack is `unmapped_identity` and nothing they write is ever acted on (BD-022, Q10) — a ticket comment cannot ask the task, answer a question or approve a plan. Upsert on `(provider, external_id)`: re-sending it moves the account to another person, which is what happens when somebody leaves. `email` is deliberately not taken: a match the platform performed itself is the route this endpoint exists to replace.',
         tags: ['org'],
         body: createIdentityMappingRequestSchema,
         response: { 200: identityMappingSchema, 400: apiErrorSchema, 409: apiErrorSchema },
@@ -302,17 +309,23 @@ export const registerOrgRoutes = async (
     },
     async (request) => {
       const actor = actorOf(request);
+      const body = request.body;
+      // A **machine** names nobody (WP-61): there is no user to check, and the row's `user_id` is
+      // `null` on purpose — which the table's own check (`user_identities_kind_has_user`) holds.
+      const userId = body.kind === 'machine' ? null : body.user_id;
       // Checked here rather than left to the foreign key, because `user_id` is the whole point of
-      // the row and `23503` reaches a caller as a 500 (`errors.ts` maps no driver code).
-      const user = await options.identities.findUser(request.body.user_id);
-      if (user === null) {
-        throw new HttpError(409, 'unknown_user', `no platform user has id ${request.body.user_id}`);
+      // a person's row and `23503` reaches a caller as a 500 (`errors.ts` maps no driver code).
+      if (userId !== null) {
+        const user = await options.identities.findUser(userId);
+        if (user === null) {
+          throw new HttpError(409, 'unknown_user', `no platform user has id ${userId}`);
+        }
       }
       const row = await options.identities.upsertMapping({
-        provider: request.body.provider,
-        externalId: request.body.external_id,
-        userId: request.body.user_id,
-        displayName: request.body.display_name ?? null,
+        provider: body.provider,
+        externalId: body.external_id,
+        userId,
+        displayName: body.display_name ?? null,
       });
       // After the effect and only for an accepted one, which is `routes/commands.ts`'s rule: a
       // refused command leaves no row, so the count of rows is the count of things that happened.
@@ -322,8 +335,9 @@ export const registerOrgRoutes = async (
         params: {
           provider: row.provider,
           external_id: row.external_id,
+          kind: row.kind,
           user_id: row.user_id,
-          display_name_chars: (request.body.display_name ?? '').length,
+          display_name_chars: (body.display_name ?? '').length,
         },
         taskId: null,
       });
@@ -339,9 +353,9 @@ export const registerOrgRoutes = async (
       // role (admin) reads it, which is the same person who writes it.
       preHandler: requirePermission(guard, 'org.users.manage'),
       schema: {
-        summary: 'Every provider account mapped to a platform user',
+        summary: 'Every provider account mapped to a platform user or declared a machine',
         description:
-          '`display_name` is what the provider calls them and is never used to resolve anything — the mapping is `(provider, external_id) → user_id` and nothing else.',
+          '`display_name` is what the provider calls them and is never used to resolve anything — the mapping is `(provider, external_id) → user_id` and nothing else. A `machine` row has `user_id: null` (WP-61).',
         tags: ['org'],
         response: { 200: identityMappingListSchema },
       },

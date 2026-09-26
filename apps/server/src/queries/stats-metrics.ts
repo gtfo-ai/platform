@@ -20,12 +20,19 @@
  * export carries it too.
  *
  * **3. A number whose error direction is known says so.** `caveats` is not decoration: reviewer
- * minutes over-count by every robot that comments (PROGRESS backlog **88**), under-count by the
- * start of every review (there is no review-requested type; approving without commenting stopped
- * being an under-count at WP-60, backlog **90**), and rest on a cap the projector
- * applies per entry (backlog **89**, whose read-side half is applied here). The two errors run in
- * opposite directions and **do not cancel**, so publishing the figure silently would be publishing
- * a precision the platform does not have.
+ * minutes over-count by every robot nobody declared a machine (PROGRESS backlog **88**; since WP-61
+ * a declared one is refused), under-count by the start of every review (there is no
+ * review-requested type) and by every window an approval touched, which is withheld until the
+ * real-GitLab check backlog **188** names, and rest on a cap applied per review window (per entry) and
+ * nowhere else (backlog **89**, WP-61's ruling). The errors run in opposite directions and **do not
+ * cancel**, so publishing the figure silently would be publishing a precision the platform does not
+ * have.
+ *
+ * **4. A number published only with its coverage carries it, or is absent** (Q87). The defect-escape
+ * rate can see only the bugs whose own ticket links a merge request, so the count of those — out of
+ * all the bug tickets it traced — rides in its caveats, and below {@link DEFECT_COVERAGE_FLOOR} the
+ * rate is absent with the coverage as the reason. The catalogue's `caveats` and `absent` are the
+ * static half; {@link foldStats} adds the half only the rows can say.
  *
  * ## What is deliberately not here
  *
@@ -223,11 +230,57 @@ export interface QuestionRow {
   readonly minutes: number;
 }
 
-/** Human minutes, already bucketed per `(identity, civil day)` — see {@link REVIEWER_DAY_CAP}. */
+/**
+ * Human minutes per civil day and kind, as the projector capped them **per review window** (per entry) and
+ * with the two exclusions `stats-queries.ts` states: rows for a declared machine dropped, review
+ * windows an approval touched withheld ({@link WithheldReviewMinutes}).
+ */
 export interface HumanMinutesRow {
   readonly day: string;
   readonly kind: string;
   readonly minutes: number;
+}
+
+/** The review windows an approval touched, withheld from every published figure (backlog 188). */
+export interface WithheldReviewMinutes {
+  readonly minutes: number;
+  readonly entries: number;
+}
+
+/**
+ * Merged merge requests measured on a civil day (PROGRESS backlog 179), one per cause `mr.merged`:
+ * how many the provider answered counts for, their lines added plus removed, and how many it
+ * answered none for.
+ */
+export interface LocRow {
+  readonly day: string;
+  readonly measured: number;
+  readonly lines: number;
+  readonly unmeasured: number;
+}
+
+/** Distinct concurrent-task overlaps first warned on a civil day (PROGRESS backlog 180). */
+export interface OverlapRow {
+  readonly day: string;
+  readonly count: number;
+}
+
+/** Lints posted on a civil day whose 48 h have run out, and how many were followed by an edit. */
+export interface LintEditRow {
+  readonly day: string;
+  readonly linted: number;
+  readonly improved: number;
+}
+
+/**
+ * Bug tickets filed on a civil day (PROGRESS backlog 114, Q87): how many were traced, how many
+ * carried a resolvable merge-request link, and how many escaped a merge the platform delivered.
+ */
+export interface BugTraceRow {
+  readonly day: string;
+  readonly bugs: number;
+  readonly linked: number;
+  readonly escaped: number;
 }
 
 export interface KbProposalRow {
@@ -256,9 +309,14 @@ export interface StatsSources {
   readonly estimatedSpend: readonly EstimatedSpendRow[];
   readonly questions: readonly QuestionRow[];
   readonly humanMinutes: readonly HumanMinutesRow[];
+  readonly withheldReviewMinutes: WithheldReviewMinutes;
   readonly kbProposals: readonly KbProposalRow[];
   readonly kbUsage: readonly KbUsageRow[];
   readonly stageReturns: readonly StatStageReturn[];
+  readonly overlaps: readonly OverlapRow[];
+  readonly loc: readonly LocRow[];
+  readonly lintEdits: readonly LintEditRow[];
+  readonly bugTraces: readonly BugTraceRow[];
 }
 
 // ── The catalogue ────────────────────────────────────────────────────────────
@@ -283,22 +341,68 @@ interface MetricDefinition {
 }
 
 /**
- * product/19 §16's cap, applied here **a second time** — across tasks, per person, per civil day.
- *
- * PROGRESS backlog **89**: the projector applies the eight-hour cap *per entry*, which is right at
- * fold time (it is stateless, order-independent and therefore replayable) and is not what the
- * document's *"capped at 8 h per calendar day"* means once a figure sums across tasks. One person
- * reviewing three tasks on one day could otherwise be credited a day and a half. So the read caps
- * again, on the bucket key the projector cannot use — `(user_id or external_author, civil day)` —
- * and the metric says so in its own caveat rather than in a comment only this file's reader sees.
+ * The `docs/TODO.md` item every approval-derived review minute waits on (PROGRESS backlog 188),
+ * named once so the definition and the caveat cannot name two different checks.
  */
-export const REVIEWER_DAY_CAP_MINUTES = 8 * 60;
+const APPROVAL_CHECK =
+  '`docs/TODO.md`’s “Does a real GitLab send `approval` *and* `approved` for the last required approver, and is the delivery’s `user` the approver?”';
 
+/**
+ * product/19 §16's eight-hour cap is applied **per review window (per entry) per calendar day**, by the
+ * projector, and by nothing here (WP-61 criterion 3, PROGRESS backlog 89).
+ *
+ * WP-41 had capped a second time at read time, per person per day across tasks. The ruling for
+ * WP-61 is the other reading of *"capped at 8 h per calendar day"* — per entry, which is what the
+ * projector can do statelessly and replay exactly — and a figure capped both ways answers neither
+ * definition, so the read-side cap is gone and the residual is published instead: one person
+ * reviewing two tasks on one day can be credited more than eight hours in a sum across tasks.
+ */
 const REVIEWER_CAVEATS = [
-  'Over-counts: a bot that is not this platform — CI, a dependency updater — opens and extends a review window like a person, because nothing records which provider accounts are robots (PROGRESS backlog 88).',
-  'Under-counts: a review’s start is not seen — the event catalogue has no review-requested type, so a window opens at the first comment or approval rather than when the reviewer began reading — and a withdrawn approval is not read. Approving without commenting **does** count since WP-60 (`mr.approved`, PROGRESS backlog 90), dated by when the platform received it. The two errors run in opposite directions and do not cancel.',
-  'Capped twice: the projector caps 8 h per calendar day per entry, and this figure caps again per person per day **per kind** across tasks (PROGRESS backlog 89) — so one person reviewing and steering on the same day can be credited up to 16 h, which is exact for reviewer minutes and a stated over-count for the combined figure.',
+  'Over-counts: a bot that is not this platform — CI, a dependency updater — opens and extends a review window like a person unless an operator has declared its account a machine (`POST /api/org/identities` with `kind: "machine"`, PROGRESS backlog 88). A declared machine’s activity is refused by the projector and its earlier rows are left out of this figure; an undeclared one is counted. Nothing is inferred from an account’s name.',
+  `Under-counts: a review’s start is not seen — the event catalogue has no review-requested type, so a window opens at the first comment or approval rather than when the reviewer began reading. And every review window an approval touched is **withheld** from this figure until ${APPROVAL_CHECK} is answered (PROGRESS backlog 188): the approver’s identity is an inference from GitLab’s documentation, and a wrong one would credit the wrong reviewer. Withheld windows are stored, not discarded. The over- and under-counts run in opposite directions and do not cancel.`,
+  'Capped per review window: product/19 §16’s 8 h per calendar day is applied to each review window (one row of the projection) on its own, not per person — so one person can be credited more than 8 h in a day here, by reviewing two tasks, or one task in two windows separated by a gap over 2 h (PROGRESS backlog 89).',
 ] as const;
+
+/** product/18:60's *"edited within 48 h"*, in hours. */
+export const LINT_EDIT_WINDOW_HOURS = 48;
+
+/**
+ * The changelog fields an edit must name to count as *improving* a linted ticket (PROGRESS backlog
+ * 186), compared lower-cased. The linter reads a ticket's summary and description (`RefinedSpec`),
+ * so those are what an improvement changes; a status, rank, sprint or watcher change is not one —
+ * and the platform's own status-mapping transition is exactly such a change.
+ */
+export const LINT_IMPROVEMENT_FIELDS = ['summary', 'description'] as const;
+
+/** product/16's *"bugs filed against agent-merged MRs within 30 days"*, in days. */
+export const DEFECT_ESCAPE_WINDOW_DAYS = 30;
+
+/**
+ * The share of bug tickets that must carry a resolvable merge-request link before the defect-escape
+ * rate is published at all — **½, a chosen floor**, the product's rule (Q87, product/16). It is
+ * **not derived**: WP-61's criterion 5 asked for a floor derived in the change (rule 63), and
+ * nothing measured or modelled here produces ½ — this is a deviation, recorded in PROGRESS under
+ * WP-61, and the measurement that could replace the choice is `docs/TODO.md`'s open question.
+ *
+ * What the choice means, stated rather than presented as a derivation: of `B` bug tickets, `L`
+ * carried a link the platform resolved and `U = B − L` did not; the true number of escapes lies in
+ * `[E, E + U]` and the published figure is its **lower bound**, wrong in the direction that
+ * flatters the platform. ½ is the point where the seen bugs are at least as many as the unseen
+ * (`L ≥ U`) — a readable threshold, not a statistical one. A rate with **no** bug ticket behind it
+ * is absent too: "no bug was filed" and "no bug reached the platform" (a binding with no webhook,
+ * backlog 187) cannot be told apart.
+ *
+ * Two residuals the coverage does **not** see, stated at the number it gates:
+ *
+ *  - **a bug whose trace job exhausts its retries emits no `ticket.bug.traced`**, so it leaves the
+ *    denominator silently instead of counting as `unreadable` — the coverage is then overstated by
+ *    exactly those bugs. Recording the exhaustion would need a dead-letter hook on the outbound
+ *    queue that this build does not have for any duty; not done here;
+ *  - **a bug that links only its later fix counts as `linked`** — it raises the coverage — while its
+ *    origin is unknown: the thirty-day look-back keeps the fix out of the numerator, not out of the
+ *    coverage. So the coverage is an upper bound on "bugs whose origin the platform could see".
+ */
+export const DEFECT_COVERAGE_FLOOR = 0.5;
 
 /**
  * Every metric this endpoint publishes, in the order a screen reads them.
@@ -335,7 +439,7 @@ export const STATS_CATALOGUE: Readonly<Record<StatMetricId, MetricDefinition>> =
     unit: 'ratio',
     aggregation: 'ratio',
     caveats: [
-      'A reviewer who approved without commenting counts as first-pass acceptance, because approving produces no event on this build (PROGRESS backlog 90).',
+      'Under-counts: since WP-60 an approval opens a review window as a comment does (`mr.approved`, PROGRESS backlog 90), so a reviewer who approved without commenting makes the task **not** first-pass here, although nobody commented. A window of a declared machine account does not count (PROGRESS backlog 88); an undeclared bot’s does.',
     ],
   },
   clean_first_mr_rate: {
@@ -420,16 +524,14 @@ export const STATS_CATALOGUE: Readonly<Record<StatMetricId, MetricDefinition>> =
   },
   reviewer_minutes_per_delivered_task: {
     label: 'Reviewer minutes per delivered task',
-    definition:
-      'Human review minutes recorded in the period ÷ tasks delivered in the period (product/16). A review window runs from the first human merge-request comment to the merge or last activity, excluding gaps over 2 h (product/19 §16).',
+    definition: `Human review minutes recorded in the period ÷ tasks delivered in the period (product/16). A review window runs from the first human merge-request comment or approval to the merge or last activity, excluding gaps over 2 h, capped at 8 h per calendar day **per review window** (per entry; product/19 §16). Every window an approval touched is left out of the numerator until ${APPROVAL_CHECK} is answered (PROGRESS backlog 188); so are the windows of accounts an operator declared machines.`,
     unit: 'minutes',
     aggregation: 'ratio',
     caveats: REVIEWER_CAVEATS,
   },
   human_minutes: {
     label: 'Human minutes',
-    definition:
-      'All human minutes recorded in the period — review, question, approval and steer (product/19 §16). Published beside the cost figures and never added to them: no rate exists to convert one into the other (Q73).',
+    definition: `All human minutes recorded in the period — review, question, approval and steer (product/19 §16). Published beside the cost figures and never added to them: no rate exists to convert one into the other (Q73). Its review part excludes what reviewer minutes excludes: windows an approval touched, until ${APPROVAL_CHECK} is answered, and declared machine accounts.`,
     unit: 'minutes',
     aggregation: 'sum',
     caveats: REVIEWER_CAVEATS,
@@ -471,7 +573,7 @@ export const STATS_CATALOGUE: Readonly<Record<StatMetricId, MetricDefinition>> =
   concurrent_task_overlaps: {
     label: 'Concurrent-task overlaps',
     definition:
-      'Conflict warnings appended — one per ordered pair per comparison, and since WP-59 a comparison that finds an overlap appends both orders at once, so every warned pair counts twice per gate entry that compared it (product/16, PROGRESS backlog 65).',
+      'Distinct overlaps first warned in the period: one per unordered pair of tasks at one pair of revisions (product/16, PROGRESS backlog 180). The rebase gate warns again at every entry that re-finds an overlap, and for both tasks of the pair at once (PROGRESS backlog 65); those repeats are one overlap here. A push to either task’s branch that still overlaps is a new one. Counted on the day it was first warned.',
     unit: 'count',
     aggregation: 'sum',
   },
@@ -498,15 +600,15 @@ export const STATS_CATALOGUE: Readonly<Record<StatMetricId, MetricDefinition>> =
   },
   tickets_edited_after_lint: {
     label: 'Tickets improved after lint',
-    definition: 'product/18:60: “tickets improved after lint (edited within 48 h)”.',
+    definition:
+      'product/18:60’s “tickets improved after lint (edited within 48 h)”: lint comments whose ticket’s summary or description was edited within 48 h after the comment ÷ lint comments, counted on the day the comment was posted (PROGRESS backlog 186). An edit counts only if the provider’s changelog names `summary` or `description` and the edit is newer than the ticket the linter read.',
     unit: 'ratio',
     aggregation: 'ratio',
-    absent: {
-      reason:
-        'The signal exists since WP-60 — an edited ticket produces `ticket.updated`, carrying the provider’s own `updated_at` — and nothing folds it: the metric needs each `ticket.updated` compared with the `task.lint.posted` baseline for the same ticket (whose `ticket_updated_at` is the ticket as the linter saw it), counted when the edit lands within 48 hours. The event’s only consumer today keeps the ticket snapshot fresh.',
-      owner:
-        'Discovered work at WP-60 — a statistics fold over an event that now exists; no work package owns it yet.',
-    },
+    caveats: [
+      'A status, rank, sprint or watcher change is not an improvement — which is also what keeps the platform’s own status transitions out, since the update event carries no editor to filter on. An edit to the summary or description by anybody, including a bot, counts.',
+      'A lint comment posted less than 48 h ago is in neither side until its window closes, so the last two days of a range carry fewer samples rather than a falling rate.',
+      'A project whose tracker binding has no webhook never reports an edit (PROGRESS backlog 187), so its lint comments count as not improved.',
+    ],
   },
   shadow_similarity: {
     label: 'Shadow similarity',
@@ -547,27 +649,20 @@ export const STATS_CATALOGUE: Readonly<Record<StatMetricId, MetricDefinition>> =
   loc_changed: {
     label: 'Lines changed per merged MR',
     definition:
-      'product/16: “LOC added/removed/changed per merged MR and aggregated per day (from MR diff stats)”, shown for information rather than as a target.',
+      'product/16’s “LOC added/removed/changed per merged MR and aggregated per day (from MR diff stats)”, shown for information rather than as a target: lines added plus lines removed ÷ the merged merge requests they were measured on, for merge requests **the platform** made (PROGRESS backlog 179). The counts are read from the provider once, when the merge request merges (GitLab’s `diffStatsSummary`), and never taken from the merge event, which carries none on GitLab.',
     unit: 'count',
-    aggregation: 'sum',
-    absent: {
-      reason:
-        'The one git provider this build ships publishes no insertion/deletion counts on its merge request events: every `mr.*` event GitLab produces carries `diff_stats: null` (its REST merge request has `changes_count`, a string like “5+”). Since WP-59 the counts have a read of their own (GraphQL’s `diffStatsSummary`), which only the history bootstrap calls; nothing reads it when a merge request is merged. The **fake** git provider does fill the event field, which is exactly why this metric is named absent rather than computed — a number that is measured in every test and null in production is worse than one that is missing in both.',
-      owner:
-        'Unowned — filed as discovered work by WP-41. It needs the WP-59 diff-stats read made once per merged merge request and recorded, not a query.',
-    },
+    aggregation: 'ratio',
+    caveats: [
+      'A merge request a human merged without a platform task is not measured: product/16’s table is about the platform’s own work, and each measurement is one provider read.',
+      'Counted on the day the measurement was recorded, which follows the merge by one provider read. One measurement per merge — a repeated measurement of the same merge is not counted again — but a merge request reopened and merged twice is two merges.',
+    ],
   },
   defect_escape: {
     label: 'Defect escape',
     definition:
-      'product/16: “bugs filed against agent-merged MRs within 30 days ÷ merged MRs”, tracked with no target.',
+      'product/16’s “bugs filed against agent-merged MRs within 30 days ÷ merged MRs”, tracked with no target: bug tickets filed in the period whose own link names a merge request the platform delivered in the 30 days before the bug was filed ÷ tasks delivered in the period (PROGRESS backlog 114, Q87). A bug ticket is one whose issue type the project routes to the `bug` template. The merge request is found **only** through a link on the bug ticket — never by its title, never by timing: a merge followed by a bug has no join key. The two sides are counted at different instants, the filing and the merge, as the merge rate’s are.',
     unit: 'ratio',
     aggregation: 'ratio',
-    absent: {
-      reason:
-        'Nothing links a later bug ticket to the merge request that caused it. The platform sees bug tickets it is given and merge requests it made, and no signal connects the two — inferring it from text would be a guess published as a defect rate.',
-      owner: 'Unowned — filed as discovered work by WP-41.',
-    },
   },
   queue_wait_minutes: {
     label: 'Queue wait',
@@ -577,7 +672,7 @@ export const STATS_CATALOGUE: Readonly<Record<StatMetricId, MetricDefinition>> =
     aggregation: 'mean',
     absent: {
       reason:
-        '`task.dequeued` is declared unconsumed and nothing projects it, so the closing instant of the wait is in the event log and in no row. Scanning the log per request is what a projection exists to avoid.',
+        '`task.dequeued` is declared unconsumed and nothing projects it, so the closing instant of the wait is in the event log and in no row. A fold of `task.queued` against `task.dequeued` at read time is possible — WP-61 reads the log that way for four metrics — and nobody has built it.',
       owner:
         'Nobody yet: `task.dequeued` is declared unconsumed naming WP-20, which shipped without a projection of it; a row that folds `task.queued`/`task.dequeued` into a wait per task owns this metric.',
     },
@@ -678,10 +773,20 @@ const publishable = (value: number | null): number | null => {
   return Number.isInteger(clamped) ? clamped : Number(clamped.toPrecision(6));
 };
 
+/**
+ * What only the rows can say about a metric: a caveat carrying a count, or an absence decided by one
+ * (rule 4 of the module docblock). Added **after** the catalogue's own caveats, never instead.
+ */
+interface DynamicMetricFacts {
+  readonly caveats?: readonly string[];
+  readonly absent?: StatAbsence;
+}
+
 const metricOf = (
   id: StatMetricId,
   fold: Fold,
   buckets: readonly { readonly start: string; readonly end: string }[],
+  facts: DynamicMetricFacts = {},
 ): StatMetric => {
   const entry = STATS_CATALOGUE[id];
   const base = {
@@ -689,12 +794,13 @@ const metricOf = (
     label: entry.label,
     definition: entry.definition,
     unit: entry.unit,
-    caveats: [...(entry.caveats ?? [])],
+    caveats: [...(entry.caveats ?? []), ...(facts.caveats ?? [])],
   };
-  if (entry.absent !== undefined) {
+  const absent = entry.absent ?? facts.absent;
+  if (absent !== undefined) {
     // An absent metric publishes no buckets at all. An array of nulls would invite a chart to draw
     // a flat line through them, which is the zero this whole shape exists to refuse (rule 16).
-    return { ...base, value: null, samples: 0, buckets: [], absent: entry.absent };
+    return { ...base, value: null, samples: 0, buckets: [], absent };
   }
   const series = fold.seriesFor(id);
   const total = { numerator: 0, denominator: 0, samples: 0 };
@@ -728,14 +834,56 @@ export interface StatsFoldInput {
   readonly sources: StatsSources;
 }
 
-/** Which `stats_event_daily` counter feeds which count metric, one to one. */
+/**
+ * Which `stats_event_daily` counter feeds which count metric, one to one.
+ *
+ * `conflict.warned` is **not** here since WP-61: it counts comparisons, and the metric counts
+ * distinct overlaps, read from the log (`OverlapRow`, PROGRESS backlog 180). The projector still
+ * writes the counter — a projection is not rewritten under a replay — and nothing publishes it.
+ */
 const COUNTER_METRICS: Readonly<Record<string, StatMetricId>> = {
   'rebase.resolved': 'rebase_conflicts_resolved',
   'rebase.exhausted': 'rebase_conflicts_escalated',
-  'conflict.warned': 'concurrent_task_overlaps',
   'review_only.threads_accepted': 'review_findings_accepted',
   'review_only.threads_dismissed': 'review_findings_dismissed',
   'ticket_lint.posted': 'ticket_lint_comments',
+};
+
+const percent = (share: number): string => `${Math.round(share * 1000) / 10} %`;
+
+/**
+ * Q87's rule, applied to the rows: the defect-escape rate with its coverage in its caveats, or
+ * absent with the coverage as the reason ({@link DEFECT_COVERAGE_FLOOR} has the derivation).
+ */
+export const defectEscapeFacts = (rows: readonly BugTraceRow[]): DynamicMetricFacts => {
+  const bugs = rows.reduce((sum, row) => sum + row.bugs, 0);
+  const linked = rows.reduce((sum, row) => sum + row.linked, 0);
+  const owner =
+    'Q87 decided the rule; the share of real bug tickets that carry a resolvable link is `docs/TODO.md`’s open measurement, and a team that links its bug tickets to the merge request they came from raises it.';
+  if (bugs === 0) {
+    return {
+      absent: {
+        reason:
+          'No bug ticket was traced in the period, so the share of bugs that could be attributed to a merge request — which this rate is only ever published with (Q87) — cannot be computed. “No bug was filed” and “no bug reached the platform” look the same from here.',
+        owner,
+      },
+    };
+  }
+  const share = linked / bugs;
+  const coverage = `${linked} of ${bugs} bug tickets filed in the period (${percent(share)}) carried a merge-request link the platform could resolve`;
+  if (share < DEFECT_COVERAGE_FLOOR) {
+    return {
+      absent: {
+        reason: `Coverage below the floor: ${coverage}, and the rate is published only when at least half did — below that, the bugs it cannot see outnumber the ones it can, and the number would describe what is missing (Q87, WP-61).`,
+        owner,
+      },
+    };
+  }
+  return {
+    caveats: [
+      `Coverage: ${coverage}. The rest could not be attributed and are not in the numerator, so the rate is a lower bound — it under-reports, in the direction that flatters the platform.`,
+    ],
+  };
 };
 
 /** The counters whose **total** is the metric rather than their count. */
@@ -777,6 +925,7 @@ export const foldStats = (input: StatsFoldInput): OrgStatsResponse => {
     fold.add('agent_time_hours', day, { numerator: task.agentHours });
     fold.add('cost_per_delivered_task', day, { numerator: task.costUsd, denominator: 1 });
     fold.add('reviewer_minutes_per_delivered_task', day, { numerator: 0, denominator: 1 });
+    fold.add('defect_escape', day, { numerator: 0, denominator: 1 });
     if (task.estimateUsd !== null && task.costActual > 0) {
       fold.add('estimate_accuracy', day, {
         numerator: Math.abs(task.estimateUsd - task.costActual) / task.costActual,
@@ -793,6 +942,32 @@ export const foldStats = (input: StatsFoldInput): OrgStatsResponse => {
       numerator: COUNTER_TOTALS.has(row.metric) ? row.total : row.count,
       samples: row.count,
     });
+  }
+
+  let unmeasuredMerges = 0;
+  for (const row of sources.loc) {
+    unmeasuredMerges += row.unmeasured;
+    fold.add('loc_changed', row.day, {
+      numerator: row.lines,
+      denominator: row.measured,
+      samples: row.measured,
+    });
+  }
+
+  for (const row of sources.overlaps) {
+    fold.add('concurrent_task_overlaps', row.day, { numerator: row.count, samples: row.count });
+  }
+
+  for (const row of sources.lintEdits) {
+    fold.add('tickets_edited_after_lint', row.day, {
+      numerator: row.improved,
+      denominator: row.linted,
+      samples: row.linted,
+    });
+  }
+
+  for (const row of sources.bugTraces) {
+    fold.add('defect_escape', row.day, { numerator: row.escaped, denominator: 0, samples: 0 });
   }
 
   for (const row of sources.cost) {
@@ -841,6 +1016,27 @@ export const foldStats = (input: StatsFoldInput): OrgStatsResponse => {
     });
   }
 
+  const withheld = sources.withheldReviewMinutes;
+  const withheldCaveat =
+    withheld.entries === 0
+      ? []
+      : [
+          `Withheld in this period: ${withheld.entries} review window${withheld.entries === 1 ? '' : 's'} an approval touched, ${publishable(withheld.minutes)} minutes (PROGRESS backlog 188).`,
+        ];
+  const facts: Partial<Record<StatMetricId, DynamicMetricFacts>> = {
+    reviewer_minutes_per_delivered_task: { caveats: withheldCaveat },
+    human_minutes: { caveats: withheldCaveat },
+    defect_escape: defectEscapeFacts(sources.bugTraces),
+    loc_changed: {
+      caveats:
+        unmeasuredMerges === 0
+          ? []
+          : [
+              `${unmeasuredMerges} merged merge request${unmeasuredMerges === 1 ? '' : 's'} in the period had no counts from the provider and ${unmeasuredMerges === 1 ? 'is' : 'are'} in neither side — not counted as zero lines.`,
+            ],
+    },
+  };
+
   const buckets = bucketsOf(input.range);
   return {
     range: {
@@ -852,7 +1048,7 @@ export const foldStats = (input: StatsFoldInput): OrgStatsResponse => {
       timezone_substituted: input.timezoneSubstituted,
     },
     project_id: input.projectId,
-    metrics: STATS_METRIC_IDS.map((id) => metricOf(id, fold, buckets)),
+    metrics: STATS_METRIC_IDS.map((id) => metricOf(id, fold, buckets, facts[id])),
     returns_by_stage: sources.stageReturns.map((row) => ({
       ...row,
       rate: publishable(row.entries === 0 ? null : row.returns / row.entries),

@@ -30,6 +30,7 @@ describe('toWireIdentityMapping (WP-31, PROGRESS backlog 79)', () => {
   const row = {
     provider: 'jira-cloud',
     external_id: 'acct-ada',
+    kind: 'person' as const,
     user_id: '00000000-0000-4000-8000-0000000000a1',
     display_name: 'Ada',
     created_at: new Date('2026-09-09T10:15:30.000Z'),
@@ -54,6 +55,7 @@ describe('toWireIdentityMapping (WP-31, PROGRESS backlog 79)', () => {
       'created_at',
       'display_name',
       'external_id',
+      'kind',
       'provider',
       'user_id',
     ]);
@@ -84,7 +86,7 @@ describe('the identity routes (WP-31 round 2)', () => {
     readonly upserts: {
       provider: string;
       externalId: string;
-      userId: string;
+      userId: string | null;
       displayName: string | null;
     }[];
     readonly actions: {
@@ -142,6 +144,7 @@ describe('the identity routes (WP-31 round 2)', () => {
           const row: IdentityMappingRecord = {
             provider: input.provider,
             external_id: input.externalId,
+            kind: input.userId === null ? 'machine' : 'person',
             user_id: input.userId,
             display_name: input.displayName,
             created_at: new Date('2026-09-09T10:15:30.000Z'),
@@ -249,6 +252,7 @@ describe('the identity routes (WP-31 round 2)', () => {
     expect(response.json()).toEqual({
       provider: 'jira-cloud',
       external_id: 'acct-ada',
+      kind: 'person',
       user_id: USER,
       display_name: 'Ada',
       created_at: '2026-09-09T10:15:30.000Z',
@@ -277,6 +281,7 @@ describe('the identity routes (WP-31 round 2)', () => {
     expect(world.actions[0]?.params).toEqual({
       provider: 'jira-cloud',
       external_id: 'acct-ada',
+      kind: 'person',
       user_id: USER,
       display_name_chars: 3,
     });
@@ -337,6 +342,12 @@ describe('the identity routes (WP-31 round 2)', () => {
       { provider: 'jira-cloud', external_id: '', user_id: USER },
       { provider: 'jira-cloud', external_id: 'acct-ada', user_id: 'not-a-uuid' },
       { provider: 'jira-cloud', external_id: 'acct-ada', user_id: USER, email: 'ada@example.test' },
+      // WP-61: a machine names nobody, so a machine **with** a user is refused rather than half
+      // honoured, and a person with none is not a person.
+      { provider: 'gitlab', external_id: 'renovate', kind: 'machine', user_id: USER },
+      { provider: 'gitlab', external_id: 'renovate', kind: 'person' },
+      { provider: 'gitlab', external_id: 'renovate' },
+      { provider: 'gitlab', external_id: 'renovate', kind: 'robot' },
     ]) {
       const response = await world.app.inject({
         method: 'POST',
@@ -349,5 +360,34 @@ describe('the identity routes (WP-31 round 2)', () => {
     // because a match the platform performed itself is the route it exists to replace (Q10).
     expect(world.upserts).toHaveLength(0);
     expect(world.actions).toHaveLength(0);
+  });
+  it('declares an account a machine with no user, audits it, and never asks for a user', async () => {
+    // WP-61, PROGRESS backlog 88: somebody else's bot, which the human-time projector then refuses.
+    // `findUser` is not consulted — a machine names nobody — so `known` is emptied to prove it.
+    world.known.clear();
+    const response = await world.app.inject({
+      method: 'POST',
+      url: '/api/org/identities',
+      payload: { provider: 'gitlab', external_id: 'renovate', kind: 'machine' },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ kind: 'machine', user_id: null });
+    expect(world.upserts).toEqual([
+      { provider: 'gitlab', externalId: 'renovate', userId: null, displayName: null },
+    ]);
+    expect(world.actions[0]?.params).toMatchObject({ kind: 'machine', user_id: null });
+  });
+
+  it('re-declares a person’s account a machine as the same row, not a second one', async () => {
+    await world.app.inject({ method: 'POST', url: '/api/org/identities', payload: mapping() });
+    await world.app.inject({
+      method: 'POST',
+      url: '/api/org/identities',
+      payload: { provider: 'jira-cloud', external_id: 'acct-ada', kind: 'machine' },
+    });
+    const listed = await world.app.inject({ method: 'GET', url: '/api/org/identities' });
+    expect(listed.json().items).toEqual([
+      expect.objectContaining({ external_id: 'acct-ada', kind: 'machine', user_id: null }),
+    ]);
   });
 });

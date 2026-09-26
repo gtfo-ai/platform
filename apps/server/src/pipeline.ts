@@ -850,6 +850,9 @@ export const composePipeline = async (
      */
     redactor: stack.platformRedactor,
     unitOfWork: options.eventing.unitOfWork,
+    // WP-61: the project stream's next sequence, for the two delivery-measure duties' events
+    // (`task.mr.measured`, `ticket.bug.traced`) — the same read the inbound ingress appends with.
+    eventStore: options.eventing.store,
     logger: options.logger,
     stageConcurrency: options.stageConcurrency,
     /**

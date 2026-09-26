@@ -301,16 +301,28 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
    * `mr.merged` was already `handled` by the pipeline and stays where it was, and the same is true
    * of the human-time projector's four (see the note at the top of this table).
    *
-   * **Half of product/18:60 is still absent**: *"tickets improved after lint (edited within
-   * 48 h)"* needed a *this ticket changed* signal no normaliser produced (PROGRESS backlog **59**).
-   * WP-60 built the signal (`ticket.updated`) and not the fold, so the statistics screen still names
-   * the metric absent — now with the fold as the missing half rather than the event — instead of
-   * publishing the half it can count as if it were the whole.
+   * **The other half of product/18:60** — *"tickets improved after lint (edited within 48 h)"* —
+   * needed a *this ticket changed* signal no normaliser produced (PROGRESS backlog **59**). WP-60
+   * built the signal (`ticket.updated`) and WP-61 the fold, which is a **read** rather than a
+   * counter: it compares two events for one ticket, and a counter folded from one event at a time
+   * cannot (`apps/server/src/queries/stats-queries.ts`). So no entry moved for it. The same read
+   * answers `task.conflict.warned` as distinct pairs (PROGRESS backlog 180) — the counter it feeds
+   * here is still written and no longer published.
    */
   'task.review.observed': 'handled',
   'task.lint.posted': 'handled',
   'task.rebase.checked': 'handled',
   'task.conflict.warned': 'handled',
+  // WP-61, PROGRESS backlog 179: product/16's lines changed per merged merge request. **Read, not
+  // handled** — the statistics query takes the first measurement per cause event (`mr.merged`), so
+  // a job redelivered after its append committed cannot count one merge twice, which an additive
+  // counter folded one event at a time could not guarantee.
+  'task.mr.measured': 'unconsumed',
+  // WP-61, PROGRESS backlog 114, Q87: the defect-escape trace. **Read, not handled** — the
+  // statistics query joins it to `stats_task_delivery` at request time, because "within thirty days
+  // of the merge" is a comparison between this event and a delivery that a fold of one event at a
+  // time cannot make. No handler reacts to it, so a sweeper needs none.
+  'ticket.bug.traced': 'unconsumed',
   // WP-40: the **spike's human stage subscribes to it**. `EPIC_SPLIT_TEMPLATE`'s `human_review`
   // names it in its `on` list, so `pipeline.epic.split.decided` steps the task out of the wait and
   // the interpreter decides where it goes — which is the same shape `default_branch.moved` has for

@@ -17,8 +17,12 @@
  *    stays on `outcome` because rows closed before WP-55 carried the return there first;
  *  - **the template filter**, which decides what "tasks started" means: a discovery task is
  *    `mode = 'normal'` and can never open a merge request;
- *  - **PROGRESS backlog 89's read-side cap**, which is a `least(sum(...), 480)` over a group key
- *    the projector deliberately cannot use;
+ *  - **PROGRESS backlog 89's ruling** (WP-61): the cap is the projector's, per entry, and the read
+ *    applies no second one — and the two exclusions the read does apply, a declared machine's rows
+ *    and the review windows an approval touched (backlog 88, 188);
+ *  - **the four reads of the event log** WP-61 added — distinct overlaps (backlog 180), the lint
+ *    fold (186) and the defect trace (114) — against events appended to a real, partitioned
+ *    `events` table;
  *  - **the civil-day arithmetic in a zone that is not UTC**, which is where an instant comparison
  *    and a date comparison disagree.
  */
@@ -55,6 +59,9 @@ const ZONE = 'Europe/Prague';
  */
 const BASE_MS = Math.floor((Date.now() - 24 * 60 * 60_000) / 1000) * 1000;
 const at = (minutes: number): string => new Date(BASE_MS + minutes * 60_000).toISOString();
+
+/** The instant every answer is computed at: the real now, a day after {@link BASE_MS}. */
+const AS_OF = new Date(BASE_MS + 24 * 60 * 60_000).toISOString();
 
 const dayOf = (iso: string): string =>
   new Intl.DateTimeFormat('en-CA', { timeZone: ZONE }).format(new Date(iso));
@@ -183,7 +190,40 @@ describe('the statistics reads (PostgreSQL)', () => {
     readStatsSources(db, resolveRange('7d', 'day', dayOf(at(0))), {
       timezone: ZONE,
       projectId: project,
+      asOf: AS_OF,
     });
+
+  /**
+   * Appends an event to the log **without** dispatching it: the four WP-61 reads consult `events`
+   * itself, and no projector is involved in what they answer. On the project's own stream.
+   */
+  const append = async (
+    project: string,
+    spec: {
+      readonly type: string;
+      readonly occurred_at: string;
+      readonly payload: Record<string, unknown>;
+      readonly cause?: string;
+    },
+  ): Promise<void> => {
+    const seq = (sequences.get(project) ?? 0) + 1;
+    sequences.set(project, seq);
+    const event = domainEventSchemasByType[
+      spec.type as keyof typeof domainEventSchemasByType
+    ].parse({
+      id: crypto.randomUUID(),
+      stream_type: 'project',
+      stream_id: project,
+      stream_seq: seq,
+      correlation_id: null,
+      cause_event_id: spec.cause ?? null,
+      actor: { kind: 'system', component: 'test' },
+      occurred_at: spec.occurred_at,
+      type: spec.type,
+      payload: spec.payload,
+    }) as DomainEvent;
+    await unitOfWork.transaction(async (scope) => scope.events.append([event]));
+  };
 
   it('counts a delivery at merge time and reads its returns from `outcome`', async () => {
     const taskId = await seedTask({ createdAt: at(-600), estimateUsd: 6, costActual: 4 });
@@ -276,30 +316,231 @@ describe('the statistics reads (PostgreSQL)', () => {
     expect(sources.questions).toEqual([{ answeredDay: dayOf(at(-3580)), minutes: 10 }]);
   });
 
-  it('caps one person’s review minutes at eight hours a day across tasks (backlog 89)', async () => {
+  it('applies no second day cap, drops a declared machine’s rows and withholds an approval’s window', async () => {
+    // WP-61 criterion 3 (backlog 89): the projector caps per entry — per task — and the read adds
+    // nothing. Five hours on each of two tasks, same reviewer, same civil day: 600, not 480.
     const first = await seedTask({ createdAt: at(-5040) });
     const second = await seedTask({ createdAt: at(-5040) });
-    // Five hours on each of two tasks, same unmapped reviewer, same civil day: the projector's
-    // per-entry cap admits both, and the read's per-(identity, day) cap clamps the total to 480.
-    for (const taskId of [first, second]) {
-      await pool.query(
+    const entry = async (taskId: string, author: string, minutes: number) =>
+      pool.query(
         `insert into human_time_entries (task_id, kind, user_id, external_author, started_at,
                                          ended_at, minutes)
-         values ($1, 'review', null, 'gitlab:ada', $2, $3, 300)`,
-        [taskId, at(-5030), at(-60)],
+         values ($1, 'review', null, $2, $3, $4, $5)`,
+        [taskId, author, at(-5030), at(-4800), minutes],
       );
-    }
-    // A different reviewer on the same day is a different bucket and is not clamped with her.
+    await entry(first, 'gitlab:ada', 300);
+    await entry(second, 'gitlab:ada', 300);
+    // Backlog 88: a bot declared a machine **after** its window was folded. The projector refuses
+    // it from now on; the read drops the row it already wrote.
+    await entry(first, 'gitlab:renovate', 90);
     await pool.query(
-      `insert into human_time_entries (task_id, kind, user_id, external_author, started_at,
-                                       ended_at, minutes)
-       values ($1, 'review', null, 'gitlab:bob', $2, $3, 120)`,
-      [first, at(-5030), at(-60)],
+      `insert into user_identities (provider, external_id, user_id, kind)
+       values ('gitlab', 'renovate', null, 'machine')`,
     );
+    // Backlog 188: Carol approved inside her window, so the whole window is withheld until the
+    // real-GitLab check is taken — and summed separately, not discarded.
+    await entry(second, 'gitlab:carol', 45);
+    await append(projectId, {
+      type: 'mr.approved',
+      occurred_at: at(-4900),
+      payload: {
+        project_id: projectId,
+        task_id: null,
+        mr: { iid: 7, url: 'https://git.example.test/acme/api/-/merge_requests/7' },
+        approver: {
+          provider: 'gitlab',
+          external_id: 'carol',
+          email: null,
+          display_name: 'Carol',
+          verified: false,
+        },
+        approved_at: null,
+      },
+    });
 
     const sources = await read();
-    const review = sources.humanMinutes.filter((row) => row.kind === 'review');
+    const review = sources.humanMinutes.filter(
+      (row) => row.kind === 'review' && row.day === dayOf(at(-5030)),
+    );
     expect(review).toEqual([{ day: dayOf(at(-5030)), kind: 'review', minutes: 600 }]);
+    expect(sources.withheldReviewMinutes).toEqual({ minutes: 45, entries: 1 });
+  });
+
+  it('counts a conflict overlap once per pair of revisions, however many gate entries re-warn it', async () => {
+    // Backlog 180: two comparisons of one pair at one pair of heads are one overlap; a push to
+    // either side is a new one. Each comparison appends both orders under one cause.
+    const project = await seedProject('overlaps');
+    const [a, b] = ['00000000-0000-4000-8000-00000000aa01', '00000000-0000-4000-8000-00000000aa02'];
+    const warn = async (on: string, other: string, head: string, cause: string, minute: number) =>
+      append(project, {
+        type: 'task.conflict.warned',
+        occurred_at: at(minute),
+        cause,
+        payload: {
+          project_id: project,
+          task_id: on,
+          mr: {
+            iid: 1,
+            url: 'https://git.example.test/acme/api/-/merge_requests/1',
+            head_sha: head,
+          },
+          other_task_id: other,
+          other_ticket_key: 'ACME-1',
+          paths: ['src/a.ts'],
+          path_count: 1,
+          truncated: false,
+        },
+      });
+    const [c1, c2, c3] = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()];
+    await warn(a, b, 'a'.repeat(40), c1, -6000);
+    await warn(b, a, 'b'.repeat(40), c1, -6000);
+    await warn(b, a, 'b'.repeat(40), c2, -5990);
+    await warn(a, b, 'a'.repeat(40), c2, -5990);
+    await warn(a, b, 'c'.repeat(40), c3, -5980);
+    await warn(b, a, 'b'.repeat(40), c3, -5980);
+
+    const sources = await read(project);
+    expect(sources.overlaps.reduce((sum, row) => sum + row.count, 0)).toBe(2);
+    // The comparisons counter would have said six; the metric no longer reads it.
+  });
+
+  it('counts one merge once however many times it was measured, and an unmeasured merge as neither side', async () => {
+    // WP-61 review round 1: a `merge_measure` job redelivered after its append committed appends a
+    // second `task.mr.measured` with the same cause; the read keeps the first.
+    const project = await seedProject('loc');
+    const taskId = await seedTask({ project, createdAt: at(-7000) });
+    const measure = async (cause: string, minute: number, stats: unknown) =>
+      append(project, {
+        type: 'task.mr.measured',
+        occurred_at: at(minute),
+        cause,
+        payload: {
+          project_id: project,
+          task_id: taskId,
+          mr: { iid: 3, url: 'https://git.example.test/acme/api/-/merge_requests/3' },
+          diff_stats: stats,
+        },
+      });
+    const [merge, redelivered, unmeasured] = [
+      crypto.randomUUID(),
+      crypto.randomUUID(),
+      crypto.randomUUID(),
+    ];
+    await measure(merge, -6990, { files_changed: 2, insertions: 30, deletions: 10 });
+    // The same merge measured again — the provider may even answer differently the second time.
+    await measure(merge, -6980, { files_changed: 2, insertions: 300, deletions: 100 });
+    await measure(redelivered, -6970, { files_changed: 1, insertions: 5, deletions: 5 });
+    await measure(unmeasured, -6960, null);
+
+    const sources = await read(project);
+    const totals = sources.loc.reduce(
+      (sum, row) => ({
+        measured: sum.measured + row.measured,
+        lines: sum.lines + row.lines,
+        unmeasured: sum.unmeasured + row.unmeasured,
+      }),
+      { measured: 0, lines: 0, unmeasured: 0 },
+    );
+    expect(totals).toEqual({ measured: 2, lines: 50, unmeasured: 1 });
+  });
+
+  it('folds an edit of the summary or description within 48 h of a lint, and nothing else', async () => {
+    // Backlog 186. Every lint is older than 48 h at `AS_OF` except the last, which is in neither
+    // side because its window is still open.
+    const project = await seedProject('lint-edits');
+    const lintTask = await seedTask({ project, createdAt: at(-5000) });
+    const HOUR = 60;
+    const lint = async (key: string, minute: number, baseline: string | null = null) =>
+      append(project, {
+        type: 'task.lint.posted',
+        occurred_at: at(minute),
+        payload: {
+          project_id: project,
+          task_id: lintTask,
+          ticket: { provider: 'jira', key, url: `https://tickets.example.test/browse/${key}` },
+          score: 50,
+          missing: [],
+          questions_posted: 2,
+          ticket_updated_at: baseline,
+        },
+      });
+    const update = async (key: string, minute: number, fields: string[], updatedAt?: string) =>
+      append(project, {
+        type: 'ticket.updated',
+        occurred_at: at(minute),
+        payload: {
+          project_id: project,
+          ticket: { provider: 'jira', key, url: `https://tickets.example.test/browse/${key}` },
+          updated_at: updatedAt ?? at(minute),
+          changed_fields: fields,
+          truncated: false,
+        },
+      });
+    const start = -5 * 24 * HOUR;
+    await lint('LE-1', start);
+    await update('LE-1', start + 47 * HOUR, ['Description']);
+    await lint('LE-2', start + 1);
+    await update('LE-2', start + 1 + 49 * HOUR, ['summary']);
+    // The platform's own status transition: an update, and not an improvement.
+    await lint('LE-3', start + 2);
+    await update('LE-3', start + 2 + HOUR, ['status']);
+    // A late delivery of an edit the linter had already seen.
+    await lint('LE-4', start + 3, at(start + 3));
+    await update('LE-4', start + 3 + HOUR, ['description'], at(start + 2));
+    // Too young to judge — 34 hours before `AS_OF`, inside the range: in neither side.
+    await lint('LE-5', -10 * HOUR);
+    await update('LE-5', -9 * HOUR, ['description']);
+
+    const sources = await read(project);
+    const totals = sources.lintEdits.reduce(
+      (sum, row) => ({ linted: sum.linted + row.linted, improved: sum.improved + row.improved }),
+      { linted: 0, improved: 0 },
+    );
+    expect(totals).toEqual({ linted: 4, improved: 1 });
+  });
+
+  it('traces a bug to a merge delivered before it was filed, never to the fix merged after', async () => {
+    // Backlog 114, Q87. Deliveries come from real `mr.merged` events through the real projector.
+    const project = await seedProject('defects');
+    const escapedFrom = await seedTask({ project, createdAt: at(-3000) });
+    const fixedBy = await seedTask({ project, createdAt: at(-3000) });
+    await merge(project, escapedFrom, at(-2900));
+    await merge(project, fixedBy, at(-1500));
+    const bug = async (key: string, outcome: string, taskId: string | null, minute = -2000) =>
+      append(project, {
+        type: 'ticket.bug.traced',
+        occurred_at: at(minute + 1),
+        payload: {
+          project_id: project,
+          ticket: { provider: 'jira', key, url: `https://tickets.example.test/browse/${key}` },
+          filed_at: at(minute),
+          outcome,
+          found_by: outcome === 'linked' ? 'ticket_link' : null,
+          mr:
+            outcome === 'linked'
+              ? { iid: 7, url: 'https://git.example.test/acme/api/-/merge_requests/7' }
+              : null,
+          task_id: taskId,
+        },
+      });
+    await bug('BUG-1', 'linked', escapedFrom);
+    // A duplicate wake-up traced it again: the first trace is the one read.
+    await bug('BUG-1', 'no_link', null);
+    await bug('BUG-2', 'no_link', null);
+    // Its link names the merge request that fixed it, merged after it was filed.
+    await bug('BUG-3', 'linked', fixedBy);
+    await bug('BUG-4', 'unreadable', null);
+
+    const sources = await read(project);
+    const totals = sources.bugTraces.reduce(
+      (sum, row) => ({
+        bugs: sum.bugs + row.bugs,
+        linked: sum.linked + row.linked,
+        escaped: sum.escaped + row.escaped,
+      }),
+      { bugs: 0, linked: 0, escaped: 0 },
+    );
+    expect(totals).toEqual({ bugs: 4, linked: 2, escaped: 1 });
   });
 
   it('keeps one project’s numbers out of another’s', async () => {
@@ -422,12 +663,14 @@ describe('the statistics reads (PostgreSQL)', () => {
     const sources = await readStatsSources(db, resolveRange('7d', 'day', '2026-03-12'), {
       timezone: ZONE,
       projectId: project,
+      asOf: AS_OF,
     });
     expect(sources.kbUsage).toEqual([{ day: '2026-03-10', eligible: 2, cited: 1 }]);
     // The project filter holds: another project's read sees none of these runs.
     const other = await readStatsSources(db, resolveRange('7d', 'day', '2026-03-12'), {
       timezone: ZONE,
       projectId: otherProjectId,
+      asOf: AS_OF,
     });
     expect(other.kbUsage).toEqual([]);
   });
@@ -445,6 +688,10 @@ describe('the statistics reads (PostgreSQL)', () => {
       sources,
     });
     expect(document.metrics.find((metric) => metric.id === 'tasks_delivered')?.value).toBe(1);
-    expect(document.metrics.find((metric) => metric.id === 'loc_changed')?.absent).not.toBeNull();
+    // Computed since WP-61 (backlog 179), and with no merge measured in this project it has no
+    // value — never an invented zero.
+    const loc = document.metrics.find((metric) => metric.id === 'loc_changed');
+    expect(loc?.absent).toBeNull();
+    expect(loc?.value).toBeNull();
   });
 });

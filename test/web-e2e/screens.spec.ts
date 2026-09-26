@@ -235,8 +235,10 @@ test('statistics renders a number, a null ratio and an absence as three differen
   await expect(page.getByText('no data in this range').first()).toBeVisible();
   // The absence, in the section that exists for it, with the owner beside the reason.
   await expect(page.getByText('Not measured, and why')).toBeVisible();
-  await expect(page.getByText('Lines changed per merged MR', { exact: true })).toBeVisible();
-  await expect(page.getByText('Unowned — filed as discovered work by WP-41.')).toBeVisible();
+  await expect(page.getByText('Queue wait', { exact: true })).toBeVisible();
+  await expect(
+    page.getByText('Nobody yet — a row that folds task.queued against task.dequeued owns it.'),
+  ).toBeVisible();
   // The error direction of a figure that has one is on the screen rather than in a docblock.
   await expect(page.getByText(/Over-counts: a bot that is not this platform/)).toBeVisible();
   // The CSV export points at the endpoint that serves it.

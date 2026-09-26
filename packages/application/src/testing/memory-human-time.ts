@@ -18,6 +18,7 @@
  */
 import type { Id, IsoDateTime } from '@platform/contracts';
 import type {
+  AccountResolution,
   ExternalAccount,
   HumanTimeEntry,
   HumanTimeStore,
@@ -31,8 +32,11 @@ export class HumanTimeStoreError extends Error {
 export interface MemoryHumanTimeStore extends HumanTimeStore {
   /** Point a merge request at the task that owns it, as `tasks.mr_ref` does. */
   seedMergeRequest(subject: { readonly projectId: Id; readonly iid: number }, taskId: Id): void;
-  /** One `user_identities` row: a provider account mapped to a platform user (WP-31). */
-  seedIdentity(account: ExternalAccount, userId: Id): void;
+  /**
+   * One `user_identities` row: a provider account mapped to a platform user (WP-31), or — with
+   * `null` — declared a machine (WP-61, migration 0045).
+   */
+  seedIdentity(account: ExternalAccount, userId: Id | null): void;
   seedQuestion(questionId: Id, askedAt: IsoDateTime): void;
   seedTimezone(projectId: Id, timezone: string | null): void;
   /** Every row, in write order — what a test counts to assert idempotency (standing rule 79). */
@@ -63,7 +67,7 @@ const accountKey = (account: ExternalAccount): string =>
 export const createMemoryHumanTimeStore = (): MemoryHumanTimeStore => {
   const rows: HumanTimeEntry[] = [];
   const mergeRequests = new Map<string, Id>();
-  const identities = new Map<string, Id>();
+  const identities = new Map<string, Id | null>();
   const questions = new Map<Id, IsoDateTime>();
   const timezones = new Map<Id, string | null>();
   let nextId = 0;
@@ -88,7 +92,14 @@ export const createMemoryHumanTimeStore = (): MemoryHumanTimeStore => {
     taskForMergeRequest: async (_tx, subject) =>
       mergeRequests.get(`${subject.projectId}!${subject.iid}`) ?? null,
 
-    resolveUser: async (_tx, account) => identities.get(accountKey(account)) ?? null,
+    resolveAccount: async (_tx, account): Promise<AccountResolution> => {
+      const key = accountKey(account);
+      if (!identities.has(key)) {
+        return { kind: 'unmapped' };
+      }
+      const userId = identities.get(key) ?? null;
+      return userId === null ? { kind: 'machine' } : { kind: 'person', userId };
+    },
 
     reviewEntries: async (_tx, taskId) =>
       clone(
