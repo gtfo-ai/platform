@@ -338,6 +338,7 @@ export const startShadowBatch = async (
         // same way a task whose intake could not reach the provider gets them.
         ticketSnapshot: null,
         ticketSnapshotAt: null,
+        ticketSignalAt: null,
         reviewSubject: null,
         historySample: null,
         riskClasses: [],

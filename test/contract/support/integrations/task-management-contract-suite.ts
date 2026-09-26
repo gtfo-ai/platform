@@ -53,6 +53,17 @@ export interface TaskManagementContractContext {
    */
   emitTicketCreated(): WebhookDelivery;
   /**
+   * Produces the delivery a provider sends when a human **edits** the ticket's text, and the field
+   * name that delivery states changed (WP-60, PROGRESS backlog 59).
+   *
+   * An obligation of the contract for `ticket.created`'s reason (standing rule 23): the snapshot
+   * freshness rule (Q61 (b)) is keyed on `ticket.updated`, and a provider that does not produce it
+   * is a provider whose tasks run on the words the ticket had at intake, silently.
+   */
+  emitTicketUpdated(): WebhookDelivery;
+  /** The field name {@link emitTicketUpdated}'s delivery states changed, in the provider's spelling. */
+  readonly updatedField: string;
+  /**
    * A delivery this provider cannot act on, and the reason it reports for it.
    *
    * Both halves are the harness's because both are provider-shaped. `{"event":"comment.added"}` is
@@ -269,6 +280,42 @@ export const runTaskManagementContract = (harness: TaskManagementContractHarness
         expect(payload.project_id).toBe(context.projectId);
         expect(payload.ticket.key).toBe(context.ticket.key);
         expect(typeof payload.issue_type).toBe('string');
+      });
+
+      /**
+       * WP-60's obligation. The ticket and the provider's own instant are what the consumer needs
+       * (it finds the live tasks by the ticket and marks their snapshots stale); the changed field
+       * is what the delivery already held, and a provider that dropped it would publish an edit
+       * with no content.
+       */
+      it('normalises an edited ticket into ticket.updated, with its instant and the field', async () => {
+        const result = await port.inbound.normalise(context.emitTicketUpdated(), inboundContext());
+        expect(result.ignored).toEqual([]);
+        const updated = result.events.filter((event) => event.type === 'ticket.updated');
+        expect(updated, 'exactly one ticket.updated per delivery').toHaveLength(1);
+        const { payload } = expectCatalogueEvent(
+          updated[0] as NonNullable<(typeof updated)[0]>,
+          'ticket.updated',
+        );
+        expect(payload.project_id).toBe(context.projectId);
+        expect((payload.ticket as TicketRefInput).key).toBe(context.ticket.key);
+        expect(Number.isNaN(Date.parse(payload.updated_at as string))).toBe(false);
+        expect(payload.changed_fields).toContain(context.updatedField);
+      });
+
+      /**
+       * *Beside*, not instead of (WP-60 criterion 1): a status change is an edit too, and its
+       * `ticket.status.changed` must survive the new event rather than be replaced by it.
+       */
+      it('reports a status change as ticket.status.changed and ticket.updated beside it', async () => {
+        const result = await port.inbound.normalise(
+          context.emitStatusChange(context.statuses.target),
+          inboundContext(),
+        );
+        expect(result.ignored).toEqual([]);
+        const types = result.events.map((event) => event.type);
+        expect(types).toContain('ticket.status.changed');
+        expect(types).toContain('ticket.updated');
       });
 
       it('normalises a comment into a catalogue event with a verified author', async () => {

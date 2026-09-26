@@ -1,5 +1,6 @@
 /**
- * Every column of `tasks` has **one** writing statement — read off disk (WP-15e).
+ * Every column of `tasks` has **one** writing statement — read off disk (WP-15e) — except the ones
+ * {@link CO_OWNED_COLUMNS} names with an exact count and a reason (`mr_ref`, WP-60).
  *
  * This is the half of PROGRESS backlog 18 that a version column cannot do. Optimistic concurrency
  * makes `save` refuse a write over a row that moved; it says nothing about a column `save` names
@@ -59,6 +60,29 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
  */
 const SHARED_COLUMNS: ReadonlySet<string> = new Set(['updated_at', 'version']);
 
+/**
+ * Columns **two** statements write by decision, with the count and the reason — the exception to
+ * "exactly one", stated as a number so a third writer still fails.
+ *
+ * `mr_ref` (WP-60, PROGRESS backlog 182): `save` owns the document, and `saveMergeRequestHead`
+ * moves **one key of it** (`jsonb_set(mr_ref, '{head_sha}', …)`) when the provider announces a push
+ * nobody on the platform made — a human's, take-over included. It is the one narrow writer that
+ * shares a column, and it pays for that the way standing rule 79 says: the same statement bumps
+ * `version`, so a `save` over a snapshot read before it is refused and re-reads rather than putting
+ * the old revision back. Both statements live in `postgres-pipeline-store.ts`, which the per-file
+ * list below still pins.
+ */
+const CO_OWNED_COLUMNS: Readonly<Record<string, readonly RegExp[]>> = {
+  // Named by the statement's shape, not counted (review round 1): a substituted writer — a second
+  // whole-document assignment, say — fails even at the same count.
+  mr_ref: [
+    // `save`: the whole document, under the version predicate.
+    /mr_ref\s*=\s*\$5::jsonb[\s\S]*version\s*=\s*version\s*\+\s*1[\s\S]*and\s+version\s*=\s*\$8/,
+    // `saveMergeRequestHead`: one key, forward only by the provider's instant, bumping the token.
+    /mr_ref\s*=\s*case\s+when\s+\$5\s+then\s+jsonb_set\(mr_ref,\s*'\{head_sha\}'[\s\S]*version\s*=\s*version\s*\+\s*case\s+when\s+\$5[\s\S]*mr_head_at\s*<\s*\$4::timestamptz/,
+  ],
+};
+
 /** The owner of every `tasks` column that any statement in this repository writes. */
 const EXPECTED_OWNERSHIP: Readonly<Record<string, readonly string[]>> = {
   'packages/infrastructure/src/cost/postgres-cost-store.ts': [
@@ -72,6 +96,13 @@ const EXPECTED_OWNERSHIP: Readonly<Record<string, readonly string[]>> = {
     // `saveTicketSnapshot`
     'ticket_snapshot',
     'ticket_snapshot_at',
+    // `recordTicketSignal` — the newest `ticket.updated`'s receipt time on every live task of the
+    // ticket (WP-60, Q61 (b)). Narrow because its writer is an event handler on a *project*-stream
+    // event, ordered with respect to none of the task's own transactions.
+    'ticket_signal_at',
+    // `saveMergeRequestHead` — the provider's instant of the recorded head, which orders the head's
+    // moves (WP-60 review round 1). Its other column, `mr_ref`, is co-owned (above).
+    'mr_head_at',
     // `saveWorkpad`
     'workpad_ref',
     // `saveRiskClasses` — the classes the merge request's own diff falls into (WP-37). A fourth
@@ -126,6 +157,8 @@ const sources = (): string[] => [
 interface Statement {
   readonly file: string;
   readonly columns: readonly string[];
+  /** The statement's whole literal, predicate included — what a co-owner is named by. */
+  readonly text: string;
 }
 
 const UPDATE_TASKS = /update\s+tasks\s+set\b([\s\S]*?)\bwhere\b/gi;
@@ -171,7 +204,9 @@ const statementsIn = (file: string, source: string): Statement[] => {
       continue;
     }
     const columns = assignments(match[1] ?? '').map((part) => part.split('=')[0]?.trim() ?? '');
-    found.push({ file, columns });
+    // The whole literal: from `update` to the quote that closes the one it opened in.
+    const close = source.indexOf(quote, index);
+    found.push({ file, columns, text: source.slice(index, close === -1 ? undefined : close) });
   }
   return found;
 };
@@ -270,7 +305,25 @@ describe('`tasks` column ownership (WP-15e)', () => {
         owners.set(column, [...(owners.get(column) ?? []), `${statement.file}#${index}`]);
       }
     }
-    const contested = [...owners].filter(([, writers]) => writers.length > 1);
+    const contested = [...owners].filter(
+      ([column, writers]) => writers.length > (CO_OWNED_COLUMNS[column]?.length ?? 1),
+    );
+    // The declared co-ownership is **exact**, not a ceiling, and it is by **shape**: each named
+    // statement is found exactly once among the column's writers, and nothing else writes it — so a
+    // stale exception, a third writer and a substituted one all fail.
+    const statements = allStatements();
+    for (const [column, shapes] of Object.entries(CO_OWNED_COLUMNS)) {
+      const writers = statements.filter((statement) => statement.columns.includes(column));
+      expect({ column, writers: writers.length }).toEqual({ column, writers: shapes.length });
+      for (const shape of shapes) {
+        expect(
+          writers
+            .filter((statement) => shape.test(statement.text))
+            .map((statement) => statement.file),
+          `${column}: the writer shaped ${shape} is missing or doubled`,
+        ).toEqual(['packages/infrastructure/src/pipeline/postgres-pipeline-store.ts']);
+      }
+    }
     // `workpad_ref` was in this list on `main` at 5121d73 — written by `save` and by `saveWorkpad`
     // — which is the defect, not a false positive.
     expect(Object.fromEntries(contested)).toEqual({});

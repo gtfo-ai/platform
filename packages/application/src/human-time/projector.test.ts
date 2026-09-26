@@ -138,6 +138,25 @@ interface LoggedLine {
   readonly message: string;
 }
 
+/** A person approved the merge request (WP-60); `approved_at` is the provider's, which is not read. */
+const approved = (
+  occurredAt: string,
+  options: { readonly externalId?: string; readonly approvedAt?: string | null } = {},
+): DomainEvent =>
+  event('mr.approved', occurredAt, {
+    project_id: PROJECT,
+    task_id: null,
+    mr: MR,
+    approver: {
+      provider: 'gitlab',
+      external_id: options.externalId ?? 'ada',
+      email: null,
+      display_name: 'Ada',
+      verified: false,
+    },
+    approved_at: options.approvedAt === undefined ? null : options.approvedAt,
+  });
+
 interface ProjectorHarness {
   readonly store: MemoryHumanTimeStore;
   readonly logs: readonly LoggedLine[];
@@ -336,6 +355,56 @@ describe('the review window', () => {
   });
 });
 
+/**
+ * product/19 §16's *"approval"* anchor (WP-60, PROGRESS backlog 90). Until the event existed this
+ * projector's docblock stated the residual: a reviewer who approved without commenting contributed
+ * zero minutes. These cases are that sentence's replacement, in both directions.
+ */
+describe('an approval is review activity', () => {
+  it('opens the approver’s window when they approve without commenting', async () => {
+    const projector = harness();
+    await projector.publish([approved('2026-06-01T09:00:00.000Z')]);
+    expect(projector.store.entries).toEqual([
+      expect.objectContaining({
+        taskId: TASK,
+        kind: 'review',
+        externalAuthor: 'gitlab:ada',
+        startedAt: '2026-06-01T09:00:00.000Z',
+        endedAt: '2026-06-01T09:00:00.000Z',
+        minutes: 0,
+      }),
+    ]);
+  });
+
+  it('extends the same person’s window from their comment to their approval, and not another’s', async () => {
+    const projector = harness();
+    await projector.publish([
+      comment('2026-06-01T09:00:00.000Z', { externalId: 'ada' }),
+      approved('2026-06-01T09:40:00.000Z', { externalId: 'ada' }),
+      approved('2026-06-01T09:50:00.000Z', { externalId: 'grace' }),
+    ]);
+    expect(projector.store.entries.map((entry) => [entry.externalAuthor, entry.minutes])).toEqual([
+      ['gitlab:ada', 40],
+      ['gitlab:grace', 0],
+    ]);
+  });
+
+  it('dates the approval by its receipt, not by the provider’s approved_at', async () => {
+    // Two clocks inside one window would make its length depend on two machines agreeing, so the
+    // provider's instant — which a GitLab older than 18.10 does not send at all — is not read.
+    const projector = harness();
+    await projector.publish([
+      comment('2026-06-01T09:00:00.000Z'),
+      approved('2026-06-01T09:30:00.000Z', { approvedAt: '2026-06-01T08:00:00.000Z' }),
+    ]);
+    expect(projector.store.entries[0]).toMatchObject({
+      startedAt: '2026-06-01T09:00:00.000Z',
+      endedAt: '2026-06-01T09:30:00.000Z',
+      minutes: 30,
+    });
+  });
+});
+
 describe('the review window’s two other shapes', () => {
   it('uses the task the payload already names, without asking the store', async () => {
     // `mr.review.comment` arrives from a normaliser with `task_id: null` — a webhook names a merge
@@ -427,7 +496,7 @@ describe('what the projector refuses to record', () => {
 
     expect(projector.store.entries).toEqual([]);
     expect(projector.logs.filter((line) => line.level === 'warn')[0]?.message).toBe(
-      'human time: this comment’s author id is longer than an identity may be; the minutes are refused rather than attributed to a truncated key',
+      'human time: this reviewer’s account id is longer than an identity may be; the minutes are refused rather than attributed to a truncated key',
     );
   });
 

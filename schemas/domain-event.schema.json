@@ -226,6 +226,82 @@
         },
         "type": {
           "type": "string",
+          "const": "ticket.updated"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "project_id": {
+              "$ref": "#/$defs/Id"
+            },
+            "ticket": {
+              "$ref": "#/$defs/TicketRef"
+            },
+            "updated_at": {
+              "$ref": "#/$defs/IsoDateTime"
+            },
+            "changed_fields": {
+              "maxItems": 32,
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/anon_3adc8ad5"
+              }
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "project_id",
+            "ticket",
+            "updated_at",
+            "changed_fields",
+            "truncated"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "id",
+        "stream_type",
+        "stream_id",
+        "stream_seq",
+        "actor",
+        "occurred_at",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "stream_type": {
+          "$ref": "#/$defs/StreamType"
+        },
+        "stream_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "stream_seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "correlation_id": {
+          "$ref": "#/$defs/anon_ecc899e6"
+        },
+        "cause_event_id": {
+          "$ref": "#/$defs/anon_ecc899e6"
+        },
+        "actor": {
+          "$ref": "#/$defs/Actor"
+        },
+        "occurred_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "type": {
+          "type": "string",
           "const": "ticket.comment.added"
         },
         "payload": {
@@ -2989,6 +3065,16 @@
             },
             "diff_stats": {
               "$ref": "#/$defs/anon_086d4f27"
+            },
+            "updated_at": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/IsoDateTime"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
@@ -3154,6 +3240,90 @@
             "mr",
             "draft",
             "head_sha"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "id",
+        "stream_type",
+        "stream_id",
+        "stream_seq",
+        "actor",
+        "occurred_at",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "stream_type": {
+          "$ref": "#/$defs/StreamType"
+        },
+        "stream_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "stream_seq": {
+          "$ref": "#/$defs/Sequence"
+        },
+        "correlation_id": {
+          "$ref": "#/$defs/anon_ecc899e6"
+        },
+        "cause_event_id": {
+          "$ref": "#/$defs/anon_ecc899e6"
+        },
+        "actor": {
+          "$ref": "#/$defs/Actor"
+        },
+        "occurred_at": {
+          "$ref": "#/$defs/IsoDateTime"
+        },
+        "type": {
+          "type": "string",
+          "const": "mr.approved"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "project_id": {
+              "$ref": "#/$defs/Id"
+            },
+            "task_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "mr": {
+              "$ref": "#/$defs/MergeRequestRef"
+            },
+            "approver": {
+              "$ref": "#/$defs/ExternalIdentity"
+            },
+            "approved_at": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/IsoDateTime"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "project_id",
+            "mr",
+            "approver"
           ],
           "additionalProperties": false
         }
@@ -5706,6 +5876,10 @@
           "type": "null"
         }
       ]
+    },
+    "anon_3adc8ad5": {
+      "maxLength": 128,
+      "$ref": "#/$defs/NonEmptyString"
     },
     "anon_def33f2f": {
       "type": "boolean"

@@ -59,6 +59,7 @@ const task = (): StoredTask =>
     estimateSamples: null,
     ticketSnapshot: null,
     ticketSnapshotAt: null,
+    ticketSignalAt: null,
     reviewSubject: null,
     historySample: null,
     version: 1,

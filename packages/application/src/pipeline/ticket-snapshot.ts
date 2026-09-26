@@ -60,22 +60,27 @@
  * commit. (The count in this sentence used to be "twenty"; it was already twenty-one when WP-15e
  * read it, which is why it is now produced by a test instead of quoted here — standing rule 63.)
  *
- * ## Freshness — what Q61 (b) asks for, and what this build can hold
+ * ## Freshness — Q61 (b), built at WP-60
  *
- * Q61 (b) asks for a re-read *"when the snapshot predates the task's last provider signal"*. **That
- * quantity does not exist in this build.** The only provider signals about a ticket are
- * `ticket.comment.added` and `ticket.status.changed`; both are declared `unconsumed`
- * (`events/consumption.ts`), both carry a **nullish** `task_id`, and both are appended to the
- * *project* stream (`integrations/inbound.ts`), so nothing on a task row or in a task-scoped query
- * can answer "when was this task last told something by the provider". Producing it means either a
- * new consumer for those two types — WP-24's and WP-31's work, and exactly the "two-provider change
- * by implication" that Q61 (b) refuses for `ticket.updated` — or an unbounded scan of the project
- * stream with no port to do it through.
+ * Q61 (b) asks for a re-read *"when the snapshot predates the task's last provider signal"*. Until
+ * WP-60 **that quantity did not exist**: nothing told the platform a ticket changed, so this
+ * paragraph said the re-read happened only when the snapshot was **absent** and an edit made after
+ * intake was invisible. It exists now, in three pieces:
  *
- * So the implementable half ships and the rest is stated: the re-read at stage start happens when
- * the snapshot is **absent**, and a description a human edits after intake is invisible until the
- * task's next task-management binding change. Closing it needs the `ticket.updated` normalisation
- * Q61 (b) rules out of this work package.
+ *  - the task-management normaliser emits `ticket.updated` on every edit (Jira's
+ *    `jira:issue_updated`), which was **one** normaliser rather than the two-provider change Q61 (b)
+ *    priced it at — Jira Cloud is the only registered task-management provider (backlog 59);
+ *  - `pipeline.ticket.signal` (`provider-signals.ts`) stamps the event's receipt time on every live
+ *    task of the ticket as `tasks.ticket_signal_at` (migration 0044);
+ *  - {@link ensureTicketSnapshot} re-reads when the snapshot is absent **or older than that
+ *    signal** — {@link isTicketSnapshotStale} is the rule, and it compares two platform instants
+ *    stamped by two processes (its docblock states the skew bound).
+ *
+ * A snapshot's `ticket_snapshot_at` is the instant its read **started**, not ended, at both writers
+ * (intake and here): an edit announced while the provider was answering is then dated after the
+ * snapshot and costs one more read at the next stage, where the other choice would have kept the
+ * pre-edit words for the rest of the task. The residual that remains is the provider's: a delivery
+ * Jira never sends, or sends after the next stage has started, is an edit the prompt does not see.
  */
 import type { Id, IsoDateTime, TicketSnapshot, TicketSnapshotComment } from '@platform/contracts';
 import { ticketSnapshotSchema } from '@platform/contracts';
@@ -347,11 +352,39 @@ export interface EnsureTicketSnapshotOptions extends TicketSnapshotOptions {
 }
 
 /**
- * The stage-start half: read the ticket if the task has none, and remember it narrowly.
+ * Does this task need its ticket read again before an agent stage? (WP-60, Q61 (b))
+ *
+ * Yes when there is no snapshot, or when the provider announced an edit after the snapshot's read
+ * started (`ticketSignalAt > ticketSnapshotAt`). Both are platform instants, but from two **processes'** clocks — the process that
+ * receives the webhook stamps the signal, the process that runs the stage stamps the snapshot — so
+ * the comparison is only as good as their agreement. With a skew of δ between them the rule can
+ * miss an edit announced within δ of a read's start (it looks older than the snapshot) or cost one
+ * extra read (a signal that looks newer than a read that did see it); it can never re-read at every
+ * stage, because a successful read stamps a snapshot newer than the signal it answered, and it can
+ * never miss an edit for ever, because the next `ticket.updated` stamps a newer signal. Both
+ * processes run from one image on one host in the shipped topology, so δ is the host's clock
+ * discipline, not measured here.
+ * A signal and a snapshot at the same instant is **not** stale, because
+ * the read that started at that instant can have seen the edit.
+ */
+export const isTicketSnapshotStale = (stored: StoredTask): boolean => {
+  if (stored.ticketSnapshot === null || stored.ticketSnapshotAt === null) {
+    return true;
+  }
+  if (stored.ticketSignalAt === null) {
+    return false;
+  }
+  return Date.parse(stored.ticketSignalAt) > Date.parse(stored.ticketSnapshotAt);
+};
+
+/**
+ * The stage-start half: read the ticket if the task has none **or its snapshot is stale**, and
+ * remember it narrowly.
  *
  * Called from the `stage.execute` job before an **agent** stage runs, which is the only consumer —
- * a gate builds no prompt. It is a no-op for a task that already has a snapshot, so the normal path
- * costs one already-loaded field and no provider call.
+ * a gate builds no prompt. It is a no-op for a task whose snapshot is fresh
+ * ({@link isTicketSnapshotStale}), so the normal path costs two already-loaded fields and no
+ * provider call.
  *
  * Three properties worth stating because a reviewer should be able to check them:
  *
@@ -363,17 +396,23 @@ export interface EnsureTicketSnapshotOptions extends TicketSnapshotOptions {
  *    field and **no transaction at all**;
  *  - it writes with `saveTicketSnapshot` — two columns — because this transaction runs beside the
  *    stage executor's own, which is PROGRESS backlog 18's interleaving exactly;
- *  - it re-loads inside the write transaction and skips if somebody else got there first, so two
- *    concurrent attempts cost one extra provider read and never a conflicting write.
+ *  - it re-loads inside the write transaction and skips if somebody else's snapshot is already at
+ *    least as fresh as this one, so two concurrent attempts cost one extra provider read and never
+ *    put an older read over a newer one;
+ *  - a re-read that fails **keeps** the stale snapshot rather than clearing it (standing rule 20:
+ *    the words the ticket had are a better prompt than none), and the next stage tries again,
+ *    because the signal is still newer than the snapshot.
  */
 export const ensureTicketSnapshot = async (
   options: EnsureTicketSnapshotOptions,
   stored: StoredTask,
 ): Promise<void> => {
   const taskId = stored.task.id;
-  if (stored.ticketSnapshot !== null) {
+  if (!isTicketSnapshotStale(stored)) {
     return;
   }
+  // The read's **start**, which is what the snapshot is as fresh as (see the module docblock).
+  const readAt = options.clock.now() as IsoDateTime;
   const snapshot = await readTicketSnapshot(options, {
     projectId: stored.task.projectId,
     taskId: stored.task.id,
@@ -384,14 +423,16 @@ export const ensureTicketSnapshot = async (
   }
   await options.unitOfWork.transaction(async (scope) => {
     const current = await options.store.tasks.load(scope.tx, taskId);
-    if (current === null || current.ticketSnapshot !== null) {
+    if (current === null) {
       return;
     }
-    await options.store.tasks.saveTicketSnapshot(
-      scope.tx,
-      taskId,
-      snapshot,
-      options.clock.now() as IsoDateTime,
-    );
+    if (
+      current.ticketSnapshotAt !== null &&
+      Date.parse(current.ticketSnapshotAt) >= Date.parse(readAt)
+    ) {
+      // Somebody else's read started no earlier than this one: theirs is at least as fresh.
+      return;
+    }
+    await options.store.tasks.saveTicketSnapshot(scope.tx, taskId, snapshot, readAt);
   });
 };

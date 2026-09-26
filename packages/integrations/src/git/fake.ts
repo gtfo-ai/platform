@@ -156,6 +156,12 @@
  *     **Anything else that reaches for `diff_stats` on a merge request or a delivery owes itself the
  *     same check.** Asserted positively by `fake.test.ts` ("publishes diff stats on the three
  *     surfaces GitLab answers null on (divergence 17)").
+ * 18. **Kinder — `mr.approved` always carries its instant** (WP-60). `emitApproval` stamps
+ *     `approved_at` with the fake's clock; GitLab sends `actioned_at` only from 18.10, so an older
+ *     instance's approval carries `approved_at: null`. A consumer must therefore date an approval by
+ *     the envelope's `occurred_at` (as the human-time projector does) and treat `approved_at` as
+ *     optional provider evidence — a consumer that required it would pass here and drop every
+ *     approval from an older GitLab.
  */
 import {
   type CodeownersRules,
@@ -354,6 +360,17 @@ const mrEventBody = z.strictObject({
   event: z.enum(['mr.opened', 'mr.updated', 'mr.merged', 'mr.closed']),
   project: z.string().min(1),
   iid: z.int().positive(),
+  /** `mr.updated` only: the provider's instant of the change (WP-60 review round 1). */
+  updated_at: z.string().min(1).optional(),
+});
+
+/** A person approved a merge request (WP-60); `approver_id` is the account that did. */
+const approvalBody = z.strictObject({
+  event: z.literal('mr.approved'),
+  project: z.string().min(1),
+  iid: z.int().positive(),
+  approver_id: z.string().min(1),
+  approved_at: z.string().min(1),
 });
 
 const reviewCommentBody = z.strictObject({
@@ -381,6 +398,7 @@ const branchMovedBody = z.strictObject({
 
 const deliveryBody = z.discriminatedUnion('event', [
   mrEventBody,
+  approvalBody,
   reviewCommentBody,
   pipelineBody,
   branchMovedBody,
@@ -520,6 +538,19 @@ export interface FakeGitProvider extends GitProviderPort {
     readonly event: 'mr.opened' | 'mr.updated' | 'mr.merged' | 'mr.closed';
     readonly project: string;
     readonly iid: number;
+    /**
+     * `mr.updated` only: somebody pushed, and the merge request's head is now this revision
+     * (WP-60, PROGRESS backlog 182) — the human push, the take-over's, that the platform learns of
+     * only through the delivery.
+     */
+    readonly headSha?: string;
+    readonly deliveryId?: string;
+  }): WebhookDelivery;
+  /** A person approved the merge request (WP-60). */
+  emitApproval(input: {
+    readonly project: string;
+    readonly iid: number;
+    readonly approverId: string;
     readonly deliveryId?: string;
   }): WebhookDelivery;
   emitReviewComment(input: {
@@ -870,6 +901,26 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
         head_sha: mr.head_sha,
       };
 
+      if (body.event === 'mr.approved') {
+        const identity = identityOf(body.approver_id);
+        const approver: ExternalIdentity = {
+          ...identity,
+          verified: context.resolveUser(identity) !== null,
+        };
+        const event: NormalisedEvent<'mr.approved'> = {
+          type: 'mr.approved',
+          payload: {
+            project_id: context.projectId,
+            task_id: null,
+            mr: mrRef,
+            approver,
+            approved_at: body.approved_at,
+          },
+          actor: { ...actor, identity: approver },
+        };
+        return { events: [event], ignored: [] };
+      }
+
       if (body.event === 'mr.review.comment') {
         const identity = identityOf(body.author_id);
         const author: ExternalIdentity = {
@@ -908,11 +959,21 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
         };
         return { events: [event], ignored: [] };
       }
+      if (body.event === 'mr.updated') {
+        // The fake's clock as the provider's instant, stamped when the delivery was built so two
+        // updates keep their order however they are normalised (WP-60 review round 1).
+        const event: NormalisedEvent<'mr.updated'> = {
+          type: 'mr.updated',
+          payload: { ...payload, updated_at: body.updated_at ?? null },
+          actor,
+        };
+        return { events: [event], ignored: [] };
+      }
       const event = {
         type: body.event,
         payload,
         actor,
-      } as NormalisedEvent<'mr.opened' | 'mr.updated' | 'mr.closed'>;
+      } as NormalisedEvent<'mr.opened' | 'mr.closed'>;
       return { events: [event], ignored: [] };
     },
   };
@@ -1604,11 +1665,41 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       if (input.event === 'mr.closed') {
         mr.state = 'closed';
       }
+      if (input.headSha !== undefined) {
+        if (input.event !== 'mr.updated') {
+          // Stricter (standing rule 1): only a push moves a head, and a push is an update.
+          throw invalidRequest(PROVIDER, 'emit', `a head moves on mr.updated, not ${input.event}`);
+        }
+        mr.head_sha = input.headSha;
+      }
       return buildFakeDelivery({
         secret: core.webhookSecret,
         event: input.event,
         deliveryId: input.deliveryId ?? nextDeliveryId(),
-        payload: { event: input.event, project: input.project, iid: input.iid },
+        payload: {
+          event: input.event,
+          project: input.project,
+          iid: input.iid,
+          ...(input.event === 'mr.updated' ? { updated_at: core.clock.now() } : {}),
+        },
+      });
+    },
+
+    emitApproval: (input) => {
+      if (findMr(input.project, input.iid) === undefined) {
+        throw notFound(PROVIDER, 'emit', `merge request ${input.iid}`);
+      }
+      return buildFakeDelivery({
+        secret: core.webhookSecret,
+        event: 'mr.approved',
+        deliveryId: input.deliveryId ?? nextDeliveryId(),
+        payload: {
+          event: 'mr.approved',
+          project: input.project,
+          iid: input.iid,
+          approver_id: input.approverId,
+          approved_at: core.clock.now(),
+        },
       });
     },
 

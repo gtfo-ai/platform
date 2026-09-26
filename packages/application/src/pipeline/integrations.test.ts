@@ -84,6 +84,9 @@ const linesMatching = (text: string, pattern: RegExp): readonly number[] => {
  * which is exactly the change that should not pass unnoticed.
  */
 const DOOR_SITES: Readonly<Record<string, number>> = {
+  // WP-60 review round 2's `ci_settle` duty: one resolution for the merge request's live head, so
+  // the CI gate is settled only for a pipeline that ran on it.
+  'ci-settle.ts': 1,
   // WP-26's conflict warning: one resolution for the whole duty, and every peer's diff is read
   // through it — a binding per peer would be a credential decryption per comparison.
   'conflict-warning.ts': 1,

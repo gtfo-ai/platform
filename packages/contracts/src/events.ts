@@ -155,6 +155,45 @@ export const ticketCreatedEvent = defineEvent('ticket.created', {
   issue_type: nonEmptyStringSchema.nullish(),
 });
 
+/** The bound on one changed-field name `ticket.updated` carries (provider text, BD-022). */
+export const MAX_TICKET_UPDATED_FIELD_CHARS = 128;
+/** The bound on how many changed-field names `ticket.updated` carries; `truncated` says a cut. */
+export const MAX_TICKET_UPDATED_FIELDS = 32;
+
+/**
+ * A ticket the binding reads **changed** — whatever else the same delivery says (WP-60, PROGRESS
+ * backlog 59, Q61 (b)).
+ *
+ * It is a fact of its own, the shape `ticket.created` took at WP-25: a delivery that moves a ticket
+ * into the pick-up status produces `ticket.matched`, `ticket.status.changed` **and** this, and an
+ * edited description — which produced **nothing** before this event existed — produces only this.
+ * Emitted **beside** the other two, never instead of them, so no consumer of theirs has to learn a
+ * new reason to fire.
+ *
+ * `updated_at` is the **provider's own** instant (Jira's `issue.fields.updated`), not the platform's
+ * receipt time — the envelope's `occurred_at` is that. The two answer different questions: the
+ * snapshot freshness rule compares **platform** instants (`tasks.ticket_signal_at` against
+ * `ticket_snapshot_at`, both on one clock), and a later consumer that compares against
+ * `task.lint.posted`'s `ticket_updated_at` needs the provider's.
+ *
+ * `changed_fields` is the field names the delivery **already holds** (Jira's changelog), bounded,
+ * de-duplicated and in delivery order; it is **provider text** (a custom field's name is whatever
+ * somebody typed), redacted with the rest of the delivery before any branch reads it. An update
+ * with no changelog is an empty list, never an invented one; `truncated` says the list was cut.
+ *
+ * No `task_id`: like `ticket.created`, the normaliser cannot know which task a ticket belongs to,
+ * and the consumer finds the live tasks by the ticket itself.
+ */
+export const ticketUpdatedEvent = defineEvent('ticket.updated', {
+  ...projectScoped,
+  ticket: ticketRefSchema,
+  updated_at: isoDateTimeSchema,
+  changed_fields: z
+    .array(nonEmptyStringSchema.max(MAX_TICKET_UPDATED_FIELD_CHARS))
+    .max(MAX_TICKET_UPDATED_FIELDS),
+  truncated: z.boolean(),
+});
+
 export const ticketCommentAddedEvent = defineEvent('ticket.comment.added', {
   ...projectScoped,
   task_id: idSchema.nullish(),
@@ -325,12 +364,12 @@ export const taskReviewObservedEvent = defineEvent('task.review.observed', {
  * downstream"*. Neither is computable from one event, and this one is deliberately the **baseline**
  * rather than the answer:
  *
- *  - *edited within 48 h* needs a later "this ticket changed" signal. **No such event exists in this
- *    build**: Jira's `jira:issue_updated` is normalised only into `ticket.matched` (when the change
- *    is what made the ticket match) and `ticket.status.changed`, so an edited description produces
- *    `unsupported_event` and nothing else. `ticket_updated_at` is carried here so that whoever adds
- *    that signal compares against the ticket as the linter saw it, rather than re-reading the
- *    provider for a number this event already knew.
+ *  - *edited within 48 h* needs a later "this ticket changed" signal. Until WP-60 **no such event
+ *    existed** — an edited description produced `unsupported_event` and nothing else. It is
+ *    `ticket.updated` now, carrying the provider's own `updated_at`; `ticket_updated_at` is carried
+ *    here so that the fold that compares the two (not built — `stats-metrics.ts` names it absent)
+ *    compares against the ticket as the linter saw it, rather than re-reading the provider for a
+ *    number this event already knew.
  *  - *questions avoided downstream* is a correlation across a later task on the same ticket, which
  *    is WP-41's (statistics). `score` and `questions_posted` are what it correlates.
  */
@@ -540,12 +579,49 @@ const mrPayload = {
 } as const;
 
 export const mrOpenedEvent = defineEvent('mr.opened', mrPayload);
-export const mrUpdatedEvent = defineEvent('mr.updated', mrPayload);
+/**
+ * `updated_at` is the **provider's** instant of the change (GitLab's `object_attributes.updated_at`),
+ * carried so a consumer can order two updates: GitLab documents no delivery order, and the recorded
+ * head (`tasks.mr_ref.head_sha`, which the conflict warning and the diff coalescer key on) must only move forward (WP-60 review
+ * round 1). `null` when the delivery carries none — and an update with no instant cannot be ordered,
+ * so it moves nothing.
+ */
+export const mrUpdatedEvent = defineEvent('mr.updated', {
+  ...mrPayload,
+  updated_at: isoDateTimeSchema.nullish(),
+});
 export const mrMergedEvent = defineEvent('mr.merged', {
   ...mrPayload,
   merge_commit_sha: shaSchema.nullish(),
 });
 export const mrClosedEvent = defineEvent('mr.closed', mrPayload);
+
+/**
+ * A person **added their approval** to a merge request — product/08's git-provider contract and
+ * product/19 §16's *"approval"* anchor of the review window (WP-60, PROGRESS backlog 90).
+ *
+ * **The whole value of the event is the actor**, so `approver` is required: a delivery that names
+ * nobody is refused by the normaliser rather than emitted without one. GitLab documents the
+ * delivery's top-level `user` as *"User who triggered the event"* and the `approval` action as *"A
+ * user adds their approval"* (`gitlab/inbound.ts` cites the page and the date), so the approver is
+ * the triggering user of that one action.
+ *
+ * One event per **approving person**, never per merge-request state: GitLab's `approved` (*"fully
+ * approved by all required approvers"*) is a statement about the merge request rather than about
+ * a person, and emitting on it too would count the last approver twice.
+ *
+ * `approved_at` is the **provider's own** instant (GitLab's `object_attributes.actioned_at`, *"When
+ * the action that triggered the webhook occurred"*, introduced in GitLab 18.10), and `null` when the
+ * instance is older and does not send it — never the merge request's `updated_at`, which is a
+ * different fact, and never invented. The envelope's `occurred_at` is the platform's receipt time.
+ */
+export const mrApprovedEvent = defineEvent('mr.approved', {
+  ...projectScoped,
+  task_id: idSchema.nullish(),
+  mr: mergeRequestRefSchema,
+  approver: externalIdentitySchema,
+  approved_at: isoDateTimeSchema.nullish(),
+});
 
 export const mrReviewCommentEvent = defineEvent('mr.review.comment', {
   ...projectScoped,
@@ -701,6 +777,7 @@ export const shadowReportCreatedEvent = defineEvent('shadow.report.created', {
 export const domainEventSchema = z.discriminatedUnion('type', [
   ticketMatchedEvent,
   ticketCreatedEvent,
+  ticketUpdatedEvent,
   ticketCommentAddedEvent,
   ticketStatusChangedEvent,
   taskCreatedEvent,
@@ -739,6 +816,7 @@ export const domainEventSchema = z.discriminatedUnion('type', [
   mrUpdatedEvent,
   mrMergedEvent,
   mrClosedEvent,
+  mrApprovedEvent,
   mrReviewCommentEvent,
   ciPipelineFinishedEvent,
   defaultBranchMovedEvent,

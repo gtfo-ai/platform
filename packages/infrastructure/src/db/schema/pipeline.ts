@@ -79,6 +79,10 @@ export const tasks = pgTable('tasks', {
   /** The ticket's own words, bounded and redacted at the write (WP-15f, migration 0015). */
   ticketSnapshot: jsonb('ticket_snapshot').$type<TicketSnapshot>(),
   ticketSnapshotAt: timestamp('ticket_snapshot_at', { withTimezone: true }),
+  /** WP-60, migration 0044: the newest `ticket.updated`'s receipt time — Q61 (b)'s signal. */
+  ticketSignalAt: timestamp('ticket_signal_at', { withTimezone: true }),
+  /** WP-60 review round 1, migration 0044: the provider's instant of the recorded `mr_ref.head_sha`. */
+  mrHeadAt: timestamp('mr_head_at', { withTimezone: true }),
   /** WP-24, migration 0020: the human merge request a review-only task reviews. */
   reviewSubject: jsonb('review_subject').$type<MergeRequestSnapshot>(),
   /** WP-35, migration 0030: the mined history one bootstrap run reads, bounded and redacted. */

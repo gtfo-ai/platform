@@ -45,6 +45,14 @@
  *     seconds, which is why the polling fallback overlaps its window. A test asserting that a
  *     freshly labelled ticket appears in `matchTickets` at once is asserting something the real
  *     provider does not promise.
+ *  8. **Stricter — `emitTicketMatched` produces `ticket.matched` alone** (WP-60). Jira announces a
+ *     match through the same `jira:issue_updated` that carries the label or status change, so it
+ *     produces `ticket.updated` beside it; this fake's match delivery is a synthetic door with no
+ *     edit in it. `emitStatusChanged` **does** produce the pair, and `emitTicketUpdated` is the
+ *     edit on its own. The direction is one event fewer: a consumer that relied on a match also
+ *     arriving as an edit would fail here and work against Jira, never the reverse — and the only
+ *     consumer (`pipeline/provider-signals.ts`) finds no task at match time anyway, because intake
+ *     has not created it yet.
  */
 import {
   type CommentRef,
@@ -188,11 +196,23 @@ const ticketCreatedBody = z.strictObject({
   ticket_key: z.string().min(1),
 });
 
+/**
+ * A ticket was edited (WP-60). `fields` are the names of what changed, as Jira's changelog states
+ * them; the edit itself is applied to the stored ticket by `emitTicketUpdated`, so a later
+ * `readTicket` returns the new words — which is what the snapshot freshness rule re-reads.
+ */
+const ticketUpdatedBody = z.strictObject({
+  event: z.literal('ticket.updated'),
+  ticket_key: z.string().min(1),
+  fields: z.array(z.string().min(1)),
+});
+
 const deliveryBody = z.discriminatedUnion('event', [
   commentAddedBody,
   statusChangedBody,
   ticketMatchedBody,
   ticketCreatedBody,
+  ticketUpdatedBody,
 ]);
 
 export interface FakeTaskManagement extends TaskManagementPort {
@@ -222,6 +242,16 @@ export interface FakeTaskManagement extends TaskManagementPort {
   /** A ticket was created — the ticket readiness linter's door (WP-25). */
   emitTicketCreated(input: {
     readonly ticketKey: string;
+    readonly deliveryId?: string;
+  }): WebhookDelivery;
+  /**
+   * A human edited the ticket (WP-60): the change is applied to the stored ticket **first**, so a
+   * `readTicket` after this returns the new words, and the delivery names the fields that moved.
+   */
+  emitTicketUpdated(input: {
+    readonly ticketKey: string;
+    readonly title?: string;
+    readonly description?: string;
     readonly deliveryId?: string;
   }): WebhookDelivery;
 }
@@ -465,6 +495,27 @@ export const createFakeTaskManagement = (
         return { events: [event], ignored: [] };
       }
 
+      /**
+       * `ticket.updated`, the fake's half of WP-60's obligation. `updated_at` is the stored
+       * ticket's own, which every `emit*` that edits the ticket moves — the provider's instant, the
+       * way Jira's `issue.fields.updated` is.
+       */
+      const updated = (fields: readonly string[]): NormalisedEvent<'ticket.updated'> => ({
+        type: 'ticket.updated',
+        payload: {
+          project_id: context.projectId,
+          ticket: ticketRef,
+          updated_at: ticket.updated_at,
+          changed_fields: [...new Set(fields)],
+          truncated: false,
+        },
+        actor,
+      });
+
+      if (body.event === 'ticket.updated') {
+        return { events: [updated(body.fields)], ignored: [] };
+      }
+
       if (body.event === 'status.changed') {
         const event: NormalisedEvent<'ticket.status.changed'> = {
           type: 'ticket.status.changed',
@@ -477,7 +528,10 @@ export const createFakeTaskManagement = (
           },
           actor,
         };
-        return { events: [event], ignored: [] };
+        // **Beside**, the way Jira's `jira:issue_updated` carries a status item: a status change
+        // is an edit of the ticket too (WP-60). A fake that emitted only the status event would be
+        // kinder than the provider to a consumer that forgot the pair (standing rule 1).
+        return { events: [event, updated(['status'])], ignored: [] };
       }
 
       if (body.event === 'ticket.created') {
@@ -700,6 +754,26 @@ export const createFakeTaskManagement = (
         event: 'ticket.created',
         deliveryId: input.deliveryId ?? nextDeliveryId(),
         payload: { event: 'ticket.created', ticket_key: input.ticketKey },
+      });
+    },
+
+    emitTicketUpdated: (input) => {
+      const ticket = requireTicket(ACTION, input.ticketKey);
+      const fields: string[] = [];
+      if (input.title !== undefined) {
+        ticket.title = input.title;
+        fields.push('summary');
+      }
+      if (input.description !== undefined) {
+        ticket.description = input.description;
+        fields.push('description');
+      }
+      ticket.updated_at = core.clock.now();
+      return buildFakeDelivery({
+        secret: core.webhookSecret,
+        event: 'ticket.updated',
+        deliveryId: input.deliveryId ?? nextDeliveryId(),
+        payload: { event: 'ticket.updated', ticket_key: ticket.key, fields },
       });
     },
 

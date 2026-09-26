@@ -444,6 +444,7 @@ const scheduleProject = async (
         version: INITIAL_TASK_VERSION,
         ticketSnapshot: choreSnapshot(options, brief),
         ticketSnapshotAt: options.clock.now(),
+        ticketSignalAt: null,
         reviewSubject: null,
         historySample: null,
         riskClasses: [],

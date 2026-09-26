@@ -51,9 +51,10 @@ const integrationsWith = (git: Partial<GitProviderPort> | null): PipelineIntegra
     getPipelineStatus: async () => {
       throw new Error('the test did not script getPipelineStatus');
     },
-    getMergeRequest: async () => {
-      throw new Error('the test did not script getMergeRequest');
-    },
+    // The CI gate reads the merge request's **live** head (WP-60 review round 2); unless a test says
+    // otherwise, the branch is where the task recorded it. Mergeability is not computed, so a rebase
+    // gate case that forgot to script it waits rather than passing.
+    getMergeRequest: async () => liveMergeRequest(HEAD_SHA),
     ...git,
   } as unknown as GitProviderPort;
   return {
@@ -75,6 +76,29 @@ const integrationsWith = (git: Partial<GitProviderPort> | null): PipelineIntegra
     communication: null,
   };
 };
+
+const liveMergeRequest = (headSha: string, hasConflicts: boolean | null = null) => ({
+  ref: {
+    provider: 'fake-git',
+    project_path: 'acme/api',
+    iid: 7,
+    url: 'https://git.example.test/acme/api/-/merge_requests/7',
+    branch: 'agentic/acme-1',
+    head_sha: headSha,
+  },
+  state: 'opened' as const,
+  draft: false,
+  title: 'totals',
+  description: '',
+  source_branch: 'agentic/acme-1',
+  target_branch: 'main',
+  head_sha: headSha,
+  mergeable: true,
+  has_conflicts: hasConflicts,
+  labels: [],
+  reviewers: [],
+  web_url: 'https://git.example.test/acme/api/-/merge_requests/7',
+});
 
 const pipelineStatus = (
   status: PipelineStatus['status'],
@@ -144,6 +168,7 @@ const storedTask = (mr: StoredTask['mr']): StoredTask => ({
   requiredReviewers: null,
   requestedByUserId: null,
   ticketSnapshotAt: null,
+  ticketSignalAt: null,
   version: 1,
 });
 
@@ -191,6 +216,8 @@ describe('the CI gate', () => {
     expect(result).toEqual({
       kind: 'settled',
       passed: false,
+      // The failure's stable identity, for product/04 S4's convergence on this path too (WP-60).
+      ciSignature: `ci:failed:test:e2e,test:unit@${HEAD_SHA}`,
       detail: 'pipeline pipeline-1 failed: test:unit, test:e2e',
     });
   });
@@ -203,6 +230,8 @@ describe('the CI gate', () => {
     expect(result).toEqual({
       kind: 'settled',
       passed: false,
+      // The failure's stable identity, for product/04 S4's convergence on this path too (WP-60).
+      ciSignature: `ci:canceled:@${HEAD_SHA}`,
       detail: 'pipeline pipeline-1 canceled',
     });
   });
@@ -216,6 +245,8 @@ describe('the CI gate', () => {
     expect(result).toEqual({
       kind: 'settled',
       passed: false,
+      // The failure's stable identity, for product/04 S4's convergence on this path too (WP-60).
+      ciSignature: `ci:skipped:@${HEAD_SHA}`,
       detail: 'pipeline pipeline-1 skipped',
     });
   });
@@ -231,6 +262,8 @@ describe('the CI gate', () => {
     expect(result).toEqual({
       kind: 'settled',
       passed: false,
+      // The failure's stable identity, for product/04 S4's convergence on this path too (WP-60).
+      ciSignature: `ci:failed:test:unit@${HEAD_SHA}`,
       detail: 'pipeline pipeline-1 failed: test:unit',
     });
   });
@@ -274,10 +307,34 @@ describe('the CI gate', () => {
   });
 
   it('waits — rather than passing — while the merge request has no head commit', async () => {
-    const result = await evaluate(templateStage('ci_gate'), storedTask({ ...MR, head_sha: null }), {
+    const result = await evaluate(templateStage('ci_gate'), storedTask(MR), {
+      getMergeRequest: async () =>
+        ({
+          ...liveMergeRequest(HEAD_SHA),
+          ref: { ...liveMergeRequest(HEAD_SHA).ref, head_sha: null },
+        }) as never,
       getPipelineStatus: async () => pipelineStatus('success'),
     });
     expect(result).toEqual({ kind: 'pending', detail: 'the merge request has no head commit yet' });
+  });
+
+  /**
+   * WP-60 review round 2: the poll path asks the pipeline status of the merge request's **live**
+   * head, never the recorded one. The recorded head is `b…` — what a pushing stage reported, or a
+   * late `mr.updated` left — and a human has pushed `c…` since; `b…`'s pipeline is green, `c…`'s is
+   * still running. Before, the gate passed on `b…`.
+   */
+  it('judges the live head, not the recorded one, so a stale green pipeline does not pass', async () => {
+    const asked: string[] = [];
+    const result = await evaluate(templateStage('ci_gate'), storedTask(MR), {
+      getMergeRequest: async () => liveMergeRequest('c'.repeat(40)),
+      getPipelineStatus: async (_project, sha) => {
+        asked.push(sha);
+        return sha === HEAD_SHA ? pipelineStatus('success') : pipelineStatus('running');
+      },
+    });
+    expect(asked).toEqual(['c'.repeat(40)]);
+    expect(result).toEqual({ kind: 'pending', detail: 'pipeline pipeline-1 is running' });
   });
 });
 

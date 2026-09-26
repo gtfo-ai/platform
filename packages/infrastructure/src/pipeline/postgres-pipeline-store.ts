@@ -110,6 +110,7 @@ interface TaskRow extends Record<string, unknown> {
   estimate_samples: number | string | null;
   ticket_snapshot: TicketSnapshot | null;
   ticket_snapshot_at: Date | null;
+  ticket_signal_at: Date | null;
   review_subject: MergeRequestSnapshot | null;
   history_sample: HistorySample | null;
   risk_classes: string[] | null;
@@ -126,7 +127,7 @@ const TASK_COLUMNS = `t.id, t.project_id, t.ticket_provider, t.ticket_key, t.tic
     t.mode, t.state, t.current_stage, t.priority, t.template_snapshot, t.branch, t.mr_ref,
     t.workpad_ref, t.stage_attempts, t.iteration_limits, t.iteration_counters, t.cost_actual,
     t.estimate_usd, t.estimate_basis, t.estimate_samples,
-    t.ticket_snapshot, t.ticket_snapshot_at, t.review_subject, t.history_sample,
+    t.ticket_snapshot, t.ticket_snapshot_at, t.ticket_signal_at, t.review_subject, t.history_sample,
     t.risk_classes, t.coverage,
     t.dependencies, t.required_reviewers,
     t.requested_by_user_id, t.version,
@@ -169,6 +170,7 @@ const toStoredTask = (row: TaskRow, template: PipelineTemplate): StoredTask => (
   estimateSamples: row.estimate_samples === null ? null : Number(row.estimate_samples),
   ticketSnapshot: row.ticket_snapshot,
   ticketSnapshotAt: iso(row.ticket_snapshot_at),
+  ticketSignalAt: iso(row.ticket_signal_at),
   reviewSubject: row.review_subject,
   historySample: row.history_sample,
   // `text[] not null default '{}'`, so the `?? []` is for a driver that hands back `null` rather
@@ -456,6 +458,58 @@ export const createPostgresPipelineStore = (
       if (result.rowCount === 0) {
         throw new PipelineRowMissingError(`task ${taskId} does not exist`);
       }
+    },
+
+    /**
+     * `ticket_signal_at` — the ninth narrow writer (WP-60, migration 0044), and the only one that
+     * writes **many** rows: every live task of one ticket. `greatest(coalesce(…, $5), $5)` so a
+     * redelivered or out-of-order signal never moves it backwards; no version bump, because `save`
+     * does not name the column. The port's docblock has the rest.
+     */
+    recordTicketSignal: async (tx, signal) => {
+      const result = await sqlOf(tx).query(
+        `update tasks
+            set ticket_signal_at = greatest(coalesce(ticket_signal_at, $4::timestamptz), $4::timestamptz),
+                updated_at = now()
+          where project_id = $1 and ticket_provider = $2 and ticket_key = $3
+            and state not in ('done', 'cancelled')`,
+        [signal.projectId, signal.provider, signal.ticketKey, signal.at],
+      );
+      return result.rowCount ?? 0;
+    },
+
+    /**
+     * One key of `mr_ref` — `head_sha` — forward only by the provider's instant, and the token when
+     * the head moves (WP-60, PROGRESS backlog 182; ordered at review round 1).
+     *
+     * The row is locked and read first (`for update`), so the one statement below knows whether the
+     * sha moves: when it does, `jsonb_set` rewrites the key in place and `version` is bumped (rule 79 —
+     * `mr_ref` is `save`'s); when it does not, only `mr_head_at` advances. The predicate is the
+     * ordering rule: `mr_head_at is null or mr_head_at < $4` — strictly later, so an equal instant
+     * moves nothing (the port's docblock says why).
+     */
+    saveMergeRequestHead: async (tx, taskId, head) => {
+      const sql = sqlOf(tx);
+      const { rows } = await sql.query<{ head_sha: string | null }>(
+        `select mr_ref ->> 'head_sha' as head_sha from tasks where id = $1 for update`,
+        [taskId],
+      );
+      const current = rows[0];
+      if (current === undefined) {
+        throw new PipelineRowMissingError(`task ${taskId} does not exist`);
+      }
+      const moves = current.head_sha !== head.headSha;
+      const result = await sql.query(
+        `update tasks
+            set mr_ref = case when $5 then jsonb_set(mr_ref, '{head_sha}', to_jsonb($3::text)) else mr_ref end,
+                mr_head_at = $4::timestamptz,
+                version = version + case when $5 then 1 else 0 end, updated_at = now()
+          where id = $1 and (mr_ref ->> 'iid')::int = $2
+            and (mr_head_at is null or mr_head_at < $4::timestamptz)
+            and state not in ('done', 'cancelled')`,
+        [taskId, head.iid, head.headSha, head.at, moves],
+      );
+      return moves && (result.rowCount ?? 0) > 0;
     },
 
     saveRiskClasses: async (tx, taskId, classes) => {

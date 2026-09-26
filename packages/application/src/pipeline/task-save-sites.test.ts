@@ -99,7 +99,10 @@ const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
   ['packages/application/src/pipeline/deadlines.ts', 1],
   ['packages/application/src/recovery/run-lease.ts', 1],
   ['packages/application/src/pipeline/dependency-gate.ts', 1],
-  ['packages/application/src/pipeline/saga.ts', 13],
+  // 12 since WP-60 review round 2: the CI handler's streak escalation left the handler for the
+  // gate settlement both paths share (`jobs.ts` § `ciConvergence`), which writes through
+  // `applyDecision` rather than a `save` of its own.
+  ['packages/application/src/pipeline/saga.ts', 12],
   ['packages/application/src/pipeline/stage-executor.ts', 5],
   ['packages/application/src/pipeline/transitions.ts', 5],
   ['packages/application/src/pipeline/task-conflict.ts', 1],
@@ -166,7 +169,7 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     );
   });
 
-  it('counts thirty-two, which is the number the change states', () => {
+  it('counts thirty-one, which is the number the change states', () => {
     // Twenty-one inherited from WP-15d (`saga.ts` 11, `transitions.ts` 5, `stage-executor.ts` 5 —
     // backlog 18 counted twenty before `stage-executor.ts` gained its fifth) plus the one
     // `escalateTaskAfterConflict` adds, which is the ending for the other twenty-one; plus four
@@ -190,8 +193,10 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     // escape and roll the dead letter back with it, so the next sweep tries again.
     // **Plus one at WP-56**: the take-over inactivity escalation, from the `deadline.sweep` job,
     // with the job's retry and `escalateTaskAfterConflict` as its ending.
+    // **Minus one at WP-60 review round 2**: the CI handler's three-identical-failures escalation
+    // moved into the gate settlement (`jobs.ts`), where it is a decision `applyDecision` applies.
     const total = [...census().values()].reduce((sum, count) => sum + count, 0);
-    expect(total).toBe(32);
+    expect(total).toBe(31);
     expect([...EXPECTED_SITES.values()].reduce((sum, count) => sum + count, 0)).toBe(total);
   });
 

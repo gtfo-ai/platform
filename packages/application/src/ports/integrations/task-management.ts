@@ -188,6 +188,12 @@ export type TaskManagementInboundEvent =
   | 'ticket.matched'
   /** WP-25: a ticket the binding reads was created, whether or not it is for the agent. */
   | 'ticket.created'
+  /**
+   * WP-60: a ticket the binding reads changed — emitted **beside** whatever else the delivery
+   * produces (`ticket.matched`, `ticket.status.changed`), never instead of it. An obligation of
+   * every task-management provider: the shared contract suite asserts it.
+   */
+  | 'ticket.updated'
   | 'ticket.comment.added'
   | 'ticket.status.changed';
 

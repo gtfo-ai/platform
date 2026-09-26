@@ -50,7 +50,16 @@ Environment names for the bundled `glab` CLI follow TD-020: `GITLAB_HOST`, `GITL
 
 Triggers to enable:
 
-- **Merge request events** → `mr.opened`, `mr.updated`, `mr.merged`, `mr.closed`
+- **Merge request events** → `mr.opened`, `mr.updated`, `mr.merged`, `mr.closed`, and `mr.approved`
+  when a person adds their approval (the `approval` action; a merge request becoming *fully*
+  approved, and an approval being withdrawn, are ignored by name). An approval counts as review
+  time for the approver; `mr.approved` carries GitLab's own instant only from GitLab 18.10, which
+  is when it started sending `actioned_at`. A push to the agent branch that the platform did not
+  make — yours, after a take-over — moves the revision the platform records for the task (forward
+  only, by the delivery's `updated_at`), so the next conflict check between tasks reads your commit.
+  The CI gate asks GitLab for the merge request's current head each time instead, and a finished
+  pipeline settles it only when it ran on that head — so deliveries arriving out of order cannot pass
+  it on an older commit's pipeline.
 - **Comments** (Note events) → `mr.review.comment`
 - **Pipeline events** → `ci.pipeline.finished`
 - **Push events** → `default_branch.moved` (only a push onto the default branch produces an event)

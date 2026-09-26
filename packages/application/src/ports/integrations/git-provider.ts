@@ -383,6 +383,11 @@ export type GitProviderInboundEvent =
   | 'mr.updated'
   | 'mr.merged'
   | 'mr.closed'
+  /**
+   * WP-60: a person added their approval, **with** the approver — an obligation of every git
+   * provider, asserted by the shared contract suite.
+   */
+  | 'mr.approved'
   | 'mr.review.comment'
   | 'ci.pipeline.finished'
   | 'default_branch.moved';

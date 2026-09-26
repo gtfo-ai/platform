@@ -99,6 +99,72 @@ export const mergedHookBody = (): string =>
     },
   });
 
+/**
+ * `X-Gitlab-Event: Merge Request Hook`, action `update` — a push (WP-60 review round 2). Composed
+ * from {@link mergedHookBody}'s envelope; `object_attributes.updated_at` is the field the page's
+ * example carries, and the one `mr.updated` orders the recorded head by.
+ */
+export const updatedHookBody = (): string => {
+  const body = JSON.parse(mergedHookBody()) as {
+    object_attributes: Record<string, unknown>;
+  };
+  body.object_attributes.action = 'update';
+  body.object_attributes.state = 'opened';
+  body.object_attributes.merge_commit_sha = null;
+  body.object_attributes.updated_at = '2026-06-01T07:59:30.000Z';
+  return JSON.stringify(body);
+};
+
+/** The account that approves in {@link approvalHookBody} — not the author of the other hooks. */
+export const APPROVER_USER_ID = 78;
+
+/**
+ * `X-Gitlab-Event: Merge Request Hook`, action `approval` (WP-60, PROGRESS backlog 90).
+ *
+ * **Composed**, like every builder in this file (no delivery is recorded here): the envelope is
+ * {@link mergedHookBody}'s, which follows the page's published merge-request example, with the
+ * action, the state and the triggering `user` changed. The action string, the `user` field's
+ * meaning (*"User who triggered the event"*) and `actioned_at` (*"When the action that triggered the
+ * webhook occurred"*, GitLab 18.10) are read from
+ * `https://docs.gitlab.com/user/project/integrations/webhook_events/` on 2026-09-26; that the
+ * triggering user of an `approval` **is** the approver is an inference from those two sentences,
+ * and `test/fixtures/http/gitlab/SOURCES.md` records it as one.
+ */
+export const approvalHookBody = (): string =>
+  JSON.stringify({
+    object_kind: 'merge_request',
+    event_type: 'merge_request',
+    user: {
+      id: APPROVER_USER_ID,
+      name: 'Alex Approver',
+      username: 'alex.approver',
+      email: '[REDACTED]',
+      avatar_url: null,
+    },
+    project: projectBlock,
+    labels: [{ id: 19, title: 'agentic', color: '#adb21a' }],
+    object_attributes: {
+      id: 155016007,
+      iid: MR_IID,
+      title: 'fix the totals',
+      description: 'Ready for review.',
+      source_branch: 'agentic/task-1',
+      target_branch: 'main',
+      state: 'opened',
+      action: 'approval',
+      actioned_at: '2026-06-01T07:58:00.000Z',
+      // The merge request's **author** — somebody other than the approver, so the golden itself
+      // tells the two apart: a normaliser that fell back to the author would name 77, not 78.
+      author_id: humanUser.id,
+      draft: false,
+      merge_status: 'can_be_merged',
+      detailed_merge_status: 'mergeable',
+      updated_at: '2026-06-01T07:58:00.000Z',
+      url: `${GITLAB_WEB}/-/merge_requests/${MR_IID}`,
+      last_commit: { id: SHA_MR7, message: 'Fix the totals\n' },
+    },
+  });
+
 /** `X-Gitlab-Event: Note Hook` on a merge request. */
 export const reviewCommentHookBody = (text: string): string =>
   JSON.stringify({

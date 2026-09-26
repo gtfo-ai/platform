@@ -1363,24 +1363,48 @@ describe('the CI gate', () => {
     });
   });
 
+  /**
+   * product/04 S4 — three **pipelines** failing the same way. Each round pushes a new head (`c…`,
+   * `d…`, `e…`) and its pipeline fails on the same job, so the loop stops early. Until WP-60 review
+   * round 3 this case sent one pipeline's event three times, which only worked because the rule
+   * counted observations rather than pipelines — the double count the next case pins shut.
+   */
   it('stops after three identical failures instead of burning the loop', async () => {
-    const harness = withPendingCi();
+    let head = 'c'.repeat(40);
+    const harness = harnessWith({
+      git: {
+        getPipelineStatus: async () => ({
+          id: 'pipeline-1',
+          head_sha: head,
+          status: 'running',
+          url: null,
+          jobs: [],
+          coverage_pct: null,
+          finished_at: null,
+        }),
+        getMergeRequest: async () => {
+          const mr = mergeRequest(false);
+          return { ...mr, head_sha: head, ref: { ...mr.ref, head_sha: head } };
+        },
+      },
+    });
     await harness.publish([ticketMatched()]);
     const task = taskOf(harness);
-    const failure = () =>
+    const failure = (sha: string) =>
       event('ci.pipeline.finished', {
         project_id: PROJECT,
         task_id: task.task.id,
         mr: mergeRequest(false).ref,
-        head_sha: 'b'.repeat(40),
+        head_sha: sha,
         status: 'failed',
         failed_jobs: [{ name: 'test:unit', log_ref: 'log:1' }],
         coverage_pct: null,
       });
 
-    await harness.publish([failure()]);
-    await harness.publish([failure()]);
-    await harness.publish([failure()]);
+    for (const sha of ['c', 'd', 'e'].map((letter) => letter.repeat(40))) {
+      head = sha;
+      await harness.publish([failure(sha)]);
+    }
     const stopped = taskOf(harness);
     expect(stopped.task.state).toBe('needs_human');
     // Rule 10: it stopped *for this reason*, not because the ci_fix limit (3) ran out.
@@ -1390,6 +1414,104 @@ describe('the CI gate', () => {
       .at(-1) as Extract<DomainEvent, { type: 'task.escalated' }>;
     expect(escalation.payload.reason).toContain('three times in a row');
     expect(stopped.task.iterationCounters.ci_fix).toBe(2);
+  });
+
+  /**
+   * WP-60 review round 3 (the orchestrator's `verify:e2e`, `ci_fix` 2 where BD-008 says 3): one red
+   * pipeline is **one** failure, whichever path sees it. Here its event settles the first round, and
+   * the poll then sees the same pipeline (the head never moves) at every later round. Counting
+   * observations made three of one pipeline and stopped the loop early; counting pipelines lets it
+   * run to BD-008's bound — which is what the e2e asserts on the poll path alone.
+   */
+  it('counts one red pipeline once, whether its event or the poll settles the gate', async () => {
+    let visible = false;
+    const red = {
+      id: 'pipeline-1',
+      head_sha: 'b'.repeat(40),
+      status: 'failed' as const,
+      url: null,
+      jobs: [
+        {
+          id: 'job-1',
+          name: 'test:unit',
+          status: 'failed' as const,
+          log_ref: 'log:1',
+          allow_failure: false,
+        },
+      ],
+      coverage_pct: null,
+      finished_at: '2026-06-01T09:30:00.000Z',
+    };
+    const harness = harnessWith({
+      git: {
+        getPipelineStatus: async () => (visible ? red : { ...red, status: 'running', jobs: [] }),
+        getMergeRequest: async () => mergeRequest(false),
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    const task = taskOf(harness);
+    expect(task.task.currentStage).toBe('ci_gate');
+    // The event path settles round one; from then on the poll sees the same pipeline.
+    visible = true;
+    await harness.publish([
+      event('ci.pipeline.finished', {
+        project_id: PROJECT,
+        task_id: task.task.id,
+        mr: mergeRequest(false).ref,
+        head_sha: 'b'.repeat(40),
+        status: 'failed',
+        failed_jobs: [{ name: 'test:unit', log_ref: 'log:1' }],
+        coverage_pct: null,
+      }),
+    ]);
+    const parked = taskOf(harness);
+    expect(parked.task.state).toBe('needs_human');
+    expect(parked.task.iterationCounters.ci_fix).toBe(3);
+    const escalation = harness
+      .events()
+      .filter((entry) => entry.type === 'task.escalated')
+      .at(-1) as Extract<DomainEvent, { type: 'task.escalated' }>;
+    expect(escalation.payload.reason).toContain('ci_fix iteration limit of 3 reached');
+    expect(escalation.payload.reason).not.toContain('three times in a row');
+  });
+
+  /**
+   * WP-60 review round 2 (pre-existing since the handler was written): a finished pipeline settles
+   * the gate only if it ran on the merge request's **live** head. `a…` is an older commit whose
+   * pipeline finished green late; the branch is at `b…`, still running. Before, the event passed
+   * the gate on `a…`; now `ci_settle` reads the head, ignores it, and the task waits — then `b…`'s
+   * own result settles it. The read is audited, which is the count this path now costs.
+   */
+  it('settles on a finished pipeline only when it ran on the live head, and ignores an older one', async () => {
+    const harness = withPendingCi();
+    await harness.publish([ticketMatched()]);
+    const task = taskOf(harness);
+    const finished = (sha: string, status: 'success' | 'failed') =>
+      event('ci.pipeline.finished', {
+        project_id: PROJECT,
+        task_id: task.task.id,
+        mr: mergeRequest(false).ref,
+        head_sha: sha,
+        status,
+        failed_jobs: [],
+        coverage_pct: null,
+      });
+    harness.audit.reset();
+
+    await harness.publish([finished('a'.repeat(40), 'success')]);
+    expect(taskOf(harness).task.currentStage).toBe('ci_gate');
+    expect(harness.store.stageRows.find((row) => row.stage === 'ci_gate')).toMatchObject({
+      state: 'running',
+      outcome: null,
+    });
+    // The duty asked the provider for the head: one `get_merge_request`, and nothing settled.
+    expect(harness.audit.entriesFor('get_merge_request').length).toBeGreaterThanOrEqual(1);
+
+    await harness.publish([finished('b'.repeat(40), 'success')]);
+    expect(harness.store.stageRows.find((row) => row.stage === 'ci_gate')).toMatchObject({
+      state: 'completed',
+      outcome: 'pass',
+    });
   });
 
   it('ignores a pipeline result for a task that is not at the gate', async () => {
@@ -1585,16 +1707,19 @@ describe('the rebase gate', () => {
 
     // And a branch that conflicts once: the resolution run, then a gate that passes — which is
     // product/16's "resolved automatically".
-    let conflicts = true;
+    // Conflicted until the resolution run has happened. Keyed on the run rather than on "the first
+    // read" since WP-60 review round 2: the CI gate reads the merge request's live head too, so the
+    // first read is no longer the rebase gate's.
+    let resolvedRef: PipelineHarness | null = null;
     const resolved = harnessWith({
       git: {
-        getMergeRequest: async () => {
-          const answer = mergeRequest(conflicts);
-          conflicts = false;
-          return answer;
-        },
+        getMergeRequest: async () =>
+          mergeRequest(
+            !(resolvedRef?.specs.some((spec) => spec.stage === 'conflict_resolution') ?? false),
+          ),
       },
     });
+    resolvedRef = resolved;
     await resolved.publish([ticketMatched()]);
     expect(taskOf(resolved).task.state).toBe('ready_for_merge');
     expect(resolved.specs.filter((spec) => spec.stage === 'conflict_resolution')).toHaveLength(1);
@@ -2004,8 +2129,9 @@ describe('the ticket’s own words (WP-15f)', () => {
 
   /**
    * The no-op check, asserted by a **count** rather than by an outcome: every later stage finds a
-   * snapshot and makes no provider call. Deleting the `ticketSnapshot !== null` guard in
-   * `ensureTicketSnapshot` turns 1 into one per agent stage and this dies.
+   * snapshot and makes no provider call. Deleting the `isTicketSnapshotStale` guard in
+   * `ensureTicketSnapshot` (until WP-60, `ticketSnapshot !== null`) turns 1 into one per agent
+   * stage and this dies.
    */
   it('reads the ticket once per task, however many stages run', async () => {
     const calls = { count: 0 };
@@ -2032,6 +2158,78 @@ describe('the ticket’s own words (WP-15f)', () => {
     const block = ticketBlockOf(harness.specs[0]?.userPrompt ?? '');
     expect(block.attributes.text).toBe('unread');
     expect(block.body).not.toContain('title:');
+  });
+
+  /**
+   * Q61 (b), built at WP-60 — the case the previous one could not have: an edit **after** intake.
+   *
+   * The ticket is read at intake, refinement asks a question, a human rewrites the description
+   * while the task waits, and the provider announces it (`ticket.updated`). The answer re-runs
+   * refinement, and that stage's prompt must carry the **new** words — read once more, from the
+   * stage job, because the snapshot is older than the signal. Before WP-60 the count stayed at one
+   * and the prompt kept the intake text for the rest of the task.
+   */
+  it('re-reads the ticket at the next agent stage after the provider announces an edit', async () => {
+    const calls = { count: 0 };
+    let description = BODY;
+    const double = ticketDouble(calls);
+    const harness = harnessWith({
+      taskManagement: {
+        readTicket: async (ref: never) => ({ ...(await double.readTicket(ref)), description }),
+      },
+      runs: {
+        ...happyRuns(),
+        refinement: completedRun({
+          ...REFINED_SPEC,
+          decision: 'ask',
+          questions: [{ id: 'q1', text: 'Which currency?', blocking: true }],
+        }),
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).task.state).toBe('waiting_answers');
+    expect(calls.count).toBe(1);
+
+    // A human edits the ticket a minute later, and the provider says so.
+    harness.clock.advance(60_000);
+    description = 'Rewritten: roll back the session rows, and log which migration failed.';
+    const edited = domainEventSchemasByType['ticket.updated'].parse({
+      ...event('ticket.updated', {
+        project_id: PROJECT,
+        ticket: TICKET,
+        updated_at: harness.clock.now(),
+        changed_fields: ['description'],
+        truncated: false,
+      }),
+      occurred_at: harness.clock.now(),
+    }) as DomainEvent;
+    await harness.publish([edited]);
+    expect(taskOf(harness).ticketSignalAt).toBe(harness.clock.now());
+    // Recording the signal reads nothing: the read is the next stage's.
+    expect(calls.count).toBe(1);
+
+    const asked = harness.events().find((entry) => entry.type === 'task.question.asked') as Extract<
+      DomainEvent,
+      { type: 'task.question.asked' }
+    >;
+    harness.script('refinement', completedRun(REFINED_SPEC));
+    await answerTaskQuestion(harness.commands, {
+      questionId: asked.payload.question.id,
+      answer: 'EUR',
+      userId: '00000000-0000-4000-8000-0000000000c1',
+      role: 'member',
+      channel: 'ticket',
+    });
+    await harness.drain();
+
+    // Exactly one more read — the re-run refinement's — and none after it, because the new
+    // snapshot is fresh against the same signal.
+    expect(calls.count).toBe(2);
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+    expect(taskOf(harness).ticketSnapshot?.description).toBe(description);
+    const rerun = harness.specs.filter((spec) => spec.stage === 'refinement')[1];
+    expect(ticketBlockOf(rerun?.userPrompt ?? '').body).toContain('log which migration failed');
+    expect(ticketBlockOf(rerun?.userPrompt ?? '').body).not.toContain(BODY);
   });
 
   it('keeps a credential somebody pasted into the ticket out of the stored row', async () => {

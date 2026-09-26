@@ -778,6 +778,7 @@ export const runReviewOnlyCheck = async (
       version: INITIAL_TASK_VERSION,
       ticketSnapshot: null,
       ticketSnapshotAt: null,
+      ticketSignalAt: null,
       reviewSubject: snapshot,
       historySample: null,
       // A review-only task never opens a merge request of its own, so the `risk_route` duty never

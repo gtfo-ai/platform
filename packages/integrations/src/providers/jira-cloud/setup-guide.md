@@ -76,7 +76,9 @@ polling is a first-class path, not a fallback of last resort.
    the exact URL once the binding is saved).
 3. **Secret:** generate one and paste the same value into `webhook_secret`. Atlassian shows it once.
 4. **Events:** *Issue: created, updated* and *Comment: created*. Nothing else is used, and every
-   other event is answered with "not handled by this provider" in the delivery log.
+   other event is answered with "not handled by this provider" in the delivery log. *Issue updated*
+   is what tells the platform a ticket was edited: a task whose ticket changes is shown the new
+   text at its next agent stage, and without the event it keeps the text it read when it started.
 5. **JQL filter** (recommended): `project = ACME` — Jira warns that an empty filter sends events for
    every issue in the site, which is more data than the platform needs or should see.
 

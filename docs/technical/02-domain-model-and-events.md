@@ -120,12 +120,13 @@ handler for it, or it destroys a work item belonging to another process in the d
 **`—` declares the event unconsumed** — nothing is expected to handle it, and a sweeper needs no handler
 for it. `packages/application/src/events/consumption.ts` is that column as code, its keys held to
 `DOMAIN_EVENT_TYPES` so a new event type cannot be added without answering the question. **It differs
-from this column on 18 rows today** (22 before WP-41, which closed `task.review.observed`, `task.lint.posted`,
+from this column on 17 rows today** (18 before WP-60, which consumed `mr.updated`; 22 before WP-41, which closed `task.review.observed`, `task.lint.posted`,
 `task.rebase.checked` and `task.conflict.warned`; 23 before WP-29, which closed `run.steered`; 25 before WP-32,
 which closed `budget.threshold.reached` and `budget.exhausted`; 28 before WP-19, which closed
 `run.finished`, `run.failed` and `artifact.created`) — the column states the finished product's consumers and the declaration states
-this build's, so each divergent entry names the work package that closes it, or — for `mr.updated`, whose payload carries
-no author — the backlog entry that says why nothing will (TD-005's amendment records the trade).
+this build's, so each divergent entry names the work package that closes it (TD-005's amendment records the
+trade). `mr.updated` was the one entry that named a backlog entry instead — its payload carries no author, so no
+*activity* consumer can read it — until WP-60 consumed it for the one thing it does carry, the head sha.
 
 > **The Slack consumer at priority 210 exists, since WP-32.** The six task rows below that name it —
 > `task.created`, `task.stage.returned`, `task.question.asked`, `task.escalated`, `task.cancelled`
@@ -143,21 +144,25 @@ no author — the backlog entry that says why nothing will (TD-005's amendment r
 > **The human-time projector at priority 230 exists, since WP-29** (`human-time/projector.ts`,
 > product/19 §16). It is a **second** consumer of four types this column already marks consumed —
 > `mr.review.comment`, `mr.merged`, `task.question.answered` and `task.approval.decided` — plus
-> `run.steered`, which had none, and whose row below now names it.
+> `run.steered`, which had none, and whose row below now names it — and, since WP-60, `mr.approved`,
+> whose only consumer it is.
 >
-> **Two of the three review anchors have no event in this catalogue, and that is the projector's
+> **One of the three review anchors has no event in this catalogue, and that is the projector's
 > stated residual.** product/19 §16 starts the review window at *"the first human MR activity
-> (comment, approval, review start)"*, and there is **no `mr.approved`** type and no
-> review-requested type — so a reviewer who approves a merge request without writing a comment
-> contributes **zero minutes**. Under-counting is the honest direction: the alternative is to guess
-> minutes for an event the platform never saw. `mr.updated` is **not** read either, and
-> deliberately — it carries no author at all, so it could attribute a minute to nobody, and it
-> fires for the platform's own pushes.
+> (comment, approval, review start)"*. Until WP-60 there was **no `mr.approved`** type either, so a
+> reviewer who approved a merge request without writing a comment contributed **zero minutes**;
+> since WP-60 the approval is an event (PROGRESS backlog 90) and the projector folds it like a
+> comment. There is still **no review-requested type**, and a *withdrawn* approval is not read.
+> Under-counting is the honest direction: the alternative is to guess minutes for an event the
+> platform never saw. `mr.updated` is **not** read by the projector, and deliberately — it carries no
+> author at all, so it could attribute a minute to nobody, and it fires for the platform's own
+> pushes; its consumer since WP-60 is the pipeline, for the head sha (row below).
 
 | Event | Producer | Payload (key fields) | Core consumers (priority) |
 |---|---|---|---|
 | `ticket.matched` | task-management adapter | ticket ref, rule, priority, type, epic, links | Intake (10) |
 | `ticket.created` | task-management adapter | ticket ref, issue type | Ticket readiness linter (10, WP-25) |
+| `ticket.updated` | task-management adapter (WP-60; emitted **beside** `ticket.matched`/`ticket.status.changed`, never instead) | ticket ref, the provider's `updated_at`, the changed field names (bounded, `truncated`), actor | Snapshot freshness (10, `pipeline.ticket.signal` — Q61 (b)); re-lint on edit and product/18:60's *"edited within 48 h"* are **not** built (the first waits on a measurement of update frequency, the second on a statistics fold) |
 | `ticket.comment.added` | adapter | ticket, comment id, author identity, text | Question answering (20), Feedback intake (30) |
 | `ticket.status.changed` | adapter | ticket, from, to, actor | Task sync (20) |
 | `task.created` | Intake | task, template, mode, estimate | Workpad (110), Slack notify (210), UI (220) |
@@ -183,9 +188,10 @@ no author — the backlog entry that says why nothing will (TD-005's amendment r
 | `run.steered` | Human | run, message, author | Runner (10), human time (230, WP-29) |
 | `artifact.created` | Stage executor | artifact | Workpad (120), UI |
 | `workspace.provisioned` / `.destroyed` / `.exported` | Workspace manager | workspace | UI |
-| `mr.opened` / `mr.updated` / `mr.merged` / `mr.closed` | git adapter | mr ref, actor, draft, head sha, diff stats | Pipeline (10), review-only (10 on `opened`, 120 on `merged`/`closed`, WP-24), stats (230) |
+| `mr.opened` / `mr.updated` / `mr.merged` / `mr.closed` | git adapter | mr ref, actor, draft, head sha, diff stats | Pipeline (10; on `updated`, since WP-60, the recorded head follows a push the platform did not make, **forward only** by the provider's `updated_at`, which `mr.updated` alone carries — PROGRESS backlog 182; what bounds the ordering residual is that the CI gate does not read the recorded head at all but asks the provider for the live one, on its poll and in `ci_settle`), review-only (10 on `opened`, 120 on `merged`/`closed`, WP-24), stats (230) |
+| `mr.approved` | git adapter (WP-60; GitLab's `approval` action only) | mr ref, approver identity, the provider's instant (`null` before GitLab 18.10) | Human time (230, the review window's *"approval"* anchor — PROGRESS backlog 90) |
 | `mr.review.comment` | git adapter | mr, thread id, author identity, text, resolved | Batching/debounce (10), feedback intake (30), human time (230, WP-29) |
-| `ci.pipeline.finished` | git adapter | mr, head sha, status, failed jobs, log refs, coverage | CI gate (10), flaky detector (15) |
+| `ci.pipeline.finished` | git adapter | mr, head sha, status, failed jobs, log refs, coverage | CI gate (10 decides, and since WP-60 review round 2 the `ci_settle` duty settles **only** a pipeline that ran on the merge request's live head, read from the provider outside the transaction), flaky detector (15) |
 | `default_branch.moved` | git adapter | project, new head | Rebase gate (10), KB index (40) |
 | `budget.threshold.reached` / `budget.exhausted` / `budget.reset` | Budget projection | scope, window, pct | Scheduler (10), Slack (210, WP-32 — `reset` excepted: a window rolling over is not news) |
 | `feedback.received` | Feedback | feedback | Feedback intake agent (30) |

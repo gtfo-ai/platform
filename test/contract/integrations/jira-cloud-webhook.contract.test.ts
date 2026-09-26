@@ -15,6 +15,7 @@
  */
 import type { ExternalIdentity, InboundContext, WebhookDelivery } from '@platform/application';
 import { IntegrationError } from '@platform/application';
+import { MAX_TICKET_UPDATED_FIELD_CHARS, MAX_TICKET_UPDATED_FIELDS } from '@platform/contracts';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   createJiraBinding,
@@ -296,21 +297,139 @@ describe('jira-cloud webhooks', () => {
         }),
         inboundContext(),
       );
-      expect(result.events, 'the label was already there').toEqual([]);
-      expect(result.ignored[0]?.reason).toBe('unsupported_event');
+      // Not a match — the label was already there — and still an edit (WP-60): the delivery is
+      // `ticket.updated` alone, naming the field, where it used to be `unsupported_event`.
+      expect(
+        result.events.map((event) => event.type),
+        'the label was already there',
+      ).toEqual(['ticket.updated']);
+      expect(result.ignored).toEqual([]);
+      expect(
+        (result.events[0]?.payload as { changed_fields: string[] } | undefined)?.changed_fields,
+      ).toEqual(['labels']);
     });
 
-    it('an edit the pipeline does not act on is ignored with a reason, not dropped', async () => {
+    /**
+     * WP-60 (PROGRESS backlog 59): until then this case was *"an edit the pipeline does not act on
+     * is ignored with a reason, not dropped"*, asserting `unsupported_event` naming `summary` — the
+     * branch an edited description died on. Atlassian's own example is the golden input.
+     */
+    it('an edit becomes ticket.updated with the ticket, the provider’s instant and the field', async () => {
       const result = await binding.port.inbound.normalise(
         binding.replay.delivery('webhook-issue-updated-summary.json'),
         inboundContext(),
       );
-      expect(result.events).toEqual([]);
-      expect(result.ignored.length).toBe(1);
-      expect(result.ignored[0]?.reason).toBe('unsupported_event');
-      expect(result.ignored[0]?.detail, 'and the reason names the field that changed').toContain(
-        'summary',
+      expect(result.ignored).toEqual([]);
+      expect(result.events).toHaveLength(1);
+      const event = result.events[0] as NonNullable<(typeof result.events)[0]>;
+      const { payload } = expectCatalogueEvent(event, 'ticket.updated');
+      expect(payload).toEqual({
+        project_id: JIRA_PROJECT_ID,
+        ticket: {
+          provider: 'jira-cloud',
+          key: 'ACME-1',
+          url: 'https://acme-example.atlassian.net/browse/ACME-1',
+        },
+        // The fixture's `issue.fields.updated`, `2026-09-01T10:15:00.000+0000`, as ISO — the
+        // provider's own instant, not the envelope's `timestamp` and not the platform's clock.
+        updated_at: '2026-09-01T10:15:00.000Z',
+        changed_fields: ['summary'],
+        truncated: false,
+      });
+      // The editor, as `ticket.status.changed` names its actor: provider identity, never verified here.
+      expect(event.actor).toEqual(
+        expect.objectContaining({
+          kind: 'integration',
+          identity: expect.objectContaining({ external_id: PM_ACCOUNT_ID, verified: false }),
+        }),
       );
+    });
+
+    /**
+     * PROGRESS backlog 185, folded into WP-60's review: `changelogItemSchema` has a key named
+     * `toString`, and an item that omitted its own was read as `Object.prototype.toString` — the
+     * whole delivery was `malformed_payload`, its pick-up and its status change dropped, and Jira's
+     * retry deduplicated away (measured: *"changelog.items.0.toString: Invalid input: expected
+     * string, received function"*). Atlassian's documented label-add, with a second changelog item
+     * that carries **no** `toString`, `fromString`, `from` or `to` at all.
+     */
+    it('reads a changelog item without its own toString as absent, and keeps the delivery', async () => {
+      const result = await binding.port.inbound.normalise(
+        binding.replay.delivery('webhook-issue-updated-labels.json', {
+          patch: (body) => {
+            (body.changelog as { items: unknown[] }).items.push({
+              field: 'Rank',
+              fieldtype: 'jira',
+            });
+          },
+        }),
+        inboundContext(),
+      );
+      expect(result.ignored).toEqual([]);
+      expect(result.events.map((event) => event.type)).toEqual([
+        'ticket.matched',
+        'ticket.updated',
+      ]);
+      expect(
+        (result.events[1]?.payload as { changed_fields: string[] } | undefined)?.changed_fields,
+      ).toEqual(['labels', 'Rank']);
+    });
+
+    it('reads a status item without its own toString as an empty target, not a function', async () => {
+      // The reader's half of backlog 185: zod's output object is ordinary, so `item.toString` on a
+      // parsed item with no such key was the inherited function again.
+      const result = await binding.port.inbound.normalise(
+        binding.replay.delivery('webhook-issue-updated-status.json', {
+          patch: (body) => {
+            const item = (body.changelog as { items: object[] }).items[0] ?? {};
+            Reflect.deleteProperty(item, 'toString');
+          },
+        }),
+        inboundContext(),
+      );
+      expect(result.ignored).toEqual([]);
+      const status = result.events.find((event) => event.type === 'ticket.status.changed');
+      expect((status?.payload as { to: unknown } | undefined)?.to).toBe('');
+    });
+
+    it('bounds and de-duplicates the changed field names, and says when it cut them', async () => {
+      const result = await binding.port.inbound.normalise(
+        binding.replay.delivery('webhook-issue-updated-summary.json', {
+          patch: (body) => {
+            const long = 'x'.repeat(MAX_TICKET_UPDATED_FIELD_CHARS + 5);
+            // Every item carries its own `toString`, as Atlassian's example does; an item without
+            // one is the case above (backlog 185).
+            const item = (field?: string) => ({
+              ...(field === undefined ? {} : { field }),
+              fieldtype: 'jira',
+              fromString: null,
+              toString: null,
+            });
+            (body.changelog as { items: unknown[] }).items = [
+              item('summary'),
+              item('summary'),
+              item('   '),
+              item(),
+              item(long),
+              ...Array.from({ length: MAX_TICKET_UPDATED_FIELDS + 3 }, (_, index) =>
+                item(`customfield_${index}`),
+              ),
+            ];
+          },
+        }),
+        inboundContext(),
+      );
+      expect(result.ignored).toEqual([]);
+      const { payload } = expectCatalogueEvent(
+        result.events[0] as NonNullable<(typeof result.events)[0]>,
+        'ticket.updated',
+      );
+      const fields = payload.changed_fields as string[];
+      expect(fields).toHaveLength(MAX_TICKET_UPDATED_FIELDS);
+      expect(fields[0]).toBe('summary');
+      expect(fields[1]).toBe('x'.repeat(MAX_TICKET_UPDATED_FIELD_CHARS));
+      expect(new Set(fields).size).toBe(fields.length);
+      expect(payload.truncated).toBe(true);
     });
 
     it('an event type this provider does not handle is ignored by name', async () => {
@@ -379,9 +498,10 @@ describe('jira-cloud webhooks', () => {
         inboundContext(),
       );
       const types = result.events.map((event) => event.type).sort();
-      expect(types, 'the move is both a match and a status change').toEqual([
+      expect(types, 'the move is a match, a status change and an edit (WP-60)').toEqual([
         'ticket.matched',
         'ticket.status.changed',
+        'ticket.updated',
       ]);
       const matched = result.events.find((event) => event.type === 'ticket.matched');
       expect((matched?.payload as { rule?: string } | undefined)?.rule).toBe(
@@ -397,7 +517,10 @@ describe('jira-cloud webhooks', () => {
         byStatus.replay.delivery('webhook-issue-updated-status.json'),
         inboundContext(),
       );
-      expect(result.events.map((event) => event.type)).toEqual(['ticket.status.changed']);
+      expect(result.events.map((event) => event.type)).toEqual([
+        'ticket.status.changed',
+        'ticket.updated',
+      ]);
     });
 
     it('announces nothing when the binding has no pick-up rule at all', async () => {
@@ -406,8 +529,9 @@ describe('jira-cloud webhooks', () => {
         none.replay.delivery('webhook-issue-updated-labels.json'),
         inboundContext(),
       );
-      expect(result.events).toEqual([]);
-      expect(result.ignored[0]?.reason).toBe('unsupported_event');
+      // No match without a rule; the edit itself is still reported (WP-60).
+      expect(result.events.map((event) => event.type)).toEqual(['ticket.updated']);
+      expect(result.ignored).toEqual([]);
     });
 
     it('treats a ticket created with the label as a match, without a changelog', async () => {
@@ -463,10 +587,10 @@ describe('jira-cloud webhooks', () => {
         binding.replay.delivery('webhook-issue-updated-summary.json'),
         inboundContext(),
       );
-      // The other direction of the pair above (standing rule 42): an edit produces neither event,
-      // so a ticket is never linted twice because somebody fixed a typo.
-      expect(result.events).toEqual([]);
-      expect(result.ignored[0]?.reason).toBe('unsupported_event');
+      // The other direction of the pair above (standing rule 42): an edit produces neither
+      // `ticket.created` nor `ticket.matched`, so a ticket is never linted twice because somebody
+      // fixed a typo — it produces `ticket.updated` and nothing else (WP-60).
+      expect(result.events.map((event) => event.type)).toEqual(['ticket.updated']);
     });
   });
 

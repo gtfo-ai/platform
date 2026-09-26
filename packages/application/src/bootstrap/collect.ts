@@ -349,6 +349,7 @@ export const collectHistory = async (
         // There is no ticket to read: the sample is this task's input, written on the same insert.
         ticketSnapshot: null,
         ticketSnapshotAt: null,
+        ticketSignalAt: null,
         reviewSubject: null,
         historySample: sample,
         riskClasses: [],

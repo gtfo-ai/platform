@@ -70,6 +70,7 @@ import {
   stageExecuteHandler,
 } from './jobs.js';
 import { type PipelineOutboundOptions, pipelineOutboundHandler } from './outbound.js';
+import { providerSignalHandlers } from './provider-signals.js';
 import { reviewOnlyHandlers } from './review-only.js';
 import { riskRoutingHandlers } from './risk-routing.js';
 import { type PipelineSagaOptions, pipelineHandlers } from './saga.js';
@@ -315,6 +316,9 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
       // WP-56: the three deadlines' timers, armed after commit at TD-005 priority 15 — the
       // "timer (15)" technical/02's catalogue gives `task.question.asked`.
       deadlineArmingHandler(options),
+      // WP-60: two provider signals written down — an edited ticket marks the live tasks'
+      // snapshots stale (Q61 (b)), and a push nobody on the platform made moves the recorded head.
+      ...providerSignalHandlers(options),
     ],
     executor,
     start: async () => {

@@ -74,6 +74,13 @@ const PAYLOADS: Record<DomainEventType, Record<string, unknown>> = {
     links: [{ kind: 'blocks', key: 'PROJ-99', url: null }],
   },
   'ticket.created': { ...projectScoped, ticket, issue_type: 'Story' },
+  'ticket.updated': {
+    ...projectScoped,
+    ticket,
+    updated_at: '2026-06-01T09:00:00.000Z',
+    changed_fields: ['description', 'labels'],
+    truncated: false,
+  },
   'ticket.comment.added': {
     ...projectScoped,
     task_id: TASK,
@@ -317,6 +324,13 @@ const PAYLOADS: Record<DomainEventType, Record<string, unknown>> = {
     merge_commit_sha: 'fee1234',
   },
   'mr.closed': { ...projectScoped, task_id: TASK, mr, draft: false, head_sha: 'abc1235' },
+  'mr.approved': {
+    ...projectScoped,
+    task_id: null,
+    mr,
+    approver: identity,
+    approved_at: '2026-06-01T09:00:00.000Z',
+  },
   'mr.review.comment': {
     ...projectScoped,
     task_id: TASK,

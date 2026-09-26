@@ -53,11 +53,38 @@ import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrat
 import type { StoredTask } from './store.js';
 
 export type GateResult =
-  | { readonly kind: 'settled'; readonly passed: boolean; readonly detail: string }
+  | {
+      readonly kind: 'settled';
+      readonly passed: boolean;
+      readonly detail: string;
+      /**
+       * The CI gate's failure, stated so that three identical ones in a row can be recognised
+       * (product/04 S4) on **this** path as well as the event path (WP-60 review round 2):
+       * `ci:<status>:<failing jobs, sorted>` — stable across attempts, because the head moves every
+       * round.
+       */
+      readonly ciSignature?: string;
+    }
   /** The answer is not available yet; ask again after `retryInMs`. */
   | { readonly kind: 'pending'; readonly detail: string }
   /** The platform cannot evaluate this gate at all; the task escalates. */
   | { readonly kind: 'unsupported'; readonly detail: string };
+
+/**
+ * One CI failure as the convergence rule records it: `ci:<status>:<failing jobs, sorted>@<sha>`.
+ *
+ * The part before `@` is the failure's **shape** — stable across attempts, because the head moves
+ * every round, and what "three identical failures" compares. The part after it is **which
+ * pipeline** failed, so that one pipeline observed twice — by the poll and by its event, or by two
+ * polls of a head nobody moved — counts once, whichever path settled it (WP-60 review round 3,
+ * `jobs.ts` § `ciConvergence`). One definition for the event path (`ci-settle.ts`) and the poll
+ * path (this module).
+ */
+export const ciFailureSignature = (
+  status: string,
+  failingJobs: readonly string[],
+  headSha: string,
+): string => `ci:${status}:${[...failingJobs].sort().join(',')}@${headSha}`;
 
 /** How many times a gate may answer `pending` before the task is parked for a human. */
 export const MAX_GATE_CHECKS = 5;
@@ -139,7 +166,16 @@ export const createGateEvaluator = (integrations: PipelineIntegrationsPort): Gat
       const git = gitReads(bindings);
 
       if (stage.id === 'ci_gate') {
-        const headSha = stored.mr.head_sha;
+        /**
+         * **The live head, not the recorded one** (WP-60 review round 2). `tasks.mr_ref.head_sha`
+         * lags the branch — it moves when a pushing stage reports or when a push's `mr.updated` is
+         * dispatched, and a late delivery can briefly hold an older revision — so a gate that asked
+         * the pipeline status of the recorded sha could pass on a green pipeline for a commit that
+         * is no longer the head. One `get_merge_request` read per evaluation (the rebase gate's
+         * read, now made here too); the diff coalescer is not involved.
+         */
+        const live = await git.mergeRequest(stored.mr, context);
+        const headSha = live?.ref.head_sha ?? null;
         if (headSha === null || headSha === undefined) {
           return { kind: 'pending', detail: 'the merge request has no head commit yet' };
         }
@@ -164,6 +200,7 @@ export const createGateEvaluator = (integrations: PipelineIntegrationsPort): Gat
           return {
             kind: 'settled',
             passed: false,
+            ciSignature: ciFailureSignature(status.status, failed, headSha),
             detail:
               failed.length === 0
                 ? `pipeline ${status.id} ${status.status}`

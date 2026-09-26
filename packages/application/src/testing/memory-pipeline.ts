@@ -193,6 +193,9 @@ export const createMemoryPipelineStore = (
       : { ...copy, task: { ...copy.task, sequence: fromLog } };
   };
 
+  /** `tasks.mr_head_at` (migration 0044) — the provider's instant of the recorded head. */
+  const mrHeadAt = new Map<Id, string>();
+
   const taskRepository: TaskRepository = {
     load: async (_tx, taskId) => {
       const stored = tasks.get(taskId);
@@ -249,7 +252,10 @@ export const createMemoryPipelineStore = (
           `a task already exists for ${stored.task.ticket.key} in mode ${stored.task.mode}`,
         );
       }
-      tasks.set(stored.task.id, clone(stored));
+      // `ticketSignalAt` is not the insert's (WP-60): the SQL insert does not name the column, so a
+      // row is born with none whatever the caller's snapshot carried — and a fake that kept it would
+      // answer a question PostgreSQL cannot be asked (standing rule 1).
+      tasks.set(stored.task.id, clone({ ...stored, ticketSignalAt: null }));
     },
     /**
      * The same columns the SQL `update tasks set …` names, and the same optimistic check (WP-15e).
@@ -330,6 +336,59 @@ export const createMemoryPipelineStore = (
       }
       // Only the token, like the SQL `update tasks set version = version + 1` (WP-59 round 1).
       tasks.set(taskId, clone({ ...current, version: current.version + 1 }));
+    },
+    recordTicketSignal: async (_tx, signal) => {
+      let moved = 0;
+      for (const [id, current] of tasks) {
+        if (
+          current.task.projectId !== signal.projectId ||
+          current.task.ticket.provider !== signal.provider ||
+          current.task.ticket.key !== signal.ticketKey ||
+          current.task.state === 'done' ||
+          current.task.state === 'cancelled'
+        ) {
+          continue;
+        }
+        // `greatest(coalesce(ticket_signal_at, $at), $at)`: never backwards (WP-60).
+        const at =
+          current.ticketSignalAt !== null && current.ticketSignalAt >= signal.at
+            ? current.ticketSignalAt
+            : signal.at;
+        tasks.set(id, clone({ ...current, ticketSignalAt: at }));
+        moved += 1;
+      }
+      return moved;
+    },
+    saveMergeRequestHead: async (_tx, taskId, head) => {
+      const current = tasks.get(taskId);
+      if (current === undefined) {
+        throw new PipelineStoreError(`task ${taskId} does not exist`);
+      }
+      const recordedAt = mrHeadAt.get(taskId);
+      if (
+        current.mr === null ||
+        current.mr.iid !== head.iid ||
+        current.task.state === 'done' ||
+        current.task.state === 'cancelled' ||
+        (recordedAt !== undefined && Date.parse(recordedAt) >= Date.parse(head.at))
+      ) {
+        return false;
+      }
+      // `tasks.mr_head_at`, which `StoredTask` does not carry: forward only, like the SQL.
+      mrHeadAt.set(taskId, head.at);
+      if (current.mr.head_sha === head.headSha) {
+        return false;
+      }
+      // One key of `mr_ref` and the token, like the SQL's `jsonb_set(…)`, `version + 1` (WP-60).
+      tasks.set(
+        taskId,
+        clone({
+          ...current,
+          mr: { ...current.mr, head_sha: head.headSha },
+          version: current.version + 1,
+        }),
+      );
+      return true;
     },
     saveRiskClasses: async (_tx, taskId, classes) => {
       const current = tasks.get(taskId);

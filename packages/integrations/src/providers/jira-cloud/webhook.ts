@@ -76,7 +76,11 @@ import {
   type TaskManagementInboundEvent,
   type WebhookDelivery,
 } from '@platform/application';
-import type { JsonObject } from '@platform/contracts';
+import {
+  type JsonObject,
+  MAX_TICKET_UPDATED_FIELD_CHARS,
+  MAX_TICKET_UPDATED_FIELDS,
+} from '@platform/contracts';
 import type { Clock } from '@platform/domain';
 import * as z from 'zod';
 import { adfToMarkdown } from './adf.js';
@@ -221,6 +225,32 @@ const commentSchema = z.object({
   body: z.unknown().optional(),
 });
 
+/**
+ * A deep copy of parsed JSON whose objects have **no prototype** (PROGRESS backlog 185, WP-60 review).
+ *
+ * `changelogItemSchema` has a key named `toString`, and zod reads a key with ordinary property
+ * access — so an item that omits its own `toString` was read as `Object.prototype.toString`, failed
+ * `string`, and made the **whole** delivery `malformed_payload` (measured: *"changelog.items.0.toString:
+ * Invalid input: expected string, received function"*), dropping its match and its status change too,
+ * with the retry deduplicated away. Standing rule 38's class: a key named like a prototype member.
+ * A null-prototype copy makes an absent key absent for **every** key of the envelope at once, so a
+ * later schema key named `constructor` or `valueOf` cannot reopen it; `toString` is the only such key
+ * in this file today.
+ */
+const withoutPrototypes = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map(withoutPrototypes);
+  }
+  if (value === null || typeof value !== 'object') {
+    return value;
+  }
+  const copy: Record<string, unknown> = Object.create(null);
+  for (const [key, entry] of Object.entries(value)) {
+    copy[key] = withoutPrototypes(entry);
+  }
+  return copy;
+};
+
 /** The documented envelope. `issue` is required for every event this normaliser handles. */
 export const jiraWebhookEnvelopeSchema = z.object({
   timestamp: z.number(),
@@ -274,15 +304,58 @@ const ignored = (
 
 const projectKeyOf = (issueKey: string): string => issueKey.split('-')[0] ?? issueKey;
 
+/**
+ * An item's own `toString`, or `''` — never `Object.prototype.toString` (backlog 185, the reader's
+ * half). zod's **output** object is an ordinary one, so an item whose `toString` was absent reads the
+ * inherited function here even after the null-prototype parse; `Object.hasOwn` is the only honest
+ * question (standing rule 38).
+ */
+const toStringOf = (item: z.infer<typeof changelogItemSchema>): string =>
+  Object.hasOwn(item, 'toString') ? (item.toString ?? '') : '';
+
 const labelsAddedBy = (envelope: JiraWebhookEnvelope): readonly string[] => {
   const item = (envelope.changelog?.items ?? []).find((entry) => entry.field === 'labels');
   if (item === undefined) {
     return [];
   }
   const before = new Set((item.fromString ?? '').split(/\s+/).filter((label) => label.length > 0));
-  return (item.toString ?? '')
+  return toStringOf(item)
     .split(/\s+/)
     .filter((label) => label.length > 0 && !before.has(label));
+};
+
+/**
+ * The changelog's field names, as `ticket.updated` carries them: de-duplicated in delivery order,
+ * each cut to {@link MAX_TICKET_UPDATED_FIELD_CHARS} and the list to
+ * {@link MAX_TICKET_UPDATED_FIELDS}, with the cut **declared** rather than silent.
+ *
+ * A field name is provider text (a custom field is called whatever somebody typed), so it is
+ * bounded here, where it leaves the adapter; it is already redacted, because the whole delivery is
+ * redacted before any branch reads it. `field` is what the changelog documents; an item without one
+ * contributes nothing rather than an invented `'?'`.
+ */
+export const changedFieldsOf = (
+  envelope: JiraWebhookEnvelope,
+): { readonly fields: readonly string[]; readonly truncated: boolean } => {
+  const seen = new Set<string>();
+  let truncated = false;
+  for (const item of envelope.changelog?.items ?? []) {
+    const raw = item.field?.trim() ?? '';
+    if (raw.length === 0) {
+      continue;
+    }
+    const name = raw.slice(0, MAX_TICKET_UPDATED_FIELD_CHARS);
+    truncated ||= name.length < raw.length;
+    if (seen.has(name)) {
+      continue;
+    }
+    if (seen.size === MAX_TICKET_UPDATED_FIELDS) {
+      truncated = true;
+      break;
+    }
+    seen.add(name);
+  }
+  return { fields: [...seen], truncated };
 };
 
 const statusChangeOf = (
@@ -292,7 +365,7 @@ const statusChangeOf = (
   if (item === undefined) {
     return null;
   }
-  return { from: item.fromString ?? '', to: item.toString ?? '' };
+  return { from: item.fromString ?? '', to: toStringOf(item) };
 };
 
 export const createJiraInboundNormaliser = (
@@ -324,6 +397,31 @@ export const createJiraInboundNormaliser = (
         kind: 'integration',
         integration_id: context.integrationId,
         provider: PROVIDER_ID,
+      },
+    };
+  };
+
+  const updatedEvent = (
+    issue: NonNullable<JiraWebhookEnvelope['issue']>,
+    envelope: JiraWebhookEnvelope,
+    context: InboundContext,
+    ticket: { readonly provider: string; readonly key: string; readonly url: string },
+  ): NormalisedEvent<'ticket.updated'> => {
+    const changed = changedFieldsOf(envelope);
+    return {
+      type: 'ticket.updated',
+      payload: {
+        project_id: context.projectId,
+        ticket,
+        updated_at: issue.fields.updated,
+        changed_fields: [...changed.fields],
+        truncated: changed.truncated,
+      },
+      actor: {
+        kind: 'integration',
+        integration_id: context.integrationId,
+        provider: PROVIDER_ID,
+        identity: identityOfUser(envelope.user),
       },
     };
   };
@@ -375,7 +473,7 @@ export const createJiraInboundNormaliser = (
       options.onRedaction?.({ action: 'normalise_delivery', count: redacted.count });
     }
     const envelope = jiraWebhookEnvelopeSchema.safeParse(
-      (redacted.value as { body: unknown }).body,
+      withoutPrototypes((redacted.value as { body: unknown }).body),
     );
     if (!envelope.success) {
       const issue = envelope.error.issues[0];
@@ -489,13 +587,26 @@ export const createJiraInboundNormaliser = (
           },
         });
       }
-      if (events.length === 0) {
-        return ignored(
-          'unsupported_event',
-          `${body.webhookEvent} changed nothing this binding acts on ` +
-            `(${(body.changelog?.items ?? []).map((item) => item.field ?? '?').join(', ') || 'no changelog'})`,
-        );
+      /**
+       * **An edit is a fact of its own** (WP-60, PROGRESS backlog 59) — emitted on every
+       * `jira:issue_updated`, **beside** whatever else the same delivery produced, never instead of
+       * it, and **last**, so a consumer that reads a delivery's first event reads what it did
+       * before. Until then an edited description, a rewritten acceptance criterion and a re-scoped
+       * ticket all reached an `unsupported_event` branch, so `tasks.ticket_snapshot` was
+       * whatever the ticket said at intake. What the event does **not** do is decide anything: it
+       * carries the ticket, the provider's own `updated` and the changelog's field names, and the
+       * consumer (`pipeline/provider-signals.ts`) only marks the live tasks' snapshots stale.
+       *
+       * Never on `jira:issue_created`: a creation is not an edit, and the linter is keyed on the
+       * difference (`ticket.created` above).
+       */
+      if (body.webhookEvent === 'jira:issue_updated') {
+        events.push(updatedEvent(issue, body, context, ticket));
       }
+      // No `unsupported_event` branch any more (WP-60): an update always produces `ticket.updated`
+      // and a creation always produces `ticket.created`, so this branch cannot end empty. Until
+      // WP-60 an edit the pipeline did not act on ended here as `"<event> changed nothing this
+      // binding acts on (<fields>)"`, which is how an edited description was dropped.
       return { events, ignored: [] };
     }
 

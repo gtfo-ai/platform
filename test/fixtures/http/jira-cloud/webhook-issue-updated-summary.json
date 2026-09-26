@@ -3,7 +3,7 @@
     "url": "https://developer.atlassian.com/cloud/jira/platform/webhooks/",
     "retrieved": "2026-09-10",
     "evidence": "documented",
-    "note": "The webhooks page example verbatim in structure: a summary change. Nothing in the pipeline acts on it, so the normaliser reports `unsupported_event` rather than dropping it silently. Headers are the documented ones: X-Atlassian-Webhook-Identifier (\"unique within a Jira Cloud tenant and is the same across retries\"), X-Atlassian-Webhook-Flow, and X-Hub-Signature, which the replay harness computes over the exact bytes it sends — a signature literal here would be a signature over a body nobody can reproduce."
+    "note": "The webhooks page example verbatim in structure: a summary change. Since WP-60 it normalises into `ticket.updated` (the ticket, `issue.fields.updated`, `changed_fields: [\"summary\"]`); until then nothing acted on it and the normaliser reported `unsupported_event`. Headers are the documented ones: X-Atlassian-Webhook-Identifier (\"unique within a Jira Cloud tenant and is the same across retries\"), X-Atlassian-Webhook-Flow, and X-Hub-Signature, which the replay harness computes over the exact bytes it sends — a signature literal here would be a signature over a body nobody can reproduce."
   },
   "delivery": {
     "headers": {

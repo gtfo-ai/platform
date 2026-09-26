@@ -493,6 +493,53 @@ describe('FakeGitProvider discussions', () => {
     expect(unknown.ignored[0]?.reason).toBe('not_for_this_project');
   });
 
+  /**
+   * WP-60 (PROGRESS backlog 182): a push the platform did not make is a test control of its own,
+   * and only an update can carry one — a merge or a close that moved the head would be a delivery
+   * GitLab never sends (stricter, standing rule 1).
+   */
+  it('moves the merge request’s head on an update that carries a push, and only on an update', async () => {
+    const port = build();
+    const mr = await port.openMergeRequest({
+      project: PROJECT,
+      branch: 'agentic/task-5',
+      target: 'main',
+      title: 'Draft',
+      description: '',
+      draft: true,
+      labels: [],
+      reviewers: [],
+      remove_source_branch: true,
+    });
+    const pushed = 'e'.repeat(40);
+    const result = await port.inbound.normalise(
+      port.emitMergeRequestEvent({
+        event: 'mr.updated',
+        project: PROJECT,
+        iid: mr.ref.iid,
+        headSha: pushed,
+      }),
+      context,
+    );
+    expect((result.events[0]?.payload as { head_sha: string } | undefined)?.head_sha).toBe(pushed);
+    expect((await port.getMergeRequest(mr.ref)).ref.head_sha).toBe(pushed);
+    expect(() =>
+      port.emitMergeRequestEvent({
+        event: 'mr.merged',
+        project: PROJECT,
+        iid: mr.ref.iid,
+        headSha: 'f'.repeat(40),
+      }),
+    ).toThrow(/mr.updated/);
+  });
+
+  it('refuses an approval of a merge request it does not have', () => {
+    const port = build();
+    expect(() =>
+      port.emitApproval({ project: PROJECT, iid: 404, approverId: 'someone' }),
+    ).toThrow();
+  });
+
   it('reports a malformed delivery instead of throwing', async () => {
     const port = build();
     const result = await port.inbound.normalise({ headers: {}, body: '{"event":"nope"}' }, context);

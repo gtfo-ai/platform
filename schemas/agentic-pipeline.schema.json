@@ -123,6 +123,7 @@
       "enum": [
         "ticket.matched",
         "ticket.created",
+        "ticket.updated",
         "ticket.comment.added",
         "ticket.status.changed",
         "task.created",
@@ -161,6 +162,7 @@
         "mr.updated",
         "mr.merged",
         "mr.closed",
+        "mr.approved",
         "mr.review.comment",
         "ci.pipeline.finished",
         "default_branch.moved",

@@ -20,8 +20,9 @@
  * export carries it too.
  *
  * **3. A number whose error direction is known says so.** `caveats` is not decoration: reviewer
- * minutes over-count by every robot that comments (PROGRESS backlog **88**), under-count by every
- * reviewer who approves without commenting (backlog **90**), and rest on a cap the projector
+ * minutes over-count by every robot that comments (PROGRESS backlog **88**), under-count by the
+ * start of every review (there is no review-requested type; approving without commenting stopped
+ * being an under-count at WP-60, backlog **90**), and rest on a cap the projector
  * applies per entry (backlog **89**, whose read-side half is applied here). The two errors run in
  * opposite directions and **do not cancel**, so publishing the figure silently would be publishing
  * a precision the platform does not have.
@@ -295,7 +296,7 @@ export const REVIEWER_DAY_CAP_MINUTES = 8 * 60;
 
 const REVIEWER_CAVEATS = [
   'Over-counts: a bot that is not this platform — CI, a dependency updater — opens and extends a review window like a person, because nothing records which provider accounts are robots (PROGRESS backlog 88).',
-  'Under-counts: approving without commenting contributes nothing, because the event catalogue has no `mr.approved` (PROGRESS backlog 90). The two errors run in opposite directions and do not cancel.',
+  'Under-counts: a review’s start is not seen — the event catalogue has no review-requested type, so a window opens at the first comment or approval rather than when the reviewer began reading — and a withdrawn approval is not read. Approving without commenting **does** count since WP-60 (`mr.approved`, PROGRESS backlog 90), dated by when the platform received it. The two errors run in opposite directions and do not cancel.',
   'Capped twice: the projector caps 8 h per calendar day per entry, and this figure caps again per person per day **per kind** across tasks (PROGRESS backlog 89) — so one person reviewing and steering on the same day can be credited up to 16 h, which is exact for reviewer minutes and a stated over-count for the combined figure.',
 ] as const;
 
@@ -502,8 +503,9 @@ export const STATS_CATALOGUE: Readonly<Record<StatMetricId, MetricDefinition>> =
     aggregation: 'ratio',
     absent: {
       reason:
-        'Nothing tells this platform that a ticket changed. Jira’s `jira:issue_updated` is normalised into `ticket.matched` and `ticket.status.changed` only, so an edited description produces no event at all — the lint event carries the ticket’s `updated_at` as the linter saw it precisely so that whoever adds the signal has a baseline.',
-      owner: 'PROGRESS backlog 59 — one normaliser change; no work package owns it.',
+        'The signal exists since WP-60 — an edited ticket produces `ticket.updated`, carrying the provider’s own `updated_at` — and nothing folds it: the metric needs each `ticket.updated` compared with the `task.lint.posted` baseline for the same ticket (whose `ticket_updated_at` is the ticket as the linter saw it), counted when the edit lands within 48 hours. The event’s only consumer today keeps the ticket snapshot fresh.',
+      owner:
+        'Discovered work at WP-60 — a statistics fold over an event that now exists; no work package owns it yet.',
     },
   },
   shadow_similarity: {

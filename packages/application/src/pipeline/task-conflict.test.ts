@@ -141,6 +141,7 @@ describe('retryOnTaskConflict', () => {
         requiredReviewers: null,
         requestedByUserId: null,
         ticketSnapshotAt: null,
+        ticketSignalAt: null,
         version: INITIAL_TASK_VERSION,
       });
     });
@@ -232,6 +233,7 @@ describe('escalateTaskAfterConflict', () => {
         requiredReviewers: null,
         requestedByUserId: null,
         ticketSnapshotAt: null,
+        ticketSignalAt: null,
         version: INITIAL_TASK_VERSION,
       });
     });

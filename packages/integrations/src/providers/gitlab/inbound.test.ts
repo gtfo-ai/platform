@@ -221,13 +221,82 @@ describe('merge request hooks', () => {
     expect(payload.merge_commit_sha).toBe(MAIN_SHA);
   });
 
+  /**
+   * WP-60 review round 1: `mr.updated` carries the provider's own instant, which is what lets the
+   * pipeline move the recorded head forward only — GitLab documents no delivery order.
+   */
+  it('carries the update’s own instant on mr.updated, and null for one it cannot read', async () => {
+    const payload = catalogued(
+      await normalise(
+        mergeRequestHook({ action: 'update', updated_at: '2026-06-01 07:59:00 UTC' }),
+      ),
+      'mr.updated',
+    );
+    expect(payload.updated_at).toBe('2026-06-01T07:59:00.000Z');
+    const unreadable = catalogued(
+      await normalise(mergeRequestHook({ action: 'update', updated_at: 'soon' })),
+      'mr.updated',
+    );
+    expect(unreadable.updated_at).toBeNull();
+  });
+
   it('carries the draft flag from the documented `draft` attribute', async () => {
     const payload = catalogued(await normalise(mergeRequestHook({ draft: true })), 'mr.opened');
     expect(payload.draft).toBe(true);
   });
 
-  it.each(['approval', 'approved', 'unapproval', 'unapproved'])(
-    'drops the %s action, which the catalogue has no event for',
+  /**
+   * WP-60 (PROGRESS backlog 90). The action string, the `user` field's meaning and `actioned_at`
+   * were read from the webhook page on 2026-09-26 before this was built (`inbound.ts`'s
+   * `APPROVAL_ACTION` quotes them); until then all four approval actions were dropped here.
+   */
+  it('normalises the approval action into mr.approved, naming the approver and the instant', async () => {
+    const result = await normalise(
+      mergeRequestHook({ action: 'approval', actioned_at: '2026-06-01T07:58:00.000Z' }),
+      { ctx: context(() => USER_ID) },
+    );
+    const payload = catalogued(result, 'mr.approved');
+    expect(payload.approver).toEqual({
+      provider: 'gitlab',
+      external_id: '77',
+      email: 'dana.reviewer@example.test',
+      display_name: 'Dana Reviewer',
+      verified: true,
+    });
+    expect(payload.approved_at).toBe('2026-06-01T07:58:00.000Z');
+    expect((payload.mr as { iid: number; head_sha: string }).iid).toBe(16);
+    expect((payload.mr as { iid: number; head_sha: string }).head_sha).toBe(SHA);
+    expect(result.events[0]?.actor).toEqual(
+      expect.objectContaining({ identity: expect.objectContaining({ external_id: '77' }) }),
+    );
+  });
+
+  it('records an approval from GitLab before 18.10 with no instant rather than borrowing one', async () => {
+    // No `actioned_at`: the merge request's `updated_at` is a different fact and is not used.
+    const absent = catalogued(
+      await normalise(mergeRequestHook({ action: 'approval' })),
+      'mr.approved',
+    );
+    expect(absent.approved_at).toBeNull();
+    // An unreadable one is not an exception on an inbound notification (standing rule 20).
+    const unreadable = catalogued(
+      await normalise(mergeRequestHook({ action: 'approval', actioned_at: 'soon' })),
+      'mr.approved',
+    );
+    expect(unreadable.approved_at).toBeNull();
+  });
+
+  it('refuses an approval that names nobody, because the approver is the event', async () => {
+    const hook = mergeRequestHook({ action: 'approval' }) as Record<string, unknown>;
+    delete hook.user;
+    const result = await normalise(hook);
+    expect(result.events).toEqual([]);
+    expect(result.ignored[0]?.reason).toBe('malformed_payload');
+    expect(result.ignored[0]?.detail).toContain('approved');
+  });
+
+  it.each(['approved', 'unapproval', 'unapproved'])(
+    'drops the %s action, which is a state change or a withdrawal rather than a person approving',
     async (action) => {
       const result = await normalise(mergeRequestHook({ action }));
       expect(result.events).toEqual([]);

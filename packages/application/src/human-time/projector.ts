@@ -14,22 +14,23 @@
  * > *"review = from the first human MR activity (comment, approval, review start) to merge or last
  * > activity"*
  *
- * The catalogue (technical/02:166-167) has `mr.opened`, `mr.updated`, `mr.merged`, `mr.closed` and
- * `mr.review.comment`. So:
+ * The catalogue (technical/02) has `mr.opened`, `mr.updated`, `mr.merged`, `mr.closed`,
+ * `mr.review.comment` and, since WP-60, `mr.approved`. So:
  *
- *  - **comment** → `mr.review.comment`. It is the one MR event carrying an `author`, which is what
- *    makes per-person attribution possible at all.
+ *  - **comment** → `mr.review.comment`, carrying its `author`.
+ *  - **approval** → `mr.approved` (WP-60, PROGRESS backlog 90), carrying its `approver`. Until
+ *    WP-60 there was no such event, and **a reviewer who approved a merge request without writing a
+ *    comment contributed zero minutes** — this paragraph said so as the projector's residual. That
+ *    sentence is no longer true for a merge request whose provider sends the approval, which the
+ *    only registered git provider (GitLab) does; a withdrawn approval is still not read (the
+ *    normaliser drops it, `gitlab/inbound.ts` says why).
  *  - **merge** → `mr.merged`, the window's ending.
- *  - **approval** → *nothing*. There is **no `mr.approved`** event in this build: no normaliser
- *    produces one and no payload carries an approval. **The residual is real and is stated rather
- *    than implied: a reviewer who approves a merge request without writing a comment contributes
- *    zero minutes.** Under-counting is the honest direction — the alternative is to guess minutes
- *    for an event the platform never saw — and it is filed rather than hidden.
- *  - **review start** → *nothing*, for the same reason: there is no review-requested type.
+ *  - **review start** → *nothing*: there is no review-requested type, and this residual stands.
  *  - `mr.updated` is deliberately **not** read. It carries no author at all (`mrPayload` has none),
  *    so it cannot attribute a minute to anybody, and it fires for the platform's *own* pushes — the
- *    Developer stage pushing commits would read as a human reviewing. Its `EVENT_CONSUMPTION` entry
- *    therefore still names WP-41.
+ *    Developer stage pushing commits would read as a human reviewing. It is consumed since WP-60,
+ *    but by the pipeline and for the revision it carries (`pipeline/provider-signals.ts`), never
+ *    as activity.
  *
  * The other three kinds are exact, because the platform itself produces both ends:
  * `task.question.answered` (with the `questions` row for *"asked"*), `task.approval.decided` and
@@ -262,28 +263,54 @@ const onReviewComment = async (
     );
     return;
   }
-  const taskId = await taskOfMergeRequest(
+  await foldAuthoredActivity(
     options,
     context,
     {
       projectId: event.payload.project_id,
       taskId: event.payload.task_id ?? null,
       iid: event.payload.mr.iid,
+      author: event.payload.author,
+      at: event.occurred_at,
     },
+    logger,
+  );
+};
+
+/**
+ * One review activity by a named person on a merge request — a comment or, since WP-60, an
+ * approval: find the task, refuse an over-long account id, resolve the platform user, fold.
+ */
+const foldAuthoredActivity = async (
+  options: HumanTimeProjectorOptions,
+  context: HandlerContext,
+  input: {
+    readonly projectId: Id;
+    readonly taskId: Id | null;
+    readonly iid: number;
+    readonly author: { readonly provider: string; readonly external_id: string };
+    readonly at: IsoDateTime;
+  },
+  logger: Logger,
+): Promise<void> => {
+  const taskId = await taskOfMergeRequest(
+    options,
+    context,
+    { projectId: input.projectId, taskId: input.taskId, iid: input.iid },
     logger,
   );
   if (taskId === null) {
     return;
   }
   const account: ExternalAccount = {
-    provider: event.payload.author.provider,
-    externalId: event.payload.author.external_id,
+    provider: input.author.provider,
+    externalId: input.author.external_id,
   };
   const externalAuthor = externalAuthorKey(account);
   if (externalAuthor === null) {
     logger.warn(
       { task_id: taskId, provider: account.provider, length: account.externalId.length },
-      'human time: this comment’s author id is longer than an identity may be; the minutes are refused rather than attributed to a truncated key',
+      'human time: this reviewer’s account id is longer than an identity may be; the minutes are refused rather than attributed to a truncated key',
     );
     return;
   }
@@ -291,11 +318,37 @@ const onReviewComment = async (
   await foldReviewActivity(
     options,
     context,
+    { taskId, projectId: input.projectId, at: input.at, identity: { userId, externalAuthor } },
+    logger,
+  );
+};
+
+/**
+ * An approval — product/19 §16's *"approval"* anchor of the review window (WP-60, PROGRESS backlog
+ * 90). The same fold as a comment: it opens the approver's window or extends it, and an approval
+ * with no comment beside it is a window of one activity — a measured zero, as a lone comment is.
+ *
+ * Dated by the envelope's `occurred_at`, the same clock a comment is dated by, and **not** by the
+ * payload's `approved_at`: that is the provider's instant, `null` on a GitLab older than 18.10, and
+ * two clocks inside one window would make its length depend on two machines agreeing. No marker
+ * check: the platform never approves a merge request, so there is no bot approval of its own to
+ * exclude — another bot's approval counts as a person's, backlog 88's residual.
+ */
+const onApproved = async (
+  options: HumanTimeProjectorOptions,
+  context: HandlerContext,
+  event: Extract<DomainEvent, { type: 'mr.approved' }>,
+  logger: Logger,
+): Promise<void> => {
+  await foldAuthoredActivity(
+    options,
+    context,
     {
-      taskId,
       projectId: event.payload.project_id,
+      taskId: event.payload.task_id ?? null,
+      iid: event.payload.mr.iid,
+      author: event.payload.approver,
       at: event.occurred_at,
-      identity: { userId, externalAuthor },
     },
     logger,
   );
@@ -406,6 +459,7 @@ export const humanTimeProjector = (options: HumanTimeProjectorOptions): EventHan
   priority: HUMAN_TIME_PRIORITY,
   eventTypes: [
     'mr.review.comment',
+    'mr.approved',
     'mr.merged',
     'task.question.answered',
     'task.approval.decided',
@@ -417,6 +471,8 @@ export const humanTimeProjector = (options: HumanTimeProjectorOptions): EventHan
     switch (event.type) {
       case 'mr.review.comment':
         return onReviewComment(options, context, event, logger);
+      case 'mr.approved':
+        return onApproved(options, context, event, logger);
       case 'mr.merged':
         return onMerged(options, context, event, logger);
       case 'task.question.answered':

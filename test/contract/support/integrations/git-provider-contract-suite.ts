@@ -188,6 +188,23 @@ export interface GitProviderContractContext {
     readonly otherRef: string;
     readonly otherOwner: string;
   };
+  /**
+   * Produces the delivery a provider sends when a person **approves** {@link mergeRequestIid}, and
+   * the provider account id of that person (WP-60, PROGRESS backlog 90).
+   *
+   * An obligation of the contract rather than of GitLab (standing rule 23): `mr.approved`'s whole
+   * value is the approver, and product/19 §16 counts an approval as review activity — a provider
+   * that did not produce it would under-count every reviewer who approves without commenting.
+   */
+  emitApproval(): WebhookDelivery;
+  readonly approverExternalId: string;
+  /**
+   * Produces the delivery a provider sends when a merge request is **updated** — a push, say
+   * (WP-60 review round 2). The suite asserts it carries the provider's own `updated_at`: the
+   * recorded head moves forward only by that instant, so a provider that sent none would leave a
+   * human's push unrecorded for ever (standing rule 23).
+   */
+  emitUpdated(): WebhookDelivery;
   /** Produces signed deliveries. */
   emitMerged(): WebhookDelivery;
   emitReviewComment(text: string): WebhookDelivery;
@@ -853,6 +870,31 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
         );
         expect(payload.text).toBe('nit: rename this');
         expect((payload.author as ExternalIdentity).verified).toBe(true);
+      });
+
+      it('normalises an approval into mr.approved, naming the person who approved', async () => {
+        const userId = '00000000-0000-4000-8000-00000000f003';
+        const result = await port.inbound.normalise(
+          context.emitApproval(),
+          inboundContext(() => userId),
+        );
+        expect(result.ignored).toEqual([]);
+        expect(result.events).toHaveLength(1);
+        const [event] = result.events;
+        const { payload } = expectCatalogueEvent(event as NonNullable<typeof event>, 'mr.approved');
+        expect((payload.mr as { iid: number }).iid).toBe(context.mergeRequestIid);
+        const approver = payload.approver as ExternalIdentity;
+        expect(approver.external_id).toBe(context.approverExternalId);
+        expect(approver.verified, 'the resolver maps the approver').toBe(true);
+      });
+
+      it('normalises an update into mr.updated, carrying the provider’s own instant', async () => {
+        const result = await port.inbound.normalise(context.emitUpdated(), inboundContext());
+        expect(result.ignored).toEqual([]);
+        const [event] = result.events;
+        const { payload } = expectCatalogueEvent(event as NonNullable<typeof event>, 'mr.updated');
+        expect(payload.updated_at, 'an update the pipeline can order').not.toBeNull();
+        expect(Number.isNaN(Date.parse(payload.updated_at as string))).toBe(false);
       });
 
       it('normalises a merge into mr.merged', async () => {

@@ -49,6 +49,7 @@ import {
   runRunCredentialRevocation,
 } from '../recovery/run-credential.js';
 import { runShadowReport, type ShadowReportOptions } from '../shadow/report.js';
+import { runCiSettle } from './ci-settle.js';
 import { runConflictWarning } from './conflict-warning.js';
 import { runCoverage } from './coverage.js';
 import { type DependencyGateOptions, runDependencyGate } from './dependency-gate.js';
@@ -122,6 +123,9 @@ export const pipelineOutboundHandler = (
         return;
       case 'coverage':
         await runCoverage(options, data);
+        return;
+      case 'ci_settle':
+        await runCiSettle(options, data);
         return;
       case 'dependency_gate':
         await runDependencyGate(options, data);

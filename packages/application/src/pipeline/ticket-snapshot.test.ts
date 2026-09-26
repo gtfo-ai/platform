@@ -20,6 +20,7 @@ import {
   boundTicketSnapshot,
   type EnsureTicketSnapshotOptions,
   ensureTicketSnapshot,
+  isTicketSnapshotStale,
   MAX_TICKET_AUTHOR_CHARS,
   MAX_TICKET_COMMENT_CHARS,
   MAX_TICKET_COMMENT_ID_CHARS,
@@ -299,6 +300,7 @@ const storedWith = (ticketSnapshot: TicketSnapshot | null): StoredTask =>
     task: { id: TASK, projectId: PROJECT, ticket: REF },
     ticketSnapshot,
     ticketSnapshotAt: ticketSnapshot === null ? null : '2026-06-01T09:00:00.000Z',
+    ticketSignalAt: null,
   }) as unknown as StoredTask;
 
 describe('reading the ticket', () => {
@@ -427,5 +429,131 @@ describe('reading the ticket', () => {
       { projectId: PROJECT, taskId: TASK, ticket: REF },
     );
     expect(snapshot).toBeNull();
+  });
+});
+
+/**
+ * Q61 (b), built at WP-60: *"re-read at stage start when it is older than the task's last provider
+ * signal"*. The signal is `tasks.ticket_signal_at`, written by `pipeline.ticket.signal` on
+ * `ticket.updated`; both instants are the platform's.
+ */
+describe('freshness (WP-60, Q61 (b))', () => {
+  const READ_AT = '2026-06-01T09:00:00.000Z';
+  const at = (
+    ticketSnapshotAt: string | null,
+    ticketSignalAt: string | null,
+    snapshot: TicketSnapshot | null = boundTicketSnapshot(ticket(), noSecretsRedactor()),
+  ): StoredTask =>
+    ({
+      task: { id: TASK, projectId: PROJECT, ticket: REF },
+      ticketSnapshot: ticketSnapshotAt === null ? null : snapshot,
+      ticketSnapshotAt,
+      ticketSignalAt,
+    }) as unknown as StoredTask;
+
+  it('is stale with no snapshot, or with a signal after the read started — and only then', () => {
+    expect(isTicketSnapshotStale(at(null, null))).toBe(true);
+    expect(isTicketSnapshotStale(at(null, '2026-06-01T08:00:00.000Z'))).toBe(true);
+    expect(isTicketSnapshotStale(at('2026-06-01T08:00:00.000Z', null))).toBe(false);
+    expect(isTicketSnapshotStale(at('2026-06-01T08:00:00.000Z', '2026-06-01T07:59:59.999Z'))).toBe(
+      false,
+    );
+    // The same instant is not stale: the read that started then can have seen the edit.
+    expect(isTicketSnapshotStale(at('2026-06-01T08:00:00.000Z', '2026-06-01T08:00:00.000Z'))).toBe(
+      false,
+    );
+    expect(isTicketSnapshotStale(at('2026-06-01T08:00:00.000Z', '2026-06-01T08:00:00.001Z'))).toBe(
+      true,
+    );
+  });
+
+  /** A store with one row, and a unit of work that runs the callback, recording every write. */
+  const storeOf = (row: StoredTask) => {
+    let current = row;
+    const writes: { snapshot: TicketSnapshot; readAt: string }[] = [];
+    return {
+      writes,
+      current: () => current,
+      options: (readTicket: () => Promise<Ticket>): EnsureTicketSnapshotOptions => ({
+        integrations: staticPipelineIntegrations(integrationsWith(readTicket)),
+        clock: { now: () => READ_AT },
+        logger: silentLogger,
+        unitOfWork: {
+          transaction: async (work: (scope: { tx: unknown }) => Promise<unknown>) =>
+            work({ tx: null }),
+        } as unknown as UnitOfWork,
+        store: {
+          tasks: {
+            load: async () => current,
+            saveTicketSnapshot: async (
+              _tx: unknown,
+              _id: Id,
+              snapshot: TicketSnapshot,
+              readAt: string,
+            ) => {
+              writes.push({ snapshot, readAt });
+              current = {
+                ...current,
+                ticketSnapshot: snapshot,
+                ticketSnapshotAt: readAt,
+              } as StoredTask;
+            },
+          },
+        } as unknown as EnsureTicketSnapshotOptions['store'],
+      }),
+    };
+  };
+
+  it('re-reads a snapshot an edit has overtaken, and stamps it with the read’s start', async () => {
+    const stale = at('2026-06-01T08:00:00.000Z', '2026-06-01T08:30:00.000Z');
+    const store = storeOf(stale);
+    let reads = 0;
+    await ensureTicketSnapshot(
+      store.options(async () => {
+        reads += 1;
+        return ticket({ description: 'Now with acceptance criteria.' });
+      }),
+      stale,
+    );
+    expect(reads).toBe(1);
+    expect(store.writes).toHaveLength(1);
+    expect(store.writes[0]?.snapshot.description).toBe('Now with acceptance criteria.');
+    expect(store.writes[0]?.readAt).toBe(READ_AT);
+    // …and the row it leaves is fresh against the same signal, so the next stage reads nothing.
+    expect(isTicketSnapshotStale(store.current())).toBe(false);
+  });
+
+  it('keeps the stale words when the re-read fails, and tries again next time', async () => {
+    const stale = at('2026-06-01T08:00:00.000Z', '2026-06-01T08:30:00.000Z');
+    const store = storeOf(stale);
+    await ensureTicketSnapshot(
+      store.options(async () => {
+        throw new Error('jira is down');
+      }),
+      stale,
+    );
+    // No write at all: an older snapshot is a better prompt than none (standing rule 20), and the
+    // signal is still newer than it, so the rule fires again at the next stage.
+    expect(store.writes).toEqual([]);
+    expect(store.current().ticketSnapshot).not.toBeNull();
+    expect(isTicketSnapshotStale(store.current())).toBe(true);
+  });
+
+  it('does not put its read over one that started no earlier', async () => {
+    const stale = at('2026-06-01T08:00:00.000Z', '2026-06-01T08:30:00.000Z');
+    const store = storeOf(stale);
+    const options = store.options(async () => ticket({ description: 'mine' }));
+    // Somebody else's read, started at the same instant, lands while this one is in flight.
+    const raced = at(READ_AT, '2026-06-01T08:30:00.000Z');
+    await ensureTicketSnapshot(
+      {
+        ...options,
+        store: {
+          tasks: { ...options.store.tasks, load: async () => raced },
+        } as unknown as EnsureTicketSnapshotOptions['store'],
+      },
+      stale,
+    );
+    expect(store.writes).toEqual([]);
   });
 });

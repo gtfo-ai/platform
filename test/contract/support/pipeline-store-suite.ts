@@ -111,6 +111,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       estimateSamples: null,
       ticketSnapshot: null,
       ticketSnapshotAt: null,
+      ticketSignalAt: null,
       reviewSubject: null,
       historySample: null,
       riskClasses: [],
@@ -324,6 +325,163 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
 
       it('refuses to bump the version of a task that does not exist', async () => {
         await expect(store.tasks.bumpVersion(tx, nextId())).rejects.toThrow();
+      });
+
+      /**
+       * WP-60, Q61 (b): the task's last provider signal. One statement over every **live** task of
+       * the ticket, forward only, no version bump — each property asserted on both stores, because
+       * a fake that moved the token or went backwards would certify a writer PostgreSQL does not
+       * have (rule 23).
+       */
+      it('records a ticket signal on the live tasks of that ticket, forward only, and nothing else', async () => {
+        const key = `SIG-${counter + 1}`;
+        const live = task({}, key);
+        const shadow = task({ task: { ...task().task, mode: 'shadow' } }, key);
+        const finished = {
+          ...shadow,
+          task: { ...shadow.task, ticket: TICKET(key), state: 'done' as const },
+        };
+        const other = task();
+        await store.tasks.insert(tx, live);
+        await store.tasks.insert(tx, finished);
+        await store.tasks.insert(tx, other);
+        // The insert never writes the signal, whatever the snapshot carried.
+        await store.tasks.insert(tx, { ...task(), ticketSignalAt: '2026-06-01T08:00:00.000Z' });
+
+        const signal = {
+          projectId,
+          provider: 'fake-jira',
+          ticketKey: key,
+          at: '2026-06-01T09:10:00.000Z' as IsoDateTime,
+        };
+        expect(await store.tasks.recordTicketSignal(tx, signal)).toBe(1);
+        const loaded = (await store.tasks.load(tx, live.task.id)) as StoredTask;
+        expect(loaded.ticketSignalAt).toBe('2026-06-01T09:10:00.000Z');
+        expect(loaded.version).toBe(live.version);
+        expect((await store.tasks.load(tx, finished.task.id))?.ticketSignalAt).toBeNull();
+        expect((await store.tasks.load(tx, other.task.id))?.ticketSignalAt).toBeNull();
+
+        // Older: the row keeps the later instant. Newer: it moves.
+        await store.tasks.recordTicketSignal(tx, {
+          ...signal,
+          at: '2026-06-01T09:00:00.000Z' as IsoDateTime,
+        });
+        expect((await store.tasks.load(tx, live.task.id))?.ticketSignalAt).toBe(
+          '2026-06-01T09:10:00.000Z',
+        );
+        await store.tasks.recordTicketSignal(tx, {
+          ...signal,
+          at: '2026-06-01T09:20:00.000Z' as IsoDateTime,
+        });
+        expect((await store.tasks.load(tx, live.task.id))?.ticketSignalAt).toBe(
+          '2026-06-01T09:20:00.000Z',
+        );
+        expect(await store.tasks.recordTicketSignal(tx, { ...signal, ticketKey: 'NOBODY-1' })).toBe(
+          0,
+        );
+      });
+
+      /**
+       * WP-60, PROGRESS backlog 182: the one narrow writer that shares a column with `save`, and
+       * therefore the one that bumps the token — asserted on both stores with the stale save it
+       * exists to refuse.
+       */
+      it('moves only the recorded head of the merge request it names, and refuses a stale save after it', async () => {
+        const mr = {
+          provider: 'fake-git',
+          project_path: 'acme/api',
+          iid: 7,
+          url: 'https://git.example.test/acme/api/-/merge_requests/7',
+          branch: 'agentic/acme-7',
+          head_sha: 'a'.repeat(40),
+        };
+        const stored = task({
+          task: { ...task().task, state: 'active' },
+          mr,
+          branch: 'agentic/acme-7',
+        });
+        await store.tasks.insert(tx, stored);
+        const before = (await store.tasks.load(tx, stored.task.id)) as StoredTask;
+
+        expect(
+          await store.tasks.saveMergeRequestHead(tx, stored.task.id, {
+            iid: 7,
+            headSha: 'e'.repeat(40),
+            at: '2026-06-01T09:10:00.000Z' as IsoDateTime,
+          }),
+        ).toBe(true);
+        const after = (await store.tasks.load(tx, stored.task.id)) as StoredTask;
+        expect(after.mr).toEqual({ ...mr, head_sha: 'e'.repeat(40) });
+        expect(after.branch).toBe('agentic/acme-7');
+        expect(after.version).toBe(before.version + 1);
+        await expect(store.tasks.save(tx, before)).rejects.toMatchObject({
+          concurrencyConflict: true,
+        });
+
+        // The same revision, another merge request: nothing moves, and the token stays.
+        expect(
+          await store.tasks.saveMergeRequestHead(tx, stored.task.id, {
+            iid: 7,
+            headSha: 'e'.repeat(40),
+            at: '2026-06-01T09:20:00.000Z' as IsoDateTime,
+          }),
+        ).toBe(false);
+        expect(
+          await store.tasks.saveMergeRequestHead(tx, stored.task.id, {
+            iid: 8,
+            headSha: 'f'.repeat(40),
+            at: '2026-06-01T09:30:00.000Z' as IsoDateTime,
+          }),
+        ).toBe(false);
+        expect((await store.tasks.load(tx, stored.task.id))?.version).toBe(after.version);
+        await expect(
+          store.tasks.saveMergeRequestHead(tx, nextId(), {
+            iid: 7,
+            headSha: 'f'.repeat(40),
+            at: '2026-06-01T09:30:00.000Z' as IsoDateTime,
+          }),
+        ).rejects.toThrow();
+      });
+
+      /**
+       * WP-60 review round 1 (measured by the reviewer: `c…` then `b…` left the head at `b…`). The
+       * head is what the CI gate asks the pipeline status of, so a late delivery for an older push
+       * must not move it back — on both stores. Equal instants move nothing; the same sha still
+       * advances the instant, so a stale delivery after it is refused.
+       */
+      it('moves the recorded head forward only by the provider’s instant, whatever order deliveries arrive in', async () => {
+        const mr = {
+          provider: 'fake-git',
+          project_path: 'acme/api',
+          iid: 9,
+          url: 'https://git.example.test/acme/api/-/merge_requests/9',
+          branch: 'agentic/acme-9',
+          head_sha: 'a'.repeat(40),
+        };
+        const stored = task({ task: { ...task().task, state: 'active' }, mr });
+        await store.tasks.insert(tx, stored);
+        const at = (minute: number) =>
+          `2026-06-01T09:${String(minute).padStart(2, '0')}:00.000Z` as IsoDateTime;
+        const head = async () => (await store.tasks.load(tx, stored.task.id))?.mr?.head_sha;
+        const move = (headSha: string, minute: number) =>
+          store.tasks.saveMergeRequestHead(tx, stored.task.id, { iid: 9, headSha, at: at(minute) });
+
+        expect(await move('c'.repeat(40), 20)).toBe(true);
+        // The older push, delivered late: refused.
+        expect(await move('b'.repeat(40), 10)).toBe(false);
+        expect(await head()).toBe('c'.repeat(40));
+        // The same instant, another sha: refused — the first applied stands.
+        expect(await move('d'.repeat(40), 20)).toBe(false);
+        expect(await head()).toBe('c'.repeat(40));
+        // The recorded sha at a later instant advances only the instant, and the token stays…
+        const version = (await store.tasks.load(tx, stored.task.id))?.version;
+        expect(await move('c'.repeat(40), 30)).toBe(false);
+        expect((await store.tasks.load(tx, stored.task.id))?.version).toBe(version);
+        // …so a stale delivery between the two is refused too.
+        expect(await move('b'.repeat(40), 25)).toBe(false);
+        expect(await head()).toBe('c'.repeat(40));
+        expect(await move('e'.repeat(40), 31)).toBe(true);
+        expect(await head()).toBe('e'.repeat(40));
       });
 
       /**
@@ -642,6 +800,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
             ticket_updated_at: null,
           },
           ticketSnapshotAt: '2026-06-01T09:10:00.000Z' as IsoDateTime,
+          ticketSignalAt: null,
         });
         await store.tasks.insert(tx, stored);
         const loaded = await store.tasks.load(tx, stored.task.id);

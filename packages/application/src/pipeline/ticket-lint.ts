@@ -562,6 +562,7 @@ export const runTicketLintCheck = async (
       // column and PROGRESS backlog 18's lost-update class cannot reach it.
       ticketSnapshot: snapshot,
       ticketSnapshotAt: options.clock.now() as IsoDateTime,
+      ticketSignalAt: null,
       reviewSubject: null,
       historySample: null,
       // A lint task posts one comment and opens no merge request (WP-37).

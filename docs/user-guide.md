@@ -187,7 +187,13 @@ the rest are not measured yet, rather than drawing empty ticks that read as "pas
   place on this screen to show those lines, and a stage picker for handing the task back. Until they
   land, take over from the API (`POST /api/tasks/:id/take-over`) and read the workpad comment. A
   task you took over and did not hand back moves to needing a human after **5 working days**; the
-  workpad keeps showing your branch and the resume command while it waits.
+  workpad keeps showing your branch and the resume command while it waits. What you push to the
+  branch while you hold it is followed: on a GitLab binding the merge request's update moves the
+  revision the platform records for the task, so the next conflict check between tasks reads your
+  commit rather than the agent's last one; an update GitLab stamps earlier than the one already
+  recorded never moves it back. The CI gate does not rely on that record at all: it asks GitLab for
+  the merge request's current head each time and judges **that** commit's pipeline, so a green
+  pipeline for an older commit never passes it.
 - **Ask the task a question.** The answers are a thread, and the task response has nowhere to carry
   one, so a question would post into a void.
 

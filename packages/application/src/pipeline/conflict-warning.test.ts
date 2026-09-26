@@ -274,6 +274,7 @@ const insertPeer = async (
       estimateSamples: null,
       ticketSnapshot: null,
       ticketSnapshotAt: null,
+      ticketSignalAt: null,
       reviewSubject: null,
       historySample: null,
       riskClasses: [],
@@ -649,6 +650,88 @@ describe('the conflict warning (product/04 S6b, BD-030)', () => {
     ).toBe(true);
     expect(
       [...started.harness.idempotency.keys()].some((key) => key.includes('conflict_warning')),
+    ).toBe(true);
+  });
+
+  /**
+   * PROGRESS backlog 182, WP-60: a human pushes to the agent branch (the take-over's shape), the
+   * provider says so with `mr.updated`, and the recorded head follows it — so the next gate entry
+   * reads the diff **again** and warns at the new revision, where before it replayed the old
+   * thread and the coalescer answered the old files. The case above is the other direction: no
+   * push, same key, one thread.
+   */
+  it('follows a push nobody on the platform made, so the next gate entry reads and warns anew', async () => {
+    const started = startHarness({ ownPaths: ['src/totals.ts'], peerPaths: ['src/totals.ts'] });
+    await insertPeer(started.harness, 'ACME-9');
+    await started.harness.publish([ticketMatched()]);
+    expect(started.posted).toHaveLength(2);
+    const ownReadsBefore = started.diffReads.filter((iid) => iid === IID).length;
+    const taskOf = () =>
+      started.harness.store.snapshot().find((entry) => entry.task.ticket.key === TICKET.key);
+    const versionBefore = taskOf()?.version ?? 0;
+
+    const PUSHED = 'e'.repeat(40);
+    const mr = {
+      provider: 'fake-git',
+      project_path: 'acme/api',
+      iid: IID,
+      url: `https://git.example.test/acme/api/-/merge_requests/${IID}`,
+      branch: 'agentic/acme-1',
+      head_sha: PUSHED,
+    };
+    await started.harness.publish([
+      domainEventSchemasByType['mr.updated'].parse({
+        id: '00000000-0000-4000-9000-000000000004',
+        stream_type: 'project',
+        stream_id: PROJECT,
+        stream_seq: 2,
+        correlation_id: null,
+        cause_event_id: null,
+        actor: { kind: 'system', component: 'test' },
+        occurred_at: '2026-06-01T09:30:00.000Z',
+        type: 'mr.updated',
+        payload: {
+          project_id: PROJECT,
+          task_id: null,
+          mr,
+          draft: false,
+          head_sha: PUSHED,
+          updated_at: '2026-06-01T09:30:00.000Z',
+        },
+      }) as DomainEvent,
+    ]);
+    // The recorded head moved, through a write that bumps the token (rule 79).
+    expect(taskOf()?.mr?.head_sha).toBe(PUSHED);
+    expect(taskOf()?.version).toBe(versionBefore + 1);
+
+    await started.harness.publish([
+      domainEventSchemasByType['default_branch.moved'].parse({
+        id: '00000000-0000-4000-9000-000000000005',
+        stream_type: 'project',
+        stream_id: PROJECT,
+        stream_seq: 3,
+        correlation_id: null,
+        cause_event_id: null,
+        actor: { kind: 'system', component: 'test' },
+        occurred_at: '2026-06-01T10:00:00.000Z',
+        type: 'default_branch.moved',
+        payload: { project_id: PROJECT, branch: 'main', new_head: 'd'.repeat(40) },
+      }) as DomainEvent,
+    ]);
+    expect(taskOf()?.task.stageAttempts.rebase_gate).toBe(2);
+    // One more read of this task's diff — the coalescer's key carries the head, and it moved.
+    expect(started.diffReads.filter((iid) => iid === IID).length).toBe(ownReadsBefore + 1);
+    // A new thread on this task's merge request, under the new revision's key; the peer's key is
+    // the peer's own head, which did not move, so its thread is replayed rather than re-posted.
+    expect(started.posted.map((thread) => thread.iid).sort()).toEqual([IID, IID, PEER_IID]);
+    expect(
+      [...started.harness.idempotency.keys()].some((key) =>
+        key.includes(
+          encodeURIComponent(
+            conflictWarningIdempotencyKey(taskOf()?.task.id as Id, PUSHED, PEER_TASK),
+          ),
+        ),
+      ),
     ).toBe(true);
   });
 

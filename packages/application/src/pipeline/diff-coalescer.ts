@@ -38,11 +38,17 @@
  *    reads again. The window is the memory bound together with {@link MAX_COALESCED_DIFFS}, not a
  *    freshness rule — freshness is the key's.
  *  - **The key is the revision the platform recorded**, `tasks.mr_ref.head_sha`, which moves when a
- *    stage that pushes reports `ImplementationNotes` (the Developer and the conflict resolution).
- *    A commit somebody else pushes to the task's branch does not move it; inside the window the
- *    duties then read the files as they were at the recorded revision — the same revision every
- *    other identity on the task (the warning's idempotency key, `tasks.dependencies.head_sha`)
- *    already names. Outside the window they read the provider's current answer, as before.
+ *    stage that pushes reports `ImplementationNotes` (the Developer and the conflict resolution)
+ *    and — since WP-60 (PROGRESS backlog 182) — when the provider's `mr.updated` announces a push
+ *    the platform did not make, a human's or the take-over's (`provider-signals.ts`) — **forward
+ *    only**, by the provider's `updated_at`, so a late delivery for an older push cannot hand this
+ *    key an older revision (the CI gate no longer reads this head: it asks the provider for the
+ *    live one, WP-60 review round 2). Until then a
+ *    commit somebody else pushed did not move it, and inside the window the duties read the files
+ *    as they were at the recorded revision. The residual now is the delivery's latency: between a
+ *    push and its `mr.updated` being dispatched, the key is still the old revision — the same one
+ *    every other identity on the task (the warning's idempotency key,
+ *    `tasks.dependencies.head_sha`) names.
  *  - **One audit row per provider call, not per asker.** The executor records the request it made;
  *    an answer served from here was not a request and leaves no `integration_actions` row. The row
  *    that exists names the task that asked first.

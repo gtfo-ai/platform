@@ -14,6 +14,8 @@ import {
 } from '@platform/integrations';
 import type { GitProviderContractContext } from './git-provider-contract-suite.js';
 import {
+  APPROVER_USER_ID,
+  approvalHookBody,
   CLOCK_AT,
   CONFLICTED_IID,
   FAILING_JOB,
@@ -32,6 +34,7 @@ import {
   SHA_MR7,
   signedDelivery,
   UNKNOWN_IID,
+  updatedHookBody,
 } from './gitlab-fixtures.js';
 import {
   createGitLabReplay,
@@ -170,6 +173,9 @@ export const gitlabReplayContext = (
       otherRef: 'agentic/task-1',
       otherOwner: '@branch-owner',
     },
+    emitApproval: () => signedDelivery('Merge Request Hook', approvalHookBody()),
+    approverExternalId: String(APPROVER_USER_ID),
+    emitUpdated: () => signedDelivery('Merge Request Hook', updatedHookBody()),
     emitMerged: () => signedDelivery('Merge Request Hook', mergedHookBody()),
     emitReviewComment: (text) => signedDelivery('Note Hook', reviewCommentHookBody(text)),
     emitPipelineFinished: () => signedDelivery('Pipeline Hook', pipelineHookBody()),

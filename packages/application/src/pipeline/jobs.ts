@@ -26,7 +26,13 @@
  */
 import type { Id, Slug } from '@platform/contracts';
 import { effortSchema } from '@platform/contracts';
-import { compilePipeline, interpret, isRunnableTaskState, stageOf } from '@platform/domain';
+import {
+  compilePipeline,
+  hasIdenticalFailureStreak,
+  interpret,
+  isRunnableTaskState,
+  stageOf,
+} from '@platform/domain';
 import type { JobHandler, Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
@@ -37,6 +43,7 @@ import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrat
 import { REBASE_GATE_STAGE, recordRebaseCheck } from './rebase.js';
 import type { PipelineSagaOptions } from './saga.js';
 import type { StageExecutionJob, StageExecutor } from './stage-executor.js';
+import type { StoredTask } from './store.js';
 import {
   escalateTaskAfterConflict,
   retryOnTaskConflict,
@@ -162,7 +169,13 @@ export interface PipelineOutboundData {
      * close's own `mr.closed` webhook finds no task — so its merge request rides the payload
      * (`iid`, `mr_url`, `mr_project_path`) with the branch the work moved to (`new_branch`).
      */
-    | 'close_superseded_mr';
+    | 'close_superseded_mr'
+    /**
+     * WP-60 review round 2: settle the CI gate from a finished pipeline, **only** if that pipeline
+     * ran on the merge request's **live** head — read from the provider here, outside every
+     * transaction, because the handler that decided cannot (`ci-settle.ts`).
+     */
+    | 'ci_settle';
   readonly project_id: string;
   /** Absent for `intake_check`, which runs before there is a task. */
   readonly task_id?: string;
@@ -201,7 +214,7 @@ export interface PipelineOutboundData {
   /** `ask_answer` only (WP-31): which ask was answered. The row holds everything else. */
   readonly ask_id?: string;
   /**
-   * `coverage` only (WP-39): the revision the pipeline that just finished ran on.
+   * `coverage` (WP-39) and `ci_settle` (WP-60): the revision the pipeline that just finished ran on.
    *
    * It rides the payload rather than being re-derived from `tasks.mr_ref` because the two can
    * disagree — a merge request whose head moved while its pipeline ran would otherwise have the old
@@ -210,8 +223,12 @@ export interface PipelineOutboundData {
    * revision's pipeline, and answers `null` when there is none.
    */
   readonly head_sha?: string;
+  /** `ci_settle` only: the finished pipeline's status and its failing jobs, from the event. */
+  readonly ci_status?: string;
+  readonly failed_jobs?: readonly string[];
   /**
-   * `dependency_gate` only (WP-38): the stage whose completion caused the check.
+   * `dependency_gate` (WP-38): the stage whose completion caused the check; `ci_settle` (WP-60): the
+   * gate the pipeline's event found the task at.
    *
    * It rides the payload because it is the answer to two questions the row cannot give when the
    * job fires: where a `block` sends the task **back to**, and which stage a question belongs to so
@@ -382,8 +399,11 @@ export interface PipelineJobOptions extends PipelineSagaOptions {
  * needs to act on the escalation cannot, and would have to widen this first. The escalation is
  * never silent either way: it is logged here and it is a `task.escalated` event.
  */
+/** What a job's own task transaction needs — no executor, so an outbound duty can settle too. */
+export type TaskTransactionOptions = PipelineSagaOptions & { readonly unitOfWork: UnitOfWork };
+
 const inTaskTransaction = async <T>(
-  options: PipelineJobOptions,
+  options: TaskTransactionOptions,
   taskId: Id,
   what: string,
   fn: (scope: TransactionScope) => Promise<T>,
@@ -569,6 +589,7 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
       stage: request.stage,
       passed: result.passed,
       detail: result.detail,
+      ...(result.ciSignature === undefined ? {} : { ciSignature: result.ciSignature }),
     });
 
     /**
@@ -601,17 +622,33 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
  * signal against whatever the other writer left. Nothing outside the transaction is repeated — the
  * `enqueueStage` below runs once, after it commits.
  */
+export type GateSettlement =
+  | {
+      readonly kind: 'gate_settled';
+      readonly stage: Slug;
+      readonly passed: boolean;
+      readonly detail: string;
+      /**
+       * A failed CI gate's stable identity (`ciFailureSignature`). When present the settlement
+       * records it and escalates on the third identical one in a row (product/04 S4) — in the
+       * settlement's own transaction, so the poll path and the event path (`ci-settle.ts`, WP-60
+       * review round 2) share one convergence rule.
+       */
+      readonly ciSignature?: string;
+    }
+  | { readonly kind: 'escalate'; readonly reason: string; readonly blockerBrief: string };
+
+/** {@link settle}, for a duty that settles a gate outside `stage.execute` (`ci-settle.ts`). */
+export const settleGate = async (
+  options: TaskTransactionOptions,
+  request: Pick<StageExecutionJob, 'taskId' | 'stage'>,
+  signal: GateSettlement,
+): Promise<void> => settle(options, request, signal);
+
 const settle = async (
-  options: PipelineJobOptions,
-  request: StageExecutionJob,
-  signal:
-    | {
-        readonly kind: 'gate_settled';
-        readonly stage: Slug;
-        readonly passed: boolean;
-        readonly detail: string;
-      }
-    | { readonly kind: 'escalate'; readonly reason: string; readonly blockerBrief: string },
+  options: TaskTransactionOptions,
+  request: Pick<StageExecutionJob, 'taskId' | 'stage'>,
+  signal: GateSettlement,
 ): Promise<void> => {
   const work = await inTaskTransaction(
     options,
@@ -644,6 +681,10 @@ const settle = async (
         return null;
       }
       const pipeline = compilePipeline(stored.task.template, stored.template);
+      const converged =
+        signal.kind === 'gate_settled' && !signal.passed && signal.ciSignature !== undefined
+          ? await ciConvergence(options, scope, stored, signal.stage, signal.ciSignature)
+          : null;
       const decision =
         signal.kind === 'escalate'
           ? ({
@@ -651,14 +692,14 @@ const settle = async (
               reason: signal.reason,
               blockerBrief: signal.blockerBrief,
             } as const)
-          : interpret(pipeline, signal);
+          : (converged ?? interpret(pipeline, signal));
       const applied = await applyDecision({
         store: options.store,
         pipeline,
         tx: scope.tx,
         stored,
         decision,
-        ...(signal.kind === 'gate_settled' ? { signal } : {}),
+        ...(signal.kind === 'gate_settled' && converged === null ? { signal } : {}),
         context: {
           ids: options.ids,
           actor: { kind: 'system', component: 'pipeline' },
@@ -676,6 +717,81 @@ const settle = async (
   if (work !== null) {
     await enqueueStage(options.jobs, work);
   }
+};
+
+/**
+ * product/04 S4: *"Three identical failures in a row stop the loop early."* — moved here from the
+ * saga's `ci.pipeline.finished` handler at WP-60 review round 2, so it holds on both settlement
+ * paths. Records this failure's signature and answers the escalation when it completes a streak of
+ * three, or `null` to settle normally.
+ */
+const ciConvergence = async (
+  options: TaskTransactionOptions,
+  scope: TransactionScope,
+  stored: StoredTask,
+  stage: Slug,
+  signature: string,
+): Promise<{
+  readonly kind: 'escalate';
+  readonly reason: string;
+  readonly blockerBrief: string;
+} | null> => {
+  const recent = await options.store.tasks.recentStageSignatures(
+    scope.tx,
+    stored.task.id,
+    stage,
+    CONVERGENCE_LOOKBACK,
+  );
+  await options.store.tasks.recordStageSignature(scope.tx, {
+    taskId: stored.task.id,
+    stage,
+    attempt: stored.task.stageAttempts[stage] ?? 1,
+    signature,
+  });
+  // One pipeline counts once (WP-60 review round 3): consecutive observations of the same pipeline
+  // — the poll and its event, or two polls of a head nobody moved — collapse into one failure, so
+  // "three in a row" means three pipelines, whichever path settled each.
+  const failures = distinctPipelines([...recent, signature]).map((entry) => entry.shape);
+  if (!hasIdenticalFailureStreak(failures, 3)) {
+    return null;
+  }
+  const failing = shapeOf(signature).split(':').slice(2).join(':');
+  return {
+    kind: 'escalate',
+    reason: 'the same CI failure three times in a row',
+    blockerBrief:
+      `The pipeline for ${stored.task.ticket.key} has failed three times with exactly the same jobs (${failing || 'none reported'}). ` +
+      'Another Implementation pass is unlikely to change it. Look at the job log, fix what is wrong, and hand the task back.',
+  };
+};
+
+/** How far back the streak looks: enough attempts that collapsing repeats still leaves three. */
+const CONVERGENCE_LOOKBACK = 10;
+
+/** `ci:<status>:<jobs>` — a signature without its pipeline, which is what "identical" compares. */
+const shapeOf = (signature: string): string => {
+  const at = signature.lastIndexOf('@');
+  return at === -1 ? signature : signature.slice(0, at);
+};
+
+/**
+ * Oldest first, with consecutive entries for the **same pipeline** collapsed into one. A signature
+ * written before WP-60's round 3 carries no `@<sha>` and is its own pipeline.
+ */
+const distinctPipelines = (
+  signatures: readonly string[],
+): readonly { readonly shape: string; readonly pipeline: string | null }[] => {
+  const out: { shape: string; pipeline: string | null }[] = [];
+  for (const signature of signatures) {
+    const at = signature.lastIndexOf('@');
+    const pipeline = at === -1 ? null : signature.slice(at + 1);
+    const previous = out.at(-1);
+    if (pipeline !== null && previous?.pipeline === pipeline) {
+      continue;
+    }
+    out.push({ shape: shapeOf(signature), pipeline });
+  }
+  return out;
 };
 
 /**

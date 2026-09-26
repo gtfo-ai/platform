@@ -167,13 +167,43 @@ describe('FakeTaskManagement', () => {
       port.emitStatusChanged({ ticketKey: 'FAKE-1', from: 'Ready for agent', to: 'In Progress' }),
       context,
     );
-    expect(status.events[0]?.type).toBe('ticket.status.changed');
+    // The status event first and the edit beside it (WP-60), the way Jira's delivery reads.
+    expect(status.events.map((event) => event.type)).toEqual([
+      'ticket.status.changed',
+      'ticket.updated',
+    ]);
 
     const matched = await port.inbound.normalise(
       port.emitTicketMatched({ ticketKey: 'FAKE-1', rule: 'label:agentic' }),
       context,
     );
     expect(matched.events[0]?.type).toBe('ticket.matched');
+  });
+
+  /**
+   * WP-60: the edit is applied **before** the delivery is built, so the stage that re-reads the
+   * ticket because of it reads the new words — the fake's half of Q61 (b).
+   */
+  it('applies an edit to the stored ticket and announces the fields that moved', async () => {
+    const port = build();
+    const context = {
+      projectId: PROJECT_ID,
+      integrationId: INTEGRATION_ID,
+      resolveUser: () => null,
+    };
+    const result = await port.inbound.normalise(
+      port.emitTicketUpdated({ ticketKey: 'FAKE-1', description: 'Now with criteria.' }),
+      context,
+    );
+    expect(result.events.map((event) => event.type)).toEqual(['ticket.updated']);
+    expect(
+      (result.events[0]?.payload as { changed_fields: string[] } | undefined)?.changed_fields,
+    ).toEqual(['description']);
+    const after = await port.readTicket(REF);
+    expect(after.description).toBe('Now with criteria.');
+    expect((result.events[0]?.payload as { updated_at: string } | undefined)?.updated_at).toBe(
+      after.updated_at,
+    );
   });
 
   it('fails a read of a ticket that never existed', async () => {

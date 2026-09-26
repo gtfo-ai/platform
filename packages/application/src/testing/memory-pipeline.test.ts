@@ -57,6 +57,7 @@ const task = (id: string, key = 'ACME-1'): StoredTask => ({
   requiredReviewers: null,
   requestedByUserId: null,
   ticketSnapshotAt: null,
+  ticketSignalAt: null,
   version: 1,
 });
 

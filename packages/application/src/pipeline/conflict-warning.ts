@@ -20,10 +20,12 @@
  * backlog 64): this task's own diff is the one the risk routing reads at the same gate entry, and a
  * peer's is the one every other task at the gate compares against, so a burst of gate entries after
  * a default-branch move reads each merge request once rather than once per task that compares
- * against it. A paths-only port method would still be the honest read: `…/diffs` has no field
- * selector, and GitLab's GraphQL `MergeRequest.diffStats` answers paths without patches (read at
- * WP-59, `test/fixtures/http/gitlab/SOURCES.md`) — filed as discovered work under WP-59 rather than
- * built here.
+ * against it. A paths-only port method was the other candidate, and it is **refused** (WP-60,
+ * PROGRESS backlog 177): `…/diffs` has no field selector, and GitLab's GraphQL
+ * `MergeRequest.diffStats`, which does answer paths without patches, is documented as a plain list
+ * with no pagination and no cap (`test/fixtures/http/gitlab/SOURCES.md`, "Pages read for WP-60") —
+ * so it would trade this bounded page for a response the size of the merge request's whole file
+ * list, on exactly the large merge requests where the saving was meant to be.
  *
  * ## When it is computed
  *

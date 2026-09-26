@@ -15,9 +15,11 @@
  * The only activity a git provider publishes for a **historical** merge request through this
  * platform's port is a discussion note with a `created_at` and a `system` flag. So:
  *
- *  - **approvals are invisible** — PROGRESS backlog **90** records that `mr.approved` is in
- *    product/08:10's contract and absent from the event catalogue — which makes this figure
- *    **under**-state a merge request approved without comment, in the limit to `null`;
+ *  - **approvals are invisible** — for a *historical* merge request the port has no approval read,
+ *    so a merge request approved without comment is **under**-stated, in the limit to `null`. The
+ *    `mr.approved` event WP-60 added (PROGRESS backlog 90) is a webhook: it reaches the human-time
+ *    projector for the platform's own merge requests as they happen and cannot reach a merge
+ *    request mined after the fact;
  *  - **a bot's note counts as a human's** — PROGRESS backlog **88**, one direction further: a CI
  *    bot or a linter that is not this platform posts ordinary notes, which makes the figure
  *    **over**-state. `system: true` excludes the provider's *own* notes ("added 3 commits") and

@@ -51,7 +51,6 @@ import {
   createTask,
   escalateTask,
   evaluateTaskAdmission,
-  hasIdenticalFailureStreak,
   interpret,
   isRepeatOfPreviousRound,
   isRunnableTaskState,
@@ -391,6 +390,10 @@ export const runIntakeCheck = async (
    * create it would turn a provider outage into lost work (standing rule 20). The next agent stage
    * reads it (`ensureTicketSnapshot`), so the failure is recoverable rather than permanent.
    */
+  // The read's **start** is what the snapshot is as fresh as (WP-60): an edit announced while the
+  // provider answers is then dated after the snapshot, and the next agent stage re-reads it
+  // (`isTicketSnapshotStale`), where the read's end would have hidden it for the rest of the task.
+  const ticketSnapshotReadAt = options.clock.now() as IsoDateTime;
   const ticketSnapshot = await readTicketSnapshot(
     options,
     { projectId, taskId: null, ticket },
@@ -467,7 +470,8 @@ export const runIntakeCheck = async (
       estimateSamples: null,
       version: INITIAL_TASK_VERSION,
       ticketSnapshot,
-      ticketSnapshotAt: ticketSnapshot === null ? null : (options.clock.now() as IsoDateTime),
+      ticketSnapshotAt: ticketSnapshot === null ? null : ticketSnapshotReadAt,
+      ticketSignalAt: null,
       // Never a review-only task: this is the ticket path (WP-24's is `review-only.ts`).
       reviewSubject: null,
       historySample: null,
@@ -1306,50 +1310,27 @@ const ciHandler = (options: PipelineSagaOptions): EventHandler => ({
       // A pipeline result for a task that is not at the CI gate is somebody else's news.
       return;
     }
-    const passed = event.payload.status === 'success';
-    const failing = event.payload.failed_jobs.map((job) => job.name).sort();
-    const detail = passed
-      ? `pipeline for ${event.payload.head_sha} succeeded`
-      : `pipeline for ${event.payload.head_sha} ${event.payload.status}${failing.length === 0 ? '' : `: ${failing.join(', ')}`}`;
-
-    if (!passed) {
-      // Stable across attempts on purpose: the head sha changes every round, so a signature that
-      // carried it would never repeat and convergence detection would never fire.
-      const signature = `ci:${event.payload.status}:${failing.join(',')}`;
-      const history = [
-        ...(await options.store.tasks.recentStageSignatures(
-          context.scope.tx,
-          stored.task.id,
-          stage,
-          2,
-        )),
-        signature,
-      ];
-      if (hasIdenticalFailureStreak(history, 3)) {
-        // product/04 S4: "Three identical failures in a row stop the loop early."
-        const escalated = escalateTask(
-          stored.task,
-          {
-            reason: 'the same CI failure three times in a row',
-            blockerBrief:
-              `The pipeline for ${stored.task.ticket.key} has failed three times with exactly the same jobs (${failing.join(', ') || 'none reported'}). ` +
-              'Another Implementation pass is unlikely to change it. Look at the job log, fix what is wrong, and hand the task back.',
-          },
-          contextFor(options, stored.task.id, event.id),
-        );
-        await options.store.tasks.save(context.scope.tx, { ...stored, task: escalated.aggregate });
-        await context.emit(escalated.events);
-        return;
-      }
-      await options.store.tasks.recordStageSignature(context.scope.tx, {
-        taskId: stored.task.id,
-        stage,
-        attempt: stored.task.stageAttempts[stage] ?? 1,
-        signature,
-      });
-    }
-
-    await step(options, context, stored, { kind: 'gate_settled', stage, passed, detail });
+    /**
+     * **Decided here, settled by a duty** (WP-60 review round 2). This handler used to settle the
+     * gate from the payload for **any** pipeline of this iid, so a green pipeline for a commit that
+     * was no longer the head passed it. Whether the pipeline ran on the head is a question for the
+     * provider's live answer, which a handler inside the dispatch transaction may not ask (WP-15d):
+     * `ci_settle` (`ci-settle.ts`) reads it and settles only on a match — the convergence rule
+     * (three identical failures) moved with it, into the settlement both paths share (`jobs.ts`).
+     */
+    const data: PipelineOutboundData = {
+      duty: 'ci_settle',
+      project_id: event.payload.project_id,
+      task_id: stored.task.id,
+      cause_event_id: event.id,
+      stage,
+      head_sha: event.payload.head_sha,
+      ci_status: event.payload.status,
+      failed_jobs: event.payload.failed_jobs.map((job) => job.name),
+    };
+    context.afterCommit(async () => {
+      await enqueueOutbound(options.jobs, data);
+    });
   },
 });
 

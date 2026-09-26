@@ -196,6 +196,15 @@ runGitProviderContract({
         otherRef: 'agentic/task-1',
         otherOwner: '@branch-owner',
       },
+      emitApproval: () =>
+        port.emitApproval({ project: PROJECT, iid: existing.ref.iid, approverId: 'approver-1' }),
+      approverExternalId: 'approver-1',
+      emitUpdated: () =>
+        port.emitMergeRequestEvent({
+          event: 'mr.updated',
+          project: PROJECT,
+          iid: existing.ref.iid,
+        }),
       emitMerged: () =>
         port.emitMergeRequestEvent({
           event: 'mr.merged',

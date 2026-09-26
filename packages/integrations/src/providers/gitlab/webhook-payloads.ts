@@ -53,6 +53,12 @@ export const mergeRequestHookSchema = z.object({
     detailed_merge_status: z.string().nullish(),
     merge_commit_sha: z.string().nullish(),
     updated_at: z.string().nullish(),
+    /**
+     * *"When the action that triggered the webhook occurred"* — introduced in GitLab 18.10, read
+     * 2026-09-26 (WP-60). Nullish because an older instance does not send it; `mr.approved` carries
+     * it as the provider's own instant and says `null` rather than borrowing `updated_at`.
+     */
+    actioned_at: z.string().nullish(),
     url: z.string().nullish(),
     last_commit: z.object({ id: z.string() }).nullish(),
   }),

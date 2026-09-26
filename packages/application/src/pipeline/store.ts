@@ -181,6 +181,19 @@ export interface StoredTask {
   /** When {@link ticketSnapshot} was read; `null` exactly when it is (`tasks_ticket_snapshot_at_paired`). */
   readonly ticketSnapshotAt: IsoDateTime | null;
   /**
+   * The latest instant the provider **told** the platform this task's ticket changed (WP-60,
+   * migration 0044) — Q61 (b)'s *"the task's last provider signal"*, which did not exist before.
+   *
+   * The platform's receipt time of the newest `ticket.updated` for the task's ticket (the event's
+   * `occurred_at`), a platform instant like {@link ticketSnapshotAt}, so "the snapshot predates the
+   * signal" is one comparison of two platform instants — stamped by two processes, whose skew bound
+   * `isTicketSnapshotStale` states. `null` means no edit has been announced
+   * since the task existed. Written only by {@link TaskRepository.recordTicketSignal}, and never
+   * by the insert (a task is born with no signal: the one that started it is older than its
+   * snapshot, which is read after it).
+   */
+  readonly ticketSignalAt: IsoDateTime | null;
+  /**
    * The human merge request a **review-only** task reviews (WP-24, migration 0020).
    *
    * `null` for every task that is not one, which is every task on a project that has not enabled
@@ -401,6 +414,59 @@ export interface TaskRepository {
    * @throws when the task does not exist, like `save` and the other narrow writes.
    */
   saveRiskClasses(tx: Transaction, taskId: Id, classes: readonly string[]): Promise<void>;
+  /**
+   * Moves `ticket_signal_at` forward on every **live** task of one ticket — the ninth narrow writer
+   * (WP-60, Q61 (b)).
+   *
+   * One statement over the project's tasks whose ticket is `(provider, ticketKey)` and whose state
+   * is not `done` or `cancelled`, setting the column to the **later** of what it holds and `at`: a
+   * redelivered or out-of-order `ticket.updated` can never move it backwards, so the write is
+   * idempotent and commutative, which is what an event handler's redelivery needs. No version bump:
+   * `save` does not name the column, so bumping the token here would refuse an in-flight aggregate
+   * write that never touched it — the partition `tasks-column-ownership.test.ts` holds.
+   *
+   * Answers how many rows moved, so the handler can log a signal that reached no task.
+   */
+  readonly recordTicketSignal: (
+    tx: Transaction,
+    signal: {
+      readonly projectId: Id;
+      readonly provider: string;
+      readonly ticketKey: string;
+      readonly at: IsoDateTime;
+    },
+  ) => Promise<number>;
+  /**
+   * Moves `mr_ref.head_sha` **forward only** — a push the provider announced, a human's or the
+   * take-over's (WP-60, PROGRESS backlog 182; ordered at review round 1).
+   *
+   * `at` is the provider's instant of the update (`mr.updated`'s `updated_at`), stored beside the
+   * head as `tasks.mr_head_at` (migration 0044). The write happens only while `mr_ref` still names
+   * merge request `iid`, the task is live, and `at` is **strictly later** than the stored instant (or
+   * none is stored): GitLab documents no delivery order, and the conflict warning, the diff
+   * coalescer and the risk routing key on this head, so a late delivery for an older push must never
+   * move it back. **An equal
+   * instant moves nothing** — two updates the provider stamped at the same instant cannot be ordered,
+   * and the first one applied stands. GitLab's webhook instants are **whole seconds** (the page's
+   * example carries `.000`), so two pushes inside one second leave the first-applied revision
+   * recorded until a later delivery moves it; the CI gate is not exposed to that, because it reads the
+   * provider's live head rather than this record (WP-60 review round 2). When the sha is already the recorded one, only `mr_head_at`
+   * advances (no version bump: `save` does not own that column), so a stale delivery arriving after
+   * the platform's own push was announced is refused too.
+   *
+   * `mr_ref` belongs to `save`, so a head that **does** move bumps `version` in the same statement
+   * (rule 79): a `save` over a snapshot read before it is refused rather than putting the old
+   * revision back. The census in `tasks-column-ownership.test.ts` names both statements.
+   *
+   * Answers whether the head moved.
+   *
+   * @throws when the task does not exist.
+   */
+  readonly saveMergeRequestHead: (
+    tx: Transaction,
+    taskId: Id,
+    head: { readonly iid: number; readonly headSha: string; readonly at: IsoDateTime },
+  ) => Promise<boolean>;
   /**
    * Moves `version` — the token {@link TaskRepository.save} guards with — and writes no column of
    * the aggregate (WP-59 review round 1); the SQL adapter also sets the bookkeeping `updated_at`, as

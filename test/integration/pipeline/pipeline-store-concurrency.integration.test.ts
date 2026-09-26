@@ -150,6 +150,7 @@ describe('a spend written in a transaction that rolls back', () => {
         estimateSamples: null,
         ticketSnapshot: null,
         ticketSnapshotAt: null,
+        ticketSignalAt: null,
         reviewSubject: null,
         historySample: null,
         riskClasses: [],

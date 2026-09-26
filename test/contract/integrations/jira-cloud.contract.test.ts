@@ -103,6 +103,12 @@ runTaskManagementContract({
             delete body.changelog;
           },
         }),
+      /** Atlassian's own documented example: a `summary` change (WP-60). */
+      emitTicketUpdated: () =>
+        binding.replay.delivery('webhook-issue-updated-summary.json', {
+          deliveryId: nextDeliveryId(),
+        }),
+      updatedField: 'summary',
       emitStatusChange: (to) =>
         binding.replay.delivery('webhook-issue-updated-status.json', {
           deliveryId: nextDeliveryId(),
@@ -114,9 +120,11 @@ runTaskManagementContract({
       unhandled: {
         // Well-formed, correctly signed, and about an event this provider does not act on — which
         // is a different answer from the fake's `malformed_payload`, and the reason the suite asks
-        // the harness for both the delivery and the reason.
+        // the harness for both the delivery and the reason. Until WP-60 this was the documented
+        // summary edit; an edit is now `ticket.updated`, so the unhandled delivery is the
+        // documented worklog event the webhook contract test already drops by name.
         delivery: () =>
-          binding.replay.delivery('webhook-issue-updated-summary.json', {
+          binding.replay.delivery('webhook-worklog-created.json', {
             deliveryId: nextDeliveryId(),
           }),
         reason: 'unsupported_event',

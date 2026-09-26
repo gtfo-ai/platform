@@ -28,7 +28,8 @@
  * `—` meaning *declared unconsumed*. Read literally, that column marks **49 of 50** types consumed,
  * because it describes the consumers the finished product has — Slack notifications, the UI band, the
  * cost ledger, the audit projection. Measured, a composed `apps/server` registers handlers for
- * **38** of them, the count of `handled` rows below. That figure is deliberately not broken down
+ * **41** of them when WP-60 last counted, the count of `handled` rows below. That figure is
+ * deliberately not broken down
  * per work package any more: it was, and it went stale four work packages later while reading as a
  * measurement (standing rule 86). `consumption.test.ts` is the census — it composes the same
  * handlers `apps/server/src/pipeline.ts` does and asserts this table equals what they register, in
@@ -38,7 +39,8 @@
  *
  * The table below is therefore **what this build consumes**, and every `unconsumed` entry names an
  * address: the work package that will flip it, or — when nothing will, because the *event* cannot
- * answer the question — the backlog entry that says so. `mr.updated` is the second kind.
+ * answer the question — the backlog entry that says so. `mr.updated` was the second kind until
+ * WP-60 found a question it *can* answer (the revision), and is `handled` since.
  *
  * The properties the amendment is protecting are unchanged: a sweeper
  * must be complete for everything declared consumed, removing a handler fails a named test, and a new
@@ -154,6 +156,20 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
    */
   'ticket.created': 'handled',
 
+  // ── Provider signals written down (WP-60), registered by `providerSignalHandlers` ──
+  /**
+   * A ticket changed — Q61 (b)'s *"the task's last provider signal"* (PROGRESS backlog 59).
+   *
+   * `handled` from the day it exists, by the work package that emits it, for `ticket.created`'s
+   * reason: `pipeline.ticket.signal` stamps the receipt time on every live task of the ticket, and
+   * `ensureTicketSnapshot` re-reads a snapshot older than it at the next agent stage. It is the
+   * **first** of the event's three promised consumers; the other two are named where they wait —
+   * the linter's re-lint on a measurement of how often a real Jira sends updates (`docs/TODO.md`),
+   * and product/18:60's *"edited within 48 h"* on a statistics fold (`stats-metrics.ts`'s absent
+   * entry names its owner).
+   */
+  'ticket.updated': 'handled',
+
   // ── The cost ledger (WP-19), registered by `costHandlers` ────────────────────
   'run.finished': 'handled',
   'run.failed': 'handled',
@@ -202,22 +218,31 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   'workspace.destroyed': 'unconsumed', // WP-20.
   'workspace.exported': 'unconsumed', // WP-20.
   /**
-   * **WP-41 looked too, and left it unconsumed — so this line no longer names a work package that
-   * will flip it** (standing rule 83: the sentence nearest the change is the one nobody re-reads).
+   * **Consumed since WP-60 — for the revision it carries, not as activity** (PROGRESS backlog 182).
    *
-   * Both of WP-29's reasons are properties of the payload rather than of the work package that
-   * meets it. It carries **no author** (`mrPayload` has none), so nothing it records can be
-   * attributed to anybody; and it fires for the platform's **own** pushes, so counting it as
-   * activity would record the Developer stage pushing a commit as a human touching the merge
-   * request. A statistic folded from it would be a number about the platform's own behaviour
-   * labelled as a number about people.
-   *
-   * What would change that is an **author on the payload**, which is a normaliser change with a
-   * fixture and a contract-suite case (standing rule 23) and is the same shape PROGRESS backlog
-   * **90** prices for `mr.approved`. It is recorded there rather than owned here: an entry naming
-   * a work package that is not going to flip it is worse than one naming none (rule 18).
+   * This entry was `unconsumed` from WP-15a to WP-60, and the reasons it gave are still true of the
+   * question they answered: the payload carries **no author**, and it fires for the platform's
+   * **own** pushes, so a statistic of human activity folded from it would be a number about the
+   * platform labelled as a number about people — which is why the human-time projector and the
+   * statistics projector still do not read it (standing rule 83: the sentence nearest the change is
+   * corrected, not deleted). What neither reason touches is the **head sha**: `pipeline.merge.request.head`
+   * (`pipeline/provider-signals.ts`) moves `tasks.mr_ref.head_sha` when a push the platform did not
+   * make arrives — a human's, the take-over's — so the conflict warning's key and the diff
+   * coalescer's key follow the branch rather than the last pushing stage. The dependency record is
+   * not rewritten by it: `tasks.dependencies.head_sha` names the revision the dependency gate
+   * inspected, which only a Developer completion re-runs.
    */
-  'mr.updated': 'unconsumed', // No author on the payload; PROGRESS backlog 90's shape.
+  'mr.updated': 'handled',
+  /**
+   * A person approved a merge request (WP-60, PROGRESS backlog 90) — product/08's contract and
+   * product/19 §16's *"approval"* anchor.
+   *
+   * `handled` by the human-time projector at 230 (`human-time/projector.ts`), which folds it into
+   * the approver's review window as it folds a comment. Its only consumer, so the entry moved with
+   * it: a sweeper without the projector would complete the dispatch and the approval's minutes
+   * would be lost exactly as they were before the event existed.
+   */
+  'mr.approved': 'handled',
   // ── The notification band (WP-32), registered by `notifyHandlers` at TD-005 priority 210 ──
   /**
    * A budget window crossed a threshold, or is spent — product/18:33's *"budget 100 %"*.
@@ -276,9 +301,10 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
    * `mr.merged` was already `handled` by the pipeline and stays where it was, and the same is true
    * of the human-time projector's four (see the note at the top of this table).
    *
-   * **Half of product/18:60 is still absent and stays that way**: *"tickets improved after lint
-   * (edited within 48 h)"* needs a *this ticket changed* signal no normaliser produces (PROGRESS
-   * backlog **59**), so the statistics screen names that metric absent with its entry rather than
+   * **Half of product/18:60 is still absent**: *"tickets improved after lint (edited within
+   * 48 h)"* needed a *this ticket changed* signal no normaliser produced (PROGRESS backlog **59**).
+   * WP-60 built the signal (`ticket.updated`) and not the fold, so the statistics screen still names
+   * the metric absent — now with the fold as the missing half rather than the event — instead of
    * publishing the half it can count as if it were the whole.
    */
   'task.review.observed': 'handled',

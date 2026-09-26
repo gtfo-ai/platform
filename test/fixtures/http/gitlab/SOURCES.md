@@ -151,7 +151,40 @@ carrying its own date.
   `deletions`. That is a **paths-without-patches** answer, which is what backlog 64's paths-only
   port method needed and `…/diffs` cannot give (`docs/TODO.md`'s question). It is recorded here and
   not built: WP-59's criterion is the coalesced read, and the port method is filed as discovered
-  work under WP-59 in `PROGRESS.md`.
+  work under WP-59 in `PROGRESS.md`. **WP-60 read the same page for its bounds and refused the port
+  method** — see "Pages read for WP-60" below.
+
+## Pages read for WP-60 that produced no fixture
+
+- `https://docs.gitlab.com/user/project/integrations/webhook_events/` § "Merge request events"
+  (retrieved **2026-09-26**) — read to answer backlog 90's measurement before `mr.approved` was built:
+  *which action strings does GitLab send for an approval, and does the payload name the approver?*
+  The four approval actions, verbatim: `approval` — *"A user adds their approval."*; `approved` — *"A
+  merge request is fully approved by all required approvers."*; `unapproval` — *"A user removes their
+  approval, either manually or by the system."*; `unapproved` — *"A previously approved merge request
+  loses its approved status, either manually or by the system."* The top-level `user` is documented as
+  *"User who triggered the event"*; the page does **not** say, of the approval actions, that it is the
+  approver. So the approver's identity is **inferred** from two documented sentences (the triggering
+  user of *"a user adds their approval"*), not documented as such. The instant is
+  `object_attributes.actioned_at` — *"When the action that triggered the webhook occurred"*,
+  *"introduced in GitLab 18.10"*. The page's example payload is an `open` and shows no approval
+  timestamp or approver field of its own. The delivery the contract suite drives is the **composed**
+  builder `approvalHookBody` in `test/contract/support/integrations/gitlab-fixtures.ts`, like every
+  other delivery in that file, not a recorded interaction.
+- `https://docs.gitlab.com/api/graphql/reference/` (retrieved **2026-09-26**) — read to answer
+  backlog 177's documentation question: *is `MergeRequest.diffStats` paginated or capped for a
+  merge request with more files than the comparison reads?* It is **neither, as documented**:
+  `MergeRequest.diffStats` — *"Details about which files were changed in the merge request. Returns
+  `[DiffStats!]`."*, one argument (`path: String`, *"Specific file path"*) — is a plain list, not a
+  connection, with no `first`/`after` arguments and no stated cap. The page states limits where
+  they exist: `Commit.diffStats` *"can only be resolved for 10 commits in any single request"* (a
+  bound on how many commits, not on files), and the new `MergeRequest.diffs` (*"Introduced in GitLab
+  19.4. Status: Experiment."*) documents size limits, an `overflow` field and forward-only
+  pagination — and carries per-file **patch text**, so it is not a paths-only read either.
+  **Consequence: backlog 64 (b) / 177 closes as refused** (WP-60): a paths-only read over
+  `diffStats` would trade the bounded `…/diffs` page (`limit` files, `per_page`) for a response whose
+  size is the merge request's whole file count, on exactly the large merge requests where the saving
+  was meant to be, and since WP-59's coalescer it would *add* a request in the ordinary case.
 
 ## What is deliberately **not** in a fixture
 

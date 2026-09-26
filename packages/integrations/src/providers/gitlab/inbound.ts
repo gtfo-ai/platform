@@ -9,8 +9,9 @@
  *
  * A delivery that produces no event says why. Four reasons exist and this normaliser uses three of
  * them deliberately:
- *  - `unsupported_event` — a kind or an action with no catalogue equivalent (an approval, a push
- *    to a feature branch, a pipeline that has not finished, a system note);
+ *  - `unsupported_event` — a kind or an action with no catalogue equivalent (an approval
+ *    *state* change or a withdrawn approval — {@link APPROVAL_ACTION} says why — a push to a
+ *    feature branch, a pipeline that has not finished, a system note);
  *  - `not_for_this_project` — the binding names a project and the payload is about another one;
  *  - `malformed_payload` — the body failed its schema, or it is a merge-request note whose thread
  *    cannot be identified.
@@ -109,9 +110,9 @@ const projectPathOf = (
  * GitLab's merge-request actions mapped onto the catalogue
  * (<https://docs.gitlab.com/user/project/integrations/webhook_events/>, "Merge request events").
  *
- * `approval`, `unapproval`, `approved` and `unapproved` have no catalogue event: technical/02 has
- * no approval event for a git provider, and folding them into `mr.updated` would put four
- * pipeline wake-ups where nothing about the merge request changed.
+ * The four approval actions are **not** folded into `mr.updated` — that would put pipeline
+ * wake-ups where nothing about the merge request changed — and since WP-60 one of them has an
+ * event of its own; see {@link APPROVAL_ACTION}.
  */
 const MR_ACTIONS: Readonly<Record<string, 'mr.opened' | 'mr.updated' | 'mr.merged' | 'mr.closed'>> =
   {
@@ -122,6 +123,95 @@ const MR_ACTIONS: Readonly<Record<string, 'mr.opened' | 'mr.updated' | 'mr.merge
     close: 'mr.closed',
   };
 
+/**
+ * The one approval action that becomes `mr.approved` (WP-60, PROGRESS backlog 90).
+ *
+ * ## What the page says, measured before this was built (rule 66)
+ *
+ * Read from `https://docs.gitlab.com/user/project/integrations/webhook_events/` § "Merge request
+ * events" on **2026-09-26** (the page this file already cites; the fixtures' `SOURCES.md` records the
+ * same reading). The documented `object_attributes.action` values include, verbatim:
+ *
+ *  - `approval` — *"A user adds their approval."*
+ *  - `approved` — *"A merge request is fully approved by all required approvers."*
+ *  - `unapproval` — *"A user removes their approval, either manually or by the system."*
+ *  - `unapproved` — *"A previously approved merge request loses its approved status, either
+ *    manually or by the system."*
+ *
+ * The page documents the top-level `user` as *"User who triggered the event"* and does **not** say,
+ * of the approval actions specifically, that it is the approver. So the approver's identity is an
+ * **inference from two documented sentences** — the triggering user of *"a user adds their
+ * approval"* is that user — and it is labelled as one here and in `SOURCES.md` rather than stated as
+ * a documented fact. The instant is `object_attributes.actioned_at`, *"When the action that
+ * triggered the webhook occurred"*, introduced in GitLab 18.10; an older instance does not send it
+ * and the event then says `null`.
+ *
+ * ## Why only `approval`
+ *
+ *  - `approved` is a statement about the **merge request's** state, not about a person; the approval
+ *    that completed the set is its own `approval` delivery (whether GitLab sends both for the last
+ *    approver is **not** stated by the page — if it does, mapping both would count that person
+ *    twice, and if it does not, nothing is lost by ignoring the state change).
+ *  - `unapproval` and `unapproved` have no catalogue event. The page says both can be *"by the
+ *    system"* — approvals are reset when commits are pushed — so a withdrawn approval is not a
+ *    reliable human act, and nothing in this build consumes one.
+ */
+const APPROVAL_ACTION = 'approval';
+
+/**
+ * A provider instant, or `null` — never an exception on an inbound notification (standing rule 20).
+ *
+ * `toIsoDateTime` throws `invalid_response` for a timestamp it cannot read, which is right for a
+ * REST answer and wrong here: an approval whose `actioned_at` is unreadable is still an approval
+ * by that person, and the event says the instant is unknown rather than inventing one.
+ */
+const instantOrNull = (value: string | null | undefined): string | null => {
+  try {
+    return toIsoDateTimeOrNull(value, 'normalise_delivery');
+  } catch {
+    return null;
+  }
+};
+
+const normaliseApproval = (
+  hook: MergeRequestHook,
+  context: InboundContext,
+  actor: Actor,
+  project: string,
+): NormalisedDelivery<GitProviderInboundEvent> => {
+  const attributes = hook.object_attributes;
+  // The event's whole value is the actor (WP-60 criterion 2): no approver, no event. Recorded as
+  // malformed rather than thrown, because this is an inbound notification (standing rule 20).
+  if (hook.user === null || hook.user === undefined) {
+    return ignored('malformed_payload', 'approval delivery names no user who approved');
+  }
+  const url = attributes.url ?? null;
+  if (url === null) {
+    return ignored('malformed_payload', 'merge request delivery carries no url');
+  }
+  const base = identityOf(hook.user);
+  const approver: ExternalIdentity = { ...base, verified: context.resolveUser(base) !== null };
+  const event: NormalisedEvent<'mr.approved'> = {
+    type: 'mr.approved',
+    payload: {
+      project_id: context.projectId,
+      task_id: null,
+      mr: {
+        provider: GITLAB_PROVIDER_ID,
+        project_path: project,
+        iid: attributes.iid,
+        url,
+        branch: attributes.source_branch ?? null,
+        head_sha: attributes.last_commit?.id ?? null,
+      },
+      approver,
+      approved_at: instantOrNull(attributes.actioned_at),
+    },
+    actor: { ...actor, identity: approver } as Actor,
+  };
+  return { events: [event], ignored: [] };
+};
+
 const normaliseMergeRequest = (
   hook: MergeRequestHook,
   context: InboundContext,
@@ -130,6 +220,9 @@ const normaliseMergeRequest = (
 ): NormalisedDelivery<GitProviderInboundEvent> => {
   const attributes = hook.object_attributes;
   const action = attributes.action ?? '';
+  if (action === APPROVAL_ACTION) {
+    return normaliseApproval(hook, context, actor, project);
+  }
   const type = MR_ACTIONS[action];
   if (type === undefined) {
     return ignored('unsupported_event', `merge request action ${JSON.stringify(action)}`);
@@ -170,9 +263,17 @@ const normaliseMergeRequest = (
     };
     return { events: [event], ignored: [] };
   }
-  const event = { type, payload, actor } as NormalisedEvent<
-    'mr.opened' | 'mr.updated' | 'mr.closed'
-  >;
+  if (type === 'mr.updated') {
+    // The provider's instant of the change, so the recorded head can only move forward (WP-60
+    // review round 1): an unreadable one is `null`, which moves nothing, never a throw (rule 20).
+    const event: NormalisedEvent<'mr.updated'> = {
+      type,
+      payload: { ...payload, updated_at: instantOrNull(attributes.updated_at) },
+      actor,
+    };
+    return { events: [event], ignored: [] };
+  }
+  const event = { type, payload, actor } as NormalisedEvent<'mr.opened' | 'mr.closed'>;
   return { events: [event], ignored: [] };
 };
 
