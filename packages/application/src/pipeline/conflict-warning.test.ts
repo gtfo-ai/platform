@@ -283,6 +283,7 @@ const insertPeer = async (
       requiredReviewers: null,
       reviewThreads: null,
       requestedByUserId: null,
+      pipelineDial: null,
       version: INITIAL_TASK_VERSION,
     };
     await harness.store.tasks.insert(scope.tx, stored);

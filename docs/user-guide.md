@@ -107,6 +107,25 @@ The autonomy dial ([product/19](product/19-operating-definitions.md) §11), four
 
 Choosing one writes the project's configuration.
 
+**What a position does to a task.** Moving the dial affects a running task only in part. Three
+policies are **fixed when a task starts** and do not move with the dial afterwards: whether business
+review runs, Assist's stop after architecture, and the number of human review rounds. The rest are
+**read when they are used**, so a move reaches running tasks too: plan approval and probation (at
+the moment a plan is ready), the budget-approval threshold (when refinement finishes), the question
+timeout (when a question is asked) and knowledge auto-apply (when a proposal is curated). **Assist**
+parks a task in *Needs human* after architecture, with a brief that names the dial; hand it back at
+*Implementation* to continue, or cancel it — after a maintainer has approved its plan, because
+Assist asks for plan approval on every task. A ticket whose pipeline has no architecture stage (a
+chore) parks before anything runs, since there is no point at which it could stop before code is
+written. Assist also turns the business-review stage off, so a task handed back past the park skips
+it. **Autonomous** allows five human review rounds on a merge request where the other positions
+allow three, and auto-applies knowledge proposals in the middle significance band. The project's
+configuration file wins wherever it sets one of `pipeline.limits.human_rounds`,
+`pipeline.limits.question_timeout`, `policies.knowledge_apply.auto_apply` or
+`policies.probation_tasks`; nothing else in it overrides the dial. The policy list under the dial
+marks the two that set nothing by themselves: `review_only` (the Review-only card is the switch) and
+`suggested_readiness_min`.
+
 The same step offers **risk classes** — product/19 §14's six (auth, payments, data, infra,
 agent-config, public-api) or what the discovery agent proposed — and applies none until you accept.
 Two of them, payments and public-api, require a **review checklist**: a list of review items *you*

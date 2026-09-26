@@ -7,8 +7,14 @@
  * policy at all (the same split `index-job.test.ts` states), so that question belongs to the
  * in-memory jobs adapter and to pg-boss.
  */
-import type { DomainEvent, Id, LibrarianProposalsData } from '@platform/contracts';
-import { fixedClock, knowledgeApplyThresholds, sequentialIds } from '@platform/domain';
+import type { DomainEvent, Id, IsoDateTime, LibrarianProposalsData } from '@platform/contracts';
+import {
+  dispositionFor,
+  fixedClock,
+  knowledgeApplyThresholds,
+  materialiseAutonomy,
+  sequentialIds,
+} from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import type { HandlerContext } from '../events/handler.js';
 import { exactSecretRedactor } from '../integrations/redaction.js';
@@ -24,6 +30,7 @@ import {
   type LibrarianJobOptions,
   librarianTriggerHandlers,
   recordLibrarianProposals,
+  thresholdsFromConfig,
 } from './librarian.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000c1' as Id;
@@ -328,5 +335,51 @@ describe('recording a librarian artifact', () => {
       const stream = await eventing.store.readStream('project', PROJECT);
       expect(stream).toHaveLength(1);
     });
+  });
+});
+
+/**
+ * `knowledgeAutoApply` is read where the document is silent — WP-62, PROGRESS backlog 72 (a).
+ *
+ * Asserted as the disposition a middle-band proposal gets (the countable effect: auto-applied or
+ * queued), never as the flag, and from both sides of the dial plus the document's override.
+ */
+describe('the dial decides auto-apply where the document is silent (WP-62)', () => {
+  const at = '2026-06-01T09:00:00.000Z' as IsoDateTime;
+  const dial = (level: 'supervised' | 'autonomous') =>
+    materialiseAutonomy({ level, at, appliedBy: null });
+  /** Inside BD-018's band (0.2 ≤ s < 0.6), where `auto_apply` is the only thing that decides. */
+  const MIDDLE = 0.4;
+
+  it('auto-applies the middle band on an Autonomous project', () => {
+    expect(dispositionFor(MIDDLE, thresholdsFromConfig({}, dial('autonomous')))).toBe(
+      'auto_applied',
+    );
+  });
+
+  it('queues it on a Supervised project, and with no dial at all (the other side)', () => {
+    expect(dispositionFor(MIDDLE, thresholdsFromConfig({}, dial('supervised')))).toBe('queued');
+    expect(dispositionFor(MIDDLE, thresholdsFromConfig({}, null))).toBe('queued');
+  });
+
+  it('lets the document override the dial in both directions (Q78)', () => {
+    expect(
+      dispositionFor(
+        MIDDLE,
+        thresholdsFromConfig(
+          { policies: { knowledge_apply: { auto_apply: false } } },
+          dial('autonomous'),
+        ),
+      ),
+    ).toBe('queued');
+    expect(
+      dispositionFor(
+        MIDDLE,
+        thresholdsFromConfig(
+          { policies: { knowledge_apply: { auto_apply: true } } },
+          dial('supervised'),
+        ),
+      ),
+    ).toBe('auto_applied');
   });
 });

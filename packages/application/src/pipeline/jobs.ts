@@ -500,7 +500,10 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
         return null;
       }
       return {
-        stage: stageOf(compilePipeline(stored.task.template, stored.template), request.stage),
+        stage: stageOf(
+          compilePipeline(stored.task.template, stored.template, stored.pipelineDial),
+          request.stage,
+        ),
         stored,
       };
     });
@@ -714,7 +717,7 @@ const settle = async (
       ) {
         return null;
       }
-      const pipeline = compilePipeline(stored.task.template, stored.template);
+      const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
       const converged =
         signal.kind === 'gate_settled' && !signal.passed && signal.ciSignature !== undefined
           ? await ciConvergence(options, scope, stored, signal.stage, signal.ciSignature)
@@ -927,7 +930,11 @@ export const reviewWindowHandler = (options: PipelineJobOptions): JobHandler<Rev
         if (current === null || current.task.state !== 'ready_for_merge') {
           return null;
         }
-        const pipeline = compilePipeline(current.task.template, current.template);
+        const pipeline = compilePipeline(
+          current.task.template,
+          current.template,
+          current.pipelineDial,
+        );
         const decision = interpret(pipeline, {
           kind: 'event',
           stage: current.task.currentStage ?? 'ready_for_merge',

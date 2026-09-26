@@ -73,6 +73,7 @@ import type {
 import {
   artifactBodyPath,
   contextPackRecordSchema,
+  taskPipelineDialSchema,
   taskStageStateSchema,
   transcriptEventSchema,
 } from '@platform/contracts';
@@ -921,7 +922,12 @@ export class UnknownStageStateError extends Error {
  */
 const findTakenOver = async (
   database: Database,
-  task: { readonly id: string; readonly template: string; readonly templateSnapshot: unknown },
+  task: {
+    readonly id: string;
+    readonly template: string;
+    readonly templateSnapshot: unknown;
+    readonly pipelineDial: unknown;
+  },
 ): Promise<TaskDetailResponse['taken_over']> => {
   const rows = await database
     .select({
@@ -973,6 +979,8 @@ const findTakenOver = async (
 export const handBackStagesOf = (task: {
   readonly template: string;
   readonly templateSnapshot: unknown;
+  /** `tasks.pipeline_dial` (WP-62): a stage the dial disabled is not one a hand-back may name. */
+  readonly pipelineDial: unknown;
 }): string[] => {
   const snapshot = task.templateSnapshot;
   const template =
@@ -982,8 +990,17 @@ export const handBackStagesOf = (task: {
   if (template === undefined) {
     return [];
   }
+  // Parsed as the store parses it, and refused the same way: a document that does not match its
+  // schema is a pipeline this build cannot compile, so the picker offers nothing.
+  const dial =
+    task.pipelineDial === null || task.pipelineDial === undefined
+      ? null
+      : taskPipelineDialSchema.safeParse(task.pipelineDial);
+  if (dial !== null && !dial.success) {
+    return [];
+  }
   try {
-    return compilePipeline(task.template, template)
+    return compilePipeline(task.template, template, dial === null ? null : dial.data)
       .stages.filter((stage) => stage.enabled)
       .map((stage) => stage.id);
   } catch {

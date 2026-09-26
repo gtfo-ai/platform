@@ -82,6 +82,7 @@ const stored = (
   requiredReviewers: null,
   reviewThreads: null,
   requestedByUserId: null,
+  pipelineDial: null,
   version: INITIAL_TASK_VERSION,
 });
 

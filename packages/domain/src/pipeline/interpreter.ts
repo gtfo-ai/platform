@@ -50,6 +50,7 @@ import type {
   Stage,
   StageKind,
   StageVerdict,
+  TaskPipelineDial,
 } from '@platform/contracts';
 import { stageVerdictSchema } from '@platform/contracts';
 import type { IterationLoop } from '../policies/iteration-limits.js';
@@ -100,7 +101,16 @@ export interface CompiledPipeline {
   /** Declaration order, custom stages spliced in, disabled ones **kept** (see `enabled`). */
   readonly stages: readonly PipelineStage[];
   readonly byId: ReadonlyMap<Slug, PipelineStage>;
+  /**
+   * The dial the task was started under (`tasks.pipeline_dial`, WP-62), or `null` when none
+   * applies. Its `business_review` is already folded into `stages`; its `stop_after_stage` is the
+   * one thing {@link interpret} reads from here.
+   */
+  readonly dial: TaskPipelineDial | null;
 }
+
+/** The stage the dial's `businessReview` policy switches (product/19 §11, `templates.ts`). */
+export const BUSINESS_REVIEW_STAGE_ID: Slug = 'business_review';
 
 const normaliseStage = (stage: Stage): PipelineStage => ({
   id: stage.id,
@@ -156,15 +166,42 @@ const normaliseCustomStage = (stage: CustomStage): PipelineStage => ({
 
 /**
  * Validates and normalises a template once, so the interpreter never re-parses and a malformed
- * template fails at task start rather than three stages in.
+ * template fails at task start rather than three stages in — **and applies the task's dial**
+ * (WP-62, PROGRESS backlog 72 (b)).
+ *
+ * `dial` is required, never defaulted, so every call site has to say where it got one: the
+ * signature change is the census. Every production site passes the value frozen on the task row
+ * (`StoredTask.pipelineDial`, `tasks.pipeline_dial`), which the creating site copied off the
+ * project's materialised preset — so no site, including the ones inside a transaction, asks the
+ * settings port (`compile-sites.test.ts` in `packages/application/src/pipeline/` holds that).
+ *
+ * The dial does two things here and nothing else:
+ *
+ *  - `business_review: false` **disables** the `business_review` stage. That is the mechanism a
+ *    template already has (`enabled: false`), so fall-through and `approve_to` walk over it exactly
+ *    as they do for a project that disabled it by hand — no new branch in the interpreter.
+ *  - `stop_after_stage` is carried on the compiled pipeline for {@link interpret}, which parks the
+ *    task after that stage (Q79). It cannot be a template edit: "stop" is not a transition any
+ *    stage shape can spell.
+ *
+ * `null` is *"no dial applies"* and compiles the template exactly as it was before WP-62.
  *
  * @throws {PolicyViolationError} when the shape or the graph is invalid (see `assertValidTemplate`).
  */
-export const compilePipeline = (templateId: Slug, template: PipelineTemplate): CompiledPipeline => {
+export const compilePipeline = (
+  templateId: Slug,
+  template: PipelineTemplate,
+  dial: TaskPipelineDial | null,
+): CompiledPipeline => {
   assertValidTemplate(templateId, template);
   const stages: PipelineStage[] = [];
   for (const stage of template.stages) {
-    stages.push(normaliseStage(stage));
+    const normalised = normaliseStage(stage);
+    stages.push(
+      dial?.business_review === false && normalised.id === BUSINESS_REVIEW_STAGE_ID
+        ? { ...normalised, enabled: false }
+        : normalised,
+    );
     for (const extra of template.custom ?? []) {
       // A custom stage declares `after`, so it lands beside its predecessor rather than at the
       // end: `security_scan` after `ci_gate` has to run before `code_review`, and fall-through is
@@ -178,6 +215,7 @@ export const compilePipeline = (templateId: Slug, template: PipelineTemplate): C
     templateId,
     stages,
     byId: new Map(stages.map((stage) => [stage.id, stage])),
+    dial,
   };
 };
 
@@ -321,6 +359,47 @@ const firstEnabledFrom = (pipeline: CompiledPipeline, fromIndex: number): Pipeli
   return null;
 };
 
+const LEVEL_NAMES: Readonly<Record<TaskPipelineDial['level'], string>> = {
+  observe: 'Observe',
+  assist: 'Assist',
+  supervised: 'Supervised',
+  autonomous: 'Autonomous',
+};
+
+/**
+ * Is this advance the one the dial's `stop_after_stage` forbids (Q79)?
+ *
+ * Only a **forward** move out of the named stage, and only into a stage that *does work* — an agent
+ * or a gate. Two things follow, and both are decided rather than incidental:
+ *
+ *  - A return out of the stop stage (`architecture → refinement`) is not a halt: the scope is not
+ *    finished yet, and the loop that bounds it is BD-008's.
+ *  - An advance into a `human` or `system` stage is not a halt either. The spike and epic-split
+ *    templates end `architecture → human_review`, which is already *"a human decides"* — parking
+ *    the task in `needs_human` instead would call a finished spike a fault. What the policy exists
+ *    to stop is the next stage that would run: product/18's *"a spec and a plan without a line of
+ *    code"*.
+ */
+const isScopeHalt = (pipeline: CompiledPipeline, from: Slug, next: PipelineStage): boolean =>
+  pipeline.dial?.stop_after_stage === from && (next.kind === 'agent' || next.kind === 'gate');
+
+/**
+ * Q79's park: `needs_human` with a brief that names the policy, so the escalation band does not read
+ * it as a fault. *Continue* is the existing hand-back — at the stage the halt refused to enter — and
+ * nothing here is a new command or a new task state (Q59).
+ */
+const scopeHalt = (
+  pipeline: CompiledPipeline,
+  from: Slug,
+  next: PipelineStage,
+): PipelineDecision => {
+  const level = pipeline.dial === null ? 'unknown' : LEVEL_NAMES[pipeline.dial.level];
+  return escalate(
+    `stopped after "${from}" by the autonomy dial (${level}: stop_after_stage)`,
+    `This project's autonomy dial is set to ${level} (scoping-only), so the task stops after "${from}". The artifacts up to and including "${from}" are ready. Hand the task back at "${next.id}" to continue, or cancel it.`,
+  );
+};
+
 /** Advance to `target` (or fall through past `fromIndex`), skipping disabled stages. */
 const advance = (
   pipeline: CompiledPipeline,
@@ -338,7 +417,12 @@ const advance = (
     );
   }
   const next = firstEnabledFrom(pipeline, startIndex);
-  return next === null ? { kind: 'complete', from } : { kind: 'enter', stage: next.id };
+  if (next === null) {
+    return { kind: 'complete', from };
+  }
+  return isScopeHalt(pipeline, from, next)
+    ? scopeHalt(pipeline, from, next)
+    : { kind: 'enter', stage: next.id };
 };
 
 /** A backwards transition: bounded, counted and reasoned (BD-008). */
@@ -408,11 +492,40 @@ const VERDICTS_BY_KIND: Readonly<Record<StageKind, readonly StageVerdict[]>> = {
 };
 
 /**
+ * A dial that stops after a stage this pipeline will never run, decided at `start` (WP-62).
+ *
+ * The chore template has no `architecture`, and a project may disable it. Reading the policy as
+ * *"then there is nothing to stop after"* would run a chore on an Assist project all the way to a
+ * merge request — the one thing *scoping-only* promises not to do. So it fails closed (standing rule
+ * 20: the side effect here is code and a merge request): the task parks before anything runs, and
+ * the brief says why and what a human can do. PROGRESS WP-62 notes and `docs/OPEN-QUESTIONS.md`
+ * carry the product question this answers provisionally.
+ */
+const unreachableScopeStop = (pipeline: CompiledPipeline): PipelineDecision | null => {
+  const stop = pipeline.dial?.stop_after_stage ?? null;
+  if (pipeline.dial === null || stop === null || stageOf(pipeline, stop)?.enabled === true) {
+    return null;
+  }
+  const level = LEVEL_NAMES[pipeline.dial.level];
+  // Named by the first stage that does work, because that is where a hand-back can re-enter: the
+  // `intake` system stage passes straight through and is not a place a human resumes a task from.
+  const first = pipeline.stages.find((stage) => stage.enabled && stage.kind !== 'system');
+  return escalate(
+    `the autonomy dial stops after "${stop}", which template "${pipeline.templateId}" does not run`,
+    `This project's autonomy dial is set to ${level} (scoping-only: stop after "${stop}"), and the "${pipeline.templateId}" pipeline has no enabled "${stop}" stage, so there is no point at which it could stop before code is written. Nothing has run. Hand the task back at "${first?.id ?? stop}" to run the whole pipeline anyway, or cancel it.`,
+  );
+};
+
+/**
  * The single entry point. Total: every signal yields a decision, and an input this module cannot
  * make sense of yields `escalate` rather than an exception.
  */
 export const interpret = (pipeline: CompiledPipeline, signal: PipelineSignal): PipelineDecision => {
   if (signal.kind === 'start') {
+    const unreachable = unreachableScopeStop(pipeline);
+    if (unreachable !== null) {
+      return unreachable;
+    }
     const first = firstEnabledFrom(pipeline, 0);
     return first === null
       ? escalate(

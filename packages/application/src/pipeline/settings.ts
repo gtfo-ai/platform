@@ -14,13 +14,14 @@ import type {
   Id,
   MaterialisedAutonomy,
   PipelineTemplate,
-  PoliciesConfig,
+  TaskPipelineDial,
 } from '@platform/contracts';
 import type {
   AutonomyPreset,
   ConfigValues,
   EffectiveConfig,
   EpicSplitSettings,
+  IterationLimits,
   WipLimits,
 } from '@platform/domain';
 import {
@@ -31,6 +32,8 @@ import {
   EPIC_SPLIT_TEMPLATE_ID,
   effectiveAutonomyPreset,
   epicSplitClaims,
+  pipelineDialOf,
+  resolveIterationLimits,
   SHIPPED_TEMPLATES,
   SPIKE_TEMPLATE_ID,
 } from '@platform/domain';
@@ -72,15 +75,40 @@ export interface ProjectSettings {
  *
  * The materialised preset with the project's own overrides on top — BD-027 keeps every policy
  * overridable, and `.agentic/config.yml` is where an override is written
- * (`autonomyOverridesFromConfig` says which keys can carry one and which cannot).
+ * (`AUTONOMY_POLICY_OVERRIDE_KEYS` says which keys can carry one, Q78).
  */
 export const autonomyPresetFor = (settings: ProjectSettings): AutonomyPreset | null =>
-  settings.autonomy === null
+  settings.autonomy === null ? null : effectiveAutonomyPreset(settings.autonomy, settings.config);
+
+/**
+ * The dial's two **pipeline** policies, as a task freezes them at start (WP-62, backlog 72 (b)).
+ *
+ * `businessReview` and `stopAfterStage` are read here, off the project's materialised preset, and
+ * copied onto the task (`StoredTask.pipelineDial`); `compilePipeline` reads the copy. `null` when
+ * the dial was never materialised — the stated *"never applied"* branch (BD-027:14), which compiles
+ * the template as it was before WP-62 — never the supervised preset.
+ */
+export const pipelineDialFor = (settings: ProjectSettings): TaskPipelineDial | null => {
+  const preset = autonomyPresetFor(settings);
+  return settings.autonomy === null || preset === null
     ? null
-    : effectiveAutonomyPreset(
-        settings.autonomy,
-        settings.config.policies as PoliciesConfig | undefined,
-      );
+    : pipelineDialOf(settings.autonomy, preset);
+};
+
+/**
+ * The iteration ceilings a new task is created with — `pipeline.limits` where the document sets
+ * them, and the dial's `humanMrRounds` where it is silent on `human_rounds` (WP-62, backlog 72 (a)).
+ *
+ * The preset already carries the document's `human_rounds` when there is one
+ * (`autonomyOverridesFromConfig`), so the two cannot disagree: the document is the override and the
+ * materialised preset is the default under it. A project whose dial was never materialised gets
+ * BD-008's three, as before.
+ */
+export const iterationLimitsFor = (settings: ProjectSettings): IterationLimits =>
+  resolveIterationLimits(
+    settings.config.pipeline?.limits,
+    autonomyPresetFor(settings)?.humanMrRounds,
+  );
 
 export interface ProjectSettingsPort {
   forProject(projectId: Id): Promise<ProjectSettings>;

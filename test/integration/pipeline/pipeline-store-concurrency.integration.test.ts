@@ -159,6 +159,7 @@ describe('a spend written in a transaction that rolls back', () => {
         requiredReviewers: null,
         reviewThreads: null,
         requestedByUserId: null,
+        pipelineDial: null,
         version: INITIAL_TASK_VERSION,
       };
       await store.tasks.insert(tx, task);

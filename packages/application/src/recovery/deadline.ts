@@ -176,7 +176,7 @@ export const recoverDeadlines = async (
   for (const row of found.undated) {
     try {
       const settings = await site.settings.forProject(row.projectId);
-      const deadlineAt = questionDeadlineRule(site.sweep.calendar, settings.config)(input.now);
+      const deadlineAt = questionDeadlineRule(site.sweep.calendar, settings)(input.now);
       if (deadlineAt === null) {
         continue;
       }

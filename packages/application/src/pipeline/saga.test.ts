@@ -814,6 +814,264 @@ describe('the plan-approval gate reads the materialised dial (BD-027, WP-30)', (
   });
 });
 
+/**
+ * The dial reaches the pipeline — WP-62, PROGRESS backlog 72 (a) and (b), Q78, Q79.
+ *
+ * Every assertion here is a **countable effect** the pipeline produced, never the value a column
+ * holds (standing rules 42 and 82): the number of human rounds a task was allowed, read back from
+ * its own iteration counter at the moment it escalated; the stages that ran, read off the run specs;
+ * the state the task is in. Each policy from both sides.
+ */
+describe('the dial reaches the pipeline (WP-62)', () => {
+  const USER = '00000000-0000-4000-8000-0000000000c2';
+  const dialled = (
+    level: 'observe' | 'assist' | 'supervised' | 'autonomous',
+    extra: Partial<HarnessOptions> = {},
+  ): PipelineHarness =>
+    harnessWith({
+      ...extra,
+      git: {
+        listDiscussions: async () => [
+          {
+            id: 't1',
+            resolvable: true,
+            resolved: false,
+            notes: [
+              {
+                id: 't1-note',
+                author: {
+                  provider: 'fake-git',
+                  external_id: '42',
+                  email: null,
+                  display_name: 'A human',
+                  verified: true,
+                },
+                body: 'please rename this',
+                created_at: '2026-06-01T09:00:00.000Z',
+                path: null,
+                line: null,
+                system: false,
+              },
+            ],
+          },
+        ],
+        getMergeRequest: async () => mergeRequest(false),
+        ...extra.git,
+      },
+      settings: {
+        autonomy: materialiseAutonomy({
+          level,
+          at: '2026-06-01T09:00:00.000Z' as IsoDateTime,
+          appliedBy: null,
+        }),
+        ...extra.settings,
+      },
+    });
+
+  const humanComment = () =>
+    event('mr.review.comment', {
+      project_id: PROJECT,
+      task_id: null,
+      mr: mergeRequest(false).ref,
+      thread_id: 't1',
+      author: {
+        provider: 'fake-git',
+        external_id: '42',
+        email: 'human@example.test',
+        display_name: 'A human',
+        verified: true,
+      },
+      text: 'one more thing',
+      resolved: false,
+    });
+
+  /**
+   * Drives human review rounds until the task stops coming back, and answers how many it was
+   * **allowed**: the `human_rounds` counter when it escalated. Bounded at twelve rounds, above every
+   * ceiling asserted here, so a regression that never escalates fails rather than hangs.
+   */
+  const roundsAllowed = async (harness: PipelineHarness): Promise<number> => {
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+    for (let round = 1; round <= 12; round += 1) {
+      await harness.publish([humanComment()]);
+      harness.clock.advance(DEFAULT_REVIEW_COMMENT_WINDOW_MS + 1);
+      await harness.drain();
+      const { task } = taskOf(harness);
+      if (task.state === 'needs_human') {
+        const escalation = harness
+          .events()
+          .filter((entry) => entry.type === 'task.escalated')
+          .at(-1) as Extract<DomainEvent, { type: 'task.escalated' }>;
+        expect(escalation.payload.reason).toContain('human_rounds iteration limit');
+        // The round that escalated was one past the ceiling, so the counter holds the ceiling.
+        expect(round).toBe((task.iterationCounters.human_rounds ?? 0) + 1);
+        return task.iterationCounters.human_rounds ?? 0;
+      }
+      expect(task.state, `round ${round}`).toBe('ready_for_merge');
+    }
+    throw new Error('the task never escalated on human rounds');
+  };
+
+  describe('humanMrRounds (backlog 72 (a))', () => {
+    it('gives a task on an Autonomous project five human rounds', async () => {
+      expect(await roundsAllowed(dialled('autonomous'))).toBe(5);
+    });
+
+    it('gives a task on a Supervised project three (the other side)', async () => {
+      // `probation_tasks: 0` only so the plan is not held for approval; it is not a round setting.
+      const harness = dialled('supervised', {
+        settings: { config: { policies: { probation_tasks: 0 } } },
+      });
+      expect(await roundsAllowed(harness)).toBe(3);
+    });
+
+    it('lets the document override the dial, never the other way round (Q78)', async () => {
+      const harness = dialled('autonomous', {
+        settings: { config: { pipeline: { limits: { human_rounds: 2 } } } },
+      });
+      expect(await roundsAllowed(harness)).toBe(2);
+    });
+  });
+
+  describe('stopAfterStage (backlog 72 (b), Q79)', () => {
+    /** Assist's plan approval is `always` (product/19 §11): a maintainer approves, then it parks. */
+    const approvePlan = async (harness: PipelineHarness): Promise<void> => {
+      const requested = harness
+        .events()
+        .find((entry) => entry.type === 'task.approval.requested') as Extract<
+        DomainEvent,
+        { type: 'task.approval.requested' }
+      >;
+      expect(requested.payload.approval.kind).toBe('plan');
+      await decideTaskApproval(harness.commands, {
+        approvalId: requested.payload.approval.id,
+        decision: 'approved',
+        userId: USER,
+        role: 'maintainer',
+      });
+      await harness.drain();
+    };
+
+    it('asks a maintainer to approve the plan first, then parks after architecture naming the policy', async () => {
+      const harness = dialled('assist');
+      await harness.publish([ticketMatched()]);
+      // The gate runs as the preset says — before the park, never instead of it (review round 1).
+      expect(taskOf(harness).task.state).toBe('waiting_approval');
+      expect(harness.types()).not.toContain('task.escalated');
+      await approvePlan(harness);
+      const { task } = taskOf(harness);
+      expect(task.state).toBe('needs_human');
+      expect(task.currentStage).toBe('architecture');
+      expect(harness.specs.map((spec) => spec.stage)).toEqual(['refinement', 'architecture']);
+      const escalation = harness
+        .events()
+        .find((entry) => entry.type === 'task.escalated') as Extract<
+        DomainEvent,
+        { type: 'task.escalated' }
+      >;
+      expect(escalation.payload.reason).toBe(
+        'stopped after "architecture" by the autonomy dial (Assist: stop_after_stage)',
+      );
+      expect(escalation.payload.blocker_brief).toContain('set to Assist (scoping-only)');
+      expect(escalation.payload.blocker_brief).toContain(
+        'Hand the task back at "implementation" to continue',
+      );
+    });
+
+    it('does not let a hand-back skip the pending plan approval', async () => {
+      // Hand-back is a `member` command; the plan approval is a maintainer's. While the approval is
+      // pending the task is not parked, and a hand-back into implementation must be refused.
+      const harness = dialled('assist');
+      await harness.publish([ticketMatched()]);
+      expect(taskOf(harness).task.state).toBe('waiting_approval');
+      await expect(
+        handBackTaskCommand(harness.humanCommands, {
+          taskId: taskOf(harness).task.id,
+          userId: USER,
+          stage: 'implementation' as Slug,
+          summary: 'skip the approval',
+        }),
+      ).rejects.toThrow('task: illegal transition waiting_approval -> implementation (hand-back)');
+      await harness.drain();
+      expect(taskOf(harness).task.state).toBe('waiting_approval');
+      expect(harness.specs.map((spec) => spec.stage)).not.toContain('implementation');
+    });
+
+    it('runs the same ticket through on a Supervised project (the other boundary)', async () => {
+      const harness = dialled('supervised', {
+        settings: { config: { policies: { probation_tasks: 0 } } },
+      });
+      await harness.publish([ticketMatched()]);
+      expect(taskOf(harness).task.state).toBe('ready_for_merge');
+      expect(harness.specs.map((spec) => spec.stage)).toContain('implementation');
+      expect(harness.types()).not.toContain('task.escalated');
+    });
+
+    it('continues through the existing hand-back — and the frozen dial still skips business review', async () => {
+      // The WP-56 lesson: a brief that names a command is tested with that command, on this task.
+      const harness = dialled('assist');
+      await harness.publish([ticketMatched()]);
+      await approvePlan(harness);
+      expect(taskOf(harness).task.state).toBe('needs_human');
+      await handBackTaskCommand(harness.humanCommands, {
+        taskId: taskOf(harness).task.id,
+        userId: USER,
+        stage: 'implementation' as Slug,
+        summary: 'the plan is right, build it',
+      });
+      await harness.drain();
+      expect(taskOf(harness).task.state).toBe('ready_for_merge');
+      const ran = harness.specs.map((spec) => spec.stage);
+      expect(ran).toEqual(['refinement', 'architecture', 'implementation', 'code_review']);
+      // `businessReview: false` at Assist, read off the task's own copy of the dial: the stage the
+      // shipped template declares never ran. At Supervised it does (above, and the next case).
+      expect(ran).not.toContain('business_review');
+    });
+
+    it('runs business review at Autonomous, which the same template declares (the other side)', async () => {
+      const harness = dialled('autonomous');
+      await harness.publish([ticketMatched()]);
+      expect(harness.specs.map((spec) => spec.stage)).toContain('business_review');
+    });
+
+    it('parks a chore on an Assist project before anything runs, because it has no architecture', async () => {
+      const harness = dialled('assist');
+      await harness.publish([ticketMatched('Chore')]);
+      const { task } = taskOf(harness);
+      expect(task.template).toBe('chore');
+      expect(task.state).toBe('needs_human');
+      expect(harness.specs).toHaveLength(0);
+      const escalation = harness
+        .events()
+        .find((entry) => entry.type === 'task.escalated') as Extract<
+        DomainEvent,
+        { type: 'task.escalated' }
+      >;
+      expect(escalation.payload.blocker_brief).toContain('Hand the task back at "refinement"');
+    });
+
+    it('copies the dial onto the task at start, where every later compile reads it', async () => {
+      const harness = dialled('supervised', {
+        settings: { config: { policies: { probation_tasks: 0 } } },
+      });
+      await harness.publish([ticketMatched()]);
+      expect(taskOf(harness).pipelineDial).toMatchObject({
+        level: 'supervised',
+        business_review: true,
+        stop_after_stage: null,
+      });
+    });
+
+    it('stores no dial for a project whose dial was never materialised', async () => {
+      const harness = harnessWith();
+      await harness.publish([ticketMatched()]);
+      expect(taskOf(harness).pipelineDial).toBeNull();
+      expect(taskOf(harness).task.state).toBe('ready_for_merge');
+    });
+  });
+});
+
 describe('plan approval (product/04 S2, BD-006)', () => {
   const large = () =>
     harnessWith({
@@ -1165,7 +1423,7 @@ describe('the budget-approval gate (product/09, WP-28, Q71)', () => {
       if (shipped === undefined) {
         throw new Error(`no shipped template "${template}"`);
       }
-      return compilePipeline(template, shipped);
+      return compilePipeline(template, shipped, null);
     };
 
     const specStageOf = (template: string): Slug => {

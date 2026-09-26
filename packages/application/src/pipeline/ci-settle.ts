@@ -72,7 +72,10 @@ export const runCiSettle = async (
   if (stored.task.currentStage !== stage) {
     return;
   }
-  const waiting = stageOf(compilePipeline(stored.task.template, stored.template), stage);
+  const waiting = stageOf(
+    compilePipeline(stored.task.template, stored.template, stored.pipelineDial),
+    stage,
+  );
   if (waiting?.kind !== 'gate') {
     return;
   }

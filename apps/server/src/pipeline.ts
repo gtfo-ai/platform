@@ -812,7 +812,11 @@ export const composePipeline = async (
    * schedule below, which creates a chore task through the same repository every other task is
    * created through (WP-36).
    */
-  const store = pipelineAdapters.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES });
+  const store = pipelineAdapters.createPostgresPipelineStore({
+    templates: SHIPPED_TEMPLATES,
+    // A list read that skips a task with an unreadable `pipeline_dial` names it here (WP-62).
+    logger: options.logger,
+  });
   /** WP-77: one instance for the recovery pass that finds and the duty that re-validates. */
   const runCredentialStore = recoveryAdapters.createPostgresRunCredentialStore();
   const maintenanceStore = new maintenanceAdapters.PostgresMaintenanceStore();

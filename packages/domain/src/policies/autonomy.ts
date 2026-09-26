@@ -16,9 +16,11 @@ import type {
   Id,
   IsoDateTime,
   MaterialisedAutonomy,
+  PipelineLimits,
   PoliciesConfig,
   Size,
   Slug,
+  TaskPipelineDial,
 } from '@platform/contracts';
 
 /** Bump when any preset below changes. Stored with the materialised policies. */
@@ -361,33 +363,109 @@ export const materialiseAutonomy = (input: {
 });
 
 /**
- * The granular overrides a project's `.agentic/config.yml` expresses, as preset fields.
+ * The parts of a project's configuration document an override can come from — `ConfigValues`
+ * narrowed to the two blocks that carry one, so a caller holding the whole document passes it.
+ */
+export interface AutonomyOverrideSource {
+  readonly policies?: PoliciesConfig | undefined;
+  readonly pipeline?: { readonly limits?: PipelineLimits | undefined } | undefined;
+}
+
+/**
+ * Which preset fields a project may override, and the document key that does it — **the rule, not
+ * a snapshot** (Q78, WP-62).
  *
- * BD-027 keeps every policy overridable, and the file is where an override is written. Only the keys
- * `policiesConfigSchema` actually has can be an override, so this map is **one entry** today —
- * `policies.probation_tasks` — and the honest consequence is stated rather than implied: a policy
- * with no configuration key cannot be overridden by a project at all, whatever the decision allows.
- * {@link AUTONOMY_POLICY_READERS} names each one and what would carry it.
+ * BD-027 keeps every policy overridable; Q78 reads that as *"overridable where something reads the
+ * override"*, because a preset field with no reader is not a configuration surface. So a field is
+ * here **exactly when** its {@link AUTONOMY_POLICY_READERS} entry is `read` **and** a document key
+ * already spells the same setting — the preset field and the key are two spellings of one setting,
+ * the **key is the override** and the materialised preset is what applies where the document is
+ * silent. A `read` field that is *not* here says why in {@link AUTONOMY_POLICIES_NOT_OVERRIDABLE};
+ * `autonomy-readers.test.ts` holds the two tables and the readers table to that partition, and
+ * drives {@link autonomyOverridesFromConfig} with each key rather than trusting this list.
  *
- * `probation` itself follows the count, because "probation for 0 tasks" and "probation off" are the
+ * `probation` follows `probation_tasks`, because "probation for 0 tasks" and "probation off" are the
  * same behaviour and two switches for one behaviour is the thing `reviewOnly` is filed for.
  */
+export const AUTONOMY_POLICY_OVERRIDE_KEYS = {
+  probation: 'policies.probation_tasks',
+  probationTasks: 'policies.probation_tasks',
+  humanMrRounds: 'pipeline.limits.human_rounds',
+  questionTimeout: 'pipeline.limits.question_timeout',
+  knowledgeAutoApply: 'policies.knowledge_apply.auto_apply',
+} as const satisfies Partial<Record<keyof AutonomyPreset, string>>;
+
+/**
+ * The `read` policies a project may **not** override in `.agentic/config.yml`, each with the reason
+ * (Q78). A reason, not an owner: these are decided.
+ */
+export const AUTONOMY_POLICIES_NOT_OVERRIDABLE = {
+  planApproval:
+    'a project narrows plan approval per stage through `pipeline.template_overrides`; a second spelling of it would be two answers (Q78)',
+  planApprovalSizeThreshold:
+    'part of plan approval, which a project narrows through `pipeline.template_overrides` (Q78)',
+  planApprovalForRiskClasses:
+    'deliberately out of reach of `pipeline.template_overrides` as well: a risk class is a statement about the change, not about the stage (product/19 §14), so no per-project key turns the risk-class gate off',
+  budgetApprovalThresholdUsd:
+    'no document key spells it; the organisation and project budgets (BD-010) are the configurable spend limits, and a key added for it would be a second one',
+  picksUpNewTickets:
+    'it is what the dial position *is* (Observe); a project that wants tickets picked up moves the dial rather than overriding the position it chose',
+  shadowMode:
+    'it is what the dial position *is* (Observe); the shadow batch is started by a command, and its budget is `features.shadow_mode`',
+  businessReview:
+    "no document key that is read spells it: `pipeline.template_overrides.<template>.stages.business_review.enabled` is in technical/12's schema and nothing on this build reads it (PROGRESS backlog 220), and a policy key beside it would be a second switch for one stage",
+  stopAfterStage:
+    'it is what Assist *is* (scoping-only); a project that wants the code written moves the dial, and one task continues through the hand-back',
+} as const satisfies Partial<Record<keyof AutonomyPreset, string>>;
+
+/**
+ * The granular overrides a project's `.agentic/config.yml` expresses, as preset fields — exactly
+ * the keys {@link AUTONOMY_POLICY_OVERRIDE_KEYS} names (Q78, widened at WP-62 from one entry).
+ *
+ * A key the document does not set is absent from the result, so the materialised preset applies
+ * there: that is backlog 72 (a)'s carrier. Moving the dial to Autonomous changes the human-round
+ * ceiling to five **because** the document is silent on `human_rounds`, and a project that wrote
+ * `human_rounds: 2` keeps two at every position — the document is the override, never a second
+ * switch.
+ */
 export const autonomyOverridesFromConfig = (
-  policies: PoliciesConfig | undefined,
+  config: AutonomyOverrideSource | undefined,
 ): Partial<AutonomyPreset> => {
-  if (policies?.probation_tasks === undefined) {
-    return {};
-  }
-  return { probationTasks: policies.probation_tasks, probation: policies.probation_tasks > 0 };
+  const policies = config?.policies;
+  const limits = config?.pipeline?.limits;
+  return {
+    ...(policies?.probation_tasks === undefined
+      ? {}
+      : { probationTasks: policies.probation_tasks, probation: policies.probation_tasks > 0 }),
+    ...(limits?.human_rounds === undefined ? {} : { humanMrRounds: limits.human_rounds }),
+    ...(limits?.question_timeout === undefined ? {} : { questionTimeout: limits.question_timeout }),
+    ...(policies?.knowledge_apply?.auto_apply === undefined
+      ? {}
+      : { knowledgeAutoApply: policies.knowledge_apply.auto_apply }),
+  };
 };
 
 /** The policies actually in force: the materialised preset, with the project's overrides on top. */
 export const effectiveAutonomyPreset = (
   materialised: MaterialisedAutonomy,
-  policies: PoliciesConfig | undefined,
+  config: AutonomyOverrideSource | undefined,
 ): AutonomyPreset => ({
   ...fromWireAutonomyPolicies(materialised.policies),
-  ...autonomyOverridesFromConfig(policies),
+  ...autonomyOverridesFromConfig(config),
+});
+
+/**
+ * The two policies that shape a task's **pipeline**, as the task freezes them at start (WP-62,
+ * `tasks.pipeline_dial`). `compilePipeline` is the reader of both.
+ */
+export const pipelineDialOf = (
+  materialised: MaterialisedAutonomy,
+  preset: AutonomyPreset,
+): TaskPipelineDial => ({
+  level: materialised.level,
+  preset_version: materialised.preset_version,
+  business_review: preset.businessReview,
+  stop_after_stage: preset.stopAfterStage,
 });
 
 /**
@@ -395,8 +473,8 @@ export const effectiveAutonomyPreset = (
  *
  * `EVENT_CONSUMPTION` is the precedent: an unconsumed event is *declared* unconsumed, with the work
  * package that will flip it, because the absent case must not be the quiet one. **Fifteen** fields
- * were stored and none was read before WP-30; five are read now, and each of the rest says who will
- * read it. The keys are held to `AutonomyPreset` by the `satisfies` below, and every `by` is a
+ * were stored and none was read before WP-30; **thirteen** are read since WP-62, and the two that
+ * are not are decided rather than deferred (each says why). The keys are held to `AutonomyPreset` by the `satisfies` below, and every `by` is a
  * **repository path** resolved against the tree by
  * `packages/domain/src/policies/autonomy-readers.test.ts`: it must be a file git knows about whose
  * text names the policy, and it may not be this module. Round 1 of WP-30 claimed that check in this
@@ -407,9 +485,10 @@ export type AutonomyPolicyReader =
   /** Something in this build reads it; `by` opens with the reader's path from the repository root. */
   | { readonly kind: 'read'; readonly by: string }
   /**
-   * Nothing reads it. `owner` is the work package that will, or the literal `'none'` — which is the
-   * honest answer for most of these and is why WP-30 filed them as discovered work rather than
-   * naming rows that do not exist (`13-implementation-plan.md` ends at WP-32).
+   * Nothing reads it. `owner` is the work package that will, the literal `'none'` when no row owns
+   * it, or a decision — which is what both remaining entries carry since WP-62 read the five that
+   * said `'none'` (PROGRESS backlog 72). `autonomy-readers.test.ts` refuses `'none'` today, so a
+   * new unread policy has to name its owner or its decision.
    */
   | { readonly kind: 'unread'; readonly owner: string; readonly why: string };
 
@@ -453,29 +532,24 @@ export const AUTONOMY_POLICY_READERS = {
     by: 'packages/application/src/pipeline/saga.ts — runIntakeCheck (WP-34)',
   },
   stopAfterStage: {
-    kind: 'unread',
-    owner: 'none',
-    why: 'Assist is "scoping-only" — the saga would park the task after the named stage instead of advancing, and the compiled pipeline has no such halt',
+    kind: 'read',
+    by: 'packages/application/src/pipeline/settings.ts — pipelineDialFor freezes it onto the task (WP-62); packages/domain/src/pipeline/interpreter.ts — interpret parks the task after the stage (Q79)',
   },
   businessReview: {
-    kind: 'unread',
-    owner: 'none',
-    why: 'whether the business-review stage runs at all; the template decides that today, not the dial',
+    kind: 'read',
+    by: 'packages/application/src/pipeline/settings.ts — pipelineDialFor freezes it onto the task (WP-62); packages/domain/src/pipeline/interpreter.ts — compilePipeline disables the stage',
   },
   questionTimeout: {
-    kind: 'unread',
-    owner: 'none',
-    why: "BD-006's one working day. Since WP-56 `questions.deadline_at` (and `approvals.deadline_at`) is written from the project's `pipeline.limits.question_timeout` on the organisation calendar and a `deadline.sweep` timer expires it — the configuration key is read, the dial's copy of it is not, so moving the dial moves nothing (PROGRESS backlog 72)",
+    kind: 'read',
+    by: "packages/application/src/pipeline/deadline-rules.ts — questionTimeoutOf, where the document's `pipeline.limits.question_timeout` is silent (WP-62)",
   },
   humanMrRounds: {
-    kind: 'unread',
-    owner: 'none',
-    why: "BD-008's ceiling for human merge-request rounds; `iterationLimits` reads the compiled template, which is a constant per template rather than per dial position",
+    kind: 'read',
+    by: "packages/application/src/pipeline/settings.ts — iterationLimitsFor, the task's `human_rounds` ceiling where the document is silent (WP-62)",
   },
   knowledgeAutoApply: {
-    kind: 'unread',
-    owner: 'none',
-    why: "WP-18b's apply policy reads `policies.knowledge_apply` out of the configuration document, so the dial's value is a preselection the wizard writes there rather than a second switch",
+    kind: 'read',
+    by: "packages/application/src/knowledge/librarian.ts — thresholdsFromConfig, where the document's `policies.knowledge_apply.auto_apply` is silent (WP-62)",
   },
   shadowMode: {
     kind: 'read',

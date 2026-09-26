@@ -175,7 +175,7 @@ const dependencyGateHandler = (options: PipelineSagaOptions): EventHandler => ({
     if (stored === null) {
       return;
     }
-    const pipeline = compilePipeline(stored.task.template, stored.template);
+    const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
     if (stageOf(pipeline, event.payload.stage)?.produces !== IMPLEMENTATION_ARTIFACT) {
       return;
     }
@@ -335,7 +335,7 @@ export const runDependencyGate = async (
       { stored, producedBy, record, logger },
       // WP-56: the question expires on the organisation's calendar at the project's limit, like
       // every other question — the settings were read above, outside any transaction.
-      questionDeadlineRule(options.calendar, settings.config),
+      questionDeadlineRule(options.calendar, settings),
     );
     return;
   }
@@ -602,7 +602,11 @@ const blockForDependencies = async (
         // moved it. Nothing to do, and nothing to count.
         return null;
       }
-      const pipeline = compilePipeline(current.task.template, current.template);
+      const pipeline = compilePipeline(
+        current.task.template,
+        current.template,
+        current.pipelineDial,
+      );
       const applied = await applyDecision({
         store: options.store,
         pipeline,

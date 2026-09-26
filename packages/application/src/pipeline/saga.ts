@@ -60,7 +60,6 @@ import {
   requestApproval,
   requiresBudgetApproval,
   requiresPlanApproval,
-  resolveIterationLimits,
   resumeStage,
   returnLoopFor,
   riskClassesRequiringPlanApproval,
@@ -86,6 +85,8 @@ import type { ProjectSettingsPort } from './settings.js';
 import {
   autonomyPresetFor,
   epicSplitRouting,
+  iterationLimitsFor,
+  pipelineDialFor,
   spikeRefusal,
   templateForIssueType,
 } from './settings.js';
@@ -152,7 +153,7 @@ const step = async (
   stored: StoredTask,
   signal: PipelineSignal,
 ): Promise<StoredTask> => {
-  const pipeline = compilePipeline(stored.task.template, stored.template);
+  const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
   const decision = await withVerdictFindings(
     options,
     context,
@@ -453,13 +454,16 @@ export const runIntakeCheck = async (
         ticket,
         template,
         mode: 'normal',
-        limits: resolveIterationLimits(settings.config.pipeline?.limits),
+        limits: iterationLimitsFor(settings),
       },
       { ...commandContext, correlationId: null },
     );
     const stored: StoredTask = {
       task: created.aggregate,
       template: settings.templates[template] as StoredTask['template'],
+      // WP-62: the dial's two pipeline policies, frozen off the project's materialised preset — the
+      // one creating site where they apply, because product/19 §11 sets them for picked-up tickets.
+      pipelineDial: pipelineDialFor(settings),
       priorityRank: priorityRankOf((data.priority as string | null | undefined) ?? null),
       createdAt: options.clock.now(),
       branch: null,
@@ -520,7 +524,7 @@ export const runIntakeCheck = async (
       return null;
     }
 
-    const pipeline = compilePipeline(stored.task.template, stored.template);
+    const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
     const applied = await applyDecision({
       store: options.store,
       pipeline,
@@ -804,11 +808,15 @@ const planApprovalGate = async (
     return false;
   }
   const settings = await options.settings.forProject(stored.task.projectId);
-  const pipeline = compilePipeline(stored.task.template, stored.template);
+  const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
   const completed = stageOf(pipeline, stage);
   if (completed?.produces !== 'ImplementationPlan') {
     return false;
   }
+  // **No yield to the dial's scope park** (WP-62 review round 1). product/19 §11 gives Assist
+  // `always` in the plan-approval row, so a maintainer approves the plan first and the park applies
+  // after it; the hand-back that continues a parked task is a `member` command and must not be a
+  // way round a maintainer's approval (a plan touching a risk class included).
   const attempt = stored.task.stageAttempts[stage] ?? 1;
   const already = await options.store.approvals.forStageAttempt(context.scope.tx, {
     taskId: stored.task.id,
@@ -868,7 +876,7 @@ const planApprovalGate = async (
       projectId: stored.task.projectId,
       kind: 'plan',
       // WP-56, BD-006's Q95 amendment: an approval expires on the question calendar and limit.
-      deadlineFrom: questionDeadlineRule(options.calendar, settings.config),
+      deadlineFrom: questionDeadlineRule(options.calendar, settings),
     },
     commandContext,
   );
@@ -949,7 +957,12 @@ const budgetApprovalGate = async (
   if (signal.kind !== 'stage_completed' || signal.verdict !== 'approve') {
     return false;
   }
-  if (!spendIsStillAhead(compilePipeline(stored.task.template, stored.template), stage)) {
+  if (
+    !spendIsStillAhead(
+      compilePipeline(stored.task.template, stored.template, stored.pipelineDial),
+      stage,
+    )
+  ) {
     return false;
   }
   const estimateUsd = stored.estimateUsd;
@@ -1002,7 +1015,7 @@ const budgetApprovalGate = async (
       projectId: stored.task.projectId,
       kind: 'budget',
       // The plan gate's expiry, for the reason WP-28 gave for sharing its decision shape.
-      deadlineFrom: questionDeadlineRule(options.calendar, settings.config),
+      deadlineFrom: questionDeadlineRule(options.calendar, settings),
     },
     commandContext,
   );
@@ -1031,7 +1044,7 @@ const recordMergeRequest = async (
   stored: StoredTask,
   stage: Slug,
 ): Promise<StoredTask> => {
-  const pipeline = compilePipeline(stored.task.template, stored.template);
+  const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
   if (stageOf(pipeline, stage)?.produces !== 'ImplementationNotes') {
     return stored;
   }
@@ -1308,7 +1321,7 @@ const ciHandler = (options: PipelineSagaOptions): EventHandler => ({
     if (stage === null) {
       return;
     }
-    const pipeline = compilePipeline(stored.task.template, stored.template);
+    const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
     const waiting = stageOf(pipeline, stage);
     if (
       waiting?.kind !== 'gate' ||

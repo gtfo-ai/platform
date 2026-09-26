@@ -748,3 +748,34 @@ export const materialisedAutonomySchema = z.strictObject({
 
 export type AutonomyPolicies = z.infer<typeof autonomyPoliciesSchema>;
 export type MaterialisedAutonomy = z.infer<typeof materialisedAutonomySchema>;
+
+/**
+ * `tasks.pipeline_dial` — the two policies of the dial that shape a task's **pipeline**, frozen at
+ * task start (WP-62, PROGRESS backlog 72 (b), Q79).
+ *
+ * `business_review` and `stop_after_stage` are read by `compilePipeline`
+ * (`packages/domain/src/pipeline/interpreter.ts`), and every one of its call sites is inside a task's
+ * life, several of them inside a transaction the settings port must not be asked from. So the value
+ * is copied off the project's **materialised** preset (BD-027:14) by the site that creates the task —
+ * which already holds the project's settings — and every later compile reads it off the row, the
+ * way `template_snapshot` is read (technical/12: *"computed at task start and frozen"*). A dial moved
+ * while a task runs therefore does not move that task, exactly as a template edit does not.
+ *
+ * `level` and `preset_version` are carried so the blocker brief of a parked task can name the
+ * position that parked it, and so a reader can tell which table the copy came from. `null` on the
+ * row means *"no dial applies to this task"* — a project whose dial was never materialised, or a
+ * task kind the dial does not shape (the creating site states which) — and is **not** a preset.
+ *
+ * **A field added later must be `.optional()` or backfilled by a migration.** The schema is strict
+ * and the column is frozen at insert, so every row written before the field existed lacks it: a
+ * required field would make every such task refuse to load (`PipelineStoredStateError`) and drop out
+ * of every list read.
+ */
+export const taskPipelineDialSchema = z.strictObject({
+  level: autonomyLevelSchema,
+  preset_version: z.int().positive(),
+  business_review: z.boolean(),
+  stop_after_stage: slugSchema.nullable(),
+});
+
+export type TaskPipelineDial = z.infer<typeof taskPipelineDialSchema>;

@@ -1,0 +1,20 @@
+-- 0049 — the autonomy dial's two pipeline policies, frozen onto the task at start (WP-62, PROGRESS
+-- backlog 72 (b), Q79).
+--
+-- `business_review` (does the business-review stage run) and `stop_after_stage` (Assist's
+-- *scoping-only*: park the task after the named stage) are read by `compilePipeline`, and every one
+-- of its call sites is inside a task's life — several inside a transaction the settings port must
+-- not be asked from. So the site that creates the task, which already holds the project's settings,
+-- copies the two values off the project's **materialised** preset (`projects.autonomy_policies`,
+-- BD-027:14) into this column, and every later compile reads them from here — `template_snapshot`'s
+-- shape (0004), for its reason: technical/12's *"computed at task start and frozen"*. A dial moved
+-- while a task runs does not move the task.
+--
+-- The document is `taskPipelineDialSchema` (`packages/contracts/src/records.ts`):
+-- `{ level, preset_version, business_review, stop_after_stage }`.
+--
+-- **Written by the insert and by nothing else**, so it has no `update tasks set` writer for
+-- `tasks-column-ownership.test.ts` to attribute. Nullable with no default: `null` is *"no dial
+-- applies to this task"* — a project whose dial was never materialised, a task kind the dial does
+-- not shape, or every row this migration finds — and compiles the template exactly as before.
+alter table tasks add column pipeline_dial jsonb;

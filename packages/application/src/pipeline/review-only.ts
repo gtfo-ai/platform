@@ -93,7 +93,6 @@ import {
   DEFAULT_REVIEW_SEVERITY_FLOOR,
   interpret,
   mergeRequestMatchesFilter,
-  resolveIterationLimits,
   selectFindings,
 } from '@platform/domain';
 import type { EventHandler, HandlerContext } from '../events/handler.js';
@@ -111,6 +110,7 @@ import { enqueueOutbound, enqueueStage, type PipelineOutboundData } from './jobs
 import type { PipelineSagaOptions } from './saga.js';
 import { priorityRankOf } from './saga.js';
 import type { ProjectSettings } from './settings.js';
+import { iterationLimitsFor } from './settings.js';
 import { INITIAL_TASK_VERSION, PIPELINE_ACTOR, type StoredTask } from './store.js';
 import { applyDecision } from './transitions.js';
 
@@ -821,13 +821,17 @@ export const insertReviewTask = async (
       ticket: input.ticket,
       template: REVIEW_ONLY_TEMPLATE_ID,
       mode: input.mode,
-      limits: resolveIterationLimits(input.settings.config.pipeline?.limits),
+      limits: iterationLimitsFor(input.settings),
     },
     commandContext,
   );
   const stored: StoredTask = {
     task: created.aggregate,
     template: input.settings.templates[REVIEW_ONLY_TEMPLATE_ID] as StoredTask['template'],
+    // WP-62: no dial. Review-only is its own opt-in (BD-028, `features.review_only`), and its
+    // one-stage template has neither a business review to switch nor a scope to stop after — a
+    // copied `stop_after_stage` would park every review on an Assist project before it ran.
+    pipelineDial: null,
     priorityRank: priorityRankOf(null),
     createdAt: options.clock.now(),
     branch: null,
@@ -866,7 +870,7 @@ export const insertReviewTask = async (
    * the spend is the budget guard the run goes through like every other, and product/18's own
    * `max_findings`. `onboarding/discovery.ts` made the same call for the same reason.
    */
-  const pipeline = compilePipeline(stored.task.template, stored.template);
+  const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
   const applied = await applyDecision({
     store: options.store,
     pipeline,

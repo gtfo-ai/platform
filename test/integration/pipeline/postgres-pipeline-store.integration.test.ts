@@ -13,7 +13,7 @@ import type { Transaction } from '@platform/application';
 import { SHIPPED_TEMPLATES } from '@platform/domain';
 import { pipeline } from '@platform/infrastructure';
 import pg from 'pg';
-import { afterAll, beforeAll } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runPipelineStoreContract } from '../../contract/support/pipeline-store-suite.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
 
@@ -113,4 +113,56 @@ runPipelineStoreContract({
       },
     };
   },
+});
+
+/**
+ * An unreadable `tasks.pipeline_dial` refuses **that task** and nothing else (WP-62 review round 1).
+ *
+ * The single-task read throws, because compiling the task with no dial would be the permissive
+ * direction; a list read that serves other tasks skips the row and names it, so one bad document
+ * does not take down the conflict warnings or the rebase re-check for the whole project.
+ */
+describe('a malformed pipeline_dial', () => {
+  it('refuses the one task on load and is left out of a list read', async () => {
+    const client = new pg.Client({ connectionString: database.connectionString });
+    await client.connect();
+    await client.query('begin');
+    try {
+      const insert = async (key: string, dial: string | null): Promise<string> => {
+        const { rows } = await client.query<{ id: string }>(
+          `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state,
+                              current_stage, pipeline_dial)
+           values ($1, 'fake-jira', $2, 'https://jira.example.test/browse/' || $2, 'feature',
+                   'active', 'implementation', $3::jsonb) returning id`,
+          [projectId, key, dial],
+        );
+        return rows[0]?.id as string;
+      };
+      const good = await insert('DIAL-1', null);
+      const bad = await insert('DIAL-2', JSON.stringify({ level: 'assist' }));
+      const errors: unknown[] = [];
+      const store = pipeline.createPostgresPipelineStore({
+        templates: SHIPPED_TEMPLATES,
+        logger: {
+          debug: () => undefined,
+          info: () => undefined,
+          warn: () => undefined,
+          error: (fields: unknown) => {
+            errors.push(fields);
+          },
+        },
+      });
+      const tx = { adapter: 'postgres', client } as unknown as Transaction;
+
+      await expect(store.tasks.load(tx, bad as never)).rejects.toThrow(
+        /tasks\.pipeline_dial that does not match the current schema/,
+      );
+      const listed = await store.tasks.listAtStage(tx, projectId as never, 'implementation');
+      expect(listed.map((stored) => stored.task.id)).toEqual([good]);
+      expect(errors).toEqual([expect.objectContaining({ task_id: bad })]);
+    } finally {
+      await client.query('rollback');
+      await client.end();
+    }
+  });
 });

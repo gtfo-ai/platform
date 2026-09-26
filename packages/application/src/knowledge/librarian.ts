@@ -32,14 +32,31 @@
  * `ticket-snapshot.ts` states at its own cap: an exact-match redactor cannot find a secret a cut has
  * already halved.
  */
-import type { Id, IsoDateTime, JsonValue, LibrarianProposal, TaskMode } from '@platform/contracts';
+import type {
+  Id,
+  IsoDateTime,
+  JsonValue,
+  LibrarianProposal,
+  MaterialisedAutonomy,
+  TaskMode,
+} from '@platform/contracts';
 import {
   knowledgeProposalCreatedEvent,
   knowledgeProposalRecordSchema,
   librarianProposalsDataSchema,
 } from '@platform/contracts';
-import type { Clock, CuratedProposal, IdSource, KnowledgeApplyThresholds } from '@platform/domain';
-import { curateProposals, knowledgeApplyThresholds } from '@platform/domain';
+import type {
+  AutonomyOverrideSource,
+  Clock,
+  CuratedProposal,
+  IdSource,
+  KnowledgeApplyThresholds,
+} from '@platform/domain';
+import {
+  curateProposals,
+  effectiveAutonomyPreset,
+  knowledgeApplyThresholds,
+} from '@platform/domain';
 import type { EventHandler } from '../events/handler.js';
 import type { EventStore } from '../ports/event-store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
@@ -445,10 +462,31 @@ export const enqueueCuration = async (jobs: Jobs, data: KnowledgeProposalsData):
   });
 };
 
-/** The thresholds a project's stored configuration implies, for a composition root's `project`. */
+/**
+ * The thresholds a project's stored configuration **and its dial** imply, for a composition root's
+ * `project` (WP-62, backlog 72 (a)).
+ *
+ * `policies.knowledge_apply.auto_apply` in the document is the override; where it is silent the
+ * project's `knowledgeAutoApply` decides — read off the **materialised** preset (BD-027:14), so
+ * Autonomous auto-applies the middle band and Supervised does not. `autonomy` is `null` for a
+ * project whose dial was never materialised, which keeps the platform default rather than
+ * substituting a preset (standing rule 16).
+ */
 export const thresholdsFromConfig = (
-  config: { readonly policies?: { readonly knowledge_apply?: unknown } } | null | undefined,
-): KnowledgeApplyThresholds =>
-  knowledgeApplyThresholds(
-    (config?.policies?.knowledge_apply ?? null) as Parameters<typeof knowledgeApplyThresholds>[0],
-  );
+  config:
+    | {
+        readonly policies?: { readonly knowledge_apply?: unknown };
+      }
+    | null
+    | undefined,
+  autonomy: MaterialisedAutonomy | null,
+): KnowledgeApplyThresholds => {
+  const policy = (config?.policies?.knowledge_apply ?? null) as Parameters<
+    typeof knowledgeApplyThresholds
+  >[0];
+  const knowledgeAutoApply =
+    autonomy === null
+      ? undefined
+      : effectiveAutonomyPreset(autonomy, config as AutonomyOverrideSource).knowledgeAutoApply;
+  return knowledgeApplyThresholds(policy, knowledgeAutoApply);
+};

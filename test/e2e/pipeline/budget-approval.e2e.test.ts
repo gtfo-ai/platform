@@ -339,8 +339,9 @@ describe('the budget-approval gate, end to end', () => {
     const replay = await decide(client, gated.id, approvalId, 'approve', 'budget-approve-1');
     expect(replay.status).toBe(200);
     // Scoped to the **budget** approval: at *Assist* the plan gate asks for one of its own the
-    // moment architecture finishes, and counting every approval of the task would make this
-    // assertion a race against a different gate.
+    // moment architecture finishes (product/19 §11: plan approval `always`), and counting every
+    // approval of the task would make this assertion a race against a different gate. Only once a
+    // maintainer approves the plan does the dial's scope stop park the task (WP-62, Q79).
     expect(
       (await approvalsOf(pipeline, gated.id)).filter((row) => row.kind === 'budget'),
     ).toHaveLength(1);

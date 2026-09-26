@@ -142,7 +142,14 @@ export interface FeatureCard {
   readonly defaultState: string;
   readonly cost: string;
   readonly touches: string;
-  /** One line where two switches exist, or a limit worth knowing before turning it on. */
+  /**
+   * One line where two switches exist, or a limit worth knowing before turning it on.
+   *
+   * **Not checked for a denial** (PROGRESS backlog 208): the comparison below holds `unbuilt` to
+   * `FEATURE_READERS`, and nothing reads this line's meaning — a *"does nothing in this build"*
+   * sentence typed here instead of in `unbuilt` passes every check. No source-text guard can tell a
+   * limit from a denial; `operating-mode.test.tsx` states the same residual at the check.
+   */
   readonly caveat?: string;
   /**
    * The one place a card may say its feature does **nothing** in this build — and the comparison
@@ -250,21 +257,36 @@ export const FEATURE_CARDS: readonly FeatureCard[] = [
  * The adoption features product/18 lists that have no switch this screen can toggle — the declared
  * **exemption list** the card comparison reads (WP-44). An entry with a `key` is a shipped
  * `features.<key>` deliberately without a card, with the reason; an entry without one is a feature
- * with no configuration key at all.
+ * with no configuration key at all, and it names the **routes** the client calls for the control
+ * its `why` says is on (WP-62, PROGRESS backlog 208) — `operating-mode.test.tsx` resolves each one
+ * against the paths the app's own sources name, so an exemption claiming a control nobody calls
+ * fails instead of reading as a working feature. That these paths are *served* is
+ * `apps/server/src/routes/client-census.test.ts`'s half.
+ *
+ * The `why` itself is free text and **is not checked for a denial** — the residual the feature
+ * card's `caveat` has, stated there and at the test.
  */
 export const FEATURES_WITHOUT_A_SWITCH: readonly {
   readonly name: string;
   readonly why: string;
   readonly key?: 'human_time';
+  /** Normalised client paths (`${…}` → `{}`), required on every entry without a `key`. */
+  readonly routes?: readonly string[];
 }[] = [
-  { name: 'Steer', why: 'on for members and maintainers; the run page carries the control' },
+  {
+    name: 'Steer',
+    why: 'on for members and maintainers; the run page carries the control',
+    routes: ['/api/runs/{}/steer'],
+  },
   {
     name: 'Take over / hand back',
-    why: 'on; the task and run pages carry the controls, and the retention window is a platform setting',
+    why: 'on; the task page carries both controls, and a taken-over workspace is kept for fourteen days, which is fixed in this build',
+    routes: ['/api/tasks/{}/take-over', '/api/tasks/{}/hand-back'],
   },
   {
     name: 'Cost estimate before spend',
-    why: 'the estimate is on; its approval threshold is the dial’s',
+    why: 'the estimate is on and shown on the task page; its approval threshold is the dial’s',
+    routes: ['/api/tasks/{}', '/api/tasks/{}/approvals/{}/decide'],
   },
   {
     name: 'Human time accounting',
@@ -272,6 +294,33 @@ export const FEATURES_WITHOUT_A_SWITCH: readonly {
     why: 'always recorded from events; the per-user breakdown is off by default and is set in the project’s configuration file (features.human_time.per_user_breakdown), not by a toggle',
   },
 ];
+
+/**
+ * The dial's policies that **set nothing by themselves**, by wire name, with what an operator should
+ * know instead (WP-62, criterion 6; PROGRESS backlog 72).
+ *
+ * The dial's policy list printed all fifteen as facts until WP-62, and seven of them set nothing.
+ * Thirteen have a reader now; these two are decided rather than deferred, and the list is held to
+ * the platform's own `AUTONOMY_POLICY_READERS` in both directions by `operating-mode.test.tsx`, so a
+ * policy that gains a reader and keeps its mark — or loses one and gains none — fails there.
+ */
+export const POLICIES_THAT_SET_NOTHING: Readonly<Record<string, string>> = {
+  review_only:
+    'a recommendation only — the Review-only mode card below is the switch (BD-028: adoption features are opt-in)',
+  suggested_readiness_min:
+    'published only — the suggested cap shown above is computed from the project’s readiness level',
+};
+
+/**
+ * What a move of the dial does to a task that is **already running** (WP-62 review round 1).
+ *
+ * Three policies are frozen onto a task when it starts — `business_review` and `stop_after_stage`
+ * (`tasks.pipeline_dial`) and the human-round ceiling (`tasks.iteration_limits`) — and every other
+ * policy with a reader is read when it is used. Saying "a task keeps the position it started under"
+ * would be false for the second group, so the line under the control names both.
+ */
+export const DIAL_TIMING_NOTE =
+  'A move applies to running tasks in part: whether business review runs, the stop after architecture and the number of human review rounds are fixed when a task starts; plan approval, probation, the budget threshold, the question timeout and knowledge auto-apply are read when they are used.';
 
 /** BD-010's windows, in the order a person thinks about them. */
 const BUDGET_WINDOWS = ['day', 'week', 'month', 'total'] as const;
@@ -359,6 +408,8 @@ export const AutonomyDial = ({ projectId }: { readonly projectId: string }): Rea
         ))}
       </div>
 
+      <p className="text-xs text-fg-muted">{DIAL_TIMING_NOTE}</p>
+
       {current === null ? null : (
         <p className="text-xs text-fg-muted">
           Readiness is level {current.readiness_level}, which suggests at most{' '}
@@ -432,22 +483,43 @@ export const AutonomyDial = ({ projectId }: { readonly projectId: string }): Rea
   );
 };
 
-/** What the dial actually set — read from the stored preset, never re-derived from the level. */
-const PolicyTable = ({ autonomy }: { readonly autonomy: AutonomyResponse }): ReactElement => (
-  <details className="text-xs">
-    <summary className="cursor-pointer text-fg-muted">
-      The {Object.keys(autonomy.policies).length} policies this position set
-    </summary>
-    <ul className="flex flex-col gap-0.5 pt-1 font-mono">
-      {Object.entries(autonomy.policies).map(([policy, value]) => (
-        <li key={policy} className="flex gap-2">
-          <span>{policy}</span>
-          <span className="text-fg-muted">{String(value)}</span>
-        </li>
-      ))}
-    </ul>
-  </details>
-);
+/**
+ * What the dial actually set — read from the stored preset, never re-derived from the level — with
+ * a mark on every policy that sets nothing by itself ({@link POLICIES_THAT_SET_NOTHING}).
+ */
+export const PolicyTable = ({
+  autonomy,
+}: {
+  readonly autonomy: AutonomyResponse;
+}): ReactElement => {
+  const entries = Object.entries(autonomy.policies);
+  const inert = entries.filter(([policy]) => policy in POLICIES_THAT_SET_NOTHING).length;
+  return (
+    <details className="text-xs">
+      <summary className="cursor-pointer text-fg-muted">
+        The {entries.length} policies this position holds — {entries.length - inert} in force,{' '}
+        {inert} that set nothing by themselves
+      </summary>
+      <ul className="flex flex-col gap-0.5 pt-1 font-mono">
+        {entries.map(([policy, value]) => {
+          const why = POLICIES_THAT_SET_NOTHING[policy];
+          return (
+            <li key={policy} className="flex flex-wrap items-center gap-2">
+              <span>{policy}</span>
+              <span className="text-fg-muted">{String(value)}</span>
+              {why === undefined ? null : (
+                <>
+                  <Badge tone="warning">sets nothing</Badge>
+                  <span className="font-sans text-fg-muted">{why}</span>
+                </>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </details>
+  );
+};
 
 // ── 2. Feature toggles ───────────────────────────────────────────────────────
 

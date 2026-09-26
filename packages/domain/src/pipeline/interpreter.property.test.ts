@@ -42,7 +42,7 @@ import { FEATURE_TEMPLATE, SHIPPED_TEMPLATES, TICKET_TEMPLATES } from './templat
  */
 const TEMPLATES: readonly [string, PipelineTemplate][] = Object.entries(SHIPPED_TEMPLATES);
 
-const compiled = TEMPLATES.map(([id, template]) => compilePipeline(id, template));
+const compiled = TEMPLATES.map(([id, template]) => compilePipeline(id, template, null));
 
 /**
  * Every stage id of a template, plus ids that are not in it.
@@ -189,11 +189,15 @@ describe.each(compiled.map((pipeline) => [pipeline.templateId, pipeline] as cons
             signalArbitrary(pipeline),
             (disabled, signal) => {
               const disabledSet = new Set(disabled);
-              const variant = compilePipeline(pipeline.templateId, {
-                stages: template.stages.map((stage) =>
-                  disabledSet.has(stage.id) ? { ...stage, enabled: false } : stage,
-                ),
-              });
+              const variant = compilePipeline(
+                pipeline.templateId,
+                {
+                  stages: template.stages.map((stage) =>
+                    disabledSet.has(stage.id) ? { ...stage, enabled: false } : stage,
+                  ),
+                },
+                null,
+              );
               const decision = interpret(variant, signal);
               const target =
                 decision.kind === 'enter'

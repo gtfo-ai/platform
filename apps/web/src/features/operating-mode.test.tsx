@@ -9,15 +9,29 @@
  * the wizard stale fails here rather than misleading a maintainer at the moment they turn it on.
  */
 
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { featuresConfigSchema } from '@platform/contracts';
 import {
+  AUTONOMY_POLICY_READERS,
+  AUTONOMY_POLICY_WIRE_NAMES,
   FEATURE_READERS,
   MAINTENANCE_CHORE_TYPES,
   MAINTENANCE_CHORES,
+  materialiseAutonomy,
   PLATFORM_DEFAULT_CONFIG,
 } from '@platform/domain';
+import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { FEATURE_CARDS, FEATURES_WITHOUT_A_SWITCH } from './operating-mode.js';
+import {
+  DIAL_TIMING_NOTE,
+  FEATURE_CARDS,
+  FEATURES_WITHOUT_A_SWITCH,
+  POLICIES_THAT_SET_NOTHING,
+  PolicyTable,
+} from './operating-mode.js';
 
 const maintenance = FEATURE_CARDS.find((card) => card.key === 'maintenance');
 
@@ -103,11 +117,154 @@ describe('the feature cards against the platform’s feature table', () => {
     }
   });
 
+  /**
+   * **The residual, stated at the check** (PROGRESS backlog 208). This case holds `unbuilt` to
+   * `FEATURE_READERS`; it reads nothing else. A *"does nothing in this build"* sentence written into
+   * a card's `caveat` — or into an unkeyed `FEATURES_WITHOUT_A_SWITCH.why`, which is where backlog
+   * 72's *"Ask the task — not built"* sat — is **not caught** here or anywhere: no source-text guard
+   * can tell a limit from a denial, so a recurrence of backlog 72's defect is reviewable, not
+   * caught. What the unkeyed entries do get is the route resolution below.
+   */
   it('says a feature is unbuilt exactly where the reader table names no reader', () => {
     const readers = FEATURE_READERS as Readonly<Record<string, readonly string[]>>;
     for (const card of FEATURE_CARDS) {
       const read = (readers[card.key] ?? []).length > 0;
       expect(card.unbuilt === undefined, `${card.key}: unbuilt line iff no reader`).toBe(read);
     }
+  });
+});
+
+/** The `/api/…` paths the app's own sources name, normalised as the client census normalises them. */
+const clientPaths = (): ReadonlySet<string> => {
+  const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+  const repoRoot = resolve(webRoot, '../../..');
+  const git = (args: readonly string[]): string[] =>
+    execFileSync('git', [...args, '-z', '--', 'apps/web/src/*.ts', 'apps/web/src/*.tsx'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    })
+      .split('\0')
+      .filter((file) => file.length > 0);
+  // Tracked and untracked-but-committable (standing rule 85); tests are out, as in the census.
+  const files = [
+    ...new Set([...git(['ls-files']), ...git(['ls-files', '--others', '--exclude-standard'])]),
+  ].filter((file) => !/\.test\.tsx?$/.test(file));
+  const found = new Set<string>();
+  for (const file of files) {
+    const source = readFileSync(join(repoRoot, file), 'utf8')
+      .split('\n')
+      .filter((line) => !/^\s*(?:\*|\/\/|\/\*)/.test(line))
+      .join('\n');
+    for (const [, , path] of source.matchAll(/(['"`])(\/api\/[^'"`]*)\1/g)) {
+      if (path !== undefined) {
+        found.add(
+          path
+            .replaceAll(/\$\{[^}]*\}/g, '{}')
+            .replace(/\/$/, '')
+            .replace(/\?.*$/, ''),
+        );
+      }
+    }
+  }
+  return found;
+};
+
+/**
+ * The unkeyed exemptions, resolved rather than trusted (WP-62, PROGRESS backlog 208).
+ *
+ * Each names the routes of the control its `why` says is on, and each route must be a path the app
+ * actually calls. That the server serves it is `apps/server/src/routes/client-census.test.ts`'s
+ * equality, so together the two say the control exists end to end. What is still not read is the
+ * `why` sentence itself — the residual stated above.
+ */
+describe('the features without a switch (backlog 208)', () => {
+  const paths = clientPaths();
+
+  it('names, for every entry without a key, routes the app really calls', () => {
+    const unkeyed = FEATURES_WITHOUT_A_SWITCH.filter((entry) => entry.key === undefined);
+    expect(unkeyed.map((entry) => entry.name)).toEqual([
+      'Steer',
+      'Take over / hand back',
+      'Cost estimate before spend',
+    ]);
+    for (const entry of unkeyed) {
+      expect(entry.routes?.length ?? 0, entry.name).toBeGreaterThan(0);
+      for (const route of entry.routes ?? []) {
+        expect(paths.has(route), `${entry.name}: ${route}`).toBe(true);
+      }
+    }
+  });
+
+  it('refuses a route the app does not call (the canary)', () => {
+    expect(paths.has('/api/tasks/{}/ask-the-task-not-built')).toBe(false);
+    expect(paths.size).toBeGreaterThan(20);
+  });
+});
+
+/**
+ * The dial's policy list marks what sets nothing (WP-62, criterion 6; PROGRESS backlog 72).
+ *
+ * The mark is held to the platform's own reader table in both directions rather than pinned, and
+ * the rendered list is read back: the marked rows are exactly the unread policies, and every other
+ * row carries no mark.
+ */
+describe('the policy list on the dial', () => {
+  const unread = Object.entries(AUTONOMY_POLICY_READERS)
+    .filter(([, entry]) => entry.kind === 'unread')
+    .map(
+      ([policy]) => AUTONOMY_POLICY_WIRE_NAMES[policy as keyof typeof AUTONOMY_POLICY_WIRE_NAMES],
+    )
+    .sort();
+
+  it('marks exactly the policies the reader table says nothing reads', () => {
+    expect(Object.keys(POLICIES_THAT_SET_NOTHING).sort()).toEqual(unread);
+  });
+
+  it('renders the mark on those rows and on no other', () => {
+    const materialised = materialiseAutonomy({
+      level: 'autonomous',
+      at: '2026-09-26T09:00:00.000Z' as never,
+      appliedBy: null,
+    });
+    render(
+      <PolicyTable
+        autonomy={{
+          level: 'autonomous',
+          materialised: true,
+          preset_version: materialised.preset_version,
+          current_preset_version: materialised.preset_version,
+          preset_outdated: false,
+          applied_at: materialised.applied_at,
+          applied_by: null,
+          policies: materialised.policies,
+          is_custom: false,
+          overrides: [],
+          readiness_level: 2,
+          suggested_cap: 'autonomous',
+          above_suggested_cap: false,
+        }}
+      />,
+    );
+    expect(
+      screen.getByText(
+        'The 15 policies this position holds — 13 in force, 2 that set nothing by themselves',
+      ),
+    ).toBeDefined();
+    const marked = screen
+      .getAllByText('sets nothing')
+      .map((badge) => badge.closest('li')?.firstElementChild?.textContent ?? '')
+      .sort();
+    expect(marked).toEqual(unread);
+  });
+});
+
+describe('the line under the dial (WP-62 review round 1)', () => {
+  it('names the three policies frozen at task start and says the rest are read live', () => {
+    for (const frozen of ['business review', 'stop after architecture', 'human review rounds']) {
+      expect(DIAL_TIMING_NOTE).toContain(frozen);
+    }
+    expect(DIAL_TIMING_NOTE).toContain('read when they are used');
+    // The false sentence the round removed: a task does not keep its whole starting position.
+    expect(DIAL_TIMING_NOTE).not.toContain('not running ones');
   });
 });

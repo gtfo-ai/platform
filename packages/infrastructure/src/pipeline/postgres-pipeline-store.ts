@@ -24,6 +24,7 @@ import type {
   ApprovalRepository,
   ArtifactRepository,
   BreakdownRepository,
+  Logger,
   PipelineStore,
   QuestionRepository,
   RunRepository,
@@ -35,7 +36,11 @@ import type {
   TaskRepository,
   Transaction,
 } from '@platform/application';
-import { TAKE_OVER_BOUNDARY_EVENTS, TaskConcurrentModificationError } from '@platform/application';
+import {
+  silentLogger,
+  TAKE_OVER_BOUNDARY_EVENTS,
+  TaskConcurrentModificationError,
+} from '@platform/application';
 import type {
   ContextPackRecord,
   EstimateBasis,
@@ -50,6 +55,7 @@ import type {
   Slug,
   TaskCoverage,
   TaskDependencies,
+  TaskPipelineDial,
   TaskReviewers,
   TaskReviewThreads,
   TaskState,
@@ -60,6 +66,7 @@ import {
   acceptanceCriterionSchema,
   taskCoverageSchema,
   taskDependenciesSchema,
+  taskPipelineDialSchema,
   taskReviewersSchema,
   taskReviewThreadsSchema,
   taskStageExitStateSchema,
@@ -76,6 +83,11 @@ import { takeOverLastActivitySql } from './take-over-activity.js';
 /** Raised when a write that had to change a row changed none. */
 export class PipelineRowMissingError extends Error {
   override readonly name = 'PipelineRowMissingError';
+}
+
+/** Raised when a stored document a task cannot run without does not match its schema (WP-62). */
+export class PipelineStoredStateError extends Error {
+  override readonly name = 'PipelineStoredStateError';
 }
 
 const sqlOf = (tx: Transaction): SqlExecutor => postgresTransaction(tx).client;
@@ -101,6 +113,7 @@ interface TaskRow extends Record<string, unknown> {
   current_stage: string | null;
   priority: string | null;
   template_snapshot: PipelineTemplate | null;
+  pipeline_dial: unknown;
   branch: string | null;
   mr_ref: MergeRequestRef | null;
   workpad_ref: WorkpadRef | null;
@@ -128,7 +141,8 @@ interface TaskRow extends Record<string, unknown> {
 }
 
 const TASK_COLUMNS = `t.id, t.project_id, t.ticket_provider, t.ticket_key, t.ticket_url, t.template,
-    t.mode, t.state, t.current_stage, t.priority, t.template_snapshot, t.branch, t.mr_ref,
+    t.mode, t.state, t.current_stage, t.priority, t.template_snapshot, t.pipeline_dial, t.branch,
+    t.mr_ref,
     t.workpad_ref, t.stage_attempts, t.iteration_limits, t.iteration_counters, t.cost_actual,
     t.estimate_usd, t.estimate_basis, t.estimate_samples,
     t.ticket_snapshot, t.ticket_snapshot_at, t.ticket_signal_at, t.review_subject, t.history_sample,
@@ -163,6 +177,7 @@ const toStoredTask = (row: TaskRow, template: PipelineTemplate): StoredTask => (
     sequence: row.sequence === null ? 1 : Number(row.sequence) + 1,
   },
   template,
+  pipelineDial: pipelineDialOf(row),
   priorityRank: priorityRank(row.priority),
   createdAt: new Date(row.created_at).toISOString() as IsoDateTime,
   branch: row.branch,
@@ -187,6 +202,31 @@ const toStoredTask = (row: TaskRow, template: PipelineTemplate): StoredTask => (
   requestedByUserId: (row.requested_by_user_id ?? null) as Id | null,
   version: Number(row.version),
 });
+
+/**
+ * `tasks.pipeline_dial` through its published schema (WP-62), never cast.
+ *
+ * It decides whether a stage runs and whether a task parks, so a document that does not match the
+ * current schema must not be read as one that does. A row that fails **throws** rather than reading
+ * as `null`: `null` would compile the template with no dial at all, which is the permissive
+ * direction — an Assist task would then run to a merge request because its copy of the policy was
+ * unreadable (standing rule 20). Only the insert writes the column, through the same schema's type,
+ * so the throw is reachable only from a row written by hand.
+ */
+const pipelineDialOf = (row: TaskRow): TaskPipelineDial | null => {
+  if (row.pipeline_dial === null || row.pipeline_dial === undefined) {
+    return null;
+  }
+  const parsed = taskPipelineDialSchema.safeParse(row.pipeline_dial);
+  if (!parsed.success) {
+    throw new PipelineStoredStateError(
+      `task ${row.id} has a tasks.pipeline_dial that does not match the current schema (${parsed.error.issues
+        .map((issue) => issue.path.join('.'))
+        .join(', ')}); the task's pipeline cannot be compiled`,
+    );
+  }
+  return parsed.data;
+};
 
 /**
  * Provider priority labels → the rank `orderQueue` sorts on (lower is more urgent, BD-010).
@@ -226,11 +266,38 @@ export interface PostgresPipelineStoreOptions {
    * would throw and the task would be unrecoverable.
    */
   readonly templates: Readonly<Record<string, PipelineTemplate>>;
+  /**
+   * Where a **list** read reports a row it skipped because its `pipeline_dial` fails its schema
+   * (WP-62 review round 1). Optional; silent by default.
+   */
+  readonly logger?: Logger;
 }
 
 export const createPostgresPipelineStore = (
   options: PostgresPipelineStoreOptions,
 ): PipelineStore => {
+  const logger = options.logger ?? silentLogger;
+  /**
+   * A list read over **other** tasks — conflict warnings, the rebase re-check — must not fail
+   * because one row's stored dial is unreadable, so the refusal is scoped to that task: the row is
+   * skipped and named, and only the single-task reads (`load`, `findBy…`) refuse. The skipped task
+   * is not lost: the next read that loads it by id throws, which is where its own work stops.
+   */
+  const listed = (rows: readonly TaskRow[]): StoredTask[] =>
+    rows.flatMap((row) => {
+      try {
+        return [toStoredTask(row, templateFor(row))];
+      } catch (error) {
+        if (!(error instanceof PipelineStoredStateError)) {
+          throw error;
+        }
+        logger.error(
+          { task_id: row.id, err: error },
+          'a task with an unreadable tasks.pipeline_dial was left out of a list read; loading it by id refuses',
+        );
+        return [];
+      }
+    });
   const templateFor = (row: TaskRow): PipelineTemplate => {
     const snapshot = row.template_snapshot;
     if (snapshot !== null && typeof snapshot === 'object' && 'stages' in snapshot) {
@@ -282,7 +349,7 @@ export const createPostgresPipelineStore = (
           where t.project_id = $1 and t.current_stage = $2 order by t.created_at`,
         [projectId, stage],
       );
-      return rows.map((row) => toStoredTask(row, templateFor(row)));
+      return listed(rows);
     },
 
     listWithMergeRequest: async (tx, projectId, query) => {
@@ -299,7 +366,7 @@ export const createPostgresPipelineStore = (
           limit $3`,
         [projectId, query.excludeTaskId, Math.max(query.limit, 0)],
       );
-      return rows.map((row) => toStoredTask(row, templateFor(row)));
+      return listed(rows);
     },
 
     countCompleted: async (tx, projectId) => {
@@ -321,10 +388,10 @@ export const createPostgresPipelineStore = (
                             workpad_ref, stage_attempts, iteration_limits, iteration_counters,
                             cost_actual, estimate_usd, estimate_basis, estimate_samples,
                             ticket_snapshot, ticket_snapshot_at, review_subject, history_sample,
-                            version)
+                            version, pipeline_dial)
          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13::jsonb, $14::jsonb,
                  $15::jsonb, $16::jsonb, $17::jsonb, $18, $19, $20, $21, $22::jsonb, $23, $24::jsonb,
-                 $25::jsonb, $26)`,
+                 $25::jsonb, $26, $27::jsonb)`,
         [
           task.id,
           task.projectId,
@@ -364,6 +431,9 @@ export const createPostgresPipelineStore = (
           // standing rule 79's lost update (migration 0030 has the argument).
           stored.historySample === null ? null : JSON.stringify(stored.historySample),
           stored.version,
+          // WP-62: written here and nowhere else — the dial the task starts under, frozen for
+          // `template_snapshot`'s reason (migration 0049 has the argument).
+          stored.pipelineDial === null ? null : JSON.stringify(stored.pipelineDial),
         ],
       );
     },

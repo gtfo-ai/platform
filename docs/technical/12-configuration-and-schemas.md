@@ -75,7 +75,9 @@ stages:                          # per-stage agent settings
                     prompt: prompts/implementation.md, prompt_append: prompts/implementation.append.md }
   code_review: { model: claude-opus-5, effort: high }
 policies:
-  autonomy: supervised           # observe | assist | supervised | autonomous (+ overrides below)
+  autonomy: supervised           # observe | assist | supervised | autonomous — overridden only by
+                                 # probation_tasks, knowledge_apply.auto_apply and pipeline.limits'
+                                 # human_rounds / question_timeout (Q78, WP-62)
   probation_tasks: 5
   knowledge_apply: { auto_apply: false, discard_below: 0.2, proposal_above: 0.6 }
   dependency_policy:             # or the shorthand `dependency_policy: ask`, which means the same

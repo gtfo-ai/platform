@@ -45,7 +45,6 @@ import {
   createTask,
   HISTORY_BOOTSTRAP_TEMPLATE_ID,
   interpret,
-  resolveIterationLimits,
 } from '@platform/domain';
 import type { PipelineIntegrationsPort } from '../pipeline/integrations.js';
 import {
@@ -56,6 +55,7 @@ import {
 } from '../pipeline/integrations.js';
 import { enqueueStage } from '../pipeline/jobs.js';
 import type { ProjectSettingsPort } from '../pipeline/settings.js';
+import { iterationLimitsFor } from '../pipeline/settings.js';
 import {
   INITIAL_TASK_VERSION,
   PIPELINE_ACTOR,
@@ -327,13 +327,15 @@ export const collectHistory = async (
           ticket,
           template: HISTORY_BOOTSTRAP_TEMPLATE_ID,
           mode: 'normal',
-          limits: resolveIterationLimits(settings.config.pipeline?.limits),
+          limits: iterationLimitsFor(settings),
         },
         contextFor(options, null),
       );
       const stored: StoredTask = {
         task: task.aggregate,
         template: template as PipelineTemplate,
+        // WP-62: no dial — the platform's own one-stage mining task, not a picked-up ticket.
+        pipelineDial: null,
         // Behind a delivery, ahead of nothing: onboarding blocks nobody's merge request, and a
         // bootstrap that jumped the queue would delay the work the project is actually for.
         priorityRank: 3,
@@ -378,7 +380,11 @@ export const collectHistory = async (
        * limit would park the onboarding step that exists to make the project usable. What bounds
        * the spend is the batch's own cap, checked at every admission by the stage executor.
        */
-      const pipeline = compilePipeline(HISTORY_BOOTSTRAP_TEMPLATE_ID, stored.template);
+      const pipeline = compilePipeline(
+        HISTORY_BOOTSTRAP_TEMPLATE_ID,
+        stored.template,
+        stored.pipelineDial,
+      );
       const applied = await applyDecision({
         store: options.store,
         pipeline,

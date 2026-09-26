@@ -64,11 +64,11 @@ import {
   interpret,
   maintenanceConfigOf,
   renderChoreBrief,
-  resolveIterationLimits,
 } from '@platform/domain';
 import { PLATFORM_TICKET_PROVIDER } from '../pipeline/integrations.js';
 import { enqueueStage } from '../pipeline/jobs.js';
 import type { ProjectSettingsPort } from '../pipeline/settings.js';
+import { iterationLimitsFor } from '../pipeline/settings.js';
 import { monthStartUtc } from '../pipeline/stage-executor.js';
 import {
   INITIAL_TASK_VERSION,
@@ -424,13 +424,17 @@ const scheduleProject = async (
           },
           template: MAINTENANCE_TEMPLATE_ID,
           mode: 'normal',
-          limits: resolveIterationLimits(settings.config.pipeline?.limits),
+          limits: iterationLimitsFor(settings),
         },
         contextFor(options, null),
       );
       const stored: StoredTask = {
         task: created.aggregate,
         template: template as PipelineTemplate,
+        // WP-62: no dial. Maintenance is its own opt-in (`features.maintenance`), scheduled by the
+        // platform rather than picked up from a ticket, and product/19 §11 sets the dial's pipeline
+        // policies for picked-up tickets.
+        pipelineDial: null,
         // Behind every ticket a human is waiting for: upkeep never jumps the delivery queue.
         priorityRank: 3,
         createdAt: options.clock.now(),
@@ -455,7 +459,11 @@ const scheduleProject = async (
         requestedByUserId: null,
       };
       await options.store.tasks.insert(scope.tx, stored);
-      const pipeline = compilePipeline(MAINTENANCE_TEMPLATE_ID, stored.template);
+      const pipeline = compilePipeline(
+        MAINTENANCE_TEMPLATE_ID,
+        stored.template,
+        stored.pipelineDial,
+      );
       const applied = await applyDecision({
         store: options.store,
         pipeline,

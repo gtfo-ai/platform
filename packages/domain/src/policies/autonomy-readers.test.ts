@@ -40,10 +40,14 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  AUTONOMY_POLICIES_NOT_OVERRIDABLE,
+  AUTONOMY_POLICY_OVERRIDE_KEYS,
   AUTONOMY_POLICY_READERS,
   AUTONOMY_POLICY_WIRE_NAMES,
   AUTONOMY_PRESETS,
+  type AutonomyOverrideSource,
   type AutonomyPolicyReader,
+  autonomyOverridesFromConfig,
 } from './autonomy.js';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
@@ -119,30 +123,41 @@ describe('the dial’s reader table (standing rule 18)', () => {
     expect(Object.keys(AUTONOMY_POLICY_READERS)).toHaveLength(15);
   });
 
-  it('splits into the eight policies something reads and the seven it does not', () => {
+  it('splits into the thirteen policies something reads and the two it does not', () => {
     const byKind = (kind: 'read' | 'unread'): string[] =>
       Object.entries(AUTONOMY_POLICY_READERS)
         .filter(([, entry]) => entry.kind === kind)
         .map(([policy]) => policy)
         .sort();
-    // The plan-approval gate's five, the budget gate's one (WP-28), and WP-34's two: intake asks
-    // `picksUpNewTickets` before it creates a task, and the shadow batch command asks `shadowMode`
-    // before it creates any. Those two are backlog 72 (c) — *"the only pairing in this entry that
-    // is a single piece of work"* — and this list is the recurrence guard the entry asked for.
-    // `suggestedReadinessMin` is **not** among them: the document it travels in is published, and
-    // the *suggestion* the screen shows is `suggestedAutonomyCap` over `projects.readiness_level` —
-    // a separate function that never reads this field.
+    // The plan-approval gate's five, the budget gate's one (WP-28), WP-34's two (intake asks
+    // `picksUpNewTickets`, the shadow batch command asks `shadowMode`) and **WP-62's five**: the
+    // three backlog 72 (a) called a second spelling of a document key (`humanMrRounds`,
+    // `questionTimeout`, `knowledgeAutoApply` — each now read where the document is silent) and the
+    // two 72 (b) called a halt the compiled pipeline could not express (`businessReview`,
+    // `stopAfterStage` — frozen onto the task and read by `compilePipeline`/`interpret`).
+    // This list **is** the recurrence guard the entry asked for.
     expect(byKind('read')).toEqual([
       'budgetApprovalThresholdUsd',
+      'businessReview',
+      'humanMrRounds',
+      'knowledgeAutoApply',
       'picksUpNewTickets',
       'planApproval',
       'planApprovalForRiskClasses',
       'planApprovalSizeThreshold',
       'probation',
       'probationTasks',
+      'questionTimeout',
       'shadowMode',
+      'stopAfterStage',
     ]);
-    expect(byKind('unread')).toHaveLength(7);
+    // Both decided rather than deferred, which is why neither names a work package: the opt-in key
+    // wins over `reviewOnly` (BD-028), and `suggestedAutonomyCap` is the one encoding of the ladder.
+    expect(byKind('unread')).toEqual(['reviewOnly', 'suggestedReadinessMin']);
+    for (const policy of byKind('unread')) {
+      const entry = AUTONOMY_POLICY_READERS[policy as keyof typeof AUTONOMY_POLICY_READERS];
+      expect(entry.kind === 'unread' && entry.owner, policy).not.toBe('none');
+    }
   });
 
   it('never leaves an absence unexplained', () => {
@@ -219,5 +234,103 @@ describe('the citation behind every claimed reader', () => {
     expect(unresolvedReaderCitations(circular, treeFiles(), readSource)).toEqual([
       `planApproval: names no repository path outside ${TABLE_MODULE}`,
     ]);
+  });
+});
+
+/**
+ * Q78's rule — *"widen to exactly the fields that have a reader, and make that the rule rather than
+ * a snapshot"* (WP-62).
+ *
+ * Three assertions make it a rule. The override surface is a subset of the `read` policies (a key
+ * for a policy nothing reads is backlog 58's unread-key class); every `read` policy is either
+ * overridable or says why not, and never both; and the declared document keys are **driven**
+ * through `autonomyOverridesFromConfig` rather than trusted, so a key declared here that the
+ * function does not honour — or one it honours that is not declared — fails by name.
+ */
+describe('the override surface (Q78)', () => {
+  const readPolicies = (): string[] =>
+    Object.entries(AUTONOMY_POLICY_READERS)
+      .filter(([, entry]) => entry.kind === 'read')
+      .map(([policy]) => policy)
+      .sort();
+
+  /** One value per declared document key — a new key must bring one, or the next case fails. */
+  const SAMPLE_VALUES: Readonly<Record<string, unknown>> = {
+    'policies.probation_tasks': 2,
+    'pipeline.limits.human_rounds': 7,
+    'pipeline.limits.question_timeout': '2 working days',
+    'policies.knowledge_apply.auto_apply': true,
+  };
+
+  const documentSetting = (dotted: string, value: unknown): AutonomyOverrideSource => {
+    const root: Record<string, unknown> = {};
+    const parts = dotted.split('.');
+    let cursor = root;
+    for (const part of parts.slice(0, -1)) {
+      const next: Record<string, unknown> = {};
+      cursor[part] = next;
+      cursor = next;
+    }
+    cursor[parts[parts.length - 1] as string] = value;
+    return root as AutonomyOverrideSource;
+  };
+
+  it('offers an override only for a policy something reads', () => {
+    for (const policy of Object.keys(AUTONOMY_POLICY_OVERRIDE_KEYS)) {
+      expect(
+        AUTONOMY_POLICY_READERS[policy as keyof typeof AUTONOMY_POLICY_READERS].kind,
+        policy,
+      ).toBe('read');
+    }
+  });
+
+  it('partitions the read policies into overridable and not, each with its key or its reason', () => {
+    const overridable = Object.keys(AUTONOMY_POLICY_OVERRIDE_KEYS);
+    const refused = Object.keys(AUTONOMY_POLICIES_NOT_OVERRIDABLE);
+    expect(overridable.filter((policy) => refused.includes(policy))).toEqual([]);
+    expect([...overridable, ...refused].sort()).toEqual(readPolicies());
+    for (const [policy, why] of Object.entries(AUTONOMY_POLICIES_NOT_OVERRIDABLE)) {
+      expect(why.length, policy).toBeGreaterThan(40);
+    }
+    // Today's answer, stated once so a reader need not derive it: the three document keys backlog
+    // 72 (a) named plus `probation_tasks` (which also carries `probation`).
+    expect([...new Set(Object.values(AUTONOMY_POLICY_OVERRIDE_KEYS))].sort()).toEqual([
+      'pipeline.limits.human_rounds',
+      'pipeline.limits.question_timeout',
+      'policies.knowledge_apply.auto_apply',
+      'policies.probation_tasks',
+    ]);
+  });
+
+  it('honours every declared key, and nothing it does not declare', () => {
+    const keys = [...new Set(Object.values(AUTONOMY_POLICY_OVERRIDE_KEYS))];
+    expect(Object.keys(SAMPLE_VALUES).sort()).toEqual([...keys].sort());
+    for (const key of keys) {
+      const declared = Object.entries(AUTONOMY_POLICY_OVERRIDE_KEYS)
+        .filter(([, path]) => path === key)
+        .map(([policy]) => policy)
+        .sort();
+      const overridden = Object.keys(
+        autonomyOverridesFromConfig(documentSetting(key, SAMPLE_VALUES[key])),
+      ).sort();
+      expect(overridden, key).toEqual(declared);
+    }
+    expect(autonomyOverridesFromConfig({})).toEqual({});
+    expect(autonomyOverridesFromConfig(undefined)).toEqual({});
+  });
+
+  it('carries the document value itself, not a coerced one', () => {
+    expect(
+      autonomyOverridesFromConfig({
+        pipeline: { limits: { human_rounds: 2, question_timeout: '3 working days' } },
+        policies: { knowledge_apply: { auto_apply: false }, probation_tasks: 0 },
+      }),
+    ).toEqual({
+      humanMrRounds: 2,
+      questionTimeout: '3 working days',
+      knowledgeAutoApply: false,
+      probationTasks: 0,
+      probation: false,
+    });
   });
 });

@@ -10,9 +10,9 @@ import {
 } from './interpreter.js';
 import { BUG_TEMPLATE, CHORE_TEMPLATE, FEATURE_TEMPLATE } from './templates.js';
 
-const feature = compilePipeline('feature', FEATURE_TEMPLATE);
-const bug = compilePipeline('bug', BUG_TEMPLATE);
-const chore = compilePipeline('chore', CHORE_TEMPLATE);
+const feature = compilePipeline('feature', FEATURE_TEMPLATE, null);
+const bug = compilePipeline('bug', BUG_TEMPLATE, null);
+const chore = compilePipeline('chore', CHORE_TEMPLATE, null);
 
 const completed = (stage: string, verdict: string | null): PipelineSignal => ({
   kind: 'stage_completed',
@@ -49,10 +49,14 @@ describe('compilePipeline', () => {
   });
 
   it('splices a custom stage after its predecessor rather than at the end', () => {
-    const withCustom = compilePipeline('feature', {
-      ...FEATURE_TEMPLATE,
-      custom: [{ id: 'security_scan', kind: 'gate', after: 'ci_gate', command: 'trivy fs .' }],
-    });
+    const withCustom = compilePipeline(
+      'feature',
+      {
+        ...FEATURE_TEMPLATE,
+        custom: [{ id: 'security_scan', kind: 'gate', after: 'ci_gate', command: 'trivy fs .' }],
+      },
+      null,
+    );
     const ids = withCustom.stages.map((stage) => stage.id);
     expect(ids.indexOf('security_scan')).toBe(ids.indexOf('ci_gate') + 1);
     expect(stageOf(withCustom, 'security_scan')).toMatchObject({
@@ -64,9 +68,13 @@ describe('compilePipeline', () => {
 
   it('refuses to compile a template whose graph is broken', () => {
     expect(() =>
-      compilePipeline('broken', {
-        stages: [{ id: 'refinement', kind: 'agent', role: 'product_manager', next: 'nowhere' }],
-      }),
+      compilePipeline(
+        'broken',
+        {
+          stages: [{ id: 'refinement', kind: 'agent', role: 'product_manager', next: 'nowhere' }],
+        },
+        null,
+      ),
     ).toThrow(/nowhere/);
   });
 });
@@ -369,18 +377,22 @@ describe('what escalates instead of transitioning', () => {
   it('escalates a return from a stage no bounded loop covers', () => {
     // A project's custom gate: the interpreter would happily find `fail_to`, and refuses because
     // the round could not be counted. An uncounted return is an unbounded loop.
-    const withCustom = compilePipeline('feature', {
-      ...FEATURE_TEMPLATE,
-      custom: [
-        {
-          id: 'security_scan',
-          kind: 'gate',
-          after: 'ci_gate',
-          command: 'trivy fs .',
-          fail_to: 'implementation',
-        },
-      ],
-    });
+    const withCustom = compilePipeline(
+      'feature',
+      {
+        ...FEATURE_TEMPLATE,
+        custom: [
+          {
+            id: 'security_scan',
+            kind: 'gate',
+            after: 'ci_gate',
+            command: 'trivy fs .',
+            fail_to: 'implementation',
+          },
+        ],
+      },
+      null,
+    );
     expect(
       escalationOf(
         interpret(withCustom, {
@@ -413,9 +425,13 @@ describe('what escalates instead of transitioning', () => {
   });
 
   it('escalates a template with every stage disabled', () => {
-    const disabled = compilePipeline('feature', {
-      stages: [{ id: 'refinement', kind: 'agent', role: 'product_manager', enabled: false }],
-    });
+    const disabled = compilePipeline(
+      'feature',
+      {
+        stages: [{ id: 'refinement', kind: 'agent', role: 'product_manager', enabled: false }],
+      },
+      null,
+    );
     expect(escalationOf(interpret(disabled, { kind: 'start' }))).toContain('no enabled stage');
   });
 });
@@ -449,7 +465,7 @@ describe('disabled stages (product/04 § "Customisation model")', () => {
       stage.id === 'business_review' ? { ...stage, enabled: false } : stage,
     ),
   };
-  const pipeline = compilePipeline('feature', withoutBusinessReview);
+  const pipeline = compilePipeline('feature', withoutBusinessReview, null);
 
   it('walks past a disabled stage a transition names by hand', () => {
     // `code_review.approve_to` still says `business_review`; the task must land on the gate beyond.
@@ -460,11 +476,15 @@ describe('disabled stages (product/04 § "Customisation model")', () => {
   });
 
   it('walks past a disabled stage on fall-through too', () => {
-    const noArchitecture = compilePipeline('feature', {
-      stages: FEATURE_TEMPLATE.stages.map((stage) =>
-        stage.id === 'architecture' ? { ...stage, enabled: false } : stage,
-      ),
-    });
+    const noArchitecture = compilePipeline(
+      'feature',
+      {
+        stages: FEATURE_TEMPLATE.stages.map((stage) =>
+          stage.id === 'architecture' ? { ...stage, enabled: false } : stage,
+        ),
+      },
+      null,
+    );
     expect(interpret(noArchitecture, completed('refinement', 'approve'))).toEqual({
       kind: 'enter',
       stage: 'implementation',
@@ -472,11 +492,15 @@ describe('disabled stages (product/04 § "Customisation model")', () => {
   });
 
   it('completes rather than entering a disabled tail', () => {
-    const stopAfterRetro = compilePipeline('feature', {
-      stages: FEATURE_TEMPLATE.stages.map((stage) =>
-        stage.id === 'done' || stage.id === 'librarian' ? { ...stage, enabled: false } : stage,
-      ),
-    });
+    const stopAfterRetro = compilePipeline(
+      'feature',
+      {
+        stages: FEATURE_TEMPLATE.stages.map((stage) =>
+          stage.id === 'done' || stage.id === 'librarian' ? { ...stage, enabled: false } : stage,
+        ),
+      },
+      null,
+    );
     expect(interpret(stopAfterRetro, completed('retrospective', 'approve'))).toEqual({
       kind: 'complete',
       from: 'retrospective',
@@ -487,11 +511,15 @@ describe('disabled stages (product/04 § "Customisation model")', () => {
     // BD-018's `auto_apply` decides what happens to a proposal; disabling the stage is how a
     // project decides it wants none. The task still finishes (standing rule 42's shape: the
     // enabled case is asserted in the happy path above).
-    const noLibrarian = compilePipeline('feature', {
-      stages: FEATURE_TEMPLATE.stages.map((stage) =>
-        stage.id === 'librarian' ? { ...stage, enabled: false } : stage,
-      ),
-    });
+    const noLibrarian = compilePipeline(
+      'feature',
+      {
+        stages: FEATURE_TEMPLATE.stages.map((stage) =>
+          stage.id === 'librarian' ? { ...stage, enabled: false } : stage,
+        ),
+      },
+      null,
+    );
     expect(interpret(noLibrarian, completed('retrospective', 'approve'))).toEqual({
       kind: 'enter',
       stage: 'done',
@@ -499,12 +527,16 @@ describe('disabled stages (product/04 § "Customisation model")', () => {
   });
 
   it('escalates a return that a disabled target would turn into a forward jump', () => {
-    const brokenReturn = compilePipeline('tail', {
-      stages: [
-        { id: 'implementation', kind: 'agent', role: 'developer', enabled: false },
-        { id: 'code_review', kind: 'agent', role: 'reviewer', return_to: 'implementation' },
-      ],
-    });
+    const brokenReturn = compilePipeline(
+      'tail',
+      {
+        stages: [
+          { id: 'implementation', kind: 'agent', role: 'developer', enabled: false },
+          { id: 'code_review', kind: 'agent', role: 'reviewer', return_to: 'implementation' },
+        ],
+      },
+      null,
+    );
     const decision = interpret(brokenReturn, completed('code_review', 'request_changes'));
     expect(decision.kind).toBe('escalate');
     expect(decision.kind === 'escalate' ? decision.reason : '').toContain('is disabled');

@@ -543,7 +543,10 @@ const revalidate = (
       reason: `attempt ${job.attempt} of "${job.stage}" has been superseded by attempt ${task.stageAttempts[job.stage] ?? 0}`,
     };
   }
-  const stage = stageOf(compilePipeline(task.template, stored.template), job.stage);
+  const stage = stageOf(
+    compilePipeline(task.template, stored.template, stored.pipelineDial),
+    job.stage,
+  );
   if (stage === null || stage.kind !== 'agent' || stage.role === null) {
     return {
       kind: 'skipped',
@@ -1346,7 +1349,7 @@ const record = async (
         ...(draft.options === null ? {} : { options: draft.options }),
         // WP-56: `deadline_at` is written in this transaction, from `questionTimeoutAt` over the
         // organisation's calendar at the project's `question_timeout` (BD-006).
-        deadlineFrom: questionDeadlineRule(input.options.calendar, input.settings.config),
+        deadlineFrom: questionDeadlineRule(input.options.calendar, input.settings),
       },
       context,
     );

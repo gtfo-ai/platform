@@ -313,9 +313,13 @@ describe('materialising the dial (BD-027:14, WP-30)', () => {
       at: '2026-09-14T10:00:00.000Z' as IsoDateTime,
       appliedBy: null,
     });
-    expect(effectiveAutonomyPreset(stored, { probation_tasks: 2 }).probationTasks).toBe(2);
+    expect(
+      effectiveAutonomyPreset(stored, { policies: { probation_tasks: 2 } }).probationTasks,
+    ).toBe(2);
     // "Probation for 0 tasks" and "probation off" are the same behaviour, so the count decides.
-    expect(effectiveAutonomyPreset(stored, { probation_tasks: 0 }).probation).toBe(false);
+    expect(effectiveAutonomyPreset(stored, { policies: { probation_tasks: 0 } }).probation).toBe(
+      false,
+    );
     // Both ways (standing rule 42): a document with no override changes nothing.
     expect(effectiveAutonomyPreset(stored, {})).toEqual(fromWireAutonomyPolicies(stored.policies));
     expect(autonomyOverridesFromConfig(undefined)).toEqual({});
@@ -337,7 +341,7 @@ describe('materialising the dial (BD-027:14, WP-30)', () => {
     });
     const baseline = fromWireAutonomyPolicies(stored.policies);
     expect(isCustomAutonomy(baseline, effectiveAutonomyPreset(stored, undefined))).toBe(false);
-    const overridden = effectiveAutonomyPreset(stored, { probation_tasks: 2 });
+    const overridden = effectiveAutonomyPreset(stored, { policies: { probation_tasks: 2 } });
     expect(isCustomAutonomy(baseline, overridden)).toBe(true);
     expect(
       describePresetOverrides(baseline, overridden)

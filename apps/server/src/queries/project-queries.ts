@@ -36,7 +36,6 @@ import type {
   AutonomyResponse,
   Id,
   IsoDateTime,
-  PoliciesConfig,
   ProjectAuditResponse,
   ProjectSummary,
   ProjectsResponse,
@@ -48,6 +47,7 @@ import {
   projectAuditResponseSchema,
   readinessResponseSchema,
 } from '@platform/contracts';
+import type { AutonomyOverrideSource } from '@platform/domain';
 import {
   AUTONOMY_PRESET_VERSION,
   applyAutonomyPreset,
@@ -329,11 +329,13 @@ export const autonomyResponseFrom = (row: AutonomyRow): AutonomyResponse => {
     materialised === null
       ? applyAutonomyPreset(row.level)
       : fromWireAutonomyPolicies(materialised.policies);
-  const configPolicies = (row.config as { policies?: PoliciesConfig } | null)?.policies;
+  // The whole document, not only `policies`: since WP-62 two of the four override keys live under
+  // `pipeline.limits` (Q78, `AUTONOMY_POLICY_OVERRIDE_KEYS`).
+  const config = (row.config ?? undefined) as AutonomyOverrideSource | undefined;
   const effective =
     materialised === null
-      ? { ...baseline, ...autonomyOverridesFromConfig(configPolicies) }
-      : effectiveAutonomyPreset(materialised, configPolicies);
+      ? { ...baseline, ...autonomyOverridesFromConfig(config) }
+      : effectiveAutonomyPreset(materialised, config);
   const overrides = describePresetOverrides(baseline, effective);
   const level = materialised?.level ?? row.level;
   const suggestedCap = suggestedAutonomyCap(row.readinessLevel);

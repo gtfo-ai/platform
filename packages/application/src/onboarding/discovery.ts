@@ -48,15 +48,10 @@
  */
 import type { Id, IsoDateTime, PipelineTemplate } from '@platform/contracts';
 import type { CommandContext } from '@platform/domain';
-import {
-  compilePipeline,
-  createTask,
-  DISCOVERY_TEMPLATE_ID,
-  interpret,
-  resolveIterationLimits,
-} from '@platform/domain';
+import { compilePipeline, createTask, DISCOVERY_TEMPLATE_ID, interpret } from '@platform/domain';
 import { enqueueStage } from '../pipeline/jobs.js';
 import type { ProjectSettingsPort } from '../pipeline/settings.js';
+import { iterationLimitsFor } from '../pipeline/settings.js';
 import {
   INITIAL_TASK_VERSION,
   PIPELINE_ACTOR,
@@ -200,13 +195,15 @@ export const startProjectDiscovery = async (
         ticket,
         template: DISCOVERY_TEMPLATE_ID,
         mode: 'normal',
-        limits: resolveIterationLimits(settings.config.pipeline?.limits),
+        limits: iterationLimitsFor(settings),
       },
       contextFor(options, null, input.requestedByUserId),
     );
     const stored: StoredTask = {
       task: created.aggregate,
       template: template as PipelineTemplate,
+      // WP-62: no dial — discovery is a one-off onboarding task, not a picked-up ticket.
+      pipelineDial: null,
       // Discovery blocks the wizard, so it goes to the front of the queue when the WIP policy
       // orders one. Zero is the most urgent rank `priorityRankOf` produces.
       priorityRank: 0,
@@ -249,7 +246,7 @@ export const startProjectDiscovery = async (
      * org and project **budgets** still apply — the admission guard the stage executor consults
      * before creating the run is untouched.
      */
-    const pipeline = compilePipeline(DISCOVERY_TEMPLATE_ID, stored.template);
+    const pipeline = compilePipeline(DISCOVERY_TEMPLATE_ID, stored.template, stored.pipelineDial);
     const applied = await applyDecision({
       store: options.store,
       pipeline,

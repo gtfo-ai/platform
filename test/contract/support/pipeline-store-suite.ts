@@ -120,6 +120,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         sequence: 1,
       },
       template: FEATURE_TEMPLATE,
+      pipelineDial: null,
       priorityRank: 2,
       createdAt: '2026-06-01T09:00:00.000Z',
       branch: null,
@@ -190,6 +191,29 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(loaded?.template.stages.map((stage) => stage.id)).toEqual(
           FEATURE_TEMPLATE.stages.map((stage) => stage.id),
         );
+      });
+
+      it('round-trips the dial the insert froze, and a whole-row save never moves it (WP-62)', async () => {
+        // `tasks.pipeline_dial` has one writer, the insert (migration 0049): every later compile of
+        // this task reads the copy, so a save that carried the caller's value would let a dial
+        // moved mid-task move the task after all.
+        const dial = {
+          level: 'assist',
+          preset_version: 1,
+          business_review: false,
+          stop_after_stage: 'architecture',
+        } as const;
+        const stored = task({ pipelineDial: dial });
+        await store.tasks.insert(tx, stored);
+        const loaded = await store.tasks.load(tx, stored.task.id);
+        expect(loaded?.pipelineDial).toEqual(dial);
+
+        await store.tasks.save(tx, { ...(loaded as StoredTask), pipelineDial: null });
+        expect((await store.tasks.load(tx, stored.task.id))?.pipelineDial).toEqual(dial);
+
+        const none = task({}, 'ACME-NO-DIAL');
+        await store.tasks.insert(tx, none);
+        expect((await store.tasks.load(tx, none.task.id))?.pipelineDial).toBeNull();
       });
 
       it('saves the state, the stage, the attempts and the counters', async () => {

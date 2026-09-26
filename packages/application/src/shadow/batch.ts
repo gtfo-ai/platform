@@ -65,7 +65,7 @@
  */
 import type { Id, IsoDateTime, MergeRequestRef, PipelineTemplate } from '@platform/contracts';
 import type { CommandContext } from '@platform/domain';
-import { compilePipeline, createTask, interpret, resolveIterationLimits } from '@platform/domain';
+import { compilePipeline, createTask, interpret } from '@platform/domain';
 import type { PipelineIntegrations, PipelineIntegrationsPort } from '../pipeline/integrations.js';
 import {
   gitReads,
@@ -78,6 +78,7 @@ import type { ProjectSettings, ProjectSettingsPort } from '../pipeline/settings.
 import {
   autonomyPresetFor,
   DEFAULT_TEMPLATE_ID,
+  iterationLimitsFor,
   templateForIssueType,
 } from '../pipeline/settings.js';
 import {
@@ -317,13 +318,17 @@ export const startShadowBatch = async (
           },
           template,
           mode: 'shadow',
-          limits: resolveIterationLimits(settings.config.pipeline?.limits),
+          limits: iterationLimitsFor(settings),
         },
         contextFor(options, null, input.requestedByUserId),
       );
       const stored: StoredTask = {
         task: created.aggregate,
         template: settings.templates[template] as PipelineTemplate,
+        // WP-62: no dial. A shadow batch runs only at Observe, whose business review and scope
+        // stop product/19 §11 prints as "—" (does not apply); the task runs the template as it
+        // stands, which is what the comparison with the human's delivery is about.
+        pipelineDial: null,
         priorityRank: 2,
         createdAt: options.clock.now(),
         branch: null,
@@ -370,7 +375,7 @@ export const startShadowBatch = async (
        * instead is the **separate shadow budget** (`features.shadow_mode.budget_usd`, checked at
        * every run's admission by the stage executor) and `MAX_SHADOW_BATCH_TICKETS`.
        */
-      const pipeline = compilePipeline(stored.task.template, stored.template);
+      const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
       const applied = await applyDecision({
         store: options.store,
         pipeline,

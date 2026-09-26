@@ -168,6 +168,7 @@ const storedTask = (mr: StoredTask['mr']): StoredTask => ({
   requiredReviewers: null,
   reviewThreads: null,
   requestedByUserId: null,
+  pipelineDial: null,
   ticketSnapshotAt: null,
   ticketSignalAt: null,
   version: 1,
@@ -183,7 +184,7 @@ const MR: StoredTask['mr'] = {
 };
 
 const templateStage = (id: Slug): PipelineStage => {
-  const stage = stageOf(compilePipeline('feature', FEATURE_TEMPLATE), id);
+  const stage = stageOf(compilePipeline('feature', FEATURE_TEMPLATE, null), id);
   if (stage === null) {
     throw new Error(`the feature template has no stage "${id}"`);
   }

@@ -79,7 +79,6 @@ import {
   DEFAULT_LINT_LABEL,
   interpret,
   MAX_LINT_QUESTIONS,
-  resolveIterationLimits,
   scoreTicketReadiness,
   selectLintQuestions,
   type TicketLintSpec,
@@ -100,6 +99,7 @@ import { enqueueOutbound, enqueueStage, type PipelineOutboundData } from './jobs
 import type { PipelineSagaOptions } from './saga.js';
 import { priorityRankOf } from './saga.js';
 import type { ProjectSettings } from './settings.js';
+import { iterationLimitsFor } from './settings.js';
 import { INITIAL_TASK_VERSION, PIPELINE_ACTOR, type StoredTask } from './store.js';
 import { boundTicketSnapshot } from './ticket-snapshot.js';
 import { applyDecision } from './transitions.js';
@@ -541,13 +541,16 @@ export const runTicketLintCheck = async (
         ticket: lintTicket,
         template: TICKET_LINT_TEMPLATE_ID,
         mode: 'normal',
-        limits: resolveIterationLimits(settings.config.pipeline?.limits),
+        limits: iterationLimitsFor(settings),
       },
       commandContext,
     );
     const stored: StoredTask = {
       task: created.aggregate,
       template: settings.templates[TICKET_LINT_TEMPLATE_ID] as StoredTask['template'],
+      // WP-62: no dial — the linter is its own opt-in (`features.ticket_linter`) and its one
+      // advisory stage is neither a business review nor a scope to stop after.
+      pipelineDial: null,
       priorityRank: priorityRankOf(null),
       createdAt: options.clock.now(),
       branch: null,
@@ -581,7 +584,7 @@ export const runTicketLintCheck = async (
      * pushes nothing, and a queued lint task has no producer to dequeue it. What bounds the spend is
      * the budget guard every run goes through and `DEFAULT_STAGE_RUN_BUDGET_USD.ticket_lint`.
      */
-    const pipeline = compilePipeline(stored.task.template, stored.template);
+    const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
     const applied = await applyDecision({
       store: options.store,
       pipeline,

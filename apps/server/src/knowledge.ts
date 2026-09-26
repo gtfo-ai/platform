@@ -71,6 +71,7 @@ import {
   thresholdsFromConfig,
 } from '@platform/application';
 import type { Id, IsoDateTime, TaskMode } from '@platform/contracts';
+import { materialisedAutonomySchema } from '@platform/contracts';
 import {
   type eventing as eventingAdapters,
   knowledge as knowledgeAdapters,
@@ -307,19 +308,32 @@ export const composeKnowledgeIndexing = async (
   );
 
   const librarianProject = async (projectId: Id) => {
-    const { rows } = await options.pool.query<{ knowledge_dir: string; config: unknown }>(
-      'select knowledge_dir, config from projects where id = $1',
-      [projectId],
-    );
+    const { rows } = await options.pool.query<{
+      knowledge_dir: string;
+      config: unknown;
+      autonomy_policies: unknown;
+    }>('select knowledge_dir, config, autonomy_policies from projects where id = $1', [projectId]);
     const row = rows[0];
-    return row === undefined
-      ? null
-      : {
-          knowledgeDir: row.knowledge_dir,
-          thresholds: thresholdsFromConfig(
-            (row.config ?? {}) as Parameters<typeof thresholdsFromConfig>[0],
-          ),
-        };
+    if (row === undefined) {
+      return null;
+    }
+    // The dial decides `auto_apply` where the document is silent (WP-62). Parsed, never cast, and a
+    // row that fails is read as "never materialised" — the platform default, which is *off* — with
+    // a named line, the same answer `createProjectSettingsPort` gives the pipeline.
+    const autonomy = materialisedAutonomySchema.safeParse(row.autonomy_policies);
+    if (row.autonomy_policies !== null && !autonomy.success) {
+      options.logger.warn(
+        { project_id: projectId },
+        'projects.autonomy_policies does not match the current schema; knowledge auto-apply falls back to the platform default (re-apply the preset)',
+      );
+    }
+    return {
+      knowledgeDir: row.knowledge_dir,
+      thresholds: thresholdsFromConfig(
+        (row.config ?? {}) as Parameters<typeof thresholdsFromConfig>[0],
+        autonomy.success ? autonomy.data : null,
+      ),
+    };
   };
 
   /**

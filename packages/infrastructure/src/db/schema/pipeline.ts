@@ -19,6 +19,7 @@ import type {
   MergeRequestSnapshot,
   TaskCoverage,
   TaskDependencies,
+  TaskPipelineDial,
   TaskReviewers,
   TaskReviewThreads,
   TicketSnapshot,
@@ -88,6 +89,8 @@ export const tasks = pgTable('tasks', {
   reviewSubject: jsonb('review_subject').$type<MergeRequestSnapshot>(),
   /** WP-35, migration 0030: the mined history one bootstrap run reads, bounded and redacted. */
   historySample: jsonb('history_sample').$type<HistorySample>(),
+  /** WP-62, migration 0049: the dial's two pipeline policies, frozen at task start (insert only). */
+  pipelineDial: jsonb('pipeline_dial').$type<TaskPipelineDial>(),
   configSnapshotHash: text('config_snapshot_hash'),
   branch: text('branch'),
   mrRef: jsonb('mr_ref').$type<MergeRequestRef>(),

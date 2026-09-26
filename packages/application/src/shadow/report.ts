@@ -110,7 +110,7 @@ const shadowReportHandler = (options: ShadowReportOptions): EventHandler => ({
     if (stored === null || stored.task.mode !== 'shadow') {
       return;
     }
-    const pipeline = compilePipeline(stored.task.template, stored.template);
+    const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
     if (stageOf(pipeline, event.payload.stage)?.kind !== 'human') {
       return;
     }

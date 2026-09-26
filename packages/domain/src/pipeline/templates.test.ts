@@ -249,7 +249,7 @@ describe('the shipped templates', () => {
     expect(stage?.kind === 'agent' ? stage.role : null).toBe('reviewer');
     expect(stage?.kind === 'agent' ? stage.produces : null).toBe('ReviewVerdict');
 
-    const pipeline = compilePipeline('review_only', REVIEW_ONLY_TEMPLATE);
+    const pipeline = compilePipeline('review_only', REVIEW_ONLY_TEMPLATE, null);
     for (const verdict of ['approve', 'request_changes'] as const) {
       const decision = interpret(pipeline, {
         kind: 'stage_completed',

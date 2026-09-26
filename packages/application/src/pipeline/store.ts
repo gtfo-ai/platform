@@ -43,6 +43,7 @@ import type {
   TaskCoverage,
   TaskDependencies,
   TaskMode,
+  TaskPipelineDial,
   TaskReviewers,
   TaskReviewThreads,
   TaskStageExitState,
@@ -86,6 +87,16 @@ export interface StoredTask {
   readonly task: Task;
   /** The template the task started with; a later edit to project settings never moves a task. */
   readonly template: PipelineTemplate;
+  /**
+   * The dial's two pipeline policies as they were when the task started (`tasks.pipeline_dial`,
+   * migration 0049, WP-62) — what every `compilePipeline` call over this task passes.
+   *
+   * Frozen for `template`'s reason: a dial moved while the task runs does not move it. Written by
+   * the insert and by nothing else. `null` is *"no dial applies"* — a project whose dial was never
+   * materialised, a task kind the dial does not shape (each creating site says which), or a row
+   * written before the column existed — and compiles the template exactly as before WP-62.
+   */
+  readonly pipelineDial: TaskPipelineDial | null;
   /** Normalised by the task-management adapter — lower is more urgent (`QueuedTask`). */
   readonly priorityRank: number;
   readonly createdAt: IsoDateTime;

@@ -42,6 +42,7 @@ import {
   expireQuestion,
   finishRun,
   handBackTask,
+  IllegalTransitionError,
   InvariantViolationError,
   isActiveRunStatus,
   isBefore,
@@ -559,7 +560,7 @@ const applyHumanDecisionRecorded = async (
 }> => {
   const applied = await applyDecision({
     store: deps.store,
-    pipeline: compilePipeline(stored.task.template, stored.template),
+    pipeline: compilePipeline(stored.task.template, stored.template, stored.pipelineDial),
     tx: scope.tx,
     stored,
     decision,
@@ -1481,7 +1482,17 @@ export const handBackTaskCommand = async (
     deps,
     { ...input, what: 'handing the task back' },
     async (scope, stored, context) => {
-      const pipeline = compilePipeline(stored.task.template, stored.template);
+      /**
+       * **Not past a pending approval** (WP-62 review round 1). Hand-back is a `member` command and
+       * an approval is a maintainer's (`task.approve_plan`), so a hand-back from
+       * `waiting_approval` into a later stage would carry a plan — one touching a risk class
+       * included — into implementation with nobody having approved it. The approval is decided
+       * with its own command; the hand-back is for a task a human holds or the platform parked.
+       */
+      if (stored.task.state === 'waiting_approval') {
+        throw new IllegalTransitionError('task', stored.task.state, `${input.stage} (hand-back)`);
+      }
+      const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
       const target = stageOf(pipeline, input.stage);
       if (target === null || !target.enabled) {
         throw new StageNotInTemplateError(

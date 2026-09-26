@@ -274,9 +274,9 @@ export const createMemoryPipelineStore = (
      * `riskClasses` (WP-37), `coverage` (WP-39), `dependencies` and `requiredReviewers` (WP-38),
      * `reviewThreads` (WP-46),
      * `costActualUsd` (WP-31: `addSpend` owns it),
-     * `estimateUsd`, `estimateBasis`, `estimateSamples`, `priorityRank`, `createdAt`, `template`)
-     * belong to the narrow writers — or, for
-     * `reviewSubject`, to the insert alone (WP-24) — and a fake that let a
+     * `estimateUsd`, `estimateBasis`, `estimateSamples`, `priorityRank`, `createdAt`, `template`,
+     * `pipelineDial` (WP-62)) belong to the narrow writers — or, for `reviewSubject` and
+     * `pipelineDial`, to the insert alone (WP-24, WP-62) — and a fake that let a
      * whole-row save carry them would answer a question the database cannot be asked — which is how
      * WP-15h found the memory store certifying behaviour PostgreSQL does not have.
      */

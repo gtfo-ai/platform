@@ -73,11 +73,18 @@ const DEFAULTS = PLATFORM_DEFAULT_CONFIG.policies?.knowledge_apply ?? {};
  */
 export const knowledgeApplyThresholds = (
   policy: KnowledgeApplyPolicy | null | undefined,
+  /**
+   * The dial's `knowledgeAutoApply`, off the project's materialised preset (WP-62, backlog 72 (a)):
+   * the switch where the document's `auto_apply` is silent, so moving the dial to Autonomous turns
+   * auto-apply on and a project that wrote `auto_apply: false` keeps it off. `undefined` for a caller
+   * with no dial — the platform default then decides, as before.
+   */
+  dialAutoApply?: boolean,
 ): KnowledgeApplyThresholds => {
   const proposalAbove = policy?.proposal_above ?? DEFAULTS.proposal_above ?? 0.6;
   const discardBelow = policy?.discard_below ?? DEFAULTS.discard_below ?? 0.2;
   return {
-    autoApply: policy?.auto_apply ?? DEFAULTS.auto_apply ?? false,
+    autoApply: policy?.auto_apply ?? dialAutoApply ?? DEFAULTS.auto_apply ?? false,
     discardBelow: Math.min(discardBelow, proposalAbove),
     proposalAbove,
   };
