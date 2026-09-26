@@ -18,7 +18,7 @@
 > **"Architect ruling (M4, session 6)"** at the end of this file. This session is started with `/orchestrate`,
 > which loads `docs/technical/15-orchestrator-prompt.md`; that document, not a pasted prompt, is now the loop.
 
-**Session 8 — 2026-09-25.** `main` opened at **`c1cc951`**, tree clean, and every run on the last three heads read **completed success** — WP-53's `ci` `35879384310` and `image` `35879384479` (PENDING in session 7's note) included, with zero `release` runs. **WP-54 is DONE at `3288496`** (its `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success**; its docs commit `bdcfbe2` read `ci` `36165713727` and `image` `36165713682` **completed success**). **WP-74 is DONE at `91e0140`** (`ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs; the docs commit that carries this sentence has its own runs, **PENDING — read to `completed` before the next row**) — backlog 82 and 147 closed, `verify:e2e` green on this machine again. **Two majors had no owner and now do**: backlog **148** (a run's `/cache` is the whole mirror volume) as **WP-75** and **133** (the launcher cannot authenticate to git) as **WP-76**, both placed right after WP-74. Machine baseline: `docker volume ls | wc -l` = **102** (the two new volumes are the user's own `speedpuzzlingcz` postgres containers, not this repository's). **Three things for the next session.** (1) **The load gate, not the work, set the pace**: one-minute load was 20–175 for most of the day (Spotlight's `mds_stores` at ~250 % and the user's containers; this session's own processes were ~6 %), so the implementer spent six of its seven hours waiting — and its waits were **unbounded `until` loops** that each tool timeout orphaned: 25 of them, killed by the orchestrator after the user asked why 24 shells were running. **Every brief now says: a load check is five readings a minute apart, then a report — never an unbounded loop, never a background shell left behind.** (2) **`verify:e2e` is red on this machine for a reason that is not the tree**: backlog **147**, reproduced on a clean `main` worktree; until WP-74 closes it, every row's e2e verdict carries that one named failure and the rest is read as the verdict. A likely cause (the refiner's, unmeasured) is macOS writing into the bind-backed control volume between the two teardown helpers. (3) **A floor list is an enumeration**: WP-54's review found seven, then five, spellings past it, and BD-025 now says so rather than claiming a boundary. **WP-75 is DONE at `1b0af26`** (`ci` `36200943398` and `image` `36200943454` **completed success**; WP-74's docs commit `6972cbc` read `ci` `36175963207` and `image` `36175963205` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 148 and 152 closed. **The TD-028 amendment WP-76 needed exists** (the architect's, session 8: the runner mints a run-scoped credential through `IntegrationActionExecutor` and passes it on the create request; Q98 filed). **WP-76 is DONE at `52495cb`** (`ci` `36208771351` and `image` `36208771353` **completed success**; WP-75's docs commit `355f444` read `ci` `36201525827` and `image` `36201525825` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 133 closed: a private repository mirrors, the developer stage can push, and the run's credential is minted, audited and revoked. **Next: WP-77** (a run credential with no confirmed revocation — backlog 155, the crash and failed-revoke paths), then WP-55 and the M4 table's order. **Pace this session**: four rows (WP-54, 74, 75, 76) plus the architect's WP-76 decision in about 17 h 30 min, of which the load gate held the tiers for roughly half; the three security rows each took three review rounds because each round found a way past the one before. Pace: WP-54 took about 8 h 20 min, most of it waiting on load; WP-74 about 2 h 30 min at a load that allowed its tiers.
+**Session 8 — 2026-09-25.** `main` opened at **`c1cc951`**, tree clean, and every run on the last three heads read **completed success** — WP-53's `ci` `35879384310` and `image` `35879384479` (PENDING in session 7's note) included, with zero `release` runs. **WP-54 is DONE at `3288496`** (its `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success**; its docs commit `bdcfbe2` read `ci` `36165713727` and `image` `36165713682` **completed success**). **WP-74 is DONE at `91e0140`** (`ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs; the docs commit that carries this sentence has its own runs, **PENDING — read to `completed` before the next row**) — backlog 82 and 147 closed, `verify:e2e` green on this machine again. **Two majors had no owner and now do**: backlog **148** (a run's `/cache` is the whole mirror volume) as **WP-75** and **133** (the launcher cannot authenticate to git) as **WP-76**, both placed right after WP-74. Machine baseline: `docker volume ls | wc -l` = **102** (the two new volumes are the user's own `speedpuzzlingcz` postgres containers, not this repository's). **Three things for the next session.** (1) **The load gate, not the work, set the pace**: one-minute load was 20–175 for most of the day (Spotlight's `mds_stores` at ~250 % and the user's containers; this session's own processes were ~6 %), so the implementer spent six of its seven hours waiting — and its waits were **unbounded `until` loops** that each tool timeout orphaned: 25 of them, killed by the orchestrator after the user asked why 24 shells were running. **Every brief now says: a load check is five readings a minute apart, then a report — never an unbounded loop, never a background shell left behind.** (2) **`verify:e2e` is red on this machine for a reason that is not the tree**: backlog **147**, reproduced on a clean `main` worktree; until WP-74 closes it, every row's e2e verdict carries that one named failure and the rest is read as the verdict. A likely cause (the refiner's, unmeasured) is macOS writing into the bind-backed control volume between the two teardown helpers. (3) **A floor list is an enumeration**: WP-54's review found seven, then five, spellings past it, and BD-025 now says so rather than claiming a boundary. **WP-75 is DONE at `1b0af26`** (`ci` `36200943398` and `image` `36200943454` **completed success**; WP-74's docs commit `6972cbc` read `ci` `36175963207` and `image` `36175963205` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 148 and 152 closed. **The TD-028 amendment WP-76 needed exists** (the architect's, session 8: the runner mints a run-scoped credential through `IntegrationActionExecutor` and passes it on the create request; Q98 filed). **WP-76 is DONE at `52495cb`** (`ci` `36208771351` and `image` `36208771353` **completed success**; WP-75's docs commit `355f444` read `ci` `36201525827` and `image` `36201525825` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 133 closed: a private repository mirrors, the developer stage can push, and the run's credential is minted, audited and revoked. **WP-77 is DONE at `2481f09`** (`ci` `36212658371` and `image` `36212658429` **completed success**; WP-76's docs commit `e0d2790` read `ci` `36209347069` and `image` `36209347052` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 155 closed. **Next: WP-55**, then the M4 table's order. **Pace this session**: four rows (WP-54, 74, 75, 76) plus the architect's WP-76 decision in about 17 h 30 min, of which the load gate held the tiers for roughly half; the three security rows each took three review rounds because each round found a way past the one before. Pace: WP-54 took about 8 h 20 min, most of it waiting on load; WP-74 about 2 h 30 min at a load that allowed its tiers.
 
 **Session 7 so far.** `main` opened at **`cc80fc3`**, tree clean, its `ci` `35114407808` and `image`
 `35114407731` both **completed success** with **zero `release` runs on the sha** — the first head to show
@@ -8567,7 +8567,7 @@ value minted in the worker, planted in a CI log the other process reads, absent 
 workers the shipped compose runs, and this is one more crossing of exactly its kind. Depends on
 WP-76. Related: **155** (the live window), Q55, TD-012, BD-022.
 
-### 155. **A run credential with no confirmed revocation stays live to GitLab's expiry — up to 48 hours — because nothing reads the `revoke_id` WP-76 records for exactly that case: not the lease sweep that detects a dead runner, and nothing after a revoke that failed** (TODO, **small-to-major** — standing rule **19**'s address is carried and never used; **live** on any instance that runs agents with `mint_credentials: true`, triggered by a runner crash *or* a failed revoke call, the second in ordinary operation; one symptom, two causes, one remedy, so one entry; **no remaining M4 row owns it — scheduled as WP-77** (refiner, session 8); found by WP-76, session 8, graded and widened by the refiner)
+### 155. **A run credential with no confirmed revocation stays live to GitLab's expiry — up to 48 hours — because nothing reads the `revoke_id` WP-76 records for exactly that case: not the lease sweep that detects a dead runner, and nothing after a revoke that failed** (**RESOLVED** at `2481f09`, WP-77, session 8 (commit pending) — see `#### WP-77` — TODO, **small-to-major** — standing rule **19**'s address is carried and never used; **live** on any instance that runs agents with `mint_credentials: true`, triggered by a runner crash *or* a failed revoke call, the second in ordinary operation; one symptom, two causes, one remedy, so one entry; **no remaining M4 row owns it — scheduled as WP-77** (refiner, session 8); found by WP-76, session 8, graded and widened by the refiner)
 
 **What is wrong.** TD-028's WP-76 amendment, decision 5: *"**The crash path** (runner dies between
 mint and revoke) is revocable from the audit row's `revoke_id`; WP-47's lease sweep
@@ -8630,6 +8630,126 @@ leaves an `unconfirmed` row and no claim of revocation.
 **Depends on / owner.** **WP-77** (new row, refiner, session 8), after WP-76 merges. Depends on
 WP-47 (the sweep), WP-76 (the rows), TD-028's WP-76 amendment decision 5, standing rules 18 and 19.
 Related: **154** (what a live token in another process's text costs), Q40 (unenforced branch scope).
+
+### 156. **A run credential minted through a git integration the project is later unbound from is out of WP-77's recovery's reach and lives to its expiry with nothing reporting it — and the teardown revoke of a run whose project is re-bound mid-run sends the old address through the *new* binding, the crossing the recovery's own join exists to refuse** (TODO, **small** — two symptoms, one cause: a credential's revocation path is re-derived from the project's **current** git binding rather than from the integration that minted it; **live** — `PUT …/bindings` has no live-run guard — but it needs a conjunction: a crash, a failed revoke or a live run, **and** an operator dropping or swapping the git integration inside the credential's 24–48 h; the teardown half is **read off the tree, not measured**; proposed owner **WP-73** for halves 1 and 2, half 3 is an architect decision **no row owns**; found by WP-77, session 8, widened by the refiner)
+
+**What is wrong.** WP-77's finding query joins `bindings b on b.project_id = r.project_id and
+b.integration_id = m.integration_id`
+(`packages/infrastructure/src/recovery/postgres-run-credential-store.ts:76-78`), because *"`revoke_id`
+is an address on that binding's host; the join is what keeps a re-bound project's old address from
+being sent to a new server"* (same file, `:22-24`). A mint whose integration is no longer bound never
+appears, and the only record of that is a docblock:
+`packages/application/src/recovery/run-credential.ts:63-66`, *"Such a token lives to its expiry, and
+nothing but this sentence says so (PROGRESS backlog 156)"* — no log line at run time. **The refiner's
+widening**: the normal teardown does not hold the same line. `apps/server/src/workspaces.ts:167-176`
+rebuilds the project's integrations **at revoke time** (`integrationsForProject(options.integrations,
+spec.projectId, …)`), and `runCredentialWrites().revoke` refuses only `git === null`
+(`packages/application/src/pipeline/integrations.ts:1586-1590`) — it never compares
+`git.ref.integrationId` with the minting integration, which `recover` does (`:1656-1659`) and the
+teardown cannot, because `RunCredentialHandle` is `Pick<MintedCredential, 'revokeId' | 'scope' |
+'expiresAt'>` (`:1710`) and carries no integration. A project re-bound from git integration A to B
+while a run is live has A's `revoke_id` executed, and audited, under B.
+
+**Evidence** (refiner, read off the tree; nothing run).
+- **The trigger exists and is unguarded.** `apps/server/src/routes/onboarding.ts:482-510`, permission
+  `project.settings.write`, no check for live runs or recent mints; `replaceProjectBindings` deletes
+  every binding of the project and re-inserts the request's set
+  (`apps/server/src/queries/onboarding-queries.ts:662-669`). Re-submitting the **same** git
+  integration survives — the join is on `integration_id`, not `bindings.id` — so only a drop or a swap
+  triggers either half.
+- **The minting integration's host cannot move under it on this build**: the only `update(integrations)`
+  outside tests writes `health` alone (`onboarding-queries.ts:805`) and nothing deletes an
+  `integrations` row. **Hypothesis, unchecked**: revoking through the *minting integration*, bound or
+  not, sends the address to the host that issued it, so the join on `bindings` may be stricter than the
+  reason its docblock gives. Whether the binding loader can build a git adapter for an integration the
+  project no longer binds — GitLab's `revoke_id` is `<project>#<token_id>`, so the binding's config may
+  not be needed — is **unread**.
+- **What the teardown crossing sends B's host**: a `DELETE` naming A's project and token id, under B's
+  credential — an address, not a secret. On another host GitLab answers `404` → `not_found` → the
+  teardown's failure log, and the credential is then *also* outside the recovery. On the same host with
+  a B credential that can see the project it may succeed and be audited as B's. **Needs measurement**;
+  neither case is tested.
+
+**What it costs to leave.** WP-77's guarantee — every credential not confirmed revoked is revoked, or
+its one attempt is on record — has a hole with no signal: an operator who swaps git providers (what the
+whole-set PUT is for) shortly after a crashed or failed-revoke run leaves a push token live for up to
+48 h with no log line, and 155's cost paragraph applies to that token unchanged. The teardown half adds
+an audit row attributing a revocation to a binding that did not mint the credential. Rare: it needs a
+git re-bind during or shortly after a run that ended badly.
+
+**What "done" looks like.** **(1)** The recovery pass **reports** every unrevoked, unexpired mint it
+will not reach — a sibling of the finding query on the same indexes, mints whose integration is no
+longer a git binding of the project — one warning per `revoke_id` naming run, integration, `revoke_id`
+and `expires_at`; the implementer states how repetition across passes is bounded. Asserted at the
+boundary: a failed teardown, then an unbind → one warning, `credentials[].revocations` unchanged.
+**(2)** The teardown revoke refuses a current git binding that is not the minting one, as `recover`
+does — which needs the minting integration on the handle — asserted with a mid-run re-bind: no
+`revoke_credential` row under B. **(3)** Decision: may a credential be revoked through its minting
+integration after unbind (or does unbinding revoke the outstanding run credentials first)? Taken by
+the architect and recorded; if yes, (1)'s warning becomes a revoke. Not before.
+
+**Depends on / owner.** WP-77 (the recovery row, `recover`'s check). **Proposed owner WP-73** for
+(1) and (2) — a query branch, a log line, one field on a handle and one comparison (refiner, session 8).
+**(3) has no owner**; if it is decided as *revoke*, it is a WP-77-shaped follow-up, not a sweep item.
+Related: **155** (resolved by WP-77), TD-028's WP-76 amendment decision 5.
+
+### 157. **Port members are declared in method syntax, so `tsc` checks their parameters bivariantly even under `strict` — a port whose parameter is *narrowed* still accepts an implementation that takes, and reads, the wider type. WP-77 narrowed `revokeCredential` and the Docker e2e's wrapper kept reading `.value` with every check green; grep found it, the compiler could not** (TODO, **nit-to-small** — no instance known on the tree today, the one found was fixed by WP-77; a class of silent near-miss; scope **measured** — 122 method-syntax members under `packages/application/src/ports/**`, 791 repo-wide — the compiler behaviour on TypeScript 7 **not measured**; proposed owner **WP-73** for the ports directory only; found by WP-77, session 8, scoped by the refiner)
+
+**What is wrong.** WP-77's notes: *"the port declares the method in method syntax, so its parameter is
+bivariant and an implementation taking the wider `MintedCredential` still type-checks. Found by grep,
+not by the compiler"*. `tsconfig.base.json:15` sets `strict: true`, which includes
+`strictFunctionTypes`, and that option's contravariant check does not apply to method signatures. The
+port line is `revokeCredential(address: CredentialRevocationAddress): Promise<void>;`
+(`packages/application/src/ports/integrations/git-provider.ts:441`); the fixed wrapper is
+`test/e2e/workspace/docker-workspace.e2e.test.ts:1686`.
+
+**Evidence** (refiner, measured off the tree with the installed linter; no test target run).
+- **The rule exists in the pinned linter.** Biome **2.5.12** (`package.json:53`);
+  `pnpm exec biome explain useConsistentMethodSignatures`: *"Enforce consistent use of either method
+  signatures or function properties within interfaces and type aliases"*, category
+  `lint/style/useConsistentMethodSignatures`, *"Available from version: 2.3.14"*, *"Fix: unsafe"*,
+  default severity `info`, and it names this hazard: *"its stricter contravariant checks will **only**
+  apply to functions written in _property_ syntax — ones written as methods will remain with the weaker
+  bivariant type checks."* Its invalid examples are all method syntax, so property style reads as the
+  default; the option that selects the style was **not read**. Docs page, **unverified** (not fetched):
+  https://biomejs.dev/linter/rules/use-consistent-method-signatures/.
+  `useConsistentMemberAccessibility`, the other candidate, governs `public`/`private` on class members
+  and does not apply.
+- **Scope**, `pnpm exec biome lint --only=style/useConsistentMethodSignatures`: **122** in
+  `packages/application/src/ports` (24 files checked); **433** in `packages/application/src`; **791**
+  repo-wide (1224 files) — `packages/application` 433, `packages/integrations` 119, `test/contract` 86,
+  `packages/infrastructure` 55, `apps/server` 51, `test/e2e` 31, `apps/web` 10, `apps/launcher` 3,
+  `packages/domain` 3. A line scan of the 21 port files agrees at **122 method-syntax members (111 with
+  a parameter) against 10 function-typed properties**: 9 of the 10 are `jobs.ts`, the one port already
+  written in property syntax, `integrations/common.ts` mixes (5 and 1), the other 19 are method-only. No
+  overloaded signature among the 122 (the same-name pairs `close`, `publish`, `record`, `append` sit in
+  different interfaces), so none needs an intersection type.
+- **Refiner's reading, needs measurement**: TypeScript decides strict variance by the *target*
+  signature's declaration kind, so a port in property syntax is checked contravariantly even against an
+  implementation written as a class or object-literal method. This repository runs `typescript`
+  **7.0.2**, the native compiler, and that it keeps these semantics was not checked. The canary that
+  settles it: on a copy, rewrite `GitProviderPort` in property syntax, restore a wrapper whose
+  `revokeCredential` takes `MintedCredential`, and `pnpm typecheck` must fail.
+
+**What it costs to leave.** Every future narrowing of a port parameter — the direction standing rule
+18 (no invented value) pushes — is invisible to the compiler for every implementation, fake and test
+wrapper; WP-77's instance would have revoked nothing while every tier was green. The fix at ports
+scope is mechanical (biome's fix is marked unsafe, so each change is read); its real payload is
+whatever mismatches `tsc` then reports, **unknown until typecheck runs**.
+
+**What "done" looks like.** **(1)** The 122 members under `packages/application/src/ports/**` in
+property syntax (`readonly name: (…) => …`, as `jobs.ts` already writes them). **(2)**
+`lint/style/useConsistentMethodSignatures` at `error` in a `biome.json` override scoped to that glob,
+so a new method-syntax port member fails `verify:static`. **(3)** `pnpm typecheck` after (1): every
+implementation it now refuses is fixed in the same change when the fix is a signature, or filed by
+number — never cast away. **(4)** The canary above, recorded. **Out of scope, and a decision rather
+than a fix in passing** (the implementer's words): the other 669 sites — including port-shaped
+interfaces declared beside their modules in `packages/application/src` rather than under `ports/`
+(e.g. `UnrevokedRunCredentialStore`); the first question for whoever decides a wider rollout is how
+many of the 311 in `packages/application/src` outside `ports/` are ports in all but directory.
+
+**Depends on / owner.** Nothing unbuilt. **Proposed owner WP-73** for (1)–(4) (refiner, session 8):
+one directory, one override. The wider rollout has **no owner**.
 
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
@@ -12197,7 +12317,7 @@ file, or the first work package that touches upgrade behaviour.
 | WP-74 | **A tool-less run gets a container and no checkout** | DONE | `91e0140` | Depends on WP-54 (`TOOLS_BY_ROLE`), WP-53, TD-021, TD-028. Folds backlog **82** (re-scoped from *no workspace* to **no checkout**) and **147** (refiner, session 8). `WorkspaceSpec.repo` and `WorkspaceHandle.cacheKey` nullable end to end; `runNeedsCheckout` on the spec's tools (an unknown tool fails closed, every role's tools classified by a test); a repo-less spec skips `updateMirror` and the clone, asks the broker for nothing (enforced at the create request's boundary), mounts no `repo-cache`, egress narrowed to the model hosts, export refused by name; the container, network, sidecar, control socket and skills kept (the ruling: TD-021's decision body, amended by the orchestrator for its mirror sentences). **Backlog 147 measured, not guessed**: on Docker Desktop for macOS the shim's two Unix sockets survive the bind-backed control directory — `readdir` lists them, `lstat`/`unlink` answer `ENOENT` — so busybox `ls -A` named them on stderr only and step 1 read the directory as empty; the emptiness test now counts what it cannot stat, the token never survives, full reclamation is asserted on production's named-volume shape and, on Linux, on the bind-backed one. **One review round**, APPROVE-with-nits, **six canaries dead by name**; nits fixed by the orchestrator (a Linux-only reclamation assertion — the bind-backed case had been weakened to *the verdict agrees with the volume*, which a regression that leaks *and* reports would pass on CI — the subagent-tools note, technical/04's stale reason, TD-021's amendment, product/13, product/18 and CLAUDE.md). **Orchestrator verification**: `PASS: verify` (396 files, 7409 passed), `PASS: verify:integration` (504), `PASS: verify:e2e` **twice** (190/190 — the first all-green e2e on this machine this session), each exit 0; the implementer's `launcher-control-plane-check` PASS 18/18. CI on `91e0140`: `ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs — the Linux-only assertion's first run. Discovered work: backlog **148**–**151**; **148** (major: every run with a checkout mounts the whole `repo-cache` volume) and the unowned major **133** are scheduled as **WP-75** and **WP-76** |
 | WP-75 | **A run's `/cache` mount is its own project's mirror, never the whole volume** | DONE | `1b0af26` | **Folded backlog 148 (major) and 152 (major — the orchestrator took it off WP-76 at round 1, because it is the same container's hazard and this row's criterion (4) was its first half).** The run container and the export helper mount one sub-path, `<cacheKey>.git`, at the path the clone's alternates name; the key validated at the mount builder; a missing mirror refused by name at the clone before any run container exists; a two-project Docker e2e reads what the daemon mounted. **The export helper was measured executing what the run wrote** — all six planted hooks, then `core.fsmonitor`, a clean filter, `gpg.program`, a push redirect and a repo `credential.helper` — and now reads only the platform's git: `.git` symlink/gitfile/linked worktree refused, `GIT_CONFIG_NOSYSTEM` + a platform global config, `.git/config` replaced, hooks removed and `core.hooksPath=/dev/null` on every call, any nested `.git` below the top level refused (a gitlink with none behind it still exports — **the orchestrator's ruling**, because the prescribed index-gitlink refusal would have refused every submodule project), an unreadable tree refused, the run container stopped before the helper. **Three review rounds, and each found a way past the one before, two of them blockers measured on the real image with `GIT_PASS` in the marker**: R1 the run's `.git/config` vectors; R2 a nested repository's own fsmonitor in `git add -A`, plus ordering asserts that passed with the line deleted (`findIndex` → −1); R3 a directory at mode 0111 hiding the nested repository from `find` while git walked in through the index, and the run container never stopped before the export. **Canaries run by the orchestrator after R3** (the reviewer's never passed the load gate): config kept, hooks kept, the walk's stderr ignored, the stop dropped, `GIT_CONFIG_NOSYSTEM` dropped — unit; the nested refusal disabled and the config kept — the Docker e2e; **all dead by name**, calibrated with a planted throw, the file md5-restored each time. **Orchestrator verification on the final tree**: `PASS: verify` (396 files, 7421 passed), `PASS: verify:integration` (504), `PASS: verify:e2e` **twice** (202/202), each exit 0, volumes at baseline. CI on `1b0af26`: `ci` `36200943398` and `image` `36200943454` **completed success**, zero `release` runs. Discovered work: backlog **153** (nit, WP-73). **The load gate cost this row most of a night**: readings from 7 to 226, `mediaanalysisd` at ~280 % | Depends on WP-74 (same mount in `hardening.ts`), WP-53, TD-021; **must land before WP-76**. Folds backlog **148** (major, latent until 133 is fixed). Sub-path mount onto the project's mirror with its existence guaranteed by `updateMirror` → clone → create ordering; two projects' mirrors on one volume in the Docker e2e, read off what the daemon was asked for; the export helper measured for the run-written hook and scoped the same way |
 | WP-76 | **The launcher authenticates to git: the mirror fetch and the push of a private repository** | DONE | `52495cb` | **Folded backlog 133 (major) and the credential half of 152; implemented Q98 (a), ruled by the orchestrator in TD-028 decision 7.** The runner mints one run-scoped credential per run with a checkout (read for a read-only run, push for a writing one, none without a checkout) through `IntegrationActionExecutor`, no idempotency key, outside any transaction; revokes it exactly once; refuses a writing run whose binding cannot mint and never falls back to the stored token; the create request carries it with five refusals; the launcher holds it for mirror and export only; **the runner answers `cred.get`**, which no process did (the consequence backlog 133 missed, found by the architect writing TD-028's amendment first). One process-wide run-secret registry, built once in the integration stack and censused, feeds the executor, the binding loader, the transcript and the artifact write. **Two review rounds**: R1 — the shadow carve-out ahead of its decision record (ruled and recorded by the orchestrator in TD-028 decision 7, technical/02's invariant and technical/06), two post-mint refusals that did not revoke, the redactor compositions untested; R2 (major, **measured**) — a shadow task handed a `push` token by the provider had its revoke suppressed as `would_have` while the refusal said *revoked*: now every revoke declares the carve-out and only an `ok` outcome counts. **Canaries by the orchestrator after R2**, all dead by name — the revoke's success guard, the revoke's carve-out, the carve-out checked in shadow mode only, an idempotency key admitted, a second registry — **the first survived** until the orchestrator added the test that holds it (an executor answering `would_have` for a revoke must produce *was not revoked … live until*). **Orchestrator verification on the final tree**: `PASS: verify` (399 files, 7488 passed), `PASS: verify:integration` (504), `PASS: verify:e2e` **twice** (206/206, four cases against a git server that refuses anonymous and wrong-password access), `launcher-control-plane-check` 18/18 and `runlet-launcher-check` 7/7 (with `DOCKER_HOST` pointed at Docker Desktop's socket — both refuse to guess it); `compose-stock-check` PASS in the implementer's shell after rebuilding the images and in CI's `image` run. CI on `52495cb`: `ci` `36208771351` and `image` `36208771353` **completed success**, zero `release` runs. Discovered work: backlog **154** (WP-72) and **155** (its own row, **WP-77**) | Depends on **WP-75**, a decision record on the credential's carrier (TD-028 amendment, before the row starts), WP-53, WP-15a, BD-025 §3. Folds backlog **133** (major, live). Run-scoped mint through `IntegrationActionExecutor`, a `read` scope with a producer, nothing in the agent's environment; a credentialed git server in the Docker e2e that refuses anonymous access; `scripts/compose-stock-check.mjs` if compose/env changes (rule 71) |
-| WP-77 | **A run credential with no confirmed revocation is revoked from its audit row** | TODO | — | Depends on WP-76, WP-47, TD-028's WP-76 amendment decision 5. Folds backlog **155** (small-to-major, live; refiner, session 8). Revoke by address with no invented value (rule 18); a recovery row over `mint_credential` rows with no successful revoke, after commit, through the executor; shadow's carve-out; `not_found` recorded as unconfirmed; 0 → 1 / 1 stays 1 on the fake provider |
+| WP-77 | **A run credential with no confirmed revocation is revoked from its audit row** | DONE | `2481f09` | **Folded backlog 155.** `revokeCredential` by address (`{revokeId}`, rule 18); a `run_credential` row of `recovery/stranded.ts` finds every terminal run with a `mint_credential` row and no successful revoke for its `revoke_id`, and a `pipeline.outbound` duty revokes it outside any transaction, through the executor, under the shadow carve-out; `would_have` a failure, `not_found` **unconfirmed**, one attempt per `revoke_id`; migration **0039** (`runs_ended_at_idx`). Countable on the fake provider: 0→1 lease-expired, 0→1 failed teardown, 1 stays 1 revoked normally. A grep, not a check, found the Docker e2e's revoke wrapper reading `.value` with `tsc` green — method-syntax port members are bivariant (backlog 157). **One review round**, APPROVE-with-nits: four canaries dead by name, two survivors explained — an equivalent mutant (noted at the SQL) and the terminal predicate in the duty's re-validation, which the orchestrator then asserted (a live run's credential refused, an ended one still found); the cancel path stated at the lines and the teardown log made honest. **Two of the orchestrator's own edits broke the tree before it verified**: a SQL comment with backticks inside a template literal (every tier failed at transform) and an exact-message test the log change invalidated — both caught by the tiers, not shipped. **Orchestrator verification**: `PASS: verify` (400 files, 7511 passed), `PASS: verify:integration` (508), `PASS: verify:e2e` **twice** (206/206), each exit 0; **the last `verify` was started without the load gate at a one-minute reading of 34** — a breach of the machine rule, recorded rather than hidden. CI on `2481f09`: `ci` `36212658371` and `image` `36212658429` **completed success**, zero `release` runs. Discovered work: backlog **156**, **157** (both to WP-73 in part) | Depends on WP-76, WP-47, TD-028's WP-76 amendment decision 5. Folds backlog **155** (small-to-major, live; refiner, session 8). Revoke by address with no invented value (rule 18); a recovery row over `mint_credential` rows with no successful revoke, after commit, through the executor; shadow's carve-out; `not_found` recorded as unconfirmed; 0 → 1 / 1 stays 1 on the fake provider |
 | WP-55 | **The return reason reaches the stage being asked to fix it, and a gate's stage row is closed** | TODO | — | Depends on WP-15, WP-17, WP-26, WP-15h; run **before** WP-46. Folds backlog **67** (major, live on every return), **32**, and backlog **95**'s first two items. Backlog 67 ruled answer (a), reader-side, with a `returned_to` column |
 | WP-56 | **Three deadlines, one mechanism** | TODO | — | Depends on WP-05, WP-15, WP-28, WP-27, WP-32; amends TD-004. Folds backlog **74** (major), **76** (major), **69**. Ruled **in the row**: one `deadline.sweep` queue, pool floor **+1** not **+4**. The working calendar is composed for the first time. **Q95** decides whether an approval expires at all |
 | WP-57 | **`run_context_pack` gets a writer, the health report its refusals, and `kb_usage` a denominator** | TODO | — | Depends on WP-17, WP-15h, WP-18a/b, and on **WP-52** (same file). Folds backlog **31** (major), **37**'s remaining half, **112**. Backlog 31 ruled answer (a), keep the table |
@@ -27071,3 +27191,146 @@ and the minter (`composeRunWorkspaces` takes the `stack`) all read the stack's. 
 `createRunScopedSecrets(` to one site in `apps/server/src`; the loader and artifact hand-overs remain a
 text census — residual stated at the test (no database here). (4) as (1). (5) `provisioner.ts`'s
 widened-scope message now says the revocation failed when it did; technical/05's lifetime is 24–48 h.
+
+#### WP-77
+
+**Round 1 (implementer, session 8).** Backlog **155** closed by number (its heading marks it
+resolved, commit pending). The row's six criteria, in order.
+
+1. **Revoke by address.** `GitProviderPort.revokeCredential` takes `CredentialRevocationAddress =
+   Pick<MintedCredential, 'revokeId'>` (`ports/integrations/git-provider.ts`) — narrowed rather than
+   a sibling, because the GitLab adapter already read only `revokeId` (the fake alone read `value`),
+   and a `MintedCredential` still is one. The fake now finds the credential by the `revokeId` it
+   wrote. Every call site that built a literal with an invented
+   `value` to reach a refusal now passes `{ revokeId }` (the shared suite's foreign handle, the
+   GitLab contract and provider tests, `fake.test.ts`, `emitted-secrets.test.ts`), and both writes in
+   `runCredentialWrites` hand the provider `{ revokeId }` — asserted in `run-credentials.test.ts` ›
+   "hands the teardown revoke’s provider the address alone as well". Shared suite:
+   `git-provider-contract-suite.ts` › "revokes a credential given only its revocation address"
+   (fake and GitLab replay). GitLab's `404` for a handle the per-call adapter did not mint is
+   `gitlab.contract.test.ts` › "will not report success for a revocation it cannot substantiate"
+   (now by address), and its other half — a fresh adapter deleting a token GitLab still has — is
+   `gitlab.contract.test.ts` › "revokes by address a token it did not mint, when GitLab still has it",
+   on the documented `204` fixture. What the page does not say (a creator-independent `DELETE`; a
+   revoked token answering `404`) is labelled `inferred` in `test/fixtures/http/gitlab/SOURCES.md`.
+2. **The recovery row.** `packages/application/src/recovery/run-credential.ts`, a row of
+   `./stranded.ts`'s table (`run_credential`), reading through
+   `packages/infrastructure/src/recovery/postgres-run-credential-store.ts`: terminal runs that ended
+   between `now - horizon` and `now - grace`, a `mint_credential` row (`ok`, `revoke_id` not null,
+   `payload.run_id` = the run, recorded `expires_at` > now) reached through
+   `integration_actions_task_idx (task_id, created_at)`, the minting binding still the project's git
+   binding, and no `revoke_credential` row for that `revoke_id` that is a success (`ok` and
+   `revoked: true`) **or** the recovery's own (`payload.origin = 'recovery'`). The read joins the
+   pass's one transaction; the wake-up — a `pipeline.outbound` duty `revoke_run_credential` carrying
+   ids and the address — is enqueued after it commits (`stranded.test.ts` › "enqueues one revocation
+   per address after the finding transaction has committed" counts open transactions at the enqueue:
+   0). The duty re-validates on fire with the same predicate for its one address, then
+   `runCredentialWrites().recover`, which calls `assertOutsideTransaction` and goes through the
+   executor keyed by the minting binding (`run-credentials.test.ts` › "refuses to revoke inside an
+   open transaction"). **Migration 0039** adds `runs_ended_at_idx` (partial, `ended_at is not null`):
+   nothing indexed "ended between two instants". Index only, so the Drizzle definitions and the
+   parity test (which does not compare secondary indexes) are unchanged. The horizon is
+   `runCredentialRecoveryHorizonMs(RUN_CREDENTIAL_TTL_SECONDS)` = TTL + one day of GitLab's date
+   rounding = 48 h; the TTL constant moved from `apps/server/src/workspaces.ts` to
+   `pipeline/integrations.ts` so the mint and the horizon read one number.
+3. **Shadow.** `recover` declares `SHADOW_RUN_CREDENTIAL_CARVE_OUT` (the executor admits any
+   `revoke_credential`); a `would_have` — or any non-`ok` outcome — throws: `run-credentials.test.ts`
+   › "treats a recovery the executor answered would_have as a failure of this row"; performed for a
+   shadow task in `run-credentials.test.ts` › "performs a shadow task’s recovery revoke under the
+   carve-out its mint used (Q98 (a))" and at the boundary in
+   `run-credential-recovery.integration.test.ts` › "revokes a shadow task’s read credential under the
+   carve-out, performed and not would_have".
+4. **`not_found` is unconfirmed; one attempt.** `recover`'s `perform` answers `unconfirmed` for an
+   `IntegrationError` `not_found`, so the row is `ok` with `{revoked: false, confirmation:
+   'unconfirmed'}` — which no reader counts as revoked — and every other failure is a `failed` row;
+   both carry `origin: 'recovery'`, which is the bound. The duty never throws for the revoke's own
+   outcome (a job retry would be a second attempt); it throws only when the binding fails to load,
+   which wrote no row. Boundary: `run-credential-recovery.integration.test.ts` › "records a
+   provider’s not_found as unconfirmed, never as revoked, and does not ask again".
+5. **Countable at the boundary.** `run-credential-recovery.integration.test.ts` › "revokes the dead
+   runner’s and the failed teardown’s, once each, and leaves the revoked one alone": production mint
+   and teardown revoke through the real executor into the real `integration_actions`, the dead run
+   ended by the lease site of the same pass, the fake provider's `credentials[].revocations`
+   `[0, 0, 1]` before and `[1, 1, 1]` after; a third pass finds nothing and a duplicate wake-up asks
+   nobody. **Canaries** (on a copy, md5-confirmed revert): the success clause replaced by `false` —
+   the normal run revoked twice, 1 failed; the `origin` clause removed — asked again, 1 failed; any
+   revoke row counted as success — the failed teardown never recovered, 1 failed.
+6. **Sentences.** Below.
+
+*Decisions and assumptions.*
+- **`unconfirmed` is an `ok` row with `revoked: false`, not a `failed` row.** The provider was asked
+  and answered; recording it `failed` would make it indistinguishable from a 5xx, and the answer is
+  the evidence an operator needs. Every reader of "revoked" already requires `revoked: true`.
+- **The bound is the payload marker, not a column.** The row's text asks for the audit row as the
+  bound, and the executor writes one on success and on failure, so no mark was added.
+  **Residual, stated in the module**: re-validation is a read, not a claim — two copies of one
+  wake-up taken at once by two `pipeline.outbound` consumers both ask; the second `DELETE` is answered
+  `404` and recorded `unconfirmed`, never as a revocation. It needs the queue a whole pass interval
+  behind and two consumers.
+- **A binding the project is no longer bound to is not reached**: the query requires the minting
+  `integration_id` to be a current git binding of the project (a `revoke_id` is an address on that
+  binding's host), and `recover` refuses a mismatch before the executor. Such a token lives to its
+  expiry, stated in the module and filed as 156.
+- **An `expires_at` that is not an ISO instant is treated as live**, guarded by a `case` so the cast
+  cannot run on it: the predicate joins the pass's one transaction with five other sites, and a cast
+  error would fail every one of them on every pass. Revoking a token that had in fact expired costs
+  one bounded call; the expiry test (`run-credential-recovery.integration.test.ts` › "leaves a live
+  run’s credential to its runner, and an expired one to its expiry") would fail if the guard never
+  matched a real instant.
+- **`cause_event_id` is the run id** on the duty's payload, as the ask executor's is: no event caused
+  the wake-up.
+- **`runCredentials` is optional on `PipelineRuntimeOptions`**; absent, the duty refuses by name and
+  asks nobody. `apps/server/src/pipeline.ts` wires one store instance into both the runtime and the
+  pass, so the census in `pipeline-census.test.ts` sees it passed.
+- **A runner that was only partitioned and later does its own teardown revoke** after the recovery
+  revoked finds GitLab's `404` through its per-call adapter and logs a failed revocation that is in
+  fact done — a false alarm in the safe direction, not fixed.
+- **The Docker workspace e2e's credentialed-server wrapper read `credential.value` in its
+  `revokeCredential`** to revoke the token at the test git server; with the port narrowed it would
+  have received `{ revokeId }` and revoked nothing, while `tsc` stayed green — the port declares the
+  method in method syntax, so its parameter is bivariant and an implementation taking the wider
+  `MintedCredential` still type-checks. Found by grep, not by the compiler; the wrapper now maps the
+  address back to the value it granted (`docker-workspace.e2e.test.ts`). Filed as 157.
+- The fake gained `clockStart` (`FakeGitOptions`), because the predicate compares a mint's recorded
+  expiry with the pass's clock and the fake's epoch is 2026-06-01.
+
+*Verification* (`nice -n 19`, each tier behind the bounded load gate). `pnpm run -s verify` **PASS**
+(7511 passed, 14 skipped, 400 files). `verify:integration` **PASS** (508, 47 files; the new
+`run-credential-recovery.integration.test.ts` is 4 of them). `verify:e2e` **PASS** (206, 37 files, the
+Docker workspace file included — after the wrapper fix below). Load readings before each tier, all
+bounded at five: verify 36.40 → 35.48 → 24.22 → 16.18 → 8.28 (GO), re-run 14.73 → 15.59 → 8.67
+(GO); integration 19.94 → 10.54 (GO); e2e 8.32 (GO). Docker after: no container of this row's,
+`docker volume ls | wc -l` = 102.
+Not run: `verify:ui`/`verify:web-e2e` (neither `apps/web` nor `@platform/contracts` changed) and the
+Docker scripts (no launcher, runlet or image change). The five new files are marked intent-to-add
+(`git add -N`) so `scripts/citations.test.ts` can resolve citations of them; nothing is staged.
+
+*Sentences (rule 83).* **Changed**: `run-lease.ts:23` (*"ends the row and nothing else"* → ends the
+row and writes nothing else, with the credential as the second consequence and the partitioned
+process's cut export push stated as consistent with the ending); `run-redaction.ts` (the crash path:
+the revoke is recovered, the redaction is not — backlog 154 named); `provisioner.ts` `onceRevoker`'s
+docblock and log line (*"it is live until it expires"* → until the recovery pass revokes it, or its
+expiry if that fails) and the widened-scope message; `integrations.ts`'s two teardown messages
+(*"live until <expiry>"* → until the recovery pass revokes it or it expires); the fake's divergence
+16; technical/05 § Credentials, technical/06's port listing, the operator guide's minting paragraph,
+`docs/TODO.md`'s quotation of `run-lease.ts:23`; `apps/server/src/pipeline.ts`'s warning when the
+recovery pass is switched off (it now names 155 among what is not recovered); `.env.example`'s
+`APP_INTAKE_RECONCILE_INTERVAL_MS` paragraph. **Left, with why**: `gitlab/provider.ts`'s *"a day
+at most"* — already corrected to 24–48 h by WP-76 review round 1 (divergence 6); grep finds no
+other copy. `integrations.ts`'s recovery-failure and binding-mismatch messages keep *"live until
+<expiry>"* — true there, the one attempt is spent. **Not touched (orchestrator's)**: TD-028's WP-76
+amendment decision 5, *"until then the token lives to its expiry"* (`TD-028-launcher-control-plane.md:198`)
+— now overtaken by this row and wants a cross-reference.
+
+**Discovered work** (for the refiner; next free backlog number 156, none fixed here).
+- **156 (small) — a run credential minted through a git binding the project has since been unbound
+  from is not recoverable and nothing says so at the time.** The finding query requires the minting
+  binding to be current (it must: the address is on that host), so such a token lives to its
+  expiry with no log line. Unbinding could revoke the binding's outstanding run credentials, or the
+  pass could log them.
+- **157 (nit) — a port method declared in method syntax accepts an implementation with a wider
+  parameter type**, because TypeScript checks method parameters bivariantly even under
+  `strictFunctionTypes`. WP-77 narrowed `revokeCredential` and one implementation still declaring
+  `(credential: MintedCredential)` and reading `.value` compiled; it was found by grep. Declaring
+  the port members as function-typed properties (`revokeCredential: (address: …) => Promise<void>`)
+  would make `tsc` refuse it — for every port, which is a decision rather than a fix in passing.
