@@ -20,11 +20,23 @@
  * process that lost its database connection is still running and still spending. Never that the
  * work was wasted.
  *
- * So the sweep ends the **row** and nothing else — with one consequence it now has for the
- * question a run was answering: `./stranded.ts`'s `task_ask_run` row (PROGRESS backlog **121**,
- * WP-48) reads a `pending` ask whose attached run is terminal and refuses it, so the thread says
- * what happened instead of `pending` for ever. That is a *separate* row of the same pass rather
- * than a write from here, because a cancelled run reaches the same state with no lease involved.
+ * So the sweep ends the **row**, and writes nothing else — with two consequences the row's ending
+ * now has, each the work of a *separate* row of the same pass rather than a write from here,
+ * because a cancelled or otherwise ended run reaches the same state with no lease involved:
+ *
+ *  - the **question** a run was answering: `./stranded.ts`'s `task_ask_run` row (PROGRESS backlog
+ *    **121**, WP-48) reads a `pending` ask whose attached run is terminal and refuses it, so the
+ *    thread says what happened instead of `pending` for ever;
+ *  - the run's **git credential** (PROGRESS backlog **155**, WP-77): `./run-credential.ts` finds a
+ *    terminal run whose credential nothing confirmed revoked and revokes it once, by address, a
+ *    pass interval after this ending. **That has a consequence for a process that is only
+ *    partitioned from the database** — the caveat above: its session may still be running, and
+ *    once its credential is revoked its pushes, and a take-over's export push, are refused by the
+ *    provider. That is consistent with the ending rather than a second decision: the row is already
+ *    terminal, the task already escalated, and nothing that process writes back will be accepted
+ *    as the run's result, so cutting its access to the repository is the same conclusion reached
+ *    at the provider. What it does *not* do is stop the session; a missing heartbeat still licenses
+ *    nothing about that.
  *
  * The ending itself is `run.failed` with the named terminal reason
  * `lease_expired` (migration 0035), which is neither `crash` (a claim about the session) nor

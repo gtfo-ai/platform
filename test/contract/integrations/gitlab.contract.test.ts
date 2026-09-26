@@ -170,15 +170,9 @@ describe('GitLab in replay: revocation, and the Q40 compensating control', () =>
     const { port, replay } = gitlabReplayContext();
     let caught: unknown;
     try {
-      await port.revokeCredential({
-        username: 'oauth2',
-        value: 'FAKE-token-from-another-process',
-        scope: 'push',
-        branchPatterns: ['agentic/*'],
-        expiresAt: '2026-06-02T00:00:00.000Z',
-        // Well-formed, and this provider never minted it: another process, or a restart.
-        revokeId: `${GITLAB_PROJECT}#${FOREIGN_TOKEN_ID}`,
-      });
+      // By address alone (WP-77). Well-formed, and this provider never minted it: another
+      // process, a restart — or the recovery pass, which holds only the mint's audit row.
+      await port.revokeCredential({ revokeId: `${GITLAB_PROJECT}#${FOREIGN_TOKEN_ID}` });
     } catch (error) {
       caught = error;
     }
@@ -188,6 +182,26 @@ describe('GitLab in replay: revocation, and the Q40 compensating control', () =>
       replay.requests.map((request) => request.key),
       "and it asked at the address the handle carries, not at the binding's project",
     ).toEqual(['DELETE /projects/acme%2Fapi/access_tokens/59']);
+  });
+
+  /**
+   * The other half, and the one the recovery row depends on (WP-77, PROGRESS backlog 155): a
+   * per-call adapter that did **not** mint a handle still revokes it by address when GitLab has
+   * it. The recovery pass always reaches this adapter that way — the process that minted is dead or
+   * its revoke failed — so a `204` here is the only path by which a stranded token is revoked.
+   * GitLab's `204` is documented (the fixture's `source`); that a token already revoked answers
+   * `404` rather than `204` is **inferred** from "404 if the access token does not exist" and is
+   * not measured here.
+   */
+  it('revokes by address a token it did not mint, when GitLab still has it', async () => {
+    const { port, replay } = gitlabReplayContext();
+    await expect(
+      port.revokeCredential({ revokeId: `${GITLAB_PROJECT}#58` }),
+      'a 204 is proof the token existed and is gone, whoever minted it',
+    ).resolves.toBeUndefined();
+    expect(replay.requests.map((request) => request.key)).toEqual([
+      'DELETE /projects/acme%2Fapi/access_tokens/58',
+    ]);
   });
 
   it('reports the default branch protected and an agentic branch not (Q40)', async () => {

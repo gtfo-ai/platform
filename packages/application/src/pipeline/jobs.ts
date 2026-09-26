@@ -147,7 +147,14 @@ export interface PipelineOutboundData {
      * Woken by `task.breakdown.decided` and **only** by it: nothing is created on the run's own
      * verdict, which is what product/04:117's *"for the PM to accept"* means.
      */
-    | 'breakdown_create';
+    | 'breakdown_create'
+    /**
+     * WP-77, PROGRESS backlog 155: revoke, by address, a run credential nothing confirmed revoked.
+     *
+     * Enqueued by the recovery pass rather than by a handler — `recovery/run-credential.ts` — and
+     * re-validated on fire against the audit rows, because that pass may enqueue one address twice.
+     */
+    | 'revoke_run_credential';
   readonly project_id: string;
   /** Absent for `intake_check`, which runs before there is a task. */
   readonly task_id?: string;
@@ -219,6 +226,12 @@ export interface PipelineOutboundData {
   readonly notification_detail?: string;
   /** Platform text naming what the notification is about when there is no task — a budget window. */
   readonly notification_subject?: string;
+  /**
+   * `revoke_run_credential` (WP-77): the run whose credential it is, and the address the mint's
+   * audit row recorded — `<project>#<token_id>` on GitLab, not a secret. The duty re-reads the rest.
+   */
+  readonly run_id?: string;
+  readonly revoke_id?: string;
   readonly [key: string]: unknown;
 }
 

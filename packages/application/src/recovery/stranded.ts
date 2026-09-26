@@ -22,9 +22,13 @@
  * | a run nothing is driving | **109** | the run's row *and its budget reservation*, for ever | **here** — `run_lease`, in `./run-lease.ts` |
  * | intake, a matched ticket | **20** | one task never starts | `pipeline/intake-reconcile.ts`, and it stays there |
  *
- * …plus one row that is **not** a lost wake-up at all and rides the same pass because it is the
+ * …plus two rows that are **not** lost wake-ups at all and ride the same pass because each is the
  * other half of one of them: `task_ask_run` (**121**), a question still `pending` whose run is
- * already terminal.
+ * already terminal, and `run_credential` (**155**, WP-77), a terminal run whose git credential
+ * nothing confirmed revoked — the runner died between mint and revoke, which is the `run_lease`
+ * row's other consequence, or its teardown revoke failed. It enqueues a `pipeline.outbound` duty
+ * per address after the pass's reads commit, bounded by the audit row that duty writes;
+ * `./run-credential.ts` carries the predicate, the bound and what it does not reach.
  *
  * **The run row is a different shape from the re-enqueuing ones, and that is why its body is its
  * own module** (WP-47). Their contract is *"find the row, enqueue the wake-up"*, bounded by an
@@ -121,6 +125,11 @@ import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
+import {
+  enqueueRunCredentialRevocation,
+  type RunCredentialRecoverySite,
+  unrevokedRunCredentialQuery,
+} from './run-credential.js';
 import type { RunLeaseSweepOptions } from './run-lease.js';
 import { sweepExpiredRunLeases } from './run-lease.js';
 
@@ -299,6 +308,15 @@ export interface StrandedRecoveryOptions {
    * five sites that are only queries.
    */
   readonly runs?: Omit<RunLeaseSweepOptions, 'clock' | 'graceMs' | 'limit' | 'logger'>;
+  /**
+   * The run-credential site (WP-77, PROGRESS backlog **155**, `./run-credential.ts`): terminal runs
+   * whose git credential nothing confirmed revoked.
+   *
+   * **Absent is "credentials are not recovered"** — every build before WP-77, where such a token
+   * lived to the provider's expiry. Optional for the reason `runs` is: a composition with no
+   * pipeline has no `pipeline.outbound` worker to take the duty it enqueues.
+   */
+  readonly credentials?: RunCredentialRecoverySite;
   readonly logger?: Logger;
 }
 
@@ -439,12 +457,25 @@ export const runStrandedRecovery = async (
 
   // One transaction, every query: backlog 101's argument is about the pass being *one* pooled
   // connection, and five reads in five transactions would be five borrows for the same answer.
+  const credentialSite = options.credentials;
   const found = await options.unitOfWork.transaction(async (scope) => ({
     bootstraps: await options.store.strandedBootstraps(scope.tx, query),
     asks: await options.store.strandedAsks(scope.tx, query),
     records: await options.store.strandedHistoryRecords(scope.tx, query),
     curations: await options.store.strandedCurations(scope.tx, query),
     endedRunAsks: await options.store.asksWithEndedRun(scope.tx, query),
+    credentials:
+      credentialSite === undefined
+        ? []
+        : await credentialSite.store.unrevokedRunCredentials(
+            scope.tx,
+            unrevokedRunCredentialQuery({
+              now,
+              graceMs: grace,
+              horizonMs: credentialSite.horizonMs,
+              limit,
+            }),
+          ),
   }));
 
   const sites: StrandedSiteReport[] = [
@@ -651,6 +682,34 @@ export const runStrandedRecovery = async (
     reEnqueued: 0,
     ended: asksEndedByRun,
   });
+
+  /**
+   * The run-credential site (WP-77, backlog 155): one `pipeline.outbound` wake-up per address, and
+   * only now — after the transaction that found them has committed, so the provider call the duty
+   * makes is outside every transaction (`assertOutsideTransaction` refuses otherwise). The bound is
+   * the audit row the duty writes, so there is no mark here and nothing to end.
+   */
+  if (credentialSite !== undefined) {
+    for (const credential of found.credentials) {
+      await enqueueRunCredentialRevocation(options.jobs, credential);
+      logger.warn(
+        {
+          project_id: credential.projectId,
+          task_id: credential.taskId,
+          run_id: credential.runId,
+          scope: credential.scope,
+          expires_at: credential.expiresAt,
+        },
+        'a terminal run’s git credential was never confirmed revoked — its runner died or its teardown revoke failed — so one revocation by address was enqueued (PROGRESS backlog 155)',
+      );
+    }
+    sites.push({
+      site: 'run_credential',
+      found: found.credentials.length,
+      reEnqueued: found.credentials.length,
+      ended: 0,
+    });
+  }
 
   if (options.runs !== undefined) {
     // The run site ends rows rather than re-enqueuing wake-ups, so `reEnqueued` is 0 by

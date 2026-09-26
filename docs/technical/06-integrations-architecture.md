@@ -70,7 +70,7 @@ getDefaultBranchHead(project) -> sha
 readCodeowners(project, ref) -> Rules
 listMergedMergeRequests(project, since, limit) -> [{ref, author, mergedAt, title, diffStats?, discussionCount}]   # history bootstrap, shadow comparison
 listCommits(project, {since, limit}) -> [{sha, message, author, committedAt, url?}]   # history bootstrap's commit messages (WP-35)
-revokeCredential(credential)                          # when the workspace is destroyed
+revokeCredential({revokeId})                          # by address (WP-77): when the workspace is destroyed, and by the recovery pass for a run whose revoke never happened
 inbound: InboundNormaliser -> mr.* | ci.pipeline.finished | default_branch.moved
 capabilities() -> {webhooks, projectTokens, groupTokens, codeowners, coverageArtifacts, draftPipelines, discussionResolution, credentialMinting}
 ```

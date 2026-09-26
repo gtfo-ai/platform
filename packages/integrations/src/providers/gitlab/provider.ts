@@ -535,21 +535,27 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
      *     fabricated handle) is ambiguous: "already revoked" and "never existed here" are the same
      *     response. The adapter cannot tell them apart, so it refuses to report success. Saying
      *     "revoked" here is what let a live push token look revoked until midnight UTC.
+     *
+     * It reads the address and nothing else (WP-77): the recovery row that revokes a credential
+     * whose runner died, or whose teardown revoke failed, holds only the `revoke_id` the mint's
+     * audit row recorded, and always reaches this through a per-call adapter that did not mint it —
+     * so a token GitLab still has is deleted (`204`), and one it answers `404` for is case 3, which
+     * that caller records as *unconfirmed*.
      */
-    revokeCredential: async (credential) => {
-      if (credential.revokeId === null) {
+    revokeCredential: async (handle) => {
+      if (handle.revokeId === null) {
         // Not minted by this provider (a static bot token): there is nothing to delete.
         return;
       }
-      const minted = credentials.addressFor(credential.revokeId);
-      const address = minted ?? parseRevokeId(credential.revokeId);
+      const minted = credentials.addressFor(handle.revokeId);
+      const address = minted ?? parseRevokeId(handle.revokeId);
       if (address === null) {
         throw invalidRequest(
           'revoke_credential',
           'revokeId is not a GitLab revocation address (expected <project>#<token_id>)',
         );
       }
-      if (credentials.isRevoked(credential.revokeId)) {
+      if (credentials.isRevoked(handle.revokeId)) {
         return;
       }
       const deleted = await client.revokeProjectAccessToken(address.project, address.tokenId);
@@ -567,7 +573,7 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
           { action: 'revoke_credential' },
         );
       }
-      credentials.markRevoked(credential.revokeId);
+      credentials.markRevoked(handle.revokeId);
     },
 
     /**

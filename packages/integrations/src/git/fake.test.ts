@@ -76,14 +76,8 @@ describe('FakeGitProvider credentials', () => {
   it('refuses to revoke a credential it never minted', async () => {
     const port = build();
     await expect(
-      port.revokeCredential({
-        username: 'oauth2',
-        value: 'fake_credential_from_elsewhere',
-        scope: 'push',
-        branchPatterns: ['agentic/*'],
-        expiresAt: '2030-01-01T00:00:00.000Z',
-        revokeId: 'rev-from-elsewhere',
-      }),
+      // By address alone (WP-77): no value is invented to reach the refusal (rule 18).
+      port.revokeCredential({ revokeId: 'rev-from-elsewhere' }),
     ).rejects.toMatchObject({ code: 'not_found' });
   });
 

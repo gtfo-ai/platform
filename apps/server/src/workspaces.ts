@@ -45,6 +45,7 @@ import type {
 import {
   integrationsForProject,
   noRunScopedSecrets,
+  RUN_CREDENTIAL_TTL_SECONDS,
   runCredentialWrites,
   runGitCredentialSecretName,
 } from '@platform/application';
@@ -60,16 +61,6 @@ import {
   type IntegrationStack,
   repositoryPathOf,
 } from './pipeline.js';
-
-/**
- * TD-021: *"a run-scoped credential that expires next day"*.
- *
- * A constant rather than a knob: it is a security property of a minted push token, and the only
- * operator interest in changing it points the wrong way. The provisioner passes it to
- * `mintCredential` (WP-76); GitLab grants it in whole days, so the token lives up to two
- * (`gitlab/credentials.ts`, TD-028's WP-76 amendment residuals).
- */
-const RUN_CREDENTIAL_TTL_SECONDS = 24 * 60 * 60;
 
 /**
  * BD-025's namespace: the only refs a run's credential may push.

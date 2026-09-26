@@ -335,6 +335,20 @@ export interface MintedCredential {
   readonly revokeId: string | null;
 }
 
+/**
+ * **Where a minted credential can be revoked — the whole of what `revokeCredential` reads** (WP-77).
+ *
+ * The port used to take the whole {@link MintedCredential}, `value` included, while the shipped
+ * adapter (GitLab) read only `revokeId` from it — the fake alone looked the credential up by its
+ * value, and now looks it up by the address it wrote. A caller that holds only the address — the recovery row that
+ * revokes a credential whose runner died between mint and revoke, or whose revocation failed at
+ * teardown (PROGRESS backlog 155), reading `revoke_id` off the mint's audit row — would then have
+ * had to construct a credential with an invented `value` to satisfy the type, which is standing
+ * rule 18's shape: an empty credential is not a credential. Narrowed instead, so a
+ * `MintedCredential` still is one and nothing needs to invent the rest.
+ */
+export type CredentialRevocationAddress = Pick<MintedCredential, 'revokeId'>;
+
 // ── Capabilities ─────────────────────────────────────────────────────────────
 
 export interface GitProviderCapabilities {
@@ -415,10 +429,16 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
    *    address; for any other handle it is indistinguishable from "never existed here", and
    *    absorbing it tells the caller a live credential is dead. Refuse (`not_found`) instead.
    *
+   * **By address** (WP-77): the argument is {@link CredentialRevocationAddress}, so a caller that
+   * holds only the `revokeId` a mint recorded revokes with that and nothing else. For such a
+   * caller the adapter is, by construction, one that did **not** mint the handle — GitLab's
+   * per-call adapter answers the provider's `404` there as `not_found`, which the caller must read
+   * as *unconfirmed*, never as *revoked*.
+   *
    * @throws {IntegrationError} `not_found` when the provider denies knowing a credential this
    * adapter did not mint. `invalid_request` when `revokeId` is not a handle this adapter wrote.
    */
-  revokeCredential(credential: MintedCredential): Promise<void>;
+  revokeCredential(address: CredentialRevocationAddress): Promise<void>;
 
   /**
    * Writes a set of whole files as **one commit**, on a branch, through the provider's API.

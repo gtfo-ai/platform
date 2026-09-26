@@ -375,7 +375,7 @@ const mintFor = async (input: {
       `run ${input.spec.runId} is read-only and was minted a push credential; the run is refused (BD-021) and ${
         revoked
           ? 'the credential was revoked'
-          : `the credential's revocation failed, so it is live until ${answer.credential.expiresAt}`
+          : `the credential's revocation failed, so it is live until the recovery pass revokes it or it expires at ${answer.credential.expiresAt}`
       }`,
       { runId: input.spec.runId },
     );
@@ -385,8 +385,15 @@ const mintFor = async (input: {
 
 /**
  * `revoke`, at most once, never throwing — a failed revocation is logged as what it is: a live
- * token until the provider's expiry. Rule 20's second half: the failure must not be silent. Answers
- * whether *this* call revoked it, so a message can say so honestly.
+ * token. Rule 20's second half: the failure must not be silent. Answers whether *this* call revoked
+ * it, so a message can say so honestly.
+ *
+ * It still never retries, and that is now a division of labour rather than a gap (WP-77, PROGRESS
+ * backlog 155): the failed attempt left a `revoke_credential` audit row that is not a success, so
+ * the recovery pass (`packages/application/src/recovery/run-credential.ts`) finds the run once it is
+ * terminal and revokes the token **once** from the mint row's `revoke_id`, through the executor and
+ * outside any transaction. Until that pass runs — a pass interval after the run ends — the token is
+ * live, and if that attempt fails too it is live until the provider's expiry.
  */
 const onceRevoker = (
   runId: string,
@@ -406,7 +413,7 @@ const onceRevoker = (
     } catch (error) {
       logger.error(
         { err: error, run_id: runId, scope: credential.scope, expires_at: credential.expiresAt },
-        'the run credential could not be revoked; it is live until it expires',
+        'the run credential could not be revoked here; unless the recovery pass has already revoked it (a cancelled run is reached that way, and a not_found here then means it is gone), it is live until that pass revokes it from its audit row, or until it expires if the pass cannot (PROGRESS backlog 155)',
       );
       return false;
     }

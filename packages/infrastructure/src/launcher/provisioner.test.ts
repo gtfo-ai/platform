@@ -330,7 +330,9 @@ describe('the workspace spec a run gets', () => {
         () => null,
         (error: unknown) => error as Error,
       );
-    expect(refused?.message).toMatch(/revocation failed, so it is live until 2026-01-03/);
+    expect(refused?.message).toMatch(
+      /revocation failed, so it is live until the recovery pass revokes it or it expires at 2026-01-03/,
+    );
     expect(refused?.message).not.toMatch(/was revoked/);
   });
 
@@ -496,7 +498,7 @@ describe('revocation: exactly once, after the end request (TD-028 WP-76 decision
       workspace.release({ kind: 'ended', status: 'completed' }),
     ).resolves.toBeUndefined();
     expect(records.map((record) => record.message)).toContain(
-      'the run credential could not be revoked; it is live until it expires',
+      'the run credential could not be revoked here; unless the recovery pass has already revoked it (a cancelled run is reached that way, and a not_found here then means it is gone), it is live until that pass revokes it from its audit row, or until it expires if the pass cannot (PROGRESS backlog 155)',
     );
     expect(JSON.stringify(records)).not.toContain('fake_run_credential_push_0001');
   });

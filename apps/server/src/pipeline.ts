@@ -83,7 +83,9 @@ import {
   createWebhookIngress,
   defaultProjectSettings,
   humanTimeHandlers,
+  RUN_CREDENTIAL_TTL_SECONDS,
   registerMaintenanceSchedule,
+  runCredentialRecoveryHorizonMs,
   runLimitsDefaults,
   silentLogger,
   startIntakeReconciliation,
@@ -778,6 +780,8 @@ export const composePipeline = async (
    * created through (WP-36).
    */
   const store = pipelineAdapters.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES });
+  /** WP-77: one instance for the recovery pass that finds and the duty that re-validates. */
+  const runCredentialStore = recoveryAdapters.createPostgresRunCredentialStore();
   const maintenanceStore = new maintenanceAdapters.PostgresMaintenanceStore();
 
   const runtime = createPipelineRuntime({
@@ -787,6 +791,9 @@ export const composePipeline = async (
     integrations,
     ids,
     clock: { now: nowIso },
+    // WP-77: where the `revoke_run_credential` duty re-validates — the store the recovery pass below
+    // finds with, so the duty asks the pass's own question for its one address.
+    runCredentials: runCredentialStore,
     // WP-32: the notification outbox, and the zone the digest and quiet hours are read in. Both are
     // required by `PipelineRuntimeOptions` rather than optional, because a process that composed
     // the pipeline without them would run the notify band on nothing.
@@ -1117,13 +1124,25 @@ export const composePipeline = async (
           causeEventId: null,
         }),
       },
+      /**
+       * WP-77, backlog **155**: a terminal run whose git credential nothing confirmed revoked — its
+       * runner died between mint and revoke (the site above ends that run's row; this one revokes
+       * what it held), or its teardown revoke failed. One `pipeline.outbound` duty per address,
+       * bounded by the audit row it writes; `packages/application/src/recovery/run-credential.ts`
+       * carries the predicate and what it does not reach. The horizon is derived from the TTL the
+       * runner mints with, so the two cannot drift apart.
+       */
+      credentials: {
+        store: runCredentialStore,
+        horizonMs: runCredentialRecoveryHorizonMs(RUN_CREDENTIAL_TTL_SECONDS),
+      },
     },
     logger: options.logger,
   });
   if (reconciler === null) {
     options.logger.warn(
       { setting: 'APP_INTAKE_RECONCILE_INTERVAL_MS=0' },
-      'the recovery pass is switched off: a matched ticket whose intake enqueue is lost is never started (PROGRESS backlog 20), a stranded history bootstrap (101) or pending ask (84) is never recovered, and a run whose process died stays "running" for ever, holding its stage budget against every future window (109)',
+      'the recovery pass is switched off: a matched ticket whose intake enqueue is lost is never started (PROGRESS backlog 20), a stranded history bootstrap (101) or pending ask (84) is never recovered, a run whose process died stays "running" for ever, holding its stage budget against every future window (109), and a run credential whose revoke never happened stays live to its expiry (155)',
     );
   }
 

@@ -196,6 +196,12 @@ answer is *"runlet has no credential responder; refusing"* (`runlet/spawn-adapte
    between mint and revoke) is revocable from the audit row's `revoke_id`; WP-47's lease sweep
    (`packages/application/src/recovery/run-lease.ts`) is where it belongs — WP-76 builds it or files
    it by number, and until then the token lives to its expiry.
+   **Built at WP-77** (PROGRESS backlog 155): a recovery row of `recovery/stranded.ts` finds every
+   terminal run with a `mint_credential` audit row and no successful `revoke_credential` row for the same
+   `revoke_id`, and revokes it **by address** from a `pipeline.outbound` job, outside any transaction and
+   through the executor — the crash path *and* a teardown revoke that failed. One attempt per
+   `revoke_id`; a `not_found` answer is recorded **unconfirmed**, never as revoked. A credential whose
+   minting binding has since been unbound is not recoverable this way (PROGRESS backlog 156).
 6. **A binding that cannot mint is a refusal for a writing run, never a fallback.** No git binding,
    or `capabilities().credentialMinting` false (GitLab's `mint_credentials` defaults to **false**,
    `gitlab/config.ts`), fails a writing run **in the runner, before the create**, terminally, naming

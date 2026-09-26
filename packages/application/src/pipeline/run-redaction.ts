@@ -115,7 +115,16 @@ export const injectedSecretRedactorForEnvironment = (
  *
  * Another **process**: the registry is memory. A `pipeline.outbound` job run by a worker that did
  * not mint (a `ROLE`-split deployment) does not know the value, so a CI log it reads while the
- * token is live is redacted only by the pattern rules. Stated, and filed rather than solved here.
+ * token is live is redacted only by the pattern rules. Stated, and filed rather than solved here
+ * (PROGRESS backlog **154**).
+ *
+ * **Nor a process that died** — the crash path. The registry dies with the runner that minted, and
+ * so did the one revoke that runner owed. Since WP-77 the revoke is recovered
+ * (`../recovery/run-credential.ts`, PROGRESS backlog **155**): a terminal run whose credential no
+ * audit row confirms revoked is revoked by address from the mint's `revoke_id`, a pass interval
+ * after the run ends. The *redaction* is not recovered: no other process ever held the value, so
+ * text quoting it that another process stores in that window is covered by the pattern rules
+ * alone — backlog 154's gap, for a window this row bounds rather than one that lasts to expiry.
  */
 export interface RunScopedSecrets {
   /** Registers a value minted for `runId`. Refuses one too short to redact, rather than dropping it. */

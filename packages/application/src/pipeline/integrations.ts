@@ -40,7 +40,7 @@ import {
   MIN_SECRET_LENGTH,
 } from '../integrations/redaction.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
-import type { IntegrationRef } from '../ports/integrations/common.js';
+import { IntegrationError, type IntegrationRef } from '../ports/integrations/common.js';
 import type {
   CommunicationPort,
   DigestItem,
@@ -1422,6 +1422,19 @@ export const communicationWrites = (integrations: PipelineIntegrations) => ({
 
 // ── The run's git credential (WP-76, TD-028's WP-76 amendment) ──────────────
 
+/**
+ * TD-021: *"a run-scoped credential that expires next day"*.
+ *
+ * A constant rather than a knob: it is a security property of a minted push token, and the only
+ * operator interest in changing it points the wrong way. The provisioner passes it to
+ * `mintCredential` (WP-76); GitLab grants it in whole days, so the token lives up to two
+ * (`gitlab/credentials.ts`, TD-028's WP-76 amendment residuals). Here rather than in
+ * `apps/server/src/workspaces.ts`, which minted with it alone until WP-77: the recovery row's
+ * horizon is derived from the same number (`runCredentialRecoveryHorizonMs`), and a second copy is
+ * a horizon that stops covering the tokens it exists for the day somebody changes one of them.
+ */
+export const RUN_CREDENTIAL_TTL_SECONDS = 24 * 60 * 60;
+
 /** What one run asks its project's git binding for. */
 export interface RunCredentialRequest {
   readonly runId: Id;
@@ -1552,7 +1565,7 @@ export const runCredentialWrites = (integrations: PipelineIntegrations) => {
         const revocation = await writes.revoke(minted, request).then(
           () => 'it was revoked',
           (error: unknown) =>
-            `its revocation failed (${describeRevokeFailure(error, minted.value)}), so it is live until ${minted.expiresAt}`,
+            `its revocation failed (${describeRevokeFailure(error, minted.value)}), so it is live until the recovery pass revokes it from the audit row (PROGRESS backlog 155) or it expires at ${minted.expiresAt}`,
         );
         throw new Error(
           `the git binding ${git.ref.integrationId} minted a credential this platform will not use: ${reason}; ${revocation}`,
@@ -1567,7 +1580,7 @@ export const runCredentialWrites = (integrations: PipelineIntegrations) => {
      * rather than a no-op (GitLab divergence 6).
      */
     revoke: async (
-      credential: MintedCredential,
+      credential: RunCredentialHandle,
       context: Pick<RunCredentialRequest, 'runId' | 'taskId' | 'projectId' | 'mode'>,
     ): Promise<void> => {
       const git = integrations.git;
@@ -1591,7 +1604,7 @@ export const runCredentialWrites = (integrations: PipelineIntegrations) => {
         projectId: context.projectId,
         taskId: context.taskId,
         perform: async () => {
-          await git.port.revokeCredential(credential);
+          await git.port.revokeCredential({ revokeId: credential.revokeId });
           return true;
         },
         // Reached only if the carve-out below stopped applying: `false` is "nothing was revoked",
@@ -1608,10 +1621,117 @@ export const runCredentialWrites = (integrations: PipelineIntegrations) => {
       // review round 2 measured (0 provider revocations, a refusal that read "it was revoked").
       if (outcome.status !== 'ok' || outcome.result !== true) {
         throw new Error(
-          `run ${context.runId}'s credential was not revoked (the executor answered ${outcome.status}); it is live until ${credential.expiresAt}`,
+          `run ${context.runId}'s credential was not revoked (the executor answered ${outcome.status}); it is live until the recovery pass revokes it from the audit row (PROGRESS backlog 155) or it expires at ${credential.expiresAt}`,
         );
       }
+    },
+
+    /**
+     * **The recovery revoke** (WP-77, PROGRESS backlog 155): a credential whose runner died between
+     * mint and revoke, or whose teardown revoke failed, revoked from the **address** the mint's
+     * audit row recorded — never from a credential rebuilt with an invented value (standing rule 18).
+     *
+     * Four things differ from {@link revoke}, and each is the point:
+     *
+     *  - **the binding must be the one that minted.** `revoke_id` is an address on the binding's
+     *    host; sending it through a *different* git binding the project was re-pointed at would
+     *    delete — or fail to find — a token on the wrong server. A mismatch is refused before the
+     *    executor is reached, so it writes no row and the caller says so;
+     *  - **the payload says `origin: 'recovery'`**, which is what bounds it: the finding query
+     *    excludes a `revoke_id` with any such row, whatever it says, so each address gets one
+     *    attempt, bounded by the audit row that attempt writes;
+     *  - **`not_found` is an answer, recorded as `unconfirmed`, never as revoked.** The adapter that
+     *    reaches this is by construction one that did not mint the handle, so a provider's "no such
+     *    token" cannot tell *already revoked* from *never existed here* (the port's docblock). The
+     *    row is `ok` — the provider was asked and answered — with `revoked: false` and
+     *    `confirmation: 'unconfirmed'`, which the "revoked means `ok` with `revoked: true`" reading
+     *    every other reader applies does not count as a revocation. Every other failure throws,
+     *    after the executor wrote a `failed` row;
+     *  - **a shadow task's revoke is performed** under the same Q98 (a) carve-out the mint used, and
+     *    anything but an `ok` outcome — `would_have` above all — throws: a recovery that the shadow
+     *    guard swallowed would read as the one attempt spent on a token still live.
+     */
+    recover: async (credential: RecoverableRunCredential): Promise<RunCredentialRecovery> => {
+      const git = integrations.git;
+      if (git === null || git.ref.integrationId !== credential.integrationId) {
+        throw new Error(
+          `run ${credential.runId}'s credential was minted through the git binding ${credential.integrationId}, which is not project ${credential.projectId}'s git binding any more, so it cannot be revoked from here; it is live until ${credential.expiresAt}`,
+        );
+      }
+      assertOutsideTransaction('the provider mutation "revoke_credential"');
+      const outcome = await integrations.executor.execute<RunCredentialRecovery | null>({
+        integration: git.ref,
+        action: 'revoke_credential',
+        payload: {
+          scope: credential.scope,
+          revoke_id: credential.revokeId,
+          run_id: credential.runId,
+          task_mode: credential.mode,
+          origin: RUN_CREDENTIAL_RECOVERY_ORIGIN,
+        },
+        mutating: true,
+        mode: credential.mode,
+        projectId: credential.projectId,
+        taskId: credential.taskId,
+        perform: async () => {
+          try {
+            await git.port.revokeCredential({ revokeId: credential.revokeId });
+            return 'revoked';
+          } catch (error) {
+            if (error instanceof IntegrationError && error.code === 'not_found') {
+              return 'unconfirmed';
+            }
+            throw error;
+          }
+        },
+        shadowResult: () => null,
+        describeResult: (result) => ({
+          revoked: result === 'revoked',
+          confirmation: result ?? 'not_performed',
+          revoke_id: credential.revokeId,
+        }),
+        shadowCarveOut: SHADOW_RUN_CREDENTIAL_CARVE_OUT,
+      });
+      if (outcome.status !== 'ok' || outcome.result === null) {
+        throw new Error(
+          `run ${credential.runId}'s credential was not revoked by the recovery pass (the executor answered ${outcome.status}); it is live until ${credential.expiresAt}`,
+        );
+      }
+      return outcome.result;
     },
   };
   return writes;
 };
+
+/**
+ * What {@link runCredentialWrites}' `revoke` reads of a credential: its address, and the two facts
+ * the audit row and a failure message name. Never the value (WP-77).
+ */
+export type RunCredentialHandle = Pick<MintedCredential, 'revokeId' | 'scope' | 'expiresAt'>;
+
+/** The payload marker every recovery revoke carries, and the finding query's bound (WP-77). */
+export const RUN_CREDENTIAL_RECOVERY_ORIGIN = 'recovery' as const;
+
+/**
+ * A credential nothing confirmed revoked, as the recovery row reads it off the mint's audit row.
+ *
+ * Every field is the platform's own — ids, the task's mode, the binding that minted, and the three
+ * facts `describeResult` recorded at the mint — so nothing here is a secret or needs one.
+ */
+export interface RecoverableRunCredential {
+  readonly runId: Id;
+  readonly taskId: Id;
+  readonly projectId: Id;
+  readonly mode: TaskMode;
+  /** The git binding the mint went through (`integration_actions.integration_id`). */
+  readonly integrationId: Id;
+  readonly revokeId: string;
+  readonly scope: CredentialScope;
+  readonly expiresAt: string;
+}
+
+/**
+ * `revoked` — the provider deleted it. `unconfirmed` — the provider says it has no such token,
+ * which from an adapter that did not mint it cannot be told from "never existed here".
+ */
+export type RunCredentialRecovery = 'revoked' | 'unconfirmed';

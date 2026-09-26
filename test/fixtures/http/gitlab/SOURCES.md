@@ -87,7 +87,13 @@ carrying its own date.
   The empty answer for an unknown username is `inferred`: the page publishes no example of it.
 - `https://docs.gitlab.com/api/project_access_tokens/` — "Create a project access token", "Revoke a
   project access token" ("returns 204 No content"), and "404: Not Found if the access token does
-  not exist".
+  not exist". **What WP-77's recovery row relies on beyond the page** (PROGRESS backlog 155): that
+  the `DELETE` succeeds for a token a *different* adapter instance created — the page names no
+  creator condition, so this is `inferred`, and the replay test *"revokes by address a token it did
+  not mint"* reuses the documented `204` fixture rather than a new one; and that a token **already
+  revoked** answers `404` rather than `204` — also `inferred` from "does not exist", unmeasured
+  against a real GitLab, and the reason the recovery records `not_found` as *unconfirmed* rather
+  than as revoked.
 - `https://docs.gitlab.com/api/rest/troubleshooting/` — the REST status table: "404 Not Found — A
   resource could not be accessed", "409 Conflict — A conflicting resource already exists".
 - `https://docs.gitlab.com/user/project/integrations/webhook_events/` — the Merge Request, Note and

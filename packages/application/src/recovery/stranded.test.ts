@@ -537,3 +537,113 @@ describe('the stranded-work pass', () => {
     });
   });
 });
+
+/**
+ * The run-credential row (WP-77, PROGRESS backlog 155): what it asks for, and the one ordering
+ * criterion (2) turns on — the wake-up is enqueued **after** the transaction that found it has
+ * committed, so the provider call its duty makes is outside every transaction.
+ */
+describe('the run-credential site', () => {
+  const credential = {
+    runId: RUN,
+    taskId: TASK,
+    projectId: PROJECT,
+    mode: 'normal' as const,
+    integrationId: '00000000-0000-4000-8000-0000000000f1' as Id,
+    revokeId: 'acme/api#58',
+    scope: 'push' as const,
+    expiresAt: '2026-09-17T00:00:00.000Z',
+  };
+
+  const emptyStore = {
+    strandedBootstraps: async () => [],
+    markBootstrapAttempt: async () => {},
+    endBootstrap: async () => {},
+    strandedAsks: async () => [],
+    markAskAttempt: async () => {},
+    endAsk: async () => {},
+    strandedHistoryRecords: async () => [],
+    markHistoryRecordAttempt: async () => {},
+    endHistoryRecord: async () => {},
+    strandedCurations: async () => [],
+    markCurationAttempt: async () => {},
+    endCuration: async () => {},
+    asksWithEndedRun: async () => [],
+  };
+
+  it('enqueues one revocation per address after the finding transaction has committed', async () => {
+    const eventing = new MemoryEventing();
+    let open = 0;
+    const unitOfWork = {
+      transaction: async <T>(fn: Parameters<MemoryEventing['transaction']>[0]) => {
+        open += 1;
+        try {
+          return (await eventing.transaction(fn)) as T;
+        } finally {
+          open -= 1;
+        }
+      },
+    } as unknown as MemoryEventing;
+    const jobs = recordingJobs();
+    const openAtEnqueue: number[] = [];
+    const asked: unknown[] = [];
+
+    const report = await runStrandedRecovery({
+      store: emptyStore,
+      unitOfWork,
+      jobs: {
+        ...jobs,
+        enqueue: async <TData extends JobData = JobData>(request: EnqueueRequest<TData>) => {
+          openAtEnqueue.push(open);
+          return jobs.enqueue(request);
+        },
+      },
+      clock: { now: () => NOW },
+      graceMs: 60_000,
+      credentials: {
+        horizonMs: 48 * 60 * 60_000,
+        store: {
+          unrevokedRunCredentials: async (_tx, query) => {
+            asked.push({ ...query, openDuringRead: open });
+            return [credential];
+          },
+          unrevokedRunCredential: async () => null,
+        },
+      },
+    });
+
+    // Read inside the pass's one transaction; enqueued with none open (criterion (2)).
+    expect(asked).toEqual([
+      {
+        endedBefore: '2026-09-15T09:59:00.000Z',
+        endedAfter: '2026-09-13T10:00:00.000Z',
+        now: NOW,
+        limit: 50,
+        openDuringRead: 1,
+      },
+    ]);
+    expect(openAtEnqueue).toEqual([0]);
+    expect(jobs.enqueued).toHaveLength(1);
+    expect(jobs.enqueued[0]?.queue).toBe(JOB_QUEUES.pipelineOutbound);
+    // Ids and the address, nothing else: the duty re-reads the rest when it fires (TD-004).
+    expect(jobs.enqueued[0]?.data).toEqual({
+      duty: 'revoke_run_credential',
+      project_id: PROJECT,
+      task_id: TASK,
+      run_id: RUN,
+      revoke_id: 'acme/api#58',
+      cause_event_id: RUN,
+    });
+    expect(report.find((site) => site.site === 'run_credential')).toEqual({
+      site: 'run_credential',
+      found: 1,
+      reEnqueued: 1,
+      ended: 0,
+    });
+  });
+
+  it('is absent from a pass whose composition did not opt in', async () => {
+    const { report } = await passOver({});
+    expect(report.map((site) => site.site)).not.toContain('run_credential');
+  });
+});

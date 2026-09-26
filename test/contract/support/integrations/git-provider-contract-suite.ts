@@ -15,7 +15,6 @@ import type {
   ExternalIdentity,
   GitProviderPort,
   InboundContext,
-  MintedCredential,
   WebhookDelivery,
 } from '@platform/application';
 import { mergeRequestSchema } from '@platform/application';
@@ -321,17 +320,39 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
        * `not_found` exactly, never a resolve and never `invalid_request` (see `foreignRevokeId`).
        */
       it('refuses to report a revocation it cannot substantiate', async () => {
-        const foreign: MintedCredential = {
-          username: 'oauth2',
-          // Obviously fake, and foreign to every provider: no harness mints this (BD-002).
-          value: 'FAKE-credential-minted-by-another-process',
+        // The address alone (WP-77): nothing a provider could answer "expired" from, and no value
+        // invented to reach the refusal (standing rule 18).
+        await expectIntegrationError(
+          () => port.revokeCredential({ revokeId: context.foreignRevokeId }),
+          'not_found',
+        );
+      });
+
+      /**
+       * **Revoke by address** (WP-77, PROGRESS backlog 155): the recovery row that revokes a
+       * credential whose runner died holds the mint's `revoke_id` and nothing else. Asserted on
+       * what the provider then refuses — a clone URL for the minted credential — rather than on
+       * the call resolving, which a no-op would also do (standing rule 1).
+       */
+      it('revokes a credential given only its revocation address', async () => {
+        if (!port.capabilities().credentialMinting) {
+          return;
+        }
+        const credential = await port.mintCredential({
+          project: context.project,
           scope: 'push',
           branchPatterns: ['agentic/*'],
-          // Far enough out that no provider can answer "expired" where it owes "not mine".
-          expiresAt: '2099-01-01T00:00:00.000Z',
-          revokeId: context.foreignRevokeId,
-        };
-        await expectIntegrationError(() => port.revokeCredential(foreign), 'not_found');
+          ttlSeconds: 3600,
+        });
+        expect(credential.revokeId, 'a minted credential carries its own address').not.toBeNull();
+        expect(port.cloneUrl(context.project, credential)).toContain(credential.value);
+
+        await port.revokeCredential({ revokeId: credential.revokeId });
+
+        await expectIntegrationError(
+          async () => port.cloneUrl(context.project, credential),
+          'invalid_request',
+        );
       });
     });
 

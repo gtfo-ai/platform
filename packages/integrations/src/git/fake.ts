@@ -133,7 +133,10 @@
  *     credential it minted is the port's no-op — where the shipped loader builds GitLab's adapter
  *     per call, whose registry has no memory of the first revoke and answers a second one
  *     `not_found` (GitLab divergence 6). {@link FakeGitProvider.credentials} counts every call so a
- *     test asserts *exactly once* rather than relying on the no-op.
+ *     test asserts *exactly once* rather than relying on the no-op. The revoke is **by address**
+ *     (WP-77): it finds the credential by the `revokeId` it wrote and reads nothing else of the
+ *     handle, so a caller holding only an audit row's `revoke_id` reaches it exactly as GitLab's
+ *     per-call adapter reaches a token — and a handle it never wrote is `not_found`, as there.
  */
 import {
   type CodeownersRules,
@@ -211,6 +214,12 @@ export interface FakeGitOptions {
   readonly webhookSecret?: string;
   /** Handle (as CODEOWNERS writes it) → the account id reviewers are set by (WP-37). */
   readonly users?: Readonly<Record<string, string>>;
+  /**
+   * Where this fake's own clock starts — the instant a minted credential's `expiresAt` is counted
+   * from. @default FAKE_EPOCH. WP-77's integration tier sets it to the wall clock, because the
+   * recovery row compares a mint's recorded expiry with the pass's own clock.
+   */
+  readonly clockStart?: string;
 }
 
 interface StoredProject {
@@ -516,7 +525,11 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
      */
     host: null,
   };
-  const core = createFakeCore({ ref, webhookSecret: options.webhookSecret });
+  const core = createFakeCore({
+    ref,
+    webhookSecret: options.webhookSecret,
+    ...(options.clockStart === undefined ? {} : { clockStart: options.clockStart }),
+  });
   const baseUrl = options.baseUrl ?? 'https://git.example.test';
   const capabilities: GitProviderCapabilities = {
     webhooks: true,
@@ -948,9 +961,14 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       return credential;
     },
 
-    revokeCredential: async (credential) => {
+    revokeCredential: async (handle) => {
       core.enter('revoke_credential');
-      const stored = credentials.get(credential.value);
+      // By address (WP-77): the handle carries `revokeId` and nothing else, so the lookup is by the
+      // address this fake wrote at mint, never by a value the caller may not hold.
+      const stored =
+        handle.revokeId === null
+          ? undefined
+          : [...credentials.values()].find((entry) => entry.revokeId === handle.revokeId);
       if (stored === undefined) {
         // Divergence 8: refuse rather than shrug. The port makes "may not report a revocation it
         // cannot substantiate" an adapter obligation, and a fake that returns void here would let

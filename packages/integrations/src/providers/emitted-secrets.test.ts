@@ -784,14 +784,8 @@ describe('gitlab emits no string carrying its own credentials (rules 31, 35)', (
       // whose address it therefore names in the message. The address comes out of the caller's
       // `revokeId`, so it is caller text (BD-022) on a path that never crosses `http.ts`.
       () =>
-        failing.revokeCredential({
-          username: 'oauth2',
-          value: 'glpat-FAKE-someone-elses-token-000000000',
-          scope: 'push',
-          branchPatterns: [],
-          expiresAt: '2026-06-03T23:59:59.000Z',
-          revokeId: `acme/${GITLAB_TOKEN}#7`,
-        }),
+        // By address alone (WP-77): the port reads nothing else of the handle.
+        failing.revokeCredential({ revokeId: `acme/${GITLAB_TOKEN}#7` }),
     ]) {
       try {
         await call();

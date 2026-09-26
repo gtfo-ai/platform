@@ -34,6 +34,7 @@ import { readFile, rm, symlink } from 'node:fs/promises';
 import path from 'node:path';
 import {
   allowAnyIntegrationHost,
+  type CredentialRevocationAddress,
   createIntegrationActionExecutor,
   createMemoryAuditLog,
   createVirtualTimer,
@@ -1672,15 +1673,23 @@ describe('a minted run credential against a credentialled git server (WP-76)', (
       integrationId: '00000000-0000-4000-8000-00000000e761',
       projects: [{ path: 'acme/api' }],
     });
+    // The server grants by value and the port revokes by **address** (WP-77), so the address is
+    // mapped back to the value here — as GitLab maps a token id to the token it deletes.
+    const valueByAddress = new Map<string, string>();
     const port: GitProviderPort = Object.assign(Object.create(git) as GitProviderPort, {
       mintCredential: async (request: Parameters<GitProviderPort['mintCredential']>[0]) => {
         const minted = await git.mintCredential(request);
         await server.grant(minted.value, minted.scope);
+        if (minted.revokeId !== null) valueByAddress.set(minted.revokeId, minted.value);
         return minted;
       },
-      revokeCredential: async (credential: MintedCredential) => {
-        await git.revokeCredential(credential);
-        await server.revoke(credential.value);
+      revokeCredential: async (address: CredentialRevocationAddress) => {
+        await git.revokeCredential(address);
+        const value = address.revokeId === null ? undefined : valueByAddress.get(address.revokeId);
+        if (value === undefined) {
+          throw new Error(`the credentialed git server has no token at ${address.revokeId}`);
+        }
+        await server.revoke(value);
       },
     });
     const auditLog = createMemoryAuditLog();

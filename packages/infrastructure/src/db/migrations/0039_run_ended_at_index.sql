@@ -1,0 +1,18 @@
+-- 0039 — the read behind the run-credential recovery row (WP-77, PROGRESS backlog 155).
+--
+-- A terminal run whose git credential nothing confirmed revoked — its runner died between mint and
+-- revoke, or its teardown revoke failed — is found by a pass that reads the runs which **ended**
+-- inside the credential's longest lifetime (the requested TTL plus GitLab's rounding to the next
+-- midnight UTC), and from each of them the task's `integration_actions` rows through
+-- `integration_actions_task_idx (task_id, created_at desc)`.
+--
+-- `runs` had no index that answers "ended between two instants": `runs_active_idx` covers the live
+-- statuses only, and the rest lead with `task_id` or `project_id`. Without this the pass, which runs
+-- every `APP_INTAKE_RECONCILE_INTERVAL_MS` (a minute on the shipped defaults), would read the whole
+-- table each time. Partial on `ended_at is not null`, because a live run has none and is never what
+-- this read wants; `packages/infrastructure/src/recovery/postgres-run-credential-store.ts` carries
+-- the query.
+--
+-- An index only: no column changes, so the Drizzle definitions and the parity test are unchanged
+-- (the parity test does not compare secondary indexes — its docblock says so).
+create index runs_ended_at_idx on runs (ended_at) where ended_at is not null;

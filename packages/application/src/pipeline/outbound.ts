@@ -44,6 +44,10 @@ import type { JobHandler } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
+import {
+  type RunCredentialRevocationOptions,
+  runRunCredentialRevocation,
+} from '../recovery/run-credential.js';
 import { runShadowReport, type ShadowReportOptions } from '../shadow/report.js';
 import { runConflictWarning } from './conflict-warning.js';
 import { runCoverage } from './coverage.js';
@@ -62,7 +66,8 @@ export interface PipelineOutboundOptions
     Pick<AskMirrorOptions, 'asks'>,
     Pick<DependencyGateOptions, 'dependencyMetadata'>,
     Pick<ShadowReportOptions, 'shadow'>,
-    Pick<RiskRoutingOptions, 'identities'> {
+    Pick<RiskRoutingOptions, 'identities'>,
+    Pick<RunCredentialRevocationOptions, 'runCredentials'> {
   readonly unitOfWork: UnitOfWork;
   /** `APP_BASE_URL` — the link an ask's mirrored comment points back at. */
   readonly baseUrl: string;
@@ -134,6 +139,9 @@ export const pipelineOutboundHandler = (
         return;
       case 'breakdown_create':
         await runBreakdownCreate(options, data);
+        return;
+      case 'revoke_run_credential':
+        await runRunCredentialRevocation(options, data);
         return;
       default:
         logger.warn(

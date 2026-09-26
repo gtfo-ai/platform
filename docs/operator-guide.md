@@ -664,7 +664,11 @@ Stated here so an operator meets them in a document rather than in production:
 - **A stage that writes needs a git binding that can mint** (WP-76). The `runner` mints one
   short-lived GitLab project access token per run with a checkout, through the integration executor —
   `read` for a read-only stage, `read` + `write` for one that writes, revoked when the run ends, one
-  audit row each — and hands it to the launcher on the create request. So the GitLab integration
+  audit row each — and hands it to the launcher on the create request. A run whose runner died, or
+  whose revoke failed, has its token revoked by the recovery pass a few minutes later (one pass
+  interval after the run ends — for a dead runner, after the lease sweep has ended it), **once**; if
+  that attempt fails too, or GitLab answers that it has no such token, the error log says so and the
+  token must be checked by hand in the project's access tokens (WP-77). So the GitLab integration
   needs **`mint_credentials: true`**, which needs a personal access token that may create project
   access tokens (GitLab Premium or Ultimate on GitLab.com; any self-managed tier) — the GitLab setup
   guide's step 5. Without it, a stage that writes (implementation, conflict resolution, the

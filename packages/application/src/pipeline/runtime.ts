@@ -57,6 +57,7 @@ import type { JobWorker } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
+import type { UnrevokedRunCredentialStore } from '../recovery/run-credential.js';
 import type { ShadowStore } from '../shadow/ports.js';
 import { type ShadowReportOptions, shadowHandlers } from '../shadow/report.js';
 import { conflictWarningHandlers } from './conflict-warning.js';
@@ -178,6 +179,16 @@ export interface PipelineRuntimeOptions extends PipelineSagaOptions, NotifyOptio
    */
   readonly maintenance?: MaintenanceSpendReader;
   /**
+   * Where the `revoke_run_credential` duty re-validates a recovery wake-up (WP-77, PROGRESS
+   * backlog 155) — the same store the recovery pass finds with.
+   *
+   * **Optional**, and absent is not a silent path: the duty **refuses** and logs, rather than
+   * revoking without asking whether the address's one attempt was spent. A runtime composed
+   * without it is one whose composition root does not run the credential site either — the pass
+   * is what enqueues the duty.
+   */
+  readonly runCredentials?: UnrevokedRunCredentialStore;
+  /**
    * TD-012 step 2 over the untrusted text this runtime's handlers **store** (WP-40 round 2).
    *
    * Today that is the epic split's queue — a model's proposed child tickets, written inside the
@@ -264,6 +275,8 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
       ? {}
       : { dependencyMetadata: options.dependencyMetadata }),
     shadow: options.shadow,
+    // WP-77: the recovery revoke's re-validation. Absent, the duty refuses by name.
+    ...(options.runCredentials === undefined ? {} : { runCredentials: options.runCredentials }),
   };
   // WP-34: the two shadow handlers and the `shadow_report` duty share one options object, because
   // they are the deciding and the calling halves of the same feature (WP-15d's shape).

@@ -449,14 +449,8 @@ describe('credential minting', () => {
    * and reporting success would be the same lie by a different route.
    */
   it('refuses to claim success for a handle it did not mint when GitLab says it is not there', async () => {
-    const foreign = {
-      username: 'oauth2',
-      value: 'FAKE-token-from-another-process',
-      scope: 'push' as const,
-      branchPatterns: ['agentic/*'],
-      expiresAt: '2026-06-02T00:00:00.000Z',
-      revokeId: `${PROJECT}#58`,
-    };
+    // The address alone — what a recovery pass holds, read off the mint's audit row (WP-77).
+    const foreign = { revokeId: `${PROJECT}#58` };
     const refused = build({
       [`DELETE /projects/${P}/access_tokens/58`]: { status: 404, body: { message: '404 Not' } },
     });
@@ -483,15 +477,8 @@ describe('credential minting', () => {
   it('refuses a handle that is not a revocation address', async () => {
     const { port, calls } = build({});
     await expect(
-      port.revokeCredential({
-        username: 'oauth2',
-        value: 'FAKE-someone-elses-token',
-        scope: 'read',
-        branchPatterns: [],
-        expiresAt: '2030-01-01T00:00:00.000Z',
-        // A bare token id: what round 1 minted, and what says nothing about where to send it.
-        revokeId: '58',
-      }),
+      // A bare token id: what round 1 minted, and what says nothing about where to send it.
+      port.revokeCredential({ revokeId: '58' }),
     ).rejects.toThrow(/revocation address/);
     expect(calls, 'and it guesses at no project first').toEqual([]);
   });
