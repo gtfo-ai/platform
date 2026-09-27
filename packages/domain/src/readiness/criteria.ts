@@ -53,6 +53,30 @@ import type { Slug } from '@platform/contracts';
 /** Who can answer a criterion — see the module docblock. */
 export type ReadinessDetector = 'agent' | 'platform';
 
+/**
+ * How the **re-check after a merge** answers a criterion (WP-64, PROGRESS backlog 46) — the split
+ * product/17 implies with *"re-checked after every merged task (cheap: mostly file and CI-event
+ * inspection)"*, stated per row so nobody re-derives it.
+ *
+ *  - `platform` — the same answer discovery takes: R9 from the git provider, R11 from the bindings,
+ *    R12 from the index. Re-asked on every re-check.
+ *  - `tree` — a **file inspection at the merged commit**, through the platform's own mirror and no
+ *    checkout (`RepositoryFileSource`, the widened vault read). Decided in both directions: the
+ *    file answers pass *and* fail, because a file read is complete evidence for the criterion.
+ *  - `ci_events` — the provider's pipeline events the platform already stored. **Pass-only**: an
+ *    observed event is the criterion's own wording (*"pipeline events observed for MRs"*), while the
+ *    absence of one in the window is not evidence of absence (a project with no merge request in the
+ *    window has observed nothing), so a miss carries the previous answer rather than failing it.
+ *  - `carried` — needs a run or a judgement no file names. Carried unchanged from the previous
+ *    evaluation, **with evidence that says so**, because a discovery run per merged task is exactly
+ *    what product/17's *"cheap"* refuses.
+ *
+ * So the honest count is **five of fourteen** re-answered after a merge (R3 pass-only, R8, R9, R11,
+ * R12) and nine carried — product/17's *"mostly"* is not true of this build, and the WP-64 notes
+ * say so for the orchestrator.
+ */
+export type ReadinessRecheckSource = 'platform' | 'tree' | 'ci_events' | 'carried';
+
 export interface ReadinessCriterion {
   /** `R1` … `R14`, product/17's own numbering. */
   readonly id: string;
@@ -63,6 +87,10 @@ export interface ReadinessCriterion {
   /** product/17's "Unlocks / protects" column. **Platform text, never model output.** */
   readonly unlocks: string;
   readonly detectedBy: ReadinessDetector;
+  /** How the re-check after a merge answers it — see {@link ReadinessRecheckSource}. */
+  readonly recheck: ReadinessRecheckSource;
+  /** Platform text: why the re-check answers it that way. Quoted in a carried row's evidence. */
+  readonly recheckReason: string;
 }
 
 /** product/17 § "What it measures", transcribed. Order is the document's. */
@@ -76,6 +104,8 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     unlocks:
       'Implementation self-check; acceptance evidence; test tamper gate has something to protect',
     detectedBy: 'agent',
+    recheck: 'carried',
+    recheckReason: 'it needs the test command run in a workspace',
   },
   {
     id: 'R2',
@@ -85,6 +115,8 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     detection: 'measured: the duration of the test command executed for R1',
     unlocks: 'Fast inner loop; fewer per-run timeouts',
     detectedBy: 'agent',
+    recheck: 'carried',
+    recheckReason: 'it needs the test command run and timed in a workspace',
   },
   {
     id: 'R3',
@@ -92,6 +124,9 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     detection: 'pipeline events observed for MRs',
     unlocks: 'Deterministic CI gate; flaky detection',
     detectedBy: 'agent',
+    recheck: 'ci_events',
+    recheckReason:
+      'a pipeline event the platform stored for a merge request is what the criterion names as its evidence',
   },
   {
     id: 'R4',
@@ -99,6 +134,8 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     detection: 'gate statistics',
     unlocks: 'Returns caused by infrastructure are not blamed on the agent',
     detectedBy: 'agent',
+    recheck: 'carried',
+    recheckReason: 'the platform keeps no flaky-rerun statistic yet',
   },
   {
     id: 'R5',
@@ -106,17 +143,22 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     detection: 'config + CI job',
     unlocks: 'Reviewer skips style; fewer nit iterations',
     detectedBy: 'agent',
+    recheck: 'carried',
+    recheckReason: 'it needs a judgement about which CI job enforces which tool',
   },
   {
     id: 'R6',
     title: 'One-command dev setup (make setup, devcontainer, compose)',
     // product/17 says "executed in the workspace", and since WP-54 a `make` target or a package
-    // script is. A devcontainer or compose file is **read**: `docker *` is blocked for every stage
-    // and a run has no daemon (the module docblock's residual).
+    // script is; since WP-64 the platform's own documented `.agentic/workspace/setup` is too
+    // (`WORKSPACE_SETUP_ALLOW`, PROGRESS backlog 144). A devcontainer or compose file is **read**:
+    // `docker *` is blocked for every stage and a run has no daemon (the module docblock's residual).
     detection:
-      'a one-command setup executed in the workspace (make setup, a package script); a devcontainer or compose file is read, since a run has no Docker',
+      'a one-command setup executed in the workspace (make setup, a package script, ./.agentic/workspace/setup); a devcontainer or compose file is read, since a run has no Docker',
     unlocks: 'Reproducible workspaces; app can be booted for business review',
     detectedBy: 'agent',
+    recheck: 'carried',
+    recheckReason: 'it needs the setup command run in a workspace',
   },
   {
     id: 'R7',
@@ -124,6 +166,8 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     detection: 'config',
     unlocks: 'Earlier error detection in Implementation',
     detectedBy: 'agent',
+    recheck: 'carried',
+    recheckReason: 'it needs a judgement about the CI configuration',
   },
   {
     id: 'R8',
@@ -131,6 +175,8 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     detection: 'file inspection',
     unlocks: 'Context pack quality; lower token cost',
     detectedBy: 'agent',
+    recheck: 'tree',
+    recheckReason: 'CLAUDE.md and AGENTS.md are read at the merged commit',
   },
   {
     id: 'R9',
@@ -138,6 +184,8 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     detection: 'git provider API',
     unlocks: 'Human merge guarantee (BD-007)',
     detectedBy: 'platform',
+    recheck: 'platform',
+    recheckReason: 'the git provider is asked again',
   },
   {
     id: 'R10',
@@ -145,6 +193,8 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     detection: 'files/KB',
     unlocks: 'MR hygiene checks are objective',
     detectedBy: 'agent',
+    recheck: 'carried',
+    recheckReason: 'a commit convention can be documented anywhere, so no file settles it',
   },
   {
     id: 'R11',
@@ -152,6 +202,8 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     detection: 'integration bindings',
     unlocks: 'Investigation stage has evidence for bugs',
     detectedBy: 'platform',
+    recheck: 'platform',
+    recheckReason: 'the bindings are read again',
   },
   {
     id: 'R12',
@@ -159,6 +211,8 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     detection: 'KB score',
     unlocks: 'Refinement drift detection, fewer questions',
     detectedBy: 'platform',
+    recheck: 'platform',
+    recheckReason: 'the index of the merged commit is scored again',
   },
   {
     id: 'R13',
@@ -166,6 +220,8 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     detection: 'config',
     unlocks: 'Lower risk from agent commits',
     detectedBy: 'agent',
+    recheck: 'carried',
+    recheckReason: 'it needs a judgement about the CI configuration and the hooks',
   },
   {
     id: 'R14',
@@ -173,6 +229,8 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     detection: 'workspace build',
     unlocks: 'Deterministic builds inside the network allow-list',
     detectedBy: 'agent',
+    recheck: 'carried',
+    recheckReason: 'it needs the lockfile install run in a workspace',
   },
 ];
 

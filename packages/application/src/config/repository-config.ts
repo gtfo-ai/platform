@@ -68,13 +68,27 @@ export const CLAUDE_MD_PATH = 'CLAUDE.md';
  * **Every** path {@link RepositoryFileSource} will read — the widening of WP-18a's vault read, stated.
  *
  * The indexer reads the knowledge directory, `.agentic/rules/`, and `CLAUDE.md`/`AGENTS.md`
- * (`isIndexedVaultPath`), and a project's other files are none of the platform's business. These two
- * are the exceptions WP-63 needs and they are exact paths, never a glob: `CLAUDE.md` is already read
- * by the indexer, so its entry adds no exposure, and `.agentic/config.yml` is the one genuinely new
- * path. A project's `.agentic/pipeline.yml` and `prompts/<stage>.md` are **still unread** — the
+ * (`isIndexedVaultPath`), and a project's other files are none of the platform's business. These
+ * three are the exceptions and they are exact paths, never a glob: `CLAUDE.md` (WP-63) and
+ * `AGENTS.md` (WP-64, the readiness re-check's R8) are already read by the indexer, so their entries
+ * add no exposure, and `.agentic/config.yml` is the one genuinely new path. A project's `.agentic/pipeline.yml` and `prompts/<stage>.md` are **still unread** — the
  * WP-18a bullet that names them is a different consumer and is not closed here.
  */
-export const REPOSITORY_FILE_PATHS = [REPOSITORY_CONFIG_PATH, CLAUDE_MD_PATH] as const;
+/**
+ * `AGENTS.md` — the second of product/17 R8's two files, read by the readiness re-check (WP-64).
+ *
+ * It adds no exposure for the reason `CLAUDE.md` did not: the indexer already reads it
+ * (`ALWAYS_INDEXED_PATHS`), so its bytes are already in the platform's hands at every indexed
+ * commit. What WP-64 needs that the index does not give is the file *as a file* — its line count and
+ * whether it is a symlink — which the chunked index does not keep.
+ */
+export const AGENTS_MD_PATH = 'AGENTS.md';
+
+export const REPOSITORY_FILE_PATHS = [
+  REPOSITORY_CONFIG_PATH,
+  CLAUDE_MD_PATH,
+  AGENTS_MD_PATH,
+] as const;
 export type RepositoryFilePath = (typeof REPOSITORY_FILE_PATHS)[number];
 
 /**
@@ -97,7 +111,8 @@ export type RepositoryFilesResult =
   | {
       readonly status: 'ok';
       readonly commitSha: string;
-      readonly files: Readonly<Record<RepositoryFilePath, RepositoryFileEntry | undefined>>;
+      /** An entry for every path the request asked for, and none for a path it did not. */
+      readonly files: Readonly<Partial<Record<RepositoryFilePath, RepositoryFileEntry>>>;
       /** `true` only when `recordedCommit` was asked and the commit read is strictly older. */
       readonly behindRecorded?: boolean;
     }

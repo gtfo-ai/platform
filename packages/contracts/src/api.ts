@@ -27,6 +27,7 @@ import {
   integrationTypeSchema,
   isoDateSchema,
   isoDateTimeSchema,
+  knowledgeProposalStatusSchema,
   MAX_PROPOSAL_DELTA_BYTES,
   mergeRequestRefSchema,
   nonEmptyStringSchema,
@@ -428,6 +429,96 @@ export const startDiscoveryResponseSchema = z.strictObject({
 });
 
 /**
+ * `POST /api/projects/:id/interview` — the wizard's step 3, the business interview (product/06,
+ * product/19 §8; WP-64).
+ *
+ * The eight sections of product/19 §8's question bank, each optional: absent is **skip** (writes
+ * nothing), `answered` carries the interviewee's text, `not_applicable` marks the section as not
+ * applying to this project (product/06: a section is complete when *"filled or explicitly marked
+ * 'not applicable'"*). Every string is untrusted (BD-022): the server redacts, then cuts, and a cut
+ * is announced in the page rather than silent.
+ */
+export const BUSINESS_INTERVIEW_SECTION_IDS = [
+  'product',
+  'users',
+  'business_rules',
+  'glossary',
+  'direction',
+  'quality_bar',
+  'review',
+  'communication',
+] as const;
+export const businessInterviewSectionIdSchema = z.enum(BUSINESS_INTERVIEW_SECTION_IDS);
+
+/**
+ * Longest answer a section accepts, in characters — refused above it at the door, and the same
+ * number is the cut applied **after** redaction (a redaction placeholder can be longer than what it
+ * replaced). The page budget it is derived from is `MAX_PROPOSAL_DELTA_BYTES`; the derivation is at
+ * `@platform/domain`'s `MAX_INTERVIEW_PAGE_OVERHEAD_BYTES`.
+ */
+export const MAX_INTERVIEW_ANSWER_CHARS = 12_000;
+/** Longest "not applicable" reason. */
+export const MAX_INTERVIEW_REASON_CHARS = 1_000;
+
+/**
+ * No NUL character: `kb_proposals.delta` is `text` and the event payload is `jsonb`, and PostgreSQL
+ * refuses `\0` in both — accepting it here turned a caller's bad byte into a 500 at the insert.
+ */
+const NO_NUL = (value: string): boolean => !value.includes('\0');
+const NUL_MESSAGE = 'must not contain a NUL character (U+0000)';
+
+export const businessInterviewAnswerSchema = z.discriminatedUnion('status', [
+  z.strictObject({
+    status: z.literal('answered'),
+    text: z
+      .string()
+      .max(MAX_INTERVIEW_ANSWER_CHARS)
+      .refine(NO_NUL, NUL_MESSAGE)
+      .refine(
+        (value) => value.trim().length > 0,
+        'an answer must say something; omit the section to skip it',
+      ),
+  }),
+  z.strictObject({
+    status: z.literal('not_applicable'),
+    reason: z.string().max(MAX_INTERVIEW_REASON_CHARS).refine(NO_NUL, NUL_MESSAGE).optional(),
+  }),
+]);
+
+export const businessInterviewRequestSchema = z
+  .strictObject({
+    answers: z.strictObject(
+      Object.fromEntries(
+        BUSINESS_INTERVIEW_SECTION_IDS.map((id) => [id, businessInterviewAnswerSchema.optional()]),
+      ) as Record<
+        (typeof BUSINESS_INTERVIEW_SECTION_IDS)[number],
+        z.ZodOptional<typeof businessInterviewAnswerSchema>
+      >,
+    ),
+  })
+  .refine(
+    (request) => Object.values(request.answers).some((answer) => answer !== undefined),
+    'the interview needs at least one answered or not-applicable section; every section is skipped',
+  );
+
+/** One page the interview proposed — a row of the knowledge proposal queue. */
+export const businessInterviewResponseSchema = z.strictObject({
+  /** `false` when this `Idempotency-Key` already recorded the interview: nothing was written again. */
+  performed: z.boolean(),
+  pages: z.array(
+    z.strictObject({
+      proposal_id: idSchema,
+      section: businessInterviewSectionIdSchema,
+      /** Repository-relative, as the proposal queue stores it. */
+      target_path: nonEmptyStringSchema,
+      status: knowledgeProposalStatusSchema,
+      /** The platform cut the answer at its cap, and the page says so. */
+      truncated: z.boolean(),
+    }),
+  ),
+});
+
+/**
  * `GET /api/projects/:id/readiness` — the evaluation, since WP-21 wrote the first one.
  *
  * `criteria` is product/17's table: what passed, the evidence and **what it unlocks**. `unlocks` is
@@ -444,7 +535,10 @@ export const readinessResponseSchema = z.strictObject({
       passed: z.boolean(),
       evidence: z.string(),
       unlocks: z.string(),
-      /** Who answered it — `platform` for R9, R11 and R12, `agent` for the other eleven. */
+      /**
+       * Who answered it — `platform` for R9, R11 and R12, `agent` for the other eleven; on a
+       * `recheck` row also `platform` for R8 and an observed R3, which the platform read itself.
+       */
       detected_by: z.enum(['agent', 'platform']),
     }),
   ),
@@ -1735,6 +1829,8 @@ export type ProjectBindingSummary = z.infer<typeof projectBindingSummarySchema>;
 export type ProjectBindingsResponse = z.infer<typeof projectBindingsResponseSchema>;
 export type PutProjectBindingsRequest = z.infer<typeof putProjectBindingsRequestSchema>;
 export type StartDiscoveryResponse = z.infer<typeof startDiscoveryResponseSchema>;
+export type BusinessInterviewRequest = z.infer<typeof businessInterviewRequestSchema>;
+export type BusinessInterviewResponse = z.infer<typeof businessInterviewResponseSchema>;
 export type ListTasksQuery = z.infer<typeof listTasksQuerySchema>;
 export type TasksResponse = z.infer<typeof tasksResponseSchema>;
 export type CreateTaskRequest = z.infer<typeof createTaskRequestSchema>;

@@ -82,17 +82,45 @@ produces two things:
 Three of the criteria are the platform's own answer and are never taken from what the model claims,
 and the "what this unlocks" text is the platform's, never the agent's. The discovery agent's shell
 reads the repository and runs the project's own declared commands — its test, lint and setup
-commands, and the lockfile install they need — so R1, R2 and R6 are answered by running them. It
-cannot commit, push or add a dependency, and nothing it writes is kept.
+commands (including an executable `.agentic/workspace/setup`, run as `./.agentic/workspace/setup`),
+and the lockfile install they need — so R1, R2 and R6 are answered by running them. It cannot
+commit, push or add a dependency, and nothing it writes is kept. It drafts **technical** pages only;
+the business pages are step 3's.
 
-Readiness is evaluated **once, here**. Nothing re-checks it after a task merges yet.
+**Readiness is re-checked after every merge onto the default branch** — a merged task, a merged
+knowledge proposal — without running an agent. The re-check re-answers five criteria and carries the
+other nine from the previous evaluation, saying so in each one's evidence (*"carried from the
+discovery evaluation of …"*):
 
-### Step 3 — Business interview — **not built**
+| Re-answered after a merge | How |
+|---|---|
+| R9, R11, R12 | the platform's own answers, as at discovery (git provider, bindings, the index) |
+| R8 | `CLAUDE.md` and `AGENTS.md` read at the merged commit: present, at most 200 lines, naming `<knowledge dir>/index.md` |
+| R3 | passes when the platform has stored a pipeline event for a merge request in the last 30 days; otherwise carried |
 
-[product/06](product/06-project-onboarding.md) describes a conversational form driven by the Product
-Manager role, which writes the product-context pages. Nothing in this build runs that interview. The
-step says so and links to the knowledge browser, where the same pages can be written by hand. It is
-the reason repository readiness cannot reach level 3 from the wizard alone.
+R1, R2, R4, R5, R6, R7, R10, R13 and R14 need a run or a judgement, so they keep the answer
+discovery gave — and discovery runs once per project. A project that was never evaluated is not
+re-checked: the readiness panel keeps saying there is no evaluation until discovery runs.
+
+### Step 3 — Business interview
+
+[product/19](product/19-operating-definitions.md) §8's eight sections — product, users, business
+rules, glossary, direction, quality bar, review expectations, communication — as a form. Each is
+optional: leave it empty to skip it, or tick **Not applicable** (with an optional reason). The same
+form is on the project settings page under *Business context*.
+
+Submitting writes **proposals, not pages**: each answered or not-applicable section becomes one page
+under `business/` in the knowledge proposal queue, where a maintainer edits and approves it, and
+approving it opens a merge request like any other proposal. Nothing is committed from the form. The
+page is your own words under the platform's headings — no agent rewrites them. Answers are cut at
+12 000 characters (a not-applicable reason at 1 000), credential-shaped strings are redacted before
+anything is stored, and a cut is announced in the page.
+
+Seven of the eight pages are knowledge-completeness sections, so once they are merged the score
+moves by 7/10 (communication is not scored); with at least one technical page — which discovery
+drafts — that is above R12's 70 %, and the re-check after the merge records it. product/06 describes
+the step as a *conversation* with the Product Manager role in your language; this build ships the
+question bank as a form instead (Q102 in the open questions).
 
 ### Step 4 — Operating mode
 
@@ -426,9 +454,9 @@ In one place, so it is not spread across thirteen sections:
 |---|---|
 | Steering a live run | run detail — the only endpoint the application calls that the server does not serve |
 | Ask the task a question | task detail |
-| The business interview | onboarding step 3 |
+| The business interview as a *conversation* with the Product Manager role (the form is built; Q102) | onboarding step 3 |
 | Committing `.agentic/` configuration from the wizard itself (the project settings page does it) | onboarding step 5 |
-| Re-evaluating readiness after a task merges | onboarding step 2 |
+| Re-answering the nine run-dependent readiness criteria after a merge (five are re-checked) | onboarding step 2 |
 | Editing a knowledge document or the pipeline in the browser | knowledge, pipeline |
 | Organisation settings (autonomy defaults, provider mode, global budgets, flags) | settings |
 | Statistics | statistics |

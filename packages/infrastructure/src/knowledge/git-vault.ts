@@ -786,7 +786,7 @@ export const unavailableVaultSource = (reason: string): VaultSource => ({
  * `RepositoryFileSource` over the same mirror — **the widening of this adapter**, stated (WP-63).
  *
  * The vault read above answers the four indexed kinds of path and nothing else; this answers the
- * paths `REPOSITORY_FILE_PATHS` names — `.agentic/config.yml` and `CLAUDE.md` — and **refuses any
+ * paths `REPOSITORY_FILE_PATHS` names — `.agentic/config.yml`, `CLAUDE.md` and (WP-64) `AGENTS.md` — and **refuses any
  * other path it is handed**, so the allow-list is enforced where the bytes are read and not only in
  * the type. Everything that decides *which commit* is shared with the vault read
  * ({@link prepareMirrorRead}): the same fetch with the same credential, the default branch only
@@ -889,7 +889,7 @@ export const createGitRepositoryFileSource = (options: GitVaultOptions): Reposit
         return {
           status: 'ok',
           commitSha: commit,
-          files: files as Record<RepositoryFilePath, RepositoryFileEntry | undefined>,
+          files,
           behindRecorded,
         };
       } catch (cause) {

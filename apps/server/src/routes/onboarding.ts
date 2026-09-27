@@ -1,5 +1,5 @@
 /**
- * The onboarding wizard's command surface — product/06 steps 1, 2 and 4 (WP-21).
+ * The onboarding wizard's command surface — product/06 steps 1, 2, 3 and 4 (WP-21, WP-64).
  *
  *   POST /api/projects                          step 1, "connect"
  *   POST /api/integrations                      step 1
@@ -7,6 +7,7 @@
  *   GET  /api/projects/:project_id/bindings     step 1
  *   PUT  /api/projects/:project_id/bindings     step 1
  *   POST /api/projects/:project_id/discovery    step 2, "technical discovery"
+ *   POST /api/projects/:project_id/interview    step 3, "business interview" (WP-64)
  *   PUT  /api/projects/:project_id/config       step 4, "operating mode and features"
  *
  * These are the first **commands** this server has served beyond the knowledge queue's decide, and
@@ -25,9 +26,11 @@
  * ## `Idempotency-Key` is required where a POST creates, and what it buys is enforced
  *
  * technical/08 § "Principles": *"idempotent where a client may retry (`Idempotency-Key` header on
- * POSTs that create)"*. The header is **required** on the three creating POSTs and refused when
+ * POSTs that create)"*. The header is **required** on the four creating POSTs and refused when
  * absent, because a header that is optional is a header production omits (standing rule 31's
- * shape). Two mechanisms, and the second exists because the first cannot see the difference that
+ * shape). (The fourth, WP-64's interview, has no natural key — two interviews are two sets of
+ * proposals — so it answers a retry from the recorded attempt, `idempotentReplay`, the task
+ * commands' shape; the two bullets below are the other three.) Two mechanisms, and the second exists because the first cannot see the difference that
  * matters:
  *
  * - **A retry is cheap because of the unique key** — `projects.key`,
@@ -71,6 +74,8 @@ import { readFile } from 'node:fs/promises';
 import { createIntegrationEgressPolicy } from '@platform/application';
 import {
   apiErrorSchema,
+  businessInterviewRequestSchema,
+  businessInterviewResponseSchema,
   createIntegrationRequestSchema,
   createProjectRequestSchema,
   type JsonObject,
@@ -99,6 +104,7 @@ import {
   ensureOrganisation,
   environmentSecretSource,
   ForbiddenSecretNameError,
+  findIdempotentAttempt,
   findProjectById,
   listProjectBindings,
   MissingSecretError,
@@ -107,7 +113,12 @@ import {
   writeIntegrationHealth,
   writeProjectConfig,
 } from '../queries/onboarding-queries.js';
-import { configHashOf, idempotencyGuard, requireIdempotencyKey } from './idempotency.js';
+import {
+  configHashOf,
+  idempotencyGuard,
+  idempotentReplay,
+  requireIdempotencyKey,
+} from './idempotency.js';
 
 export interface OnboardingRoutesOptions {
   readonly database: Database;
@@ -675,6 +686,102 @@ export const registerOnboardingRoutes = async (
         started: result.status === 'started',
         detail: result.detail,
       };
+    },
+  );
+  /**
+   * product/06 step 3, the business interview (WP-64).
+   *
+   * One queued knowledge proposal per answered or not-applicable section, source `human` — never a
+   * commit: the proposal queue's decision and its merge request are the only way a page reaches the
+   * repository (`onboarding/interview.ts` in the application ring carries the argument, the bounds
+   * and the redaction). `kb.write` (maintainer), the knowledge base's own write permission.
+   *
+   * It creates, so `Idempotency-Key` is required; and it has **no natural key** to re-read — two
+   * interviews of one project are two sets of proposals — so a replay is answered from the recorded
+   * attempt (`idempotentReplay`, the task commands' shape) with `performed: false` and nothing
+   * written again. The `human_actions` row carries the sections, the proposal ids and the redaction
+   * count, **never an answer**: the text is untrusted and lives in the redacted proposal rows. It is
+   * written **in the proposals' transaction**, under an advisory lock on the key, so a crash cannot
+   * leave proposals without their audit row and two racing submits queue the pages once.
+   */
+  typed.post(
+    '/api/projects/:project_id/interview',
+    {
+      preValidation: requirePermission(guard, 'kb.write', { project: projectOf }),
+      schema: {
+        summary: 'Record the business interview (the wizard’s step 3) as knowledge proposals',
+        description:
+          'product/19 §8’s eight sections, each optional: absent skips it, `answered` carries the interviewee’s text, `not_applicable` marks it as not applying to this project. Every answered or not-applicable section becomes one knowledge proposal in the queue (source `human`), never a commit; approving it opens a merge request like any other proposal. Answers are redacted, then cut to their cap, and a cut is announced in the page. Requires `Idempotency-Key`; a replay answers `performed: false` and writes nothing.',
+        tags: ['projects'],
+        params: projectParamsSchema,
+        body: businessInterviewRequestSchema,
+        response: {
+          200: businessInterviewResponseSchema,
+          201: businessInterviewResponseSchema,
+          404: apiErrorSchema,
+          409: apiErrorSchema,
+          503: apiErrorSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const key = requireIdempotencyKey(request);
+      const projectId = request.params.project_id;
+      const actor = actorOf(request);
+      const action = 'project.interview.record';
+      const replay = await idempotentReplay(
+        (query) => findIdempotentAttempt(options.database, query),
+        {
+          userId: actor.userId,
+          action,
+          key,
+          request: { project_id: projectId, answers: request.body.answers },
+        },
+      );
+      if (replay.replayed) {
+        const recorded = businessInterviewResponseSchema.shape.pages.safeParse(
+          replay.previous?.pages,
+        );
+        return { performed: false, pages: recorded.success ? recorded.data : [] };
+      }
+      if ((await findProjectById(options.database, projectId)) === null) {
+        throw new NotFoundError(`project ${projectId}`);
+      }
+      const result = await commands().recordInterview({
+        projectId: projectId as never,
+        userId: actor.userId as never,
+        answers: request.body.answers,
+        // Written in the proposals' own transaction, never after it (WP-64 review round 1).
+        audit: {
+          action,
+          key,
+          params: { project_id: projectId, idempotency_key: key, body_digest: replay.digest },
+        },
+      });
+      if (result.status === 'not_found') {
+        throw new NotFoundError(`project ${projectId}`);
+      }
+      if (result.status === 'replayed') {
+        // A concurrent submit under this key committed first: answer from its record.
+        const previous = await findIdempotentAttempt(options.database, {
+          userId: actor.userId,
+          action,
+          key,
+        });
+        const recorded = businessInterviewResponseSchema.shape.pages.safeParse(
+          previous?.params.pages,
+        );
+        return { performed: false, pages: recorded.success ? recorded.data : [] };
+      }
+      const pages = result.pages.map((page) => ({
+        proposal_id: page.proposalId,
+        section: page.section,
+        target_path: page.targetPath,
+        status: page.status,
+        truncated: page.truncated,
+      }));
+      reply.code(201);
+      return { performed: true, pages };
     },
   );
 };

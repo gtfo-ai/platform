@@ -49,7 +49,7 @@ business overview, personas, business rules, glossary, direction, quality bar, t
 
 ## Readiness
 
-Separate from knowledge completeness, the **repository readiness level** tells the team how much autonomy the repository can support and what each missing criterion unlocks. It is computed at the end of technical discovery and shown in the wizard with the three cheapest improvements. Full definition: [17 — Repository readiness](17-repository-readiness.md).
+Separate from knowledge completeness, the **repository readiness level** tells the team how much autonomy the repository can support and what each missing criterion unlocks. It is computed at the end of technical discovery and re-checked after every merge (product/17) and shown in the wizard with the three cheapest improvements. Full definition: [17 — Repository readiness](17-repository-readiness.md).
 
 ## Ongoing onboarding
 

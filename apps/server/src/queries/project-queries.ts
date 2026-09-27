@@ -193,7 +193,8 @@ export type ProjectReadiness =
  * the table's current wording over the copy: a release that improves what a criterion says it
  * unlocks should improve it everywhere, and the value proposition is platform prose that no model
  * ever wrote. `evidence` is the opposite — it is the Discovery agent's own words for eleven of the
- * fourteen criteria (BD-022) — so it is served exactly as stored and rendered as text.
+ * fourteen criteria (BD-022) — so it is served exactly as stored and rendered as text. `detected_by`
+ * is the row's (who answered it), floored at the table's `platform` for R9, R11 and R12.
  *
  * A criterion in the row that the current table does not have (a release that dropped one) is
  * **dropped** rather than served with an invented `unlocks`; a criterion the table has and the row
@@ -241,7 +242,13 @@ export const findProjectReadiness = async (
       passed: record.passed,
       evidence: typeof record.evidence === 'string' ? record.evidence : '',
       unlocks: criterion.unlocks,
-      detected_by: criterion.detectedBy,
+      // Who answered **this** row (WP-64): the stored value, which only the platform writes — a
+      // re-check answers R8 and an observed R3 itself — and never `agent` for a criterion the
+      // table says the platform answers.
+      detected_by:
+        criterion.detectedBy === 'platform' || record.detected_by === 'platform'
+          ? 'platform'
+          : 'agent',
     });
     if (record.passed) {
       passed.add(criterion.id);

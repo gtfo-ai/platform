@@ -850,6 +850,50 @@ export const recordHumanAction = async (
 ): Promise<void> => insertHumanAction(database, input);
 
 /**
+ * Records a command's `human_actions` row **inside a transaction the command already holds**, and
+ * refuses when this caller's key already performed the action (WP-64 review round 1).
+ *
+ * For a command with no natural key — the interview queues eight proposals and nothing unique
+ * stops a second eight — `idempotentReplay`'s read before the command is not enough: two submits
+ * that race both read "no attempt". So the claim takes a transaction-scoped advisory lock on
+ * `(user, action, key)`, re-reads under it, and inserts the row in the **same** transaction as the
+ * command's writes. The second of two racing submits waits for the first to commit, then finds its
+ * row and answers `false`, and its caller rolls back. A crash between the writes and the audit row
+ * is impossible for the same reason: they commit together.
+ *
+ * Raw SQL on the transaction's own client, because the command's unit of work owns the connection;
+ * the lookup is `findIdempotentAttempt`'s predicate.
+ */
+export const claimIdempotentAttemptInTransaction = async (
+  client: { query(text: string, values?: unknown[]): Promise<{ rows: unknown[] }> },
+  input: {
+    readonly userId: string;
+    readonly action: string;
+    readonly key: string;
+    readonly params: JsonObject;
+    readonly taskId?: string | null;
+  },
+): Promise<boolean> => {
+  await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+    `human_actions:${input.userId}:${input.action}:${input.key}`,
+  ]);
+  const existing = await client.query(
+    `select 1 from human_actions
+      where user_id = $1 and action = $2 and params ->> 'idempotency_key' = $3
+      limit 1`,
+    [input.userId, input.action, input.key],
+  );
+  if (existing.rows.length > 0) {
+    return false;
+  }
+  await client.query(
+    'insert into human_actions (task_id, user_id, action, params) values ($1, $2, $3, $4::jsonb)',
+    [input.taskId ?? null, input.userId, input.action, JSON.stringify(input.params)],
+  );
+  return true;
+};
+
+/**
  * What a previous attempt under this `Idempotency-Key` asked for, or `null` when there was none.
  *
  * **This is the store technical/08's header implies, built out of a table that already exists.**

@@ -706,7 +706,8 @@ Stated here so an operator meets them in a document rather than in production:
 - **Creating an integration from a screen landed with WP-30** (§4): the wizard's integrations step and
   the project settings page both carry the create and test buttons over the endpoints §4 documents.
 - **No SBOM attestation** is published (§2).
-- **The business-interview step of onboarding is not built** (see the user guide).
+- **The business-interview step of onboarding is a form, not the Product Manager's conversation**
+  (WP-64, Q102; see the user guide). Its answers become knowledge proposals, never commits.
 - Every endpoint the browser application calls is served (the census in
   `apps/server/src/routes/client-census.test.ts` holds it, admitted gaps empty since WP-27, which added
   steer, take-over and hand-back). A steer reaches only a run held by the process that serves the API;

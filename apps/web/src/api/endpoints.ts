@@ -35,6 +35,8 @@ import {
   askTaskResponseSchema,
   autonomyResponseSchema,
   budgetsResponseSchema,
+  businessInterviewRequestSchema,
+  businessInterviewResponseSchema,
   cancelRunRequestSchema,
   cancelTaskRequestSchema,
   contextPackRecordSchema,
@@ -247,6 +249,15 @@ export interface Endpoints {
     projectId: string,
     idempotencyKey?: string,
   ) => Promise<z.output<typeof startDiscoveryResponseSchema>>;
+  /**
+   * `POST …/interview` (WP-64): the wizard's step 3. It creates proposals, so the key is required
+   * and belongs to the intent — the same answers pressed twice are one interview.
+   */
+  readonly recordInterview: (
+    projectId: string,
+    body: z.input<typeof businessInterviewRequestSchema>,
+    idempotencyKey: string,
+  ) => Promise<z.output<typeof businessInterviewResponseSchema>>;
   /**
    * `POST …/config/export` (WP-63, Q94 (c)): propose the settings as `.agentic/config.yml` in a
    * merge request. It creates a branch, so the key is required and belongs to the intent.
@@ -572,6 +583,12 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
         body: {},
         idempotent: true,
         ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+      }),
+    recordInterview: (projectId, body, idempotencyKey) =>
+      client.command(`/api/projects/${seg(projectId)}/interview`, {
+        schema: businessInterviewResponseSchema,
+        body: businessInterviewRequestSchema.parse(body),
+        idempotencyKey,
       }),
 
     setProjectAutonomy: async (projectId, body, idempotencyKey) => {

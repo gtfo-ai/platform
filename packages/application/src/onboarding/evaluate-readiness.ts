@@ -202,3 +202,137 @@ export const evaluateReadiness = (input: EvaluateReadinessInput): EvaluateReadin
     redactions: tally.count,
   };
 };
+
+// ── The re-check after a merge (WP-64, PROGRESS backlog 46) ──────────────────
+
+/**
+ * What the re-check observed without a run — the `tree` and `ci_events` rows of
+ * `READINESS_CRITERIA[].recheck`, answered by `agentInstructionsReadiness` and
+ * `mergeRequestPipelineReadiness` in the domain ring.
+ *
+ * `null` for a criterion means *"not observed"*, and the fold then carries the previous answer: a
+ * file the mirror could not read is not a file that is absent, and an empty event window is not a
+ * CI that does not run.
+ */
+export interface ReadinessObservations {
+  /** R8, or `null` when the repository files could not be read. */
+  readonly agentInstructions: { readonly passed: boolean; readonly evidence: string } | null;
+  /** R3, or `null` when nothing was observed in the window (pass-only). */
+  readonly mergeRequestPipelines: { readonly passed: boolean; readonly evidence: string } | null;
+}
+
+export interface RecheckReadinessInput {
+  readonly id: Id;
+  readonly projectId: Id;
+  readonly evaluatedAt: IsoDateTime;
+  /** The evaluation this one re-checks: the project's latest, whoever wrote it. */
+  readonly previous: ReadinessEvaluation;
+  readonly signals: PlatformReadinessSignals;
+  readonly observations: ReadinessObservations;
+}
+
+/** The prefix a carried row's evidence starts with — also how a second re-check recognises one. */
+export const CARRIED_EVIDENCE_PREFIX = 'carried from the ';
+
+/**
+ * A carried row's evidence: which evaluation it came from, why it was not re-asked, and the words
+ * that evaluation stored — cut to the same per-criterion cap every evidence string has.
+ *
+ * A row that was **already** carried keeps its evidence unchanged, so the text names the evaluation
+ * that actually observed it rather than the most recent re-check that copied it forward.
+ */
+const carriedEvidence = (
+  criterion: ReadinessCriterion,
+  previous: ReadinessEvaluation,
+  stored: string,
+): string => {
+  if (stored.startsWith(CARRIED_EVIDENCE_PREFIX)) {
+    return stored;
+  }
+  const text = `${CARRIED_EVIDENCE_PREFIX}${previous.source} evaluation of ${previous.evaluatedAt} (not re-checked after a merge: ${criterion.recheckReason}): ${stored}`;
+  return text.length <= MAX_READINESS_EVIDENCE_CHARS
+    ? text
+    : `${text.slice(0, MAX_READINESS_EVIDENCE_CHARS)}…`;
+};
+
+/**
+ * One re-check evaluation — product/17's *"re-checked after every merged task"*. Pure.
+ *
+ * Four rules, one per `ReadinessRecheckSource`, and each is stated at the source:
+ *
+ *  - `platform` (R9, R11, R12) — answered exactly as discovery answers them, by the same function,
+ *    and **never** from anything the previous evaluation's model said;
+ *  - `tree` (R8) — the file inspection, in both directions; when the files could not be read, the
+ *    previous answer is carried;
+ *  - `ci_events` (R3) — an observed pass replaces the previous answer; no observation carries it;
+ *  - `carried` — the previous answer, with evidence naming where it came from and why.
+ *
+ * It takes **no redactor**, and that is a property rather than an omission: every string it writes
+ * is either platform text or evidence the previous evaluation already stored after redaction.
+ */
+export const recheckReadiness = (input: RecheckReadinessInput): ReadinessEvaluation => {
+  const previousById = new Map(input.previous.criteria.map((row) => [row.id, row]));
+  const carry = (criterion: ReadinessCriterion): StoredReadinessCriterion => {
+    const stored = previousById.get(criterion.id);
+    return {
+      id: criterion.id,
+      // An evaluation written before a criterion existed has no row for it: unanswered is `false`.
+      passed: stored?.passed ?? false,
+      evidence: carriedEvidence(criterion, input.previous, stored?.evidence ?? NOT_REPORTED),
+      unlocks: criterion.unlocks,
+      // Who answered it is carried with the answer: an R3 a re-check observed stays the platform's
+      // when a later re-check carries it. Never below the table's `platform`.
+      detectedBy:
+        criterion.detectedBy === 'platform'
+          ? 'platform'
+          : (stored?.detectedBy ?? criterion.detectedBy),
+    };
+  };
+  /**
+   * An answer the platform observed itself — `detectedBy: 'platform'` whatever the table's column
+   * says, because the stored field is *who answered it* (`StoredReadinessCriterion`), and on a
+   * re-check R8 and R3 are answered by a file read and a count of stored events, not by a model.
+   */
+  const observed = (
+    criterion: ReadinessCriterion,
+    answer: { readonly passed: boolean; readonly evidence: string },
+  ): StoredReadinessCriterion => ({
+    id: criterion.id,
+    passed: answer.passed,
+    evidence: answer.evidence,
+    unlocks: criterion.unlocks,
+    detectedBy: 'platform',
+  });
+
+  const criteria = READINESS_CRITERIA.map((criterion): StoredReadinessCriterion => {
+    switch (criterion.recheck) {
+      case 'platform':
+        return observed(criterion, platformAnswer(criterion, input.signals));
+      case 'tree': {
+        const answer = criterion.id === 'R8' ? input.observations.agentInstructions : null;
+        return answer === null ? carry(criterion) : observed(criterion, answer);
+      }
+      case 'ci_events': {
+        const answer = criterion.id === 'R3' ? input.observations.mergeRequestPipelines : null;
+        return answer?.passed === true ? observed(criterion, answer) : carry(criterion);
+      }
+      default:
+        // `carried` — and, failing closed, anything a later source is added as before it has a
+        // branch here: an unanswered criterion keeps the previous answer rather than passing.
+        return carry(criterion);
+    }
+  });
+
+  const passed = new Set(criteria.filter((criterion) => criterion.passed).map(({ id }) => id));
+  return {
+    id: input.id,
+    projectId: input.projectId,
+    level: readinessLevelFor(passed),
+    criteria,
+    evaluatedAt: input.evaluatedAt,
+    source: READINESS_RECHECK_SOURCE,
+  };
+};
+
+/** `readiness_evaluations.source` for this producer — the value the port has named since WP-21. */
+export const READINESS_RECHECK_SOURCE = 'recheck';

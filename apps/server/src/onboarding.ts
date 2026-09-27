@@ -7,7 +7,8 @@
  *    an integration. It borrows the pool per request and starts no worker.
  *  - {@link composeOnboardingRecording} is what a **worker** role registers: the `artifact.created`
  *    handler for a `DiscoveryDraft` and the `onboarding.discovery` job behind it, which is what
- *    writes `readiness_evaluations` and the drafted pages.
+ *    writes `readiness_evaluations` and the drafted pages — and, since WP-64, the readiness
+ *    re-check after a merge, on the same queue.
  *
  * It is the shape `knowledge.ts` next door already uses (`createKnowledgeCommands` /
  * `composeKnowledgeIndexing`), for the same reason: which collaborators exist is a property of the
@@ -29,6 +30,8 @@
  */
 import { randomUUID } from 'node:crypto';
 import type {
+  BusinessInterviewAnswers,
+  BusinessInterviewResult,
   DiscoveryRecordOptions,
   IntegrationActionExecutor,
   Jobs,
@@ -37,6 +40,9 @@ import type {
   PipelineIntegrationsPort,
   PlatformReadinessProbe,
   PlatformReadinessSignals,
+  ReadinessCiEvents,
+  ReadinessRecheckOptions,
+  RepositoryFileSource,
   StartDiscoveryResult,
 } from '@platform/application';
 import {
@@ -45,12 +51,13 @@ import {
   gitReads,
   integrationsForProject,
   noRunScopedSecrets,
+  recordBusinessInterview,
   startProjectDiscovery,
 } from '@platform/application';
-import type { Id, IntegrationType, IsoDateTime } from '@platform/contracts';
+import type { Id, IntegrationType, IsoDateTime, JsonObject } from '@platform/contracts';
 import { SHIPPED_TEMPLATES } from '@platform/domain';
 import {
-  type eventing as eventingAdapters,
+  eventing as eventingAdapters,
   knowledge as knowledgeAdapters,
   pipeline as pipelineAdapters,
   redaction as redactionAdapters,
@@ -61,6 +68,7 @@ import { createIntegrationProber } from '@platform/integrations';
 import type pg from 'pg';
 import { injectedSecretRedactorForEnvironment } from './agent.js';
 import { createProjectSettingsPort } from './pipeline.js';
+import { claimIdempotentAttemptInTransaction } from './queries/onboarding-queries.js';
 
 const nowIso = (): IsoDateTime => new Date().toISOString() as IsoDateTime;
 
@@ -70,6 +78,25 @@ export interface OnboardingCommands {
     readonly projectId: Id;
     readonly userId: Id;
   }): Promise<StartDiscoveryResult>;
+  /**
+   * product/06 step 3, the business interview (WP-64): one queued knowledge proposal per answered
+   * section. Needs no job runtime — it writes rows and asks for nothing to run.
+   */
+  recordInterview(input: {
+    readonly projectId: Id;
+    readonly userId: Id;
+    readonly answers: BusinessInterviewAnswers;
+    /**
+     * The `human_actions` row, written in the proposals' own transaction and refused when this
+     * caller's key already performed the interview (`claimIdempotentAttemptInTransaction`). The
+     * pages and the redaction count are added to `params` here, where they are known.
+     */
+    readonly audit: {
+      readonly action: string;
+      readonly key: string;
+      readonly params: JsonObject;
+    };
+  }): Promise<BusinessInterviewResult>;
   /** product/06 step 1's "the platform validates access". `null` for an id nobody has. */
   testIntegration(integrationId: Id): Promise<{
     readonly ok: boolean;
@@ -105,6 +132,15 @@ export interface OnboardingCommandOptions {
    * budgets for one account.
    */
   readonly executor: IntegrationActionExecutor;
+  /**
+   * The environment a run is given (WP-64), so an interview answer that repeats the model
+   * credential is redacted before it reaches a row — the pair `createKnowledgeCommands` composes for
+   * a maintainer's edit, which is the same kind of write: a person's text becoming a page.
+   */
+  readonly runEnvironment: {
+    readonly env: Readonly<Record<string, string>>;
+    readonly secretEnvNames: readonly string[];
+  };
   readonly logger: Logger;
 }
 
@@ -125,6 +161,11 @@ export const createOnboardingCommands = (options: OnboardingCommandOptions): Onb
     // TD-012 step 2 over the probe's detail, beside the account's own exact-match redactor.
     platformRedactor: redactionAdapters.patternRedactor(),
   });
+  // TD-012 over interview answers: the run environment's credentials first, then the pattern rules.
+  const interviewRedactor = composeSecretRedactors(
+    injectedSecretRedactorForEnvironment(options.runEnvironment, options.logger),
+    redactionAdapters.patternRedactor(),
+  );
 
   return {
     startDiscovery: async ({ projectId, userId }) => {
@@ -148,6 +189,42 @@ export const createOnboardingCommands = (options: OnboardingCommandOptions): Onb
         { projectId, requestedByUserId: userId },
       );
     },
+    recordInterview: async ({ projectId, userId, answers, audit }) =>
+      recordBusinessInterview(
+        {
+          unitOfWork: options.eventing.unitOfWork,
+          eventStore: options.eventing.store,
+          proposals: new knowledgeAdapters.PostgresProposalStore(options.pool),
+          knowledge: new knowledgeAdapters.PostgresKnowledgeStore(options.pool),
+          clock: { now: nowIso },
+          ids,
+          redactor: interviewRedactor,
+          project: async (id) => readProject(options.pool, id),
+        },
+        {
+          projectId,
+          userId,
+          answers,
+          claim: async (tx, recorded) =>
+            claimIdempotentAttemptInTransaction(eventingAdapters.postgresTransaction(tx).client, {
+              userId,
+              action: audit.action,
+              key: audit.key,
+              params: {
+                ...audit.params,
+                sections: recorded.pages.map((page) => page.section),
+                pages: recorded.pages.map((page) => ({
+                  proposal_id: page.proposalId,
+                  section: page.section,
+                  target_path: page.targetPath,
+                  status: page.status,
+                  truncated: page.truncated,
+                })),
+                redactions: recorded.redactions,
+              },
+            }),
+        },
+      ),
     testIntegration: async (integrationId) => prober.test(integrationId),
   };
 };
@@ -162,6 +239,8 @@ export interface ComposeOnboardingOptions {
     readonly env: Readonly<Record<string, string>>;
     readonly secretEnvNames: readonly string[];
   };
+  /** The mirror's named-file reader (`composeKnowledgeIndexing`), for the re-check's R8 (WP-64). */
+  readonly files: RepositoryFileSource;
   readonly logger: Logger;
 }
 
@@ -278,6 +357,29 @@ export const createPlatformReadinessProbe = (options: {
 });
 
 /**
+ * R3's evidence for the re-check — `ci.pipeline.finished` events carrying a merge request (WP-64).
+ *
+ * Read off the append-only `events` table, which is the one place a pipeline event is kept: it
+ * needs no projection of its own, and the window keeps the read inside the `(type, occurred_at)`
+ * index and the partitions it names. `mr` is `nullish` on the payload, so a JSON `null` and an
+ * absent key both mean "no merge request", which is what `jsonb_typeof = 'object'` asks.
+ */
+export const createReadinessCiEvents = (pool: pg.Pool): ReadinessCiEvents => ({
+  mergeRequestPipelinesSince: async (projectId, since) => {
+    const { rows } = await pool.query<{ count: number }>(
+      `select count(*)::int as count
+         from events
+        where type = 'ci.pipeline.finished'
+          and occurred_at >= $2
+          and payload->>'project_id' = $1
+          and jsonb_typeof(payload->'mr') = 'object'`,
+      [projectId, since],
+    );
+    return rows[0]?.count ?? 0;
+  },
+});
+
+/**
  * Registers the `DiscoveryDraft` trigger and starts the `onboarding.discovery` worker.
  *
  * One more pooled connection — the worker holds one during its single transaction — counted in
@@ -310,6 +412,19 @@ export const composeOnboardingRecording = async (
     logger: options.logger,
   };
 
-  const runtime = createOnboardingRuntime({ record, jobs: options.jobs });
+  const recheck: ReadinessRecheckOptions = {
+    unitOfWork: options.eventing.unitOfWork,
+    readiness: record.readiness,
+    // The same probe discovery uses: R9, R11 and R12 are answered one way whoever asks.
+    signals: record.signals,
+    files: options.files,
+    ciEvents: createReadinessCiEvents(options.pool),
+    clock: { now: nowIso },
+    ids: { next: (): Id => randomUUID() as Id },
+    project: async (projectId) => readProject(options.pool, projectId),
+    logger: options.logger,
+  };
+
+  const runtime = createOnboardingRuntime({ record, recheck, jobs: options.jobs });
   return { runtime };
 };

@@ -232,7 +232,7 @@ beforeEach(() => {
 });
 
 describe('the onboarding wizard', () => {
-  it('shows every step, including the one that is honestly not built', async () => {
+  it('shows every step, the business interview included', async () => {
     render(createApp({ fetchImpl: fetchFor('absent'), realtime: false }).element);
     for (const title of [
       'Connect',
@@ -245,9 +245,10 @@ describe('the onboarding wizard', () => {
     ]) {
       expect(await screen.findByText(title), title).toBeTruthy();
     }
-    // product/06 § "Step 3" is not implemented, and the screen says so rather than collecting
-    // answers nobody reads.
-    expect(await screen.findByText('Not built in this release')).toBeTruthy();
+    // product/06 § "Step 3" exists since WP-64: the question bank's eight sections, as a form whose
+    // answers become proposals (`business-interview.test.tsx` drives it).
+    expect(await screen.findByLabelText('Glossary')).toBeTruthy();
+    expect(screen.queryByText('Not built in this release')).toBeNull();
   });
 
   it('tells an operator a project with no evaluation needs a discovery run', async () => {

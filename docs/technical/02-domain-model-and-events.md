@@ -201,7 +201,7 @@ trade). `mr.updated` was the one entry that named a backlog entry instead — it
 | `feedback.received` | Feedback | feedback | Feedback intake agent (30) |
 | `knowledge.proposal.created` / `.applied` / `.rejected` | Librarian / Human | proposal | Index rebuild (40), UI |
 | `knowledge.index.rebuilt` | Indexer | project, commit | — |
-| `readiness.evaluated` | Discovery / CI gate | project, level, criteria | Policy suggestions (20), UI |
+| `readiness.evaluated` | *no producer on this build* (PROGRESS backlog 228; the discovery recorder and the WP-64 re-check write `readiness_evaluations` rows without emitting it) | project, level, criteria | Policy suggestions (20), UI |
 | `config.changed` | Settings / repo sync | scope, diff (secrets redacted), actor | Audit (0), effective config rebuild (10) |
 | `integration.action.performed` / `.failed` | adapters | integration, action, payload (redacted), result | Audit (0), health (20) |
 | `shadow.report.created` | Shadow report duty (WP-34) | task, artifact ref | Batch completion (40), UI |

@@ -27,9 +27,9 @@
  * bytes the CLI received (standing rule 82: `FakeClaudeRunner` picks its scenario from `spec.stage`
  * and never reads a prompt, so this file runs the real runner over a scripted process instead).
  *
- * **Steps 3–5** are covered in as much as they exist: the business interview is not built (the
- * wizard screen says so), and the commit step is the knowledge proposal queue, whose rows this file
- * asserts.
+ * **Steps 3–5**: the business interview (WP-64) is driven end to end by
+ * `readiness-loop.e2e.test.ts`, which also merges its pages and a task and watches the readiness
+ * re-check notice; the commit step is the knowledge proposal queue, whose rows this file asserts.
  *
  * ## The fixture repository
  *

@@ -289,6 +289,30 @@ export const DEFAULT_IMPLEMENTATION_ALLOW: readonly string[] = [
 ];
 
 /**
+ * product/19 §5's documented one-command setup, **`.agentic/workspace/setup`**, as a named verb —
+ * the literal path and nothing else (WP-64, PROGRESS backlog 144).
+ *
+ * product/17 R6 is detected *"executed in the workspace"*. Since WP-54 a `make` target or a package
+ * script is run by discovery; the platform's own documented setup path was the one form that had no
+ * verb, so discovery *read* the script — the weaker evidence R6 was reworded to avoid. One literal,
+ * with no argument form: `./.agentic/workspace/setup --anything` falls to `ask`, like every spelling
+ * nobody named.
+ *
+ * **What the name does not bound, said where the name is** (BD-025's WP-54 amendment, accepted
+ * there for `make *` and `npm run *`): the script's *body* is repository content, and a task branch
+ * can change it. What bounds it is the run container, its non-root user, its workspace-only writable
+ * mount and its egress allow-list (BD-021, TD-021) — never this list. It is the same residual as
+ * `make setup`, for the same repository-controlled reason.
+ *
+ * **In the verification baseline only** — discovery, the Reviewer and the Acceptance Tester — and
+ * **not** in {@link PROJECT_COMMAND_ALLOW}: it is the platform's documented path rather than a
+ * command a project declares, so a project's `commands.allow` does not narrow it away
+ * ({@link isProjectCommandEntry} does not cover it). A project that does not want it run writes it
+ * into `commands.block`, which always wins.
+ */
+export const WORKSPACE_SETUP_ALLOW: readonly string[] = ['./.agentic/workspace/setup'];
+
+/**
  * The baseline of the two roles that **check** work rather than write it — the Reviewer (product/13
  * *"tests only"*) and the Acceptance Tester (*"tests/app cmds"*) — and of Discovery, whose
  * readiness criteria R1, R2 and R6 product/17 detects by running the project's commands (WP-54).
@@ -302,6 +326,7 @@ export const DEFAULT_VERIFICATION_ALLOW: readonly string[] = [
   ...DEFAULT_READ_ONLY_ALLOW,
   ...LOCKFILE_INSTALL_ALLOW,
   ...PROJECT_COMMAND_ALLOW,
+  ...WORKSPACE_SETUP_ALLOW,
 ];
 
 /**
@@ -1656,8 +1681,11 @@ export interface OrganisationNarrowing {
  *    (the same two rules, the other way round). A glob the organisation did not list verbatim is
  *    removed, which is the direction a coverage question between two globs has to fail in. A stage's and a skill's
  *    additions (TD-027) are part of the baseline here and meet the same test. When the organisation
- *    states no `allow`, nothing is removed from it: the maximum is then the platform's own, which
- *    every baseline already sits under by construction.
+ *    states no `allow`, nothing is removed from it: the maximum is then the platform's own shipped
+ *    baselines themselves. That is not one list every baseline sits under — since WP-64 the
+ *    `verification` baseline holds `./.agentic/workspace/setup` ({@link WORKSPACE_SETUP_ALLOW}),
+ *    which `DEFAULT_IMPLEMENTATION_ALLOW` deliberately does not — so "no organisation `allow`"
+ *    means "each role's shipped baseline", not "the implementation list".
  *  - `ask` and `block` — the organisation's entries are **added**; neither list can shrink, and an
  *    allow entry named verbatim in either is removed.
  *

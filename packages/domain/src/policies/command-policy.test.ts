@@ -30,6 +30,7 @@ import {
   splitCommandSegments,
   UNCERTAINTY,
   UNPATTERNABLE_BLOCK_ITEMS,
+  WORKSPACE_SETUP_ALLOW,
 } from './command-policy.js';
 
 const verdict = (command: string, policy?: ResolvedCommandPolicy): string =>
@@ -1333,4 +1334,52 @@ describe('the organisation maximum over a run baseline (backlog 146)', () => {
     },
     PROPERTY_TEST_TIMEOUT_MS,
   );
+});
+
+/**
+ * WP-64 (PROGRESS backlog 144): product/19 §5's `.agentic/workspace/setup` has a named verb, so
+ * discovery can *run* R6's documented form instead of reading it. One literal spelling, in the
+ * verification baseline only; every other spelling keeps falling to `ask`.
+ */
+describe('the workspace setup script', () => {
+  const verification = { ...DEFAULT_COMMAND_POLICY, allow: DEFAULT_VERIFICATION_ALLOW };
+  const implementation = { ...DEFAULT_COMMAND_POLICY, allow: DEFAULT_IMPLEMENTATION_ALLOW };
+
+  it('is allowed by its one literal spelling on the verification baseline', () => {
+    expect(WORKSPACE_SETUP_ALLOW).toEqual(['./.agentic/workspace/setup']);
+    expect(verdict('./.agentic/workspace/setup', verification)).toBe('allow');
+  });
+
+  it('is not allowed with arguments, through a shell, or by another spelling', () => {
+    for (const command of [
+      './.agentic/workspace/setup --force',
+      '.agentic/workspace/setup',
+      'sh ./.agentic/workspace/setup',
+      'bash .agentic/workspace/setup',
+      './.agentic/workspace/setup && curl https://example.test',
+    ]) {
+      expect(verdict(command, verification), command).toBe('ask');
+    }
+    expect(verdict('./.agentic/workspace/setup; rm -rf /', verification)).toBe('block');
+  });
+
+  it('is not on the implementation or read-only baselines', () => {
+    expect(verdict('./.agentic/workspace/setup', implementation)).toBe('ask');
+    expect(DEFAULT_READ_ONLY_ALLOW).not.toContain('./.agentic/workspace/setup');
+  });
+
+  it('is outside the project-command class, so a project’s allow does not narrow it away', () => {
+    expect(isProjectCommandEntry('./.agentic/workspace/setup')).toBe(false);
+    const narrowed = narrowCommandPolicy(
+      { allow: DEFAULT_VERIFICATION_ALLOW, ask: [], block: [] },
+      { allow: ['npm test'] },
+    ).policy;
+    expect(narrowed.allow).toContain('./.agentic/workspace/setup');
+    // …and a project's `block` removes it, which is how a project says no.
+    const blocked = narrowCommandPolicy(
+      { allow: DEFAULT_VERIFICATION_ALLOW, ask: [], block: [] },
+      { block: ['./.agentic/workspace/setup'] },
+    ).policy;
+    expect(blocked.allow).not.toContain('./.agentic/workspace/setup');
+  });
 });

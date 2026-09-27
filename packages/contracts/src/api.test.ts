@@ -3,6 +3,7 @@ import {
   answerQuestionRequestSchema,
   apiErrorSchema,
   auditEntrySchema,
+  businessInterviewRequestSchema,
   createProjectRequestSchema,
   createTaskRequestSchema,
   decideApprovalRequestSchema,
@@ -605,5 +606,37 @@ describe('the onboarding wizard’s DTOs (WP-21, product/06)', () => {
       }).success,
     ).toBe(false);
     expect(readinessResponseSchema.safeParse({ ...response, level: 9 }).success).toBe(false);
+  });
+});
+
+/**
+ * WP-64 review round 1: an interview answer or reason carrying U+0000 is a 400 naming the field,
+ * never a 500 from PostgreSQL (`text` and `jsonb` both refuse the byte). Both directions (rule 42).
+ */
+describe('businessInterviewRequestSchema', () => {
+  it('refuses a NUL in an answer or a reason, and names where', () => {
+    const nul = String.fromCharCode(0);
+    const answer = businessInterviewRequestSchema.safeParse({
+      answers: { product: { status: 'answered', text: `Invoicing${nul}` } },
+    });
+    expect(answer.success).toBe(false);
+    expect(answer.error?.issues[0]?.path).toEqual(['answers', 'product', 'text']);
+    expect(answer.error?.issues[0]?.message).toContain('NUL');
+    const reason = businessInterviewRequestSchema.safeParse({
+      answers: { users: { status: 'not_applicable', reason: `none${nul}` } },
+    });
+    expect(reason.success).toBe(false);
+    expect(reason.error?.issues[0]?.path).toEqual(['answers', 'users', 'reason']);
+  });
+
+  it('accepts the same text without it', () => {
+    expect(
+      businessInterviewRequestSchema.safeParse({
+        answers: {
+          product: { status: 'answered', text: 'Invoicing' },
+          users: { status: 'not_applicable', reason: 'none' },
+        },
+      }).success,
+    ).toBe(true);
   });
 });

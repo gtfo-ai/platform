@@ -597,7 +597,15 @@ describe('the platform skills a stage is planned with', () => {
      * nobody is watching.
      */
     const policy = commandBaselineFor('discovery', 'discovery', ['kb']);
-    for (const command of ['git log -5', 'cat package.json', 'npm ci', 'npm test', 'make setup']) {
+    // WP-64 (backlog 144): R6's documented setup script, by its one literal spelling.
+    for (const command of [
+      'git log -5',
+      'cat package.json',
+      'npm ci',
+      'npm test',
+      'make setup',
+      './.agentic/workspace/setup',
+    ]) {
       expect(evaluateCommand({ command }, policy, 'ask').verdict, command).toBe('allow');
     }
     for (const command of [

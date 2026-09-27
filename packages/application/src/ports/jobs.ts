@@ -430,6 +430,11 @@ export const JOB_QUEUES = {
    * serialise — two projects' onboardings are independent rows. The work is a handful of rows in
    * one transaction. (`knowledgeProposals` took a key at WP-48 because a *recovery* deliberately
    * re-enqueues it; this queue has no recovery row, and a job it does not lose needs no key.)
+   *
+   * **Since WP-64 it also carries the readiness re-check after a merge** (`kind:
+   * 'readiness_recheck'`, `onboarding/recheck.ts`) — one worker for both, so no second pooled
+   * connection. Still no key: a burst of merges is already collapsed one level up, by the
+   * `knowledge.index` queue's per-project `stately` policy whose run enqueues this.
    */
   discoveryRecord: 'onboarding.discovery',
   /**

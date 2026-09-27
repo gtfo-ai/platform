@@ -18,10 +18,10 @@
  *   other, which is how a served endpoint ended up with no caller anywhere.
  * - **Step 2 (technical discovery)** starts the Discovery agent and shows the readiness evaluation
  *   it produces, with product/17's three cheapest improvements.
- * - **Step 3 (business interview)** is **not built**. product/06 describes a conversational form
- *   driven by the Product Manager role; nothing in this build runs an interview, and a form that
- *   collected answers nobody reads would be worse than an honest gap. The step says so and links to
- *   the knowledge screen, where the same pages can be written by hand.
+ * - **Step 3 (business interview)** is `features/business-interview.tsx` since WP-64, rendered here
+ *   and on the project settings page: product/19 §8's question bank as a form, whose answers become
+ *   `business/*` pages **in the proposal queue** — never a commit. It is the form without the
+ *   Product Manager's conversation (Q102), and it says so.
  * - **Step 3b (history bootstrap)** is `features/history-bootstrap.tsx`, rendered here and on the
  *   project settings page — the *same component*, for step 4's reason. It is optional and
  *   budget-capped, it shows the estimate before it starts anything (product/06's own requirement),
@@ -69,6 +69,7 @@ import {
   SectionHeading,
 } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
+import { BusinessInterview } from './business-interview.js';
 import { HistoryBootstrap } from './history-bootstrap.js';
 import { bindingConfigOf, OperatingMode } from './operating-mode.js';
 
@@ -320,10 +321,14 @@ export const OnboardingScreen = (): ReactElement => {
       </Step>
 
       <Step number={3} title="Business interview">
-        <EmptyState
-          title="Not built in this release"
-          hint="product/06 describes a conversational form driven by the Product Manager role. Nothing in this build runs one, so the wizard says so rather than collecting answers nobody reads. The same pages can be written by hand from the project’s Knowledge screen."
-        />
+        {project === null ? (
+          <EmptyState
+            title="Create the project first"
+            hint="Step 1 is what a business context belongs to."
+          />
+        ) : (
+          <BusinessInterview projectId={project.id} projectKey={project.key} />
+        )}
       </Step>
 
       {/**

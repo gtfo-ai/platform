@@ -52,7 +52,7 @@ is the case this paragraph is written for: §1 keeps the *policy* on the default
 sandbox, not the list, bounds what the branch's scripts do.
 
 **A residual this amendment accepts, stated rather than implied.** Discovery now runs an
-**unreviewed** repository's `make` targets and package scripts at first contact (it has to, to
+**unreviewed** repository's `make` targets, package scripts and (since WP-64) its `./.agentic/workspace/setup` script, by that literal path, at first contact (it has to, to
 answer R1, R2 and R6), and the model credential is in that run's environment. Two paths out follow
 from that and are not closed by the command list: the run's egress admits the git host, so a
 `Makefile` can push to it with credentials of its own; and `npm run env` or `make -p` print the

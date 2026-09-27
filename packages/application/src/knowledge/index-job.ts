@@ -65,7 +65,7 @@ import type { EnqueueResult, JobHandler, Jobs, JobWorker } from '../ports/jobs.j
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
-import type { KnowledgeIndexer } from './indexer.js';
+import type { IndexReport, KnowledgeIndexer } from './indexer.js';
 
 /** Why a run was asked for — a log field, and the only thing that distinguishes two wake-ups. */
 export type KnowledgeIndexReason = 'task_started' | 'merged' | 'default_branch_moved' | 'requested';
@@ -107,8 +107,21 @@ export interface KnowledgeIndexJobOptions {
    * the branch). It runs after the index and never instead of it: a failure is logged and the
    * index run's outcome stands, because a configuration that could not be re-read keeps its
    * previous reading (`refreshRepositoryConfig`).
+   *
+   * **`run` says why it was asked for and what it found** (WP-64): the readiness re-check hangs
+   * off the same hook and runs when the run **indexed a commit it had not read** — which is what a
+   * merge onto the default branch looks like from here, whichever wake-up noticed it. Keying on the
+   * *reason* would lose re-checks: the queue is `stately` per project, so a merge arriving while a
+   * task-start run is queued is collapsed into that run, and the trailing run carries the task-start
+   * reason with the merged commit. Hanging it here rather than on `mr.merged` directly is also what
+   * orders it **after** the index write: R12 is scored from the index, and a re-check racing the
+   * index run would score the previous commit's vault.
    */
-  readonly afterIndex?: (projectId: Id, commitSha: string) => Promise<void>;
+  readonly afterIndex?: (
+    projectId: Id,
+    commitSha: string,
+    run: { readonly reason: KnowledgeIndexReason; readonly status: IndexReport['status'] },
+  ) => Promise<void>;
   readonly logger?: Logger;
 }
 
@@ -198,11 +211,14 @@ export const knowledgeIndexHandler =
     logger.info(fields, 'knowledge index run finished');
     if (options.afterIndex !== undefined && report.commitSha !== null) {
       try {
-        await options.afterIndex(projectId, report.commitSha);
+        await options.afterIndex(projectId, report.commitSha, {
+          reason: job.data.reason,
+          status: report.status,
+        });
       } catch (error) {
         logger.error(
           { project_id: projectId, commit_sha: report.commitSha, err: error },
-          'the repository configuration could not be re-read after the index run; the previous reading stands',
+          'the after-index work (the repository configuration re-read, the readiness re-check request) failed; the previous reading stands',
         );
       }
     }

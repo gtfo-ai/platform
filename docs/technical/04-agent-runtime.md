@@ -237,8 +237,10 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 > could run a project's tests. Now:
 >
 > - **Three baselines**, chosen per role: `read_only` (`DEFAULT_READ_ONLY_ALLOW`), `verification`
->   (read-only + the lockfile installs + `PROJECT_COMMAND_ALLOW`, for the reviewer, the acceptance
->   tester and discovery) and `implementation` (which now also carries `PROJECT_COMMAND_ALLOW`, for
+>   (read-only + the lockfile installs + `PROJECT_COMMAND_ALLOW` + since WP-64 the literal
+>   `./.agentic/workspace/setup` (`WORKSPACE_SETUP_ALLOW`, outside the project-command class so a
+>   project's `commands.allow` does not narrow it; `commands.block` does), for the reviewer, the
+>   acceptance tester and discovery) and `implementation` (which now also carries `PROJECT_COMMAND_ALLOW`, for
 >   the developer). `PROJECT_COMMAND_ALLOW` is Q69's named verb set — `npm test`, `npm run *`,
 >   `pnpm test`, `pnpm run *`, `make *`, `pytest *`, `go test *`, `cargo test *` and their other
 >   spelling — never a `*` allow. `Bash` follows product/13's Shell column for every role, which gave

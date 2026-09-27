@@ -274,6 +274,30 @@ describe('the index job handler', () => {
     expect(errors[0]).toMatch(/previous reading stands/);
   });
 
+  /**
+   * WP-64: the hook is told why the run happened **and what it found**, which is what the readiness
+   * re-check keys on (`shouldRecheckAfterIndex`): a new commit, whichever wake-up noticed it.
+   */
+  it('hands the after-index hook the run’s reason and status', async () => {
+    const runs: { reason: string; status: string }[] = [];
+    for (const [reason, status] of [
+      ['merged', 'indexed'],
+      ['task_started', 'unchanged'],
+    ] as const) {
+      await knowledgeIndexHandler({
+        indexer: { index: async () => report({ commitSha: 'cafe125', status }) },
+        project: async () => project,
+        afterIndex: async (_projectId, _commitSha, run) => {
+          runs.push({ ...run });
+        },
+      })(job({ project_id: PROJECT, reason }));
+    }
+    expect(runs).toEqual([
+      { reason: 'merged', status: 'indexed' },
+      { reason: 'task_started', status: 'unchanged' },
+    ]);
+  });
+
   it('leaves the commit out when the wake-up did not name one', async () => {
     const requests: IndexRequest[] = [];
     await knowledgeIndexHandler({

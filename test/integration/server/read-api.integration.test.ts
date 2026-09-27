@@ -1272,6 +1272,16 @@ describe('the list projections', () => {
         JSON.stringify([
           { id: 'R1', passed: true, evidence: 'ran the suite', detected_by: 'agent', unlocks: '' },
           { id: 'R3', passed: true, evidence: 'CI runs on MRs', detected_by: 'agent', unlocks: '' },
+          // WP-64: the row's own `detected_by` is who answered — a re-check reads R8 itself…
+          {
+            id: 'R8',
+            passed: true,
+            evidence: 'CLAUDE.md links',
+            detected_by: 'platform',
+            unlocks: '',
+          },
+          // …and a platform criterion is the platform's whatever a row says.
+          { id: 'R9', passed: false, evidence: 'unprotected', detected_by: 'agent', unlocks: '' },
           // An id no release has: dropped rather than served with an invented `unlocks`.
           { id: 'R99', passed: true, evidence: 'invented', detected_by: 'agent', unlocks: '' },
         ]),
@@ -1284,7 +1294,13 @@ describe('the list projections', () => {
       const response = answered.found && answered.recorded ? answered.response : null;
       expect(response?.level).toBe(1);
       expect(response?.source).toBe('discovery');
-      expect(response?.criteria.map((entry) => entry.id)).toEqual(['R1', 'R3']);
+      expect(response?.criteria.map((entry) => entry.id)).toEqual(['R1', 'R3', 'R8', 'R9']);
+      expect(response?.criteria.map((entry) => entry.detected_by)).toEqual([
+        'agent',
+        'agent',
+        'platform',
+        'platform',
+      ]);
       // `unlocks` comes from the platform's table, not from the stored copy — the row above wrote
       // an empty string and the read publishes product/17's sentence.
       expect(response?.criteria[0]?.unlocks).toContain('Implementation self-check');

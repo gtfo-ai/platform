@@ -104,7 +104,9 @@ export * from './notify/render.js';
 // Onboarding: the wizard's discovery run and the readiness evaluation (WP-21)
 export * from './onboarding/discovery.js';
 export * from './onboarding/evaluate-readiness.js';
+export * from './onboarding/interview.js';
 export * from './onboarding/ports.js';
+export * from './onboarding/recheck.js';
 export * from './onboarding/record.js';
 export * from './onboarding/runtime.js';
 // The pipeline (WP-15): interpreter-driven sagas, the stage executor and their ports

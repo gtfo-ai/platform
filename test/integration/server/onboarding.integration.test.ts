@@ -27,8 +27,10 @@ import { SHIPPED_PROVIDERS } from '@platform/integrations';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { createReadinessCiEvents } from '../../../apps/server/src/onboarding.js';
 import type { Database } from '../../../apps/server/src/queries/identity-queries.js';
 import {
+  claimIdempotentAttemptInTransaction,
   createIntegration,
   createProject,
   ensureOrganisation,
@@ -482,5 +484,141 @@ describe('the audit row', () => {
     expect(
       await findIdempotentAttempt(db, { userId, action: 'task.resume', key: 'shared-key' }),
     ).toBeNull();
+  });
+});
+
+/**
+ * R3's evidence for the readiness re-check (WP-64): `ci.pipeline.finished` events that carry a merge
+ * request, for one project, inside the window — read off the real `events` table, because the
+ * predicate is JSON in SQL and only this tier executes it. Every excluded shape has a row that
+ * would be counted if its clause were dropped (rule 42).
+ */
+describe('the re-check’s CI-event read', () => {
+  const MR = {
+    provider: 'fake-git',
+    project_path: 'acme/readiness',
+    iid: 7,
+    url: 'https://git.example.test/acme/readiness/-/merge_requests/7',
+    branch: 'agentic/x',
+    head_sha: 'a'.repeat(40),
+  };
+  const append = async (input: {
+    readonly type: string;
+    readonly project: string;
+    readonly mr: unknown;
+    readonly occurredAt: string;
+  }) => {
+    // The next sequence of the project's own stream — the trigger refuses a gap.
+    const next = await pool.query<{ seq: number }>(
+      `select coalesce(max(stream_seq), 0)::int + 1 as seq
+         from events where stream_type = 'project' and stream_id = $1`,
+      [input.project],
+    );
+    const seq = next.rows[0]?.seq ?? 1;
+    await pool.query(
+      `insert into events (id, stream_type, stream_id, stream_seq, type, payload, actor, occurred_at)
+       values (gen_random_uuid(), 'project', $1, $2, $3, $4::jsonb, $5::jsonb, $6)`,
+      [
+        input.project,
+        seq,
+        input.type,
+        JSON.stringify({
+          project_id: input.project,
+          task_id: null,
+          ...(input.mr === undefined ? {} : { mr: input.mr }),
+          head_sha: 'b'.repeat(40),
+          status: 'success',
+          failed_jobs: [],
+        }),
+        JSON.stringify({ kind: 'system', component: 'test' }),
+        input.occurredAt,
+      ],
+    );
+  };
+
+  it('counts merge-request pipelines of this project in the window, and nothing else', async () => {
+    // Every row is written **now**, because `events` is partitioned by month and a fresh database
+    // has partitions from the current month forward only; the window's clause is exercised by
+    // asking from an instant after the rows instead of by writing a row before it.
+    const now = new Date().toISOString();
+    const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1_000).toISOString();
+    const events = createReadinessCiEvents(pool);
+    expect(await events.mergeRequestPipelinesSince(projectId as Id, since as never)).toBe(0);
+
+    await append({ type: 'ci.pipeline.finished', project: projectId, mr: MR, occurredAt: now });
+    await append({ type: 'ci.pipeline.finished', project: projectId, mr: MR, occurredAt: now });
+    // Excluded, one clause each: no merge request (null and absent), another project, another
+    // event type.
+    await append({ type: 'ci.pipeline.finished', project: projectId, mr: null, occurredAt: now });
+    await append({
+      type: 'ci.pipeline.finished',
+      project: projectId,
+      mr: undefined,
+      occurredAt: now,
+    });
+    await append({
+      type: 'ci.pipeline.finished',
+      project: otherProjectId,
+      mr: MR,
+      occurredAt: now,
+    });
+    await append({ type: 'mr.opened', project: projectId, mr: MR, occurredAt: now });
+
+    expect(await events.mergeRequestPipelinesSince(projectId as Id, since as never)).toBe(2);
+    // …and a window that starts after them sees none of them.
+    const later = new Date(Date.now() + 60_000).toISOString();
+    expect(await events.mergeRequestPipelinesSince(projectId as Id, later as never)).toBe(0);
+  });
+});
+
+/**
+ * WP-64 review round 1: the interview's audit row is claimed **inside** the command's transaction,
+ * under an advisory lock on `(user, action, key)`, so the second of two submits — sequential or
+ * racing — is refused and its caller rolls back. Asserted with two real concurrent transactions.
+ */
+describe('claiming an attempt inside the command’s transaction', () => {
+  const claim = async (client: pg.PoolClient, key: string) =>
+    claimIdempotentAttemptInTransaction(client, {
+      userId,
+      action: 'project.interview.record',
+      key,
+      params: { idempotency_key: key, body_digest: 'digest' },
+    });
+
+  it('grants the first attempt and refuses a replay after it committed', async () => {
+    const client = await pool.connect();
+    try {
+      await client.query('begin');
+      expect(await claim(client, 'claim-sequential')).toBe(true);
+      await client.query('commit');
+      await client.query('begin');
+      expect(await claim(client, 'claim-sequential')).toBe(false);
+      await client.query('rollback');
+    } finally {
+      client.release();
+    }
+  });
+
+  it('lets exactly one of two racing transactions record the attempt', async () => {
+    const first = await pool.connect();
+    const second = await pool.connect();
+    try {
+      await first.query('begin');
+      await second.query('begin');
+      expect(await claim(first, 'claim-race')).toBe(true);
+      // The second waits on the lock until the first commits, then finds its row.
+      const racing = claim(second, 'claim-race');
+      await first.query('commit');
+      expect(await racing).toBe(false);
+      await second.query('rollback');
+    } finally {
+      first.release();
+      second.release();
+    }
+    const rows = await pool.query(
+      `select count(*)::int as count from human_actions
+        where action = 'project.interview.record' and params ->> 'idempotency_key' = 'claim-race'`,
+    );
+    expect(rows.rows).toEqual([{ count: 1 }]);
   });
 });

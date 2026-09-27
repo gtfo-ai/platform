@@ -6,6 +6,7 @@
  * would hide a broken stream behind data that happens to be fresh — the failure that is hardest to
  * notice and worst to debug. If the stream is down, the connection badge in the header says so.
  */
+import type { BusinessInterviewRequest } from '@platform/contracts';
 import { type UseQueryResult, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError } from '../api/http.js';
 import { queryKeys } from '../api/keys.js';
@@ -869,6 +870,23 @@ export const useOnboardingCommands = (mint?: MintKey) => {
       onSuccess: async (_result, projectId) => {
         intents.release(['discovery.run', projectId]);
         await queryClient.invalidateQueries({ queryKey: queryKeys.projectReadiness(projectId) });
+      },
+    }),
+    /**
+     * WP-64: the business interview. One key per intent — the same answers submitted twice are one
+     * interview, and the server answers the second with `performed: false`; released on success so
+     * a later, edited submission is a new one. The proposal queue is what it writes to.
+     */
+    recordInterview: useMutation({
+      mutationFn: (input: { projectId: string; answers: BusinessInterviewRequest['answers'] }) =>
+        endpoints.recordInterview(
+          input.projectId,
+          { answers: input.answers },
+          intents.keyFor(['interview.record', input]),
+        ),
+      onSuccess: async (_result, input) => {
+        intents.release(['interview.record', input]);
+        await queryClient.invalidateQueries({ queryKey: queryKeys.kbProposals(input.projectId) });
       },
     }),
   };

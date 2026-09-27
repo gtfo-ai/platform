@@ -11,7 +11,7 @@
  * |---|---|
  * | 1 connect | integrations and bindings — the create and test controls live on the Integrations screen, which this page links to and whose buttons WP-30 added (PROGRESS backlog 55) |
  * | 2 technical discovery | re-run discovery and read the readiness ladder |
- * | 3 business interview | **not built** — the same honest gap the wizard shows |
+ * | 3 business interview | `BusinessInterview`, the same component the wizard renders (WP-64) |
  * | 4 operating mode | `features/operating-mode.tsx`, the *same component* the wizard renders |
  * | 5 commit | the knowledge proposal queue |
  *
@@ -52,6 +52,7 @@ import {
   SectionHeading,
 } from '../ui/kit.js';
 import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
+import { BusinessInterview } from './business-interview.js';
 import { HistoryBootstrap } from './history-bootstrap.js';
 import { bindingConfigOf, OperatingMode } from './operating-mode.js';
 
@@ -216,10 +217,8 @@ export const ProjectSettingsScreen = ({
 
       <Card className="flex flex-col gap-2">
         <SectionHeading>Business context</SectionHeading>
-        <EmptyState
-          title="Not built in this release"
-          hint="The wizard’s business interview is a conversational form driven by the Product Manager role, and nothing in this build runs one. The same pages can be written by hand from the Knowledge screen."
-        />
+        {/* The wizard's step 3, mirrored (product/18:55, WP-64) — the *same component*. */}
+        <BusinessInterview projectId={project.id} projectKey={project.key} />
         <p className="text-sm">
           <Link to="/projects/$key/knowledge" params={{ key: project.key }}>
             Open the knowledge base

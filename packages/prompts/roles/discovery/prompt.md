@@ -12,6 +12,12 @@ yet.
 A **DiscoveryDraft**: draft technical pages, plus the questions an engineer on this project has to
 answer, and a readiness assessment of what the platform would need to work here.
 
+**Technical pages only** — under `technical/` (`technical/overview.md`, `technical/how-to-run.md`,
+`technical/conventions.md` and the like). Do not draft a page under `business/`: what the product is,
+who it is for, its rules, its glossary, its direction, its quality bar and its review expectations
+are the team's own answers, collected by the business interview that follows this stage. A business
+fact you noticed in the repository belongs in `questions`, as a question for that interview.
+
 ## The one rule that makes this useful
 
 **Every claim is marked `verified` or `inferred`, and the two are never mixed in a sentence.**
@@ -39,7 +45,7 @@ platform treats an unanswered criterion as failing, which only ever makes it mor
 | R3 | CI runs on merge requests (a pipeline configuration that triggers on MRs) |
 | R4 | CI looks reliable — no evidence of routine flaky reruns |
 | R5 | a linter and a formatter are enforced by a CI job, not only configured |
-| R6 | one documented command sets the project up and succeeds when you run it (`make setup`, a package script); a devcontainer or compose file you can only read, since the run has no Docker |
+| R6 | one documented command sets the project up and succeeds when you run it (`make setup`, a package script, or an executable `.agentic/workspace/setup`, run as `./.agentic/workspace/setup`); a devcontainer or compose file you can only read, since the run has no Docker |
 | R7 | type checking or static analysis runs in CI, where the language has one |
 | R8 | `CLAUDE.md` or `AGENTS.md` exists, is at most 200 lines, and links to the knowledge index |
 | R10 | a merge-request template and a commit convention are documented |
@@ -66,13 +72,14 @@ accepts or edits; nothing you write here changes what the platform does until th
 | data | database migrations, schema definitions, raw SQL |
 | infra | how it is built, deployed and run: containers, CI configuration, infrastructure as code |
 | agent_config | the files that configure agents on this repository |
+| public_api | what other systems depend on: exported packages and their entry points, HTTP or RPC contracts (an OpenAPI document, protobuf or GraphQL schemas), published schemas |
 
 Three rules, and they are the difference between a proposal that is useful and one that is noise.
 
 - **Paths you saw.** A pattern names directories or files that exist in this repository — `src/auth/**`,
   not a guess at what a project like this usually has. `evidence` says where you saw them.
-- **Only these names.** A name outside the table is dropped by the platform, so a sixth area you
-  think matters belongs in `questions`, not here.
+- **Only these names.** A name outside the table is dropped by the platform, so an area you think
+  matters that none of these six covers belongs in `questions`, not here.
 - **Say nothing about what a class should force.** Whether a class requires a plan approval or a
   named reviewer is the platform's decision and your answer to it is ignored.
 
@@ -85,9 +92,10 @@ Your shell reads, installs what the lockfile pins, and runs the project's declar
 is the whole list: `ls`, `cat`, `grep`, `rg`, `find`, `git log`, `git diff`, `git show`,
 `git blame`, `git status`; `npm ci`, `pnpm install --frozen-lockfile`, `pip install -r <file>`; and
 `npm test`, `npm run <script>`, `pnpm test`, `pnpm run <script>`, `make <target>`, `pytest`,
-`go test`, `cargo test`. Anything else is refused, and so is anything the project has not declared
-when its configuration narrows the list. You cannot keep a file you write, commit, push, or add a
-dependency.
+`go test`, `cargo test`; and the platform's documented setup script, exactly as
+`./.agentic/workspace/setup` with no arguments. Anything else is refused, and so is a project
+command the project has not declared when its configuration narrows the list. You cannot keep a
+file you write, commit, push, or add a dependency.
 
 A command you were refused is evidence about the platform, not about the project: do not report it
 as one that failed. Say what you read instead, and mark the claim `inferred`.

@@ -527,6 +527,8 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
             modelApiKey: config.modelApiKey,
             modelOauthToken: config.modelOauthToken,
           }),
+          // WP-64: the re-check reads CLAUDE.md/AGENTS.md through the index's own mirror.
+          files: knowledge.files,
           logger: loggerPort,
         });
         for (const handler of onboarding.runtime.handlers) {
@@ -632,6 +634,12 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           // The process's one executor, so the wizard's probe is audited and rate-limited like
           // every other outbound call and shares one budget per account with the pipeline's.
           executor: (stack as NonNullable<typeof stack>).executor,
+          // WP-64: the interview's redactor, the pair a maintainer's proposal edit gets.
+          runEnvironment: agentRunEnvironment({
+            providerMode: config.providerMode,
+            modelApiKey: config.modelApiKey,
+            modelOauthToken: config.modelOauthToken,
+          }),
           logger: loggerPort,
         })
       : null;

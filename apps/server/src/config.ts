@@ -599,7 +599,9 @@ export const POOL_RESERVATIONS = {
    * The onboarding worker — **one connection**, at concurrency 1 (WP-21).
    *
    * `onboarding.discovery` records what a discovery run found: the readiness evaluation and the
-   * drafted pages, in one write transaction. Everything before that transaction is a read — the
+   * drafted pages, in one write transaction. Since WP-64 the same worker runs the readiness re-check
+   * after a merge (one more kind of job on the queue, one row in one transaction), so the term is
+   * still one. Everything before that transaction is a read — the
    * project row, the artifact, the index, and the git-provider call R9 needs — and both
    * `integrations.forProject` and the executor refuse to run inside a transaction, so the term is
    * flat like the pipeline's four and the knowledge base's four rather than per dispatch.

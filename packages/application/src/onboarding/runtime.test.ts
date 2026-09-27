@@ -51,6 +51,7 @@ const runtimeFor = (logger?: DiscoveryRecordOptions['logger']) => {
   const runtime = createOnboardingRuntime({
     jobs: observed.jobs,
     record: { logger } as never,
+    recheck: { logger } as never,
   });
   return { ...observed, runtime };
 };
@@ -77,6 +78,41 @@ describe('createOnboardingRuntime', () => {
     // one that did not still gets a handler rather than an exception at registration.
     expect(runtimeFor(silentLogger).runtime.handlers).toHaveLength(1);
     expect(runtimeFor(undefined).runtime.handlers).toHaveLength(1);
+  });
+
+  /**
+   * WP-64: the re-check rides the same queue and the same worker; the payload's `kind` is what
+   * routes it. Both directions, so a handler that sent everything to one side fails.
+   */
+  it('routes a re-check payload to the re-check and a discovery payload to the recorder', async () => {
+    const asked: string[] = [];
+    const observed = observedJobs();
+    const runtime = createOnboardingRuntime({
+      jobs: observed.jobs,
+      record: {
+        project: async () => {
+          asked.push('discovery');
+          return null;
+        },
+      } as never,
+      recheck: {
+        project: async () => {
+          asked.push('recheck');
+          return null;
+        },
+      } as never,
+    });
+    await runtime.start();
+    const handler = observed.inner.handlers.get(JOB_QUEUES.discoveryRecord);
+    await handler?.({
+      id: 'j1',
+      data: { kind: 'readiness_recheck', project_id: 'p', commit_sha: 'c'.repeat(40) },
+    } as never);
+    await handler?.({
+      id: 'j2',
+      data: { project_id: 'p', task_id: 't', artifact_id: 'a' },
+    } as never);
+    expect(asked).toEqual(['recheck', 'discovery']);
   });
 
   it('stops the worker it started, and stopping twice is not an error', async () => {

@@ -69,8 +69,10 @@ import {
   createKnowledgeIndexRuntime,
   createLibrarianRuntime,
   decideKnowledgeProposal,
+  enqueueReadinessRecheck,
   projectConfigWithRepository,
   refreshRepositoryConfig,
+  shouldRecheckAfterIndex,
   thresholdsFromConfig,
 } from '@platform/application';
 import type { Id, IsoDateTime, TaskMode } from '@platform/contracts';
@@ -130,6 +132,11 @@ export interface ComposedKnowledgeIndexing {
    * (the shape `ComposedPipeline.agentMissing` uses).
    */
   readonly missing: readonly string[];
+  /**
+   * The mirror's named-file reader, for the readiness re-check's R8 (WP-64) — the same reader the
+   * repository-configuration refresher uses, so one process has one mirror.
+   */
+  readonly files: RepositoryFileSource;
   stop(): Promise<void>;
 }
 
@@ -231,7 +238,7 @@ export interface ComposeKnowledgeMirrorOptions {
 export interface ComposedKnowledgeMirror {
   /** The knowledge vault read — the four indexed kinds of path. */
   readonly vault: VaultSource;
-  /** The two named files outside them (WP-63): `.agentic/config.yml` and `CLAUDE.md`. */
+  /** The named files outside them: `.agentic/config.yml`, `CLAUDE.md` (WP-63) and `AGENTS.md` (WP-64). */
   readonly files: RepositoryFileSource;
   /** What could not be composed, by name; empty when both are real. */
   readonly missing: readonly string[];
@@ -254,7 +261,7 @@ export const composeKnowledgeMirror = async (
     return {
       vault: knowledgeAdapters.unavailableVaultSource(reason),
       files: knowledgeAdapters.unavailableRepositoryFileSource(
-        'APP_KNOWLEDGE_MIRROR_ROOT is not set, so this process has no mirror of the repository to read .agentic/config.yml or CLAUDE.md from (TD-026); set the variable to a writable data volume',
+        'APP_KNOWLEDGE_MIRROR_ROOT is not set, so this process has no mirror of the repository to read .agentic/config.yml, CLAUDE.md or AGENTS.md from (TD-026); set the variable to a writable data volume',
       ),
       missing: ['APP_KNOWLEDGE_MIRROR_ROOT'],
     };
@@ -368,9 +375,21 @@ export const composeKnowledgeIndexing = async (
         ? null
         : { projectKey: project.key, knowledgeDir: project.knowledge_dir };
     },
-    // WP-63: the repository layer re-read at the commit the index run read.
-    afterIndex: async (projectId, commitSha) => {
-      await refreshConfig({ projectId, commitSha });
+    // WP-63: the repository layer re-read at the commit the index run read. WP-64: when the run
+    // read a **new** default-branch commit (a merge), the readiness re-check at the same commit —
+    // enqueued here, after the index write, so R12 is scored from the merged commit's vault
+    // (`onboarding/recheck.ts` has the ordering argument). Outside every transaction: the index
+    // run's own has committed.
+    afterIndex: async (projectId, commitSha, run) => {
+      try {
+        await refreshConfig({ projectId, commitSha });
+      } finally {
+        // Independent of the configuration read: a file that could not be re-read must not cost
+        // the merge its re-check. The refresh's own error still reaches the index job's log.
+        if (shouldRecheckAfterIndex(run)) {
+          await enqueueReadinessRecheck(options.jobs, { projectId, commitSha });
+        }
+      }
     },
   });
 
@@ -544,6 +563,7 @@ export const composeKnowledgeIndexing = async (
   return {
     handlers: [...runtime.handlers, ...(librarian?.handlers ?? [])],
     missing,
+    files: composedMirror.files,
     stop: async () => {
       await librarian?.stop();
       await runtime.stop();
