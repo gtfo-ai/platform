@@ -271,15 +271,41 @@ describe('the CI gate', () => {
   });
 
   it('reports the failing job names, not the error block (the Q55 cut)', async () => {
+    const logReads: string[] = [];
     const result = await evaluate(templateStage('ci_gate'), storedTask(MR), {
       getPipelineStatus: async () => pipelineStatus('failed', [job('test:unit', 'failed')]),
+      // A log **is** available, so an implementation that closed Q55 by appending it would have a
+      // body to append (WP-69, backlog 4): the assertion below is then about the body, not only
+      // about the opaque handle, which no implementation would ever print.
+      getJobLog: async (_project, logRef) => {
+        logReads.push(logRef);
+        return 'FAIL src/totals.test.ts\n  expected 3, received 2';
+      },
     });
     // product/04 S4 asks for "the failing job's error block"; this gate reads no log, because
     // `getJobLog`'s redaction obligation for a run-scoped credential is open (Q55). The cut is
     // pinned so that closing Q55 changes a failing test rather than nothing at all.
     const detail = result.kind === 'settled' ? result.detail : '';
     expect(detail).toContain('test:unit');
+    expect(detail).not.toContain('FAIL src/totals.test.ts');
     expect(detail).not.toContain('log:test:unit');
+    expect(logReads).toEqual([]);
+  });
+
+  it('settles a failed pipeline whose only failing job may fail as not passed, with no names', async () => {
+    // The `failed.length === 0` arm reached from a `failed` status (WP-69, backlog 4), not only
+    // from `canceled`/`skipped`. Moot against GitLab, which reports such a pipeline `success`;
+    // pinned so that a provider that does not is judged by the status rather than by the list.
+    const result = await evaluate(templateStage('ci_gate'), storedTask(MR), {
+      getPipelineStatus: async () =>
+        pipelineStatus('failed', [job('flaky:browser', 'failed', true), job('lint', 'success')]),
+    });
+    expect(result).toEqual({
+      kind: 'settled',
+      passed: false,
+      ciSignature: `ci:failed:@${HEAD_SHA}`,
+      detail: 'pipeline pipeline-1 failed',
+    });
   });
 
   it('passes a successful pipeline', async () => {

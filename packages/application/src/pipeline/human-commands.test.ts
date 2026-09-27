@@ -94,7 +94,7 @@ const REFINED_SPEC = {
   non_functional: [],
   dependencies: [],
   size: 'M',
-  drift: { flag: 'none', justification: 'in the documented direction' },
+  drift: { flag: false, justification: 'in the documented direction' },
   assumptions: [],
   questions: [],
   decision: 'proceed',
@@ -157,7 +157,7 @@ const RETRO = {
   what_went_well: ['the plan held'],
   returns: [],
   human_corrections: [],
-  cost_summary: '1.25 USD',
+  cost_summary: { total_usd: 1.25, is_estimate: false, by_stage: [] },
   proposals: [],
 };
 
@@ -219,9 +219,12 @@ const harnessWith = (options: Parameters<typeof createPipelineHarness>[0] = {}) 
       }),
       ...options.git,
     },
-    // Everything but `git`, which is merged over the defaults above rather than replacing them
-    // (WP-59: the first cases here to pass `git` need the merge request read as well).
-    ...Object.fromEntries(Object.entries(options).filter(([key]) => key !== 'git')),
+    // Everything but `git` and `runs`, which are merged over the defaults above rather than
+    // replacing them (WP-59 for `git`: the first cases here to pass it need the merge request read
+    // as well; WP-69 for `runs`, backlog 183: a partial `runs` used to replace the whole set).
+    ...Object.fromEntries(
+      Object.entries(options).filter(([key]) => key !== 'git' && key !== 'runs'),
+    ),
   });
 
 let stream = 0;
@@ -1079,10 +1082,8 @@ describe('the two commands that predate this row', () => {
   });
 
   it('redacts the reason a rejected approval carries', async () => {
-    // `runs(...)` rather than a bare override: `harnessWith` spreads `options` last, so an
-    // `options.runs` replaces the merged set instead of adding to it (the shape `asking()` uses).
     const harness = harnessWith({
-      runs: runs({ architecture: ok({ ...PLAN, estimated_size: 'XL' }) }),
+      runs: { architecture: ok({ ...PLAN, estimated_size: 'XL' }) },
     });
     await harness.publish([ticketMatched()]);
     expect(taskOf(harness).task.state).toBe('waiting_approval');

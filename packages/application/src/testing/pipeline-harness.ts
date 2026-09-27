@@ -15,6 +15,13 @@
  * how far out `startAfter` is — which is the part that is this ring's decision.
  *
  * The clock is a value the test moves. Nothing here reads `Date.now()` (standing rule 2).
+ *
+ * **A script is held to what production could have produced** (WP-69, PROGRESS backlog 77): a
+ * scripted run's structured output is parsed against the stage's declared artifact schema, the
+ * way the real runner parses the model's answer, and a script that does not parse fails the test
+ * with the zod issue ({@link ScriptedRunRefusedError}) instead of reaching the pipeline as data no
+ * model could have produced. A fixture that never has to satisfy the thing under test is a fixture
+ * nobody validates — one sat invalid here from WP-15 to WP-28 and was copied twice.
  */
 import type {
   AgentRole,
@@ -23,9 +30,10 @@ import type {
   IsoDateTime,
   PipelineTemplate,
 } from '@platform/contracts';
-import { agentRoleSchema, refinedSpecDataSchema } from '@platform/contracts';
+import { agentRoleSchema, artifactDataSchemas, refinedSpecDataSchema } from '@platform/contracts';
 import type { RolePromptDefinition, SkillDefinition } from '@platform/domain';
 import { readDataBlocks, SHIPPED_TEMPLATES } from '@platform/domain';
+import type * as z from 'zod';
 import { type AskRunPlanner, createAskRunPlanner } from '../ask/planner.js';
 import { createBudgetGuard } from '../cost/guard.js';
 import { createLateCostRecorder } from '../cost/late.js';
@@ -183,7 +191,21 @@ export const recordingJobs = (): RecordingJobs => {
 export interface ScriptedRun {
   readonly status: RunOutcome['status'];
   readonly terminalReason: RunOutcome['terminalReason'];
+  /**
+   * The artifact's `data`, **parsed** against the stage's declared schema when the run completes
+   * (see `checkScripted`); `unknown` here only because a test may deliberately script a bad one.
+   */
   readonly structuredOutput?: unknown;
+  /**
+   * Why this script **deliberately** describes a run the real runner would have refused (WP-69).
+   *
+   * For a test of a check that sits *behind* the runner — the ask executor re-validating an
+   * `AskAnswer`, say — which production reaches only if the runner's check and that one ever
+   * disagree. Set, the detector skips the parse **and** insists the output really does not parse,
+   * so the reason cannot outlive a fixture that has since become valid. Unset is the default for
+   * every other script.
+   */
+  readonly deliberatelyInvalid?: string;
   readonly costUsd?: number;
   readonly error?: string | null;
   /** Written to the transcript as the `run_stopped` row's reason (WP-12). */
@@ -200,7 +222,104 @@ export interface ScriptedRun {
   readonly throwsOnStart?: Error;
 }
 
-const outcomeFor = (runId: Id, scripted: ScriptedRun): RunOutcome => ({
+/**
+ * A script this harness refuses because production could not have produced the run it describes
+ * (WP-69, PROGRESS backlog 77).
+ *
+ * The runner's `start` is the wrong place to *report* one: the stage executor catches whatever
+ * `start` throws and records a run that could not start (WP-15c), so a throw there alone would
+ * surface as a task escalated to `needs_human` — a failure that blames the pipeline for the
+ * fixture. The harness therefore records the refusal and {@link PipelineHarness.drain} throws it,
+ * so the test fails with this message and the zod issue in it.
+ */
+export class ScriptedRunRefusedError extends Error {
+  readonly key: string;
+  constructor(key: string, reason: string) {
+    super(`the script for "${key}" describes a run production would refuse: ${reason}`);
+    this.name = 'ScriptedRunRefusedError';
+    this.key = key;
+  }
+}
+
+/** `path.to.field: message`, the shape `validateStructuredOutput` reports in production. */
+const describeIssues = (issues: readonly z.core.$ZodIssue[]): string =>
+  issues
+    .map(
+      (issue) => `${issue.path.length === 0 ? '(root)' : issue.path.join('.')}: ${issue.message}`,
+    )
+    .join('; ');
+
+/**
+ * The detector (WP-69, backlog 77): what a script claims a run produced, parsed the way production
+ * parses it.
+ *
+ * `ScriptedRun.structuredOutput` is `unknown`, and until WP-69 it was **cast** into the outcome —
+ * so the harness was kinder than the real runner (standing rule 1) about the one thing a stage
+ * exists to produce, and a fixture could claim to be a `RefinedSpec` without being one. It did,
+ * for the whole of the pipeline's history: `drift: { flag: 'none' }` was written at WP-15 and
+ * copied into two more files before WP-28 tripped over it. The real runner validates the answer
+ * against `artifactDataSchemas[spec.artifactType]` (`packages/infrastructure/src/runner/
+ * structured-output.ts`) and fails the run when it does not parse; this parses against the same
+ * entry of the same table, chosen by the same field of the same spec, so every test that scripts a
+ * run is checked the moment it exists and no list of fixtures has to be kept.
+ *
+ * Two refusals, both production's own shape:
+ *  - a **completed** run of a stage that produces an artifact must carry structured output that
+ *    parses (the real runner fails it with `error_max_structured_output_retries` otherwise);
+ *  - a run that did **not** complete carries none (the real runner reports `null` for every
+ *    ending but `success`, so a failed run's scripted artifact is data no reader could ever see).
+ *
+ * What it answers with is the **parsed** value, as production does, so a schema default or
+ * transform is applied here too rather than being a second difference.
+ */
+const checkScripted = (
+  spec: RunSpec,
+  scripted: ScriptedRun,
+):
+  | { readonly ok: true; readonly value: unknown }
+  | { readonly ok: false; readonly reason: string } => {
+  const value = scripted.structuredOutput ?? null;
+  if (scripted.status !== 'completed') {
+    return value === null
+      ? { ok: true, value: null }
+      : {
+          ok: false,
+          reason:
+            `it ends "${scripted.status}" and still carries structured output, which the real ` +
+            'runner reports as null for every ending but success',
+        };
+  }
+  if (spec.artifactType === null) {
+    return { ok: true, value };
+  }
+  if (scripted.deliberatelyInvalid !== undefined) {
+    return artifactDataSchemas[spec.artifactType].safeParse(value).success
+      ? {
+          ok: false,
+          reason:
+            `it is declared deliberately invalid ("${scripted.deliberatelyInvalid}") and its ` +
+            `structured output parses as a ${spec.artifactType}, so the declaration is stale`,
+        }
+      : { ok: true, value };
+  }
+  if (value === null) {
+    return {
+      ok: false,
+      reason: `it completes a ${spec.artifactType} run with no structured output, which that artifact requires`,
+    };
+  }
+  const parsed = artifactDataSchemas[spec.artifactType].safeParse(value);
+  return parsed.success
+    ? { ok: true, value: parsed.data }
+    : {
+        ok: false,
+        reason:
+          `it completes a ${spec.artifactType} run with structured output the schema refuses ` +
+          `(${describeIssues(parsed.error.issues)})`,
+      };
+};
+
+const outcomeFor = (runId: Id, scripted: ScriptedRun, structuredOutput: unknown): RunOutcome => ({
   runId,
   status: scripted.status,
   terminalReason: scripted.terminalReason,
@@ -216,7 +335,9 @@ const outcomeFor = (runId: Id, scripted: ScriptedRun): RunOutcome => ({
   modelUsage: [],
   cost: { usd: scripted.costUsd ?? 0.25, is_estimate: false, price_list_id: null },
   wallMs: 1000,
-  structuredOutput: (scripted.structuredOutput ?? null) as RunOutcome['structuredOutput'],
+  // Parsed by `checkScripted` before it gets here; the cast is from `unknown` to the JSON shape
+  // the parse already established, not a statement nobody checked.
+  structuredOutput: structuredOutput as RunOutcome['structuredOutput'],
   error: scripted.error ?? null,
   redactionCount: 0,
 });
@@ -234,7 +355,10 @@ export interface HarnessOptions {
   readonly runsAgents?: boolean;
   readonly settings?: Partial<Omit<ProjectSettings, 'projectId'>>;
   /**
-   * One scripted run per key; a run with no script fails the test loudly.
+   * One scripted run per key. A run with no script makes the runner's `start` throw, which the
+   * stage executor records as a run that could not start — the task **escalates**; the test fails
+   * only if it asserts otherwise (PROGRESS backlog 249). A script production could not have
+   * produced fails the test itself, through `drain` ({@link ScriptedRunRefusedError}).
    *
    * The key is the **stage id** for a pipeline stage and `ask:<question>` for an ask-the-task run,
    * which has no stage — see {@link harnessScriptKey}, which reads the question out of the prompt
@@ -411,6 +535,7 @@ export interface PipelineHarness {
   script(stage: string, run: ScriptedRun): void;
   /** Appends the events and dispatches everything, running stage jobs until the loop is quiet. */
   publish(events: readonly DomainEvent[]): Promise<void>;
+  /** Runs the loop until it is quiet; rejects with the first {@link ScriptedRunRefusedError}. */
   drain(): Promise<void>;
   /** Every event in the log, in position order. */
   events(): readonly DomainEvent[];
@@ -839,6 +964,8 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
         })
       : null;
   const specs: RunSpec[] = [];
+  /** What {@link checkScripted} refused, thrown by `drain` (see {@link ScriptedRunRefusedError}). */
+  const refusals: ScriptedRunRefusedError[] = [];
 
   const gitPort = stubGit(options.git);
   const taskManagementPort = stubTaskManagement(options.taskManagement);
@@ -937,12 +1064,18 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
       if (scripted === undefined) {
         throw new Error(`the test scripted no run for "${key}"`);
       }
+      const checked = checkScripted(spec, scripted);
+      if (!checked.ok) {
+        const refusal = new ScriptedRunRefusedError(key, checked.reason);
+        refusals.push(refusal);
+        throw refusal;
+      }
       return {
         runId: spec.runId,
         // The same value `outcomeFor` reports, from the start: a harness that answered `null` here
         // would be kinder than either shipped runner in the one direction a take-over reads.
         sessionId: `session-${spec.runId}`,
-        outcome: Promise.resolve(outcomeFor(spec.runId, scripted)),
+        outcome: Promise.resolve(outcomeFor(spec.runId, scripted, checked.value)),
         steer: async () => {},
         stop: async () => {},
       };
@@ -1191,6 +1324,12 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
         (await runJobs(JOB_QUEUES.mrCommentDebounce)) +
         // WP-56: a deadline fires when the test has moved the clock past it, and not before.
         (await runJobs(JOB_QUEUES.deadlineSweep));
+      // A refused script fails the test here, by name, rather than as the escalation the executor
+      // makes of a `start` that threw (backlog 77).
+      const [refused] = refusals.splice(0);
+      if (refused !== undefined) {
+        throw refused;
+      }
       if (dispatched === 0 && ran === 0) {
         return;
       }

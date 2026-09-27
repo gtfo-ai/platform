@@ -32,6 +32,7 @@ import { exactSecretRedactor } from '../integrations/redaction.js';
 import type { NewRun } from '../pipeline/store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
+import { askingRefinedSpec } from '../testing/artifact-fixtures.js';
 import { createMemoryAskStore } from '../testing/memory-ask.js';
 import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
 import { askTaskCommand } from './commands.js';
@@ -109,6 +110,8 @@ const ANSWER = {
 const harnessWith = (
   options: {
     readonly answer?: Record<string, unknown>;
+    /** The harness's `ScriptedRun.deliberatelyInvalid`, for the one answer the runner would refuse. */
+    readonly deliberatelyInvalid?: string;
     readonly askCostUsd?: number;
     readonly askStatus?: 'completed' | 'failed';
     readonly question?: string;
@@ -137,13 +140,18 @@ const harnessWith = (
       refinement: {
         status: 'completed',
         terminalReason: 'success',
-        structuredOutput: { decision: 'ask', questions: [{ id: 'q1', text: 'Which currency?' }] },
+        structuredOutput: askingRefinedSpec(),
         costUsd: 0.1,
       },
       [`ask:${options.question ?? QUESTION}`]: {
         status: options.askStatus ?? 'completed',
         terminalReason: options.askStatus === 'failed' ? 'error_during_execution' : 'success',
-        structuredOutput: options.answer ?? ANSWER,
+        // Only a completed run carries an answer: the real runner reports none for any other
+        // ending, and the harness refuses a script that says otherwise (WP-69).
+        ...(options.askStatus === 'failed' ? {} : { structuredOutput: options.answer ?? ANSWER }),
+        ...(options.deliberatelyInvalid === undefined
+          ? {}
+          : { deliberatelyInvalid: options.deliberatelyInvalid }),
         costUsd: options.askCostUsd ?? 0.2,
         ...(options.askStatus === 'failed' ? { error: 'the model stopped' } : {}),
       },
@@ -960,7 +968,7 @@ describe('an ask that never runs', () => {
         refinement: {
           status: 'completed',
           terminalReason: 'success',
-          structuredOutput: { decision: 'ask', questions: [{ id: 'q1', text: 'Which currency?' }] },
+          structuredOutput: askingRefinedSpec(),
           costUsd: 0.1,
         },
         [`ask:${QUESTION}`]: {
@@ -981,7 +989,10 @@ describe('an ask that never runs', () => {
   });
 
   it('fails rather than storing an answer the contract rejects', async () => {
-    const harness = harnessWith({ answer: { answer: 'no citations field at all' } });
+    const harness = harnessWith({
+      answer: { answer: 'no citations field at all' },
+      deliberatelyInvalid: 'the ask executor re-validates the answer behind the runner',
+    });
     await seedTask(harness);
     await askThroughHttp(harness);
     const [ask] = harness.asks.all();
@@ -1206,7 +1217,7 @@ describe('a run that ended without an answer', () => {
         refinement: {
           status: 'completed',
           terminalReason: 'success',
-          structuredOutput: { decision: 'ask', questions: [{ id: 'q1', text: 'Which currency?' }] },
+          structuredOutput: askingRefinedSpec(),
           costUsd: 0.1,
         },
         [`ask:${QUESTION}`]: {
@@ -1233,7 +1244,7 @@ describe('a run that ended without an answer', () => {
         refinement: {
           status: 'completed',
           terminalReason: 'success',
-          structuredOutput: { decision: 'ask', questions: [{ id: 'q1', text: 'Which currency?' }] },
+          structuredOutput: askingRefinedSpec(),
           costUsd: 0.1,
         },
         [`ask:${QUESTION}`]: {

@@ -28,6 +28,28 @@
  * (`APP_JOBS_POLL_INTERVAL_SECONDS`, `APP_DISPATCH_POLL_INTERVAL_MS`) rather than the assertions
  * being given generous sleeps — standing rule 2: a wall-clock assertion is a hardware assertion, so
  * nothing below asserts *how long* anything took, only that it arrived.
+ *
+ * ## `pg` in an e2e file: take it from the harness, as a type (WP-69, PROGRESS backlog 21)
+ *
+ * WP-15d once saw `createEventing` throw `EventBus is not a constructor` in a throwaway e2e file
+ * whose first import was a value `import pg from 'pg'`, and filed it as a module-graph cycle that
+ * bites at one import order. **The graph says there is no such cycle.** A pass with madge 8.0.0
+ * over this file, `instance.ts`, `apps/server/src/runtime.ts` and the package entry points, with
+ * type-only imports skipped (they are erased before anything runs), finds **none** — on today's
+ * tree and on WP-15d's own commit (`8ae121c`). Counted *with* type imports it finds six today, all
+ * inside `@platform/application` and none through `EventBus` or the eventing adapter (`pipeline/
+ * rebase ↔ saga ↔ jobs`, `stage-executor → task-conflict → transitions`, `config/repository-config
+ * ↔ repository-grades`, `maintenance/scheduler ↔ notify/maintenance-report`, `recovery/stranded ↔
+ * superseded-mr`), and every one has a type-only edge. The symptom did not reproduce either: `pg`
+ * imported first, before this harness, `instance.ts`, the server runtime or the infrastructure
+ * package alone, then `createEventing` over an unconnected pool — five orders, green at both
+ * commits. So the report stands as an unexplained observation, not a diagnosed cycle.
+ *
+ * The rule that removes the occasion rather than the symptom: an e2e file needs no `pg` **value**.
+ * A pool comes from `createTestPool` and a client from `createTestClient` (the census in
+ * `packages/infrastructure/src/db/pool-errors.test.ts` refuses any other construction), and `pg` is
+ * imported as a type, as this file does. If a value import is ever needed and the `TypeError`
+ * comes back, start from the measurement above — it is not a cycle in the static graph.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -430,9 +452,10 @@ export interface StartPipelineOptions {
    * `stage: 'refinement'`.
    *
    * Returning `undefined` falls through to the stage map, so the fourteen files that use `scenarios`
-   * alone are untouched. It is wired into the **fake-runner** half only: `real-over-fake-cli`'s
-   * scripted CLI is addressed by stage id (`scriptedWorkspaces`) and has no spec to offer, which is
-   * stated here rather than discovered by a test that silently got the stage map instead.
+   * alone are untouched. It is wired into **both** halves: the fake runner's `select` and, since
+   * WP-69 (backlog 184), `real-over-fake-cli`'s scripted CLI, which is handed the spec the
+   * production planner built — before that it was addressed by stage id alone, so the command-api
+   * case could not report a new merge request from the reworked branch.
    */
   readonly scenarioFor?: (spec: RunSpec, world: SeededWorld) => ScenarioSpec | undefined;
   readonly label?: string;
@@ -902,8 +925,8 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
    * seams would let `composition.runner` win and the mode would silently be the old one.
    */
   const scripted = scriptedWorkspaces(
-    (stage) => {
-      const scenario = scenarios[stage];
+    (stage, spec) => {
+      const scenario = options.scenarioFor?.(spec, world) ?? scenarios[stage];
       if (scenario === undefined) {
         throw new Error(`no scenario for stage "${stage}"`);
       }

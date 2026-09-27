@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import vitestConfig, { PROCESS_SUITES } from '../vitest.config.js';
+import { censusFiles } from './census-files.mjs';
 import { TARGETS, VERIFY_GROUPS } from './verify-targets.js';
 
 /**
@@ -161,5 +163,104 @@ describe('the verification targets and .github/workflows/ci.yml', () => {
       Object.keys(TARGETS).filter((target) => target !== 'verify' && !commands.has(target)),
       'a verification target is run by no CI job',
     ).toEqual([]);
+  });
+});
+
+/**
+ * Every vitest project is run by a verification target, and so by a CI job (WP-69, backlog 25's
+ * fifth criterion).
+ *
+ * The chain above holds `verify-targets.ts` to the workflow, and stops at the `package.json` script:
+ * nothing compared a script's `--project` flags with the projects `vitest.config.ts` declares. A
+ * project nobody names is a suite moved out of `verify` — the WP-06 `ignored:check` shape one level
+ * down — and WP-69 is the change that could have produced one, by splitting the real-process
+ * suites into a project of their own.
+ */
+const projectsNamedBy = (script: string): string[] =>
+  [...script.matchAll(/--project(?:=|\s+)([\w-]+)/g)].map((match) => match[1] ?? '');
+
+const scriptBodies = (): Readonly<Record<string, string>> =>
+  (JSON.parse(read('package.json')) as { scripts: Record<string, string> }).scripts;
+
+const declaredProjects = (): string[] =>
+  (vitestConfig.test?.projects ?? []).map((project) => {
+    const name = (project as { test?: { name?: unknown } }).test?.name;
+    return typeof name === 'string' ? name : '(unnamed)';
+  });
+
+describe('the vitest projects and the verification targets', () => {
+  it('reads a project name out of a script, whichever spelling it uses', () => {
+    expect(projectsNamedBy('vitest run --project unit --project=contract --coverage')).toEqual([
+      'unit',
+      'contract',
+    ]);
+    expect(projectsNamedBy('playwright test')).toEqual([]);
+  });
+
+  it('runs every project vitest.config.ts declares from some verification target', () => {
+    const bodies = scriptBodies();
+    const targeted = new Set(
+      Object.values(TARGETS)
+        .flat()
+        .flatMap((script) => projectsNamedBy(bodies[script] ?? '')),
+    );
+    const declared = declaredProjects();
+    // Not vacuous: the config declares projects, and the targets name some (standing rule 4).
+    expect(declared.length).toBeGreaterThan(0);
+    expect(targeted.size).toBeGreaterThan(0);
+    expect(
+      declared.filter((name) => !targeted.has(name)),
+      'a vitest project no verification target runs — its suites gate nothing on a push',
+    ).toEqual([]);
+    expect(
+      [...targeted].filter((name) => !declared.includes(name)),
+      'a verification target names a vitest project that does not exist',
+    ).toEqual([]);
+  });
+
+  it('puts the real-process suites in `verify` itself, not in a target of their own', () => {
+    const bodies = scriptBodies();
+    const inVerify = new Set(
+      (TARGETS.verify ?? []).flatMap((script) => projectsNamedBy(bodies[script] ?? '')),
+    );
+    expect(inVerify.has('process')).toBe(true);
+  });
+});
+
+/**
+ * The `process` project holds exactly the test files that use a structural wait (WP-69).
+ *
+ * A structural wait takes its deadline from the running test's budget, and that budget is only
+ * right in the project whose scheduling it was chosen for. So the membership is read off what the
+ * files import rather than kept by hand: a new file that imports `structural-wait.js` and is not in
+ * `PROCESS_SUITES` runs in the parallel group — the class this row closed — and fails here instead.
+ * What it cannot see (review round 1): a dynamic `import()` of the module, and a test that reaches it
+ * through a non-test helper file.
+ */
+/** An import statement, at the start of a line — so a string that spells one (below) is not one. */
+const STRUCTURAL_WAIT_IMPORT =
+  /^(?:import\b[^;]*?|\}\s*)from '\.{1,2}\/(?:[\w./-]*\/)?structural-wait\.js'/m;
+const TEST_FILE = /\.test\.tsx?$/;
+
+describe('the process project’s membership', () => {
+  it('is exactly the test files that import a structural wait, in both directions', () => {
+    const importers = censusFiles(repositoryRoot, { include: (path) => TEST_FILE.test(path) })
+      .filter((file) => STRUCTURAL_WAIT_IMPORT.test(file.contents))
+      .map((file) => file.path)
+      .sort();
+    expect(importers.length, 'no test file imports structural-wait.js').toBeGreaterThan(0);
+    expect(importers).toEqual([...PROCESS_SUITES].sort());
+  });
+
+  it('recognises the import spellings a test file uses, and not a mention in prose', () => {
+    expect(STRUCTURAL_WAIT_IMPORT.test("import { waitUntil } from './structural-wait.js';")).toBe(
+      true,
+    );
+    expect(STRUCTURAL_WAIT_IMPORT.test("} from '../runlet/structural-wait.js';")).toBe(true);
+    expect(STRUCTURAL_WAIT_IMPORT.test('see `structural-wait.ts` for the budget')).toBe(false);
+    // …and this file, which spells both imports inside strings, is not one of the importers.
+    expect(
+      STRUCTURAL_WAIT_IMPORT.test('  expect(test("import { x } from \'./structural-wait.js\'"))'),
+    ).toBe(false);
   });
 });

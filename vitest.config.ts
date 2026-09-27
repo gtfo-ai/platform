@@ -27,7 +27,9 @@ const repositoryRoot = fileURLToPath(new URL('.', import.meta.url));
  * nested checkout planted under `packages/` and `apps/web/src/` **is** collected by them, measured
  * as 143/21/17 against this checkout's 142/20/16. Being anchored is not the same as being scoped.
  *
- * Those five projects are the whole audit. There is no root-level `include`: with `projects` set
+ * Those five projects were the whole audit. The sixth, `process` (WP-69), names its files one by
+ * one ({@link PROCESS_SUITES}) and so cannot collect another checkout's, and carries the exclusions
+ * anyway for the reason above. There is no root-level `include`: with `projects` set
  * the root config collects nothing of its own, and the only other glob list in this file is
  * `coverage.include`, which is anchored and carries these exclusions too — `all: true` would
  * otherwise pull another checkout's sources into the denominator of every threshold.
@@ -40,6 +42,31 @@ const excludeEverywhere = [
 ];
 
 /**
+ * The suites that start **real processes** and wait on them structurally (WP-69, PROGRESS backlog
+ * 25) — the `process` project's whole membership.
+ *
+ * A structural wait asserts that something happens (a socket is bound, a pid file is written, a pid
+ * disappears), and how long it takes is **process scheduling**: exactly the quantity the parallel
+ * `unit`+`contract` run moves by an order of magnitude on a busy host. The conformance suite failed
+ * a push at a one-minute load of 12.63 and again at 7.97 inside that run, and passed alone. So these
+ * files do not run inside it: the `process` project runs them **after** it (`groupOrder: 1`), **one
+ * file at a time** (`fileParallelism: false`), under a `testTimeout` of their own — the same answer
+ * `integration` and `e2e-fake-claude` already give to suites that own real resources. The waits
+ * take their deadline from the running test's budget (`structural-wait.ts`), so a wait that runs
+ * out still fails first and names its component.
+ *
+ * Still a step of `verify` and of CI's unit job: `pnpm test` names all three projects in one run,
+ * so coverage is one report and the pre-push hook runs these files too. `scripts/verify.test.ts`
+ * holds that every project here is run by some verification target, and that this list is exactly
+ * the test files importing `structural-wait.js` — so the list cannot drift from what uses it.
+ */
+export const PROCESS_SUITES = [
+  'packages/infrastructure/src/runlet/conformance.contract.test.ts',
+  'packages/infrastructure/src/runlet/shim.test.ts',
+  'packages/infrastructure/src/runlet/structural-wait.test.ts',
+];
+
+/**
  * Test tiers per docs/technical/10-testing-strategy.md.
  *
  *   unit             fast, no container — domain ring, policies, pure adapters. Two files do real
@@ -48,6 +75,8 @@ const excludeEverywhere = [
  *                    `packages/infrastructure/src/runner/path-guard.filesystem.test.ts`, whose
  *                    whole point is which names the running volume treats as one file.
  *   contract         integration-type ports against fakes / recorded fixtures
+ *   process          the suites that start real processes ({@link PROCESS_SUITES}), after the
+ *                    two above and one file at a time, in the same `pnpm test` run
  *   integration      Testcontainers + PGlite database suites
  *   e2e-fake-claude  one ticket through the pipeline with the fake Claude runner
  *   ui               web app reducers/components (happy-dom) — Playwright lives separately
@@ -79,6 +108,7 @@ export default defineConfig({
             '**/*.contract.test.ts',
             '**/*.integration.test.ts',
             '**/*.e2e.test.ts',
+            ...PROCESS_SUITES,
           ],
         },
       },
@@ -87,7 +117,25 @@ export default defineConfig({
           name: 'contract',
           environment: 'node',
           include: ['packages/*/src/**/*.contract.test.ts', 'test/contract/**/*.test.ts'],
+          exclude: [...excludeEverywhere, ...PROCESS_SUITES],
+        },
+      },
+      {
+        test: {
+          name: 'process',
+          environment: 'node',
+          include: PROCESS_SUITES,
           exclude: excludeEverywhere,
+          // After `unit` and `contract` (group 0) have finished, and one file at a time: the host's
+          // scheduler is then this file's, not five thousand other tests'.
+          sequence: { groupOrder: 1 },
+          fileParallelism: false,
+          // The budget the structural waits take their share of. Generous on purpose: it bounds a
+          // wait for something structural, never a duration, so a dead component still fails at
+          // the speed it dies wherever a test asserts the death, and what this number decides is
+          // only how long a slow host is given before a wait names what it was waiting for.
+          testTimeout: 120_000,
+          hookTimeout: 120_000,
         },
       },
       {

@@ -219,9 +219,9 @@ const ASKING_SPEC = {
   non_functional: [],
   dependencies: [],
   size: 'M',
-  drift: { flag: 'none', justification: 'in the documented direction' },
+  drift: { flag: false, justification: 'in the documented direction' },
   assumptions: [],
-  questions: [{ id: 'q1', text: 'Which currency?' }],
+  questions: [{ id: 'q1', text: 'Which currency?', blocking: true }],
   decision: 'ask',
   kb_citations: [],
 };

@@ -7,6 +7,7 @@
 
 import { type DomainEvent, domainEventSchemasByType } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
+import { askingRefinedSpec } from '../testing/artifact-fixtures.js';
 import { createPipelineHarness, type HarnessOptions } from '../testing/pipeline-harness.js';
 import { mappedStatus, renderWorkpad, workpadMarker } from './workpad.js';
 
@@ -41,7 +42,7 @@ const harnessFor = (options: Partial<HarnessOptions> = {}) =>
       refinement: {
         status: 'completed',
         terminalReason: 'success',
-        structuredOutput: { decision: 'ask', questions: [{ id: 'q1', text: 'Which currency?' }] },
+        structuredOutput: askingRefinedSpec(),
       },
     },
     ...options,

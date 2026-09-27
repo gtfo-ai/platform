@@ -258,7 +258,15 @@ export interface ScriptedWorkspaces {
  * asserts the substitution must compare against the value production would use.
  */
 export const scriptedWorkspaces = (
-  scenarioFor: (stage: string) => {
+  /**
+   * The scenario for one run, given its stage and the **spec** the production planner built — so a
+   * case can script by what the run was handed (its checkout, say) and not only by its stage
+   * (WP-69, backlog 184).
+   */
+  scenarioFor: (
+    stage: string,
+    spec: RunSpec,
+  ) => {
     readonly structuredOutput: unknown;
     readonly costUsd?: number;
     readonly awaitSteers?: number;
@@ -282,7 +290,7 @@ export const scriptedWorkspaces = (
       provision: async (spec) => {
         const stage = spec.stage ?? '';
         await onSpec?.(spec);
-        const scenario = scenarioFor(stage);
+        const scenario = scenarioFor(stage, spec);
         const cli = runnerAdapters.fakeSpawnClaudeCodeProcess(
           fakeCliScriptFor(spec, scenario),
           scenario.bash === undefined ? {} : { workdir: scenario.bash.workdir },

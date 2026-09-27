@@ -506,7 +506,14 @@ describe('a chore run’s admission', () => {
     commands_run: [],
     known_gaps: [],
     followup_tickets: [],
-    mr: null,
+    // A merge request, because `ImplementationNotes.mr` is not nullable: the `null` this fixture
+    // carried until WP-69 is an answer the real runner refuses (backlog 77).
+    mr: {
+      url: 'https://git.example.test/acme/api/-/merge_requests/1',
+      iid: 1,
+      head_sha: 'b'.repeat(40),
+      branch: 'agentic/chore-1',
+    },
   };
 
   const choreHarness = (spentUsd: number, capUsd: number, pendingRuns = 0): PipelineHarness =>
@@ -519,6 +526,15 @@ describe('a chore run’s admission', () => {
       },
       maintenanceSpentUsd: spentUsd,
       maintenancePendingRuns: pendingRuns,
+      // The merge request the chore's notes name has no head commit yet, so the CI gate waits —
+      // which is where the walk stops. Needed since WP-69: the notes carried `mr: null` before,
+      // which the real runner refuses, and the gate never read the merge request at all.
+      git: {
+        getMergeRequest: async () =>
+          ({
+            ref: { iid: 1, url: 'https://git.example.test/acme/api/-/merge_requests/1' },
+          }) as never,
+      },
       runs: {
         refinement: {
           status: 'completed',

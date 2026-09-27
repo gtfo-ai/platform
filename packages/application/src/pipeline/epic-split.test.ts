@@ -22,6 +22,7 @@ import type {
   TicketRefInput,
 } from '../ports/integrations/task-management.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
+import { IMPLEMENTATION_PLAN } from '../testing/artifact-fixtures.js';
 import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
 import {
   BreakdownRefusedError,
@@ -168,7 +169,17 @@ const splitHarness = (
       [SPIKE_DOCUMENT_STAGE]: {
         status: 'completed',
         terminalReason: 'success',
-        structuredOutput: which === 'spike' ? REPORT : BREAKDOWN(options.children ?? 2),
+        // What the stage produces depends on the template the ticket was routed to, so the script
+        // follows the case's expectation: a ticket that stays a `feature` gets an
+        // `ImplementationPlan` at `architecture`, as a model would give it. A breakdown there was
+        // data the runner refuses (WP-69, backlog 77); if routing ever disagrees with the case, the
+        // harness now refuses the script by name instead of walking on.
+        structuredOutput:
+          which === 'spike'
+            ? REPORT
+            : which === 'off' || options.createTicket === false
+              ? IMPLEMENTATION_PLAN
+              : BREAKDOWN(options.children ?? 2),
       },
     },
     settings: {

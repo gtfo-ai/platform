@@ -22,7 +22,11 @@ import type {
   MergeRequest,
 } from '../ports/integrations/git-provider.js';
 import type { Ticket } from '../ports/integrations/task-management.js';
-import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
+import {
+  createPipelineHarness,
+  type PipelineHarness,
+  type ScriptedRun,
+} from '../testing/pipeline-harness.js';
 import { startShadowBatch } from './batch.js';
 import { shadowReviewTicketKeyFor, shadowTaskOfReviewKey } from './human-review.js';
 import type { ShadowBatchTicketRow } from './ports.js';
@@ -474,7 +478,7 @@ const walkedHarness = (
   options: {
     readonly merged?: readonly MergedMergeRequest[];
     /** Extra scripts, e.g. `code_review+merge_request` for the human-MR review alone. */
-    readonly runs?: Readonly<Record<string, ReturnType<typeof completedRun>>>;
+    readonly runs?: Readonly<Record<string, ScriptedRun>>;
   } = {},
 ) =>
   createPipelineHarness({
@@ -750,11 +754,20 @@ describe('the review of the human merge request, through the whole walk (WP-45)'
   it('writes the report when the review escalates instead of waiting for ever — and says so', async () => {
     /**
      * WP-45 review round 1: the wait is bounded only by the ending events, so this drives one that
-     * is not `task.completed`. The review run returns no artifact, the executor escalates the review
-     * task to `needs_human`, `task.escalated` wakes the report, and the batch completes.
+     * is not `task.completed`. The review run fails — the way the real runner reports a model that
+     * never produced a valid verdict (`error_max_structured_output_retries`); until WP-69 this
+     * scripted a *completed* run with no artifact, which that runner cannot return (backlog 77) — the
+     * executor escalates the review task to `needs_human`, `task.escalated` wakes the report, and
+     * the batch completes.
      */
     const harness = walkedHarness({
-      runs: { 'code_review+merge_request': completedRun(undefined) },
+      runs: {
+        'code_review+merge_request': {
+          status: 'failed',
+          terminalReason: 'error_max_structured_output_retries',
+          error: 'the platform rejected the structured output: verdict: Invalid option',
+        },
+      },
     });
     await startBatch(harness, ['ACME-1']);
     await harness.drain();

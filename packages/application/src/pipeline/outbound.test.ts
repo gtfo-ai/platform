@@ -21,6 +21,7 @@ import { transactionIsOpen } from '../events/open-transaction.js';
 import type { StoredEvent } from '../ports/event-store.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
+import { askingRefinedSpec } from '../testing/artifact-fixtures.js';
 import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
 import {
   integrationsForProject,
@@ -46,7 +47,7 @@ const harnessWith = (calls: ProviderCalls): PipelineHarness =>
         status: 'completed',
         terminalReason: 'success',
         // Parks the task at `waiting_answers` after one stage: enough of a task to render.
-        structuredOutput: { decision: 'ask', questions: [{ id: 'q1', text: 'Which currency?' }] },
+        structuredOutput: askingRefinedSpec(),
       },
     },
     git: {

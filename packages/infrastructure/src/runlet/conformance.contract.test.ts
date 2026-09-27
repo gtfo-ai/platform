@@ -17,27 +17,38 @@
  * `docs/research/12-run-shim-verification.md`, including the `volume-subpath` and embedded-DNS
  * checks this work package owes, with the Docker version they were run on.
  *
- * Timing discipline: no assertion in this file bounds a duration from above. `waitForFile` and
- * `waitForProcessGone` are lower bounds on something structural — a file appears, a pid stops
- * existing — and the grace period *itself* is proved on an injected clock in
+ * Timing discipline: no assertion in this file bounds a duration from above. `waitForFile`,
+ * `waitUntil` and `waitForProcessGone` are lower bounds on something structural — a file appears, a
+ * pid stops existing — and the grace period *itself* is proved on an injected clock in
  * `packages/infrastructure/src/runlet/shim.test.ts`, where the clock can be moved by hand.
+ *
+ * **Where the bound on those waits lives** (WP-69, backlog 25): not in this file. It ran inside the
+ * fully parallel `contract` project with 30 s deadlines written by hand, and failed a push at a
+ * one-minute load of 12.63 and again at 7.97 on a docs-only tree. What those waits measure is
+ * process scheduling, so the file runs in the `process` project (`vitest.config.ts`) — after the
+ * parallel group, one file at a time, with the project's own `testTimeout` — and each wait takes
+ * its deadline from the running test's budget (`./structural-wait.ts`), so it still fails first
+ * and names what it was waiting for. The resolved budget was read rather than inferred: the
+ * `contract` project resolves `testTimeout` to 5000 ms, and every test here passed its own
+ * `60_000` from WP-13 onward, which is why the first failure reported the helper's 30 s deadline
+ * at 31,482 ms and the second `Test timed out in 60000ms`.
  */
 import { type ChildProcess, spawn as spawnProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFile, stat, writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import type { SpawnOptions } from '@anthropic-ai/claude-agent-sdk';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { afterEach, describe, expect, it } from 'vitest';
 import { systemClock } from '../runner/clock.js';
 import { createAllowListCredentialResponder, createRunletSpawn } from './spawn-adapter.js';
+import { settlesWithin, waitForFile, waitForProcessGone, waitUntil } from './structural-wait.js';
 import {
   connectProbe,
   createControlVolume,
   nodeScript,
   processIsAlive,
   type RunletProbe,
-  waitForProcessGone,
 } from './testing.js';
 
 const REPO = fileURLToPath(new URL('../../../../', import.meta.url));
@@ -65,33 +76,6 @@ afterEach(async () => {
     await volume.cleanup();
   }
 });
-
-const waitForFile = async (file: string, timeoutMs = 30_000): Promise<void> => {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    if ((await stat(file).catch(() => null)) !== null) {
-      return;
-    }
-    if (Date.now() > deadline) {
-      throw new Error(`${file} never appeared`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-};
-
-/** The same shape as {@link waitForFile}: a lower bound on something structural, never an upper one. */
-const waitFor = async (what: string, ready: () => boolean, timeoutMs = 30_000): Promise<void> => {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    if (ready()) {
-      return;
-    }
-    if (Date.now() > deadline) {
-      throw new Error(`${what} never happened`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-};
 
 /** Bytes carried by the `stdout`/`stderr` frames a probe has received so far. */
 const payloadOf = (probe: RunletProbe, type: 'stdout' | 'stderr'): Buffer =>
@@ -134,7 +118,7 @@ const startShimProcess = async (env: Record<string, string> = {}): Promise<ShimP
   const exited = new Promise<number | null>((resolve) => {
     child.once('exit', (code) => resolve(code));
   });
-  await waitForFile(volume.controlSocketPath);
+  await waitForFile('the shim process to listen on its control socket', volume.controlSocketPath);
   return {
     controlSocketPath: volume.controlSocketPath,
     credentialSocketPath: volume.credentialSocketPath,
@@ -158,7 +142,7 @@ describe('agentic-runlet conformance, against the real shim process', () => {
     const messages: { type: string }[] = [];
     const stderrLines: string[] = [];
 
-    for await (const message of query({
+    const conversation = query({
       prompt: 'summarise the bug',
       options: {
         // The seam TD-025 §2 is about, wired to the production transport rather than to
@@ -173,9 +157,15 @@ describe('agentic-runlet conformance, against the real shim process', () => {
         cwd: REPO,
         env: { PATH: process.env['PATH'] ?? '/usr/bin' },
       },
-    })) {
-      messages.push(message as { type: string });
-    }
+    });
+    await settlesWithin(
+      'the shim to spawn the CLI and carry the SDK query to its result',
+      (async () => {
+        for await (const message of conversation) {
+          messages.push(message as { type: string });
+        }
+      })(),
+    );
 
     expect(messages.map((message) => message.type)).toContain('result');
     const result = messages.find((message) => message.type === 'result') as unknown as {
@@ -188,7 +178,7 @@ describe('agentic-runlet conformance, against the real shim process', () => {
     // The SDK parsed it, which means the NDJSON crossed the frame protocol byte for byte.
     expect(result.total_cost_usd).toBe(0.01);
     expect(await shim.exited).toBe(0);
-  }, 60_000);
+  });
 
   it('carries 16 MiB of CLI stdout without loss (the case the fake cannot exercise)', async () => {
     const shim = await startShimProcess();
@@ -218,7 +208,10 @@ describe('agentic-runlet conformance, against the real shim process', () => {
     // the fake would sit on its stdin listener for ever and the test would time out rather than
     // fail.
     child.stdin.end();
-    await new Promise<void>((resolve) => child.once('exit', () => resolve()));
+    await settlesWithin(
+      'the shim to spawn the CLI and report its exit',
+      new Promise<void>((resolve) => child.once('exit', () => resolve())),
+    );
 
     const received = await collected;
     const fillerStart = received.indexOf('\n') + 1;
@@ -234,7 +227,7 @@ describe('agentic-runlet conformance, against the real shim process', () => {
     expect(received.subarray(fillerStart + filler.length).toString('utf8')).toContain(
       '"type":"result"',
     );
-  }, 60_000);
+  });
 
   /**
    * The entrypoint's `onShutdown` must not `process.exit(0)` — and this is the condition under
@@ -275,7 +268,7 @@ describe('agentic-runlet conformance, against the real shim process', () => {
       cwd: REPO,
       env: { PATH: process.env['PATH'] ?? '/usr/bin' },
     });
-    await runner.next('spawn.ok');
+    await settlesWithin('the shim to spawn the child and answer spawn.ok', runner.next('spawn.ok'));
 
     // Stop reading *before* the bulk flows, not once it is "unmistakably flowing". The earlier
     // form waited for 1 MiB and then paused, but one 20 ms poll tick of a unix socket carries far
@@ -297,7 +290,9 @@ describe('agentic-runlet conformance, against the real shim process', () => {
     // child's stdio when it exits, resuming the stream the shim had paused, so `close` arrives
     // long before the flush window. Measured: `readableFlowing === false` at `exit`, and `close`
     // 128 KiB of further reads later.)
-    await waitFor('the shim shut down', () => shim.stderr().includes('agentic-runlet exiting'));
+    await waitUntil('the shim to log its shutdown', () =>
+      shim.stderr().includes('agentic-runlet exiting'),
+    );
 
     const beforeReading = payloadOf(runner, 'stdout').length;
     runner.resume();
@@ -323,7 +318,7 @@ describe('agentic-runlet conformance, against the real shim process', () => {
     // explains it.
     expect(payloadOf(runner, 'stderr').length).toBeLessThan(BULK_BYTES / 2);
     expect(await shim.exited).toBe(0);
-  }, 60_000);
+  });
 
   it('relays a signal to the CLI and forwards its stderr', async () => {
     const shim = await startShimProcess();
@@ -340,23 +335,17 @@ describe('agentic-runlet conformance, against the real shim process', () => {
     child.stdout.on('data', (chunk: Buffer) => lines.push(chunk.toString('utf8')));
     child.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user' } })}\n`);
 
-    const sawSignal = new Promise<void>((resolve) => {
-      const check = setInterval(() => {
-        if (lines.join('').includes('"signal":"SIGUSR1"')) {
-          clearInterval(check);
-          resolve();
-        }
-      }, 20);
-    });
     // `kill()` returns `state.connection?.send(...) ?? false`, so a `false` here means *the control
     // connection was not up yet* — not that the child died. A fixed sleep therefore asserted a
     // hardware property: it failed on `main` at load average 150 with the child perfectly healthy.
     // The pid file is the structural lower bound this file's docblock asks for, and it is strictly
     // stronger than "connected": the child can only write it because the shim received the `spawn`
     // frame, which it can only have received over the connection `kill()` is about to use.
-    await waitForFile(pidFile);
+    await waitForFile('the shim to spawn the fake CLI, which writes its pid file', pidFile);
     expect(child.kill('SIGUSR1')).toBe(true);
-    await sawSignal;
+    await waitUntil('the shim to relay SIGUSR1 to the fake CLI, which reports it on stdout', () =>
+      lines.join('').includes('"signal":"SIGUSR1"'),
+    );
 
     child.kill('SIGKILL');
     const [code, signal] = await new Promise<[number | null, NodeJS.Signals | null]>((resolve) => {
@@ -365,7 +354,7 @@ describe('agentic-runlet conformance, against the real shim process', () => {
     expect(code).toBeNull();
     expect(signal).toBe('SIGKILL');
     expect(await shim.exited).toBe(0);
-  }, 60_000);
+  });
 
   it('kills a child that ignores SIGTERM when the control connection drops', async () => {
     const shim = await startShimProcess({ RUNLET_KILL_GRACE_MS: '250' });
@@ -384,24 +373,24 @@ describe('agentic-runlet conformance, against the real shim process', () => {
       cwd: REPO,
       env: { PATH: process.env['PATH'] ?? '/usr/bin' },
     });
-    await runner.next('spawn.ok');
-    await waitForFile(pidFile);
+    await settlesWithin('the shim to spawn the child and answer spawn.ok', runner.next('spawn.ok'));
+    await waitForFile('the shim to spawn the fake CLI, which writes its pid file', pidFile);
     const pid = Number(await readFile(pidFile, 'utf8'));
     expect(processIsAlive(pid)).toBe(true);
 
     runner.close();
 
     // The graceful half ran…
-    await waitForFile(`${pidFile}.term`);
+    await waitForFile('the shim to SIGTERM the child when the connection drops', `${pidFile}.term`);
     // …and then the child is gone. A process that ignores SIGTERM can only be ended by SIGKILL,
     // and the only thing that sent one is the shim's grace timer. Asserted by asking the
     // operating system, not by watching a call.
-    await waitForProcessGone(pid);
+    await waitForProcessGone(pid, 'the shim’s grace timer to SIGKILL a child that ignores SIGTERM');
     expect(processIsAlive(pid)).toBe(false);
     // And the shim itself is gone, so the container can exit: TD-025 §1's "an orphaned agent
     // never keeps running" covers the shim too.
     expect(await shim.exited).toBe(0);
-  }, 60_000);
+  });
 
   it('answers the credential helper mode of the same binary, and refuses what the runner refuses', async () => {
     const shim = await startShimProcess();
@@ -420,7 +409,7 @@ describe('agentic-runlet conformance, against the real shim process', () => {
     // Same lower bound as the signal test: this one needs the child *running* before it asks the
     // credential socket a question, because the answer is scoped to a live child (WP-13's broker
     // must not answer after child exit, and must not answer before there is one to answer for).
-    await waitForFile(pidFile);
+    await waitForFile('the shim to spawn the fake CLI, which writes its pid file', pidFile);
 
     const ask = async (input: string): Promise<string> => {
       const helper = spawnProcess(
@@ -456,5 +445,5 @@ describe('agentic-runlet conformance, against the real shim process', () => {
 
     child.kill('SIGKILL');
     await new Promise<void>((resolve) => child.once('exit', () => resolve()));
-  }, 60_000);
+  });
 });

@@ -133,6 +133,10 @@ const EXPECTED_ADDITIONS: Readonly<Record<string, readonly string[]>> = {
   ui: [`apps/web/src/${names.webPlain}/ordinary.test.tsx`],
   integration: [`${names.root}/plain/ordinary.integration.test.ts`],
   'e2e-fake-claude': [`${names.root}/plain/ordinary.e2e.test.ts`],
+  // WP-69's `process` project names its files one by one (`PROCESS_SUITES`), so no fixture can
+  // be *added* to it; what this file asserts of it is the negative half — it collects nothing
+  // foreign and nothing new.
+  process: [],
 };
 
 /** Every path inside a nested checkout. Each is the sibling of an entry above. */
@@ -261,9 +265,16 @@ afterAll(() => {
 const everythingCollected = (): readonly string[] => [...collected.values()].flat();
 
 describe('vitest project scoping', () => {
-  it('resolves the same five projects with the fixtures in place', () => {
+  it('resolves the same six projects with the fixtures in place', () => {
     const projects = [...collected.keys()].sort();
-    expect(projects).toStrictEqual(['contract', 'e2e-fake-claude', 'integration', 'ui', 'unit']);
+    expect(projects).toStrictEqual([
+      'contract',
+      'e2e-fake-claude',
+      'integration',
+      'process',
+      'ui',
+      'unit',
+    ]);
     expect(projects).toStrictEqual([...baseline.keys()].sort());
     expect(Object.keys(EXPECTED_ADDITIONS).sort()).toStrictEqual(projects);
   });

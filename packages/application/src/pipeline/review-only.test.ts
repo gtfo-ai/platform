@@ -397,7 +397,9 @@ describe('a human merge request opening', () => {
     const { harness } = reviewHarness({
       files: [fileDiff('src/billing/charge.ts')],
       review: REVIEW({
-        checklists_applied: [{ name: 'invented', item_count: 99, required_by: ['nobody'] }],
+        checklists_applied: [
+          { name: 'invented', item_count: 99, required_by: ['nobody'], truncated: false },
+        ],
       }),
       harness: {
         settings: {
@@ -432,7 +434,9 @@ describe('a human merge request opening', () => {
 
   it('records "given none" on a verdict whose review matched no class, never the model’s claim', async () => {
     const { harness } = reviewHarness({
-      review: REVIEW({ checklists_applied: [{ name: 'x', item_count: 1, required_by: [] }] }),
+      review: REVIEW({
+        checklists_applied: [{ name: 'x', item_count: 1, required_by: [], truncated: false }],
+      }),
     });
     await harness.publish([mrEvent('mr.opened')]);
     const task = reviewTask(harness);

@@ -4409,6 +4409,8 @@ that pays for it. Cheapest owner is whoever the gate stops first.
 > measurements inside a tenth of a point confirm the entry rather than change it, and neither says
 > *which* files or which ring carry the uncovered branches, which is still **WP-70**'s opening move
 > and `docs/TODO.md`'s open question.
+>
+> **Addendum (refiner, session 8, from WP-69's run).** WP-69's `verify` reported branches **80.01 %** (440 files, 8222 passed) — headroom **0.01**, the lowest of the five readings (80.05, 80.04, 80.06, 80.08, 80.01), so the next change adding any uncovered branch is likely to fail CI's unit job for a reason it did not create. The figure is the implementer's, **not** re-measured (rule 66); the threshold is unchanged (`vitest.config.ts:229`, domain 85 at `:235`). Two facts for WP-70's opening measurement, both read off the tree: WP-69 put a third project (`process`) into the same coverage run (`package.json` `test` script), and `coverage.include` is `packages/*/src/**/*.ts` with no exclusion for test support (`vitest.config.ts:188-193`), so the in-memory doubles and the harness under `packages/application/src/testing/` — including WP-69's new `artifact-fixtures.ts` — sit in the denominator. Whether they raise or lower the figure is a **hypothesis** until the json-summary run names the files. **Still WP-70's; urgency raised, not a new entry.**
 
 ### 88. **A bot that is not this platform opens and extends a human review window, so every reviewer-minutes figure over-counts by however many robots comment on a merge request — and the flag that would fix it cannot be written in the table the bullet proposes, nor on the wire** (**RESOLVED** at `8dbebd9`, WP-61, session 8 — TODO — **no work package owns it**; found by WP-29, session 5)
 > **M4 (architect, session 6): folded into WP-61.**
@@ -11086,6 +11088,30 @@ Whether `paused → returned` should exist too (so return-to-stage works from an
 
 **What is wrong.** WP-68 added the negation to six `noRestrictedImports` overrides (`biome.json:45,98,128,158,194,220`) so the census tests can import `scripts/census-files.mjs`. The overrides are per ring, not per tier, so the exemption reaches production sources too, and `packages/domain` — which CLAUDE.md says has no I/O — would accept an import of a module that walks the file system. **Done.** The negation is scoped to test files (an `includes` on `**/*.test.ts` or a separate override), or the docblock of `census-files.mjs` states why a ring-wide exemption is accepted; a planted production import is refused, measured. Related: **10**.
 
+### 249. **A harness run with no script is escalated by the stage executor rather than failing the test, so a missing script passes every case that does not assert the task's ending** (small, TODO — **latent test-instrument gap**, the same class as backlog **77** (*a harness kinder than production*) at the other end of the script; **read off the tree, the affected-case count not measured** (rule 66); **no work package owns it** — for the **M5 architect pass**; found and filed by WP-69, session 8)
+
+**What is wrong.** The harness runner's `start` throws a plain `Error` when `scriptFor` finds nothing — `the test scripted no run for "${key}"` (`packages/application/src/testing/pipeline-harness.ts:1063-1066`, uncommitted WP-69 tree) — while a script that *is* present but invalid is pushed onto `refusals` and rethrown by `drain` (`:1067-1071`, `:1327-1331`). The executor catches whatever `start` throws, fails the run and escalates the task (`packages/application/src/pipeline/stage-executor.ts:1036-1051`, *"the runner could not start this stage; the run is failed and the task escalated"*). WP-69 rewrote the harness docblock to say so and cite this number (`pipeline-harness.ts:358-361`); the old sentence *"a run with no script fails the test loudly"* was false.
+
+**What it costs to leave.** A case that forgets to script a stage, or whose walk reaches a stage the author did not expect, ends at `needs_human` and passes unless it asserts the state — the shape that let one invalid fixture live from WP-15 to WP-28 (77). Nothing is wrong in production; the cost is a unit tier that reports green over a walk that stopped early.
+
+**What "done" looks like.** A missing script is a `drain` refusal like an invalid one (a named error, the key in it), and a case that genuinely means *"this stage cannot start"* **declares** it on the script map — the shape `ScriptedRun.deliberatelyInvalid` already uses, refused when unused so it cannot go stale. One harness case each way in `pipeline-harness.test.ts`. **Needs measurement first:** how many of the ~46 harness importers fail once the refusal is routed through `drain` (a run of the application unit tier); WP-69's analogue found 23 invalid scripts in 11 files against the two a grep found, so the size is not known until run.
+
+**Depends on** nothing unbuilt; best after WP-69 lands (it edits the same harness).
+
+### 250. **Two docblocks justify the runlet's narrow entry by saying `runlet/testing.ts` imports `vitest` at module scope — it never has** (nit, TODO — **documentation wrong, design right**: the narrow entry is still needed; **read off the tree**; folded into **WP-73**; found by WP-69, session 8)
+
+**What is wrong.** `packages/infrastructure/src/runlet/entry.ts:10` (*"through `runlet/testing.js`, **`vitest` and `fast-check`**"*) and `:16` (*"`testing.ts` imports `vitest` at module scope"*), and `apps/runlet/src/index.ts:23-24` (*"(through `runlet/testing.ts`) `vitest`"*). `testing.ts` imports `node:fs/promises`, `node:net`, `node:os`, `node:path`, a type from `@platform/contracts` and `./framing.js` (`testing.ts:11-16`), and did so at its first commit (`d1e7b69`); `git log -G"vitest|fast-check"` over the file is empty, so the sentence was wrong when WP-22 wrote it. The entry's reason still holds — the root barrel reaches `pg`, `pg-boss` and the SDK — and WP-69 made the vitest half true of a **different** module: `structural-wait.ts:31` imports `TestRunner` from `vitest` and is deliberately absent from the barrel (`runlet/index.ts:9-17`).
+
+**Done.** Both docblocks drop the `testing.ts`→`vitest` claim and name `structural-wait.ts` as the vitest importer kept out of the barrel, so the next person adding it to `index.ts` meets the reason. **Depends on** WP-69 landing.
+
+### 251. **Nothing checks for a value-import cycle; "no runtime cycle" is one measurement, not a guard — and the pinned linter already ships the rule** (nit-to-small, TODO — **latent**: WP-69 measured **0** value cycles with madge 8.0.0 at `f1ce323` and at `8ae121c`, and six type-inclusive ones, all inside `@platform/application`; **folded into WP-73**, measurement first; found by WP-69, session 8, closing backlog **21**'s falsified hypothesis)
+
+**What is wrong / the evidence.** WP-69's notes, item 7, quoted: *"madge 8.0.0 (`pnpm dlx`) over the e2e harness, `instance.ts`, the server runtime and every package entry, **type-only imports skipped**: **0 cycles** at `f1ce323` and **0** at WP-15d's own commit `8ae121c` … Counted with type imports: six today, two at `8ae121c`."* madge is not a dependency and neither `package.json` nor `biome.json` names any cycle rule. The pinned `@biomejs/biome` **2.5.12** (`package.json:53`) ships `suspicious/noImportCycles` with an `ignoreTypes` option, on by default — but its schema says an inline `import { type Foo }` is **not** treated as type-only, and the repository sets `verbatimModuleSyntax: true` (`tsconfig.base.json:11`), so whether the six type-inclusive cycles report is **not known**.
+
+**What it costs to leave.** Backlog 21's symptom stays an unexplained observation; a real value cycle introduced later would be found the way 21 was — one import order, one tier, one afternoon.
+
+**Done.** **Needs measurement:** `biome lint` with `noImportCycles` on, finding count over the tree. If it is zero or the six are rewritten to `import type`, the rule goes on at `error` in `biome.json` (no new dependency, no new `verify` target); a planted two-module value cycle is refused, measured. If the count is large, the entry is updated with it and returned unowned rather than landed red (WP-71's rule for linters). **Depends on** nothing unbuilt.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -12498,6 +12524,8 @@ panic note records; and every tier that grows lengthens the parallel run.
 > harness-level answer this entry recommends (the real-process suites in their own project with their own
 > `testTimeout`, or bounded concurrency) is now the cheaper one: the suite has grown to 4 960 tests.
 > Still unowned; still before whoever next touches `packages/infrastructure/src/runlet/`.
+>
+> **Correction (refiner, session 8, from WP-69's item 3).** *"The per-test timeout has been raised since the first instance"* above is **false**: every conformance test carried its own `60_000` from WP-13's first commit (`d1e7b69`, `git log -S`), so the two instances differ in which bound reported first, not in the budget; `shim.test.ts` had no override and ran at the `contract`/`unit` default of 5 s under two 15 s helper deadlines. WP-69 removed all five literals in favour of the `process` project.
 
 **Owner. None, and this entry says so plainly.** WP-13 wrote the file and is DONE; no plan row owns *the
 timing bounds of a test tier*; `scripts/verify-targets.ts` owns the **list** of verification targets, not
@@ -33163,3 +33191,163 @@ fails; (8) an untracked `set({ config })` writer planted under `apps/server/src/
 `apps/server/src/queries/integration-config-writers.test.ts` › "is exactly the declared list, in both directions"
 fails naming it. The tracked half of (4) and (8) is each census's fixture plant, so the main
 checkout's index was never touched.
+
+#### WP-69
+
+**Implemented** (implementer, session 8): backlog **77**, **25**, **21**, **4**, **183** and **184**,
+criterion by criterion.
+
+1. **The detector.** `packages/application/src/testing/pipeline-harness.ts` no longer casts a
+   script into the outcome: `checkScripted` parses a **completed** run's structured output against
+   `artifactDataSchemas[spec.artifactType]` — the table and the field the real runner uses
+   (`packages/infrastructure/src/runner/structured-output.ts`) — and answers the **parsed** value;
+   it also refuses a completed artifact run with no output and a run that did **not** complete but
+   still carries output (the real runner reports `null` for every ending but `success`). A refusal
+   is a `ScriptedRunRefusedError` naming the script key and the zod issues (`path: message`), and it
+   is thrown by **`drain`**, not only by `start`: the stage executor catches whatever `start` throws
+   and escalates the task (WP-15c), so a throw there alone would have read as a pipeline failure.
+   A test of a check *behind* the runner declares it with `ScriptedRun.deliberatelyInvalid: '<why>'`,
+   and the declaration is itself refused once the payload parses, so it cannot go stale. The module
+   docblock gained the sentence. Held by
+   `packages/application/src/testing/pipeline-harness.test.ts` › "refuses the fixture that was invalid from WP-15 to WP-28, naming the field and the issue"
+   (calibrated on the historical fixture, both directions with
+   › "walks on with the same payload once the one field is what the schema says").
+2. **The number.** With the detector in and nothing fixed, the application unit tier went
+   **140 failed of 1874 tests, in 11 files**. Distinct invalid scripts behind them, per file, after
+   the loop was run until green (a refusal stops the walk, so the first pass masks later stages):
+   `ask/ask-pipeline.test.ts` 5 (four partial `RefinedSpec`s `{ decision, questions }` and one
+   `failed` ask that still carried an answer); `pipeline/stage-executor.test.ts` 6 (three partial
+   `RefinedSpec`s, one `{}`, two completed runs with no output); `pipeline/saga.test.ts` 2 (a
+   question without `blocking`; `RetroReport.cost_summary: '1.25 USD'`, a string where the schema
+   has an object); `pipeline/human-commands.test.ts` 2 (`drift.flag: 'none'`; the same
+   `cost_summary`, found by grep once `saga.test.ts` named it — it was masked); `review-only.test.ts`
+   2 (`checklists_applied[]` without `truncated`); `cost/guard.test.ts` 1 (`flag: 'none'` and no
+   `blocking`); `maintenance/scheduler.test.ts` 1 (`ImplementationNotes.mr: null`, not nullable);
+   `pipeline/epic-split.test.ts` 1 (a `TicketBreakdown` scripted at `architecture` for the cases a
+   ticket stays a `feature`, where the stage produces an `ImplementationPlan`);
+   `pipeline/outbound.test.ts` 1, `pipeline/workpad.test.ts` 1 (partial `RefinedSpec`s);
+   `shadow/report.test.ts` 1 (a completed review with no verdict). **23 invalid scripts in 11 files**,
+   against the two the grep found; plus **3** that were deliberately invalid and are now declared
+   (the ask executor's `AskAnswer` re-validation; the executor's "produced no artifact" and
+   "unknown verdict" escalations). Every one was fixed on the fixture side — **no schema was
+   loosened** — and none revealed a schema/prompt disagreement: each was a test writing only the
+   fields it read. The valid shapes now live in `packages/application/src/testing/artifact-fixtures.ts`
+   (typed with the contract's inferred types). Two fixes changed how a case *reaches* its ending
+   and say so at the line: the shadow report's escalating review now fails as
+   `error_max_structured_output_retries` (the real runner's shape), and the maintenance chore's
+   notes name a merge request whose head the CI gate waits on.
+3. **The budget, read.** A throwaway script over `createVitest(...).projects` printed each
+   project's resolved config: `contract` resolves `testTimeout` to **5000** ms — the backlog's
+   reading was right about the project — and every one of the conformance suite's six tests
+   passed its own `60_000` from WP-13's first commit (`d1e7b69`, `git log -S`), which is why the
+   first failure reported the helper's 30 s deadline at 31,482 ms and the second `Test timed out in
+   60000ms`. So the backlog's "the per-test timeout has been raised since the first instance" is
+   not so: it was never raised. `shim.test.ts` had no override and ran at **5 s** under two **15 s**
+   helper deadlines — there the contradiction was live, and a slow host reported `Test timed out in
+   5000ms` rather than a component. The per-test figure is read at run time too:
+   `packages/infrastructure/src/runlet/structural-wait.test.ts` › "is the process project’s testTimeout, as vitest resolved it for this test".
+4. **All five literals, one answer — the harness's.** New vitest project **`process`**
+   (`vitest.config.ts`, `PROCESS_SUITES`): the conformance suite, `shim.test.ts` and the helper's own
+   test, run **after** `unit`+`contract` (`sequence.groupOrder: 1`), **one file at a time**
+   (`fileParallelism: false`; resolved `maxWorkers` 1), with `testTimeout`/`hookTimeout` 120 s. The
+   five literals are gone: `packages/infrastructure/src/runlet/structural-wait.ts` gives
+   `waitUntil`/`waitForFile`/`waitForProcessGone`/`settlesWithin` (the last for a promise-shaped
+   wait — a frame, an `exit`, an SDK query) a deadline of **75 % of the running test's own
+   budget from the test's start** (`TestRunner.getCurrentTest()`), so a wait always fails before
+   the test does and names its component; `waitForProcessGone` moved there from `testing.ts` (which
+   the barrel re-exports, and which must not import `vitest`). The conformance suite's six
+   `60_000`s are removed so the project owns the number, and its signal test's deadline-less
+   `setInterval` became a named wait. No number was sized at a load: the waits assert structure,
+   and 120 s is "how long a slow host is given before a wait names what it waited for".
+5. **Still in `verify` and in CI.** `pnpm test` is `--project unit --project contract --project
+   process --coverage` — one run, one coverage report, the same `verify:tests` group and CI unit
+   job, and the pre-push hook. `scripts/verify.test.ts` now closes the link the chain lacked
+   (script → project): › "runs every project vitest.config.ts declares from some verification target"
+   (both directions), › "puts the real-process suites in `verify` itself, not in a target of their own",
+   and the membership is read off the tree, not kept:
+   › "is exactly the test files that import a structural wait, in both directions".
+   `scripts/nested-checkouts.test.ts` knows the sixth project.
+6. **Canary, both criteria** — see Verification. The first canary run found a hole: with the
+   shim's `spawn` handling removed, the signal test named the shim but the SIGTERM test hung on
+   `runner.next('spawn.ok')`, which has no bound, and ended as vitest's bare `Test timed out in
+   120000ms`. `settlesWithin` closes it for the awaits the canary reached; **not every** await is bounded —
+   `conformance.contract.test.ts:352,433,447` and every `await shim.exited` still are not, and `shim.test.ts`'s
+   41 `runner.next` awaits rely on the test's own timeout (review round 1; accepted, stated here).
+7. **The import cycle: there is none to name.** madge 8.0.0 (`pnpm dlx`) over the e2e harness,
+   `instance.ts`, the server runtime and every package entry, **type-only imports skipped**: **0
+   cycles** at `f1ce323` and **0** at WP-15d's own commit `8ae121c` (a detached worktree with a
+   symlinked `node_modules`, removed afterwards). Counted with type imports: six today, two at
+   `8ae121c`, all inside `@platform/application`, none through `EventBus` or `infrastructure/events`,
+   each with a type-only edge (named in the docblock below). The symptom did not reproduce in five
+   import orders at either commit (`pg` value-imported first, then the harness / `instance.ts` / the
+   server runtime / the infrastructure package, then `createEventing` over an unconnected pool), nor
+   in a whole-instance e2e run with `pg` imported first (Verification). The hypothesis is
+   falsified and the observation stays unexplained; what is written down is the rule that removes
+   the occasion — an e2e file takes a pool/client from the harness and `pg` as a type — in
+   `test/e2e/support/pipeline.ts`'s docblock, with the measurement. No workaround was copied.
+
+**Backlog 4.** `gates.test.ts`: the Q55 case now scripts `getJobLog` with a real body and asserts
+the body is absent and the log never read; a new case reaches the `failed.length === 0` arm from a
+`failed` status whose only failing job may fail — `packages/application/src/pipeline/gates.test.ts` › "settles a failed pipeline whose only failing job may fail as not passed, with no names".
+**Backlog 183.** `harnessWith` excludes `runs` from the trailing spread; the hand workaround and its
+comment are gone, and that case (`redacts the reason a rejected approval carries`) is now the
+check — it needs the merged defaults to reach the approval. **Backlog 184.** The e2e harness's
+`scenarioFor` is wired into the `real-over-fake-cli` half too (`scriptedWorkspaces` hands the spec
+over); the command-api case opens a merge request on `agentic/ACME-1-r3` before the rework (`-r3`:
+the case returns the task once first and `reworkBranchName` counts `human_rounds` — the first run
+of this change used `-r2`, copied from `rework-close.e2e.test.ts`, and the new assertion caught it), the
+Developer run on that checkout reports it, and the case now asserts the ending: the task carries
+the new, open merge request and the superseded one's close is audited.
+
+**Decisions/assumptions.** (a) The `process` project is a **named list**, not a file-name suffix:
+renaming the two runlet files would have broken fifteen ledger citations, and the list is held to
+its importers by the census, so it cannot drift silently. It does break CLAUDE.md's "test file
+naming decides the tier" for these three files — proposed text below. (b) 75 % and 120 s are
+judgement, not measurement, and are stated as such at the constant and in the config. (c) A
+refused script throws from `drain`, i.e. from `publish` as well; a test that calls a job handler
+directly (not through `drain`) still sees only the executor's escalation — which cases do so for
+a stage run was not audited. (d) The detector checks what **runs**: a script for a stage the walk never reaches is
+not parsed (three `{}` placeholders in `stage-executor.test.ts` were made valid anyway).
+
+**Sentences falsified.** Changed: the harness's "a run with no script fails the test loudly" (it
+escalates the task; filed below); `pipeline.ts`'s "`scenarioFor` … wired into the fake-runner half
+only"; `testing.ts`'s `waitForProcessGone` "Structural, with no upper bound" (it had a 15 s one);
+the conformance and `shim.test.ts` timing docblocks; `vitest.config.ts`'s "Those five projects are
+the whole audit"; `nested-checkouts.test.ts`'s "the same five projects"; technical/10 gained the
+`process` row. **Left, the orchestrator's**: `CLAUDE.md` — "`pnpm test` (unit + contract, with
+coverage)" → "(unit + contract + process, with coverage)"; the `verify` bullet's "bundle:check +
+unit + contract" → "… + unit + contract + process"; and after "Test file naming decides the tier: …"
+add "— except the three real-process suites named in `vitest.config.ts`'s `PROCESS_SUITES`, which
+run in the `process` project and are held there by `scripts/verify.test.ts`". Also left, not this
+row's: `packages/infrastructure/src/runlet/entry.ts` and `apps/runlet/src/index.ts` say `testing.ts`
+imports `vitest` at module scope; it does not (filed below). Backlog 25's "the per-test timeout has
+been raised since the first instance" is false (item 3); the entry is the refiner's to close.
+
+**Discovered work.**
+- **249** A harness run with **no** script throws from `start`, which the executor turns into a
+  `needs_human` escalation — so a missing script fails a test only if the test asserts the ending.
+  Routing it through the same `drain` refusal is one line, but some cases may lean on "unscripted
+  stage = stop"; not measured, not done.
+- **250** `runlet/entry.ts` and `apps/runlet/src/index.ts` describe `runlet/testing.ts` as importing
+  `vitest` at module scope; it imports nothing of vitest's today (the reason `entry.ts` exists is
+  still sound — `structural-wait.ts` now does, and is deliberately not in the barrel).
+- **251** Nothing guards against a **value** import cycle; madge is not a dependency and the six
+  type-only cycles are harmless by construction. A census over value imports would make "no
+  runtime cycle" a checked fact rather than today's measurement.
+
+**Verification** (each tier after a load reading under 12; Docker held alone; after each Docker
+tier no container of this repository's but the Testcontainers reaper, `docker volume ls | wc -l` =
+102): `pnpm run -s verify` **PASS** (440 files, 8222 passed, 14 skipped; branches **80.01 %** against
+the 80 % threshold); `verify:integration` **PASS** (57 files, 605); `verify:e2e` **PASS** (42 files,
+215) — a first run failed one case, command-api's new `mr_ref` assertion on the `-r2` constant (item
+184 above), fixed and rerun green; that first run also carried a temporary copy of
+`rework-close.e2e.test.ts` whose first import was a value `import pg from 'pg'`, which **passed**
+(backlog 21, item 7), and was deleted. The `process` project was observed running after the last
+`unit` result in a mixed run (process files 1.0–2.0 s each at load ~7). `scripts/citations.test.ts`
+green over these notes. **Canaries**, each reverted md5-confirmed: (1) `checkScripted` short-cut to
+accept every script → four cases of `packages/application/src/testing/pipeline-harness.test.ts`
+fail, including › "refuses the fixture that was invalid from WP-15 to WP-28, naming the field and the issue";
+(6) the shim's `case 'spawn'` made a no-op → all six conformance cases fail and **none** as a bare
+timeout: four with `StructuralWaitExpiredError: waited for the shim to spawn …` (the pid-file
+waits and `spawn.ok`), the SDK case with the transport's `the shim refused the connection`, the
+16 MiB case on its byte count (0).

@@ -9,6 +9,7 @@ import type { DomainEvent, Id } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { RunStartError } from '../ports/runner.js';
+import { askingRefinedSpec, PROCEEDING_REFINED_SPEC } from '../testing/artifact-fixtures.js';
 import {
   createPipelineHarness,
   type HarnessOptions,
@@ -94,8 +95,8 @@ describe('an artifact whose identifier carries a secret', () => {
           status: 'completed',
           terminalReason: 'success',
           structuredOutput: {
+            ...PROCEEDING_REFINED_SPEC,
             goal: 'ship the footer',
-            decision: 'proceed',
             kb_citations: [{ path: `knowledge/${SECRET}.md`, reason: 'the page' }],
           },
         },
@@ -151,12 +152,10 @@ describe('an artifact whose identifier carries a secret', () => {
         refinement: {
           status: 'completed',
           terminalReason: 'success',
-          structuredOutput: {
+          structuredOutput: askingRefinedSpec(undefined, {
             goal: `ship the footer with ${SECRET}`,
-            decision: 'ask',
-            questions: [{ id: 'q1', text: 'Which currency?', blocking: true }],
             kb_citations: [{ path: 'knowledge/footer.md', reason: 'the page' }],
-          },
+          }),
         },
       },
     });
@@ -200,11 +199,7 @@ describe('the prompt a run was started with', () => {
     refinement: {
       status: 'completed' as const,
       terminalReason: 'success' as const,
-      structuredOutput: {
-        goal: 'ship the footer',
-        decision: 'ask',
-        questions: [{ id: 'q1', text: 'Which currency?', blocking: true }],
-      },
+      structuredOutput: askingRefinedSpec(undefined, { goal: 'ship the footer' }),
     },
   };
 
@@ -348,7 +343,12 @@ describe('a run the platform stopped', () => {
   it('escalates a completed run that produced no artifact', async () => {
     const harness = harnessWith({
       runs: {
-        refinement: { status: 'completed', terminalReason: 'success', structuredOutput: null },
+        refinement: {
+          status: 'completed',
+          terminalReason: 'success',
+          structuredOutput: null,
+          deliberatelyInvalid: 'the executor escalates a missing artifact behind the runner',
+        },
       },
     });
     await harness.publish([ticketMatched()]);
@@ -361,7 +361,9 @@ describe('a run the platform stopped', () => {
         refinement: {
           status: 'completed',
           terminalReason: 'success',
-          structuredOutput: { decision: 'ship it' },
+          structuredOutput: { ...PROCEEDING_REFINED_SPEC, decision: 'ship it' },
+          deliberatelyInvalid:
+            'the executor escalates a verdict it does not know behind the runner',
         },
       },
     });
@@ -386,7 +388,11 @@ describe('an invalid repository configuration', () => {
         },
       },
       runs: {
-        refinement: { status: 'completed', terminalReason: 'success', structuredOutput: {} },
+        refinement: {
+          status: 'completed',
+          terminalReason: 'success',
+          structuredOutput: askingRefinedSpec(),
+        },
       },
     });
     await harness.publish([ticketMatched()]);
@@ -403,7 +409,11 @@ describe('an invalid repository configuration', () => {
       const harness = harnessWith({
         settings: { repository: { status, commitSha: null, detail: null } },
         runs: {
-          refinement: { status: 'completed', terminalReason: 'success', structuredOutput: {} },
+          refinement: {
+            status: 'completed',
+            terminalReason: 'success',
+            structuredOutput: askingRefinedSpec(),
+          },
         },
       });
       await harness.publish([ticketMatched()]);
@@ -419,7 +429,11 @@ describe('the task budget', () => {
       // afford it and nothing is spent at all.
       settings: { taskBudgetUsd: 1 },
       runs: {
-        refinement: { status: 'completed', terminalReason: 'success', structuredOutput: {} },
+        refinement: {
+          status: 'completed',
+          terminalReason: 'success',
+          structuredOutput: askingRefinedSpec(),
+        },
       },
     });
     await harness.publish([ticketMatched()]);
@@ -634,7 +648,14 @@ describe('a run whose start failed for a transport reason', () => {
 describe('a stage write that lost every race with another writer', () => {
   const harnessThatAlwaysConflicts = (): { harness: PipelineHarness; conflicts: () => number } => {
     const harness = harnessWith({
-      runs: { refinement: { status: 'completed', terminalReason: 'success', costUsd: 0.4 } },
+      runs: {
+        refinement: {
+          status: 'completed',
+          terminalReason: 'success',
+          costUsd: 0.4,
+          structuredOutput: askingRefinedSpec(),
+        },
+      },
     });
     /**
      * The in-memory store does not roll back (its divergence 4), and since WP-15i the executor's
@@ -733,7 +754,12 @@ describe('a task a human stopped while its stage was running', () => {
   ): PipelineHarness => {
     const harness = harnessWith({
       runs: {
-        refinement: { status: 'completed', terminalReason: 'success', costUsd: 0.4 },
+        refinement: {
+          status: 'completed',
+          terminalReason: 'success',
+          costUsd: 0.4,
+          structuredOutput: askingRefinedSpec(),
+        },
       },
       ...(options.cost === true ? { cost: true } : {}),
     });

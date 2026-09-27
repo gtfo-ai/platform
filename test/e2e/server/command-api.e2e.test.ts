@@ -23,6 +23,7 @@
  * approval gate (`planApprovalGate`'s `above_size` default with the `L` threshold), which is the
  * only way an `approvals` row exists in this build.
  */
+import type { RunSpec } from '@platform/application';
 import type { RunRecord, TaskDetailResponse } from '@platform/contracts';
 import { afterEach, describe, expect, it } from 'vitest';
 import { BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD, Client } from '../support/instance.js';
@@ -40,6 +41,13 @@ afterEach(async () => {
   await harness?.stop();
   harness = undefined;
 });
+
+const PROJECT_PATH = 'acme/api';
+/**
+ * `taskBranchName('ACME-1')` plus the attempt this rework starts (Q92): `-r3`, not `-r2`, because the
+ * case returns the task once before it reworks it and `reworkBranchName` counts `human_rounds`.
+ */
+const REWORK_BRANCH = 'agentic/ACME-1-r3';
 
 const ticketMatched = (pipeline: PipelineE2E) =>
   inboundEvent('ticket.matched', {
@@ -134,12 +142,41 @@ describe('the task command surface, on a task the pipeline drove', () => {
     const held = gate();
     const started = gate();
     let firstRunId: string | null = null;
+    /**
+     * The merge request the Developer run after the rework reports from the **new** branch — the
+     * production shape (WP-69, backlog 184). Until WP-69 the rework re-reported the merge request it
+     * had just superseded, because this mode's scripted CLI had no spec to key on, so the close
+     * duty raced the task's re-adoption of the same merge request and the task could end on a
+     * closed one. `rework-close.e2e.test.ts` is the case about the close itself.
+     */
+    let reworked: { iid: number; url: string; headSha: string } | null = null;
 
     const pipeline = await startPipeline({
       scenarios: featureScenarios,
       label: 'command-api',
       tickets: TICKETS,
       agent: 'real-over-fake-cli',
+      scenarioFor: (spec: RunSpec, world) => {
+        if (spec.stage !== 'implementation' || spec.checkoutRef !== REWORK_BRANCH) {
+          return undefined;
+        }
+        if (reworked === null) {
+          throw new Error('the rework merge request was not opened before the Developer ran');
+        }
+        const base = featureScenarios(world).implementation;
+        return {
+          ...base,
+          structuredOutput: {
+            ...(base?.structuredOutput as Record<string, unknown>),
+            mr: {
+              url: reworked.url,
+              iid: reworked.iid,
+              head_sha: reworked.headSha,
+              branch: REWORK_BRANCH,
+            },
+          },
+        } as never;
+      },
       onAgentSpec: async (spec) => {
         if (firstRunId !== null) {
           return;
@@ -247,13 +284,33 @@ describe('the task command surface, on a task the pipeline drove', () => {
     expect((await pipeline.task()).iteration_counters.human_rounds).toBe(1);
 
     // ── rework: the same return, plus the agent counters reset ─────────────
-    const reworked = await send(
+    // The Developer "opens" the new merge request from the reworked branch; the fake runner calls
+    // no tools, so the harness opens it, as `rework-close.e2e.test.ts` does.
+    const opened = await pipeline.git.openMergeRequest({
+      project: PROJECT_PATH,
+      branch: REWORK_BRANCH,
+      target: 'main',
+      title: 'Draft: sum the invoice footer, again',
+      description: 'Opened by the developer stage after a rework.',
+      draft: true,
+      labels: ['agentic'],
+      reviewers: [],
+      remove_source_branch: true,
+    });
+    reworked = { iid: opened.ref.iid, url: opened.web_url, headSha: opened.head_sha };
+    pipeline.git.setPipeline({
+      project: PROJECT_PATH,
+      headSha: opened.head_sha,
+      status: 'success',
+      jobs: [{ name: 'test:unit', status: 'success' }],
+    });
+    const reworkReply = await send(
       client,
       `/api/tasks/${task.id}/rework`,
       { stage: 'architecture', instructions: 'sum the model, not the view' },
       'rework-1',
     );
-    expect(reworked.status, JSON.stringify(reworked.body)).toBe(200);
+    expect(reworkReply.status, JSON.stringify(reworkReply.body)).toBe(200);
     await pipeline.settle(
       'ready_for_merge once more',
       (snapshot) => snapshot.state === 'ready_for_merge',
@@ -261,6 +318,19 @@ describe('the task command surface, on a task the pipeline drove', () => {
     const afterRework = await pipeline.task();
     expect(afterRework.iteration_counters.human_rounds).toBe(2);
     expect(afterRework.stage_attempts.architecture).toBe(2);
+    // …and the ending is deterministic: the task carries the merge request opened from the new
+    // branch, which is open, and the superseded one is the one the duty closed (backlog 184).
+    const [adopted] = await pipeline.query<{ mr_ref: { iid: number } | null }>(
+      'select mr_ref from tasks where id = $1',
+      [task.id],
+    );
+    expect(adopted?.mr_ref?.iid).toBe(opened.ref.iid);
+    expect((await pipeline.git.getMergeRequest(opened.ref)).state).toBe('opened');
+    await pipeline.waitFor('the close of the superseded merge request', async () =>
+      (await pipeline.auditRows()).some(
+        (row) => row.action === 'close_merge_request' && row.status === 'ok',
+      ),
+    );
 
     // ── feedback: an opinion, not a transition ────────────────────────────
     const feedback = await send(

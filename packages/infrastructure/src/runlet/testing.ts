@@ -225,21 +225,11 @@ export const nodeScript = (source: string): { command: string; args: string[] } 
   args: ['-e', source],
 });
 
-/** Polls a pid until the operating system says it is gone. Structural, with no upper bound. */
-export const waitForProcessGone = async (pid: number, timeoutMs = 15_000): Promise<void> => {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    try {
-      process.kill(pid, 0);
-    } catch {
-      return;
-    }
-    if (Date.now() > deadline) {
-      throw new Error(`process ${pid} was still alive after ${timeoutMs} ms`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-};
+/*
+ * `waitForProcessGone` lived here with a hand-written 15 s deadline ("structural, with no upper
+ * bound", which the literal contradicted). It is in `./structural-wait.ts` since WP-69, bounded by the
+ * running test's own budget; it is not re-exported from here because that module imports `vitest`.
+ */
 
 /** True while the operating system still knows the pid. */
 export const processIsAlive = (pid: number): boolean => {

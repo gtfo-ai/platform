@@ -140,7 +140,7 @@ const RETRO = {
   what_went_well: ['the plan held'],
   returns: [],
   human_corrections: [],
-  cost_summary: '1.25 USD',
+  cost_summary: { total_usd: 1.25, is_estimate: false, by_stage: [] },
   proposals: [],
 };
 
@@ -401,7 +401,7 @@ describe('intake', () => {
       structuredOutput: {
         ...REFINED_SPEC,
         decision: 'ask',
-        questions: [{ id: 'q1', text: 'Which currency?' }],
+        questions: [{ id: 'q1', text: 'Which currency?', blocking: true }],
       },
     });
     await harness.publish([ticketMatched()]);

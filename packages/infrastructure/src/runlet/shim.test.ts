@@ -8,11 +8,14 @@
  *    not by asserting that `kill()` was called on a double (standing rule 3);
  *  - the clock is injected, so "within the grace period" is proved by *advancing* it rather than by
  *    waiting. There is no upper bound on a duration anywhere in this file (standing rule 2). The
- *    two places that do wait — `waitForProcessGone`, `waitForFile` — are **lower** bounds on
+ *    places that do wait — `waitForProcessGone`, `waitForFile`, `waitFor` — are **lower** bounds on
  *    something structural ("the pid disappears", "the marker exists"), which is the shape the
- *    ci-fix entry argues for.
+ *    ci-fix entry argues for. Their deadline is not written here: the file runs in the `process`
+ *    project and each wait takes a share of the running test's budget (`./structural-wait.ts`,
+ *    WP-69 — this file carried two 15 s literals inside a project whose budget was 5 s, so a slow
+ *    host reported `Test timed out in 5000ms` and never the component).
  */
-import { chmod, readFile, stat, writeFile } from 'node:fs/promises';
+import { chmod, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { type LogFields, silentLogger } from '@platform/application';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -24,6 +27,7 @@ import {
   type RunletShimOptions,
   type RunletShutdownReason,
 } from './shim.js';
+import { waitForFile, waitForProcessGone, waitUntil } from './structural-wait.js';
 import {
   type ControlVolume,
   connectProbe,
@@ -31,7 +35,6 @@ import {
   nodeScript,
   processIsAlive,
   type RunletProbe,
-  waitForProcessGone,
 } from './testing.js';
 
 const TOKEN = 'run-token-aaaaaaaaaaaaaaaaaaaaaa';
@@ -101,37 +104,11 @@ const spawnFrame = (script: string, env: Record<string, string> = {}): Record<st
   env,
 });
 
-const waitForFile = async (file: string, timeoutMs = 15_000): Promise<void> => {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const found = await stat(file).catch(() => null);
-    if (found !== null) {
-      return;
-    }
-    if (Date.now() > deadline) {
-      throw new Error(`${file} never appeared`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-};
-
-/** Polls until something structural becomes true. A lower bound, never an upper one (rule 2). */
-const waitFor = async (
-  what: string,
-  predicate: () => boolean,
-  timeoutMs = 15_000,
-): Promise<void> => {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    if (predicate()) {
-      return;
-    }
-    if (Date.now() > deadline) {
-      throw new Error(`${what} never became true`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-};
+/**
+ * Polls until something structural becomes true. A lower bound, never an upper one (rule 2): the
+ * deadline is the running test's own budget, not a literal (`./structural-wait.ts`, WP-69).
+ */
+const waitFor = waitUntil;
 
 const collect = (probe: RunletProbe, type: 'stdout' | 'stderr'): Buffer =>
   Buffer.concat(
@@ -400,7 +377,7 @@ describe('the run shim: kill on disconnect', () => {
 
     probe.close();
     // The child ignores SIGTERM, so the marker proves the *graceful* half really ran…
-    await waitForFile(marker);
+    await waitForFile('the shim to SIGTERM the child, which writes its marker', marker);
     expect(await readFile(marker, 'utf8')).toBe('term');
     expect(processIsAlive(pid)).toBe(true);
 
@@ -556,7 +533,7 @@ describe('the run shim: cred.get is the only surface the workspace can reach', (
       expect(credentialFrames(runner)).toHaveLength(1);
       const refusalsBefore = harness.shim.metrics.credentialRefusals;
 
-      await waitForFile(gpidFile);
+      await waitForFile('the child to start its grandchild, which writes its pid file', gpidFile);
       const grandchildPid = Number(await readFile(gpidFile, 'utf8'));
       strays.push(grandchildPid);
       endTheChild(runner);
@@ -621,7 +598,7 @@ describe('the run shim: cred.get is the only surface the workspace can reach', (
     runner.send(spawnFrame(GRANDCHILD_SPEAKS_LATER, { GPID: gpidFile, GO: goFile }));
     await runner.next('stdout');
     const childPid = harness.shim.childPid as number;
-    await waitForFile(gpidFile);
+    await waitForFile('the child to start its grandchild, which writes its pid file', gpidFile);
     strays.push(Number(await readFile(gpidFile, 'utf8')));
     await waitForProcessGone(childPid);
     await waitFor('the shim armed the stdio flush timer', () => harness.clock.pending === 1);
@@ -682,7 +659,7 @@ describe('the run shim: cred.get is the only surface the workspace can reach', (
     runner.send(spawnFrame(OUTLIVES_ITS_OWN_EXIT, { GPID: gpidFile }));
     await runner.next('stdout');
     const childPid = harness.shim.childPid as number;
-    await waitForFile(gpidFile);
+    await waitForFile('the child to start its grandchild, which writes its pid file', gpidFile);
     strays.push(Number(await readFile(gpidFile, 'utf8')));
 
     runner.send({ type: 'stdin' }, Buffer.from('go\n'));
