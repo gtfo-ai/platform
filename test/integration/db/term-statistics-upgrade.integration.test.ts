@@ -14,9 +14,13 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Id } from '@platform/contracts';
 import { db, knowledge } from '@platform/infrastructure';
-import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDatabase, type TestDatabase, withClient } from '../support/postgres.js';
+import {
+  createTestClient,
+  createTestDatabase,
+  type TestDatabase,
+  withClient,
+} from '../support/postgres.js';
 
 const MIGRATIONS = fileURLToPath(
   new URL('../../../packages/infrastructure/src/db/migrations/', import.meta.url),
@@ -82,7 +86,7 @@ describe('migration 0042: an index built before it has no statistics, and says s
   });
 
   it('forgets the commit, stores no listing, and searches every term under `no_statistics`', async () => {
-    const client = new pg.Client({ connectionString: database.connectionString });
+    const client = createTestClient(database.connectionString);
     await client.connect();
     try {
       const state = await client.query<{

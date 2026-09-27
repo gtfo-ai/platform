@@ -11,10 +11,13 @@
  *
  * **Tracked *and* untracked-but-not-ignored** is standing rule 85, paid for by a rejected push: a
  * guard that reads only `git ls-files` is green on a file its author has not committed, so a census
- * would pass locally and fail on CI with the author's own new screen in it.
+ * would pass locally and fail on CI with the author's own new screen in it. Since WP-68 the list
+ * and the read are `scripts/census-files.mjs`'s, shared with every census in the repository: a
+ * path that vanished after the listing reads as nothing, and one that exists and cannot be read
+ * throws naming it rather than crashing on the first `ENOENT` (backlog 10's second column).
  */
-import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { censusPaths, censusText } from '../../../../scripts/census-files.mjs';
 
 export const repositoryRoot = fileURLToPath(new URL('../../../..', import.meta.url));
 
@@ -28,20 +31,20 @@ export const WEB_SOURCES = 'apps/web/src';
  * `apps/server/src` the same way this one reads `apps/web/src`, and a second copy of the two `git`
  * invocations is a second place for the untracked half to be forgotten.
  */
-export const sourceFilesUnder = (directory: string): string[] => {
-  const git = (args: readonly string[]): string[] =>
-    execFileSync('git', [...args], { cwd: repositoryRoot, encoding: 'utf8' })
-      .split('\n')
-      .filter((line) => line.length > 0);
-  const tracked = git(['ls-files', '--', directory]);
-  const untracked = git(['ls-files', '--others', '--exclude-standard', '--', directory]);
-  return [...new Set([...tracked, ...untracked])].filter(
-    (path) =>
+export const sourceFilesUnder = (directory: string): string[] =>
+  censusPaths(repositoryRoot, {
+    pathspecs: [directory],
+    include: (path) =>
       (path.endsWith('.ts') || path.endsWith('.tsx')) &&
       !path.endsWith('.test.ts') &&
       !path.endsWith('.test.tsx'),
-  );
-};
+  });
+
+/**
+ * One listed source's text. A path that vanished since it was listed reads as the empty string —
+ * it is no longer part of the tree — and one that exists and cannot be read throws, naming it.
+ */
+export const readSource = (path: string): string => censusText(repositoryRoot, path);
 
 export const webSourceFiles = (): string[] => sourceFilesUnder(WEB_SOURCES);
 

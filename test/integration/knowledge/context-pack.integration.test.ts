@@ -41,9 +41,10 @@ import {
 import type { Id, IsoDate } from '@platform/contracts';
 import { DEFAULT_CONTEXT_BUDGET_TOKENS, parseKbDocument } from '@platform/domain';
 import { knowledge } from '@platform/infrastructure';
-import pg from 'pg';
+import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
+import { createTestClient } from '../support/postgres.js';
 
 let database: MigratedDatabase;
 let projectId: Id;
@@ -66,7 +67,7 @@ const parsedFixture = () =>
 
 beforeAll(async () => {
   database = await createMigratedDatabase('context-pack');
-  client = new pg.Client({ connectionString: database.connectionString });
+  client = createTestClient(database.connectionString);
   await client.connect();
   const org = await client.query<{ id: string }>(
     "insert into organizations (name) values ('pack') returning id",

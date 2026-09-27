@@ -16,8 +16,15 @@
 
 import type { LogFields, Logger } from '@platform/application';
 import { db } from '@platform/infrastructure';
+import pg from 'pg';
 import { describe, expect, it } from 'vitest';
-import { createTestDatabase, createTestPool, strictPoolLogger, type TestPool } from './postgres.js';
+import {
+  createTestClient,
+  createTestDatabase,
+  createTestPool,
+  strictPoolLogger,
+  type TestPool,
+} from './postgres.js';
 
 /** Runs `fn` with every uncaught exception collected instead of ending the process. */
 const withUncaughtWatch = async (fn: (seen: unknown[]) => Promise<void>): Promise<void> => {
@@ -170,5 +177,60 @@ describe('dropping a database out from under a pool that is still attached', () 
     });
 
     await handle.close();
+  });
+});
+
+describe('dropping a database out from under a bare client that is still connected (backlog 30)', () => {
+  it('ends the process through an uncaught 57P01 when nobody listens and no pool is involved', async () => {
+    // The premise the client census rests on, measured rather than assumed: backlog 28's evidence
+    // traced a *pool*'s idle client, and backlog 30 asked for the bare-client path to be derived
+    // on its own. This is the unguarded client the census refuses everywhere but here.
+    const database = await createTestDatabase('drop-bare-client');
+    const bare = new pg.Client({ connectionString: database.connectionString });
+    await withUncaughtWatch(async (seen) => {
+      await bare.connect();
+      await bare.query('select 1');
+
+      await database.drop();
+
+      await until('the terminated connection to surface', () => seen.length > 0);
+      // Hold the watch open for the connection-closed report that follows, so it lands here and
+      // not on the runner as an unhandled error after this case has finished.
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect((seen[0] as { code?: string }).code).toBe('57P01');
+    });
+  });
+
+  it('reaches a createTestClient as swallowed terminations, not as an uncaught exception', async () => {
+    const database = await createTestDatabase('drop-test-client');
+    // Deliberately leaked: no `end()`, which is the edit backlog 30 is about.
+    const leaked = createTestClient(database.connectionString);
+    await withUncaughtWatch(async (seen) => {
+      await leaked.connect();
+      await leaked.query('select 1');
+
+      await database.drop();
+
+      await until(
+        'the terminated connection to reach the client',
+        () => leaked.terminations.length > 0 || seen.length > 0,
+      );
+      // Give the connection-closed report that follows the 57P01 time to arrive, so a listener
+      // that absorbed only the first would be caught re-throwing the second.
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(seen).toEqual([]);
+      expect((leaked.terminations[0] as { code?: string }).code).toBe('57P01');
+    });
+  });
+
+  it('re-throws a client error that is not a termination', () => {
+    const client = createTestClient('postgres://platform:not-a-real-password@127.0.0.1:1/unused');
+    const unrelated = Object.assign(new Error('relation "nope" does not exist'), { code: '42P01' });
+    expect(() => client.emit('error', unrelated)).toThrow('relation "nope" does not exist');
+    // The follow-up report is absorbed only after a termination, never on its own.
+    expect(() => client.emit('error', new Error('Connection terminated unexpectedly'))).toThrow(
+      'Connection terminated unexpectedly',
+    );
+    expect(client.terminations).toEqual([]);
   });
 });

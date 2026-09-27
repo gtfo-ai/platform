@@ -19,9 +19,16 @@
  * in `packages/infrastructure/src/db/pool-errors.ts`). So a pool in this tier is built by
  * `createTestPool`, never by hand, and `postgres.integration.test.ts` holds that.
  *
- * A bare `pg.Client` does **not** need the same care: `client.end()` resolves on the connection's
- * `end` event, so a client the caller closed is genuinely closed before the drop can reach it. One
- * that is *leaked* still takes the process down, which is the intended direction of that error.
+ * A bare `pg.Client` is the same hazard one level down, and since WP-68 it is **measured**, not
+ * assumed (backlog 30): a connected client with no `'error'` listener and **no pool anywhere**
+ * raises the forced drop's `57P01` as an **uncaught exception** — measured against PostgreSQL 18,
+ * two runs of two, and held by `postgres.integration.test.ts`. `client.end()` resolves on the
+ * connection's `end` event, so a client the caller closed is genuinely closed before the drop can
+ * reach it; one that is *leaked* — an `end()` moved out of a `finally`, a `return` added above one —
+ * ended the process with every test green, which is backlog 28 again. So the harness owns a bare
+ * client too: `createTestClient` builds every one with the same asymmetric listener
+ * `createTestPool` has, `withClient` owns a scoped one's whole lifetime, and the census in
+ * `packages/infrastructure/src/db/pool-errors.test.ts` refuses a client constructed anywhere else.
  */
 import { randomUUID } from 'node:crypto';
 import type { Logger } from '@platform/application';
@@ -136,15 +143,50 @@ export const strictPoolLogger: Logger = {
   },
 };
 
-const withAdminClient = async <T>(fn: (client: pg.Client) => Promise<T>): Promise<T> => {
-  const client = new pg.Client({ connectionString: adminConnectionString() });
-  await client.connect();
-  try {
-    return await fn(client);
-  } finally {
-    await client.end();
-  }
+/**
+ * The client shape this tier uses: a `pg.Client` that records the teardown terminations it
+ * swallowed, for the reason `TestPool` records them.
+ */
+export interface TestClient extends pg.Client {
+  readonly terminations: readonly Error[];
+}
+
+/**
+ * The message `pg` emits after a terminated backend's socket closes. It follows a `57P01` on a
+ * client — measured: a listener on a leaked client saw the `57P01` and then this, with no code —
+ * so it is absorbed only **after** one, when it is the same death reported twice.
+ */
+const TERMINATED_UNEXPECTEDLY = 'Connection terminated unexpectedly';
+
+/**
+ * A bare client that survives its database being dropped out from under it, and nothing else —
+ * the one place in the test tiers a `pg.Client` is constructed (the census names the others).
+ *
+ * The listener is `createTestPool`'s, for the same reasons and with the same asymmetry: exactly
+ * `57P01` is absorbed and recorded, plus the connection-closed report that follows it; everything
+ * else is re-thrown, so a surprise fails the run where it happened. What it does **not** do is end
+ * the client: a caller that opens one still owns its `end()`, and a caller that wants the harness
+ * to own that too uses `withClient`.
+ */
+export const createTestClient = (connectionString: string): TestClient => {
+  const terminations: Error[] = [];
+  const client = new pg.Client({ connectionString });
+  client.on('error', (error: Error) => {
+    const code = (error as { code?: unknown }).code;
+    if (
+      code === '57P01' ||
+      (terminations.length > 0 && error.message === TERMINATED_UNEXPECTEDLY)
+    ) {
+      terminations.push(error);
+      return;
+    }
+    throw error;
+  });
+  return Object.assign(client, { terminations }) as TestClient;
 };
+
+const withAdminClient = async <T>(fn: (client: pg.Client) => Promise<T>): Promise<T> =>
+  withClient(adminConnectionString(), fn);
 
 /**
  * Creates an empty database with a unique name. The caller owns it and must `drop()` it; a leaked
@@ -172,12 +214,15 @@ export const createTestDatabase = async (label = 'test'): Promise<TestDatabase> 
   };
 };
 
-/** Opens a client against `connectionString` and closes it when `fn` resolves or throws. */
+/**
+ * Opens a client against `connectionString` and closes it when `fn` resolves or throws — the
+ * harness owning the whole lifetime, so no edit to the body can leak the connection.
+ */
 export const withClient = async <T>(
   connectionString: string,
   fn: (client: pg.Client) => Promise<T>,
 ): Promise<T> => {
-  const client = new pg.Client({ connectionString });
+  const client = createTestClient(connectionString);
   await client.connect();
   try {
     return await fn(client);

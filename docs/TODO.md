@@ -128,10 +128,17 @@ Product-definition items were decided on 2026-08-28 and moved into `product/19-o
       can rank and "precision holds" is true by construction — standing rule 5, a weakness of the instrument
       rather than a defect. Needs near-miss documents written **without** consulting the query list. WP-18
       and WP-21 both build on this vault. PROGRESS backlog entry 16.
-- [ ] **`gitleaks` pre-commit scans nothing in a linked worktree and reports `no leaks found`** — measured
-      2026-09-11; BD-002's gate failing open, standing rule 18. CI's `secret scan` job is unaffected.
-      **Needs measurement:** whether this session's agent worktrees took the container fallback or the host
-      binary. PROGRESS backlog entry 8.
+- [x] **`gitleaks` pre-commit scans nothing in a linked worktree and reports `no leaks found`** — **closed at
+      WP-68** (2026-09-27): the container fallback mounts the common git directory beside the work tree, a
+      linked worktree with no `node_modules` takes the main worktree's pinned binary first, and a scan that
+      exits 0 without proving it read the change is refused with its own banner (`scripts/gitleaks.test.ts`).
+      The measurement this item asked for: session 8 ran **no** linked worktree (`git worktree list` showed
+      the main checkout alone and `.git/worktrees/` was empty before WP-68's own probe), and the main checkout
+      resolves the host binary, which scans a staged diff correctly — so a session-8 commit whose hook ran
+      met a working scan (whether every hook ran, rather than `--no-verify`, is recorded nowhere). Whether the *earlier* sessions' worktrees (`.claude/worktrees/slack-fix`, `wp/*`) did cannot be
+      established any more: they are pruned, and nothing recorded which scanner a hook run took. PROGRESS
+      `#### WP-68` has the measurements. Original text: measured 2026-09-11; BD-002's gate failing open,
+      standing rule 18. CI's `secret scan` job is unaffected. PROGRESS backlog entry 8.
 - [ ] **The runlet conformance suite's 30 s waits are a hardware assertion, and one of them blocked a
       push** — `waitForFile`/`waitFor` default to `timeoutMs = 30_000`
       (`packages/infrastructure/src/runlet/conformance.contract.test.ts:69,83`) inside `verify`'s fully

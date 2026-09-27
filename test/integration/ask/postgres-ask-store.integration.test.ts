@@ -11,10 +11,10 @@
  */
 import type { Transaction } from '@platform/application';
 import { ask } from '@platform/infrastructure';
-import pg from 'pg';
 import { afterAll, beforeAll } from 'vitest';
 import { runAskStoreContract } from '../../contract/support/ask-store-suite.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
+import { createTestClient } from '../support/postgres.js';
 
 let database: MigratedDatabase;
 let projectId: string;
@@ -25,7 +25,7 @@ let auditId: string;
 
 beforeAll(async () => {
   database = await createMigratedDatabase('asks');
-  const client = new pg.Client({ connectionString: database.connectionString });
+  const client = createTestClient(database.connectionString);
   await client.connect();
   try {
     const org = await client.query<{ id: string }>(
@@ -75,7 +75,7 @@ afterAll(async () => {
 runAskStoreContract({
   name: 'postgres',
   create: async () => {
-    const client = new pg.Client({ connectionString: database.connectionString });
+    const client = createTestClient(database.connectionString);
     await client.connect();
     await client.query('begin');
     return {

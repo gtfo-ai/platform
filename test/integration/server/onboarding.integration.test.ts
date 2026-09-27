@@ -25,7 +25,7 @@ import {
 } from '@platform/infrastructure';
 import { SHIPPED_PROVIDERS } from '@platform/integrations';
 import { drizzle } from 'drizzle-orm/node-postgres';
-import pg from 'pg';
+import type pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createReadinessCiEvents } from '../../../apps/server/src/onboarding.js';
 import type { Database } from '../../../apps/server/src/queries/identity-queries.js';
@@ -46,7 +46,7 @@ import {
 } from '../../../apps/server/src/queries/onboarding-queries.js';
 import { runReadinessStoreContract } from '../../contract/support/readiness-store-suite.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
-import { createTestPool } from '../support/postgres.js';
+import { createTestClient, createTestPool } from '../support/postgres.js';
 
 /** Obviously fake (BD-002), planted so its absence from the sealed row is a measurement. */
 const PLANTED_TOKEN = 'glpat-FAKE-wp21-planted-credential-000000';
@@ -100,7 +100,7 @@ afterAll(async () => {
 runReadinessStoreContract({
   name: 'postgres',
   create: async () => {
-    const client = new pg.Client({ connectionString: database.connectionString });
+    const client = createTestClient(database.connectionString);
     await client.connect();
     await client.query('begin');
     return {

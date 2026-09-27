@@ -1,8 +1,8 @@
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { CensusUnreadableError, censusPaths, readCensus } from './census-files.mjs';
 import {
   type CitationContinuation,
   citationSites,
@@ -14,7 +14,7 @@ import {
 } from './citations.js';
 
 /**
- * Every citation of a test, in every tracked source file, resolved against the file it names.
+ * Every citation of a test, in every tracked (or untracked and not ignored) source file, resolved against the file it names.
  *
  * Standing rule 11 with rule 30's correction applied: WP-14's divergence register justified its
  * kindest entry with a test that did not exist, and writing that down again would not have stopped
@@ -22,7 +22,8 @@ import {
  *
  *  - the **calibration** below, which drives the resolver with a synthetic repository and watches
  *    it fail (standing rule 21 — an uncalibrated instrument reads whatever you were hoping for);
- *  - the **sweep**, which asks git what is tracked (rule 7) and resolves every citation in it;
+ *  - the **sweep**, which asks git what it knows about — tracked or untracked, never ignored, through
+ *    `census-files.mjs` (rule 7, backlog 10) — and resolves every citation in it;
  *  - the **recall check**, which finds every place a citation *opens* with a second expression of
  *    that shape and requires the parser to have read one there. "Nothing was reported" is what a
  *    parser that matched nothing also says (rule 29), and round 2 shipped exactly that: a
@@ -42,14 +43,17 @@ import {
 const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 /**
- * The lower bound on the number of places a citation opens.
+ * The lower bound on the number of places a citation opens, **per kind of file**.
  *
  * It exists so the recall check cannot pass by finding nothing (rule 29), not so that deleting a
- * citation fails the build — hence a number below the current count rather than equal to it. The
+ * citation fails the build — hence numbers below the current counts rather than equal to them. The
  * recall check itself is the assertion with teeth: it is per site, so halving what the parser reads
- * fails it whatever this number says.
+ * fails it whatever these numbers say. There are two because one floor over every file type could
+ * no longer fail (backlog 111): the Markdown corpus alone is several times the old single floor of
+ * 14, so the code half could have stopped being parsed with the total still above it — and the
+ * reverse. Counted when set (WP-68, 2026-09-27): 43 sites in code and 208 in Markdown (199 of them in `PROGRESS.md`).
  */
-const MINIMUM_CITATION_SITES = 14;
+const MINIMUM_CITATION_SITES = { code: 30, markdown: 150 } as const;
 
 /**
  * The citation marker, written as an escape so the synthetic fixtures are not claims.
@@ -72,10 +76,33 @@ const CITED_SOURCE = /\.(?:ts|tsx|mjs|md)$/;
 const continuationFor = (path: string): CitationContinuation =>
   path.endsWith('.md') ? 'prose' : 'comment';
 
-const trackedFiles = (): string[] =>
-  execFileSync('git', ['ls-files', '-z'], { cwd: REPOSITORY_ROOT, encoding: 'utf8' })
-    .split('\0')
-    .filter((path) => path.length > 0);
+interface Corpus {
+  readonly sources: readonly string[];
+  readonly read: (path: string) => string;
+}
+
+let corpus: Corpus | undefined;
+
+/**
+ * Every prose-bearing file git knows about, read once. Read inside a test rather than in the
+ * `describe` body: a failure to read used to throw at collection time and take every case in the
+ * file with it, where now it fails the case that needed the corpus and names the paths.
+ */
+const checkout = (): Corpus => {
+  if (corpus === undefined) {
+    const listed = censusPaths(REPOSITORY_ROOT, { include: (path) => CITED_SOURCE.test(path) });
+    const { files, unreadable } = readCensus(REPOSITORY_ROOT, listed);
+    if (unreadable.length > 0) {
+      throw new CensusUnreadableError(unreadable);
+    }
+    const contents = new Map(files.map((file) => [file.path, file.contents]));
+    corpus = {
+      sources: [...contents.keys()],
+      read: (path) => contents.get(path) ?? '',
+    };
+  }
+  return corpus;
+};
 
 describe('the citation parser', () => {
   it('reads a file citation and the names that follow it on the line', () => {
@@ -184,6 +211,24 @@ describe('the citation parser', () => {
     expect(citationSites(source)).toEqual([{ file: 'workspace/fake.test.ts', line: 1 }]);
   });
 
+  it('counts a site whose marker the margin pushed onto the next line, which the parser does not read', () => {
+    // Backlog 3: the oracle used to require the file token and the marker on one physical line,
+    // exactly as the parser does, so this shape was invisible to both and recall reported nothing.
+    // An oracle has to over-approximate what it audits: the site is found here and the parser
+    // reads nothing, which is a recall failure naming the line — loud, not silent.
+    const wrapped = [
+      ' * the fake is covered by `workspace/fake.test.ts`',
+      ` * ${MARKER} "attach returns a path that no server is listening on"`,
+    ].join('\n');
+    expect(citationSites(wrapped)).toEqual([{ file: 'workspace/fake.test.ts', line: 1 }]);
+    expect(collectCitations(wrapped)).toEqual([]);
+
+    const markdown = ['see `workspace/fake.test.ts`', `> ${MARKER} "a name"`].join('\n');
+    expect(citationSites(markdown)).toEqual([{ file: 'workspace/fake.test.ts', line: 1 }]);
+    // A blank line is a paragraph break, not a wrap: nothing opens there.
+    expect(citationSites(['`workspace/fake.test.ts`', '', `${MARKER} "x"`].join('\n'))).toEqual([]);
+  });
+
   it('collects the names a file declares, including a table-driven one', () => {
     const names = testNamesIn(
       [
@@ -225,21 +270,20 @@ describe('the citation parser', () => {
 });
 
 describe('every citation in this checkout', () => {
-  const sources = trackedFiles().filter((path) => CITED_SOURCE.test(path));
-  const read = (path: string): string => readFileSync(join(REPOSITORY_ROOT, path), 'utf8');
-  const citations = sources.flatMap((path) =>
-    collectCitations(read(path), continuationFor(path)).map((citation) => ({
-      ...citation,
-      source: path,
-    })),
-  );
-  const sites = sources.flatMap((path) =>
-    citationSites(read(path)).map((site) => ({ ...site, source: path })),
-  );
+  const citationsOf = ({ sources, read }: Corpus) =>
+    sources.flatMap((path) =>
+      collectCitations(read(path), continuationFor(path)).map((citation) => ({
+        ...citation,
+        source: path,
+      })),
+    );
+  const sitesOf = ({ sources, read }: Corpus) =>
+    sources.flatMap((path) => citationSites(read(path)).map((site) => ({ ...site, source: path })));
 
   it('names a test that exists', () => {
+    const { sources, read } = checkout();
     const failures = resolveCitations({
-      citations,
+      citations: citationsOf(checkout()),
       trackedFiles: sources,
       read,
     });
@@ -247,6 +291,8 @@ describe('every citation in this checkout', () => {
   });
 
   it('was read at every site where one opens, so a parser with a blind spot cannot pass', () => {
+    const citations = citationsOf(checkout());
+    const sites = sitesOf(checkout());
     const unread = sites.filter(
       (site) =>
         !citations.some(
@@ -259,6 +305,8 @@ describe('every citation in this checkout', () => {
     expect(
       unread.map((site) => `${site.source}:${site.line} opens a citation of ${site.file}`),
     ).toEqual([]);
-    expect(sites.length).toBeGreaterThanOrEqual(MINIMUM_CITATION_SITES);
+    const markdown = sites.filter((site) => site.source.endsWith('.md')).length;
+    expect(sites.length - markdown).toBeGreaterThanOrEqual(MINIMUM_CITATION_SITES.code);
+    expect(markdown).toBeGreaterThanOrEqual(MINIMUM_CITATION_SITES.markdown);
   });
 });

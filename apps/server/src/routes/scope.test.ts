@@ -24,28 +24,16 @@
  * no longer used. The eleven command routes are registered the same way, which is what made the
  * omission worth closing rather than noting.
  */
-import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { readSource, sourceFilesUnder } from './web-sources.js';
 
-const repositoryRoot = fileURLToPath(new URL('../../../..', import.meta.url));
 const ROUTE_DIR = 'apps/server/src/routes';
 
-/** Route modules git knows about, tracked and untracked alike; tests are not registrations. */
-const routeModules = (): string[] => {
-  const git = (args: readonly string[]): string[] =>
-    execFileSync('git', [...args], { cwd: repositoryRoot, encoding: 'utf8' })
-      .split('\n')
-      .filter((line) => line.length > 0);
-  return [
-    ...new Set([
-      ...git(['ls-files', '--', ROUTE_DIR]),
-      ...git(['ls-files', '--others', '--exclude-standard', '--', ROUTE_DIR]),
-    ]),
-  ].filter((path) => path.endsWith('.ts') && !path.endsWith('.test.ts'));
-};
+/**
+ * Route modules git knows about, tracked and untracked alike; tests are not registrations. The
+ * list and the read are `web-sources.ts`'s, which are `scripts/census-files.mjs`'s (WP-68).
+ */
+const routeModules = (): string[] => sourceFilesUnder(ROUTE_DIR);
 
 /**
  * Every `preHandler:` and `preValidation:` value in a module, as source text.
@@ -75,7 +63,7 @@ describe('the project-scope preHandler and the permission guard travel together'
     expect(modules).toContain('apps/server/src/routes/org.ts');
     expect(modules.some((path) => path.endsWith('.test.ts'))).toBe(false);
 
-    const sources = modules.map((path) => readFileSync(join(repositoryRoot, path), 'utf8'));
+    const sources = modules.map((path) => readSource(path));
     // …and the extraction finds something in them, which a regex that silently matched nothing
     // would not.
     expect(sources.flatMap(preHandlers).length).toBeGreaterThanOrEqual(7);
@@ -89,7 +77,7 @@ describe('the project-scope preHandler and the permission guard travel together'
   it('never resolves a project without deciding a permission, and never the reverse', () => {
     const offences: string[] = [];
     for (const path of routeModules()) {
-      const source = readFileSync(join(repositoryRoot, path), 'utf8');
+      const source = readSource(path);
       for (const handler of preHandlers(source)) {
         // `scope`, `scopeRun`, `scopeTask` — any identifier this repository names a resolver, but
         // **not** `scopedProject`, which is the guard's reader rather than the resolver.

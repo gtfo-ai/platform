@@ -11,10 +11,11 @@
  */
 import type { Transaction } from '@platform/application';
 import { notify } from '@platform/infrastructure';
-import pg from 'pg';
+import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runNotificationStoreContract } from '../../contract/support/notification-store-suite.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
+import { createTestClient } from '../support/postgres.js';
 
 let database: MigratedDatabase;
 let projectId: string;
@@ -23,7 +24,7 @@ let approvalId: string;
 
 beforeAll(async () => {
   database = await createMigratedDatabase('notifications');
-  const client = new pg.Client({ connectionString: database.connectionString });
+  const client = createTestClient(database.connectionString);
   await client.connect();
   try {
     const org = await client.query<{ id: string }>(
@@ -59,7 +60,7 @@ afterAll(async () => {
 runNotificationStoreContract({
   name: 'postgres',
   create: async () => {
-    const client = new pg.Client({ connectionString: database.connectionString });
+    const client = createTestClient(database.connectionString);
     await client.connect();
     await client.query('begin');
     return {
@@ -84,7 +85,7 @@ runNotificationStoreContract({
  */
 describe('what the notifications table refuses', () => {
   const withClient = async (fn: (client: pg.Client) => Promise<void>): Promise<void> => {
-    const client = new pg.Client({ connectionString: database.connectionString });
+    const client = createTestClient(database.connectionString);
     await client.connect();
     await client.query('begin');
     try {
@@ -184,7 +185,7 @@ describe('what the notifications table refuses', () => {
  */
 describe('countStaleUndeliveredNotifications', () => {
   it('counts undelivered rows past their plan’s bound, and nothing else', async () => {
-    const client = new pg.Client({ connectionString: database.connectionString });
+    const client = createTestClient(database.connectionString);
     await client.connect();
     await client.query('begin');
     try {

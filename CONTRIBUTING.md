@@ -19,9 +19,11 @@ pnpm run -s verify   # lint + typecheck + unit + contract
 |---|---|
 | `pre-commit` | gitleaks on the staged diff, Biome on staged files |
 | `commit-msg` | commitlint (conventional commits) |
-| `pre-push` | `pnpm conflict:check` (merge debris in any tracked file), then `pnpm test` (unit + contract) |
+| `pre-push` | `pnpm conflict:check` (merge debris in any tracked, or untracked and not ignored, file), then `pnpm test` (unit + contract) |
 
-gitleaks comes from the `@b12k/gitleaks` devDependency — no global install needed. If it is missing, the hook falls back to the official image via Docker. If neither is available the scan **did not run**, so the hook fails closed and tells you how to fix it; `GITLEAKS_SKIP=1 git commit …` is the deliberate, loud opt-out and is ignored in CI. **Never** use `--no-verify` or `GITLEAKS_SKIP` to get past an actual secret finding.
+gitleaks comes from the `@b12k/gitleaks` devDependency — no global install needed. In a linked worktree with no `node_modules` of its own it uses the main worktree's pinned binary; failing both, it falls back to the official image via Docker. If none is available the scan **did not run**, so the hook fails closed and tells you how to fix it; `GITLEAKS_SKIP=1 git commit …` is the deliberate, loud opt-out and is ignored in CI. A scan that exits 0 without proving it read your change — `scanned ~0 bytes` over a staged diff that adds lines, or git failing inside the container — is a **failure** with its own banner, not a pass (`scripts/gitleaks.mjs` has the history). **Never** use `--no-verify` or `GITLEAKS_SKIP` to get past an actual secret finding.
+
+A linked worktree (`git worktree add`, the arrangement `docs/technical/14-orchestration-protocol.md` describes) needs its own `pnpm install` before it can commit: Biome in `pre-commit` and commitlint in `commit-msg` run from the worktree's `./node_modules/.bin`, and without it the commit is refused (`exit status 127`) — closed, not open.
 
 ## Verification contract
 

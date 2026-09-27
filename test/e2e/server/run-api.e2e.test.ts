@@ -36,8 +36,8 @@ import {
   runMessagesResponseSchema,
   runRecordSchema,
 } from '@platform/contracts';
-import pg from 'pg';
 import { afterEach, describe, expect, it } from 'vitest';
+import { createTestClient } from '../../integration/support/postgres.js';
 import {
   PLANTED_MODEL_KEY,
   PLANTED_MODEL_KEY_PLACEHOLDER,
@@ -75,7 +75,7 @@ const ticketMatched = (pipeline: PipelineE2E) =>
 
 /** The `ContextPackRecord` the run's own `run.started` event carried — the planner's record. */
 const runStartedPack = async (pipeline: PipelineE2E, runId: string): Promise<ContextPackRecord> => {
-  const client = new pg.Client({ connectionString: pipeline.database.connectionString });
+  const client = createTestClient(pipeline.database.connectionString);
   await client.connect();
   try {
     const { rows } = await client.query<{ payload: { context_pack: ContextPackRecord } }>(
@@ -99,7 +99,7 @@ const setPackHeader = async (
   runId: string,
   pack: ContextPackRecord | null,
 ): Promise<void> => {
-  const client = new pg.Client({ connectionString: pipeline.database.connectionString });
+  const client = createTestClient(pipeline.database.connectionString);
   await client.connect();
   try {
     await client.query(

@@ -27,7 +27,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { repositoryRoot, webSourceFiles, withoutComments } from './web-sources.js';
+import { readSource, repositoryRoot, webSourceFiles, withoutComments } from './web-sources.js';
 
 const QUERIES = 'apps/web/src/app/queries.ts';
 
@@ -53,7 +53,7 @@ const sourcesExcept = (excluded: readonly string[]): { path: string; source: str
     .filter((path) => !excluded.includes(path))
     .map((path) => ({
       path,
-      source: withoutComments(readFileSync(join(repositoryRoot, path), 'utf8')),
+      source: withoutComments(readSource(path)),
     }));
 
 const declarationsIn = (pattern: RegExp): string[] => {

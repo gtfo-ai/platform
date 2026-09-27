@@ -30,8 +30,8 @@
  * acts as whom — and nothing else.
  */
 import { identityMappingListSchema, identityMappingSchema } from '@platform/contracts';
-import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createTestClient } from '../../integration/support/postgres.js';
 import {
   BOOTSTRAP_EMAIL,
   BOOTSTRAP_PASSWORD,
@@ -58,7 +58,7 @@ const rows = async <T extends Record<string, unknown>>(
   text: string,
   params: readonly unknown[] = [],
 ): Promise<T[]> => {
-  const client = new pg.Client({ connectionString: instance.database.connectionString });
+  const client = createTestClient(instance.database.connectionString);
   await client.connect();
   try {
     return (await client.query<T>(text, [...params])).rows;

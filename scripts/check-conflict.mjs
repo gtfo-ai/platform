@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Fails when a tracked file carries merge debris: a conflict marker git wrote, or a `.orig`/`.rej`
+ * Fails when a file — tracked, or untracked and not ignored — carries merge debris: a conflict marker git wrote, or a `.orig`/`.rej`
  * file a failed merge or patch left behind.
  *
  * This exists because it happened. The WP-13 squash merge (`d1e7b69`) put a whole conflict — seven
@@ -49,7 +49,7 @@
  * Included, because the content check cannot see them: a `.rej` holds rejected diff hunks and
  * carries no markers at all, and a `.orig` is whatever the tool saved. Both are debris from the
  * same event as the markers, both are worthless to a reader of the tree, and the corpus to check
- * them against — the tracked file list — is already in hand. This part is a **deny**-list, so its
+ * them against — the file list — is already in hand. This part is a **deny**-list, so its
  * drift direction is a miss and never a false pass: `mergetool` also leaves `*.BASE.*`,
  * `*.LOCAL.*`, `*.REMOTE.*` and `*.BACKUP.*`, which are not matched here. The `BACKUP` one is the
  * conflicted file itself and so is caught by content; the other three are clean versions and are
@@ -57,8 +57,13 @@
  *
  * ## Scope, asked of git rather than carried in a list (standing rule 7)
  *
- * The scope is `git ls-files`: every path this repository tracks, staged or committed, with no
- * extension list and no directory list to drift. The exemption is git's own declaration too, for
+ * The scope is every path git knows about and does not ignore — `git ls-files` **plus**
+ * `git ls-files --others --exclude-standard`, through `census-files.mjs` — with no extension list
+ * and no directory list to drift. The untracked half is backlog 10: a file holding a whole
+ * conflict, or a `.orig` a merge tool just wrote, used to pass until it was staged. An ignored file
+ * is not read, because an ignored file is not a source file. A path that vanishes between the
+ * listing and the read is dropped, and one that exists and cannot be read is **named** on stderr
+ * and in the PASS line rather than skipped in silence. The exemption is git's own declaration too, for
  * the same reason `check-nul.mjs` uses `binary`: it is granted in the tree, in a file reviewers
  * read, and never by editing this script.
  *
@@ -69,7 +74,7 @@
  * fails closed. A path declared `binary` (or `-text`) is skipped as well: it is not text and has
  * no lines to read.
  *
- * That exemption is also the guard's own off switch, so it is bounded: an empty `git ls-files` and
+ * That exemption is also the guard's own off switch, so it is bounded: an empty file list and
  * an empty list of *examined* files are both failures with exit code 2, not passes. A single
  * `* conflict-markers` line in `.gitattributes` would otherwise report `PASS (0 files)` for ever —
  * a check that succeeds because it looked at nothing (standing rule 4).
@@ -83,10 +88,9 @@
  * other verification step (docs/technical/14-orchestration-protocol.md).
  */
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { censusPaths, readCensus } from './census-files.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 
@@ -116,21 +120,16 @@ const DEBRIS = /\.(?:orig|rej)$/i;
 /** At most this many marker lines are reported per file; the rest are counted. */
 const REPORTED_PER_FILE = 3;
 
-const tracked = spawnSync('git', ['ls-files', '-z'], {
-  cwd: repositoryRoot,
-  encoding: 'utf8',
-  maxBuffer: 64 * 1024 * 1024,
-});
-
-if (tracked.error || tracked.status !== 0) {
-  fail(`could not list tracked files: ${tracked.error?.message ?? tracked.stderr}`, 2);
+let paths;
+try {
+  paths = censusPaths(repositoryRoot);
+} catch (error) {
+  fail(`could not list the files to check: ${error.message}`, 2);
 }
-
-const paths = tracked.stdout.split('\0').filter((path) => path !== '');
 
 if (paths.length === 0) {
   // Rule 4: a check that quietly examined nothing would pass for ever.
-  fail('found no tracked files to check; is this the repository root?', 2);
+  fail('found no files to check; is this the repository root?', 2);
 }
 
 /**
@@ -194,28 +193,26 @@ const markersIn = (contents) => {
 };
 
 const offenders = [];
-let examined = 0;
+const toRead = [];
 
 for (const path of paths) {
   if (exempt.has(path)) {
     continue;
   }
   if (DEBRIS.test(path)) {
-    offenders.push(`${path}: a leftover merge/patch artefact is tracked`);
+    offenders.push(`${path}: a leftover merge/patch artefact`);
     continue;
   }
   if (declaredBinary.has(path)) {
     continue;
   }
-  let contents;
-  try {
-    contents = readFileSync(join(repositoryRoot, path), 'utf8');
-  } catch {
-    // A tracked path that is not a readable file here (a symlink to nowhere, a gitlink) has no
-    // lines of this repository's to check.
-    continue;
-  }
-  examined += 1;
+  toRead.push(path);
+}
+
+const { files, vanished, unreadable } = readCensus(repositoryRoot, toRead);
+const examined = files.length;
+
+for (const { path, contents } of files) {
   const markers = markersIn(contents);
   for (const marker of markers.slice(0, REPORTED_PER_FILE)) {
     offenders.push(`${path}:${marker.line}: ${marker.text}`);
@@ -225,21 +222,28 @@ for (const path of paths) {
   }
 }
 
+// A path that exists and could not be read has not been checked, and saying nothing about it
+// would read as "checked, clean". A dangling symlink or a gitlink has no lines of this
+// repository's, so it does not fail the check — but it is named, here and in the verdict line.
+for (const { path, reason } of unreadable) {
+  process.stderr.write(`not checked: ${path} (${reason})\n`);
+}
+
 if (examined === 0) {
   // The mirror of the empty-`git ls-files` guard above, and the reason the `.gitattributes`
-  // exemption cannot be used to switch this check off: `* conflict-markers` declares every tracked
+  // exemption cannot be used to switch this check off: `* conflict-markers` declares every
   // path exempt, and a guard that examined nothing would then report success for ever (standing
-  // rule 4). The other route here is every tracked path being unreadable — a tree of gitlinks or
+  // rule 4). The other route here is every path being unreadable — a tree of gitlinks or
   // dangling symlinks — which is equally not a corpus this check has verified.
   fail(
-    `examined none of the ${paths.length} tracked path(s): ${exempt.size} are exempt via .gitattributes, ${declaredBinary.size} are declared binary, and the rest could not be read. A check with an empty corpus has verified nothing, so this is a failure rather than a pass.`,
+    `examined none of the ${paths.length} path(s): ${exempt.size} are exempt via .gitattributes, ${declaredBinary.size} are declared binary, and the rest could not be read. A check with an empty corpus has verified nothing, so this is a failure rather than a pass.`,
     2,
   );
 }
 
 if (offenders.length > 0) {
   process.stderr.write(
-    'tracked file(s) carry merge debris. A committed conflict marker is a broken file that every tool but git ignores: it typechecks nowhere, lints nowhere, and in a Markdown file it renders as text.\n',
+    'file(s) carry merge debris. A committed conflict marker is a broken file that every tool but git ignores: it typechecks nowhere, lints nowhere, and in a Markdown file it renders as text.\n',
   );
   for (const offender of offenders) {
     process.stderr.write(`  ${offender}\n`);
@@ -247,9 +251,14 @@ if (offenders.length > 0) {
   process.stderr.write(
     'Finish the merge and delete the artefact. A path that legitimately contains marker lines declares `conflict-markers` in .gitattributes — the bare attribute, no value.\n',
   );
-  fail(`(${examined} tracked text files examined)`);
+  fail(`(${examined} text files examined)`);
 }
 
+const residue = [
+  unreadable.length > 0 ? `, ${unreadable.length} not readable (named above)` : '',
+  vanished.length > 0 ? `, ${vanished.length} vanished while checking` : '',
+].join('');
+
 process.stdout.write(
-  `PASS: conflict:check (${examined} tracked text files, ${declaredBinary.size} declared binary, ${exempt.size} exempt, no conflict markers and no .orig/.rej debris)\n`,
+  `PASS: conflict:check (${examined} text files tracked or untracked, ${declaredBinary.size} declared binary, ${exempt.size} exempt${residue}, no conflict markers and no .orig/.rej debris)\n`,
 );

@@ -35,8 +35,6 @@
  * that path). It also says nothing about the *shape* either side expects; that is
  * `packages/contracts`, which both import.
  */
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../app.js';
@@ -46,7 +44,7 @@ import { createLogger } from '../logging.js';
 import { createMetrics } from '../metrics.js';
 import type { Database } from '../queries/identity-queries.js';
 import { SseHub } from '../sse/hub.js';
-import { repositoryRoot, webSourceFiles, withoutComments } from './web-sources.js';
+import { readSource, webSourceFiles, withoutComments } from './web-sources.js';
 
 /**
  * The endpoints the client calls and this server does not serve yet, each with the row that owns
@@ -231,9 +229,7 @@ describe('the client’s endpoint list against the server’s router', () => {
     // Test files are out of scope by suffix, not by name: `api/http.test.ts` calls `/api/thing`.
     expect(files.some((file) => file.endsWith('.test.ts'))).toBe(false);
 
-    const paths = clientPaths(
-      files.map((path) => ({ path, source: readFileSync(join(repositoryRoot, path), 'utf8') })),
-    );
+    const paths = clientPaths(files.map((path) => ({ path, source: readSource(path) })));
     expect(paths).toContain('/api/runs/{}/messages');
     expect(paths).toContain('/api/auth/get-session');
     // …and a path that appears only in a comment is not a path the app calls. This used to be
@@ -253,7 +249,7 @@ describe('the client’s endpoint list against the server’s router', () => {
     const paths = clientPaths(
       webSourceFiles().map((path) => ({
         path,
-        source: readFileSync(join(repositoryRoot, path), 'utf8'),
+        source: readSource(path),
       })),
     );
     const probes = await Promise.all(paths.map(probe));
@@ -300,7 +296,7 @@ describe('the client’s endpoint list against the server’s router', () => {
     const paths = clientPaths(
       webSourceFiles().map((path) => ({
         path,
-        source: readFileSync(join(repositoryRoot, path), 'utf8'),
+        source: readSource(path),
       })),
     );
     expect(paths).toContain('/api/artifacts/{}');
@@ -520,7 +516,7 @@ describe('the client’s endpoint list against the server’s router', () => {
     const paths = clientPaths(
       webSourceFiles().map((path) => ({
         path,
-        source: readFileSync(join(repositoryRoot, path), 'utf8'),
+        source: readSource(path),
       })),
     );
     for (const path of ['/api/tasks/{}/ask', '/api/tasks/{}/asks', '/api/tasks/{}/audit']) {
@@ -556,7 +552,7 @@ describe('the client’s endpoint list against the server’s router', () => {
     const paths = clientPaths(
       webSourceFiles().map((path) => ({
         path,
-        source: readFileSync(join(repositoryRoot, path), 'utf8'),
+        source: readSource(path),
       })),
     );
     // The screen calls it — the inverse of the pre-WP-43 assertion, so a screen that lost the call
@@ -574,7 +570,7 @@ describe('the client’s endpoint list against the server’s router', () => {
     const paths = clientPaths(
       webSourceFiles().map((path) => ({
         path,
-        source: readFileSync(join(repositoryRoot, path), 'utf8'),
+        source: readSource(path),
       })),
     );
     for (const path of [
@@ -618,7 +614,7 @@ describe('the client’s endpoint list against the server’s router', () => {
     const paths = clientPaths(
       webSourceFiles().map((path) => ({
         path,
-        source: readFileSync(join(repositoryRoot, path), 'utf8'),
+        source: readSource(path),
       })),
     );
     expect(paths).not.toContain('/api/projects/{}/kb/health');
@@ -628,7 +624,7 @@ describe('the client’s endpoint list against the server’s router', () => {
     const paths = clientPaths(
       webSourceFiles().map((path) => ({
         path,
-        source: readFileSync(join(repositoryRoot, path), 'utf8'),
+        source: readSource(path),
       })),
     );
     const probes = (await Promise.all(paths.map(probe))).filter((entry) => entry.served);

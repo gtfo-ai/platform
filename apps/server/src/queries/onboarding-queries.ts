@@ -387,9 +387,13 @@ export type CreateIntegrationResult =
  * stays: it covers rows written before this check existed and rows an operator wrote with `psql`.
  * This is the layer that stops the row being created.
  *
- * `createIntegration` is the **only** writer of `integrations.config` in this repository
- * (`writeIntegrationHealth` names `health` and nothing else; `PATCH /api/integrations/:id` is
- * unbuilt), so one call site is the whole coverage. A second writer has to come through here.
+ * One call site is the whole coverage because `createIntegration` is the only writer of
+ * `integrations.config` — a claim about every other file, so it is not asserted here: it is held by
+ * `queries/integration-config-writers.test.ts`, whose declared list of writers is one, and whose
+ * docblock states the spellings it cannot see (standing rule 63, PROGRESS backlog 130). A second
+ * writer — `PATCH /api/integrations/:id` is specified in technical/08 and unbuilt — fails that
+ * census until it is declared there, and has to come through here. This refusal has **no** call-time
+ * twin, deliberately: the write answers the question once, and the census is the cheaper closure.
  */
 export const assertNoCredentialInConfig = (
   config: JsonObject,
@@ -430,8 +434,8 @@ export const assertNoCredentialInConfig = (
  * (`base_url` defaults to `https://sentry.io`) and Slack default theirs, so a body with no
  * `base_url` passes this guard with an undeclared *effective* host and is refused only at the
  * call — no credential leaves, but the operator learns it from the first call rather than from
- * the `POST`; sweeping the provider-parsed config would close it and is filed with backlog 130's
- * census. **A false refusal**: `new URL()` is the parser and any colon-bearing string parses —
+ * the `POST`; sweeping the provider-parsed config would close it, and it is filed on its own as
+ * PROGRESS backlog 245 — backlog 130's census closed the writer half only. **A false refusal**: `new URL()` is the parser and any colon-bearing string parses —
  * `'Mon: 9-5'` and `mailto:…` both answer 403 `integration_host_not_permitted` — so a value that
  * is not a URL is not "left alone" if it carries a colon; the shipped schemas have no such field,
  * and the direction is the fail-closed one.
@@ -440,6 +444,9 @@ export const assertNoCredentialInConfig = (
  * strictly shaped only once the provider's own schema sees it, which this command never runs
  * (`createIntegration` validates credential *fields*, not the document). Rule 14: this is a runtime
  * check over a body that reached the process as JSON, not a claim `tsc` makes.
+ *
+ * It runs on the create path alone, which covers every write of the column for as long as the
+ * create is the only writer; `queries/integration-config-writers.test.ts` is what holds that.
  *
  * @throws {HttpError} 403 `integration_host_not_permitted` — the request is well formed and this
  * deployment does not permit it, which is the reading `secret_name_not_permitted` already has.

@@ -38,9 +38,13 @@
  *    its divergence register says so explicitly.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import {
+  CensusUnreadableError,
+  censusPaths,
+  readCensus,
+} from '../../../../scripts/census-files.mjs';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
 
@@ -142,21 +146,7 @@ const EXPECTED_OWNERSHIP: Readonly<Record<string, readonly string[]>> = {
   ],
 };
 
-const gitFiles = (args: readonly string[]): string[] =>
-  execFileSync('git', [...args, '-z', '--', '*.ts', '*.sql'], {
-    cwd: REPO_ROOT,
-    encoding: 'utf8',
-    maxBuffer: 32 * 1024 * 1024,
-  })
-    .split('\0')
-    .filter((file) => file.length > 0);
-
-const sources = (): string[] => [
-  ...new Set([
-    ...gitFiles(['ls-files']),
-    ...gitFiles(['ls-files', '--others', '--exclude-standard']),
-  ]),
-];
+const sources = (): string[] => censusPaths(REPO_ROOT, { pathspecs: ['*.ts', '*.sql'] });
 
 interface Statement {
   readonly file: string;
@@ -218,30 +208,28 @@ const statementsIn = (file: string, source: string): Statement[] => {
 /**
  * Every `update tasks` statement in the tree.
  *
- * A path is re-checked with `existsSync` between the listing and the read, which is the hole its
+ * A path that vanished between the listing and the read is dropped (and named, below), which is the hole its
  * sibling census already names: *"a path can disappear between `ls-files` and here (a concurrent
  * editor, a temp file); a census that crashed on that would be a census people turn off"*
  * (`db/pool-errors.test.ts`). Measured here rather than reasoned — this file failed a `verify` with
  * `ENOENT … .vitest-scope-23805-egp4di/plain/ordinary.e2e.test.ts`, a fixture another test in the
  * same run plants and deletes, and it is a **crash** rather than a finding: the census reports
  * nothing at all rather than reporting one file it could not read. Found while WP-21 was in review;
- * the file is WP-15e's and nothing about it changed except this guard.
+ * the file is WP-15e's and nothing about it changed except this guard. Since WP-68 the listing, the
+ * vanished-path rule and the unreadable-path report are `scripts/census-files.mjs`'s, shared with
+ * every census: an unreadable path throws naming itself rather than reading as "no `update tasks`".
  */
 /** A path the listing named and the read could not find — see {@link allStatements}. */
 const dropped: string[] = [];
 
 const allStatements = (): Statement[] => {
-  dropped.length = 0;
-  const found: Statement[] = [];
-  for (const file of sources()) {
-    const full = path.join(REPO_ROOT, file);
-    if (!existsSync(full)) {
-      dropped.push(file);
-      continue;
-    }
-    found.push(...statementsIn(file, readFileSync(full, 'utf8')));
+  const { files, vanished, unreadable } = readCensus(REPO_ROOT, sources());
+  if (unreadable.length > 0) {
+    throw new CensusUnreadableError(unreadable);
   }
-  return found;
+  dropped.length = 0;
+  dropped.push(...vanished);
+  return files.flatMap(({ path: file, contents }) => statementsIn(file, contents));
 };
 
 /**
@@ -263,7 +251,7 @@ const isTracked = (file: string): boolean =>
 
 describe('`tasks` column ownership (WP-15e)', () => {
   it('drops only paths that are genuinely gone, and says which', () => {
-    // The `existsSync` filter above tolerates a race; silently, it would also tolerate a **tracked**
+    // Dropping a vanished path tolerates a race; silently, it would also tolerate a **tracked**
     // file this census cannot read, which looks exactly like a file with no `update tasks` in it.
     // Nothing is expected here on a quiet tree — the assertion is that whatever *is* dropped was
     // untracked, and the path is in the message so a real gap names itself.

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Fails when a tracked source file contains a literal NUL byte.
+ * Fails when a source file — tracked, or untracked and not ignored — contains a literal NUL byte.
  *
  * This exists because it happened **twice**. WP-05 put a literal NUL in a template string in
  * `packages/infrastructure/src/jobs/in-memory-jobs.ts`; WP-10 put one in
@@ -21,10 +21,16 @@
  *
  * ## Scope, asked of git rather than carried in a list (standing rule 7)
  *
- * The scope is `git ls-files`: every path this repository tracks, with no extension list and no
- * directory list to drift. Today that is 534 files and **none** of them is a genuine binary — this
- * repository stores no images, no archives and no compiled artefacts — so the rule is simply "no
- * tracked file may contain a NUL byte".
+ * The scope is every path git knows about and does not ignore — `git ls-files` **plus**
+ * `git ls-files --others --exclude-standard` — with no extension list and no directory list to
+ * drift. The untracked half is backlog 10: the guard used to read the tracked set alone, so a new
+ * file carrying a NUL passed `verify` until it was staged, which is how WP-16's two went unseen.
+ * An ignored file is not read, because an ignored file is not a source file. The list, the
+ * vanished-path rule and the unreadable-path report are `census-files.mjs`'s, shared with every
+ * other census: a path that disappears between the listing and the read is dropped, and a path
+ * that exists and cannot be read (a dangling symlink, a gitlink) is **named** on stderr and in the
+ * PASS line rather than skipped in silence. This repository stores no images, no archives and no
+ * compiled artefacts, so the rule is simply "no source file may contain a NUL byte".
  *
  * The escape hatch for the day one is added is also git's own declaration rather than a second
  * hand-maintained list: a path whose `binary` attribute is set, or whose `text` attribute is
@@ -32,8 +38,8 @@
  * to make anyway for git to stop trying to diff and merge the file, so the exemption cannot be
  * granted by editing this script — it is granted in the tree, in a file reviewers read.
  *
- * That escape hatch is also the guard's own off switch, so it is bounded twice: an empty
- * `git ls-files` and an empty list of *examined text files* are both failures, not passes. A single
+ * That escape hatch is also the guard's own off switch, so it is bounded twice: an empty file
+ * list and an empty list of *examined text files* are both failures, not passes. A single
  * `* binary` line in `.gitattributes` would otherwise have reported `PASS (0 tracked text files)`
  * forever — a check that succeeds because it looked at nothing (standing rule 4).
  *
@@ -41,10 +47,9 @@
  * verification step (docs/technical/14-orchestration-protocol.md).
  */
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { censusPaths, readCensus } from './census-files.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 
@@ -54,21 +59,16 @@ const fail = (message, code = 1) => {
   process.exit(code);
 };
 
-const tracked = spawnSync('git', ['ls-files', '-z'], {
-  cwd: repositoryRoot,
-  encoding: 'utf8',
-  maxBuffer: 64 * 1024 * 1024,
-});
-
-if (tracked.error || tracked.status !== 0) {
-  fail(`could not list tracked files: ${tracked.error?.message ?? tracked.stderr}`, 2);
+let paths;
+try {
+  paths = censusPaths(repositoryRoot);
+} catch (error) {
+  fail(`could not list the files to check: ${error.message}`, 2);
 }
-
-const paths = tracked.stdout.split('\0').filter((path) => path !== '');
 
 if (paths.length === 0) {
   // Rule 4: a check that quietly examined nothing would pass forever.
-  fail('found no tracked files to check; is this the repository root?', 2);
+  fail('found no files to check; is this the repository root?', 2);
 }
 
 /**
@@ -100,21 +100,14 @@ for (let index = 0; index + 2 < fields.length; index += 3) {
 }
 
 const offenders = [];
-let examined = 0;
+const { files, vanished, unreadable } = readCensus(
+  repositoryRoot,
+  paths.filter((path) => !declaredBinary.has(path)),
+  { encoding: null },
+);
+const examined = files.length;
 
-for (const path of paths) {
-  if (declaredBinary.has(path)) {
-    continue;
-  }
-  let contents;
-  try {
-    contents = readFileSync(join(repositoryRoot, path));
-  } catch {
-    // A tracked path that is not a readable file here (a symlink to nowhere, a gitlink) has no
-    // bytes of this repository's to check.
-    continue;
-  }
-  examined += 1;
+for (const { path, contents } of files) {
   const at = contents.indexOf(0);
   if (at !== -1) {
     const line = contents.subarray(0, at).toString('utf8').split('\n').length;
@@ -122,21 +115,28 @@ for (const path of paths) {
   }
 }
 
+// A path that exists and could not be read has not been checked, and saying nothing about it
+// would read as "checked, clean". A dangling symlink or a gitlink has no bytes of this
+// repository's, so it does not fail the check — but it is named, here and in the verdict line.
+for (const { path, reason } of unreadable) {
+  process.stderr.write(`not checked: ${path} (${reason})\n`);
+}
+
 if (examined === 0) {
   // The mirror of the empty-`git ls-files` guard above, and the reason the `.gitattributes`
-  // exemption cannot be used to switch this check off: `* binary` declares every tracked path
+  // exemption cannot be used to switch this check off: `* binary` declares every path
   // exempt, and a guard that examined nothing would then report success forever (standing rule 4).
-  // The other route here is every tracked path being unreadable — a tree of gitlinks or dangling
+  // The other route here is every path being unreadable — a tree of gitlinks or dangling
   // symlinks — which is equally not a corpus this check has verified.
   fail(
-    `examined none of the ${paths.length} tracked path(s): ${declaredBinary.size} are declared binary in .gitattributes and the rest could not be read. A check with an empty corpus has verified nothing, so this is a failure rather than a pass.`,
+    `examined none of the ${paths.length} path(s): ${declaredBinary.size} are declared binary in .gitattributes and the rest could not be read. A check with an empty corpus has verified nothing, so this is a failure rather than a pass.`,
     2,
   );
 }
 
 if (offenders.length > 0) {
   process.stderr.write(
-    `${offenders.length} tracked source file(s) contain a literal NUL byte. git will treat each as binary: its diff renders as "Bin", it cannot be three-way merged, and grep skips it.\n`,
+    `${offenders.length} source file(s) contain a literal NUL byte. git will treat each as binary: its diff renders as "Bin", it cannot be three-way merged, and grep skips it.\n`,
   );
   for (const offender of offenders) {
     process.stderr.write(`  ${offender}\n`);
@@ -144,9 +144,14 @@ if (offenders.length > 0) {
   process.stderr.write(
     'Write the byte as the escape \\0 in the source, or declare the path binary in .gitattributes if it really is.\n',
   );
-  fail(`(${examined} tracked text files examined)`);
+  fail(`(${examined} text files examined)`);
 }
 
+const residue = [
+  unreadable.length > 0 ? `, ${unreadable.length} not readable (named above)` : '',
+  vanished.length > 0 ? `, ${vanished.length} vanished while checking` : '',
+].join('');
+
 process.stdout.write(
-  `PASS: nul:check (${examined} tracked text files, ${declaredBinary.size} declared binary, none with a NUL byte)\n`,
+  `PASS: nul:check (${examined} text files tracked or untracked, ${declaredBinary.size} declared binary${residue}, none with a NUL byte)\n`,
 );

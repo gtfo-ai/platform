@@ -11,10 +11,10 @@
  */
 import type { Transaction } from '@platform/application';
 import { cost } from '@platform/infrastructure';
-import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runCostStoreContract } from '../../contract/support/cost-store-suite.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
+import { createTestClient } from '../support/postgres.js';
 
 let database: MigratedDatabase;
 let projectId: string;
@@ -22,7 +22,7 @@ let orgId: string;
 
 beforeAll(async () => {
   database = await createMigratedDatabase('cost-store');
-  const client = new pg.Client({ connectionString: database.connectionString });
+  const client = createTestClient(database.connectionString);
   await client.connect();
   try {
     const org = await client.query<{ id: string }>(
@@ -64,7 +64,7 @@ const refinedSpec = (size: string) => ({
 runCostStoreContract({
   name: 'postgres',
   create: async () => {
-    const client = new pg.Client({ connectionString: database.connectionString });
+    const client = createTestClient(database.connectionString);
     await client.connect();
     await client.query('begin');
     const tx = { adapter: 'postgres', client } as unknown as Transaction;
@@ -193,7 +193,7 @@ describe('what a budget window counts before the ledger has written it', () => {
   const ORG = { scope: 'org' as const, scopeId: null };
 
   it('values a live run at the reservation and an ended one at what it reported', async () => {
-    const client = new pg.Client({ connectionString: database.connectionString });
+    const client = createTestClient(database.connectionString);
     await client.connect();
     await client.query('begin');
     try {

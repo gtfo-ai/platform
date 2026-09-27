@@ -33,10 +33,9 @@
  * by design. That exclusion is also what keeps this file out of its own census (standing rule 59) —
  * stated rather than relied on silently.
  */
-import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { censusPaths, censusText } from '../../../../scripts/census-files.mjs';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
 
@@ -110,22 +109,8 @@ const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
   ['packages/application/src/pipeline/task-conflict.ts', 1],
 ]);
 
-const gitFiles = (args: readonly string[]): string[] =>
-  execFileSync('git', [...args, '-z', '--', '*.ts', '*.tsx'], {
-    cwd: REPO_ROOT,
-    encoding: 'utf8',
-    maxBuffer: 32 * 1024 * 1024,
-  })
-    .split('\0')
-    .filter((file) => file.length > 0);
-
 /** Tracked *and* committable-but-untracked, which is the tree the pre-push hook sees (rule 85). */
-const sources = (): string[] => [
-  ...new Set([
-    ...gitFiles(['ls-files']),
-    ...gitFiles(['ls-files', '--others', '--exclude-standard']),
-  ]),
-];
+const sources = (): string[] => censusPaths(REPO_ROOT, { pathspecs: ['*.ts', '*.tsx'] });
 
 const isTestTier = (file: string): boolean =>
   file.startsWith('test/') ||
@@ -155,7 +140,7 @@ const census = (): Map<string, number> => {
     if (isTestTier(file)) {
       continue;
     }
-    const body = withoutComments(readFileSync(path.join(REPO_ROOT, file), 'utf8'));
+    const body = withoutComments(censusText(REPO_ROOT, file));
     const hits = body.match(SAVE_CALL)?.length ?? 0;
     if (hits > 0) {
       found.set(file, hits);
@@ -256,7 +241,7 @@ const escalationCensus = (): Map<string, { escalations: number; closes: number }
     if (isTestTier(file) || !file.startsWith('packages/application/src/')) {
       continue;
     }
-    const body = withoutComments(readFileSync(path.join(REPO_ROOT, file), 'utf8'));
+    const body = withoutComments(censusText(REPO_ROOT, file));
     const escalations = body.match(ESCALATE_CALL)?.length ?? 0;
     const closes = body.match(CLOSE_PARKED_CALL)?.length ?? 0;
     if (escalations > 0 || closes > 0) {
@@ -315,7 +300,7 @@ describe('every entry, completion and cancellation closes the attempt it ends (W
       if (isTestTier(file) || !file.startsWith('packages/application/src/')) {
         continue;
       }
-      const body = withoutComments(readFileSync(path.join(REPO_ROOT, file), 'utf8'));
+      const body = withoutComments(censusText(REPO_ROOT, file));
       const endings = body.match(ENDING_CALL)?.length ?? 0;
       const closes = body.match(CLOSE_CURRENT_CALL)?.length ?? 0;
       if (endings > 0 || closes > 0) {

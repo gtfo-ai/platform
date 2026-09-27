@@ -30,10 +30,9 @@
  * `.pipelineDial` read and **fails** here rather than passing — the fail-closed direction, at the
  * price of a false positive a reviewer resolves by adding a named exception below.
  */
-import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { censusPaths, censusText } from '../../../../scripts/census-files.mjs';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
 
@@ -117,21 +116,7 @@ const EXPECTED_SITES: Readonly<Record<string, { readonly sites: number; readonly
  */
 const FROZEN_COPY = [/^(?:stored|current)\.pipelineDial$/, /^dial === null \? null : dial\.data$/];
 
-const gitFiles = (args: readonly string[]): string[] =>
-  execFileSync('git', [...args, '-z', '--', '*.ts', '*.tsx'], {
-    cwd: REPO_ROOT,
-    encoding: 'utf8',
-    maxBuffer: 32 * 1024 * 1024,
-  })
-    .split('\0')
-    .filter((file) => file.length > 0);
-
-const sources = (): string[] => [
-  ...new Set([
-    ...gitFiles(['ls-files']),
-    ...gitFiles(['ls-files', '--others', '--exclude-standard']),
-  ]),
-];
+const sources = (): string[] => censusPaths(REPO_ROOT, { pathspecs: ['*.ts', '*.tsx'] });
 
 const isTestTier = (file: string): boolean =>
   file.startsWith('test/') ||
@@ -187,7 +172,7 @@ const census = (): Map<string, string[][]> => {
   const found = new Map<string, string[][]>();
   for (const file of sources()) {
     if (isTestTier(file)) continue;
-    const calls = compileCalls(withoutComments(readFileSync(path.join(REPO_ROOT, file), 'utf8')));
+    const calls = compileCalls(withoutComments(censusText(REPO_ROOT, file)));
     if (calls.length > 0) found.set(file, calls);
   }
   return found;

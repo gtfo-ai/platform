@@ -61,13 +61,26 @@
  *  - a citation is attributed to the line its **file token** is on, so two citations of the same
  *    file on one line are one site to the recall check in `citations.test.ts`;
  *  - the sweep reads a file as text, so a citation inside a string literal is read like any other.
- *    That is deliberate: the parser's own fixtures are therefore real citations of real tests.
+ *    That is deliberate: the parser's own fixtures are therefore real citations of real tests;
+ *  - a citation whose **marker** the margin pushed onto the next line — the backticked file at the
+ *    end of one line, `›` at the start of the next — is not read, because the parser opens a
+ *    context only on a token with its marker. This is the one shape the parser and the recall
+ *    oracle used to share (backlog 3): the oracle required the same token-and-marker line, so such
+ *    a citation was invisible to both and the recall check reported nothing. Since WP-68 the oracle
+ *    ({@link CITATION_SITE}) spans that wrap, so the shape is **refused loudly** by the recall check
+ *    instead of passing in silence — reflow the citation so the marker follows its file token;
+ *  - a line that ends in a comma while a citation is open continues onto the next, so a quoted
+ *    phrase there is read as one more cited name. It fails loudly (`no such test`), which is the
+ *    right direction; the fix is to close the list before the wrap (backlog 6).
  *
- * Its scope is `git ls-files` filtered to the file types this repository writes prose in — `.ts`,
- * `.tsx`, `.mjs` and `.md` — so it cannot drift the way a hand-maintained list does (standing rule
- * 7). Markdown is in that list because `CLAUDE.md`, `PROGRESS.md` and `docs/technical/*` are where
- * this class of claim also lives; no Markdown citation exists yet, so that half is a guard waiting
- * rather than a guard working, and the recall check will say so the day one is written.
+ * Its scope is every file git knows about and does not ignore — tracked or untracked, through
+ * `census-files.mjs`, so a citation written in a new file is resolved before it is staged — filtered
+ * to the file types this repository writes prose in: `.ts`, `.tsx`, `.mjs` and `.md` (standing
+ * rule 7). **The Markdown half is enforced, not waiting**: `CLAUDE.md`, `PROGRESS.md` and
+ * `docs/**` carry citations the sweep resolves and the recall check requires the parser to have
+ * read, and `citations.test.ts` holds a floor **per kind** (`MINIMUM_CITATION_SITES`) so that
+ * neither half can stop being parsed while the other keeps the total up. The figures are the
+ * floor's, stated once there (standing rule 63).
  */
 
 /** One `file › "name"` claim, with the line it was written on. */
@@ -91,8 +104,14 @@ const QUOTED = /"((?:\\.|[^"\\])*)"/g;
  * what it exists to catch is a regression in the scanning — context carrying, wrapping, quoted-name
  * collection — rather than in the file-name pattern. A guard and its oracle sharing one regex is
  * one guard.
+ *
+ * An oracle has to **over-approximate** what it audits (standing rule 65), so it also accepts a
+ * line break between the file token and the marker, with the continuation's decoration (`*`, `//`
+ * or `>`) in between — a shape the parser does not read. A site found only here is therefore a
+ * recall failure naming the line, which is the point: backlog 3 measured the shared shape passing
+ * with *failures `[]`* because neither side saw it. The site is attributed to the file token's line.
  */
-export const CITATION_SITE = /`([\w./-]+\.tsx?)`[ \t]*›/g;
+export const CITATION_SITE = /`([\w./-]+\.tsx?)`[ \t]*(?:\r?\n[ \t]*(?:(?:\*|\/\/|>)[ \t]*)*)?›/g;
 
 /** Which line decorations a wrapped citation may continue over. */
 export type CitationContinuation = 'comment' | 'prose';
@@ -251,13 +270,22 @@ export const collectCitations = (
   );
 
 /** Every line of a document at which a citation is written, by the independent site shape. */
-export const citationSites = (source: string): { file: string; line: number }[] =>
-  source.split('\n').flatMap((line, index) =>
-    [...line.matchAll(CITATION_SITE)].map((match) => ({
-      file: match[1] ?? '',
-      line: index + 1,
-    })),
-  );
+export const citationSites = (source: string): { file: string; line: number }[] => {
+  const sites: { file: string; line: number }[] = [];
+  // Matches arrive in order, so the line count is carried forward rather than recounted.
+  let line = 1;
+  let counted = 0;
+  for (const match of source.matchAll(CITATION_SITE)) {
+    for (let index = counted; index < match.index; index += 1) {
+      if (source.charCodeAt(index) === 10) {
+        line += 1;
+      }
+    }
+    counted = match.index;
+    sites.push({ file: match[1] ?? '', line });
+  }
+  return sites;
+};
 
 const NAMED_TEST =
   /\b(?:it|test|describe)(?:\.(?:skip|only|todo|concurrent|sequential|fails|runIf|skipIf))*\(\s*(['"])((?:\\.|(?!\1)[^\\])*)\1/g;
@@ -287,7 +315,7 @@ export interface CitationFailure extends TestCitation {
 }
 
 /**
- * Resolves citations against the tracked files, given the repository's file list.
+ * Resolves citations against the tracked and untracked-but-not-ignored files, given the repository's file list.
  *
  * `read` is injected so the whole check is a pure function of (citations, file list, contents) and
  * can be driven with a synthetic repository — the calibration standing rule 21 asks for: a guard

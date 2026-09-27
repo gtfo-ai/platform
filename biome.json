@@ -41,7 +41,8 @@
                   "../../*/src/**",
                   "../../../**",
                   "**/packages/*/src/**",
-                  "**/apps/*/src/**"
+                  "**/apps/*/src/**",
+                  "!**/scripts/census-files.mjs"
                 ],
                 "message": "Import another workspace package by its @platform/* name, never by a relative path that walks around the dependency rule (technical/01)."
               }
@@ -93,7 +94,8 @@
                       "../../*/src/**",
                       "../../../**",
                       "**/packages/*/src/**",
-                      "**/apps/*/src/**"
+                      "**/apps/*/src/**",
+                      "!**/scripts/census-files.mjs"
                     ],
                     "message": "Import another workspace package by its @platform/* name, never by a relative path that walks around the dependency rule (technical/01)."
                   }
@@ -122,7 +124,8 @@
                       "../../*/src/**",
                       "../../../**",
                       "**/packages/*/src/**",
-                      "**/apps/*/src/**"
+                      "**/apps/*/src/**",
+                      "!**/scripts/census-files.mjs"
                     ],
                     "message": "Import another workspace package by its @platform/* name, never by a relative path that walks around the dependency rule (technical/01)."
                   }
@@ -151,7 +154,8 @@
                       "../../*/src/**",
                       "../../../**",
                       "**/packages/*/src/**",
-                      "**/apps/*/src/**"
+                      "**/apps/*/src/**",
+                      "!**/scripts/census-files.mjs"
                     ],
                     "message": "Import another workspace package by its @platform/* name, never by a relative path that walks around the dependency rule (technical/01)."
                   }
@@ -186,7 +190,8 @@
                       "../../*/src/**",
                       "../../../**",
                       "**/packages/*/src/**",
-                      "**/apps/*/src/**"
+                      "**/apps/*/src/**",
+                      "!**/scripts/census-files.mjs"
                     ],
                     "message": "Import another workspace package by its @platform/* name, never by a relative path that walks around the dependency rule (technical/01)."
                   }
@@ -211,7 +216,8 @@
                       "../../*/src/**",
                       "../../../**",
                       "**/packages/*/src/**",
-                      "**/apps/*/src/**"
+                      "**/apps/*/src/**",
+                      "!**/scripts/census-files.mjs"
                     ],
                     "message": "apps/* are composition roots: import workspace packages by their @platform/* name, never by a relative path (technical/01)."
                   }

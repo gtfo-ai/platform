@@ -9,11 +9,12 @@
 
 import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LogFields, Logger } from '@platform/application';
 import { describe, expect, it } from 'vitest';
+import { censusFiles } from '../../../../scripts/census-files.mjs';
 import { createDatabasePool } from './client.js';
 import { CONNECTION_LOSS_CODES, errorCode, isConnectionLoss } from './pool-errors.js';
 
@@ -120,7 +121,9 @@ describe('the pool a runtime is built on', () => {
  * guard that reads only the tracked set is blind to the file somebody is writing right now, which
  * is exactly the file a new mistake is in. It bit this census on its first day (rule 59: a guard
  * that reads the repository's own sources has itself inside its scope, and that is where it fails
- * first) — every pre-commit run was green because the new files were untracked.
+ * first) — every pre-commit run was green because the new files were untracked. Since WP-68 the
+ * list, and what happens to a path that vanished or cannot be read, are `scripts/census-files.mjs`'s,
+ * the one helper every census in the repository reads through.
  *
  * ## The spellings it catches, and the ones it cannot
  *
@@ -151,25 +154,14 @@ const POOL_SITES_ALLOWED = new Set([
 const POOL_CONSTRUCTION = /new\s+(?:pg\.)?Pool\s*\(/;
 const SOURCE_FILE = /\.(ts|tsx|mts|cts|mjs|cjs|js|jsx)$/;
 
-const gitPaths = (root: string, args: readonly string[]): string[] =>
-  execFileSync('git', [...args, '-z'], { cwd: root, encoding: 'utf8' })
-    .split('\0')
-    .filter((path) => SOURCE_FILE.test(path));
-
-/** Every source file git knows about and does not ignore, tracked or not. */
-const censusFiles = (root: string): string[] => [
-  ...gitPaths(root, ['ls-files']),
-  ...gitPaths(root, ['ls-files', '--others', '--exclude-standard']),
-];
-
 /** The census itself, so the repository and a planted fixture are judged by the same function. */
 const poolSites = (root: string): string[] =>
-  censusFiles(root).filter((path) => {
-    const full = join(root, path);
-    // A path can disappear between `ls-files` and here (a concurrent editor, a temp file); a
-    // census that crashed on that would be a census people turn off.
-    return existsSync(full) && POOL_CONSTRUCTION.test(readFileSync(full, 'utf8'));
-  });
+  // The list, the vanished-path rule and the unreadable-path report are the one census helper's
+  // (`scripts/census-files.mjs`, WP-68): tracked plus untracked-but-not-ignored, a path that
+  // disappeared since the listing dropped, and one that cannot be read named in a throw.
+  censusFiles(root, { include: (path) => SOURCE_FILE.test(path) })
+    .filter(({ contents }) => POOL_CONSTRUCTION.test(contents))
+    .map(({ path }) => path);
 
 describe('the census that keeps every pool guarded', () => {
   it('finds no unguarded pool construction in a source file of this repository', () => {
@@ -203,6 +195,103 @@ describe('the census that keeps every pool guarded', () => {
       git('add', 'tracked.ts', '.gitignore');
 
       expect(poolSites(root).sort()).toEqual(['tracked.ts', 'untracked.ts']);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * A bare client built anywhere else is a client nobody listens to, and backlog 30 measured what
+ * that costs: a connected `pg.Client` with no `'error'` listener and no pool anywhere raises a
+ * forced drop's `57P01` as an **uncaught exception** (`postgres.integration.test.ts` holds the
+ * measurement). "Every client is ended" is a dataflow question no census can answer, so the
+ * question is moved to where a grep can answer it: the test harness **owns** a bare client —
+ * `createTestClient` attaches the listener at construction and `withClient` owns a scoped one's
+ * lifetime — and this census refuses a construction anywhere else.
+ *
+ * Four files may construct one, each for the reason beside it. Two are production and were
+ * accounted for when backlog 30 was filed: the broadcast adapter's client carries its error
+ * through the `onError` seam the notification client wires, and the migrator's ends in a
+ * `finally` and carries **no** listener, which is backlog 30's labelled hypothesis (a failover
+ * mid-migration would end the migrate container untyped), recorded rather than changed here.
+ *
+ * It reads what the pool census reads, through the same helper. What it catches: the `new`
+ * operator followed by the `pg`-qualified `Client` constructor, and a **named import** of `Client`
+ * from `pg` in any spelling (`as` included), since a file that imports the class by name has no
+ * other use for it. What it does **not** see — the pool census's list, one level down:
+ *
+ *  - **an alias of the qualified name** — the class assigned to a variable, then constructed;
+ *  - **`pg.native`'s client**, or a client reached reflectively (`Reflect.construct`, a computed
+ *    member access spelling the name as a string);
+ *  - **a client built by something else** — a dependency that opens its own (pg-boss, drizzle's
+ *    drivers), or a helper returning one it constructed behind a variable name;
+ *  - **a default import renamed** — `import postgres from 'pg'` then the qualified constructor
+ *    under that name.
+ *
+ * A floor against the accident — somebody copying a nearby line — not a proof.
+ */
+const CLIENT_SITES_ALLOWED = new Map([
+  ['test/integration/support/postgres.ts', 'createTestClient, which attaches the listener'],
+  [
+    'test/integration/support/postgres.integration.test.ts',
+    'measures the premise, so it builds the unguarded client this census refuses',
+  ],
+  ['packages/infrastructure/src/broadcast/postgres-broadcast.ts', 'errors reach the onError seam'],
+  ['packages/infrastructure/src/db/migrator.ts', 'ends in a finally; no listener (backlog 247)'],
+]);
+
+// Assembled, like the pool census's plant, so neither pattern matches this file's own text.
+// Spellings it cannot see (review round 1): a default-plus-named import (`import pg, { Client }
+// from 'pg'`), a destructure (`const { Client } = pg`), and any construction through a variable.
+const CLIENT_CONSTRUCTION = new RegExp(`new\\s+pg\\s*\\.\\s*${'Client'}\\s*\\(`);
+const CLIENT_NAMED_IMPORT = new RegExp(
+  `import\\s+(?:type\\s+)?\\{[^}]*\\b${'Client'}\\b[^}]*\\}\\s*from\\s*['"]${'pg'}['"]`,
+);
+
+const clientSites = (root: string): string[] =>
+  censusFiles(root, { include: (path) => SOURCE_FILE.test(path) })
+    .filter(
+      ({ contents }) => CLIENT_CONSTRUCTION.test(contents) || CLIENT_NAMED_IMPORT.test(contents),
+    )
+    .map(({ path }) => path);
+
+describe('the census that keeps every bare client owned by the harness', () => {
+  it('finds no bare client constructed outside the files that account for one', () => {
+    const root = new URL('../../../../', import.meta.url).pathname;
+    const found = clientSites(root);
+
+    // Both anchors: the harness factory is found (so the pattern bites) and every allowed entry
+    // still constructs one (so the list cannot rot into permission for nothing).
+    expect(found).toContain('test/integration/support/postgres.ts');
+    expect([...CLIENT_SITES_ALLOWED.keys()].filter((path) => !found.includes(path))).toEqual([]);
+    expect(
+      found
+        .filter((path) => !CLIENT_SITES_ALLOWED.has(path))
+        .map((path) => `${path} constructs a bare pg client; use createTestClient or withClient`)
+        .sort(),
+    ).toEqual([]);
+  });
+
+  it('names a planted client whether it is tracked or merely untracked, and skips an ignored one', () => {
+    const root = mkdtempSync(join(tmpdir(), 'client-census-'));
+    try {
+      const git = (...args: string[]): void => {
+        execFileSync('git', args, { cwd: root, stdio: 'ignore' });
+      };
+      git('init', '-q');
+      writeFileSync(join(root, '.gitignore'), 'ignored.ts\n');
+      const constructed = `import pg from 'pg';\nexport const c = new pg.${'Client'}({});\n`;
+      const imported = `import { ${'Client'} as Bare } from '${'pg'}';\nexport const c = new Bare();\n`;
+      writeFileSync(join(root, 'tracked.ts'), constructed);
+      writeFileSync(join(root, 'untracked.ts'), constructed);
+      writeFileSync(join(root, 'aliased.ts'), imported);
+      writeFileSync(join(root, 'ignored.ts'), constructed);
+      // The control for the pattern itself: an HTTP test client of the same name is not pg's.
+      writeFileSync(join(root, 'http.ts'), `export const c = new ${'Client'}('http://x');\n`);
+      git('add', 'tracked.ts', '.gitignore');
+
+      expect(clientSites(root).sort()).toEqual(['aliased.ts', 'tracked.ts', 'untracked.ts']);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

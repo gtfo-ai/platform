@@ -4,11 +4,10 @@
  * reason: a table that names a reader nobody wrote is a claim, and the claim is what the feature
  * cards are compared against.
  */
-import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { featuresConfigSchema } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
+import { censusPaths, censusText } from '../../../../scripts/census-files.mjs';
 import { PLATFORM_DEFAULT_CONFIG } from './effective-config.js';
 import { FEATURE_READERS } from './feature-readers.js';
 
@@ -17,18 +16,8 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
 /** The defaults module declares every key, so a citation of it would prove nothing. */
 const DEFAULTS_MODULE = 'packages/domain/src/config/effective-config.ts';
 
-const gitFiles = (args: readonly string[]): string[] =>
-  execFileSync('git', [...args, '-z'], {
-    cwd: REPO_ROOT,
-    encoding: 'utf8',
-    maxBuffer: 32 * 1024 * 1024,
-  })
-    .split('\0')
-    .filter((file) => file.length > 0);
-
 /** Tracked *and* committable-but-untracked (standing rule 85). */
-const treeFiles = (): ReadonlySet<string> =>
-  new Set([...gitFiles(['ls-files']), ...gitFiles(['ls-files', '--others', '--exclude-standard'])]);
+const treeFiles = (): ReadonlySet<string> => new Set(censusPaths(REPO_ROOT));
 
 /** `features.<key>` or `features?.<key>`, as a whole word — how a reader names the key. */
 const mentions = (body: string, key: string): boolean =>
@@ -54,7 +43,7 @@ export const unresolvedFeatureReaders = (
   return problems.sort();
 };
 
-const readSource = (file: string): string => readFileSync(path.join(REPO_ROOT, file), 'utf8');
+const readSource = (file: string): string => censusText(REPO_ROOT, file);
 
 describe('the feature reader table', () => {
   it('has an entry for every feature key a project may write, and for nothing else', () => {

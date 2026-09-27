@@ -36,7 +36,12 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { repositoryRoot, sourceFilesUnder, withoutComments } from './routes/web-sources.js';
+import {
+  readSource,
+  repositoryRoot,
+  sourceFilesUnder,
+  withoutComments,
+} from './routes/web-sources.js';
 
 const read = (path: string): string =>
   withoutComments(readFileSync(join(repositoryRoot, path), 'utf8'));
@@ -404,11 +409,7 @@ describe('the jobs seam every composition shares', () => {
      * somebody has written and not committed is censused rather than skipped.
      */
     const builders = sourceFilesUnder('apps/server/src')
-      .filter((path) =>
-        withoutComments(readFileSync(join(repositoryRoot, path), 'utf8')).includes(
-          'createPgBossJobs(',
-        ),
-      )
+      .filter((path) => withoutComments(readSource(path)).includes('createPgBossJobs('))
       .toSorted();
     expect(builders).toEqual([ROOT]);
   });

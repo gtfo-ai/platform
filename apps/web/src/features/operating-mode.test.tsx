@@ -9,9 +9,7 @@
  * the wizard stale fails here rather than misleading a maintainer at the moment they turn it on.
  */
 
-import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { featuresConfigSchema } from '@platform/contracts';
 import {
@@ -25,6 +23,7 @@ import {
 } from '@platform/domain';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
+import { censusFiles } from '../../../../scripts/census-files.mjs';
 import {
   DIAL_TIMING_NOTE,
   FEATURE_CARDS,
@@ -138,20 +137,15 @@ describe('the feature cards against the platform’s feature table', () => {
 const clientPaths = (): ReadonlySet<string> => {
   const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
   const repoRoot = resolve(webRoot, '../../..');
-  const git = (args: readonly string[]): string[] =>
-    execFileSync('git', [...args, '-z', '--', 'apps/web/src/*.ts', 'apps/web/src/*.tsx'], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-    })
-      .split('\0')
-      .filter((file) => file.length > 0);
-  // Tracked and untracked-but-committable (standing rule 85); tests are out, as in the census.
-  const files = [
-    ...new Set([...git(['ls-files']), ...git(['ls-files', '--others', '--exclude-standard'])]),
-  ].filter((file) => !/\.test\.tsx?$/.test(file));
+  // Tracked and untracked-but-committable (standing rule 85) through the one census helper
+  // (WP-68); tests are out, as in the census.
+  const files = censusFiles(repoRoot, {
+    pathspecs: ['apps/web/src/*.ts', 'apps/web/src/*.tsx'],
+    include: (file) => !/\.test\.tsx?$/.test(file),
+  });
   const found = new Set<string>();
   for (const file of files) {
-    const source = readFileSync(join(repoRoot, file), 'utf8')
+    const source = file.contents
       .split('\n')
       .filter((line) => !/^\s*(?:\*|\/\/|\/\*)/.test(line))
       .join('\n');

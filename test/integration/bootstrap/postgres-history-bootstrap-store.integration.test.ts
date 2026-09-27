@@ -30,11 +30,11 @@ import {
 } from '@platform/application';
 import type { Id, IsoDateTime } from '@platform/contracts';
 import { bootstrap as bootstrapAdapters, eventing } from '@platform/infrastructure';
-import pg from 'pg';
+import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runHistoryBootstrapStoreContract } from '../../contract/support/history-bootstrap-store-suite.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
-import { createTestPool } from '../support/postgres.js';
+import { createTestClient, createTestPool } from '../support/postgres.js';
 
 let database: MigratedDatabase;
 let pool: pg.Pool;
@@ -81,7 +81,7 @@ afterAll(async () => {
 runHistoryBootstrapStoreContract({
   name: 'postgres',
   create: async () => {
-    const client = new pg.Client({ connectionString: database.connectionString });
+    const client = createTestClient(database.connectionString);
     await client.connect();
     await client.query('begin');
     return {
@@ -261,7 +261,7 @@ describe('what only the database can answer', () => {
       return created.rows[0]?.id as string;
     };
 
-    const client = new pg.Client({ connectionString: database.connectionString });
+    const client = createTestClient(database.connectionString);
     await client.connect();
     try {
       const tx = { adapter: 'postgres', client } as unknown as Transaction;
@@ -343,7 +343,7 @@ describe('what only the database can answer', () => {
     // Another task's spend, on the same project, which must not be counted.
     await entry(otherTask, 9);
 
-    const client = new pg.Client({ connectionString: database.connectionString });
+    const client = createTestClient(database.connectionString);
     await client.connect();
     try {
       const tx = { adapter: 'postgres', client } as unknown as Transaction;

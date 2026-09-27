@@ -16,17 +16,18 @@ import type { StoredTask, Transaction } from '@platform/application';
 import { INITIAL_TASK_VERSION } from '@platform/application';
 import { SHIPPED_TEMPLATES } from '@platform/domain';
 import { pipeline } from '@platform/infrastructure';
-import pg from 'pg';
+import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runPipelineStoreConcurrencyContract } from '../../contract/support/pipeline-store-concurrency-suite.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
+import { createTestClient } from '../support/postgres.js';
 
 let database: MigratedDatabase;
 let projectId: string;
 
 beforeAll(async () => {
   database = await createMigratedDatabase('pipeline-store-concurrency');
-  const client = new pg.Client({ connectionString: database.connectionString });
+  const client = createTestClient(database.connectionString);
   await client.connect();
   try {
     const org = await client.query<{ id: string }>(
@@ -55,7 +56,7 @@ runPipelineStoreConcurrencyContract({
       store: pipeline.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES }),
       projectId,
       begin: async () => {
-        const client = new pg.Client({ connectionString: database.connectionString });
+        const client = createTestClient(database.connectionString);
         await client.connect();
         open.push(client);
         await client.query('begin');
@@ -106,7 +107,7 @@ describe('a spend written in a transaction that rolls back', () => {
     fn: (tx: Transaction) => Promise<T>,
     verb: 'commit' | 'rollback',
   ) => {
-    const client = new pg.Client({ connectionString: database.connectionString });
+    const client = createTestClient(database.connectionString);
     await client.connect();
     await client.query('begin');
     try {

@@ -305,7 +305,7 @@ here**: the pre-push hook rejected a status row tonight because I attributed a t
 
 Each of these cost at least one review round to learn; all are evidenced in the notes below.
 
-91. **The tree's own guards read `git ls-files`, so a new file is invisible to them until it is committed — and a verify that passed over it has not checked it.** WP-59's `test/integration/recovery/superseded-mr-recovery.integration.test.ts` opened a citation of `human-commands.test.ts` followed by prose rather than a test name; the orchestrator's `PASS: verify` (405 files, 7691) was green because the file was **untracked**, and the citation guard's scope is tracked files. The pre-push hook refused the push the moment the commit made it tracked; the fix was one line, amended into the unpushed commit. WP-77's implementer had already worked around exactly this with `git add -N` (intent-to-add) so the guard would see its new files; that is now the rule, not a habit: **before a verify that is meant to certify a change, new files are marked intent-to-add**, so every census that reads `git ls-files` — citations, NUL, conflict markers, ignored paths, the provider-directory scans — sees them. The same shape as rule 30's NUL byte, one guard later.
+91. **(Retired by WP-68: every census now reads through `scripts/census-files.mjs`, which adds the untracked-but-not-ignored set, so marking new files intent-to-add before a certifying verify is no longer needed.)** **The tree's own guards read `git ls-files`, so a new file is invisible to them until it is committed — and a verify that passed over it has not checked it.** WP-59's `test/integration/recovery/superseded-mr-recovery.integration.test.ts` opened a citation of `human-commands.test.ts` followed by prose rather than a test name; the orchestrator's `PASS: verify` (405 files, 7691) was green because the file was **untracked**, and the citation guard's scope is tracked files. The pre-push hook refused the push the moment the commit made it tracked; the fix was one line, amended into the unpushed commit. WP-77's implementer had already worked around exactly this with `git add -N` (intent-to-add) so the guard would see its new files; that is now the rule, not a habit: **before a verify that is meant to certify a change, new files are marked intent-to-add**, so every census that reads `git ls-files` — citations, NUL, conflict markers, ignored paths, the provider-directory scans — sees them. The same shape as rule 30's NUL byte, one guard later.
 
 86. **A prediction copied into the tree becomes an observation, and the tree is where nobody re-derives it.**
    Backlog 7 predicted, from documentation, that tinyproxy could not start as uid 1000 with `cap_drop ALL`
@@ -11048,6 +11048,44 @@ Whether `paused → returned` should exist too (so return-to-stage works from an
 
 **Depends on** nothing unbuilt. **Needs no measurement** to start: the refusal is measured and the rest is a table read.
 
+### 245. **`assertHostIsDeclared` sweeps only the URLs a create body contains, so a Sentry or Slack binding that leaves `base_url` to its default is accepted at the write with an undeclared *effective* host — refused at the call, so no credential leaves, but the operator learns it from the first call rather than the `POST`** (small, TODO — **not a live egress hole**: the call-time half refuses the defaulted host and every outbound path of both providers reaches it; a **write-time false acceptance**, the defence-in-depth layer short by one case; **live** since WP-51 (`4b71d45`) on every create of those two providers without `base_url`; **read off the tree, not measured** (rule 66) — no test pins the defaulted-host refusal at either layer; folded into **WP-73** (refiner, session 8); found by WP-51's round-1 reviewer, filed by WP-68, session 8)
+
+**What is wrong.** The write-time guard walks the request's `config` document and checks every string that parses as a URL (`apps/server/src/queries/onboarding-queries.ts:454-481`, called at `:518`); a key the body omits is never visited. Two of the five provider schemas default the one URL field: Sentry `base_url` `.default('https://sentry.io')` (`packages/integrations/src/providers/sentry/config.ts:44-49`) and Slack `.default('https://slack.com/api')` (`packages/integrations/src/providers/slack/config.ts:45-47`). GitLab `base_url` (`gitlab/config.ts:40`), Loki `base_url` (`loki/config.ts:47`) and Jira `site_url` (`jira-cloud/config.ts:28`) are required, so a body without them fails the provider's parse and never makes a call. The docblock already states the gap and this number (`onboarding-queries.ts:433-438`).
+
+**Why no credential leaves (the security question, answered off the tree).** The call-time half reads the **parsed** config, defaults applied: `IntegrationRef.host` is `egressHostOf(config.base_url)` (`sentry/provider.ts:205`, `slack/provider.ts:313`), and `assertEgressAllowed` refuses any host the policy does not allow before the call, with no audit row (`packages/application/src/integrations/action-executor.ts:862-881`, run first in `run` at `:891`). Every outbound call of a binding goes through that executor — the probe (`apps/server/src/routes/onboarding.ts:419`), the pipeline (`apps/server/src/pipeline.ts:453-472`, the policy built from `APP_INTEGRATION_HOSTS`, never `allowAnyIntegrationHost()` in production) and Slack's Socket Mode open (`slack/provider.ts:632-636`), whose answered WebSocket host is then held to `ref.host` or a subdomain (`slack/provider.ts:197-217`). So an operator who did not declare `sentry.io`/`slack.com` gets a refused call, not a leak. The residual the WP-51 docblock already names — a *declared* host is trusted — is unchanged.
+
+**Evidence gap.** `packages/integrations/src/providers/egress-host.test.ts:27-28,131,143` deliberately configures **non-default** hosts so a hard-coded default cannot pass; nothing asserts the defaulted case at either layer. The call-time refusal above is a code read.
+
+**What it costs to leave.** An `integrations` row that cannot make a single call is written, audited as created and listed as healthy-until-probed; the first signal is a probe `ok: false` or a pipeline refusal naming `APP_INTEGRATION_HOSTS`. Operator friction and a wrong write-time promise (`routes/onboarding.ts:312` says *"every URL in `config` must name a host the operator declared"*), not a leak.
+
+**What "done" looks like.** The guard sweeps the **provider-parsed** document (the catalogue entry's config schema, defaults applied, over the create body) in addition to — not instead of — the raw body, so a default is judged like a typed value; one route case per defaulted provider answering `403 integration_host_not_permitted` for a body with no `base_url`, and one contract case asserting the executor refuses a defaulted-host ref. The docblock's "false acceptance" paragraph is deleted in the same change (rule 83). Whether parsing the full provider schema at the create is acceptable (it would also newly refuse bodies that are malformed today but accepted) is the row's decision to state; if not, a per-provider "effective host" read off the schema's default is the narrower fix.
+
+**Depends on** nothing unbuilt. **Urgency trigger:** becomes a live hole only if a provider ever builds its host from something other than the parsed config the ref reads, or an outbound path bypasses `IntegrationActionExecutor` — the egress-host census and the executor docblock are what hold both today.
+
+### 246. **On Docker Desktop, the gitleaks container fallback intermittently reads a stale (empty) index; WP-68's zero-byte audit refuses the fully stale case, and a partly stale one — some added lines visible, the secret's not — would pass** (small, TODO — **latent**: the fallback runs only when no pinned binary is found in the worktree, the main worktree or on `PATH` (`scripts/gitleaks.mjs:141-158`), and WP-68 made the main worktree's binary the second choice; the empty-index case is **measured** (2 of 4), the partial case is a **hypothesis, not observed**; CI's full-history gitleaks job (`.github/workflows/ci.yml:199`) is a backstop after the push; folded into **WP-73** (refiner, session 8); found by WP-68, session 8)
+
+**What is wrong / the evidence** (WP-68 notes, quoted): *"Right after `git reset` + `git add` on the host, 2 of 4 container scans reported `scanned ~0 bytes` (refused by this row's audit — loud, not open), and a direct `git diff --staged` in the same mounts showed the **whole tree deleted** in 2 of 4 runs (the index read as empty)."* The container is given the host's common git dir at `/gitcommon` and the work tree at `/repo` (`scripts/gitleaks-audit.mjs:53` `containerArgs`, invoked at `scripts/gitleaks.mjs:158`); the audit compares only **bytes scanned against zero** (`scripts/gitleaks-audit.mjs:125-135`) when the host's `git diff --cached --numstat` says lines were added (`:84-93`). A scan that read a non-zero but incomplete diff is indistinguishable from a complete one.
+
+**What it costs to leave.** A pre-commit secret scan that can pass a commit whose credential it never saw — only on a machine with no host binary, only on Docker Desktop, only under the unobserved partial-staleness race. CI still scans full history, so the leak would be caught after it reached the remote, which is the case BD-002's pre-commit hook exists to prevent.
+
+**What "done" looks like.** The container path compares the **container's** `git diff --cached --numstat` with the host's before believing a scan, and fails with its own banner on any mismatch (the WP-68 notes' second option); a stand-in-scanner unit case feeding a mismatched count, both directions, in `scripts/gitleaks.test.ts`'s shape. **Needs measurement** only to claim the partial case exists; the detector is worth having either way. Copying the index into the container (the third option) is the alternative if the comparison itself proves racy.
+
+**Depends on** nothing unbuilt.
+
+### 247. **The migrator's `pg.Client` carries no `'error'` listener, so a server-side termination mid-migration would end the `migrate` container on an uncaught `57P01` rather than a typed failure** (small, TODO — **latent**: one-shot process, `compose.yml:107-122` `restart: 'no'`; needs a failover or `pg_terminate_backend` inside a migration; **now a measured mechanism, still an unmeasured instance**: WP-68 measured that a connected client with no listener and no pool dies on an uncaught `57P01` (`test/integration/support/postgres.integration.test.ts` › "ends the process through an uncaught 57P01 when nobody listens and no pool is involved"), the migrator itself was not exercised; folded into **WP-73** (refiner, session 8); backlog **30**'s labelled hypothesis, filed by WP-68, session 8)
+
+**What is wrong.** `connectWithPg` builds `new pg.Client({ connectionString })` and connects it with no listener (`packages/infrastructure/src/db/migrator.ts:107-111`); `runMigrations` holds it for the whole run (`:250`) and ends it in a `finally` (`:338-346`). Its only production caller is the migrate entrypoint (`apps/server/src/migrate.ts`); `assertSchemaIsKnown` uses the pool, not this client. WP-68's client census allows it **by name**: `packages/infrastructure/src/db/pool-errors.test.ts:241` — `'ends in a finally; no listener (backlog 30)'`.
+
+**What it costs to leave.** A migrate that is interrupted exits with an untyped stack instead of the migrator's own error, and the `finally` does not get to run its cleanup in order; the advisory lock is released by the dead session either way, and migrations are transactional, so **no schema damage** is implied — the cost is diagnosis, the shape CLAUDE.md's pool rule and backlog 28 were written about.
+
+**What "done" looks like.** The client gets a listener that records the error and makes the in-flight `runMigrations` fail with a typed error naming the termination (not a swallow — rule 20); the census row at `pool-errors.test.ts:241` changes its reason to name the listener; one integration case terminating the migrator's backend mid-run and asserting the typed rejection, reusing WP-68's premise harness.
+
+**Depends on** nothing unbuilt.
+
+### 248. **`biome.json`'s `!**/scripts/census-files.mjs` negation re-allows the census helper in every ring, not only in tests, so a domain file could import a module that reads the disk** (TODO, nit — **latent**: every importer today is a test or `web-sources.ts`; **read off the tree**; folded into **WP-73**; found by WP-68's review, session 8)
+
+**What is wrong.** WP-68 added the negation to six `noRestrictedImports` overrides (`biome.json:45,98,128,158,194,220`) so the census tests can import `scripts/census-files.mjs`. The overrides are per ring, not per tier, so the exemption reaches production sources too, and `packages/domain` — which CLAUDE.md says has no I/O — would accept an import of a module that walks the file system. **Done.** The negation is scoped to test files (an `includes` on `**/*.test.ts` or a separate override), or the docblock of `census-files.mjs` states why a ring-wide exemption is accepted; a planted production import is refused, measured. Related: **10**.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -13905,8 +13943,8 @@ is narrower and worth having stated precisely rather than re-derived.
   `#waitForControlSocket` (`provider.ts:785`), called from `attach` at `:774`, bounded by
   `CONTROL_SOCKET_TIMEOUT_MS = 30_000` at `CONTROL_SOCKET_POLL_MS = 50` (`:144-145`), throwing
   `workspace_failed`, which `classifyProvisionFailure` treats as retryable.
-- **The unit half is calibrated and the e2e half is not.** `packages/infrastructure/src/workspace/provider.test.ts`
-  › *"waits for a shim that starts listening after attach was called"* drives a late-booting shim and kills
+- **The unit half is calibrated and the e2e half is not.**
+  `packages/infrastructure/src/workspace/provider.test.ts` › *"waits for a shim that starts listening after attach was called"* drives a late-booting shim and kills
   the mutant by name (unmutated 38/38; before that case existed, shortening the loop to one look left
   **37/37 green**). **Needs measurement** (rule 66, not run here): whether the *e2e* attach case kills the
   same mutant. In that file `create` → `relaxControlDirectoryForHost` → `attach` may already leave the socket
@@ -29538,8 +29576,8 @@ resolved, commit pending). The row's six criteria, in order.
    rounding = 48 h; the TTL constant moved from `apps/server/src/workspaces.ts` to
    `pipeline/integrations.ts` so the mint and the horizon read one number.
 3. **Shadow.** `recover` declares `SHADOW_RUN_CREDENTIAL_CARVE_OUT` (the executor admits any
-   `revoke_credential`); a `would_have` — or any non-`ok` outcome — throws: `run-credentials.test.ts`
-   › "treats a recovery the executor answered would_have as a failure of this row"; performed for a
+   `revoke_credential`); a `would_have` — or any non-`ok` outcome — throws:
+   `run-credentials.test.ts` › "treats a recovery the executor answered would_have as a failure of this row"; performed for a
    shadow task in `run-credentials.test.ts` › "performs a shadow task’s recovery revoke under the
    carve-out its mint used (Q98 (a))" and at the boundary in
    `run-credential-recovery.integration.test.ts` › "revokes a shadow task’s read credential under the
@@ -32965,3 +33003,163 @@ two lists; added with its reason, and the full tier's rerun **PASS**ed (600 pass
 **Discovered work (round 1)**: **244** a task paused at `ready_for_merge` cannot be resumed
 (`IllegalTransitionError paused -> ready_for_merge` from `resumeTaskCommand`), and a `block`
 deferred there therefore has no wake-up either. Measured in the unit tier.
+
+#### WP-68
+
+**Implemented** (implementer, session 8): backlog **8**, **10**, **30**, **3**, **111**, **9**, **6** and
+**130**, criterion by criterion.
+
+1. **The secret scan scans a linked worktree or refuses loudly.** Measured first, in a real linked
+   worktree (`git worktree add --detach`, removed afterwards; `git worktree list` shows the main
+   checkout alone): with a runtime-generated `ghp_`-shaped value staged and no `node_modules` in the
+   worktree, the old script took the container fallback and printed `[git] fatal: not a git
+   repository: …/.git/worktrees/<name>`, `0 commits scanned`, `scanned ~0 bytes (0)`, **`no leaks
+   found`, exit 0** — backlog 8 reproduced. The host binary run in the same worktree found it
+   (`scanned ~65 bytes`, `leaks found: 1`, exit 1). `scripts/gitleaks.mjs` now (a) tries the **main
+   worktree's** pinned binary before PATH and Docker; (b) mounts the common git directory at
+   `/gitcommon` beside the work tree at `/repo` and names both through `GIT_DIR`/`GIT_COMMON_DIR`/
+   `GIT_WORK_TREE` — fixed container paths, because a bind whose target repeated the host path
+   under `/Users` was measured serving an **empty** directory on Docker Desktop, and a worktree under
+   `/private/tmp` is not shared with the VM at all (same symptom); (c) **audits every exit 0**
+   (`scripts/gitleaks-audit.mjs`): a `[git] fatal:` line, a missing `scanned ~N bytes` line, or
+   `N = 0` while the host's `git diff --cached --numstat` says the staged diff adds lines is a
+   failure with its own banner. The refusal's own assertions:
+   `scripts/gitleaks.test.ts` › "refuses the exact output the broken fallback printed, although gitleaks exited 0",
+   › "fails loudly when the scanner exits 0 over zero bytes of a staged change, and passes the same output over an empty one"
+   (a stand-in scanner printing the measured output, in a real linked worktree, both directions) and
+   › "finds a staged credential with the main worktree's binary, and passes a clean change it really read"
+   (the real pinned binary, both directions). The container path with the new mounts, by hand: leak
+   found (`scanned ~65 bytes`, exit 1), and a clean change read `~24`/`~21 bytes`, exit 0 — **but
+   not every time**, which is discovered work **246**.
+2. **The four scope-holed guards read untracked files.** `check-nul.mjs`, `check-conflict.mjs` and
+   the citation sweep read through the shared helper (below); `docker-access.test.ts` already unioned
+   the two lists (WP-53) and now reads through the helper too. The decision is one docblock line in
+   `scripts/census-files.mjs`: *an ignored file is not a source file, and an untracked one is*
+   (`--exclude-standard`). The two suites that **pinned the hole** had those cases rewritten — the
+   untracked NUL / conflict is now **named**, with an ignored one beside it as the control:
+   `scripts/check-nul.test.ts` › "names a NUL in a file nobody has staged yet, and not one in an ignored file"
+   and `scripts/check-conflict.test.ts` › "names a conflict and a .orig nobody has staged yet, and not an ignored conflict".
+   Their fixtures exclude the copied guard through `.git/info/exclude`, which is `--exclude-standard`
+   exercised on its second source.
+3. **One shared helper**, `scripts/census-files.mjs` (+ `.d.mts`): `censusPaths` (tracked ∪
+   untracked-not-ignored, pathspecs, sorted), `readCensus` (files / `vanished` / `unreadable` —
+   `lstat` tells a path with no entry from one whose contents cannot be had), `censusFiles` and
+   `censusText` (throw `CensusUnreadableError` naming every unreadable path). Held by
+   `scripts/census-files.test.ts` (tracked, staged, untracked, ignored, vanished, unreadable). **Every**
+   census that read a git list now reads through it — 20 sites: the two `verify` scripts, the
+   citation sweep, `docker-access`, `web-sources.ts` (and so client-census, endpoint-callers,
+   settings-mirror, pipeline-census, run-secrets-composition), `scope`, `operating-mode`,
+   `compile-sites`, `task-save-sites`, `wip-commit-sites`, `feature-readers`, `autonomy-readers`,
+   `pool-errors`, `human-time-writers`, `stats-writers`, `tasks-column-ownership`, `workspace-deps`
+   and `release.test.ts`. The two scripts **name** an unreadable path on stderr and in the PASS line
+   (a dangling symlink or gitlink has no bytes of the repository's, so it does not fail them); the
+   unit censuses throw. `check-ignored.mjs` is deliberately not moved: it reads no contents and walks
+   disk. The dependency rule denies a relative import of `scripts/` from `packages/`/`apps/`;
+   `biome.json` re-allows this one file by name with a negated pattern in each ring's group
+   (measured: the negation admits the file and still refuses a sibling `scripts/other.mjs`).
+4. **The harness owns a bare client.** `test/integration/support/postgres.ts` gained
+   `createTestClient` (the `createTestPool` listener: absorbs `57P01` and the `Connection terminated
+   unexpectedly` report that follows one, re-throws everything else) and `withClient` is built on
+   it. **All 48** `new pg.Client` sites under `test/` (not twelve — the count grew by 36 since backlog
+   30 was filed) construct through `createTestClient`; their lifetimes are unchanged. The census is
+   the second half of `packages/infrastructure/src/db/pool-errors.test.ts`: the qualified
+   constructor or a named import of `Client` from `pg`, outside four accounted files (the harness,
+   the premise test, the broadcast adapter, the migrator), both directions, docblock listing what it
+   cannot see; calibrated by planting — › "names a planted client whether it is tracked or merely untracked, and skips an ignored one"
+   (tracked, untracked, an `as`-aliased import, an ignored plant and an HTTP `Client` as controls).
+5. **Measured before (4) was believed.** A throwaway PostgreSQL 18 container, a database created and
+   dropped `with (force)` under a connected `pg.Client` with **no listener and no pool**: **uncaught
+   `57P01`**, two runs of two; with a listener the client saw `57P01` then a code-less
+   `Connection terminated unexpectedly`, and survived. Held at the integration tier:
+   `test/integration/support/postgres.integration.test.ts` › "ends the process through an uncaught 57P01 when nobody listens and no pool is involved",
+   › "reaches a createTestClient as swallowed terminations, not as an uncaught exception" and
+   › "re-throws a client error that is not a termination".
+6. **Citation oracle.** `CITATION_SITE` now over-approximates: it accepts a line break (with `*`,
+   `//` or `>` decoration) between the file token and the marker, which the parser does not read —
+   `scripts/citations.test.ts` › "counts a site whose marker the margin pushed onto the next line, which the parser does not read".
+   It found **two** real sites of the shared shape in this file (a site at old line 13908 citing
+   `provider.test.ts`, one at 29541 citing `run-credentials.test.ts`), invisible to both halves
+   until now; reflowed, and both **resolve**. The docblock's gap list names the shape and the
+   comma-continuation nit (backlog 6(a)); the "dormant" sentence is replaced by what is true, with a
+   **floor per kind** (`MINIMUM_CITATION_SITES = { code: 30, markdown: 150 }`, counted at 43 and 208).
+   The sweep reads untracked files, lazily inside the cases (an unreadable path used to throw at
+   collection and take the whole file).
+7. **Were this session's agent worktrees scanned?** What can be established: session 8 used **no**
+   linked worktree — `git worktree list` showed the main checkout alone at WP-68's start and
+   `.git/worktrees/` held nothing before this row's own probe; the main checkout resolves
+   `node_modules/.bin/gitleaks`, which scans a staged diff correctly (measured above, and in a linked
+   worktree too). So a session-8 commit whose hook ran met a working scan; whether every hook ran
+   (rather than `--no-verify`/`LEFTHOOK=0`) is recorded nowhere. The earlier sessions' worktrees
+   (`slack-fix`, `wp/*`) are pruned, and nothing recorded which scanner their hooks took — that half
+   **cannot be established** any more, and is stated rather than guessed.
+8. **Backlog 130's census**, `apps/server/src/queries/integration-config-writers.test.ts`: every
+   production `.insert(integrations)`/`.update(integrations)` chain naming `config` (or whose
+   argument is not an object literal, or spreads), and raw `insert into`/`update integrations` naming
+   it, against a declared list of **one**, both directions, with `writeIntegrationHealth`'s
+   health-only update as the positive control. **Calibration found a hole in the first version**: the
+   shorthand `set({ config, … })` was invisible to a `config:` pattern; fixed. Planted: tracked,
+   untracked, dynamic `set(changes)`, spread, raw SQL, health-only and ignored. The exclusivity
+   sentence on `assertNoCredentialInConfig` now points at the census, `assertHostIsDeclared` gains
+   the pointer, and the call-time twin is recorded as not built.
+
+**Nits.** **9**: `CONTRIBUTING.md` says a linked worktree needs its own `pnpm install` before it can
+commit (Biome and commitlint run from its `./node_modules/.bin` and refuse with exit 127 — closed);
+resolving commitlint from the main worktree was rejected because its config resolves
+`@commitlint/config-conventional` from the worktree. **6**: (a) is in the citation gap list; (b) — the
+orchestrator's merges rewriting files — has no code fix, and the last merge commit on `main` is
+`31abfc6` (2026-09-11); none since.
+
+**Decisions/assumptions.** (a) `nul:check`/`conflict:check` now fail on an untracked file — including
+a `.orig` a merge tool just wrote, in `verify` and in the pre-push hook. Intended (it is the hole),
+and it changes what a developer's scratch files can do to a local verify. (b) An unreadable path
+fails a unit census but only is **named** by the two scripts. (c) A vanished path reads as the empty
+string through `censusText`, which equals "dropped" for every counting census. (d) The container
+fallback keeps working without the host binary rather than being removed. (e) The migrator's bare
+client keeps no listener (backlog 30's hypothesis), allowed by the census by name and filed as 247.
+
+**Sentences falsified.** Changed: `check-nul.mjs` and `check-conflict.mjs` headers, scope sections
+and PASS lines; `citations.ts` scope/dormant sentences and `CITATION_SITE`'s docblock;
+`citations.test.ts`'s sweep bullet and floor docblock; `postgres.ts`'s "A bare `pg.Client` does
+**not** need the same care"; `pool-errors.ts` ("a census over `git ls-files`"); `globs.ts` (history
+qualified); `onboarding-queries.ts` (exclusivity, `assertHostIsDeclared`, "filed with backlog 130's
+census" → 245); `web-sources.ts`, `docker-access`, `tasks-column-ownership`, `workspace-deps`,
+`release.test.ts` docblocks; `CONTRIBUTING.md`; `docs/TODO.md`'s gitleaks item. **Left, the
+orchestrator's** (exact text proposed in the report): `CLAUDE.md` lines on `nul:check`,
+`conflict:check`, `secrets:scan`, the NUL convention's "Its scope is `git ls-files`", the `pg.Pool`
+bullet (the client half) and "a census over `git ls-files`" in the transport bullet; standing rule
+**91**, whose intent-to-add step this row makes unnecessary.
+
+**Discovered work.**
+- **245** `assertHostIsDeclared` sweeps only URLs present in the body, so a provider whose `base_url`
+  defaults (Sentry, Slack) passes the write with an undeclared *effective* host and is refused only at
+  the call; sweeping the provider-parsed config would close it. Its docblock filed it "with backlog
+  130's census", whose done-criteria did not include it. Read off the tree.
+- **246** **The container fallback reads a stale index intermittently on Docker Desktop.** Right after
+  `git reset` + `git add` on the host, 2 of 4 container scans reported `scanned ~0 bytes` (refused by
+  this row's audit — loud, not open), and a direct `git diff --staged` in the same mounts showed the
+  **whole tree deleted** in 2 of 4 runs (the index read as empty). A *partially* stale index — some
+  added lines visible, the secret's not — would pass the zero-byte audit; **not observed**, a
+  hypothesis. Options: prefer the host binary (done), compare the container's staged `--numstat`
+  with the host's before believing a scan, or copy the index into the container.
+- **247** The migrator's `pg.Client` carries no `'error'` listener (backlog 30's labelled hypothesis:
+  a failover mid-migration ends the migrate container on an untyped uncaught error). Allowed by name
+  in the client census; unowned.
+
+**Verification** (each tier after a load reading under 12; Docker held alone; after each Docker tier
+no container of this repository's but the Testcontainers reaper, `docker volume ls | wc -l` = 102):
+`pnpm run -s verify` **PASS** (8204 passed, 14 skipped; `nul:check`/`conflict:check` over 1616 files
+tracked or untracked); `verify:integration` **PASS** (57 files, 605); `verify:e2e` **PASS** (42 files,
+215); `verify:ui` **PASS** (385). `scripts/citations.test.ts` green over these notes. **Canaries**,
+each reverted md5-confirmed: (1) the zero-byte refusal disabled in `gitleaks-audit.mjs` →
+`scripts/gitleaks.test.ts` › "refuses zero bytes unless the host says there was nothing to read, and a missing count always"
+and › "fails loudly when the scanner exits 0 over zero bytes of a staged change, and passes the same output over an empty one"
+fail; (2) the `--others` sweep removed from `census-files.mjs` → 10 cases fail across
+`census-files`, `check-nul`, `check-conflict`, the pool and client plants and the config-writer plant;
+(4) an untracked `new pg.Client` planted under `test/integration/` →
+`packages/infrastructure/src/db/pool-errors.test.ts` › "finds no bare client constructed outside the files that account for one"
+fails naming it, and `createTestClient`'s listener detached →
+`test/integration/support/postgres.integration.test.ts` › "reaches a createTestClient as swallowed terminations, not as an uncaught exception"
+fails; (8) an untracked `set({ config })` writer planted under `apps/server/src/queries/` →
+`apps/server/src/queries/integration-config-writers.test.ts` › "is exactly the declared list, in both directions"
+fails naming it. The tracked half of (4) and (8) is each census's fixture plant, so the main
+checkout's index was never touched.

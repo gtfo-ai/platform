@@ -10,11 +10,11 @@
 import { createServer } from 'node:http';
 import type { ServerRuntime, StartRuntimeOptions } from '@platform/server';
 import { loadServerConfig, requiredPoolConnections, startRuntime } from '@platform/server';
-import pg from 'pg';
 import {
   createMigratedDatabase,
   type MigratedDatabase,
 } from '../../integration/support/migrated.js';
+import { createTestClient } from '../../integration/support/postgres.js';
 
 /**
  * `requiredPoolConnections` for `ROLE=all` at the default concurrency (WP-56), computed from a
@@ -191,7 +191,7 @@ export interface SeededProject {
  * needs real rows rather than invented uuids.
  */
 export const seedProject = async (instance: Instance): Promise<SeededProject> => {
-  const client = new pg.Client({ connectionString: instance.database.connectionString });
+  const client = createTestClient(instance.database.connectionString);
   await client.connect();
   try {
     const org = await client.query<{ id: string }>(

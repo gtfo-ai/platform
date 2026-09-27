@@ -45,27 +45,22 @@
  * — that is `biome.json`'s `noRestrictedImports`, which is the dependency rule (technical/01) and a
  * different question from whether the manifest says what the code does.
  *
- * Scope is `git ls-files` rather than a hand-written list (standing rule 7), so a package added
+ * Scope is what git knows about rather than a hand-written list (standing rule 7), so a package added
  * later is covered the day it is added — and, per standing rule 85, tracked **and** untracked
  * files, because a guard over the tree that cannot see a new file is green until the commit lands.
  */
-import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { censusPaths, censusText } from './census-files.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-const tracked = (...args: readonly string[]): string[] =>
-  execFileSync('git', ['-C', REPO, ...args], { encoding: 'utf8' })
-    .split('\n')
-    .filter((line) => line.length > 0);
-
-/** Every file git knows about — committed or not — so a new package is in scope immediately. */
-const files = (): string[] => [
-  ...new Set([...tracked('ls-files'), ...tracked('ls-files', '--others', '--exclude-standard')]),
-];
+/**
+ * Every file git knows about — committed or not — so a new package is in scope immediately. The
+ * list and the read are `census-files.mjs`'s (WP-68), shared with every census.
+ */
+const files = (): string[] => censusPaths(REPO);
 
 /**
  * `from '…'`, `import '…'` and `import('…')` — see the docblock for what it does not see.
@@ -87,7 +82,7 @@ const workspacePackages = (): WorkspacePackage[] => {
   const manifests = all.filter((file) => /^(packages|apps)\/[^/]+\/package\.json$/.test(file));
   return manifests.map((manifest) => {
     const dir = path.dirname(manifest);
-    const parsed = JSON.parse(readFileSync(path.join(REPO, manifest), 'utf8')) as {
+    const parsed = JSON.parse(censusText(REPO, manifest)) as {
       name: string;
       dependencies?: Record<string, string>;
       devDependencies?: Record<string, string>;
@@ -96,7 +91,7 @@ const workspacePackages = (): WorkspacePackage[] => {
     for (const file of all.filter(
       (entry) => entry.startsWith(`${dir}/src/`) && /\.tsx?$/.test(entry),
     )) {
-      const source = readFileSync(path.join(REPO, file), 'utf8');
+      const source = censusText(REPO, file);
       for (const match of source.matchAll(IMPORT)) {
         if (match[1] !== undefined && match[1] !== parsed.name) {
           imported.add(match[1]);

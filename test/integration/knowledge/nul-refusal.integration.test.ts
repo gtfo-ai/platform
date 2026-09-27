@@ -32,9 +32,10 @@ import { FIXTURE_KNOWLEDGE_DIR, FIXTURE_PROJECT_KEY } from '@platform/applicatio
 import type { Id } from '@platform/contracts';
 import { parseKbDocument } from '@platform/domain';
 import { knowledge } from '@platform/infrastructure';
-import pg from 'pg';
+import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
+import { createTestClient } from '../support/postgres.js';
 
 let database: MigratedDatabase;
 let projectId: Id;
@@ -43,7 +44,7 @@ const PATH = `${FIXTURE_KNOWLEDGE_DIR}/technical/raw-nul.md`;
 
 beforeAll(async () => {
   database = await createMigratedDatabase('nul-refusal');
-  const client = new pg.Client({ connectionString: database.connectionString });
+  const client = createTestClient(database.connectionString);
   await client.connect();
   try {
     const org = await client.query<{ id: string }>(
@@ -82,7 +83,7 @@ const inTransaction = async (
     client: pg.Client,
   ) => Promise<void>,
 ): Promise<void> => {
-  const client = new pg.Client({ connectionString: database.connectionString });
+  const client = createTestClient(database.connectionString);
   await client.connect();
   try {
     await client.query('begin');

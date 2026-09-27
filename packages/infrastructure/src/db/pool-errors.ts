@@ -84,7 +84,7 @@ export const isConnectionLoss = (error: unknown): boolean => {
  *
  * Idempotent in the only sense that matters: it is called once, from the factory, so no pool this
  * repository builds is ever without it. `packages/infrastructure/src/db/pool-errors.test.ts` holds
- * that as a census over `git ls-files`.
+ * that as a census over every source git knows about, tracked or not.
  */
 export const guardIdleClientErrors = (pool: pg.Pool, logger: Logger = silentLogger): pg.Pool => {
   pool.on('error', (error: Error) => {

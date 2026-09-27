@@ -16,10 +16,11 @@
  * schema owner rather than by the application role.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { censusFiles } from '../../../../scripts/census-files.mjs';
 
 /** The adapter, and nothing else. Tests are excluded by the file filter below. */
 const WRITER_SITES_ALLOWED = new Set(['packages/infrastructure/src/stats/postgres-stats-store.ts']);
@@ -34,22 +35,14 @@ const DRIZZLE_WRITE = /\.(insert|update|delete)\(\s*(statsTaskDelivery|statsEven
 
 const SOURCE_FILE = /\.(ts|tsx|mts|cts|mjs|cjs|js|jsx)$/;
 
-const gitPaths = (root: string, args: readonly string[]): string[] =>
-  execFileSync('git', [...args, '-z'], { cwd: root, encoding: 'utf8' })
-    .split('\0')
-    .filter((path) => SOURCE_FILE.test(path));
-
-const censusFiles = (root: string): string[] => [
-  ...gitPaths(root, ['ls-files']),
-  ...gitPaths(root, ['ls-files', '--others', '--exclude-standard']),
-];
-
 /** The census itself, so the repository and a planted fixture are judged by the same function. */
 const writerSites = (root: string, pattern: RegExp): string[] =>
-  censusFiles(root).filter((path) => {
-    const full = join(root, path);
-    return existsSync(full) && pattern.test(readFileSync(full, 'utf8'));
-  });
+  // The list, the vanished-path rule and the unreadable-path report are the one census helper's
+  // (`scripts/census-files.mjs`, WP-68): tracked plus untracked-but-not-ignored, a path that
+  // disappeared since the listing dropped, and one that cannot be read named in a throw.
+  censusFiles(root, { include: (path) => SOURCE_FILE.test(path) })
+    .filter(({ contents }) => pattern.test(contents))
+    .map(({ path }) => path);
 
 /** A test may read and assert about a table; only production code is held to the one writer. */
 const production = (paths: readonly string[]): string[] =>

@@ -34,11 +34,16 @@ import { afterAll, describe, expect, it } from 'vitest';
  *    in the PASS line stops a walk that found nothing from masquerading as a clean one
  *    (standing rule 4).
  *
+ * **The scope case used to pin the hole** (backlog 10): it planted an untracked file holding a whole
+ * conflict and expected a PASS, because the guard read `git ls-files` alone. Since WP-68 the scope
+ * is `census-files.mjs`'s, so that case expects the untracked file **named** and an ignored one
+ * beside it left alone.
+ *
  * No literal marker appears in this file: they are built with `repeat`, the way a NUL byte is
  * written `\0` (CLAUDE.md). This file is tracked, so a literal one would make the guard fail on
  * its own test.
  */
-const GUARD = join(dirname(fileURLToPath(import.meta.url)), 'check-conflict.mjs');
+const SCRIPTS = dirname(fileURLToPath(import.meta.url));
 
 /** The host's git configuration is not part of these fixtures (see `check-ignored.test.ts`). */
 const GIT_ENV = {
@@ -79,10 +84,23 @@ const CLOSE = marker('>', 'main');
 const conflict = (ours: string, theirs: string): string =>
   [OPEN, ours, SEPARATOR, theirs, CLOSE].join('\n');
 
+const installGuard = (root: string): void => {
+  mkdirSync(join(root, 'scripts'), { recursive: true });
+  for (const file of ['check-conflict.mjs', 'census-files.mjs']) {
+    copyFileSync(join(SCRIPTS, file), join(root, 'scripts', file));
+  }
+};
+
+/** Ignores the guard's own copy, through the file `--exclude-standard` reads besides `.gitignore`. */
+const excludeGuard = (root: string): void => {
+  writeFileSync(join(root, '.git', 'info', 'exclude'), '/scripts/\n');
+};
+
 /**
- * A repository containing `files`, all staged and committed, with the guard copied into
- * `scripts/` — the script derives the repository root from its own location — but deliberately
- * *not* tracked, so the fixture's file counts are the fixture's own.
+ * A repository containing `files`, all staged and committed, with the guard and its census helper
+ * copied into `scripts/` — the script derives the repository root from its own location — and
+ * `scripts/` excluded through `.git/info/exclude`, so the fixture's file counts are the fixture's
+ * own and not the guard's.
  */
 const repository = (files: Record<string, string | Uint8Array>): string => {
   // `realpathSync` because macOS's `/var` is a symlink to `/private/var`.
@@ -93,9 +111,9 @@ const repository = (files: Record<string, string | Uint8Array>): string => {
     mkdirSync(dirname(full), { recursive: true });
     writeFileSync(full, contents);
   }
-  mkdirSync(join(root, 'scripts'), { recursive: true });
-  copyFileSync(GUARD, join(root, 'scripts', 'check-conflict.mjs'));
+  installGuard(root);
   git(root, 'init', '-q', '-b', 'main', '.');
+  excludeGuard(root);
   git(root, 'add', '-A', '--', ...Object.keys(files));
   git(root, 'commit', '-q', '-m', 'fixture');
   return root;
@@ -142,16 +160,43 @@ describe('check-conflict.mjs', () => {
         'docs/banner.txt': `${'='.repeat(40)}\n${'='.repeat(9)} NOTE\n`,
         'src/a.ts': 'export const a = 1;\n',
       });
-      // Untracked, and a whole conflict: the guard's scope is `git ls-files`, so a clean verdict
-      // here is about tracked files and not about an empty disk.
+      // Ignored, and a whole conflict: an ignored file is not a source file, so a clean verdict
+      // here is about the scope and not about an empty disk.
+      writeFileSync(join(root, '.git', 'info', 'exclude'), '/scripts/\n/scratch.ts\n');
       writeFileSync(join(root, 'scratch.ts'), `${conflict('const a = 1;', 'const a = 2;')}\n`);
 
       const result = runGuard(root);
 
       expect(result.stdout.trim()).toBe(
-        'PASS: conflict:check (4 tracked text files, 0 declared binary, 0 exempt, no conflict markers and no .orig/.rej debris)',
+        'PASS: conflict:check (4 text files tracked or untracked, 0 declared binary, 0 exempt, no conflict markers and no .orig/.rej debris)',
       );
       expect(result.status).toBe(0);
+    },
+    FIXTURE_TIMEOUT_MS,
+  );
+
+  it(
+    'names a conflict and a .orig nobody has staged yet, and not an ignored conflict',
+    () => {
+      // Backlog 10's case for this guard: the scope used to be `git ls-files`, so a file holding a
+      // whole conflict — or the `.orig` a merge tool just wrote — passed until it was staged. The
+      // ignored file beside them is the control: "reads untracked files" is wanted, "reads the
+      // whole disk" is not.
+      const root = repository({ '.gitignore': '/ignored.ts\n', 'src/a.ts': 'export {};\n' });
+      writeFileSync(join(root, 'src', 'new.ts'), `${conflict('const a = 1;', 'const a = 2;')}\n`);
+      writeFileSync(join(root, 'src', 'a.ts.orig'), 'export {};\n');
+      writeFileSync(join(root, 'ignored.ts'), `${conflict('const b = 1;', 'const b = 2;')}\n`);
+
+      const result = runGuard(root);
+
+      expect(reported(result.stderr)).toEqual([
+        'src/a.ts.orig: a leftover merge/patch artefact',
+        `src/new.ts:1: ${OPEN}`,
+        `src/new.ts:3: ${SEPARATOR}`,
+        `src/new.ts:5: ${CLOSE}`,
+      ]);
+      expect(result.stdout.trim()).toBe('FAIL: conflict:check');
+      expect(result.status).toBe(1);
     },
     FIXTURE_TIMEOUT_MS,
   );
@@ -284,7 +329,7 @@ describe('check-conflict.mjs', () => {
       );
       expect(lines, 'a staged-but-uncommitted file was skipped').toContain(`staged.ts:2: ${OPEN}`);
       expect(lines.filter((line) => line.startsWith('clean.ts'))).toEqual([]);
-      expect(result.stderr).toContain('(5 tracked text files examined)');
+      expect(result.stderr).toContain('(5 text files examined)');
       expect(result.stdout.trim()).toBe('FAIL: conflict:check');
       expect(result.status).toBe(1);
     },
@@ -335,7 +380,7 @@ describe('check-conflict.mjs', () => {
       const exempted = runGuard(root);
 
       expect(exempted.stdout.trim()).toBe(
-        'PASS: conflict:check (1 tracked text files, 0 declared binary, 1 exempt, no conflict markers and no .orig/.rej debris)',
+        'PASS: conflict:check (1 text files tracked or untracked, 0 declared binary, 1 exempt, no conflict markers and no .orig/.rej debris)',
       );
       expect(exempted.status).toBe(0);
 
@@ -395,8 +440,8 @@ describe('check-conflict.mjs', () => {
         reported(result.stderr),
         'a leftover merge/patch artefact was tracked and nothing said so',
       ).toEqual([
-        'src/a.ts.ORIG: a leftover merge/patch artefact is tracked',
-        'src/a.ts.rej: a leftover merge/patch artefact is tracked',
+        'src/a.ts.ORIG: a leftover merge/patch artefact',
+        'src/a.ts.rej: a leftover merge/patch artefact',
       ]);
       expect(result.status).toBe(1);
     },
@@ -416,7 +461,7 @@ describe('check-conflict.mjs', () => {
       const clean = runGuard(root);
 
       expect(clean.stdout.trim()).toBe(
-        'PASS: conflict:check (2 tracked text files, 2 declared binary, 0 exempt, no conflict markers and no .orig/.rej debris)',
+        'PASS: conflict:check (2 text files tracked or untracked, 2 declared binary, 0 exempt, no conflict markers and no .orig/.rej debris)',
       );
       expect(clean.status).toBe(0);
 
@@ -448,7 +493,7 @@ describe('check-conflict.mjs', () => {
       expect(
         result.stderr,
         'a `* conflict-markers` line switched the guard off and it reported success (rule 4)',
-      ).toContain('examined none of the 2 tracked path(s)');
+      ).toContain('examined none of the 2 path(s)');
       expect(result.stdout.trim()).toBe('FAIL: conflict:check');
       expect(result.status).toBe(2);
     },
@@ -456,22 +501,24 @@ describe('check-conflict.mjs', () => {
   );
 
   it(
-    'fails rather than passes when no tracked path can be read',
+    'fails rather than passes when no path can be read, and names each one it could not read',
     () => {
-      // The other route to an empty corpus: everything tracked is a path with no bytes of this
-      // repository's to read. A dangling symlink is the cheapest one to build.
+      // The other route to an empty corpus: everything listed is a path with no bytes of this
+      // repository's to read. A dangling symlink is the cheapest one to build. It used to be
+      // skipped in silence; it is named now.
       const root = realpathSync(mkdtempSync(join(tmpdir(), 'conflict-check-')));
       roots.push(root);
       symlinkSync('nowhere', join(root, 'link'));
-      mkdirSync(join(root, 'scripts'), { recursive: true });
-      copyFileSync(GUARD, join(root, 'scripts', 'check-conflict.mjs'));
+      installGuard(root);
       git(root, 'init', '-q', '-b', 'main', '.');
+      excludeGuard(root);
       git(root, 'add', '-A', '--', 'link');
       git(root, 'commit', '-q', '-m', 'fixture');
 
       const result = runGuard(root);
 
-      expect(result.stderr).toContain('examined none of the 1 tracked path(s)');
+      expect(result.stderr).toContain('not checked: link (a symbolic link that cannot be followed');
+      expect(result.stderr).toContain('examined none of the 1 path(s)');
       expect(result.stdout.trim()).toBe('FAIL: conflict:check');
       expect(result.status).toBe(2);
     },
@@ -479,17 +526,17 @@ describe('check-conflict.mjs', () => {
   );
 
   it(
-    'fails rather than passes where git tracks nothing',
+    'fails rather than passes where git knows no source file',
     () => {
       const root = realpathSync(mkdtempSync(join(tmpdir(), 'conflict-check-')));
       roots.push(root);
-      mkdirSync(join(root, 'scripts'), { recursive: true });
-      copyFileSync(GUARD, join(root, 'scripts', 'check-conflict.mjs'));
+      installGuard(root);
       git(root, 'init', '-q', '-b', 'main', '.');
+      excludeGuard(root);
 
       const result = runGuard(root);
 
-      expect(result.stderr).toContain('found no tracked files to check');
+      expect(result.stderr).toContain('found no files to check');
       expect(result.stdout.trim()).toBe('FAIL: conflict:check');
       expect(result.status).toBe(2);
     },

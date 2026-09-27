@@ -13,9 +13,10 @@ import type { Transaction } from '@platform/application';
 import type { Id } from '@platform/contracts';
 import { FEATURE_TEMPLATE } from '@platform/domain';
 import { recovery as recoveryAdapters } from '@platform/infrastructure';
-import pg from 'pg';
+import type pg from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
+import { createTestClient } from '../support/postgres.js';
 
 let database: MigratedDatabase;
 let projectId: Id;
@@ -79,7 +80,7 @@ const appendTaskEvent = async (taskId: Id, seq: number, type: string): Promise<v
 
 beforeAll(async () => {
   database = await createMigratedDatabase('deadline-recovery');
-  const setup = new pg.Client({ connectionString: database.connectionString });
+  const setup = createTestClient(database.connectionString);
   await setup.connect();
   try {
     const org = await setup.query<{ id: string }>(
@@ -101,7 +102,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  client = new pg.Client({ connectionString: database.connectionString });
+  client = createTestClient(database.connectionString);
   await client.connect();
   await client.query('begin');
   tx = { adapter: 'postgres', client } as unknown as Transaction;

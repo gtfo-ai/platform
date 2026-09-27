@@ -35,10 +35,9 @@
  * direction instead is the exact `read`/`unread` split asserted below: moving an entry into `read`
  * requires a citation that resolves, and moving one out changes a list somebody has to edit.
  */
-import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { censusPaths, censusText } from '../../../../scripts/census-files.mjs';
 import {
   AUTONOMY_POLICIES_NOT_OVERRIDABLE,
   AUTONOMY_POLICY_OVERRIDE_KEYS,
@@ -58,18 +57,8 @@ const TABLE_MODULE = 'packages/domain/src/policies/autonomy.ts';
 /** A citation, in the shape the repository settled on after WP-24: a path from the root. */
 const REPO_PATH = /(?:packages|apps|test|scripts)\/[\w./-]*\.tsx?/g;
 
-const gitFiles = (args: readonly string[]): string[] =>
-  execFileSync('git', [...args, '-z'], {
-    cwd: REPO_ROOT,
-    encoding: 'utf8',
-    maxBuffer: 32 * 1024 * 1024,
-  })
-    .split('\0')
-    .filter((file) => file.length > 0);
-
 /** Tracked *and* committable-but-untracked, which is the tree a pre-push hook sees (rule 85). */
-const treeFiles = (): ReadonlySet<string> =>
-  new Set([...gitFiles(['ls-files']), ...gitFiles(['ls-files', '--others', '--exclude-standard'])]);
+const treeFiles = (): ReadonlySet<string> => new Set(censusPaths(REPO_ROOT));
 
 const mentions = (body: string, policy: string): boolean => {
   const wire = AUTONOMY_POLICY_WIRE_NAMES[policy as keyof typeof AUTONOMY_POLICY_WIRE_NAMES];
@@ -113,7 +102,7 @@ export const unresolvedReaderCitations = (
   return problems.sort();
 };
 
-const readSource = (file: string): string => readFileSync(path.join(REPO_ROOT, file), 'utf8');
+const readSource = (file: string): string => censusText(REPO_ROOT, file);
 
 describe('the dial’s reader table (standing rule 18)', () => {
   it('has an entry for every policy, and no entry for anything else', () => {

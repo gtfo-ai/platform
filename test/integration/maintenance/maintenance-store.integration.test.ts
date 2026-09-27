@@ -14,10 +14,10 @@
 import type { Transaction } from '@platform/application';
 import type { Id, IsoDateTime } from '@platform/contracts';
 import { maintenance as maintenanceAdapters } from '@platform/infrastructure';
-import pg from 'pg';
+import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
-import { createTestPool } from '../support/postgres.js';
+import { createTestClient, createTestPool } from '../support/postgres.js';
 
 let database: MigratedDatabase;
 let pool: pg.Pool;
@@ -26,7 +26,7 @@ let projectId: string;
 const store = new maintenanceAdapters.PostgresMaintenanceStore();
 
 const withTx = async <T>(fn: (tx: Transaction) => Promise<T>): Promise<T> => {
-  const client = new pg.Client({ connectionString: database.connectionString });
+  const client = createTestClient(database.connectionString);
   await client.connect();
   try {
     return await fn({ adapter: 'postgres', client } as unknown as Transaction);

@@ -38,7 +38,12 @@ import {
 import type pg from 'pg';
 import { describe, expect, it } from 'vitest';
 import { composeIntegrationStack, platformRedactorFor } from './pipeline.js';
-import { repositoryRoot, sourceFilesUnder, withoutComments } from './routes/web-sources.js';
+import {
+  readSource,
+  repositoryRoot,
+  sourceFilesUnder,
+  withoutComments,
+} from './routes/web-sources.js';
 
 const RUN = '11111111-1111-4111-8111-111111111111';
 const TOKEN = 'fake_run_credential_composition_0001';
@@ -103,16 +108,11 @@ describe('the run credentials reach every sink WP-76 composed them into', () => 
 
   it('builds the registry once in the whole server: the minter and the sinks cannot diverge', () => {
     const sites = sourceFilesUnder('apps/server/src').flatMap((file) => {
-      const source = withoutComments(readFileSync(join(repositoryRoot, file), 'utf8'));
+      const source = withoutComments(readSource(file));
       return source.split('createRunScopedSecrets(').length > 1 ? [file] : [];
     });
     const count = sourceFilesUnder('apps/server/src')
-      .map(
-        (file) =>
-          withoutComments(readFileSync(join(repositoryRoot, file), 'utf8')).split(
-            'createRunScopedSecrets(',
-          ).length - 1,
-      )
+      .map((file) => withoutComments(readSource(file)).split('createRunScopedSecrets(').length - 1)
       .reduce((sum, n) => sum + n, 0);
     expect(sites).toEqual(['apps/server/src/pipeline.ts']);
     expect(count).toBe(1);

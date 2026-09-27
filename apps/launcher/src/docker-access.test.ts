@@ -44,20 +44,12 @@
  *    gets switched off.
  */
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { censusFiles, censusPaths } from '../../../scripts/census-files.mjs';
 
 const REPO_ROOT = process.cwd();
 
-const gitSources = (args: readonly string[]): string[] =>
-  execFileSync('git', [...args, '-z', '--', '*.ts', '*.tsx', '*.mjs', '*.js'], {
-    cwd: REPO_ROOT,
-    encoding: 'utf8',
-    maxBuffer: 32 * 1024 * 1024,
-  })
-    .split('\0')
-    .filter((file) => file.length > 0);
+const SOURCE_PATHSPECS = ['*.ts', '*.tsx', '*.mjs', '*.js'];
 
 /**
  * Every source git knows about — the scope, asked of git rather than carried (rule 7).
@@ -66,14 +58,10 @@ const gitSources = (args: readonly string[]): string[] =>
  * was not free: a census that reads only `ls-files` is green on the machine that wrote the new file
  * and red on the push. WP-53 added two verification scripts that read `DOCKER_HOST`, and with the
  * old scope this file passed while they were untracked and would have failed on the commit. The
- * same widening is already in `wip-commit-sites.test.ts` and `client-census.test.ts`.
+ * same widening is already in `wip-commit-sites.test.ts` and `client-census.test.ts`. Since WP-68
+ * both halves, the vanished-path rule and the unreadable-path report are `census-files.mjs`'s.
  */
-const trackedSources = (): string[] => [
-  ...new Set([
-    ...gitSources(['ls-files']),
-    ...gitSources(['ls-files', '--others', '--exclude-standard']),
-  ]),
-];
+const trackedSources = (): string[] => censusPaths(REPO_ROOT, { pathspecs: SOURCE_PATHSPECS });
 
 /**
  * A test-tier file, which is allowed to construct an engine because that is how the adapter is
@@ -104,14 +92,11 @@ const CONSTRUCTS_ENGINE = /\b(?:new|extends)\s+(?:[A-Za-z_$][\w$]*\s*\.\s*)?\w*D
 const READS_DOCKER_HOST = /\bDOCKER_HOST\b/;
 
 const filesMatching = (pattern: RegExp): string[] =>
-  trackedSources()
-    .filter((file) => !isTestTier(file))
-    .filter((file) => {
-      const source = readFileSync(path.join(REPO_ROOT, file), 'utf8');
-      // Read the whole file, then strip: a pattern applied per line would miss a construction the
-      // formatter wrapped, which is standing rule 58's recall hole.
-      return pattern.test(withoutComments(source));
-    })
+  censusFiles(REPO_ROOT, { pathspecs: SOURCE_PATHSPECS, include: (file) => !isTestTier(file) })
+    // Read the whole file, then strip: a pattern applied per line would miss a construction the
+    // formatter wrapped, which is standing rule 58's recall hole.
+    .filter(({ contents }) => pattern.test(withoutComments(contents)))
+    .map(({ path }) => path)
     .sort();
 
 /** Does this path ship in an image? `apps/` and `packages/` do; `scripts/` is run by hand. */
@@ -190,7 +175,13 @@ describe('TD-021: exactly one component reaches the Docker daemon', () => {
     // commit is in the scope. On a clean checkout that set is empty and this says nothing; on the
     // machine that just wrote a new file it is the difference between green here and red on the
     // push, which is the failure rule 85 names.
-    const untracked = gitSources(['ls-files', '--others', '--exclude-standard']);
+    const untracked = execFileSync(
+      'git',
+      ['ls-files', '--others', '--exclude-standard', '-z', '--', ...SOURCE_PATHSPECS],
+      { cwd: REPO_ROOT, encoding: 'utf8' },
+    )
+      .split('\0')
+      .filter((file) => file.length > 0);
     for (const file of untracked) {
       expect(sources).toContain(file);
     }

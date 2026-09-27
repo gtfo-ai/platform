@@ -24,12 +24,17 @@ import { afterAll, describe, expect, it } from 'vitest';
  *
  * **Why it cannot pass for the wrong reason.** The clean case asserts the exact file count in the
  * PASS line, so a walk that found nothing cannot masquerade as a clean one; the fixture it runs on
- * *contains* a NUL byte, in an untracked file, so "no offender" is a statement about the guard's
+ * *contains* a NUL byte, in an **ignored** file, so "no offender" is a statement about the guard's
  * scope rather than about an empty tree; and the premise of the whole guard — that git classifies
  * such a blob as binary and stops diffing it — is asserted against git itself rather than trusted
  * from the docblock (standing rule 3).
+ *
+ * **The scope case used to pin the hole** (backlog 10). It planted an untracked file full of NUL
+ * bytes and expected a PASS, because the guard read `git ls-files` alone. Since WP-68 the scope is
+ * `census-files.mjs`'s — tracked plus untracked-but-not-ignored — and that case expects the
+ * untracked file **named**, with an ignored one beside it as the control.
  */
-const GUARD = join(dirname(fileURLToPath(import.meta.url)), 'check-nul.mjs');
+const SCRIPTS = dirname(fileURLToPath(import.meta.url));
 
 /** The host's git configuration is not part of these fixtures (see `check-ignored.test.ts`). */
 const GIT_ENV = {
@@ -55,10 +60,23 @@ const git = (cwd: string, ...args: readonly string[]): string => {
 const roots: string[] = [];
 
 /**
- * A repository containing `files`, all staged and committed, with the guard copied into
- * `scripts/` — the script derives the repository root from its own location — but deliberately
- * *not* tracked, so the fixture's file counts are the fixture's own.
+ * A repository containing `files`, all staged and committed, with the guard and its census helper
+ * copied into `scripts/` — the script derives the repository root from its own location — and
+ * `scripts/` excluded through `.git/info/exclude`, so the fixture's file counts are the fixture's
+ * own and not the guard's.
  */
+const installGuard = (root: string): void => {
+  mkdirSync(join(root, 'scripts'), { recursive: true });
+  for (const file of ['check-nul.mjs', 'census-files.mjs']) {
+    copyFileSync(join(SCRIPTS, file), join(root, 'scripts', file));
+  }
+};
+
+/** Ignores the guard's own copy, through the file `--exclude-standard` reads besides `.gitignore`. */
+const excludeGuard = (root: string): void => {
+  writeFileSync(join(root, '.git', 'info', 'exclude'), '/scripts/\n');
+};
+
 const repository = (files: Record<string, string | Uint8Array>): string => {
   // `realpathSync` because macOS's `/var` is a symlink to `/private/var`.
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'nul-check-')));
@@ -68,9 +86,9 @@ const repository = (files: Record<string, string | Uint8Array>): string => {
     mkdirSync(dirname(full), { recursive: true });
     writeFileSync(full, contents);
   }
-  mkdirSync(join(root, 'scripts'), { recursive: true });
-  copyFileSync(GUARD, join(root, 'scripts', 'check-nul.mjs'));
+  installGuard(root);
   git(root, 'init', '-q', '-b', 'main', '.');
+  excludeGuard(root);
   git(root, 'add', '-A', '--', ...Object.keys(files));
   git(root, 'commit', '-q', '-m', 'fixture');
   return root;
@@ -109,20 +127,43 @@ describe('check-nul.mjs', () => {
     'passes on a tree of text files, and says how many it examined',
     () => {
       const root = repository({
+        '.gitignore': '/ignored.ts\n',
         'README.md': '# fixture\n',
         'src/a.ts': 'export const a = 1;\n',
         'src/b.ts': 'export const b = 2;\n',
       });
-      // Untracked, and full of NUL bytes: the guard's scope is `git ls-files`, so a clean verdict
-      // here is about tracked files and not about an empty disk.
-      writeFileSync(join(root, 'scratch.ts'), Buffer.from('const x = "\0";\n'));
+      // Ignored, and full of NUL bytes: an ignored file is not a source file, so a clean verdict
+      // here is about the scope and not about an empty disk.
+      writeFileSync(join(root, 'ignored.ts'), Buffer.from('const x = "\0";\n'));
 
       const result = runGuard(root);
 
       expect(result.stdout.trim()).toBe(
-        'PASS: nul:check (3 tracked text files, 0 declared binary, none with a NUL byte)',
+        'PASS: nul:check (4 text files tracked or untracked, 0 declared binary, none with a NUL byte)',
       );
       expect(result.status).toBe(0);
+    },
+    FIXTURE_TIMEOUT_MS,
+  );
+
+  it(
+    'names a NUL in a file nobody has staged yet, and not one in an ignored file',
+    () => {
+      // Backlog 10's own case: WP-16 wrote two NULs into brand-new files and the guard said PASS,
+      // because its scope was `git ls-files`. The untracked file must be named; the ignored one
+      // beside it is the control that tells "reads untracked files" from "reads the whole disk".
+      const root = repository({
+        '.gitignore': '/ignored.ts\n',
+        'src/a.ts': 'export const a = 1;\n',
+      });
+      writeFileSync(join(root, 'src', 'new.ts'), Buffer.from('const x = "\0";\n'));
+      writeFileSync(join(root, 'ignored.ts'), Buffer.from('const y = "\0";\n'));
+
+      const result = runGuard(root);
+
+      expect(offenders(result.stderr)).toEqual(['src/new.ts:1 (byte 11)']);
+      expect(result.stdout.trim()).toBe('FAIL: nul:check');
+      expect(result.status).toBe(1);
     },
     FIXTURE_TIMEOUT_MS,
   );
@@ -156,7 +197,7 @@ describe('check-nul.mjs', () => {
       // the file list with `-z` and hands it back over `--stdin` NUL-delimited.
       expect(result.stderr).toContain('  src/leading.ts:1 (byte 0)\n');
       expect(result.stderr).toContain('  src/two\nlines.ts:2 (byte 33)\n');
-      expect(result.stderr).toContain('2 tracked source file(s) contain a literal NUL byte');
+      expect(result.stderr).toContain('2 source file(s) contain a literal NUL byte');
       expect(result.stdout.trim()).toBe('FAIL: nul:check');
       expect(result.status).toBe(1);
     },
@@ -176,7 +217,7 @@ describe('check-nul.mjs', () => {
       const clean = runGuard(root);
 
       expect(clean.stdout.trim()).toBe(
-        'PASS: nul:check (2 tracked text files, 2 declared binary, none with a NUL byte)',
+        'PASS: nul:check (2 text files tracked or untracked, 2 declared binary, none with a NUL byte)',
       );
       expect(clean.status).toBe(0);
 
@@ -206,7 +247,7 @@ describe('check-nul.mjs', () => {
       expect(
         result.stderr,
         'a `* binary` line switched the guard off and it reported success (standing rule 4)',
-      ).toContain('examined none of the 2 tracked path(s)');
+      ).toContain('examined none of the 2 path(s)');
       expect(result.stdout.trim()).toBe('FAIL: nul:check');
       expect(result.status).toBe(2);
     },
@@ -214,41 +255,49 @@ describe('check-nul.mjs', () => {
   );
 
   it(
-    'fails rather than passes when no tracked path can be read',
+    'fails rather than passes when no path can be read, and names each one it could not read',
     () => {
-      // The other route to an empty corpus: everything tracked is a path with no bytes of this
+      // The other route to an empty corpus: everything listed is a path with no bytes of this
       // repository's to read. A dangling symlink is the cheapest one to build; a submodule
-      // gitlink behaves the same way.
+      // gitlink behaves the same way. It used to be skipped in silence; it is named now.
       const root = realpathSync(mkdtempSync(join(tmpdir(), 'nul-check-')));
       roots.push(root);
       symlinkSync('nowhere', join(root, 'link'));
-      mkdirSync(join(root, 'scripts'), { recursive: true });
-      copyFileSync(GUARD, join(root, 'scripts', 'check-nul.mjs'));
+      installGuard(root);
       git(root, 'init', '-q', '-b', 'main', '.');
+      excludeGuard(root);
       git(root, 'add', '-A', '--', 'link');
       git(root, 'commit', '-q', '-m', 'fixture');
 
       const result = runGuard(root);
 
-      expect(result.stderr).toContain('examined none of the 1 tracked path(s)');
+      expect(result.stderr).toContain('not checked: link (a symbolic link that cannot be followed');
+      expect(result.stderr).toContain('examined none of the 1 path(s)');
       expect(result.stdout.trim()).toBe('FAIL: nul:check');
       expect(result.status).toBe(2);
+
+      // Beside a readable file the verdict is a pass, and the unreadable path is still in it.
+      writeFileSync(join(root, 'a.ts'), 'export const a = 1;\n');
+      const beside = runGuard(root);
+      expect(beside.stdout.trim()).toBe(
+        'PASS: nul:check (1 text files tracked or untracked, 0 declared binary, 1 not readable (named above), none with a NUL byte)',
+      );
     },
     FIXTURE_TIMEOUT_MS,
   );
 
   it(
-    'fails rather than passes outside a repository, where git tracks nothing',
+    'fails rather than passes in a repository that holds no source file',
     () => {
       const root = realpathSync(mkdtempSync(join(tmpdir(), 'nul-check-')));
       roots.push(root);
-      mkdirSync(join(root, 'scripts'), { recursive: true });
-      copyFileSync(GUARD, join(root, 'scripts', 'check-nul.mjs'));
+      installGuard(root);
       git(root, 'init', '-q', '-b', 'main', '.');
+      excludeGuard(root);
 
       const result = runGuard(root);
 
-      expect(result.stderr).toContain('found no tracked files to check');
+      expect(result.stderr).toContain('found no files to check');
       expect(result.stdout.trim()).toBe('FAIL: nul:check');
       expect(result.status).toBe(2);
     },

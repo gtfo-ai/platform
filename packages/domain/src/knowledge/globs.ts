@@ -26,8 +26,8 @@ const REGEX_METACHARACTERS = /[.+^${}()|[\]\\]/g;
  * Written as the escape `\0` and never as a literal NUL byte. A literal one makes git classify
  * the blob as binary, so the change stops appearing in `git diff` and `grep -rn` skips the file
  * (CLAUDE.md, standing rule 30) — and this file was written with two literal NULs in it, which
- * `pnpm nul:check` did not catch because its scope is `git ls-files` and a new file is not yet
- * tracked. NUL is still the right sentinel, because no repository path can contain one; the
+ * `pnpm nul:check` did not catch because its scope was then `git ls-files` and a new file is not
+ * yet tracked (backlog 10, closed at WP-68: it reads untracked files too). NUL is still the right sentinel, because no repository path can contain one; the
  * escape is the fix, not a different character.
  */
 const CROSSING_WILDCARD = '\0crossing\0';

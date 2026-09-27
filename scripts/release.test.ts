@@ -13,6 +13,7 @@ import { dirname, join } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { censusPaths } from './census-files.mjs';
 import { MVP_EXIT_CRITERIA } from './changelog.mjs';
 
 /**
@@ -51,11 +52,13 @@ const read = (path: string): string => readFileSync(join(repositoryRoot, path), 
 
 const readJson = <T>(path: string): T => JSON.parse(read(path)) as T;
 
-/** What git tracks, so no list here has to be maintained by hand (standing rule 7). */
+/**
+ * What git knows about — tracked, or untracked and not ignored — so no list here has to be
+ * maintained by hand (standing rule 7) and a workflow written but not yet staged is held to the
+ * same pins (backlog 10; the list is `census-files.mjs`'s).
+ */
 const tracked = (pattern: string): string[] =>
-  execFileSync('git', ['ls-files', pattern], { cwd: repositoryRoot, encoding: 'utf8' })
-    .split('\n')
-    .filter((line) => line !== '');
+  censusPaths(repositoryRoot, { pathspecs: [pattern] });
 
 const RELEASE_WORKFLOW = '.github/workflows/release.yml';
 const IMAGE_WORKFLOW = '.github/workflows/image.yml';

@@ -34,13 +34,12 @@ import { PassThrough } from 'node:stream';
 import type { Id } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import { eventing as eventingAdapters } from '@platform/infrastructure';
-import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   createMigratedDatabase,
   type MigratedDatabase,
 } from '../../integration/support/migrated.js';
-import { createTestPool } from '../../integration/support/postgres.js';
+import { createTestClient, createTestPool } from '../../integration/support/postgres.js';
 import { type Instance, startInstance } from '../support/instance.js';
 import { type PipelineE2E, seedWorld, startPipeline } from '../support/pipeline.js';
 import { featureScenarios, TICKETS } from '../support/scenarios.js';
@@ -254,9 +253,7 @@ describe('an instance started with the pipeline disabled', () => {
     instance = undefined;
     await handedOver?.stop();
 
-    const after = new pg.Client({
-      connectionString: (database as MigratedDatabase).connectionString,
-    });
+    const after = createTestClient((database as MigratedDatabase).connectionString);
     await after.connect();
     try {
       const queued = await after.query<{ attempts: number }>('select attempts from event_dispatch');

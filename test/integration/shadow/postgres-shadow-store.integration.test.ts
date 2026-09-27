@@ -20,11 +20,11 @@
 import type { Transaction } from '@platform/application';
 import type { Id } from '@platform/contracts';
 import { shadow as shadowAdapters } from '@platform/infrastructure';
-import pg from 'pg';
+import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runShadowStoreContract } from '../../contract/support/shadow-store-suite.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
-import { createTestPool } from '../support/postgres.js';
+import { createTestClient, createTestPool } from '../support/postgres.js';
 
 let database: MigratedDatabase;
 let pool: pg.Pool;
@@ -66,7 +66,7 @@ afterAll(async () => {
 runShadowStoreContract({
   name: 'postgres',
   create: async () => {
-    const client = new pg.Client({ connectionString: database.connectionString });
+    const client = createTestClient(database.connectionString);
     await client.connect();
     await client.query('begin');
     return {
@@ -149,7 +149,7 @@ describe('what only the database can answer', () => {
     // Excluded because it is before the window.
     await entry(taskIds[1] as string, 50, older);
 
-    const client = new pg.Client({ connectionString: database.connectionString });
+    const client = createTestClient(database.connectionString);
     await client.connect();
     try {
       const store = new shadowAdapters.PostgresShadowStore();

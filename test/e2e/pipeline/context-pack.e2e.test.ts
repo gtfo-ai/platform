@@ -35,8 +35,8 @@ import {
 import { type ContextPackRecord, contextPackRecordSchema, type Id } from '@platform/contracts';
 import { parseKbDocument, readDataBlocks } from '@platform/domain';
 import { knowledge } from '@platform/infrastructure';
-import pg from 'pg';
 import { afterEach, describe, expect, it } from 'vitest';
+import { createTestClient } from '../../integration/support/postgres.js';
 import { BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD, Client } from '../support/instance.js';
 import { inboundEvent, type PipelineE2E, startPipeline } from '../support/pipeline.js';
 import { featureScenarios, TICKETS } from '../support/scenarios.js';
@@ -50,7 +50,7 @@ afterEach(async () => {
 
 /** Indexes the fixture vault into the instance's database, for the instance's project. */
 const seedVault = async (pipeline: PipelineE2E): Promise<void> => {
-  const client = new pg.Client({ connectionString: pipeline.database.connectionString });
+  const client = createTestClient(pipeline.database.connectionString);
   await client.connect();
   try {
     const documents = FIXTURE_VAULT.flatMap((document) => {
@@ -87,7 +87,7 @@ interface StartedPack {
 }
 
 const runStartedPacks = async (pipeline: PipelineE2E): Promise<StartedPack[]> => {
-  const client = new pg.Client({ connectionString: pipeline.database.connectionString });
+  const client = createTestClient(pipeline.database.connectionString);
   await client.connect();
   try {
     const { rows } = await client.query<{
@@ -160,7 +160,7 @@ describe('the context pack a composed instance builds', () => {
     }
     // Not vacuous: at least one served pack names documents, so the rows were written and read.
     expect(packs.some((pack) => pack.tier0.length + pack.tier1.length > 0)).toBe(true);
-    const counted = new pg.Client({ connectionString: harness.database.connectionString });
+    const counted = createTestClient(harness.database.connectionString);
     await counted.connect();
     try {
       const { rows } = await counted.query<{ count: string }>(

@@ -28,11 +28,12 @@ import {
 import type { Id } from '@platform/contracts';
 import { extractQueryTerms, parseKbDocument } from '@platform/domain';
 import { knowledge } from '@platform/infrastructure';
-import pg from 'pg';
+import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runKnowledgeProposalsContract } from '../../contract/support/knowledge-proposals-suite.js';
 import { runKnowledgeStoreContract } from '../../contract/support/knowledge-store-suite.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
+import { createTestClient } from '../support/postgres.js';
 
 let database: MigratedDatabase;
 let projectId: string;
@@ -46,7 +47,7 @@ let seededArtifacts = 0;
 const termsOf = (text: string): readonly string[] => extractQueryTerms(text);
 
 const connect = async (): Promise<pg.Client> => {
-  const client = new pg.Client({ connectionString: database.connectionString });
+  const client = createTestClient(database.connectionString);
   await client.connect();
   return client;
 };

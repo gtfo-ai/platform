@@ -12,10 +12,10 @@
 import type { Transaction } from '@platform/application';
 import { SHIPPED_TEMPLATES } from '@platform/domain';
 import { pipeline } from '@platform/infrastructure';
-import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runPipelineStoreContract } from '../../contract/support/pipeline-store-suite.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
+import { createTestClient } from '../support/postgres.js';
 
 let database: MigratedDatabase;
 let projectId: string;
@@ -24,7 +24,7 @@ let otherUserId: string;
 
 beforeAll(async () => {
   database = await createMigratedDatabase('pipeline-store');
-  const client = new pg.Client({ connectionString: database.connectionString });
+  const client = createTestClient(database.connectionString);
   await client.connect();
   try {
     const org = await client.query<{ id: string }>(
@@ -56,7 +56,7 @@ afterAll(async () => {
 runPipelineStoreContract({
   name: 'postgres',
   create: async () => {
-    const client = new pg.Client({ connectionString: database.connectionString });
+    const client = createTestClient(database.connectionString);
     await client.connect();
     await client.query('begin');
     const tx = { adapter: 'postgres', client } as unknown as Transaction;
@@ -124,7 +124,7 @@ runPipelineStoreContract({
  */
 describe('a malformed pipeline_dial', () => {
   it('refuses the one task on load and is left out of a list read', async () => {
-    const client = new pg.Client({ connectionString: database.connectionString });
+    const client = createTestClient(database.connectionString);
     await client.connect();
     await client.query('begin');
     try {
