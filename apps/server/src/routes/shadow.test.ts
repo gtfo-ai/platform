@@ -18,6 +18,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { toApiError } from '../errors.js';
 import { OnboardingUnavailableError } from '../onboarding.js';
 import type { ShadowCommands } from '../shadow.js';
+import { type MemoryAttempt, memoryAttemptRecords } from './idempotency-memory.js';
 import { registerShadowRoutes, SHADOW_START_ACTION } from './shadow.js';
 
 const PROJECT = '00000000-0000-4000-8000-000000000a01';
@@ -73,12 +74,14 @@ let app: FastifyInstance;
 let world: World;
 let calls: { name: string; input: unknown }[];
 let actions: { userId: string; action: string; params: JsonObject }[];
-let attempts: Map<string, string | null>;
+let attempts: Map<string, MemoryAttempt>;
 let roleCalls: { projectId: string; userId: string }[];
+let batchReads: string[];
 
 const build = async (): Promise<void> => {
   calls = [];
   actions = [];
+  batchReads = [];
   attempts = new Map();
   roleCalls = [];
   world = {
@@ -135,19 +138,16 @@ const build = async (): Promise<void> => {
       // The batch's project is a column, not a path segment: `scopeToProject` reads it and the
       // guard scopes by what it left behind.
       projectOfBatch: async () => (world.batchFound ? BATCH_PROJECT : null),
-      previousAttempt: async (query) => {
-        const digest = attempts.get(`${query.userId}|${query.action}|${query.key}`);
-        return digest === undefined ? null : { bodyDigest: digest };
-      },
+      ...memoryAttemptRecords(attempts),
       recordAction: async (input) => {
         actions.push({ userId: input.userId, action: input.action, params: input.params });
         const key = input.params.idempotency_key;
         const digest = input.params.body_digest;
         if (typeof key === 'string') {
-          attempts.set(
-            `${input.userId}|${input.action}|${key}`,
-            typeof digest === 'string' ? digest : null,
-          );
+          attempts.set(`${input.userId}|${input.action}|${key}`, {
+            bodyDigest: typeof digest === 'string' ? digest : null,
+            params: input.params,
+          });
         }
       },
       // The published envelope exactly: the response schema is strict, so an extra key here would
@@ -157,10 +157,12 @@ const build = async (): Promise<void> => {
         can_start: gate.canStart,
         blocked_reason: gate.blockedReason,
       }),
-      findBatch: async () =>
-        world.batchFound
+      findBatch: async (batchId) => {
+        batchReads.push(batchId);
+        return world.batchFound
           ? ({ found: true, response: emptyBatch } as never)
-          : ({ found: false } as never),
+          : ({ found: false } as never);
+      },
     },
   });
   await app.ready();
@@ -217,10 +219,44 @@ describe('POST /api/projects/:project_id/shadow-batches', () => {
     expect(actions).toHaveLength(1);
   });
 
-  it('accepts a replay of the same body under the same key', async () => {
+  it('answers a replay of the same body with the first batch, and writes no second row', async () => {
+    // WP-67 criterion (5), PROGRESS backlog 99: the same counts as the different-body case above,
+    // for the case that used to leave a second batch row and a second audit row behind.
     await post({ ticket_keys: ['ACME-1'] }, { 'idempotency-key': 'batch-1' });
     const replay = await post({ ticket_keys: ['ACME-1'] }, { 'idempotency-key': 'batch-1' });
     expect(replay.statusCode).toBe(202);
+    // The **first** batch's id, read back through the batch projection by the id the audit row
+    // recorded — never a stored response.
+    expect(JSON.parse(replay.body)).toEqual({
+      batch_id: BATCH,
+      tickets: [],
+      started: 0,
+      refused: 0,
+    });
+    expect(batchReads).toEqual([BATCH]);
+    expect(calls).toHaveLength(1);
+    expect(actions).toHaveLength(1);
+  });
+
+  it('refuses a replay whose first batch can no longer be read, rather than inventing one', async () => {
+    await post({ ticket_keys: ['ACME-1'] }, { 'idempotency-key': 'batch-1' });
+    world.batchFound = false;
+    const replay = await post({ ticket_keys: ['ACME-1'] }, { 'idempotency-key': 'batch-1' });
+    expect(`${replay.statusCode} ${errorCode(replay.body)}`).toBe('409 idempotency_key_reused');
+    expect(calls).toHaveLength(1);
+    expect(actions).toHaveLength(1);
+  });
+
+  it('gives the key back when the batch is refused, so the same request may be sent again', async () => {
+    world.result = { status: 'blocked', blocker: 'feature_disabled', detail: 'shadow mode is off' };
+    const refused = await post({ ticket_keys: ['ACME-1'] }, { 'idempotency-key': 'batch-1' });
+    expect(refused.statusCode).toBe(409);
+    expect(actions).toHaveLength(0);
+    world.result = null;
+    const retried = await post({ ticket_keys: ['ACME-1'] }, { 'idempotency-key': 'batch-1' });
+    expect(retried.statusCode).toBe(202);
+    expect(calls).toHaveLength(2);
+    expect(actions).toHaveLength(1);
   });
 
   it('refuses an anonymous caller before validating the body', async () => {
@@ -376,7 +412,7 @@ describe('a process that composed no pipeline', () => {
       queries: {
         projectRole: async () => 'maintainer',
         projectExists: async () => true,
-        previousAttempt: async () => null,
+        ...memoryAttemptRecords(new Map()),
         recordAction: async () => {},
         projectOfBatch: async () => null,
         listBatches: async (_projectId, gate) => ({

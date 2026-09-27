@@ -205,6 +205,10 @@ export const coverageBasisText = (coverage: TaskCoverage | null): string => {
   return `${head}, against ${coverage.base_pct.toFixed(1)} % on ${coverage.base_branch} at ${shortSha(coverage.base_sha ?? '')} as it stood on ${at}. One percentage for the whole change: per-file coverage needs the CI's coverage artifact, which this platform does not download.`;
 };
 
+/** The gate's acting ending is waiting for the task to resume (WP-67, `deferred_stage`). */
+const isDeferred = (dependencies: TaskDependencies): boolean =>
+  (dependencies.deferred_stage ?? null) !== null;
+
 /**
  * The dependency item's value — product/04:58, product/10:38's *"dependency status"* (WP-38).
  *
@@ -229,14 +233,20 @@ export const dependencyValueText = (dependencies: TaskDependencies | null): stri
   const added = `${dependencies.added.length} added`;
   switch (dependencies.decision) {
     case 'block':
-      return `${added} · blocked`;
+      // A deferred block (WP-67): the task was at a human-owned stop when the gate ran, and the
+      // return is applied when it resumes — so it is not yet "blocked" in the sense of sent back.
+      return isDeferred(dependencies) ? `${added} · blocked on resume` : `${added} · blocked`;
     case 'ask':
       // **`ask` with no question is not `waiting`.** The gate decides in a job, and a task that
       // stopped being active before that job fired gets the packages on this panel and nobody
       // asked — rare in production, where a stage takes minutes, and measured in the e2e tier where
       // a whole template walks in a second. Printing "waiting" for it would name a human who is not
       // coming (standing rule 18).
-      return dependencies.question_id === null ? `${added} · not asked` : `${added} · waiting`;
+      if (dependencies.question_id !== null) {
+        return `${added} · waiting`;
+      }
+      // Deferred (WP-67): a person had stopped the task, and the question is asked when it resumes.
+      return isDeferred(dependencies) ? `${added} · asks on resume` : `${added} · not asked`;
     default:
       return added;
   }
@@ -283,9 +293,12 @@ export const dependencyBasisText = (dependencies: TaskDependencies | null): stri
     })
     .join(', ');
   const truncated = dependencies.truncated ? ' The list was cut, so there may be more.' : '';
-  const unasked =
-    dependencies.decision === 'ask' && dependencies.question_id === null
-      ? ' The task had already moved past the point where the platform parks it, so nobody was asked — decide here before you merge.'
+  const unasked = isDeferred(dependencies)
+    ? dependencies.decision === 'ask'
+      ? ' A person had stopped the task when the gate ran, so the question is asked when the task resumes.'
+      : ' A person had stopped the task when the gate ran, so it goes back to the stage that added the package when it resumes.'
+    : dependencies.decision === 'ask' && dependencies.question_id === null
+      ? ' The task had already moved past the point where the platform parks it, and a task that has passed review is not interrupted with a question, so nobody was asked — decide here before you merge.'
       : '';
   return `${packages}.${truncated}${unasked}${unread}`;
 };

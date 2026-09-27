@@ -46,7 +46,12 @@ import { requirePermission } from '../auth/rbac.js';
 import { HttpError, NotFoundError } from '../errors.js';
 import type { ProjectConfigCommands } from '../project-config.js';
 import type { HumanActionInput } from '../queries/onboarding-queries.js';
-import { idempotentReplay, readIdempotencyKey, requireIdempotencyKey } from './idempotency.js';
+import {
+  claimIdempotentAttempt,
+  type IdempotencyRecords,
+  readIdempotencyKey,
+  requireIdempotencyKey,
+} from './idempotency.js';
 import { repositoryReadingOf } from './projects.js';
 
 /** What the export reads about the project, re-read per request. */
@@ -65,11 +70,8 @@ export interface ExportableProject {
 export interface ProjectConfigQueries {
   readonly projectRole: (projectId: string, userId: string) => Promise<string | null>;
   readonly exportableProject: (projectId: string) => Promise<ExportableProject | null>;
-  readonly previousAttempt: (query: {
-    readonly userId: string;
-    readonly action: string;
-    readonly key: string;
-  }) => Promise<{ readonly bodyDigest: string | null; readonly params: JsonObject } | null>;
+  readonly claimAttempt: IdempotencyRecords['claimAttempt'];
+  readonly releaseAttempt: IdempotencyRecords['releaseAttempt'];
   readonly recordAction: (input: HumanActionInput) => Promise<void>;
   readonly readRepository: (projectId: string) => Promise<RepositoryConfigSnapshot | null>;
 }
@@ -190,7 +192,7 @@ export const registerProjectConfigRoutes = async (
       const key = requireIdempotencyKey(request);
       const projectId = request.params.project_id;
       const actor = actorOf(request);
-      const replay = await idempotentReplay(options.queries.previousAttempt, {
+      const replay = await claimIdempotentAttempt(options.queries, {
         userId: actor.userId,
         action: CONFIG_EXPORT_ACTION,
         key,
@@ -210,73 +212,76 @@ export const registerProjectConfigRoutes = async (
         };
       }
 
-      const project = await options.queries.exportableProject(projectId);
-      if (project === null) {
-        throw new NotFoundError(`project ${projectId}`);
-      }
-      const configHash = project.configHash ?? 'unconfigured';
-      if (request.body.base_hash !== undefined && request.body.base_hash !== configHash) {
-        throw new HttpError(
-          409,
-          'config_conflict',
-          `this project's configuration has moved since you read it (its hash is now ${configHash}); re-read it and export again`,
-        );
-      }
-      if (project.configHash === null || Object.keys(project.config).length === 0) {
-        throw new HttpError(
-          409,
-          'nothing_to_export',
-          `project ${projectId} has no settings to export: write them first (PUT /api/projects/${projectId}/config)`,
-        );
-      }
-      const parsed = agenticConfigSchema.safeParse(project.config);
-      if (!parsed.success) {
-        throw new HttpError(
-          409,
-          'invalid_stored_config',
-          `the stored configuration of project ${projectId} does not parse, so it cannot be exported; GET /api/projects/${projectId}/config names the keys`,
-        );
-      }
+      return replay.run(async (effectReturned) => {
+        const project = await options.queries.exportableProject(projectId);
+        if (project === null) {
+          throw new NotFoundError(`project ${projectId}`);
+        }
+        const configHash = project.configHash ?? 'unconfigured';
+        if (request.body.base_hash !== undefined && request.body.base_hash !== configHash) {
+          throw new HttpError(
+            409,
+            'config_conflict',
+            `this project's configuration has moved since you read it (its hash is now ${configHash}); re-read it and export again`,
+          );
+        }
+        if (project.configHash === null || Object.keys(project.config).length === 0) {
+          throw new HttpError(
+            409,
+            'nothing_to_export',
+            `project ${projectId} has no settings to export: write them first (PUT /api/projects/${projectId}/config)`,
+          );
+        }
+        const parsed = agenticConfigSchema.safeParse(project.config);
+        if (!parsed.success) {
+          throw new HttpError(
+            409,
+            'invalid_stored_config',
+            `the stored configuration of project ${projectId} does not parse, so it cannot be exported; GET /api/projects/${projectId}/config names the keys`,
+          );
+        }
 
-      const report: ConfigExportReport = await commands().export({
-        projectId: projectId as Id,
-        project: { defaultBranch: project.defaultBranch, knowledgeDir: project.knowledgeDir },
-        configHash,
-        content: renderExport(parsed.data, configHash),
-        exportId: configExportIdOf(actor.userId, key),
-        requestedByUserId: actor.userId as Id,
-      });
-      if (report.status === 'unavailable') {
-        throw new HttpError(409, 'config_export_unavailable', options.redactText(report.reason));
-      }
+        const report: ConfigExportReport = await commands().export({
+          projectId: projectId as Id,
+          project: { defaultBranch: project.defaultBranch, knowledgeDir: project.knowledgeDir },
+          configHash,
+          content: renderExport(parsed.data, configHash),
+          exportId: configExportIdOf(actor.userId, key),
+          requestedByUserId: actor.userId as Id,
+        });
+        if (report.status === 'unavailable') {
+          throw new HttpError(409, 'config_export_unavailable', options.redactText(report.reason));
+        }
+        effectReturned();
 
-      const answer = {
-        status: report.status,
-        performed: true,
-        config_hash: configHash,
-        branch: report.status === 'exported' ? report.branch : null,
-        commit_sha: report.status === 'exported' ? report.commitSha : null,
-        merge_request_url: report.status === 'exported' ? report.mergeRequestUrl : null,
-        paths: report.status === 'exported' ? [...report.paths] : [],
-        notes: report.status === 'exported' ? [...report.notes] : [report.reason],
-      };
-      await options.queries.recordAction({
-        userId: actor.userId,
-        action: CONFIG_EXPORT_ACTION,
-        params: {
-          project_id: projectId,
-          config_hash: answer.config_hash,
-          status: answer.status,
-          branch: answer.branch,
-          commit_sha: answer.commit_sha,
-          merge_request_url: answer.merge_request_url,
-          paths: answer.paths,
-          notes: answer.notes,
-          idempotency_key: key,
-          body_digest: replay.digest,
-        },
+        const answer = {
+          status: report.status,
+          performed: true,
+          config_hash: configHash,
+          branch: report.status === 'exported' ? report.branch : null,
+          commit_sha: report.status === 'exported' ? report.commitSha : null,
+          merge_request_url: report.status === 'exported' ? report.mergeRequestUrl : null,
+          paths: report.status === 'exported' ? [...report.paths] : [],
+          notes: report.status === 'exported' ? [...report.notes] : [report.reason],
+        };
+        await options.queries.recordAction({
+          userId: actor.userId,
+          action: CONFIG_EXPORT_ACTION,
+          params: {
+            project_id: projectId,
+            config_hash: answer.config_hash,
+            status: answer.status,
+            branch: answer.branch,
+            commit_sha: answer.commit_sha,
+            merge_request_url: answer.merge_request_url,
+            paths: answer.paths,
+            notes: answer.notes,
+            idempotency_key: key,
+            body_digest: replay.digest,
+          },
+        });
+        return answer;
       });
-      return answer;
     },
   );
 
@@ -302,7 +307,7 @@ export const registerProjectConfigRoutes = async (
       const key = readIdempotencyKey(request);
       const projectId = request.params.project_id;
       const actor = actorOf(request);
-      const replay = await idempotentReplay(options.queries.previousAttempt, {
+      const replay = await claimIdempotentAttempt(options.queries, {
         userId: actor.userId,
         action: CONFIG_REFRESH_ACTION,
         key,
@@ -313,28 +318,31 @@ export const registerProjectConfigRoutes = async (
           repository: repositoryReadingOf(await options.queries.readRepository(projectId)),
         };
       }
-      if ((await options.queries.exportableProject(projectId)) === null) {
-        throw new NotFoundError(`project ${projectId}`);
-      }
-      const outcome: RepositoryConfigRefresh = await commands().refresh(projectId as Id);
-      if (outcome.status === 'unavailable') {
-        throw new HttpError(
-          409,
-          'repository_unreadable',
-          `the default branch could not be read, so the previous reading stands: ${options.redactText(outcome.reason)}`,
-        );
-      }
-      await options.queries.recordAction({
-        userId: actor.userId,
-        action: CONFIG_REFRESH_ACTION,
-        params: {
-          project_id: projectId,
-          status: outcome.snapshot.status,
-          commit_sha: outcome.snapshot.commitSha,
-          ...(key === null ? {} : { idempotency_key: key, body_digest: replay.digest }),
-        },
+      return replay.run(async (effectReturned) => {
+        if ((await options.queries.exportableProject(projectId)) === null) {
+          throw new NotFoundError(`project ${projectId}`);
+        }
+        const outcome: RepositoryConfigRefresh = await commands().refresh(projectId as Id);
+        if (outcome.status === 'unavailable') {
+          throw new HttpError(
+            409,
+            'repository_unreadable',
+            `the default branch could not be read, so the previous reading stands: ${options.redactText(outcome.reason)}`,
+          );
+        }
+        effectReturned();
+        await options.queries.recordAction({
+          userId: actor.userId,
+          action: CONFIG_REFRESH_ACTION,
+          params: {
+            project_id: projectId,
+            status: outcome.snapshot.status,
+            commit_sha: outcome.snapshot.commitSha,
+            ...(key === null ? {} : { idempotency_key: key, body_digest: replay.digest }),
+          },
+        });
+        return { repository: repositoryReadingOf(outcome.snapshot) };
       });
-      return { repository: repositoryReadingOf(outcome.snapshot) };
     },
   );
 };

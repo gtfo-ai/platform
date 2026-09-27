@@ -351,7 +351,10 @@ export const startShadowBatch = async (
         dependencies: null,
         requiredReviewers: null,
         reviewThreads: null,
-        requestedByUserId: null,
+        // The maintainer who started the batch (WP-67, PROGRESS backlog 92). A shadow task assigns
+        // nobody on the provider whatever this says — its writes are `would_have` — but the row
+        // records who asked, like every task a person starts.
+        requestedByUserId: input.requestedByUserId,
       };
       await options.store.tasks.insert(scope.tx, stored);
       await options.shadow.addTicket(scope.tx, batchId, {

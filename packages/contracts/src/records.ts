@@ -412,6 +412,20 @@ export const taskDependenciesSchema = z.strictObject({
   /** The question `ask` opened, so the panel can link what it is waiting for. */
   question_id: idSchema.nullable(),
   checked_at: isoDateTimeSchema,
+  /**
+   * The stage whose diff this is, while the decision's acting ending is **deferred** (WP-67,
+   * PROGRESS backlog 96, Q91): `ask` or `block` reached a task at a stop a human owns — `paused`,
+   * `needs_human`, `waiting_answers`, `waiting_approval` — so nothing was asked or returned yet, and
+   * the gate performs it when the task next resumes (`task.resumed`). It is the stage a deferred
+   * question belongs to and the one a deferred block returns to.
+   *
+   * `null` means nothing is pending: the ending was performed, or it does not apply, or — for an
+   * `ask` that reached `ready_for_merge`, `merged` or `retro` — it was **refused and kept** (Q91's
+   * answer): a task that has passed review is not interrupted by a question the platform could have
+   * asked earlier, and the panel says `not asked`. Absent on a record written before WP-67, which
+   * the gate reads as `null`.
+   */
+  deferred_stage: slugSchema.nullable().optional(),
 });
 
 export type TaskDependencies = z.infer<typeof taskDependenciesSchema>;

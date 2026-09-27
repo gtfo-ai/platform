@@ -487,9 +487,10 @@ export const runIntakeCheck = async (
       dependencies: null,
       requiredReviewers: null,
       reviewThreads: null,
-      // `tasks.requested_by_user_id` has no writer: a ticket the pick-up rule matched was not
-      // requested by anybody the platform can name (`StoredTask.requestedByUserId` says what that
-      // costs the reviewer fallback).
+      // Not written at intake: a ticket the pick-up rule matched was not requested by anybody the
+      // platform can name yet. Its reporter is the candidate, resolved only through
+      // `user_identities` and never by an email match — PROGRESS backlog 92's half (b), which
+      // WP-67 did not build (`StoredTask.requestedByUserId` says what that costs the fallback).
       requestedByUserId: null,
     };
     await options.store.tasks.insert(scope.tx, stored);

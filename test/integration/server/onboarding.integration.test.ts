@@ -572,9 +572,11 @@ describe('the re-check’s CI-event read', () => {
 });
 
 /**
- * WP-64 review round 1: the interview's audit row is claimed **inside** the command's transaction,
- * under an advisory lock on `(user, action, key)`, so the second of two submits — sequential or
- * racing — is refused and its caller rolls back. Asserted with two real concurrent transactions.
+ * WP-64 review round 1: the interview's audit row is claimed **inside** the command's transaction —
+ * since WP-67 by inserting the key's `command_idempotency` row there, whose primary key the second
+ * of two racing transactions blocks on (an advisory lock until then) — so the second of two
+ * submits, sequential or racing, is refused and its caller rolls back. Asserted with two real
+ * concurrent transactions.
  */
 describe('claiming an attempt inside the command’s transaction', () => {
   const claim = async (client: pg.PoolClient, key: string) =>
@@ -606,7 +608,7 @@ describe('claiming an attempt inside the command’s transaction', () => {
       await first.query('begin');
       await second.query('begin');
       expect(await claim(first, 'claim-race')).toBe(true);
-      // The second waits on the lock until the first commits, then finds its row.
+      // The second waits on the first's uncommitted key until it commits, then finds its row.
       const racing = claim(second, 'claim-race');
       await first.query('commit');
       expect(await racing).toBe(false);

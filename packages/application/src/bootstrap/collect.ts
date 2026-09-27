@@ -359,7 +359,9 @@ export const collectHistory = async (
         dependencies: null,
         requiredReviewers: null,
         reviewThreads: null,
-        requestedByUserId: null,
+        // The person who started the bootstrap, read off the batch this job collects for (WP-67,
+        // PROGRESS backlog 92): the command held them, and the chunk tasks are theirs.
+        requestedByUserId: batch.requestedBy,
       };
       await options.store.tasks.insert(scope.tx, stored);
       await options.bootstrap.addChunk(scope.tx, {

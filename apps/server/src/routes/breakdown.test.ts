@@ -18,6 +18,7 @@ import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod
 import { beforeEach, describe, expect, it } from 'vitest';
 import { toApiError } from '../errors.js';
 import { type BreakdownQueries, registerBreakdownRoutes } from './breakdown.js';
+import { memoryAttemptRecords } from './idempotency-memory.js';
 
 const TASK = '00000000-0000-4000-8000-0000000000a1';
 const PROJECT = '00000000-0000-4000-8000-0000000000b1';
@@ -105,8 +106,7 @@ const build = async (overrides: Partial<BreakdownQueries> = {}): Promise<World> 
     queries: {
       taskProjectId: async (taskId) => (taskId === TASK ? PROJECT : null),
       projectRole: async () => null,
-      previousAttempt: async (query) =>
-        attempts.get(`${query.userId}|${query.action}|${query.key}`) ?? null,
+      ...memoryAttemptRecords(attempts),
       recordAction: async (input) => {
         actions.push({ ...input });
         const key = input.params.idempotency_key;
@@ -165,7 +165,7 @@ const buildReadOnly = async (): Promise<FastifyInstance> => {
     queries: {
       taskProjectId: async () => PROJECT,
       projectRole: async () => null,
-      previousAttempt: async () => null,
+      ...memoryAttemptRecords(new Map()),
       recordAction: async () => {},
       listBreakdown: async () => [],
     },

@@ -5,25 +5,75 @@
  * commands: two copies of a key's character set, its cap and its digest would be two things to keep
  * true, and the second copy is the one that would silently accept a key the first refuses.
  *
- * ## What the header buys, and the two shapes it takes
+ * ## The record (WP-67, migration 0053)
  *
- * The mechanism is one **digest of the canonical request**, recorded in the `human_actions` row the
- * command writes ({@link recordHumanAction}) beside the key itself. `human_actions` is append-only
- * (`platform_table_policy`), one row is written per performed command, and that makes it the
- * idempotency store technical/08's header implies — with no new table and no migration.
+ * One row of `command_idempotency` per `(user, action, key)`: the **digest of the canonical
+ * request**, when the key was claimed, and — once the command performed — which `human_actions`
+ * row recorded it. Until WP-67 the record *was* that audit row, read with a JSON predicate, and that
+ * is why two requests that arrived together were both performed: both reads returned null under
+ * READ COMMITTED and nothing unique stood between them. The audit stays append-only and complete;
+ * the table is the key's identity (the migration's header says why it is not a unique index on
+ * `human_actions`).
  *
- * Two commands then read it differently, and the difference is the resource's, not the header's:
+ * - **Scope** `(user_id, action, key)` — see "A key belongs to the caller" below.
+ * - **Retention: none.** A key is honoured for as long as the audit it points at, which is kept;
+ *   a window after which a key is forgotten is a window after which a retry performs twice.
+ * - **A replay answers the first attempt**: {@link claimIdempotentAttempt} returns the `params` the
+ *   first attempt's audit row recorded (the ids it made, the branch it took), and the route answers
+ *   from them with `performed: false` and writes nothing.
+ * - **A different request digest under a used key** is `409 idempotency_key_reused`.
  *
- * - **A create with a natural key** (the wizard's three) answers a retry by re-reading the resource
- *   through `projects.key` or `(integrations.org_id, type, name)`. The digest is what turns a
- *   *different* body under a used key into a `409` rather than a silent replay.
- * - **A command with no natural key** (every task and run command) has nothing to re-read, so the
- *   recorded attempt **is** the answer: {@link idempotentReplay} reports that this key has already
- *   performed this command, the caller answers with the resource's current state and
- *   `performed: false`, and nothing is performed twice.
+ * ## The write ordering, decided rather than inherited
  *
- * There is still no stored *response* in either shape. A replay is answered by re-reading, which is
- * the same answer and one fewer thing to keep consistent.
+ * Two orderings close the concurrent double-perform, and they trade different failures:
+ *
+ * - **Claim with the effect** — the key's row is inserted in the *same* transaction as the
+ *   command's writes, so a second request blocks on the first's uncommitted key and meets it once
+ *   the first commits. No window at all, but it needs the route to hold the effect's transaction.
+ *   Where it does — the business interview (`claimIdempotentAttemptInTransaction`) — this is what
+ *   is used.
+ * - **Claim before the effect** — the row is committed **first**, the command performs in its own
+ *   transaction in the application ring, and the `human_actions` row completes the claim. This is
+ *   what every other keyed command uses ({@link claimIdempotentAttempt}), because none of them
+ *   holds its command's transaction: `pause`, `retry-stage`, a shadow batch and a breakdown decision
+ *   are application commands with their own unit of work.
+ *
+ * Claim-before-effect trades a **double-perform** for a **key that claims a command nobody
+ * performed**, and WP-67 takes that trade deliberately. What each ending does:
+ *
+ * - the command **refuses, 404s, or answers "already"** → the claim is released, so a retry under
+ *   the key is a first attempt again — WP-15i's "none is left for a refused one" holds for the
+ *   record too. The route's `run` releases in a `finally` **only while the effect has not
+ *   returned**: the route calls `performed()` the moment its application command returns having
+ *   done something, and from then on nothing releases the key;
+ * - the command **performs** → the audit row completes the claim, and every later request under the
+ *   key is a replay;
+ * - a second request arrives **while the first is performing** → `409 idempotency_key_in_flight`,
+ *   never a second performance;
+ * - anything fails **after the effect returned** — the audit insert, the completion, the route's
+ *   own bookkeeping — or the **process dies** between the claim and the audit row → the claim stays.
+ *   A retry is refused `409 idempotency_key_in_flight` for {@link CLAIM_IN_FLIGHT_MS}, then
+ *   `409 idempotency_attempt_unknown` for good: the platform cannot tell whether the effect
+ *   committed, so it says so and asks for a new key after the caller has looked at the resource. It
+ *   is **never** re-claimed automatically, because a re-claim is exactly the double-perform this
+ *   closes. (Review round 1 of WP-67: the first version released in the `finally` on *any* throw,
+ *   so an audit insert refused after the effect committed freed the key and the retry performed
+ *   again; pool errors are per connection, so "the release will fail too" was not an argument.)
+ *
+ * The one residual left is inside the command: an application command that commits its effect and
+ * **then** throws is read as a refusal and its key released. The commands this server composes
+ * commit in their last statement, so that is a claim about them, stated rather than enforced.
+ *
+ * ## Two shapes of answer, and the difference is the resource's
+ *
+ * - **A create with a natural key** (the wizard's project and integration creates) answers a retry
+ *   by re-reading the resource through `projects.key` or `(integrations.org_id, type, name)`; the
+ *   record is what turns a *different* body under a used key into a `409`. These two are **not**
+ *   on the claim: their audit row is written inside the create's own transaction, and the natural
+ *   key stops a second row, so a concurrent different body is answered with the first resource
+ *   instead of a 409 — stated at `findIdempotentAttempt`.
+ * - **A command with no natural key** (every task and run command, the shadow batch, the
+ *   bootstrap, discovery, the breakdown decision, the settings and configuration writes) claims.
  *
  * ## A key belongs to the caller
  *
@@ -32,26 +82,14 @@
  * owner, because the string is generated by a client per attempt and nothing distinguishes one
  * client's `retry-1` from another's. An installation-wide lookup would answer this caller a
  * `409 idempotency_key_reused` for a key a stranger used — a wrong refusal, and an oracle for the
- * existence of somebody else's command. {@link findIdempotentAttempt} carries the full argument
- * and what the narrower scope gives up.
- *
- * ## The residual, which is the same one `findIdempotentAttempt` states
- *
- * Two requests from the same caller carrying the same key that arrive **at once** both read "no
- * previous attempt" before either commits (READ COMMITTED), so the second is not refused. For a wizard create the unique key
- * underneath still stops a second row. For a task command what bounds it is the aggregate and the
- * queue rather than this header: two concurrent `retry-stage` calls each move the attempt counter,
- * `tasks.version` makes one of them re-read (WP-15e), and the `stage.execute` queue is `stately` per
- * task with the executor re-validating the attempt — so the pair produces one extra attempt number
- * and **one** run. Closing it properly needs a unique index on
- * `(user_id, action, params->>'idempotency_key')` plus writing the row *before* the effect, which trades a
- * double-perform for a key that claims a command nobody performed; that is a different design and
- * it is in `PROGRESS.md`, not here.
+ * existence of somebody else's command. `findIdempotentAttempt` carries the full argument and what
+ * the narrower scope gives up.
  */
 import { createHash } from 'node:crypto';
 import type { JsonObject } from '@platform/contracts';
 import type { FastifyRequest } from 'fastify';
 import { HttpError } from '../errors.js';
+import type { CommandAttemptClaim } from '../queries/idempotency-queries.js';
 import type { Database } from '../queries/identity-queries.js';
 import { findIdempotentAttempt } from '../queries/onboarding-queries.js';
 
@@ -199,6 +237,121 @@ export const idempotentReplay = async (
     digest,
   });
   return { replayed: previous !== null, digest, previous: previous?.params ?? null };
+};
+
+/**
+ * How long a claim nobody completed is reported as *still running* rather than *unknown*.
+ *
+ * Five minutes: every command this server takes answers inside one HTTP request, and the longest
+ * of them — a configuration export, which opens a merge request — is bounded by the provider
+ * client's own timeouts well inside it. After this, the claim is the residue of a process that
+ * died, and the answer changes from "retry" to "look first, then use a new key".
+ */
+export const CLAIM_IN_FLIGHT_MS = 5 * 60_000;
+
+/** The two statements a claiming route needs, injected so a route module names no database. */
+export interface IdempotencyRecords {
+  readonly claimAttempt: (query: {
+    readonly userId: string;
+    readonly action: string;
+    readonly key: string;
+    readonly digest: string;
+  }) => Promise<CommandAttemptClaim>;
+  readonly releaseAttempt: (query: {
+    readonly userId: string;
+    readonly action: string;
+    readonly key: string;
+  }) => Promise<void>;
+}
+
+export interface ClaimedAttempt {
+  /** `true`: this key already performed this command — answer from `previous`, perform nothing. */
+  readonly replayed: boolean;
+  readonly digest: string | null;
+  /** The `params` the performing attempt's audit row recorded, so the answer can carry what it made. */
+  readonly previous: JsonObject | null;
+  /**
+   * Runs the rest of the command under the claim. `body` calls `performed()` as soon as the
+   * application command has returned **having done something**; until it does, any ending — a
+   * throw, a 404, an `already` answer — releases the key in a `finally`. After it, nothing does:
+   * a throw from the audit insert leaves the claim held, so a retry is answered in flight or
+   * unknown and is never performed again (module note). A request with no key, or a replay, runs
+   * `body` with nothing to release.
+   */
+  readonly run: <T>(body: (performed: () => void) => Promise<T>) => Promise<T>;
+}
+
+/**
+ * Claims this request's key before the command performs — the ordering the module note decides.
+ *
+ * Absent key: nothing to claim, and the command performs as a request with no header always has.
+ * A key another request of this caller **performed** with the same digest is a replay; with a
+ * different digest, `409 idempotency_key_reused`. A key a request is **still holding** is
+ * `409 idempotency_key_in_flight` — or `idempotency_attempt_unknown` once the claim is older than
+ * {@link CLAIM_IN_FLIGHT_MS} — and a different digest there is `idempotency_key_reused` first,
+ * because that answer is true whatever became of the other request.
+ */
+export const claimIdempotentAttempt = async (
+  records: IdempotencyRecords,
+  input: {
+    readonly userId: string;
+    readonly action: string;
+    readonly key: string | null;
+    readonly request: unknown;
+    /** The clock the staleness is read against; injected for the tests. */
+    readonly now?: () => number;
+  },
+): Promise<ClaimedAttempt> => {
+  const passThrough = <T>(body: (performed: () => void) => Promise<T>): Promise<T> =>
+    body(() => undefined);
+  if (input.key === null) {
+    return { replayed: false, digest: null, previous: null, run: passThrough };
+  }
+  const key = input.key;
+  const digest = configHashOf(input.request);
+  const query = { userId: input.userId, action: input.action, key };
+  const claim = await records.claimAttempt({ ...query, digest });
+  if (claim.status === 'claimed') {
+    return {
+      replayed: false,
+      digest,
+      previous: null,
+      run: async (body) => {
+        let effectReturned = false;
+        try {
+          return await body(() => {
+            effectReturned = true;
+          });
+        } finally {
+          if (!effectReturned) {
+            await records.releaseAttempt(query);
+          }
+        }
+      },
+    };
+  }
+  assertIdempotentRequest({
+    action: input.action,
+    key,
+    previousDigest: claim.bodyDigest,
+    digest,
+  });
+  if (claim.status === 'performed') {
+    return { replayed: true, digest, previous: claim.params, run: passThrough };
+  }
+  const age = (input.now ?? Date.now)() - Date.parse(claim.claimedAt);
+  if (age < CLAIM_IN_FLIGHT_MS) {
+    throw new HttpError(
+      409,
+      'idempotency_key_in_flight',
+      `a ${input.action} under Idempotency-Key "${key}" is still being performed; send the same request again once it has answered`,
+    );
+  }
+  throw new HttpError(
+    409,
+    'idempotency_attempt_unknown',
+    `a ${input.action} under Idempotency-Key "${key}" started at ${claim.claimedAt} and never recorded an outcome, so this server cannot say whether it was performed; check the resource, then use a new key`,
+  );
 };
 
 /**

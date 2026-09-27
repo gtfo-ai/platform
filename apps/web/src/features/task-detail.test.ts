@@ -245,6 +245,23 @@ describe('the dependency status on the Checks panel', () => {
     const notAsked = gated({ question_id: null });
     expect(dependencyValueText(notAsked)).toBe('1 added · not asked');
     expect(dependencyBasisText(notAsked)).toContain('nobody was asked');
+    // Q91's answer, on the screen rather than only in a docblock: a finished task is not interrupted.
+    expect(dependencyBasisText(notAsked)).toContain('not interrupted with a question');
+  });
+
+  it('says a deferred ending will happen on resume, and never calls it not asked (WP-67)', () => {
+    const deferredAsk = gated({ question_id: null, deferred_stage: 'implementation' });
+    expect(dependencyValueText(deferredAsk)).toBe('1 added · asks on resume');
+    expect(dependencyBasisText(deferredAsk)).toContain(
+      'the question is asked when the task resumes',
+    );
+    const deferredBlock = gated({ decision: 'block', deferred_stage: 'implementation' });
+    expect(dependencyValueText(deferredBlock)).toBe('1 added · blocked on resume');
+    expect(dependencyBasisText(deferredBlock)).toContain('goes back to the stage');
+    // …and an explicit `null` is the same as a record written before the field existed.
+    expect(dependencyValueText(gated({ question_id: null, deferred_stage: null }))).toBe(
+      '1 added · not asked',
+    );
   });
 
   it('says what the policy did, and counts the packages', () => {

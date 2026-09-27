@@ -70,11 +70,44 @@
 > Idempotency is **two** mechanisms: a retry is answered from the unique key underneath the command
 > (`projects.key`, `(integrations.org_id, type, name)`, `(tasks.project_id, ticket_key, mode)`), and
 > a **different** request under a used key is refused `409 idempotency_key_reused` by comparing a
-> digest of the canonical request recorded in the `human_actions` row beside the key. There is no
-> stored *response*: a legitimate retry is answered by re-reading the resource.
+> digest of the canonical request recorded beside the key. There is no stored *response*: a
+> legitimate retry is answered by re-reading the resource. **Amended at WP-67:** the record beside
+> the key is `command_idempotency`, not the `human_actions` row (next paragraph), and discovery
+> claims its key like the task commands do; the two creates keep their natural key and **state a
+> divergence** — two *concurrent* creates under one key are stopped by the unique key, and a
+> concurrent *different* body is answered with the first resource rather than a `409`. The other
+> three wizard writes (`…/test`, `PUT …/bindings`, `PUT …/config`) take no key: a `PUT` is
+> idempotent by its own shape and the probe changes nothing a retry could duplicate.
 >
-> **An `Idempotency-Key` belongs to the caller.** Every lookup, for the wizard's three creates and
-> for the eleven commands below, is scoped `(user_id, action, key)` — the acting user, the command,
+> **The idempotency record (WP-67, migration 0053).** `command_idempotency` holds one row per
+> `(user_id, action, key)` — the digest of the canonical request, when the key was claimed, and the
+> `human_actions` row that recorded the performed command. Until WP-67 the record was that audit
+> row, read with a JSON predicate, so two requests that arrived **together** both read "no attempt"
+> under READ COMMITTED and both performed. What the header now buys, stated as the contract:
+>
+> - **Scope** `(user_id, action, key)`, the table's primary key (next paragraph for why the user).
+> - **Retention: none.** A key is honoured for as long as the audit it points at is kept, which is
+>   forever; a window after which a key is forgotten is a window after which a retry performs twice.
+> - **A replay answers the first attempt** — `performed: false` and what the first attempt's audit
+>   row recorded (the ids it made), never a second performance and never a second audit row.
+> - **A different request digest under a used key** is `409 idempotency_key_reused`, whether the
+>   first request performed or is still performing.
+> - **Ordering: claim before the effect.** The key's row is committed **before** the command runs,
+>   because the effect is an application command in a transaction the route does not hold; a second
+>   request under a held key is `409 idempotency_key_in_flight`, a refusal (409, 404, `already`)
+>   releases the key, and the audit row completes it. The trade is a double-perform for a key that
+>   names a command nobody performed: a process that dies between the claim and the audit row leaves
+>   the key claimed, and after five minutes a retry is `409 idempotency_attempt_unknown` — check the
+>   resource, use a new key. It is never re-claimed automatically, because that is the double-perform.
+>   Where the route **does** hold the effect's transaction (the business interview) the claim is
+>   inserted in it instead, and there is no window at all. `apps/server/src/routes/idempotency.ts`
+>   carries the argument and the one residual the other way round (an audit insert refused without
+>   the process dying releases a performed key).
+> - `human_actions` stays append-only and complete, duplicates included; the migration backfilled
+>   every keyed row, the **first** of any duplicates winning.
+>
+> **An `Idempotency-Key` belongs to the caller.** Every lookup, for the wizard's creates and for
+> every command below, is scoped `(user_id, action, key)` — the acting user, the command,
 > the string. This paragraph is where that is decided, because the tables above say only that the
 > header goes on a command a client may retry: the string is generated per attempt by a client, so
 > nothing distinguishes one account's `retry-1` from another's, and an installation-wide lookup

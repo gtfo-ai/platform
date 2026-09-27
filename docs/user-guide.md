@@ -279,7 +279,9 @@ form's submit button stays disabled until the command's own required fields are 
 send a request the server will reject.
 
 Double-clicking a command is safe: every write carries an idempotency key, and a replay performs
-nothing twice.
+nothing twice. Two requests under one key that arrive **at the same moment** are safe too since WP-67:
+the second is refused `409 idempotency_key_in_flight` instead of being performed, and sending it again
+once the first has answered returns the first answer.
 
 ### The checks panel, and what it cannot show
 

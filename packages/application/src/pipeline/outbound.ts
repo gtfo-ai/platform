@@ -55,7 +55,11 @@ import { runCiSettle } from './ci-settle.js';
 import { runConflictWarning } from './conflict-warning.js';
 import { runCoverage } from './coverage.js';
 import { type DeliveryMeasuresOptions, runBugTrace, runMergeMeasure } from './delivery-measures.js';
-import { type DependencyGateOptions, runDependencyGate } from './dependency-gate.js';
+import {
+  type DependencyGateOptions,
+  runDependencyGate,
+  runDependencyGateResume,
+} from './dependency-gate.js';
 import { runBreakdownCreate, runSpikeReport } from './epic-split.js';
 import type { OutboundJobData } from './jobs.js';
 import { runReviewOnlyCheck, runReviewOnlyObservation, runReviewOnlyPost } from './review-only.js';
@@ -138,6 +142,9 @@ export const pipelineOutboundHandler = (
         return;
       case 'dependency_gate':
         await runDependencyGate(options, data);
+        return;
+      case 'dependency_gate_resume':
+        await runDependencyGateResume(options, data);
         return;
       case 'shadow_report':
         await runShadowReport(options, data);

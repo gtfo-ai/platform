@@ -54,22 +54,23 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
 import { HttpError, NotFoundError } from '../errors.js';
-import { idempotentReplay, requireIdempotencyKey } from './idempotency.js';
+import {
+  claimIdempotentAttempt,
+  type IdempotencyRecords,
+  requireIdempotencyKey,
+} from './idempotency.js';
 import { scopedProject, scopeToProject } from './scope.js';
 
 /** How many thread entries and audit rows one page carries. A page, not an export. */
 export const ASK_PAGE_LIMIT = 50;
 export const TASK_AUDIT_PAGE_LIMIT = 100;
 
-/** What the ask surface reads and writes outside the application ring, as six functions. */
+/** What the ask surface reads and writes outside the application ring, as seven functions. */
 export interface AskQueries {
   readonly taskProjectId: (taskId: string) => Promise<string | null>;
   readonly projectRole: (projectId: string, userId: string) => Promise<UserRole | null>;
-  readonly previousAttempt: (query: {
-    readonly userId: string;
-    readonly action: string;
-    readonly key: string;
-  }) => Promise<{ readonly bodyDigest: string | null; readonly params: JsonObject } | null>;
+  readonly claimAttempt: IdempotencyRecords['claimAttempt'];
+  readonly releaseAttempt: IdempotencyRecords['releaseAttempt'];
   readonly recordAction: (input: {
     readonly userId: string;
     readonly action: string;
@@ -177,7 +178,7 @@ export const registerAskRoutes = async (
       const actor = actorOf(request);
       // Before the replay, not after it: a key belongs to whoever issued it (`./idempotency.ts`).
       const key = requireIdempotencyKey(request);
-      const replay = await idempotentReplay(options.queries.previousAttempt, {
+      const replay = await claimIdempotentAttempt(options.queries, {
         userId: actor.userId,
         action: 'task.ask',
         key,
@@ -196,37 +197,46 @@ export const registerAskRoutes = async (
         }
         return { ask_id: askId, task_id: taskId, performed: false, status: 'pending' as const };
       }
-      const projectId = await projectOf(taskId);
-      const result = await options.asks.ask({
-        taskId,
-        projectId,
-        userId: actor.userId,
-        question: request.body.question,
-      });
-      if (result.status === 'duplicate') {
-        // Only a ticket-sourced ask can collide, and this door never creates one — so this is a
-        // defect rather than a state, and it is named rather than reported as success.
-        throw new HttpError(
-          409,
-          'ask_already_recorded',
-          'an ask with this identity already exists on this task',
-        );
-      }
-      await options.queries.recordAction({
-        userId: actor.userId,
-        action: 'task.ask',
-        // The **shape** of the request, never the words: the question is free text and this route
-        // has no redactor — the command redacts it on its way to the row (`routes/commands.ts`'s
-        // module note states the same rule for the other nine free-text fields).
-        params: {
+      const asks = options.asks;
+      return replay.run(async (effectReturned) => {
+        const projectId = await projectOf(taskId);
+        const result = await asks.ask({
+          taskId,
+          projectId,
+          userId: actor.userId,
+          question: request.body.question,
+        });
+        if (result.status === 'duplicate') {
+          // Only a ticket-sourced ask can collide, and this door never creates one — so this is a
+          // defect rather than a state, and it is named rather than reported as success.
+          throw new HttpError(
+            409,
+            'ask_already_recorded',
+            'an ask with this identity already exists on this task',
+          );
+        }
+        effectReturned();
+        await options.queries.recordAction({
+          userId: actor.userId,
+          action: 'task.ask',
+          // The **shape** of the request, never the words: the question is free text and this route
+          // has no redactor — the command redacts it on its way to the row (`routes/commands.ts`'s
+          // module note states the same rule for the other nine free-text fields).
+          params: {
+            ask_id: result.askId,
+            question_chars: request.body.question.length,
+            idempotency_key: key,
+            ...(replay.digest === null ? {} : { body_digest: replay.digest }),
+          },
+          taskId,
+        });
+        return {
           ask_id: result.askId,
-          question_chars: request.body.question.length,
-          idempotency_key: key,
-          ...(replay.digest === null ? {} : { body_digest: replay.digest }),
-        },
-        taskId,
+          task_id: taskId,
+          performed: true,
+          status: 'pending' as const,
+        };
       });
-      return { ask_id: result.askId, task_id: taskId, performed: true, status: 'pending' as const };
     },
   );
 

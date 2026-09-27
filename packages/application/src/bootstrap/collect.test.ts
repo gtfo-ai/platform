@@ -176,6 +176,7 @@ const seedBatch = async (
     readonly mergeRequests: number;
     readonly batchSize: number;
     readonly capUsd?: number;
+    readonly requestedBy?: Id | null;
   },
 ): Promise<Id> => {
   const id = harness.ids.next();
@@ -183,7 +184,7 @@ const seedBatch = async (
     await harness.bootstrap.createBatch(scope.tx, {
       id,
       projectId: PROJECT,
-      requestedBy: null,
+      requestedBy: input.requestedBy ?? null,
       mergeRequests: input.mergeRequests,
       batchSize: input.batchSize,
       days: 183,
@@ -249,6 +250,22 @@ describe('collecting a project’s merged history', () => {
 
     // The batch moves to `mining` in the same transaction as the chunks.
     expect(harness.bootstrap.batches[0]?.status).toBe('mining');
+  });
+
+  it('writes the batch’s requester onto every chunk task, and nobody when nobody asked (WP-67)', async () => {
+    const REQUESTER = '00000000-0000-4000-8000-0000000000e1' as Id;
+    const asked = world({ merged: 3 });
+    await collect(
+      asked,
+      await seedBatch(asked, { mergeRequests: 3, batchSize: 2, requestedBy: REQUESTER }),
+    );
+    const askedTasks = await tasksOf(asked);
+    expect(askedTasks).toHaveLength(2);
+    expect(askedTasks.map((task) => task.requestedByUserId)).toEqual([REQUESTER, REQUESTER]);
+
+    const nobody = world({ merged: 3 });
+    await collect(nobody, await seedBatch(nobody, { mergeRequests: 3, batchSize: 2 }));
+    expect((await tasksOf(nobody)).map((task) => task.requestedByUserId)).toEqual([null, null]);
   });
 
   it('reads the provider once per merge request for its discussions, and says so in the audit', async () => {

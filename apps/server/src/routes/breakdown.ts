@@ -54,18 +54,19 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { effectiveRole, requirePermission } from '../auth/rbac.js';
 import { commandRefusal, HttpError, NotFoundError } from '../errors.js';
-import { idempotentReplay, requireIdempotencyKey } from './idempotency.js';
+import {
+  claimIdempotentAttempt,
+  type IdempotencyRecords,
+  requireIdempotencyKey,
+} from './idempotency.js';
 import { scopedProject, scopeToProject } from './scope.js';
 
-/** What this surface reads or writes outside the application ring, as five functions. */
+/** What this surface reads or writes outside the application ring, as six functions. */
 export interface BreakdownQueries {
   readonly taskProjectId: (taskId: string) => Promise<string | null>;
   readonly projectRole: (projectId: string, userId: string) => Promise<UserRole | null>;
-  readonly previousAttempt: (query: {
-    readonly userId: string;
-    readonly action: string;
-    readonly key: string;
-  }) => Promise<{ readonly bodyDigest: string | null; readonly params: JsonObject } | null>;
+  readonly claimAttempt: IdempotencyRecords['claimAttempt'];
+  readonly releaseAttempt: IdempotencyRecords['releaseAttempt'];
   readonly recordAction: (input: {
     readonly userId: string;
     readonly action: string;
@@ -190,7 +191,7 @@ export const registerBreakdownRoutes = async (
       const actor = actorOf(request);
       // Before the replay, not after it: a key belongs to whoever issued it (`./idempotency.ts`).
       const key = requireIdempotencyKey(request);
-      const replay = await idempotentReplay(options.queries.previousAttempt, {
+      const replay = await claimIdempotentAttempt(options.queries, {
         userId: actor.userId,
         action: 'task.breakdown.decide',
         key,
@@ -208,56 +209,59 @@ export const registerBreakdownRoutes = async (
           remaining: counted('remaining'),
         };
       }
-      if (options.breakdown === null) {
-        throw new HttpError(
-          503,
-          'commands_unavailable',
-          'this process cannot decide a ticket breakdown: it serves reads only. Ask an instance that runs the workers',
-        );
-      }
-      await projectOf(taskId);
-      // A **refusal** is translated here rather than globally, exactly as `routes/commands.ts`
-      // translates the aggregate's: `BreakdownRefusedError` means "not to this, not now" to a
-      // caller who chose the decision, and means "this build has a bug" on a route that reads —
-      // which is why `toApiError` leaves it as `500 internal_error` everywhere else.
-      const result = await (async () => {
-        try {
-          return await (options.breakdown as BreakdownCommandPort).decide({
-            taskId,
-            itemIds: request.body.item_ids,
-            decision: request.body.decision,
-            userId: actor.userId,
-            reason: request.body.reason ?? null,
-          });
-        } catch (error) {
-          const refusal = commandRefusal(error);
-          if (refusal === null) {
-            throw error;
-          }
-          throw refusal;
+      return replay.run(async (effectReturned) => {
+        if (options.breakdown === null) {
+          throw new HttpError(
+            503,
+            'commands_unavailable',
+            'this process cannot decide a ticket breakdown: it serves reads only. Ask an instance that runs the workers',
+          );
         }
-      })();
-      await options.queries.recordAction({
-        userId: actor.userId,
-        action: 'task.breakdown.decide',
-        // The **shape** of the request plus the counts the command produced, never the words. The
-        // reason is untrusted free text and it is stored — redacted — on the rows the decision
-        // moved, which is the one copy worth keeping; a second copy in `human_actions` would be a
-        // second thing to redact and a second thing to get wrong (`routes/commands.ts`' module
-        // note). `reason_chars` is what an auditor needs from it here.
-        params: {
-          decision: request.body.decision,
-          items: request.body.item_ids.length,
-          reason_chars: (request.body.reason ?? '').length,
-          accepted: result.accepted,
-          rejected: result.rejected,
-          remaining: result.remaining,
-          idempotency_key: key,
-          ...(replay.digest === null ? {} : { body_digest: replay.digest }),
-        },
-        taskId,
+        await projectOf(taskId);
+        // A **refusal** is translated here rather than globally, exactly as `routes/commands.ts`
+        // translates the aggregate's: `BreakdownRefusedError` means "not to this, not now" to a
+        // caller who chose the decision, and means "this build has a bug" on a route that reads —
+        // which is why `toApiError` leaves it as `500 internal_error` everywhere else.
+        const result = await (async () => {
+          try {
+            return await (options.breakdown as BreakdownCommandPort).decide({
+              taskId,
+              itemIds: request.body.item_ids,
+              decision: request.body.decision,
+              userId: actor.userId,
+              reason: request.body.reason ?? null,
+            });
+          } catch (error) {
+            const refusal = commandRefusal(error);
+            if (refusal === null) {
+              throw error;
+            }
+            throw refusal;
+          }
+        })();
+        effectReturned();
+        await options.queries.recordAction({
+          userId: actor.userId,
+          action: 'task.breakdown.decide',
+          // The **shape** of the request plus the counts the command produced, never the words. The
+          // reason is untrusted free text and it is stored — redacted — on the rows the decision
+          // moved, which is the one copy worth keeping; a second copy in `human_actions` would be a
+          // second thing to redact and a second thing to get wrong (`routes/commands.ts`' module
+          // note). `reason_chars` is what an auditor needs from it here.
+          params: {
+            decision: request.body.decision,
+            items: request.body.item_ids.length,
+            reason_chars: (request.body.reason ?? '').length,
+            accepted: result.accepted,
+            rejected: result.rejected,
+            remaining: result.remaining,
+            idempotency_key: key,
+            ...(replay.digest === null ? {} : { body_digest: replay.digest }),
+          },
+          taskId,
+        });
+        return { task_id: taskId, performed: true, ...result };
       });
-      return { task_id: taskId, performed: true, ...result };
     },
   );
 };

@@ -4641,8 +4641,10 @@ backlog **78** and **68** were given as WP-43 and WP-44. (a) depends on nothing 
 thing in this entry; nearest owner for it is whoever next opens `risk-classes.ts` or the settings
 screen.
 
-### 92. **`tasks.requested_by_user_id` has no writer at any of the four sites that create a task, so product/19:138's third reviewer step resolves to nobody on every task — and at three of the four the requester is in hand and dropped** (TODO, small — **no work package owns it**; found by WP-37, session 5; the other half of the same step is backlog **79**)
+### 92. **`tasks.requested_by_user_id` has no writer at any of the four sites that create a task, so product/19:138's third reviewer step resolves to nobody on every task — and at one of the four (discovery) the requester is in hand and dropped** (half **(a)** implemented in WP-67, session 8, commit pending — for the orchestrator to mark; half **(b)** TODO, small, **unowned** — carried as backlog **243**; found by WP-37, session 5; the other half of the same step is backlog **79**)
 > **M4 (architect, session 6): folded into WP-67.**
+>
+> **Correction (refiner, session 8, from WP-67's decision (a)).** This entry said *three* of the four sites hold the actor and named review-only and the ticket linter as *"commands with an actor"*. **They are not**: review-only's task is created by a handler on `mr.opened` (`packages/application/src/pipeline/review-only.ts:523`) and the linter's by one on `ticket.created` (`pipeline/ticket-lint.ts:359`) — a provider delivery, with no platform user in hand — and neither task ever opens a merge request, so the `risk_route` duty that reads the column never runs for them (the comments at `review-only.ts:851-852` and `ticket-lint.ts:571`). Their `requestedByUserId: null` (`review-only.ts:858`, `ticket-lint.ts:577`) is correct and costs nothing. The commands that **do** hold an actor are three, two of which this entry did not know about because they did not exist yet: discovery (`onboarding/discovery.ts:236`), the shadow batch (`shadow/batch.ts:357`) and the history bootstrap's chunk tasks (`bootstrap/collect.ts:364`, from the batch's `requestedBy`) — WP-67 writes all three. So the site count is **six**, not four, and the sentences below that say *"three of the four"*, *"Review-only and the linter are commands with an actor"* and *"one field on the insert in … `pipeline/review-only.ts` and `pipeline/ticket-lint.ts`"* are superseded by this note. Also stale: **(b)**'s dependency — *"no screen calls that endpoint (79's remaining half)"* — was resolved at `b4c23bc` (WP-43, backlog 79's header), so (b) is schedulable now; its remaining design point is in **243**.
 
 **What is wrong.** The reviewer precedence's fallback reads a column nothing writes. WP-37 implemented
 the step rather than omitting it — *"routing that cannot express its own last step is the state
@@ -10973,6 +10975,78 @@ second writer (a replay, a recovery path) calling with an unbounded claim on a r
 PostgreSQL and fail against the double, or the reverse assumption would be written into a test. **Done:** one contract
 case — out-of-range claim on an already-recorded (and one on an abandoned) chunk — deciding which answer the port owes,
 and the double moved to that order (or the adapter to a pre-check), divergence 6 updated. **Depends on** WP-66.
+
+### 240. **A deferred dependency-gate ending is woken only by an `afterCommit` enqueue on `task.resumed`, so a process that dies between the resume's commit and the enqueue leaves the question unasked (or the block unreturned) until the task stops and resumes again — and no row of `recovery/stranded.ts` reads `deferred_stage`** (small, TODO — **latent**: needs a process death inside one commit-to-enqueue window, the same class as backlog **101**'s eight sites; **read off the tree, not measured** (rule 66); **unowned** — for the M5 architect pass, home named below; found by WP-67, session 8)
+
+**What is wrong.** WP-67 (backlog **96**) records an `ask`/`block` that met a human-owned stop as `tasks.dependencies.deferred_stage` (`packages/contracts/src/records.ts:428`; written at `packages/application/src/pipeline/dependency-gate.ts:707` and `:773`) and performs it from a `task.resumed` handler that reads the record and then enqueues the `dependency_gate_resume` duty **after commit** (`dependency-gate.ts:219-243`, the enqueue at `:240-242`). That is the lost-wake-up shape `packages/application/src/recovery/stranded.ts:8-12` names: the event's `handler_executions` record makes a redispatch skip it, and the duty re-validates only when something enqueues it (`:838`). The record survives, so the next `task.resumed` recovers it — but a task that stays `active` never emits one, and a deferred `ask` is dropped on fire once the task is past `active` (Q91's answer, `dependency-gate.ts:822`).
+
+**Evidence.** The implementer's discovered-work bullet, quoted: *"A deferred gate ending is woken by an `afterCommit` enqueue; a crash between the resume's commit and the enqueue loses it until the next resume, and no `recovery/stranded.ts` row reads `deferred_stage`. Latent; read off the tree."* Confirmed: `deferred_stage` appears in no file under `packages/application/src/recovery/` (grep), and the site table (`stranded.ts:16-25`) has no dependency-gate row.
+
+**What it costs to leave.** For `ask`: the question WP-67 exists to make sure is asked is not, silently — backlog **96**'s defect back for the crashed window. For `block`: a package the policy blocks rides on to review with no return. Both need a crash in a sub-second window; nothing logs it.
+
+**What "done" looks like.** A row in `stranded.ts`'s table (its natural home — the class, the pass, the interval and the pool reservation are already there): tasks `active` with `dependencies.deferred_stage` set past a grace, re-enqueuing `dependency_gate_resume`, **bounded** as backlog **105** requires of every row (a mark — on the dependencies record or a column — so a duty that keeps failing is not re-enqueued every pass), with a unit case each way: a lost wake-up is recovered once, a task at a human-owned stop with a deferral is not touched. The grace needs a timestamp the predicate can read; **needs design**, not measurement: which instant the task became `active` (no such column is cited here).
+
+**Depends on** WP-67. No M4 row opens `recovery/`; a new bounded row is more than a sweep line, so it is left for the architect rather than folded into WP-73.
+
+### 241. **A `command_idempotency` claim left by a process that died mid-command answers `409 idempotency_attempt_unknown` for ever and is visible to nobody but the caller who hits it — no metric, no log line, no admin read** (small, TODO — **live** from WP-67 (commit pending), but only after a process death between claim and audit row; working as designed on the refusal side (the trade is argued at the line), the gap is **observability**; **read off the tree, not measured**; folded into **WP-73** (refiner, session 8); found by WP-67, session 8)
+
+**What is wrong.** `apps/server/src/routes/idempotency.ts:52-56` decides that a claim whose process died is `409 idempotency_key_in_flight` for `CLAIM_IN_FLIGHT_MS` (5 min, `:247`, *"chosen, not derived"* — WP-67 decision (d)) and then `409 idempotency_attempt_unknown` *"for good"*, **never re-claimed** (`:331-343`). The row is `command_idempotency` with `completed_at is null` (migration `0053_command_idempotency.sql:25-26`). Nothing reads such rows but the claim path: `command_idempotency` is named in no metrics module (`apps/server/src/metrics.ts` does not mention it; grep over `apps/` and `packages/`), and no route lists them.
+
+**Evidence.** The implementer's bullet, quoted: *"An uncompleted `command_idempotency` claim (a process died mid-command) is visible to nobody: no metric, no admin read; the caller only learns it from `idempotency_attempt_unknown`."* Confirmed by the greps above.
+
+**What it costs to leave.** An operator cannot tell that a crash left commands in an unknown state — the one case the message asks a human to *"check the resource"* — and cannot count how often the 5-minute choice is reached. The SPA side of the same refusal is **242**.
+
+**What "done" looks like.** One gauge beside WP-65's in `apps/server/src/metrics.ts`: uncompleted claims older than `CLAIM_IN_FLIGHT_MS`, labelled by `action` (never by key or user — a key is caller text), with a unit case that a completed and a fresh claim are not counted; and one sentence in `docs/operator-guide.md` saying what a non-zero value means and that the fix is a human check, not a delete. Deleting stale claims is **not** in scope: it re-opens the double-perform WP-67 closed.
+
+**Depends on** WP-67.
+
+### 242. **The SPA has no handling for WP-67's two new refusals: `409 idempotency_key_in_flight` shows as an ordinary error, and after `409 idempotency_attempt_unknown` — which tells the caller to use a new key — the client re-sends the same key for that intent until the component unmounts** (small, TODO — **live** from WP-67 (commit pending); the in-flight half is a **hypothesis about frequency**: most command buttons are already disabled while pending, so the trigger is narrower than "a double-click"; **read off the tree, UI effect not measured**; folded into **WP-73** (refiner, session 8); found by WP-67, session 8)
+
+**What is wrong.** `apps/web/src/app/idempotency.ts:25-29` says *"Two clicks still send two requests"*, both under the intent's one key; since WP-67 the second, if it arrives while the first performs, is refused `idempotency_key_in_flight` (`apps/server/src/routes/idempotency.ts:332-338`). No file under `apps/web/src` outside tests names either new code (grep for `in_flight`/`attempt_unknown`: only the docblock at `idempotency.ts:16`, which names `idempotency_key_reused`). The error renders through `ApiError` (`apps/web/src/api/http.ts:24`) like any 409 — the server's message, *"…still being performed; send the same request again once it has answered"*, is readable, but it is shown as a failure beside a first request that succeeded. Separately, the key register releases a key **only on success** (`apps/web/src/app/idempotency.ts:18-21`), so after `idempotency_attempt_unknown` a re-submit of the same form carries the same key and gets the same 409 until the screen is left.
+
+**Evidence and its limit.** The implementer's bullet, quoted: *"… the second click is answered `409 idempotency_key_in_flight` — which the client has no handling for and shows as an error like any 409 … Read off the tree; the UI effect unmeasured."* Against it: the task page's command buttons are `disabled` on `isPending` (`apps/web/src/features/task-detail.tsx:785`, `:796`, `:832`, `:999`, `:1007`, `:1016`), as are operating-mode's and the interview's, so a real double-click on those likely never sends the second request. **Needs measurement** (a `verify:web-e2e` case, not run here): which of the screens using `keyFor` (`apps/web/src/app/queries.ts`) let a second send through, and whether a network-timeout retry reaches the in-flight window at all.
+
+**What it costs to leave.** A user sees an error for a command that was performed; after a crash, a form that cannot be submitted again without leaving the page. The user guide (`docs/user-guide.md:281-284`) already describes the in-flight answer as safe, which is true of the server and silent about the screen.
+
+**What "done" looks like.** In the shared mutation path: `idempotency_key_in_flight` is shown as *in progress* (not an error) and the query is refreshed when the first answers; `idempotency_attempt_unknown` **releases** the intent's key and tells the user to check the task before sending again. One `test:ui` case per code, and the user guide's sentence extended by what the screen shows.
+
+**Depends on** WP-67.
+
+### 243. **Backlog 92 half (b) — intake writes no requester, so the reviewer fallback still resolves to nobody on every ticket-started task — is unbuilt, and its reporter is not in hand at the task insert** (small, TODO — **live**: intake is where almost every task comes from, so WP-67's half (a) moved the fallback for discovery, shadow and bootstrap tasks only; fail-closed, nobody is assigned wrongly; **read off the tree**; **unowned** — for the M5 architect pass; found by WP-67, session 8. **The evidence and the recommendation are backlog 92's** — this entry holds the number and the one new fact, so the two do not split)
+
+**What is wrong.** `packages/application/src/pipeline/saga.ts:490-494` still writes `requestedByUserId: null`, with a comment naming 92's half (b). The new fact since 92 was written: the reporter is **not available at that insert** — `Ticket.reporter` is on the port (`packages/application/src/ports/integrations/task-management.ts:93`) but no pipeline module or event contract carries it (grep for `reporter` under `pipeline/` and `packages/contracts/src/` finds only the two comments), and the ticket is first read *after* intake, into `ticket_snapshot` (WP-15f). So half (b) is not one field on an insert: it needs the reporter on the snapshot read, the `user_identities` lookup (backlog **79** resolved, `b4c23bc` — the mapping screen exists), and a **second writer** of `tasks.requested_by_user_id`, which the column-ownership partition (`packages/infrastructure/src/pipeline/tasks-column-ownership.test.ts`) must then name.
+
+**What it costs to leave.** 92's cost, unchanged for the commonest task: a project with neither `CODEOWNERS` nor `policies.reviewers` gets no reviewer.
+
+**What "done" looks like.** 92's half (b) as written there (resolved only through `user_identities`, never an email match, `null` when unmapped), plus: the write site chosen (the snapshot job, narrow method) and the ownership test updated; both ways asserted — a mapped reporter becomes the requester and the routing assigns them, an unmapped one leaves `null`. **Depends on** WP-67 and 92 (a).
+
+### 244. **A task paused at `ready_for_merge` can be neither resumed nor returned: pause accepts the state and nothing takes the task back to it, so a human who pauses a finished task strands it — and a merge made on the provider while it is paused is dropped without a trace** (**major**, TODO — **live** since WP-15i (`8abccbf`, the resume route; the edge table is WP-02's `168d368`), **not** introduced by WP-67, which only added a second thing that waits for the resume; the resume refusal is **measured** (unit tier, WP-67 round 1), the other exits and the merge drop are **read off the tree**; the resume and its event folded into **WP-73**, the merge-while-paused half filed as **Q104** (refiner, session 8); found by WP-67's review round 1, session 8)
+
+**What is wrong.** The Task table lets six states enter `paused` — `active`, `returned`, `waiting_answers`, `waiting_approval`, `needs_human` **and `ready_for_merge`** (`packages/domain/src/aggregates/task-state-machine.ts:57`, `:63-65`, `:67`, `:68`) — and gives `paused` three successors, `active`, `needs_human`, `cancelled` (`:66`). `pauseTask` is `withState(task, 'paused')` with no guard of its own (`packages/domain/src/aggregates/task.ts:410-423`; `withState` asserts the table at `:78-81`). `resumeTaskCommand` re-enters `current_stage` through `applyDecision` (`packages/application/src/pipeline/commands.ts:665-679`), and for `ready_for_merge` that is `markReadyForMerge` (`packages/application/src/pipeline/transitions.ts:89-90`) → `enterTerminalStage` → `withState(task, 'ready_for_merge')` (`task.ts:623-651`) — `paused → ready_for_merge`, refused. So the edge that lets a finished task pause has no way back. The exits, one by one:
+- **resume, retry-stage** — refused, same transition (`commands.ts:665`; retry enters the same stage).
+- **return-to-stage, rework** — **also refused**: `returnToStage` is `withState(task, 'returned')` (`task.ts:300`) and `paused → returned` is not an edge. So the route's own description, *"a task paused at `ready_for_merge`, say — answers 409 naming the transition, and the way out is `return-to-stage`"* (`apps/server/src/routes/commands.ts:535`), and the command's docblock, *"Returning it to an earlier stage is the way out"* (`packages/application/src/pipeline/commands.ts:660-663`), name an exit that does not open. Read off the tree.
+- **hand-back** — works over the API to an **agent** stage (`paused → active`; `handBackTaskCommand`, `commands.ts:1471`), and refuses `ready_for_merge` itself. The screen offers it only while a take-over is in force (`apps/web/src/features/take-over.tsx:235`), so a **manual** pause has no hand-back button.
+- **cancel** — works (`task.ts:694`), and is the one exit on the screen that does.
+- **`needs_human`** — an edge, but no HTTP request can reach it (CLAUDE.md, the command surface).
+And the provider's merge: `pipeline.merge.request` handles `mr.merged` only when `state === 'ready_for_merge'` and **returns silently** otherwise (`packages/application/src/pipeline/saga.ts:1394-1397`), and its `handler_executions` record makes a redispatch skip it. A human who pauses, then merges in GitLab, leaves a task that is `paused` for ever with the merge nowhere in its stream — and even a fixed resume would put it back at `ready_for_merge` waiting for a merge that already happened.
+
+**Evidence.** WP-67 round 1, quoted: *"**244** a task paused at `ready_for_merge` cannot be resumed (`IllegalTransitionError paused -> ready_for_merge` from `resumeTaskCommand`), and a `block` deferred there therefore has no wake-up either. Measured in the unit tier."* The refusal is **pinned as intended** since WP-15i: `packages/application/src/pipeline/human-commands.test.ts` › "refuses to resume at a stage the paused state has no edge to", whose comment reads *‘`paused → ready_for_merge` is not in technical/02’s table, so the honest answer is the refusal’*; WP-67 pins it again at `packages/application/src/pipeline/dependency-gate.test.ts` › "does not defer an ask for a task paused at ready_for_merge, whose resume is refused (Q91)" (`.rejects.toThrow('illegal transition paused -> ready_for_merge')`, `:715`). The deferred-`block` consequence is stated at `packages/application/src/pipeline/dependency-gate.ts:540-546` (*‘A `block` at such a stop is still deferred and has the same missing wake-up’*; the deferral at `:790-797`), and the panel prints **`blocked on resume`** for it (`apps/web/src/features/task-detail.tsx:238`) — a promise nothing can keep.
+
+**Is it a defect or the docs?** The docs never wrote the edge in either direction: technical/02:46 draws only `active ─► paused(…) ─► active`, and the code's own note widened the *entry* (`task-state-machine.ts:26-27`, *"`paused` is reachable from the waiting states as well as from `active`"*) without widening the exit. WP-15i's test calls the refusal "honest" against a table that does not contain the entry edge either. What pause is **for** at this state is product/04:84: *"`@agentic hold` pauses"* — written in the human-review-at-Ready line, i.e. a hold on a task at `ready_for_merge`, which only makes sense if the hold can be lifted back to Ready. (`@agentic hold` itself is unbuilt — no non-test source matches it — so today the path is the task header's **Pause** button, `task-detail.tsx:998-1005`.) product/04:159 lists `Paused (budget | manual)` as a status, not a place a task goes to die. So: a **defect in an incomplete transcription**, and technical/02 changes first.
+
+**What it costs to leave.** Every **Pause** pressed on a task waiting for merge is a cancel in slow motion: the only on-screen exit is **Cancel**, which records a task whose work was finished as `cancelled`; over the API, a hand-back to an agent stage spends a fresh run (and a code-review round) on a change that had passed review. A `block` the dependency policy raised stays unapplied, so the package can still merge through the provider. A merge made while paused never reaches `merged`/`retro`/`done`, so the retrospective and every figure that reads a merged task (lead time, BD-011's cost per merged task) miss it.
+
+**What "done" looks like** (the resume half, WP-73):
+1. technical/02's Task diagram and the note beside `TASK_TRANSITIONS` gain **`paused → ready_for_merge`** — *a task paused while waiting for a merge resumes waiting for it* — docs first (rule 8); `task-state-machine.test.ts`'s expected table updated with it.
+2. The resume **emits `task.resumed`**: `enterTerminalStage` (`task.ts:623`) does not look at `RESUMED_FROM` (`:172-177`) the way `enterStage` does (`:197`), so the edge alone would move the state and still wake no deferred gate — this is the half that is more than one line.
+3. `human-commands.test.ts` › "refuses to resume at a stage the paused state has no edge to" **inverted**: pause at `ready_for_merge`, resume, state `ready_for_merge`, one `task.resumed`, no stage job enqueued (nothing runs at Ready); and the refusal kept for a state that genuinely has no way back, if one remains.
+4. `dependency-gate.test.ts`: a `block` deferred at a paused `ready_for_merge` **returns the task** on resume (the countable effect: one `task.stage.returned` spending `dependency_policy`); the `ask` case keeps Q91's answer (not deferred, not asked) with its comment and `dependency-gate.ts:536-546`'s docblock rewritten from "cannot come" to "Q91".
+5. `commands.ts:535` and `packages/application/src/pipeline/commands.ts:660-663` stop naming return-to-stage as the way out.
+Whether `paused → returned` should exist too (so return-to-stage works from any pause) is **not** in this fix: it is the same question for every paused stage, and nobody has asked for it.
+
+**The merge half** depends on **Q104** (whether a provider merge ends a pause), and is built with this fix if Q104's recommendation is accepted.
+
+**Depends on** nothing unbuilt. **Needs no measurement** to start: the refusal is measured and the rest is a table read.
 
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
@@ -32733,3 +32807,161 @@ were spaced with other work and a time-bounded wait. A `verify` after the last e
 (a 60 s timeout, load rising from 11.58 to 27.36 during the run; nothing of this row's touches the
 runlet); the next series' fifth reading was 9.69 and `verify` then **PASS**ed (8165 passed, 14
 skipped). `scripts/citations.test.ts` green over these notes.
+
+#### WP-67
+
+**Implemented** (implementer, session 8): backlog **47**, **99**, **96** (the human-owned stops; Q91
+answered per its recommendation) and **92** half (a). What was already there, stated before anything
+was built: `routes/idempotency.ts` stored a digest beside the key in the `human_actions` row, scoped
+`(user_id, action, key)`, answered a replay from that row's `params` and refused a different digest
+with `409 idempotency_key_reused` — criterion (1)'s scope, replay and refusal existed for every
+command but the shadow batch. **The open part of 47 was the record not being a record**: a lookup
+over an append-only table with no unique index, so two requests under one key that arrive together
+both read nothing under READ COMMITTED and both perform. That is what this row closes.
+
+1. **The record.** Migration **0053** adds `command_idempotency (user_id, action, idempotency_key,
+   body_digest, claimed_at, completed_at, human_action_id)`, primary key = the scope; Drizzle
+   (`schema/pipeline.ts`), table count 65. **Not** a unique index on `human_actions`, for two
+   reasons written in the migration header: a claim must be *released* when a command is refused
+   and `human_actions` is `append_only`; and the index would be built over the duplicate rows the
+   window already put there, failing the upgrade. **Retention: none** — a key is honoured as long as
+   the audit it points at. The backfill copies every keyed `human_actions` row, **first** of any
+   duplicates winning (criterion (1)'s "first response"). Every keyed `human_actions` insert
+   completes/upserts the record on the same executor (`insertHumanAction`), so the table indexes
+   every used key. Replay answers the first attempt's `params`; different digest →
+   `idempotency_key_reused` whether the first performed or is still performing.
+2. **Ordering, decided: claim before the effect** (`claimIdempotentAttempt`, argued in
+   `routes/idempotency.ts` § "The write ordering"), because no command route holds its command's
+   transaction. A refusal/404/`already` releases the claim (`run`'s `finally`; a release deletes only
+   an uncompleted row, so it is a no-op after the audit row completed it). A second request while
+   held → `409 idempotency_key_in_flight`; a claim older than `CLAIM_IN_FLIGHT_MS` (5 min) →
+   `409 idempotency_attempt_unknown`, **never re-claimed** — that is the key which names a command
+   nobody performed, the side of the trade chosen. The one residual the other way is named: an audit
+   insert refused without the process dying is followed by a release, so a retry performs again.
+   Where the route holds the effect's transaction (the interview) the claim is **with** the effect:
+   `claimIdempotentAttemptInTransaction` now inserts the key row in that transaction (the advisory
+   lock is gone; the primary key blocks the racing transaction).
+3. **Concurrency at the integration tier**:
+   `test/integration/server/command-idempotency.integration.test.ts` › "performs once when the second arrives while the first is mid-effect"
+   (effect's transaction held open on a barrier; the second is `409 idempotency_key_in_flight`; one
+   effect row, one audit row, then a replay) and › "performs each key once under a burst of simultaneous pairs"
+   (12 pairs, no barrier). Driven through `claimIdempotentAttempt` in the route's own order because
+   this tier has no `fastify` dependency (`test/` cannot import it — a typecheck failure, measured);
+   the **route** is driven concurrently on PostgreSQL in the e2e:
+   `test/e2e/server/command-api.e2e.test.ts` › "pauses, resumes, retries, returns, reworks, feeds back and cancels — and refuses each from a state that cannot"
+   now sends two `feedback` under one new key at once and asserts exactly one more
+   `feedback.received`. The SQL states and the upgrade over duplicates:
+   `test/integration/server/command-idempotency.integration.test.ts` › "claims once, answers in_flight while held, and frees an uncompleted claim on release"
+   and › "applies, keeps every audit row, and answers each key with its first attempt".
+4. **The wizard's seven**: discovery **claims** (`routes/onboarding.ts`, replay answers the first
+   task id); the interview claims **in its transaction**; project and integration creates keep the
+   natural key and write the audit + record inside the create's transaction — **divergence stated**
+   (`findIdempotentAttempt`, technical/08): a concurrent *different* body is answered with the first
+   resource instead of a 409. `…/test`, `PUT …/bindings`, `PUT …/config` take no key (stated).
+5. **Shadow**: `apps/server/src/routes/shadow.test.ts` › "answers a replay of the same body with the first batch, and writes no second row"
+   — one command call, one audit row, the first batch's id read back through `findBatch`, beside the
+   existing different-body case; plus › "gives the key back when the batch is refused, so the same request may be sent again"
+   and › "refuses a replay whose first batch can no longer be read, rather than inventing one".
+6. **Dependency gate re-entry**: `tasks.dependencies.deferred_stage` (contracts; optional, absent
+   = `null`) records an `ask`/`block` that met `paused`/`needs_human`/`waiting_answers`/
+   `waiting_approval`; a `task.resumed` handler (priority 120, reads before it enqueues) wakes the
+   `dependency_gate_resume` duty, which performs it under the row lock and clears the deferral in the
+   same transaction. The gate takes the row lock (`bumpVersion`, then re-load) before deciding to
+   defer, which is what makes the handler's read sound (docblock of `loadLocked`). Both directions:
+   `packages/application/src/pipeline/dependency-gate.test.ts` › "asks exactly one question for a task paused across the gate, once it is resumed",
+   › "raises no second question on a later resume: the record is the trigger’s idempotency",
+   › "raises none for a task that was asked before it stopped" and
+   › "defers a block across a pause and returns the task when it resumes". **Q91**: `ready_for_merge`/
+   `merged`/`retro` stay refused (`deferred_stage: null`), marked implemented in OPEN-QUESTIONS; the
+   panel says why on the screen (`apps/web/src/features/task-detail.test.ts` › "says a deferred ending will happen on resume, and never calls it not asked (WP-67)").
+7. **Requester**: discovery, shadow batch and bootstrap chunk tasks write `requested_by_user_id`
+   (`packages/application/src/onboarding/discovery.test.ts` › "creates a task on the discovery template and runs its one agent stage"
+   and › "stamps the pipeline actor when nobody asked for it" for both ways). **Two defects found and
+   fixed on the way, both of which kept step three dead even with a writer**: the routing read the
+   provider off `mr.provider`, which `recordMergeRequest` always stores `null`; and it resolved the
+   requester's **account id** (`String(user.id)` on GitLab) through `resolveUserId`, which takes a
+   *username*. `packages/application/src/pipeline/risk-routing.test.ts` › "assigns the requester’s provider account when nothing else matched"
+   and › "routes a task nobody requested to nobody, with the same identity mapped". The discovery
+   task's routing is asserted on a row whose requester is supplied on the read, stated at the case:
+   a discovery task never opens a merge request.
+8. **Rule 83**: `StoredTask.requestedByUserId`'s docblock, `saga.ts`'s intake comment and
+   `requesterAccount`'s docblock rewritten; technical/03 (`tasks` amendment + `command_idempotency`
+   entry), technical/08 (§ "The idempotency record"), the onboarding and shadow route docblocks, the
+   user guide's double-click sentence.
+
+**Decisions/assumptions**: (a) "the three commands that hold the actor" are discovery, shadow batch
+and history bootstrap — backlog 92 named review-only and the linter, which are started by a provider
+delivery and hold no actor (sentence falsified, left in 92 for the refiner). (b) The requester's
+account id is assigned without a lookup (above). (c) A deferred `ask` whose merge request head moved
+is dropped rather than asked. (d) `CLAIM_IN_FLIGHT_MS` = 5 min is chosen, not derived.
+
+**Sentences falsified.** Changed: `routes/idempotency.ts` "The residual…" (now "The write ordering");
+`findIdempotentAttempt`'s "Two concurrent requests… Nobody owns it"; `claimIdempotentAttemptInTransaction`'s
+advisory lock (code and `onboarding.integration.test.ts` docblock); `routes/onboarding.ts` and
+`onboarding-queries.ts` "digest … in the `human_actions` row"; `routes/shadow.ts` "a replay creates a
+batch **row**"; `routes/bootstrap.ts` replay paragraph; technical/08:72; the three `requested_by`
+sites; `dependency-gate.ts`'s ask/block docblocks; the panel's `not asked` basis. **Left, and why**:
+CLAUDE.md's `routes/idempotency.ts` sentence ("stored beside the key") and its WP-21 bullet ("digest
+… recorded beside the key in `human_actions`") — I may not edit CLAUDE.md; exact replacement for the
+orchestrator: *"…a digest of the canonical request stored beside the key in `command_idempotency`
+(migration 0053, WP-67), claimed before the command performs, so a concurrent repeat is
+`409 idempotency_key_in_flight` rather than a second effect…"*. Backlog 47/92/96/99's bodies — the
+orchestrator's to resolve.
+
+**Canaries** (each on the file, reverted and md5-confirmed):
+- **(3)** `claimCommandAttempt` reverted to the pre-WP-67 read-then-perform (look, claim nothing):
+  `test/integration/server/command-idempotency.integration.test.ts` › "performs once when the second arrives while the first is mid-effect",
+  › "performs each key once under a burst of simultaneous pairs" and › "claims once, answers in_flight while held, and frees an uncompleted claim on release"
+  fail (3 of 7). The held case first failed by hanging to its 120 s timeout — the second request
+  performed and waited on the barrier — so only the first performance now waits.
+- **(5)** the shadow route's replay branch disabled: `apps/server/src/routes/shadow.test.ts` › "answers a replay of the same body with the first batch, and writes no second row"
+  and › "refuses a replay whose first batch can no longer be read, rather than inventing one" fail.
+- **(6)** the `task.resumed` handler unregistered: `packages/application/src/pipeline/dependency-gate.test.ts` › "asks exactly one question for a task paused across the gate, once it is resumed",
+  › "raises no second question on a later resume: the record is the trigger’s idempotency" and
+  › "defers a block across a pause and returns the task when it resumes" fail. The other direction —
+  a re-entry keyed on `decision` alone (no deferral filter in the handler, no `question_id` check in
+  the duty): › "raises none for a task that was asked before it stopped" and › "raises no second question on a later resume: the record is the trigger’s idempotency" fail.
+
+**Discovered work** (for the refiner, from 240):
+- **240** A deferred gate ending is woken by an `afterCommit` enqueue; a crash between the resume's
+  commit and the enqueue loses it until the next resume, and no `recovery/stranded.ts` row reads
+  `deferred_stage`. Latent; read off the tree.
+- **241** An uncompleted `command_idempotency` claim (a process died mid-command) is visible to
+  nobody: no metric, no admin read; the caller only learns it from `idempotency_attempt_unknown`.
+- **242** The SPA sends a double-click as two requests under **one** key (`apps/web/src/app/idempotency.ts`:
+  *"Two clicks still send two requests"*), so since this row the second click is answered
+  `409 idempotency_key_in_flight` — which the client has no handling for and shows as an error like
+  any 409, where before it was (wrongly) performed twice. Read off the tree; the UI effect unmeasured.
+- **243** Backlog 92 half (b) (intake: the ticket reporter via `user_identities`) is still unbuilt.
+
+**Verification** (each tier after a load reading under 12; Docker held alone, `docker ps` clean of
+this repository's containers and `docker volume ls | wc -l` = 102 after each Docker tier):
+`pnpm run -s verify` **PASS** (8181 passed, 14 skipped); `verify:e2e` **PASS** (42 files, 215
+tests); `verify:ui` **PASS** (385); `verify:web-e2e` **PASS** (47). `verify:integration` first
+**FAIL**ed on `test/integration/db/migrations.integration.test.ts` › "creates every table technical/03 specifies and nothing else"
+and › "records the storage policy of every table that declares one" — the new table was not in the
+two lists; added with its reason, and the full tier's rerun **PASS**ed (600 passed).
+`scripts/citations.test.ts` green over these notes.
+
+**Review round 1 (REQUEST_CHANGES, three findings) — fixed:**
+1. **[major] a failure after the effect released the key.** `run` now hands the body an
+   `effectReturned()` marker, called by each of the nine claiming sites the moment its command
+   returned having performed; the `finally` releases only before it. `recordHumanAction` puts the
+   audit row and its completion in one transaction on the pool. Both directions:
+   `apps/server/src/routes/idempotency.test.ts` › "keeps the key held when anything fails after the effect returned, so a retry never performs again",
+   `apps/server/src/routes/commands.test.ts` › "never performs again when the audit row fails after the command performed"
+   and › "gives the key back when the command refuses, and performs a retry of it"; integration
+   `test/integration/server/command-idempotency.integration.test.ts` › "keeps the key claimed when the audit insert fails, so the retry performs nothing"
+   (a real foreign-key failure). Canary (release unconditionally): the two unit cases fail.
+2. **[minor] the handler's deferral filter was unasserted.** The old case read `jobs.enqueued`
+   after `drain`, which removes what it runs; it now records enqueues as they are made. Canary
+   (filter removed): `packages/application/src/pipeline/dependency-gate.test.ts` › "raises none for a task that was asked before it stopped" fails.
+3. **[minor] ask deferred at a paused `ready_for_merge`.** Measured: `resume` there is **refused**
+   (`paused → ready_for_merge` is not an edge), so no `task.resumed` and never `active`. An `ask`
+   at a stop whose `current_stage` is past review is no longer deferred (Q91).
+   › "does not defer an ask for a task paused at ready_for_merge, whose resume is refused (Q91)";
+   canary (the past-review check removed) fails it.
+
+**Discovered work (round 1)**: **244** a task paused at `ready_for_merge` cannot be resumed
+(`IllegalTransitionError paused -> ready_for_merge` from `resumeTaskCommand`), and a `block`
+deferred there therefore has no wake-up either. Measured in the unit tier.

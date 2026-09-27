@@ -20,6 +20,7 @@ import type { HistoryBootstrapCommands } from '../bootstrap.js';
 import { toApiError } from '../errors.js';
 import { OnboardingUnavailableError } from '../onboarding.js';
 import { BOOTSTRAP_START_ACTION, registerBootstrapRoutes } from './bootstrap.js';
+import { memoryAttemptRecords } from './idempotency-memory.js';
 
 const PROJECT = '00000000-0000-4000-8000-000000000b01';
 const BATCH = '00000000-0000-4000-8000-000000000b02';
@@ -104,8 +105,7 @@ const build = async (): Promise<void> => {
     queries: {
       projectRole: async () => world.role,
       projectExists: async () => world.projectExists,
-      previousAttempt: async (query) =>
-        attempts.get(`${query.userId}|${query.action}|${query.key}`) ?? null,
+      ...memoryAttemptRecords(attempts),
       recordAction: async (input) => {
         actions.push({ userId: input.userId, action: input.action, params: input.params });
         const key = input.params.idempotency_key;
@@ -307,7 +307,7 @@ describe('POST /api/projects/:project_id/history-bootstraps', () => {
       queries: {
         projectRole: async () => 'maintainer',
         projectExists: async () => true,
-        previousAttempt: async () => null,
+        ...memoryAttemptRecords(new Map()),
         recordAction: async () => {},
         listBootstraps: async () => ({
           items: [],

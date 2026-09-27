@@ -104,11 +104,16 @@ import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
 import type { TaskCommands } from '../commands.js';
 import { commandRefusal, HttpError, NotFoundError } from '../errors.js';
-import { idempotentReplay, readIdempotencyKey, requireIdempotencyKey } from './idempotency.js';
+import {
+  claimIdempotentAttempt,
+  type IdempotencyRecords,
+  readIdempotencyKey,
+  requireIdempotencyKey,
+} from './idempotency.js';
 import { scopedProject, scopeToProject } from './scope.js';
 
 /**
- * Everything these routes read or write outside the application ring, as seven functions.
+ * Everything these routes read or write outside the application ring, as eight functions.
  *
  * Injected rather than imported, so this module **names no database at all** — the argument
  * `requirePermission`'s `projectRole` makes one layer down, and the reason eleven routes can be
@@ -129,16 +134,14 @@ export interface CommandQueries {
     readonly taskState: TaskState;
   } | null>;
   /**
-   * The previous attempt under an `Idempotency-Key`, for {@link idempotentReplay}.
+   * The `Idempotency-Key` record, for {@link claimIdempotentAttempt}: claim before the command
+   * performs, release when it did not (WP-67).
    *
    * Keyed by the **caller** as well as by the command and the key: a key belongs to whoever issued
    * it, and the argument for that scope is in `./idempotency.ts`.
    */
-  readonly previousAttempt: (query: {
-    readonly userId: string;
-    readonly action: string;
-    readonly key: string;
-  }) => Promise<{ readonly bodyDigest: string | null; readonly params: JsonObject } | null>;
+  readonly claimAttempt: IdempotencyRecords['claimAttempt'];
+  readonly releaseAttempt: IdempotencyRecords['releaseAttempt'];
   readonly recordAction: (input: {
     readonly userId: string;
     readonly action: string;
@@ -374,7 +377,7 @@ export const registerCommandRoutes = async (
       input.key === 'required'
         ? requireIdempotencyKey(input.request)
         : readIdempotencyKey(input.request);
-    const replay = await idempotentReplay(options.queries.previousAttempt, {
+    const replay = await claimIdempotentAttempt(options.queries, {
       userId: actor.userId,
       action: input.action,
       key,
@@ -383,18 +386,24 @@ export const registerCommandRoutes = async (
     if (replay.replayed) {
       return input.answer({ performed: false, result: null, previous: replay.previous });
     }
-    const result = await performing(input.perform);
-    const taskId = typeof input.taskId === 'function' ? input.taskId(result) : input.taskId;
-    await options.queries.recordAction({
-      userId: actor.userId,
-      action: input.action,
-      params: {
-        ...input.params,
-        ...(input.auditResult === undefined ? {} : input.auditResult(result)),
-        ...(key === null ? {} : { idempotency_key: key }),
-        ...(replay.digest === null ? {} : { body_digest: replay.digest }),
-      },
-      ...(taskId === undefined ? {} : { taskId }),
+    // Under the claim: a refusal from `perform` releases the key, the audit row completes it, and
+    // a failure after `perform` returned leaves it held (`./idempotency.ts`, WP-67 round 1).
+    const result = await replay.run(async (effectReturned) => {
+      const performed = await performing(input.perform);
+      effectReturned();
+      const taskId = typeof input.taskId === 'function' ? input.taskId(performed) : input.taskId;
+      await options.queries.recordAction({
+        userId: actor.userId,
+        action: input.action,
+        params: {
+          ...input.params,
+          ...(input.auditResult === undefined ? {} : input.auditResult(performed)),
+          ...(key === null ? {} : { idempotency_key: key }),
+          ...(replay.digest === null ? {} : { body_digest: replay.digest }),
+        },
+        ...(taskId === undefined ? {} : { taskId }),
+      });
+      return performed;
     });
     return input.answer({ performed: true, result, previous: null });
   };

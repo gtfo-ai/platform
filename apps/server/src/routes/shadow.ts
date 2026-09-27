@@ -13,16 +13,18 @@
  * `human_actions` row per accepted command and none for a refused one, and the guards at
  * `preValidation` so an anonymous caller is refused before being told the body's shape.
  *
- * ## Why the replay answer is the batch, and what is idempotent underneath it
+ * ## A replay answers the first batch, and what is idempotent underneath it
  *
- * There is **no stored response** (`routes/onboarding.ts` made the same call): a replayed key with
- * the same body performs nothing twice because the underlying unique index does the deciding —
- * `tasks (project_id, ticket_key, mode)`, which is what turns the second attempt at a ticket into
- * the batch's own `already_shadowed` refusal. So a replay creates a batch **row** whose tickets are
- * all refusals, which is honest (somebody asked twice, and the second ask ran nothing) and is
- * countable: N tasks after the first call, N after the second. The `409 idempotency_key_reused`
- * guard is what stops the *different-body* case, which is the one that would otherwise create new
- * tasks under a key the caller believed was spent.
+ * Since WP-67 (PROGRESS backlog 99) this route uses the same claim every other command does
+ * (`claimIdempotentAttempt`): the key is claimed before the batch starts, a same-key same-body
+ * replay is answered with the **first** batch's id and tickets — read back through the batch
+ * projection, not a stored response — and it creates **no** second `shadow_batches` row and **no**
+ * second `human_actions` row. Two submits that arrive together start one batch; the second is
+ * `409 idempotency_key_in_flight`. Until WP-67 a replay reached the command, and the unique index
+ * `tasks (project_id, ticket_key, mode)` turned every ticket into `already_shadowed` — so the task
+ * count was right and the Shadow screen showed a second batch that did nothing. That index still
+ * decides for a *different* key naming the same tickets, which is a new request and gets a new
+ * batch of refusals. The `409 idempotency_key_reused` guard stops a different body under a used key.
  *
  * ## The gate is published on the read, not discovered on the write
  *
@@ -35,6 +37,7 @@
 import {
   apiErrorSchema,
   type Id,
+  type JsonObject,
   MAX_SHADOW_BATCH_TICKETS,
   shadowBatchesResponseSchema,
   shadowBatchResponseSchema,
@@ -50,13 +53,17 @@ import { OnboardingUnavailableError } from '../onboarding.js';
 import type { HumanActionInput } from '../queries/onboarding-queries.js';
 import type { ShadowBatchRead } from '../queries/shadow-queries.js';
 import type { ShadowCommands } from '../shadow.js';
-import { assertIdempotentRequest, configHashOf, requireIdempotencyKey } from './idempotency.js';
+import {
+  claimIdempotentAttempt,
+  type IdempotencyRecords,
+  requireIdempotencyKey,
+} from './idempotency.js';
 import { scopedProject, scopeToProject } from './scope.js';
 
 /**
- * Everything these routes read or write outside the application ring, as seven functions.
+ * Everything these routes read or write outside the application ring, as eight functions.
  *
- * Injected rather than imported, exactly as `routes/commands.ts` takes its seven: the decisions
+ * Injected rather than imported, exactly as `routes/commands.ts` takes its own: the decisions
  * this file owns — the key policy, the replay, which capability each route asks for, which refusal
  * maps to which status and what lands in the audit row — are decisions, and *"a decision that needs
  * a PostgreSQL container to exercise is a decision no fast tier asserts"*.
@@ -64,11 +71,9 @@ import { scopedProject, scopeToProject } from './scope.js';
 export interface ShadowQueries {
   readonly projectRole: (projectId: string, userId: string) => Promise<string | null>;
   readonly projectExists: (projectId: string) => Promise<boolean>;
-  readonly previousAttempt: (query: {
-    readonly userId: string;
-    readonly action: string;
-    readonly key: string;
-  }) => Promise<{ readonly bodyDigest: string | null } | null>;
+  /** The `Idempotency-Key` record (WP-67): claimed before the batch starts, released if it did not. */
+  readonly claimAttempt: IdempotencyRecords['claimAttempt'];
+  readonly releaseAttempt: IdempotencyRecords['releaseAttempt'];
   readonly recordAction: (input: HumanActionInput) => Promise<void>;
   readonly listBatches: (
     projectId: string,
@@ -97,7 +102,7 @@ export interface ShadowRoutesOptions {
    * Whether this project may start a batch, and why not — asked for the **read** endpoint.
    *
    * Injected rather than imported so this module names no settings source, exactly as
-   * `routes/commands.ts` takes its seven queries: the predicate is the application's
+   * `routes/commands.ts` takes its queries: the predicate is the application's
    * (`shadowBatchBlocker`) and the *settings* it is applied to are the composition root's.
    */
   readonly gate:
@@ -154,6 +159,38 @@ export const registerShadowRoutes = async (
     return { userId: actor.userId };
   };
 
+  /**
+   * The answer to a replayed key: the batch the first attempt started, read back through the same
+   * projection `GET /api/shadow-batches/:id` serves (WP-67, PROGRESS backlog 99).
+   *
+   * It refuses rather than invents when it cannot: a row written before `batch_id` was audited, or
+   * a batch that no longer exists, is `409 idempotency_key_reused` naming why — the same answer
+   * `routes/commands.ts` gives a take-over whose branch was never recorded.
+   */
+  const replayedBatch = async (previous: JsonObject | null) => {
+    const batchId = previous?.batch_id;
+    const read = typeof batchId === 'string' ? await options.queries.findBatch(batchId) : null;
+    if (read === null || !read.found) {
+      throw new HttpError(
+        409,
+        'idempotency_key_reused',
+        'this Idempotency-Key has already started a shadow batch, and that batch can no longer be read back; use a new key',
+      );
+    }
+    const tickets = read.response.tickets.map((ticket) => ({
+      ticket_key: ticket.ticket_key,
+      task_id: ticket.task_id,
+      refused_reason: ticket.refused_reason,
+    }));
+    const started = tickets.filter((ticket) => ticket.task_id !== null).length;
+    return {
+      batch_id: read.response.batch.id,
+      tickets,
+      started,
+      refused: tickets.length - started,
+    };
+  };
+
   typed.post(
     '/api/projects/:project_id/shadow-batches',
     {
@@ -179,66 +216,67 @@ export const registerShadowRoutes = async (
       // exists to catch. The keys are **not** sorted: a caller that asked for a different order
       // asked a different question as far as this digest is concerned, and normalising here would
       // silently accept one request as another.
-      const digest = configHashOf({
-        project_id: projectId,
-        ticket_keys: [...request.body.ticket_keys],
-      });
-      const previous = await options.queries.previousAttempt({
+      const replay = await claimIdempotentAttempt(options.queries, {
         userId: actor.userId,
         action: SHADOW_START_ACTION,
         key,
+        request: { project_id: projectId, ticket_keys: [...request.body.ticket_keys] },
       });
-      assertIdempotentRequest({
-        action: SHADOW_START_ACTION,
-        key,
-        previousDigest: previous?.bodyDigest ?? null,
-        digest,
-      });
-      if (!(await options.queries.projectExists(projectId))) {
-        throw new NotFoundError(`project ${projectId}`);
+      if (replay.replayed) {
+        // WP-67, PROGRESS backlog 99: the **first** batch, read back — never a second batch row
+        // whose tickets are all `already_shadowed`, and never a second audit row.
+        reply.code(202);
+        return replayedBatch(replay.previous);
       }
-
-      let result: Awaited<ReturnType<ShadowCommands['startBatch']>>;
-      try {
-        result = await commands().startBatch({
-          projectId: projectId as Id,
-          ticketKeys: request.body.ticket_keys,
-          userId: actor.userId as Id,
-        });
-      } catch (error) {
-        if (error instanceof OnboardingUnavailableError) {
-          throw new HttpError(503, 'shadow_unavailable', error.message);
+      return replay.run(async (effectReturned) => {
+        if (!(await options.queries.projectExists(projectId))) {
+          throw new NotFoundError(`project ${projectId}`);
         }
-        throw error;
-      }
-      if (result.status === 'blocked') {
-        throw new HttpError(409, `shadow_${result.blocker}`, result.detail);
-      }
 
-      const started = result.tickets.filter((ticket) => ticket.taskId !== null).length;
-      await options.queries.recordAction({
-        userId: actor.userId,
-        action: SHADOW_START_ACTION,
-        params: {
-          project_id: projectId,
+        let result: Awaited<ReturnType<ShadowCommands['startBatch']>>;
+        try {
+          result = await commands().startBatch({
+            projectId: projectId as Id,
+            ticketKeys: request.body.ticket_keys,
+            userId: actor.userId as Id,
+          });
+        } catch (error) {
+          if (error instanceof OnboardingUnavailableError) {
+            throw new HttpError(503, 'shadow_unavailable', error.message);
+          }
+          throw error;
+        }
+        if (result.status === 'blocked') {
+          throw new HttpError(409, `shadow_${result.blocker}`, result.detail);
+        }
+        // The batch exists from here on: nothing after this line may give the key back.
+        effectReturned();
+
+        const started = result.tickets.filter((ticket) => ticket.taskId !== null).length;
+        await options.queries.recordAction({
+          userId: actor.userId,
+          action: SHADOW_START_ACTION,
+          params: {
+            project_id: projectId,
+            batch_id: result.batchId,
+            tickets: result.tickets.length,
+            started,
+            idempotency_key: key,
+            body_digest: replay.digest,
+          },
+        });
+        reply.code(202);
+        return {
           batch_id: result.batchId,
-          tickets: result.tickets.length,
+          tickets: result.tickets.map((ticket) => ({
+            ticket_key: ticket.ticketKey,
+            task_id: ticket.taskId,
+            refused_reason: ticket.refusedReason,
+          })),
           started,
-          idempotency_key: key,
-          body_digest: digest,
-        },
+          refused: result.tickets.length - started,
+        };
       });
-      reply.code(202);
-      return {
-        batch_id: result.batchId,
-        tickets: result.tickets.map((ticket) => ({
-          ticket_key: ticket.ticketKey,
-          task_id: ticket.taskId,
-          refused_reason: ticket.refusedReason,
-        })),
-        started,
-        refused: result.tickets.length - started,
-      };
     },
   );
 

@@ -137,6 +137,11 @@ export interface PipelineOutboundData {
      */
     | 'dependency_gate'
     /**
+     * WP-67, PROGRESS backlog 96: perform the gate's `ask` or `block` that a stop a human owns
+     * deferred, now the task has resumed. Calls no provider; the record carries the decision.
+     */
+    | 'dependency_gate_resume'
+    /**
      * WP-34, shadow mode: compare what a shadow task produced with the human merge request the
      * batch resolved for its ticket, and write the one `shadow_reports` row.
      */

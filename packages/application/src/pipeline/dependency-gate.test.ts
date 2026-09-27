@@ -23,12 +23,17 @@ import type {
 import { domainEventSchemasByType } from '@platform/contracts';
 import { MAX_DETECTED_DEPENDENCIES } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
+import { markTransactions } from '../events/open-transaction.js';
 import { exactSecretRedactor } from '../integrations/redaction.js';
 import type { DependencyMetadataPort } from '../ports/dependency-metadata.js';
 import type { FileDiff, MergeRequest } from '../ports/integrations/git-provider.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import { questionTimeoutAt } from '../scheduling/working-calendar.js';
 import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
+import { pauseTaskCommand, resumeTaskCommand } from './commands.js';
+import { runDependencyGate } from './dependency-gate.js';
+import { staticPipelineIntegrations } from './integrations.js';
+import { staticProjectSettings } from './settings.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000d1' as Id;
 const IID = 11;
@@ -195,9 +200,16 @@ interface StartOptions {
   readonly metadata?: DependencyMetadataPort;
   readonly git?: null;
   readonly secrets?: readonly { readonly name: string; readonly value: string }[];
+  /**
+   * Runs when the gate reads the diff — the provider call it makes **outside** every transaction,
+   * which is the window between the Developer stage completing and the ending being taken. A test
+   * that pauses the task here reproduces WP-38's measured window deterministically.
+   */
+  readonly onDiff?: (harness: PipelineHarness) => Promise<void>;
 }
 
 const start = async (options: StartOptions = {}): Promise<PipelineHarness> => {
+  const holder: { harness: PipelineHarness | null } = { harness: null };
   const harness = createPipelineHarness({
     projectId: PROJECT,
     settings: {
@@ -219,10 +231,16 @@ const start = async (options: StartOptions = {}): Promise<PipelineHarness> => {
       : {
           git: {
             getMergeRequest: async () => mergeRequest(),
-            getMergeRequestDiff: async () => options.files ?? ADDS_LODASH,
+            getMergeRequestDiff: async () => {
+              if (options.onDiff !== undefined && holder.harness !== null) {
+                await options.onDiff(holder.harness);
+              }
+              return options.files ?? ADDS_LODASH;
+            },
           },
         }),
   });
+  holder.harness = harness;
   await harness.publish([ticketMatched()]);
   return harness;
 };
@@ -528,6 +546,176 @@ describe('the dependency gate (product/04:58, WP-38)', () => {
     const stored = await storedTask(harness);
     // Not an empty record: the gate could not read a diff, so it states nothing about one.
     expect(stored?.dependencies).toBeNull();
+    expect(questionsAsked(harness)).toHaveLength(0);
+  });
+});
+
+const USER = '00000000-0000-4000-8000-0000000000e9' as Id;
+
+/** Pauses the task the first time the gate reads the diff, as a person pressing Pause would. */
+const pauseOnce = () => {
+  let paused = false;
+  return async (harness: PipelineHarness): Promise<void> => {
+    if (paused) {
+      return;
+    }
+    paused = true;
+    await pauseTaskCommand(harness.humanCommands, { taskId: taskIdOf(harness), userId: USER });
+  };
+};
+
+describe('a decision that meets a stop a human owns is deferred to the resume (WP-67, backlog 96)', () => {
+  it('asks exactly one question for a task paused across the gate, once it is resumed', async () => {
+    const harness = await start({ onDiff: pauseOnce() });
+
+    // Paused when the ending was taken: nobody asked yet, and the record says the question waits.
+    let stored = await storedTask(harness);
+    expect(stored?.task.state).toBe('paused');
+    expect(questionsAsked(harness)).toHaveLength(0);
+    expect(stored?.dependencies?.decision).toBe('ask');
+    expect(stored?.dependencies?.question_id).toBeNull();
+    expect(stored?.dependencies?.deferred_stage).toBe('implementation');
+
+    await resumeTaskCommand(harness.humanCommands, { taskId: taskIdOf(harness), userId: USER });
+    await harness.drain();
+
+    stored = await storedTask(harness);
+    expect(questionsAsked(harness)).toHaveLength(1);
+    expect(questionsAsked(harness)[0]?.text).toContain('npm:lodash');
+    expect(stored?.task.state).toBe('waiting_answers');
+    expect(stored?.dependencies?.question_id).not.toBeNull();
+    expect(stored?.dependencies?.deferred_stage).toBeNull();
+    // The question belongs to the stage that added the package, not to wherever the task resumed.
+    const question = await harness.store.questions.load(
+      {} as never,
+      stored?.dependencies?.question_id as Id,
+    );
+    expect(question?.stage).toBe('implementation');
+  });
+
+  it('raises no second question on a later resume: the record is the trigger’s idempotency', async () => {
+    const harness = await start({ onDiff: pauseOnce() });
+    const task = taskIdOf(harness);
+    await resumeTaskCommand(harness.humanCommands, { taskId: task, userId: USER });
+    await harness.drain();
+    expect(questionsAsked(harness)).toHaveLength(1);
+
+    // Paused again while waiting on the answer, and resumed: `task.resumed` fires a second time.
+    await pauseTaskCommand(harness.humanCommands, { taskId: task, userId: USER });
+    await resumeTaskCommand(harness.humanCommands, { taskId: task, userId: USER });
+    await harness.drain();
+    expect(questionsAsked(harness)).toHaveLength(1);
+  });
+
+  it('raises none for a task that was asked before it stopped', async () => {
+    // The other direction (standing rule 42): the gate asked while the task was active; a person
+    // then paused it and resumed it — `task.resumed` fires — and nothing asks again. (Answering the
+    // question is not this case: it resumes the implementation stage, whose next completion is a
+    // new diff the gate reads afresh, WP-38's own rule.)
+    const harness = await start({ metadata: checkedMetadata({}) });
+    const task = taskIdOf(harness);
+    expect(questionsAsked(harness)).toHaveLength(1);
+    expect((await storedTask(harness))?.dependencies?.deferred_stage ?? null).toBeNull();
+    const resumedBefore = harness.events().filter((event) => event.type === 'task.resumed').length;
+    // Every enqueue from here on, seen as it is made: `drain` takes a job out of `enqueued` when
+    // it runs it, so reading `enqueued` afterwards would see nothing whatever the handler did
+    // (review round 1: a canary that removed the handler's filter survived that reading).
+    const duties: string[] = [];
+    const enqueue = harness.jobs.enqueue.bind(harness.jobs);
+    (harness.jobs as { enqueue: typeof enqueue }).enqueue = async (request) => {
+      duties.push(String((request.data as { duty?: unknown } | undefined)?.duty));
+      return enqueue(request);
+    };
+
+    await pauseTaskCommand(harness.humanCommands, { taskId: task, userId: USER });
+    await resumeTaskCommand(harness.humanCommands, { taskId: task, userId: USER });
+    await harness.drain();
+
+    expect(
+      harness.events().filter((event) => event.type === 'task.resumed').length,
+      'the resume happened, so the trigger was offered',
+    ).toBeGreaterThan(resumedBefore);
+    expect(questionsAsked(harness)).toHaveLength(1);
+    // Nothing deferred, so the handler enqueued no resume duty at all — the duty's own re-check
+    // would have made the question count above pass either way.
+    expect(duties.length, 'the resume enqueued its stage, so the spy saw enqueues').toBeGreaterThan(
+      0,
+    );
+    expect(duties.filter((duty) => duty === 'dependency_gate_resume')).toEqual([]);
+  });
+
+  it('defers a block across a pause and returns the task when it resumes', async () => {
+    const harness = await start({ policy: 'block', onDiff: pauseOnce() });
+
+    let stored = await storedTask(harness);
+    expect(stored?.task.state).toBe('paused');
+    expect(stored?.dependencies?.decision).toBe('block');
+    expect(stored?.dependencies?.deferred_stage).toBe('implementation');
+    expect(returns(harness)).toHaveLength(0);
+
+    await resumeTaskCommand(harness.humanCommands, { taskId: taskIdOf(harness), userId: USER });
+    await harness.drain();
+
+    const blocked = returns(harness).filter((entry) =>
+      entry.reason.includes('dependency policy blocks npm:lodash'),
+    );
+    expect(blocked.length).toBeGreaterThanOrEqual(1);
+    stored = await storedTask(harness);
+    expect(stored?.dependencies?.deferred_stage ?? null).toBeNull();
+    expect(stored?.task.iterationCounters.dependency_policy ?? 0).toBeGreaterThanOrEqual(1);
+  });
+
+  it('does not defer an ask for a task paused at ready_for_merge, whose resume is refused (Q91)', async () => {
+    /**
+     * WP-67 review round 1. What resume restores for a pause taken at `ready_for_merge`, measured
+     * here: **nothing** — it re-enters `ready_for_merge` through `markReadyForMerge`, and
+     * `paused → ready_for_merge` is not an edge, so the resume is refused. No `task.resumed`, never
+     * `active`: a deferral would wait for ever, and Q91 says a task past review is not asked
+     * anyway, so the ask is refused and the record kept rather than deferred.
+     *
+     * The gate's duty is called directly on the paused task, the arrangement the risk-routing
+     * shadow case uses and for a stated reason: the walk takes a task to `ready_for_merge` in the
+     * same drain as the gate's job, so the pipeline cannot be stopped between them by a hook that
+     * would not also stop it earlier. The walk runs under `allow`; the duty then decides under `ask`.
+     */
+    const harness = await start({ policy: 'allow' });
+    const task = taskIdOf(harness);
+    expect((await storedTask(harness))?.task.state).toBe('ready_for_merge');
+    await pauseTaskCommand(harness.humanCommands, { taskId: task, userId: USER });
+
+    await runDependencyGate(
+      {
+        store: harness.store,
+        settings: staticProjectSettings(() => ({
+          ...harness.settings,
+          config: { ...harness.settings.config, policies: { dependency_policy: 'ask' } },
+        })),
+        jobs: harness.jobs,
+        calendar: harness.calendar,
+        integrations: staticPipelineIntegrations(harness.integrations),
+        ids: harness.ids,
+        clock: { now: () => harness.clock.now() },
+        unitOfWork: markTransactions(harness.memory),
+      },
+      {
+        duty: 'dependency_gate',
+        project_id: PROJECT,
+        task_id: task,
+        cause_event_id: '00000000-0000-4000-9000-0000000000aa',
+        stage: 'implementation',
+      },
+    );
+    let stored = await storedTask(harness);
+    expect(stored?.dependencies?.decision).toBe('ask');
+    expect(stored?.dependencies?.question_id).toBeNull();
+    expect(stored?.dependencies?.deferred_stage).toBeNull();
+
+    await expect(
+      resumeTaskCommand(harness.humanCommands, { taskId: task, userId: USER }),
+    ).rejects.toThrow('illegal transition paused -> ready_for_merge');
+    await harness.drain();
+    stored = await storedTask(harness);
+    expect(stored?.task.state).toBe('paused');
     expect(questionsAsked(harness)).toHaveLength(0);
   });
 });

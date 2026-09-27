@@ -21,6 +21,7 @@ import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { toApiError } from '../errors.js';
+import { memoryAttemptRecords } from './idempotency-memory.js';
 import type { SettingsQueries } from './settings.js';
 import {
   MAX_OVERRIDE_REASON_CHARS,
@@ -142,8 +143,7 @@ const build = async (overrides: Partial<SettingsQueries> = {}): Promise<World> =
         };
       },
       projectAudit: async () => ({ items: [] }),
-      previousAttempt: async (query) =>
-        attempts.get(`${query.userId}|${query.action}|${query.key}`) ?? null,
+      ...memoryAttemptRecords(attempts),
       recordAction: async (input) => {
         actions.push({ userId: input.userId, action: input.action, params: input.params });
         // What the real writer does, so a replay by the same caller finds this attempt and one by

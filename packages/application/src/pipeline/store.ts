@@ -181,12 +181,15 @@ export interface StoredTask {
   /**
    * The human who asked for this task — step **three** of product/19:138's reviewer precedence.
    *
-   * `tasks.requested_by_user_id` **has no writer anywhere in this build**: intake creates a task
-   * from a ticket a rule matched, and the three commands that create one (discovery, review-only,
-   * the ticket linter) carry the actor into the `human_actions` row rather than onto the task. So
-   * this is `null` on every row, the fallback resolves to nobody, and WP-37 says so by name instead
-   * of assigning silently. It is read rather than omitted because the alternative — routing that
-   * cannot express its own last step — is the state `readCodeowners` sat in for five milestones.
+   * **Written by the three commands that hold the actor** (WP-67, PROGRESS backlog 92): discovery
+   * (`onboarding/discovery.ts`), a shadow batch (`shadow/batch.ts`) and a history bootstrap's chunk
+   * tasks (`bootstrap/collect.ts`, from the batch's `requested_by`). Every other creation site
+   * writes `null`, and each says why: intake's task comes from a ticket a rule matched (its reporter
+   * is backlog 92's half (b), unbuilt), review-only and the ticket linter are started by a provider
+   * delivery rather than a person, and the maintenance scheduler is the platform's own. `null`
+   * makes the fallback resolve to nobody, and the routing says so by name instead of assigning
+   * silently; a user id still needs a `user_identities` row for the provider to reach an account
+   * (backlog 79).
    */
   readonly requestedByUserId: Id | null;
   /**

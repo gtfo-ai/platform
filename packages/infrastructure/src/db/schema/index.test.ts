@@ -47,8 +47,11 @@ describe('Drizzle schema', () => {
     // wake-up is lost (migration 0043, WP-59 review round 1, PROGRESS backlog 178), plus
     // `project_repository_config` — the last reading of a project's own `.agentic/config.yml` on
     // its default branch, the `repo` layer technical/12's merge names and nothing produced
-    // (migration 0050, WP-63, PROGRESS backlog 44).
-    expect(tables.length).toBe(64);
+    // (migration 0050, WP-63, PROGRESS backlog 44), plus `command_idempotency` — the
+    // `Idempotency-Key` record a command claims before it performs, which `human_actions` could not
+    // be because it is append-only and already holds the duplicates a unique index would refuse
+    // (migration 0053, WP-67, PROGRESS backlog 47).
+    expect(tables.length).toBe(65);
   });
 
   it('names every table and column in snake_case, matching the wire format', () => {

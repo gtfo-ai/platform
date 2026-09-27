@@ -73,6 +73,7 @@ import type {
   DependencyMetadata,
   Id,
   TaskDependencies,
+  TaskState,
 } from '@platform/contracts';
 import { dependencyMetadataSchema, taskDependenciesSchema } from '@platform/contracts';
 import type {
@@ -89,7 +90,12 @@ import {
   detectDependencyChanges,
   gateDecisionFor,
   isRunnableTaskState,
+  isTerminalTaskState,
+  LIBRARIAN_STAGE,
+  MERGED_GATE_STAGE,
   openQuestion,
+  READY_FOR_MERGE_STAGE,
+  RETROSPECTIVE_STAGE,
   stageOf,
   toQuestionRecord,
 } from '@platform/domain';
@@ -109,6 +115,7 @@ import { integrationsForProject, noRunScopedSecrets } from './integrations.js';
 import { enqueueOutbound, enqueueStage, type PipelineOutboundData } from './jobs.js';
 import type { RebaseJobOptions } from './rebase.js';
 import type { PipelineSagaOptions } from './saga.js';
+import type { StageExecutionJob } from './stage-executor.js';
 import { PIPELINE_ACTOR, type StoredTask } from './store.js';
 import {
   escalateTaskAfterConflict,
@@ -194,9 +201,56 @@ const dependencyGateHandler = (options: PipelineSagaOptions): EventHandler => ({
   },
 });
 
+/**
+ * `task.resumed` → perform a **deferred** ending (WP-67, PROGRESS backlog 96, Q91).
+ *
+ * The gate decides once, in a job, and until WP-67 an ending that met a task at a stop a human owns
+ * — `paused`, `needs_human`, `waiting_answers`, `waiting_approval` — gave up and nothing ever tried
+ * again: a question nobody was asked, and for `block`, a package the policy blocks on a branch
+ * nobody was told about. The record now says so (`deferred_stage`), and every one of those four
+ * stops ends in `enterStage`, which emits `task.resumed` (`RESUMED_FROM` in the Task aggregate), so
+ * this is the idempotent trigger: the record is the predicate and the job clears it in the same
+ * transaction that performs the ending, so a second resume finds nothing to do.
+ *
+ * The handler **reads** before it enqueues, so a resume with nothing deferred — almost all of them —
+ * costs no job. That read is sound only because the gate writes the deferral under the task row's
+ * lock (see {@link deferOrPerform}): a deferral either committed before the resume did, and is seen
+ * here, or it was written after, and then the gate saw the task already `active` and performed the
+ * ending itself instead of deferring it.
+ *
+ * `ready_for_merge`, `merged` and `retro` are not here, and that is Q91's answer rather than a gap:
+ * a task that passed review never becomes `active` again and is not interrupted with a question.
+ */
+const dependencyGateResumeHandler = (options: PipelineSagaOptions): EventHandler => ({
+  name: 'pipeline.dependency.gate.resume',
+  priority: 120,
+  eventTypes: ['task.resumed'],
+  handle: async (context: HandlerContext) => {
+    const event = context.event.event;
+    if (event.type !== 'task.resumed') {
+      return;
+    }
+    const stored = await options.store.tasks.load(context.scope.tx, event.payload.task_id);
+    const deferred = stored?.dependencies?.deferred_stage ?? null;
+    if (stored === null || deferred === null) {
+      return;
+    }
+    const data: PipelineOutboundData = {
+      duty: 'dependency_gate_resume',
+      project_id: event.payload.project_id,
+      task_id: event.payload.task_id,
+      cause_event_id: event.id,
+    };
+    context.afterCommit(async () => {
+      await enqueueOutbound(options.jobs, data);
+    });
+  },
+});
+
 /** Every handler this module registers, for the runtime to spread. */
 export const dependencyGateHandlers = (options: PipelineSagaOptions): readonly EventHandler[] => [
   dependencyGateHandler(options),
+  dependencyGateResumeHandler(options),
 ];
 
 /**
@@ -469,17 +523,191 @@ const inTaskTransaction = async <T>(
 };
 
 /**
+ * A stop a **human** owns: `paused`, `needs_human`, `waiting_answers`, `waiting_approval`.
+ *
+ * Exactly the states `isRunnableTaskState` excludes minus the terminal pair — and exactly the
+ * states the Task aggregate's `enterStage` leaves with a `task.resumed` (`RESUMED_FROM`), which is
+ * what makes deferring to that event sound: every task parked here comes back through it.
+ */
+const isHumanOwnedStop = (state: TaskState): boolean =>
+  !isRunnableTaskState(state) && !isTerminalTaskState(state);
+
+/**
+ * The stages a task is at once it has **passed review** — Q91's `ready_for_merge`, `merged`, `retro`,
+ * as the stage ids a stopped task still carries in `current_stage`.
+ *
+ * Needed because a stop hides the state it was taken from (WP-67 review round 1): a task paused at
+ * `ready_for_merge` is `paused`. **Measured**: `resume` on it re-enters `ready_for_merge` through
+ * `markReadyForMerge`, and `paused → ready_for_merge` is not an edge of the state machine, so the
+ * resume is **refused** (`IllegalTransitionError`) — no `task.resumed`, never `active`. A deferred
+ * `ask` there would wait for a resume that cannot come and print "asks on resume" for ever; Q91's
+ * answer is that it is not asked at all, so it is not deferred. (A `block` at such a stop is still
+ * deferred and has the same missing wake-up — the panel's "blocked on resume" is a promise nothing
+ * keeps until that resume exists; both are PROGRESS backlog **244** (to WP-73, with Q104), filed, not fixed.)
+ */
+const PAST_REVIEW_STAGES: ReadonlySet<string> = new Set([
+  READY_FOR_MERGE_STAGE,
+  MERGED_GATE_STAGE,
+  RETROSPECTIVE_STAGE,
+  LIBRARIAN_STAGE,
+]);
+
+const isPastReview = (stage: string | null): boolean =>
+  stage !== null && PAST_REVIEW_STAGES.has(stage);
+
+type GateScope = Parameters<Parameters<RebaseJobOptions['unitOfWork']['transaction']>[0]>[0];
+
+/**
+ * Reads the task **under its row lock**, or `null` when it no longer exists.
+ *
+ * `bumpVersion` is the store's one statement that takes the row lock without writing a column of
+ * the aggregate (WP-59), and the second `load` after it reads what was committed by whoever held
+ * the lock before — READ COMMITTED gives each statement a fresh snapshot. It is what makes a
+ * deferral race-free (WP-67): a resume that is committing when the gate looks is waited out and
+ * then seen as `active`, and a resume that starts after the gate took the lock meets the bumped
+ * version at its own `save` and re-runs, after the deferral is committed — so its `task.resumed`
+ * handler reads the deferral. Without the lock the gate could read `paused`, the resume commit and
+ * find nothing deferred, and the gate then write a deferral nobody would ever perform.
+ */
+const loadLocked = async (
+  options: DependencyGateOptions,
+  scope: GateScope,
+  taskId: Id,
+): Promise<StoredTask | null> => {
+  if ((await options.store.tasks.load(scope.tx, taskId)) === null) {
+    return null;
+  }
+  await options.store.tasks.bumpVersion(scope.tx, taskId);
+  return options.store.tasks.load(scope.tx, taskId);
+};
+
+/** The question an `ask` opens, built from the record so a deferred ask asks the same thing. */
+const dependencyQuestionText = (record: TaskDependencies): string => {
+  const lines = record.added
+    .filter((entry) => entry.policy === 'ask')
+    .map((entry) => `- ${describeDependency(entry)}`);
+  return (
+    `This change adds ${lines.length === 1 ? 'a third-party dependency' : `${lines.length} third-party dependencies`}. ` +
+    `The project's dependency policy is "ask", so it needs your decision before the task goes on:\n${lines.join('\n')}\n` +
+    'Answer "yes" to accept them, or say which to remove.'
+  );
+};
+
+/** The return reason a `block` carries, built from the record for the same reason. */
+const blockReasonOf = (record: TaskDependencies): string =>
+  `the project's dependency policy blocks ${record.added
+    .filter((entry) => entry.policy === 'block')
+    .map((entry) => `${entry.ecosystem}:${entry.name}`)
+    .join(', ')}`;
+
+/**
+ * Opens the question and records it, in the caller's transaction on an `active` task.
+ *
+ * The question, the task's move to `waiting_answers` and the record are written together, so a
+ * crash cannot leave a record claiming `ask` with no question to answer — `question_id` is the link
+ * the panel follows and a dangling one would be a screen pointing at nothing. The deferral, if there
+ * was one, is cleared by the same write: this is what makes the resume trigger idempotent.
+ */
+const askNow = async (
+  options: DependencyGateOptions,
+  scope: GateScope,
+  input: {
+    readonly current: StoredTask;
+    readonly record: TaskDependencies;
+    readonly stage: string;
+    readonly deadlineFrom: DeadlineRule;
+    readonly logger: Logger;
+  },
+): Promise<void> => {
+  const { current, record } = input;
+  const context = commandContextFor(options, current.task.id);
+  const question = openQuestion(
+    {
+      id: context.ids.next(),
+      taskId: current.task.id,
+      projectId: current.task.projectId,
+      // The stage that added the package, so answering resumes *that* stage — the saga reads
+      // `question.stage` — rather than whatever the task drifted to while CI was running.
+      stage: input.stage,
+      text: dependencyQuestionText(record),
+      blocking: true,
+      options: ['yes', 'no'],
+      deadlineFrom: input.deadlineFrom,
+    },
+    context,
+  );
+  await options.store.questions.insert(scope.tx, question);
+  const asked = askQuestion(current.task, { question: toQuestionRecord(question) }, context);
+  await options.store.tasks.save(scope.tx, { ...current, task: asked.aggregate });
+  await options.store.tasks.saveDependencies(
+    scope.tx,
+    current.task.id,
+    taskDependenciesSchema.parse({ ...record, question_id: question.id, deferred_stage: null }),
+  );
+  await scope.events.append(asked.events);
+  input.logger.info(
+    { task_id: current.task.id, question_id: question.id, added: record.added.length },
+    'dependency gate: the project’s policy is "ask", so the task is waiting for an answer',
+  );
+};
+
+/**
+ * Returns the task to the stage that added the package, in the caller's transaction.
+ *
+ * **`from` is read off the locked row rather than captured before the provider call**, and that is
+ * the whole re-validation (TD-004). This job fires whenever the queue reaches it, so the task has
+ * usually moved on from the stage that completed — measured on the e2e: the block lands at
+ * `rebase_gate` or at `ready_for_merge` far more often than at the CI gate. Requiring the stage not
+ * to have moved would make the gate fire almost never, which is the failure mode a re-validation is
+ * most likely to hide. A task already back at that stage is left alone: another attempt is in
+ * flight, or a human moved it, and there is nothing to count.
+ */
+const returnNow = async (
+  options: DependencyGateOptions,
+  scope: GateScope,
+  input: { readonly current: StoredTask; readonly stage: string; readonly reason: string },
+): Promise<{ readonly work: StageExecutionJob | null } | null> => {
+  const { current } = input;
+  const from = current.task.currentStage;
+  if (from === null || from === input.stage) {
+    return null;
+  }
+  const pipeline = compilePipeline(current.task.template, current.template, current.pipelineDial);
+  const applied = await applyDecision({
+    store: options.store,
+    pipeline,
+    tx: scope.tx,
+    stored: current,
+    decision: {
+      kind: 'return',
+      from,
+      to: input.stage,
+      loop: DEPENDENCY_POLICY_LOOP,
+      reason: input.reason,
+      escalationBrief:
+        `${current.task.ticket.key} keeps adding a dependency this project's policy blocks (${input.reason}). ` +
+        'Either allow-list the package in `.agentic/config.yml` or tell the task what to use instead, then hand it back.',
+    },
+    context: commandContextFor(options, current.task.id),
+    causedByEventId: null,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
+  });
+  await scope.events.append(applied.events);
+  return { work: applied.work ?? null };
+};
+
+/**
  * The **ask** ending: one blocking question on the existing gate.
  *
- * The question and the record are written in **one** transaction, so a crash cannot leave a record
- * claiming `ask` with no question to answer — `question_id` is the link the panel follows and a
- * dangling one would be a screen pointing at nothing.
+ * `askQuestion` needs an `active` task, and a task that is not one when the job fires takes one of
+ * two endings — both **named, not silent** (standing rule 18), both with the record written so the
+ * panel shows the packages:
  *
- * `askQuestion` needs an `active` task, and the window in which it might not be is real but narrow:
- * a human pauses, cancels or takes the task over in the seconds after the stage completed. That
- * case is **named, not silent** (standing rule 18) — the record is still written with the decision
- * it reached, so the panel shows the packages, and the log says the question could not be asked
- * rather than leaving a maintainer to read a blank as "nothing was added".
+ *  - **a stop a human owns** (WP-67): the question is **deferred** — `deferred_stage` names the
+ *    stage it belongs to, and {@link runDependencyGateResume} asks it when the task resumes;
+ *  - **`ready_for_merge`, `merged`, `retro`** (Q91, answered): the question is **refused and the
+ *    record kept**. A task that passed review is not interrupted with a question the platform could
+ *    have asked earlier, and the panel says `not asked` with that reason.
  */
 const askAboutDependencies = async (
   options: DependencyGateOptions,
@@ -487,64 +715,41 @@ const askAboutDependencies = async (
   deadlineFrom: DeadlineRule,
 ): Promise<void> => {
   const { stored, record, logger } = input;
-  const lines = record.added
-    .filter((entry) => entry.policy === 'ask')
-    .map((entry) => `- ${describeDependency(entry)}`);
-  const text =
-    `This change adds ${lines.length === 1 ? 'a third-party dependency' : `${lines.length} third-party dependencies`}. ` +
-    `The project's dependency policy is "ask", so it needs your decision before the task goes on:\n${lines.join('\n')}\n` +
-    'Answer "yes" to accept them, or say which to remove.';
-
   await inTaskTransaction(
     options,
     stored.task.id,
     'asking about an added dependency',
     async (scope) => {
-      const current = await options.store.tasks.load(scope.tx, stored.task.id);
+      const current = await loadLocked(options, scope, stored.task.id);
       if (current === null) {
         return;
       }
       if (current.task.state !== 'active') {
+        const deferred =
+          isHumanOwnedStop(current.task.state) && !isPastReview(current.task.currentStage);
         await options.store.tasks.saveDependencies(
           scope.tx,
           stored.task.id,
-          taskDependenciesSchema.parse(record),
+          taskDependenciesSchema.parse({
+            ...record,
+            deferred_stage: deferred ? input.producedBy : null,
+          }),
         );
         logger.warn(
           { task_id: stored.task.id, state: current.task.state, added: record.added.length },
-          'dependency gate: the task stopped being active before the dependency question could be asked, so the packages are on the panel and nobody was asked',
+          deferred
+            ? 'dependency gate: a person has stopped the task, so the dependency question is deferred until it resumes'
+            : 'dependency gate: the task had passed review before the dependency question could be asked, so the packages are on the panel and nobody was asked (Q91)',
         );
         return;
       }
-      const context = commandContextFor(options, stored.task.id);
-      const question = openQuestion(
-        {
-          id: context.ids.next(),
-          taskId: stored.task.id,
-          projectId: stored.task.projectId,
-          // The stage that added the package, so answering resumes *that* stage — the saga reads
-          // `question.stage` — rather than whatever the task drifted to while CI was running.
-          stage: input.producedBy,
-          text,
-          blocking: true,
-          options: ['yes', 'no'],
-          deadlineFrom,
-        },
-        context,
-      );
-      await options.store.questions.insert(scope.tx, question);
-      const asked = askQuestion(current.task, { question: toQuestionRecord(question) }, context);
-      await options.store.tasks.save(scope.tx, { ...current, task: asked.aggregate });
-      await options.store.tasks.saveDependencies(
-        scope.tx,
-        stored.task.id,
-        taskDependenciesSchema.parse({ ...record, question_id: question.id }),
-      );
-      await scope.events.append(asked.events);
-      logger.info(
-        { task_id: stored.task.id, question_id: question.id, added: record.added.length },
-        'dependency gate: the project’s policy is "ask", so the task is waiting for an answer',
-      );
+      await askNow(options, scope, {
+        current,
+        record,
+        stage: input.producedBy,
+        deadlineFrom,
+        logger,
+      });
     },
   );
 };
@@ -565,6 +770,12 @@ const askAboutDependencies = async (
  * still `returnToStage`'s own, with the brief below. The loop is logged on every block, because a
  * counter's name is an explanation.
  *
+ * A task at **a stop a human owns** is not returned — the pipeline may not move it — and the block
+ * is **deferred** to its resume (WP-67): until then `ready_for_merge` was the one state it still
+ * blocked in, and a package the policy blocks sat on the branch of any task a person had paused.
+ * **Except** a task paused at `ready_for_merge`: its resume is refused today, so the deferred block
+ * has no wake-up and the package can still merge through the provider — backlog **244**.
+ *
  * A stage with no return edge at all cannot return — the interpreter's fail-closed direction — and
  * that is **named rather than ignored**: the task stays where it is, the record is on the panel, and
  * the log says the block could not be applied.
@@ -574,74 +785,151 @@ const blockForDependencies = async (
   input: EndingInput & { readonly redact: (value: string) => string },
 ): Promise<void> => {
   const { stored, record, logger } = input;
-  const blocked = record.added.filter((entry) => entry.policy === 'block');
-  const reason = input.redact(
-    `the project's dependency policy blocks ${blocked.map((entry) => `${entry.ecosystem}:${entry.name}`).join(', ')}`,
-  );
+  const reason = input.redact(blockReasonOf(record));
 
-  const work = await inTaskTransaction(
+  const outcome = await inTaskTransaction(
     options,
     stored.task.id,
     'returning a task for a blocked dependency',
     async (scope) => {
-      const current = await options.store.tasks.load(scope.tx, stored.task.id);
-      /**
-       * **`from` is read here rather than captured before the provider call**, and that is the
-       * whole re-validation (TD-004). This job fires whenever the queue reaches it, so the task has
-       * usually moved on from the stage that completed — measured on the e2e: the block lands at
-       * `rebase_gate` or at `ready_for_merge` far more often than at the CI gate. Requiring the
-       * stage not to have moved would make the gate fire almost never, which is the failure mode a
-       * re-validation is most likely to hide.
-       */
-      if (current === null || !isRunnableTaskState(current.task.state)) {
+      const current = await loadLocked(options, scope, stored.task.id);
+      if (current === null) {
         return null;
       }
-      const from = current.task.currentStage;
-      if (from === null || from === input.producedBy) {
-        // Already back where the block would send it: another attempt is in flight, or a human
-        // moved it. Nothing to do, and nothing to count.
+      if (isHumanOwnedStop(current.task.state)) {
+        await options.store.tasks.saveDependencies(
+          scope.tx,
+          stored.task.id,
+          taskDependenciesSchema.parse({ ...record, deferred_stage: input.producedBy }),
+        );
+        return 'deferred' as const;
+      }
+      if (!isRunnableTaskState(current.task.state)) {
         return null;
       }
-      const pipeline = compilePipeline(
-        current.task.template,
-        current.template,
-        current.pipelineDial,
-      );
-      const applied = await applyDecision({
-        store: options.store,
-        pipeline,
-        tx: scope.tx,
-        stored: current,
-        decision: {
-          kind: 'return',
-          from,
-          to: input.producedBy,
-          loop: DEPENDENCY_POLICY_LOOP,
-          reason,
-          escalationBrief:
-            `${current.task.ticket.key} keeps adding a dependency this project's policy blocks (${reason}). ` +
-            'Either allow-list the package in `.agentic/config.yml` or tell the task what to use instead, then hand it back.',
-        },
-        context: commandContextFor(options, current.task.id),
-        causedByEventId: null,
-        ...(options.logger === undefined ? {} : { logger: options.logger }),
-      });
-      await scope.events.append(applied.events);
-      return applied.work;
+      return returnNow(options, scope, { current, stage: input.producedBy, reason });
     },
   );
-  if (work !== null && work !== undefined) {
-    await enqueueStage(options.jobs, work);
+  if (outcome === 'deferred') {
+    logger.warn(
+      { task_id: stored.task.id, to: input.producedBy, loop: DEPENDENCY_POLICY_LOOP },
+      'dependency gate: the project’s policy blocks a package this change adds, and a person has stopped the task, so the return is deferred until it resumes',
+    );
+    return;
+  }
+  if (outcome === null) {
+    return;
+  }
+  if (outcome.work !== null) {
+    await enqueueStage(options.jobs, outcome.work);
   }
   logger.info(
     {
       task_id: stored.task.id,
       to: input.producedBy,
       loop: DEPENDENCY_POLICY_LOOP,
-      blocked: blocked.length,
+      blocked: record.added.filter((entry) => entry.policy === 'block').length,
     },
     'dependency gate: the project’s policy blocks a package this change adds, so the task went back to the stage that added it',
   );
+};
+
+/**
+ * `pipeline.outbound` duty **dependency_gate_resume**: perform the ending a stop deferred (WP-67).
+ *
+ * Woken by {@link dependencyGateResumeHandler}; it calls **no provider** — the decision and its
+ * packages are on the record, redacted when they were written — and it rides the outbound queue
+ * only so that the ending is taken by the same job-shaped owner, with the same conflict bound and
+ * escalation, as the gate's first attempt.
+ *
+ * **What it re-validates on fire** (TD-004), under the row lock:
+ *
+ *  - nothing deferred any more → nothing (a second resume, or the gate re-ran on a new diff);
+ *  - the task is at a human-owned stop again → nothing, and the deferral stays for the next resume;
+ *  - the merge request's head moved away from the revision the record was read at → the deferral
+ *    is dropped: that diff is no longer the change, and the gate re-runs when the Developer stage
+ *    that moved it completes;
+ *  - a deferred `ask` on a task that is no longer `active` → dropped, Q91's answer;
+ *  - otherwise the ending is performed, and the deferral cleared **in the same transaction** — the
+ *    question insert and the record for `ask`, the return and the record for `block`.
+ */
+export const runDependencyGateResume = async (
+  options: DependencyGateOptions,
+  data: PipelineOutboundData,
+): Promise<void> => {
+  const logger: Logger = options.logger ?? silentLogger;
+  const taskId = data.task_id as Id | undefined;
+  if (taskId === undefined) {
+    return;
+  }
+  const pending = await options.unitOfWork.transaction(async (scope) =>
+    options.store.tasks.load(scope.tx, taskId),
+  );
+  if (pending === null || (pending.dependencies?.deferred_stage ?? null) === null) {
+    return;
+  }
+  // Read outside every transaction, like the gate's own read (WP-56's deadline).
+  const settings = await options.settings.forProject(pending.task.projectId);
+  const deadlineFrom = questionDeadlineRule(options.calendar, settings);
+
+  const outcome = await inTaskTransaction(
+    options,
+    taskId,
+    'performing a deferred dependency decision',
+    async (scope) => {
+      const current = await loadLocked(options, scope, taskId);
+      const record = current?.dependencies ?? null;
+      const stage = record?.deferred_stage ?? null;
+      if (current === null || record === null || stage === null) {
+        return null;
+      }
+      const state = current.task.state;
+      if (isHumanOwnedStop(state) || isTerminalTaskState(state)) {
+        return null;
+      }
+      const clear = async (why: string): Promise<null> => {
+        await options.store.tasks.saveDependencies(
+          scope.tx,
+          taskId,
+          taskDependenciesSchema.parse({ ...record, deferred_stage: null }),
+        );
+        logger.info({ task_id: taskId, state, decision: record.decision }, why);
+        return null;
+      };
+      const head = current.mr?.head_sha ?? null;
+      if (record.head_sha !== null && head !== null && record.head_sha !== head) {
+        return clear(
+          'dependency gate: the merge request moved on from the revision the deferred decision was about, so it is dropped; the gate reads the new diff when the implementation completes',
+        );
+      }
+      if (record.decision === 'ask' && record.question_id === null) {
+        if (state !== 'active') {
+          return clear(
+            'dependency gate: the task had passed review before the deferred dependency question could be asked, so nobody was asked (Q91)',
+          );
+        }
+        await askNow(options, scope, { current, record, stage, deadlineFrom, logger });
+        return null;
+      }
+      if (record.decision === 'block') {
+        await options.store.tasks.saveDependencies(
+          scope.tx,
+          taskId,
+          taskDependenciesSchema.parse({ ...record, deferred_stage: null }),
+        );
+        // The names on the record were redacted before they were stored.
+        return returnNow(options, scope, { current, stage, reason: blockReasonOf(record) });
+      }
+      return clear('dependency gate: nothing was left to perform for the deferred decision');
+    },
+  );
+  if (outcome !== null && outcome.work !== null) {
+    await enqueueStage(options.jobs, outcome.work);
+    logger.info(
+      { task_id: taskId, loop: DEPENDENCY_POLICY_LOOP },
+      'dependency gate: the task resumed, so the deferred block sent it back to the stage that added the package',
+    );
+  }
 };
 
 const commandContextFor = (options: DependencyGateOptions, taskId: Id): CommandContext => ({

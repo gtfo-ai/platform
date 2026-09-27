@@ -15,9 +15,10 @@
  *
  * There is **no stored response** (`routes/shadow.ts` and `routes/onboarding.ts` made the same
  * call). What there is is the recorded **attempt**: a replay of the same key with the same body is
- * answered from the `human_actions` row the first one wrote — {@link idempotentReplay}, WP-15i's
- * half of the header — so the command is not reached and the answer carries the batch the caller
- * already has.
+ * answered from the `human_actions` row the first one wrote — {@link claimIdempotentAttempt},
+ * which since WP-67 also **claims** the key before the command runs, so two submits that arrive
+ * together start one batch and the second is `409 idempotency_key_in_flight` — and the answer
+ * carries the batch the caller already has.
  *
  * The first version let the replay reach the command and relied on `already_running`, which held
  * only while the batch was **live**: once it completed, the same key with the same body started a
@@ -59,7 +60,11 @@ import type { HistoryBootstrapCommands } from '../bootstrap.js';
 import { HttpError, NotFoundError } from '../errors.js';
 import { OnboardingUnavailableError } from '../onboarding.js';
 import type { HumanActionInput } from '../queries/onboarding-queries.js';
-import { idempotentReplay, requireIdempotencyKey } from './idempotency.js';
+import {
+  claimIdempotentAttempt,
+  type IdempotencyRecords,
+  requireIdempotencyKey,
+} from './idempotency.js';
 
 export interface BootstrapQueries {
   readonly projectRole: (projectId: string, userId: string) => Promise<string | null>;
@@ -70,11 +75,8 @@ export interface BootstrapQueries {
    * The `params` are what a replay is answered from — there is no stored response, so the audit
    * row is the record of what the first attempt produced (`routes/idempotency.ts`).
    */
-  readonly previousAttempt: (query: {
-    readonly userId: string;
-    readonly action: string;
-    readonly key: string;
-  }) => Promise<{ readonly bodyDigest: string | null; readonly params: JsonObject } | null>;
+  readonly claimAttempt: IdempotencyRecords['claimAttempt'];
+  readonly releaseAttempt: IdempotencyRecords['releaseAttempt'];
   readonly recordAction: (input: HumanActionInput) => Promise<void>;
   /** The batches, with the gate and the estimate the caller's `merge_requests` asks for. */
   readonly listBootstraps: (projectId: string, mergeRequests: number | null) => Promise<unknown>;
@@ -201,10 +203,10 @@ export const registerBootstrapRoutes = async (
       const key = requireIdempotencyKey(request);
       const projectId = request.params.project_id;
       const actor = actorOf(request);
-      // Reads the attempt, refuses a different body under the same key, and reports whether this
-      // key has already started one. The digest is over the same canonical request the first
+      // Claims the key (WP-67), refuses a different body under it, and reports whether this key
+      // has already started one. The digest is over the same canonical request the first
       // version hashed, so a row written by that build still matches its own retry.
-      const replay = await idempotentReplay(options.queries.previousAttempt, {
+      const replay = await claimIdempotentAttempt(options.queries, {
         userId: actor.userId,
         action: BOOTSTRAP_START_ACTION,
         key,
@@ -213,65 +215,68 @@ export const registerBootstrapRoutes = async (
           merge_requests: request.body.merge_requests ?? null,
         },
       });
-      if (!(await options.queries.projectExists(projectId))) {
-        throw new NotFoundError(`project ${projectId}`);
-      }
-      if (replay.replayed) {
-        reply.code(202);
-        return replayedStart(replay.previous);
-      }
-
-      let result: Awaited<ReturnType<HistoryBootstrapCommands['start']>>;
-      try {
-        result = await commands().start({
-          projectId: projectId as Id,
-          mergeRequests: request.body.merge_requests ?? null,
-          userId: actor.userId as Id,
-        });
-      } catch (error) {
-        if (error instanceof OnboardingUnavailableError) {
-          throw new HttpError(503, 'bootstrap_unavailable', error.message);
+      return replay.run(async (effectReturned) => {
+        if (!(await options.queries.projectExists(projectId))) {
+          throw new NotFoundError(`project ${projectId}`);
         }
-        throw error;
-      }
-      if (result.status === 'blocked') {
-        throw new HttpError(409, `bootstrap_${result.blocker}`, result.detail);
-      }
+        if (replay.replayed) {
+          reply.code(202);
+          return replayedStart(replay.previous);
+        }
 
-      // The **whole** estimate, not only the two money figures: it is what an operator was told
-      // this batch would cost — the reason the row exists — and it is what a replay of this key is
-      // answered with, so a field missing here would be a field this endpoint could not answer
-      // twice.
-      await options.queries.recordAction({
-        userId: actor.userId,
-        action: BOOTSTRAP_START_ACTION,
-        params: {
-          project_id: projectId,
+        let result: Awaited<ReturnType<HistoryBootstrapCommands['start']>>;
+        try {
+          result = await commands().start({
+            projectId: projectId as Id,
+            mergeRequests: request.body.merge_requests ?? null,
+            userId: actor.userId as Id,
+          });
+        } catch (error) {
+          if (error instanceof OnboardingUnavailableError) {
+            throw new HttpError(503, 'bootstrap_unavailable', error.message);
+          }
+          throw error;
+        }
+        if (result.status === 'blocked') {
+          throw new HttpError(409, `bootstrap_${result.blocker}`, result.detail);
+        }
+        effectReturned();
+
+        // The **whole** estimate, not only the two money figures: it is what an operator was told
+        // this batch would cost — the reason the row exists — and it is what a replay of this key is
+        // answered with, so a field missing here would be a field this endpoint could not answer
+        // twice.
+        await options.queries.recordAction({
+          userId: actor.userId,
+          action: BOOTSTRAP_START_ACTION,
+          params: {
+            project_id: projectId,
+            batch_id: result.batchId,
+            merge_requests: result.estimate.mergeRequests,
+            batch_size: result.estimate.batchSize,
+            batches: result.estimate.batches,
+            estimated_usd: result.estimate.estimatedUsd,
+            cap_usd: result.estimate.capUsd,
+            stops_at_cap: result.estimate.stopsAtCap,
+            days: result.estimate.days,
+            idempotency_key: key,
+            ...(replay.digest === null ? {} : { body_digest: replay.digest }),
+          },
+        });
+        reply.code(202);
+        return {
           batch_id: result.batchId,
-          merge_requests: result.estimate.mergeRequests,
-          batch_size: result.estimate.batchSize,
-          batches: result.estimate.batches,
-          estimated_usd: result.estimate.estimatedUsd,
-          cap_usd: result.estimate.capUsd,
-          stops_at_cap: result.estimate.stopsAtCap,
-          days: result.estimate.days,
-          idempotency_key: key,
-          ...(replay.digest === null ? {} : { body_digest: replay.digest }),
-        },
+          estimate: {
+            merge_requests: result.estimate.mergeRequests,
+            batch_size: result.estimate.batchSize,
+            batches: result.estimate.batches,
+            estimated_usd: result.estimate.estimatedUsd,
+            cap_usd: result.estimate.capUsd,
+            stops_at_cap: result.estimate.stopsAtCap,
+            days: result.estimate.days,
+          },
+        };
       });
-      reply.code(202);
-      return {
-        batch_id: result.batchId,
-        estimate: {
-          merge_requests: result.estimate.mergeRequests,
-          batch_size: result.estimate.batchSize,
-          batches: result.estimate.batches,
-          estimated_usd: result.estimate.estimatedUsd,
-          cap_usd: result.estimate.capUsd,
-          stops_at_cap: result.estimate.stopsAtCap,
-          days: result.estimate.days,
-        },
-      };
     },
   );
 

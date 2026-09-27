@@ -205,6 +205,14 @@ describe('startShadowBatch — the gate', () => {
     const harness = world();
     const result = await run(harness, ['ACME-1']);
     expect(result.status).toBe('started');
+    // WP-67, PROGRESS backlog 92: the task records the maintainer who started the batch.
+    const created = harness.events().find((event) => event.type === 'task.created') as
+      | (DomainEvent & { payload: { task_id: Id } })
+      | undefined;
+    const stored = await harness.memory.transaction(async (scope) =>
+      harness.store.tasks.load(scope.tx, created?.payload.task_id as Id),
+    );
+    expect(stored?.requestedByUserId).toBe(USER);
   });
 
   it('refuses a project whose dial is past Observe, by name', async () => {

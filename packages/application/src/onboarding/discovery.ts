@@ -224,14 +224,16 @@ export const startProjectDiscovery = async (
       historySample: null,
       ticketSnapshotAt: null,
       ticketSignalAt: null,
-      // No merge request, so nothing to classify, and no requester on the row: the wizard's actor
-      // is recorded in `human_actions` by the route (WP-37 reads both and says so).
+      // No merge request, so nothing to classify.
       riskClasses: [],
       coverage: null,
       dependencies: null,
       requiredReviewers: null,
       reviewThreads: null,
-      requestedByUserId: null,
+      // The person who started discovery — the requester product/19:138's third reviewer step
+      // falls back to (WP-67, PROGRESS backlog 92). The route also records them in `human_actions`;
+      // this is the column the routing reads.
+      requestedByUserId: input.requestedByUserId,
     };
     await options.store.tasks.insert(scope.tx, stored);
 

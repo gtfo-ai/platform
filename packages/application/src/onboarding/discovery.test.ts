@@ -98,6 +98,9 @@ describe('startProjectDiscovery', () => {
     });
     const firstEvent = (await harness.memory.store.readStream('task', created?.task.id as Id))[0];
     expect(firstEvent?.event.actor).toEqual({ kind: 'user', user_id: USER });
+    // WP-67, PROGRESS backlog 92: the row carries who asked, which is what the reviewer routing's
+    // third step reads (`risk-routing.test.ts` asserts the routing it feeds).
+    expect(created?.requestedByUserId).toBe(USER);
     // Nothing ever asks a provider about this key, so there is no snapshot — and `null` is what
     // `ensureTicketSnapshot` already reads as "the platform has not read this ticket".
     expect(created?.ticketSnapshot).toBeNull();
@@ -174,6 +177,8 @@ describe('startProjectDiscovery', () => {
     const [created] = harness.store.snapshot();
     const stream = await harness.memory.store.readStream('task', created?.task.id as Id);
     expect(stream[0]?.event.actor).toEqual({ kind: 'system', component: 'pipeline' });
+    // …and the row names nobody, so the reviewer fallback routes to nobody (both ways, rule 42).
+    expect(created?.requestedByUserId).toBeNull();
   });
 
   it('starts one discovery task per project, not one per deployment', async () => {

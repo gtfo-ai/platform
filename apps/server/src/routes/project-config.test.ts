@@ -21,6 +21,7 @@ import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { toApiError } from '../errors.js';
+import { type MemoryAttempt, memoryAttemptRecords } from './idempotency-memory.js';
 import {
   CONFIG_EXPORT_ACTION,
   CONFIG_REFRESH_ACTION,
@@ -50,6 +51,7 @@ let world: World;
 let exports: ConfigExportRequest[];
 let refreshes: string[];
 let actions: { userId: string; action: string; params: JsonObject }[];
+let attempts: Map<string, MemoryAttempt>;
 
 const exported = (): ConfigExportReport => ({
   status: 'exported',
@@ -64,6 +66,7 @@ beforeEach(async () => {
   exports = [];
   refreshes = [];
   actions = [];
+  attempts = new Map();
   world = {
     role: 'maintainer',
     project: {
@@ -99,21 +102,18 @@ beforeEach(async () => {
     queries: {
       projectRole: async () => world.role,
       exportableProject: async () => world.project,
-      previousAttempt: async (query) => {
-        const found = actions
-          .filter(
-            (entry) =>
-              entry.userId === query.userId &&
-              entry.action === query.action &&
-              entry.params.idempotency_key === query.key,
-          )
-          .at(-1);
-        return found === undefined
-          ? null
-          : { bodyDigest: (found.params.body_digest as string) ?? null, params: found.params };
-      },
+      ...memoryAttemptRecords(attempts),
       recordAction: async (input) => {
         actions.push({ userId: input.userId, action: input.action, params: input.params });
+        // What the real writer does: the audit row completes the key's record.
+        const key = input.params.idempotency_key;
+        const digest = input.params.body_digest;
+        if (typeof key === 'string') {
+          attempts.set(`${input.userId}|${input.action}|${key}`, {
+            bodyDigest: typeof digest === 'string' ? digest : null,
+            params: input.params,
+          });
+        }
       },
       readRepository: async () => world.stored,
     },

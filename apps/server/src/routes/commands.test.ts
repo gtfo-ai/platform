@@ -41,6 +41,7 @@ import {
   STEER_MIN_INTERVAL_MS,
   type SteerGate,
 } from './commands.js';
+import { memoryAttemptRecords } from './idempotency-memory.js';
 
 const TASK = '00000000-0000-4000-8000-0000000000a1';
 const RUN = '00000000-0000-4000-8000-0000000000a2';
@@ -64,7 +65,7 @@ interface World {
     params: JsonObject;
     taskId?: string | null;
   }[];
-  /** The attempt `previousAttempt` answers with, keyed `user|action|key` — the lookup's scope. */
+  /** The attempts `claimAttempt` answers with, keyed `user|action|key` — the record's scope. */
   readonly attempts: Map<string, { bodyDigest: string | null; params: JsonObject }>;
   /** What the next command call throws, if anything. */
   throws: Error | null;
@@ -165,8 +166,7 @@ const build = async (
         taskId === TASK ? { state: 'active', currentStage: 'refinement' } : null,
       runPosition: async (runId) =>
         runId === RUN ? { status: 'completed', taskId: TASK, taskState: 'active' } : null,
-      previousAttempt: async (query) =>
-        attempts.get(`${query.userId}|${query.action}|${query.key}`) ?? null,
+      ...memoryAttemptRecords(attempts),
       recordAction: async (input) => {
         actions.push({ ...input });
         // What the real writer does, so a replay of the same key by the same caller finds this
@@ -693,6 +693,56 @@ describe('the routes’ own answers', () => {
     });
   });
 
+  it('gives the key back when the command refuses, and performs a retry of it', async () => {
+    // WP-67 review round 1, the releasing direction: a throw from the command itself.
+    world.throws = new IllegalTransitionError('Task', 'active', 'waiting_answers');
+    const refused = await post(
+      world,
+      `/api/tasks/${TASK}/feedback`,
+      { scope: 'task', text: 'thin' },
+      'fb-refused',
+    );
+    expect(refused.status).toBe(409);
+    const retried = await post(
+      world,
+      `/api/tasks/${TASK}/feedback`,
+      { scope: 'task', text: 'thin' },
+      'fb-refused',
+    );
+    expect(retried.status).toBe(200);
+    expect(retried.body.performed).toBe(true);
+    expect(world.calls.filter((call) => call.name === 'feedback')).toHaveLength(2);
+  });
+
+  it('never performs again when the audit row fails after the command performed', async () => {
+    // WP-67 review round 1, the other direction: the effect committed and the audit insert did
+    // not. The key stays claimed, so the retry is answered in flight rather than performed twice.
+    let refuseAudit = true;
+    const failing = await build({
+      recordAction: async () => {
+        if (refuseAudit) {
+          refuseAudit = false;
+          throw new Error('the audit insert was refused');
+        }
+      },
+    });
+    const first = await post(
+      failing,
+      `/api/tasks/${TASK}/feedback`,
+      { scope: 'task', text: 'thin' },
+      'fb-audit',
+    );
+    expect(first.status).toBe(500);
+    const retried = await post(
+      failing,
+      `/api/tasks/${TASK}/feedback`,
+      { scope: 'task', text: 'thin' },
+      'fb-audit',
+    );
+    expect(`${retried.status} ${retried.body.error?.code}`).toBe('409 idempotency_key_in_flight');
+    expect(failing.calls.filter((call) => call.name === 'feedback')).toHaveLength(1);
+  });
+
   it('answers a feedback replay with the id the first attempt recorded', async () => {
     const first = await post(
       world,
@@ -873,7 +923,7 @@ describe('the routes’ own answers', () => {
         projectRole: async () => null,
         taskPosition: async () => ({ state: 'active', currentStage: 'refinement' }),
         runPosition: async () => ({ status: 'completed', taskId: TASK, taskState: 'active' }),
-        previousAttempt: async () => null,
+        ...memoryAttemptRecords(new Map()),
         recordAction: async () => undefined,
       },
       commands: null,

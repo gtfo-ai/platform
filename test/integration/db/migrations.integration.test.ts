@@ -23,6 +23,10 @@ const EXPECTED_TABLES = [
   'budgets',
   'code_files',
   'code_maps',
+  // WP-67 (migration 0053): the `Idempotency-Key` record a command claims before it performs.
+  // `human_actions` could not be it: a claim is released when the command is refused, and that
+  // table is append-only and already held the duplicates a unique index would refuse.
+  'command_idempotency',
   'config_audit',
   'cost_entries',
   'cost_rollup_daily',
@@ -193,6 +197,9 @@ describe('migrate on an empty PostgreSQL 18', () => {
       // change no privilege — they are here because "the registry lists every table" is only
       // useful as an invariant if it is actually true.
       row('accounts', 'read_write', null),
+      // WP-67 (migration 0053): read_write because a claim is completed in place and released
+      // (deleted) when the command it guarded was refused.
+      row('command_idempotency', 'read_write', null),
       row('config_audit', 'append_only', 'created_at'),
       row('cost_entries', 'append_only', 'created_at'),
       // Registered read_write on purpose: the dispatcher claims, defers and deletes its own queue

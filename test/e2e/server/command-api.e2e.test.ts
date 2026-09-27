@@ -286,6 +286,32 @@ describe('the task command surface, on a task the pipeline drove', () => {
     expect(feedbackAgain.body.performed).toBe(false);
     expect(feedbackAgain.body.feedback_id).toBe(feedback.body.feedback_id);
 
+    // WP-67 criterion (3), through the real route and the real command on PostgreSQL: two requests
+    // under one **new** key sent at once record exactly one more `feedback.received`. `feedback`
+    // has no aggregate that refuses a repeat, so until WP-67 both performed (backlog 47). The
+    // other is refused while the first holds the key, or answered as its replay — never performed.
+    const raced = await Promise.all(
+      [0, 1].map(() =>
+        send(
+          client,
+          `/api/tasks/${task.id}/feedback`,
+          { scope: 'task', text: 'sent twice at once' },
+          'feedback-race',
+        ),
+      ),
+    );
+    expect(
+      raced.filter((reply) => reply.status === 200 && reply.body.performed === true),
+    ).toHaveLength(1);
+    for (const reply of raced) {
+      const outcome =
+        reply.status === 200 ? 'answered' : `${reply.status} ${reply.body.error?.code}`;
+      expect(['answered', '409 idempotency_key_in_flight']).toContain(outcome);
+    }
+    expect(
+      (await pipeline.events()).filter((event) => event.type === 'feedback.received'),
+    ).toHaveLength(2);
+
     // ── cancel, and then every command refuses ────────────────────────────
     const cancelled = await send(client, `/api/tasks/${task.id}/cancel`, { reason: 'not needed' });
     expect(cancelled.status, JSON.stringify(cancelled.body)).toBe(200);
@@ -297,6 +323,8 @@ describe('the task command surface, on a task the pipeline drove', () => {
     const audit = await humanActions(pipeline);
     expect(audit.map((row) => row.action).sort()).toEqual([
       'task.cancel',
+      'task.feedback',
+      // The concurrent pair above: one row for the one that performed (WP-67).
       'task.feedback',
       'task.pause',
       'task.resume',
@@ -314,6 +342,7 @@ describe('the task command surface, on a task the pipeline drove', () => {
     expect(JSON.stringify(audit)).not.toContain('the footer still rounds twice');
     expect(JSON.stringify(audit)).not.toContain('sum the model, not the view');
     expect(JSON.stringify(audit)).not.toContain('the review was thin');
+    expect(JSON.stringify(audit)).not.toContain('sent twice at once');
     // …and nothing escalated the task: no HTTP request may park a task for a human.
     expect(events.some((event) => event.type === 'task.escalated')).toBe(false);
     void readyForMerge;

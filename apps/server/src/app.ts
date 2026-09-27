@@ -79,6 +79,7 @@ import type { OnboardingCommands } from './onboarding.js';
 import type { ProjectConfigCommands } from './project-config.js';
 import { listHistoryBootstraps } from './queries/bootstrap-queries.js';
 import { listOrgBudgets, writeBudget } from './queries/cost-queries.js';
+import { claimCommandAttempt, releaseCommandAttempt } from './queries/idempotency-queries.js';
 import type { Database } from './queries/identity-queries.js';
 import {
   findConfigLayers,
@@ -93,7 +94,6 @@ import {
   upsertIdentityMapping,
 } from './queries/identity-queries.js';
 import {
-  findIdempotentAttempt,
   findProjectById,
   recordHumanAction,
   writeProjectAutonomy,
@@ -500,7 +500,8 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         projectRole: async (projectId, userId) =>
           findProjectRole(options.database, projectId, userId),
         exportableProject: async (projectId) => findExportableProject(options.database, projectId),
-        previousAttempt: async (query) => findIdempotentAttempt(options.database, query),
+        claimAttempt: async (query) => claimCommandAttempt(options.database, query),
+        releaseAttempt: async (query) => releaseCommandAttempt(options.database, query),
         recordAction: async (input) => recordHumanAction(options.database, input),
         readRepository: async (projectId) =>
           repositorySnapshotFrom((await findConfigLayers(options.database, projectId)) ?? {}),
@@ -518,7 +519,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       // moment they configure the binding, that one covers a row this route never saw.
       integrationHosts: config.integrationHosts,
     });
-    // WP-34: shadow mode's one command and two reads (product/10:20). The seven database functions
+    // WP-34: shadow mode's one command and two reads (product/10:20). The eight database functions
     // are bound here so the route module names none of them (`routes/shadow.ts`'s `ShadowQueries`).
     await registerShadowRoutes(app, {
       queries: {
@@ -526,7 +527,8 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
           findProjectRole(options.database, projectId, userId),
         projectExists: async (projectId) =>
           (await findProjectById(options.database, projectId)) !== null,
-        previousAttempt: async (query) => findIdempotentAttempt(options.database, query),
+        claimAttempt: async (query) => claimCommandAttempt(options.database, query),
+        releaseAttempt: async (query) => releaseCommandAttempt(options.database, query),
         recordAction: async (input) => recordHumanAction(options.database, input),
         listBatches: async (projectId, gate) =>
           listShadowBatches(options.database, projectId, gate),
@@ -549,7 +551,8 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
           findProjectRole(options.database, projectId, userId),
         projectExists: async (projectId) =>
           (await findProjectById(options.database, projectId)) !== null,
-        previousAttempt: async (query) => findIdempotentAttempt(options.database, query),
+        claimAttempt: async (query) => claimCommandAttempt(options.database, query),
+        releaseAttempt: async (query) => releaseCommandAttempt(options.database, query),
         recordAction: async (input) => recordHumanAction(options.database, input),
         listBootstraps: async (projectId, mergeRequests) => {
           const gate =
@@ -579,7 +582,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       bootstrap: options.historyBootstrap,
     });
     await registerSettingsRoutes(app, {
-      // The nine reads and writes the settings surface needs, bound to this process's database
+      // The ten reads and writes the settings surface needs, bound to this process's database
       // here so that the route module names none (`routes/settings.ts`'s `SettingsQueries`).
       queries: {
         projectRole: async (projectId, userId) =>
@@ -593,7 +596,8 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         writeBudget: async (input) => writeBudget(options.database, input),
         projectAudit: async (projectId, limit) =>
           listProjectAudit(options.database, projectId, limit),
-        previousAttempt: async (query) => findIdempotentAttempt(options.database, query),
+        claimAttempt: async (query) => claimCommandAttempt(options.database, query),
+        releaseAttempt: async (query) => releaseCommandAttempt(options.database, query),
         recordAction: async (input) => recordHumanAction(options.database, input),
       },
       // TD-012 step 2, the platform's patterns — the same composition `commands.ts` gives every
@@ -632,7 +636,8 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         taskProjectId: async (taskId) => findTaskProjectId(options.database, taskId),
         projectRole: async (projectId, userId) =>
           findProjectRole(options.database, projectId, userId),
-        previousAttempt: async (query) => findIdempotentAttempt(options.database, query),
+        claimAttempt: async (query) => claimCommandAttempt(options.database, query),
+        releaseAttempt: async (query) => releaseCommandAttempt(options.database, query),
         recordAction: async (input) => recordHumanAction(options.database, input),
         ...options.asks.queries,
       },
@@ -643,14 +648,15 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         taskProjectId: async (taskId) => findTaskProjectId(options.database, taskId),
         projectRole: async (projectId, userId) =>
           findProjectRole(options.database, projectId, userId),
-        previousAttempt: async (query) => findIdempotentAttempt(options.database, query),
+        claimAttempt: async (query) => claimCommandAttempt(options.database, query),
+        releaseAttempt: async (query) => releaseCommandAttempt(options.database, query),
         recordAction: async (input) => recordHumanAction(options.database, input),
         listBreakdown: options.breakdown?.queries.listBreakdown ?? (async () => []),
       },
       breakdown: options.breakdown?.commands ?? null,
     });
     await registerCommandRoutes(app, {
-      // The seven functions the command routes need, bound to this process's database here so
+      // The eight functions the command routes need, bound to this process's database here so
       // that module names none (`routes/commands.ts`'s `CommandQueries`).
       queries: {
         taskProjectId: async (taskId) => findTaskProjectId(options.database, taskId),
@@ -659,7 +665,8 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
           findProjectRole(options.database, projectId, userId),
         taskPosition: async (taskId) => findTaskPosition(options.database, taskId),
         runPosition: async (runId) => findRunPosition(options.database, runId),
-        previousAttempt: async (query) => findIdempotentAttempt(options.database, query),
+        claimAttempt: async (query) => claimCommandAttempt(options.database, query),
+        releaseAttempt: async (query) => releaseCommandAttempt(options.database, query),
         recordAction: async (input) => recordHumanAction(options.database, input),
       },
       commands: options.commands,

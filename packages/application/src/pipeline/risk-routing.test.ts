@@ -328,8 +328,7 @@ const optionsOf = (harness: PipelineHarness): RiskRoutingOptions => ({
   ids: harness.ids,
   clock: { now: () => harness.clock.now() },
   unitOfWork: markTransactions(harness.memory),
-  // Never consulted here: `tasks.requested_by_user_id` is `null` on every task this build creates
-  // (PROGRESS backlog 92), so step three of the precedence stops before it.
+  // Empty unless a case maps one: step three needs a user on the row *and* an identity for them.
   identities: { forProvider: async () => new Map() },
 });
 
@@ -467,8 +466,9 @@ describe('reviewer routing (product/19:138, WP-37)', () => {
   });
 
   it('assigns nobody on a project with no CODEOWNERS, no reviewers and no mapped requester', async () => {
-    // The shipped default, and the one an operator meets first: `tasks.requested_by_user_id` has no
-    // writer and `user_identities` is empty (PROGRESS backlog 79), so step three finds nobody.
+    // The shipped default, and the one an operator meets first: a ticket intake picked up names no
+    // requester (`tasks.requested_by_user_id` is written only by the three commands that hold an
+    // actor, WP-67) and `user_identities` is empty (PROGRESS backlog 79), so step three finds nobody.
     const started = startHarness({});
     await started.harness.publish([ticketMatched()]);
 
@@ -590,5 +590,72 @@ describe('reviewer routing (product/19:138, WP-37)', () => {
     const key = encodeURIComponent(reviewerRoutingIdempotencyKey(id, HEAD));
     expect(started.harness.idempotency.keys().some((stored) => stored.endsWith(key))).toBe(true);
     expect(actions(started.harness, 'set_reviewers').length).toBe(1);
+  });
+});
+
+/**
+ * WP-67 criterion (7), PROGRESS backlog 92: step three of product/19:138 with a writer behind it.
+ *
+ * The **writer** is asserted where it lives — `onboarding/discovery.test.ts` reads the discovery
+ * task's row and finds the user who started it. What is asserted here is the routing that row
+ * feeds, both ways (standing rule 42): a requester with a mapped identity is assigned when nothing
+ * else matched, and a task nobody requested routes to nobody. The row's requester is supplied on the
+ * read, the arrangement the shadow case above uses and for a stated reason: a discovery task never
+ * opens a merge request, so the pipeline cannot drive one to this duty, and `save` does not own the
+ * column (the insert writes it), so the read is the only place a case can set it.
+ */
+describe('the requester fallback (product/19:138 step three, WP-67)', () => {
+  const REQUESTER = '00000000-0000-4000-8000-0000000000e1' as Id;
+
+  const routeWithRequester = async (requestedByUserId: Id | null) => {
+    // The mapped identity's external id is the provider's **account id** (`String(user.id)` on
+    // GitLab), so the directory knows no user by it: the requester must be assigned without a
+    // username lookup, which is what the row's first version did and what resolved nobody.
+    const started = startHarness({});
+    await started.harness.publish([ticketMatched()]);
+    const id = await taskId(started.harness);
+    started.harness.audit.reset();
+    await runRiskRouting(
+      {
+        ...optionsOf(started.harness),
+        // The row as a command that holds its actor writes it. `save` does not own this column
+        // (it is written by the insert only), so the read is where the case sets it.
+        store: {
+          ...started.harness.store,
+          tasks: {
+            ...started.harness.store.tasks,
+            load: async (tx, taskId) => {
+              const loaded = await started.harness.store.tasks.load(tx, taskId);
+              return loaded === null ? null : { ...loaded, requestedByUserId };
+            },
+          },
+        },
+        identities: { forProvider: async () => new Map([['4242', REQUESTER]]) },
+      },
+      {
+        duty: 'risk_route',
+        project_id: PROJECT,
+        task_id: id,
+        cause_event_id: '00000000-0000-4000-9000-000000000002',
+      },
+    );
+    return started;
+  };
+
+  it('assigns the requester’s provider account when nothing else matched', async () => {
+    const started = await routeWithRequester(REQUESTER);
+    expect(started.assigned).toEqual([['4242']]);
+    const record = await requiredReviewers(started.harness);
+    expect(record?.source).toBe('requester');
+    expect(record?.handles).toEqual(['4242']);
+    // No username lookup for an account id.
+    expect(started.lookups).toEqual([]);
+    expect(record?.assigned).toEqual(['4242']);
+  });
+
+  it('routes a task nobody requested to nobody, with the same identity mapped', async () => {
+    const started = await routeWithRequester(null);
+    expect(started.assigned).toEqual([]);
+    expect(actions(started.harness, 'set_reviewers')).toEqual([]);
   });
 });

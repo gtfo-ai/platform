@@ -25,8 +25,9 @@
  * are unique indexes, so a retried create finds the row and answers with it instead of making a
  * second. A unique key cannot tell that retry from a **different** request sent under a used
  * `Idempotency-Key`, so every performed command also records a digest of its canonical request
- * beside the key in `human_actions` and {@link findIdempotentAttempt} refuses a later request whose
- * digest differs. There is still no stored *response* — a repeat with the same key and body is
+ * beside the key — in `command_idempotency` since WP-67, completed by the `human_actions` row in
+ * the same statement set — and {@link findIdempotentAttempt} refuses a later request whose digest
+ * differs. There is still no stored *response* — a repeat with the same key and body is
  * answered by re-reading the resource, which is the same answer and one fewer thing to keep
  * consistent.
  *
@@ -51,8 +52,9 @@ import { projectRecordSchema } from '@platform/contracts';
 import { DEFAULT_AUTONOMY_LEVEL, materialiseAutonomy } from '@platform/domain';
 import { db as dbAdapters, secrets as secretAdapters } from '@platform/infrastructure';
 import type { ProviderCatalogueEntry } from '@platform/integrations';
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { HttpError } from '../errors.js';
+import { completeCommandAttempt, findCommandAttempt } from './idempotency-queries.js';
 import type { Database } from './identity-queries.js';
 
 const { bindings, humanActions, integrations, organizations, projects, secrets } =
@@ -831,38 +833,68 @@ export interface HumanActionInput {
   readonly taskId?: string | null;
 }
 
-/** The insert itself, so a caller inside a transaction and one outside share one statement. */
+/**
+ * The insert itself, so a caller inside a transaction and one outside share one statement.
+ *
+ * A row that carries an `Idempotency-Key` also **completes** the key's record in
+ * `command_idempotency` on the same executor (WP-67, {@link completeCommandAttempt}): inside a
+ * command's transaction the two commit together, and {@link recordHumanAction} gives them a
+ * transaction of their own when it is called on the pool.
+ */
 const insertHumanAction = async (
   executor: Pick<Database, 'insert'>,
   input: HumanActionInput,
 ): Promise<void> => {
-  await executor.insert(humanActions).values({
-    taskId: input.taskId ?? null,
+  const inserted = await executor
+    .insert(humanActions)
+    .values({
+      taskId: input.taskId ?? null,
+      userId: input.userId,
+      action: input.action,
+      params: input.params,
+    })
+    .returning({ id: humanActions.id });
+  const key = input.params.idempotency_key;
+  const row = inserted[0];
+  if (typeof key !== 'string' || row === undefined) {
+    return;
+  }
+  const digest = input.params.body_digest;
+  await completeCommandAttempt(executor, {
     userId: input.userId,
     action: input.action,
-    params: input.params,
+    key,
+    digest: typeof digest === 'string' ? digest : null,
+    humanActionId: row.id,
   });
 };
 
+/**
+ * On the pool, the audit row and the key's completion are **one transaction** (WP-67 review round
+ * 1): as two statements, a failure between them left an audit row whose key still read as a claim.
+ */
 export const recordHumanAction = async (
   database: Database,
   input: HumanActionInput,
-): Promise<void> => insertHumanAction(database, input);
+): Promise<void> => {
+  await database.transaction(async (tx) => insertHumanAction(tx, input));
+};
 
 /**
  * Records a command's `human_actions` row **inside a transaction the command already holds**, and
  * refuses when this caller's key already performed the action (WP-64 review round 1).
  *
  * For a command with no natural key — the interview queues eight proposals and nothing unique
- * stops a second eight — `idempotentReplay`'s read before the command is not enough: two submits
- * that race both read "no attempt". So the claim takes a transaction-scoped advisory lock on
- * `(user, action, key)`, re-reads under it, and inserts the row in the **same** transaction as the
- * command's writes. The second of two racing submits waits for the first to commit, then finds its
- * row and answers `false`, and its caller rolls back. A crash between the writes and the audit row
- * is impossible for the same reason: they commit together.
+ * stops a second eight — a read before the command is not enough: two submits that race both read
+ * "no attempt". So the claim is the **insert** of the key's `command_idempotency` row (migration
+ * 0053, WP-67) in the **same** transaction as the command's writes: the second of two racing
+ * submits blocks on the first one's uncommitted primary key, meets it once the first commits,
+ * answers `false`, and its caller rolls back. A crash between the writes and the audit row is
+ * impossible for the same reason: they commit together. This is the ordering
+ * `routes/idempotency.ts` calls **claim with the effect**, available only where the route holds the
+ * effect's transaction; until WP-67 it was an advisory lock plus a JSON read of `human_actions`.
  *
- * Raw SQL on the transaction's own client, because the command's unit of work owns the connection;
- * the lookup is `findIdempotentAttempt`'s predicate.
+ * Raw SQL on the transaction's own client, because the command's unit of work owns the connection.
  */
 export const claimIdempotentAttemptInTransaction = async (
   client: { query(text: string, values?: unknown[]): Promise<{ rows: unknown[] }> },
@@ -874,21 +906,27 @@ export const claimIdempotentAttemptInTransaction = async (
     readonly taskId?: string | null;
   },
 ): Promise<boolean> => {
-  await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
-    `human_actions:${input.userId}:${input.action}:${input.key}`,
-  ]);
-  const existing = await client.query(
-    `select 1 from human_actions
-      where user_id = $1 and action = $2 and params ->> 'idempotency_key' = $3
-      limit 1`,
-    [input.userId, input.action, input.key],
+  const digest = (input.params as Record<string, unknown>).body_digest;
+  const claimed = await client.query(
+    `insert into command_idempotency (user_id, action, idempotency_key, body_digest)
+     values ($1, $2, $3, $4)
+     on conflict do nothing
+     returning 1`,
+    [input.userId, input.action, input.key, typeof digest === 'string' ? digest : null],
   );
-  if (existing.rows.length > 0) {
+  if (claimed.rows.length === 0) {
     return false;
   }
-  await client.query(
-    'insert into human_actions (task_id, user_id, action, params) values ($1, $2, $3, $4::jsonb)',
+  const inserted = await client.query(
+    'insert into human_actions (task_id, user_id, action, params) values ($1, $2, $3, $4::jsonb) returning id',
     [input.taskId ?? null, input.userId, input.action, JSON.stringify(input.params)],
+  );
+  const humanActionId = (inserted.rows[0] as { id: string }).id;
+  await client.query(
+    `update command_idempotency
+        set completed_at = greatest(now(), claimed_at), human_action_id = $4
+      where user_id = $1 and action = $2 and idempotency_key = $3`,
+    [input.userId, input.action, input.key, humanActionId],
   );
   return true;
 };
@@ -896,18 +934,16 @@ export const claimIdempotentAttemptInTransaction = async (
 /**
  * What a previous attempt under this `Idempotency-Key` asked for, or `null` when there was none.
  *
- * **This is the store technical/08's header implies, built out of a table that already exists.**
- * The idempotency of each wizard command is its unique key (`projects.key`,
- * `(integrations.org_id, type, name)`, `(tasks.project_id, ticket_key, mode)`), which makes a
- * *retry* cheap and correct — but a unique key cannot tell a retry from a **different request sent
- * under a used key**, and four places in this repository claim it can. `human_actions` is
- * append-only (`platform_table_policy`), one row is written per performed command, and it already
- * carries the key; adding a digest of the canonical body to the same row is the whole mechanism,
- * with no new table and no migration.
+ * **Read out of `command_idempotency` since WP-67** (migration 0053), where it used to be a JSON
+ * predicate over `human_actions`. A key counts as used only once its command **completed** — an
+ * in-flight claim is not an attempt a lookup can answer from, and the routes that must see one
+ * claim instead of looking (`claimIdempotentAttempt` in `routes/idempotency.ts`). The callers left
+ * on this read are the wizard's two creates, whose natural key is what stops a second row, and the
+ * interview's early answer, whose real guard is {@link claimIdempotentAttemptInTransaction}.
  *
  * What it is **not**: a stored *response*. A repeat with the same key and the same body is answered
- * by re-reading the resource through its natural key, not by replaying bytes — which is the same
- * answer and is one fewer thing to keep consistent. A repeat with a *different* body is a 409.
+ * by re-reading the resource through its natural key, or from the `params` the first attempt's
+ * audit row recorded — never by replaying bytes.
  *
  * ## The scope of a key is `(user, action)`, and the user half is the security-relevant one
  *
@@ -927,52 +963,27 @@ export const claimIdempotentAttemptInTransaction = async (
  * What the narrower scope gives up, stated rather than implied: a command issued by **two**
  * accounts under one key is performed twice. That is not the header's job — the aggregate refuses
  * the second (`task.pause` twice is `paused → paused`), the wizard's unique keys refuse a second
- * row, and a shared key across accounts is not a retry of the same request in any case. A row
- * whose `user_id` a deleted user left `null` (`on delete set null`) is invisible to every lookup,
- * which frees the key rather than refusing it — again the direction that loses a 409, never one
- * that performs something twice.
+ * row, and a shared key across accounts is not a retry of the same request in any case. A deleted
+ * user's keys are deleted with them (`on delete cascade`), which frees the key rather than
+ * refusing it — the direction that loses a 409, never one that performs something twice.
  *
- * ## Two residuals, named rather than implied
+ * ## The residual on the wizard's creates, which WP-67 states rather than closes
  *
- * **A crash between the effect and the record.** `createProject` and `createIntegration` write the
- * `human_actions` row **inside** the transaction that performs the effect, so for those two there is
- * no window. `POST …/discovery` cannot: its effect is a pipeline transaction in the application
- * ring that this route does not hold, so a crash between the two leaves a discovery task whose key
- * has no digest, and a later *different* request under that key is answered by the natural key
- * (`already_started`) instead of being refused. The direction is the safe one — nothing is created
- * twice — and the cost is a 409 that does not happen.
- *
- * **Two concurrent requests with the same key.** Both read "no previous attempt" before either
- * commits (READ COMMITTED), so both proceed and the second is not refused; the unique key still
- * stops a second row, so what is lost is again only the 409. Closing it needs a **unique index on
- * `(user_id, action, params->>'idempotency_key')`** — the scope above, as an index — which is a
- * migration and which would also turn a legitimate retry into a constraint violation that this
- * function would have to catch and read as "already performed" — a different design, not a stricter
- * one. Nobody owns it; `PROGRESS.md` carries it.
+ * Two **concurrent** creates under one key both read "no attempt" here; the unique key underneath
+ * (`projects.key`, `(integrations.org_id, type, name)`) still stops a second row, so what is lost
+ * is only the `409` for a concurrent *different* body, which is answered with the first resource
+ * instead. The divergence is deliberate: those two write their audit row inside the create's own
+ * transaction, which already leaves no crash window, and the natural key already decides.
  */
 export const findIdempotentAttempt = async (
   database: Database,
   input: { readonly userId: string; readonly action: string; readonly key: string },
 ): Promise<{ readonly bodyDigest: string | null; readonly params: JsonObject } | null> => {
-  const rows = await database
-    .select({ params: humanActions.params })
-    .from(humanActions)
-    .where(
-      and(
-        eq(humanActions.userId, input.userId),
-        eq(humanActions.action, input.action),
-        sql`${humanActions.params} ->> 'idempotency_key' = ${input.key}`,
-      ),
-    )
-    .orderBy(desc(humanActions.createdAt))
-    .limit(1);
-  const row = rows[0];
-  if (row === undefined) {
+  const found = await findCommandAttempt(database, input);
+  if (found === null || found.status !== 'performed') {
     return null;
   }
-  const params = (row.params ?? {}) as JsonObject;
-  const digest = (params as Record<string, unknown>).body_digest;
   // The whole `params` object, not only the digest: for a command with no natural key to re-read,
-  // the recorded attempt **is** the answer to a retry (WP-15i, `idempotentReplay`).
-  return { bodyDigest: typeof digest === 'string' ? digest : null, params };
+  // the recorded attempt **is** the answer to a retry (WP-15i).
+  return { bodyDigest: found.bodyDigest, params: found.params };
 };

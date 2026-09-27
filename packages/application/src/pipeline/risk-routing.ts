@@ -142,12 +142,14 @@ export const riskRoutingHandlers = (options: PipelineSagaOptions): readonly Even
 /**
  * The provider account of the human who asked for this task, or `null`.
  *
- * Step three of product/19:138, and **it resolves to nobody on this build** — twice over, which is
- * why both halves are named here rather than in one sentence. `tasks.requested_by_user_id` has no
- * writer at all (`StoredTask.requestedByUserId`), and `user_identities` is empty until an operator
- * fills it through `POST /api/org/identities` (PROGRESS backlog 79). The caller logs which of the
- * two it hit, because *"the fallback found nobody"* and *"there is no fallback"* are different
- * things to an operator deciding whether to map an identity.
+ * Step three of product/19:138, and it needs **two** things, which is why both are named here
+ * rather than in one sentence. `tasks.requested_by_user_id` must name somebody — since WP-67 the
+ * three commands that hold an actor write it (discovery, a shadow batch, a history bootstrap;
+ * `StoredTask.requestedByUserId` lists the sites that write `null` and why) — and `user_identities`
+ * must map that user to an account on this provider, which it does only once an operator fills it
+ * through `POST /api/org/identities` (PROGRESS backlog 79). The caller logs which of the two it
+ * hit, because *"the fallback found nobody"* and *"there is no fallback"* are different things to
+ * an operator deciding whether to map an identity.
  */
 const requesterAccount = async (
   options: RiskRoutingOptions,
@@ -254,6 +256,14 @@ export const runRiskRouting = async (
 
   await routeReviewers(options, {
     stored,
+    /**
+     * Whose directory maps a platform user to an account: the ref's own provider when it names
+     * one, and otherwise the git binding's — which is **every** production task, because
+     * `recordMergeRequest` stores `provider: null` by design (WP-15d: `gitReads` fills the account
+     * in at use). Until WP-67 this read only the ref, so step three could not fire on any task
+     * even once `tasks.requested_by_user_id` had a writer (PROGRESS backlog 92).
+     */
+    provider: stored.mr.provider ?? integrations.git?.ref.provider ?? null,
     paths,
     matched,
     classes,
@@ -274,6 +284,7 @@ export const runRiskRouting = async (
 
 interface RoutingInput {
   readonly stored: StoredTask;
+  readonly provider: string | null;
   readonly paths: readonly string[];
   readonly matched: readonly string[];
   readonly classes: Readonly<Record<string, RiskClass>> | undefined;
@@ -292,7 +303,7 @@ const routeReviewers = async (options: RiskRoutingOptions, input: RoutingInput):
   if (ref === null) {
     return;
   }
-  const provider = ref.provider ?? null;
+  const provider = input.provider;
 
   /**
    * **`CODEOWNERS` is read at the default branch, never inside the change** — and that is a
@@ -314,13 +325,12 @@ const routeReviewers = async (options: RiskRoutingOptions, input: RoutingInput):
    */
   const target = await input.reads.defaultBranch(context);
   const rules = target === null ? null : await input.reads.codeowners(target.branch, context);
+  const requester =
+    provider === null ? null : await requesterAccount(options, provider, stored.requestedByUserId);
   const routing = resolveReviewerRouting({
     codeowners: codeownersFor(rules, input.paths).map(input.redact),
     configured: input.configured,
-    requester:
-      provider === null
-        ? null
-        : await requesterAccount(options, provider, stored.requestedByUserId),
+    requester,
     classReviewers: reviewersRequiredByClasses(input.classes, input.matched),
     limit: MAX_ROUTED_REVIEWERS,
   });
@@ -328,7 +338,17 @@ const routeReviewers = async (options: RiskRoutingOptions, input: RoutingInput):
   const resolved: string[] = [];
   const unresolved: string[] = [];
   for (const handle of routing.handles) {
-    const externalId = await input.reads.userId(handle, context);
+    /**
+     * **The requester is already an account, not a handle** (WP-67). `user_identities` maps a user
+     * to the provider's own account id — `String(user.id)` on GitLab (`gitlab/inbound.ts`) — and
+     * `resolveUserId` takes a *username*, so looking the id up again asked GitLab for a user named
+     * `4242` and resolved nobody: step three could not have fired on the one shipped git provider
+     * even with a writer behind it. A `CODEOWNERS` or configured handle is still resolved.
+     */
+    const externalId =
+      routing.source === 'requester' && handle === requester
+        ? handle
+        : await input.reads.userId(handle, context);
     if (externalId === null) {
       unresolved.push(handle);
       continue;

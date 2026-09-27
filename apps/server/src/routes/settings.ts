@@ -68,7 +68,11 @@ import { requirePermission } from '../auth/rbac.js';
 import { HttpError, NotFoundError } from '../errors.js';
 import type { WriteBudgetResult } from '../queries/cost-queries.js';
 import type { HumanActionInput } from '../queries/onboarding-queries.js';
-import { idempotentReplay, readIdempotencyKey } from './idempotency.js';
+import {
+  claimIdempotentAttempt,
+  type IdempotencyRecords,
+  readIdempotencyKey,
+} from './idempotency.js';
 
 /**
  * The database this module needs, as nine functions.
@@ -101,11 +105,8 @@ export interface SettingsQueries {
     readonly createdBy: string | null;
   }): Promise<WriteBudgetResult>;
   projectAudit(projectId: string, limit: number): Promise<ProjectAuditResponse>;
-  previousAttempt(query: {
-    readonly userId: string;
-    readonly action: string;
-    readonly key: string;
-  }): Promise<{ readonly bodyDigest: string | null; readonly params: JsonObject } | null>;
+  claimAttempt: IdempotencyRecords['claimAttempt'];
+  releaseAttempt: IdempotencyRecords['releaseAttempt'];
   recordAction(input: HumanActionInput): Promise<void>;
 }
 
@@ -174,7 +175,7 @@ export const registerSettingsRoutes = async (
   };
 
   /**
-   * One settings write: replay, perform, audit — in that order and never another.
+   * One settings write: claim, perform, audit — in that order and never another.
    *
    * `perform` runs only when this request is not a replay, and the `human_actions` row is written
    * only when `perform` returned, so a refusal writes nothing and a replay performs nothing. It is
@@ -197,7 +198,7 @@ export const registerSettingsRoutes = async (
   }): Promise<unknown> => {
     const actor = actorOf(input.request);
     const key = readIdempotencyKey(input.request);
-    const replay = await idempotentReplay(options.queries.previousAttempt, {
+    const replay = await claimIdempotentAttempt(options.queries, {
       userId: actor.userId,
       action: input.action,
       key,
@@ -206,16 +207,21 @@ export const registerSettingsRoutes = async (
     if (replay.replayed) {
       return input.answer({ performed: false, result: null });
     }
-    const result = await input.perform(actor.userId);
-    await options.queries.recordAction({
-      userId: actor.userId,
-      action: input.action,
-      params: {
-        ...input.params,
-        ...(input.auditResult === undefined ? {} : input.auditResult(result)),
-        ...(key === null ? {} : { idempotency_key: key }),
-        ...(replay.digest === null ? {} : { body_digest: replay.digest }),
-      },
+    // Under the claim (WP-67): a refusal releases the key, the audit row completes it.
+    const result = await replay.run(async (effectReturned) => {
+      const performed = await input.perform(actor.userId);
+      effectReturned();
+      await options.queries.recordAction({
+        userId: actor.userId,
+        action: input.action,
+        params: {
+          ...input.params,
+          ...(input.auditResult === undefined ? {} : input.auditResult(performed)),
+          ...(key === null ? {} : { idempotency_key: key }),
+          ...(replay.digest === null ? {} : { body_digest: replay.digest }),
+        },
+      });
+      return performed;
     });
     return input.answer({ performed: true, result });
   };

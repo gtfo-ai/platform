@@ -387,6 +387,26 @@ export const humanActions = pgTable('human_actions', {
 });
 
 /**
+ * The command idempotency record — one row per `(user, action, Idempotency-Key)` (migration 0053,
+ * WP-67, PROGRESS backlog 47). `completed_at` null is a **claim** taken before a command performs;
+ * set, it names the `human_actions` row that recorded the performed command. The migration's header
+ * carries the reasoning (why not a unique index on `human_actions`, the retention, the backfill).
+ */
+export const commandIdempotency = pgTable(
+  'command_idempotency',
+  {
+    userId: uuid('user_id').notNull(),
+    action: text('action').notNull(),
+    idempotencyKey: text('idempotency_key').notNull(),
+    bodyDigest: text('body_digest'),
+    claimedAt: timestamp('claimed_at', { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    humanActionId: uuid('human_action_id'),
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.action, table.idempotencyKey] })],
+);
+
+/**
  * The notification outbox (WP-32, migration 0023).
  *
  * `digest_day` is a `date` rather than a timestamp on purpose: it is a *day in the organisation's
@@ -515,6 +535,7 @@ export type Question = typeof questions.$inferSelect;
 export type Approval = typeof approvals.$inferSelect;
 export type Workspace = typeof workspaces.$inferSelect;
 export type HumanAction = typeof humanActions.$inferSelect;
+export type CommandIdempotencyRow = typeof commandIdempotency.$inferSelect;
 export type Notification = typeof notifications.$inferSelect;
 export type TaskAsk = typeof taskAsks.$inferSelect;
 export type TicketBreakdownItem = typeof ticketBreakdownItems.$inferSelect;

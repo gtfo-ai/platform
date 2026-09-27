@@ -20,8 +20,8 @@
  * performed — and carries the `Idempotency-Key` the client sent, so an operator reading the audit
  * can tell one double-clicked create from two deliberate ones. For the two creates whose effect is
  * a write in `queries/onboarding-queries.ts` it is written **inside that write's transaction**,
- * because the row is also the idempotency record; `findIdempotentAttempt` states what that does not
- * cover.
+ * together with the key's `command_idempotency` row it completes (WP-67); `findIdempotentAttempt`
+ * states what that does not cover.
  *
  * ## `Idempotency-Key` is required where a POST creates, and what it buys is enforced
  *
@@ -29,16 +29,18 @@
  * POSTs that create)"*. The header is **required** on the four creating POSTs and refused when
  * absent, because a header that is optional is a header production omits (standing rule 31's
  * shape). (The fourth, WP-64's interview, has no natural key — two interviews are two sets of
- * proposals — so it answers a retry from the recorded attempt, `idempotentReplay`, the task
- * commands' shape; the two bullets below are the other three.) Two mechanisms, and the second exists because the first cannot see the difference that
- * matters:
+ * proposals — so it answers a retry from the recorded attempt and claims its key **inside** the
+ * proposals' transaction; discovery claims its key before the command runs, the task commands'
+ * shape since WP-67. The two bullets below are the project and integration creates.) Two
+ * mechanisms, and the second exists because the first cannot see the difference that matters:
  *
  * - **A retry is cheap because of the unique key** — `projects.key`,
  *   `(integrations.org_id, type, name)`, `(tasks.project_id, ticket_key, mode)`. The command finds
  *   the row and answers with it, so there is no stored *response* to keep consistent.
  * - **A repeat with a different body is refused**, by `idempotencyGuard` (`./idempotency.ts`, which
  *   is where the whole mechanism moved when WP-15i gave it eleven more callers): every performed
- *   command records a digest of its canonical request in the `human_actions` row beside the key,
+ *   command records a digest of its canonical request beside the key (`command_idempotency` since
+ *   WP-67, completed by the `human_actions` row),
  *   and a later request **from that caller** under that key whose digest differs is
  *   `409 idempotency_key_reused` — the lookup is scoped `(user_id, action, key)`, so another
  *   account's identical string is not this caller's attempt (`findIdempotentAttempt`). A
@@ -96,6 +98,7 @@ import { requirePermission } from '../auth/rbac.js';
 import { HttpError, NotFoundError } from '../errors.js';
 import type { OnboardingCommands } from '../onboarding.js';
 import { OnboardingUnavailableError } from '../onboarding.js';
+import { claimCommandAttempt, releaseCommandAttempt } from '../queries/idempotency-queries.js';
 import type { Database } from '../queries/identity-queries.js';
 import { findProjectRole } from '../queries/identity-queries.js';
 import {
@@ -114,6 +117,7 @@ import {
   writeProjectConfig,
 } from '../queries/onboarding-queries.js';
 import {
+  claimIdempotentAttempt,
   configHashOf,
   idempotencyGuard,
   idempotentReplay,
@@ -218,6 +222,13 @@ export const registerOnboardingRoutes = async (
    * That is criterion 1 of the row spelled in code: a list a caller can extend is not a list, so
    * there is no body field, no query parameter and no per-project override that reaches this.
    */
+  /** The `Idempotency-Key` record for the one wizard command that claims (WP-67): discovery. */
+  const attemptRecords = {
+    claimAttempt: async (query: Parameters<typeof claimCommandAttempt>[1]) =>
+      claimCommandAttempt(options.database, query),
+    releaseAttempt: async (query: Parameters<typeof releaseCommandAttempt>[1]) =>
+      releaseCommandAttempt(options.database, query),
+  };
   const egress = createIntegrationEgressPolicy(options.integrationHosts ?? []);
 
   const secretSource = environmentSecretSource(
@@ -641,51 +652,71 @@ export const registerOnboardingRoutes = async (
       const key = requireIdempotencyKey(request);
       const projectId = request.params.project_id;
       // The body is empty, so the request *is* the project the path names: a key reused for a
-      // different project is the reuse this guard exists to catch.
+      // different project is the reuse this guard exists to catch. Claimed before the command runs
+      // (WP-67), because the effect is a pipeline transaction this route does not hold.
       const actor = actorOf(request);
-      const digest = await idempotencyGuard(options.database, {
+      const replay = await claimIdempotentAttempt(attemptRecords, {
         userId: actor.userId,
         action: 'project.discovery.start',
         key,
         request: { project_id: projectId },
       });
-      if ((await findProjectById(options.database, projectId)) === null) {
-        throw new NotFoundError(`project ${projectId}`);
-      }
-      let result: Awaited<ReturnType<OnboardingCommands['startDiscovery']>>;
-      try {
-        result = await commands().startDiscovery({
-          projectId: projectId as never,
-          userId: actor.userId as never,
-        });
-      } catch (error) {
-        if (error instanceof OnboardingUnavailableError) {
-          throw new HttpError(503, 'onboarding_unavailable', error.message);
+      if (replay.replayed) {
+        const taskId = replay.previous?.task_id;
+        if (typeof taskId !== 'string') {
+          throw new HttpError(
+            409,
+            'idempotency_key_reused',
+            'this Idempotency-Key has already started discovery, and the attempt that did predates the task id being audited; use a new key',
+          );
         }
-        throw error;
+        return {
+          task_id: taskId,
+          started: false,
+          detail: 'this Idempotency-Key already started this project’s discovery; follow the task',
+        };
       }
-      if (result.status === 'unavailable') {
-        throw new HttpError(409, 'discovery_unavailable', result.detail);
-      }
-      if (result.status === 'started') {
-        await recordHumanAction(options.database, {
-          userId: actor.userId,
-          action: 'project.discovery.start',
-          params: {
-            project_id: projectId,
-            task_id: result.taskId,
-            idempotency_key: key,
-            body_digest: digest,
-          },
-          taskId: result.taskId,
-        });
-        reply.code(202);
-      }
-      return {
-        task_id: result.taskId,
-        started: result.status === 'started',
-        detail: result.detail,
-      };
+      return replay.run(async (effectReturned) => {
+        if ((await findProjectById(options.database, projectId)) === null) {
+          throw new NotFoundError(`project ${projectId}`);
+        }
+        let result: Awaited<ReturnType<OnboardingCommands['startDiscovery']>>;
+        try {
+          result = await commands().startDiscovery({
+            projectId: projectId as never,
+            userId: actor.userId as never,
+          });
+        } catch (error) {
+          if (error instanceof OnboardingUnavailableError) {
+            throw new HttpError(503, 'onboarding_unavailable', error.message);
+          }
+          throw error;
+        }
+        if (result.status === 'unavailable') {
+          throw new HttpError(409, 'discovery_unavailable', result.detail);
+        }
+        if (result.status === 'started') {
+          // A task exists now; `already_started` performed nothing and gives the key back.
+          effectReturned();
+          await recordHumanAction(options.database, {
+            userId: actor.userId,
+            action: 'project.discovery.start',
+            params: {
+              project_id: projectId,
+              task_id: result.taskId,
+              idempotency_key: key,
+              body_digest: replay.digest,
+            },
+            taskId: result.taskId,
+          });
+          reply.code(202);
+        }
+        return {
+          task_id: result.taskId,
+          started: result.status === 'started',
+          detail: result.detail,
+        };
+      });
     },
   );
   /**
@@ -701,8 +732,9 @@ export const registerOnboardingRoutes = async (
    * attempt (`idempotentReplay`, the task commands' shape) with `performed: false` and nothing
    * written again. The `human_actions` row carries the sections, the proposal ids and the redaction
    * count, **never an answer**: the text is untrusted and lives in the redacted proposal rows. It is
-   * written **in the proposals' transaction**, under an advisory lock on the key, so a crash cannot
-   * leave proposals without their audit row and two racing submits queue the pages once.
+   * written **in the proposals' transaction**, together with the key's `command_idempotency` row
+   * (WP-67; an advisory lock until then), so a crash cannot leave proposals without their audit row
+   * and two racing submits queue the pages once.
    */
   typed.post(
     '/api/projects/:project_id/interview',
