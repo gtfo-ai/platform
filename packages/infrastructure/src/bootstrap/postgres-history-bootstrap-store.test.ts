@@ -83,6 +83,8 @@ const chunkRow = (overrides: Record<string, unknown> = {}) => ({
   detail: null,
   proposals: 0,
   refused_proposals: 0,
+  // Migration 0052 (WP-66): the run's own coverage claim — null until it reports.
+  merge_requests_read: null,
   ...overrides,
 });
 
@@ -126,7 +128,13 @@ describe('PostgresHistoryBootstrapStore — reading a batch', () => {
 
   it('maps a chunk, including the counts a batch screen reads', async () => {
     const chunk = await store.chunkOfTask(
-      scripted([chunkRow({ recorded_at: new Date('2026-09-14T12:00:00.000Z'), proposals: 3 })]),
+      scripted([
+        chunkRow({
+          recorded_at: new Date('2026-09-14T12:00:00.000Z'),
+          proposals: 3,
+          merge_requests_read: 7,
+        }),
+      ]),
       TASK as never,
     );
     expect(chunk).toEqual({
@@ -144,6 +152,7 @@ describe('PostgresHistoryBootstrapStore — reading a batch', () => {
       detail: null,
       proposals: 3,
       refusedProposals: 0,
+      mergeRequestsRead: 7,
     });
   });
 
@@ -175,6 +184,7 @@ describe('PostgresHistoryBootstrapStore — the three writes whose answer is the
         at: '2026-09-14T12:00:00.000Z' as never,
         proposals: 2,
         refusedProposals: 1,
+        mergeRequestsRead: 20,
       }),
     ).toBe(true);
     expect(
@@ -182,8 +192,33 @@ describe('PostgresHistoryBootstrapStore — the three writes whose answer is the
         at: '2026-09-14T12:00:00.000Z' as never,
         proposals: 2,
         refusedProposals: 1,
+        mergeRequestsRead: 20,
       }),
     ).toBe(false);
+  });
+
+  it('writes the run’s coverage claim in the same statement that stamps its report', async () => {
+    // WP-66, standing rule 79: one writer, one `set`. The claim is not a second update a crash
+    // could separate from `recorded_at`.
+    const seen: { text: string; values: readonly unknown[] }[] = [];
+    const tx = {
+      adapter: 'postgres',
+      client: {
+        query: async (text: string, values: readonly unknown[]) => {
+          seen.push({ text, values });
+          return { rows: [], rowCount: 1 };
+        },
+      } as unknown as SqlExecutor,
+    } as unknown as Transaction;
+    await store.markChunkRecorded(tx, CHUNK as never, {
+      at: '2026-09-14T12:00:00.000Z' as never,
+      proposals: 2,
+      refusedProposals: 1,
+      mergeRequestsRead: 3,
+    });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.text).toMatch(/recorded_at = \$2[\s\S]*merge_requests_read = \$5/);
+    expect(seen[0]?.values).toEqual([CHUNK, '2026-09-14T12:00:00.000Z', 2, 1, 3]);
   });
 
   it('says whether `completeIfDone` was the write that finished the batch', async () => {
@@ -213,6 +248,7 @@ describe('PostgresHistoryBootstrapStore — the three writes whose answer is the
         at: '2026-09-14T12:00:00.000Z' as never,
         proposals: 0,
         refusedProposals: 0,
+        mergeRequestsRead: 0,
       }),
     ).toBe(false);
   });

@@ -10925,6 +10925,55 @@ number; the one with it has everything but the warning and the purge. **Done:** 
 (one row per component, mirrors per project, the growth over the last month), a warning at 50 GB, and the purge as a
 confirmed command — or product/19 §20 amended to the metrics. **Depends on** WP-65. Related: **Q63**.
 
+### 237. **WP-66 criterion (5)'s "honest intermediate" covers no more of the window, because the ticket fetch is already exactly the chunks' slots; and the batch-level ticket cut is reported nowhere** (small, TODO — the first half is a **plan sentence falsified**, not a code defect; the second is a **live** silent cut on every bootstrap with a task-management binding and a `done` mapping; **read off the tree, not measured** (rule 66); the silent-cut half folded into **WP-73** (refiner, session 8), raising the coverage itself **unowned** — for the M5 architect pass, after `docs/TODO.md`'s bootstrap measurement; found by WP-66, session 8)
+
+**What is wrong.** (1) The plan row said: raise the **fetch** and keep the per-run slice. The fetch is
+`limit: groups.length * HISTORY_TICKETS_PER_CHUNK` (`packages/application/src/bootstrap/collect.ts:286`) and chunk *i*
+takes exactly `closed.tickets.slice(i × 5, (i + 1) × 5)` (`collect.ts:304-307`), so the fetch already asks for every
+slot there is; a ticket fetched past it reaches no prompt. The only ways to cover more are a larger slice (the prompt
+grows, and five is an input to `sample.ts`'s byte sum, not a result of it) or more runs (the cost grows). One nuance the
+implementer's note leaves out: the slots are filled only up to what the window holds, **and an unreadable ticket is
+dropped without a replacement** (`collect.ts:498-505`), so the later chunks lose a slot per dropped ticket rather than
+the next match taking it. (2) The provider is asked for exactly `limit` matches (`collect.ts:485-488`) and
+`reads: matches.length` (`:506`) can therefore never exceed it, so the platform cannot tell a window with 50 closed
+tickets from one with 5 000. The chunk's `truncated` does not carry it either: `collect.ts:302-313` passes no
+`truncated` into `buildHistorySample`, and `sample.ts:292-298` compares `input.tickets.length` with a slice of the same
+five. **Cost to leave:** (1) a future implementer takes the plan's intermediate and ships a change that costs rate
+limit and covers nothing; (2) the batch's `detail` says nothing about the ticket half's coverage, which is backlog
+**103**'s gap in its batch-level form. **Done:** (1) the plan row amended (below) and the coverage decision taken with
+the TODO measurement's numbers; (2) `matches` asked for `limit + 1`, the `+1` never read as a ticket (one identity, no
+`readTicket`), and the batch's `detail`/`missing` saying *"the window has more closed tickets than this batch's N slots"*
+when it answers more — a unit case each way; optionally backfilling a dropped ticket's slot from the next match, which
+is the same `+k` probe. **Depends on** nothing for (2); (1) on `docs/TODO.md` (a)/(c). Related: **103**, **102**.
+
+### 238. **The coverage pair is published per batch and the chunks are not, so one run that read nothing is indistinguishable from ten runs that each skipped a little** (small, TODO — **working as designed** against WP-66 criterion (2), which asked for the batch pair; a product-surface gap, not a defect; **live** from WP-66 (commit pending); **read off the tree, not measured**; **unowned** — for the M5 architect pass; found by WP-66, session 8)
+
+**What is wrong.** `coveragePair` (`apps/server/src/queries/bootstrap-queries.ts:131-143`) sums the claim and the
+denominator over the claiming chunks into one pair per batch, and `historyBootstrapBatchSchema`
+(`packages/contracts/src/api.ts:753-784`) has counts of chunks and no chunk list; the panel renders the one sentence
+(`apps/web/src/features/history-bootstrap.tsx:82-86`). The implementer's example: one run 0 of 20 and nine runs
+20 of 20 reads *"180 of 200"*, as do ten runs of 18. No route serves a chunk (the two history-bootstrap routes,
+`apps/server/src/routes/bootstrap.ts:178`, `:279`, are the batch list and the start). **Cost to leave:** the one
+shape the claim exists to catch — a run that stopped early — is averaged away; the stored column
+(`history_bootstrap_chunks.merge_requests_read`) holds it and `docs/TODO.md` (b)'s query reads it by hand. **Done:** a
+per-chunk read (chunk index, shown, claimed or `null`, proposals, recorded/abandoned) — a field on the batch DTO or a
+route of its own, with the census entry — and the panel naming the chunk whose claim is below its shown count; or a
+decision that the batch pair is enough, recorded against this entry once TODO (b) has a real batch's figures.
+**Depends on** WP-66; better after TODO (b). Related: **102**.
+
+### 239. **The in-memory bootstrap store refuses an out-of-range coverage claim before its idempotency check, where PostgreSQL answers `false` for an already-recorded chunk without evaluating the constraint — a divergence the contract suite does not pin** (nit, TODO — **latent**: the only caller bounds the claim first (`packages/application/src/bootstrap/record.ts:329`, `boundCoverageClaim`), so no producer passes an out-of-range value today; stated as divergence 6 in the double's docblock; **read off the tree**; folded into **WP-73** (refiner, session 8); found by WP-66, session 8)
+
+**What is wrong.** `packages/application/src/testing/memory-bootstrap.ts:152-163` throws for a claim outside
+`0 … mergeRequests` before `:164` asks `recordedAt !== null || abandonedAt !== null`; the adapter's `update … where id
+= $1 and recorded_at is null and abandoned_at is null` (`packages/infrastructure/src/bootstrap/postgres-history-bootstrap-store.ts:302-303`)
+touches no row there, so the check constraint is never evaluated and it returns `false`. The contract suite's refusal
+cases (`test/contract/support/history-bootstrap-store-suite.ts:260-275`) run on an unrecorded chunk only. The docblock
+(`memory-bootstrap.ts:35-41`) states the order and calls it *"stricter, never kinder"*. **Cost to leave:** none today; a
+second writer (a replay, a recovery path) calling with an unbounded claim on a recorded chunk would pass against
+PostgreSQL and fail against the double, or the reverse assumption would be written into a test. **Done:** one contract
+case — out-of-range claim on an already-recorded (and one on an abandoned) chunk — deciding which answer the port owes,
+and the double moved to that order (or the adapter to a pre-check), divergence 6 updated. **Depends on** WP-66.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -32568,3 +32617,119 @@ it. (3) `bytesUnder` counts a vanished path as 0 and a mirror that vanishes mid-
 (`apps/server/src/metrics.test.ts` › "isolates a failing sampler: its gauges go absent and the dispatch backlog is still scraped").
 (4) The executor's docblock states the organisation-scoped shape. (5) `listCommunicationAccounts`
 says it is single-tenant (BD-009). (6) technical/12 has `APP_KNOWLEDGE_MIRROR_MAX_BYTES`.
+
+#### WP-66
+
+**Implemented** (implementer, session 8): backlog **102**, **103** and **124**'s first half. The
+eight criteria, where each lands:
+
+1. **The claim is stored beside the platform's count, nullable, by the one writer.** Migration
+   **0052** adds `history_bootstrap_chunks.merge_requests_read integer` (no default, no backfill:
+   `null` is *no report*, including every chunk recorded before 0052). The recorder passes it in the
+   **same** `markChunkRecorded` call — the same `set` as `recorded_at`, `proposals` and
+   `refused_proposals` — so there is no second writer (rule 79). Drizzle (`schema/knowledge.ts`),
+   the port row, the adapter, the in-memory double (divergence 6) and the contract suite carry it.
+   Asserted on the row the production path wrote:
+   `packages/application/src/bootstrap/record.test.ts` › "stores the run’s own coverage claim on the chunk, in the write that stamps its report"
+   (null before, `0` after a run that read nothing — not null), the contract case
+   `test/contract/support/history-bootstrap-store-suite.ts` › "stores the run’s own coverage claim beside the platform’s count, and null until it reports"
+   against both stores, the one-statement shape at
+   `packages/infrastructure/src/bootstrap/postgres-history-bootstrap-store.test.ts` › "writes the run’s coverage claim in the same statement that stamps its report",
+   and in the e2e (`test/e2e/onboarding/history-bootstrap.e2e.test.ts` › "mines the history into evidenced proposals, and queues every one of them")
+   on the chunk rows the instance's own recorder wrote: the full chunk's run claims 3 of 20, the
+   short chunk's run over-claims 6 of 1 and is stored as 1.
+2. **The pair, never the ratio; the claim bounded.** The batch DTO gains
+   `merge_requests_read_claimed` (nullable) and `merge_requests_read_of` — the platform's count
+   over **exactly the chunks that made a claim**, not the batch's N, so two of ten runs reported
+   does not read "40 of 200" (`apps/server/src/queries/bootstrap-queries.test.ts` › "publishes no claim — null, not zero — for a batch none of whose runs has made one").
+   The panel line reads *"By the mining runs’ own account (not checked by the platform), they read
+   37 of the 200 merge requests they were shown."*, or says in words that no run has reported;
+   `apps/web/src/features/history-bootstrap.test.tsx` › "shows the runs’ own coverage claim as a pair with what they were shown, never a ratio"
+   and › "says that no run has reported a claim yet, rather than drawing a zero". **Decision (a):
+   the claim is a number, so it is bounded rather than rendered as text** — the recorder stores
+   `boundCoverageClaim(claim, shown)` = `min(max(claim, 0), shown)`, the raw figure goes on the
+   log line (`merge_requests_read_claimed`), and `history_bootstrap_chunks_read_within_shown`
+   (0052) refuses `< 0` or `> merge_requests` from any writer. −1 never gets this far (the artifact
+   schema's `nonnegative`); 21, 10¹² and `Number.MAX_SAFE_INTEGER` of 20 are each stored as 20 —
+   record.test.ts's `it.each` over five claims, and the contract's refusal of 21 and −1 on both
+   stores. **The artifact schema is not capped** (decision (b)): a `.max` there would refuse the
+   whole artifact and the proposals in it for an over-claim (rule 20); `schemas/` is unchanged.
+3. **No alert, no refusal**: no warning tone, no log level above `info`, and the recorder writes
+   the proposals whatever the claim says (the `it.each` asserts `status: 'recorded'` and the row).
+4. **`sample.ts` says which constants are derived and which chosen**: a paragraph of its own in
+   the module docblock (only the per-merge-request bound — one twelfth of a ticket, 3 802
+   characters, which the three per-MR caps are chosen to fit at 3 712 — and the sum are derived;
+   every ticket and commit constant is chosen), plus a line at the constants and a corrected
+   `collect.ts` `closedTickets` docblock, which said *"five tickets beside twenty merge requests is
+   what one prompt can hold"*.
+5. **Coverage not raised, and the row's intermediate does not do what it says.** The fetch limit
+   is `groups.length × HISTORY_TICKETS_PER_CHUNK` and each chunk takes a fixed slice of five, so
+   raising the *fetch* while keeping the *slice* reads more tickets and puts **none** of them in a
+   prompt — there is no slot for them. Covering more of the window needs either a larger slice (the
+   prompt grows) or more runs (the cost grows), both of which wait for criterion 7's measurement.
+   Stated in `collect.ts`, `sample.ts` and technical/07. Filed as **237**.
+6. **The fixture.** WP-59 had already renamed `additions` → `insertions`; what remained was the
+   `as MergedMergeRequest` cast that let the drift hide. `sample.test.ts`'s fixture is now
+   `mergedMergeRequestSchema.parse(...)`, so a field the strict schema refuses fails every case by
+   name before an assertion runs.
+7. **The measurement stays in `docs/TODO.md`** — its (b) premise ("logs it … without comparing")
+   is updated to the stored column and gives the query to run; nothing is invented.
+8. **technical/03** has one entry for both tables in § "Knowledge and code", after
+   `shadow_batches`: every column as 0030, 0032, 0036 and 0052 leave them, and the reasons for
+   `history_bootstrap_batches_one_live` (the ending is one fact with two columns; the race), for
+   `history_bootstrap_chunks_counts_need_a_report` (re-declared by 0052 under the same name to
+   require `merge_requests_read is null` before a report — rule 18), and for 0036's two and 0052's
+   own. The other ten tables of backlog 124 are not this row's.
+
+**Canaries** (on the file, md5-confirmed restore each time): (1) recorder writes the unbounded
+claim → 8 cases of `record.test.ts` fail, including every case whose default artifact claims 20
+of 1, the double refusing by constraint name; recorder writes the platform's count instead of the
+claim → › "stores the run’s own coverage claim on the chunk, in the write that stamps its report"
+and the under-read case fail. (2) The projection's denominator over **all** chunks → both
+`bootstrap-queries.test.ts` pair cases fail; the panel rendering a percentage instead of the pair →
+`apps/web/src/features/history-bootstrap.test.tsx` › "shows the runs’ own coverage claim as a pair with what they were shown, never a ratio"
+fails. **The e2e found the defect's own shape in its fixture**: the fake historian had always
+claimed `merge_requests_read: refs.length`, where `refs` is cut to the ten citations the evidence
+cap admits — so every shipped e2e run "read" 10 of 20 and nothing noticed. The first run of the
+new assertion stored 15 (10 + 5) where 3 was meant; the scenario now keys on the merge requests
+the prompt carried.
+
+**Rule 83, sentences changed**: `artifacts.ts`'s `merge_requests_read` docblock (*"which the
+recorder logs beside it"*), `sample.ts` and `collect.ts` as above, `record.ts`'s docblock and log
+comment, `bootstrap-queries.ts` (new section), the Drizzle chunk field, technical/03 (new entry),
+technical/07 § "History bootstrap" (coverage and the claim), the user guide (a **Step 3b** section
+it never had), `docs/TODO.md` (b). **Left**: the historian prompt's *"the platform records its own
+count beside yours"* is now simply true — no prompt edit, no version bump, no eval change, because
+the artifact's shape did not change. product/19 §18 needs nothing (it states the promise, not the
+coverage).
+
+**Discovered work** (for the refiner; none fixed here):
+- **237** — criterion (5)'s "honest intermediate" (raise the fetch, keep the per-run slice) covers
+  **no** more of the window: every chunk has exactly five slots and the fetch already fills them. A
+  real intermediate is either ticket-only runs or a bigger slice, each with a cost the TODO
+  measurement has to price. Relatedly the **batch-level** ticket cut is silent: the fetch asks for
+  exactly the slots, so the platform never learns whether the window held more closed tickets, and
+  `truncated` is per chunk — a `limit + 1` probe would let `detail` say "the window has more".
+- **238** — the pair is per **batch**; the chunks are not published. A batch where one run read 0
+  of 20 and nine read everything reads *"180 of 200"*, indistinguishable from nine runs each
+  skipping two. A per-chunk read (no endpoint today) is where the run that stopped early would be
+  nameable.
+- **239** — the in-memory double refuses an out-of-range claim **before** its idempotency
+  predicate, where PostgreSQL evaluates the check only on a row the `where` kept (divergence 6,
+  stricter); a contract case for "out-of-range claim on an already-recorded chunk" would pin which
+  answer the port owes.
+
+**Verification** (the migration marked intent-to-add before any certifying run): `pnpm run -s
+verify` **PASS** (8165 passed, 14 skipped); `verify:ui` **PASS** (384); `verify:integration`
+**PASS** (593); `verify:web-e2e` **PASS** (47); `verify:e2e` **FAIL** once (the fixture above),
+then the file alone 5/5 and the whole tier **PASS** (215). `schemas:check` unchanged (the artifact
+schema did not move; the DTO is not a generated document). Docker after each tier: no container of
+this run left beyond testcontainers' own reaper, volumes 102 before and after. **Load discipline,
+stated**: the second `verify` was started in the same command as its reading (5.32 — under the
+bar, but the rule is read, decide, then run); one reading of 23.56 stopped the UI canary, which was
+reverted and re-run on a later reading of 11.58; `sleep 60` is refused by the harness, so readings
+were spaced with other work and a time-bounded wait. A `verify` after the last edits failed
+**once** on `packages/infrastructure/src/runlet/conformance.contract.test.ts` › "relays a signal to the CLI and forwards its stderr"
+(a 60 s timeout, load rising from 11.58 to 27.36 during the run; nothing of this row's touches the
+runlet); the next series' fifth reading was 9.69 and `verify` then **PASS**ed (8165 passed, 14
+skipped). `scripts/citations.test.ts` green over these notes.

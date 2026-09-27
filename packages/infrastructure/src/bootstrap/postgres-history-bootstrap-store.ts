@@ -83,7 +83,8 @@ const BATCH_COLUMNS = `id, project_id, requested_by, merge_requests, batch_size,
     cap_usd, estimated_usd, status, detail, created_at, completed_at`;
 
 const CHUNK_COLUMNS = `id, batch_id, chunk_index, task_id, merge_requests, tickets, commits,
-    redaction_count, truncated, recorded_at, abandoned_at, detail, proposals, refused_proposals`;
+    redaction_count, truncated, recorded_at, abandoned_at, detail, proposals, refused_proposals,
+    merge_requests_read`;
 
 interface BatchRow extends Record<string, unknown> {
   readonly id: string;
@@ -115,6 +116,7 @@ interface ChunkRow extends Record<string, unknown> {
   readonly detail: string | null;
   readonly proposals: number;
   readonly refused_proposals: number;
+  readonly merge_requests_read: number | null;
 }
 
 const instant = (value: Date): IsoDateTime => value.toISOString() as IsoDateTime;
@@ -161,6 +163,7 @@ const toChunk = (row: ChunkRow): HistoryBootstrapChunkRow => ({
   detail: row.detail,
   proposals: row.proposals,
   refusedProposals: row.refused_proposals,
+  mergeRequestsRead: row.merge_requests_read,
 });
 
 export class PostgresHistoryBootstrapStore implements HistoryBootstrapStore {
@@ -291,13 +294,14 @@ export class PostgresHistoryBootstrapStore implements HistoryBootstrapStore {
       readonly at: IsoDateTime;
       readonly proposals: number;
       readonly refusedProposals: number;
+      readonly mergeRequestsRead: number;
     },
   ): Promise<boolean> {
     const { rowCount } = await sqlOf(tx).query(
       `update history_bootstrap_chunks
-          set recorded_at = $2, proposals = $3, refused_proposals = $4
+          set recorded_at = $2, proposals = $3, refused_proposals = $4, merge_requests_read = $5
         where id = $1 and recorded_at is null and abandoned_at is null`,
-      [chunkId, outcome.at, outcome.proposals, outcome.refusedProposals],
+      [chunkId, outcome.at, outcome.proposals, outcome.refusedProposals, outcome.mergeRequestsRead],
     );
     return (rowCount ?? 0) > 0;
   }

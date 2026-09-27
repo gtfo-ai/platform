@@ -276,6 +276,13 @@ export const historyBootstrapChunks = pgTable('history_bootstrap_chunks', {
   recordedAt: timestamp('recorded_at', { withTimezone: true }),
   proposals: integer('proposals').notNull().default(0),
   refusedProposals: integer('refused_proposals').notNull().default(0),
+  /**
+   * The mining run's **own claim** of how many of `mergeRequests` it read (migration 0052, WP-66,
+   * backlog 102) — `HistoryFindings.merge_requests_read`, bounded by the recorder to what the run
+   * was shown. `null` is *no report* (not recorded yet, or recorded before 0052), never *read
+   * nothing*; one writer, the `markChunkRecorded` that stamps `recordedAt` (standing rule 79).
+   */
+  mergeRequestsRead: integer('merge_requests_read'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   /**
    * When the stranded-work pass re-enqueued this chunk's lost `record` (migration 0036,

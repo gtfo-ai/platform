@@ -693,7 +693,11 @@ export const historyFindingsDataSchema = z.strictObject({
    *
    * A model's claim about its own coverage, kept because it is the only signal that a run stopped
    * early with an artifact — and labelled as the model's rather than compared with the platform's
-   * count, which the recorder logs beside it.
+   * count. Since WP-66 the recorder stores it on the chunk beside that count
+   * (`history_bootstrap_chunks.merge_requests_read`, migration 0052), bounded to what the run was
+   * shown, and the batch screen publishes the pair. **Not capped here**, deliberately: an
+   * over-claim is not a reason to refuse the run's whole artifact and the proposals in it (standing
+   * rule 20), so the bound is the recorder's (`boundCoverageClaim`) and the database's.
    */
   merge_requests_read: z.int().nonnegative(),
   /** What the batch looked like, in the model's words. Rendered as text, never as markup. */

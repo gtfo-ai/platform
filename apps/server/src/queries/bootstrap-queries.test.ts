@@ -30,6 +30,8 @@ const chunk = (overrides: Partial<Parameters<typeof bootstrapBatchFrom>[1][numbe
   recordedAt: null,
   proposals: 0,
   refusedProposals: 0,
+  mergeRequests: 20,
+  mergeRequestsRead: null,
   ...overrides,
 });
 
@@ -42,8 +44,13 @@ describe('projecting one batch', () => {
           recordedAt: new Date('2026-09-14T11:00:00.000Z'),
           proposals: 3,
           refusedProposals: 1,
+          mergeRequestsRead: 20,
         }),
-        chunk({ recordedAt: new Date('2026-09-14T11:05:00.000Z'), proposals: 2 }),
+        chunk({
+          recordedAt: new Date('2026-09-14T11:05:00.000Z'),
+          proposals: 2,
+          mergeRequestsRead: 3,
+        }),
         chunk(),
       ],
       4.8,
@@ -65,7 +72,31 @@ describe('projecting one batch', () => {
       chunks_recorded: 2,
       proposals: 5,
       refused_proposals: 1,
+      // The pair over the two runs that claimed, never the batch's N and never a ratio: the third
+      // run has not reported, so its twenty merge requests are in neither number.
+      merge_requests_read_claimed: 23,
+      merge_requests_read_of: 40,
     });
+  });
+
+  it('publishes no claim — null, not zero — for a batch none of whose runs has made one', () => {
+    // Standing rule 18: *no report* and *read nothing* are different facts. A chunk recorded before
+    // migration 0052 has a report and no claim, and it is left out of both halves of the pair.
+    const projected = bootstrapBatchFrom(
+      row(),
+      [chunk(), chunk({ recordedAt: new Date('2026-09-14T11:00:00.000Z') })],
+      0,
+    );
+    expect(projected.merge_requests_read_claimed).toBeNull();
+    expect(projected.merge_requests_read_of).toBe(0);
+
+    const readNothing = bootstrapBatchFrom(
+      row(),
+      [chunk({ recordedAt: new Date('2026-09-14T11:00:00.000Z'), mergeRequestsRead: 0 })],
+      0,
+    );
+    expect(readNothing.merge_requests_read_claimed).toBe(0);
+    expect(readNothing.merge_requests_read_of).toBe(20);
   });
 
   it('carries the platform’s own sentence for an empty batch', () => {

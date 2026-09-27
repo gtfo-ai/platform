@@ -10,16 +10,19 @@
  *  2. an unevidenced or invented citation is **refused and recorded**, with the platform's reason
  *     where a reader of the queue will see it;
  *  3. the source is `history`, so a mined page is distinguishable from a Discovery draft;
- *  4. a redelivery writes **nothing** twice.
+ *  4. a redelivery writes **nothing** twice;
+ *  5. the run's own coverage claim lands on the chunk in the same write, as the model's number
+ *     bounded by what the run was shown — never refused, never compared (WP-66, backlog 102).
  */
 import type { HistoryFindingsData, HistorySample, Id, IsoDateTime } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
+import type { LogFields, Logger } from '../ports/logger.js';
 import { createMemoryHistoryBootstrapStore } from '../testing/memory-bootstrap.js';
 import { MemoryEventing } from '../testing/memory-eventing.js';
 import { memoryKnowledgeStore } from '../testing/memory-knowledge.js';
 import { memoryProposalStore } from '../testing/memory-proposals.js';
-import { recordHistoryFindings } from './record.js';
+import { boundCoverageClaim, recordHistoryFindings } from './record.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000c1' as Id;
 const TASK = '00000000-0000-4000-8000-0000000000c2' as Id;
@@ -71,7 +74,15 @@ const redactor: SecretRedactor = {
   redactJson: (value: unknown) => ({ value, count: 0 }),
 } as SecretRedactor;
 
-const setup = async (options: { readonly data?: unknown; readonly sample?: unknown } = {}) => {
+const setup = async (
+  options: {
+    readonly data?: unknown;
+    readonly sample?: unknown;
+    /** How many merge requests the platform put in this run's prompt — the chunk's own count. */
+    readonly shown?: number;
+    readonly logger?: Logger;
+  } = {},
+) => {
   const eventing = new MemoryEventing();
   const bootstrap = createMemoryHistoryBootstrapStore({ now: () => AT });
   const proposals = memoryProposalStore();
@@ -92,7 +103,7 @@ const setup = async (options: { readonly data?: unknown; readonly sample?: unkno
       batchId: BATCH,
       chunkIndex: 0,
       taskId: TASK,
-      mergeRequests: 1,
+      mergeRequests: options.shown ?? 1,
       tickets: 1,
       commits: 0,
       redactionCount: 0,
@@ -125,6 +136,7 @@ const setup = async (options: { readonly data?: unknown; readonly sample?: unkno
           },
         },
         clock: { now: () => AT },
+        ...(options.logger === undefined ? {} : { logger: options.logger }),
       },
       { kind: 'record', project_id: PROJECT, task_id: TASK, artifact_id: ARTIFACT },
     );
@@ -254,6 +266,64 @@ describe('recording a mining run’s findings', () => {
     expect(report.status).toBe('skipped');
     expect(report.reason).toContain('sample');
     expect(proposals.rows).toEqual([]);
+  });
+
+  it('stores the run’s own coverage claim on the chunk, in the write that stamps its report', async () => {
+    // Backlog 102: the claim used to reach a log line and no reader. Asserted on the chunk row the
+    // production path wrote (standing rule 79), and `null` before the report — no report is not
+    // *read nothing* (standing rule 18), which is the `0` below.
+    const { bootstrap, record } = await setup({
+      shown: 20,
+      data: { ...findings(), merge_requests_read: 0 },
+    });
+    expect(bootstrap.chunksOf(BATCH)[0]?.mergeRequestsRead).toBeNull();
+
+    await record();
+    const chunk = bootstrap.chunksOf(BATCH)[0];
+    expect(chunk?.recordedAt).toBe(AT);
+    expect(chunk?.mergeRequestsRead).toBe(0);
+    expect(chunk?.mergeRequests).toBe(20);
+  });
+
+  it.each([
+    ['an under-read', 3, 3],
+    ['a full read', 20, 20],
+    ['one more than it was shown', 21, 20],
+    ['10^12, which an integer column cannot hold', 1_000_000_000_000, 20],
+    ['the largest integer the schema admits', Number.MAX_SAFE_INTEGER, 20],
+  ])(
+    'stores %s of 20 as the model’s claim bounded by what it was shown',
+    async (_label, claim, stored) => {
+      // The claim is never refused — the run's proposals are recorded whatever it says — and never
+      // corrected upwards: it is bounded to `0 … shown`, and the raw figure stays on the log line.
+      const records: { fields: LogFields; message: string }[] = [];
+      const keep = (fields: LogFields, message: string): void => {
+        records.push({ fields, message });
+      };
+      const { bootstrap, proposals, record } = await setup({
+        shown: 20,
+        data: { ...findings(), merge_requests_read: claim },
+        logger: { debug: keep, info: keep, warn: keep, error: keep },
+      });
+      const report = await record();
+
+      expect(report.status).toBe('recorded');
+      expect(proposals.rows).toHaveLength(1);
+      expect(bootstrap.chunksOf(BATCH)[0]?.mergeRequestsRead).toBe(stored);
+      const line = records.find((entry) => entry.message.includes('recorded its findings'));
+      expect(line?.fields).toMatchObject({
+        merge_requests_read: stored,
+        merge_requests_read_claimed: claim,
+        merge_requests_given: 20,
+      });
+    },
+  );
+
+  it('bounds a claim to the platform’s count, and refuses a negative rather than calling it zero', () => {
+    expect(boundCoverageClaim(7, 20)).toBe(7);
+    expect(boundCoverageClaim(40, 20)).toBe(20);
+    expect(() => boundCoverageClaim(-1, 20)).toThrow(RangeError);
+    expect(boundCoverageClaim(5, 0)).toBe(0);
   });
 
   it('records nothing for an artifact this build’s schema refuses', async () => {

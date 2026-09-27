@@ -4,8 +4,9 @@
  * > *"Output goes to the proposal queue only."*
  *
  * One wake-up, one transaction: the run's `HistoryFindings` artifact becomes `kb_proposals` rows
- * with source **`history`**, the chunk is stamped with what it produced, and the batch is completed
- * once every chunk has reported.
+ * with source **`history`**, the chunk is stamped with what it produced — and with the run's own
+ * claim of how much of it it read (`merge_requests_read`, WP-66) — and the batch is completed once
+ * every chunk has reported.
  *
  * ## Three rules, and each one is enforced rather than instructed
  *
@@ -137,6 +138,26 @@ const EMPTY: HistoryRecordReport = {
   refused: 0,
   redactions: 0,
   reason: null,
+};
+
+/**
+ * The run's coverage claim as the chunk stores it: the model's number, **bounded by what the
+ * platform showed it** (WP-66, PROGRESS backlog 102).
+ *
+ * `HistoryFindings.merge_requests_read` is `z.int().nonnegative()` — any safe integer up to
+ * 2^53 − 1 — and it is the **model's** claim. It is not refused: an over-claim is not a reason to
+ * throw away the proposals the run was paid for (standing rule 20), and the claim stays labelled as
+ * the model's — nothing compares it or alerts on it, and an under-read is stored exactly as
+ * claimed. What the platform will not do is
+ * *publish* a number no run could have meant — "read 25 of the 20 it was shown" — or overflow an
+ * `integer` column with one, so the stored value is `min(claim, shown)` and the raw claim goes to
+ * the log line beside it. A negative claim cannot reach here — the schema refuses it — and is thrown
+ * on rather than clamped (review round 1): `0` is *read nothing*, a claim no run made (rule 16).
+ * `history_bootstrap_chunks_read_within_shown` (migration 0052) is the database's half of the bound.
+ */
+export const boundCoverageClaim = (claim: number, shown: number): number => {
+  if (claim < 0) throw new RangeError(`a coverage claim is never negative, got ${claim}`);
+  return Math.min(claim, shown);
 };
 
 /** The platform's refusal, carried where a maintainer reading the queue will see it. */
@@ -308,14 +329,18 @@ export const recordHistoryFindings = async (
     })),
   ];
 
+  const mergeRequestsRead = boundCoverageClaim(findings.merge_requests_read, chunk.mergeRequests);
   const streamSeq = await options.eventStore.nextStreamSequence('project', projectId);
   const outcome = await options.unitOfWork.transaction(async (scope) => {
     // The claim that makes the whole transaction idempotent: `recorded_at is null` is in the
-    // predicate, so a redelivery that raced this one writes nothing and appends no event.
+    // predicate, so a redelivery that raced this one writes nothing and appends no event. The run's
+    // own coverage claim rides in the same call — it is part of the same report, and a second
+    // writer of the chunk is what standing rule 79 forbids.
     const claimed = await options.bootstrap.markChunkRecorded(scope.tx, chunk.id, {
       at: createdAt,
       proposals: rows.filter((row) => row.status === 'queued').length,
       refusedProposals: rows.filter((row) => row.status !== 'queued').length,
+      mergeRequestsRead,
     });
     if (!claimed) {
       return { written: false, completed: false };
@@ -381,7 +406,10 @@ export const recordHistoryFindings = async (
       queued: report.queued,
       refused: report.refused,
       // The model's own claim about its coverage, beside the platform's count of what it was shown.
-      merge_requests_read: findings.merge_requests_read,
+      // Stored bounded (`boundCoverageClaim`) and published as the pair on the batch; the raw
+      // figure is here so an over-claim the bound flattened is still on the record.
+      merge_requests_read: mergeRequestsRead,
+      merge_requests_read_claimed: findings.merge_requests_read,
       merge_requests_given: chunk.mergeRequests,
       redactions: report.redactions,
       batch_completed: outcome.completed,

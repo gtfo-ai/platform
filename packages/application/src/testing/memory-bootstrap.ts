@@ -32,6 +32,13 @@
  * 5. **`markChunkRecorded`, `abandonChunk` and `completeIfDone` answer `true` only on the
  *    transition**, which is the same predicate the adapter puts in its `where`, so the recorder's
  *    idempotency — and the recovery's ending (WP-48) — is exercised here as well as there.
+ * 6. **The coverage claim's bound, as the database states it** (WP-66). Migration 0052's
+ *    `history_bootstrap_chunks_read_within_shown` refuses a `merge_requests_read` outside
+ *    `0 … merge_requests`, and `markChunkRecorded` here throws for the same values — **before** the
+ *    idempotency predicate is asked, where PostgreSQL would answer `false` without evaluating the
+ *    check for a row the `where` excluded. That order is stricter, never kinder: a caller that
+ *    passes an unbounded claim fails here on every call. The store contract suite asserts the
+ *    refusal against both.
  */
 import type { Id, IsoDateTime } from '@platform/contracts';
 import type {
@@ -137,11 +144,23 @@ export const createMemoryHistoryBootstrapStore = (
         detail: null,
         proposals: 0,
         refusedProposals: 0,
+        mergeRequestsRead: null,
       });
     },
 
     markChunkRecorded: async (_tx, chunkId, outcome) => {
       const chunk = chunks.find((row) => row.id === chunkId);
+      if (
+        chunk !== undefined &&
+        (!Number.isInteger(outcome.mergeRequestsRead) ||
+          outcome.mergeRequestsRead < 0 ||
+          outcome.mergeRequestsRead > chunk.mergeRequests)
+      ) {
+        throw new Error(
+          `chunk ${chunkId}: merge_requests_read ${outcome.mergeRequestsRead} is outside 0 … ${chunk.mergeRequests} ` +
+            '(history_bootstrap_chunks_read_within_shown)',
+        );
+      }
       if (chunk === undefined || chunk.recordedAt !== null || chunk.abandonedAt !== null) {
         return false;
       }
@@ -150,6 +169,7 @@ export const createMemoryHistoryBootstrapStore = (
         recordedAt: outcome.at,
         proposals: outcome.proposals,
         refusedProposals: outcome.refusedProposals,
+        mergeRequestsRead: outcome.mergeRequestsRead,
       });
       return true;
     },

@@ -40,6 +40,22 @@
  * ASCII `estimateTokens` reads it as roughly **39 500** tokens — which is what makes product/19's
  * batch size of twenty a batch that fits in one run rather than a number in a document. The figure
  * is produced by a test from the constants rather than quoted beside them (PROGRESS backlog 22).
+ *
+ * ## Which of these numbers are derived and which are chosen
+ *
+ * **Only the merge-request bound is derived** — one twelfth of `TICKET_SNAPSHOT_MAX_TEXT_CHARS`,
+ * 3 802 characters, which the three per-merge-request caps are chosen to fit under (they reach
+ * 3 712) — and {@link HISTORY_SAMPLE_MAX_TEXT_CHARS} is derived as the table's sum; **every ticket
+ * and commit constant is chosen** ({@link HISTORY_TICKETS_PER_CHUNK} = 5,
+ * {@link MAX_HISTORY_TICKET_COMMENTS} = 4, {@link MAX_HISTORY_TICKET_DESCRIPTION_CHARS},
+ * {@link HISTORY_COMMITS_PER_CHUNK} = 20, {@link MAX_HISTORY_COMMIT_CHARS}), because they are
+ * *inputs* to that sum and the budget therefore cannot be what justified them (PROGRESS backlog
+ * 103, WP-66). What the choice costs is stated rather than hidden: a batch of N merge requests
+ * reads `ceil(N / 20) × 5` closed tickets — **50** at the default N = 200, 250 at the 1 000
+ * maximum — against product/19 §18's unbounded *"closed tickets of the last 6 months"*, and the
+ * provider's `matchTickets` order, not the platform's, decides which ones. How many tickets a real
+ * project closes in six months, and what five real tickets add to one run's cost, are unmeasured
+ * (`docs/TODO.md`); raising the number waits for them.
  */
 import type {
   HistoryCommit,
@@ -64,7 +80,11 @@ export const MAX_HISTORY_TICKET_DESCRIPTION_CHARS = 2_000;
 export const MAX_HISTORY_TICKET_COMMENTS = 4;
 export const MAX_HISTORY_COMMIT_CHARS = 200;
 
-/** How many closed tickets and commit messages ride beside one chunk's twenty merge requests. */
+/**
+ * How many closed tickets and commit messages ride beside one chunk's twenty merge requests.
+ *
+ * **Chosen, not derived** — see "Which of these numbers are derived and which are chosen" above.
+ */
 export const HISTORY_TICKETS_PER_CHUNK = 5;
 export const HISTORY_COMMITS_PER_CHUNK = 20;
 

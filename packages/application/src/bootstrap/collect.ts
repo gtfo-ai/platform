@@ -451,9 +451,15 @@ const markEmpty = async (
  *
  * `matchTickets` answers identities — `TicketMatch` carries `ref`, `issue_type`, `links` and no
  * text at all — so the words need one `readTicket` each. That is the second fan-out of this module
- * and it is why the ticket half is bounded at {@link HISTORY_TICKETS_PER_CHUNK} per chunk rather
- * than at N: five tickets beside twenty merge requests is what one prompt can hold, and reading two
- * hundred to use fifty would be spending somebody else's rate limit on text nobody sees.
+ * and it is why the fetch is bounded at exactly the slots the chunks have —
+ * {@link HISTORY_TICKETS_PER_CHUNK} × the number of chunks — rather than at N: every chunk takes a
+ * fixed slice of that many, so a ticket read past the last slot would be somebody else's rate limit
+ * spent on text no prompt carries. **Five per chunk is a chosen number, not one the prompt budget
+ * derived** (PROGRESS backlog 103, and `sample.ts`'s "derived and chosen" paragraph): it is an input
+ * to the budget's sum. The consequence is that the fetch limit and the per-run slice move
+ * **together** — raising the fetch alone covers no more of the window, because no chunk has a slot
+ * for the extra tickets (WP-66 checked this against the row’s suggested intermediate, and left both
+ * where they are until the measurement in `docs/TODO.md` exists).
  */
 const closedTickets = async (input: {
   readonly tickets: ReturnType<typeof ticketReads>;

@@ -10,7 +10,9 @@
  *  - a **blocked** project sees the reason and a disabled button, rather than a button that answers
  *    409 when pressed;
  *  - the platform's `detail` and `blocked_reason` are rendered as **text**, never as markup, like
- *    every other string on every other screen (BD-022, and the rule is about the sink).
+ *    every other string on every other screen (BD-022, and the rule is about the sink);
+ *  - the runs' coverage claim is shown as the **pair** with the platform's count, labelled as the
+ *    runs' own, never as a percentage — and *no claim yet* is words, not a zero (WP-66).
  */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -67,6 +69,9 @@ interface WorldOptions {
   readonly blockedReason?: string | null;
   readonly detail?: string | null;
   readonly capUsd?: number;
+  /** The batch's coverage pair; the batch is rendered only when `detail` is given. */
+  readonly claimed?: number | null;
+  readonly claimedOf?: number;
 }
 
 let asked: (string | null)[];
@@ -106,6 +111,8 @@ const fetchFor = (options: WorldOptions = {}) =>
                   chunks_recorded: 0,
                   proposals: 0,
                   refused_proposals: 0,
+                  merge_requests_read_claimed: options.claimed ?? null,
+                  merge_requests_read_of: options.claimedOf ?? 0,
                 },
               ],
         can_start: options.canStart ?? true,
@@ -188,6 +195,36 @@ describe('the history bootstrap panel', () => {
     expect(button.disabled).toBe(true);
     fireEvent.click(button);
     expect(started).toEqual([]);
+  });
+
+  it('shows the runs’ own coverage claim as a pair with what they were shown, never a ratio', async () => {
+    const { container } = render(
+      createApp({
+        fetchImpl: fetchFor({ detail: 'a platform sentence', claimed: 37, claimedOf: 200 }),
+        realtime: false,
+      }).element,
+    );
+    expect(
+      await screen.findByText(
+        'By the mining runs’ own account (not checked by the platform), the runs that reported a count read 37 of the 200 merge requests they were shown.',
+      ),
+    ).toBeTruthy();
+    // Two facts, and no number derived from them: 37/200 is 18.5%, and the screen owns no ratio.
+    expect(container.textContent).not.toMatch(/%/);
+    expect(container.textContent).not.toContain('18.5');
+  });
+
+  it('says that no run has reported a claim yet, rather than drawing a zero', async () => {
+    const { container } = render(
+      createApp({
+        fetchImpl: fetchFor({ detail: 'a platform sentence', claimed: null }),
+        realtime: false,
+      }).element,
+    );
+    expect(
+      await screen.findByText('No mining run has reported how many merge requests it read yet.'),
+    ).toBeTruthy();
+    expect(container.textContent).not.toContain('count read 0');
   });
 
   it('renders a batch’s platform detail as text, never as markup', async () => {

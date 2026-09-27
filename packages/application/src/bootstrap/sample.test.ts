@@ -20,6 +20,7 @@ import type {
   MergedMergeRequest,
   RepositoryCommit,
 } from '../ports/integrations/git-provider.js';
+import { mergedMergeRequestSchema } from '../ports/integrations/git-provider.js';
 import type { Ticket } from '../ports/integrations/task-management.js';
 import {
   buildHistorySample,
@@ -48,8 +49,14 @@ const redactor = (): SecretRedactor & { readonly calls: () => number } => {
   } as SecretRedactor & { readonly calls: () => number };
 };
 
+/**
+ * The one merge request every case pins, **parsed** through the port's strict schema rather than
+ * cast to its type (WP-66, criterion 6): WP-59 corrected `additions` to `insertions`, and the parse
+ * is what stops the next field-name drift from hiding behind an `as` — an object the adapter could
+ * never hand the sampler is refused here, by name, before any assertion runs.
+ */
 const mergeRequest = (overrides: Partial<MergedMergeRequest> = {}): MergedMergeRequest =>
-  ({
+  mergedMergeRequestSchema.parse({
     ref: {
       provider: 'fake-git',
       project_path: 'acme/api',
@@ -67,12 +74,12 @@ const mergeRequest = (overrides: Partial<MergedMergeRequest> = {}): MergedMergeR
     },
     merged_at: '2026-05-29T09:12:00.000Z',
     title: 'Sum the invoice footer',
-    // `insertions`, the field `diffStatsSchema` names — this fixture said `additions` behind the
-    // cast below until WP-59, a shape the strict schema would have refused (PROGRESS backlog 113).
+    // `insertions`, the field `diffStatsSchema` names — this fixture said `additions` behind an
+    // `as` cast until WP-59, a shape the strict schema would have refused (PROGRESS backlog 113).
     diff_stats: { files_changed: 3, insertions: 40, deletions: 2 },
     discussion_count: 2,
     ...overrides,
-  }) as MergedMergeRequest;
+  });
 
 const discussion = (body: string, system = false): Discussion =>
   ({

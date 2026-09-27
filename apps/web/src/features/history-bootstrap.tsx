@@ -23,6 +23,19 @@
  * provider's, and they still go through `ui/untrusted.tsx` like every other string on every other
  * screen: the rule is about the sink, not about the author's intentions (BD-022), and a sentence
  * that is platform text today is one somebody widens tomorrow.
+ *
+ * ## How much of the history was read: a pair, labelled as the model's
+ *
+ * A batch whose runs each stopped after three of their twenty merge requests used to render exactly
+ * like one that read everything (PROGRESS backlog 102). The line under the counts now shows the
+ * runs' **own claim** beside the platform's count of what **those same runs** were shown —
+ * *"read 37 of the 200 merge requests they were shown"* — and never a percentage, which would be a
+ * derived number this screen would then own (standing rule 9). It is labelled as the runs' claim
+ * and nothing more: no warning tone, no alert, no refusal (WP-66). The claim is a model's number,
+ * so it is bounded before it gets here — per run to what that run was shown, by the recorder and
+ * by migration 0052's check — and the DTO admits only a non-negative integer; it is rendered with
+ * `formatInteger` like every other count. `null` — no run has reported a claim — is said in words
+ * rather than drawn as `0`, which would be a run that read nothing (standing rule 18).
  */
 import type { HistoryBootstrapBatch } from '@platform/contracts';
 import { Link } from '@tanstack/react-router';
@@ -63,6 +76,14 @@ const STATUS_LABEL: Readonly<Record<HistoryBootstrapBatch['status'], string>> = 
   completed: 'finished',
   empty: 'nothing to mine',
 };
+
+/** The runs' coverage claim beside the platform's count — see the module docblock. */
+const coverageClaim = (
+  batch: Pick<HistoryBootstrapBatch, 'merge_requests_read_claimed' | 'merge_requests_read_of'>,
+): string =>
+  batch.merge_requests_read_claimed === null
+    ? 'No mining run has reported how many merge requests it read yet.'
+    : `By the mining runs’ own account (not checked by the platform), the runs that reported a count read ${formatInteger(batch.merge_requests_read_claimed)} of the ${formatInteger(batch.merge_requests_read_of)} merge requests they were shown.`;
 
 export const HistoryBootstrap = ({
   projectId,
@@ -167,6 +188,7 @@ export const HistoryBootstrap = ({
                 {formatInteger(batch.refused_proposals)} refused · {formatUsd(batch.spent_usd)} of{' '}
                 {formatUsd(batch.cap_usd)} spent
               </span>
+              <span className="text-fg-muted">{coverageClaim(batch)}</span>
               {batch.detail === null ? null : (
                 <span className="text-fg-muted">
                   <UntrustedText value={batch.detail} />

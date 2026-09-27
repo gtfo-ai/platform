@@ -768,6 +768,20 @@ export const historyBootstrapBatchSchema = z.strictObject({
   /** Proposals written to the queue by this batch, and how many the recorder refused. */
   proposals: z.int().nonnegative(),
   refused_proposals: z.int().nonnegative(),
+  /**
+   * **The mining runs' own claim** of how many merge requests they read, summed over the runs that
+   * reported one (WP-66, PROGRESS backlog 102) — the model's number, bounded per run by what that
+   * run was shown, and published as the model's: nothing compares it, alerts on it or refuses it.
+   * `null` when no run of the batch has reported a claim yet, which is not *read nothing* (`0`).
+   */
+  merge_requests_read_claimed: z.int().nonnegative().nullable(),
+  /**
+   * The other half of the pair: the **platform's** count of the merge requests it put in the
+   * prompts of exactly the runs summed into `merge_requests_read_claimed` (`0` when that is
+   * `null`). Published beside it rather than as a ratio — *"read 37 of 200"* is two facts, a
+   * percentage is a derived number one screen would then own (standing rule 9).
+   */
+  merge_requests_read_of: z.int().nonnegative(),
 });
 
 export const historyBootstrapsResponseSchema = z.strictObject({

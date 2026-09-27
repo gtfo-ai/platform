@@ -122,6 +122,24 @@ drafts — that is above R12's 70 %, and the re-check after the merge records it
 the step as a *conversation* with the Product Manager role in your language; this build ships the
 question bank as a form instead (Q102 in the open questions).
 
+### Step 3b — History bootstrap (optional)
+
+Mines the project's merged history into knowledge proposals ([product/19](product/19-operating-definitions.md)
+§18): the last N merged merge requests (default 200, at most 1 000) of the last six months, with
+their review threads, plus closed tickets and commit messages. It shows the estimated cost and the
+cap before you start, runs one agent per twenty merge requests, and everything it finds lands in the
+knowledge proposal queue with the merge requests it cites — nothing is applied without a
+maintainer. The same panel is on the project settings page.
+
+Each batch shows how many of its runs have reported, what they proposed and refused, what it
+spent — and **how much the runs say they read**: *"the runs that reported a count read 37 of the 200
+merge requests they were shown"* — the 200 is what those runs were shown, not the whole batch. That count is the agents' own claim, not something the platform checked, and it is shown
+as the two numbers rather than a percentage; a batch whose runs read only part of what they were
+given has mined only part of the history, and a re-run reads everything again at full cost. *"No
+mining run has reported how many merge requests it read yet"* means exactly that, not zero. The
+ticket half is small by design: a batch reads five closed tickets per twenty merge requests — 50 at
+the default N — and which ones is the ticket tracker's order, not the platform's.
+
 ### Step 4 — Operating mode
 
 The autonomy dial ([product/19](product/19-operating-definitions.md) §11), four positions:

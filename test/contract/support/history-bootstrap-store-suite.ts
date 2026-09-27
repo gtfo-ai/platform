@@ -11,7 +11,9 @@
  *    batch with `LiveHistoryBootstrapError`, which is what the start command turns into that same
  *    named refusal when two commands race past the read (WP-35 review round 2);
  *  - `markChunkRecorded` answers `false` for a chunk that already reported, which is what makes the
- *    recorder idempotent — the job is at-least-once and `kb_proposals` rows are not;
+ *    recorder idempotent — the job is at-least-once and `kb_proposals` rows are not — and it is
+ *    the one writer of the run's coverage claim, `null` until then and bounded by what the run was
+ *    shown (WP-66);
  *  - `abandonChunk` is the recovery's ending and is exclusive with `markChunkRecorded` in both
  *    directions (WP-48), and a batch whose last chunk was abandoned still completes;
  *  - `completeIfDone` answers `true` exactly once, on the transition, so a batch is completed once
@@ -202,7 +204,7 @@ export const runHistoryBootstrapStoreContract = (options: {
     it('claims a chunk exactly once, which is what makes the recorder idempotent', async () => {
       const context = await start();
       const { chunkIds } = await seed(context);
-      const outcome = { at: AT, proposals: 3, refusedProposals: 1 };
+      const outcome = { at: AT, proposals: 3, refusedProposals: 1, mergeRequestsRead: 20 };
 
       expect(
         await run(context, (tx) => context.store.markChunkRecorded(tx, chunkIds[0], outcome)),
@@ -218,10 +220,70 @@ export const runHistoryBootstrapStoreContract = (options: {
       expect(chunks).toEqual([]);
     });
 
+    it('stores the run’s own coverage claim beside the platform’s count, and null until it reports', async () => {
+      // WP-66, PROGRESS backlog 102: the claim is written by the call that stamps the report and by
+      // nothing else, and a chunk that has not reported has **no** claim — `null`, not `0`, which
+      // would read as a run that read nothing (standing rule 18).
+      const context = await start();
+      const { batchId, chunkIds } = await seed(context);
+      const before = await run(context, (tx) => context.store.chunks(tx, batchId));
+      expect(before.map((chunk) => chunk.mergeRequestsRead)).toEqual([null, null]);
+
+      await run(context, (tx) =>
+        context.store.markChunkRecorded(tx, chunkIds[0], {
+          at: AT,
+          proposals: 0,
+          refusedProposals: 0,
+          mergeRequestsRead: 3,
+        }),
+      );
+      const after = await run(context, (tx) => context.store.chunks(tx, batchId));
+      expect(after.map((chunk) => [chunk.mergeRequestsRead, chunk.mergeRequests])).toEqual([
+        [3, 20],
+        [null, 20],
+      ]);
+      // A read that reported nothing is a finding, and it is stored as one.
+      await run(context, (tx) =>
+        context.store.markChunkRecorded(tx, chunkIds[1], {
+          at: AT,
+          proposals: 0,
+          refusedProposals: 0,
+          mergeRequestsRead: 0,
+        }),
+      );
+      expect(
+        (await run(context, (tx) => context.store.chunkOfTask(tx, context.taskIds[1])))
+          ?.mergeRequestsRead,
+      ).toBe(0);
+    });
+
+    it.each([
+      ['more than the run was shown', 21],
+      ['a negative count', -1],
+    ])(
+      'refuses a coverage claim of %s (history_bootstrap_chunks_read_within_shown)',
+      async (_label, claim) => {
+        // The recorder bounds the model's number before it writes; this is the store's half, so a
+        // second writer that forgot the bound is refused rather than published (migration 0052).
+        const context = await start();
+        const { chunkIds } = await seed(context);
+        await expect(
+          run(context, (tx) =>
+            context.store.markChunkRecorded(tx, chunkIds[0], {
+              at: AT,
+              proposals: 0,
+              refusedProposals: 0,
+              mergeRequestsRead: claim,
+            }),
+          ),
+        ).rejects.toThrow(/history_bootstrap_chunks_read_within_shown/);
+      },
+    );
+
     it('completes a batch exactly once, and only when every chunk has reported', async () => {
       const context = await start();
       const { batchId, chunkIds } = await seed(context);
-      const outcome = { at: AT, proposals: 1, refusedProposals: 0 };
+      const outcome = { at: AT, proposals: 1, refusedProposals: 0, mergeRequestsRead: 20 };
 
       // One of two: not done.
       await run(context, (tx) => context.store.markChunkRecorded(tx, chunkIds[0], outcome));
@@ -266,6 +328,7 @@ export const runHistoryBootstrapStoreContract = (options: {
             at: AT,
             proposals: 2,
             refusedProposals: 0,
+            mergeRequestsRead: 20,
           }),
         ),
       ).toBe(false);
@@ -275,6 +338,7 @@ export const runHistoryBootstrapStoreContract = (options: {
           at: AT,
           proposals: 1,
           refusedProposals: 0,
+          mergeRequestsRead: 20,
         }),
       );
       expect(await run(context, (tx) => context.store.abandonChunk(tx, chunkIds[1], ending))).toBe(
@@ -294,6 +358,7 @@ export const runHistoryBootstrapStoreContract = (options: {
           at: AT,
           proposals: 2,
           refusedProposals: 0,
+          mergeRequestsRead: 20,
         }),
       );
       expect(await run(context, (tx) => context.store.completeIfDone(tx, batchId, AT))).toBe(false);

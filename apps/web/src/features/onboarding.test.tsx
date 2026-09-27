@@ -132,6 +132,8 @@ const HISTORY_BOOTSTRAPS = {
       chunks_recorded: 2,
       proposals: 5,
       refused_proposals: 1,
+      merge_requests_read_claimed: 37,
+      merge_requests_read_of: 40,
     },
   ],
   can_start: true,

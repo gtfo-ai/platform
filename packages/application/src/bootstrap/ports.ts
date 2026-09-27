@@ -95,6 +95,16 @@ export interface HistoryBootstrapChunkRow {
   readonly detail: string | null;
   readonly proposals: number;
   readonly refusedProposals: number;
+  /**
+   * The mining run's **own claim** of how many of {@link mergeRequests} it read — the model's
+   * number, not the platform's (migration 0052, WP-66, PROGRESS backlog 102).
+   *
+   * `null` until the run reports, and for a run recorded before the column existed: *no report*,
+   * which is not *read nothing* (standing rule 18). Written only by {@link
+   * HistoryBootstrapStore.markChunkRecorded}, already bounded to `0 … mergeRequests` by the
+   * recorder.
+   */
+  readonly mergeRequestsRead: number | null;
 }
 
 export interface HistoryBootstrapStore {
@@ -150,6 +160,11 @@ export interface HistoryBootstrapStore {
    * `false` is what makes the recorder idempotent: the job is at-least-once, and a second delivery
    * must not write a second set of `kb_proposals` rows. `recorded_at is null` is in the predicate,
    * so the answer is about the write rather than about the read that preceded it.
+   *
+   * `mergeRequestsRead` rides in the same call because it is the same report: the run's coverage
+   * claim is written with its counts or not at all, so there is no second writer of the chunk
+   * (standing rule 79). The caller bounds it to `0 … mergeRequests`; migration 0052's
+   * `history_bootstrap_chunks_read_within_shown` refuses a writer that did not.
    */
   markChunkRecorded(
     tx: Transaction,
@@ -158,6 +173,7 @@ export interface HistoryBootstrapStore {
       readonly at: IsoDateTime;
       readonly proposals: number;
       readonly refusedProposals: number;
+      readonly mergeRequestsRead: number;
     },
   ): Promise<boolean>;
 

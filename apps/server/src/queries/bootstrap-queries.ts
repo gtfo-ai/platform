@@ -32,6 +32,18 @@
  * this projection sums stored numbers instead of counting `kb_proposals` rows. That is not a
  * shortcut: a `kb_proposals` count would drift the moment a maintainer decides one, and the
  * question this screen answers is *what did the mining produce*, not *what is still queued*.
+ *
+ * ## The coverage pair: the model's claim beside the platform's count, never a ratio
+ *
+ * `merge_requests_read_claimed` sums `history_bootstrap_chunks.merge_requests_read` — each run's
+ * **own claim** of what it read, which the recorder stored bounded by what that run was shown
+ * (WP-66, PROGRESS backlog 102) — over the chunks that **have** one, and `merge_requests_read_of`
+ * sums the platform's `merge_requests` over **exactly those chunks**. The denominator is the
+ * claimants' own, not the batch's: a batch with two of ten runs reported would otherwise read
+ * *"read 40 of 200"* when both runs read everything they were given. A chunk with no claim — not
+ * reported yet, or recorded before migration 0052 — contributes to neither, and a batch with no
+ * claim at all publishes `null` rather than `0`, because no report is not *read nothing*
+ * (standing rule 18). No ratio is computed here or anywhere: the screen renders the two numbers.
  */
 import type {
   HistoryBootstrapBatch,
@@ -66,6 +78,8 @@ export interface BootstrapChunkRowShape {
   readonly recordedAt: Date | null;
   readonly proposals: number;
   readonly refusedProposals: number;
+  readonly mergeRequests: number;
+  readonly mergeRequestsRead: number | null;
 }
 
 const STATUSES: readonly HistoryBootstrapStatus[] = ['collecting', 'mining', 'completed', 'empty'];
@@ -110,7 +124,25 @@ export const bootstrapBatchFrom = (
   chunks_recorded: chunks.filter((chunk) => chunk.recordedAt !== null).length,
   proposals: chunks.reduce((total, chunk) => total + chunk.proposals, 0),
   refused_proposals: chunks.reduce((total, chunk) => total + chunk.refusedProposals, 0),
+  ...coveragePair(chunks),
 });
+
+/** The claim and its denominator over the chunks that made one — see the module docblock. */
+const coveragePair = (
+  chunks: readonly BootstrapChunkRowShape[],
+): Pick<HistoryBootstrapBatch, 'merge_requests_read_claimed' | 'merge_requests_read_of'> => {
+  const claimants = chunks.filter(
+    (chunk): chunk is BootstrapChunkRowShape & { readonly mergeRequestsRead: number } =>
+      chunk.mergeRequestsRead !== null,
+  );
+  return {
+    merge_requests_read_claimed:
+      claimants.length === 0
+        ? null
+        : claimants.reduce((total, chunk) => total + chunk.mergeRequestsRead, 0),
+    merge_requests_read_of: claimants.reduce((total, chunk) => total + chunk.mergeRequests, 0),
+  };
+};
 
 /**
  * `GET /api/projects/:project_id/history-bootstraps` — the batches, the gate and the estimate.
@@ -155,6 +187,8 @@ export const listHistoryBootstraps = async (
             recordedAt: historyBootstrapChunks.recordedAt,
             proposals: historyBootstrapChunks.proposals,
             refusedProposals: historyBootstrapChunks.refusedProposals,
+            mergeRequests: historyBootstrapChunks.mergeRequests,
+            mergeRequestsRead: historyBootstrapChunks.mergeRequestsRead,
           })
           .from(historyBootstrapChunks)
           .where(inArray(historyBootstrapChunks.batchId, ids));

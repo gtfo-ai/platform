@@ -47,6 +47,8 @@ afterEach(async () => {
  */
 const MERGED = 21;
 const BATCH_SIZE = 20;
+/** What the full chunk's run claims to have read of its twenty — the under-read of backlog 102. */
+const UNDER_READ = 3;
 
 /** A merge request reference the model could only have written by reading its own prompt. */
 const REF = /--- merge request (![0-9]+) ---/g;
@@ -75,9 +77,8 @@ const scenarioFromPrompt = (spec: RunSpec) => {
    * this file cited all twenty and was refused by the runner's own validation (divergence 3 of the
    * fake's register, doing exactly what it exists for).
    */
-  const refs = [...block.body.matchAll(REF)]
-    .map((match) => match[1] as string)
-    .slice(0, MAX_HISTORY_EVIDENCE_PER_PROPOSAL);
+  const shown = [...block.body.matchAll(REF)].map((match) => match[1] as string);
+  const refs = shown.slice(0, MAX_HISTORY_EVIDENCE_PER_PROPOSAL);
   const urls = [...block.body.matchAll(URL_OF)].map((match) => match[1] as string);
   const first = refs[0] as string;
   const firstUrl = urls[0] as string;
@@ -121,8 +122,17 @@ const scenarioFromPrompt = (spec: RunSpec) => {
           reason: 'cites a merge request this run was never shown',
         },
       ],
-      merge_requests_read: refs.length,
-      summary: `read ${refs.length} merge requests of this project's history`,
+      /**
+       * The run's own coverage claim, and a different one per chunk (WP-66, backlog 102), keyed on
+       * how many merge requests the prompt carried — not on `refs`, which the evidence cap cut to
+       * ten (the first version of this claim was `refs.length`, an unnoticed ten of twenty): the full
+       * chunk **under-reads** (claims 3 of its 20) and the short chunk **over-claims** (says it
+       * read five more than the one it was shown). The first is the case the column exists for,
+       * and the second is the bound — stored as what the run was shown, never as the model's
+       * larger number.
+       */
+      merge_requests_read: shown.length === BATCH_SIZE ? UNDER_READ : shown.length + 5,
+      summary: `read merge requests of this project's history`,
     },
   };
 };
@@ -339,8 +349,9 @@ describe('a history bootstrap on a project’s merged history', () => {
       proposals: number;
       refused_proposals: number;
       recorded_at: Date | null;
+      merge_requests_read: number | null;
     }>(
-      'select chunk_index, merge_requests, proposals, refused_proposals, recorded_at from history_bootstrap_chunks where batch_id = $1 order by chunk_index',
+      'select chunk_index, merge_requests, proposals, refused_proposals, recorded_at, merge_requests_read from history_bootstrap_chunks where batch_id = $1 order by chunk_index',
       [batchId],
     );
     // product/19 §18's *"batches of ~20 MRs per run"*, at this test's smaller batch size.
@@ -357,6 +368,15 @@ describe('a history bootstrap on a project’s merged history', () => {
      */
     expect(chunks.map((chunk) => chunk.proposals)).toEqual([2, 1]);
     expect(chunks.map((chunk) => chunk.refused_proposals)).toEqual([1, 2]);
+    /**
+     * The runs' own coverage claims, on the rows the production recorder wrote (WP-66, standing
+     * rule 79): the under-read as the model said it, and the over-claim bounded to the one merge
+     * request that run was shown — beside the platform's own counts asserted above.
+     */
+    expect(chunks.map((chunk) => chunk.merge_requests_read)).toEqual([
+      UNDER_READ,
+      MERGED - BATCH_SIZE,
+    ]);
 
     // Every task is a mining task, and every run is a `bootstrap` run by the `historian`.
     const tasks = await pipeline.query<{ template: string; ticket_key: string }>(
@@ -443,6 +463,8 @@ describe('a history bootstrap on a project’s merged history', () => {
         refused_proposals: number;
         chunks_recorded: number;
         spent_usd: number;
+        merge_requests_read_claimed: number | null;
+        merge_requests_read_of: number;
       }[];
       can_start: boolean;
     }>(`/api/projects/${pipeline.projectId}/history-bootstraps`);
@@ -452,6 +474,9 @@ describe('a history bootstrap on a project’s merged history', () => {
     expect(item?.proposals).toBe(3);
     expect(item?.refused_proposals).toBe(3);
     expect(item?.chunks_recorded).toBe(2);
+    // The pair, never a ratio: "read 4 of the 21 merge requests they were shown".
+    expect(item?.merge_requests_read_claimed).toBe(UNDER_READ + (MERGED - BATCH_SIZE));
+    expect(item?.merge_requests_read_of).toBe(MERGED);
     // The spend comes from `cost_entries`, which is the same source the cap is enforced against.
     expect(item?.spent_usd).toBeGreaterThan(0);
     // …and another bootstrap may start now that this one has finished.
