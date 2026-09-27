@@ -455,8 +455,10 @@ the same: stop serving on the old code, migrate, start the new code.
 to `main` is reviewed, verified and published to GHCR on `amd64` and `arm64` as `sha-<7>`, `edge`
 and `latest`. So **pull `latest`, or pin a `sha-<7>` tag** — `latest` is the newest push to `main`
 and `sha-<7>` is one exact commit, which is what to pin when you want the upgrade to be a decision
-rather than a schedule. There are no version tags yet: semantic versions are deferred to a later
-piece of work, and nothing published today carries one.
+rather than a schedule. **Version tags** (`X.Y.Z`, and the moving `X.Y` and `X`) are cut by the same
+workflow once the maintainers switch versioning on: each is a copy of one push's `sha-<7>` image at
+the same digest, never a separate build, and its GitHub Release says whether the upgrade needs a
+migration. Until the first `vX.Y.Z` release exists nothing published carries one — pin a `sha-<7>`.
 
 ```bash
 cd agentic

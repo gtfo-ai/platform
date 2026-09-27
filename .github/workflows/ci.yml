@@ -23,6 +23,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -39,11 +41,53 @@ jobs:
       # when a target or group in that table is not run by this workflow.
       - run: pnpm run -s verify:static
 
+      # **The three linters over the CI surface itself** (WP-71, backlog 117; TD-017, research/09).
+      # Each is a container image pinned by **digest** — `docker://…@sha256:…`, the `uses:` form
+      # `scripts/release.test.ts` holds to the same pin rule as every action — and none is a step of
+      # `verify`, because each needs a container runtime `verify` does not assume. The first run over
+      # the tree they land on found 16 zizmor findings, 23 hadolint findings and no actionlint
+      # finding; all were fixed or waived with a reason before this job existed, so it lands green
+      # (the counts and every waiver are in PROGRESS.md under WP-71). `scripts/release.test.ts`'s
+      # SHA-pin check **stays**: it is the cheaper of the two and holds on the day a tool is skipped.
+      #
+      # actionlint: workflow syntax, expressions, `runs-on` labels and shellcheck over every `run:`
+      # block (the image carries shellcheck). It finds the workflows itself.
+      - name: actionlint
+        uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 # 1.7.12
+        with:
+          args: -color
+      # zizmor: template injection, token scope, credential persistence and cache poisoning — and,
+      # online, whether each pinned SHA is really a commit of the action it names (impostor-commit),
+      # which the pin regex cannot see. **Findings fail the job** (the first of the two decisions
+      # backlog 117 asked to be stated rather than defaulted): at the default persona there were
+      # 16, every one was fixed rather than waived, and a new one is a change to fix or to waive at
+      # its line with `# zizmor: ignore[<audit>]` and a reason. The `auditor` persona's 13 extra
+      # notes (10 template expansions of trusted contexts, 3 permissions without a comment) are not
+      # gated. The token is this job's read-only `GITHUB_TOKEN`, for the online audits' API reads.
+      - name: zizmor
+        uses: docker://ghcr.io/zizmorcore/zizmor@sha256:a2eb396d886c053073405c7a980f2139ba2248ec172243cfa3841e57196e8101 # 1.30.1
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: --no-progress .
+      # hadolint over every Dockerfile git tracks — the list is held to `docker/*.Dockerfile` in both
+      # directions by `scripts/release.test.ts`, because the image has no shell to expand a glob. The
+      # second decision, which rules are waived for images that already pin by digest, is
+      # `.hadolint.yaml`: two rules for the corpus, each with its reason, and every other waiver at
+      # its line.
+      - name: hadolint
+        uses: docker://hadolint/hadolint@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d # v2.15.1
+        with:
+          entrypoint: /bin/hadolint
+          args: docker/app.Dockerfile docker/base.Dockerfile docker/egress.Dockerfile docker/launcher.Dockerfile docker/runtime.Dockerfile
+
   typecheck:
     name: typecheck
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -57,6 +101,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -74,6 +120,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           # scripts/changelog.test.ts and scripts/release.test.ts read this repository's own history; a
           # shallow clone gave them one commit (2788e9c: "expected 1 to be greater than 100").
           fetch-depth: 0
@@ -98,6 +145,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -111,6 +160,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -137,6 +188,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -153,6 +206,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -189,6 +244,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -210,6 +266,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           # Both gates walk a commit range, which a shallow clone cannot answer for.
           fetch-depth: 0
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -226,6 +283,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0

@@ -15,8 +15,8 @@
 | **UI** | reducers, components, transcript normaliser (golden fixtures), Playwright e2e with fake SSE backend | Vitest 5 (+ browser mode), Playwright 1.63 | every PR |
 | **Prompt evals** | each role prompt against 5–10 recorded cases with schema + field assertions; regression baseline | promptfoo (Agent SDK provider, `max_budget_usd`, JSON schema output) | PRs touching `prompts/**` or the SDK package (environment `llm-ci`, same-repo PRs only); nightly |
 | **Real-LLM smoke** | 2–3 tickets end-to-end on a fixture repo with real Claude, Haiku/Sonnet by default | `nightly-llm.yml` + `workflow_dispatch`; cost summary; fails above `LLM_CI_MAX_USD` | nightly on main |
-| **Mutation** | `packages/core/src/domain/**` | StrykerJS 10 + vitest runner, `break: 70` | weekly |
-| **Security** | dependency and secret scanning, SAST | gitleaks (pre-commit + CI), trufflehog weekly, CodeQL default, Renovate | continuous |
+| **Mutation** | `packages/domain/src/**` (corrected at WP-71: the row named `packages/core/src/domain/**`, which never existed) | StrykerJS 10 + vitest runner, `break: 70` | weekly, scheduled and on dispatch — **never a pull-request gate**. **Not built**: it is a plan row of its own (text in PROGRESS.md under WP-71, backlog 116), and whether *weekly* is right waits on the one number nobody has — what a full pass over `packages/domain` costs on a hosted runner. Until then mutation testing is done by hand, per work package |
+| **Security** | dependency and secret scanning, SAST, the CI surface itself | gitleaks (pre-commit + CI); **CodeQL default setup**, a repository *setting* an administrator applies (`CONTRIBUTING.md` § Repository settings) — until it is on there is no SAST; actionlint, zizmor and hadolint in CI's `lint` job (WP-71); Renovate. trufflehog is not run | continuous |
 
 ## Fixtures and fakes (first-class code)
 - `FakeClaudeRunner`: replays `test/fixtures/claude/<scenario>.jsonl` (our normalised `RunEvent`s incl. a `result` with usage/cost/`structured_output`); scripted `ask_human`, tool policy prompts, budget stops, stalls; used by application tests, the UI dev server and the e2e job.

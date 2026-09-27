@@ -1,7 +1,8 @@
 /**
  * Types for `changelog.mjs`, which stays plain JavaScript for the reason every script in this
- * directory does: `release.yml` runs it as `node scripts/changelog.mjs --upgrade-note` on a runner
- * that has checked out the repository and installed nothing (the `notices.d.mts` precedent).
+ * directory does: `image.yml`'s `release` job runs it as `node scripts/changelog.mjs --release-notes`
+ * on a runner that has checked out the repository and installed nothing (the `notices.d.mts`
+ * precedent).
  *
  * The shapes are what `scripts/changelog.test.ts` drives, so a rename or an argument change is a
  * compile error rather than a surprise on the one run that matters.
@@ -83,7 +84,20 @@ export declare const renderChangelog: (input: {
   generatedAt: string;
 }) => string;
 
-export declare const configuredVersion: (root?: string) => string;
+export declare const renderReleaseNotes: (input: {
+  commits: readonly ParsedCommit[];
+  url: string;
+  note: string;
+}) => string;
+
+export declare const versionRefusal: (input: {
+  version: string;
+  previousTag: string | null;
+}) => string | null;
+
+export declare const changelogHeadingProblems: (text: string) => string[];
+
+export declare const requestedVersion: (argv: readonly string[]) => string;
 
 export interface ExitCriterion {
   /** A substring of product/14 § "MVP exit criteria", quoted in the release notes. */
@@ -93,4 +107,7 @@ export interface ExitCriterion {
 }
 
 export declare const MVP_EXIT_CRITERIA: readonly ExitCriterion[];
-export declare const exitCriteriaNote: (criteria?: readonly ExitCriterion[]) => string;
+export declare const exitCriteriaNote: (
+  criteria?: readonly ExitCriterion[],
+  options?: { first?: boolean },
+) => string;

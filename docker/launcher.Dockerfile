@@ -28,6 +28,9 @@ ARG BASE_IMAGE=platform-base:dev
 
 # ── Production dependencies ──────────────────────────────────────────────────────────────────────
 FROM ${BASE_IMAGE} AS deps
+# A build stage: nothing runs as this stage, so ending it as root is not DL3002's concern
+# (`.hadolint.yaml` has the reasoning; the final stage still ends `USER agentic` and is checked).
+# hadolint ignore=DL3002
 USER root
 WORKDIR /src
 RUN corepack enable pnpm

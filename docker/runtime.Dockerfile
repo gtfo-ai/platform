@@ -38,6 +38,9 @@ ARG BASE_IMAGE=platform-base:dev
 # nothing in this repository could re-derive, and the weekly rebuild would then fail on the first
 # upstream release rather than picking it up, which is the opposite of what the schedule is for.
 FROM ${BASE_IMAGE} AS tools
+# A build stage: nothing runs as this stage, so ending it as root is not DL3002's concern
+# (`.hadolint.yaml` has the reasoning; the final stage still ends `USER agentic` and is checked).
+# hadolint ignore=DL3002
 USER root
 ARG TARGETARCH
 ARG GH_VERSION=2.100.0
@@ -90,6 +93,8 @@ RUN set -eux; \
 # The shim is bundled here rather than copied from the host so that `docker build` from a clean
 # checkout produces the image CI publishes; the bundle is generated output and is not committed.
 FROM ${BASE_IMAGE} AS shim
+# A build stage (see `tools` above).
+# hadolint ignore=DL3002
 USER root
 WORKDIR /src
 RUN corepack enable pnpm
@@ -117,6 +122,9 @@ RUN pnpm install --frozen-lockfile --filter @platform/runlet... --ignore-scripts
 # `-musl` is excluded rather than counted: this image is glibc (Debian), and technical/11 already
 # says the unused libc variant is removed. If both gnu candidates ever appeared the count would
 # fail rather than pick one.
+# DL4006 is a false positive here: the only pipe is inside `$(…)`, and its output is what `test`
+# compares — `grep -c` prints `0` on no match, so a failure on either side fails the `test`.
+# hadolint ignore=DL4006
 RUN set -eux; \
     found="$(find /src/node_modules/.pnpm -path '*claude-agent-sdk-linux*/claude' -type f ! -path '*musl*')"; \
     test "$(printf '%s' "$found" | grep -c .)" = 1; \
@@ -153,6 +161,11 @@ WORKDIR /work/repo
 # credential helper the workspace's `credential.helper=!agentic-runlet credential` invokes.
 ENTRYPOINT ["/usr/local/bin/agentic-runlet"]
 
+# **Waived, and a defect rather than a false positive** (PROGRESS backlog 256, WP-71): under `/bin/sh`
+# a pipeline reports the status of its *last* command, so each `<tool> --version | head -1` below
+# passes when the tool itself is missing or broken. Fixing it changes what the image build runs,
+# which the row that found it could not verify without building an image.
+# hadolint ignore=DL4006
 RUN set -eux; \
     claude --version; \
     agentic-runlet unknown-mode 2>&1 | grep -q 'unknown mode'; \

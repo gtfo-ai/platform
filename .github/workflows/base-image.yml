@@ -51,6 +51,8 @@ jobs:
             arch: arm64
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # Both images: `platform-runtime` is where the six agent CLIs and the `claude` binary live, so
       # a build of `platform-base` alone would check the smaller half of the tool layer.
       - run: node scripts/build-images.mjs base runtime --size-check

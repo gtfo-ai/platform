@@ -4,7 +4,7 @@
 
 ## Repository layout (CI-relevant)
 ```
-.github/workflows/  ci.yml integration.yml evals.yml nightly-llm.yml image.yml base-image.yml release.yml codeql.yml secrets-scan.yml mutation.yml dco.yml
+.github/workflows/  ci.yml integration.yml evals.yml nightly-llm.yml image.yml base-image.yml release.yml codeql.yml secrets-scan.yml mutation.yml dco.yml   (as designed; as built: ci.yml image.yml base-image.yml — the table below says where each of the others went)
 .github/ISSUE_TEMPLATE/  bug.yml feature.yml integration-request.yml config.yml ; PULL_REQUEST_TEMPLATE.md ; CODEOWNERS ; dependabot.yml (security only)
 renovate.json lefthook.yml commitlint.config.js .editorconfig .gitleaks.toml
 docker/base.Dockerfile docker/app.Dockerfile compose.yml compose.local.yml .env.example
@@ -14,33 +14,34 @@ THIRD_PARTY_NOTICES.md LICENSE CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md
 ## Workflows
 | Workflow | Trigger | Jobs |
 |---|---|---|
-| `ci.yml` | `pull_request`, `push: main`, `merge_group` | **as built**: lint, typecheck, bundle budget, unit + contract (coverage upload), ui, web e2e (playwright), integration, e2e-fake-claude, secret scan, commitlint, dco — eleven jobs, and the four `verify:*` groups are one command each (`scripts/verify-targets.ts`, held to this workflow by `scripts/verify.test.ts`). **actionlint, hadolint and zizmor are not among them**: nothing in this repository runs any of the three (WP-42 measured it; the pin check TD-019 wants is `scripts/release.test.ts` instead, over every `uses:` in every workflow) |
+| `ci.yml` | `pull_request`, `push: main`, `merge_group` | **as built**: lint, typecheck, bundle budget, unit + contract (coverage upload), ui, web e2e (playwright), integration, e2e-fake-claude, secret scan, commitlint, dco — eleven jobs, and the four `verify:*` groups are one command each (`scripts/verify-targets.ts`, held to this workflow by `scripts/verify.test.ts`). **The `lint` job also runs actionlint, zizmor and hadolint** (WP-71, backlog 117), each a step whose image is pinned by `sha256` digest: actionlint (with shellcheck) and zizmor over the workflows, hadolint over every `docker/*.Dockerfile`. zizmor's findings **fail** the job; hadolint waives two rules for the corpus in `.hadolint.yaml` (DL3008, DL3066) and the rest only at their lines, each with a reason. First run, at `87816a4`: actionlint 0, zizmor 16 (all fixed), hadolint 23 (waived with reasons, two of them a real defect filed as backlog 256). They are not `verify` steps, because each needs a container runtime `verify` does not assume |
 | ~~`integration.yml`~~ | — | **absorbed**: the `integration` and `e2e-fake-claude` jobs of `ci.yml`. The e2e tier runs whole `apps/server` instances against the Testcontainers database rather than `docker compose` (the reasoning is in `vitest.config.ts`) |
 | `evals.yml` | as designed | **not built — WP-33**, blocked on a model credential (`pnpm eval` says so and exits 1). A release cut without it ships prompts no tier has measured against a model, which `scripts/changelog.mjs` states in the release notes *because* this file is absent |
 | `nightly-llm.yml` | as designed | **not built — WP-33**, same blocker, same sentence in the release notes |
-| `image.yml` | `push: main`, tags `v*`, `pull_request` (build only), `workflow_dispatch` | native amd64 + arm64 runners, manifest merge; a push to `main` publishes `sha-<7>`, `edge` **and `latest`**, a tag publishes `X.Y.Z`, `X.Y`, `X`, `sha-<7>` and `latest` (**TD-019's amendment of 2026-09-16**: every push to `main` is the release and `latest` is the newest one, which supersedes that record's “never `latest` in docs” clause and closes Q89's recommendation the other way; the tag branch is kept for WP-71); provenance attestation, **no SBOM** (WP-22 amendment); size check per image. A release reaches it by **`push: tags`** when the tag was created with an administrator's token and by **`workflow_dispatch`** when it was created with `GITHUB_TOKEN` — see `release.yml` below |
+| `image.yml` | `push: main`, `pull_request` (build only), `workflow_dispatch` — **no `push: tags`** since WP-71 | native amd64 + arm64 runners, manifest merge; provenance attestation, **no SBOM** (WP-22 amendment); size check per image. **What every published tag means** (TD-019's amendment of 2026-09-16 and WP-71): `sha-<7>` — the manifest list built from that commit, on every ref but a pull request; `edge` and `latest` — the newest push to `main`, published from `refs/heads/main` only (a dispatch on any other ref publishes `sha-<7>` alone); `X.Y.Z`, `X.Y`, `X` — **once `RELEASE_VERSIONING` is `enabled`**, a copy of the manifest list the push that cut version `X.Y.Z` built and attested, made by the `release` job with `imagetools create` **from that digest** (handed over by the `merge` legs as artifacts; nothing is copied unless every `sha-<7>` still points at it, and no release is cut unless all three tags read back as it), so a version is never built and carries that build's attestation. The version is computed by the `version` job (`scripts/version.mjs`) from the conventional commits since the last `vX.Y.Z` tag, and the same job's `vX.Y.Z` git tag and GitHub Release (body: `pnpm changelog --release-notes`) are created with `GITHUB_TOKEN`. `latest` has **one** definition: the tag arm that also published it on a `v*` tag is gone with the trigger that reached it |
 | `base-image.yml` | weekly, `workflow_dispatch`, paths `docker/base.Dockerfile` | rebuild base with pinned CLIs |
-| `codeql.yml` | default setup | **not built, and no work package owns it** (WP-42 finding) |
+| ~~`codeql.yml`~~ | — | **a setting, not a file** (WP-71): TD-017's "CodeQL default setup" is enabled in the repository's security settings and writes no workflow, so it is recorded where the ruleset is — `CONTRIBUTING.md` § Repository settings — for an administrator to apply. Until one does, this build has **no SAST** |
 | ~~`secrets-scan.yml`~~ | — | **absorbed**: the `secret scan` job of `ci.yml`, gitleaks over the full history. trufflehog is not run |
-| `release.yml` | `workflow_dispatch` only — **retired** (TD-019's amendment, 2026-09-16): no push starts it, because it was red on every commit for a repository setting nobody intends to change (Q90) and continuous deployment replaced the batched release. The rest of this row describes the mechanism as **history**, kept for WP-71. Was `push: main`; **built at WP-42**: release-please v5 grooms a release PR; a human merges it, which creates `vX.Y.Z`. How the tag reaches `image.yml` depends on the token that created it: with `RELEASE_PLEASE_TOKEN` set the tag push starts `image.yml` by itself and the release **watches that run**; on the `GITHUB_TOKEN` fallback the tag starts nothing — `workflow_dispatch` is the documented exception — so the release dispatches `image.yml` on the tag ref and watches that. Either way the image build's verdict is the release job's. The workflow also appends the upgrade note (migration required or not, derived from the migration files) to the release body. **Never run** — see the amendment below |
-| `mutation.yml` | weekly | **not built, and no work package owns it** (WP-42 finding). Mutation testing has been done by hand, per work package |
+| ~~`release.yml`~~ | — | **deleted at WP-71**, with `release-please-config.json` and `.release-please-manifest.json`. It ran release-please v5 (built at WP-42), was retired to a manual dispatch by TD-019's amendment of 2026-09-16 because it was red on every push for a repository setting nobody intended to change (Q90), and was deleted when versions came back as a **retag** in `image.yml`: keeping it would have kept a second route to a version tag, one that rebuilt the images on the tag ref. The WP-42 amendment below describes it as history |
+| `mutation.yml` | weekly, `workflow_dispatch` | **not built — scheduled as a plan row of its own** (WP-71's notes carry the text): StrykerJS over `packages/domain/src/**`, `break: 70`, never a pull-request gate, and the first thing it measures is what one pass costs on a hosted runner, which decides whether *weekly* is right. Mutation testing is done by hand, per work package, until then |
 | `dco.yml` | `pull_request`, `push: main`, `merge_group` | DCO check. Implemented as the `dco` and `commitlint` jobs of `ci.yml`: both walk the commit range of the event (`before..after` on a push, `base..head` otherwise) and fail when the range cannot be determined, so a direct push to `main` is gated exactly like a pull request |
-All `uses:` pinned to SHAs — enforced since WP-42 by `scripts/release.test.ts`, over every
-`uses:` in every workflow git tracks, because the lint job that was supposed to enforce it runs no
-actionlint and no zizmor. Renovate keeps them current. Required checks and merge queue are
+All `uses:` pinned — an action to a commit SHA, a `docker://` image to a `sha256` digest — enforced
+since WP-42 by `scripts/release.test.ts` over every `uses:` in every workflow git knows about. That
+check **stays** now that the `lint` job runs actionlint and zizmor (WP-71): it is the cheaper of the
+two and still holds on the day a tool is skipped. Renovate keeps them current. Required checks and merge queue are
 configured as a ruleset on `main`; the list of checks an administrator applies is in
 `CONTRIBUTING.md` § Branch protection and is held to `ci.yml`'s job names in both directions by the
 same test.
 
-**Four of the eleven rows above are still absent**: `evals.yml` and `nightly-llm.yml` are WP-33's
-and blocked on a human credential; `codeql.yml` and `mutation.yml` have **no owner at all** and are
-filed as discovered work rather than quietly dropped. Six of the others were absorbed into `ci.yml`
-as jobs, which is why this table now says which.
+**Of the eleven rows above, three workflows exist** (`ci.yml`, `image.yml`, `base-image.yml`). Three
+were absorbed into `ci.yml` as jobs, `release.yml` was built and then deleted, and `codeql.yml` is a
+setting rather than a file. `evals.yml` and `nightly-llm.yml` are WP-33's and blocked on a human
+credential; `mutation.yml` is a plan row of its own (WP-71's notes).
 
 ## Images
 - **`platform-base`** (`docker/base.Dockerfile`): `node:24-trixie-slim` pinned by digest; `git jq bash ripgrep ca-certificates openssh-client curl`; pinned CLIs with `TARGETARCH` switches: `glab`, `gh`, `acli`, `jira`, `logcli`, `sentry-cli`, `@sentry/mcp-server`; user `agentic` (uid 1000); `THIRD_PARTY_NOTICES.md` copied in. Rebuilt weekly.
 - **`platform`** (`docker/app.Dockerfile`): stages `deps` (pnpm, `onlyBuiltDependencies` for the SDK packages, never `--omit=optional`; remove the unused musl/glibc SDK platform package), `build` (server + web), final `FROM platform-base`: copy `node_modules` + `dist`, `USER agentic`, `HEALTHCHECK` via `node dist/healthcheck.js`, `ENTRYPOINT ["node","dist/main.js"]`, `ROLE` env selects `all | api | worker | runner | indexer`. Start-up doctor verifies the Claude binary (`local` mode: the mounted one).
-- Multi-arch amd64/arm64; digests published in release notes; `gh attestation verify` documented.
+- Multi-arch amd64/arm64; digests published in release notes (the `release` job's `### Images` block, WP-71 — once versioning is enabled); `gh attestation verify` documented.
 
 ## Compose
 ```yaml
@@ -70,7 +71,7 @@ credential names the server must read is unknowable when this file is written. T
 what it reads is a short fixed set rather than an unknowable one.
 
 ## Release
-- **Continuous deployment since TD-019's amendment of 2026-09-16**: every push to `main` is the release, published as `sha-<7>`, `edge` and `latest`; the release-please pull request is retired and semantic versions are WP-71's, computed from the conventional commits and applied by retagging the sha manifests. commitlint is still enforced by lefthook and CI (the history is what a version will be computed from); agents sign off commits (DCO).
+- **Continuous deployment since TD-019's amendment of 2026-09-16**: every push to `main` is the release, published as `sha-<7>`, `edge` and `latest`. **Semantic versions since WP-71**, behind the repository variable `RELEASE_VERSIONING` = `enabled` (unset, so none is cut yet): `image.yml` computes the version from the conventional commits since the last `vX.Y.Z` tag, retags the sha manifests it just built, and creates the tag and the GitHub Release with `pnpm changelog --release-notes` as its body — no release pull request, no bot commit, no second build. release-please is deleted. commitlint is enforced by lefthook and CI (the history is what the version is computed from); agents sign off commits (DCO).
 - Migrations forward-only, run by the `migrate` service with an advisory lock; the app refuses to start when the DB schema is newer than the code; release notes state whether a migration is required; `pg_dump` before upgrade documented.
 - `.agentic` schema `version` with JSON Schemas under `schemas/` served by the app for editor validation; N-1 upcast in memory + migration proposal.
 - Hygiene: CONTRIBUTING, CODE_OF_CONDUCT, SECURITY (private reporting), CODEOWNERS, issue forms, PR template with a "no secrets" checkbox, lefthook (lint, typecheck, gitleaks, commitlint, unit on push), DCO.
@@ -181,11 +182,11 @@ silent one.
 ## Amendment (WP-42, 2026-09-15) — the release mechanism, as built
 
 > **Superseded as a description of what runs, by TD-019's amendment of 2026-09-16** (the product
-> owner's continuous-deployment decision). Everything in this section is still an accurate account
-> of the batched release-please mechanism and of the four decisions inside it — it is kept for
-> **WP-71**, which reintroduces semantic versions — but *none of it is triggered any more*:
-> `release.yml` is `workflow_dispatch` only, there is no release pull request, and `latest` is the
-> newest push to `main` rather than the newest tag. Read every sentence below as history.
+> owner's continuous-deployment decision), **and deleted from the tree at WP-71**: `release.yml`,
+> `release-please-config.json` and `.release-please-manifest.json` no longer exist, versions are a
+> retag in `image.yml` (the workflow table above), and `latest` is the newest push to `main`. This
+> section is an accurate account of the batched release-please mechanism and of the four decisions
+> inside it, kept as history; read every sentence below in the past tense.
 
 The workflow table above is corrected in place. What follows is the part of the **Release** section
 that turned out to be a plan rather than a description, and one thing it never said.

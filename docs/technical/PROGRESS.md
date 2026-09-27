@@ -11148,6 +11148,32 @@ Whether `paused → returned` should exist too (so return-to-stage works from an
 
 **Done.** One sentence at `COVERAGE_RINGS` stating the prefix semantics and that a colliding name needs the globs rewritten (for example `!(runlet|testing)` → an explicit exclusion of `runlet/` and `testing/`). **Trigger**: the first such directory or file. **Depends on** nothing.
 
+### 256. **Six of the images' build-time smoke checks are `<tool> --version | head -1` under `/bin/sh`, so the step takes `head`'s exit status and a tool that is present but cannot run passes the build** (small, TODO — **latent**: nothing is broken today; the case that fires it is a binary that exists and fails to execute, most plausibly `acli`, the one fetched from a moving `latest` URL; **read off the tree**, no image built (rule 66); folded into **WP-73** (refiner, session 8); found by WP-71 through hadolint DL4006, session 8)
+
+**What is wrong / the evidence.** WP-71 notes, *Discovered work*, quoted: *"under `/bin/sh` `<tool> --version | head -1` reports `head`'s status, so `rg` in `base.Dockerfile` and `gh`, `glab`, `logcli`, `jira`, `acli` in `runtime.Dockerfile` pass the build when the binary is missing or broken — `acli` is the one fetched from a moving `latest` URL. Found by hadolint DL4006; waived at the line naming this entry."* On the tree: `docker/base.Dockerfile:82` (`rg --version | head -1`) and `docker/runtime.Dockerfile:172-174,176-177` (`gh`, `glab`, `logcli … 2>&1`, `jira version`, `acli`), each `RUN` waived `# hadolint ignore=DL4006` with a comment citing this number (`base.Dockerfile:73-77`, `runtime.Dockerfile:164-168`); `set -eux` does not help, since `-e` sees the pipeline's status. `claude --version` and `sentry-cli --version` (`:170`, `:175`) are unpiped and do check; `:171`'s `agentic-runlet … | grep -q` deliberately tests the output, not the status.
+
+**Correction to the report — "missing" is already caught; "broken" is not.** A binary that is *absent* fails earlier: every download is `curl -f` and the tarball extractions name their member (`runtime.Dockerfile:70-80`), `chmod 0755 gh glab logcli sentry-cli jira acli` (`:82`) fails on a missing file, the `COPY` at `:146` fails likewise, and `ripgrep` comes from `apt-get install` (`base.Dockerfile:42-50`). What the check fails to catch is a file that is there and does not run — the wrong architecture, a dynamically linked build missing a library on trixie-slim, a truncated download — which is exactly what a moving `ACLI_URL` (`runtime.Dockerfile:51-55`) can serve without a version change on our side.
+
+**What it costs to leave.** A published `platform-runtime` whose `acli` (or `gh`, `glab`, `logcli`, `jira`) cannot execute is found by the first run that shells out to it — a failed agent stage, days later — rather than by a red image build, which is the one thing the smoke step's own comment (`base.Dockerfile:71-72`) says it exists to prevent.
+
+**What "done" looks like.** The pipes go (the output length is not what is checked), or those `RUN`s get `SHELL ["/bin/bash", "-o", "pipefail", "-c"]`; the two DL4006 waivers and their comments are removed, so hadolint (now in CI's `lint` job) guards the pattern from then on. **Measured, not argued**: `node scripts/build-images.mjs base runtime` passes, and a canary — one tool replaced by a non-executable file in a scratch copy of the Dockerfile — fails the build. Needs a Docker daemon, which is why WP-71 (which built no image) waived it. **Depends on** WP-71 landing (the hadolint step and `.hadolint.yaml`).
+
+### 257. **Once the first version is cut, the committed `CHANGELOG.md` is stale by construction — and under continuous deployment it is stale again after nearly every push — while nothing decides what the file is for** (small, TODO — **latent with a named trigger**: the first push to `main` after an administrator sets `RELEASE_VERSIONING` = `enabled`, unset today; **design, not a defect**: WP-71 moved every release's notes into its GitHub Release, so what is missing is a decision about the file; filed as **Q105** with a recommendation; the build **folded into WP-73** conditional on Q105's answer (refiner, session 8); found by WP-71, session 8)
+
+**What is wrong / the evidence.** WP-71 notes, quoted: *"After the first cut `CHANGELOG.md` is stale by construction: it says `## 0.1.0 (unreleased)` while `v0.1.0` exists, no workflow rewrites it, and `pnpm changelog` refuses to until given a version ahead."* On the tree: `CHANGELOG.md:16` is `## 0.1.0 (unreleased)` and its header (`:8-11`) says *"No workflow writes this file … `pnpm changelog` refuses to rewrite this file under a version that is not ahead of the newest release tag"*; the refusal is `scripts/changelog.mjs` (held by `scripts/changelog.test.ts` › "refuses once a tag exists at the configured version, and writes nothing"). **The refiner's addition, read off the tree:** with the switch on, `image.yml`'s `version` job cuts a version on every push to `main` carrying a `feat`/`fix`/`perf`/`revert` (WP-71 notes, *Bump rules*), so a preview a human regenerates is out of date after most pushes, not only after the first — the file cannot be kept current without the bot commit on `main` that Q96 (3) rejected.
+
+**What it costs to leave.** A reader of the repository's front page is told `0.1.0` is unreleased while `ghcr.io` serves `0.1.0`, `0.2.0`, …; the file's *Before you upgrade* block (`CHANGELOG.md:18-`) names a migration count that is no longer the upgrade the reader faces. Nothing breaks; a document lies.
+
+**What "done" looks like.** Q105 answered, then built: under the recommendation (a static pointer), `CHANGELOG.md` becomes a short hand-written file naming the GitHub Releases page and `pnpm changelog --stdout` as the preview, `pnpm changelog`'s default mode stops writing the file, `scripts/release.test.ts`'s `CHANGELOG.md` block (`:624-`) asserts the file carries **no** version heading, and the header sentences in `CONTRIBUTING.md:132`, technical/11:250 and `changelog.mjs:5,17` follow (rule 83). **Must land before** the switch is set — `docs/TODO.md:223` already names this as a pre-switch decision. **Depends on** Q105.
+
+### 258. **`changelog.mjs`, `notices.mjs` and `version.mjs` decide "am I the program?" by comparing their resolved URL with `resolve(argv[1])`, so run through a path with a symlink in it they do nothing and exit 0 — and `notices.mjs` is a `verify:static` step** (small, TODO — **latent**: `pnpm` and CI invoke them by a relative path; the trigger is an absolute path through a symlink, which macOS's temporary directory is; the silent exit is **measured** once (below), the pnpm/CI immunity is **read off the tree, not measured**; folded into **WP-73** (refiner, session 8); found by WP-71, session 8)
+
+**What is wrong / the evidence.** WP-71 notes, quoted: *"Every `scripts/*.mjs` decides 'am I the program?' by comparing its resolved URL with `resolve(argv[1])`, so run through a symlinked path — macOS's temporary directory is one — it does nothing and exits **0** (rule 20). Measured: the first run of the CLI case in `changelog.test.ts` wrote no file and exited 0; the test now uses the real path."* **Scope corrected by the refiner:** it is **three** of the 29 `scripts/*.mjs`, not every one — `scripts/changelog.mjs:528-529`, `scripts/notices.mjs:707-708`, `scripts/version.mjs:133-134`, each `process.argv[1] !== undefined && fileURLToPath(import.meta.url) === resolvePath(process.argv[1])`; the other 26 run at module scope with no guard. Node resolves the main module's symlinks for `import.meta.url` (the default without `--preserve-symlinks-main`) and `path.resolve` does not, which is the mechanism. The workaround sits in the test, not the script: `scripts/changelog.test.ts:480-483` (`realpathSync(scratch())`, with the reason).
+
+**What it costs to leave.** Rule 20's worst shape — a check that did nothing reporting success. `notices:check` (`package.json:39`) is a step of `verify:static`, so an invocation through a symlinked absolute path passes without comparing anything; `version.mjs --github-output` (`image.yml:95`) would emit no version, and the next `scripts/*.mjs` that copies the idiom inherits it. Invoked as `node scripts/…` from a checkout, `argv[1]` resolves against the working directory, which is why CI and `pnpm` are not affected today.
+
+**What "done" looks like.** The three guards compare against `realpathSync(process.argv[1])` (one helper beside `ts-source-resolver.mjs` or in each — a matter for the implementer); one case per script, or one shared case, runs it through a symlinked directory and asserts it *did* its work (for `notices.mjs --check`, that a stale file fails); and `changelog.test.ts:480-483`'s workaround and comment are then removed, so the test stops hiding the thing it found. `import.meta.main` is the alternative, but whether every `engines: ">=24"` release carries it is **not verified here** — the implementer checks before choosing it. **Depends on** nothing unbuilt.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -14257,7 +14283,7 @@ entry is about a file deliberately taken *out* of that number.
 **Depends on / owner.** None. **No work package owns it.** Cheapest home: whoever next adds a module
 to `apps/server/src/queries/` or edits `vitest.config.ts`'s exclude list.
 
-### 116. **`codeql.yml` and `mutation.yml` are named by three documents, exist nowhere, and were never allocated to a work package — the two rows of technical/11's table that were neither absorbed into `ci.yml` nor claimed by WP-33** (TODO — one cause, two halves whose costs differ by an order of magnitude; **no work package owns it**; found by WP-42, session 5)
+### 116. **`codeql.yml` and `mutation.yml` are named by three documents, exist nowhere, and were never allocated to a work package — the two rows of technical/11's table that were neither absorbed into `ci.yml` nor claimed by WP-33** (**RESOLVED** by WP-71 at `WP71SHA`, session 8 — the CodeQL half as a recorded repository setting; **the mutation half is resolved only as a plan-row text** (WP-71 notes, *For the orchestrator*, proposed WP-78), so WP-71's criterion (2) is met when that row is added to the plan, and until then those notes are the half's only record — TODO — one cause, two halves whose costs differ by an order of magnitude; **no work package owns it**; found by WP-42, session 5)
 > **M4 (architect, session 6): folded into WP-71.**
 
 **What is wrong.** Two of technical/11's eleven workflow rows have no owner. `.github/workflows/`
@@ -14311,7 +14337,7 @@ question already parked at `docs/TODO.md:149` (*"TypeScript 7 (Go compiler) tool
 (Vitest, Biome, Stryker) — WP-00"*). Adjacent and *not* the same finding: backlog **117** (the three
 workflow linters, which are steps of an existing job rather than workflows of their own).
 
-### 117. **No workflow linter runs anywhere — actionlint, hadolint and zizmor are specified by TD-017, research/09 and technical/11, and the SHA pinning a plan row assumed they enforced is held by a regex in a test instead** (TODO, small — **no work package owns it**; found by WP-42, session 5)
+### 117. **No workflow linter runs anywhere — actionlint, hadolint and zizmor are specified by TD-017, research/09 and technical/11, and the SHA pinning a plan row assumed they enforced is held by a regex in a test instead** (**RESOLVED** by WP-71 at `WP71SHA`, session 8 — TODO, small — **no work package owns it**; found by WP-42, session 5)
 > **M4 (architect, session 6): folded into WP-71.**
 
 **What is wrong.** Three static checks over the CI surface are specified and none exists. WP-42's
@@ -14357,7 +14383,7 @@ no job (rule 30's lesson about guards that fire on legitimate content).
 `.github/workflows/`. Adjacent and *not* the same finding: backlog **116** (`codeql.yml` and
 `mutation.yml`, the other two unowned rows of the same table).
 
-### 118. **`pnpm changelog` models exactly one moment — the first release — and it is wrong on both sides of it: the preview it writes must be deleted by hand in the release PR, and running it again once a tag exists overwrites release-please's released entries under a heading taken from `initial-version`** (TODO, small — one cause, two symptoms, the first with a **named date**; **no work package owns it**; found by WP-42, the second symptom by the refiner off the tree, session 5)
+### 118. **`pnpm changelog` models exactly one moment — the first release — and it is wrong on both sides of it: the preview it writes must be deleted by hand in the release PR, and running it again once a tag exists overwrites release-please's released entries under a heading taken from `initial-version`** (**RESOLVED** by WP-71 at `WP71SHA`, session 8 — what the file says after the first cut is backlog **257** / **Q105** — TODO, small — one cause, two symptoms, the first with a **named date**; **no work package owns it**; found by WP-42, the second symptom by the refiner off the tree, session 5)
 > **M4 (architect, session 6): folded into WP-71.**
 
 **What is wrong.** `scripts/changelog.mjs` renders **the whole file** — its own docblock at `:351`
@@ -33501,3 +33527,204 @@ directory entry (`apps/server/src/queries/**`) added to `coverage.exclude` → �
 entries coverage.exclude adds to the shared globs" fails; `deliveredTasks` calling
 `boundTaskRows('started', …)` → the new integration case fails on `kind` (`"started"` for
 `"delivered"`).
+
+#### WP-71
+
+**Implemented** (implementer, session 8): backlog **116**, **117**, **118** and Q96's versioning half, criterion
+by criterion, against TD-019's Q96 amendment. Nothing here created a tag, a release, a repository variable
+or a setting; every tag in this note existed only in a temporary directory.
+
+1. **CodeQL is a setting** (`CONTRIBUTING.md` § Repository settings, item 2, in the ruleset's shape): no
+   `codeql.yml`, and `scripts/release.test.ts` › "records CodeQL as a setting, and no workflow claims to be it"
+   fails on a workflow named for it or using `github/codeql-action`. technical/10's Security row and
+   technical/11's table now say that until an administrator applies it there is **no SAST**.
+2. **Mutation testing gets a plan row** — not added (plan rows are the orchestrator's); its text is under
+   *For the orchestrator* below. technical/10's scope is corrected to `packages/domain/src/**` and held by
+   `scripts/release.test.ts` › "names a directory that exists".
+3. **Three linters, one step each, in CI's `lint` job**, each a `docker://…@sha256:` image: actionlint 1.7.12
+   (shellcheck 0.11.0 in the image), zizmor 1.30.1 (online, the job's read-only `GITHUB_TOKEN`), hadolint
+   2.15.1. **Decision 1: zizmor's findings fail the job** at the default persona; a waiver is `# zizmor:
+   ignore[…]` at its line with a reason (none needed). **Decision 2: hadolint waives DL3008 and DL3066 for the
+   corpus** in `.hadolint.yaml`, each with its reason (digest-pinned trixie base rebuilt weekly; `root` and a
+   uid-1000 `agentic` the base asserts), `failure-threshold: style`, and everything else only at its line.
+   **Not `verify` steps**, because each needs a container runtime; the pin check now accepts a `sha256` image
+   digest beside a 40-hex commit.
+4. **The SHA-pin check stays** (`scripts/release.test.ts` › "is a corpus, and every `uses:` in it is pinned to a
+   commit SHA or an image digest (TD-019)").
+5. **Measured first**, at `87816a4`, the images run once by hand and removed afterwards (`docker images`
+   before and after identical; 13 containers, all the user's; 102 volumes). **Before**: actionlint **0** over
+   four workflows; zizmor **16** (offline 1 high `cache-poisoning` on `release.yml`'s `setup-node`, 14 medium
+   `artipacked` — every `actions/checkout` — and 1 info `template-injection` at `image.yml:153`; online the
+   same 16, the `artipacked` ones graded low) plus 16 suppressed; hadolint **23** over five Dockerfiles
+   (DL3066 ×12, DL3002 ×5, DL4006 ×3, DL3008 ×2, DL3025 ×1; `egress` 0). **After**: 0 / 0 (13 suppressed —
+   the `auditor` persona's 10 template expansions of trusted contexts and 3 uncommented `permissions:`, not
+   gated) / 0. **Fixed**: `persist-credentials: false` on all fourteen checkouts (nothing after a checkout
+   uses git's network credential — read off the scripts); `package-manager-cache: false` where a job feeds a
+   release; `steps.meta.outputs.short`/`matrix.arch` moved into `env:`. **Waived at the line**: the five
+   DL3002 are build stages (`web`, `deps` ×2, `tools`, `shim`; the canary below shows the final stage is still
+   checked), the DL3025 is a `HEALTHCHECK` that needs a shell, one DL4006 is a pipe inside `$(…)` that `test`
+   checks. **Two DL4006 are a real defect**, waived and filed as **256**, not fixed (below).
+6. **The changelog check is pure parsing**: `changelogHeadingProblems` (`scripts/changelog.mjs`) held over the
+   shipped file by `scripts/release.test.ts` › "has no unreleased heading below a released one, and no version
+   headed twice", and from both sides on fixtures in `scripts/changelog.test.ts`.
+7. **`pnpm changelog` refuses** when a release tag exists and the version it would render (`--version`, else
+   `FIRST_VERSION` = `0.1.0`) is not ahead of it — exit 1, nothing written, naming the way out.
+   `scripts/changelog.test.ts` › "refuses once a tag exists at the configured version, and writes nothing" runs
+   the program against a scratch repository with the tag.
+8. **Versions, as TD-019's amendment and Q96 describe them.** `image.yml` gains a `version` job (runs on every
+   event, computes only on a push to `main` with the switch on, `fetch-depth: 0`) and a `release` job
+   (`needs: [version, merge]`, `if:` naming the switch, `contents: write` + `packages: write`): it renders the
+   body with `pnpm changelog --release-notes`, copies each manifest list to `X.Y.Z`/`X.Y`/`X` with
+   `imagetools create` **from the digest this run's `merge` leg attested** (round 1: checked against
+   `sha-<7>` for all five before any copy, all three tags read back after), appends the five digests, and
+   only then runs `gh release create vX.Y.Z --target <sha>`. The image is stamped with the computed version.
+   **`push: tags` and the tag arm are gone**, so `latest` has one definition (the newest push to `main`) and a
+   version is never built. `scripts/version.mjs` computes the version; `scripts/semver.mjs` is the one answer
+   to "which release is the latest" (highest strict `vX.Y.Z` that `HEAD` contains — the changelog used
+   `git describe`, the *nearest* `v*`).
+9. **Rule 83** — see *Sentences falsified*.
+
+**Decisions and assumptions** (each is also at its line).
+- **The switch is the repository variable `RELEASE_VERSIONING` = `enabled`**, unset today; tested in the
+  `release` job's `if:` **and** in the `version` step. An unset variable reading as the empty string is
+  GitHub's documented behaviour, not observed here.
+- **release-please is deleted** — `release.yml`, `release-please-config.json`, `.release-please-manifest.json`.
+  TD-019's amendment permits "kept … or deleted"; keeping it required the tag arm, since it dispatched
+  `image.yml` on the tag ref, and that arm *built the images again* under the version. Q90's residual (the
+  `signoff` identity) closes with it.
+- **Bump rules**: visible changelog types cut a version (`feat` minor, `fix`/`perf`/`revert` patch, breaking
+  major); the hidden types cut nothing (Q96 names `docs`/`chore`; the rest of the hidden set is my extension,
+  so that a version's notes are never empty). **Before 1.0.0 a breaking change is minor** — the retired
+  config's `bump-minor-pre-major: true`, kept, where Q96's sentence says "`!` → major": otherwise the first
+  `!` after `0.1.0` declares 1.0. The first version is `0.1.0` whatever the commits say. A shallow clone is
+  **refused**.
+- **The eleven manifests stay at `0.0.0`** (Q96 (5)); the tag is the version, and no workflow commits.
+- **`CHANGELOG.md` stays as the preview** a human regenerates (regenerated here, 285 commits, 119 shown);
+  every release's notes live in its GitHub Release. Criteria 6 and 7 are about this file, which is why it
+  was kept rather than deleted — what it should say after the first cut is **257**.
+- The version job runs on every event rather than being skipped, because a job whose `needs` contains a
+  skipped job is skipped transitively unless every downstream `if:` uses a status function — GitHub's
+  documented behaviour, not observed here.
+
+**Canaries** (each reverted md5-confirmed): the switch removed from the `release` job's `if:` → › "cuts nothing
+until an administrator sets RELEASE_VERSIONING=enabled" and › "names the versioning switch exactly as the
+release job tests it" fail; removed from the `version` step → two cases of › "computes nothing for %s"
+fail; `## 0.2.0 (2026-10-01)` inserted above `## 0.1.0 (unreleased)` in `CHANGELOG.md` → the heading case fails
+with *"line 20: 0.1.0 is marked unreleased below 0.2.0"*; `pnpm changelog` in a scratch clone tagged `v0.1.0`
+→ exit 1, *"v0.1.0 is released and the version to render, 0.1.0, is not ahead of it"*, and
+`--version 0.1.1` passes the refusal (`git tag -l` in this repository: empty before and after); a final-stage
+`USER root` appended to a copy of `app.Dockerfile` → hadolint `DL3002`, exit 1.
+
+**Sentences falsified.** Changed: technical/11's layout line, its `ci.yml`, `image.yml`, `codeql.yml`,
+`release.yml` and `mutation.yml` rows, *"because the lint job that was supposed to enforce it runs no actionlint
+and no zizmor"*, *"Four of the eleven rows above are still absent"*, the Release bullet (*"semantic versions
+are WP-71's"*), *"digests published in release notes"* (now says where), and the WP-42 amendment's banner
+(*"kept for WP-71"*); technical/10's mutation and security rows (*"`packages/core/src/domain/**`"*,
+*"CodeQL default"*, *"trufflehog weekly"*); `CONTRIBUTING.md`'s `release.yml` paragraph, the whole Releasing
+list (*"the tag branch of `image.yml` … is kept and unused"*), and *"CI runs the same targets plus …"*;
+the operator guide's *"There are no version tags yet"*; `docs/TODO.md` row 222's two surviving items;
+`image.yml`'s *"Three things are deliberate"*, *"nothing in this file computes a version"*, the tag-arm comment
+and the guard paragraph's line numbers; `changelog.mjs`'s docblock (*"release-please writes the changelog"*,
+*"the version is read from `initial-version`"*) and the generated header (*"that PR is where this preview
+should be deleted"*); `.github/CODEOWNERS`; `gh-stub.sh`'s header. **Left, not mine** (exact text below):
+CLAUDE.md's release bullet; TD-019's decision line and TD-017's *"CodeQL default setup; … trufflehog
+weekly"*; TD-015's *"Stryker weekly on the domain"* (true as a decision, unbuilt); Q96/Q89/Q90's status lines;
+the plan's WP-42 row (*"which the lint job's actionlint and zizmor steps already enforce"* — history of a
+row, now true); technical/11's WP-42 amendment body (history, bannered); research/09.
+
+**For the orchestrator — exact text.**
+- **CLAUDE.md**, replace the release bullet's sentences from *"**`release.yml`'s release-please job is
+  retired**"* through *"on every path."* with: *"**Versions are a retag, behind one switch** (WP-71, Q96):
+  once an administrator sets the repository variable `RELEASE_VERSIONING` = `enabled`, `image.yml`'s
+  `version` job computes `X.Y.Z` from the conventional commits since the last `vX.Y.Z` tag
+  (`scripts/version.mjs`: `feat` minor, `fix`/`perf`/`revert` patch, breaking major but minor before 1.0,
+  hidden types nothing, first `0.1.0`, a shallow clone refused) and its `release` job copies, **by digest**, the manifest
+  lists the same run's `merge` legs built and attested to `X.Y.Z`/`X.Y`/`X` — nothing is copied unless every
+  `sha-<7>` still points at its attested digest, and no release is cut unless all three tags read back as it — then
+  creates the tag and the GitHub Release with `pnpm changelog --release-notes` as the body. It is **unset**,
+  so no push cuts anything. release-please, `release.yml` and its two configuration files are **deleted**;
+  there is no `push: tags` trigger and no tag arm, so `latest` has one definition. No bot commit: the eleven
+  manifests stay at `0.0.0`, and `CHANGELOG.md` is a preview a human regenerates, which `pnpm changelog`
+  **refuses** to render under a version not ahead of the newest release tag. CI's `lint` job also runs
+  **actionlint, zizmor and hadolint** as digest-pinned `docker://` steps (zizmor findings fail; hadolint
+  waivers in `.hadolint.yaml` or at the line, each with a reason). `scripts/release.test.ts` holds all of it:
+  every `uses:` pinned to a commit SHA or an image digest, the switch named in the `release` job's `if:` and
+  executed in the `version` step, the retag and release shell run against stub `docker`/`gh`, no untrusted context
+  (`github.event.*`, `github.head_ref`, `inputs.*`) expanded inside any `run:` script, the required
+  checks equal to `ci.yml`'s jobs, the eleven versions at `0.0.0`, and CodeQL recorded as a setting."*
+- **TD-019**, an amendment: *"**Amendment (WP-71, 2026-09-27): what every published tag means.** `sha-<7>` —
+  the manifest list built from that commit, published for every ref but a pull request. `edge` and `latest` —
+  the newest push to `main`, published from `refs/heads/main` only. `X.Y.Z`, `X.Y`, `X` — once the repository
+  variable `RELEASE_VERSIONING` is `enabled`, a copy, made from its digest, of the manifest list the push that
+  cut version `X.Y.Z` built and attested (the same digest `sha-<7>` names), computed from the conventional commits since the previous `vX.Y.Z` tag; the
+  `vX.Y.Z` git tag and a GitHub Release carrying the notes are created by the same run. No image is built for
+  a version, `image.yml` has no tag trigger, and release-please with its configuration is deleted."*
+- **TD-017**, an amendment: *"**Amendment (WP-71):** CodeQL default setup is a repository setting an
+  administrator applies (`CONTRIBUTING.md` § Repository settings), not a workflow; trufflehog is not run and
+  gitleaks is the whole of secret scanning; actionlint, zizmor and hadolint run in CI's `lint` job, pinned by
+  image digest, zizmor's findings failing it."*
+- **TD-015**: nothing to change unless the mutation row decides otherwise — *"Stryker weekly on the domain"*
+  is a decision and stays true; technical/10 now names the scope that exists.
+- **Q96**, a status line: *"— **Implemented by WP-71** behind the repository variable `RELEASE_VERSIONING`
+  (unset): points (1)–(3) and (5) as recommended, (4) as the variable, release-please deleted rather than
+  kept. One departure: a breaking change before 1.0.0 is a minor bump (the retired configuration's rule)."*
+- **Plan row** (next free number, WP-78): *"| WP-78 | **Mutation testing runs nowhere, and technical/10's
+  weekly row is a sentence.** Folds backlog **116**'s second half. StrykerJS 10 with the vitest runner over
+  `packages/domain/src/**` (tests excluded), `break: 70` (TD-015, technical/10), in a `mutation.yml` on a
+  weekly `schedule` and `workflow_dispatch` — **never a pull-request gate**; the hand practice per work
+  package (rules 21, 22, 62, 77, 88) stays. TD/10's scope was `packages/core/src/domain/**`, a path that
+  never existed (corrected at WP-71). | WP-71 (the pin rules the new workflow is held to); `docs/TODO.md`'s
+  TypeScript 7 / Stryker compatibility row | **(1)** One Stryker pass over `packages/domain` is **measured
+  first** on a hosted runner — wall clock, mutants, score — and recorded; *weekly* is kept or changed on that
+  number. **(2)** `break: 70` fails the run; the score and the surviving mutants are an artifact. **(3)** Every
+  `uses:` pinned (`scripts/release.test.ts`), the workflow passes the `lint` job's actionlint and zizmor, and
+  its permissions are `contents: read`. **(4)** `@stryker-mutator/*` enter `THIRD_PARTY_NOTICES.md` only if they
+  are runtime dependencies (they are dev: say so). **(5)** Rule 83: technical/10's and technical/11's mutation
+  rows say it exists. |"*
+
+**Discovered work** (next free backlog numbers).
+- **256** Two smoke tests are vacuous for the tools they exist to check: under `/bin/sh`
+  `<tool> --version | head -1` reports `head`'s status, so `rg` in `base.Dockerfile` and `gh`, `glab`,
+  `logcli`, `jira`, `acli` in `runtime.Dockerfile` pass the build when the binary is missing or broken — `acli`
+  is the one fetched from a moving `latest` URL. Found by hadolint DL4006; waived at the line naming this
+  entry, because the fix (`SHELL ["/bin/bash", "-o", "pipefail", "-c"]` before those `RUN`s, or no pipe)
+  changes what an image build runs and this row builds no image.
+- **257** After the first cut `CHANGELOG.md` is stale by construction: it says `## 0.1.0 (unreleased)` while
+  `v0.1.0` exists, no workflow rewrites it, and `pnpm changelog` refuses to until given a version ahead. The
+  owner's choice, recorded in `docs/TODO.md`'s new first-cut row: delete the file for the Releases page, or
+  regenerate it as the next preview at each cut.
+- **258** Every `scripts/*.mjs` decides "am I the program?" by comparing its resolved URL with
+  `resolve(argv[1])`, so run through a symlinked path — macOS's temporary directory is one — it does nothing
+  and exits **0** (rule 20). Measured: the first run of the CLI case in `changelog.test.ts` wrote no file and
+  exited 0; the test now uses the real path. Latent in CI, where paths are real.
+
+**Residuals, stated.** A **re-run** of a push that already released rebuilds and republishes `sha-<7>` with a
+new digest and computes no version, so `X.Y.Z` keeps the old digest while `sha-<7>` moves. What runs only on
+the first push after the switch — `gh release create` with `GITHUB_TOKEN` making the tag, the copied digest
+matching, the version reaching `GET /api/version` — is a `docs/TODO.md` row, because nothing here can observe it.
+
+**Verification** (each tier after a one-minute load reading under 12 — 5.21, 2.79, 3.22): `pnpm run -s verify`
+**PASS** (442 files, 8279 passed, 14 skipped); the scripts tier alone 214/214. `verify:commits` not run: no new
+commits. Docker used only for the three linter images, removed afterwards.
+
+**Review round 1 (APPROVE with nits), fixed.** (1) **Retag by the attested digest, checked first**: each
+`merge` leg records the digest it merged and attested as an artifact (`digest-<image>`, upload-artifact
+v7.0.1; a matrix job's outputs are one set for all legs); the `release` job downloads them
+(download-artifact v7.0.0, `37930b1`), refuses — **before any copy** — when a digest is missing or
+`sha-<7>` no longer points at it, copies `<repo>@<digest>`, and reads back **all three** version tags; a
+read-back mismatch can only fail after the tags moved, and says so. New stub cases: › "copies nothing when
+sha-<7> no longer points at the digest this run built", › "copies nothing when the merge job left no digest
+for an image". *"Refusing unless the copy has the source's digest"* is replaced above and in the texts for
+the orchestrator. technical/11's image row: *"made by the `release` job with `imagetools create` and
+checked to carry the same digest"* → see below. (2) The gate is asserted as the **whole normalised
+expression**. (3) **Offline template-injection census**: `scripts/release.test.ts` › "are expanded in no
+workflow this repository runs" refuses `github.event.*`, `github.head_ref` and `inputs.*` in any `run:`
+line of any workflow, comment lines included, calibrated by › "finds a planted one in a script and
+ignores the same value passed through env:". (4) `.hadolint.yaml`'s DL3008 reason rests on the weekly
+rebuild alone (`apt-get update` reads the current archive; the digest fixes the image, not the index).
+**Canaries**, reverted md5-confirmed: the `sha-<7>` pre-check made `if false` → the moved-source case
+fails; `&& vars.RELEASE_VERSIONING` → `||` → the gate case fails; `${{ github.event.head_commit.message }}`
+planted in `image.yml`'s meta script → the census fails naming `image.yml line 130`. actionlint and zizmor
+re-run over the new `image.yml`: 0 and 0 (images removed after; 13 containers, 102 volumes). **Not
+observed**: that download-artifact v7 reads what upload-artifact v7 wrote in another job — documented, not
+seen here; the first push after the switch is the measurement, which `docs/TODO.md`'s first-cut row names.

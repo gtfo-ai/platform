@@ -70,6 +70,11 @@ ENV NODE_ENV=production
 
 # A smoke test of the layer this image exists to provide, run at build time so a broken install is
 # a failed build rather than a failed run three days later.
+# **Waived, and a defect rather than a false positive** (PROGRESS backlog 256, WP-71): under `/bin/sh`
+# a pipeline reports the status of its *last* command, so each `<tool> --version | head -1` below
+# passes when the tool itself is missing or broken. Fixing it changes what the image build runs,
+# which the row that found it could not verify without building an image.
+# hadolint ignore=DL4006
 RUN set -eux; \
     node --version; \
     git --version; \

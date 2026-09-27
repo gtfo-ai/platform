@@ -3,6 +3,7 @@ import {
   chmodSync,
   copyFileSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -14,33 +15,29 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { censusPaths } from './census-files.mjs';
-import { MVP_EXIT_CRITERIA } from './changelog.mjs';
+import { changelogHeadingProblems, MVP_EXIT_CRITERIA } from './changelog.mjs';
 
 /**
- * The release mechanism, asserted against the files that decide it (WP-42, TD-019, technical/11).
+ * The release mechanism, asserted against the files that decide it (WP-42, WP-71, TD-019,
+ * technical/11).
  *
- * `scripts/verify.test.ts` holds `verify` to `ci.yml`; this is the same job for `release.yml`, and
- * it exists because **nothing here has ever run**. GitHub Actions cannot be executed from a
- * checkout, so the alternative to these assertions is a workflow whose first execution is also its
- * first test — on the push that cuts a release (standing rule 71). What can be checked offline is
- * every property that is a statement about the *files*: the trigger, the pins, the handshake with
- * `image.yml`, and that the eleven version strings the release moves are all the same string.
+ * `scripts/verify.test.ts` holds `verify` to `ci.yml`; this is the same job for the workflows that
+ * publish, and it exists because **no workflow can be run from a checkout**. The alternative to
+ * these assertions is a workflow whose first execution is also its first test — on the push that
+ * cuts a release (standing rule 71). What can be checked offline is every property that is a
+ * statement about the *files*: the triggers, the pins, the gate, the permissions, the one route a
+ * version tag takes to the registry.
  *
- * One part of that workflow *is* executable, and is executed: the shell of the two steps that find
- * and watch the image build runs here against a stub `gh` (`the shell that finds and watches the
- * image build`, below), because that shell is where watching the wrong run turns a release green
- * without its images.
+ * Two parts of `image.yml` *are* executable, and are executed: the step that decides whether this
+ * run computes a version at all (the switch), and the step that retags the images and cuts the
+ * release, against a stub `docker` and a stub `gh` (`scripts/fixtures/`). Nothing here creates a
+ * tag, a release or a registry tag anywhere; the version arithmetic itself is `version.test.ts`'s.
  *
- * What it cannot check is stated here rather than implied: whether release-please's own run
- * produces the version this configuration asks for, whether the identity its commits carry is the
- * one `signoff` names, whether a tag created with an administrator's token really does start
- * `image.yml` (GitHub's documentation says it does; nobody here has seen it), whether such a run
- * reports the tag as its `head_branch` — the scenarios below assume it, because `gh run list`
- * prints it that way, and a release where it is false fails loudly rather than watching the wrong
- * run — and whether a dispatch started from a release run reaches it. Each of those was read out of a pinned source —
- * the action at `45996ed`, release-please 17.6.0, and GitHub's own documentation on `GITHUB_TOKEN`
- * and workflow triggering — and the citations are in `.github/workflows/release.yml`'s header,
- * where the next person to change it will read them.
+ * What it cannot check, stated rather than implied: that `vars.RELEASE_VERSIONING` reads as the
+ * empty string when the variable is unset (GitHub's documentation says so for contexts; nobody here
+ * has seen the job skip), that `GITHUB_TOKEN` may create the tag through `gh release create` (Q90's
+ * measurement is that only *pull requests* are refused), and that `imagetools create` keeps the
+ * digest — the step checks that one at run time rather than trusting it.
  *
  * **Why it cannot pass for the wrong reason.** Every corpus it builds is asserted non-empty first:
  * a regex that matched nothing would otherwise satisfy every "each of these is pinned" assertion
@@ -55,423 +52,471 @@ const readJson = <T>(path: string): T => JSON.parse(read(path)) as T;
 /**
  * What git knows about — tracked, or untracked and not ignored — so no list here has to be
  * maintained by hand (standing rule 7) and a workflow written but not yet staged is held to the
- * same pins (backlog 10; the list is `census-files.mjs`'s).
+ * same pins (backlog 10; the list is `census-files.mjs`'s). A tracked path deleted from the working
+ * tree is dropped, as `census-files.mjs` drops a vanished one: it is no longer part of the tree —
+ * which is the state of `release.yml` between WP-71's deletion and its commit.
  */
 const tracked = (pattern: string): string[] =>
-  censusPaths(repositoryRoot, { pathspecs: [pattern] });
+  censusPaths(repositoryRoot, { pathspecs: [pattern] }).filter((path) =>
+    existsSync(join(repositoryRoot, path)),
+  );
 
-const RELEASE_WORKFLOW = '.github/workflows/release.yml';
 const IMAGE_WORKFLOW = '.github/workflows/image.yml';
 const CI_WORKFLOW = '.github/workflows/ci.yml';
-const CONFIG = 'release-please-config.json';
-const MANIFEST = '.release-please-manifest.json';
 
-interface ReleasePleaseConfig {
-  readonly 'initial-version': string;
-  readonly 'include-component-in-tag': boolean;
-  readonly signoff: string;
-  readonly packages: Record<string, { readonly 'extra-files'?: { readonly path: string }[] }>;
-}
+/** The switch, spelled once here; the workflow and CONTRIBUTING.md are both held to it. */
+const SWITCH_VARIABLE = 'RELEASE_VERSIONING';
+const SWITCH_VALUE = 'enabled';
 
-describe('.github/workflows/release.yml', () => {
-  const workflow = read(RELEASE_WORKFLOW);
+/**
+ * One job of a workflow: from `  <name>:` to the next job key at the same indentation, or the end.
+ * Asserted non-empty by every caller, so a renamed job fails here rather than emptying a corpus.
+ */
+const jobOf = (workflow: string, name: string): string => {
+  const start = workflow.indexOf(`\n  ${name}:\n`);
+  expect(start, `no job \`${name}\``).toBeGreaterThanOrEqual(0);
+  const rest = workflow.slice(start + 1);
+  const next = /\n {2}[a-z][\w-]*:\n/.exec(rest.slice(1));
+  return next === null ? rest : rest.slice(0, next.index + 1);
+};
 
-  /**
-   * **The retirement, asserted as the absence it is** (TD-019's amendment, 2026-09-16).
-   *
-   * This case used to read *"is triggered by a push to main and by nothing else"*. The owner's
-   * continuous-deployment decision inverts it: a push to `main` must start **nothing** here, because
-   * this job was red on every commit and could not have been otherwise — the `GITHUB_TOKEN` path is
-   * refused until an administrator changes a repository setting (measured, run 34966305421) and the
-   * token path needs a credential this repository does not carry (Q90).
-   *
-   * Two assertions, because one would not have caught the change that matters: the trigger block is
-   * exactly `workflow_dispatch:`, **and** the string `push:` does not appear in it. A regex that
-   * merely found `workflow_dispatch` would pass a file that kept both.
-   */
-  it('cannot be started by a push: it is workflow_dispatch and nothing else (TD-019 amendment)', () => {
-    const triggers = (/\non:\n((?:[ \t]+.*\n|\n)+)/.exec(workflow)?.[1] ?? '').trim();
-    expect(triggers).not.toBe('');
-    expect(triggers).toBe('workflow_dispatch:');
-    expect(triggers).not.toContain('push:');
-  });
+/** A job's `permissions:` block, as `key: value` strings. */
+const permissionsOf = (job: string): string[] => {
+  const block = /\n {4}permissions:\n((?: {6}(?:#.*|[a-z-]+: \w+)\n)+)/.exec(job)?.[1] ?? '';
+  return [...block.matchAll(/^ {6}([a-z-]+): (\w+)$/gm)].map((match) => `${match[1]}: ${match[2]}`);
+};
 
-  it('runs release-please v5 against the config and manifest that exist', () => {
-    const action = /uses: googleapis\/release-please-action@([0-9a-f]{40}) # (v\d+\.\d+\.\d+)/.exec(
-      workflow,
-    );
-    expect(action).not.toBeNull();
-    expect(action?.[2]?.startsWith('v5.')).toBe(true);
+/** The `run: |` body of the step named `stepName` in `text`, dedented — the file is the only copy. */
+const runScript = (text: string, stepName: string): string => {
+  const step = text.slice(text.indexOf(`name: ${stepName}`));
+  expect(text.includes(`name: ${stepName}`), `no step named \`${stepName}\``).toBe(true);
+  const body = /\n {8}run: \|\n((?: {10}.*\n|[ \t]*\n)+)/.exec(step)?.[1] ?? '';
+  // Without this an extraction that stopped matching would "pass" every case below at once.
+  expect(body).not.toBe('');
+  return body.replace(/^ {10}/gm, '');
+};
 
-    expect(workflow).toContain(`config-file: ${CONFIG}`);
-    expect(workflow).toContain(`manifest-file: ${MANIFEST}`);
-    expect(existsSync(join(repositoryRoot, CONFIG))).toBe(true);
-    expect(existsSync(join(repositoryRoot, MANIFEST))).toBe(true);
-  });
-
-  /**
-   * An **equality**, not a containment: the point of this assertion is the "and no more" half, and
-   * `arrayContaining` plus "every entry ends in `: write`" admitted any further write scope that
-   * happened to be added — `packages: write` would have passed both. The four below are each
-   * justified at the line in the workflow, and a fifth is a decision somebody makes here.
-   *
-   * **`checks: read` was one of them and is not any more.** `gh run watch` does make a read that
-   * needs it — a job's annotations — but it **tolerates being refused**: cli/cli's
-   * `pkg/cmd/run/watch/watch.go` (trunk, read 2026-09-15) matches that one error by name,
-   * `err != shared.ErrMissingAnnotationsPermissions`, and prints that the token lacks `checks:read`
-   * rather than failing the command. gh's manual note about that permission is about *fine-grained
-   * PATs*, which `GITHUB_TOKEN` is not. So the scope bought log detail, not the verdict, and the
-   * verdict is what the step exists for.
-   */
-  it('holds the permissions each of its effects needs, and no more', () => {
-    const job = workflow.slice(workflow.indexOf('  release-please:'));
-    const permissions = /permissions:\n((?: {6}(?:#.*|[a-z-]+: \w+)\n)+)/.exec(job)?.[1] ?? '';
-    const granted = [...permissions.matchAll(/^ {6}([a-z-]+): (\w+)$/gm)].map(
-      (match) => `${match[1]}: ${match[2]}`,
-    );
-    expect([...granted].sort()).toEqual([
-      // `gh workflow run`, and the `gh run list`/`gh run watch` that find and follow the image
-      // build — without them the tag would publish no image, silently. The reads come with it.
-      'actions: write',
-      'contents: write',
-      'issues: write',
-      'pull-requests: write',
-    ]);
-  });
-
-  /**
-   * The release pull request's own CI, which is a property of *which token opens it*.
-   *
-   * A pull request opened with `GITHUB_TOKEN` starts no workflow run, so `ci.yml`'s `pull_request`
-   * jobs — `dco` among them — never report on the release PR, and the required checks an
-   * administrator applies then make it unmergeable. The out is a token the repository does not
-   * carry; what is asserted here is that the workflow *takes* one, that it falls back, and that the
-   * cost of the fallback is written down where the person merging the first release will read it
-   * (Q90). The value of that secret is nowhere in this repository and never will be (BD-002).
-   */
-  it('takes an administrator’s token, falls back, and states what the fallback costs', () => {
-    expect(workflow).toContain(
-      'token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}',
-    );
-
-    const header = workflow.slice(0, workflow.indexOf('\non:\n'));
-    expect(header).not.toBe('');
-    expect(header).toContain(
-      '**The release PR gets no CI run unless an administrator provides a token.**',
-    );
-    // The three ways a PR with no run of its own can still be merged, and the one that makes the
-    // `dco` verdict reachable at all.
-    expect(header).toContain('close and reopen');
-    expect(header).toContain('merge_group');
-    expect(header).toContain('Q90');
-
-    /*
-     * **The documents' half of this inverted at TD-019's amendment** (2026-09-16).
-     *
-     * It used to read *"a secret nobody is told to create is a secret nobody creates"* and required
-     * both documents to name `RELEASE_PLEASE_TOKEN`. With the job retired nobody is told to create
-     * it, and an instruction to set up a secret for a workflow no push can start is worse than no
-     * instruction: it is a setup step that buys nothing. So the assertion is the other way round —
-     * `CONTRIBUTING.md` no longer carries the setup section, and the two documents that described
-     * the mechanism say it is retired rather than pending. The **workflow** half above is unchanged,
-     * because the header and the dispatch path still take the token if somebody runs it by hand.
-     */
-    expect(read('CONTRIBUTING.md')).not.toContain('What an administrator sets up once');
-    /*
-     * The **specific sentence** each document must carry, not the word "retired" anywhere in it.
-     * `toContain('retired')` over a whole file is standing rule 43's shape: every wrong version of
-     * these documents satisfies it too — one paragraph about a retired *anything*, or the word left
-     * behind by a half-finished edit, would pass while the instruction it is meant to have replaced
-     * sat three lines above.
-     */
-    expect(read('CONTRIBUTING.md')).toContain(
-      'is **retired**: it is `workflow_dispatch` only, so no push starts it.',
-    );
-    expect(read('docs/TODO.md')).toContain('the release-please job is **retired** by TD-019');
-  });
-
-  /**
-   * The handshake criterion 1 is really about, asserted from **both** ends (standing rule 42) —
-   * and now from both *paths*, because there are two and the earlier version of this file believed
-   * in one.
-   *
-   * Which route the tag takes to `image.yml` is a property of the token that created it. With
-   * `RELEASE_PLEASE_TOKEN` set the tag is an ordinary push, so `image.yml`'s `push: tags: ['v*']`
-   * starts the build by itself and a dispatch would start a **second** run on the same ref —
-   * `image.yml`'s concurrency queues rather than cancels, so that run rebuilds five images on two
-   * architectures, republishes identical tags, and is waited for under the same `timeout-minutes`.
-   * On the `GITHUB_TOKEN` fallback the tag starts nothing and the dispatch, the documented
-   * exception, is the only way in. Both are stated here; *which one runs* is executed against a
-   * stub `gh` in the describe below.
-   */
-  it('reaches image.yml by the one route the tag’s own token leaves open', () => {
-    // The branch is decided by the same expression the token itself is chosen by, so the two
-    // halves cannot come to disagree about which path a release took.
-    expect(workflow).toContain("TAG_STARTED_A_RUN: ${{ secrets.RELEASE_PLEASE_TOKEN != '' }}");
-    expect(workflow).toContain(
-      'token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}',
-    );
-    expect(workflow).toMatch(/gh workflow run image\.yml --ref "\$TAG"/);
-    expect(workflow).toContain('TAG: ${{ steps.release.outputs.tag_name }}');
-
-    const header = workflow.slice(0, workflow.indexOf('\non:\n'));
-    expect(header).toContain(
-      '**How the tag reaches `image.yml` depends on which token created it, and both paths are built.**',
-    );
-
-    // `gh workflow run` returns when the dispatch is *accepted*, so dispatching and stopping there
-    // would make this job green for a release whose images never built. Either path ends in the
-    // watch, and the run it watches has to be the one this release started: the baseline that
-    // answers "was this run already here?" is therefore taken **before** release-please can create
-    // anything, which is the only moment at which that question has an answer.
-    expect(workflow).toContain('gh run watch "$run_id" --exit-status');
-    expect(workflow.indexOf('id: image-runs-before')).toBeLessThan(workflow.indexOf('id: release'));
-    expect(workflow).toContain('RUNS_BEFORE: ${{ steps.image-runs-before.outputs.runs }}');
-
-    const image = read(IMAGE_WORKFLOW);
-    expect(image).toMatch(/^ {2}workflow_dispatch:$/m);
-    expect(image).toMatch(/^ {4}tags: \['v\*'\]$/m);
-    expect(image).toContain('"${GITHUB_REF_TYPE}" = "tag"');
-    expect(image).toContain('version="${GITHUB_REF_NAME#v}"');
-    // The tag scheme lives there and is not copied into the release workflow.
-    expect(workflow).not.toContain('imagetools');
-  });
-
-  it('acts on a release only when one was created', () => {
-    // A step writes `if:` either as its first key (`- if: …`) or under its name; both are here.
-    const conditionals = [...workflow.matchAll(/^\s+(?:- )?if: (.+)$/gm)].map((match) => match[1]);
-    expect(conditionals.length).toBeGreaterThan(0);
-    for (const condition of conditionals) {
-      expect(condition).toBe("${{ steps.release.outputs.release_created == 'true' }}");
+/**
+ * **release-please is retired by deletion** (WP-71; TD-019's amendment permits "kept … or
+ * deleted").
+ *
+ * It was kept at the amendment as a manual dispatch "if a batched version is ever wanted again".
+ * WP-71 is where versions came back, and they came back as a *retag* in `image.yml`; keeping the
+ * old mechanism beside it would have kept a second route to a version tag — `release.yml`
+ * dispatched `image.yml` on the tag ref, whose tag arm **built the images again** under the version,
+ * which is exactly what TD-019's amendment forbids. So the workflow and its two configuration files
+ * go together, and this asserts the absence rather than trusting it.
+ */
+describe('release-please, retired', () => {
+  it('has no workflow, no configuration and no manifest left to run from', () => {
+    for (const path of [
+      '.github/workflows/release.yml',
+      'release-please-config.json',
+      '.release-please-manifest.json',
+    ]) {
+      expect(existsSync(join(repositoryRoot, path)), path).toBe(false);
     }
-    // The two effects that must not happen on an ordinary push to main.
-    expect(conditionals.length).toBeGreaterThanOrEqual(3);
+    const workflows = tracked('.github/workflows/*.yml');
+    expect(workflows.length).toBeGreaterThanOrEqual(3);
+    for (const path of workflows) expect(read(path), path).not.toContain('release-please-action');
   });
 
-  it('gives the upgrade note the history it is derived from', () => {
-    // `git describe` cannot find the previous release tag in a shallow clone, and the note would
-    // then claim every migration is new on every release.
-    expect(workflow).toMatch(/fetch-depth: 0/);
-    expect(workflow).toContain('node scripts/changelog.mjs --upgrade-note');
+  /*
+   * The documents' half, kept from the amendment's round: `CONTRIBUTING.md` no longer tells an
+   * administrator to create `RELEASE_PLEASE_TOKEN` or to let Actions open pull requests — a setup
+   * step for a workflow that does not exist buys nothing. The one switch it *does* name is below.
+   */
+  it('is no longer a setup step anybody is told to take', () => {
+    const contributing = read('CONTRIBUTING.md');
+    expect(contributing).not.toContain('What an administrator sets up once');
+    expect(contributing).not.toContain('RELEASE_PLEASE_TOKEN');
+    expect(contributing).toContain(
+      '`release.yml` and release-please’s two configuration files are **deleted**',
+    );
   });
 });
 
 /**
- * The one part of `release.yml` that can be run from a checkout: the shell of the two steps that
- * decide **which** `image.yml` run a release watches, executed against a stub `gh`
- * (`scripts/fixtures/gh-stub.sh`) and a `sleep` that returns at once.
- *
- * It is worth the harness because the failure it guards against is silent. `gh run watch` on the
- * wrong run reports *that* run's verdict: a release whose images never built goes green, which is
- * the exact outcome the watch was added to prevent. The wrong run is not hypothetical — a manual
- * `workflow_dispatch` or a re-run at the same commit leaves one, and on the administrator-token
- * path the `push: main` build of the very commit being released is always there.
- *
- * What the stub does **not** do is evaluate the `--jq` expression (there is no jq here); it prints
- * the fields `--json` names, tab-separated, which is what `… | @tsv` produces. That is why the
- * workflow keeps its jq to a bare projection and does the selecting in shell — the part that can
- * be run is the part that decides.
+ * **What a version is, and the one route it takes to the registry** (WP-71, plan criteria 8 and
+ * the TD-019 amendment's "no second build").
  */
-describe('the shell that finds and watches the image build', () => {
-  const releaseWorkflow = read(RELEASE_WORKFLOW);
-  const BASELINE_STEP = 'which image.yml runs already exist for this commit';
-  const IMAGE_STEP = 'build and publish the images for the tag';
-  const HEAD_SHA = '1b0c5f9a2d3e4f5061728394a5b6c7d8e9f01234';
-  const TAG = 'v0.1.0';
-
-  /** A run as `gh run list` would report it, plus the first poll on which it becomes visible. */
-  interface StubRun {
-    readonly id: number;
-    readonly branch: string;
-    readonly event: 'push' | 'workflow_dispatch';
-    readonly sha?: string;
-    /** 1 — already there; n — appears on the nth `gh run list` of the step (a late run). */
-    readonly fromCall?: number;
-  }
-
-  interface Outcome {
-    readonly status: number;
-    readonly stdout: string;
-    readonly stderr: string;
-    readonly calls: readonly string[];
-    readonly runsBefore: string;
-  }
-
-  /** The `run:` body of a named step, dedented — the file is the only copy of it (rule 7). */
-  const runScript = (stepName: string): string => {
-    const step = releaseWorkflow.slice(releaseWorkflow.indexOf(`name: ${stepName}`));
-    const body = /\n {8}run: \|\n((?: {10}.*\n|[ \t]*\n)+)/.exec(step)?.[1] ?? '';
-    // Without this an extraction that stopped matching would "pass" every case below at once.
-    expect(body).not.toBe('');
-    return body.replace(/^ {10}/gm, '');
-  };
-
-  const scenarioFile = (runs: readonly StubRun[]): string =>
-    runs
-      .map((run) =>
-        [run.id, run.sha ?? HEAD_SHA, run.branch, run.event, run.fromCall ?? 1].join('\t'),
-      )
-      .join('\n')
-      .concat('\n');
+describe("image.yml's versioning (WP-71)", () => {
+  const workflow = read(IMAGE_WORKFLOW);
+  const release = jobOf(workflow, 'release');
+  const version = jobOf(workflow, 'version');
 
   /**
-   * Runs the baseline step against `before`, then the image step against `after`, exactly as the
-   * job does: the baseline's output is the image step's `RUNS_BEFORE`.
+   * **The gate — the property that makes landing this row safe.** An unset repository variable is
+   * the empty string, so with the switch absent the job is skipped and the push that lands this row
+   * creates no tag and no release. The job's `if:` must name the switch, the ref and the event; a
+   * condition that lost the switch would cut `0.1.0` on the next push to `main`.
    */
-  const drive = (scenario: {
-    readonly before: readonly StubRun[];
-    readonly after: readonly StubRun[];
-    readonly administratorToken: boolean;
-    readonly watchExit?: number;
-  }): Outcome => {
-    const directory = mkdtempSync(join(tmpdir(), 'release-yml-'));
+  it('cuts nothing until an administrator sets RELEASE_VERSIONING=enabled', () => {
+    const condition =
+      /\n {4}if: >-\n((?: {6}.*\n)+)/.exec(release)?.[1]?.replace(/\s+/g, ' ') ?? '';
+    // The **whole** expression, normalised — not each clause somewhere in it: round 1's version of
+    // this case checked containment, and a canary turning `&& vars.…` into `|| vars.…` survived it
+    // (every clause still appears; the switch no longer gates anything).
+    expect(condition.trim()).toBe(
+      "github.event_name == 'push' && github.ref == 'refs/heads/main' " +
+        `&& vars.${SWITCH_VARIABLE} == '${SWITCH_VALUE}' && needs.version.outputs.version != ''`,
+    );
+    // The version step reads the same variable; the executable half of that is below.
+    expect(version).toContain(`${SWITCH_VARIABLE}: \${{ vars.${SWITCH_VARIABLE} }}`);
+  });
+
+  /**
+   * Q96 (2): "`image.yml`'s `push: tags` trigger goes" — and with it the tag arm that published
+   * `X.Y.Z`/`X.Y`/`X` **and a second `latest`** from a second build. A version tag now reaches the
+   * registry by one route, the retag; `latest` has one definition, the newest push to `main`.
+   */
+  it('has no tag trigger and no tag arm, so a version is never built and latest is defined once', () => {
+    const triggers = (/\non:\n((?:[ \t]+.*\n|\n)+)/.exec(workflow)?.[1] ?? '').trim();
+    expect(triggers.split('\n').map((line) => line.trimEnd())).toEqual([
+      'push:',
+      '    branches: [main]',
+      '  pull_request:',
+      '  workflow_dispatch:',
+    ]);
+    // Code only: the comments explain why the ref, not its name, is compared.
+    const code = workflow
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('#'))
+      .join('\n');
+    expect(code).not.toContain('GITHUB_REF_TYPE');
+    expect(code).not.toContain('GITHUB_REF_NAME');
+    const assignments = [...workflow.matchAll(/^\s+tags="([^"]*)"$/gm)].map((match) => match[1]);
+    expect(assignments.length).toBeGreaterThan(0);
+    expect(assignments.filter((tags) => /\blatest\b/.test(tags ?? ''))).toHaveLength(1);
+  });
+
+  it('retags the manifest lists this run merged, and builds nothing', () => {
+    expect(release).toMatch(/\n {4}needs: \[version, merge\]\n/);
+    expect(release).not.toContain('build-images.mjs');
+    expect(release).not.toMatch(/docker (?:build|push)\b/);
+    expect(release).toContain('docker buildx imagetools create');
+    // The source is the digest this run attested, never the `sha-<7>` tag as it stands.
+    expect(release).toContain('"${repo}@${digest}"');
+    expect(release).not.toMatch(/imagetools create[^\n]*\\\n[^\n]*\n\s+"\$\{repo\}:sha-/);
+    expect(release).toContain('uses: actions/download-artifact@');
+    expect(jobOf(workflow, 'merge')).toContain('name: digest-${{ matrix.image }}');
+    // The read-back that makes "a retag" a statement the run verifies, not a sentence it trusts.
+    expect(release).toContain('not a retag');
+  });
+
+  /**
+   * The release job's image list is a second statement of the merge job's matrix (a step that
+   * cuts one release after all five copies cannot be a matrix), so the two are held equal —
+   * both directions, because an image missing from either publishes a release without it.
+   */
+  it('names the same five images as the manifest-list job', () => {
+    const matrix = /\n {8}image: \[([^\]]+)\]\n/.exec(jobOf(workflow, 'merge'))?.[1] ?? '';
+    const merged = matrix.split(',').map((image) => image.trim());
+    const loop = /\n\s+images="([^"]+)"\n/.exec(release)?.[1] ?? '';
+    const retagged = loop.split(/\s+/).filter((image) => image !== '');
+    expect(merged.length).toBe(5);
+    expect([...retagged].sort()).toEqual([...merged].sort());
+  });
+
+  it('holds the permissions each of its effects needs, and no more', () => {
+    expect(permissionsOf(release).sort()).toEqual(['contents: write', 'packages: write']);
+    expect(permissionsOf(version)).toEqual(['contents: read']);
+  });
+
+  it('reads the history and tags it computes from, in both jobs that read them', () => {
+    for (const job of [version, release]) expect(job).toMatch(/fetch-depth: 0/);
+    expect(version).toContain('node scripts/version.mjs --github-output');
+    expect(release).toContain(
+      'node scripts/changelog.mjs --release-notes --version "${VERSION}" > "${RUNNER_TEMP}/notes.md"',
+    );
+    // The image reports the version it was released as, from the same output the release uses.
+    expect(jobOf(workflow, 'build')).toContain(
+      'RELEASE_VERSION: ${{ needs.version.outputs.version }}',
+    );
+  });
+});
+
+/** A throwaway directory with the two stubs on `PATH` and a `sleep` that returns at once. */
+const stubDirectory = (): string => {
+  const directory = mkdtempSync(join(tmpdir(), 'image-yml-'));
+  for (const name of ['gh', 'docker']) {
+    copyFileSync(join(repositoryRoot, `scripts/fixtures/${name}-stub.sh`), join(directory, name));
+    chmodSync(join(directory, name), 0o755);
+  }
+  writeFileSync(join(directory, 'calls.log'), '');
+  writeFileSync(join(directory, 'outputs'), '');
+  return directory;
+};
+
+const callsIn = (directory: string): string[] =>
+  readFileSync(join(directory, 'calls.log'), 'utf8')
+    .split('\n')
+    .filter((line) => line !== '');
+
+/**
+ * The switch, **executed**: the step that decides whether this run computes a version at all, run
+ * with a stub `node` that records whether it was asked. Only a push to `refs/heads/main` with the
+ * variable set to exactly `enabled` reaches the computation; every other combination writes an
+ * empty version, which is what skips the release job.
+ */
+describe('the step that computes a version, and the switch in front of it', () => {
+  const step = runScript(jobOf(read(IMAGE_WORKFLOW), 'version'), 'compute the version');
+
+  const drive = (env: Record<string, string>) => {
+    const directory = stubDirectory();
     try {
-      copyFileSync(join(repositoryRoot, 'scripts/fixtures/gh-stub.sh'), join(directory, 'gh'));
-      chmodSync(join(directory, 'gh'), 0o755);
-      writeFileSync(join(directory, 'sleep'), '#!/bin/bash\nexit 0\n', { mode: 0o755 });
-      writeFileSync(join(directory, 'before.tsv'), scenarioFile(scenario.before));
-      writeFileSync(join(directory, 'after.tsv'), scenarioFile(scenario.after));
-      writeFileSync(join(directory, 'gh.log'), '');
-      writeFileSync(join(directory, 'outputs'), '');
-
-      const environment = {
-        PATH: `${directory}:${process.env.PATH ?? ''}`,
-        HOME: directory,
-        GH_TOKEN: 'not-a-real-token',
-        GITHUB_SHA: HEAD_SHA,
-        GITHUB_SERVER_URL: 'https://github.com',
-        GITHUB_REPOSITORY: 'gtfo-ai/platform',
-        GITHUB_OUTPUT: join(directory, 'outputs'),
-        STUB_LOG: join(directory, 'gh.log'),
-        STUB_DIR: directory,
-        TAG,
-      };
-      const run = (script: string, extra: Record<string, string>) =>
-        spawnSync('bash', ['-c', script], {
-          cwd: directory,
-          encoding: 'utf8',
-          env: { ...environment, ...extra },
-        });
-
-      const baseline = run(runScript(BASELINE_STEP), {
-        STUB_RUNS: join(directory, 'before.tsv'),
-      });
-      expect(`${baseline.status}: ${baseline.stderr}`).toBe('0: ');
-      const runsBefore = /^runs=(.*)$/m.exec(readFileSync(join(directory, 'outputs'), 'utf8'))?.[1];
-      expect(runsBefore).toBeDefined();
-      // The poll counter is per step; the baseline's own call must not age the scenario.
-      rmSync(join(directory, 'calls'), { force: true });
-
-      const image = run(runScript(IMAGE_STEP), {
-        STUB_RUNS: join(directory, 'after.tsv'),
-        RUNS_BEFORE: runsBefore ?? '',
-        TAG_STARTED_A_RUN: String(scenario.administratorToken),
-        STUB_WATCH_EXIT: String(scenario.watchExit ?? 0),
+      writeFileSync(
+        join(directory, 'node'),
+        '#!/bin/bash\nprintf "node %s\\n" "$*" >> "$STUB_LOG"\necho "version=0.1.0" >> "$GITHUB_OUTPUT"\n',
+        { mode: 0o755 },
+      );
+      const result = spawnSync('bash', ['-c', step], {
+        cwd: directory,
+        encoding: 'utf8',
+        env: {
+          PATH: `${directory}:${process.env.PATH ?? ''}`,
+          GITHUB_OUTPUT: join(directory, 'outputs'),
+          STUB_LOG: join(directory, 'calls.log'),
+          ...env,
+        },
       });
       return {
-        status: image.status ?? -1,
-        stdout: image.stdout,
-        stderr: image.stderr,
-        calls: readFileSync(join(directory, 'gh.log'), 'utf8')
-          .split('\n')
-          .filter((line) => line !== ''),
-        runsBefore: runsBefore ?? '',
+        status: result.status,
+        calls: callsIn(directory),
+        outputs: readFileSync(join(directory, 'outputs'), 'utf8'),
       };
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
   };
 
-  const watched = (outcome: Outcome): string[] =>
-    outcome.calls
-      .filter((call) => call.startsWith('run watch '))
-      .map((call) => call.split(' ')[2] ?? '');
+  const onMain = { GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/main' };
 
-  const dispatches = (outcome: Outcome): string[] =>
-    outcome.calls.filter((call) => call.startsWith('workflow run '));
-
-  const mainBuild: StubRun = { id: 6900, branch: 'main', event: 'push' };
-
-  it('dispatches on the GITHUB_TOKEN fallback, and watches the run the dispatch created', () => {
-    const outcome = drive({
-      before: [mainBuild],
-      after: [{ id: 7001, branch: TAG, event: 'workflow_dispatch' }, mainBuild],
-      administratorToken: false,
-    });
-
+  it('computes only on a push to main with the switch set to exactly `enabled`', () => {
+    const outcome = drive({ ...onMain, [SWITCH_VARIABLE]: SWITCH_VALUE });
     expect(outcome.status).toBe(0);
-    expect(dispatches(outcome)).toEqual([`workflow run image.yml --ref ${TAG}`]);
-    expect(watched(outcome)).toEqual(['7001']);
+    expect(outcome.calls).toEqual(['node scripts/version.mjs --github-output']);
+    expect(outcome.outputs).toBe('version=0.1.0\n');
   });
 
-  /**
-   * The case the run lookup exists for. An older `workflow_dispatch` run at this very commit — a
-   * manual start, or a re-run — is the newest match the moment the dispatch is accepted, and the
-   * release's own run has not appeared yet. Taking the newest match would watch the older run to
-   * *its* verdict, which is already decided.
-   */
-  it('ignores a run that was already there, and waits for the one this release started', () => {
-    const stale: StubRun = { id: 6950, branch: TAG, event: 'workflow_dispatch' };
-    const outcome = drive({
-      before: [stale, mainBuild],
-      after: [{ id: 7010, branch: TAG, event: 'workflow_dispatch', fromCall: 3 }, stale, mainBuild],
-      administratorToken: false,
-    });
-
+  it.each([
+    ['the switch unset — this repository today', { ...onMain }],
+    ['the switch set to something else', { ...onMain, [SWITCH_VARIABLE]: 'true' }],
+    [
+      'a pull request',
+      {
+        GITHUB_EVENT_NAME: 'pull_request',
+        GITHUB_REF: 'refs/pull/1/merge',
+        [SWITCH_VARIABLE]: SWITCH_VALUE,
+      },
+    ],
+    [
+      'a dispatch on a branch',
+      {
+        GITHUB_EVENT_NAME: 'workflow_dispatch',
+        GITHUB_REF: 'refs/heads/wip',
+        [SWITCH_VARIABLE]: SWITCH_VALUE,
+      },
+    ],
+    [
+      'a dispatch on main',
+      {
+        GITHUB_EVENT_NAME: 'workflow_dispatch',
+        GITHUB_REF: 'refs/heads/main',
+        [SWITCH_VARIABLE]: SWITCH_VALUE,
+      },
+    ],
+  ])('computes nothing for %s', (_label, env) => {
+    const outcome = drive(env);
     expect(outcome.status).toBe(0);
-    expect(outcome.runsBefore).toContain('6950');
-    expect(watched(outcome)).toEqual(['7010']);
+    expect(outcome.calls).toEqual([]);
+    expect(outcome.outputs).toBe('version=\n');
   });
+});
 
-  /**
-   * The administrator-token path: the tag push has already started the build, so a dispatch would
-   * be a second one queued behind it. The `push: main` build of the same commit is always present
-   * here, and the tag's run is told from it by the ref — and by the baseline, which contains it.
-   */
-  it('dispatches nothing when the tag itself started a run, and watches that run', () => {
-    const outcome = drive({
-      before: [mainBuild],
-      after: [{ id: 7020, branch: TAG, event: 'push', fromCall: 2 }, mainBuild],
-      administratorToken: true,
-    });
+/**
+ * The step that creates things on the public repository, **executed against stubs**: five copies
+ * of a manifest list and one `gh release create`. The failure modes it is run through are the ones
+ * that would publish something wrong — a copy with a different digest, a copy that failed, a tag
+ * of that name already standing somewhere else — and in each the release is **not** cut.
+ */
+describe('the shell that tags the images and cuts the release', () => {
+  const HEAD_SHA = '1b0c5f9a2d3e4f5061728394a5b6c7d8e9f01234';
+  const step = runScript(
+    jobOf(read(IMAGE_WORKFLOW), 'release'),
+    'tag the images and cut the release',
+  );
 
-    expect(outcome.status).toBe(0);
-    expect(dispatches(outcome)).toEqual([]);
-    expect(watched(outcome)).toEqual(['7020']);
-    expect(outcome.stdout).toContain('not dispatching');
-  });
+  const BUILT = `sha256:${'1'.repeat(64)}`;
+  const IMAGES = [
+    'platform-base',
+    'platform-runtime',
+    'platform-egress',
+    'platform',
+    'platform-launcher',
+  ];
 
-  it('fails when no new run appears, and says what is and is not known at that point', () => {
-    const outcome = drive({
-      before: [mainBuild],
-      after: [mainBuild],
-      administratorToken: false,
-    });
+  const drive = (scenario: {
+    readonly existingTag?: string;
+    /** What `sha-<7>` points at when the step runs; the run built and attested `BUILT`. */
+    readonly sourceDigest?: string;
+    readonly copyDigest?: string;
+    readonly createExit?: number;
+    /** Images whose digest file the merge job did not leave. */
+    readonly missingDigests?: readonly string[];
+  }) => {
+    const directory = stubDirectory();
+    try {
+      // The step runs in a checkout; this one has a commit, and optionally the tag at issue.
+      const git = (...args: string[]) =>
+        execFileSync(
+          'git',
+          [
+            '-c',
+            'user.name=Fixture',
+            '-c',
+            'user.email=fixture@example.test',
+            '-c',
+            'commit.gpgsign=false',
+            '-c',
+            'tag.gpgsign=false',
+            '-c',
+            'core.hooksPath=/dev/null',
+            ...args,
+          ],
+          { cwd: directory, stdio: 'ignore' },
+        );
+      git('init', '-q', '-b', 'main');
+      git('commit', '--allow-empty', '--no-verify', '-q', '-m', 'feat: a fixture');
+      if (scenario.existingTag !== undefined) git('tag', scenario.existingTag);
 
-    expect(outcome.status).toBe(1);
-    expect(watched(outcome)).toEqual([]);
-    // Bounded rather than hanging: 30 polls, and the message claims only what is true — the
-    // release exists, the dispatch was accepted, and whether images were built is not knowable
-    // from this step.
-    const polls = outcome.calls.filter((call) =>
-      call.startsWith('run list --workflow image.yml --event'),
+      // `RUNNER_TEMP` is where the previous step rendered the notes; the stub `gh` copies the file it
+      // is handed to `notes.md` beside itself, which is what the release would have carried.
+      const runnerTemp = join(directory, 'runner');
+      mkdirSync(runnerTemp);
+      writeFileSync(join(runnerTemp, 'notes.md'), '### Before you upgrade\n\nsomething\n');
+      // What the `merge` legs recorded: the digest each merged and attested.
+      mkdirSync(join(runnerTemp, 'digests'));
+      for (const image of IMAGES) {
+        if (scenario.missingDigests?.includes(image)) continue;
+        writeFileSync(join(runnerTemp, 'digests', image), `${BUILT}\n`);
+      }
+      const result = spawnSync('bash', ['-c', step], {
+        cwd: directory,
+        encoding: 'utf8',
+        env: {
+          PATH: `${directory}:${process.env.PATH ?? ''}`,
+          HOME: directory,
+          GH_TOKEN: 'not-a-real-token',
+          GITHUB_SHA: HEAD_SHA,
+          GITHUB_REPOSITORY: 'gtfo-ai/platform',
+          GITHUB_REPOSITORY_OWNER: 'GTFO-AI',
+          REGISTRY: 'ghcr.io',
+          RUNNER_TEMP: runnerTemp,
+          VERSION: '0.1.0',
+          STUB_LOG: join(directory, 'calls.log'),
+          STUB_DIR: directory,
+          STUB_SOURCE_DIGEST: scenario.sourceDigest ?? BUILT,
+          ...(scenario.copyDigest === undefined ? {} : { STUB_COPY_DIGEST: scenario.copyDigest }),
+          STUB_CREATE_EXIT: String(scenario.createExit ?? 0),
+        },
+      });
+      const released = join(directory, 'notes.md');
+      return {
+        status: result.status,
+        stderr: result.stderr,
+        calls: callsIn(directory),
+        notes: existsSync(released) ? readFileSync(released, 'utf8') : '',
+        notesFile: join(runnerTemp, 'notes.md'),
+      };
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  };
+
+  const creates = (calls: readonly string[]) =>
+    calls.filter((call) => call.startsWith('docker buildx imagetools create'));
+  const releases = (calls: readonly string[]) =>
+    calls.filter((call) => call.startsWith('gh release create'));
+
+  it('copies each manifest list to X.Y.Z, X.Y and X, then cuts one release at this commit', () => {
+    const outcome = drive({});
+    expect(`${outcome.status}: ${outcome.stderr}`).toBe('0: ');
+
+    const copies = creates(outcome.calls);
+    expect(copies).toHaveLength(5);
+    expect(copies[3]).toBe(
+      `docker buildx imagetools create -t ghcr.io/gtfo-ai/platform:0.1.0 -t ghcr.io/gtfo-ai/platform:0.1 -t ghcr.io/gtfo-ai/platform:0 ghcr.io/gtfo-ai/platform@${BUILT}`,
     );
-    expect(polls.length).toBe(30);
-    expect(outcome.stderr).toContain('the release exists, and the dispatch was accepted');
-    expect(outcome.stderr).toContain('start one on that tag by hand');
-    expect(outcome.stderr).not.toContain('has no images');
+    // Every source is checked before the first copy, and every one of the three tags after it.
+    const firstCopy = outcome.calls.findIndex((call) =>
+      call.startsWith('docker buildx imagetools create'),
+    );
+    const sourceChecks = outcome.calls.filter((call) => /inspect \S+:sha-1b0c5f9 /.test(call));
+    expect(sourceChecks).toHaveLength(5);
+    expect(outcome.calls.slice(0, firstCopy).filter((call) => call.includes(':sha-'))).toHaveLength(
+      5,
+    );
+    for (const tag of ['0.1.0', '0.1', '0']) {
+      expect(
+        outcome.calls.filter((call) =>
+          call.includes(`inspect ghcr.io/gtfo-ai/platform-egress:${tag} `),
+        ),
+      ).toHaveLength(1);
+    }
+    // Created once, at the commit this run built, and last — never before a copy.
+    expect(releases(outcome.calls)).toEqual([
+      `gh release create v0.1.0 --target ${HEAD_SHA} --title v0.1.0 --notes-file ${outcome.notesFile}`,
+    ]);
+    expect(outcome.calls.at(-1)).toBe(releases(outcome.calls)[0]);
+    // The body is the rendered notes plus the five images and their digests.
+    expect(outcome.notes).toContain('### Before you upgrade');
+    expect(outcome.notes).toContain('### Images');
+    expect(
+      outcome.notes.match(/^- `ghcr\.io\/gtfo-ai\/[\w-]+:0\.1\.0` — `sha256:1{64}`$/gm),
+    ).toHaveLength(5);
   });
 
-  it('is red when the image build it watched is red (--exit-status)', () => {
-    const outcome = drive({
-      before: [mainBuild],
-      after: [{ id: 7001, branch: TAG, event: 'workflow_dispatch' }, mainBuild],
-      administratorToken: false,
-      watchExit: 1,
-    });
-
-    expect(watched(outcome)).toEqual(['7001']);
+  /**
+   * The reviewer's case: `sha-<7>` moved after this run attested it — a dispatch at the same commit
+   * on another ref runs in another concurrency group. Nothing may be copied at all, not even the
+   * images whose tag did not move.
+   */
+  it('copies nothing when sha-<7> no longer points at the digest this run built', () => {
+    const outcome = drive({ sourceDigest: `sha256:${'3'.repeat(64)}` });
     expect(outcome.status).toBe(1);
+    expect(outcome.stderr).toContain('the digest this run built and attested; nothing was copied');
+    expect(creates(outcome.calls)).toEqual([]);
+    expect(releases(outcome.calls)).toEqual([]);
+  });
+
+  it('copies nothing when the merge job left no digest for an image', () => {
+    const outcome = drive({ missingDigests: ['platform-launcher'] });
+    expect(outcome.status).toBe(1);
+    expect(outcome.stderr).toContain('no digest recorded for platform-launcher');
+    expect(creates(outcome.calls)).toEqual([]);
+  });
+
+  it('refuses to cut the release when a copied tag reads back as another digest', () => {
+    const outcome = drive({ copyDigest: `sha256:${'2'.repeat(64)}` });
+    expect(outcome.status).toBe(1);
+    expect(outcome.stderr).toContain('not a retag');
+    expect(outcome.stderr).toContain('have already moved');
+    expect(releases(outcome.calls)).toEqual([]);
+  });
+
+  it('refuses to cut the release when a copy fails', () => {
+    const outcome = drive({ createExit: 1 });
+    expect(outcome.status).toBe(1);
+    expect(creates(outcome.calls)).toHaveLength(1);
+    expect(releases(outcome.calls)).toEqual([]);
+  });
+
+  it('refuses a version whose tag already exists, before touching the registry', () => {
+    const outcome = drive({ existingTag: 'v0.1.0' });
+    expect(outcome.status).toBe(1);
+    expect(outcome.stderr).toContain('v0.1.0 already exists');
+    expect(outcome.calls).toEqual([]);
   });
 });
 
@@ -484,9 +529,9 @@ describe('the shell that finds and watches the image build', () => {
  * 71 — no test in this repository has ever started a workflow).
  *
  * It reads the **main branch** of the tag computation, not the file as a whole: `latest` also
- * appears on the tag branch and in the header comment, so `workflow.includes('latest')` would have
- * passed before the change as readily as after it. The `else` arm is the one a push to `main`
- * takes, and it is the one quoted.
+ * appears in the comments, so `workflow.includes('latest')` would have passed before the change as
+ * readily as after it. Since WP-71 removed the tag arm this is the computation's only conditional
+ * arm, and it is the one quoted.
  */
 describe("image.yml's tags on a push to main (TD-019 amendment)", () => {
   const workflow = read(IMAGE_WORKFLOW);
@@ -498,10 +543,11 @@ describe("image.yml's tags on a push to main (TD-019 amendment)", () => {
    * `else` is exactly the defect review found: this job is gated only on
    * `github.event_name != 'pull_request'` and the workflow declares `workflow_dispatch`, so "not a
    * tag" admits a manual dispatch on a feature branch. A test that reads the arm without its
-   * condition cannot tell the two apart.
+   * condition cannot tell the two apart. (It was an `elif` behind the tag arm until WP-71 removed
+   * that arm; either spelling is read.)
    */
   const mainBranchArm = (): { condition: string; tags: string } => {
-    const arm = /\n\s+elif \[ (.+?) \]; then\n\s+tags="([^"]+)"\n/.exec(workflow);
+    const arm = /\n\s+(?:el)?if \[ (.+?) \]; then\n\s+tags="([^"]+)"\n/.exec(workflow);
     expect(
       arm,
       'the manifest step has no guarded branch arm: a bare `else` publishes from any ref',
@@ -535,23 +581,20 @@ describe("image.yml's tags on a push to main (TD-019 amendment)", () => {
     const step = workflow.slice(workflow.indexOf('tags="sha-${short}"'));
     expect(step.slice(0, step.indexOf('\n          refs='))).not.toMatch(/\n\s+else\n/);
   });
-
-  it('keeps the tag branch as it was, because versions are WP-71 and not this change', () => {
-    const tagArm = /version="\$\{GITHUB_REF_NAME#v\}"\n\s+tags="([^"]+)"/.exec(workflow)?.[1] ?? '';
-    expect(tagArm).not.toBe('');
-    expect(tagArm).toContain('${version}');
-    expect(tagArm).toContain('${version%.*}');
-    expect(tagArm).toContain('${version%%.*}');
-    expect(tagArm).toContain('latest');
-  });
 });
 
 describe('every workflow this repository runs', () => {
   const workflows = tracked('.github/workflows/*.yml');
 
-  it('is a corpus, and every `uses:` in it is pinned to a commit SHA (TD-019)', () => {
-    expect(workflows).toContain(RELEASE_WORKFLOW);
-    expect(workflows.length).toBeGreaterThanOrEqual(4);
+  /**
+   * Two pinned shapes, both immutable: an action at a 40-hex commit, and — since WP-71's linters — a
+   * container image at a `sha256` digest (`docker://image@sha256:<64 hex>`). A tag in either place
+   * (`@v4`, `:1.7.12`) is mutable and fails here.
+   */
+  it('is a corpus, and every `uses:` in it is pinned to a commit SHA or an image digest (TD-019)', () => {
+    expect(workflows).toContain(IMAGE_WORKFLOW);
+    expect(workflows).toContain(CI_WORKFLOW);
+    expect(workflows.length).toBeGreaterThanOrEqual(3);
 
     const uses = workflows.flatMap((path) =>
       [...read(path).matchAll(/^\s*(?:-\s+)?uses: (\S+)(?:\s+#.*)?$/gm)].map((match) => ({
@@ -566,71 +609,83 @@ describe('every workflow this repository runs', () => {
       // A local composite action (`./.github/...`) is this repository's own code and carries no
       // supply-chain question; there are none today, and the shape is allowed for when there are.
       if (ref.startsWith('./')) continue;
+      if (ref.startsWith('docker://')) {
+        expect(`${path}: ${ref}`).toMatch(/^[^:]+: docker:\/\/[^@\s]+@sha256:[0-9a-f]{64}$/);
+        continue;
+      }
       expect(`${path}: ${ref}`).toMatch(/@[0-9a-f]{40}$/);
     }
   });
 });
 
-describe('the versioning shape (one product version, moved together)', () => {
-  const config = readJson<ReleasePleaseConfig>(CONFIG);
-  const manifest = readJson<Record<string, string>>(MANIFEST);
+/**
+ * **The three workflow linters** (WP-71, backlog 117, plan criteria 3–5): one step each in CI's
+ * `lint` job, each a digest-pinned image. What is held here is what the files can state — that the
+ * steps exist in that job, that they are pinned, and that hadolint's explicit file list (its image
+ * has no shell to expand a glob) is every Dockerfile git knows, in both directions. Whether they
+ * pass is the job's to say; their first-run counts are in PROGRESS.md under WP-71.
+ */
+describe("the workflow linters in ci.yml's lint job", () => {
+  const lint = jobOf(read(CI_WORKFLOW), 'lint');
+
+  it.each([
+    ['actionlint', 'rhysd/actionlint'],
+    ['zizmor', 'ghcr.io/zizmorcore/zizmor'],
+    ['hadolint', 'hadolint/hadolint'],
+  ])('runs %s as a digest-pinned step of the lint job', (name, image) => {
+    const step = new RegExp(
+      `\\n {6}- name: ${name}\\n {8}uses: docker:\\/\\/${image.replace(/[./]/g, (c) => `\\${c}`)}@sha256:[0-9a-f]{64} # \\S+\\n`,
+    );
+    expect(lint).toMatch(step);
+  });
+
+  it('lints every Dockerfile git knows about, and names no other', () => {
+    const args = /name: hadolint\n[\s\S]*?\n {10}args: (.+)\n/.exec(lint)?.[1] ?? '';
+    const named = args.split(/\s+/).filter((arg) => arg !== '');
+    const dockerfiles = tracked('docker/*.Dockerfile');
+    expect(dockerfiles.length).toBeGreaterThanOrEqual(5);
+    expect([...named].sort()).toEqual([...dockerfiles].sort());
+  });
+
+  /**
+   * The second decision backlog 117 asked to be stated rather than defaulted: which hadolint rules
+   * are waived for the whole corpus, each with its reason. A waiver without a reason is a rule
+   * switched off, so every `ignored` entry must be preceded by a comment.
+   */
+  it('waives hadolint rules only with a stated reason, and fails on every level otherwise', () => {
+    const config = read('.hadolint.yaml');
+    expect(config).toMatch(/^failure-threshold: style$/m);
+    const ignored = [...config.matchAll(/^ {2}- (DL\d{4}|SC\d{4})$/gm)];
+    expect(ignored.length).toBeGreaterThan(0);
+    for (const match of ignored) {
+      const before = config.slice(0, match.index).trimEnd().split('\n').at(-1) ?? '';
+      expect(before, `${match[1]} is waived without a reason`).toMatch(/^ {2}#/);
+    }
+  });
+});
+
+/**
+ * **One product version, and it lives in the tag** (WP-42's decision, WP-71's mechanism).
+ *
+ * Nothing in this repository is published to a registry — every manifest is `private: true` — so a
+ * per-package version would be a number with no consumer and eleven chances to disagree. Since
+ * WP-71 the version is computed from the history on each push and exists as a **tag**, never as a
+ * commit: moving eleven `version` fields would need a bot commit on `main`, which Q96 (3) rules
+ * out. So the eleven fields stay at `0.0.0` together — the value that says "the tag is the
+ * version", and the image reports the computed one at `GET /api/version` from its build argument.
+ */
+describe('the versioning shape (one product version, carried by the tag)', () => {
   const manifests = tracked('*package.json');
 
-  it('releases one component, at the repository root, tagged `vX.Y.Z`', () => {
-    expect(Object.keys(config.packages)).toEqual(['.']);
-    expect(Object.keys(manifest)).toEqual(['.']);
-    // `include-component-in-tag: false` is what makes the tag `v0.1.0` rather than
-    // `platform-v0.1.0`, which is the shape `image.yml`'s `tags: ['v*']` reads.
-    expect(config['include-component-in-tag']).toBe(false);
-    expect(config['initial-version']).toMatch(/^\d+\.\d+\.\d+$/);
-  });
-
-  /**
-   * Nothing in this repository is published to a registry — every manifest is `private: true` —
-   * so a per-package version would be a number with no consumer and eleven chances to disagree.
-   * The decision is one product version; this is what makes "together" mechanical rather than
-   * remembered: the set of files that must move is read from **git**, not from a list here.
-   */
-  it('moves every workspace manifest with the root, and knows of no others', () => {
-    const extras = (config.packages['.']?.['extra-files'] ?? []).map((file) => file.path);
+  it('knows of exactly eleven manifests, all at 0.0.0', () => {
     expect(manifests.length).toBe(11);
-    expect([...extras].sort()).toEqual(manifests.filter((path) => path !== 'package.json').sort());
-  });
-
-  it('carries one version string across all eleven manifests and the release manifest', () => {
     const versions = manifests.map((path) => readJson<{ version: string }>(path).version);
-    expect(new Set(versions).size).toBe(1);
-    expect(versions[0]).toBe(manifest['.']);
-  });
-
-  /**
-   * `0.0.0` is not a version this build claims; it is how release-please is told there has been no
-   * release. Its manifest reader skips an entry whose value is exactly `0.0.0`
-   * (`src/manifest.ts`, "but a previous version was specified in the manifest" — the branch is
-   * guarded by `!== '0.0.0'`), so the first release PR takes its version from `initial-version`
-   * instead. Both halves are asserted because either one alone would let the first release be
-   * `1.0.0`, which is release-please's default when no previous release is found.
-   */
-  it('is bootstrapped so the first release is the configured initial version', () => {
-    expect(manifest['.']).toBe('0.0.0');
-    expect(config['initial-version']).toBe('0.1.0');
-  });
-
-  /**
-   * `ci.yml`'s `dco` job fails a commit whose `Signed-off-by` e-mail is not its author's, and the
-   * release PR's commit is made by the action rather than by a person. The identity below is
-   * therefore load-bearing; what can be asserted here is its *shape* — the same `Name <email>`
-   * `scripts/commits.mjs` § parseIdentity requires — and not that it matches the author, which
-   * only a run can say.
-   */
-  it('signs off the release commit in the form the DCO gate accepts', () => {
-    expect(config.signoff).toMatch(/^.+\s<[^<>\s]+@[^<>\s]+>$/);
+    expect(new Set(versions)).toEqual(new Set(['0.0.0']));
   });
 });
 
 describe('CHANGELOG.md', () => {
   const changelog = read('CHANGELOG.md');
-  const config = readJson<ReleasePleaseConfig>(CONFIG);
 
   it('is generated, and says which command generates it', () => {
     expect(changelog).toContain('Generated by `pnpm changelog`');
@@ -681,15 +736,15 @@ describe('CHANGELOG.md', () => {
   });
 
   /**
-   * release-please inserts a released section **before** the first heading matching its
-   * `DEFAULT_VERSION_HEADER_REGEX` (`src/updaters/changelog.ts`, v17.6.0) and otherwise demotes
-   * the whole file below its own. The preview heading below is what makes the first case the one
-   * that happens — a file without it would come back from the release PR rearranged.
+   * Plan criterion 6 (backlog 118's first symptom), in this tracked-file test rather than as a new
+   * `verify` target: **pure parsing, no history** — no `(unreleased)` heading below a released one,
+   * and no two headings for one version. The parser is `changelog.mjs`'s and is tested from both
+   * sides in `changelog.test.ts`; here it is held over the file that ships.
    */
-  it('carries a heading release-please will insert its released section above', () => {
-    const versionHeader = /\n###? v?[0-9[]/s;
-    expect(versionHeader.test(changelog)).toBe(true);
-    expect(changelog).toContain(`## ${config['initial-version']} (unreleased)`);
+  it('has no unreleased heading below a released one, and no version headed twice', () => {
+    // Not vacuous: the file has at least one version heading for the parser to read.
+    expect(changelog).toMatch(/^## \d+\.\d+\.\d+ \(/m);
+    expect(changelogHeadingProblems(changelog)).toEqual([]);
   });
 });
 
@@ -746,5 +801,144 @@ describe('the required checks named in CONTRIBUTING.md', () => {
     const named = [...section.matchAll(/^- `([^`]+)`/gm)].map((match) => match[1] ?? '');
 
     expect([...named].sort()).toEqual([...jobs].sort());
+  });
+});
+
+/**
+ * **What an administrator applies in the repository's settings** — the class of thing a checkout
+ * cannot read (WP-71, backlog 116). The branch ruleset was the first member; CodeQL's default setup
+ * and the versioning switch are the other two, and `CONTRIBUTING.md` § Repository settings is where
+ * all three are written down. What is held here is that each document says what the tree does.
+ */
+describe('the repository settings CONTRIBUTING.md asks an administrator for', () => {
+  const section = (): string => {
+    const after = read('CONTRIBUTING.md').split('\n## Repository settings\n')[1] ?? '';
+    const text = after.split('\n## ')[0] ?? '';
+    expect(text, 'CONTRIBUTING.md has no “## Repository settings” section').not.toBe('');
+    return text;
+  };
+
+  /**
+   * TD-017 says "CodeQL default setup", which is a **setting** — it writes no workflow and cannot be
+   * applied from a checkout. So there must be no `codeql.yml` pretending otherwise (technical/11
+   * listed one for two sessions that never existed), and the setting must be written down where the
+   * ruleset is.
+   */
+  it('records CodeQL as a setting, and no workflow claims to be it', () => {
+    const workflows = tracked('.github/workflows/*');
+    expect(workflows.length).toBeGreaterThan(0);
+    expect(workflows.filter((path) => /codeql/i.test(path))).toEqual([]);
+    for (const path of workflows) expect(read(path), path).not.toContain('github/codeql-action');
+    expect(section()).toContain('**CodeQL default setup**');
+  });
+
+  /**
+   * The switch the release job tests and the switch the document tells an administrator to set are
+   * **one** name and value, read out of both files — a document naming a variable the workflow
+   * does not read would be an instruction that turns nothing on.
+   */
+  it('names the versioning switch exactly as the release job tests it', () => {
+    const condition = /vars\.(\w+) == '(\w+)'/.exec(jobOf(read(IMAGE_WORKFLOW), 'release'));
+    expect(condition?.slice(1)).toEqual([SWITCH_VARIABLE, SWITCH_VALUE]);
+    expect(section()).toContain(`\`${SWITCH_VARIABLE}\` = \`${SWITCH_VALUE}\``);
+  });
+});
+
+/**
+ * technical/10's mutation row named `packages/core/src/domain/**`, a path that has never existed
+ * (backlog 116; rule 83). A scope is only a scope if it is a directory, so the row's path is read
+ * and looked for.
+ */
+describe("technical/10's mutation-testing scope", () => {
+  it('names a directory that exists', () => {
+    const row = /^\| \*\*Mutation\*\* \| `([^`]+)`/m.exec(
+      read('docs/technical/10-testing-strategy.md'),
+    );
+    expect(row, 'technical/10 has no Mutation row').not.toBeNull();
+    const directory = (row?.[1] ?? '').replace(/\/\*\*$/, '');
+    expect(directory).not.toBe('');
+    expect(existsSync(join(repositoryRoot, directory)), directory).toBe(true);
+  });
+});
+
+/**
+ * **No untrusted context is expanded inside a `run:` script** (WP-71 review round 1) — the offline
+ * half of zizmor's `template-injection` audit, so the class is refused where `verify` runs and not
+ * only in CI's `lint` job.
+ *
+ * Actions substitutes `${{ … }}` into the script text *before* the shell sees it, so a pull
+ * request's title or a commit message containing `"; curl … | sh #` becomes code. The remedy is
+ * the one this repository already uses: pass the value through `env:` and read `"$NAME"`. The list
+ * is the contexts an outsider can write: anything under `github.event.` (titles, bodies, commit
+ * messages, branch names, labels, review text), `github.head_ref`, and `inputs.` (a dispatch's
+ * free text). Trusted contexts (`github.run_id`, `matrix.*` this file defines, `steps.*.outputs`)
+ * are not listed — zizmor's `auditor` persona reports ten of those and gates none.
+ *
+ * Scanned line by line, as `verify.test.ts` scans `run:` positions, and **comment lines inside a
+ * block are included**: an expression in a shell comment is substituted too.
+ */
+const UNTRUSTED_CONTEXT =
+  /\$\{\{[^}]*\b(github\.event\.[\w.*[\]'"-]+|github\.head_ref|inputs\.[\w-]+)/g;
+
+const runBlockLines = (workflow: string): { line: number; text: string }[] => {
+  const found: { line: number; text: string }[] = [];
+  let blockIndent: number | null = null;
+  for (const [index, line] of workflow.split('\n').entries()) {
+    const indent = line.length - line.trimStart().length;
+    if (blockIndent !== null) {
+      if (line.trim() === '' || indent > blockIndent) {
+        found.push({ line: index + 1, text: line });
+        continue;
+      }
+      blockIndent = null;
+    }
+    const run = /^\s*(?:-\s+)?run:\s*(.*)$/.exec(line);
+    if (run === null) continue;
+    const rest = (run[1] ?? '').trim();
+    if (rest.startsWith('|') || rest.startsWith('>')) blockIndent = indent;
+    else found.push({ line: index + 1, text: rest });
+  }
+  return found;
+};
+
+const untrustedExpansions = (workflow: string): string[] =>
+  runBlockLines(workflow).flatMap(({ line, text }) =>
+    [...text.matchAll(UNTRUSTED_CONTEXT)].map((match) => `line ${line}: ${match[1]}`),
+  );
+
+describe('untrusted contexts in run: scripts', () => {
+  it('finds a planted one in a script and ignores the same value passed through env:', () => {
+    const planted = [
+      'jobs:',
+      '  lint:',
+      '    steps:',
+      '      - env:',
+      '          TITLE: ${{ github.event.pull_request.title }}',
+      '        run: echo "$TITLE"',
+      '      - run: echo "${{ github.event.head_commit.message }}"',
+      '      - run: |',
+      '          set -eu',
+      '          # a comment is substituted too: ${{ github.head_ref }}',
+      '          echo "${{ inputs.reason }} ${{ github.run_id }}"',
+      '      - name: after the block',
+      '        run: echo "${{ matrix.arch }}"',
+      '',
+    ].join('\n');
+    expect(untrustedExpansions(planted)).toEqual([
+      'line 7: github.event.head_commit.message',
+      'line 10: github.head_ref',
+      'line 11: inputs.reason',
+    ]);
+  });
+
+  it('are expanded in no workflow this repository runs', () => {
+    const workflows = tracked('.github/workflows/*.yml');
+    expect(workflows.length).toBeGreaterThanOrEqual(3);
+    // Not vacuous: the scan reads real script lines out of every workflow.
+    for (const path of workflows) expect(runBlockLines(read(path)).length, path).toBeGreaterThan(0);
+    const findings = workflows.flatMap((path) =>
+      untrustedExpansions(read(path)).map((finding) => `${path} ${finding}`),
+    );
+    expect(findings, 'pass these through `env:` and read "$NAME" in the script').toEqual([]);
   });
 });

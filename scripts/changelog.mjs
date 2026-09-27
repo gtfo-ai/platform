@@ -1,29 +1,40 @@
 #!/usr/bin/env node
 /**
- * The changelog and the release's upgrade note, both derived from git and the tree (TD-019).
+ * The changelog and a release's notes, both derived from git and the tree (TD-019, WP-71).
  *
- *   pnpm changelog                  regenerate CHANGELOG.md for the unreleased range
- *   node scripts/changelog.mjs --stdout        print it instead of writing it
- *   node scripts/changelog.mjs --upgrade-note  print only the "Before you upgrade" block
+ *   pnpm changelog                               regenerate CHANGELOG.md, the preview of the next version
+ *   node scripts/changelog.mjs --stdout          print it instead of writing it
+ *   node scripts/changelog.mjs --release-notes   print the body of a GitHub Release
+ *   node scripts/changelog.mjs --upgrade-note    print only the "Before you upgrade" block
+ *   … --version X.Y.Z                            the version to render (default: `FIRST_VERSION`)
  *
- * ## What this is for, and what it is not
+ * ## What this is for
  *
- * `release-please` (TD-019) writes the changelog and the release notes when a human merges the
- * release PR. That run happens on a cloud runner, against the GitHub API, with a token this
- * checkout does not have — so **nothing here can measure it**. What this script is, is the same
- * question asked offline: *which commits would the first release cover, and what would the notes
- * say about upgrading?* It reads release-please 17.6.0's own rules rather than inventing its own:
+ * Every push to `main` is the release (TD-019's amendment, Q96), and once an administrator turns
+ * versioning on, `image.yml`'s `release` job cuts a `vX.Y.Z` tag and a GitHub Release for every
+ * push that carries a releasable commit. **The release body is where a version's notes live**:
+ * that job runs `--release-notes --version X.Y.Z` and nothing commits the result, so there is no
+ * bot commit on `main`. `CHANGELOG.md` is the same rendering asked offline — *what would the next
+ * version say?* — and it is a preview a human regenerates, never a file a workflow writes.
  *
- *  - the section table below is `DEFAULT_CHANGELOG_SECTIONS` from
- *    https://github.com/googleapis/release-please/blob/v17.6.0/src/util/filter-commits.ts —
- *    `feat`, `fix`, `perf` and `revert` are visible, the rest are hidden, and a breaking change is
- *    shown even when its type is hidden;
- *  - the version is read from `initial-version` in `release-please-config.json`, so there is one
- *    source for it rather than two (standing rule 7).
+ * ## The version it renders, and the refusal (plan criterion 7, backlog 118)
  *
- * The *rendering* is release-please's when it runs; a byte-for-byte match with what it will emit is
- * not claimed here and is not checkable from this checkout (standing rule 86: this docblock states
- * what was read, not what was observed to happen on a runner).
+ * Every mode that renders a version **refuses** when a release tag exists and the version is not
+ * ahead of it. Before WP-71 this script took its version from release-please's `initial-version`
+ * and rendered `previousTag..HEAD` under it, so the first `pnpm changelog` typed after the first
+ * release would have rewritten the released commits' notes under `## 0.1.0 (unreleased)` — the
+ * wrong range under a released number. Refusing is the `pnpm eval` shape: a run that cannot be
+ * right says so and exits 1 rather than writing something that looks right. The refusal names the
+ * version `node scripts/version.mjs` would cut, which is what a human previewing the next release
+ * wants to pass.
+ *
+ * The section table is release-please 17.6.0's `DEFAULT_CHANGELOG_SECTIONS`
+ * (https://github.com/googleapis/release-please/blob/v17.6.0/src/util/filter-commits.ts) — `feat`,
+ * `fix`, `perf` and `revert` are visible, the rest are hidden, and a breaking change is shown even
+ * when its type is hidden. release-please itself is retired (WP-71 deleted its workflow and
+ * configuration); its table is kept because it is a sensible, documented default and because
+ * `version.mjs` reads the same table to decide which commits cut a version, so what the notes show
+ * and what moves the number cannot disagree.
  *
  * ## The two derivations that are the point
  *
@@ -39,10 +50,18 @@
  * rather than a sentence in a template.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve as resolvePath } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import {
+  compareVersions,
+  FIRST_VERSION,
+  latestReleaseTag,
+  parseVersion,
+  releaseTags,
+  tagVersion,
+} from './semver.mjs';
 
 const repositoryRoot = resolvePath(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -181,19 +200,14 @@ const migrationsAt = (ref, root = repositoryRoot) => {
   }
 };
 
-/** The newest `vX.Y.Z` tag that is an ancestor of HEAD, or `null` before the first release. */
-export const previousReleaseTag = (root = repositoryRoot) => {
-  try {
-    const out = execFileSync('git', ['describe', '--tags', '--abbrev=0', '--match', 'v*'], {
-      cwd: root,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    return out === '' ? null : out;
-  } catch {
-    return null;
-  }
-};
+/**
+ * The highest strict `vX.Y.Z` tag `HEAD` contains, or `null` before the first release.
+ *
+ * It was `git describe --match 'v*'` until WP-71: the *nearest* tag by topology, accepting any tag
+ * starting with `v`. `semver.mjs` has why that is the wrong question for a version, and this is now
+ * the same answer `version.mjs` uses.
+ */
+export const previousReleaseTag = (root = repositoryRoot) => latestReleaseTag(releaseTags(root));
 
 /**
  * Does upgrading to this build apply a migration?
@@ -333,48 +347,31 @@ export const MVP_EXIT_CRITERIA = [
 ];
 
 /** The section that keeps the release from reading as a claim about the product's MVP. */
-export const exitCriteriaNote = (criteria = MVP_EXIT_CRITERIA) => {
-  const lines = [
-    '### What this release does not claim',
-    '',
-    'This is the first release of the **mechanism** — the images, the migrations, the changelog and',
-    'the tags. It is not a claim that the MVP is finished. product/14’s exit criteria, each with',
-    'what this repository can say about it:',
-    '',
-  ];
+export const exitCriteriaNote = (criteria = MVP_EXIT_CRITERIA, { first = true } = {}) => {
+  // "The first release of the mechanism" is true of exactly one version; every later one gets the
+  // sentence that stays true (standing rule 83: a note rendered for years must not say "first").
+  const opening = first
+    ? [
+        'This is the first release of the **mechanism** — the images, the migrations, the changelog and',
+        'the tags. It is not a claim that the MVP is finished. product/14’s exit criteria, each with',
+        'what this repository can say about it:',
+      ]
+    : [
+        'A version is cut by every push to `main` that carries a releasable commit, so a version',
+        'number is not a claim that the MVP is finished. product/14’s exit criteria, each with what',
+        'this repository can say about it:',
+      ];
+  const lines = ['### What this release does not claim', '', ...opening, ''];
   for (const criterion of criteria) {
     lines.push(`- *“${criterion.quote}”* — **${criterion.status}**: ${criterion.note}`);
   }
   return `${lines.join('\n')}\n`;
 };
 
-/** The whole pre-release CHANGELOG.md. */
-export const renderChangelog = ({ version, date, commits, unparsed, url, note, generatedAt }) => {
+/** The note, then the breaking changes, then the visible sections — the body of one version. */
+const renderSections = ({ commits, url, note }) => {
   const { breaking, sections } = groupBySection(commits);
-  const shown = [...sections.values()].reduce((sum, list) => sum + list.length, 0);
-  const lines = [
-    '<!--',
-    '  Generated by `pnpm changelog` from the conventional commits `pnpm run -s verify:commits`',
-    '  enforces. Do not edit by hand.',
-    '',
-    `  Generated at ${generatedAt} on ${date}: ${commits.length + unparsed} commits in the range,`,
-    `  ${shown} of them in the sections release-please 17.6.0 shows by default` +
-      `${unparsed > 0 ? `, ${unparsed} not conventional commits` : ''}.`,
-    '',
-    '  The section below is a **preview**: release-please writes the real one when a human merges',
-    '  the release PR (TD-019). Its updater inserts the released section above the first heading',
-    '  matching /\\n###? v?[0-9[]/ — this one — so the release PR will show its own `0.1.0` section',
-    '  directly above, and that PR is where this preview should be deleted.',
-    '-->',
-    '',
-    '# Changelog',
-    '',
-    `## ${version} (unreleased)`,
-    '',
-    note.trimEnd(),
-    '',
-  ];
-
+  const lines = [note.trimEnd(), ''];
   if (breaking.length > 0) {
     lines.push(`### ${BREAKING_SECTION}`, '');
     for (const commit of breaking) lines.push(entry(commit, url));
@@ -385,22 +382,147 @@ export const renderChangelog = ({ version, date, commits, unparsed, url, note, g
     for (const commit of list) lines.push(entry(commit, url));
     lines.push('');
   }
+  return lines;
+};
+
+/** The whole CHANGELOG.md: the preview of the next version, rendered from a checkout. */
+export const renderChangelog = ({ version, date, commits, unparsed, url, note, generatedAt }) => {
+  const { sections } = groupBySection(commits);
+  const shown = [...sections.values()].reduce((sum, list) => sum + list.length, 0);
+  const lines = [
+    '<!--',
+    '  Generated by `pnpm changelog` from the conventional commits `pnpm run -s verify:commits`',
+    '  enforces. Do not edit by hand.',
+    '',
+    `  Generated at ${generatedAt} on ${date}: ${commits.length + unparsed} commits in the range,`,
+    `  ${shown} of them in the sections release-please 17.6.0 shows by default` +
+      `${unparsed > 0 ? `, ${unparsed} not conventional commits` : ''}.`,
+    '',
+    '  The section below is a **preview** of the next version. No workflow writes this file: every',
+    '  release carries its own notes in its GitHub Release, rendered there by',
+    '  `pnpm changelog --release-notes` (TD-019’s amendment, WP-71), and `pnpm changelog` refuses to',
+    '  rewrite this file under a version that is not ahead of the newest release tag.',
+    '-->',
+    '',
+    '# Changelog',
+    '',
+    `## ${version} (unreleased)`,
+    '',
+    ...renderSections({ commits, url, note }),
+  ];
   return `${lines.join('\n').trimEnd()}\n`;
 };
 
-/** `initial-version` from the release-please config — the one place the first version is written. */
-export const configuredVersion = (root = repositoryRoot) => {
-  const config = JSON.parse(readFileSync(join(root, 'release-please-config.json'), 'utf8'));
-  const version = config['initial-version'];
-  if (typeof version !== 'string' || !/^\d+\.\d+\.\d+$/.test(version)) {
-    throw new Error('release-please-config.json has no usable "initial-version"');
+/**
+ * The body of one GitHub Release: no file header and no version heading — the release is titled
+ * with its tag, so a heading inside it would be the version stated twice.
+ */
+export const renderReleaseNotes = ({ commits, url, note }) =>
+  `${renderSections({ commits, url, note }).join('\n').trimEnd()}\n`;
+
+/**
+ * Why `version` may not be rendered as the next release after `previousTag`, or `null` when it may.
+ *
+ * Plan criterion 7 / backlog 118's second symptom: once a release exists, rendering a version at or
+ * below it puts released commits under a number that is already taken.
+ */
+export const versionRefusal = ({ version, previousTag }) => {
+  if (parseVersion(version) === null) return `not a MAJOR.MINOR.PATCH version: ${version}`;
+  if (previousTag === null) return null;
+  const previous = tagVersion(previousTag);
+  if (previous === null) return `not a release tag: ${previousTag}`;
+  if (compareVersions(version, previous) > 0) return null;
+  return (
+    `${previousTag} is released and the version to render, ${version}, is not ahead of it — ` +
+    'rendering would put the commits since that release under a number that is already taken. ' +
+    'Each release carries its own notes in its GitHub Release; to preview the next one, pass the ' +
+    'version it would cut: node scripts/changelog.mjs --stdout --version "$(node scripts/version.mjs)"'
+  );
+};
+
+/**
+ * A version heading of a changelog: ours (`## 0.1.0 (unreleased)`, `## 0.1.0 (2026-09-27)`) and
+ * the linked form release-please and most generators write (`## [0.1.0](…) (2026-09-27)`).
+ */
+const VERSION_HEADING = /^##\s+\[?v?(\d+\.\d+\.\d+)\]?(?:\([^)]*\))?\s*\(([^)]*)\)\s*$/;
+
+/**
+ * What is structurally wrong with a changelog's version headings (plan criterion 6, backlog 118's
+ * first symptom) — pure parsing, no history, so it holds on a shallow clone and needs no tag.
+ *
+ * Two shapes: an `(unreleased)` heading **below** a released one (the preview that survived a
+ * release, which is what release-please's insert-above rule produced), and **two headings for one
+ * version** (the same release rendered twice). Returns one sentence per problem; `[]` is clean.
+ */
+export const changelogHeadingProblems = (text) => {
+  const problems = [];
+  const seen = new Map();
+  let released = null;
+  const lines = text.split('\n');
+  for (const [index, line] of lines.entries()) {
+    const match = VERSION_HEADING.exec(line);
+    if (match === null) continue;
+    const [, version = '', qualifier = ''] = match;
+    const at = index + 1;
+    if (seen.has(version)) {
+      problems.push(
+        `line ${at}: a second heading for ${version} (the first is line ${seen.get(version)})`,
+      );
+    } else {
+      seen.set(version, at);
+    }
+    if (qualifier.trim().toLowerCase() === 'unreleased') {
+      if (released !== null) {
+        problems.push(
+          `line ${at}: ${version} is marked unreleased below ${released.version}, a released version (line ${released.at})`,
+        );
+      }
+    } else if (released === null) {
+      released = { version, at };
+    }
   }
-  return version;
+  return problems;
+};
+
+/** The value after `--version`, or `FIRST_VERSION` when the flag is absent. */
+export const requestedVersion = (argv) => {
+  const index = argv.indexOf('--version');
+  if (index === -1) return FIRST_VERSION;
+  const value = argv[index + 1];
+  if (value === undefined || value.startsWith('--') || value === '') {
+    throw new Error('--version needs a value: MAJOR.MINOR.PATCH');
+  }
+  return value;
 };
 
 const fail = (message) => {
   process.stderr.write(`${message}\n`);
   process.exit(1);
+};
+
+/** `CHANGELOG.md`, written (or printed with `--stdout`). */
+const writePreview = ({ version, commits, unparsed, note }) => {
+  const rendered = renderChangelog({
+    version,
+    date: new Date().toISOString().slice(0, 10),
+    commits,
+    unparsed,
+    url: repositoryUrl(),
+    note,
+    generatedAt: execFileSync('git', ['rev-parse', '--short', 'HEAD'], {
+      cwd: repositoryRoot,
+      encoding: 'utf8',
+    }).trim(),
+  });
+  if (process.argv.includes('--stdout')) {
+    process.stdout.write(rendered);
+  } else {
+    const output = join(repositoryRoot, 'CHANGELOG.md');
+    writeFileSync(output, rendered, 'utf8');
+    process.stdout.write(
+      `wrote ${output} (${commits.length} commits, ${unparsed} not conventional)\n`,
+    );
+  }
 };
 
 const isProgram =
@@ -414,34 +536,25 @@ if (isProgram) {
       previous: previousTag === null ? [] : migrationsAt(previousTag),
       previousTag,
     });
-    const note = `${upgradeNote({ verdict, measurement: modelMeasurement() })}\n${exitCriteriaNote()}`;
+    const note =
+      `${upgradeNote({ verdict, measurement: modelMeasurement() })}\n` +
+      exitCriteriaNote(MVP_EXIT_CRITERIA, { first: previousTag === null });
 
     if (process.argv.includes('--upgrade-note')) {
       process.stdout.write(`\n${note}`);
     } else {
+      const version = requestedVersion(process.argv);
+      const refusal = versionRefusal({ version, previousTag });
+      if (refusal !== null) fail(`pnpm changelog: refusing. ${refusal}`);
       const range = previousTag === null ? null : `${previousTag}..HEAD`;
       const { commits, unparsed } = readCommits(range);
       if (commits.length === 0) fail('no commits in the range — nothing to write');
-      const rendered = renderChangelog({
-        version: configuredVersion(),
-        date: new Date().toISOString().slice(0, 10),
-        commits,
-        unparsed,
-        url: repositoryUrl(),
-        note,
-        generatedAt: execFileSync('git', ['rev-parse', '--short', 'HEAD'], {
-          cwd: repositoryRoot,
-          encoding: 'utf8',
-        }).trim(),
-      });
-      if (process.argv.includes('--stdout')) {
-        process.stdout.write(rendered);
+      if (process.argv.includes('--release-notes')) {
+        // No `process.exit` after this write: on a pipe (the workflow redirects it) a write can be
+        // asynchronous, and exiting would truncate the release body.
+        process.stdout.write(renderReleaseNotes({ commits, url: repositoryUrl(), note }));
       } else {
-        const output = join(repositoryRoot, 'CHANGELOG.md');
-        writeFileSync(output, rendered, 'utf8');
-        process.stdout.write(
-          `wrote ${output} (${commits.length} commits, ${unparsed} not conventional)\n`,
-        );
+        writePreview({ version, commits, unparsed, note });
       }
     }
   } catch (error) {

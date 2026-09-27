@@ -3,7 +3,7 @@ name: image
 # technical/11 § Workflows. Builds every image this repository ships, on **native** runners for both
 # architectures, merges them into one manifest list per image, and attests what it published.
 #
-# Three things are deliberate.
+# Four things are deliberate.
 #
 # **The build itself is `scripts/build-images.mjs`, not YAML.** That script knows which Dockerfile
 # makes which image, what each is built `FROM`, and what each may weigh. A second copy of that in a
@@ -18,17 +18,35 @@ name: image
 # against Sigstore's public instance, so this repository — which has no secrets at all — can still
 # publish a verifiable provenance attestation. `gh attestation verify oci://<image> --repo <repo>`
 # is what an operator runs.
+#
+# **A version is a retag, never a build** (WP-71; TD-019's amendment of 2026-09-16, Q96). Every push
+# to `main` is the release; once an administrator turns versioning on, the `version` job computes
+# `X.Y.Z` from the conventional commits since the last `vX.Y.Z` tag (`scripts/version.mjs`), the
+# build stamps it into the image, and the `release` job — after the manifest lists exist — points
+# `X.Y.Z`, `X.Y` and `X` at the manifest list **this run** built and cuts the tag and the GitHub
+# Release. There is no `push: tags` trigger any more and no tag arm in the tag computation: a
+# version tag reaches the registry by exactly one route, so no version can be built twice, and
+# `latest` has exactly one definition in this file — the newest push to `main`.
+#
+# **The switch is `vars.RELEASE_VERSIONING == 'enabled'`**, a repository variable an administrator
+# sets (`CONTRIBUTING.md` § Repository settings). It is unset, so this workflow creates **no tag and
+# no release** — Q96's "one human switch before the first cut". The gate is in the `release` job's
+# `if:` and in the step that computes the version, and `scripts/release.test.ts` fails when either
+# stops naming it.
 
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# Pushes to `main` queue rather than cancel, so two runs never compute a version at once: the
+# second one's `version` job starts after the first run's tag exists. GitHub keeps one *pending* run
+# per group, so a third push can replace a queued second — whose commits are then in the third's
+# range, because a version is computed from everything since the last tag, not from one push.
 concurrency:
   group: image-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -37,8 +55,52 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
+  # **The version this push releases, or none** — computed before the build so the image reports it
+  # at `GET /api/version`, and passed to the `release` job so both halves use one answer.
+  #
+  # It runs on every event, and computes only on a push to `main` with the switch on; everywhere else
+  # its output is empty and the build is stamped `0.0.0-edge+<sha>` as before. Running it always,
+  # rather than skipping the job, is deliberate: a job whose `needs` contains a skipped job is itself
+  # skipped unless its `if:` uses a status function, and that would have to be repeated on every job
+  # below — a rule GitHub documents and this repository cannot run offline.
+  version:
+    name: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.next.outputs.version }}
+    steps:
+      # Full history *and tags*: `version.mjs` refuses a shallow clone, which would otherwise
+      # compute the first version again on every push after it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # No dependency is installed — the script is plain Node — so there is no package cache to
+      # restore, and restoring one into a job that feeds a release is what zizmor's cache-poisoning
+      # audit exists for.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - id: next
+        name: compute the version (only on a push to main, only when versioning is enabled)
+        env:
+          RELEASE_VERSIONING: ${{ vars.RELEASE_VERSIONING }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "push" ] && [ "${GITHUB_REF}" = "refs/heads/main" ] \
+            && [ "${RELEASE_VERSIONING:-}" = "enabled" ]; then
+            node scripts/version.mjs --github-output
+          else
+            echo "version=" >> "$GITHUB_OUTPUT"
+            echo "no version for this run: versioning is '${RELEASE_VERSIONING:-unset}' (the switch is RELEASE_VERSIONING=enabled), event ${GITHUB_EVENT_NAME}, ref ${GITHUB_REF}"
+          fi
+
   build:
     name: build (${{ matrix.arch }})
+    needs: version
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -53,18 +115,18 @@ jobs:
             arch: arm64
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      # Build metadata the image reports at `GET /api/version` (`runtime.ts` § buildInfo).
-      # Derived from the ref rather than from `git describe`, which needs a full clone to answer.
+      # Build metadata the image reports at `GET /api/version` (`runtime.ts` § buildInfo): the
+      # version the `version` job computed when this push releases one, `0.0.0-edge+<sha>` otherwise.
       - id: meta
+        env:
+          RELEASE_VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
           short="${GITHUB_SHA::7}"
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            version="${GITHUB_REF_NAME#v}"
-          else
-            version="0.0.0-edge+${short}"
-          fi
+          version="${RELEASE_VERSION:-0.0.0-edge+${short}}"
           {
             echo "version=${version}"
             echo "commit=${GITHUB_SHA}"
@@ -146,11 +208,14 @@ jobs:
       # between jobs for every one of five images.
       - name: push the per-architecture images
         if: github.event_name != 'pull_request'
+        env:
+          SHORT: ${{ steps.meta.outputs.short }}
+          ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
           owner=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
           for image in platform-base platform-runtime platform-egress platform platform-launcher; do
-            target="${REGISTRY}/${owner}/${image}:sha-${{ steps.meta.outputs.short }}-${{ matrix.arch }}"
+            target="${REGISTRY}/${owner}/${image}:sha-${SHORT}-${ARCH}"
             docker tag "${image}:ci" "${target}"
             docker push "${target}"
           done
@@ -177,26 +242,28 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # `X.Y.Z`, `X.Y`, `X`, `latest` on a tag; `sha-<7>`, `edge` **and `latest`** on `main`;
-      # `sha-<7>` **and nothing else** on any other ref.
+      # `sha-<7>`, `edge` **and `latest`** on `main`; `sha-<7>` **and nothing else** on any other
+      # ref. The version tags are not here: the `release` job applies them to the manifest list this
+      # step creates, after it exists (see the header).
       #
       # **`latest` is the newest push to `main`** — TD-019's amendment of 2026-09-16, the product
       # owner's continuous-deployment decision. It supersedes that record's original "never
       # `latest` in docs" clause and Q89's recommendation to stop publishing it: every push to
       # `main` is reviewed, verified by six targets and published here on two architectures, which
-      # is what makes it the release. The tag branch is untouched and keeps `X.Y.Z`/`X.Y`/`X` for
-      # whenever WP-71 reintroduces versions; nothing in this file computes a version.
+      # is what makes it the release. **This is the only definition of `latest` in this file**:
+      # until WP-71 a tag arm published a second one ("the newest version tag"), and WP-71 removed
+      # the arm with the `push: tags` trigger that reached it — so `latest` and the newest version
+      # tag point at the same manifest list whenever the newest push to `main` cut a version, and
+      # `latest` runs ahead of the version tags whenever it did not (a `docs:` push).
       #
       # **The branch arm is guarded on the ref, and the guard is the whole of the claim.** This job
-      # is gated only on `github.event_name != 'pull_request'` (line 161) and this workflow declares
-      # `workflow_dispatch` (line 27), so "not a tag" is **not** the same as "a push to `main`": a
-      # manual dispatch on a feature branch takes the `else` arm, and without this guard it would
-      # publish `latest` and `edge` from code nobody reviewed. `GITHUB_REF` is compared rather than
-      # `GITHUB_REF_NAME`, because a *tag* named `main` would match the name and this arm is only
-      # ever reached with `refs/heads/…`; belt and braces, since `GITHUB_REF_TYPE` already sent a
-      # tag down the other branch. Any other ref gets `sha-<7>` alone — the artefact is still built,
-      # published and attested, and is addressable by exactly the name that identifies the commit
-      # it came from.
+      # is gated only on `github.event_name != 'pull_request'` and this workflow declares
+      # `workflow_dispatch`, so "not a pull request" is **not** the same as "a push to `main`": a
+      # manual dispatch on a feature branch — or on a tag — reaches this step, and without the guard
+      # it would publish `latest` and `edge` from code nobody reviewed. `GITHUB_REF` is compared
+      # rather than `GITHUB_REF_NAME`, because a *tag* named `main` would match the name. Any other
+      # ref gets `sha-<7>` alone — the artefact is still built, published and attested, and is
+      # addressable by exactly the name that identifies the commit it came from.
       #
       # **`edge` follows the same rule as `latest`, deliberately.** Before this guard `edge` meant
       # "the last thing that ran this workflow", which is the hazard Q89 filed; both names are
@@ -219,19 +286,7 @@ jobs:
           repo="${REGISTRY}/${owner}/${{ matrix.image }}"
           short="${GITHUB_SHA::7}"
           tags="sha-${short}"
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            # `latest` here is the **second** definition of that name in this file, and it is left
-            # for WP-71 rather than resolved: this arm says "the newest version tag" while the one
-            # below says "the newest push to `main`", which is TD-019's amendment's wording. No
-            # `v*` tag exists — `git tag -l` is empty — so nothing takes this arm today and the two
-            # cannot yet disagree. The row that reintroduces versions owns the choice, because it
-            # is the row that first makes it reachable: either this `latest` goes (a version is
-            # addressed by `X.Y.Z`) or the branch one does (`latest` means the newest release
-            # again, and `edge` alone tracks `main`). Deciding it here would be deciding WP-71's
-            # acceptance criterion from a workflow comment.
-            version="${GITHUB_REF_NAME#v}"
-            tags="${tags} ${version} ${version%.*} ${version%%.*} latest"
-          elif [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+          if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
             tags="${tags} edge latest"
           fi
           refs=""
@@ -254,3 +309,160 @@ jobs:
           subject-name: ${{ steps.merge.outputs.repo }}
           subject-digest: ${{ steps.merge.outputs.digest }}
           push-to-registry: true
+
+      # The digest this leg merged and attested, handed to the `release` job as a file: a matrix job
+      # has one set of outputs for all its legs, so five digests cannot travel as job outputs
+      # without each leg's value depending on which finished last. The `release` job copies **this**
+      # digest, never whatever `sha-<7>` points at when it runs.
+      - name: record the digest this run built
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          IMAGE: ${{ matrix.image }}
+          DIGEST: ${{ steps.merge.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/digest"
+          printf '%s\n' "${DIGEST}" > "${RUNNER_TEMP}/digest/${IMAGE}"
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: digest-${{ matrix.image }}
+          path: ${{ runner.temp }}/digest/${{ matrix.image }}
+          if-no-files-found: error
+          retention-days: 1
+
+  # **The version this push released: a tag on each manifest list, then the git tag and the GitHub
+  # Release** (WP-71; TD-019's amendment, Q96).
+  #
+  # **Off until an administrator turns it on.** `vars.RELEASE_VERSIONING == 'enabled'` is Q96's one
+  # human switch before the first cut: an unset repository variable reads as the empty string, so
+  # this job is skipped on every push until somebody decides that `0.1.0` is real
+  # (`CONTRIBUTING.md` § Repository settings). The `version` job's step tests the same variable, so
+  # removing it from either place still leaves the other — and `scripts/release.test.ts` fails on
+  # either removal.
+  #
+  # **A retag, never a build — of the digest this run attested.** The `merge` legs hand this job the
+  # five digests they merged and attested (an artifact per image). Before anything is published,
+  # each is compared with what `sha-<7>` points at **now**: a dispatch at the same commit on another
+  # ref runs in another concurrency group and can have moved that tag, and then nothing is copied.
+  # The copy is made **from the digest** (`<repo>@sha256:…`), so it cannot pick up a moved tag
+  # between the check and the copy either. `imagetools create` with one manifest-list source
+  # "performs a carbon copy" (https://docs.docker.com/reference/cli/docker/buildx/imagetools/create/);
+  # afterwards all three version tags are read back and must carry that digest, because the
+  # provenance attestation is stored against it. A read-back mismatch can only fail **after** the
+  # tags moved — the step says so, and the release is not cut.
+  #
+  # **The order is chosen for a re-run.** Images first, release last: a failure between them leaves
+  # version tags and no release, and a re-run repeats the (idempotent) copies and then cuts it. The
+  # other order would leave a release whose images do not exist.
+  #
+  # `GITHUB_TOKEN` may create a tag and a release (only pull requests are refused — Q90's
+  # measurement, run 34966305421); a tag it creates starts no workflow, which is why this file no
+  # longer has a `push: tags` trigger for it to start.
+  release:
+    name: release
+    needs: [version, merge]
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main'
+      && vars.RELEASE_VERSIONING == 'enabled' && needs.version.outputs.version != ''
+    runs-on: ubuntu-latest
+    permissions:
+      # The tag and the GitHub Release.
+      contents: write
+      # The version tags on the five manifest lists.
+      packages: write
+    steps:
+      # Full history and tags: the notes are the range since the previous release tag, and the
+      # upgrade note compares its migrations with this build's.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: digest-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/digests
+
+      # The release body is `pnpm changelog --release-notes`: the upgrade note, product/14's exit
+      # criteria and the commits since the previous release. Nothing commits it (Q96 (3)), and the
+      # script refuses a version that is not ahead of the newest release tag.
+      - name: render the release notes
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          node scripts/changelog.mjs --release-notes --version "${VERSION}" > "${RUNNER_TEMP}/notes.md"
+
+      - name: tag the images and cut the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # A tag of this name that `HEAD` does not contain — made by hand, on another branch — is
+          # not something to release over: `gh release create` would attach the release to *that*
+          # tag and ignore `--target`.
+          if git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null; then
+            echo "v${VERSION} already exists and HEAD does not carry it as its release; refusing to cut it again" >&2
+            exit 1
+          fi
+          owner=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+          short="${GITHUB_SHA::7}"
+          notes="${RUNNER_TEMP}/notes.md"
+          images="platform-base platform-runtime platform-egress platform platform-launcher"
+          inspect() {
+            docker buildx imagetools inspect "$1" --format '{{ json .Manifest.Digest }}' | tr -d '"'
+          }
+
+          # 1. Every source first, before anything is published: the digest this run attested, and
+          #    `sha-<7>` still pointing at it.
+          for image in ${images}; do
+            repo="${REGISTRY}/${owner}/${image}"
+            built=$(cat "${RUNNER_TEMP}/digests/${image}" 2>/dev/null || true)
+            if ! printf '%s' "${built}" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+              echo "no digest recorded for ${image} by this run's merge job (got '${built}'); nothing was copied" >&2
+              exit 1
+            fi
+            current=$(inspect "${repo}:sha-${short}")
+            if [ "${current}" != "${built}" ]; then
+              echo "${repo}:sha-${short} is ${current:-nothing}, not ${built}, the digest this run built and attested; nothing was copied" >&2
+              exit 1
+            fi
+          done
+
+          # 2. Copy by digest, then read all three tags back.
+          {
+            echo ''
+            echo '### Images'
+            echo ''
+            echo "Each is a manifest list for amd64 and arm64 with a provenance attestation (\`gh attestation verify oci://<image> --repo ${GITHUB_REPOSITORY}\`), at the digest built as \`sha-${short}\`."
+            echo ''
+          } >> "${notes}"
+          for image in ${images}; do
+            repo="${REGISTRY}/${owner}/${image}"
+            digest=$(cat "${RUNNER_TEMP}/digests/${image}")
+            docker buildx imagetools create \
+              -t "${repo}:${VERSION}" -t "${repo}:${VERSION%.*}" -t "${repo}:${VERSION%%.*}" \
+              "${repo}@${digest}"
+            for tag in "${VERSION}" "${VERSION%.*}" "${VERSION%%.*}"; do
+              copied=$(inspect "${repo}:${tag}")
+              if [ "${copied}" != "${digest}" ]; then
+                echo "${repo}:${tag} is ${copied:-nothing} after the copy, not ${digest}: not a retag. The version tags of ${image} have already moved; the release is not cut" >&2
+                exit 1
+              fi
+            done
+            echo "- \`${repo}:${VERSION}\` — \`${digest}\`" >> "${notes}"
+          done
+          gh release create "v${VERSION}" --target "${GITHUB_SHA}" --title "v${VERSION}" \
+            --notes-file "${notes}"

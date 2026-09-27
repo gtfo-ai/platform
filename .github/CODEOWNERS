@@ -21,10 +21,12 @@
 /docs/technical/ @JanMikes
 /.github/ @JanMikes
 
-# Release engineering: the version, the changelog, the release workflow and the third-party
-# accounting a published image carries (TD-019, BD-002).
-/release-please-config.json @JanMikes
-/.release-please-manifest.json @JanMikes
+# Release engineering: the version computation, the changelog, and the third-party accounting a
+# published image carries (TD-019, BD-002). The workflow that cuts a version is `image.yml`, under
+# `/.github/` above; release-please and its two configuration files were deleted at WP-71.
+/scripts/version.mjs @JanMikes
+/scripts/semver.mjs @JanMikes
+/scripts/changelog.mjs @JanMikes
 /CHANGELOG.md @JanMikes
 /THIRD_PARTY_NOTICES.md @JanMikes
 /LICENSE @JanMikes

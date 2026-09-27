@@ -30,6 +30,9 @@ ARG BASE_IMAGE=platform-base:dev
 
 # ── The SPA bundle ───────────────────────────────────────────────────────────────────────────────
 FROM ${BASE_IMAGE} AS web
+# A build stage: nothing runs as this stage, so ending it as root is not DL3002's concern
+# (`.hadolint.yaml` has the reasoning; the final stage still ends `USER agentic` and is checked).
+# hadolint ignore=DL3002
 USER root
 WORKDIR /src
 RUN corepack enable pnpm
@@ -61,6 +64,8 @@ RUN pnpm --filter @platform/web run build
 # `spawnClaudeCodeProcess` ("Claude Code executable not found at …"), so a platform process without
 # it cannot start a run even though the binary that actually executes is the run container's.
 FROM ${BASE_IMAGE} AS deps
+# A build stage (see `web` above).
+# hadolint ignore=DL3002
 USER root
 WORKDIR /src
 RUN corepack enable pnpm
@@ -126,6 +131,9 @@ EXPOSE 8080
 # `/healthz` and never `/readyz` (TD-023's amendment): readiness is 503 for ever on `ROLE=all`
 # until a pipeline can be composed, and a container platform that restarted this process for that
 # would be restarting an instance that is working as designed.
+# The shell form is deliberate and DL3025 does not apply: hadolint reads a `HEALTHCHECK CMD` as a
+# `CMD`, and this one needs a shell to expand `${PORT}` and to turn a failed `curl` into `exit 1`.
+# hadolint ignore=DL3025
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
   CMD curl -fsS "http://127.0.0.1:${PORT}/healthz" || exit 1
 

@@ -1,0 +1,28 @@
+# hadolint's configuration for `docker/*.Dockerfile` (WP-71, backlog 117). CI's `lint` job runs it
+# over every Dockerfile git tracks; the decision this file records is **which rules are waived for
+# images that already pin by digest**, stated rather than defaulted.
+#
+# Every level fails the job: a finding is fixed, waived here with its reason, or waived at its line
+# with a `# hadolint ignore=` comment that says why. The first run (hadolint 2.15.1 at `87816a4`)
+# found 23: DL3066 x12, DL3002 x5, DL4006 x3, DL3008 x2, DL3025 x1. Two rules are waived for the
+# whole corpus, below; the other nine findings are waived at their lines (the five DL3002 are build
+# stages, one DL4006 is a pipe inside `$(…)`, the DL3025 is a `HEALTHCHECK` that needs a shell) and
+# two DL4006 are a real defect, filed as PROGRESS backlog 256 rather than fixed by a row that builds
+# no image.
+failure-threshold: style
+
+ignored:
+  # Pin versions in `apt-get install`. `apt-get update` reads the **current** trixie archive at build
+  # time — the base image's digest fixes the image, not the package index — so these builds are
+  # deliberately not reproducible at the package level. That is the point of `base-image.yml`'s
+  # weekly rebuild: it exists to pick up the archive's security updates. Pinning
+  # `<package>=<version>` would fail that rebuild the first time trixie moves a version, because the
+  # archive keeps only the current one — the opposite of what the schedule is for (the reasoning
+  # `runtime.Dockerfile` gives for pinning its CLIs by version rather than by sha256).
+  - DL3008
+  # Non-numeric `USER`. The two users these files name are `root`, which is uid 0 everywhere, and
+  # `agentic`, which `base.Dockerfile` creates with uid 1000 and asserts at build time
+  # (`test "$(id -u)" = 1000`). The case this rule exists for — an orchestrator that must prove a
+  # non-root uid without resolving the name, like Kubernetes' `runAsNonRoot` — is not one this
+  # product supports: it ships Docker Compose (TD-018).
+  - DL3066

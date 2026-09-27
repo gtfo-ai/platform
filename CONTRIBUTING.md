@@ -81,36 +81,64 @@ job missing from the list gates nothing:
 [`image.yml`](.github/workflows/image.yml) builds and size-checks every image on a pull request and
 is deliberately **not** required: it builds five images on two architectures, its failure is
 visible on the PR, and requiring it would put that on the critical path of every documentation
-change. [`release.yml`](.github/workflows/release.yml) starts on no event but a manual dispatch
-(TD-019's amendment retired its release-please job) and has nothing to require.
+change. It is also the workflow that cuts versions (below), and nothing about that runs on a pull
+request.
+
+## Repository settings
+
+Three things live in the repository's settings rather than in a file, so a checkout can neither
+apply nor read them; this is the list an administrator applies, and `scripts/release.test.ts` holds
+what the files can say about each.
+
+1. **The ruleset on `main`**, with the required checks listed under *Branch protection* above.
+2. **CodeQL default setup** (TD-017): *Settings → Code security → Code scanning → CodeQL analysis →
+   Set up → Default*. It is a setting, not a workflow — default setup writes no file — so there is
+   no `codeql.yml` in `.github/workflows/`, and there must not be one pretending otherwise. Until it
+   is switched on this repository has **no SAST at all**: `ci.yml`'s `secret scan` job (gitleaks)
+   and the `zizmor` step of `lint` are the whole of its security scanning.
+3. **The versioning switch**: the repository variable `RELEASE_VERSIONING` = `enabled`
+   (*Settings → Secrets and variables → Actions → Variables*, or
+   `gh variable set RELEASE_VERSIONING --body enabled`). It is **unset**, and while it is, no push
+   creates a tag or a release (below). It is the one human decision before the first version
+   ([Q96](docs/OPEN-QUESTIONS.md)): set it when the owner decides that `0.1.0` is real — Q96's
+   recommendation is not before WP-33's model credential exists, since until then the release notes
+   must say the prompts have never been run against a model. Removing the variable stops versioning
+   again; it deletes nothing that was already published.
 
 ## Releasing
 
 **Every push to `main` is the release** ([TD-019](docs/decisions/technical/TD-019-release-engineering.md)'s
-amendment of 2026-09-16, the product owner's continuous-deployment decision). A maintainer's part is
-the review and the merge; there is nothing else to do:
+amendment of 2026-09-16, the product owner's continuous-deployment decision, and WP-71). A
+maintainer's part is the review and the merge; there is nothing else to do:
 
 1. A push to `main` is built by [`image.yml`](.github/workflows/image.yml) on `amd64` and `arm64` and
    published to GHCR as `sha-<7>`, `edge` **and `latest`**. `latest` means the newest push to `main`.
-2. There is no release pull request and no version bump to merge. `release.yml`'s release-please job
-   is **retired**: it is `workflow_dispatch` only, so no push starts it. It stayed red on every
-   commit and could not have been otherwise — a PR opened with `GITHUB_TOKEN` is refused
-   (*"GitHub Actions is not permitted to create or approve pull requests"*, measured at run
-   `34966305421`) until an administrator changes a repository setting, and the alternative needs a
-   credential this repository does not carry ([Q90](docs/OPEN-QUESTIONS.md)).
-3. **Conventional commits and the DCO are still enforced**, by lefthook and by `ci.yml`. The history
-   is what a semantic version will be computed from when **WP-71** reintroduces one — a version
-   derived from the commits on each push and applied by *retagging* the sha manifests, never a second
-   build. Until then the eleven manifests stay at `0.0.0` and the tag branch of `image.yml`
-   (`X.Y.Z`, `X.Y`, `X`, `latest`) is kept and unused.
+2. **Once `RELEASE_VERSIONING` is `enabled`** (above), the same run also cuts a **version**: the
+   `version` job computes `X.Y.Z` from the conventional commits since the last `vX.Y.Z` tag
+   (`node scripts/version.mjs` — `feat` is minor, `fix`/`perf`/`revert` patch, a breaking change
+   major, and minor before 1.0; `docs`, `chore`, `test`, `ci`, `refactor`, `build` and `style` cut
+   nothing; the first version is `0.1.0`), the image reports it at `GET /api/version`, and the
+   `release` job copies the manifest lists this run built to `X.Y.Z`, `X.Y` and `X` — a retag, never
+   a second build — and creates the `vX.Y.Z` tag and the GitHub Release. The release body is
+   `pnpm changelog --release-notes`: the upgrade note, product/14's exit criteria, the commits and
+   the images' digests. Nothing is committed back: there is no release pull request, no version bump
+   and no bot commit, and the eleven manifests stay at `0.0.0` — the tag is the version.
+3. `release.yml` and release-please’s two configuration files are **deleted** (WP-71). The
+   release-please job had been retired to a manual dispatch by TD-019's amendment; keeping it beside
+   the retag would have kept a second route to a version tag, one that rebuilt the images.
+4. **Conventional commits and the DCO are still enforced**, by lefthook and by `ci.yml`, because the
+   history is what the version is computed from.
 
-`pnpm changelog` regenerates `CHANGELOG.md` from those commits, with release-please 17.6.0's own
-section table. It is a document this repository renders, not one a workflow writes.
+`pnpm changelog` regenerates `CHANGELOG.md`, the **preview** of the next version, from the same
+commits and release-please 17.6.0's section table. No workflow writes it, and it **refuses** — exit 1,
+nothing written — when a release tag exists and the version it would render is not ahead of it; to
+preview the next release, `pnpm changelog --version "$(node scripts/version.mjs)"`.
 
 ## Pull requests
 
 - Small and focused. Tests are part of the change, not a follow-up (see [`docs/technical/10-testing-strategy.md`](docs/technical/10-testing-strategy.md)): unit and property tests for domain code, contract tests for every integration port, golden fixtures for SDK streams, fake-Claude e2e for pipeline changes.
-- `pnpm run -s verify` must be green before you open the PR; CI runs the same targets plus the integration, e2e, ui, secret-scan, commitlint and DCO jobs.
+- `pnpm run -s verify` must be green before you open the PR; CI runs the same targets plus the integration, e2e, ui, secret-scan, commitlint and DCO jobs, and its `lint` job adds three linters `verify` cannot run without a container runtime — **actionlint** and **zizmor** over `.github/workflows/`, **hadolint** over `docker/*.Dockerfile` (waivers in `.hadolint.yaml` or at the line, each with its reason). Changing a workflow or a Dockerfile? Run them the way the job does, with the image digests from `.github/workflows/ci.yml`:
+  `docker run --rm -v "$PWD:/repo:ro" -w /repo rhysd/actionlint@sha256:…` · `docker run --rm -v "$PWD:/repo:ro" -w /repo ghcr.io/zizmorcore/zizmor@sha256:… --offline .` · `docker run --rm -v "$PWD:/repo:ro" -w /repo hadolint/hadolint@sha256:… hadolint docker/*.Dockerfile`.
 - Coverage thresholds hold **per ring** (`COVERAGE_RINGS` in `vitest.config.ts`; there is no overall threshold since WP-70): 80 % on every metric, 90 % lines / 85 % branches / 90 % functions / 90 % statements in `packages/domain`, and a named, lower floor for the rings that carry debt — `apps/server`, `packages/infrastructure`, and one metric each of `packages/prompts` and `apps/launcher`. A file in a new directory must fall in exactly one ring (`scripts/coverage-budget.test.ts`), and a new coverage exclusion is an entry in `COVERAGE_EXCLUDED_FILES` and in that test.
 - Update `.env.example` with every new environment variable and `CLAUDE.md` when a command or convention changes.
 
