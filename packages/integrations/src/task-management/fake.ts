@@ -53,6 +53,11 @@
  *     arriving as an edit would fail here and work against Jira, never the reverse — and the only
  *     consumer (`pipeline/provider-signals.ts`) finds no task at match time anyway, because intake
  *     has not created it yet.
+ *  9. **Different — this fake redacts nothing itself; its registration does** (WP-73b, PROGRESS
+ *     backlog 260). Built directly, `inbound.normalise` reads the body as given. Resolved through
+ *     `fakeTaskManagementRegistration` (`bindings/fake-registrations.ts`), the loader's redactor is applied to the whole
+ *     body before `normalise` reads it, as a real adapter does; the delivery key is still built from
+ *     the header id and is not redacted, where a real adapter redacts its key.
  */
 import {
   type CommentRef,

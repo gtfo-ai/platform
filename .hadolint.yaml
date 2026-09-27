@@ -6,9 +6,9 @@
 # with a `# hadolint ignore=` comment that says why. The first run (hadolint 2.15.1 at `87816a4`)
 # found 23: DL3066 x12, DL3002 x5, DL4006 x3, DL3008 x2, DL3025 x1. Two rules are waived for the
 # whole corpus, below; the other nine findings are waived at their lines (the five DL3002 are build
-# stages, one DL4006 is a pipe inside `$(…)`, the DL3025 is a `HEALTHCHECK` that needs a shell) and
-# two DL4006 are a real defect, filed as PROGRESS backlog 256 rather than fixed by a row that builds
-# no image.
+# stages, one DL4006 is a pipe inside `$(…)`, the DL3025 is a `HEALTHCHECK` that needs a shell);
+# the two DL4006 that were a real defect (PROGRESS backlog 256) were fixed at WP-73b by removing the
+# pipes, and their waivers with them.
 failure-threshold: style
 
 ignored:

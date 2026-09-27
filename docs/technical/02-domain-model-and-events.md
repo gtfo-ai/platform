@@ -61,7 +61,10 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > human merging is BD-007's decision, made in the one place the platform cannot refuse it, so
 > `mr.merged` for a task paused **at `ready_for_merge`** records `task.resumed` and the merge and
 > the retrospective runs as for any merge. A task paused at any **other** stage whose merge
-> request is merged is escalated to `needs_human` with a brief rather than dropped. **Both edges
+> request is merged is escalated to `needs_human` with a brief rather than dropped, and so, since
+> WP-73b (PROGRESS backlog 264), is a task still `active`, `returned`, `waiting_answers` or
+> `waiting_approval` — a merge before Ready is not the decision Ready waits for; a task already in
+> `needs_human` stays there with a log line naming the merge. **Both edges
 > exist only for a task paused _at_ `ready_for_merge`** (WP-73 review round 1): the table cannot say
 > "from this stage", so the Task aggregate refuses them from a pause anywhere else, and a
 > **hand-back cannot reach them** — handed back from a pause at `ci_gate` to `ready_for_merge` or

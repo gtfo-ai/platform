@@ -1684,7 +1684,13 @@ export interface RunCredentialRequest {
  * project's configuration.
  */
 export type RunCredentialMint =
-  | { readonly kind: 'minted'; readonly credential: MintedCredential; readonly ref: IntegrationRef }
+  | {
+      readonly kind: 'minted';
+      readonly credential: MintedCredential;
+      readonly ref: IntegrationRef;
+      /** What the teardown revoke takes: the address, and the binding that minted it (backlog 156). */
+      readonly handle: RunCredentialHandle;
+    }
   | { readonly kind: 'unavailable'; readonly reason: string };
 
 /**
@@ -1788,7 +1794,7 @@ export const runCredentialWrites = (integrations: PipelineIntegrations) => {
           minted.scope !== request.scope
             ? `asked for ${request.scope}, got ${minted.scope}`
             : `its value is shorter than ${MIN_SECRET_LENGTH} characters, so it could not be redacted`;
-        const revocation = await writes.revoke(minted, request).then(
+        const revocation = await writes.revoke(runCredentialHandle(minted, git.ref), request).then(
           () => 'it was revoked',
           (error: unknown) =>
             `its revocation failed (${describeRevokeFailure(error, minted.value)}), so it is live until the recovery pass revokes it from the audit row (PROGRESS backlog 155) or it expires at ${minted.expiresAt}`,
@@ -1797,13 +1803,26 @@ export const runCredentialWrites = (integrations: PipelineIntegrations) => {
           `the git binding ${git.ref.integrationId} minted a credential this platform will not use: ${reason}; ${revocation}`,
         );
       }
-      return { kind: 'minted', credential: minted, ref: git.ref };
+      return {
+        kind: 'minted',
+        credential: minted,
+        ref: git.ref,
+        handle: runCredentialHandle(minted, git.ref),
+      };
     },
 
     /**
      * Revokes a credential {@link mint} returned. Called **once** per credential by its owner (decision
      * 5): a per-call adapter has no memory of an earlier revoke, so a second call is `not_found`
      * rather than a no-op (GitLab divergence 6).
+     *
+     * **The binding must be the one that minted** (WP-73b, PROGRESS backlog 156 half 2), as
+     * {@link recover} requires: the caller rebuilds the project's integrations at revoke time, so
+     * a project re-bound from git integration A to B while the run was live would otherwise send
+     * A's address through B — to B's host, audited as B's. A mismatch is refused before the
+     * executor, so no row is written under a binding that did not mint the credential. Whether
+     * such a credential may still be revoked through its minting integration is backlog 156's
+     * half 3, an architect decision this refusal does not take.
      */
     revoke: async (
       credential: RunCredentialHandle,
@@ -1813,6 +1832,11 @@ export const runCredentialWrites = (integrations: PipelineIntegrations) => {
       if (git === null) {
         throw new Error(
           `project ${context.projectId} has no git binding any more, so run ${context.runId}'s credential cannot be revoked here; it lives until ${credential.expiresAt}`,
+        );
+      }
+      if (git.ref.integrationId !== credential.integrationId) {
+        throw new Error(
+          `run ${context.runId}'s credential was minted through the git binding ${credential.integrationId}, and project ${context.projectId}'s git binding is now ${git.ref.integrationId}; its address is not sent to a binding that did not mint it, so it lives until ${credential.expiresAt} (PROGRESS backlog 156)`,
         );
       }
       assertOutsideTransaction('the provider mutation "revoke_credential"');
@@ -1930,10 +1954,24 @@ export const runCredentialWrites = (integrations: PipelineIntegrations) => {
 };
 
 /**
- * What {@link runCredentialWrites}' `revoke` reads of a credential: its address, and the two facts
- * the audit row and a failure message name. Never the value (WP-77).
+ * What {@link runCredentialWrites}' `revoke` reads of a credential: its address, the two facts the
+ * audit row and a failure message name, and the binding that minted it (WP-73b, backlog 156 — the
+ * revoke refuses any other). Never the value (WP-77).
  */
-export type RunCredentialHandle = Pick<MintedCredential, 'revokeId' | 'scope' | 'expiresAt'>;
+export type RunCredentialHandle = Pick<MintedCredential, 'revokeId' | 'scope' | 'expiresAt'> & {
+  readonly integrationId: Id;
+};
+
+/** The handle of a credential minted through `ref` — the only way one is built. */
+export const runCredentialHandle = (
+  minted: Pick<MintedCredential, 'revokeId' | 'scope' | 'expiresAt'>,
+  ref: IntegrationRef,
+): RunCredentialHandle => ({
+  revokeId: minted.revokeId,
+  scope: minted.scope,
+  expiresAt: minted.expiresAt,
+  integrationId: ref.integrationId,
+});
 
 /** The payload marker every recovery revoke carries, and the finding query's bound (WP-77). */
 export const RUN_CREDENTIAL_RECOVERY_ORIGIN = 'recovery' as const;

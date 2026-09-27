@@ -19,9 +19,63 @@
  * permissive one. The check is a plain equality against a value the caller supplies, so a test that
  * seeds one credential and expects another fails at the binding rather than four stages later.
  */
-import type { CommunicationPort, GitProviderPort, TaskManagementPort } from '@platform/application';
+import type {
+  CommunicationPort,
+  GitProviderPort,
+  InboundNormaliser,
+  SecretRedactor,
+  TaskManagementPort,
+  WebhookDelivery,
+} from '@platform/application';
 import * as z from 'zod';
 import type { AnyProviderRegistration } from '../registry.js';
+
+/**
+ * The delivery body as the adapter's normaliser may read it: the loader's redactor applied to the
+ * **whole** body first, as GitLab, Jira and Slack do (`gitlab/inbound.ts`, `jira-cloud/webhook.ts`,
+ * `slack/inbound.ts`). JSON is redacted as JSON so a placeholder never breaks the document; a body
+ * that is not JSON is redacted as text and left for the normaliser to refuse as malformed.
+ */
+const redactedBody = (body: string, redactor: SecretRedactor): string => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return redactor.redactText(body).value;
+  }
+  return JSON.stringify(redactor.redactJson(parsed as never).value);
+};
+
+/**
+ * **The loader's redactor, honoured** (WP-73b, PROGRESS backlog 260). Each fake is built once by
+ * the test and its `inbound` normaliser is its own, so `create` used to hand back the prebuilt port
+ * and drop `input.redactor` — and in the e2e tier a fake's normalised inbound **event** carried a
+ * value the `inbox` row had redacted (WP-72 measured a `glpat-` value in `mr.review.comment`'s
+ * `events.payload`). Production is not affected: every real adapter composes the redactor itself.
+ *
+ * What is wrapped is `normalise` alone. `verify` still reads the **original** body — a signature is
+ * over the bytes that were sent — and `deliveryKey` is the fake's own (built from a header id, not
+ * from the body), which is the divergence each fake's register now names.
+ */
+const withInboundRedactor = <TPort extends object>(
+  port: TPort,
+  redactor: SecretRedactor,
+): TPort => {
+  const inbound = (port as { inbound?: InboundNormaliser }).inbound;
+  if (inbound === undefined) {
+    return port;
+  }
+  const redacting: InboundNormaliser = {
+    verify: (delivery) => inbound.verify(delivery),
+    deliveryKey: (delivery) => inbound.deliveryKey(delivery),
+    normalise: async (delivery: WebhookDelivery, context) =>
+      inbound.normalise({ ...delivery, body: redactedBody(delivery.body, redactor) }, context),
+  };
+  return new Proxy(port, {
+    get: (target, key, receiver) =>
+      key === 'inbound' ? redacting : Reflect.get(target, key, receiver),
+  });
+};
 
 export const FAKE_GIT_PROVIDER_ID = 'fake-git';
 export const FAKE_TASK_MANAGEMENT_PROVIDER_ID = 'fake-task-management';
@@ -59,9 +113,9 @@ export const fakeGitRegistration = (
   // through this registration resolves its credential the way production does rather than through a
   // shape only the fake has (standing rule 1).
   gitCredential: { passwordField: 'token', username: 'agentic' },
-  create: ({ secrets }) => {
+  create: ({ secrets, redactor }) => {
     refuseWrongToken(FAKE_GIT_PROVIDER_ID, options.token, secrets.token);
-    return options.port;
+    return withInboundRedactor(options.port, redactor);
   },
 });
 
@@ -90,9 +144,9 @@ export const fakeCommunicationRegistration = (
   setupGuidePath: 'packages/integrations/src/communication/fake.ts',
   agentTooling: null,
   communicationChannels: { channel: 'channel', digestChannel: 'digest_channel' },
-  create: ({ secrets }) => {
+  create: ({ secrets, redactor }) => {
     refuseWrongToken(FAKE_COMMUNICATION_PROVIDER_ID, options.token, secrets.token);
-    return options.port;
+    return withInboundRedactor(options.port, redactor);
   },
 });
 
@@ -106,8 +160,8 @@ export const fakeTaskManagementRegistration = (
   secretFields: ['token'],
   setupGuidePath: 'packages/integrations/src/task-management/fake.ts',
   agentTooling: null,
-  create: ({ secrets }) => {
+  create: ({ secrets, redactor }) => {
     refuseWrongToken(FAKE_TASK_MANAGEMENT_PROVIDER_ID, options.token, secrets.token);
-    return options.port;
+    return withInboundRedactor(options.port, redactor);
   },
 });

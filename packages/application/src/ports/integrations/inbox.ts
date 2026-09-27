@@ -23,9 +23,29 @@
 import type { Id, IsoDateTime, JsonObject } from '@platform/contracts';
 import type { Transaction } from '../transaction.js';
 import type { SecretRedactor } from './audit.js';
-import type { InboundNormaliser, IntegrationRef } from './common.js';
+import type { IgnoredDelivery, InboundNormaliser, IntegrationRef } from './common.js';
 
 // ── The inbox ────────────────────────────────────────────────────────────────
+
+/** A code `inbox.error_reasons` stores (migration 0055): an ignore's reason, or a refused decision. */
+export type InboxReasonCode = IgnoredDelivery['reason'] | 'decision_refused';
+
+/**
+ * The codes the refused-deliveries read answers (WP-73b, PROGRESS backlog 206) — **a decision,
+ * stated here**: what an operator must act on. `unmapped_identity` (map the account),
+ * `decision_refused` (the aggregate said no — a role, an expired approval) and `malformed_payload`
+ * (the provider sent what the adapter cannot read). Not `unsupported_event` — a message that is
+ * not a thread reply, a push to a branch the platform does not watch — and not
+ * `not_for_this_project`, which a group-level webhook produces for every unbound repository; both
+ * are the noise that pushed refusals out of the newest fifty. A delivery that failed its signature
+ * writes no inbox row at all (an unauthenticated caller must not choose a dedup key), so it is not
+ * a code here.
+ */
+export const REFUSED_DELIVERY_REASONS: readonly InboxReasonCode[] = [
+  'decision_refused',
+  'malformed_payload',
+  'unmapped_identity',
+];
 
 /** One row of `inbox` as the ingress writes it (technical/03, migration 0014). */
 export interface InboxDelivery {
@@ -53,6 +73,12 @@ export interface InboxDelivery {
     readonly provider: string;
     readonly external_id: string;
   }[];
+  /**
+   * The distinct reason codes behind {@link error} (WP-73b, PROGRESS backlog 206; migration 0055):
+   * each `IgnoredDelivery.reason`, and `decision_refused` for a decision an aggregate refused. The
+   * platform's own enum values, never provider text. Empty when the delivery produced events.
+   */
+  readonly errorReasons: readonly InboxReasonCode[];
   readonly receivedAt: IsoDateTime;
   /** When normalisation finished. Written at insert while the ingress normalises in-request. */
   readonly processedAt: IsoDateTime | null;

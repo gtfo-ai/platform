@@ -35,6 +35,8 @@ export interface HeldConnectionAccount {
   readonly provider: string;
   /** `integrations.name`, so a log line names what an operator named. */
   readonly name: string;
+  /** {@link HeldConnectionFingerprint}. */
+  readonly fingerprint: HeldConnectionFingerprint;
   /**
    * Builds the connection over this account's credentials. Opens nothing.
    *
@@ -55,7 +57,20 @@ export interface BrokenHeldConnectionAccount {
   readonly provider: string;
   readonly name: string;
   readonly detail: string;
+  /** {@link HeldConnectionFingerprint} — so an operator's fix re-opens it without a restart. */
+  readonly fingerprint: HeldConnectionFingerprint;
 }
+
+/**
+ * A digest of what an account's connection was built from — `integrations.config` and the **ids**
+ * in `integrations.secret_ids`, never a credential value (WP-73b, PROGRESS backlog 197). The
+ * supervisor compares it at every re-list and re-opens an account whose fingerprint moved, so a
+ * changed configuration, a re-sealed credential under a new secret id, or a broken account an
+ * operator fixed is picked up without restarting the process. A value rotated **in place** under
+ * the same secret id does not move it; this build has no such write (`secrets` rows are sealed at
+ * the integration's creation and never updated), which is why the ids are enough.
+ */
+export type HeldConnectionFingerprint = string;
 
 export interface HeldConnectionDirectory {
   /** Every account whose configuration selects a held inbound connection, in a stable order. */

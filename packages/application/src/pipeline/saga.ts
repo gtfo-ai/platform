@@ -1418,10 +1418,42 @@ const mergeRequestHandler = (options: PipelineSagaOptions): EventHandler => ({
       );
       return;
     }
+    const state = stored.task.state;
+    if (state === 'needs_human') {
+      // `needs_human → needs_human` is not an edge, and the task already waits for a person; the
+      // merge is logged so it is not lost without a trace (WP-73b, backlog 264). The brief the task
+      // carries is the earlier one — the one case the entry leaves as this line.
+      (options.logger ?? silentLogger).warn(
+        { task_id: stored.task.id, stage, mr_iid: event.payload.mr.iid },
+        'the merge request was merged while the task was waiting for a human; its brief does not mention the merge',
+      );
+      return;
+    }
+    if (
+      state === 'active' ||
+      state === 'returned' ||
+      state === 'waiting_answers' ||
+      state === 'waiting_approval'
+    ) {
+      // WP-73b, backlog 264: a merge made on the provider while the pipeline is still working
+      // towards Ready is not the decision `ready_for_merge` waits for. It used to be dropped here
+      // — the task ran on against a merged merge request and never reached `retro` — and is now
+      // escalated, as `mr.closed` is from every non-terminal state and as Q104 (c) escalates a
+      // merge of a task paused before Ready.
+      await escalateFor(
+        'mr.merged',
+        'the merge request was merged before the pipeline marked it ready',
+        `The merge request for ${stored.task.ticket.key} was merged on the provider while the task was ${state} at ${stage}, ` +
+          'before the pipeline had marked it ready. Check what was merged; then cancel the task, or hand it back if work remains.',
+      );
+      return;
+    }
     // `paused` here is a task paused **at** `ready_for_merge` (Q104, answer (a)): the merge is the
     // human decision the pause held the platform back for, so it ends the pause — `recordMerge`
-    // emits `task.resumed` before the merge's own `task.stage.entered` (backlog 244).
-    if (stored.task.state !== 'ready_for_merge' && stored.task.state !== 'paused') {
+    // emits `task.resumed` before the merge's own `task.stage.entered` (backlog 244). Every other
+    // state left (`queued`, `merged`, `retro`, `done`, `cancelled`) has already moved past a merge
+    // or never had a stage.
+    if (state !== 'ready_for_merge' && state !== 'paused') {
       return;
     }
     await step(options, context, stored, {

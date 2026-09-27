@@ -38,7 +38,8 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import type { AgentTooling } from '@platform/application';
-import type { IntegrationType } from '@platform/contracts';
+import type { IntegrationType, JsonObject, JsonValue } from '@platform/contracts';
+import type { z } from 'zod';
 import { gitlabProviderRegistration } from './providers/gitlab/index.js';
 import {
   JIRA_CLOUD_AGENT_TOOLING,
@@ -75,7 +76,36 @@ export interface ProviderCatalogueEntry {
    * Loki or Sentry binding is not in it, and its skill would never be provisioned.
    */
   readonly agentTooling: AgentTooling | null;
+  /**
+   * Config keys a **binding** may not set, because only the account's value is read (WP-73b,
+   * PROGRESS backlog 201) — the registration's `accountOnlyFields`, `[]` when it declares none.
+   */
+  readonly accountOnlyFields: readonly string[];
+  /**
+   * The value each config field **defaults** to when a body leaves it out — read off the
+   * provider's own schema, field by field, so nothing is hand-copied (WP-73b, PROGRESS backlog
+   * 245). Sentry's `base_url` is `https://sentry.io` and Slack's `https://slack.com/api`; a field
+   * with no default is absent. The create's host guard sweeps these beside the body, so a default
+   * is judged like a typed value.
+   */
+  readonly configDefaults: JsonObject;
 }
+
+/**
+ * Each field's default, asked of the field's own schema with `undefined` — the one input a
+ * `.default()` answers and a required field refuses — so a credential, which is required, is never
+ * here, and neither is a field whose absence is allowed without a value.
+ */
+const configDefaultsOf = (schema: z.ZodObject): JsonObject => {
+  const defaults: Record<string, JsonValue> = {};
+  for (const [field, fieldSchema] of Object.entries(schema.shape)) {
+    const parsed = (fieldSchema as z.ZodType).safeParse(undefined);
+    if (parsed.success && parsed.data !== undefined) {
+      defaults[field] = parsed.data as JsonValue;
+    }
+  }
+  return defaults;
+};
 
 /** The metadata half of a registration, plus the one fact a registration does not carry. */
 const entryOf = (
@@ -86,6 +116,8 @@ const entryOf = (
     readonly secretFields: readonly string[];
     readonly setupGuidePath: string;
     readonly agentTooling: AgentTooling | null;
+    readonly accountOnlyFields?: readonly string[];
+    readonly configSchema: z.ZodObject;
   },
   inboundWebhook: boolean,
 ): ProviderCatalogueEntry => ({
@@ -96,6 +128,8 @@ const entryOf = (
   setupGuidePath: registration.setupGuidePath,
   inboundWebhook,
   agentTooling: registration.agentTooling,
+  accountOnlyFields: [...(registration.accountOnlyFields ?? [])],
+  configDefaults: configDefaultsOf(registration.configSchema),
 });
 
 /**

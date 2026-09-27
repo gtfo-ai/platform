@@ -40,9 +40,11 @@
  * The onboarding wizard creates a Slack integration on a running instance, and a list read once at
  * start-up would make that integration the silent absence this module exists to end. So the list
  * is read again every `relistMs`: an account that appeared is opened, one that disappeared or
- * stopped selecting a held connection is closed. What it does **not** notice is a *changed*
- * credential on an account it already holds — a rotated app-level token needs a restart, stated in
- * the setup guide rather than implied here.
+ * stopped selecting a held connection is closed, and — since WP-73b (PROGRESS backlog 197) — one
+ * whose **fingerprint** moved (its `config`, or the ids of its sealed credentials) is closed and
+ * opened again, so a rotated app-level token re-sealed under a new secret id, or a broken account
+ * an operator fixed, is held without a restart. A value rotated in place under the same secret id
+ * is not seen; `HeldConnectionFingerprint` says why this build has no such write.
  *
  * ## It says that it holds each connection, where every process can read it (WP-72)
  *
@@ -375,13 +377,24 @@ export const startInboundConnections = async (
       }
       return;
     }
-    const listed = new Set(accounts.map((account) => account.integrationId));
+    const listed = new Map(accounts.map((account) => [account.integrationId, account]));
     for (const [integrationId, entry] of held) {
-      if (!listed.has(integrationId)) {
+      const current = listed.get(integrationId);
+      if (current === undefined) {
         held.delete(integrationId);
         logger.info(
           { ...accountFields(entry.account) },
           'an integration no longer selects a held inbound connection; closing it',
+        );
+        await close(entry);
+        continue;
+      }
+      if (current.fingerprint !== entry.account.fingerprint) {
+        // Backlog 197: closed here and opened again by the loop below, on the new configuration.
+        held.delete(integrationId);
+        logger.info(
+          { ...accountFields(entry.account) },
+          'an integration’s held-connection configuration or credentials changed; re-opening it',
         );
         await close(entry);
       }

@@ -41,6 +41,7 @@ import { dirname, resolve as resolvePath } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { CHANGELOG_SECTIONS, readCommits } from './changelog.mjs';
+import { isProgram } from './is-program.mjs';
 import {
   compareVersions,
   FIRST_VERSION,
@@ -130,10 +131,8 @@ export const nextVersionOf = (root = repositoryRoot) => {
   return { previousTag, ...nextVersion({ previousTag, commits }) };
 };
 
-const isProgram =
-  process.argv[1] !== undefined && fileURLToPath(import.meta.url) === resolvePath(process.argv[1]);
-
-if (isProgram) {
+// Real paths on both sides, so a run through a symlinked path is still the program (backlog 258).
+if (isProgram(import.meta.url)) {
   try {
     const { previousTag, version, reason } = nextVersionOf();
     process.stderr.write(

@@ -99,11 +99,13 @@ const connectionDouble = (starts: (() => Promise<void>)[]) => {
 const account = (
   integrationId: Id,
   double: ReturnType<typeof connectionDouble>,
+  fingerprint = 'fingerprint-1',
 ): HeldConnectionAccount => ({
   kind: 'selected',
   integrationId,
   provider: 'slack',
   name: `slack ${integrationId.slice(-2)}`,
+  fingerprint,
   open: (onDelivery) => {
     double.bind(onDelivery);
     return double.connection;
@@ -271,6 +273,7 @@ describe('a process that serves /webhooks/*', () => {
             integrationId: A,
             provider: 'slack',
             name: 'no app token',
+            fingerprint: 'fingerprint-1',
             open: () => {
               throw new IntegrationError('invalid_request', 'slack', 'set SLACK_APP_TOKEN');
             },
@@ -297,6 +300,7 @@ describe('a process that serves /webhooks/*', () => {
       provider: 'slack',
       name: 'undecryptable',
       detail: 'its credentials cannot be read: bad envelope',
+      fingerprint: 'fingerprint-broken',
     };
     const { logger, lines } = recordingLogger();
     const handle = await startInboundConnections({
@@ -337,6 +341,74 @@ describe('a process that serves /webhooks/*', () => {
     expect(first.log).toEqual(['start', 'stopped']);
     expect(later.log).toEqual(['start']);
     expect(handle.status().map((status) => status.integrationId)).toEqual([B]);
+    await handle.stop();
+  });
+
+  /**
+   * WP-73b, PROGRESS backlog 197: the re-list used to diff by integration id only, so an account it
+   * already held — or had named broken — was never re-opened, and a rotated token needed a restart.
+   */
+  it('closes and re-opens an account whose fingerprint changed, and leaves an unchanged one', async () => {
+    const before = connectionDouble([]);
+    const after = connectionDouble([]);
+    const steady = connectionDouble([]);
+    let listed: HeldConnectionAccount[] = [account(A, before), account(B, steady)];
+    const clock = manualScheduler();
+    const handle = await startInboundConnections({
+      directory: { list: async () => listed },
+      liveness: livenessDouble().options,
+      ingress: ingressDouble().ingress,
+      role: 'all',
+      scheduler: clock.scheduler,
+      relistMs: 60_000,
+    });
+    await settle();
+
+    // A's credential was re-sealed under a new secret id; B's account is unchanged.
+    listed = [account(A, after, 'fingerprint-2'), account(B, steady)];
+    clock.fire(60_000);
+    await settle();
+
+    expect(before.log).toEqual(['start', 'stopped']);
+    expect(after.log).toEqual(['start']);
+    expect(steady.log).toEqual(['start']);
+    expect(handle.status().map((status) => [status.integrationId, status.state])).toEqual([
+      [B, 'open'],
+      [A, 'open'],
+    ]);
+    await handle.stop();
+  });
+
+  it('re-opens a broken account once an operator fixed it', async () => {
+    const fixed = connectionDouble([]);
+    let listed: (HeldConnectionAccount | BrokenHeldConnectionAccount)[] = [
+      {
+        kind: 'broken',
+        integrationId: A,
+        provider: 'slack',
+        name: 'slack a1',
+        detail: 'its configuration fails its schema at: app_token',
+        fingerprint: 'fingerprint-broken',
+      },
+    ];
+    const clock = manualScheduler();
+    const handle = await startInboundConnections({
+      directory: { list: async () => listed },
+      liveness: livenessDouble().options,
+      ingress: ingressDouble().ingress,
+      role: 'all',
+      scheduler: clock.scheduler,
+      relistMs: 60_000,
+    });
+    await settle();
+    expect(handle.status().map((status) => status.state)).toEqual(['refused']);
+
+    listed = [account(A, fixed, 'fingerprint-fixed')];
+    clock.fire(60_000);
+    await settle();
+
+    expect(fixed.log).toEqual(['start']);
+    expect(handle.status().map((status) => status.state)).toEqual(['open']);
     await handle.stop();
   });
 

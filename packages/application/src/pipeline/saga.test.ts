@@ -2450,6 +2450,49 @@ describe('a merge made while the task is paused (Q104, backlog 244)', () => {
       outcome: 'mr.merged',
     });
   });
+
+  /**
+   * **Backlog 264** (WP-73b): the same drop one state over. A merge of a task the pipeline is still
+   * working on — `active` at a gate, or waiting on a person — was returned from without a trace, and
+   * the task ran on against a merged merge request.
+   */
+  it('escalates, never drops, a merge of an active task still at a gate (backlog 264)', async () => {
+    const harness = harnessWith({
+      git: {
+        getPipelineStatus: async () => ({
+          id: 'pipeline-1',
+          head_sha: 'b'.repeat(40),
+          status: 'running',
+          url: null,
+          jobs: [],
+          coverage_pct: null,
+          finished_at: null,
+        }),
+        getMergeRequest: async () => mergeRequest(false),
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).task).toMatchObject({ state: 'active', currentStage: 'ci_gate' });
+
+    await harness.publish([merged()]);
+    const task = taskOf(harness).task;
+    expect(task.state).toBe('needs_human');
+    expect(task.currentStage).toBe('ci_gate');
+    const escalated = harness.events().find((entry) => entry.type === 'task.escalated');
+    expect(escalated?.payload).toMatchObject({
+      reason: 'the merge request was merged before the pipeline marked it ready',
+    });
+    expect(
+      String((escalated?.payload as { blocker_brief?: unknown } | undefined)?.blocker_brief),
+    ).toContain('while the task was active at ci_gate');
+    expect(harness.store.stageRows.filter((row) => row.stage === 'ci_gate').at(-1)).toMatchObject({
+      state: 'failed',
+      outcome: 'mr.merged',
+    });
+  });
+
+  // The waiting-state case, and the one already in `needs_human`, are in
+  // `dependency-gate.test.ts`: a waiting task with a merge request needs the Developer stage behind it.
 });
 
 /**

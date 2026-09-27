@@ -109,7 +109,7 @@ describe('runCredentialWrites (WP-76)', () => {
     const answer = await writes.mint(request('normal', 'push'));
     expect(answer.kind).toBe('minted');
     if (answer.kind !== 'minted') return;
-    await writes.revoke(answer.credential, { ...IDS, mode: 'normal' });
+    await writes.revoke(answer.handle, { ...IDS, mode: 'normal' });
 
     expect(auditLog.entriesFor('mint_credential')).toHaveLength(1);
     expect(auditLog.entriesFor('revoke_credential')).toHaveLength(1);
@@ -148,7 +148,7 @@ describe('runCredentialWrites (WP-76)', () => {
     const answer = await writes.mint(request('shadow', 'read'));
     expect(answer.kind).toBe('minted');
     if (answer.kind !== 'minted') return;
-    await writes.revoke(answer.credential, { ...IDS, mode: 'shadow' });
+    await writes.revoke(answer.handle, { ...IDS, mode: 'shadow' });
 
     expect(auditLog.entries.map((entry) => [entry.action, entry.status])).toEqual([
       ['mint_credential', 'ok'],
@@ -264,6 +264,7 @@ describe('runCredentialWrites (WP-76)', () => {
       branchPatterns: ['agentic/*'],
       expiresAt: '2026-06-03T00:00:00.000Z',
       revokeId: 'acme/api#17',
+      integrationId: GIT_REF.integrationId,
     };
     await runCredentialWrites(integrations).revoke(push, { ...IDS, mode: 'shadow' });
     expect(revoked).toHaveLength(1);
@@ -297,6 +298,7 @@ describe('runCredentialWrites (WP-76)', () => {
       branchPatterns: ['agentic/*'],
       expiresAt: '2026-06-03T00:00:00.000Z',
       revokeId: 'acme/api#17',
+      integrationId: GIT_REF.integrationId,
     };
     await expect(
       runCredentialWrites(suppressing).revoke(push, { ...IDS, mode: 'normal' }),
@@ -304,6 +306,36 @@ describe('runCredentialWrites (WP-76)', () => {
       /was not revoked \(the executor answered would_have\); it is live until the recovery pass revokes it .* or it expires at 2026-06-03/,
     );
     expect(revoked).toHaveLength(0);
+  });
+
+  /**
+   * WP-73b, PROGRESS backlog 156 half 2: the teardown rebuilds the project's integrations at revoke
+   * time, so a project re-bound from git integration A to B while the run was live used to send A's
+   * address through B, audited as B's. It is refused as `recover` refuses it.
+   */
+  it('refuses a teardown revoke through a git binding that did not mint the credential', async () => {
+    const { integrations, auditLog, revoked } = harness();
+    const writes = runCredentialWrites(integrations);
+    const answer = await writes.mint(request('normal', 'push'));
+    if (answer.kind !== 'minted') throw new Error('expected a credential');
+    expect(answer.handle.integrationId).toBe(GIT_REF.integrationId);
+    const rebound: PipelineIntegrations = {
+      ...integrations,
+      git:
+        integrations.git === null
+          ? null
+          : {
+              ...integrations.git,
+              ref: { ...GIT_REF, integrationId: '00000000-0000-4000-8000-00000000a0b2' as Id },
+            },
+    };
+
+    await expect(
+      runCredentialWrites(rebound).revoke(answer.handle, { ...IDS, mode: 'normal' }),
+    ).rejects.toThrow(/minted through the git binding .*a001.* is now .*a0b2.*backlog 156/);
+    // Refused before the executor: nothing reached a provider, and no row names binding B.
+    expect(revoked).toEqual([]);
+    expect(auditLog.entriesFor('revoke_credential')).toEqual([]);
   });
 
   it('refuses to mint or revoke inside an open transaction', async () => {
@@ -315,7 +347,7 @@ describe('runCredentialWrites (WP-76)', () => {
     const answer = await writes.mint(request('normal', 'push'));
     if (answer.kind !== 'minted') throw new Error('expected a credential');
     await expect(
-      withOpenTransaction(async () => writes.revoke(answer.credential, { ...IDS, mode: 'normal' })),
+      withOpenTransaction(async () => writes.revoke(answer.handle, { ...IDS, mode: 'normal' })),
     ).rejects.toBeInstanceOf(TransactionOpenError);
     expect(minted).toHaveLength(1);
     expect(revoked).toHaveLength(0);
@@ -456,7 +488,7 @@ describe('runCredentialWrites().recover (WP-77)', () => {
     const answer = await writes.mint(request('normal', 'push'));
     if (answer.kind !== 'minted') throw new Error('expected a credential');
 
-    await writes.revoke(answer.credential, { ...IDS, mode: 'normal' });
+    await writes.revoke(answer.handle, { ...IDS, mode: 'normal' });
 
     expect(revoked).toEqual([{ revokeId: 'acme/api#17' }]);
   });

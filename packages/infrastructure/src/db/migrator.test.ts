@@ -19,6 +19,7 @@ import {
   type MigrateDependencies,
   type MigrateEvent,
   type MigrationClient,
+  MigrationConnectionLostError,
   runMigrations,
 } from './migrator.js';
 
@@ -58,6 +59,10 @@ interface FakeState {
   readonly notices?: readonly string[];
   /** Statement text fragment that should throw when executed. */
   readonly failOn?: string;
+  /** What `failOn` throws; a plain `boom` error when absent. */
+  readonly failWith?: Error;
+  /** What the client's `'error'` listener recorded, as `connectionLost` reports it. */
+  readonly lost?: Error;
 }
 
 const fakeClient = (state: FakeState = {}) => {
@@ -69,7 +74,7 @@ const fakeClient = (state: FakeState = {}) => {
     query: async <R extends Record<string, unknown>>(text: string, values?: readonly unknown[]) => {
       queries.push({ text, values: values ?? [] });
       if (state.failOn !== undefined && text.includes(state.failOn)) {
-        throw new Error(`boom: ${state.failOn}`);
+        throw state.failWith ?? new Error(`boom: ${state.failOn}`);
       }
       if (text.includes('from platform_migrations')) {
         const rows = [...(state.applied ?? new Map())].map(([name, checksum]) => ({
@@ -97,6 +102,7 @@ const fakeClient = (state: FakeState = {}) => {
       ended = true;
       await Promise.resolve();
     },
+    connectionLost: () => state.lost ?? null,
   };
 
   return {
@@ -368,6 +374,7 @@ describe('findUnknownMigrations', () => {
     },
     on: () => undefined,
     end: () => Promise.resolve(),
+    connectionLost: () => null,
   });
 
   const known = [{ name: '0001_first', sql: '', checksum: '' }];
@@ -445,5 +452,56 @@ describe('findUnknownMigrations', () => {
       expect(quotedName).toMatch(shape);
       expect(line).toBe(new DatabaseSchemaAheadError([quotedName]).message);
     });
+  });
+});
+
+/**
+ * WP-73b, PROGRESS backlog 247: a lost connection is the migrator's own typed failure, whichever
+ * way it surfaced; a failing SQL statement is not (the other direction, rule 42).
+ */
+describe('a connection lost mid-run', () => {
+  const terminated = Object.assign(
+    new Error('terminating connection due to administrator command'),
+    {
+      code: '57P01',
+    },
+  );
+
+  it('is a MigrationConnectionLostError when the in-flight query reports the termination', async () => {
+    const fake = fakeClient({ failOn: 'pg_advisory_lock', failWith: terminated });
+    const failure = await runMigrations(
+      { connectionString: 'postgres://x' },
+      dependencies(fake.client),
+    ).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(MigrationConnectionLostError);
+    expect((failure as MigrationConnectionLostError).code).toBe('57P01');
+    expect((failure as Error).cause).toBe(terminated);
+    expect(fake.wasEnded()).toBe(true);
+  });
+
+  it('is typed from the listener’s record when the query only says the client is unusable', async () => {
+    const fake = fakeClient({
+      failOn: 'platform_migrations',
+      failWith: new Error('Client has encountered a connection error and is not queryable'),
+      lost: terminated,
+    });
+    const failure = await runMigrations(
+      { connectionString: 'postgres://x' },
+      dependencies(fake.client),
+    ).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(MigrationConnectionLostError);
+    expect((failure as Error).cause).toBe(terminated);
+    // Nothing is asked of a dead session: the unlock is skipped rather than sent and ignored.
+    expect(fake.texts().some((text) => text.includes('pg_advisory_unlock'))).toBe(false);
+  });
+
+  it('leaves an ordinary SQL failure as it was', async () => {
+    const fake = fakeClient({ failOn: 'platform_migrations' });
+    const failure = await runMigrations(
+      { connectionString: 'postgres://x' },
+      dependencies(fake.client),
+    ).catch((error: unknown) => error);
+    expect(failure).not.toBeInstanceOf(MigrationConnectionLostError);
+    expect((failure as Error).message).toContain('boom');
   });
 });

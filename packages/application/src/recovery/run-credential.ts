@@ -63,7 +63,9 @@
  *  - a credential minted through a git binding the project is **no longer bound to**: the finding
  *    query requires the mint's `integration_id` to be the project's git binding still, because a
  *    `revoke_id` is an address on that binding's host and no other binding may be sent it. Such a
- *    token lives to its expiry, and nothing but this sentence says so (PROGRESS backlog 156);
+ *    token lives to its expiry; since WP-73b the pass **reports** it — one warning per address per
+ *    process, naming run, integration, `revoke_id` and `expires_at` — through a sibling read with
+ *    the binding negated (PROGRESS backlog 156 half 1). Revoking it is half 3, not decided;
  *  - a mint whose response was lost (TD-028's residual): no `revoke_id` was ever recorded;
  *  - a run that is **not terminal**: a live run's credential is its runner's. The lease sweep ends a
  *    run nobody is renewing, and the pass after that reaches its credential here — which, for a
@@ -110,6 +112,23 @@ export interface UnrevokedRunCredentialStore {
     query: UnrevokedRunCredentialQuery,
   ): Promise<readonly RecoverableRunCredential[]>;
   /**
+   * The same predicate with the binding **negated** (WP-73b, PROGRESS backlog 156 half 1): the
+   * unrevoked, unexpired mints whose minting integration is no longer a binding of the project, so
+   * {@link unrevokedRunCredentials} will never reach them. The pass reports them; it does not revoke
+   * them — whether it may is backlog 156's half 3, an architect decision.
+   */
+  unreachableRunCredentials(
+    tx: Transaction,
+    query: UnrevokedRunCredentialQuery,
+    /**
+     * The `(integration, revoke_id)` pairs this process has already reported, **skipped by the
+     * query** (WP-73b review round 1): the read is bounded by `query.limit`, oldest run first, so
+     * without this a backlog past the limit would answer the same reported rows every pass and a
+     * newer credential could expire unreported. Skipping them pages past what was already said.
+     */
+    alreadyReported: readonly UnreachableRunCredentialKey[],
+  ): Promise<readonly RecoverableRunCredential[]>;
+  /**
    * The same predicate for **one** address, without the run window — the duty's re-validation on
    * fire. `null` when it was revoked, attempted or has expired since the pass read it.
    */
@@ -134,11 +153,72 @@ const PROVIDER_EXPIRY_ROUNDING_MS = 24 * 60 * 60_000;
 export const runCredentialRecoveryHorizonMs = (ttlSeconds: number): number =>
   ttlSeconds * 1000 + PROVIDER_EXPIRY_ROUNDING_MS;
 
+/**
+ * **How often an unreachable credential is reported** (WP-73b, PROGRESS backlog 156 half 1).
+ *
+ * The finding read answers the same credential on every pass until it expires — up to 48 hours of
+ * one-minute passes — and a warning repeated two thousand times is a warning nobody reads. So the
+ * site remembers, **in this process**, the addresses it has reported, and reports each once:
+ * a restart reports it once more, which is the bound, stated rather than hidden. Nothing is written
+ * to the database for it — the report is a log line, not a claim, and a mark would be a column of
+ * its own for a question (half 3) nobody has answered. An entry is forgotten once its credential's
+ * recorded expiry has passed, so the memory holds at most the unexpired unreachable credentials.
+ */
+export interface UnreachableRunCredentialReports {
+  /** `true` the first time this process meets `revokeId`; drops entries expired at `now`. */
+  firstSighting(credential: RecoverableRunCredential, now: IsoDateTime): boolean;
+  /** What this process has reported and not yet forgotten — the query's `alreadyReported`. */
+  reported(now: IsoDateTime): readonly UnreachableRunCredentialKey[];
+}
+
+/** One reported credential's identity: the integration that minted it and its address. */
+export interface UnreachableRunCredentialKey {
+  readonly integrationId: Id;
+  readonly revokeId: string;
+}
+
+export const createUnreachableRunCredentialReports = (): UnreachableRunCredentialReports => {
+  const seen = new Map<string, { key: UnreachableRunCredentialKey; expiresAt: number }>();
+  const forgetExpired = (now: IsoDateTime): void => {
+    const at = Date.parse(now);
+    for (const [id, entry] of seen) {
+      if (entry.expiresAt <= at) {
+        seen.delete(id);
+      }
+    }
+  };
+  return {
+    firstSighting: (credential, now) => {
+      forgetExpired(now);
+      const id = `${credential.integrationId}\0${credential.revokeId}`;
+      if (seen.has(id)) {
+        return false;
+      }
+      const expiresAt = Date.parse(credential.expiresAt);
+      // An expiry that is not an instant is kept for the horizon: the SQL treats it as live too.
+      seen.set(id, {
+        key: { integrationId: credential.integrationId, revokeId: credential.revokeId },
+        expiresAt: Number.isNaN(expiresAt) ? Date.parse(now) + 48 * 60 * 60_000 : expiresAt,
+      });
+      return true;
+    },
+    reported: (now) => {
+      forgetExpired(now);
+      return [...seen.values()].map((entry) => entry.key);
+    },
+  };
+};
+
 /** The site's collaborators, as `./stranded.ts` takes them. */
 export interface RunCredentialRecoverySite {
   readonly store: UnrevokedRunCredentialStore;
   /** {@link runCredentialRecoveryHorizonMs} of the TTL the composition mints with. */
   readonly horizonMs: number;
+  /**
+   * The memory of what this process has already reported (backlog 156 half 1). One per process —
+   * the composition makes it once, beside the site — or every pass reports every credential again.
+   */
+  readonly unreachable: UnreachableRunCredentialReports;
 }
 
 export const unrevokedRunCredentialQuery = (input: {

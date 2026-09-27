@@ -20,6 +20,7 @@ import type { EnqueueRequest, JobData } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import { MemoryEventing } from '../testing/memory-eventing.js';
 import { recordingJobs } from '../testing/pipeline-harness.js';
+import { createUnreachableRunCredentialReports } from './run-credential.js';
 import type {
   StrandedAsk,
   StrandedAskWithEndedRun,
@@ -607,8 +608,10 @@ describe('the run-credential site', () => {
             asked.push({ ...query, openDuringRead: open });
             return [credential];
           },
+          unreachableRunCredentials: async () => [],
           unrevokedRunCredential: async () => null,
         },
+        unreachable: createUnreachableRunCredentialReports(),
       },
     });
 
@@ -640,6 +643,74 @@ describe('the run-credential site', () => {
       reEnqueued: 1,
       ended: 0,
     });
+  });
+
+  /**
+   * WP-73b, PROGRESS backlog 156 half 1: a mint whose integration the project no longer binds is
+   * out of the revoke's reach by design. It is reported — one warning per address per process —
+   * and nothing is enqueued for it, because sending its address anywhere is half 3's decision.
+   */
+  it('reports an unreachable credential once per process, and enqueues nothing for it', async () => {
+    const warnings: { fields: Record<string, unknown>; message: string }[] = [];
+    const logger = {
+      debug: () => {},
+      info: () => {},
+      warn: (fields: Record<string, unknown>, message: string) => {
+        warnings.push({ fields, message });
+      },
+      error: () => {},
+    };
+    const unreachable = createUnreachableRunCredentialReports();
+    const excluded: string[][] = [];
+    const jobs = recordingJobs();
+    const passAt = async (now: IsoDateTime) =>
+      runStrandedRecovery({
+        store: emptyStore,
+        unitOfWork: new MemoryEventing(),
+        jobs,
+        clock: { now: () => now },
+        graceMs: 60_000,
+        logger,
+        credentials: {
+          horizonMs: 48 * 60 * 60_000,
+          store: {
+            unrevokedRunCredentials: async () => [],
+            unreachableRunCredentials: async (_tx, _query, alreadyReported) => {
+              excluded.push(alreadyReported.map((key) => key.revokeId));
+              return [credential];
+            },
+            unrevokedRunCredential: async () => null,
+          },
+          unreachable,
+        },
+      });
+
+    const first = await passAt(NOW);
+    const second = await passAt('2026-09-15T10:01:00.000Z' as IsoDateTime);
+
+    expect(jobs.enqueued).toHaveLength(0);
+    const reported = warnings.filter((entry) => entry.message.includes('backlog 156'));
+    expect(reported).toHaveLength(1);
+    expect(reported[0]?.fields).toMatchObject({
+      run_id: RUN,
+      integration_id: credential.integrationId,
+      revoke_id: 'acme/api#58',
+      expires_at: '2026-09-17T00:00:00.000Z',
+    });
+    expect(first.find((site) => site.site === 'run_credential_unreachable')?.found).toBe(1);
+    expect(second.find((site) => site.site === 'run_credential_unreachable')?.found).toBe(0);
+    // Review round 1: the second pass asks the store to skip what was already reported, so a
+    // backlog past the limit pages forward instead of answering the same rows every pass.
+    expect(excluded).toEqual([[], ['acme/api#58']]);
+  });
+
+  it('forgets a reported address once its credential has expired', () => {
+    const reports = createUnreachableRunCredentialReports();
+    expect(reports.firstSighting(credential, NOW)).toBe(true);
+    expect(reports.firstSighting(credential, NOW)).toBe(false);
+    // After the recorded expiry the entry is dropped — the finding read no longer answers it, and
+    // the memory holds only the unexpired unreachable credentials.
+    expect(reports.firstSighting(credential, '2026-09-17T00:00:01.000Z' as IsoDateTime)).toBe(true);
   });
 
   it('is absent from a pass whose composition did not opt in', async () => {

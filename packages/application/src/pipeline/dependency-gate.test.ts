@@ -788,3 +788,77 @@ describe('a decision that meets a stop a human owns is deferred to the resume (W
     expect(stored?.dependencies?.deferred_stage ?? null).toBeNull();
   });
 });
+
+/**
+ * **A merge made on the provider while the task waits for an answer** (WP-73b, PROGRESS backlog
+ * 264). The dependency gate's `ask` is the shipped way a task with a merge request comes to wait,
+ * so it is where the waiting-state half of 264 is asserted; the `active` half is in `saga.test.ts`.
+ * Until WP-73b `pipeline.merge.request` returned on any state but `ready_for_merge`/`paused`, and
+ * its `handler_executions` record made a redispatch skip it, so the merge was lost for good.
+ */
+describe('a merge made while the task waits (backlog 264)', () => {
+  /** The next gapless position on the project stream, which the escalation also appends to. */
+  const nextSeq = (harness: PipelineHarness) =>
+    Math.max(
+      0,
+      ...harness
+        .events()
+        .filter((entry) => entry.stream_type === 'project' && entry.stream_id === PROJECT)
+        .map((entry) => entry.stream_seq),
+    ) + 1;
+  const merged = (seq: number) =>
+    domainEventSchemasByType['mr.merged'].parse({
+      id: nextEventId(),
+      stream_type: 'project',
+      stream_id: PROJECT,
+      stream_seq: seq,
+      correlation_id: null,
+      cause_event_id: null,
+      actor: { kind: 'system', component: 'test' },
+      occurred_at: '2026-06-01T10:00:00.000Z',
+      type: 'mr.merged',
+      payload: {
+        project_id: PROJECT,
+        task_id: null,
+        mr: MR_REF,
+        draft: false,
+        head_sha: HEAD,
+        diff_stats: null,
+        merge_commit_sha: 'c'.repeat(40),
+      },
+    }) as DomainEvent;
+  const escalations = (harness: PipelineHarness) =>
+    harness
+      .events()
+      .filter((entry) => entry.type === 'task.escalated')
+      .map((entry) => entry.payload as { reason: string; blocker_brief: string });
+
+  it('escalates a merge of a task waiting for answers, with a brief naming the stage', async () => {
+    const harness = await start({ metadata: checkedMetadata({}) });
+    expect((await storedTask(harness))?.task.state).toBe('waiting_answers');
+
+    await harness.publish([merged(nextSeq(harness))]);
+    await harness.drain();
+
+    const stored = await storedTask(harness);
+    expect(stored?.task.state).toBe('needs_human');
+    const escalated = escalations(harness);
+    expect(escalated).toHaveLength(1);
+    expect(escalated[0]?.reason).toBe(
+      'the merge request was merged before the pipeline marked it ready',
+    );
+    expect(escalated[0]?.blocker_brief).toContain('while the task was waiting_answers at');
+  });
+
+  it('leaves a task already waiting for a human where it is, and escalates nothing twice', async () => {
+    const harness = await start({ metadata: checkedMetadata({}) });
+    await harness.publish([merged(nextSeq(harness))]);
+    await harness.drain();
+    expect((await storedTask(harness))?.task.state).toBe('needs_human');
+
+    await harness.publish([merged(nextSeq(harness))]);
+    await harness.drain();
+    expect((await storedTask(harness))?.task.state).toBe('needs_human');
+    expect(escalations(harness)).toHaveLength(1);
+  });
+});

@@ -19,13 +19,16 @@
 import { randomUUID } from 'node:crypto';
 import type {
   Jobs,
+  Logger,
   PipelineIntegrations,
   PipelineIntegrationsPort,
   RecoverableRunCredential,
+  UnreachableRunCredentialReports,
 } from '@platform/application';
 import {
   allowAnyIntegrationHost,
   createIntegrationActionExecutor,
+  createUnreachableRunCredentialReports,
   createVirtualTimer,
   declarePipelineQueues,
   noSecretsRedactor,
@@ -155,7 +158,7 @@ const mint = async (
   if (answer.kind !== 'minted') {
     throw new Error(`expected a credential, got ${answer.reason}`);
   }
-  return { writes, credential: answer.credential };
+  return { writes, credential: answer.credential, handle: answer.handle };
 };
 
 /** A queue runtime with `pipeline.outbound` declared, as `createPipelineRuntime.start` declares it. */
@@ -166,16 +169,22 @@ const queues = async () => {
 };
 
 /** One whole recovery pass at `now` — the lease site and the credential site — into `jobs`. */
-const pass = async (now: IsoDateTime, jobs: Jobs) =>
+const pass = async (
+  now: IsoDateTime,
+  jobs: Jobs,
+  extra: { logger?: Logger; unreachable?: UnreachableRunCredentialReports } = {},
+) =>
   runStrandedRecovery({
     store: recoveryAdapters.createPostgresStrandedWorkStore(),
     unitOfWork: new eventing.PostgresUnitOfWork({ pool }),
     jobs,
     clock: { now: () => now },
     graceMs: GRACE_MS,
+    ...(extra.logger === undefined ? {} : { logger: extra.logger }),
     credentials: {
       store: credentialStore,
       horizonMs: runCredentialRecoveryHorizonMs(RUN_CREDENTIAL_TTL_SECONDS),
+      unreachable: extra.unreachable ?? createUnreachableRunCredentialReports(),
     },
     runs: {
       store: recoveryAdapters.createPostgresExpiredRunStore(),
@@ -275,14 +284,14 @@ describe('a run credential nothing confirmed revoked (WP-77, backlog 155)', () =
     const minted = await mint(port, failed, 'normal', 'push');
     git.core.script.failNext('revoke_credential', new Error('the provider went away'));
     await expect(
-      minted.writes.revoke(minted.credential, { ...failed, projectId, mode: 'normal' }),
+      minted.writes.revoke(minted.handle, { ...failed, projectId, mode: 'normal' }),
     ).rejects.toThrow(/the provider went away/);
     await endRun(failed.runId);
 
     // (c) The negative: revoked normally, then ended — the same shape as (b) but for the outcome.
     const normal = await seedRun('normal', 5 * 60_000);
     const kept = await mint(port, normal, 'normal', 'push');
-    await kept.writes.revoke(kept.credential, { ...normal, projectId, mode: 'normal' });
+    await kept.writes.revoke(kept.handle, { ...normal, projectId, mode: 'normal' });
     await endRun(normal.runId);
 
     // Before: nothing asked for (a) or (b); one revocation for (c).
@@ -384,6 +393,81 @@ describe('a run credential nothing confirmed revoked (WP-77, backlog 155)', () =
     const again = await queues();
     const report = await pass(iso(10 * 60_000), again.jobs);
     expect(report.find((site) => site.site === 'run_credential')).toMatchObject({ found: 0 });
+  });
+
+  /**
+   * WP-73b, PROGRESS backlog 156 half 1, at the boundary: a teardown revoke fails, then the project
+   * is unbound from the git integration that minted — the whole-set `PUT …/bindings` an operator
+   * swaps providers with. The revoke's finding join no longer reaches the mint, so before WP-73b
+   * nothing said the token was live. Now one warning names it, across two passes, and the provider
+   * is asked nothing: `credentials[].revocations` stays 0.
+   */
+  it('reports, once and without revoking, a credential whose minting integration was unbound', async () => {
+    const git = fakeGit();
+    const port = integrationsOver(git);
+    const failed = await seedRun('normal', 5 * 60_000);
+    const minted = await mint(port, failed, 'normal', 'push');
+    git.core.script.failNext('revoke_credential', new Error('the provider went away'));
+    await expect(
+      minted.writes.revoke(minted.handle, { ...failed, projectId, mode: 'normal' }),
+    ).rejects.toThrow(/the provider went away/);
+    await endRun(failed.runId);
+    await pool.query('delete from bindings where project_id = $1 and integration_id = $2', [
+      projectId,
+      gitIntegrationId,
+    ]);
+    try {
+      const warnings: { fields: Record<string, unknown>; message: string }[] = [];
+      const logger: Logger = {
+        debug: () => {},
+        info: () => {},
+        warn: (fields, message) => {
+          warnings.push({ fields: fields as Record<string, unknown>, message });
+        },
+        error: () => {},
+      };
+      const unreachable = createUnreachableRunCredentialReports();
+      const runtime = await queues();
+      const first = await pass(iso(5 * 60_000), runtime.jobs, { logger, unreachable });
+      const second = await pass(iso(6 * 60_000), runtime.jobs, { logger, unreachable });
+
+      expect(first.find((site) => site.site === 'run_credential')).toMatchObject({ found: 0 });
+      const reported = warnings.filter((entry) => entry.message.includes('backlog 156'));
+      expect(reported).toHaveLength(1);
+      expect(reported[0]?.fields).toMatchObject({
+        run_id: failed.runId,
+        integration_id: gitIntegrationId,
+        revoke_id: minted.credential.revokeId,
+        expires_at: minted.credential.expiresAt,
+      });
+      expect(second.find((site) => site.site === 'run_credential_unreachable')).toMatchObject({
+        found: 0,
+      });
+      expect(
+        runtime.snapshot().filter((job) => job.data['duty'] === 'revoke_run_credential'),
+      ).toEqual([]);
+      expect(git.credentials.map((row) => row.revocations)).toEqual([0]);
+      // Review round 1: the read skips what was reported before the limit applies, so the next
+      // unreported row is reachable however long the backlog; the reported one is not answered.
+      const again = await new eventing.PostgresUnitOfWork({ pool }).transaction(async (scope) =>
+        credentialStore.unreachableRunCredentials(
+          scope.tx,
+          {
+            endedBefore: iso(5 * 60_000),
+            endedAfter: iso(-48 * 60 * 60_000),
+            now: iso(5 * 60_000),
+            limit: 10,
+          },
+          unreachable.reported(iso(5 * 60_000)),
+        ),
+      );
+      expect(again).toEqual([]);
+    } finally {
+      await pool.query('insert into bindings (project_id, integration_id) values ($1, $2)', [
+        projectId,
+        gitIntegrationId,
+      ]);
+    }
   });
 
   it('leaves a live run’s credential to its runner, and an expired one to its expiry', async () => {

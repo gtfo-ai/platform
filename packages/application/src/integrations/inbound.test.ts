@@ -650,6 +650,7 @@ describe('an integration nobody has bound', () => {
 
     expect(outcome).toMatchObject({ kind: 'accepted', events: 0, ignored: 1 });
     expect(harness.inbox.only().error).toContain('no project is bound to this integration');
+    expect(harness.inbox.only().errorReasons).toEqual(['not_for_this_project']);
     expect(harness.appended).toEqual([]);
   });
 });
@@ -678,6 +679,8 @@ describe('the ignore detail on the row', () => {
     expect(row.error).not.toContain(BINDING_SECRET);
     // The cut happened *after* the replacement, so the count still saw it.
     expect(row.redactionCount).toBe(3);
+    // The code is stored whole beside the cut sentence (WP-73b, backlog 206).
+    expect(row.errorReasons).toEqual(['unsupported_event']);
   });
 });
 
@@ -739,6 +742,8 @@ describe('a human decision arriving from a provider', () => {
     expect(harness.inbox.only().error).toBe(
       'decision_refused: not_permitted: a viewer cannot approve a plan',
     );
+    // WP-73b, backlog 206: the code beside the sentence, which is what the refused list filters on.
+    expect(harness.inbox.only().errorReasons).toEqual(['decision_refused']);
     expect(harness.audit.entries[0]?.error).toBe(
       'decision_refused: not_permitted: a viewer cannot approve a plan',
     );

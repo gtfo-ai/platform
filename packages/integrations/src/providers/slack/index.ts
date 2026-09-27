@@ -127,6 +127,9 @@ export const createSlackRegistration = (deps: SlackRegistrationDeps): SlackProvi
     // WP-32: the binding loader reads the channel out of the validated config, and this is what says
     // which key holds it. `digest_channel` falls back to `channel` in the loader, not here.
     communicationChannels: { channel: 'channel', digestChannel: 'digest_channel' },
+    // WP-73b, backlog 201: the transport is the account's (`inboundConnection.selected` reads the
+    // account's config), so a binding may not carry its own `socket_mode`.
+    accountOnlyFields: ['socket_mode'],
     /**
      * Socket Mode as a held inbound connection (WP-43): selected by `socket_mode`, which defaults to
      * **on** — the shipped manifest's own choice — so an account that says nothing is held.

@@ -58,6 +58,7 @@ beforeAll(async () => {
       redactionCount: 0,
       error,
       unmappedIdentities: unmapped,
+      errorReasons: error === null ? [] : (['unmapped_identity'] as const),
       receivedAt: at as IsoDateTime,
       processedAt: at as IsoDateTime,
     });
@@ -122,6 +123,9 @@ describe('refused inbound deliveries (WP-44, backlog 198)', () => {
     const items = await listRefusedDeliveries(drizzled, integrationId);
     expect(items.map((item) => item.delivery_id)).toEqual(['d3', 'd2', 'd1', 'd0']);
     expect(items.find((item) => item.delivery_id === 'd0')?.unmapped).toBeNull();
+    // d0 predates migration 0055 too: no codes, served because it cannot be told apart.
+    expect(items.find((item) => item.delivery_id === 'd0')?.reasons).toBeNull();
+    expect(items.find((item) => item.delivery_id === 'd1')?.reasons).toEqual(['unmapped_identity']);
     expect(items.find((item) => item.delivery_id === 'd1')?.unmapped).toEqual([
       { provider: 'slack', external_id: 'U1' },
     ]);
@@ -136,5 +140,77 @@ describe('refused inbound deliveries (WP-44, backlog 198)', () => {
         last_seen_at: '2026-09-26T10:00:00.000Z',
       },
     ]);
+  });
+});
+
+/**
+ * WP-73b, PROGRESS backlog 206: the read served every row with an `inbox.error`, newest fifty, so a
+ * busy channel's ordinary ignores pushed the refusal an operator opened it for out of the list.
+ * Sixty ignores newer than one refusal: the refusal is what the read answers.
+ */
+describe('refused deliveries on a busy binding (backlog 206)', () => {
+  it('answers the one refusal behind sixty newer ignores, and none of the ignores', async () => {
+    const org = await pool.query<{ id: string }>(
+      "insert into organizations (name) values ('busy') returning id",
+    );
+    const busy = (
+      await pool.query<{ id: string }>(
+        `insert into integrations (org_id, type, provider, name)
+         values ($1, 'communication', 'slack', 'Busy Slack') returning id`,
+        [org.rows[0]?.id],
+      )
+    ).rows[0]?.id as string;
+    const store = integrationAdapters.createPostgresInboxStore({ sql: pool });
+    const client = await pool.connect();
+    try {
+      await client.query('begin');
+      const tx = { adapter: 'postgres', client } as unknown as Transaction;
+      const row = (
+        deliveryId: string,
+        at: string,
+        error: string,
+        reasons: readonly ('unsupported_event' | 'decision_refused')[],
+      ) => ({
+        provider: 'slack',
+        deliveryId,
+        integrationId: busy as Id,
+        headers: {},
+        payload: {},
+        verified: true,
+        redactionCount: 0,
+        error,
+        unmappedIdentities: [],
+        errorReasons: reasons,
+        receivedAt: at as IsoDateTime,
+        processedAt: at as IsoDateTime,
+      });
+      await store.record(
+        tx,
+        row('refused', '2026-09-27T08:00:00.000Z', 'decision_refused: not_permitted: a viewer', [
+          'decision_refused',
+        ]),
+      );
+      for (let index = 0; index < 60; index += 1) {
+        const at = new Date(Date.parse('2026-09-27T09:00:00.000Z') + index * 1000).toISOString();
+        await store.record(
+          tx,
+          row(
+            `ignored-${index}`,
+            at,
+            'unsupported_event: message is not a reply in a task thread',
+            ['unsupported_event'],
+          ),
+        );
+      }
+      await client.query('commit');
+    } finally {
+      client.release();
+    }
+
+    const items = await listRefusedDeliveries(drizzled, busy);
+    expect(items.map((item) => [item.delivery_id, item.reasons])).toEqual([
+      ['refused', ['decision_refused']],
+    ]);
+    expect((await store.find('slack', 'ignored-0'))?.errorReasons).toEqual(['unsupported_event']);
   });
 });

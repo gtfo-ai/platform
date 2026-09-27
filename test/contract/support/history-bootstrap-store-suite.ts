@@ -280,6 +280,45 @@ export const runHistoryBootstrapStoreContract = (options: {
       },
     );
 
+    it.each([
+      ['already recorded', 'record'],
+      ['abandoned', 'abandon'],
+    ] as const)(
+      'answers false for an out-of-range claim on a chunk %s, as the idempotency check decides first',
+      async (_label, ending) => {
+        // WP-73b, PROGRESS backlog 239: PostgreSQL's `update … where recorded_at is null and
+        // abandoned_at is null` touches no row here, so the check constraint is never evaluated
+        // and the answer is `false`. That is the port's answer; the in-memory double used to throw
+        // before asking, and this is the case that pins which of the two a second writer meets.
+        const context = await start();
+        const { chunkIds } = await seed(context);
+        if (ending === 'record') {
+          await run(context, (tx) =>
+            context.store.markChunkRecorded(tx, chunkIds[0], {
+              at: AT,
+              proposals: 0,
+              refusedProposals: 0,
+              mergeRequestsRead: 3,
+            }),
+          );
+        } else {
+          await run(context, (tx) =>
+            context.store.abandonChunk(tx, chunkIds[0], { at: AT, detail: 'nothing arrived' }),
+          );
+        }
+        expect(
+          await run(context, (tx) =>
+            context.store.markChunkRecorded(tx, chunkIds[0], {
+              at: AT,
+              proposals: 0,
+              refusedProposals: 0,
+              mergeRequestsRead: 21,
+            }),
+          ),
+        ).toBe(false);
+      },
+    );
+
     it('completes a batch exactly once, and only when every chunk has reported', async () => {
       const context = await start();
       const { batchId, chunkIds } = await seed(context);

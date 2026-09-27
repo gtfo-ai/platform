@@ -46,7 +46,14 @@
  */
 
 import { readdirSync } from 'node:fs';
-import { noSecretsRedactor } from '@platform/application';
+import type { IntegrationRef } from '@platform/application';
+import {
+  createIntegrationActionExecutor,
+  createIntegrationEgressPolicy,
+  createVirtualTimer,
+  IntegrationEgressRefusedError,
+  noSecretsRedactor,
+} from '@platform/application';
 import { fixedClock } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { gitlabProviderRegistration } from './gitlab/index.js';
@@ -206,4 +213,78 @@ describe('every provider’s published egress host', () => {
       expect(hostOf(testCase.port(testCase.otherHost))).toBe(testCase.otherHost);
     });
   });
+});
+
+/**
+ * **A defaulted host is refused at the call** (WP-73b, PROGRESS backlog 245). Sentry and Slack
+ * default `base_url`; a binding that leaves it out publishes the default's host, and the executor
+ * refuses it unless an operator declared it. The write-time half — `createIntegration` sweeping the
+ * catalogue's `configDefaults` — is `test/integration/server/onboarding.integration.test.ts`'s;
+ * this is the call-time half the entry said nothing pinned. Built through each registration with
+ * its config parsed as the binding loader parses it, so the default is the schema's own.
+ */
+describe('a provider’s defaulted base_url at the call', () => {
+  const executor = createIntegrationActionExecutor({
+    egress: createIntegrationEgressPolicy(['sentry.example.test', 'slack.example.test']),
+    auditLog: {
+      record: async () => {
+        throw new Error('a refused call writes no audit row');
+      },
+    } as never,
+    redactor: noSecretsRedactor(),
+    timer: createVirtualTimer({ autoAdvance: true }),
+    clock,
+  });
+  const DEFAULTED = [
+    [
+      'sentry',
+      'sentry.io',
+      () =>
+        sentryProviderRegistration.create({
+          integrationId: INTEGRATION_ID,
+          config: sentryProviderRegistration.configSchema.parse({
+            organization: 'acme-example',
+            auth_token: 'FAKE-sentry-auth-token-0123456789',
+          }),
+          secrets: { auth_token: 'FAKE-sentry-auth-token-0123456789' },
+          redactor: noSecretsRedactor(),
+        }),
+    ],
+    [
+      'slack',
+      'slack.com',
+      () =>
+        slackProviderRegistration.create({
+          integrationId: INTEGRATION_ID,
+          config: slackProviderRegistration.configSchema.parse({
+            channel: 'C0FAKECHAN1',
+            bot_token: 'xoxb-FAKE-bot-token-0123456789',
+          }),
+          secrets: { bot_token: 'xoxb-FAKE-bot-token-0123456789' },
+          redactor: noSecretsRedactor(),
+        }),
+    ],
+  ] as const;
+
+  it.each(DEFAULTED)(
+    '%s publishes %s and the executor refuses it, sending nothing',
+    async (_provider, host, build) => {
+      const port = build() as { ref: IntegrationRef };
+      expect(port.ref.host).toBe(host);
+      let performed = 0;
+      await expect(
+        executor.execute({
+          integration: port.ref,
+          action: 'probe',
+          mutating: false,
+          payload: {},
+          perform: async () => {
+            performed += 1;
+            return null;
+          },
+        }),
+      ).rejects.toBeInstanceOf(IntegrationEgressRefusedError);
+      expect(performed).toBe(0);
+    },
+  );
 });

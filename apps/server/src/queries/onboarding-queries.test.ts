@@ -25,7 +25,9 @@ import { describe, expect, it } from 'vitest';
 import { HttpError } from '../errors.js';
 import {
   assertHostIsDeclared,
+  assertNoAccountOnlyFields,
   assertNoCredentialInConfig,
+  createIntegration,
   environmentSecretSource,
   ForbiddenSecretNameError,
   MissingSecretError,
@@ -344,4 +346,75 @@ describe('assertHostIsDeclared', () => {
     // turn a number into a 500 on the way to the schema that will refuse it properly.
     expect(refuse({ max_pages: 10, mint_credentials: false, project: null })).toBeNull();
   });
+});
+
+/**
+ * WP-73b, PROGRESS backlog 201: a key only the account decides is refused on a binding, by name —
+ * Slack's `socket_mode`, which the held connection reads off `integrations.config` alone.
+ */
+describe('assertNoAccountOnlyFields', () => {
+  const SLACK_ID = '00000000-0000-4000-8000-0000000000e1';
+  const known = [{ id: SLACK_ID, provider: 'slack' }];
+
+  it('refuses socket_mode on a Slack binding, naming the field and where it lives', () => {
+    expect(() =>
+      assertNoAccountOnlyFields(
+        [{ integrationId: SLACK_ID, config: { socket_mode: false } }],
+        known,
+      ),
+    ).toThrow(/socket_mode is set on the slack integration .* never on a project's binding/);
+  });
+
+  it('accepts a Slack binding that leaves it to the account, and a provider with no such field', () => {
+    expect(() =>
+      assertNoAccountOnlyFields(
+        [{ integrationId: SLACK_ID, config: { channel: 'C0FAKE' } }, { integrationId: SLACK_ID }],
+        known,
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertNoAccountOnlyFields(
+        [{ integrationId: 'gitlab-1', config: { socket_mode: false } }],
+        [{ id: 'gitlab-1', provider: 'gitlab' }],
+      ),
+    ).not.toThrow();
+  });
+});
+
+/**
+ * WP-73b, PROGRESS backlog 245 (review round 1): the write-time default sweep at the unit tier. The
+ * host guard runs before the create touches the database, so a database that answers nothing is
+ * enough — a create that got past the guard would fail on it, which is a different error.
+ */
+describe('createIntegration and a provider’s defaulted base_url', () => {
+  const defaulted = SHIPPED_PROVIDERS.filter(
+    (entry) => entry.id === 'sentry' || entry.id === 'slack',
+  );
+
+  it('has the two providers whose base_url has a default, so the cases below run', () => {
+    expect(defaulted.map((entry) => entry.id).toSorted()).toEqual(['sentry', 'slack']);
+  });
+
+  it.each(defaulted.map((entry) => [entry.id, entry] as const))(
+    'refuses a %s body with no base_url when only another host is declared',
+    async (id, provider) => {
+      const failure = await createIntegration({} as never, {
+        orgId: 'org-1',
+        integration: {
+          type: provider.type,
+          provider: id,
+          name: `${id} defaulted`,
+          config: {},
+          secretRefs: {},
+        },
+        provider,
+        egress: createIntegrationEgressPolicy([`${id}.example.test`]),
+        secretSource: { read: async () => 'unused' } as never,
+        secretKey: {} as never,
+        newId: () => 'id-1',
+      }).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(HttpError);
+      expect((failure as HttpError).code).toBe('integration_host_not_permitted');
+    },
+  );
 });

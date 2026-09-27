@@ -76,3 +76,23 @@ export const createDatabasePool = (
     },
   };
 };
+
+/**
+ * A dedicated `pg.Client` — the one production construction site of a bare client (WP-73b,
+ * PROGRESS backlog 247), with its `'error'` listener attached **here**, before it can connect.
+ *
+ * The pool rule's reason holds one level down: an `EventEmitter` throws an `'error'` nobody listens
+ * for, and a server-side termination (`57P01`) of a connected client arrives as exactly that event
+ * — `test/integration/support/postgres.integration.test.ts` measured the process ending on it. The
+ * caller decides what the event means; `onError` is required so "a client without one" is not a
+ * thing a reviewer has to notice. `pool-errors.test.ts`'s client census allows this file and
+ * refuses a construction anywhere else in production code.
+ */
+export const createDatabaseClient = (
+  connectionString: string,
+  onError: (error: Error) => void,
+): pg.Client => {
+  const client = new pg.Client({ connectionString });
+  client.on('error', onError);
+  return client;
+};

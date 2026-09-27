@@ -133,8 +133,9 @@ const world = (options: WorldOptions = {}) => {
       ...options.git,
     },
     taskManagement: {
-      matchTickets: async () =>
-        (options.matches ?? ['ACME-3']).map(
+      // A provider answers at most `limit` matches, which is what the batch-level cut is read off.
+      matchTickets: async (_rule: unknown, query: { readonly limit: number }) =>
+        (options.matches ?? ['ACME-3']).slice(0, query.limit).map(
           (key) =>
             ({
               ref: {
@@ -361,6 +362,38 @@ describe('collecting a project’s merged history', () => {
     expect(report.tickets).toBe(0);
     expect(report.reason).toContain('no ticket status to `done`');
     expect(harness.audit.entries.map((entry) => entry.action)).not.toContain('match_tickets');
+  });
+
+  /**
+   * WP-73b, PROGRESS backlog 237 (2): the fetch asked for exactly the batch's ticket slots, so a
+   * window with fifty closed tickets and one with five thousand read the same, and the batch said
+   * nothing. It asks for one more and says so when the window holds more — both ways (rule 42).
+   */
+  it('says when the window holds more closed tickets than the batch has slots, and reads none past them', async () => {
+    const keys = Array.from({ length: 6 }, (_, index) => `ACME-${index + 1}`);
+    const harness = world({ merged: 1, matches: keys });
+    const report = await collect(
+      harness,
+      await seedBatch(harness, { mergeRequests: 1, batchSize: 1 }),
+    );
+
+    expect(report.tickets).toBe(5);
+    expect(report.reason).toContain('more closed tickets than this batch');
+    expect(report.reason).toContain('5 ticket slots');
+    // The probe match is an identity, never a sixth ticket read.
+    expect(harness.audit.entries.filter((entry) => entry.action === 'read_ticket')).toHaveLength(5);
+  });
+
+  it('says nothing about a cut when the window fills the slots exactly', async () => {
+    const keys = Array.from({ length: 5 }, (_, index) => `ACME-${index + 1}`);
+    const harness = world({ merged: 1, matches: keys });
+    const report = await collect(
+      harness,
+      await seedBatch(harness, { mergeRequests: 1, batchSize: 1 }),
+    );
+
+    expect(report.tickets).toBe(5);
+    expect(report.reason ?? '').not.toContain('more closed tickets');
   });
 
   it('does nothing on a redelivery once the batch has moved past collecting', async () => {

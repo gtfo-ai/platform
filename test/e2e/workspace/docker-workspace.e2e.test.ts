@@ -41,6 +41,7 @@ import {
   type GitProviderPort,
   type MintedCredential,
   noSecretsRedactor,
+  runCredentialHandle,
   runCredentialWrites,
 } from '@platform/application';
 import type { Id } from '@platform/contracts';
@@ -1721,7 +1722,7 @@ describe('a minted run credential against a credentialled git server (WP-76)', (
       return answer.credential;
     };
     const revoke = async (runId: string, credential: MintedCredential) =>
-      writes.revoke(credential, {
+      writes.revoke(runCredentialHandle(credential, git.ref), {
         runId: runId as Id,
         taskId: randomUUID() as Id,
         projectId: randomUUID() as Id,

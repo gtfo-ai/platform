@@ -1,0 +1,24 @@
+-- 0055 — why a delivery produced no event, as codes rather than as a sentence (WP-73b, PROGRESS
+-- backlog 206).
+--
+-- `inbox.error` is one redacted, bounded string: every `reason: detail` line a delivery produced,
+-- the adapters' ignores and the aggregates' refusals together. The refused-deliveries read
+-- (`GET /api/integrations/:id/refused-deliveries`, WP-44) could therefore only filter on
+-- `error is not null`, so on a busy Slack channel — every non-thread message is ignored as
+-- `unsupported_event` — or a GitLab binding receiving pushes to `agentic/*` branches, the newest
+-- fifty rows were ignores and the `unmapped_identity` the operator opened the list for was not
+-- among them. Parsing the sentence back would be the fragile half: it is redacted and cut.
+--
+-- **The codes are stored where they are produced.** The ingress already holds each reason as a
+-- code (`IgnoredDelivery.reason`, and `decision_refused` for a decision an aggregate refused) and
+-- writes the distinct set here beside the sentence. They are the platform's own enum values, not
+-- provider text, so nothing in this column is redacted or bounded.
+--
+-- **Nullable, no default**: a row written before this migration recorded no codes, and "not
+-- recorded" is not "no reason" (standing rule 18). The read serves such a row and says why.
+--
+-- The read stays on `inbox_refused_idx` (0047): the codes are a filter over the rows that index
+-- already orders, so on a channel that is nearly all ignores the read walks more index entries
+-- before it has fifty refusals — bounded by the rows with an error for this integration, which
+-- is the index's own size.
+alter table inbox add column error_reasons text[];

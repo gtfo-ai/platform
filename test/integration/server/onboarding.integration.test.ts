@@ -17,7 +17,7 @@
  *    exactly that reason.
  */
 import type { Transaction } from '@platform/application';
-import { allowAnyIntegrationHost } from '@platform/application';
+import { allowAnyIntegrationHost, createIntegrationEgressPolicy } from '@platform/application';
 import type { Id, IntegrationType } from '@platform/contracts';
 import {
   knowledge as knowledgeAdapters,
@@ -323,6 +323,53 @@ describe('the wizard’s integration writes', () => {
       }),
     ).rejects.toThrow(/declares no credential field/);
   });
+
+  /**
+   * WP-73b, PROGRESS backlog 245: Sentry and Slack default `base_url`, and the host guard used to
+   * sweep only the URLs a body contains — so a body that left `base_url` out was written with an
+   * undeclared *effective* host and refused only at the first call. One case per defaulted provider,
+   * read off the catalogue so a third provider with a defaulted URL is covered the day it exists.
+   */
+  const defaulted = SHIPPED_PROVIDERS.filter((entry) =>
+    Object.values(entry.configDefaults).some(
+      (value) => typeof value === 'string' && /^https?:\/\//.test(value),
+    ),
+  );
+
+  it('finds exactly the providers whose URL is defaulted (the scope, before the cases)', () => {
+    expect(defaulted.map((entry) => entry.id)).toEqual(['sentry', 'slack']);
+  });
+
+  it.each(defaulted.map((entry) => [entry.id, entry] as const))(
+    'refuses a %s body that leaves base_url to its undeclared default, and writes nothing',
+    async (id, provider) => {
+      const before = await pool.query<{ count: number }>(
+        'select count(*)::int as count from integrations',
+      );
+      await expect(
+        createIntegration(db, {
+          orgId,
+          integration: {
+            type: provider.type,
+            provider: id,
+            name: `wiz ${id} defaulted host`,
+            config: {},
+            secretRefs: {},
+          },
+          provider,
+          // Declares a host — just not the default one.
+          egress: createIntegrationEgressPolicy([`${id}.example.test`]),
+          secretSource: source,
+          secretKey: key,
+          newId: () => crypto.randomUUID(),
+        }),
+      ).rejects.toMatchObject({ statusCode: 403, code: 'integration_host_not_permitted' });
+      const after = await pool.query<{ count: number }>(
+        'select count(*)::int as count from integrations',
+      );
+      expect(after.rows[0]?.count).toBe(before.rows[0]?.count);
+    },
+  );
 
   it('refuses an empty environment value rather than sealing an empty credential', async () => {
     // Standing rule 18: an unset credential that produces a permissive result is the defect.

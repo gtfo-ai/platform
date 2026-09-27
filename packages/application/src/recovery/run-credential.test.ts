@@ -106,6 +106,7 @@ const harness = (
   } as unknown as PipelineIntegrationsPort;
   const store: UnrevokedRunCredentialStore = {
     unrevokedRunCredentials: async () => [],
+    unreachableRunCredentials: async () => [],
     unrevokedRunCredential: async (_tx, input) => {
       revalidations.push(input);
       return options.revalidated === undefined ? STRANDED : options.revalidated;

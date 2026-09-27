@@ -26,7 +26,8 @@
  *     134); and an approval is posted with buttons only while some process holds the chat socket
  *     (backlog 200, migration 0054).
  *  6. **A run credential quoted in text a process that never minted it stores** is absent from the
- *     `inbox` row it writes (backlog 154, decision (a): the pattern rule is the defence there). The
+ *     `inbox` row it writes and, since WP-73b, from the `mr.review.comment` event it appends
+ *     (backlog 154, decision (a): the pattern rule is the defence there; backlog 260). The
  *     token is planted rather than minted — a mint needs the launcher's control plane, which only
  *     the Docker tier has — and that is the whole of decision (a)'s claim: whatever minted it, the
  *     process storing the text never knew the value.
@@ -283,9 +284,17 @@ describe('the shipped topology: app (ROLE=all, no launcher) beside runner (ROLE=
     expect(stored[0]?.redaction_count).toBeGreaterThan(0);
     // The `mr.review.comment` **event** is the other half, and it is the adapter's rather than the
     // ingress's: a real provider's normaliser redacts the whole delivery with the loader's platform
-    // redactor before any branch reads it (`inbound-redaction.test.ts`). The fake registration
-    // ignores the caller's redactor, so this tier cannot assert it — measured here at WP-72 (the
-    // event carried the value) and filed as PROGRESS backlog 260 rather than asserted as a pass.
+    // redactor before any branch reads it. The fake registration dropped that redactor until
+    // WP-73b (PROGRESS backlog 260 — WP-72 measured the event carrying the value); it now applies it
+    // to the body before the fake's normaliser reads it, so the event is asserted here too — the
+    // pattern half of an inbound **event**, which no other tier asserts.
+    const comments = await pipeline.query<{ payload: unknown }>(
+      "select payload from events where type = 'mr.review.comment' and payload ->> 'thread_id' = 'disc-topology-1'",
+    );
+    expect(comments).toHaveLength(1);
+    const eventText = JSON.stringify(comments[0]?.payload);
+    expect(eventText).not.toContain(mintedShape);
+    expect(eventText).toContain('[REDACTED');
   }, 300_000);
 });
 

@@ -52,7 +52,7 @@ describe('the egress allow-list', () => {
     expect(build().egress.hosts).not.toContain('registry.npmjs.org');
   });
 
-  it('is only the git host in local provider mode, where nothing talks to a model host', () => {
+  it('is only the git host when the platform names no egress hosts of its own', () => {
     expect(build({ platformEgressHosts: [] }).egress.hosts).toEqual(['git.example.com']);
   });
 

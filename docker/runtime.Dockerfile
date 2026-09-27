@@ -161,20 +161,22 @@ WORKDIR /work/repo
 # credential helper the workspace's `credential.helper=!agentic-runlet credential` invokes.
 ENTRYPOINT ["/usr/local/bin/agentic-runlet"]
 
-# **Waived, and a defect rather than a false positive** (PROGRESS backlog 256, WP-71): under `/bin/sh`
-# a pipeline reports the status of its *last* command, so each `<tool> --version | head -1` below
-# passes when the tool itself is missing or broken. Fixing it changes what the image build runs,
-# which the row that found it could not verify without building an image.
-# hadolint ignore=DL4006
+# **No pipes** (WP-73b, PROGRESS backlog 256): under `/bin/sh` a pipeline reports its *last*
+# command's status, so each `<tool> --version | head -1` passed with a tool that is present but
+# cannot run — a wrong architecture, a missing library, a truncated download, which `acli`'s moving
+# `latest` URL can serve. Each check is now the tool's own exit status. The shim's check tests its
+# **output** (it exits non-zero on an unknown mode by design), so it is captured and matched rather
+# than piped into `grep -q`.
 RUN set -eux; \
     claude --version; \
-    agentic-runlet unknown-mode 2>&1 | grep -q 'unknown mode'; \
-    gh --version | head -1; \
-    glab --version | head -1; \
-    logcli --version 2>&1 | head -1; \
+    runlet_says="$(agentic-runlet unknown-mode 2>&1 || true)"; \
+    case "$runlet_says" in *'unknown mode'*) ;; *) echo "agentic-runlet: $runlet_says" >&2; exit 1 ;; esac; \
+    gh --version; \
+    glab --version; \
+    logcli --version 2>&1; \
     sentry-cli --version; \
-    jira version | head -1; \
-    acli --version | head -1
+    jira version; \
+    acli --version
 
 LABEL org.opencontainers.image.title="platform-runtime" \
       org.opencontainers.image.description="Run container: claude CLI, agent CLIs and the agentic-runlet shim (TD-021, TD-025)." \

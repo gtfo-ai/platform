@@ -73,9 +73,10 @@
  *   listed, not analysed).
  */
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, resolve as resolvePath } from 'node:path';
+import { join } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { isProgram } from './is-program.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 
@@ -704,10 +705,8 @@ const output = argument('--out', join(root, 'THIRD_PARTY_NOTICES.md'));
  * Only when this file is the program. The exported halves above are what `scripts/notices.test.ts`
  * drives directly; the test also spawns this file, which is the artefact `verify` runs.
  */
-const isProgram =
-  process.argv[1] !== undefined && fileURLToPath(import.meta.url) === resolvePath(process.argv[1]);
-
-if (isProgram) {
+// Real paths on both sides, so a run through a symlinked path is still the program (backlog 258).
+if (isProgram(import.meta.url)) {
   try {
     const documents = parseLockfile(readFileSync(join(root, 'pnpm-lock.yaml'), 'utf8'));
     const { ids, variantOf } = productionClosure(documents);

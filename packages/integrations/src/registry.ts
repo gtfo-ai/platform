@@ -192,6 +192,13 @@ export interface ProviderRegistration<TType extends IntegrationType> {
   readonly communicationChannels?: CommunicationChannelFields;
   /** Present for a provider that can deliver over a held connection (WP-43). */
   readonly inboundConnection?: InboundConnectionSupport;
+  /**
+   * Config keys only the **account** (`integrations.config`) may set — a binding write that names
+   * one is refused (WP-73b, PROGRESS backlog 201). Slack's `socket_mode` is the one: the held
+   * connection reads the account's value, so a binding's copy could only disagree with it. Must
+   * exist in `configSchema`, checked at registration like `secretFields`. Absent is none.
+   */
+  readonly accountOnlyFields?: readonly string[];
   create(input: ProviderCreateInput): IntegrationPortByType[TType];
 }
 
@@ -241,6 +248,14 @@ export const createIntegrationRegistry = (
           registration.id,
           `secret field "${field}" does not exist in the config schema; it would be stored and ` +
             'rendered as plain configuration (BD-002)',
+        );
+      }
+    }
+    for (const field of registration.accountOnlyFields ?? []) {
+      if (!(field in shape)) {
+        throw new ProviderRegistrationError(
+          registration.id,
+          `account-only field "${field}" does not exist in the config schema; a binding write could not name it anyway`,
         );
       }
     }

@@ -52,6 +52,7 @@ import { projectRecordSchema } from '@platform/contracts';
 import { DEFAULT_AUTONOMY_LEVEL, materialiseAutonomy } from '@platform/domain';
 import { db as dbAdapters, secrets as secretAdapters } from '@platform/infrastructure';
 import type { ProviderCatalogueEntry } from '@platform/integrations';
+import { findShippedProvider } from '@platform/integrations';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { HttpError } from '../errors.js';
 import { completeCommandAttempt, findCommandAttempt } from './idempotency-queries.js';
@@ -429,13 +430,11 @@ export const assertNoCredentialInConfig = (
  * Measured against the five shipped schemas, nothing else in a config document parses as an absolute
  * URL — a `project` is `acme/api`, a `channel` is `#agentic`, a `team_id` is `T…`, an `organization`
  * is a slug — so the sweep costs no false refusal on the shipped field *values* and covers a sixth
- * provider the day it exists. Two edges the round-1 reviewer measured, stated rather than implied.
- * **A false acceptance**: the sweep sees only URLs *present* in the document, and Sentry
- * (`base_url` defaults to `https://sentry.io`) and Slack default theirs, so a body with no
- * `base_url` passes this guard with an undeclared *effective* host and is refused only at the
- * call — no credential leaves, but the operator learns it from the first call rather than from
- * the `POST`; sweeping the provider-parsed config would close it, and it is filed on its own as
- * PROGRESS backlog 245 — backlog 130's census closed the writer half only. **A false refusal**: `new URL()` is the parser and any colon-bearing string parses —
+ * provider the day it exists. **A default is swept too** (WP-73b, PROGRESS backlog 245): the caller
+ * passes the body with the provider's `configDefaults` under it, so a Sentry or Slack body that
+ * leaves `base_url` out is judged by the host it will actually call. That is the *effective*
+ * document field by field, not a full parse of the provider's schema: the create body carries no
+ * credential fields and a strict parse would refuse every one of them. **A false refusal**: `new URL()` is the parser and any colon-bearing string parses —
  * `'Mon: 9-5'` and `mailto:…` both answer 403 `integration_host_not_permitted` — so a value that
  * is not a URL is not "left alone" if it carries a colon; the shipped schemas have no such field,
  * and the direction is the fail-closed one.
@@ -515,7 +514,12 @@ export const createIntegration = async (
   },
 ): Promise<CreateIntegrationResult> => {
   assertNoCredentialInConfig(input.integration.config, input.provider);
-  assertHostIsDeclared(input.integration.config, input.egress);
+  // The body over the provider's defaults: a field the body leaves out is judged by the value the
+  // provider will use for it (WP-73b, backlog 245).
+  assertHostIsDeclared(
+    { ...input.provider.configDefaults, ...input.integration.config },
+    input.egress,
+  );
 
   const declared = new Set(input.provider.secretFields);
   const unknown = Object.keys(input.integration.secretRefs).filter((field) => !declared.has(field));
@@ -642,6 +646,33 @@ export const listProjectBindings = async (
 };
 
 /**
+ * WP-73b, PROGRESS backlog 201: a binding may not set a key only the **account** decides — Slack's
+ * `socket_mode`, which selects the held connection off `integrations.config` alone. The strict
+ * provider schema accepted it on a binding, where it half-applied: the transport stayed the
+ * account's while the binding's merged value flipped that project's buttons. Refused by name, so
+ * the operator is told where the setting lives. The provider's own declaration is the list
+ * (`accountOnlyFields`), so a provider this build does not ship refuses nothing here.
+ */
+export const assertNoAccountOnlyFields = (
+  items: readonly { readonly integrationId: string; readonly config?: JsonObject }[],
+  known: readonly { readonly id: string; readonly provider: string }[],
+): void => {
+  for (const item of items) {
+    const provider = known.find((row) => row.id === item.integrationId)?.provider;
+    const accountOnly =
+      provider === undefined ? [] : (findShippedProvider(provider)?.accountOnlyFields ?? []);
+    const named = accountOnly.filter((field) => item.config !== undefined && field in item.config);
+    if (named.length > 0) {
+      throw new HttpError(
+        400,
+        'invalid_request',
+        `${named.join(', ')} is set on the ${provider} integration ${item.integrationId}, never on a project's binding: the account's value is the one every project uses`,
+      );
+    }
+  }
+};
+
+/**
  * Replaces a project's bindings with exactly the set given.
  *
  * One transaction: a wizard that removed every binding and then failed to add the new ones would
@@ -656,7 +687,7 @@ export const replaceProjectBindings = async (
   await database.transaction(async (tx) => {
     if (ids.length > 0) {
       const known = await tx
-        .select({ id: integrations.id })
+        .select({ id: integrations.id, provider: integrations.provider })
         .from(integrations)
         .where(inArray(integrations.id, ids));
       const missing = ids.filter((id) => !known.some((row) => row.id === id));
@@ -667,6 +698,7 @@ export const replaceProjectBindings = async (
           `no integration with id ${missing.join(', ')}; create the integration before binding it`,
         );
       }
+      assertNoAccountOnlyFields(items, known);
     }
     await tx.delete(bindings).where(eq(bindings.projectId, projectId));
     for (const item of items) {

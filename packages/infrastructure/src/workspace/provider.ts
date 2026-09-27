@@ -306,8 +306,6 @@ export interface DockerWorkspaceProviderOptions {
   readonly controlRoot: string;
   /** The shared `repo-cache` volume holding one bare mirror per project. */
   readonly cacheVolume: string;
-  /** Where the cache volume is mounted inside a helper container. */
-  readonly cacheMount?: string;
   /** A network with a route out, for the two helpers that must reach the git host. */
   readonly helperNetwork: string;
   /** The network the egress sidecar is connected to besides the run's own. */
@@ -425,7 +423,13 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
   readonly #controlVolume: string;
   readonly #controlRoot: string;
   readonly #cacheVolume: string;
-  readonly #cacheMount: string;
+  /**
+   * Where the cache volume is mounted inside **every** container that reads it — the helpers and the
+   * run container alike, which is why it is the constant and not an option (WP-73b, PROGRESS
+   * backlog 153): a clone's `objects/info/alternates` names this path, and the run container's
+   * mount (`hardening.ts`) must be at the same one or every pre-run object is unreadable.
+   */
+  readonly #cacheMount = CONTAINER_CACHE_MOUNT;
   readonly #helperNetwork: string;
   readonly #skillCatalogue: PlatformSkillCatalogue;
   readonly #egressNetwork: string;
@@ -446,7 +450,6 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     this.#controlVolume = options.controlVolume;
     this.#controlRoot = options.controlRoot;
     this.#cacheVolume = options.cacheVolume;
-    this.#cacheMount = options.cacheMount ?? CONTAINER_CACHE_MOUNT;
     this.#helperNetwork = options.helperNetwork;
     this.#skillCatalogue = options.skills;
     this.#egressNetwork = options.egressNetwork;

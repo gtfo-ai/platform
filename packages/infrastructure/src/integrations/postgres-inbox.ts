@@ -39,8 +39,8 @@ import type { SqlExecutor } from '../events/sql.js';
 
 const INSERT_DELIVERY = `insert into inbox
     (provider, delivery_id, integration_id, received_at, headers, payload, processed_at, error,
-     redaction_count, verified, unmapped_identities)
-  values ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8, $9, $10, $11::jsonb)
+     redaction_count, verified, unmapped_identities, error_reasons)
+  values ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8, $9, $10, $11::jsonb, $12::text[])
   on conflict (provider, delivery_id) do nothing`;
 
 interface InboxRow extends Record<string, unknown> {
@@ -55,6 +55,7 @@ interface InboxRow extends Record<string, unknown> {
   readonly redaction_count: number;
   readonly verified: boolean;
   readonly unmapped_identities: unknown;
+  readonly error_reasons: string[] | null;
 }
 
 /** `inbox.unmapped_identities` read back; a row from before migration 0047 recorded none. */
@@ -82,6 +83,8 @@ const toDelivery = (row: InboxRow): InboxDelivery => ({
   redactionCount: row.redaction_count,
   error: row.error,
   unmappedIdentities: identitiesOf(row.unmapped_identities),
+  // A row from before migration 0055 recorded none; the port's reader sees an empty list.
+  errorReasons: (row.error_reasons ?? []) as InboxDelivery['errorReasons'],
   receivedAt: row.received_at.toISOString() as IsoDateTime,
   processedAt: (row.processed_at?.toISOString() ?? null) as IsoDateTime | null,
 });
@@ -101,6 +104,7 @@ export const createPostgresInboxStore = (options: { readonly sql: SqlExecutor })
       delivery.redactionCount,
       delivery.verified,
       JSON.stringify(delivery.unmappedIdentities),
+      [...delivery.errorReasons],
     ]);
     return (result.rowCount ?? 0) > 0;
   },
@@ -108,7 +112,7 @@ export const createPostgresInboxStore = (options: { readonly sql: SqlExecutor })
   find: async (provider: string, deliveryId: string): Promise<InboxDelivery | null> => {
     const { rows } = await options.sql.query<InboxRow>(
       `select provider, delivery_id, integration_id, received_at, headers, payload, processed_at,
-              error, redaction_count, verified, unmapped_identities
+              error, redaction_count, verified, unmapped_identities, error_reasons
          from inbox
         where provider = $1 and delivery_id = $2`,
       [provider, deliveryId],

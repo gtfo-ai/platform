@@ -484,9 +484,12 @@ const closedTickets = async (input: {
     };
   }
   const rule: TicketMatchRule = { kind: 'status', status: closedStatus };
+  // One more than there are slots (WP-73b, PROGRESS backlog 237 (2)): the extra match is never read
+  // as a ticket — it is the only way to tell a window with exactly as many closed tickets as slots
+  // from one with thousands, which a fetch of exactly `limit` could never answer.
   const matches = await input.tickets.matches(
     rule,
-    { since: input.since, limit: input.limit },
+    { since: input.since, limit: input.limit + 1 },
     input.context,
   );
   if (matches === null) {
@@ -505,5 +508,9 @@ const closedTickets = async (input: {
       read.push(ticket);
     }
   }
-  return { tickets: read, reads: matches.length, reason: null };
+  const cut =
+    matches.length > input.limit
+      ? `the window holds more closed tickets than this batch's ${input.limit} ticket slots (${HISTORY_TICKETS_PER_CHUNK} per run), so the sample carries ${input.limit} of them and not the rest`
+      : null;
+  return { tickets: read, reads: Math.min(matches.length, input.limit), reason: cut };
 };

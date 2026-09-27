@@ -34,11 +34,11 @@
  *    idempotency — and the recovery's ending (WP-48) — is exercised here as well as there.
  * 6. **The coverage claim's bound, as the database states it** (WP-66). Migration 0052's
  *    `history_bootstrap_chunks_read_within_shown` refuses a `merge_requests_read` outside
- *    `0 … merge_requests`, and `markChunkRecorded` here throws for the same values — **before** the
- *    idempotency predicate is asked, where PostgreSQL would answer `false` without evaluating the
- *    check for a row the `where` excluded. That order is stricter, never kinder: a caller that
- *    passes an unbounded claim fails here on every call. The store contract suite asserts the
- *    refusal against both.
+ *    `0 … merge_requests`, and `markChunkRecorded` here throws for the same values — **after** the
+ *    idempotency predicate, in the adapter's order (WP-73b, PROGRESS backlog 239): an out-of-range
+ *    claim on a chunk already recorded or abandoned answers `false` here as in PostgreSQL, whose
+ *    `where` excludes the row before the check is evaluated. It used to throw first; the store
+ *    contract suite now pins both the refusal on an open chunk and the `false` on a closed one.
  */
 import type { Id, IsoDateTime } from '@platform/contracts';
 import type {
@@ -150,19 +150,20 @@ export const createMemoryHistoryBootstrapStore = (
 
     markChunkRecorded: async (_tx, chunkId, outcome) => {
       const chunk = chunks.find((row) => row.id === chunkId);
+      // Divergence 6's order: the idempotency predicate first, then the bound — the adapter's
+      // `where` excludes the row before the check constraint could be evaluated.
+      if (chunk === undefined || chunk.recordedAt !== null || chunk.abandonedAt !== null) {
+        return false;
+      }
       if (
-        chunk !== undefined &&
-        (!Number.isInteger(outcome.mergeRequestsRead) ||
-          outcome.mergeRequestsRead < 0 ||
-          outcome.mergeRequestsRead > chunk.mergeRequests)
+        !Number.isInteger(outcome.mergeRequestsRead) ||
+        outcome.mergeRequestsRead < 0 ||
+        outcome.mergeRequestsRead > chunk.mergeRequests
       ) {
         throw new Error(
           `chunk ${chunkId}: merge_requests_read ${outcome.mergeRequestsRead} is outside 0 … ${chunk.mergeRequests} ` +
             '(history_bootstrap_chunks_read_within_shown)',
         );
-      }
-      if (chunk === undefined || chunk.recordedAt !== null || chunk.abandonedAt !== null) {
-        return false;
       }
       replaceChunk({
         ...chunk,

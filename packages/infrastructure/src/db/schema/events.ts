@@ -120,6 +120,11 @@ export const inbox = pgTable(
       jsonb('unmapped_identities').$type<
         readonly { readonly provider: string; readonly external_id: string }[]
       >(),
+    /**
+     * The distinct reason codes behind `error` (migration 0055, WP-73b, PROGRESS backlog 206).
+     * Null on a row written before it — "not recorded", never "none".
+     */
+    errorReasons: text('error_reasons').array(),
   },
   (table) => [primaryKey({ columns: [table.provider, table.deliveryId] })],
 );

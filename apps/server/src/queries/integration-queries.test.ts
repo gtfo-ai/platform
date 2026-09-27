@@ -13,8 +13,14 @@
  */
 import type { JsonObject } from '@platform/contracts';
 import { findShippedProvider } from '@platform/integrations';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
-import { healthOf, type IntegrationRow, publishableConfig } from './integration-queries.js';
+import {
+  healthOf,
+  type IntegrationRow,
+  publishableConfig,
+  refusedDeliveryFilter,
+} from './integration-queries.js';
 import { UnprojectableRowError } from './pipeline-queries.js';
 
 const PLANTED_TOKEN = 'FAKE-gitlab-token-DO-NOT-USE-0123456789';
@@ -99,5 +105,24 @@ describe('healthOf', () => {
       // The path, never the value — the same rule the transcript projection follows (BD-022).
       expect((error as UnprojectableRowError).message).not.toContain('fine');
     }
+  });
+});
+
+/**
+ * WP-73b, PROGRESS backlog 206 (review round 1): the refused-deliveries filter at the unit tier —
+ * rendered as the SQL PostgreSQL receives, so dropping the code overlap, or the pre-0055 branch,
+ * fails here and not only in the integration case.
+ */
+describe('refusedDeliveryFilter', () => {
+  const rendered = new PgDialect().sqlToQuery(refusedDeliveryFilter() ?? expect.fail('no filter'));
+
+  it('overlaps the stored codes with exactly the refusal codes, and serves a row with none', () => {
+    expect(rendered.sql).toContain('"error_reasons" is null');
+    expect(rendered.sql).toMatch(/"error_reasons" && \$\d+::text\[\]/);
+    expect(rendered.params).toEqual([
+      ['decision_refused', 'malformed_payload', 'unmapped_identity'],
+    ]);
+    // The noise the filter exists to drop is not among them.
+    expect(JSON.stringify(rendered.params)).not.toContain('unsupported_event');
   });
 });

@@ -91,8 +91,13 @@ Subscriptions* the request URL `https://<your instance>/webhooks/slack/<integrat
 - **Two API replicas hold two connections, and that is fine.** Slack keeps up to ten per app and
   sends each payload to any one of them; a payload Slack sends twice is recognised by its content
   and performed once.
-- **A rotated app-level token needs a restart** of the API process: a connection already held is
-  not re-read.
+- **A changed integration is re-opened without a restart.** The minute re-read compares each
+  held account's configuration and the ids of its sealed credentials with what it opened, and
+  closes and re-opens one that moved — which is also how an integration whose credentials could
+  not be read is picked up once they are fixed. This build has no command that replaces a sealed
+  credential in place, so rotating the app-level token means sealing it anew (a new integration,
+  or a new secret row the integration names); a value overwritten inside the same secret row is
+  not noticed until the API process restarts.
 - **`APP_INTEGRATION_HOSTS` must name `slack.com`.** Opening the connection is a call like any
   other the platform makes for a binding, and a host nobody declared is refused before it is made.
 

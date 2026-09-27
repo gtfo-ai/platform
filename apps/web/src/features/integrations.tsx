@@ -50,7 +50,8 @@ const HEALTH_TONE: Record<string, BadgeTone> = {
 const INTEGRATION_TYPES = ['task_management', 'git', 'communication', 'logs', 'errors'] as const;
 
 /**
- * What this integration's inbound half refused or ignored, and why (WP-44, PROGRESS backlog 198).
+ * What this integration's inbound half refused, and why (WP-44, PROGRESS backlog 198) — refusals
+ * only since WP-73b (backlog 206): an ordinary ignore is filtered out by the server on its code.
  *
  * A chat click refused as `unmapped_identity` or `decision_refused: not_permitted` used to be
  * visible only in SQL and in the API process's log, so an operator debugging a dead button had no
@@ -90,6 +91,12 @@ const RefusedDeliveries = ({ integrationId }: { readonly integrationId: string }
             >
               <span className="text-fg-muted">{formatDateTime(delivery.received_at)}</span>
               <UntrustedText value={delivery.error} />
+              {delivery.reasons === null ? (
+                <span className="text-fg-muted">
+                  Received before the platform recorded reason codes, so it is listed whether it was
+                  a refusal or an ordinary ignore.
+                </span>
+              ) : null}
               {delivery.unmapped === null ? (
                 <span className="text-fg-muted">
                   Received before the platform recorded which account was refused.

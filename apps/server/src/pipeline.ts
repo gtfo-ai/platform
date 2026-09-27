@@ -86,6 +86,7 @@ import {
   createRunScopedSecrets,
   createRunStopReasons,
   createStageRunPlanner,
+  createUnreachableRunCredentialReports,
   createWebhookIngress,
   defaultProjectSettings,
   humanTimeHandlers,
@@ -1264,6 +1265,8 @@ export const composePipeline = async (
       credentials: {
         store: runCredentialStore,
         horizonMs: runCredentialRecoveryHorizonMs(RUN_CREDENTIAL_TTL_SECONDS),
+        // Made once, here, so the memory of what was reported outlives a pass (backlog 156).
+        unreachable: createUnreachableRunCredentialReports(),
       },
       /**
        * WP-56 round 2, backlog **161** and **162**: a question, approval or take-over whose timer

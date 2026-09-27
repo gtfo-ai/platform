@@ -37,6 +37,13 @@
  *    something, because a repository's history and a directory are never empty. A second cause
  *    of an empty mount — a checkout outside Docker's shared paths — is caught by the same check.
  *
+ * **A partly stale index is refused too** (WP-73b, PROGRESS backlog 246). Docker Desktop was
+ * measured serving the container an empty index twice in four runs; the zero-byte check refuses
+ * that, and a partly stale one — some added lines visible, a credential's not — would scan a
+ * non-zero count and pass. So a staged scan in the container first prints the container's own
+ * `git diff --cached --numstat`, in the **same** container, and it is believed only when that
+ * equals the host's record for record; any other answer fails with its own banner.
+ *
  * `scripts/gitleaks.test.ts` asserts the refusal on its own, against a scanner that reports
  * exactly the measured output, and asserts the real binary in a real linked worktree both ways.
  *
@@ -50,7 +57,15 @@ import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { containerArgs, gitLayout, scanVerdict, stagedAddedLines } from './gitleaks-audit.mjs';
+import {
+  addedLinesOf,
+  containerArgs,
+  containerIndexVerdict,
+  gitLayout,
+  scanVerdict,
+  stagedNumstat,
+  stagedRaw,
+} from './gitleaks-audit.mjs';
 
 // ghcr.io/gitleaks/gitleaks:v8.30.1, pinned by multi-arch index digest.
 const DOCKER_IMAGE =
@@ -70,6 +85,18 @@ const NOTHING_READ_BANNER = [
   '  #  Fix: `pnpm install` in this checkout (the host binary     #',
   '  #  works in a linked worktree), or check that Docker can     #',
   '  #  see this path. See BD-002 and PROGRESS backlog 8.         #',
+  '  ##############################################################',
+  '',
+];
+
+const STALE_INDEX_BANNER = [
+  '',
+  '  ##############################################################',
+  '  #  THE SECRET SCAN READ A DIFFERENT CHANGE THAN YOURS.       #',
+  '  #  The container saw another staged diff than this checkout, #',
+  '  #  so what it scanned is not evidence about your commit.     #',
+  '  #  Fix: run the commit again, or `pnpm install` so the host  #',
+  '  #  binary scans instead. See BD-002, PROGRESS backlog 246.  #',
   '  ##############################################################',
   '',
 ];
@@ -108,8 +135,18 @@ const onPath = () => {
 const dockerAvailable = () =>
   spawnSync('docker', ['info'], { stdio: 'ignore', env: childEnv }).status === 0;
 
-/** Run the scanner, echo what it said, and hold its exit 0 to the evidence. */
-const audited = (command, commandArgs) => {
+const staged = args[0] === 'git' && args.includes('--staged');
+
+/**
+ * Run the scanner, echo what it said, and hold its exit 0 to the evidence.
+ *
+ * `probedIndex`: the container printed its own staged `--numstat` ahead of the scan, and the scan
+ * is believed only if it equals the host's (WP-73b, PROGRESS backlog 246) — checked **before** the
+ * scan's own verdict, so a stale index is refused even when the scan found something.
+ */
+const audited = (command, commandArgs, probedIndex = false) => {
+  const hostNumstat = staged ? stagedNumstat(repoRoot) : null;
+  const hostRaw = staged ? stagedRaw(repoRoot) : null;
   const result = spawnSync(command, commandArgs, {
     cwd: repoRoot,
     env: childEnv,
@@ -117,14 +154,24 @@ const audited = (command, commandArgs) => {
     stdio: ['inherit', 'pipe', 'pipe'],
     maxBuffer: 256 * 1024 * 1024,
   });
-  process.stdout.write(result.stdout ?? '');
+  let stdout = result.stdout ?? '';
+  let indexRefusal = null;
+  if (probedIndex && result.error === undefined) {
+    const index = containerIndexVerdict({ hostNumstat, hostRaw, stdout });
+    stdout = index.rest;
+    indexRefusal = index.ok ? null : index.reason;
+  }
+  process.stdout.write(stdout);
   process.stderr.write(result.stderr ?? '');
   if (result.error !== undefined) {
     process.stderr.write(`could not run ${command}: ${result.error.message}\n`);
     return 1;
   }
-  const staged = args[0] === 'git' && args.includes('--staged');
-  const mayBeEmpty = staged && stagedAddedLines(repoRoot) === 0;
+  if (indexRefusal !== null) {
+    process.stderr.write([...STALE_INDEX_BANNER, `  ${indexRefusal}.`, ''].join('\n'));
+    return 1;
+  }
+  const mayBeEmpty = staged && hostNumstat !== null && addedLinesOf(hostNumstat) === 0;
   const verdict = scanVerdict({
     status: result.status ?? 1,
     output: `${result.stdout ?? ''}\n${result.stderr ?? ''}`,
@@ -155,7 +202,14 @@ if (dockerAvailable()) {
   process.stderr.write(`gitleaks binary not found; falling back to ${DOCKER_IMAGE}\n`);
   // --network=none isolates the scanner's own namespace; the daemon still pulls the
   // image over the host network, so a missing image is not a problem.
-  process.exit(audited('docker', containerArgs(layout, DOCKER_IMAGE, [...args, ...COMMON])));
+  // A staged scan runs behind the container's own view of the index (backlog 246).
+  process.exit(
+    audited(
+      'docker',
+      containerArgs(layout, DOCKER_IMAGE, [...args, ...COMMON], { probeIndex: staged }),
+      staged,
+    ),
+  );
 }
 
 if (required && !isTruthy(process.env.CI) && isTruthy(process.env.GITLEAKS_SKIP)) {

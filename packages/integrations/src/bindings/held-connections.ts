@@ -8,7 +8,7 @@
  * app's, not a project's, and every delivery it produces is addressed to
  * `/webhooks/<provider>/<integrationId>` exactly as an HTTP one is. So the selection is read off
  * `integrations.config` alone and a binding's overlay is not consulted — a project cannot switch its
- * account's transport, and a `socket_mode` written into `bindings.config` changes nothing here.
+ * account's transport, and since WP-73b (backlog 201) a binding write refuses `socket_mode`.
  *
  * ## Every outbound call goes through the executor
  *
@@ -21,11 +21,13 @@
  * through the executor: its host is whatever Slack answered, over a call to a host the operator
  * declared — stated rather than implied, and filed in PROGRESS under WP-43.
  */
+import { createHash } from 'node:crypto';
 import type {
   BindingRepository,
   BrokenHeldConnectionAccount,
   HeldConnectionAccount,
   HeldConnectionDirectory,
+  HeldConnectionFingerprint,
   IntegrationActionExecutor,
   SecretRedactor,
   SecretStore,
@@ -48,6 +50,35 @@ export interface HeldConnectionDirectoryOptions {
 
 const secretName = (provider: string, integrationId: Id, field: string): string =>
   `${provider}:${integrationId}:${field}`;
+
+/** JSON with every object's keys sorted, so a reordered column is not a changed one. */
+const canonicalJson = (value: unknown): string => {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(',')}]`;
+  }
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, entry]) => entry !== undefined)
+      .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+};
+
+/**
+ * WP-73b, PROGRESS backlog 197: the account's `config` and the **ids** of its sealed credentials —
+ * never a value — digested, so the supervisor can tell a changed account from an unchanged one.
+ * `integrations.config` holds no credential (the credential fields are sealed into `secrets`, and
+ * `GET /api/integrations` strips them if one is pasted there anyway); the digest is one-way either
+ * way, and it is compared in memory, never logged.
+ */
+const fingerprintOf = (account: {
+  readonly config: unknown;
+  readonly secretIds: readonly string[];
+}): HeldConnectionFingerprint =>
+  createHash('sha256')
+    .update(canonicalJson({ config: account.config, secret_ids: [...account.secretIds] }))
+    .digest('hex');
 
 export const createHeldConnectionDirectory = (
   options: HeldConnectionDirectoryOptions,
@@ -72,7 +103,12 @@ export const createHeldConnectionDirectory = (
     if (support === undefined || !support.selected(account.config)) {
       return null;
     }
-    const named = { integrationId, provider: account.provider, name: account.name };
+    const named = {
+      integrationId,
+      provider: account.provider,
+      name: account.name,
+      fingerprint: fingerprintOf(account),
+    };
     let secrets: Readonly<Record<string, string>>;
     try {
       secrets = await options.secrets.resolve(account.secretIds);

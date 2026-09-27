@@ -151,6 +151,8 @@ describe('the shipped provider catalogue', () => {
         setupGuidePath: 'packages/integrations/src/providers/nope/setup-guide.md',
         inboundWebhook: false,
         agentTooling: null,
+        accountOnlyFields: [],
+        configDefaults: {},
       }),
     ).rejects.toThrow();
   });
@@ -187,5 +189,23 @@ describe('the shipped provider catalogue', () => {
     // …and the check is live: a run where nobody has an inbound half would satisfy the equality.
     expect(both.built.length).toBeGreaterThan(0);
     expect(both.built.length).toBeLessThan(SHIPPED_PROVIDERS.length);
+  });
+});
+
+/**
+ * WP-73b, PROGRESS backlog 245: the defaults the create's host guard sweeps beside the body, read
+ * off each provider's own schema — so Sentry's and Slack's defaulted `base_url` is judged at the
+ * write. A required field (a credential, a required URL) has no default and is absent.
+ */
+describe('a provider’s published config defaults', () => {
+  it('names Sentry’s and Slack’s default base_url, and no default for a required field', () => {
+    expect(findShippedProvider('sentry')?.configDefaults).toMatchObject({
+      base_url: 'https://sentry.io',
+    });
+    expect(findShippedProvider('slack')?.configDefaults).toMatchObject({
+      base_url: 'https://slack.com/api',
+    });
+    expect(findShippedProvider('gitlab')?.configDefaults).not.toHaveProperty('base_url');
+    expect(findShippedProvider('sentry')?.configDefaults).not.toHaveProperty('auth_token');
   });
 });

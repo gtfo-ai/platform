@@ -17,9 +17,14 @@ import { afterAll, describe, expect, it } from 'vitest';
 import {
   bytesScanned,
   containerArgs,
+  containerIndexVerdict,
   gitLayout,
+  NUMSTAT_BEGIN,
+  NUMSTAT_END,
+  RAW_BEGIN,
   scanVerdict,
   stagedAddedLines,
+  stagedRaw,
 } from './gitleaks-audit.mjs';
 
 /**
@@ -258,6 +263,139 @@ describe('the pre-commit scan in a linked worktree', () => {
       expect(bytesScanned(clean.stderr)).toBeGreaterThan(0);
       expect(clean.stderr).toContain('no leaks found');
       expect(clean.status).toBe(0);
+    },
+    FIXTURE_TIMEOUT_MS,
+  );
+});
+
+/**
+ * WP-73b, PROGRESS backlog 246: the container fallback on Docker Desktop was measured reading a
+ * stale index, and the zero-byte audit refuses only the fully stale case. A staged scan in the
+ * container now prints the container's own `--numstat` first and is believed only when it equals
+ * the host's. Driven here through the real script with a **stand-in `docker`** on `PATH` — no
+ * daemon — that prints a chosen numstat and a scan that read bytes, so the only thing deciding
+ * the verdict is the comparison.
+ */
+describe('the container fallback’s own view of the index (backlog 246)', () => {
+  const RAW_A =
+    ':000000 100644 0000000000000000000000000000000000000000 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa A\u0000change.ts\u0000';
+  const RAW_B =
+    ':000000 100644 0000000000000000000000000000000000000000 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb A\u0000change.ts\u0000';
+  const frame = (numstat: string, raw: string): string =>
+    `${NUMSTAT_BEGIN}\n${numstat}\n${RAW_BEGIN}\n${raw}\n${NUMSTAT_END}\n`;
+
+  it('believes the container only when its staged numstat and blob ids are the host’s', () => {
+    const host = '1\t0\tchange.ts\u0000';
+    expect(
+      containerIndexVerdict({ hostNumstat: host, hostRaw: RAW_A, stdout: frame(host, RAW_A) }),
+    ).toEqual({ ok: true, rest: '' });
+    // Partly stale: the file is there, its added line is not — the case the byte count passes.
+    const partial = containerIndexVerdict({
+      hostNumstat: '2\t0\tchange.ts\u00001\t0\tleak.ts\u0000',
+      hostRaw: RAW_A,
+      stdout: `${frame('2\t0\tchange.ts\u0000', RAW_A)}INF scanned ~65 bytes`,
+    });
+    expect(partial.ok).toBe(false);
+    expect(partial.rest).toBe('INF scanned ~65 bytes');
+    // Review round 1: equal counts, a different blob — a placeholder edited into a key and restaged.
+    const sameCounts = containerIndexVerdict({
+      hostNumstat: host,
+      hostRaw: RAW_B,
+      stdout: frame(host, RAW_A),
+    });
+    expect(sameCounts.ok).toBe(false);
+    // No frame at all, or a frame with no blob half, is not evidence either.
+    expect(
+      containerIndexVerdict({ hostNumstat: host, hostRaw: RAW_A, stdout: 'INF no leaks found' }).ok,
+    ).toBe(false);
+    expect(
+      containerIndexVerdict({
+        hostNumstat: host,
+        hostRaw: RAW_A,
+        stdout: `${NUMSTAT_BEGIN}\n${host}\n${NUMSTAT_END}\n`,
+      }).ok,
+    ).toBe(false);
+  });
+
+  /** A git `-z` answer as a `printf` format: NULs escaped, nothing else special in it. */
+  const printable = (answer: string): string => answer.replaceAll('\u0000', '\\0');
+
+  const containerScan = (worktree: string, containerNumstat: string, containerRaw: string) => {
+    const stub = join(worktree, '..', `stub-${roots.length}-${Date.now()}-${Math.random()}`);
+    mkdirSync(stub);
+    const realGit = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
+    symlinkSync(realGit, join(stub, 'git'));
+    writeFileSync(
+      join(stub, 'docker'),
+      [
+        '#!/bin/sh',
+        'if [ "$1" = info ]; then exit 0; fi',
+        `printf '%s\\n' '${NUMSTAT_BEGIN}'`,
+        `printf '${printable(containerNumstat)}'`,
+        `printf '\\n%s\\n' '${RAW_BEGIN}'`,
+        `printf '${printable(containerRaw)}'`,
+        `printf '\\n%s\\n' '${NUMSTAT_END}'`,
+        "printf 'INF scanned ~65 bytes (65 bytes) in 3ms\\nINF no leaks found\\n' >&2",
+        'exit 0',
+        '',
+      ].join('\n'),
+    );
+    chmodSync(join(stub, 'docker'), 0o755);
+    const result = spawnSync(
+      process.execPath,
+      [join(worktree, 'scripts', 'gitleaks.mjs'), 'git', '--staged', '--require'],
+      { cwd: worktree, env: { ...GIT_ENV, PATH: `${stub}:/usr/bin:/bin` }, encoding: 'utf8' },
+    );
+    return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+  };
+
+  it(
+    'refuses a container scan whose index differs from the host’s, and passes one that matches',
+    () => {
+      const { worktree } = linkedWorktree();
+      writeFileSync(
+        join(worktree, 'change.ts'),
+        'export const change = 1;\nexport const two = 2;\n',
+      );
+      git(worktree, 'add', 'change.ts');
+      expect(stagedAddedLines(worktree)).toBe(2);
+      const raw = stagedRaw(worktree) ?? expect.fail('no raw');
+
+      // One added line visible instead of two: bytes were scanned, so only the comparison refuses.
+      const stale = containerScan(worktree, '1\t0\tchange.ts\u0000', raw);
+      expect(stale.stderr).toContain('falling back');
+      expect(stale.stderr).toContain('THE SECRET SCAN READ A DIFFERENT CHANGE THAN YOURS');
+      expect(stale.stderr).toContain(
+        'host: 1 files, 2 added lines; container: 1 files, 1 added lines',
+      );
+      expect(stale.status).toBe(1);
+
+      // The control: the same stand-in reporting the host's own answer is believed.
+      const matching = containerScan(worktree, '2\t0\tchange.ts\u0000', raw);
+      expect(matching.stderr).not.toContain('THE SECRET SCAN READ A DIFFERENT CHANGE');
+      expect(matching.stdout).not.toContain(NUMSTAT_BEGIN);
+      expect(matching.status).toBe(0);
+    },
+    FIXTURE_TIMEOUT_MS,
+  );
+
+  it(
+    'refuses a container that saw the same line counts but an older blob (review round 1)',
+    () => {
+      const { worktree } = linkedWorktree();
+      // A placeholder staged, then edited into another value and staged again: `1 0 change.ts`
+      // both times, so only the blob id tells the stale index from the current one.
+      writeFileSync(join(worktree, 'change.ts'), 'export const KEY = "placeholder";\n');
+      git(worktree, 'add', 'change.ts');
+      const staleRaw = stagedRaw(worktree) ?? expect.fail('no raw');
+      writeFileSync(join(worktree, 'change.ts'), 'export const KEY = "another-value";\n');
+      git(worktree, 'add', 'change.ts');
+      expect(stagedRaw(worktree)).not.toBe(staleRaw);
+
+      const stale = containerScan(worktree, '1\t0\tchange.ts\u0000', staleRaw);
+      expect(stale.stderr).toContain('THE SECRET SCAN READ A DIFFERENT CHANGE THAN YOURS');
+      expect(stale.stderr).toContain('same line counts but different staged blobs');
+      expect(stale.status).toBe(1);
     },
     FIXTURE_TIMEOUT_MS,
   );

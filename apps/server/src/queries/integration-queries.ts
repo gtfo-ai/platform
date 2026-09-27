@@ -34,6 +34,8 @@
  * `checked_at: null` says *nobody has checked*, which is true. A stored value that is not the
  * published shape is refused by name rather than coerced.
  */
+
+import { REFUSED_DELIVERY_REASONS } from '@platform/application';
 import type {
   Id,
   IntegrationSummary,
@@ -44,7 +46,7 @@ import type {
 import { integrationSummarySchema, MAX_REFUSED_DELIVERIES } from '@platform/contracts';
 import { db as dbAdapters } from '@platform/infrastructure';
 import type { ProviderCatalogueEntry } from '@platform/integrations';
-import { and, asc, desc, eq, isNotNull } from 'drizzle-orm';
+import { and, asc, desc, eq, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { UnprojectableRowError } from './pipeline-queries.js';
 
 const { inbox, integrations } = dbAdapters.schema;
@@ -150,8 +152,21 @@ export const toIntegrationSummary = (
 });
 
 /**
- * The newest inbound deliveries of one integration that carry an `inbox.error` — what the platform
- * refused or ignored, and why (WP-44, PROGRESS backlog 198).
+ * WP-73b, backlog 206: refusals only, on the stored codes — `&&` is array overlap with
+ * `REFUSED_DELIVERY_REASONS` — and a pre-0055 row, which has none and is served because it cannot
+ * be told apart. Exported so the unit tier can render it.
+ */
+export const refusedDeliveryFilter = () =>
+  or(
+    isNull(inbox.errorReasons),
+    sql`${inbox.errorReasons} && ${sql.param([...REFUSED_DELIVERY_REASONS])}::text[]`,
+  );
+
+/**
+ * The newest inbound deliveries of one integration that the platform **refused**, and why (WP-44,
+ * PROGRESS backlog 198) — since WP-73b (backlog 206) filtered on `inbox.error_reasons` to the codes
+ * `REFUSED_DELIVERY_REASONS` names, so an ordinary ignore no longer pushes a refusal out of the
+ * newest fifty.
  *
  * Until this read, a chat click refused as `unmapped_identity` or `decision_refused: not_permitted`
  * was visible only in SQL and in the API process's log. Everything served here was redacted at the
@@ -168,15 +183,19 @@ export const listRefusedDeliveries = async (
       receivedAt: inbox.receivedAt,
       error: inbox.error,
       unmapped: inbox.unmappedIdentities,
+      reasons: inbox.errorReasons,
     })
     .from(inbox)
-    .where(and(eq(inbox.integrationId, integrationId), isNotNull(inbox.error)))
+    .where(
+      and(eq(inbox.integrationId, integrationId), isNotNull(inbox.error), refusedDeliveryFilter()),
+    )
     .orderBy(desc(inbox.receivedAt))
     .limit(MAX_REFUSED_DELIVERIES);
   return rows.map((row) => ({
     delivery_id: row.deliveryId,
     received_at: row.receivedAt.toISOString(),
     error: row.error ?? '',
+    reasons: row.reasons === null ? null : [...row.reasons],
     unmapped:
       row.unmapped === null
         ? null

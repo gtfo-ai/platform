@@ -332,6 +332,10 @@ export interface DockerFixtureOptions {
    * refusal is correct (a socket whose mode the platform could not set is a socket whose access
    * control it cannot state), so the *harness* is what has to change. A caller that passes `false`
    * cannot read `controlRoot` from its own filesystem and must reach the volume through a container.
+   * The second divergence of the bind-backed default (PROGRESS backlog 147, measured at WP-74): after
+   * teardown the shim's `ctl.sock`/`cred.sock` can survive as entries `readdir` lists and
+   * `lstat`/`unlink` answer `ENOENT` for, which nothing in the guest can remove — so full
+   * reclamation is asserted on the named-volume shape production deploys, not on this one.
    */
   readonly controlVolumeBind?: boolean;
 }

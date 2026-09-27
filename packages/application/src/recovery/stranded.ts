@@ -508,6 +508,21 @@ export const runStrandedRecovery = async (
               limit,
             }),
           ),
+    unreachableCredentials:
+      credentialSite === undefined
+        ? []
+        : await credentialSite.store.unreachableRunCredentials(
+            scope.tx,
+            unrevokedRunCredentialQuery({
+              now,
+              graceMs: grace,
+              horizonMs: credentialSite.horizonMs,
+              limit,
+            }),
+            // Pages past what this process already said, so a backlog past `limit` does not
+            // answer the same rows every pass (WP-73b review round 1).
+            credentialSite.unreachable.reported(now),
+          ),
   }));
 
   const sites: StrandedSiteReport[] = [
@@ -800,6 +815,32 @@ export const runStrandedRecovery = async (
       reEnqueued: found.credentials.length,
       ended: 0,
     });
+    /**
+     * WP-73b, backlog 156 half 1: what the site above cannot reach — a mint whose integration the
+     * project no longer binds — is **reported**, once per address per process
+     * (`UnreachableRunCredentialReports`), and never revoked: sending the address anywhere is half
+     * 3's decision. `found` counts what this pass reported, so a repeat reads 0.
+     */
+    let reported = 0;
+    for (const credential of found.unreachableCredentials) {
+      if (!credentialSite.unreachable.firstSighting(credential, now)) {
+        continue;
+      }
+      reported += 1;
+      logger.warn(
+        {
+          project_id: credential.projectId,
+          task_id: credential.taskId,
+          run_id: credential.runId,
+          integration_id: credential.integrationId,
+          revoke_id: credential.revokeId,
+          scope: credential.scope,
+          expires_at: credential.expiresAt,
+        },
+        'a terminal run’s git credential was never confirmed revoked, and the integration that minted it is no longer bound to the project, so the recovery pass will not revoke it: it is live until it expires — revoke it by hand in the provider (PROGRESS backlog 156)',
+      );
+    }
+    sites.push({ site: 'run_credential_unreachable', found: reported, reEnqueued: 0, ended: 0 });
   }
 
   if (options.deadlines !== undefined) {

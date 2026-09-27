@@ -1,13 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import {
-  copyFileSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
@@ -477,12 +469,11 @@ describe('pnpm changelog, as a program, around the first release', () => {
 
   /** A repository that carries this script, one migration, and the given history. */
   const checkout = (steps: readonly string[]): string => {
-    // The real path: macOS's temporary directory is behind a symlink, and the script's own
-    // "am I the program?" check compares its resolved URL with `argv[1]`, so a symlinked path would
-    // make it do nothing and exit 0 — which is how the first run of this case failed.
-    const root = realpathSync(scratch());
+    // Not a real path on purpose: macOS's temporary directory is behind a symlink, which is how the
+    // first run of this case found backlog 258 — the script did nothing and exited 0.
+    const root = scratch();
     mkdirSync(join(root, 'scripts'));
-    for (const name of ['changelog.mjs', 'semver.mjs'])
+    for (const name of ['changelog.mjs', 'semver.mjs', 'is-program.mjs'])
       copyFileSync(join(scriptsDirectory, name), join(root, 'scripts', name));
     mkdirSync(join(root, 'packages/infrastructure/src/db/migrations'), { recursive: true });
     writeFileSync(

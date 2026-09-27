@@ -21,7 +21,8 @@
  *
  * **The binding that minted must still be the project's git binding.** `revoke_id` is an address on
  * that binding's host; the join is what keeps a re-bound project's old address from being sent to a
- * new server. The residual is stated in the application module.
+ * new server. What that join leaves out is read by `unreachableRunCredentials`, the same predicate
+ * with the binding negated, and **reported**, never revoked (WP-73b, PROGRESS backlog 156 half 1).
  */
 import type {
   CredentialScope,
@@ -55,7 +56,7 @@ interface Row extends Record<string, unknown> {
  *
  * `$1` the live statuses, `$2` `now`, `$3` `endedAfter`.
  */
-const FROM_AND_PREDICATE = `
+const fromAndPredicate = (binding: 'bound' | 'unbound'): string => `
    from runs r
    join tasks t on t.id = r.task_id
    join integration_actions m
@@ -73,9 +74,7 @@ const FROM_AND_PREDICATE = `
           -- the revoke is harmless if it is not, and the one attempt still bounds it.
           else true
         end
-   join bindings b
-     on b.project_id = r.project_id
-    and b.integration_id = m.integration_id
+   ${BINDING_CLAUSE[binding]}
    join integrations i
      on i.id = m.integration_id
     and i.type = 'git'
@@ -95,7 +94,29 @@ const FROM_AND_PREDICATE = `
            (v.status = 'ok' and v.result ->> 'revoked' = 'true')
            or v.payload ->> 'origin' = 'recovery'
          )
+    )${binding === 'unbound' ? UNBOUND_PREDICATE : ''}`;
+
+/**
+ * The one clause the two finding reads differ by (WP-73b, PROGRESS backlog 156 half 1). `bound` is
+ * the recovery's: the minting integration must still be a binding of the project. `unbound` is the
+ * report's sibling: it must not be — which the join cannot say, so the join is dropped and a
+ * `not exists` on the same `(project_id, integration_id)` pair joins the `where` instead.
+ */
+const BINDING_CLAUSE = {
+  bound: `join bindings b
+     on b.project_id = r.project_id
+    and b.integration_id = m.integration_id`,
+  unbound: '',
+} as const;
+
+const UNBOUND_PREDICATE = `
+    and not exists (
+      select 1 from bindings b
+       where b.project_id = r.project_id
+         and b.integration_id = m.integration_id
     )`;
+
+const FROM_AND_PREDICATE = fromAndPredicate('bound');
 
 const SELECT = `select r.id as run_id, r.task_id, r.project_id, t.mode::text as mode,
                        m.integration_id, m.result ->> 'revoke_id' as revoke_id,
@@ -129,6 +150,31 @@ export const createPostgresRunCredentialStore = (): UnrevokedRunCredentialStore 
         order by r.ended_at, m.created_at
         limit $5`,
       [LIVE_RUN_STATUSES, query.now, query.endedAfter, query.endedBefore, query.limit],
+    );
+    return rows.map(toCredential);
+  },
+
+  unreachableRunCredentials: async (tx, query, alreadyReported) => {
+    // The pairs already reported are skipped **before** the limit applies (WP-73b review round 1),
+    // so each pass reaches the next unreported rows rather than the same oldest `limit` again.
+    const { rows } = await sqlOf(tx).query<Row>(
+      `${SELECT}
+       ${fromAndPredicate('unbound')}
+          and r.ended_at < $4::timestamptz
+          and r.ended_at >= $3::timestamptz
+          and (m.integration_id::text, m.result ->> 'revoke_id') not in (
+                select * from unnest($6::text[], $7::text[]))
+        order by r.ended_at, m.created_at
+        limit $5`,
+      [
+        LIVE_RUN_STATUSES,
+        query.now,
+        query.endedAfter,
+        query.endedBefore,
+        query.limit,
+        alreadyReported.map((key) => key.integrationId),
+        alreadyReported.map((key) => key.revokeId),
+      ],
     );
     return rows.map(toCredential);
   },

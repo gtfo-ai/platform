@@ -158,3 +158,31 @@ describe('the held-connection directory', () => {
     });
   });
 });
+
+/** WP-73b, PROGRESS backlog 197: what the supervisor compares to re-open a changed account. */
+describe('the held-connection fingerprint', () => {
+  const fingerprintOf = async (id: Id) =>
+    (await harness().directory.list()).find((entry) => entry.integrationId === id)?.fingerprint;
+
+  it('is stable for an unchanged account and moves with its config or its secret ids', async () => {
+    const original = ACCOUNTS[SLACK] as IntegrationAccount;
+    const first = await fingerprintOf(SLACK);
+    expect(first).toMatch(/^[0-9a-f]{64}$/);
+    expect(await fingerprintOf(SLACK)).toBe(first);
+    try {
+      ACCOUNTS[SLACK] = { ...original, config: { channel: 'C0OTHER' } as never };
+      expect(await fingerprintOf(SLACK)).not.toBe(first);
+      // The same credential values re-sealed under a new secret id — a rotation's shape.
+      SECRETS['rotated'] = SECRETS['full'] as Record<string, string>;
+      ACCOUNTS[SLACK] = { ...original, secretIds: ['rotated' as Id] };
+      expect(await fingerprintOf(SLACK)).not.toBe(first);
+    } finally {
+      ACCOUNTS[SLACK] = original;
+      delete SECRETS['rotated'];
+    }
+  });
+
+  it('is given to a broken account too, so an operator’s fix re-opens it', async () => {
+    expect(await fingerprintOf(BROKEN)).toMatch(/^[0-9a-f]{64}$/);
+  });
+});

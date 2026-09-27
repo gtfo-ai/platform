@@ -210,11 +210,12 @@ describe('the census that keeps every pool guarded', () => {
  * `createTestClient` attaches the listener at construction and `withClient` owns a scoped one's
  * lifetime — and this census refuses a construction anywhere else.
  *
- * Four files may construct one, each for the reason beside it. Two are production and were
- * accounted for when backlog 30 was filed: the broadcast adapter's client carries its error
- * through the `onError` seam the notification client wires, and the migrator's ends in a
- * `finally` and carries **no** listener, which is backlog 30's labelled hypothesis (a failover
- * mid-migration would end the migrate container untyped), recorded rather than changed here.
+ * Four files may construct one, each for the reason beside it. Two are production: the broadcast
+ * adapter's client carries its error through the `onError` seam the notification client wires, and
+ * `createDatabaseClient` (`client.ts`) attaches a required listener before the client connects —
+ * the migrator's client is built there since WP-73b, which turned backlog 30's labelled hypothesis
+ * (a failover mid-migration ends the migrate container untyped) into a typed
+ * `MigrationConnectionLostError` (PROGRESS backlog 247), so the migrator's own exemption is gone.
  *
  * It reads what the pool census reads, through the same helper. What it catches: the `new`
  * operator followed by the `pg`-qualified `Client` constructor, and a **named import** of `Client`
@@ -238,7 +239,10 @@ const CLIENT_SITES_ALLOWED = new Map([
     'measures the premise, so it builds the unguarded client this census refuses',
   ],
   ['packages/infrastructure/src/broadcast/postgres-broadcast.ts', 'errors reach the onError seam'],
-  ['packages/infrastructure/src/db/migrator.ts', 'ends in a finally; no listener (backlog 247)'],
+  [
+    'packages/infrastructure/src/db/client.ts',
+    'createDatabaseClient, which attaches the listener before it connects (backlog 247)',
+  ],
 ]);
 
 // Assembled, like the pool census's plant, so neither pattern matches this file's own text.

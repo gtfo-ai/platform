@@ -163,7 +163,7 @@ export const createRunGitCredentialMinter = (options: {
     if (minted.kind === 'unavailable') {
       return minted;
     }
-    const { credential } = minted;
+    const { credential, handle } = minted;
     const revoke = async (): Promise<void> =>
       runCredentialWrites(
         // The value itself, not a registry lookup: the revocation's own scope must name the token
@@ -173,7 +173,9 @@ export const createRunGitCredentialMinter = (options: {
             { name: runGitCredentialSecretName(spec.runId), value: credential.value },
           ],
         }),
-      ).revoke(credential, context);
+        // The handle names the binding that minted; a project re-bound since is refused rather
+        // than sent this address (PROGRESS backlog 156).
+      ).revoke(handle, context);
     // Before anything else can see it: from this line every redactor over the registry replaces it.
     // It cannot refuse here: the registry's one refusal is a value shorter than `MIN_SECRET_LENGTH`,
     // and `runCredentialWrites.mint` has already refused — and revoked — such a value before

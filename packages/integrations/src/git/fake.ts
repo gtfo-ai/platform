@@ -162,6 +162,11 @@
  *     the envelope's `occurred_at` (as the human-time projector does) and treat `approved_at` as
  *     optional provider evidence — a consumer that required it would pass here and drop every
  *     approval from an older GitLab.
+ * 19. **Different — this fake redacts nothing itself; its registration does** (WP-73b, PROGRESS
+ *     backlog 260). Built directly, `inbound.normalise` reads the body as given. Resolved through
+ *     `fakeGitRegistration` (`bindings/fake-registrations.ts`), the loader's redactor is applied to the whole
+ *     body before `normalise` reads it, as a real adapter does; the delivery key is still built from
+ *     the header id and is not redacted, where a real adapter redacts its key.
  */
 import {
   type CodeownersRules,

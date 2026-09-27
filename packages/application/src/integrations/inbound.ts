@@ -76,6 +76,7 @@ import type {
   InboundDeliveryStatus,
   InboundIntegrationLoader,
   InboxDelivery,
+  InboxReasonCode,
   InboxStore,
   ResolvedInboundIntegration,
 } from '../ports/integrations/inbox.js';
@@ -159,6 +160,21 @@ export interface WebhookIngress {
     readonly delivery: WebhookDelivery;
   }): Promise<InboundDeliveryOutcome>;
 }
+
+/**
+ * The distinct reason codes behind the row's `error`, sorted (WP-73b, PROGRESS backlog 206) — what
+ * the refused-deliveries read filters on, so it need not parse the redacted, cut sentence.
+ */
+export const errorReasonsOf = (
+  normalised: readonly NormalisedDelivery[],
+  refusals: readonly { readonly reason: unknown }[] = [],
+): InboxReasonCode[] =>
+  [
+    ...new Set<InboxReasonCode>([
+      ...normalised.flatMap((result) => result.ignored.map((entry) => entry.reason)),
+      ...(refusals.length > 0 ? (['decision_refused'] as const) : []),
+    ]),
+  ].toSorted();
 
 /** `{reason: detail}` lines, redacted **then** cut. `null` when the delivery produced events. */
 const errorTextOf = (
@@ -459,6 +475,7 @@ export const createWebhookIngress = (options: WebhookIngressOptions): WebhookIng
       const row = (
         at: IsoDateTime,
         failure: { readonly text: string | null; readonly count: number },
+        refusals: readonly DecisionRefusalLine[],
       ): InboxDelivery => ({
         provider,
         deliveryId,
@@ -469,6 +486,7 @@ export const createWebhookIngress = (options: WebhookIngressOptions): WebhookIng
         redactionCount: headers.count + payload.count + failure.count,
         error: failure.text,
         unmappedIdentities: unmappedIdentitiesOf(normalised, resolved.redactor),
+        errorReasons: errorReasonsOf(normalised, refusals),
         receivedAt: at,
         processedAt: at,
       });
@@ -526,7 +544,7 @@ export const createWebhookIngress = (options: WebhookIngressOptions): WebhookIng
             // normalise, and only the one whose row lands appends. It comes **after** the
             // decisions because the row carries their refusals; a lost race throws, and the
             // rollback takes the decision writes with it.
-            const isNew = await options.inbox.record(scope.tx, row(at, failure));
+            const isNew = await options.inbox.record(scope.tx, row(at, failure, refusals));
             if (!isNew) {
               throw new DuplicateDeliveryRollback();
             }

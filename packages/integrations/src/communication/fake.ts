@@ -49,6 +49,11 @@
  *     backlog 200): a fake that said `true` would have its approvals posted as text on every
  *     instance, for a reason that is not true of it. A test that wants the held-transport branch
  *     passes `capabilities: { socketMode: true }`.
+ * 10. **Different — this fake redacts nothing itself; its registration does** (WP-73b, PROGRESS
+ *     backlog 260). Built directly, `inbound.normalise` reads the body as given. Resolved through
+ *     `fakeCommunicationRegistration` (`bindings/fake-registrations.ts`), the loader's redactor is applied to the whole
+ *     body before `normalise` reads it, as a real adapter does; the delivery key is still built from
+ *     the header id and is not redacted, where a real adapter redacts its key.
  */
 import {
   type ApprovalPost,

@@ -12,8 +12,8 @@
  * pg-boss owns its own schema (TD-004), so it is installed through its own API rather than copied
  * into a migration file; grants are re-applied afterwards so the application role can use it.
  */
-import pg from 'pg';
 import { PgBoss } from 'pg-boss';
+import { createDatabaseClient } from './client.js';
 import { loadMigrations, type Migration, migrationsDirectory } from './migrations.js';
 import { TRANSCRIPT_RETENTION_SCOPE } from './partitions.js';
 
@@ -86,7 +86,56 @@ export interface MigrationReader {
 export interface MigrationClient extends MigrationReader {
   on(event: 'notice', listener: (notice: { message?: string }) => void): unknown;
   end(): Promise<void>;
+  /**
+   * The error the connection reported on its own — a server-side termination, a dropped socket —
+   * or `null` while it has reported none (WP-73b, PROGRESS backlog 247). Recorded by the client's
+   * `'error'` listener, which `createDatabaseClient` attaches before the client connects.
+   */
+  connectionLost(): Error | null;
 }
+
+/**
+ * `runMigrations` lost its connection mid-run (WP-73b, PROGRESS backlog 247) — a failover, a
+ * `pg_terminate_backend`, a database dropped under it. Before this, a termination between two
+ * queries reached a client with no `'error'` listener and ended the `migrate` container on an
+ * uncaught `57P01` instead of this. **No schema damage is implied**: each migration is applied in
+ * its own transaction and the advisory lock dies with the session, so the next `migrate` resumes
+ * from the last recorded file. `cause` is what the connection or the in-flight query reported.
+ */
+export class MigrationConnectionLostError extends Error {
+  override readonly name = 'MigrationConnectionLostError';
+  /** The SQLSTATE the server sent, when it sent one (`57P01` for a terminated backend). */
+  readonly code: string | null;
+
+  constructor(cause: unknown) {
+    const code = sqlStateOf(cause);
+    super(
+      `the migrate connection was lost mid-run${code === null ? '' : ` (${code})`}: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }; every applied migration is recorded, so run migrate again`,
+      { cause },
+    );
+    this.code = code;
+  }
+}
+
+/** SQLSTATEs of an administrator or a crash ending the session (class 57, operator intervention). */
+const CONNECTION_LOSS_CODES = new Set(['57P01', '57P02', '57P03']);
+
+const sqlStateOf = (error: unknown): string | null => {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' ? code : null;
+};
+
+/** Whether a query's rejection is the connection going away rather than the SQL failing. */
+const isConnectionLoss = (error: unknown): boolean => {
+  const code = sqlStateOf(error);
+  if (code !== null && CONNECTION_LOSS_CODES.has(code)) {
+    return true;
+  }
+  const message = error instanceof Error ? error.message : '';
+  return /Connection terminated|not queryable/.test(message);
+};
 
 /** Injected so the unit tier can drive every branch without a database. */
 export interface MigrateDependencies {
@@ -105,9 +154,17 @@ const MIGRATION_LOG_DDL = `
 `;
 
 const connectWithPg = async (connectionString: string): Promise<MigrationClient> => {
-  const client = new pg.Client({ connectionString });
+  let lost: Error | null = null;
+  // The listener records rather than throws (rule 20: never swallowed — `runMigrations` turns it
+  // into `MigrationConnectionLostError`); the first report wins, because a termination is followed
+  // by a "Connection terminated unexpectedly" that says less.
+  const client = createDatabaseClient(connectionString, (error) => {
+    lost ??= error;
+  });
   await client.connect();
-  return client as unknown as MigrationClient;
+  return Object.assign(client as unknown as Omit<MigrationClient, 'connectionLost'>, {
+    connectionLost: () => lost,
+  });
 };
 
 const installPgBoss = async (connectionString: string, schema: string): Promise<number | null> => {
@@ -335,14 +392,33 @@ export const runMigrations = async (
       partitionsCreated,
       durationMs: Date.now() - started,
     };
+  } catch (error) {
+    // Backlog 247: the connection going away is the migrator's own failure, typed, whichever of
+    // the two ways it surfaced — the in-flight query's rejection, or the listener's record.
+    const lost = client.connectionLost();
+    if (lost !== null || isConnectionLoss(error)) {
+      // The report that carries the server's SQLSTATE says the most: the in-flight query gets the
+      // `57P01` itself, while the listener often hears only "Connection terminated unexpectedly".
+      throw new MigrationConnectionLostError(
+        isConnectionLoss(error) && sqlStateOf(error) !== null ? error : (lost ?? error),
+      );
+    }
+    throw error;
   } finally {
-    // Releasing is belt and braces: ending the session drops the lock anyway.
-    await client
-      .query('select pg_advisory_unlock($1::int, $2::int)', [
-        MIGRATION_LOCK_KEY[0],
-        MIGRATION_LOCK_KEY[1],
-      ])
-      .catch(() => undefined);
-    await client.end();
+    if (client.connectionLost() === null) {
+      // Releasing is belt and braces: ending the session drops the lock anyway.
+      await client
+        .query('select pg_advisory_unlock($1::int, $2::int)', [
+          MIGRATION_LOCK_KEY[0],
+          MIGRATION_LOCK_KEY[1],
+        ])
+        .catch(() => undefined);
+    }
+    // A lost connection has nothing left to close cleanly; its `end` may still reject.
+    await client.end().catch((error: unknown) => {
+      if (client.connectionLost() === null) {
+        throw error;
+      }
+    });
   }
 };

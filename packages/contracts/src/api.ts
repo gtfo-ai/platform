@@ -1336,11 +1336,18 @@ export const identityCandidateListSchema = z.strictObject({
  * the write** and bounded there (`MAX_INBOX_ERROR_CHARS`). It is provider-derived text (BD-022).
  * `unmapped` is the accounts the delivery was refused for as `unmapped_identity` — `null` for a row
  * written before migration 0047, which recorded no list ("not recorded" is not "none").
+ *
+ * **Only refusals are served** (WP-73b, PROGRESS backlog 206): a row whose `reasons` include one
+ * an operator must act on — `REFUSED_DELIVERY_REASONS` in `@platform/application`'s inbox port is
+ * the one list — and never an ordinary ignore. `reasons` are the platform's own codes, `null` for
+ * a row written before migration 0055, which recorded none and is served because it cannot be told
+ * apart.
  */
 export const refusedDeliverySchema = z.strictObject({
   delivery_id: z.string(),
   received_at: isoDateTimeSchema,
   error: z.string(),
+  reasons: z.array(nonEmptyStringSchema).nullable(),
   unmapped: z
     .array(z.strictObject({ provider: nonEmptyStringSchema, external_id: nonEmptyStringSchema }))
     .nullable(),
