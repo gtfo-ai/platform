@@ -8,6 +8,7 @@ import {
 import { describe, expect, it } from 'vitest';
 import {
   BadRequestError,
+  CrossSiteRequestError,
   commandRefusal,
   ForbiddenError,
   HttpError,
@@ -24,6 +25,11 @@ describe('toApiError', () => {
     for (const error of [
       new UnauthorizedError(),
       new ForbiddenError('org.audit.read', 'member'),
+      new CrossSiteRequestError(
+        'POST',
+        '/api/integrations',
+        'Origin (absent) is not a trusted origin',
+      ),
       new NotFoundError('project x'),
       new BadRequestError('invalid_topics', 'bad topic'),
       new TooManyRequestsError('slow down'),
@@ -38,6 +44,24 @@ describe('toApiError', () => {
     // Authenticating differently fixes one and not the other; a client has to be able to tell.
     expect(map(new UnauthorizedError()).statusCode).toBe(401);
     expect(map(new ForbiddenError('a', 'viewer')).statusCode).toBe(403);
+  });
+
+  it('words a cross-site refusal as one, not as a role that may not act (backlog 56)', () => {
+    // The CSRF hook used to pass the violation through ForbiddenError's role slot, which rendered
+    // "role cross-site request: Origin (absent) is not a trusted origin may not perform POST …".
+    const mapped = map(
+      new CrossSiteRequestError(
+        'POST',
+        '/api/integrations',
+        'Origin (absent) is not a trusted origin',
+      ),
+    );
+    expect(mapped.statusCode).toBe(403);
+    expect(mapped.body.error.code).toBe('cross_site_request');
+    expect(mapped.body.error.message).toBe(
+      'cross-site request refused for POST /api/integrations: Origin (absent) is not a trusted origin',
+    );
+    expect(mapped.body.error.message).not.toMatch(/\brole\b|may not perform/);
   });
 
   it('maps the domain’s own permission error onto 403, not 500', () => {

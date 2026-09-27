@@ -21,7 +21,14 @@
  * (BD-025) — that is the caller's job (`packages/application/src/config/repository-config.ts`
  * since WP-63); this module only merges what it is handed.
  */
-import type { AgenticConfig, AutonomyLevel, ConfigSource } from '@platform/contracts';
+import {
+  type AgenticConfig,
+  type AutonomyLevel,
+  type ConfigSource,
+  DEFAULT_BOOTSTRAP_BUDGET_USD,
+  DEFAULT_BOOTSTRAP_DAYS,
+  DEFAULT_BOOTSTRAP_MERGE_REQUESTS,
+} from '@platform/contracts';
 import { DEFAULT_ASK_BUDGET_USD, DEFAULT_ASK_MODEL } from '../ask/ask.js';
 import { DEFAULT_CONTEXT_BUDGET_TOKENS } from '../knowledge/retrieval.js';
 import { autonomyRank } from '../policies/autonomy.js';
@@ -147,6 +154,15 @@ export const PLATFORM_DEFAULT_CONFIG: ConfigValues = {
       urgent: [...DEFAULT_URGENT_NOTIFICATION_CLASSES],
     },
     shadow_mode: { enabled: false },
+    // product/18's opt-in (BD-028) and product/19's sample — the three bounds are `featuresConfigSchema`'s
+    // own defaults, the ones `historyBootstrapSettings` applies (PROGRESS backlog 205: this table
+    // shipped no entry, so the effective configuration showed no default for the wizard's step 3b).
+    history_bootstrap: {
+      enabled: false,
+      merge_requests: DEFAULT_BOOTSTRAP_MERGE_REQUESTS,
+      days: DEFAULT_BOOTSTRAP_DAYS,
+      budget_usd: DEFAULT_BOOTSTRAP_BUDGET_USD,
+    },
     // product/18:45's default column is *"off (spike template option)"* (WP-40). The two keys beside
     // the switch are the platform's own answers to questions the feature cannot be built without —
     // which ticket types the variant claims, and what an accepted child is created as — and both are

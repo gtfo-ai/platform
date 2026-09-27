@@ -13,8 +13,8 @@
  * a card may say its feature is unbuilt **exactly when** this table names no reader.
  *
  * The keys are held to **`featuresConfigSchema`'s** key set — every `features.<key>` a project may
- * write, which is one more than `PLATFORM_DEFAULT_CONFIG.features` ships defaults for
- * (`history_bootstrap` has none; its reader defaults to off) — by the type below, and every path is
+ * write, and since WP-73 (backlog 205) exactly the keys `PLATFORM_DEFAULT_CONFIG.features` ships
+ * defaults for — by the type below, and every path is
  * resolved against the tree by `feature-readers.test.ts` — a file git knows about whose text names
  * `features.<key>`, which may not be the defaults module (it declares every key, so citing it would
  * prove nothing). What the check cannot see, stated rather than implied: whether the cited module

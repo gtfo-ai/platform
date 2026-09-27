@@ -52,6 +52,7 @@ import {
   READINESS_CI_WINDOW_DAYS,
 } from '@platform/domain';
 import type { RepositoryFileEntry, RepositoryFileSource } from '../config/repository-config.js';
+import type { EventStore } from '../ports/event-store.js';
 import type { Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
@@ -59,6 +60,7 @@ import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import { type ReadinessObservations, recheckReadiness } from './evaluate-readiness.js';
 import type { PlatformReadinessProbe, ReadinessStore } from './ports.js';
+import { readinessEvaluatedEventFor } from './readiness-event.js';
 
 /** The `onboarding.discovery` queue's second payload — `kind` tells the two apart. */
 export interface ReadinessRecheckData {
@@ -82,6 +84,8 @@ export interface ReadinessCiEvents {
 
 export interface ReadinessRecheckOptions {
   readonly unitOfWork: UnitOfWork;
+  /** The project stream's next sequence, for `readiness.evaluated` (backlog 228). */
+  readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
   readonly readiness: ReadinessStore;
   readonly signals: PlatformReadinessProbe;
   readonly files: RepositoryFileSource;
@@ -178,8 +182,19 @@ export const recheckProjectReadiness = async (
     signals,
     observations,
   });
+  const streamSeq = await options.eventStore.nextStreamSequence('project', projectId);
   await options.unitOfWork.transaction(async (scope) => {
     await options.readiness.record(scope.tx, evaluation);
+    // One event per recorded row, in the row's transaction (backlog 228, `readiness-event.ts`).
+    await scope.events.append([
+      readinessEvaluatedEventFor({
+        id: options.ids.next(),
+        evaluation,
+        streamSeq,
+        component: 'readiness_recheck',
+        occurredAt: now,
+      }),
+    ]);
   });
   return {
     status: 'recorded',

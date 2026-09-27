@@ -55,7 +55,9 @@ export interface RolePrompt {
  * and a replaced file carrying the platform's version number would claim to be a platform prompt.
  */
 export const ROLE_PROMPT_VERSIONS = {
-  triager: '1',
+  // WP-73 (backlog 142): the type mapping is a `type_mapping` data block when given, not a
+  // `get_task_context` value — no `include` serves configuration.
+  triager: '2',
   // WP-40: the epic-split variant's `TicketBreakdown` section.
   product_manager: '2',
   investigator: '1',

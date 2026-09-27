@@ -305,7 +305,12 @@ describe('which run the take-over panel offers', () => {
     // The inference would have named RUN, a run that had finished before the take-over.
     const container = await renderHeld({ ...TAKEN_OVER, run_id: null });
     expect(downloads(container)).toEqual([]);
-    expect(container.textContent).toContain('No run was live when the task was taken over');
+    expect(container.textContent).toContain(
+      'No run was in flight in the process that answered the take-over',
+    );
+    // Backlog 134: on the shipped topology a run may be live in another process, so the panel may
+    // not say none was.
+    expect(container.textContent).not.toContain('No run was live');
   });
 
   it('offers the recorded run, not the newest one started by the take-over’s instant', async () => {

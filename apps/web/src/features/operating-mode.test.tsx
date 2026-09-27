@@ -80,8 +80,8 @@ describe('the maintenance feature card', () => {
  * for a key nothing reads that says nothing about it.
  */
 describe('the feature cards against the platform’s feature table', () => {
-  // Every `features.<key>` a project may write — the schema's key set, which is one wider than the
-  // defaults table (`history_bootstrap` ships no default; its reader treats absent as off).
+  // Every `features.<key>` a project may write — the schema's key set, which since WP-73 (backlog
+  // 205) is also exactly the defaults table's, asserted below so the docblock's claim is checked.
   const shipped = Object.keys(featuresConfigSchema.shape).sort();
   const exempt = FEATURES_WITHOUT_A_SWITCH.flatMap((entry) =>
     entry.key === undefined ? [] : [entry.key],
@@ -92,6 +92,12 @@ describe('the feature cards against the platform’s feature table', () => {
     expect(covered).toEqual(shipped);
     // A key is a card **or** an exemption, never both — two answers to "can I switch this?".
     expect(FEATURE_CARDS.filter((card) => (exempt as string[]).includes(card.key))).toEqual([]);
+  });
+
+  it('compares with `PLATFORM_DEFAULT_CONFIG.features`, which ships a default for every key', () => {
+    // `FEATURE_CARDS`' docblock says the cards are held to the defaults table; until backlog 205 the
+    // table lacked `history_bootstrap`, so that comparison would have failed and was not made.
+    expect(Object.keys(PLATFORM_DEFAULT_CONFIG.features ?? {}).sort()).toEqual(shipped);
   });
 
   it('has a card for the epic split that says it creates tickets, and only it says so', () => {

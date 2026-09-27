@@ -10,7 +10,7 @@
  * | wizard step | here |
  * |---|---|
  * | 1 connect | integrations and bindings — the create and test controls live on the Integrations screen, which this page links to and whose buttons WP-30 added (PROGRESS backlog 55) |
- * | 2 technical discovery | re-run discovery and read the readiness ladder |
+ * | 2 technical discovery | start discovery — **once per project**: a second start answers `started: false` and runs nothing (PROGRESS backlog 230) — and read the readiness level, which the post-merge re-check moves only for the criteria it answers |
  * | 3 business interview | `BusinessInterview`, the same component the wizard renders (WP-64) |
  * | 4 operating mode | `features/operating-mode.tsx`, the *same component* the wizard renders |
  * | 5 commit | the knowledge proposal queue |
@@ -190,9 +190,13 @@ export const ProjectSettingsScreen = ({
               commands.startDiscovery.mutate(project.id);
             }}
           >
-            Run discovery again
+            Start discovery
           </Button>
         </div>
+        <p className="text-xs text-fg-muted">
+          Discovery runs once per project: once it has run, this starts nothing. After a merge the
+          platform re-checks some readiness criteria; the rest keep the answer discovery gave.
+        </p>
         {commands.startDiscovery.isError ? (
           <ErrorNotice
             title="Discovery was not started."

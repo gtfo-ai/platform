@@ -252,6 +252,12 @@ command and its current section is a **preview**: release-please writes the rele
 PR is merged, inserting it above the preview's heading (its updater's documented insertion rule),
 and the release PR is where the preview is deleted.
 
+> **Superseded (WP-71, then Q105 at WP-73).** Both answers are in each release's GitHub Release body,
+> rendered by `image.yml`'s `release` job with `pnpm changelog --release-notes`; `release.yml` and
+> release-please are gone. `CHANGELOG.md` is now a hand-written **pointer** to the Releases page with
+> no version heading (PROGRESS backlog 257), held so by `scripts/release.test.ts`; `pnpm changelog`
+> prints the next version's preview and writes no file.
+
 **TD-019's "the app refuses to start when the DB schema is newer than the code" now has a caller.**
 `findUnknownMigrations` existed from WP-03 and nothing called it; `startRuntime` now asks
 `assertSchemaIsKnown` before it composes anything, and a database carrying a migration this build

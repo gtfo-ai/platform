@@ -1,6 +1,8 @@
 import { pipelineFileSchema, pipelineGraphIssues } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { PolicyViolationError } from '../errors.js';
+import { DEFAULT_STAGE_RUN_BUDGET_USD, DEFAULT_TASK_BUDGET_USD } from '../policies/budgets.js';
+import { DEFAULT_ITERATION_LIMITS } from '../policies/iteration-limits.js';
 import { compilePipeline, interpret } from './interpreter.js';
 import {
   assertValidTemplate,
@@ -325,6 +327,30 @@ describe('the shipped templates', () => {
       { on: 'default_branch.moved', to: 'rebase_gate' },
       { on: 'mr.merged', to: 'merged_gate' },
     ]);
+  });
+});
+
+describe('the conflict-resolution bound (PROGRESS backlog 66)', () => {
+  it('states the conflict-resolution bound beside the stage', () => {
+    // The agent stages a resolution re-runs, read off the template rather than listed: the
+    // resolution itself, then its fall-through into `ci_gate` and the review tail up to the gate
+    // that sent it there.
+    const ids = FEATURE_TEMPLATE.stages.map((stage) => stage.id);
+    const tail = FEATURE_TEMPLATE.stages
+      .slice(ids.indexOf('conflict_resolution'), ids.indexOf('rebase_gate'))
+      .filter((stage) => stage.kind === 'agent')
+      .map((stage) => stage.id);
+    expect(tail).toEqual(['conflict_resolution', 'code_review', 'business_review']);
+    const perResolution = tail.reduce(
+      (sum, id) => sum + (DEFAULT_STAGE_RUN_BUDGET_USD[id] ?? Number.NaN),
+      0,
+    );
+    // The two figures `CONFLICT_RESOLUTION_STAGE`'s docblock states. A constant that moves under
+    // them fails here, and the docblock moves with it.
+    expect(perResolution * DEFAULT_ITERATION_LIMITS.rebase).toBe(26);
+    expect(DEFAULT_TASK_BUDGET_USD).toBe(50);
+    expect(DEFAULT_ITERATION_LIMITS.rebase).toBe(2);
+    expect(DEFAULT_ITERATION_LIMITS.code_review).toBe(3);
   });
 });
 

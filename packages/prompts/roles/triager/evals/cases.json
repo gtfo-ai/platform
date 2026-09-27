@@ -54,6 +54,24 @@
           "value": "JSON.parse(output).template === 'bug'"
         }
       ]
+    },
+    {
+      "id": "triager-no-mapping",
+      "description": "no type_mapping block is given, so the model routes from the ticket text instead of claiming a mapping it was never shown (backlog 142)",
+      "vars": {
+        "ticket": "issue_type: Story\ntitle: Password reset email links expire immediately\nlabels: agentic, auth\ndescription: Since last week every reset link says it has expired the moment it is opened. It used to last an hour."
+      },
+      "expect_fields": ["template", "reason"],
+      "assert": [
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).template === 'bug'"
+        },
+        {
+          "type": "javascript",
+          "value": "!/mapping/i.test(JSON.parse(output).reason)"
+        }
+      ]
     }
   ]
 }

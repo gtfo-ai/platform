@@ -157,6 +157,21 @@ const BUSINESS_REVIEW_STAGE: Stage = {
  * conflict by changing the code: the diff a human is asked to merge is not the one that was
  * reviewed.
  *
+ * **What that price is bounded by, in the two currencies that stop a task** (PROGRESS backlog 66).
+ * This constant prices the resolution run; the tail it re-enters is priced by the stages it
+ * re-runs. Per resolution the caps are `DEFAULT_STAGE_RUN_BUDGET_USD` of `conflict_resolution`,
+ * `code_review` and `business_review`, and `DEFAULT_ITERATION_LIMITS.rebase` resolutions may happen,
+ * so at the shipped defaults a task can spend **up to $26 of caps** on conflicts against
+ * `DEFAULT_TASK_BUDGET_USD`'s **$50**, before any human review round. And a re-review that
+ * *returns* spends the review loops BD-008 meant for findings: two resolutions whose code reviews
+ * both return use **two of `code_review`'s three rounds**, and an escalation on that loop names the
+ * review, not the conflict. Both figures are derived from the constants, and
+ * `templates.test.ts` › *"states the conflict-resolution bound beside the stage"* fails when a
+ * constant moves under them. Whether a re-review of a merge commit typically returns is **not
+ * measured** — no run of the tail after a resolution has been observed; the first conflicted
+ * dogfood task (or WP-33's real-model smoke) answers it, and only a *yes* makes the counter
+ * decision `RETURN_LOOPS_BY_EDGE` was built for (whether that round should spend the same loop).
+ *
  * **It merges rather than rebases, and that is measured rather than preferred** — see
  * `STAGE_PROMPT_FOCUS.conflict_resolution` and Q76. product/04 S6b says *"rebase (or merge, per
  * project)"*; product/19 §3 blocks `git push --force*` at the organisation maximum and no project

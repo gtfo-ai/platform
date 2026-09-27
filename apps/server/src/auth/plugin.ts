@@ -19,7 +19,7 @@
 import { fromNodeHeaders } from 'better-auth/node';
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 import fastifyPlugin from 'fastify-plugin';
-import { ForbiddenError, UnauthorizedError } from '../errors.js';
+import { CrossSiteRequestError, UnauthorizedError } from '../errors.js';
 import type { Database } from '../queries/identity-queries.js';
 import { findUserById } from '../queries/identity-queries.js';
 import type { Auth } from './better-auth.js';
@@ -191,10 +191,7 @@ const plugin: FastifyPluginAsync<AuthPluginOptions> = async (
       trustedOrigins,
     });
     if (violation !== null) {
-      throw new ForbiddenError(
-        `${request.method} ${request.url}`,
-        `cross-site request: ${violation}`,
-      );
+      throw new CrossSiteRequestError(request.method, request.url, violation);
     }
   });
 

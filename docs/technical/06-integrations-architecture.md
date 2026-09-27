@@ -409,7 +409,12 @@ the existing suite (BD-017).
     (default 5 minutes) is a replay and is rejected; that comparison takes an injected clock.
     With neither token configured, `verify` is `false` — an endpoint that accepts unverified
     deliveries because nothing was configured looks exactly like one that works.
-- **Polling fallback** per binding when no public URL (`APP_WEBHOOK_PUBLIC_URL` unset) or as a safety net: Jira `search/jql` with `updated >= -Nm`, GitLab MR/pipeline listing since last cursor; same normaliser; dedup makes both paths safe together.
+- **Polling fallback** per binding when the instance has no public URL, or as a safety net: Jira `search/jql` with `updated >= -Nm`, GitLab MR/pipeline listing since last cursor; same normaliser; dedup makes both paths safe together.
+  > **Not built (WP-73, PROGRESS backlog 187).** This build has **no ticket or merge-request poller**, so a webhook is
+  > **required**: a binding without one passes its probe and starts no ticket. The webhook URL is built from
+  > `APP_BASE_URL` (`APP_WEBHOOK_PUBLIC_URL` was removed, backlog 127). What does poll is narrower — the CI gate reads a
+  > merge request's pipeline itself (`gates.ts`), and `matchTickets`' one caller is the history bootstrap. A poller, when
+  > built, must also emit `ticket.updated` for a polled edit, or a polled binding's tasks never see one (backlog 187).
 - **Slack** uses Socket Mode (research/03): a long-lived connection in the API process (or a dedicated `slack` process when scaling), emitting the same domain events.
   > **As built at WP-43.** The connection is held by **the process that serves `/webhooks/*`** —
   > `ROLE=all` or `ROLE=api` — and by construction rather than by a flag: `startRuntime` hands the

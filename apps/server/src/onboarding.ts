@@ -414,6 +414,7 @@ export const composeOnboardingRecording = async (
 
   const recheck: ReadinessRecheckOptions = {
     unitOfWork: options.eventing.unitOfWork,
+    eventStore: options.eventing.store,
     readiness: record.readiness,
     // The same probe discovery uses: R9, R11 and R12 are answered one way whoever asks.
     signals: record.signals,

@@ -338,8 +338,8 @@ describe('renderChangelog', () => {
   it('heads the preview with the version it was asked for, marked unreleased, and nothing else', () => {
     expect(rendered()).toContain('\n## 0.1.0 (unreleased)\n');
     expect(changelogHeadingProblems(rendered())).toEqual([]);
-    // The header states who writes this file — nobody but a human running this script.
-    expect(rendered()).toContain('No workflow writes this file');
+    // The header says it is a preview that nothing writes to a file (Q105, backlog 257).
+    expect(rendered()).toContain('printed and never written to a file');
   });
 
   it('records what it was generated from, so the file is never read as hand-written', () => {
@@ -516,13 +516,17 @@ describe('pnpm changelog, as a program, around the first release', () => {
       env: { PATH: process.env.PATH ?? '' },
     });
 
-  it('writes the preview under FIRST_VERSION before any release exists', () => {
+  it('prints the preview under FIRST_VERSION before any release exists, and writes no file', () => {
     const root = checkout(['feat: one', 'fix: two']);
-    const result = run(root);
-    expect(`${result.status}: ${result.stderr}`).toBe('0: ');
-    const written = readFileSync(join(root, 'CHANGELOG.md'), 'utf8');
-    expect(written).toContain('## 0.1.0 (unreleased)');
-    expect(changelogHeadingProblems(written)).toEqual([]);
+    // The default mode and `--stdout` are one mode since Q105 (c) (backlog 257): a preview is
+    // printed, and `CHANGELOG.md` is a hand-written pointer nothing regenerates.
+    for (const args of [[], ['--stdout']]) {
+      const result = run(root, ...args);
+      expect(`${result.status}: ${result.stderr}`).toBe('0: ');
+      expect(result.stdout).toContain('## 0.1.0 (unreleased)');
+      expect(changelogHeadingProblems(result.stdout)).toEqual([]);
+    }
+    expect(() => readFileSync(join(root, 'CHANGELOG.md'), 'utf8')).toThrow(/ENOENT/);
   });
 
   it('refuses once a tag exists at the configured version, and writes nothing', () => {

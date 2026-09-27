@@ -46,7 +46,9 @@ Environment names for the bundled `glab` CLI follow TD-020: `GITLAB_HOST`, `GITL
 
 ## 3. Create the webhook
 
-**Settings → Webhooks → Add new webhook**, URL `<APP_WEBHOOK_PUBLIC_URL>/webhooks/gitlab/<integrationId>`.
+**Settings → Webhooks → Add new webhook**, URL `<APP_BASE_URL>/webhooks/gitlab/<integrationId>` — the
+exact URL is the `webhook_url` field of `GET /api/integrations/<integrationId>/setup-guide`
+(the integrations screen does not display it yet).
 
 Triggers to enable:
 
@@ -85,9 +87,10 @@ Leave **Enable SSL verification** on.
 > With neither token configured the platform rejects every delivery. That is deliberate: an
 > endpoint that accepts unverified webhooks looks exactly like one that works.
 
-If the instance has no public URL for this platform (`APP_WEBHOOK_PUBLIC_URL` unset), skip the
-webhook and rely on polling; the same normaliser runs and the dedup key makes both paths safe to
-run together.
+The webhook is **required**: this build has no poller for these events. The CI gate asks GitLab
+about the merge request's pipeline itself, but a review comment, an approval, a merge and a
+default-branch move reach the platform only as deliveries. The instance must be reachable from
+GitLab at `APP_BASE_URL`.
 
 ## 4. Protect the default branch
 
@@ -152,7 +155,7 @@ was accepted.
 | `detailed_merge_status` | GitLab 15.6+ (before that the platform uses `merge_status`, which is still returned) |
 | `order_by=merged_at` on the merge request list | GitLab 17.2+ — not used; the platform orders by `updated_at` and sorts client-side so older instances work |
 | Signed webhooks (Standard Webhooks) | GitLab 19.0+ (generally available 19.1) |
-| `Idempotency-Key` delivery header | GitLab 17.4+ — not used; the dedup key is event + object id + revision, so webhooks and polling dedup against each other |
+| `Idempotency-Key` delivery header | GitLab 17.4+ — not used; the dedup key is event + object id + revision, so a redelivery of the same event is recognised whatever its header |
 | Project access tokens | any self-managed tier; **Premium/Ultimate on gitlab.com** |
 | Code Owners *enforcement* | Premium/Ultimate. The platform reads the `CODEOWNERS` file on any tier — it is just a file — and uses it for reviewer routing; GitLab will not enforce approvals on Free. |
 

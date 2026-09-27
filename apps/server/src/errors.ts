@@ -73,6 +73,24 @@ export class ForbiddenError extends HttpError {
   }
 }
 
+/**
+ * TD-022's cross-site refusal (PROGRESS backlog 56). It is a 403 like a missing capability, but it is
+ * a different fact with a different fix — a header the caller forgot, not a role it lacks — so it
+ * carries its own `error.code` and composes its own sentence instead of passing the violation
+ * through {@link ForbiddenError}'s `role` slot, which rendered *"role cross-site request: … may not
+ * perform POST …"*.
+ */
+export class CrossSiteRequestError extends HttpError {
+  constructor(method: string, url: string, violation: string) {
+    super(
+      403,
+      'cross_site_request',
+      `cross-site request refused for ${method} ${url}: ${violation}`,
+    );
+    this.name = 'CrossSiteRequestError';
+  }
+}
+
 export class NotFoundError extends HttpError {
   constructor(what: string) {
     super(404, 'not_found', `${what} does not exist`);

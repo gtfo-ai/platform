@@ -78,6 +78,7 @@ Intake ─► Refinement ─► Architecture ─► Implementation ─► CI gat
 
 ### S6b — Rebase gate (gate, BD-030)
 - Runs before Ready and again whenever the default branch moves while the MR waits: rebase (or merge, per project), resolve conflicts (bounded, default 2 attempts, by a short Implementation run), re-run CI. Escalates with a blocker brief when conflicts cannot be resolved. The board warns when two active tasks touch the same files.
+- Resolving a conflict changes the code, so each attempt re-enters CI and re-runs the review tail (code review, then business review): at the shipped defaults two attempts can commit up to $26 of stage caps against the $50 task default, and two re-reviews that return spend two of code review's three rounds — the derivation is beside `CONFLICT_RESOLUTION_STAGE` in `packages/domain/src/pipeline/templates.ts`. Whether a re-review of a merge commit typically returns is not yet measured.
 
 ### S7 — Ready for merge (human)
 - MR is marked ready; reviewers assigned from CODEOWNERS/project config; **risk classes** derived from touched paths (auth, payments, migrations, infra…) are labelled on the MR and can require a named reviewer, plan approval or a stricter checklist (BD-030); the Checks panel shows coverage delta and dependency status; ticket status → `In review`; Slack notification with summary and cost.

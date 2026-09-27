@@ -4473,6 +4473,7 @@
               "type": "string",
               "enum": [
                 "discovery",
+                "recheck",
                 "ci_gate",
                 "maintenance",
                 "manual"

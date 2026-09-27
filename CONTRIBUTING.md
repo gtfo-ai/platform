@@ -129,10 +129,12 @@ maintainer's part is the review and the merge; there is nothing else to do:
 4. **Conventional commits and the DCO are still enforced**, by lefthook and by `ci.yml`, because the
    history is what the version is computed from.
 
-`pnpm changelog` regenerates `CHANGELOG.md`, the **preview** of the next version, from the same
-commits and release-please 17.6.0's section table. No workflow writes it, and it **refuses** — exit 1,
-nothing written — when a release tag exists and the version it would render is not ahead of it; to
-preview the next release, `pnpm changelog --version "$(node scripts/version.mjs)"`.
+`CHANGELOG.md` is a short hand-written pointer to the GitHub Releases page and lists **no versions**
+(Q105, PROGRESS backlog 257): under continuous deployment a list kept in the file would be stale after
+nearly every push. `pnpm changelog` **prints** the preview of the next version from the same commits
+and release-please 17.6.0's section table, and writes nothing. It **refuses** — exit 1 — when a
+release tag exists and the version it would render is not ahead of it; to preview the next release,
+`pnpm changelog --version "$(node scripts/version.mjs)"`.
 
 ## Pull requests
 

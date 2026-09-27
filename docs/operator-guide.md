@@ -112,9 +112,13 @@ never its role (above).
 - **A command's effect.** A command answered by a process that runs no worker (`ROLE=api`) is handed
   to a worker through the job queue in the database: that role holds an enqueue-only queue client
   and never takes a job itself (WP-72; before it, such a process held none, so a knowledge approval
-  waited for the nightly pass and every command that starts a stage was refused). On a brand-new
-  database whose worker has never started, a command that enqueues is refused with a message naming
-  the queue — start a worker first.
+  waited for the nightly pass and every command that starts a stage was refused). **On a new
+  database, start a worker (`ROLE=worker`, `runner`, `indexer` or `all`) before a `ROLE=api`
+  process**, because queues are declared by the workers that serve them: until one has started
+  against the database once — and a worker refused at its own pool floor has not — every command that
+  enqueues is refused. The browser sees a `500` carrying a request id; the API's log line for that
+  id is `QueueNotDeclaredError`, naming the queue and telling you to start a worker (PROGRESS backlog
+  262).
 - **The live run.** The runner writes the transcript and announces it with PostgreSQL `NOTIFY`; the
   process that serves your browser reads the rows back, so the run screen fills from `app` while the
   run executes in `runner`.
@@ -462,7 +466,10 @@ curl -sS -b cookies.txt -X POST "$BASE/api/integrations" \
 ```
 
 The two extra headers are not optional and the API says so if you omit them: every mutating request
-needs a trusted `Origin` **and** `x-requested-with`, which is the cross-site guard. `Idempotency-Key`
+needs a trusted `Origin` **and** `x-requested-with`, which is the cross-site guard; omitting one
+answers `403` with the code `cross_site_request` and a sentence naming the missing piece — for
+example *"cross-site request refused for POST /api/integrations: Origin (absent) is not a trusted
+origin"*. `Idempotency-Key`
 is required on the three commands that *create* something, so a retry is not a second integration.
 
 Then bind it to a project — in the wizard's step 1, or on the project's own settings page
@@ -486,8 +493,9 @@ This guide does not repeat them.
 
 ### The webhook URL
 
-For a provider with an inbound half, the integrations screen publishes the URL to paste into the
-provider. It is built from `APP_BASE_URL`:
+For a provider with an inbound half, the API publishes the URL to paste into the provider — the
+`webhook_url` field of `GET /api/integrations/:id/setup-guide` (the integrations screen does not
+display it yet, PROGRESS backlog 272). It is built from `APP_BASE_URL`:
 
 ```
 <APP_BASE_URL>/webhooks/<provider>/<integration_id>

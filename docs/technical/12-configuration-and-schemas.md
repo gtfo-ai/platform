@@ -27,20 +27,39 @@ Neutral names, no product prefix for standard variables; `APP_` for product-spec
 | `APP_MODEL_EGRESS_HOSTS` | `api.anthropic.com` | hosts a run container may reach besides its git host. Needed in **both** provider modes (WP-53 measured the CLI authenticating against the same API either way). Empty fails closed |
 | `APP_WORKSPACE_RUNTIME_CLI_PATH` | `/usr/local/bin/claude` | where the `claude` binary is **inside the run image** (PROGRESS backlog 34). The launcher verifies it against the image with `test -x` before the first run and refuses by name |
 | `APP_CLAUDE_BINARY` | bundled | path to a `claude` binary in `local` mode |
-| `APP_WORKSPACE_ROOT` | `/var/lib/app/workspaces` | runner volume |
 | `APP_WEB_ROOT` | the image's own `/app/apps/web/dist` | **absolute** directory the API process serves the built SPA from, at `/` and on the same origin as `/api` and `/events` (technical/09, WP-15j). Unlike `APP_KNOWLEDGE_MIRROR_ROOT` it *has* a default, because it names a part of the image rather than a data volume an operator has to choose — `docker/app.Dockerfile` writes it and `apps/server/src/web/bundle.ts` states it once. Set it to serve a patched bundle from a mounted volume. A directory that is not there is named in a warning at start-up and changes nothing else: the API, `/healthz` and `/readyz` are unaffected and every client path answers the JSON 404 an unmatched path answers. Only a role that serves the API serves it |
 | `APP_KNOWLEDGE_MIRROR_ROOT` | unset | **absolute** path where the platform keeps its own bare mirror per project, which the knowledge indexer reads with git plumbing (TD-026). **Unset composes no `VaultSource`** and the index job refuses by name; it never defaults to a path, and a relative one is refused. The directory must exist and be writable by the process — it is never created. Two further requirements the operator supplies rather than the platform: **`git` on the process' `PATH`** (probed at composition; when it is missing the index job refuses naming `git`, like the variable), and a **git binding on the project**, whose existing credential the fetch authenticates with through a credential helper — never in the URL, and never anonymously. `projects.repo_url` must be an `https://`, `http://` or `file://` URL: git's scp-style `git@host:acme/api.git` is **refused** (the form carries no scheme, and it names an SSH remote whose key this platform does not hold), so a project written that way indexes to a permanent `vault_unavailable` naming the scheme — other parts of the platform do accept that spelling, and this is the one place it is not enough. Distinct from the launcher's `APP_WORKSPACE_CACHE_VOLUME`, which only the launcher can advance |
 | `APP_KNOWLEDGE_MIRROR_MAX_BYTES` | unset | a positive integer: the ceiling on the knowledge mirrors' total **bytes** under `APP_KNOWLEDGE_MIRROR_ROOT` (WP-65, Q63). **Unset is no ceiling**, the default on purpose — removing a mirror costs its project a full re-clone on its next index run. When set, after each index run the mirror **used least recently** is removed until the total is under it: by last use (a read stamps the mirror before it runs git and again once prepared), never by age, never the mirror just read and never one used within the last hour. Anything that is not a positive integer refuses to start, naming the variable. Choose it from the storage gauge — `platform_storage_bytes{component="knowledge_mirrors"}` and `knowledge_mirror_bytes{project_id}` on `/metrics` |
-| `APP_TRANSCRIPT_STORE` | `db` | `db | fs:<path> | s3:<bucket>` (03) |
-| `APP_RUNNER_MAX_PARALLEL` | `4` | org `max_parallel_runs` seed |
-| `APP_WEBHOOK_PUBLIC_URL` | unset | if set, webhooks are advertised in setup guides; else polling |
-| `APP_DISABLE_TELEMETRY` | `true` | no phone-home by default |
 | `APP_INTEGRATION_HOSTS` | unset (**closed**) | comma-separated hosts a provider binding may name (WP-51, PROGRESS backlog 48). **Not settable through the API** — a list a caller can extend is not a list. Enforced twice: `POST /api/integrations` refuses an undeclared host with `403 integration_host_not_permitted` naming the host and this variable, and `IntegrationActionExecutor` refuses the *call*, so a row written before the list existed cannot slip past. Matching is exact and case-insensitive on the host alone: no port, no path, no subdomain wildcard, punycode as written. Unset or empty means **no provider call leaves the process**, which is rule 18's fail-closed answer; a single `*` declares the list open. It checks names, never the addresses they resolve to |
-| `APP_FEATURE_*` | — | feature flags for staged rollout |
 | `CLAUDE_CODE_DISABLE_AUTO_MEMORY` | `1` | set on runner processes (research/04) |
 | `DISABLE_AUTOUPDATER` | `1` | runner processes `[verify name in research/05]` |
 
 Secrets may also be provided as files via `*_FILE` variants (Docker secrets convention).
+
+**Removed at WP-73, because nothing read them** (PROGRESS backlog 127; each was in `.env.example` and in
+this table, and a documented name that does nothing is one an operator acts on). Where each behaviour
+lives instead:
+
+- `APP_WORKSPACE_ROOT` — a run's workspace is the launcher's, configured by its own `APP_WORKSPACE_*`
+  variables (`apps/launcher/src/config.ts`). The name also *broke* a launcher handed the file, whose
+  strict schema refuses an unknown `APP_WORKSPACE_*` name.
+- `APP_TRANSCRIPT_STORE` — transcripts are stored in the database (`run_messages`, technical/03) and
+  nowhere else; this build has no file or object-store backend.
+- `APP_RUNNER_MAX_PARALLEL` — the organisation's parallel-run limit is `DEFAULT_WIP_LIMITS`
+  (`packages/domain/src/policies/wip.ts`), which nothing on this build lets an operator change.
+- `APP_WEBHOOK_PUBLIC_URL` — the webhook URL an integration's setup guide publishes is built from
+  **`APP_BASE_URL`** (`<APP_BASE_URL>/webhooks/<provider>/<integration_id>`, the operator guide's
+  § The webhook URL). A webhook is required for a binding to start tickets: this build has no poller
+  (PROGRESS backlog 187).
+- `APP_DISABLE_TELEMETRY` — this build sends nothing anywhere, so there is nothing to disable.
+- `APP_FEATURE_*` (five flags) — **decided at WP-73: deleted rather than built.** The file said the
+  instance value was a ceiling on what a project may enable; no code enforced it, and a project's own
+  `features` block in `.agentic/config.yml` (below) is the only switch anything reads. An
+  instance-wide ceiling would be a product decision (how the two values combine per flag, and how a
+  refused project request is surfaced), not a line in a file.
+
+`test/e2e/compose/compose-config.e2e.test.ts` holds the file to the server's reads in both
+directions, so a name added back without a reader fails there.
 
 ## `.agentic/config.yml` (repository, non-secret, highest precedence for non-secret keys)
 
@@ -53,14 +72,13 @@ project:
   commit_convention: conventional
   default_branch: main
 pipeline:
-  template_overrides:            # per template
+  template_overrides:            # per template; only plan_approval / size_threshold are read (below)
     feature:
       stages:
-        business_review: { enabled: true }
         architecture: { plan_approval: above_size, size_threshold: L }
-    chore:
-      stages: { architecture: { enabled: false } }
-  custom_stages: []              # or reference pipeline.yml
+    bug:
+      stages: { architecture: { plan_approval: always } }
+  custom_stages: []              # parses; not read on this build (below)
   limits:
     code_review_iterations: 3
     business_review_iterations: 2
@@ -73,7 +91,7 @@ stages:                          # per-stage agent settings
   refinement: { model: claude-opus-5, effort: medium, max_turns: 30, budget_usd: 2 }
   architecture: { model: claude-opus-5, effort: high, budget_usd: 5 }
   implementation: { model: claude-opus-5, effort: high, max_turns: 200, budget_usd: 15,
-                    prompt: prompts/implementation.md, prompt_append: prompts/implementation.append.md }
+                    prompt: prompts/implementation.md, prompt_append: prompts/implementation.append.md }  # prompt keys: not read (below)
   code_review: { model: claude-opus-5, effort: high }
 policies:
   autonomy: supervised           # observe | assist | supervised | autonomous — overridden only by
@@ -123,11 +141,25 @@ Secrets are never accepted from the repo. Unknown keys are errors (fail loudly, 
 
 A stored reading is re-validated against the current schema and grades when it is read, not only when the file is re-read; a pinned re-read whose commit is **older** than the recorded one is not recorded (a late `default_branch.moved` cannot undo a newer reading); a `__proto__` key and any explicit YAML tag are refused by path. The file is written by the platform only as a **merge request** (`POST /api/projects/:project_id/config/export`, an `agentic/config/*` branch — never a direct commit, Q94 (b)).
 
+**Keys that parse and are not read on this build** (PROGRESS backlogs 220 and 226 — the schema accepts them, so a
+write that carries one is answered `200` and changes nothing; the readers are unscheduled work):
+
+- **`pipeline.template_overrides`**: of a stage entry, only **`plan_approval`** and **`size_threshold`** are read —
+  by the plan-approval gate, from the **settings** layer (the repository file's `template_overrides` is *not applied*,
+  per the grading table below). **`enabled`** — on a stage or on a template — switches nothing: a stage a project
+  turns off still runs, and a template-level `enabled` has no specified meaning yet.
+- **`pipeline.custom_stages`**, **`stages.<id>.prompt`** and **`stages.<id>.prompt_append`**: no reader. A
+  project's `.agentic/pipeline.yml` and its `prompts/` directory are not read either (next section); the repository
+  reader reads exactly this file and `CLAUDE.md`.
+
 The example above is transcribed key for key into a fixture and parsed by
 `packages/contracts/src/config.test.ts` › "parses the example from technical/12 unchanged", so a key
 this page documents and the schema refuses fails the build rather than an operator's file.
 
 ## `.agentic/pipeline.yml` (optional full template definition)
+
+> **Not read on this build** (PROGRESS backlog 226). A project runs the shipped templates
+> (`packages/domain/src/pipeline/templates.ts`); this section is the specification a reader will be built to.
 
 ```yaml
 version: 1
@@ -181,9 +213,13 @@ Verdict fields drive transitions; the platform never parses markdown to decide.
 
 `prompts/<role>.md` shipped with the platform, hashed; a project override or append is hashed with it; `Run.prompt_version = sha256(platform_prompt + override + append)` plus a human-readable label (`refinement@1.3+project`).
 
+> **As built:** a project override or append is **not read** (PROGRESS backlog 226), so `prompt_version` is always
+> the shipped role prompt's declared version plus the digests `promptVersionOf` appends (the assembled system prompt's, and the skill set's).
+
+
 ## Effective configuration
 
-`effective = merge(defaults, org, project, repo)` with per-key provenance; computed at task start and frozen into `Run.settings_snapshot`. The organisation's command list caps what project and repo may grant (BD-025's WP-54 and WP-63 amendments — a baseline intersected with it before either narrows). **No organisation autonomy maximum is composed on this build** (PROGRESS backlog 223; the published view caps at `autonomous`), and the repo layer may **tighten, never loosen** what an agent or reviewer is held to: protected paths are a union, the autonomy-override keys and `policies.autonomy` are not applied from it (WP-63, Q101).
+`effective = merge(defaults, org, project, repo)` with per-key provenance, **read per stage** rather than per task: the settings port reads the stored settings and the last valid repository reading each time a stage is planned, and the reading is refreshed after each knowledge index run and on `POST …/config/refresh` — so a task that starts before the first index run after a merge runs on the previous reading, and a later stage of the same task can see a newer one. **No snapshot is stored**: `runs.settings_snapshot` has no writer on this build (PROGRESS backlog 227). The organisation's command list caps what project and repo may grant (BD-025's WP-54 and WP-63 amendments — a baseline intersected with it before either narrows). **No organisation autonomy maximum is composed on this build** (PROGRESS backlog 223; the published view caps at `autonomous`), and the repo layer may **tighten, never loosen** what an agent or reviewer is held to: protected paths are a union, the autonomy-override keys and `policies.autonomy` are not applied from it (WP-63, Q101).
 
 **What production composes (WP-63).** `org` is `organizations.settings.commands` — the organisation's command maximum and nothing else (no surface writes it yet, PROGRESS backlog 146 (2); a value that does not parse is refused, not read as absent). `project` is `projects.config`, what the settings screens and `PUT …/config` write. `repo` is the last `valid` reading of the file above. **The repository wins** wherever it states an operational key (Q94 (a), bounded by the grading above); the settings answer where it is silent; defaults answer the rest; and `GET …/config` publishes the merge as `effective` with the layer of every leaf in `sources` — so a key can answer `repo` — beside `config`, which stays the settings layer the screens round-trip. The pipeline's settings port merges `project` and `repo` **without** the defaults, because several readers treat a key's presence as an override of the materialised autonomy dial (Q78).
 

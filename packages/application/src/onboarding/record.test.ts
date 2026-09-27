@@ -25,6 +25,7 @@ import {
   type DiscoveryRecordData,
   type DiscoveryRecordOptions,
   discoveryTriggerHandlers,
+  isBusinessDraftPath,
   MAX_DISCOVERY_DOCUMENTS,
   recordDiscoveryFindings,
 } from './record.js';
@@ -229,7 +230,69 @@ describe('recordDiscoveryFindings', () => {
     const { options, eventing } = harness();
     await recordDiscoveryFindings(options, job);
     const stream = await eventing.store.readStream('project', PROJECT);
-    expect(stream.map((entry) => entry.event.type)).toEqual(['knowledge.proposal.created']);
+    expect(stream.map((entry) => entry.event.type)).toEqual([
+      'readiness.evaluated',
+      'knowledge.proposal.created',
+    ]);
+  });
+
+  it('publishes one readiness.evaluated for the row it records, in its transaction (backlog 228)', async () => {
+    const { options, eventing, readiness } = harness();
+    await recordDiscoveryFindings(options, job);
+    const stream = await eventing.store.readStream('project', PROJECT);
+    const evaluated = stream.filter((entry) => entry.event.type === 'readiness.evaluated');
+    expect(evaluated).toHaveLength(1);
+    const row = readiness.rows[0];
+    expect(evaluated[0]?.event.payload).toEqual({
+      project_id: PROJECT,
+      level: row?.level,
+      criteria: row?.criteria.map(({ id, passed, evidence }) => ({ id, passed, evidence })),
+      source: 'discovery',
+    });
+    // The stream stays gap-free with the proposals behind it.
+    expect(stream.map((entry) => entry.event.stream_seq)).toEqual(
+      stream.map((_, index) => index + 1),
+    );
+  });
+
+  it('refuses a drafted business page and counts it, storing no row (backlog 229)', async () => {
+    const { options, proposals, eventing } = harness({
+      data: draft({
+        documents: [page({ path: 'business/overview.md', title: 'What the business is' }), page()],
+      }),
+    });
+    const report = await recordDiscoveryFindings(options, job);
+    expect(report.businessRefused).toBe(1);
+    // Refused, not relabelled and not discarded: the interview is the business producer.
+    expect(proposals.rows.map((row) => row.targetPath)).toEqual([
+      '.agentic/knowledge/technical/overview.md',
+    ]);
+    expect(proposals.rows.every((row) => row.kind === 'technical')).toBe(true);
+    const created = (await eventing.store.readStream('project', PROJECT)).filter(
+      (entry) => entry.event.type === 'knowledge.proposal.created',
+    );
+    expect(created).toHaveLength(1);
+  });
+
+  it('keeps a technical page, and refuses none, when no path is a business one', async () => {
+    const { options, proposals } = harness();
+    const report = await recordDiscoveryFindings(options, job);
+    expect(report.businessRefused).toBe(0);
+    expect(proposals.rows).toHaveLength(1);
+  });
+
+  it('reads a business path by its first segment, whatever its spelling', () => {
+    for (const path of [
+      'business/overview.md',
+      './business/x.md',
+      'Business/x.md',
+      '/business/x',
+    ]) {
+      expect(isBusinessDraftPath(path), path).toBe(true);
+    }
+    for (const path of ['technical/business.md', 'businesses/x.md', '../business/x.md', 'x.md']) {
+      expect(isBusinessDraftPath(path), path).toBe(false);
+    }
   });
 
   it('refuses a path that would climb out of the knowledge directory', async () => {

@@ -31,20 +31,23 @@ export const jiraCloudConfigSchema = z.strictObject({
   /** Secret. An Atlassian API token, never a password. */
   api_token: nonEmptyStringSchema,
   /**
-   * Secret. The webhook's secret token; `null` when this binding has no webhook and is polled
-   * instead (`capabilities().webhooks` is then false, and every delivery fails `verify`).
+   * Secret. The webhook's secret token; `null` when this binding has no webhook
+   * (`capabilities().webhooks` is then false, and every delivery fails `verify`). **Such a binding
+   * starts no ticket on this build**: nothing polls, so a webhook is required for intake (PROGRESS
+   * backlog 187). Reads and writes the pipeline makes through it still work.
    */
   webhook_secret: nonEmptyStringSchema.nullish(),
   /** Project keys this binding reads. Empty means "whatever the webhook and the JQL deliver". */
   project_keys: z.array(nonEmptyStringSchema).default([]),
   /**
    * The pick-up rule a **webhook** announces a match with (product/08: a label or a mapped
-   * status). The polling path takes its rule from the caller instead — `matchTickets(rule)`.
+   * status). `matchTickets(rule)` takes its rule from the caller instead; its one caller on this
+   * build is the history bootstrap, because there is no ticket poller.
    *
    * `pickup_status` wins when both are set, because a status is the narrower statement: a project
    * that moves tickets into "Ready for agent" has said when the ticket is ready, where a label can
    * sit on a ticket for weeks before it is. Both empty means this binding announces no matches by
-   * webhook and is polled for them.
+   * webhook — and, with no poller on this build, that no ticket is picked up at all.
    */
   pickup_label: nonEmptyStringSchema.nullish().default('agentic'),
   pickup_status: nonEmptyStringSchema.nullish().default(null),

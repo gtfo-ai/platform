@@ -135,7 +135,10 @@ export const TakeOverDownloads = ({
     <p className="text-xs text-fg-muted">
       {inferred
         ? 'No run had started when the task was taken over, so there is no transcript or workspace to download — the branch is where the work is.'
-        : 'No run was live when the task was taken over, so nothing was exported and there is no transcript or workspace to download — the branch is where the work is.'}
+        : // Not "no run was live" (PROGRESS backlog 134): on the shipped topology the process that
+          // answered never holds a run, so one may still be running elsewhere, and this take-over
+          // did not stop it. The user guide says the same.
+          'No run was in flight in the process that answered the take-over, so nothing was exported and there is no transcript or workspace to download — the branch is where the work is. A run executing in another process was not stopped by this take-over.'}
     </p>
   ) : (
     <div className="flex flex-col gap-1 text-xs">

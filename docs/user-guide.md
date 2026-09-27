@@ -31,7 +31,7 @@ server on every request — the browser only hides what you cannot do.
 | You want to | You need |
 |---|---|
 | read boards, tasks, runs, budgets, the knowledge base | viewer |
-| answer a question, pause/resume, retry a stage, cancel a run, leave feedback | member |
+| answer a question, pause/resume, retry a stage, cancel a run, leave feedback, ask the task | member |
 | approve a plan or a budget, cancel a task, return it to a stage, rework it, decide a knowledge proposal, set budgets, run discovery | maintainer |
 | create a project, add an integration, manage users | admin |
 
@@ -60,9 +60,8 @@ capital or a hyphen produces an inline error and **no request**, which is easy t
 button that did nothing.
 
 Then: the integrations the project uses. This step **binds and tests** them; it does not create them.
-An integration has to exist first, and creating one is the operator's job — the API serves it and no
-screen renders a form yet, so the operator guide's §4 does it with a request. Once one exists it
-appears here as a checkbox, "Test connection" makes one real call to the provider and records the
+An integration has to exist first: an admin creates it on the **Integrations** screen (section 9) or
+with the request in the operator guide's §4. Once one exists it appears here as a checkbox, "Test connection" makes one real call to the provider and records the
 result, and "Bind" attaches it to this project. A wrong token is therefore a red badge here rather
 than a failed run tomorrow.
 
@@ -256,8 +255,9 @@ and the platform will not publish a document it cannot vouch for — it says so 
 
 ### What you can do from here
 
-Nine of the eleven commands the product serves (the other two are on the run screen). Each is an
-operation the task aggregate either performs or **refuses by name** — a refusal comes back as an
+The commands in the table below, plus **take over**, **hand back** and **ask the task** (after the
+checks panel); a run's own commands — retry, cancel and steer — are on the run screen (section 5).
+Each is an operation the task aggregate either performs or **refuses by name** — a refusal comes back as an
 error naming the transition, not as a silent no-op — and each accepted one leaves a row in the audit.
 
 | Command | Who | What it does |
@@ -307,10 +307,10 @@ The eleventh, the **tamper check**, is named as absent with its reason: it needs
 compare the paths a change touches with the exceptions its plan declared and to store the result,
 and this build does not do that yet. It is never drawn as an empty tick that reads as "passed".
 
-### What is not on this screen
+### Taking over, the epic breakdown, and asking the task
 
-- ~~**Take over** and **hand back**~~ **are on this screen since WP-44** (and on the run screen,
-  for the run's task). **Take over** pauses the pipeline, interrupts the running agent, commits and
+- **Take over** and **hand back** are on this screen (and on the run screen, for the run's task).
+  **Take over** pauses the pipeline, interrupts the running agent, commits and
   pushes its work in progress on `agentic/<ticket>` and answers with the branch, the
   `claude --resume` command and whether the workspace was exported — the panel shows exactly those,
   in the tense the platform means them (*requested* is "being pushed as the run winds down", not
@@ -320,7 +320,9 @@ and this build does not do that yet. It is never drawn as an empty tick that rea
   so it lasts as long as the transcript does) and **the workspace tarball** when you asked for one
   (`GET /api/runs/<run>/export.tar`, kept for **14 days from the take-over, whether or not you have
   handed back** — the taken-over workspace's own retention). When no run was in flight in the
-  process that answered, nothing was exported and the panel offers neither download; a take-over
+  process that answered, nothing was exported and the panel offers neither download — and on a stock
+  instance that is every take-over, because the process serving this screen never holds a run, so a
+  run executing in the `runner` container keeps going (section 5; PROGRESS backlog 134); a take-over
   recorded before WP-73 names the run it *infers* and says so
   — and **Hand back**, whose stage list is the task's own pipeline, so it offers nothing the platform
   would refuse. A task you took over and have not handed back moves to needing a human after
@@ -340,8 +342,12 @@ and this build does not do that yet. It is never drawn as an empty tick that rea
   with your reason. Only a maintainer sees the checkboxes; everybody who can read the task can read
   the queue. The feature is off until a project turns on **Epic split** in its operating-mode
   features.
-- **Ask the task a question.** The answers are a thread, and the task response has nowhere to carry
-  one, so a question would post into a void.
+- **Ask the task** (member) is a thread at the bottom of the page: ask *"why did you choose X?"* and
+  the answer is written from the task's audit trail and artifacts, citing the exact run, artifact or
+  action it rests on — each citation is a link into this application, never a link the model wrote.
+  An ask starts a run and spends the project's money, which is why it needs a member rather than a
+  viewer; reading the thread needs only a viewer. It is a project feature (**Ask the task** among the operating-mode features), on by default.
+  Like any run it needs an instance whose runner is configured (section 13).
 
 ## 5. Run detail and the transcript
 
@@ -468,11 +474,11 @@ Nothing on this screen is a credential: the server strips every field a provider
 secret before publishing an integration's configuration, and publishes nothing at all for a provider
 this build does not ship — because it then cannot tell configuration from credential.
 
-"Test connection" lives in the **wizard**, beside the binding it is about. **"Add an integration"
-lives nowhere**: `POST /api/integrations` is served, the browser application even carries the client
-call for it, and no screen renders the form — so this screen's cards are the ones an operator created
-with a request (operator guide, §4). It is the one place in the product where the API can do
-something the browser cannot.
+**Add an integration** (admin) is a form on this screen, and **Test connection** is on each card as
+well as in the wizard beside the binding it is about. The form never takes a credential: it names the
+*environment variable* the server reads, which must be on the operator's allow-list (operator guide,
+§4) — so a create can be refused for a reason outside the form, and the server's own message is
+shown.
 
 ## 10. Audit log
 
@@ -484,18 +490,23 @@ parameters. A *refused* command records nothing.
 
 ## 11. Settings
 
-The signed-in session, the theme, the instance version, and the user list with roles.
+The signed-in session, the theme, the instance version, the user list with roles, the
+**organisation budgets** (the caps that stop a new run anywhere in the organisation), and **provider
+identities** — which Slack, Jira or GitLab account is which person, without which a decision made in
+those tools is refused as unmapped.
 
-Autonomy defaults, provider mode, global budgets and feature flags are **named as absent** rather
+Autonomy defaults, the provider mode and instance-wide feature flags are **named as absent** rather
 than drawn as controls that would silently do nothing: the endpoints that would write them are not
-built.
+built. A project's features are switched on its own settings page.
 
-## 12. Statistics — **a stub, and it says so**
+## 12. Statistics
 
-Delivered tasks, cost, lines changed, cycle time, return rates and intervention rate, with a CSV
-export, are what this screen is for. None of it is published yet. The screen names the numbers that
-are coming rather than drawing a chart on a response shape invented in the browser, or a page of
-zeroes that would read as "we delivered nothing" instead of "nothing is measured yet".
+The organisation's delivery numbers over a range you choose (7, 30, 90 or 365 days) and a bucket
+(day, week, month), with a **CSV download** of the same figures and a table of returns by stage.
+Every number carries its definition, and its caveats are on the screen. A number this build cannot
+compute is listed under **Not measured, and why** with its reason, never drawn as a zero — a zero
+would read as "we delivered nothing" instead of "nothing is measured"; and a range with nothing in
+it says *no data in this range*, which is a different sentence from `0`.
 
 ## 13. The whole list of what is not there yet
 
@@ -504,15 +515,13 @@ In one place, so it is not spread across thirteen sections:
 | Not built | Where you meet it |
 |---|---|
 | Steering a live run | run detail — served, and refused `409 run_not_reachable` on every stock instance, because the process that serves the application never holds a run |
-| Ask the task a question | task detail |
 | The business interview as a *conversation* with the Product Manager role (the form is built; Q102) | onboarding step 3 |
 | Committing `.agentic/` configuration from the wizard itself (the project settings page does it) | onboarding step 5 |
 | Re-answering the nine run-dependent readiness criteria after a merge (five are re-checked) | onboarding step 2 |
 | Editing a knowledge document or the pipeline in the browser | knowledge, pipeline |
-| Organisation settings (autonomy defaults, provider mode, global budgets, flags) | settings |
-| Statistics | statistics |
-| Nine of the thirteen merge-readiness checks | task detail |
-| Creating an integration from the browser — any screen at all | integrations, onboarding step 1 |
+| Organisation settings for autonomy defaults, the provider mode and instance-wide feature flags | settings |
+| The statistics the screen lists under *Not measured, and why* | statistics |
+| The tamper check — the one merge-readiness check the panel names as absent (section 4) | task detail |
 
 And one that is about the deployment rather than a screen: an agent stage runs only on an instance
 whose operator set `APP_LAUNCHER_URL` and `APP_LAUNCHER_TOKEN`, because those switch on the `runner`

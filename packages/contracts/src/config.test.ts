@@ -26,11 +26,10 @@ const DOC_EXAMPLE = {
     template_overrides: {
       feature: {
         stages: {
-          business_review: { enabled: true },
           architecture: { plan_approval: 'above_size', size_threshold: 'L' },
         },
       },
-      chore: { stages: { architecture: { enabled: false } } },
+      bug: { stages: { architecture: { plan_approval: 'always' } } },
     },
     custom_stages: [],
     limits: {

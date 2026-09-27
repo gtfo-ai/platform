@@ -421,22 +421,13 @@ const RESIDUAL: readonly { group: string; reason: string; matches: (name: string
     matches: (name) =>
       name.startsWith('APP_DEV_') || name === 'EVAL_MAX_USD' || name === 'LLM_CI_MAX_USD',
   },
-  {
-    group: 'declared with no reader in this build',
-    // Not this row's to fix: each is documented in `.env.example` and read by nothing. They are
-    // listed by name so that a tenth is a decision somebody makes rather than a line somebody adds.
-    // `APP_WORKING_DAYS`, `APP_WORKING_HOURS` and `APP_HOLIDAYS` **left** at WP-56: the server
-    // reads them now (the working calendar), so they are in `namesServerReads()` instead.
-    reason: 'documented in `.env.example`; no source reads them (PROGRESS, WP-50 discovered work)',
-    matches: (name) =>
-      [
-        'APP_DISABLE_TELEMETRY',
-        'APP_RUNNER_MAX_PARALLEL',
-        'APP_TRANSCRIPT_STORE',
-        'APP_WEBHOOK_PUBLIC_URL',
-        'APP_WORKSPACE_ROOT',
-      ].includes(name) || name.startsWith('APP_FEATURE_'),
-  },
+  // The group *"declared with no reader in this build"* is **gone** (WP-73, PROGRESS backlog 127):
+  // `APP_DISABLE_TELEMETRY`, `APP_RUNNER_MAX_PARALLEL`, `APP_TRANSCRIPT_STORE`,
+  // `APP_WEBHOOK_PUBLIC_URL`, `APP_WORKSPACE_ROOT` and the five `APP_FEATURE_*` were deleted from
+  // `.env.example` and technical/12 rather than given a reader, and `APP_WORKING_DAYS`,
+  // `APP_WORKING_HOURS` and `APP_HOLIDAYS` had left at WP-56 when the server began to read them. A
+  // name documented and read by nothing now matches no group and fails the residual check below —
+  // which is a decision somebody makes rather than a line somebody adds.
 ];
 
 describe('compose.yml gives the app service the environment the server reads (WP-50)', () => {
@@ -481,6 +472,20 @@ describe('compose.yml gives the app service the environment the server reads (WP
       expect(residual).toContain('POSTGRES_PASSWORD');
       expect(residual).toContain('DOCKER_HOST');
       expect(residual.some((name) => name.startsWith('RUNLET_'))).toBe(true);
+
+      // Backlog 127's knobs are gone from the stock file, not reclassified: `APP_WORKSPACE_ROOT`
+      // would otherwise pass silently as "the launcher's" (it matches `APP_WORKSPACE_*`).
+      const deleted = delivered.filter(
+        (name) =>
+          [
+            'APP_DISABLE_TELEMETRY',
+            'APP_RUNNER_MAX_PARALLEL',
+            'APP_TRANSCRIPT_STORE',
+            'APP_WEBHOOK_PUBLIC_URL',
+            'APP_WORKSPACE_ROOT',
+          ].includes(name) || name.startsWith('APP_FEATURE_'),
+      );
+      expect(deleted).toEqual([]);
     },
   );
 

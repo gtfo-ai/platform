@@ -33,7 +33,7 @@ In the project's **Project settings → People / Permissions**, the account need
 
 | Permission | Used by |
 |---|---|
-| Browse projects | reading tickets, searching, polling |
+| Browse projects | reading tickets, searching |
 | Add comments | the workpad and questions |
 | Edit issues | labels |
 | Transition issues | status changes |
@@ -50,7 +50,7 @@ it out: the platform reports the missing capability instead of failing halfway t
 | `site_url` | `https://acme-example.atlassian.net` | Your site, no path |
 | `user_email` | `agentic-bot@example.test` | The account the token belongs to |
 | `api_token` | `FAKE-jira-api-token-0123456789` | **Secret.** Stored encrypted, redacted from every log and audit row |
-| `webhook_secret` | `FAKE-jira-webhook-secret-0123456789` | **Secret.** Leave empty to poll instead of receiving webhooks |
+| `webhook_secret` | `FAKE-jira-webhook-secret-0123456789` | **Secret.** Required for tickets to be picked up: this build has no poller (step 4) |
 | `project_keys` | `["ACME"]` | Deliveries for any other project are ignored and recorded as such |
 | `pickup_label` | `agentic` | The label that means "this ticket is for the platform" (product/19 §6) |
 
@@ -66,14 +66,16 @@ JIRA_WEBHOOK_SECRET=       # or JIRA_WEBHOOK_SECRET_FILE=/run/secrets/jira_webho
 The platform **does not follow redirects** (since WP-59): a `site_url` that answers with one fails
 every call as `did not complete`. Use the site URL itself, `https://<site>.atlassian.net`.
 
-## 4. Register the webhook (optional but better)
+## 4. Register the webhook (required)
 
-Only if this instance has a public URL (`APP_WEBHOOK_PUBLIC_URL`). Without one, skip to step 5 —
-polling is a first-class path, not a fallback of last resort.
+**This build has no ticket poller**, so the webhook is the only way a ticket reaches the platform:
+a binding without one passes *Test connection* and never starts a task. The instance must be
+reachable from Atlassian at `APP_BASE_URL`, which is what the URL below is built from.
 
 1. **Jira settings → System → WebHooks → Create a WebHook.**
-2. **URL:** `https://<your-instance>/webhooks/jira-cloud/<integration-id>` (the settings page shows
-   the exact URL once the binding is saved).
+2. **URL:** `https://<your-instance>/webhooks/jira-cloud/<integration-id>` (the exact URL is the
+   `webhook_url` field of `GET /api/integrations/<integration-id>/setup-guide`; the integrations
+   screen does not display it yet).
 3. **Secret:** generate one and paste the same value into `webhook_secret`. Atlassian shows it once.
 4. **Events:** *Issue: created, updated* and *Comment: created*. Nothing else is used, and every
    other event is answered with "not handled by this provider" in the delivery log. *Issue updated*
@@ -89,8 +91,9 @@ request to be replayed a week later.
 
 ## 5. Choose how tickets are picked up
 
-Either a **label** (the default, `agentic`) or a **status**. Both are polled with JQL when there is
-no webhook:
+Either a **label** (the default, `agentic`) or a **status**. The webhook announces a ticket when it
+carries the rule's label or enters its status. The same rule is also asked as JQL by the one
+reader that searches, the history bootstrap:
 
 ```
 labels = "agentic" AND updated >= "-15m" ORDER BY updated ASC

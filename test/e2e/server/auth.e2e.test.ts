@@ -124,6 +124,14 @@ describe('CSRF (TD-022)', () => {
       body: JSON.stringify({ connection_id: 'nope', add: ['org'] }),
     });
     expect(response.status).toBe(403);
+    // Its own code and sentence (backlog 56), not a role that "may not perform" the request.
+    expect(await response.json()).toMatchObject({
+      error: {
+        code: 'cross_site_request',
+        message:
+          'cross-site request refused for POST /events/subscriptions: the x-requested-with header is required on mutating requests',
+      },
+    });
   });
 
   it('refuses a cookie-authenticated mutation from another origin', async () => {
@@ -139,6 +147,13 @@ describe('CSRF (TD-022)', () => {
       body: JSON.stringify({ connection_id: 'nope', add: ['org'] }),
     });
     expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({
+      error: {
+        code: 'cross_site_request',
+        message:
+          'cross-site request refused for POST /events/subscriptions: Origin https://evil.example is not a trusted origin',
+      },
+    });
   });
 });
 

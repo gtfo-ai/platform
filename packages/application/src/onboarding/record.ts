@@ -90,6 +90,7 @@ import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import { evaluateReadiness } from './evaluate-readiness.js';
 import type { PlatformReadinessProbe, ReadinessStore } from './ports.js';
+import { readinessEvaluatedEventFor } from './readiness-event.js';
 
 /** `onboarding.discovery` job payload — snake_case, like every other payload on the wire. */
 export interface DiscoveryRecordData {
@@ -180,6 +181,13 @@ export interface DiscoveryRecordReport {
    * the classes themselves are on the project row for the wizard to render.
    */
   readonly riskClasses: number;
+  /**
+   * Drafted pages refused because their path is under `business/` (PROGRESS backlog 229). Counted
+   * rather than stored: no row, not even a `discarded` one, because a business page is the
+   * interview's to write (step 3, Q102) and a model's summary of what the business is must not reach
+   * the queue at all — once approved it would credit R12 exactly as the interviewee's words would.
+   */
+  readonly businessRefused: number;
 }
 
 const EMPTY: DiscoveryRecordReport = {
@@ -190,6 +198,7 @@ const EMPTY: DiscoveryRecordReport = {
   discarded: 0,
   redactions: 0,
   riskClasses: 0,
+  businessRefused: 0,
 };
 
 /**
@@ -233,9 +242,37 @@ const proposedClassesFrom = (
   return proposed;
 };
 
+/**
+ * Whether a drafted page's path is a **business** page: its first segment, after `./` and empty
+ * segments are dropped, is `business` in any case. The draft's path is relative to the knowledge
+ * directory (the curator joins it), which is where product/05 puts `business/`; a path that spells
+ * the knowledge directory itself is caught by the curator's own rules, not here.
+ */
+export const isBusinessDraftPath = (path: string): boolean => {
+  const first = path.split(/[\\/]+/).find((segment) => segment !== '' && segment !== '.');
+  return first?.toLowerCase() === 'business';
+};
+
+/**
+ * The drafted pages the recorder will curate, and how many it refused for their path.
+ *
+ * `kind` is `technical` for every page it keeps, and that is now a **statement** rather than a
+ * default: a `business/` page is refused before this point rather than labelled by path (backlog
+ * 229). Refusing, not relabelling, is Q102's reason (1) — a business page is what the interviewee
+ * said, not a model's summary of them — and the Discovery prompt already forbids the path; this is
+ * the platform holding it rather than the model.
+ */
+const draftedPages = (
+  draft: DiscoveryDraftData,
+): { readonly kept: DiscoveryDraftData['documents']; readonly businessRefused: number } => {
+  const considered = draft.documents.slice(0, MAX_DISCOVERY_DOCUMENTS);
+  const kept = considered.filter((document) => !isBusinessDraftPath(document.path));
+  return { kept, businessRefused: considered.length - kept.length };
+};
+
 /** One drafted page as the curator's input. Every string the model wrote is redacted here. */
 const proposalsFrom = (
-  draft: DiscoveryDraftData,
+  documents: DiscoveryDraftData['documents'],
   redactor: SecretRedactor,
   tally: { count: number },
 ): readonly LibrarianProposal[] => {
@@ -244,7 +281,7 @@ const proposalsFrom = (
     tally.count += outcome.count;
     return outcome.value;
   };
-  return draft.documents.slice(0, MAX_DISCOVERY_DOCUMENTS).map((document) => ({
+  return documents.map((document) => ({
     // Always `add`: the curator turns it into an `update` when the index already holds the page,
     // which is the dedupe technical/07 step 2 asks for and is fresher than anything a first run
     // could know.
@@ -344,9 +381,10 @@ export const recordDiscoveryFindings = async (
   tally.count += redactions;
 
   const proposedClasses = proposedClassesFrom(draft, options.redactor, tally);
+  const pages = draftedPages(draft);
 
   const curated = curateProposals({
-    proposals: proposalsFrom(draft, options.redactor, tally),
+    proposals: proposalsFrom(pages.kept, options.redactor, tally),
     knowledgeDir: project.knowledgeDir,
     indexedPaths: [...indexed.keys()],
     thresholds: DISCOVERY_PROPOSAL_THRESHOLDS,
@@ -388,13 +426,21 @@ export const recordDiscoveryFindings = async (
     if (rows.length > 0) {
       await options.proposals.insert(scope.tx, rows);
     }
-    await scope.events.append(
-      rows.map((row, index) =>
+    await scope.events.append([
+      // One per recorded row, in the row's own transaction (backlog 228), ahead of the proposals.
+      readinessEvaluatedEventFor({
+        id: options.ids.next(),
+        evaluation,
+        streamSeq,
+        component: 'discovery',
+        occurredAt: createdAt,
+      }),
+      ...rows.map((row, index) =>
         knowledgeProposalCreatedEvent.parse({
           id: options.ids.next(),
           stream_type: 'project',
           stream_id: projectId,
-          stream_seq: streamSeq + index,
+          stream_seq: streamSeq + 1 + index,
           actor: { kind: 'system', component: 'discovery' },
           occurred_at: createdAt,
           type: 'knowledge.proposal.created',
@@ -421,7 +467,7 @@ export const recordDiscoveryFindings = async (
           },
         }),
       ),
-    );
+    ]);
   });
 
   return {
@@ -432,6 +478,7 @@ export const recordDiscoveryFindings = async (
     discarded: rows.filter((row) => row.status === 'discarded').length,
     redactions: tally.count,
     riskClasses: Object.keys(proposedClasses).length,
+    businessRefused: pages.businessRefused,
   };
 };
 
@@ -449,6 +496,7 @@ export const discoveryRecordHandler =
       queued: report.queued,
       discarded: report.discarded,
       risk_classes: report.riskClasses,
+      business_refused: report.businessRefused,
       redactions: report.redactions,
       reason: report.reason,
     };

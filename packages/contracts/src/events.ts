@@ -809,7 +809,12 @@ export const readinessEvaluatedEvent = defineEvent('readiness.evaluated', {
       evidence: z.string(),
     }),
   ),
-  source: z.enum(['discovery', 'ci_gate', 'maintenance', 'manual']),
+  /**
+   * Which producer wrote the row. `discovery` and `recheck` (the post-merge re-check, WP-64) are the
+   * two that append it since WP-73 (PROGRESS backlog 228); the other three are technical/02's
+   * original list and have no producer on this build.
+   */
+  source: z.enum(['discovery', 'recheck', 'ci_gate', 'maintenance', 'manual']),
 });
 
 // ── Configuration and integrations ───────────────────────────────────────────

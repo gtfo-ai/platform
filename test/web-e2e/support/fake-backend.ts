@@ -300,7 +300,12 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
       // The test control endpoints are called from Node, not from the page, so they carry no
       // cookie and the rule lets them through by its first two clauses.
       if (violation !== null && !path.startsWith('/__test__/')) {
-        problem(response, 403, 'forbidden', `cross-site request: ${violation}`);
+        problem(
+          response,
+          403,
+          'cross_site_request',
+          `cross-site request refused for ${method} ${path}: ${violation}`,
+        );
         return;
       }
     }

@@ -57,6 +57,7 @@ const harness = (
   const eventing = new MemoryEventing();
   const recheck: ReadinessRecheckOptions = {
     unitOfWork: eventing,
+    eventStore: eventing.store,
     readiness,
     signals: { read: async () => signals },
     files: {
@@ -90,7 +91,7 @@ const harness = (
       options.project === undefined ? { knowledgeDir: '.agentic/knowledge' } : options.project,
     logger: silentLogger,
   };
-  return { readiness, reads, windows, recheck };
+  return { readiness, reads, windows, recheck, eventing };
 };
 
 /** The discovery evaluation a re-check starts from: nothing but R1 and R3 claimed. */
@@ -137,6 +138,41 @@ describe('recheckProjectReadiness', () => {
     expect(windows).toEqual([
       new Date(Date.parse(NOW) - READINESS_CI_WINDOW_DAYS * 24 * 60 * 60 * 1_000).toISOString(),
     ]);
+  });
+
+  it('appends one readiness.evaluated per recorded row, and none for a skip (backlog 228)', async () => {
+    const { readiness, recheck, eventing } = harness({ pipelines: 2 });
+    // A skip records nothing, so it says nothing.
+    await recheckProjectReadiness(recheck, data);
+    expect(await eventing.store.readStream('project', PROJECT)).toEqual([]);
+
+    await seedDiscovery(readiness);
+    await recheckProjectReadiness(recheck, data);
+    const stream = await eventing.store.readStream('project', PROJECT);
+    expect(stream.map((entry) => entry.event.type)).toEqual(['readiness.evaluated']);
+    const row = readiness.rows[1];
+    expect(stream[0]?.event.payload).toEqual({
+      project_id: PROJECT,
+      level: row?.level,
+      criteria: row?.criteria.map(({ id, passed, evidence }) => ({ id, passed, evidence })),
+      source: 'recheck',
+    });
+  });
+
+  it('appends no event when the row does not commit', async () => {
+    const { readiness, recheck, eventing } = harness();
+    await seedDiscovery(readiness);
+    const failing: ReadinessRecheckOptions = {
+      ...recheck,
+      readiness: {
+        ...readiness,
+        record: async () => {
+          throw new Error('the row could not be written');
+        },
+      },
+    };
+    await expect(recheckProjectReadiness(failing, data)).rejects.toThrow('could not be written');
+    expect(await eventing.store.readStream('project', PROJECT)).toEqual([]);
   });
 
   it('carries R8 when the mirror cannot be read, rather than failing it', async () => {
