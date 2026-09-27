@@ -30,6 +30,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { HttpError } from '../../../apps/server/src/errors.js';
 import {
   claimCommandAttempt,
+  countStaleCommandClaims,
   findCommandAttempt,
   releaseCommandAttempt,
 } from '../../../apps/server/src/queries/idempotency-queries.js';
@@ -444,5 +445,34 @@ describe('migration 0053 over duplicates already in human_actions', () => {
         { idempotency_key: 'legacy', body_digest: null, feedback_id: null, completed: true },
       ]);
     });
+  });
+});
+
+/**
+ * The `command_idempotency_claims_unknown` gauge's reading (WP-73, PROGRESS backlog 241): an
+ * uncompleted claim older than the bound, by action — and neither a completed claim nor a fresh one,
+ * both directions (standing rule 42).
+ */
+describe('the stale-claim count behind the operator’s gauge', () => {
+  it('counts an uncompleted claim past the bound, by action, and not a completed or a fresh one', async () => {
+    const insert = (action: string, key: string, claimedAt: string, completed: boolean) =>
+      pool.query(
+        `insert into command_idempotency (user_id, action, idempotency_key, claimed_at, completed_at)
+         values ($1, $2, $3, $4::timestamptz, case when $5 then $4::timestamptz + interval '1 second' end)`,
+        [userId, action, key, claimedAt, completed],
+      );
+    await insert('wp73.stale', 'wp73-stale-1', '2026-01-01T00:00:00Z', false);
+    await insert('wp73.stale', 'wp73-stale-2', '2026-01-01T00:00:00Z', false);
+    await insert('wp73.other', 'wp73-stale-3', '2026-01-01T00:00:00Z', false);
+    await insert('wp73.done', 'wp73-done-1', '2026-01-01T00:00:00Z', true);
+    await insert('wp73.fresh', 'wp73-fresh-1', '2026-03-01T00:00:00Z', false);
+
+    const counted = (await countStaleCommandClaims(sql, new Date('2026-02-01T00:00:00Z')))
+      .filter((entry) => entry.action.startsWith('wp73.'))
+      .sort((a, b) => a.action.localeCompare(b.action));
+    expect(counted).toEqual([
+      { action: 'wp73.other', claims: 1 },
+      { action: 'wp73.stale', claims: 2 },
+    ]);
   });
 });

@@ -345,6 +345,8 @@ const outcomeFor = (runId: Id, scripted: ScriptedRun, structuredOutput: unknown)
 
 export interface HarnessOptions {
   readonly projectId?: Id;
+  /** Platform users by id → display name, for `NotificationStore.userName` (WP-73, backlog 234). */
+  readonly users?: Readonly<Record<string, string>>;
   /**
    * Whether this composition subscribes `stage.execute` (TD-028 decision 5, WP-53).
    *
@@ -984,7 +986,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     options.organisationCommunication,
     '00000000-0000-4000-8000-00000000a0a9',
   );
-  const notifications = createMemoryNotificationStore();
+  const notifications = createMemoryNotificationStore(options.users ?? {});
   // WP-34: the shadow batch's store. Composed unconditionally, because `createPipelineRuntime`
   // requires it — `EVENT_CONSUMPTION` declares `shadow.report.created` handled.
   const shadow = createMemoryShadowStore({ now: () => clock.now() });

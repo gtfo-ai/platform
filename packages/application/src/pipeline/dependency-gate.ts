@@ -208,7 +208,8 @@ const dependencyGateHandler = (options: PipelineSagaOptions): EventHandler => ({
  * — `paused`, `needs_human`, `waiting_answers`, `waiting_approval` — gave up and nothing ever tried
  * again: a question nobody was asked, and for `block`, a package the policy blocks on a branch
  * nobody was told about. The record now says so (`deferred_stage`), and every one of those four
- * stops ends in `enterStage`, which emits `task.resumed` (`RESUMED_FROM` in the Task aggregate), so
+ * stops ends in a stage entry that emits `task.resumed` (`RESUMED_FROM` in the Task aggregate —
+ * `enterStage`, and since WP-73 the tail-stage entry a pause at `ready_for_merge` leaves by), so
  * this is the idempotent trigger: the record is the predicate and the job clears it in the same
  * transaction that performs the ending, so a second resume finds nothing to do.
  *
@@ -218,8 +219,10 @@ const dependencyGateHandler = (options: PipelineSagaOptions): EventHandler => ({
  * here, or it was written after, and then the gate saw the task already `active` and performed the
  * ending itself instead of deferring it.
  *
- * `ready_for_merge`, `merged` and `retro` are not here, and that is Q91's answer rather than a gap:
- * a task that passed review never becomes `active` again and is not interrupted with a question.
+ * `ready_for_merge`, `merged` and `retro` are not stops, and a question is not deferred at them —
+ * Q91's answer rather than a gap: a task that passed review never becomes `active` again and is
+ * not interrupted with a question. A task *paused* at `ready_for_merge` is a stop, and its resume
+ * performs a deferred `block` (WP-73, backlog 244).
  */
 const dependencyGateResumeHandler = (options: PipelineSagaOptions): EventHandler => ({
   name: 'pipeline.dependency.gate.resume',
@@ -526,8 +529,10 @@ const inTaskTransaction = async <T>(
  * A stop a **human** owns: `paused`, `needs_human`, `waiting_answers`, `waiting_approval`.
  *
  * Exactly the states `isRunnableTaskState` excludes minus the terminal pair — and exactly the
- * states the Task aggregate's `enterStage` leaves with a `task.resumed` (`RESUMED_FROM`), which is
- * what makes deferring to that event sound: every task parked here comes back through it.
+ * states the Task aggregate leaves with a `task.resumed` (`RESUMED_FROM`, read by `enterStage` and,
+ * since WP-73, by the tail-stage entry too), which is what makes deferring to that event sound:
+ * every task parked here comes back through it — or, paused at `ready_for_merge`, is merged on the
+ * provider and comes back through the same event into `merged` (Q104).
  */
 const isHumanOwnedStop = (state: TaskState): boolean =>
   !isRunnableTaskState(state) && !isTerminalTaskState(state);
@@ -537,13 +542,11 @@ const isHumanOwnedStop = (state: TaskState): boolean =>
  * as the stage ids a stopped task still carries in `current_stage`.
  *
  * Needed because a stop hides the state it was taken from (WP-67 review round 1): a task paused at
- * `ready_for_merge` is `paused`. **Measured**: `resume` on it re-enters `ready_for_merge` through
- * `markReadyForMerge`, and `paused → ready_for_merge` is not an edge of the state machine, so the
- * resume is **refused** (`IllegalTransitionError`) — no `task.resumed`, never `active`. A deferred
- * `ask` there would wait for a resume that cannot come and print "asks on resume" for ever; Q91's
- * answer is that it is not asked at all, so it is not deferred. (A `block` at such a stop is still
- * deferred and has the same missing wake-up — the panel's "blocked on resume" is a promise nothing
- * keeps until that resume exists; both are PROGRESS backlog **244** (to WP-73, with Q104), filed, not fixed.)
+ * `ready_for_merge` is `paused`, and `resume` on it re-enters `ready_for_merge` — never `active`
+ * (`paused → ready_for_merge`, WP-73, PROGRESS backlog 244). So a deferred `ask` there is not
+ * deferred: Q91's answer is that a task past review is not asked at all, and the resume would not
+ * make it `active` to ask it. A `block` at such a stop **is** deferred, and its resume performs it:
+ * the entry into `ready_for_merge` emits `task.resumed`, and `ready_for_merge → returned` is an edge.
  */
 const PAST_REVIEW_STAGES: ReadonlySet<string> = new Set([
   READY_FOR_MERGE_STAGE,
@@ -773,8 +776,9 @@ const askAboutDependencies = async (
  * A task at **a stop a human owns** is not returned — the pipeline may not move it — and the block
  * is **deferred** to its resume (WP-67): until then `ready_for_merge` was the one state it still
  * blocked in, and a package the policy blocks sat on the branch of any task a person had paused.
- * **Except** a task paused at `ready_for_merge`: its resume is refused today, so the deferred block
- * has no wake-up and the package can still merge through the provider — backlog **244**.
+ * That includes a task paused at `ready_for_merge`, whose resume re-enters it (WP-73, backlog 244);
+ * a merge made on the provider during that pause ends it instead (Q104), and the deferred block is
+ * then dropped by {@link runDependencyGateResume}, because a merged task cannot be returned.
  *
  * A stage with no return edge at all cannot return — the interpreter's fail-closed direction — and
  * that is **named rather than ignored**: the task stays where it is, the record is on the panel, and
@@ -850,6 +854,8 @@ const blockForDependencies = async (
  *    is dropped: that diff is no longer the change, and the gate re-runs when the Developer stage
  *    that moved it completes;
  *  - a deferred `ask` on a task that is no longer `active` → dropped, Q91's answer;
+ *  - a task that is `merged`, `retro` or `done` — a merge made on the provider ended its pause
+ *    (Q104) → dropped, because a merged task cannot be returned;
  *  - otherwise the ending is performed, and the deferral cleared **in the same transaction** — the
  *    question insert and the record for `ask`, the return and the record for `block`.
  */
@@ -884,7 +890,7 @@ export const runDependencyGateResume = async (
         return null;
       }
       const state = current.task.state;
-      if (isHumanOwnedStop(state) || isTerminalTaskState(state)) {
+      if (isHumanOwnedStop(state) || (isTerminalTaskState(state) && state !== 'done')) {
         return null;
       }
       const clear = async (why: string): Promise<null> => {
@@ -896,6 +902,15 @@ export const runDependencyGateResume = async (
         logger.info({ task_id: taskId, state, decision: record.decision }, why);
         return null;
       };
+      if (state === 'merged' || state === 'retro' || state === 'done') {
+        // Q104: a merge made on the provider ended the pause (and the retrospective may already
+        // have finished the task by the time this job fires). A merged task has no return edge, and
+        // letting `applyDecision` fall back to its escalation would park a task whose work is on
+        // the default branch — so the deferral is dropped, and the record keeps the packages.
+        return clear(
+          'dependency gate: the merge request was merged while the task was paused, so the deferred decision is dropped; the packages stay on the panel',
+        );
+      }
       const head = current.mr?.head_sha ?? null;
       if (record.head_sha !== null && head !== null && record.head_sha !== head) {
         return clear(

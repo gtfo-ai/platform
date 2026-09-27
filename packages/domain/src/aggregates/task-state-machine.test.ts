@@ -20,7 +20,7 @@ import {
  *    │           │  └── returned(stage) ◄─┘ (human comments / rework)
  *    │           ├─► waiting_answers ─► active
  *    │           ├─► waiting_approval ─► active | needs_human
- *    │           ├─► paused(budget|manual|taken_over) ─► active
+ *    │           ├─► paused(budget|manual|taken_over) ─► active | ready_for_merge | merged
  *    │           └─► needs_human ─► active | cancelled
  *    └─► cancelled
  * ```
@@ -56,8 +56,10 @@ const EXPECTED_TASK_EDGES = {
   waiting_answers: ['active', 'paused', 'needs_human', 'cancelled'],
   // "waiting_approval ─► active | needs_human".
   waiting_approval: ['active', 'paused', 'needs_human', 'cancelled'],
-  // "paused(budget|manual|taken_over) ─► active".
-  paused: ['active', 'needs_human', 'cancelled'],
+  // "paused(budget|manual|taken_over) ─► active | ready_for_merge | merged" — the last two since
+  // WP-73 (backlog 244, Q104): a pause at `ready_for_merge` resumes there, and a provider merge
+  // during it ends it.
+  paused: ['active', 'ready_for_merge', 'merged', 'needs_human', 'cancelled'],
   // "needs_human ─► active | cancelled".
   needs_human: ['active', 'paused', 'cancelled'],
   // "ready_for_merge ─► merged" and "returned(stage) ◄─┘ (human comments / rework)".

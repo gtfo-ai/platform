@@ -472,7 +472,8 @@ export const taskDetail = taskDetailResponseSchema.parse({
       state: 'completed',
       entered_at: now,
       exited_at: now,
-      outcome: 'spec accepted',
+      // One word of `taskStageOutcomeSchema` (WP-73, backlog 213); the screen says it as a sentence.
+      outcome: 'approve',
     },
     {
       stage: 'implementation',
@@ -543,6 +544,8 @@ export const takenOverTaskDetail = taskDetailResponseSchema.parse({
     stage: 'implementation',
     resume_commands: ['git fetch && git checkout agentic/demo-3', 'claude --resume sess-demo-3'],
     held_by: IDS.user,
+    run_id: null,
+    run_recorded: false,
     hand_back_stages: ['refinement', 'implementation', 'code_review'],
   },
   runs: [{ ...run, task_id: IDS.taskTaken }],

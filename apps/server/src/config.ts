@@ -668,13 +668,12 @@ export const POOL_RESERVATIONS = {
    * a provider call or an audit write**, and the per-dispatch term is back to
    * `CONNECTIONS_PER_DISPATCH`. While this reads 1, the shape is back: it is not a knob.
    *
-   * **What is still true and is not counted here.** A handler may borrow a connection *transiently*
-   * inside its transaction — `ProjectSettingsPort.forProject` is a `projects` query, and the status
-   * mapping makes one. That is a read of the local database, not a connection held across a third
-   * party's latency: it contends for a connection, it cannot stall on one, because every other
-   * borrower in this process releases without waiting on a dispatch. The reservations above are
-   * what cover it. Filed as discovered work; the honest fix is for the settings port to take the
-   * caller's transaction.
+   * **Holds, and borrows too.** Until WP-73 four handlers read `ProjectSettingsPort.forProject`
+   * from inside their transaction on a connection the port borrowed from the pool — a third,
+   * uncounted, per dispatch (PROGRESS backlogs 19 and 221). The port now takes the caller's
+   * transaction, so a handler's settings read runs on the connection it already holds, and a read
+   * with no transaction handed in is refused while one is open (`assertSettingsReadOutsideTransaction`)
+   * — which is what makes "a dispatch holds two" true of what it borrows as well.
    */
   auditPerDispatch: 0,
 } as const;

@@ -187,6 +187,14 @@ export const createPostgresNotificationStore = (): NotificationStore => ({
     return row === undefined ? null : toStored(row);
   },
 
+  userName: async (tx, userId) => {
+    const { rows } = await sqlOf(tx).query<{ name: string }>(
+      'select name from users where id = $1',
+      [userId],
+    );
+    return rows[0]?.name ?? null;
+  },
+
   projectsAwaitingDigest: async (tx, input) => {
     const { rows } = await sqlOf(tx).query<{ project_id: string }>(
       `select project_id

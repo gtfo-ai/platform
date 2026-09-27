@@ -40,6 +40,7 @@ import {
   returnToStageCommand,
   takeOverTaskCommand,
 } from './commands.js';
+import { conflictWarningMarker } from './conflict-warning.js';
 import { MAX_GATE_CHECKS } from './gates.js';
 import { staticPipelineIntegrations } from './integrations.js';
 import { GATE_RECHECK_MS } from './jobs.js';
@@ -2187,6 +2188,44 @@ describe('human merge-request comments (BD-007)', () => {
       harness.jobs.enqueued.filter((request) => request.queue === JOB_QUEUES.mrCommentDebounce),
     ).toHaveLength(0);
   });
+
+  /**
+   * WP-73, PROGRESS backlog 214: the platform's own conflict warning, delivered back by the
+   * provider as a Note hook, is not a reviewer speaking. Settled by this case rather than by a
+   * citation (whether GitLab fires a Note hook for the token owner's own note is not in
+   * `SOURCES.md`): if it does, nothing is armed; a human's comment still is, both ways (rule 42).
+   */
+  it('arms no window for the platform’s own note, and still arms one for a human’s', async () => {
+    const harness = harnessWith();
+    await harness.publish([ticketMatched()]);
+    const comment = (text: string) =>
+      event('mr.review.comment', {
+        project_id: PROJECT,
+        task_id: null,
+        mr: mergeRequest(false).ref,
+        thread_id: 'thread-w',
+        author: {
+          provider: 'fake-git',
+          external_id: '1',
+          email: null,
+          display_name: 'agentic-bot',
+          verified: true,
+        },
+        text,
+        resolved: false,
+      });
+    const armed = () =>
+      harness.jobs.enqueued.filter((request) => request.queue === JOB_QUEUES.mrCommentDebounce);
+    await harness.publish([
+      comment(
+        `${conflictWarningMarker(taskOf(harness).task.id)}\nAnother open merge request changes src/totals.ts.`,
+      ),
+    ]);
+    // With the handler's marker check removed (md5-confirmed revert) this armed one window.
+    expect(armed()).toHaveLength(0);
+    await harness.publish([comment('please rename the helper')]);
+    expect(armed()).toHaveLength(1);
+  });
 });
 
 describe('when the default branch moves under a waiting merge request', () => {
@@ -2269,6 +2308,147 @@ describe('when the merge request is closed instead of merged', () => {
       }),
     ]);
     expect(taskOf(harness).task.state).toBe('needs_human');
+  });
+});
+
+/**
+ * **A first pipeline review is matched on the merge request's files** (WP-73, PROGRESS backlog 218,
+ * route (a)). The plan names `src/totals.ts`; the merge request also changes a `payments` path. The
+ * rebase gate that writes `tasks.risk_classes` runs after code review, so before WP-73 the first
+ * review was given no checklist. Asserted on the assembled prompt, not through the runner (rule 82).
+ */
+describe('the first review’s checklist reads the merge request (backlog 218)', () => {
+  const settings = {
+    config: {
+      policies: {
+        risk_classes: { payments: { paths: ['src/billing/**'], require: ['checklist:payments'] } },
+        review_checklists: { payments: ['Amounts are integer minor units'] },
+      },
+    },
+  };
+  const firstReviewPrompt = (harness: PipelineHarness) =>
+    harness.specs.find((spec) => spec.stage === 'code_review')?.userPrompt ?? '';
+
+  it('gives the reviewer the checklist of a class only the merge request’s files match', async () => {
+    const harness = harnessWith({
+      settings,
+      git: {
+        getPipelineStatus: async () => ({
+          id: 'pipeline-1',
+          head_sha: 'b'.repeat(40),
+          status: 'success',
+          url: null,
+          jobs: [],
+          coverage_pct: null,
+          finished_at: '2026-06-01T09:30:00.000Z',
+        }),
+        getMergeRequest: async () => mergeRequest(false),
+        getMergeRequestDiff: async () => [
+          {
+            old_path: 'src/billing/charge.ts',
+            new_path: 'src/billing/charge.ts',
+            diff: '+x',
+            new_file: false,
+            renamed_file: false,
+            deleted_file: false,
+            omitted: false,
+          },
+        ],
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    // With the job's read removed (md5-confirmed revert) the first review carried no checklist.
+    expect(firstReviewPrompt(harness)).toContain('Amounts are integer minor units');
+  });
+
+  it('gives none when neither the plan nor the merge request touches the class', async () => {
+    const harness = harnessWith({ settings });
+    await harness.publish([ticketMatched()]);
+    expect(firstReviewPrompt(harness)).not.toBe('');
+    expect(firstReviewPrompt(harness)).not.toContain('Amounts are integer minor units');
+  });
+});
+
+/**
+ * **A merge made on the provider while the task is paused** (WP-73, PROGRESS backlog 244, Q104 —
+ * answered (a)). Until WP-73 the handler returned on any state but `ready_for_merge`, and its
+ * `handler_executions` record made a redispatch skip it: the merge was lost for good.
+ */
+describe('a merge made while the task is paused (Q104, backlog 244)', () => {
+  const USER = '00000000-0000-4000-8000-0000000000c2';
+  const merged = () =>
+    event('mr.merged', {
+      project_id: PROJECT,
+      task_id: null,
+      mr: mergeRequest(false).ref,
+      draft: false,
+      head_sha: 'b'.repeat(40),
+      diff_stats: null,
+      merge_commit_sha: 'c'.repeat(40),
+    });
+  const count = (harness: PipelineHarness, type: string) =>
+    harness.events().filter((entry) => entry.type === type).length;
+
+  it('ends a pause at ready_for_merge: the task resumes, merges and runs its retrospective', async () => {
+    const harness = harnessWith();
+    await harness.publish([ticketMatched()]);
+    await pauseTaskCommand(harness.humanCommands, {
+      taskId: taskOf(harness).task.id,
+      userId: USER,
+    });
+    expect(taskOf(harness).task.state).toBe('paused');
+
+    await harness.publish([merged()]);
+    await harness.drain();
+    // With the handler's guard back at `state !== 'ready_for_merge'` (md5-confirmed revert) the
+    // task stayed `paused` and neither event below was recorded.
+    expect(taskOf(harness).task.state).toBe('done');
+    expect(count(harness, 'task.resumed')).toBe(1);
+    const resumed = harness.events().find((entry) => entry.type === 'task.resumed');
+    expect(resumed?.payload).toMatchObject({
+      reason: 'the merge request was merged while the task was paused',
+    });
+    expect(
+      harness.store.stageRows.filter((row) => row.stage === 'ready_for_merge').at(-1),
+    ).toMatchObject({ state: 'completed', outcome: 'mr.merged' });
+  });
+
+  it('escalates, never drops, a merge of a task paused at a stage before ready_for_merge', async () => {
+    const harness = harnessWith({
+      git: {
+        getPipelineStatus: async () => ({
+          id: 'pipeline-1',
+          head_sha: 'b'.repeat(40),
+          status: 'running',
+          url: null,
+          jobs: [],
+          coverage_pct: null,
+          finished_at: null,
+        }),
+        getMergeRequest: async () => mergeRequest(false),
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).task.currentStage).toBe('ci_gate');
+    await pauseTaskCommand(harness.humanCommands, {
+      taskId: taskOf(harness).task.id,
+      userId: USER,
+    });
+
+    await harness.publish([merged()]);
+    const task = taskOf(harness).task;
+    expect(task.state).toBe('needs_human');
+    expect(task.currentStage).toBe('ci_gate');
+    // Escalated, not merged: the pause was not waiting for this merge.
+    expect(count(harness, 'task.resumed')).toBe(0);
+    const escalated = harness.events().find((entry) => entry.type === 'task.escalated');
+    expect(escalated?.payload).toMatchObject({
+      reason: 'the merge request was merged while the task was paused before it was ready',
+    });
+    expect(harness.store.stageRows.filter((row) => row.stage === 'ci_gate').at(-1)).toMatchObject({
+      state: 'failed',
+      outcome: 'mr.merged',
+    });
   });
 });
 

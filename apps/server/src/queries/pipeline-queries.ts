@@ -66,6 +66,7 @@ import type {
   TaskConflict,
   TaskDetailResponse,
   TaskRecord,
+  TaskStageOutcome,
   TaskStageState,
   TaskState,
   TranscriptEvent,
@@ -74,6 +75,7 @@ import {
   artifactBodyPath,
   contextPackRecordSchema,
   taskPipelineDialSchema,
+  taskStageOutcomeSchema,
   taskStageStateSchema,
   transcriptEventSchema,
 } from '@platform/contracts';
@@ -901,6 +903,20 @@ export class UnknownStageStateError extends Error {
 }
 
 /**
+ * `task_stages.outcome` in the one vocabulary (WP-73, PROGRESS backlog 213). Every write since
+ * WP-73 is parsed by the store; a row written before it may hold a word outside the list (a
+ * model's own verdict text among them), and that is published as `unrecognised` — the word the
+ * vocabulary keeps for exactly this — rather than served raw or dropped.
+ */
+const stageOutcomeOf = (outcome: string | null): TaskStageOutcome | null => {
+  if (outcome === null) {
+    return null;
+  }
+  const parsed = taskStageOutcomeSchema.safeParse(outcome);
+  return parsed.success ? parsed.data : 'unrecognised';
+};
+
+/**
  * The take-over in force on a task, or `null` — WP-27, and the one projection here that reads the
  * **event log** rather than a row.
  *
@@ -956,6 +972,10 @@ const findTakenOver = async (
     return null;
   }
   const sessionId = typeof row.payload.session_id === 'string' ? row.payload.session_id : null;
+  // Absent on an event written before WP-73 (backlog 203): published as not recorded, never as
+  // "no run", because the two mean different things to the screen.
+  const runRecorded = 'run_id' in row.payload;
+  const runId = typeof row.payload.run_id === 'string' ? row.payload.run_id : null;
   return {
     at: isoRequired(row.occurredAt),
     branch,
@@ -963,6 +983,8 @@ const findTakenOver = async (
     stage,
     resume_commands: [...resumeCommands(branch, sessionId)],
     held_by: row.actor.kind === 'user' ? row.actor.user_id : null,
+    run_id: runId,
+    run_recorded: runRecorded,
     hand_back_stages: handBackStagesOf(task),
   };
 };
@@ -1071,7 +1093,7 @@ export const findTaskDetail = async (
       state: stageStateOf(row),
       entered_at: isoRequired(row.enteredAt),
       exited_at: iso(row.exitedAt),
-      outcome: row.outcome,
+      outcome: stageOutcomeOf(row.outcome),
     })),
     artifacts: artifactRows.map((row) => ({
       id: row.id as Id,

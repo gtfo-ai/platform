@@ -11,11 +11,13 @@ import { runNotificationStoreContract } from './support/notification-store-suite
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b1' as Id;
 const TASK = '00000000-0000-4000-8000-0000000000c1' as Id;
+const USER = { id: '00000000-0000-4000-8000-0000000000d1' as Id, name: 'Fake Maintainer' };
 
 runNotificationStoreContract({
   name: 'in-memory',
   create: async () => ({
-    store: createMemoryNotificationStore(),
+    store: createMemoryNotificationStore({ [USER.id]: USER.name }),
+    user: USER,
     tx: { adapter: 'memory' } as never,
     projectId: PROJECT,
     taskId: TASK,

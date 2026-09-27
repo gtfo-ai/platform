@@ -291,7 +291,7 @@ describe('the Checks panel’s gate, thread and verdict items (WP-46)', () => {
     name: string,
     attempt: number,
     state: TaskDetailResponse['stages'][number]['state'],
-    outcome: string | null,
+    outcome: TaskDetailResponse['stages'][number]['outcome'],
   ): TaskDetailResponse['stages'][number] => ({
     stage: name,
     attempt,
@@ -394,6 +394,28 @@ describe('the Checks panel’s gate, thread and verdict items (WP-46)', () => {
     expect(unread.text()).not.toContain('0 open');
   });
 
+  it('says the count is as of its reading and that a resolution does not refresh it (backlog 210)', async () => {
+    const view = await render$(detailWith({ artifacts: [] }));
+    await waitFor(() => expect(view.text()).toContain('2 open · 1 resolved'));
+    expect(view.text()).toContain('A thread resolved without a new comment is not counted');
+  });
+
+  it('labels a review-only task’s count as the platform’s own findings (backlog 209)', async () => {
+    const view = await render$(
+      detailWith({
+        task: {
+          ...TASK_ROW,
+          review_threads: { open: 1, resolved: 3, checked_at: AT, counts: 'platform_findings' },
+        },
+        artifacts: [],
+      }),
+    );
+    await waitFor(() => expect(view.text()).toContain('1 findings open · 3 resolved'));
+    expect(view.text()).toContain('The platform’s own review findings on this merge request');
+    // Not the human-review wording: this is not what BD-007's window counts.
+    expect(view.text()).not.toContain('Read by the review window');
+  });
+
   it('reads the business verdict and the criteria from the latest Acceptance Verdict, as text', async () => {
     const view = await render$(detailWith({}), (url) =>
       url.endsWith(VERDICT_V2)
@@ -428,5 +450,69 @@ describe('the Checks panel’s gate, thread and verdict items (WP-46)', () => {
     await waitFor(() => expect(view.text()).toContain('no verdict'));
     expect(view.text()).toContain('not judged');
     expect(view.requested).toEqual([]);
+  });
+});
+
+/**
+ * **Which review checklists the Reviewer was given** (WP-73, PROGRESS backlog 217): the three
+ * values of `ReviewVerdict.checklists_applied`, each its own sentence, and `null` never drawn as
+ * *none* (standing rule 16).
+ */
+describe('the review checklists line (backlog 217)', () => {
+  const REVIEW = '00000000-0000-4000-8000-0000000000e1';
+  const reviewBody = (checklists: unknown) => ({
+    id: REVIEW,
+    task_id: TASK,
+    artifact_type: 'ReviewVerdict',
+    version: 1,
+    schema_version: '1',
+    produced_by_run_id: null,
+    created_at: '2026-09-13T05:00:00.000Z',
+    redaction_count: 0,
+    markdown: null,
+    data: {
+      verdict: 'approve',
+      findings: [],
+      summary: 'Looks right.',
+      protected_path_changes_confirmed: [],
+      ...(checklists === undefined ? {} : { checklists_applied: checklists }),
+    },
+  });
+
+  const renderWith = async (checklists: unknown): Promise<() => string> => {
+    const detail: TaskDetailResponse = {
+      ...TASK_DETAIL,
+      artifacts: [{ id: REVIEW, artifact_type: 'ReviewVerdict', version: 1, url: null }],
+    };
+    const fetchWith = (async (input: RequestInfo | URL): Promise<Response> => {
+      const url = String(input);
+      if (url.endsWith(`/api/artifacts/${REVIEW}`)) return json(reviewBody(checklists));
+      if (url.endsWith(`/api/tasks/${TASK}`)) return json(detail);
+      return fetchImpl(input);
+    }) as typeof fetch;
+    const { container } = render(createApp({ fetchImpl: fetchWith, realtime: false }).element);
+    await screen.findByText('Checks');
+    return () => container.textContent ?? '';
+  };
+
+  it('names each list the reviewer was given, with its count and the class that required it', async () => {
+    const text = await renderWith([
+      { name: 'payments', item_count: 2, required_by: ['payments'], truncated: false },
+    ]);
+    await waitFor(() =>
+      expect(text()).toContain(
+        'Reviewer given 2 items from checklist payments (required by: payments).',
+      ),
+    );
+  });
+
+  it('says "given none" for an empty list and "not recorded" for a missing one — never the other', async () => {
+    const none = await renderWith([]);
+    await waitFor(() => expect(none()).toContain('the reviewer was given none'));
+    expect(none()).not.toContain('not recorded');
+    cleanup();
+    const unrecorded = await renderWith(undefined);
+    await waitFor(() => expect(unrecorded()).toContain('Review checklists: not recorded'));
+    expect(unrecorded()).not.toContain('given none');
   });
 });

@@ -74,7 +74,11 @@ export const settleApprovalMessage = async (
       message?.taskId === null || message === null
         ? null
         : await options.store.tasks.load(scope.tx, message.taskId);
-    return { approval, message, task };
+    // Who decided, by name (WP-73, backlog 234); an expired approval has no decider.
+    const deciderId = approval.approval.decidedByUserId;
+    const decider =
+      deciderId === null ? null : await options.notifications.userName(scope.tx, deciderId);
+    return { approval, message, task, decider };
   });
   if (read === null) {
     logger.debug({ approval_id: approvalId }, 'approval settled: the approval is gone');
@@ -130,6 +134,7 @@ export const settleApprovalMessage = async (
       body: settledApprovalBody({
         subject: { name, url },
         outcome: status as SettledApprovalOutcome,
+        decider: read.decider === null ? null : chat.redactor.redactText(read.decider).value,
       }),
       idempotencyKey: approvalSettledKey(approvalId),
     },

@@ -403,17 +403,29 @@ describe('resume', () => {
     expect(taskOf(harness).task.iterationCounters).toEqual(before);
   });
 
-  it('refuses to resume at a stage the paused state has no edge to', async () => {
-    // A task paused at `ready_for_merge` is the case: `paused → ready_for_merge` is not in
-    // technical/02's table, so the honest answer is the refusal rather than a silent no-op or a
-    // task quietly moved to `active` at a stage that means "waiting for a human to merge".
+  it('resumes a task paused at ready_for_merge back to waiting for the merge (backlog 244)', async () => {
+    // Until WP-73 `paused → ready_for_merge` was not an edge and this case pinned the refusal; the
+    // pause was then a cancel in slow motion. No paused stage is left without a way back: every
+    // other stage `paused` is entered from is resumed to `active`.
     const harness = await walked();
     const task = taskOf(harness).task.id;
     await pauseTaskCommand(harness.humanCommands, { taskId: task, userId: USER });
-    await expect(
-      resumeTaskCommand(harness.humanCommands, { taskId: task, userId: USER }),
-    ).rejects.toThrow(IllegalTransitionError);
-    expect(taskOf(harness).task.state).toBe('paused');
+    const stageJobsBefore = harness.jobs.enqueued.filter(
+      (request) => request.queue === JOB_QUEUES.stageExecute,
+    ).length;
+    const runsBefore = harness.specs.length;
+
+    await resumeTaskCommand(harness.humanCommands, { taskId: task, userId: USER });
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+    expect(taskOf(harness).task.currentStage).toBe('ready_for_merge');
+    // With `task.resumed` removed from the tail-stage entry (md5-confirmed revert) this read 0.
+    expect(countOf(harness, 'task.resumed')).toBe(1);
+    // Nothing runs at Ready: no stage job, and draining the worker starts no run.
+    expect(
+      harness.jobs.enqueued.filter((request) => request.queue === JOB_QUEUES.stageExecute).length,
+    ).toBe(stageJobsBefore);
+    await harness.drain();
+    expect(harness.specs.length).toBe(runsBefore);
   });
 
   it('refuses on a process with no queue, before it writes anything', async () => {
@@ -1659,6 +1671,62 @@ describe('hand a task back', () => {
       }),
     ).rejects.toThrow(StageNotInTemplateError);
     // Still paused, still where the human left it: a refusal writes nothing.
+    expect(taskOf(harness).task.state).toBe('paused');
+  });
+
+  /**
+   * WP-73 review round 1: `paused → ready_for_merge` and `paused → merged` exist for a pause **at**
+   * `ready_for_merge` only, and a hand-back names any enabled stage — so a task paused at `ci_gate`
+   * handed back to Ready would skip CI and rebase, and one handed back to `merged_gate` would record
+   * a merge that never happened. Both are refused and nothing is written.
+   */
+  it('refuses a hand-back past the gates into Ready or into the merge (review round 1)', async () => {
+    const harness = harnessWith({
+      git: {
+        getPipelineStatus: async () => ({
+          id: 'pipeline-1',
+          head_sha: 'b'.repeat(40),
+          status: 'running',
+          url: null,
+          jobs: [],
+          coverage_pct: null,
+          finished_at: null,
+        }),
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    const stored = taskOf(harness);
+    expect(stored.task.currentStage).toBe('ci_gate');
+    await pauseTaskCommand(harness.humanCommands, { taskId: stored.task.id, userId: USER });
+
+    for (const stage of ['ready_for_merge', 'merged_gate']) {
+      await expect(
+        handBackTaskCommand(harness.humanCommands, {
+          taskId: stored.task.id,
+          userId: USER,
+          stage: stage as Slug,
+          summary: 'skip ahead',
+        }),
+        stage,
+      ).rejects.toThrow(IllegalTransitionError);
+    }
+    expect(taskOf(harness).task.state).toBe('paused');
+    expect(taskOf(harness).task.currentStage).toBe('ci_gate');
+    expect(countOf(harness, 'task.handed_back')).toBe(0);
+  });
+
+  it('refuses a hand-back into the merge from a pause at Ready too, which only a provider may say', async () => {
+    const harness = await walked();
+    const stored = taskOf(harness);
+    await pauseTaskCommand(harness.humanCommands, { taskId: stored.task.id, userId: USER });
+    await expect(
+      handBackTaskCommand(harness.humanCommands, {
+        taskId: stored.task.id,
+        userId: USER,
+        stage: 'merged_gate' as Slug,
+        summary: 'it is merged, trust me',
+      }),
+    ).rejects.toThrow(IllegalTransitionError);
     expect(taskOf(harness).task.state).toBe('paused');
   });
 

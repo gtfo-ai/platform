@@ -24,9 +24,11 @@
  *
  * The **Reviewer's checklists** (WP-45) read what the review can see: the merge request's own
  * files for a review of a human merge request (`tasks.review_subject`), and otherwise the
- * Implementation Plan's paths plus whatever `tasks.risk_classes` already holds — the rebase gate
- * runs *after* code review, so on a first review that column is empty and the plan is the source,
- * with the plan-approval gate's residual below. The planner states which source it used.
+ * Implementation Plan's paths, the task's own merge request's changed files (read by the
+ * `stage.execute` job before the run since WP-73, PROGRESS backlog 218) and whatever
+ * `tasks.risk_classes` already holds — the rebase gate runs *after* code review, so on a first
+ * review that column is empty. Only a review whose merge-request read failed is left with the plan
+ * alone and the plan-approval gate's residual below. The planner states which source it used.
  *
  * The **plan-approval gate** reads the Implementation Plan's `files_to_change[].path` — the first
  * moment the platform knows what a task will touch, and the moment plan approval is decided, so the

@@ -15,6 +15,7 @@ import {
   SPIKE_TEMPLATE_ID,
 } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
+import { TransactionOpenError, withOpenTransaction } from '../events/open-transaction.js';
 import {
   autonomyPresetFor,
   DEFAULT_TEMPLATE_BY_ISSUE_TYPE,
@@ -248,5 +249,30 @@ describe('the port’s two constructors', () => {
     expect(built.config).toEqual({ version: 1 });
     expect(built.workspaceRoot).toBe('/tmp/ws');
     expect(built.autonomy).toBeNull();
+  });
+});
+
+/**
+ * WP-73, PROGRESS backlogs 19 and 221: the settings port's recurrence guard, held by the double
+ * every harness uses as well as by the production adapter (`apps/server/src/pipeline.test.ts`), so
+ * a handler that asks without its transaction fails the unit tier rather than borrowing a second
+ * pooled connection in production.
+ */
+describe('the settings port refuses a read without the caller’s transaction inside one', () => {
+  const port = staticProjectSettings((projectId) => defaultProjectSettings(projectId));
+  const project = '00000000-0000-4000-8000-0000000000a1' as never;
+
+  it('refuses inside a transaction when no transaction is handed in', async () => {
+    await expect(withOpenTransaction(async () => port.forProject(project))).rejects.toThrow(
+      TransactionOpenError,
+    );
+  });
+
+  it('answers inside a transaction that is handed in, and outside any', async () => {
+    const inside = await withOpenTransaction(async () =>
+      port.forProject(project, { adapter: 'memory' }),
+    );
+    expect(inside.projectId).toBe(project);
+    expect((await port.forProject(project)).projectId).toBe(project);
   });
 });

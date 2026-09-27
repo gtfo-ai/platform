@@ -888,6 +888,18 @@ describe('what became of the findings', () => {
     });
   });
 
+  it('fills the task’s review threads with its own findings, labelled as such (backlog 209)', async () => {
+    const { harness } = await observe({ resolved: false, headMoved: true });
+    const task = reviewTask(harness);
+    // The human's own thread (`disc-2`) is not counted: this is the platform's findings record.
+    // Until WP-73 the column stayed `null` on every review-only task and the panel read "not read".
+    expect(task?.reviewThreads).toMatchObject({
+      open: 1,
+      resolved: 0,
+      counts: 'platform_findings',
+    });
+  });
+
   it('counts an unresolved thread as neither', async () => {
     const { observed } = await observe({ resolved: false, headMoved: true });
     expect(observed[0]?.payload).toMatchObject({

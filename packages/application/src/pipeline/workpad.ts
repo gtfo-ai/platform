@@ -337,7 +337,7 @@ export const statusMappingHandler = (options: WorkpadOptions): EventHandler => (
     if (stored === null) {
       return;
     }
-    const settings = await options.settings.forProject(stored.task.projectId);
+    const settings = await options.settings.forProject(stored.task.projectId, context.scope.tx);
     const status = mappedStatus(
       settings.config.status_mapping,
       stored.task.state,

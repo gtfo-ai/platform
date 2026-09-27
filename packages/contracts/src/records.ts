@@ -490,6 +490,16 @@ export const taskReviewThreadsSchema = z.strictObject({
   resolved: z.int().nonnegative(),
   /** When the window read them — the platform's clock, like every other `*_at` it writes. */
   checked_at: isoDateTimeSchema,
+  /**
+   * **Whose threads these are** (WP-73, PROGRESS backlog 209 — the decision, stated here). A
+   * pipeline task counts the **human** review threads BD-007's window reads (`human_review`,
+   * and every record written before WP-73, which carries no key). A **review-only** task never
+   * reaches that window, and the threads the platform is accountable for there are its **own
+   * findings** — so its observation duty writes their count as `platform_findings`, and the panel
+   * labels it so rather than reusing the human-review wording. `open` is then a finding nobody has
+   * resolved, `resolved` one somebody has.
+   */
+  counts: z.enum(['human_review', 'platform_findings']).optional(),
 });
 
 export type TaskReviewThreads = z.infer<typeof taskReviewThreadsSchema>;

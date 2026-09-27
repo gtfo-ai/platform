@@ -43,7 +43,7 @@ queued ─► active(stage=…) ─► … ─► ready_for_merge ─► merged 
    │           │  └── returned(stage) ◄─┘ (human comments / rework)
    │           ├─► waiting_answers ─► active
    │           ├─► waiting_approval ─► active | needs_human
-   │           ├─► paused(budget|manual|taken_over) ─► active
+   │           ├─► paused(budget|manual|taken_over) ─► active | ready_for_merge | merged
    │           └─► needs_human ─► active | cancelled
    └─► cancelled
 ```
@@ -51,6 +51,26 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 
 *Which* limit a `returned` spends is decided by the transition and not only by the stage it leaves (WP-26). `ready_for_merge` has two outgoing returns — a human's comment, which is BD-008's `human_rounds`, and the default branch moving, which re-enters the rebase gate — and attributing the second to the first escalated a task with *"human_rounds iteration limit of 3 reached: main moved to …"* after three merges to `main` under a waiting merge request. The edges that need their own loop are enumerated in `RETURN_LOOPS_BY_EDGE` (`packages/domain/src/pipeline/interpreter.ts`); everything else is attributed by the stage, and an edge in neither table cannot return at all.
 
+> **`paused → ready_for_merge` and `paused → merged` were added at WP-73** (PROGRESS backlog 244,
+> Q104). `ready_for_merge` has always had an edge **into** `paused` — the header's **Pause**, and
+> product/04:84's `@agentic hold` is the same act — and nothing led back, so a task paused while it
+> waited for a merge could only be cancelled. *A task paused while waiting for a merge resumes
+> waiting for it*: `resume` re-enters `ready_for_merge`, and the entry emits `task.resumed` like
+> every other way out of a pause, so an ending deferred to the resume (the dependency policy's
+> `block`) is performed. **A merge made on the provider ends the pause** (Q104, answer (a)): a
+> human merging is BD-007's decision, made in the one place the platform cannot refuse it, so
+> `mr.merged` for a task paused **at `ready_for_merge`** records `task.resumed` and the merge and
+> the retrospective runs as for any merge. A task paused at any **other** stage whose merge
+> request is merged is escalated to `needs_human` with a brief rather than dropped. **Both edges
+> exist only for a task paused _at_ `ready_for_merge`** (WP-73 review round 1): the table cannot say
+> "from this stage", so the Task aggregate refuses them from a pause anywhere else, and a
+> **hand-back cannot reach them** — handed back from a pause at `ci_gate` to `ready_for_merge` or
+> `merged_gate` is refused (it would skip CI and rebase, or record a merge that never happened),
+> and the hand-back command refuses `merged_gate` from a pause at Ready too, because only the
+> provider's `mr.merged` may say a merge happened. `paused →
+> returned` is still not an edge: `return-to-stage` from a pause is the same question for every
+> paused stage, and nobody has asked for it.
+>
 > **`retro → retro` was added at WP-18b**, when the librarian stage went back into the shipped
 > templates (technical/12's example has always carried it). The retrospective phase now has **two**
 > stages — the facilitator's report and the Librarian's curation of the proposals it produced — and
@@ -178,7 +198,7 @@ trade). `mr.updated` was the one entry that named a backlog entry instead — it
 | `task.approval.requested` / `.decided` | Pipeline / Approval (`.decided` with `expired` from the timer, WP-56) | approval | Slack buttons (210), pipeline (10), timer (15, `.requested` — WP-56); `.decided` also edits the posted message to remove its buttons (210, `approval_settled` duty — WP-65) |
 | `task.escalated` | Pipeline | task, reason, blocker brief | Ticket (110), Slack (210) |
 | `task.paused` / `task.resumed` | Budget/Human | task, reason | UI, workpad |
-| `task.taken_over` / `task.handed_back` | Human | task, branch, session, stage | Workspace export (10), ticket (110), timer (15, `.taken_over` — WP-56) |
+| `task.taken_over` / `task.handed_back` | Human | task, branch, session, stage; `task.taken_over` also the interrupted run (nullable — none was live; absent on an event before WP-73) | Workspace export (10), ticket (110), timer (15, `.taken_over` — WP-56) |
 | `task.cancelled` / `task.completed` | Pipeline | task, outcome, totals | Ticket transition (110), Slack (210), stats (230) |
 | `task.review.observed` | Review-only (WP-24) | task, mr, head sha reviewed and now, threads posted/resolved/accepted/dismissed/unresolved | stats (230) |
 | `task.lint.posted` | Ticket readiness linter (WP-25) | task, ticket, score, missing elements, questions posted, the ticket's `updated_at` | stats (230) |

@@ -76,10 +76,11 @@
  * **On the shipped topology the N is moot, and the window is spent on a refusal** (WP-72). The
  * process that serves the API is pinned never to hold a run (TD-028, PROGRESS backlog 134), so every
  * steer that reaches the gate is then refused `409 run_not_reachable` — asserted through two
- * processes in `test/e2e/topology/two-processes.e2e.test.ts` — and the gate has already recorded
- * the attempt, so a person who retries within five seconds is told `429` about a message that could
- * never have been delivered. That is the fail-closed direction and costs nothing but the wording;
- * the N-containers arithmetic becomes real the day a process that serves the API can reach a run.
+ * processes in `test/e2e/topology/two-processes.e2e.test.ts`. The gate records the attempt before
+ * the call and **refunds** it when the call refuses (WP-73, PROGRESS backlog 263), so a person who
+ * retries is told the refusal again rather than `429` about a message that could never have been
+ * delivered; the N-containers arithmetic becomes real the day a process that serves the API can
+ * reach a run.
  */
 
 import type { RunStatus, TaskState, UserRole } from '@platform/contracts';
@@ -218,9 +219,18 @@ export const STEER_MIN_INTERVAL_MS = 5_000;
  */
 export const STEER_GATE_MAX_USERS = 4_096;
 
+/**
+ * Gives back the window slot one admitted attempt took (WP-73, PROGRESS backlog 263). It releases
+ * that attempt's slot only — a later attempt the window has since admitted keeps its own.
+ */
+export type SteerRefund = () => void;
+
 export interface SteerGate {
-  /** `true` when this caller may steer now; records the attempt when it answers `true`. */
-  allow(userId: string): boolean;
+  /**
+   * When this caller may steer now: records the attempt and answers the refund for it, which the
+   * route calls when the steer is then refused. `null` when the window has not passed.
+   */
+  allow(userId: string): SteerRefund | null;
 }
 
 /**
@@ -240,7 +250,7 @@ export const createSteerGate = (
       const at = now();
       const previous = last.get(userId);
       if (previous !== undefined && at - previous < intervalMs) {
-        return false;
+        return null;
       }
       if (last.size >= maxUsers && previous === undefined) {
         const oldest = last.keys().next();
@@ -251,7 +261,14 @@ export const createSteerGate = (
       // Delete first so the insertion order is the recency order the eviction above reads.
       last.delete(userId);
       last.set(userId, at);
-      return true;
+      return () => {
+        // Only this attempt's slot: if the window passed and a later steer was admitted, the entry
+        // is that one's and stays. Deleting rather than restoring `previous` is equivalent, because
+        // an admitted attempt means `previous` was already outside the window.
+        if (last.get(userId) === at) {
+          last.delete(userId);
+        }
+      };
     },
   };
 };
@@ -540,7 +557,7 @@ export const registerCommandRoutes = async (
     body: resumeTaskRequestSchema,
     summary: 'Resume the task at the stage it stopped at',
     description:
-      'Re-enters the current stage and enqueues it; no iteration round is spent, because the task stood still rather than going round. A state the task cannot leave for that stage — a task paused at `ready_for_merge`, say — answers 409 naming the transition, and the way out is `return-to-stage`.',
+      'Re-enters the current stage and enqueues it; no iteration round is spent, because the task stood still rather than going round. A task paused at `ready_for_merge` resumes waiting for the merge, and nothing is enqueued. A state the task cannot leave for that stage answers 409 naming the transition.',
     params: () => ({}),
     perform: async ({ deps, taskId, userId }) => deps.resume({ taskId, userId }),
   });
@@ -1010,22 +1027,31 @@ export const registerCommandRoutes = async (
           // After the replay check and before the command: a replayed request delivered nothing, so
           // charging it against the window would refuse the *next* real steer. The gate is the
           // last thing between the caller and the session.
-          if (!steerGate.allow(userId)) {
+          const refund = steerGate.allow(userId);
+          if (refund === null) {
             throw new HttpError(
               429,
               'rate_limited',
-              `steering is limited to one message every ${STEER_MIN_INTERVAL_MS / 1_000} seconds per person (technical/08); the run is still listening, try again in a moment`,
+              `steering is limited to one message every ${STEER_MIN_INTERVAL_MS / 1_000} seconds per person (technical/08); your last message was accepted moments ago, try again in a moment`,
             );
           }
-          return commands().steerRun({
-            runId,
-            userId,
-            // The role the guard actually applied — the project membership where there is one, the
-            // organisation role otherwise. The aggregate asks `can()` again with it.
-            role: request.effectiveRole ?? 'viewer',
-            message: body.message,
-            authorName: name,
-          });
+          try {
+            return await commands().steerRun({
+              runId,
+              userId,
+              // The role the guard actually applied — the project membership where there is one,
+              // the organisation role otherwise. The aggregate asks `can()` again with it.
+              role: request.effectiveRole ?? 'viewer',
+              message: body.message,
+              authorName: name,
+            });
+          } catch (error) {
+            // A refused steer delivered nothing, so it gives its slot back (WP-73, backlog 263).
+            // Recorded *before* the call and refunded on refusal — never recorded after it, which
+            // would let two concurrent steers through the window.
+            refund();
+            throw error;
+          }
         },
         answer: async ({ performed }) => ({ ...(await runPositionOf(runId)), performed }),
       });

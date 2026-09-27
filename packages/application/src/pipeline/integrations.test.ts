@@ -113,6 +113,9 @@ const DOOR_SITES: Readonly<Record<string, number>> = {
   // WP-37's `risk_route` duty: one resolution for the classification and the reviewer routing,
   // which are one wake-up and share every read.
   'risk-routing.ts': 1,
+  // WP-73 (backlog 218): the `stage.execute` job's read of a pipeline task's merge-request files
+  // before a Reviewer run — outside every transaction and outside the run, so no minted credential.
+  'review-paths.ts': 1,
   'saga.ts': 1,
   // WP-59's `close_superseded_mr` duty: one resolution for the comment and the close of the merge
   // request a rework let go of.

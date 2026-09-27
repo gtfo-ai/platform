@@ -26,7 +26,7 @@ import type {
   TicketRef,
   UserRole,
 } from '@platform/contracts';
-import { InvariantViolationError } from '../errors.js';
+import { IllegalTransitionError, InvariantViolationError } from '../errors.js';
 import { type CommandContext, type Decision, eventRecorder, FIRST_STREAM_SEQ } from '../events.js';
 import { assertCan } from '../permissions.js';
 import {
@@ -499,7 +499,13 @@ export const resumeCommands = (branch: string, sessionId: string | null): readon
 /** A human took the task over (product/19 §19): the pipeline pauses and the workspace is exported. */
 export const takeOverTask = (
   task: Task,
-  input: { readonly branch: string; readonly stage: Slug; readonly sessionId?: string },
+  input: {
+    readonly branch: string;
+    readonly stage: Slug;
+    readonly sessionId?: string;
+    /** The run the take-over interrupted, `null` when none was live (WP-73, backlog 203). */
+    readonly runId: Id | null;
+  },
   context: CommandContext,
 ): TaskDecision => {
   const next = withState(task, 'paused');
@@ -510,6 +516,7 @@ export const takeOverTask = (
     branch: input.branch,
     session_id: input.sessionId ?? null,
     stage: input.stage,
+    run_id: input.runId,
   });
   return { aggregate: { ...next, sequence: recorder.sequence }, events: recorder.events };
 };
@@ -620,14 +627,37 @@ export const recordArtifact = (
 
 // ── the tail of the pipeline ─────────────────────────────────────────────────
 
+/**
+ * Enters one of the tail stages, whose state is not `active`.
+ *
+ * It emits `task.resumed` when the task was stopped, exactly as {@link enterStage} does (WP-73,
+ * PROGRESS backlog 244): `paused → ready_for_merge` (a resume) and `paused → merged` (a merge made
+ * on the provider during the pause, Q104) are both ways out of a pause, and a handler that defers
+ * work to the resume — the dependency policy's `block` — listens for that event and nothing else.
+ */
 const enterTerminalStage = (
   task: Task,
   stage: Slug,
   state: TaskState,
   context: CommandContext,
+  resumeReason: string | null = null,
 ): TaskDecision => {
+  // `paused → ready_for_merge` and `paused → merged` exist for a task paused **at**
+  // `ready_for_merge` only (WP-73, PROGRESS backlog 244, review round 1): the table cannot say
+  // "from this stage", so the aggregate does. Without it a hand-back from a pause at `ci_gate` put
+  // the task at Ready past CI and rebase, or recorded a merge that never happened.
+  if (task.state === 'paused' && task.currentStage !== READY_FOR_MERGE_STAGE) {
+    throw new IllegalTransitionError('Task', task.state, state);
+  }
   const next = withState(task, state);
   const recorder = recorderFor(task, context);
+  if (RESUMED_FROM.has(task.state)) {
+    recorder.emit('task.resumed', {
+      project_id: task.projectId,
+      task_id: task.id,
+      reason: resumeReason,
+    });
+  }
   const attempt = enteredAttempt(task, stage);
   recorder.emit('task.stage.entered', {
     project_id: task.projectId,
@@ -652,7 +682,13 @@ export const markReadyForMerge = (task: Task, context: CommandContext): TaskDeci
 
 /** `mr.merged` arrived; the merged gate records the merge (product/04 S8). */
 export const recordMerge = (task: Task, context: CommandContext): TaskDecision =>
-  enterTerminalStage(task, MERGED_GATE_STAGE, 'merged', context);
+  enterTerminalStage(
+    task,
+    MERGED_GATE_STAGE,
+    'merged',
+    context,
+    task.state === 'paused' ? 'the merge request was merged while the task was paused' : null,
+  );
 
 /** The retrospective stage (product/04 S9). */
 export const startRetrospective = (task: Task, context: CommandContext): TaskDecision =>

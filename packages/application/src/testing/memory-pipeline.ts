@@ -34,6 +34,7 @@ import {
   taskReviewersSchema,
   taskReviewThreadsSchema,
   taskStageExitStateSchema,
+  taskStageOutcomeSchema,
   taskStageStateSchema,
   workpadRefSchema,
 } from '@platform/contracts';
@@ -508,6 +509,8 @@ export const createMemoryPipelineStore = (
     },
     recordStageExited: async (_tx, entry) => {
       const state = taskStageExitStateSchema.parse(entry.state);
+      // Parsed before anything moves, as the SQL store parses before its statement (WP-73).
+      const outcome = taskStageOutcomeSchema.parse(entry.outcome);
       if ((state === 'returned') !== (entry.returnedTo !== null)) {
         throw new PipelineStoreError(
           `task_stages ${entry.taskId}/${entry.stage}#${String(entry.attempt)}: state "${state}" with returned_to ${JSON.stringify(entry.returnedTo)} — a return names its target and nothing else does`,
@@ -526,13 +529,14 @@ export const createMemoryPipelineStore = (
         return;
       }
       row.state = state;
-      row.outcome = entry.outcome;
+      row.outcome = outcome;
       row.returnReason = entry.returnReason;
       row.returnedTo = entry.returnedTo;
       row.exitedAt = sequence;
     },
     /** The SQL's `where state = 'running'`, and nothing for a row that is closed (WP-46). */
     closeOpenStage: async (_tx, entry) => {
+      const outcome = taskStageOutcomeSchema.parse(entry.outcome);
       const row = [...stages]
         .reverse()
         .find(
@@ -546,7 +550,7 @@ export const createMemoryPipelineStore = (
       }
       sequence += 1;
       row.state = taskStageExitStateSchema.parse('failed');
-      row.outcome = entry.outcome;
+      row.outcome = outcome;
       row.returnReason = entry.reason;
       row.returnedTo = null;
       row.exitedAt = sequence;

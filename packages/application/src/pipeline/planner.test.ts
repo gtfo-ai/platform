@@ -197,6 +197,50 @@ describe('`paths:` pages in production shape (WP-58, PROGRESS backlog 170)', () 
     );
   });
 
+  /** A review-only `code_review` request with no plan, whose merge request names `files`. */
+  const reviewOnlyRequestNaming = (files: readonly string[]): StageRunRequest => {
+    const base = implementationRequestNaming([]);
+    return {
+      ...base,
+      stage: { id: 'code_review', kind: 'agent', role: 'reviewer', produces: 'ReviewVerdict' },
+      artifacts: [],
+      task: {
+        ...base.task,
+        reviewSubject: {
+          title: 'A human change',
+          description: '',
+          source_branch: 'feature/x',
+          target_branch: 'main',
+          head_sha: 'a'.repeat(40),
+          labels: [],
+          files: files.map((path) => ({ path, diff: '+x', truncated: false, omitted: false })),
+          file_count: files.length,
+          truncated: false,
+        },
+      },
+    } as unknown as StageRunRequest;
+  };
+
+  it('scores a review-only run by the merge request’s own files, and not otherwise (backlog 174)', async () => {
+    const reviewed = reviewOnlyRequestNaming(['src/api/session.ts']);
+    expect(touchedPathsOf(reviewed)).toEqual({
+      paths: ['src/api/session.ts'],
+      source: 'review_subject',
+    });
+    const plan = await (await plannerOver()).plan(reviewed);
+    const lesson = plan.contextPack.tier1.find(
+      (entry) => entry.path === '.agentic/knowledge/lessons/L-2026-01-04-session-fixtures.md',
+    );
+    // With `review_subject` unread (md5-confirmed revert) the source was `none` and no page scored.
+    expect(lesson).toMatchObject({ reason: 'paths', validated: true });
+
+    // The negative: a merge request naming no file a page's glob covers admits nothing by path.
+    const unrelated = await (await plannerOver()).plan(reviewOnlyRequestNaming(['docs/notes.md']));
+    expect(
+      unrelated.contextPack.tier1.filter((entry) => entry.reason === 'paths' && entry.validated),
+    ).toEqual([]);
+  });
+
   it('admits nothing by path when no listing is stored, which is the state before WP-58', async () => {
     const { store } = await indexedFixtureVault();
     const planner = createStageRunPlanner({
@@ -1290,6 +1334,24 @@ describe('the review checklists a run is given (WP-45)', () => {
     expect(plan.reviewChecklists).toEqual([
       { name: 'payments', item_count: 2, required_by: ['payments'], truncated: false },
     ]);
+  });
+
+  it('matches a first pipeline review on the merge request’s files the plan did not name (backlog 218)', async () => {
+    const request = {
+      ...reviewRequest({ planFiles: ['README.md'] }),
+      mergeRequestPaths: ['README.md', 'src/billing/charge.ts'],
+    } as StageRunRequest;
+    const reading = reviewChecklistsOf(request);
+    expect(reading.source).toBe('implementation_plan_and_merge_request');
+    expect(reading.classes).toEqual(['payments']);
+    const plan = await (await plannerOf()).plan(request);
+    const [block] = checklistBlocks(plan.spec.userPrompt);
+    expect(block?.body).toContain('checklist: payments');
+    expect(plan.reviewChecklists).toEqual([
+      { name: 'payments', item_count: 2, required_by: ['payments'], truncated: false },
+    ]);
+    // The converse: the same plan without the read is given no checklist — the residual 218 named.
+    expect(reviewChecklistsOf(reviewRequest({ planFiles: ['README.md'] })).classes).toEqual([]);
   });
 
   it('reads the merge request’s own files for a review of a merge request, not the plan', async () => {

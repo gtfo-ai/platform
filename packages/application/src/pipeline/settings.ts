@@ -38,6 +38,8 @@ import {
   SHIPPED_TEMPLATES,
   SPIKE_TEMPLATE_ID,
 } from '@platform/domain';
+import { assertOutsideTransaction } from '../events/open-transaction.js';
+import type { Transaction } from '../ports/transaction.js';
 
 export interface ProjectSettings {
   readonly projectId: Id;
@@ -170,9 +172,38 @@ export const iterationLimitsFor = (settings: ProjectSettings): IterationLimits =
     autonomyPresetFor(settings)?.humanMrRounds,
   );
 
+/**
+ * Where the pipeline reads a project's settings — and **on which connection** (WP-73, PROGRESS
+ * backlogs 19 and 221).
+ *
+ * A caller that holds a transaction passes it, and the read runs on that connection: an event
+ * handler's `context.scope.tx`, which `EventBus` holds open for the whole handler body. A caller that
+ * holds none passes nothing, and the adapter borrows a connection of its own — which is correct
+ * only **outside** a transaction, so both shipped implementations call
+ * {@link assertSettingsReadOutsideTransaction} on that branch. Before WP-73 four handlers
+ * (`planApprovalGate`, `budgetApprovalGate`, the scheduler, the status mapping) asked without a
+ * transaction from inside one, so a dispatch that `POOL_RESERVATIONS` counts as holding two
+ * connections briefly borrowed a third; that borrow now fails a test instead of being a sentence.
+ */
 export interface ProjectSettingsPort {
-  forProject(projectId: Id): Promise<ProjectSettings>;
+  forProject(projectId: Id, tx?: Transaction): Promise<ProjectSettings>;
 }
+
+/**
+ * The recurrence guard of {@link ProjectSettingsPort}: a settings read with no transaction handed
+ * to it may not be made while one is open on the call path, because it would borrow a second pooled
+ * connection inside the first. The fix is always the same — pass the scope's `tx`.
+ *
+ * @throws {TransactionOpenError} when a transaction is open on this call path.
+ */
+export const assertSettingsReadOutsideTransaction = (): void => {
+  assertOutsideTransaction(
+    'settings.forProject without the caller’s transaction',
+    'Reading settings on a connection borrowed from the pool here would hold a second pooled ' +
+      'connection inside the first, which the pool floor does not count: pass the scope’s `tx` ' +
+      '(PROGRESS backlogs 19 and 221).',
+  );
+};
 
 /**
  * product/04 S0: intake "classifies it (`feature | bug | chore | spike`) using the ticket type
@@ -239,7 +270,14 @@ export const defaultProjectSettings = (
 export const staticProjectSettings = (
   settings: (projectId: Id) => ProjectSettings,
 ): ProjectSettingsPort => ({
-  forProject: async (projectId) => settings(projectId),
+  forProject: async (projectId, tx) => {
+    // The double holds the production adapter's rule, so a handler that asks without its
+    // transaction fails the unit tier rather than only borrowing a connection in production.
+    if (tx === undefined) {
+      assertSettingsReadOutsideTransaction();
+    }
+    return settings(projectId);
+  },
 });
 
 /** The project's `features.epic_split`, with every default filled in (WP-40). */

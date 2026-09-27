@@ -903,6 +903,9 @@ describe('the task projection', () => {
         resume_commands: ['git fetch && git checkout agentic/ACME-9', 'claude --resume sess-1'],
         // A system actor holds nothing (WP-44); a take-over through the route names its user.
         held_by: null,
+        // An event with no `run_id` key predates WP-73: not recorded, never "no run" (backlog 203).
+        run_id: null,
+        run_recorded: false,
         // The task has no snapshot, so the shipped `feature` template is compiled — the list the
         // hand-back route checks against (WP-44, criterion 2).
         hand_back_stages: expect.arrayContaining(['refinement', 'implementation', 'code_review']),
@@ -951,6 +954,19 @@ describe('the task projection', () => {
       expect((await findTaskDetail(drizzled, pausedTaskId))?.taken_over).not.toBeNull();
       await append(6, 'task.resumed', {});
       expect((await findTaskDetail(drizzled, pausedTaskId))?.taken_over).toBeNull();
+    });
+
+    it('publishes the run the take-over recorded, and a recorded absence as recorded (backlog 203)', async () => {
+      await append(7, 'task.taken_over', {
+        branch: 'agentic/ACME-9',
+        session_id: null,
+        stage: 'refinement',
+        run_id: null,
+      });
+      expect((await findTaskDetail(drizzled, pausedTaskId))?.taken_over).toMatchObject({
+        run_id: null,
+        run_recorded: true,
+      });
     });
   });
 });
@@ -1500,6 +1516,26 @@ describe('the Checks panel’s reads (WP-46)', () => {
       client.release();
     }
 
+    // A row written before WP-73 may carry a word outside the vocabulary (backlog 213): the store
+    // now refuses one at the write, so it is planted with SQL, and the projection publishes it as
+    // `unrecognised` rather than serving the raw text or failing the page.
+    await pool.query(
+      `insert into task_stages (task_id, stage, attempt, state, outcome, exited_at)
+       values ($1, 'code_review', 1, 'completed', 'ship it!', now())`,
+      [ownTaskId],
+    );
+    await expect(
+      store.tasks.recordStageExited({ adapter: 'postgres', client: pool } as never, {
+        taskId: ownTaskId,
+        stage: 'code_review',
+        attempt: 1,
+        state: 'completed',
+        outcome: 'ship it!' as never,
+        returnReason: null,
+        returnedTo: null,
+      }),
+    ).rejects.toThrow();
+
     const detail = await findTaskDetail(drizzled, ownTaskId);
     expect(detail?.task.review_threads).toEqual({ open: 2, resolved: 1, checked_at: AT });
     expect(
@@ -1507,6 +1543,7 @@ describe('the Checks panel’s reads (WP-46)', () => {
     ).toEqual([
       ['ci_gate', 'completed', 'pass', false],
       ['rebase_gate', 'failed', 'undecided', false],
+      ['code_review', 'completed', 'unrecognised', false],
     ]);
     // The panel picks the newest version off this list and opens it through the artifact route.
     expect(

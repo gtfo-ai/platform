@@ -47,6 +47,7 @@ import {
   isActiveRunStatus,
   isBefore,
   isTaskFinished,
+  MERGED_GATE_STAGE,
   pauseTask,
   recordFeedback,
   resetAgentIterations,
@@ -657,10 +658,11 @@ export const pauseTaskCommand = async (
  * resumption), and it is why a paused task can always be resumed while a spent loop cannot be
  * re-entered by `return-to-stage`.
  *
- * The state machine is what refuses the rest: `paused → active` exists, and a task paused at
- * `ready_for_merge` has no edge back to that stage, so resuming it is a `409` naming the transition
- * rather than a silent no-op. Returning it to an earlier stage is the way out, and it is a different
- * command.
+ * The state machine is what refuses the rest: `paused → active` exists, and so, since WP-73
+ * (PROGRESS backlog 244), does `paused → ready_for_merge` — a task paused while waiting for a merge
+ * resumes waiting for it, with a `task.resumed` and no stage job, since nothing runs at Ready. A
+ * move the table does not have is a `409` naming the transition rather than a silent no-op.
+ * (`paused → returned` is **not** an edge, so `return-to-stage` is no way out of a pause.)
  */
 export const resumeTaskCommand = async (
   deps: HumanCommandDependencies,
@@ -1402,6 +1404,9 @@ export const takeOverTaskCommand = async (
           branch,
           stage,
           ...(live?.handle.sessionId == null ? {} : { sessionId: live.handle.sessionId }),
+          // Recorded rather than inferred by the screen (WP-73, backlog 203): `null` exactly when
+          // nothing was exported below.
+          runId: live?.runId ?? null,
         },
         context,
       );
@@ -1490,6 +1495,15 @@ export const handBackTaskCommand = async (
        * with its own command; the hand-back is for a task a human holds or the platform parked.
        */
       if (stored.task.state === 'waiting_approval') {
+        throw new IllegalTransitionError('task', stored.task.state, `${input.stage} (hand-back)`);
+      }
+      /**
+       * **Not into the merge** (WP-73 review round 1). Entering `merged_gate` records a merge, and
+       * the only thing that may say a merge happened is the provider's `mr.merged`. The aggregate
+       * already refuses it from a pause at any other stage; from a pause at `ready_for_merge` it
+       * would be an edge, so the command refuses the target by name.
+       */
+      if (input.stage === MERGED_GATE_STAGE) {
         throw new IllegalTransitionError('task', stored.task.state, `${input.stage} (hand-back)`);
       }
       const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);

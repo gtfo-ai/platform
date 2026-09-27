@@ -109,15 +109,43 @@ const ResumeLines = ({
   </div>
 );
 
+/**
+ * Which run's files the panel offers (WP-73, PROGRESS backlog 203): the run `task.taken_over`
+ * recorded when it did, and only for an event from before WP-73 the inference
+ * {@link interruptedRunOf} — which then says it is one, because on a take-over with no live run it
+ * names an earlier, finished run the take-over never interrupted.
+ */
+export const takeOverRunOf = (
+  takenOver: Pick<TakenOver, 'at' | 'run_id' | 'run_recorded'>,
+  runs: readonly Pick<RunRecord, 'id' | 'started_at'>[],
+): { readonly runId: string | null; readonly inferred: boolean } =>
+  takenOver.run_recorded
+    ? { runId: takenOver.run_id, inferred: false }
+    : { runId: interruptedRunOf(runs, takenOver.at), inferred: true };
+
 /** The two files a take-over hands a person (WP-44, Q93). */
-export const TakeOverDownloads = ({ runId }: { readonly runId: string | null }): ReactElement =>
+export const TakeOverDownloads = ({
+  runId,
+  inferred,
+}: {
+  readonly runId: string | null;
+  readonly inferred: boolean;
+}): ReactElement =>
   runId === null ? (
     <p className="text-xs text-fg-muted">
-      No run had started when the task was taken over, so there is no transcript or workspace to
-      download — the branch is where the work is.
+      {inferred
+        ? 'No run had started when the task was taken over, so there is no transcript or workspace to download — the branch is where the work is.'
+        : 'No run was live when the task was taken over, so nothing was exported and there is no transcript or workspace to download — the branch is where the work is.'}
     </p>
   ) : (
     <div className="flex flex-col gap-1 text-xs">
+      {inferred ? (
+        <p className="text-fg-muted">
+          This take-over was recorded before the platform stored which run it interrupted, so the
+          run below is inferred — the newest run that had started by then — and may be one that had
+          already finished.
+        </p>
+      ) : null}
       <div className="flex flex-wrap gap-3">
         <DownloadLink
           path={transcriptDownloadPath(runId)}
@@ -255,7 +283,7 @@ export const TakeOverPanel = ({
               {workspaceExportText(answered.workspace_export)}
             </p>
           )}
-          <TakeOverDownloads runId={interruptedRunOf(runs, takenOver.at)} />
+          <TakeOverDownloads {...takeOverRunOf(takenOver, runs)} />
           <HandBack taskId={taskId} takenOver={takenOver} commands={commands} />
         </Card>
       </div>

@@ -1364,6 +1364,40 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           }),
         ).rejects.toThrow();
       });
+
+      it('refuses an outcome outside the contracts’ vocabulary, on both writes (WP-73, backlog 213)', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        await enter(stored.task.id, 'code_review', 1);
+        await expect(
+          store.tasks.recordStageExited(tx, {
+            taskId: stored.task.id,
+            stage: 'code_review',
+            attempt: 1,
+            state: 'completed',
+            outcome: 'looks good to me' as never,
+            returnReason: null,
+            returnedTo: null,
+          }),
+        ).rejects.toThrow();
+        await expect(
+          store.tasks.closeOpenStage(tx, {
+            taskId: stored.task.id,
+            stage: 'code_review',
+            attempt: 1,
+            outcome: 'looks good to me' as never,
+            reason: 'x',
+          }),
+        ).rejects.toThrow();
+        // The other side: a word of the vocabulary is written.
+        await store.tasks.closeOpenStage(tx, {
+          taskId: stored.task.id,
+          stage: 'code_review',
+          attempt: 1,
+          outcome: 'escalated',
+          reason: 'x',
+        });
+      });
     });
 
     describe('artifacts', () => {

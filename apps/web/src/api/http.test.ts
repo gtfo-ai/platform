@@ -1,6 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as z from 'zod';
-import { ApiError, CSRF_HEADER, CSRF_HEADER_VALUE, createApiClient, NetworkError } from './http.js';
+import { createIntentKeys } from '../app/idempotency.js';
+import {
+  ApiError,
+  ATTEMPT_UNKNOWN_MESSAGE,
+  CSRF_HEADER,
+  CSRF_HEADER_VALUE,
+  createApiClient,
+  IN_FLIGHT_RETRY_DELAY_MS,
+  IN_FLIGHT_RETRY_LIMIT,
+  isRetiredIdempotencyKey,
+  NetworkError,
+} from './http.js';
 
 const schema = z.strictObject({ ok: z.boolean() });
 
@@ -142,5 +153,102 @@ describe('the API client', () => {
     const error = await client.get('/api/thing', { schema }).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(DOMException);
     expect((error as DOMException).name).toBe('AbortError');
+  });
+});
+
+/**
+ * WP-67's two in-flight refusals (WP-73, PROGRESS backlog 242): one case per code, each read off
+ * what the requests carried rather than off the client's answer alone.
+ */
+describe('a keyed command the server says is in flight or unknown', () => {
+  const problem = (code: string) =>
+    new Response(JSON.stringify({ error: { code, message: `server says ${code}` } }), {
+      status: 409,
+      headers: { 'content-type': 'application/json' },
+    });
+  const ok = () =>
+    new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  const keysSent = (mock: ReturnType<typeof vi.fn<FetchMock>>) =>
+    mock.mock.calls.map((_call, index) =>
+      new Headers(initOf(mock, index).headers).get('Idempotency-Key'),
+    );
+
+  it('sends an in-flight command again under the same key until the first has answered', async () => {
+    const answers = [
+      problem('idempotency_key_in_flight'),
+      problem('idempotency_key_in_flight'),
+      ok(),
+    ];
+    const fetchImpl = vi.fn<FetchMock>(async () => answers.shift() ?? ok());
+    const sleep = vi.fn(async () => {});
+    const client = createApiClient({ fetchImpl: fetchImpl as unknown as typeof fetch, sleep });
+
+    await expect(
+      client.command('/api/tasks/t/feedback', {
+        schema,
+        body: { text: 'x' },
+        idempotencyKey: 'k-1',
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(keysSent(fetchImpl)).toEqual(['k-1', 'k-1', 'k-1']);
+    expect(sleep).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledWith(IN_FLIGHT_RETRY_DELAY_MS);
+  });
+
+  it('stops after the bound and reports the in-flight refusal then', async () => {
+    const fetchImpl = vi.fn<FetchMock>(async () => problem('idempotency_key_in_flight'));
+    const client = createApiClient({
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      sleep: async () => {},
+    });
+    await expect(
+      client.command('/api/tasks/t/feedback', { schema, idempotencyKey: 'k-2' }),
+    ).rejects.toMatchObject({ code: 'idempotency_key_in_flight' });
+    expect(fetchImpl).toHaveBeenCalledTimes(IN_FLIGHT_RETRY_LIMIT);
+  });
+
+  it('stops retrying an in-flight command once its caller aborts, as an abort', async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn<FetchMock>(async () => {
+      controller.abort();
+      return problem('idempotency_key_in_flight');
+    });
+    const sleep = vi.fn(async () => {});
+    const client = createApiClient({ fetchImpl: fetchImpl as unknown as typeof fetch, sleep });
+    const error = await client
+      .command('/api/tasks/t/feedback', {
+        schema,
+        idempotencyKey: 'k-abort',
+        signal: controller.signal,
+      })
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(DOMException);
+    expect((error as DOMException).name).toBe('AbortError');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it('retires the key after idempotency_attempt_unknown, and the intent gets a new one', async () => {
+    const fetchImpl = vi.fn<FetchMock>(async () => problem('idempotency_attempt_unknown'));
+    const client = createApiClient({ fetchImpl: fetchImpl as unknown as typeof fetch });
+    const minted = ['intent-key-1', 'intent-key-2'];
+    const intents = createIntentKeys(() => minted.shift() ?? 'intent-key-n');
+    const key = intents.keyFor(['task.feedback', 'x']);
+    expect(isRetiredIdempotencyKey(key)).toBe(false);
+
+    const error = await client
+      .command('/api/tasks/t/feedback', { schema, idempotencyKey: key })
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).code).toBe('idempotency_attempt_unknown');
+    expect((error as ApiError).message).toBe(ATTEMPT_UNKNOWN_MESSAGE);
+    // Sent once: an unknown outcome is not retried under the same key.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(isRetiredIdempotencyKey(key)).toBe(true);
+    // Until WP-73 the register released a key only on success, so this was the same key again.
+    expect(intents.keyFor(['task.feedback', 'x'])).not.toBe(key);
   });
 });

@@ -336,11 +336,20 @@ describe('pause, escalate, take over, hand back', () => {
   it('pauses on take-over and announces the hand-back without moving the task', () => {
     const takenOver = takeOverTask(
       activeTask(),
-      { branch: 'agentic/PROJ-1', stage: 'implementation', sessionId: 'sess-1' },
+      {
+        branch: 'agentic/PROJ-1',
+        stage: 'implementation',
+        sessionId: 'sess-1',
+        runId: '00000000-0000-4000-8000-000000000001' as never,
+      },
       context(),
     );
     expect(takenOver.aggregate.state).toBe('paused');
     expect(types(takenOver.events)).toEqual(['task.taken_over']);
+    // The interrupted run is recorded, not left to the screen to infer (WP-73, backlog 203).
+    expect(takenOver.events[0]?.payload).toMatchObject({
+      run_id: '00000000-0000-4000-8000-000000000001',
+    });
 
     const handedBack = handBackTask(
       takenOver.aggregate,
@@ -461,6 +470,30 @@ describe('the tail of the pipeline', () => {
     expect(done.aggregate.state).toBe('done');
     expect(types(done.events)).toEqual(['task.completed']);
     expect(isTaskFinished(done.aggregate)).toBe(true);
+  });
+
+  it('resumes a task paused at ready_for_merge back to waiting, with a task.resumed (backlog 244)', () => {
+    const ready = markReadyForMerge(activeTask(), context()).aggregate;
+    const paused = pauseTask(ready, { reason: 'manual' }, context()).aggregate;
+    const resumed = markReadyForMerge(paused, context());
+    expect(resumed.aggregate.state).toBe('ready_for_merge');
+    expect(types(resumed.events)).toEqual(['task.resumed', 'task.stage.entered']);
+    // The positive's converse: an ordinary entry into ready_for_merge is not a resume.
+    expect(types(markReadyForMerge(activeTask(), context()).events)).toEqual([
+      'task.stage.entered',
+    ]);
+  });
+
+  it('ends a pause at ready_for_merge with the merge, naming why it resumed (Q104)', () => {
+    const ready = markReadyForMerge(activeTask(), context()).aggregate;
+    const paused = pauseTask(ready, { reason: 'manual' }, context()).aggregate;
+    const merged = recordMerge(paused, context());
+    expect(merged.aggregate.state).toBe('merged');
+    expect(types(merged.events)).toEqual(['task.resumed', 'task.stage.entered']);
+    expect(merged.events[0]?.payload).toMatchObject({
+      reason: 'the merge request was merged while the task was paused',
+    });
+    expect(types(recordMerge(ready, context()).events)).toEqual(['task.stage.entered']);
   });
 
   it('refuses to skip from ready straight to done', () => {

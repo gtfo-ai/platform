@@ -24,7 +24,7 @@
  * `coalesced` is a success, not an error: it means the window this comment belongs to is already
  * scheduled.
  */
-import type { Id, Slug } from '@platform/contracts';
+import type { Id, Slug, TaskStageOutcome } from '@platform/contracts';
 import { effortSchema } from '@platform/contracts';
 import {
   compilePipeline,
@@ -41,6 +41,7 @@ import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
 import { createGateEvaluator, MAX_GATE_CHECKS } from './gates.js';
 import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
 import { REBASE_GATE_STAGE, recordRebaseCheck } from './rebase.js';
+import { reviewedMergeRequestPaths } from './review-paths.js';
 import {
   isOpenReviewThread,
   reviewThreadCounts,
@@ -627,7 +628,12 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
        * provider being down.
        */
       await ensureTicketSnapshot(options, admitted.stored);
-      const outcome = await options.executor.execute(request);
+      // WP-73, backlog 218: a Reviewer is matched on the merge request's files too, read here for
+      // the same reason as the ticket — outside every transaction, before the plan.
+      const mergeRequestPaths = await reviewedMergeRequestPaths(options, admitted.stored, stage);
+      const outcome = await options.executor.execute(
+        mergeRequestPaths === undefined ? request : { ...request, mergeRequestPaths },
+      );
       /**
        * **A run that could not be *started* for a transport reason is re-enqueued here** (Q59(a)).
        *
@@ -760,7 +766,7 @@ export type GateSettlement =
        * The word the gate's row is closed `failed` with (WP-46, backlog 160): `undecided` (still
        * pending after `MAX_GATE_CHECKS`) or `unsupported` (the project's providers cannot answer).
        */
-      readonly outcome: string;
+      readonly outcome: TaskStageOutcome;
       readonly reason: string;
       readonly blockerBrief: string;
     };

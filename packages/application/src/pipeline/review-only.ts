@@ -1060,6 +1060,15 @@ export const runReviewOnlyObservation = async (
     if (current === null) {
       return;
     }
+    // The Checks panel's review-threads item for a review-only task: the platform's own findings,
+    // labelled as such (WP-73, backlog 209 — `taskReviewThreadsSchema.counts` states the decision).
+    // Through the column's one narrow writer, never `save`.
+    await options.store.tasks.saveReviewThreads(scope.tx, taskId, {
+      open: ours.length - resolved,
+      resolved,
+      checked_at: options.clock.now(),
+      counts: 'platform_findings',
+    });
     await scope.events.append([
       buildEvent(
         'task.review.observed',

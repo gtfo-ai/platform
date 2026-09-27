@@ -349,6 +349,8 @@ describe('taking a task over and handing it back', () => {
     // WP-44: who holds it, and the stages a hand-back may name — the compiled pipeline's, which is
     // the list the refusal below is made against (so `deployment` is not in it).
     expect(taken.body.taken_over?.held_by).toEqual(expect.any(String));
+    // WP-73, backlog 203: the run it interrupted is recorded on the event, not inferred.
+    expect(taken.body.taken_over).toMatchObject({ run_id: runId, run_recorded: true });
     expect(taken.body.taken_over?.hand_back_stages).toContain('implementation');
     expect(taken.body.taken_over?.hand_back_stages).not.toContain('deployment');
 

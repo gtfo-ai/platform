@@ -42,14 +42,22 @@ import type {
   HumanTimeKind,
   HumanTimeSummary,
   QuestionRecord,
+  ReviewVerdictData,
   TaskCoverage,
   TaskDependencies,
   TaskDetailResponse,
   TaskRecord,
   TaskReviewers,
   TaskReviewThreads,
+  TaskStageOutcome,
+  TaskStageOutcomeWord,
 } from '@platform/contracts';
-import { acceptanceVerdictDataSchema } from '@platform/contracts';
+import {
+  acceptanceVerdictDataSchema,
+  reviewVerdictDataSchema,
+  stageVerdictSchema,
+  taskStageOutcomeWordSchema,
+} from '@platform/contracts';
 import { Link, useSearch } from '@tanstack/react-router';
 import { type ReactElement, useState } from 'react';
 import {
@@ -408,16 +416,29 @@ export const gateBasisText = (row: StageRow | null, gate: string): string => {
 };
 
 /**
- * The review window's reading of the merge request's human threads (WP-46, backlog 95 item 3).
- * `null` is *the window has not read them*, which is never drawn as `0 open`.
+ * The review window's reading of the merge request's human threads (WP-46, backlog 95 item 3), or —
+ * for a review-only task — the platform's own findings, labelled as such (WP-73, backlog 209).
+ * `null` is *nobody has read them*, which is never drawn as `0 open`.
  */
 export const reviewThreadsValueText = (threads: TaskReviewThreads | null): string =>
-  threads === null ? 'not read' : `${threads.open} open · ${threads.resolved} resolved`;
+  threads === null
+    ? 'not read'
+    : threads.counts === 'platform_findings'
+      ? `${threads.open} findings open · ${threads.resolved} resolved`
+      : `${threads.open} open · ${threads.resolved} resolved`;
 
+/**
+ * The sentence under the count. It says **when** the number was read and that a resolution does
+ * not refresh it (WP-73, PROGRESS backlog 210): only a comment re-opens BD-007's window, and GitLab
+ * sends no comment event for a thread resolved without a note — its merge-request event fires only
+ * when *all* threads are resolved, which nothing on this build consumes.
+ */
 export const reviewThreadsBasisText = (threads: TaskReviewThreads | null): string =>
   threads === null
     ? 'The review window reads the merge request’s threads when a human comments on it while the task waits for merge; nobody has yet.'
-    : `Read by the review window at ${formatDateTime(threads.checked_at)}; a thread is open while it is resolvable, unresolved and has a human note.`;
+    : threads.counts === 'platform_findings'
+      ? `The platform’s own review findings on this merge request, as it read them back at ${formatDateTime(threads.checked_at)}; a human’s own threads are not counted here, and a finding resolved since then is not reflected.`
+      : `Read by the review window at ${formatDateTime(threads.checked_at)}; a thread is open while it is resolvable, unresolved and has a human note. A thread resolved without a new comment is not counted until the next comment — the number is as of that time.`;
 
 /** The latest `AcceptanceVerdict` among the task's artifacts — the newest version wins. */
 export const latestAcceptanceVerdict = (
@@ -540,6 +561,139 @@ const AcceptanceChecks = ({
         </ul>
       )}
     </>
+  );
+};
+
+/**
+ * **The word→sentence table of `task_stages.outcome`** (WP-73, PROGRESS backlog 213). The platform's
+ * own words are an exhaustive `switch` — a word added to `taskStageOutcomeWordSchema` without a
+ * sentence here fails `tsc` — and the two families the vocabulary includes by reference are said
+ * generically: a stage verdict, and the event that moved a human stage.
+ */
+export const stageOutcomeWordSentence = (word: TaskStageOutcomeWord): string => {
+  switch (word) {
+    case 'returned':
+      return 'Sent the task back to an earlier stage.';
+    case 'superseded':
+      return 'Ended when the stage was entered again as a new attempt.';
+    case 'left':
+      return 'Ended when the task entered another stage.';
+    case 'cancelled':
+      return 'Ended because the task was cancelled.';
+    case 'system':
+      return 'Completed by the platform on entry.';
+    case 'failed':
+      return 'The run failed, could not start, or its process stopped renewing it.';
+    case 'escalated':
+      return 'Escalated to a human.';
+    case 'undecided':
+      return 'Escalated: the gate could not decide in its allotted checks.';
+    case 'unsupported':
+      return 'Escalated: the project’s integrations cannot answer this gate.';
+    case 'converged':
+      return 'Escalated: the same failure repeated, so another round would not help.';
+    case 'question.expired':
+      return 'Escalated: a question expired unanswered.';
+    case 'approval.expired':
+      return 'Escalated: an approval expired undecided.';
+    case 'budget.rejected':
+      return 'Escalated: the budget approval was rejected.';
+    case 'take_over.expired':
+      return 'Escalated: the take-over saw no activity for five working days.';
+    case 'write_conflict':
+      return 'Escalated: the platform’s write lost every retry against another writer.';
+    case 'dead_lettered':
+      return 'Escalated: an event about this task could not be processed.';
+    case 'repository_config_invalid':
+      return 'Escalated: the repository’s .agentic/config.yml does not parse.';
+    case 'unknown':
+      return 'Finished without a verdict.';
+    case 'unrecognised':
+      return 'Finished with a verdict the platform does not recognise.';
+  }
+};
+
+/** Any `task_stages.outcome` as a sentence: the table above, a verdict, or an event's name. */
+export const stageOutcomeSentence = (outcome: TaskStageOutcome): string => {
+  const word = taskStageOutcomeWordSchema.safeParse(outcome);
+  if (word.success) {
+    return stageOutcomeWordSentence(word.data);
+  }
+  if (stageVerdictSchema.safeParse(outcome).success) {
+    return `Verdict: ${outcome.replace('_', ' ')}.`;
+  }
+  // The one event name the platform writes as an ending rather than as a move (`closeCurrentStageRow`).
+  if (outcome === 'task.completed') {
+    return 'Ended because the task completed.';
+  }
+  return `Moved on by ${outcome}.`;
+};
+
+/** The latest `ReviewVerdict` among the task's artifacts — the newest version wins. */
+export const latestReviewVerdict = (
+  artifacts: TaskDetailResponse['artifacts'],
+): TaskDetailResponse['artifacts'][number] | null =>
+  artifacts
+    .filter((artifact) => artifact.artifact_type === 'ReviewVerdict')
+    .reduce<TaskDetailResponse['artifacts'][number] | null>(
+      (latest, artifact) =>
+        latest === null || artifact.version > latest.version ? artifact : latest,
+      null,
+    );
+
+/**
+ * What a Review Verdict's `checklists_applied` says, one line per list (WP-73, PROGRESS backlog
+ * 217). The three values are three different statements and none stands in for another: `[]` is
+ * *"given none"*, a list is what the prompt carried, and `null`/absent is *"not recorded"* — never
+ * rendered as *none* (standing rule 16).
+ */
+export const checklistsAppliedLines = (
+  applied: ReviewVerdictData['checklists_applied'],
+): readonly string[] => {
+  if (applied === null || applied === undefined) {
+    return ['Review checklists: not recorded on this verdict.'];
+  }
+  if (applied.length === 0) {
+    return ['Review checklists: the reviewer was given none.'];
+  }
+  return applied.map(
+    (entry) =>
+      `Reviewer given ${entry.item_count} item${entry.item_count === 1 ? '' : 's'} from checklist ${entry.name}${entry.truncated ? ' (cut by the prompt’s bound)' : ''} (required by: ${entry.required_by.length === 0 ? 'no class' : entry.required_by.join(', ')}).`,
+  );
+};
+
+/**
+ * **Which review checklists the Reviewer was given** (WP-73, PROGRESS backlog 217): the platform's
+ * own record on the latest Review Verdict (WP-45), read through the artifact route as the
+ * Acceptance Verdict is. A line beside the risk classes rather than a twelfth Checks item —
+ * product/10:38's eleven are held both ways by `checks-panel.test.tsx`. The list names are project
+ * configuration and go through `UntrustedText` like every other string on this panel.
+ */
+const ReviewChecklists = ({
+  taskId,
+  artifacts,
+}: {
+  readonly taskId: string;
+  readonly artifacts: TaskDetailResponse['artifacts'];
+}): ReactElement | null => {
+  const latest = latestReviewVerdict(artifacts);
+  const body = useArtifactBody(taskId, latest?.id ?? null);
+  if (latest === null || body.isPending) {
+    return null;
+  }
+  const parsed = body.isError ? null : reviewVerdictDataSchema.safeParse(body.data.data);
+  const lines =
+    parsed === null || !parsed.success
+      ? [`Review checklists: unavailable — the Review Verdict v${latest.version} was not read.`]
+      : checklistsAppliedLines(parsed.data.checklists_applied);
+  return (
+    <ul className="-mt-1 flex flex-col gap-0.5">
+      {lines.map((line) => (
+        <li key={line} className="text-[11px] text-fg-muted">
+          <UntrustedText value={line} />
+        </li>
+      ))}
+    </ul>
   );
 };
 
@@ -976,7 +1130,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
                   </p>
                   {stage.outcome === null ? null : (
                     <p className="text-xs">
-                      <UntrustedText value={stage.outcome} />
+                      <UntrustedText value={stageOutcomeSentence(stage.outcome)} />
                     </p>
                   )}
                 </Card>
@@ -1376,6 +1530,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
               )}
             </div>
           </div>
+          <ReviewChecklists taskId={taskId} artifacts={artifacts} />
           {/*
             **The census of what this panel does not answer** (WP-38, criterion 5; WP-46).
 

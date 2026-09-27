@@ -88,7 +88,7 @@ const build = async (
    * key policy into a question about the clock. The window has its own `describe` further down,
    * where it is driven on an injected clock (standing rule 2).
    */
-  steerGate: SteerGate = { allow: () => true },
+  steerGate: SteerGate = { allow: () => () => {} },
 ): Promise<World> => {
   const calls: Call[] = [];
   const actions: World['actions'] = [];
@@ -518,6 +518,38 @@ describe('the steer window (technical/08: one message per five seconds per user)
     advance(1);
     const later = await post(gated, `/api/runs/${RUN}/steer`, { message: 'three' }, 'steer-3');
     expect(later.status, JSON.stringify(later.body)).toBe(200);
+  });
+
+  it('gives the slot back when the steer is refused, so the retry meets the refusal and not a 429 (backlog 263)', async () => {
+    const { world: gated, advance } = await windowed();
+    gated.throws = new RunNotReachableError(RUN as never, 'steered');
+    const refused = await post(gated, `/api/runs/${RUN}/steer`, { message: 'one' }, 'steer-r1');
+    expect(`${refused.status} ${refused.body.error?.code ?? ''}`).toBe('409 run_not_reachable');
+
+    advance(1);
+    gated.throws = new RunNotReachableError(RUN as never, 'steered');
+    const retry = await post(gated, `/api/runs/${RUN}/steer`, { message: 'one' }, 'steer-r2');
+    // With the refund removed (md5-confirmed revert) this read `429 rate_limited`.
+    expect(`${retry.status} ${retry.body.error?.code ?? ''}`).toBe('409 run_not_reachable');
+
+    // The other direction (standing rule 42): an accepted steer still spends the window.
+    const accepted = await post(gated, `/api/runs/${RUN}/steer`, { message: 'two' }, 'steer-r3');
+    expect(accepted.status, JSON.stringify(accepted.body)).toBe(200);
+    advance(1);
+    const tooSoon = await post(gated, `/api/runs/${RUN}/steer`, { message: 'three' }, 'steer-r4');
+    expect(`${tooSoon.status} ${tooSoon.body.error?.code ?? ''}`).toBe('429 rate_limited');
+    expect(tooSoon.body.error?.message).not.toContain('still listening');
+  });
+
+  it('refunds only the attempt it admitted, never a later one the window let through', () => {
+    let at = 0;
+    const gate = createSteerGate(() => at);
+    const first = gate.allow('u');
+    at += STEER_MIN_INTERVAL_MS;
+    expect(gate.allow('u'), 'the window passed, so a second attempt is admitted').not.toBeNull();
+    first?.();
+    at += 1;
+    expect(gate.allow('u'), 'the second attempt still holds its slot').toBeNull();
   });
 
   it('is per user: a colleague’s message is not refused because of mine', async () => {

@@ -7,7 +7,7 @@
  *    │           │  └── returned(stage) ◄─┘ (human comments / rework)
  *    │           ├─► waiting_answers ─► active
  *    │           ├─► waiting_approval ─► active | needs_human
- *    │           ├─► paused(budget|manual|taken_over) ─► active
+ *    │           ├─► paused(budget|manual|taken_over) ─► active | ready_for_merge | merged
  *    │           └─► needs_human ─► active | cancelled
  *    └─► cancelled
  * ```
@@ -34,6 +34,13 @@ import { IllegalTransitionError } from '../errors.js';
  *    would either have to move the task back to `active` (which `retro` has no edge to, by design:
  *    a merged task never goes back to work) or run outside the pipeline entirely.
  *  - `ready_for_merge → returned` is the human-MR-comment path (BD-007).
+ *  - **`paused → ready_for_merge` and `paused → merged` were added at WP-73** (PROGRESS backlog
+ *    244, Q104): *a task paused while waiting for a merge resumes waiting for it*, and a merge made
+ *    on the provider while it is paused ends the pause (Q104's answer (a)) — the saga takes that
+ *    edge only when the paused task's stage is `ready_for_merge`. Before it, `ready_for_merge`
+ *    could enter `paused` and nothing led back, so a pause was a cancel in slow motion. The table
+ *    cannot say *"from this stage"*, so the **aggregate** refuses both edges from a pause at any
+ *    other stage (`enterTerminalStage`, review round 1) — a hand-back cannot reach them.
  *  - **`active → done` was added at WP-21**, and it closes a gap rather than widening a guarantee.
  *    Until then the only edge into `done` was `retro → done`, so a template that finishes without a
  *    merge could not finish at all: the pipeline asked for `complete`, the machine refused, and
@@ -63,7 +70,7 @@ export const TASK_TRANSITIONS = {
   returned: ['active', 'needs_human', 'paused', 'cancelled'],
   waiting_answers: ['active', 'paused', 'needs_human', 'cancelled'],
   waiting_approval: ['active', 'paused', 'needs_human', 'cancelled'],
-  paused: ['active', 'needs_human', 'cancelled'],
+  paused: ['active', 'ready_for_merge', 'merged', 'needs_human', 'cancelled'],
   needs_human: ['active', 'paused', 'cancelled'],
   ready_for_merge: ['merged', 'returned', 'paused', 'needs_human', 'cancelled'],
   merged: ['retro', 'needs_human'],

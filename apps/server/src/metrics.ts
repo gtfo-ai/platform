@@ -39,6 +39,8 @@ export interface Metrics {
   readonly storageTotalBytes: Gauge<'components'>;
   /** One knowledge mirror's bytes, per project (WP-65, Q63). */
   readonly knowledgeMirrorBytes: Gauge<'project_id'>;
+  /** Command claims nobody completed past their in-flight window, by action (WP-73). */
+  readonly commandClaimsUnknown: Gauge<'action'>;
   /** Sets the gauges that have to be sampled rather than incremented. Called on scrape. */
   readonly collect: () => Promise<void>;
 }
@@ -73,12 +75,19 @@ export interface MetricsOptions {
       | null;
   };
   /**
+   * The `command_idempotency` claims left uncompleted past `CLAIM_IN_FLIGHT_MS`, by action (WP-73,
+   * PROGRESS backlog 241). Absent in a process that serves no command.
+   */
+  readonly staleCommandClaims?: () => Promise<
+    readonly { readonly action: string; readonly claims: number }[]
+  >;
+  /**
    * Told when an isolated sampler throws (WP-65 review round 2): its series is then absent from the
    * scrape, and without a log line an operator could not tell a failing measurement from a gauge
    * this process never registers.
    */
   readonly onSamplerError?: (
-    sampler: 'undelivered_notifications' | 'storage',
+    sampler: 'undelivered_notifications' | 'storage' | 'stale_command_claims',
     error: unknown,
   ) => void;
   /** Node process metrics (heap, event loop lag, handles). @default true */
@@ -200,6 +209,20 @@ export const createMetrics = (options: MetricsOptions = {}): Metrics => {
     registers: options.storage?.mirrors == null ? [] : [registry],
   });
 
+  /**
+   * **Commands whose outcome nobody can state** (WP-73, PROGRESS backlog 241). A claim older than
+   * `CLAIM_IN_FLIGHT_MS` with no `completed_at` is a process that died mid-command; its key answers
+   * `409 idempotency_attempt_unknown` for good and the caller alone would otherwise know. A non-zero
+   * value asks a human to check the resource the action names — never to delete the row, which
+   * re-opens the double-perform WP-67 closed (`docs/operator-guide.md`).
+   */
+  const commandClaimsUnknown = new Gauge({
+    name: 'command_idempotency_claims_unknown',
+    help: 'Command idempotency claims left uncompleted past CLAIM_IN_FLIGHT_MS — a process died mid-command, so whether it performed is unknown — by action (WP-73).',
+    labelNames: ['action'] as const,
+    registers: options.staleCommandClaims === undefined ? [] : [registry],
+  });
+
   /** The storage gauge's reading: every series rebuilt from this scrape (WP-65). */
   const sampleStorage = async (storage: NonNullable<MetricsOptions['storage']>): Promise<void> => {
     const database = await storage.database();
@@ -235,6 +258,7 @@ export const createMetrics = (options: MetricsOptions = {}): Metrics => {
     storageBytes,
     storageTotalBytes,
     knowledgeMirrorBytes,
+    commandClaimsUnknown,
     collect: async () => {
       if (options.pendingDispatch !== undefined) {
         eventDispatchPending.set(await options.pendingDispatch());
@@ -255,6 +279,20 @@ export const createMetrics = (options: MetricsOptions = {}): Metrics => {
         } catch (error) {
           notificationsUndelivered.reset();
           options.onSamplerError?.('undelivered_notifications', error);
+        }
+      }
+      if (options.staleCommandClaims !== undefined) {
+        try {
+          const claims = await options.staleCommandClaims();
+          // Rebuilt from this scrape, so an action whose claims were looked at and cleared by a
+          // human drops out rather than keeping its last value.
+          commandClaimsUnknown.reset();
+          for (const entry of claims) {
+            commandClaimsUnknown.set({ action: entry.action }, entry.claims);
+          }
+        } catch (error) {
+          commandClaimsUnknown.reset();
+          options.onSamplerError?.('stale_command_claims', error);
         }
       }
       if (options.storage !== undefined) {

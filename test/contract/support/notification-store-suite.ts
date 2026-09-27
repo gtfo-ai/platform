@@ -32,6 +32,8 @@ export interface NotificationStoreHarness {
     readonly taskId: Id | null;
     /** An approval on that task, for the message-address cases (WP-65). */
     readonly approvalId: Id;
+    /** A platform user the store knows, for the decider's name (WP-73, backlog 234). */
+    readonly user: { readonly id: Id; readonly name: string };
     cleanup(): Promise<void>;
   }>;
 }
@@ -329,6 +331,11 @@ export const runNotificationStoreContract = (harness: NotificationStoreHarness):
         approvalId: context.approvalId,
         messageRef: ref,
       });
+    });
+
+    it('names a platform user it knows, and nobody for an id it does not (backlog 234)', async () => {
+      expect(await store.userName(tx, context.user.id)).toBe(context.user.name);
+      expect(await store.userName(tx, '00000000-0000-4000-8000-00000000ffff' as Id)).toBeNull();
     });
 
     it('marks nothing for an empty id list', async () => {

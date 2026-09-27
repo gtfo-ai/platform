@@ -85,6 +85,30 @@ describe('createMetrics', () => {
     expect(await silent.registry.metrics()).not.toContain('notifications_undelivered{');
   });
 
+  it('publishes the stale command claims by action, drops a cleared one, and nothing where unsampled (backlog 241)', async () => {
+    let claims = [
+      { action: 'task.feedback', claims: 2 },
+      { action: 'task.cancel', claims: 1 },
+    ];
+    const metrics = createMetrics({
+      defaultMetrics: false,
+      staleCommandClaims: async () => claims,
+    });
+    await metrics.collect();
+    let text = await metrics.registry.metrics();
+    expect(text).toContain('command_idempotency_claims_unknown{action="task.feedback"} 2');
+    expect(text).toContain('command_idempotency_claims_unknown{action="task.cancel"} 1');
+
+    claims = [{ action: 'task.feedback', claims: 2 }];
+    await metrics.collect();
+    text = await metrics.registry.metrics();
+    expect(text).not.toContain('command_idempotency_claims_unknown{action="task.cancel"}');
+
+    const silent = createMetrics({ defaultMetrics: false });
+    await silent.collect();
+    expect(await silent.registry.metrics()).not.toContain('command_idempotency_claims_unknown{');
+  });
+
   /**
    * WP-65 (Q63): the storage gauge — database and mirrors as two lines under one total, the
    * mirrors per project, and **no** total where the mirrors cannot be measured.

@@ -220,11 +220,28 @@ export const notificationBody = (draft: NotificationDraft): MessageBody => ({
 /** How an approval was settled, as the approval aggregate records it. */
 export type SettledApprovalOutcome = 'approved' | 'rejected' | 'expired';
 
-/** The platform's sentence for each outcome, and who decided it — never a provider string. */
-const SETTLED_APPROVAL_TEXT: Readonly<Record<SettledApprovalOutcome, string>> = {
-  approved: 'Approved by a maintainer. The task page names who.',
-  rejected: 'Changes requested by a maintainer. The task page names who.',
-  expired: 'Expired: nobody decided before the deadline, so the deadline did.',
+/** The longest decider name the edited message carries; a person's name, not a paragraph. */
+export const SETTLED_APPROVAL_DECIDER_MAX = 80;
+
+/**
+ * The platform's sentence for each outcome, naming who decided it (WP-73, PROGRESS backlog 234) —
+ * never a provider string. `decider` is the name of the user in `decided_by_user_id`, already
+ * redacted by the caller; `null` when the approval names no user the store knows, which keeps the
+ * role wording. `expired` names no one: nobody decided.
+ */
+const settledApprovalText = (outcome: SettledApprovalOutcome, decider: string | null): string => {
+  switch (outcome) {
+    case 'approved':
+      return decider === null
+        ? 'Approved by a maintainer. The task page names who.'
+        : `Approved by ${decider}.`;
+    case 'rejected':
+      return decider === null
+        ? 'Changes requested by a maintainer. The task page names who.'
+        : `Changes requested by ${decider}.`;
+    case 'expired':
+      return 'Expired: nobody decided before the deadline, so the deadline did.';
+  }
 };
 
 /**
@@ -233,20 +250,27 @@ const SETTLED_APPROVAL_TEXT: Readonly<Record<SettledApprovalOutcome, string>> = 
  *
  * `markdown` only, never `blocks`, for {@link notificationBody}'s reason — and because a body with
  * no blocks is what makes the Slack adapter render plain sections, which is the whole point: the
- * buttons are removed by being absent. The decider is named by role rather than by name: the
- * application ring has no user directory to ask, and the task page, which the link points at,
- * shows the decision with its person.
+ * buttons are removed by being absent. The decider is named by **name** since WP-73 (backlog 234),
+ * read from `users` through `NotificationStore.userName` for the approval's `decided_by_user_id`;
+ * the name is text a person typed, so it is bounded and its links unlabelled here like every other
+ * string, and the markdown path neutralises a mention in it.
  */
 export const settledApprovalBody = (input: {
   readonly subject: NotificationSubject;
   readonly outcome: SettledApprovalOutcome;
+  /** The decider's display name, redacted; `null` when none is known. */
+  readonly decider?: string | null;
 }): MessageBody => {
   const name = boundText(unlabelledLinks(input.subject.name), NOTIFICATION_KEY_MAX);
   const url = boundUrl(input.subject.url);
+  const decider =
+    input.decider === null || input.decider === undefined || input.decider.trim() === ''
+      ? null
+      : boundText(unlabelledLinks(input.decider), SETTLED_APPROVAL_DECIDER_MAX);
   return {
     markdown: [
       `**${boundText(`${name}: the approval is settled`, NOTIFICATION_TITLE_MAX)}**`,
-      SETTLED_APPROVAL_TEXT[input.outcome],
+      settledApprovalText(input.outcome, decider),
       ...(url === null ? [] : [url]),
     ].join('\n'),
   };

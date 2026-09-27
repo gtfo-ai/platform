@@ -21,6 +21,8 @@ let database: MigratedDatabase;
 let projectId: string;
 let taskId: string;
 let approvalId: string;
+let userId: string;
+const USER_NAME = 'Fake Maintainer';
 
 beforeAll(async () => {
   database = await createMigratedDatabase('notifications');
@@ -48,6 +50,11 @@ beforeAll(async () => {
       [taskId],
     );
     approvalId = approval.rows[0]?.id as string;
+    const user = await client.query<{ id: string }>(
+      "insert into users (email, name) values ('maintainer@example.invalid', $1) returning id",
+      [USER_NAME],
+    );
+    userId = user.rows[0]?.id as string;
   } finally {
     await client.end();
   }
@@ -69,6 +76,7 @@ runNotificationStoreContract({
       projectId: projectId as never,
       taskId: taskId as never,
       approvalId: approvalId as never,
+      user: { id: userId as never, name: USER_NAME },
       cleanup: async () => {
         await client.query('rollback');
         await client.end();

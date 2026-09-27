@@ -1511,6 +1511,16 @@
             },
             "stage": {
               "$ref": "#/$defs/Slug"
+            },
+            "run_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [

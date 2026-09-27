@@ -43,7 +43,8 @@ test('the task detail shows the stage timeline, the runs and the checks panel', 
   await expect(page.getByRole('heading', { name: 'DEMO-1' })).toBeVisible();
   // Scoped to the timeline: `refinement` is also an option of the stage-command select.
   await expect(page.locator('ol').getByText('refinement')).toBeVisible();
-  await expect(page.getByText('spec accepted')).toBeVisible();
+  // The stage's outcome word, through the word→sentence table (WP-73, backlog 213).
+  await expect(page.getByText('Verdict: approve.')).toBeVisible();
   await expect(page.getByRole('link', { name: 'implementation · developer' })).toBeVisible();
   await expect(page.getByText('Cost so far', { exact: true })).toBeVisible();
   // WP-28: the refinement estimate, what it rests on and product/19 §10's accuracy — three numbers

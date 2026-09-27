@@ -27,7 +27,7 @@
  * with a brief, and its stream keeps moving. Catching it also keeps the failure off the queue
  * entirely, which is what makes the brief say what actually went wrong.
  */
-import type { DomainEvent, Id, Slug } from '@platform/contracts';
+import type { DomainEvent, Id, Slug, TaskStageOutcome } from '@platform/contracts';
 import type {
   CommandContext,
   CompiledPipeline,
@@ -138,7 +138,7 @@ export interface ApplyOptions {
    * 160) — `undecided`, `unsupported` and `converged` from the gate settlement, `escalated` when the
    * caller does not say. Read only when the decision escalates; see {@link closeParkedStageRow}.
    */
-  readonly escalationOutcome?: string;
+  readonly escalationOutcome?: TaskStageOutcome;
 }
 
 /**
@@ -374,7 +374,7 @@ export const closeParkedStageRow = async (
   store: PipelineStore,
   tx: import('../ports/transaction.js').Transaction,
   escalation: { readonly aggregate: Task; readonly events: readonly DomainEvent[] },
-  outcome: string,
+  outcome: TaskStageOutcome,
 ): Promise<void> => {
   const task = escalation.aggregate;
   if (task.state !== 'needs_human' || task.currentStage === null) {
@@ -400,7 +400,7 @@ export const closeCurrentStageRow = async (
   store: PipelineStore,
   tx: import('../ports/transaction.js').Transaction,
   task: Task,
-  outcome: string,
+  outcome: TaskStageOutcome,
   reason: string,
 ): Promise<void> => {
   if (task.currentStage === null) {

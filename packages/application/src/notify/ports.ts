@@ -141,6 +141,14 @@ export interface NotificationStore {
   approvalMessage(tx: Transaction, approvalId: Id): Promise<StoredNotification | null>;
 
   /**
+   * A platform user's display name (`users.name`), or `null` for an id the store does not know —
+   * read to name who decided an approval in its edited chat message (WP-73, PROGRESS backlog 234).
+   * The name is text a person typed, so the caller redacts and bounds it like any other string it
+   * posts.
+   */
+  userName(tx: Transaction, userId: Id): Promise<string | null>;
+
+  /**
    * Every project with an undelivered notification older than `before` — the digest's fan-out.
    *
    * `before` is a bound rather than "now" so that a retried digest job collects the same set as the

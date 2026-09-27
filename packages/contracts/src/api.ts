@@ -48,7 +48,7 @@ import {
 } from './common.js';
 import { agenticConfigSchema, MAX_BOOTSTRAP_MERGE_REQUESTS, riskClassSchema } from './config.js';
 import { domainEventSchema, domainEventTypeSchema } from './events.js';
-import { taskStageStateSchema } from './pipeline.js';
+import { taskStageOutcomeSchema, taskStageStateSchema } from './pipeline.js';
 import {
   approvalRecordSchema,
   autonomyPoliciesSchema,
@@ -856,6 +856,17 @@ export const takenOverSchema = z.strictObject({
    */
   held_by: idSchema.nullable(),
   /**
+   * The run the take-over interrupted, as the `task.taken_over` event recorded it (WP-73, PROGRESS
+   * backlog 203): `null` when no run was live, so nothing was exported. Meaningful only when
+   * {@link run_recorded} is `true`.
+   */
+  run_id: idSchema.nullable(),
+  /**
+   * Whether the event recorded {@link run_id} at all. `false` for a take-over recorded before
+   * WP-73, whose screen can only **infer** the run — and says that it is an inference.
+   */
+  run_recorded: z.boolean(),
+  /**
    * Every stage a hand-back may name: the task's **compiled** pipeline, enabled stages only, in
    * pipeline order (WP-44, criterion 2). The same list `POST …/hand-back` checks against —
    * `compilePipeline` over the task's frozen template — so the picker offers nothing the route
@@ -940,7 +951,8 @@ export const taskDetailResponseSchema = z.strictObject({
       state: taskStageStateSchema,
       entered_at: isoDateTimeSchema,
       exited_at: isoDateTimeSchema.nullable(),
-      outcome: z.string().nullable(),
+      /** `task_stages.outcome` in its one vocabulary (WP-73): see {@link taskStageOutcomeSchema}. */
+      outcome: taskStageOutcomeSchema.nullable(),
     }),
   ),
   artifacts: z.array(artifactRefSchema),

@@ -637,6 +637,9 @@ describe('the digest settings a project reads', () => {
 
 describe('an approval notification', () => {
   const APPROVAL = '00000000-0000-4000-8000-0000000000e9' as Id;
+  /** The user `decided_by_user_id` names, and the name the store knows them by (backlog 234). */
+  const DECIDER = '00000000-0000-4000-8000-0000000000da' as Id;
+  const DECIDER_NAME = 'Fake Maintainer';
 
   /** A real pending approval on the harness's task, so the duty's reload has a row to read. */
   const pendingApproval = async (
@@ -800,6 +803,7 @@ describe('an approval notification', () => {
   const settle = async (
     harness: PipelineHarness,
     status: 'approved' | 'rejected' | 'expired',
+    decidedBy: Id | null = status === 'expired' ? null : DECIDER,
   ): Promise<void> => {
     await harness.memory.transaction(async (scope) => {
       const stored = await harness.store.approvals.load(scope.tx, APPROVAL);
@@ -811,6 +815,7 @@ describe('an approval notification', () => {
         approval: {
           ...stored.approval,
           status,
+          decidedByUserId: decidedBy,
           decidedAt: '2026-06-01T10:00:00.000Z' as never,
           sequence: stored.approval.sequence + 1,
         },
@@ -833,12 +838,13 @@ describe('an approval notification', () => {
    * fake's recorded update *and* from the executor's audit row (rule 79), once per outcome.
    */
   for (const [outcome, sentence] of [
-    ['approved', 'Approved by a maintainer'],
-    ['rejected', 'Changes requested by a maintainer'],
+    // The user in `decided_by_user_id`, by name (WP-73, backlog 234) — not a role.
+    ['approved', `Approved by ${DECIDER_NAME}.`],
+    ['rejected', `Changes requested by ${DECIDER_NAME}.`],
     ['expired', 'Expired: nobody decided before the deadline'],
   ] as const) {
     it(`edits the posted message when the approval is ${outcome}, and its buttons are gone`, async () => {
-      const harness = harnessWith();
+      const harness = harnessWith({ users: { [DECIDER]: DECIDER_NAME } });
       const taskId = await taskOf(harness);
       await pendingApproval(harness, taskId);
       await notify(harness, {
@@ -870,6 +876,32 @@ describe('an approval notification', () => {
       expect(harness.communication?.updates).toHaveLength(1);
     });
   }
+
+  it('keeps the role wording for a decider the store cannot name, and bounds a hostile name (backlog 234)', async () => {
+    for (const [users, expected, absent] of [
+      [{}, 'Approved by a maintainer. The task page names who.', 'Approved by .'],
+      [
+        { [DECIDER]: `[Ada](https://attacker.example) ${'x'.repeat(200)}` },
+        'Approved by https://attacker.example',
+        '[Ada](',
+      ],
+    ] as const) {
+      const harness = harnessWith({ users });
+      const taskId = await taskOf(harness);
+      await pendingApproval(harness, taskId);
+      await notify(harness, {
+        task_id: taskId,
+        notification_class: 'approval',
+        approval_id: APPROVAL,
+      });
+      await settle(harness, 'approved');
+      await settled(harness, 'approved');
+      const markdown = harness.communication?.updates[0]?.markdown ?? '';
+      expect(markdown).toContain(expected);
+      expect(markdown).not.toContain(absent);
+      expect(markdown).not.toContain('x'.repeat(100));
+    }
+  });
 
   it('edits nothing while the approval is pending, or when no message with buttons was posted', async () => {
     const harness = harnessWith();

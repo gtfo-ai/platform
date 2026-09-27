@@ -98,6 +98,71 @@ export const taskStageStateSchema = z.enum([
 
 export type TaskStageState = z.infer<typeof taskStageStateSchema>;
 
+/**
+ * **The words the platform itself writes into `task_stages.outcome`** (WP-73, PROGRESS backlog
+ * 213), each with its writer, so a new word is a decision made here rather than a string somebody
+ * types at a new call site.
+ *
+ *  - `returned` — the attempt that sent the task back (`apply`'s return case);
+ *  - `superseded` / `left` — an entry closed the attempt the task was still at: a new attempt of the
+ *    same stage, or another stage (`closeCurrentStageRow` in `enter`);
+ *  - `cancelled` — a human cancelled the task at that attempt;
+ *  - `system` — a system stage, which completes on entry;
+ *  - `failed` — a run that failed, could not start, or whose lease expired;
+ *  - `escalated` — an escalation that names no more specific word;
+ *  - `undecided`, `unsupported`, `converged` — a gate the platform could not decide, could not
+ *    evaluate, or stopped on a repeated failure;
+ *  - `question.expired`, `approval.expired`, `budget.rejected`, `take_over.expired` — the timers and
+ *    the budget decision that park a task;
+ *  - `write_conflict`, `dead_lettered`, `repository_config_invalid` — a write that lost every race,
+ *    an event that spent its dispatch bound, a repository file that does not parse;
+ *  - `unknown` — an agent stage that finished with no verdict at all;
+ *  - `unrecognised` — a word outside this vocabulary: a model's verdict the interpreter does not
+ *    know (stored as this word rather than as the model's own text), or a row written before
+ *    WP-73 that the read projection meets.
+ */
+export const taskStageOutcomeWordSchema = z.enum([
+  'returned',
+  'superseded',
+  'left',
+  'cancelled',
+  'system',
+  'failed',
+  'escalated',
+  'undecided',
+  'unsupported',
+  'converged',
+  'question.expired',
+  'approval.expired',
+  'budget.rejected',
+  'take_over.expired',
+  'write_conflict',
+  'dead_lettered',
+  'repository_config_invalid',
+  'unknown',
+  'unrecognised',
+]);
+
+export type TaskStageOutcomeWord = z.infer<typeof taskStageOutcomeWordSchema>;
+
+/**
+ * **The one vocabulary of `task_stages.outcome`** (WP-73, PROGRESS backlog 213): an agent stage's
+ * verdict or a gate's `pass`/`fail` ({@link stageVerdictSchema}, by reference), the event that moved
+ * a human stage forward (`mr.merged`, `task.completed` — {@link domainEventTypeSchema}, by
+ * reference, because a template's `on` may name any event), or one of the platform's own words
+ * ({@link taskStageOutcomeWordSchema}). Parsed by the store before it writes, as `state` is; the
+ * database carries no check constraint, because rows written before WP-55 hold free-form words and
+ * a constraint would have to be `NOT VALID` to exist at all — the read projection publishes such a
+ * row's word as `unrecognised` instead.
+ */
+export const taskStageOutcomeSchema = z.union([
+  stageVerdictSchema,
+  domainEventTypeSchema,
+  taskStageOutcomeWordSchema,
+]);
+
+export type TaskStageOutcome = z.infer<typeof taskStageOutcomeSchema>;
+
 /** The three states an attempt can be **closed** with — the argument of `recordStageExited`. */
 export const taskStageExitStateSchema = taskStageStateSchema.extract([
   'completed',

@@ -49,9 +49,51 @@ export class NetworkError extends Error {
   }
 }
 
+/**
+ * **WP-67's two in-flight refusals, answered here** (WP-73, PROGRESS backlog 242) — the one path
+ * every keyed command goes through, so no screen needs its own handling.
+ *
+ * - `409 idempotency_key_in_flight`: the same intent's first request is still being performed (a
+ *   double click on a button that does not disable itself, a retry that overtook a slow answer).
+ *   The server's own instruction is *"send the same request again once it has answered"*, so the
+ *   client does exactly that — the same body under the same key, every
+ *   {@link IN_FLIGHT_RETRY_DELAY_MS}, at most {@link IN_FLIGHT_RETRY_LIMIT} times — and the caller
+ *   sees a request that is still pending, then the first attempt's answer (a replay), which is what
+ *   refreshes its queries. Only past the bound does it become an error.
+ * - `409 idempotency_attempt_unknown`: a process died mid-command and nobody can say whether it
+ *   performed. The key is **retired** — {@link isRetiredIdempotencyKey}, which `app/idempotency.ts`
+ *   asks before reusing a held key — so the next send of that intent is a new request, and the
+ *   message tells the person to look at the task first.
+ */
+export const IN_FLIGHT_RETRY_DELAY_MS = 1_000;
+export const IN_FLIGHT_RETRY_LIMIT = 10;
+
+/** How many retired keys are remembered; a key is a random id, so the bound is memory only. */
+const RETIRED_KEYS_MAX = 256;
+const retiredKeys = new Set<string>();
+
+const retireKey = (key: string): void => {
+  if (retiredKeys.size >= RETIRED_KEYS_MAX) {
+    const oldest = retiredKeys.values().next();
+    if (!oldest.done) {
+      retiredKeys.delete(oldest.value);
+    }
+  }
+  retiredKeys.add(key);
+};
+
+/** Whether a `409 idempotency_attempt_unknown` retired this key (WP-73, backlog 242). */
+export const isRetiredIdempotencyKey = (key: string): boolean => retiredKeys.has(key);
+
+/** What the person is told after `idempotency_attempt_unknown` — a platform sentence. */
+export const ATTEMPT_UNKNOWN_MESSAGE =
+  'The platform cannot tell whether this was done: a server stopped while performing it. Check the task before sending it again — sending it again is a new request.';
+
 export interface ApiClientOptions {
   /** Injected so the whole client is testable without a server and without patching globals. */
   readonly fetchImpl?: typeof fetch;
+  /** The wait between two sends of an in-flight command; injected so a test does not sleep. */
+  readonly sleep?: (ms: number) => Promise<void>;
   /** Empty in the browser: the SPA is served from the API's own origin (technical/08). */
   readonly baseUrl?: string;
   /** Injected for the same reason as `fetchImpl`; used for `Idempotency-Key`. */
@@ -144,6 +186,12 @@ export const createApiClient = (options: ApiClientOptions = {}): ApiClient => {
   const fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
   const baseUrl = options.baseUrl ?? '';
   const newIdempotencyKey = options.newIdempotencyKey ?? (() => crypto.randomUUID());
+  const sleep =
+    options.sleep ??
+    ((ms: number) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      }));
 
   const send = async <TSchema extends z.ZodType>(
     path: string,
@@ -193,27 +241,45 @@ export const createApiClient = (options: ApiClientOptions = {}): ApiClient => {
         options_,
       ),
 
-    command: (path, options_) =>
-      send(
-        path,
-        {
-          method: options_.method ?? 'POST',
-          credentials: 'same-origin',
-          headers: {
-            accept: 'application/json',
-            'content-type': 'application/json',
-            [CSRF_HEADER]: CSRF_HEADER_VALUE,
-            // The caller's key wins: it is the one that survives a retry of the same intent.
-            ...(options_.idempotencyKey !== undefined
-              ? { 'Idempotency-Key': options_.idempotencyKey }
-              : options_.idempotent === true
-                ? { 'Idempotency-Key': newIdempotencyKey() }
-                : undefined),
-          },
-          body: JSON.stringify(options_.body ?? {}),
-          ...(options_.signal === undefined ? {} : { signal: options_.signal }),
+    command: async (path, options_) => {
+      // The caller's key wins: it is the one that survives a retry of the same intent.
+      const key =
+        options_.idempotencyKey ?? (options_.idempotent === true ? newIdempotencyKey() : null);
+      const init: RequestInit = {
+        method: options_.method ?? 'POST',
+        credentials: 'same-origin',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json',
+          [CSRF_HEADER]: CSRF_HEADER_VALUE,
+          ...(key === null ? undefined : { 'Idempotency-Key': key }),
         },
-        options_,
-      ),
+        body: JSON.stringify(options_.body ?? {}),
+        ...(options_.signal === undefined ? {} : { signal: options_.signal }),
+      };
+      for (let sent = 1; ; sent += 1) {
+        try {
+          return await send(path, init, options_);
+        } catch (error) {
+          if (key === null || !(error instanceof ApiError)) {
+            throw error;
+          }
+          if (error.code === 'idempotency_key_in_flight' && sent < IN_FLIGHT_RETRY_LIMIT) {
+            // A caller that gave up (a route change, an unmount) stops the retries here, as an
+            // abort — the same error the fetch itself raises — rather than a second later.
+            if (options_.signal?.aborted === true) {
+              throw new DOMException('The operation was aborted.', 'AbortError');
+            }
+            await sleep(IN_FLIGHT_RETRY_DELAY_MS);
+            continue;
+          }
+          if (error.code === 'idempotency_attempt_unknown') {
+            retireKey(key);
+            throw new ApiError(error.status, error.code, ATTEMPT_UNKNOWN_MESSAGE, error.details);
+          }
+          throw error;
+        }
+      }
+    },
   };
 };

@@ -18,17 +18,23 @@
  * So a key is held per **canonical value of the variables**, minted on the first send and released
  * when that intent **succeeds**: a retry of a failed send keeps the key, a corrected form gets a
  * new one because its variables differ, and a deliberate second identical create after a success
- * gets a new one because the first released it. Three behaviours out of one rule.
+ * gets a new one because the first released it. Three behaviours out of one rule — and a fourth
+ * since WP-73 (backlog 242): a key the server answered `409 idempotency_attempt_unknown` for is
+ * retired by the HTTP client, and the next send of that intent mints a new one.
  *
  * ## What it does not do
  *
  * It does not deduplicate on the client. Two clicks still send two requests; what the second one
  * carries is a key the server recognises, which is where the decision belongs — the client cannot
- * know whether the first request reached the server. And it holds keys in a `ref`, so a component
+ * know whether the first request reached the server. If the second arrives while the first is
+ * still performing, the server answers `409 idempotency_key_in_flight` and the HTTP client sends it
+ * again until the first has answered (`api/http.ts`), so the screen sees a pending request and then
+ * the first one's answer — not an error. And it holds keys in a `ref`, so a component
  * that unmounts between the two sends starts a new intent; that is the same window a page reload
  * has and is the reason the *server* is the thing that refuses, not this.
  */
 import { useRef } from 'react';
+import { isRetiredIdempotencyKey } from '../api/http.js';
 
 /** Stable JSON: two identical intents whose keys were built in a different order must agree. */
 export const canonicalJson = (value: unknown): string => {
@@ -63,7 +69,10 @@ export const createIntentKeys = (mint: MintKey = defaultMint): IntentKeys => {
     keyFor: (variables) => {
       const intent = canonicalJson(variables);
       const existing = held.get(intent);
-      if (existing !== undefined) {
+      // A key the server answered `idempotency_attempt_unknown` for is refused for good, so the
+      // intent gets a new one (WP-73, backlog 242) — the release that refusal asks for, made here
+      // because no screen's `onError` would otherwise remember to.
+      if (existing !== undefined && !isRetiredIdempotencyKey(existing)) {
         return existing;
       }
       const minted = mint();

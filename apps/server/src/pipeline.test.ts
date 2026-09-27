@@ -7,7 +7,12 @@
  * *decides*: where a git binding's repository path comes from, and what a project's settings are.
  */
 import type { RunSpec } from '@platform/application';
-import { autonomyPresetFor, silentLogger } from '@platform/application';
+import {
+  autonomyPresetFor,
+  silentLogger,
+  TransactionOpenError,
+  withOpenTransaction,
+} from '@platform/application';
 import { materialiseAutonomy } from '@platform/domain';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -104,6 +109,30 @@ describe('the project settings port', () => {
       'spike',
       'ticket_lint',
     ]);
+  });
+
+  /**
+   * WP-73, PROGRESS backlogs 19 and 221: the read runs on the caller's transaction when it is
+   * handed one, and a read with **no** transaction is refused while one is open — the borrow that
+   * made a dispatch's peak three connections is a failure rather than a sentence.
+   */
+  it('reads on the caller’s transaction, and refuses to borrow from the pool inside one', async () => {
+    const pool = poolOf([{ config: {} }]) as unknown as { query: ReturnType<typeof vi.fn> };
+    const client = { query: vi.fn(async () => ({ rows: [{ config: {} }], rowCount: 1 })) };
+    const port = createProjectSettingsPort(pool as never);
+    const project = '00000000-0000-4000-8000-0000000000b1' as never;
+
+    await port.forProject(project, { adapter: 'postgres', client } as never);
+    expect(client.query).toHaveBeenCalledTimes(1);
+    expect(pool.query).not.toHaveBeenCalled();
+
+    await expect(withOpenTransaction(async () => port.forProject(project))).rejects.toThrow(
+      TransactionOpenError,
+    );
+    expect(pool.query).not.toHaveBeenCalled();
+    // Outside every transaction the pool is the right connection, and it is used.
+    await port.forProject(project);
+    expect(pool.query).toHaveBeenCalledTimes(1);
   });
 
   it('refuses a project that has no row instead of settling defaults for a task it cannot place', async () => {

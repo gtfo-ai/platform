@@ -95,9 +95,11 @@ import {
   type PipelineComposition,
 } from './pipeline.js';
 import { createProjectConfigCommands } from './project-config.js';
+import { countStaleCommandClaims } from './queries/idempotency-queries.js';
 import { listRunMessages } from './queries/pipeline-queries.js';
 import { createReadinessCheck } from './readiness.js';
 import { roleCapabilities, roleIsIdle } from './role.js';
+import { CLAIM_IN_FLIGHT_MS } from './routes/idempotency.js';
 import { createShadowCommands } from './shadow.js';
 import { SseHub } from './sse/hub.js';
 import { startTranscriptBridge } from './sse/transcript-bridge.js';
@@ -244,6 +246,14 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
                 database.pool,
                 undeliveredNotificationBounds(new Date().toISOString() as IsoDateTime),
               ),
+          }
+        : {}),
+      // WP-73 (backlog 241): the command claims a dead process left behind. Where commands are
+      // served; the table is shared, so one API process reads the whole installation.
+      ...(capabilities.api
+        ? {
+            staleCommandClaims: async () =>
+              countStaleCommandClaims(database.db, new Date(Date.now() - CLAIM_IN_FLIGHT_MS)),
           }
         : {}),
       // WP-65 (Q63): the storage gauge. The database line in every process that has a database;

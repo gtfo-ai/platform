@@ -665,19 +665,14 @@ describe('a decision that meets a stop a human owns is deferred to the resume (W
     expect(stored?.task.iterationCounters.dependency_policy ?? 0).toBeGreaterThanOrEqual(1);
   });
 
-  it('does not defer an ask for a task paused at ready_for_merge, whose resume is refused (Q91)', async () => {
-    /**
-     * WP-67 review round 1. What resume restores for a pause taken at `ready_for_merge`, measured
-     * here: **nothing** — it re-enters `ready_for_merge` through `markReadyForMerge`, and
-     * `paused → ready_for_merge` is not an edge, so the resume is refused. No `task.resumed`, never
-     * `active`: a deferral would wait for ever, and Q91 says a task past review is not asked
-     * anyway, so the ask is refused and the record kept rather than deferred.
-     *
-     * The gate's duty is called directly on the paused task, the arrangement the risk-routing
-     * shadow case uses and for a stated reason: the walk takes a task to `ready_for_merge` in the
-     * same drain as the gate's job, so the pipeline cannot be stopped between them by a hook that
-     * would not also stop it earlier. The walk runs under `allow`; the duty then decides under `ask`.
-     */
+  /**
+   * The gate's duty called directly on a task paused at `ready_for_merge`, the arrangement the
+   * risk-routing shadow case uses and for a stated reason: the walk takes a task to
+   * `ready_for_merge` in the same drain as the gate's job, so the pipeline cannot be stopped between
+   * them by a hook that would not also stop it earlier. The walk runs under `allow`; the duty then
+   * decides under the policy given.
+   */
+  const pausedAtReady = async (policy: 'ask' | 'block') => {
     const harness = await start({ policy: 'allow' });
     const task = taskIdOf(harness);
     expect((await storedTask(harness))?.task.state).toBe('ready_for_merge');
@@ -688,7 +683,7 @@ describe('a decision that meets a stop a human owns is deferred to the resume (W
         store: harness.store,
         settings: staticProjectSettings(() => ({
           ...harness.settings,
-          config: { ...harness.settings.config, policies: { dependency_policy: 'ask' } },
+          config: { ...harness.settings.config, policies: { dependency_policy: policy } },
         })),
         jobs: harness.jobs,
         calendar: harness.calendar,
@@ -705,17 +700,91 @@ describe('a decision that meets a stop a human owns is deferred to the resume (W
         stage: 'implementation',
       },
     );
+    return { harness, task };
+  };
+
+  it('does not defer an ask for a task paused at ready_for_merge, and its resume asks nothing (Q91)', async () => {
+    // Q91: a task past review is not asked, so the ask is refused and the record kept rather than
+    // deferred. Since WP-73 (backlog 244) the resume exists — `paused → ready_for_merge` — so the
+    // other half is asserted too: the task is back at Ready and still nobody was asked.
+    const { harness, task } = await pausedAtReady('ask');
     let stored = await storedTask(harness);
     expect(stored?.dependencies?.decision).toBe('ask');
     expect(stored?.dependencies?.question_id).toBeNull();
     expect(stored?.dependencies?.deferred_stage).toBeNull();
 
-    await expect(
-      resumeTaskCommand(harness.humanCommands, { taskId: task, userId: USER }),
-    ).rejects.toThrow('illegal transition paused -> ready_for_merge');
+    await resumeTaskCommand(harness.humanCommands, { taskId: task, userId: USER });
     await harness.drain();
     stored = await storedTask(harness);
-    expect(stored?.task.state).toBe('paused');
+    expect(stored?.task.state).toBe('ready_for_merge');
     expect(questionsAsked(harness)).toHaveLength(0);
+  });
+
+  it('defers a block at a paused ready_for_merge and returns the task when it resumes (backlog 244)', async () => {
+    const { harness, task } = await pausedAtReady('block');
+    let stored = await storedTask(harness);
+    expect(stored?.task.state).toBe('paused');
+    expect(stored?.dependencies?.deferred_stage).toBe('implementation');
+    const returnsBefore = returns(harness).length;
+
+    await resumeTaskCommand(harness.humanCommands, { taskId: task, userId: USER });
+    await harness.drain();
+
+    // The countable effect: one return spending `dependency_policy`. Before WP-73 the resume was
+    // refused and this block waited for a wake-up that could not come.
+    const blocked = returns(harness)
+      .slice(returnsBefore)
+      .filter((entry) => entry.reason.includes('dependency policy blocks npm:lodash'));
+    expect(blocked).toHaveLength(1);
+    stored = await storedTask(harness);
+    expect(stored?.dependencies?.deferred_stage ?? null).toBeNull();
+    expect(stored?.task.iterationCounters.dependency_policy).toBe(1);
+  });
+
+  it('drops a deferred block when the merge ended the pause, and does not escalate the merged task (Q104)', async () => {
+    const { harness } = await pausedAtReady('block');
+    const returnsBefore = returns(harness).length;
+    await harness.publish([
+      domainEventSchemasByType['mr.merged'].parse({
+        id: nextEventId(),
+        stream_type: 'project',
+        stream_id: PROJECT,
+        stream_seq: 2,
+        correlation_id: null,
+        cause_event_id: null,
+        actor: { kind: 'system', component: 'test' },
+        occurred_at: '2026-06-01T10:00:00.000Z',
+        type: 'mr.merged',
+        payload: {
+          project_id: PROJECT,
+          task_id: null,
+          mr: MR_REF,
+          draft: false,
+          head_sha: HEAD,
+          diff_stats: null,
+          merge_commit_sha: 'c'.repeat(40),
+        },
+      }) as DomainEvent,
+    ]);
+    await harness.drain();
+
+    const stored = await storedTask(harness);
+    // The package is on the default branch: returning a merged task is not an edge, and the
+    // escalation `applyDecision` would have fallen back to is what this case refuses.
+    // (This walk scripts no retrospective run, so the task ends escalated *by that stage*; what is
+    // asserted is that the merge was recorded and nothing the gate did moved or parked the task.)
+    const entered = harness
+      .events()
+      .filter((entry) => entry.type === 'task.stage.entered')
+      .map((entry) => (entry.payload as { stage: string }).stage);
+    expect(entered).toContain('merged_gate');
+    expect(entered.at(-1)).toBe('retrospective');
+    const escalations = harness
+      .events()
+      .filter((entry) => entry.type === 'task.escalated')
+      .map((entry) => (entry.payload as { reason: string }).reason);
+    expect(escalations.filter((reason) => !reason.startsWith('stage "retrospective"'))).toEqual([]);
+    expect(returns(harness).slice(returnsBefore)).toHaveLength(0);
+    expect(stored?.dependencies?.deferred_stage ?? null).toBeNull();
   });
 });

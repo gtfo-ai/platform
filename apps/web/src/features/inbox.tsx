@@ -22,6 +22,13 @@ import {
 } from '../ui/kit.js';
 import { UntrustedProse } from '../ui/untrusted.js';
 
+/**
+ * ` · due …` for a waiting item that has a deadline, nothing for one that has none. Questions and
+ * approvals both expire since WP-56 (Q95), so the card of each says when (PROGRESS backlog 166).
+ */
+const dueSuffix = (deadline: string | null | undefined): string =>
+  deadline === null || deadline === undefined ? '' : ` · due ${formatDateTime(deadline)}`;
+
 export const InboxScreen = (): ReactElement => {
   useTopics(['org']);
   const inbox = useInbox();
@@ -83,9 +90,7 @@ export const InboxScreen = (): ReactElement => {
             </Link>
             <span className="ml-auto text-xs text-fg-muted">
               {formatDateTime(question.asked_at)}
-              {question.deadline_at === null || question.deadline_at === undefined
-                ? ''
-                : ` · due ${formatDateTime(question.deadline_at)}`}
+              {dueSuffix(question.deadline_at)}
             </span>
           </div>
           <UntrustedProse value={question.text} />
@@ -126,6 +131,7 @@ export const InboxScreen = (): ReactElement => {
           </Link>
           <span className="ml-auto text-xs text-fg-muted">
             {formatDateTime(approval.requested_at)}
+            {dueSuffix(approval.deadline_at)}
           </span>
         </Card>
       ))}

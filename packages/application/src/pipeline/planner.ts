@@ -724,7 +724,12 @@ export const taskTextOf = (request: StageRunRequest): string =>
     .slice(0, MAX_TASK_TEXT_CHARS);
 
 /** Where a run's touched paths came from — logged per run, so "none" is said rather than implied. */
-export type TouchedPathsSource = 'implementation_plan' | 'review_verdict' | 'both' | 'none';
+export type TouchedPathsSource =
+  | 'implementation_plan'
+  | 'review_verdict'
+  | 'both'
+  | 'review_subject'
+  | 'none';
 
 /** More paths than this in one plan is a plan that names a tree, not a change; the rest are cut. */
 export const MAX_TOUCHED_PATHS = 200;
@@ -740,12 +745,17 @@ export const MAX_TOUCHED_PATHS = 200;
  *  - **`ReviewVerdict`** — `findings[].file`: what a reviewer pointed at, which is the "diff" half
  *    for a stage the task was **returned** to.
  *
+ * **A review of a merge request the platform read** (`tasks.review_subject` — review-only mode, and
+ * the shadow comparison's review of a human merge request) reads **that merge request's files**
+ * instead, `files[].path` — already a structured field, so nothing is parsed out of a diff (WP-73,
+ * PROGRESS backlog 174). It is the precedence {@link reviewChecklistsOf} uses, for the same reason:
+ * the run reviews that change, not the plan. The paths are provider text, compared only with
+ * `paths:` globs like the model output below; a list the provider window cut (`files.length <
+ * file_count`) under-reports rather than guesses.
+ *
  * **Stages with none, named rather than defaulted:** `intake`, `refinement`, `investigation`,
- * `architecture` on its first run, `ticket_lint`, `discovery`, the history bootstrap and the
- * review-only `code_review` run before any plan exists, so their path match is empty and the source
- * is logged as `none`. A merge request's own diff (`tasks.review_subject`) is not read here: it is
- * a provider's text bounded for a *prompt*, not a path list, and parsing paths out of it is a
- * decision left named rather than taken.
+ * `architecture` on its first run, `ticket_lint`, `discovery` and the history bootstrap, so their
+ * path match is empty and the source is logged as `none`.
  *
  * The artifact data is **model output** (already redacted at the write). It is only ever compared
  * with a document's `paths:` globs by `matchingRepoPaths`, which reads it as a string and nothing
@@ -754,6 +764,14 @@ export const MAX_TOUCHED_PATHS = 200;
 export const touchedPathsOf = (
   request: StageRunRequest,
 ): { readonly paths: readonly string[]; readonly source: TouchedPathsSource } => {
+  const subject = request.task.reviewSubject ?? null;
+  if (subject !== null) {
+    const fromSubject = subject.files.map((file) => file.path).filter((path) => path !== '');
+    return {
+      paths: [...new Set(fromSubject)].slice(0, MAX_TOUCHED_PATHS),
+      source: fromSubject.length > 0 ? 'review_subject' : 'none',
+    };
+  }
   const latest = latestArtifacts(request.artifacts);
   const fromPlan: string[] = [];
   const fromReview: string[] = [];
@@ -789,7 +807,12 @@ export const touchedPathsOf = (
 };
 
 /** Where a Reviewer run's risk classes were read from — logged per run, so "none" is said. */
-export type ReviewClassSource = 'review_subject' | 'implementation_plan' | 'none';
+export type ReviewClassSource =
+  | 'review_subject'
+  | 'implementation_plan'
+  | 'merge_request'
+  | 'implementation_plan_and_merge_request'
+  | 'none';
 
 /**
  * The review checklists a **Reviewer** run is given — Q83, WP-45 criterion 3.
@@ -799,11 +822,15 @@ export type ReviewClassSource = 'review_subject' | 'implementation_plan' | 'none
  *  - a review of a merge request the platform read (`tasks.review_subject` — review-only mode, and
  *    the shadow comparison's review of a human merge request): **that merge request's files**,
  *    which is the authoritative source product/19 §14 names;
- *  - every other review: the Implementation Plan's paths ({@link touchedPathsOf}), **plus** the
- *    classes `tasks.risk_classes` already holds. The rebase gate that writes that column runs after
- *    code review, so on a first review it is empty and the plan is the source — with the plan
- *    approval gate's residual, stated in `risk-classes.ts`: a path the plan did not name escapes
- *    the class. A review after a return from the gate sees the gate's reading too.
+ *  - every other review: the Implementation Plan's paths ({@link touchedPathsOf}), **the task's
+ *    own merge request's changed files** when the `stage.execute` job read them
+ *    (`mergeRequestPaths`, WP-73, PROGRESS backlog 218), **plus** the classes `tasks.risk_classes`
+ *    already holds. The rebase gate that writes that column runs after code review, so on a first
+ *    review it is empty; before WP-73 the plan was then the only source, and a path the plan did
+ *    not name escaped the checklist exactly where it matters most. The merge request's files close
+ *    that for every review whose read succeeded; a read that failed (or a task with no merge
+ *    request) falls back to the plan and the log names the source. A review after a return from
+ *    the gate sees the gate's reading too.
  *
  * `missing` is a list a class names and the configuration does not define; the schema refuses such
  * a document, so this is empty unless `projects.config` was written around it, and the planner
@@ -821,12 +848,13 @@ export const reviewChecklistsOf = (
   const classes = policies?.risk_classes as Readonly<Record<string, RiskClass>> | undefined;
   const subject = request.task.reviewSubject ?? null;
   const planPaths = subject === null ? touchedPathsOf(request) : null;
+  const fromPlan =
+    planPaths?.source === 'implementation_plan' || planPaths?.source === 'both'
+      ? planPaths.paths
+      : [];
+  const fromMergeRequest = subject === null ? (request.mergeRequestPaths ?? []) : [];
   const paths =
-    subject !== null
-      ? subject.files.map((file) => file.path)
-      : planPaths?.source === 'implementation_plan' || planPaths?.source === 'both'
-        ? planPaths.paths
-        : [];
+    subject !== null ? subject.files.map((file) => file.path) : [...fromPlan, ...fromMergeRequest];
   const matched = new Set(riskClassesForPaths(classes, paths));
   for (const name of request.task.riskClasses ?? []) {
     if (classes !== undefined && Object.hasOwn(classes, name)) {
@@ -844,7 +872,16 @@ export const reviewChecklistsOf = (
     applied,
     missing,
     classes: names,
-    source: subject !== null ? 'review_subject' : paths.length > 0 ? 'implementation_plan' : 'none',
+    source:
+      subject !== null
+        ? 'review_subject'
+        : fromMergeRequest.length > 0
+          ? fromPlan.length > 0
+            ? 'implementation_plan_and_merge_request'
+            : 'merge_request'
+          : fromPlan.length > 0
+            ? 'implementation_plan'
+            : 'none',
   };
 };
 

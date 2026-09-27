@@ -65,10 +65,12 @@ import type {
   ProjectSettingsPort,
   RunScopedSecrets,
   SecretRedactor,
+  Transaction,
   WebhookIngress,
   WorkingCalendar,
 } from '@platform/application';
 import {
+  assertSettingsReadOutsideTransaction,
   composeSecretRedactors,
   costHandlers,
   createAskRunPlanner,
@@ -102,16 +104,13 @@ import type { Id, IsoDateTime, MaterialisedAutonomy } from '@platform/contracts'
 import { materialisedAutonomySchema } from '@platform/contracts';
 import type { ConfigValues } from '@platform/domain';
 import { SHIPPED_TEMPLATES } from '@platform/domain';
-import type {
-  eventing as eventingAdapters,
-  jobs as jobsAdapters,
-  runner as runnerAdapters,
-} from '@platform/infrastructure';
+import type { jobs as jobsAdapters, runner as runnerAdapters } from '@platform/infrastructure';
 import {
   ask as askAdapters,
   bootstrap as bootstrapAdapters,
   cost as costAdapters,
   dependencies as dependencyAdapters,
+  eventing as eventingAdapters,
   humanTime as humanTimeAdapters,
   integrations as integrationAdapters,
   knowledge as knowledgeAdapters,
@@ -631,8 +630,15 @@ export const createProjectSettingsPort = (
   /** Optional so the two call sites that have no logger keep their one argument. */
   logger: Logger = silentLogger,
 ): ProjectSettingsPort => ({
-  forProject: async (projectId: Id): Promise<ProjectSettings> => {
-    const { rows } = await pool.query<
+  forProject: async (projectId: Id, tx?: Transaction): Promise<ProjectSettings> => {
+    // On the caller's connection when it holds one (WP-73, backlogs 19 and 221): a handler's read
+    // then borrows nothing, so `POOL_RESERVATIONS`' "a dispatch holds two" is also true of what it
+    // borrows. With no transaction handed in, the pool — and only outside a transaction.
+    if (tx === undefined) {
+      assertSettingsReadOutsideTransaction();
+    }
+    const executor = tx === undefined ? pool : eventingAdapters.postgresTransaction(tx).client;
+    const { rows } = await executor.query<
       {
         config: unknown;
         autonomy_policies: unknown;

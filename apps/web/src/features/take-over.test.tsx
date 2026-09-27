@@ -74,6 +74,8 @@ const TAKEN_OVER: TakenOver = {
   stage: 'implementation',
   resume_commands: ['git fetch && git checkout agentic/acme-1', 'claude --resume sess-1'],
   held_by: SESSION.user.id,
+  run_id: RUN,
+  run_recorded: true,
   hand_back_stages: ['refinement', 'implementation', 'code_review'],
 };
 
@@ -243,8 +245,8 @@ describe('a take-over in force', () => {
     expect(container.textContent).toContain('escalated — still held');
     expect(container.textContent).toContain('claude --resume sess-1');
 
-    // The two downloads name the run the take-over interrupted — the newest one started by then —
-    // and are same-origin paths composed by the client.
+    // The two downloads name the run the take-over recorded (WP-73, backlog 203), and are
+    // same-origin paths composed by the client.
     const hrefs = [...container.querySelectorAll('a[download]')].map((anchor) =>
       anchor.getAttribute('href'),
     );
@@ -278,6 +280,50 @@ describe('a take-over in force', () => {
     await screen.findByText('Taken over by a human');
     expect(container.textContent).toContain('No stage to hand back to');
     expect(screen.queryByRole('button', { name: 'Hand back' })).toBeNull();
+  });
+});
+
+/**
+ * WP-73, PROGRESS backlog 203: the panel reads the run `task.taken_over` recorded, and infers only
+ * for an event written before the field existed — saying so.
+ */
+describe('which run the take-over panel offers', () => {
+  const downloads = (container: HTMLElement) =>
+    [...container.querySelectorAll('a[download]')].map((anchor) => anchor.getAttribute('href'));
+  const renderHeld = async (takenOver: TakenOver) => {
+    const view = render(
+      createApp({
+        fetchImpl: fetchFor(detail({ taken_over: takenOver }), []),
+        realtime: false,
+      }).element,
+    );
+    await screen.findByText('Taken over by a human');
+    return view.container;
+  };
+
+  it('offers no downloads for a take-over that recorded no live run', async () => {
+    // The inference would have named RUN, a run that had finished before the take-over.
+    const container = await renderHeld({ ...TAKEN_OVER, run_id: null });
+    expect(downloads(container)).toEqual([]);
+    expect(container.textContent).toContain('No run was live when the task was taken over');
+  });
+
+  it('offers the recorded run, not the newest one started by the take-over’s instant', async () => {
+    const container = await renderHeld({ ...TAKEN_OVER, run_id: LATER_RUN });
+    expect(downloads(container)).toEqual([
+      `/api/runs/${LATER_RUN}/transcript.jsonl`,
+      `/api/runs/${LATER_RUN}/export.tar`,
+    ]);
+    expect(container.textContent).not.toContain('is inferred');
+  });
+
+  it('infers the run for a take-over recorded before WP-73, and says it is an inference', async () => {
+    const container = await renderHeld({ ...TAKEN_OVER, run_id: null, run_recorded: false });
+    expect(downloads(container)).toEqual([
+      `/api/runs/${RUN}/transcript.jsonl`,
+      `/api/runs/${RUN}/export.tar`,
+    ]);
+    expect(container.textContent).toContain('the run below is inferred');
   });
 });
 

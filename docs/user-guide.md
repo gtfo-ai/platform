@@ -263,7 +263,7 @@ error naming the transition, not as a silent no-op — and each accepted one lea
 | Command | Who | What it does |
 |---|---|---|
 | **Pause** | member | stops the task from entering another stage |
-| **Resume** | member | lets it continue |
+| **Resume** | member | lets it continue. A task paused while it waited for its merge goes back to waiting for it; merging the merge request on the git provider while it is paused ends the pause, and the retrospective runs as for any merge |
 | **Cancel** | maintainer | ends the task; it enters no further stage |
 | **Retry stage** | member | runs the current stage again, optionally with a reason. Costs a run |
 | **Return to stage** | maintainer | sends the task back to an earlier stage; a reason is required. Costs an iteration of the loop |
@@ -281,7 +281,10 @@ send a request the server will reject.
 Double-clicking a command is safe: every write carries an idempotency key, and a replay performs
 nothing twice. Two requests under one key that arrive **at the same moment** are safe too since WP-67:
 the second is refused `409 idempotency_key_in_flight` instead of being performed, and sending it again
-once the first has answered returns the first answer.
+once the first has answered returns the first answer. The application does that sending for you: the
+second click stays pending for a moment and then shows the first one's result, not an error. If a
+server stopped while performing a command, nobody can say whether it was done; the screen says so and
+asks you to check the task first, and pressing the button again is then a new request.
 
 ### The checks panel, and what it cannot show
 
@@ -316,7 +319,9 @@ and this build does not do that yet. It is never drawn as an empty tick that rea
   interrupted (`GET /api/runs/<run>/transcript.jsonl`, rendered from the stored transcript each time,
   so it lasts as long as the transcript does) and **the workspace tarball** when you asked for one
   (`GET /api/runs/<run>/export.tar`, kept for **14 days from the take-over, whether or not you have
-  handed back** — the taken-over workspace's own retention)
+  handed back** — the taken-over workspace's own retention). When no run was in flight in the
+  process that answered, nothing was exported and the panel offers neither download; a take-over
+  recorded before WP-73 names the run it *infers* and says so
   — and **Hand back**, whose stage list is the task's own pipeline, so it offers nothing the platform
   would refuse. A task you took over and have not handed back moves to needing a human after
   **5 working days without a command from you** — any command you issue on the task (a pause, an

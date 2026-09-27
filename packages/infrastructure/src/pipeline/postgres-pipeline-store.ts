@@ -70,6 +70,7 @@ import {
   taskReviewersSchema,
   taskReviewThreadsSchema,
   taskStageExitStateSchema,
+  taskStageOutcomeSchema,
   taskStageStateSchema,
   workpadRefSchema,
 } from '@platform/contracts';
@@ -824,7 +825,8 @@ export const createPostgresPipelineStore = (
           entry.taskId,
           entry.stage,
           entry.attempt,
-          entry.outcome,
+          // The column's one vocabulary (WP-73, backlog 213), parsed as `state` is.
+          taskStageOutcomeSchema.parse(entry.outcome),
           entry.returnReason,
           state,
           entry.returnedTo,
@@ -847,7 +849,7 @@ export const createPostgresPipelineStore = (
           entry.stage,
           entry.attempt,
           taskStageExitStateSchema.parse('failed'),
-          entry.outcome,
+          taskStageOutcomeSchema.parse(entry.outcome),
           entry.reason,
           taskStageStateSchema.parse('running'),
         ],

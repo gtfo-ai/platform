@@ -18,7 +18,9 @@
  * **three** places that hand pipeline code an open scope mark it here — `EventBus`'s handler
  * invocation, the dead-letter sink it calls from the dispatcher's own transaction (WP-49), and the
  * `UnitOfWork` {@link markTransactions} wraps for the job path — and
- * {@link assertOutsideTransaction} refuses. A guard enforced only by TypeScript is not enforced at
+ * {@link assertOutsideTransaction} refuses — the integrations port and the provider call, and since
+ * WP-73 a settings read that was not handed the caller's transaction (PROGRESS backlogs 19 and
+ * 221; `assertSettingsReadOutsideTransaction`). A guard enforced only by TypeScript is not enforced at
  * a boundary (standing rule 14), and a rule written only in a docblock is the rule that gets
  * broken by the next work package (rule 30).
  *
@@ -55,14 +57,20 @@ export class TransactionOpenError extends Error {
   /** What was attempted — `integrations.forProject`, `get_default_branch_head`. */
   readonly attempted: string;
 
-  constructor(attempted: string) {
+  /**
+   * @param why the remedy, when it is not the provider-call one — the settings port's is "pass the
+   *   caller's transaction" (WP-73, PROGRESS backlog 19), which moving the call to a job is not.
+   */
+  constructor(attempted: string, why?: string) {
     super(
-      `${attempted} was attempted inside an open database transaction. A provider call holds a ` +
-        'pooled connection for the length of somebody else’s HTTP round trip and nests the ' +
-        'audit write inside the caller’s transaction, so the pipeline makes it from a job ' +
-        'instead: enqueue with HandlerContext.afterCommit and re-validate when the job fires ' +
-        '(TD-004, technical/06 § "Outbound: actions"). See packages/application/src/pipeline/' +
-        'outbound.ts for the shape.',
+      `${attempted} was attempted inside an open database transaction. ` +
+        (why ??
+          'A provider call holds a ' +
+            'pooled connection for the length of somebody else’s HTTP round trip and nests the ' +
+            'audit write inside the caller’s transaction, so the pipeline makes it from a job ' +
+            'instead: enqueue with HandlerContext.afterCommit and re-validate when the job fires ' +
+            '(TD-004, technical/06 § "Outbound: actions"). See packages/application/src/pipeline/' +
+            'outbound.ts for the shape.'),
     );
     this.attempted = attempted;
   }
@@ -78,9 +86,9 @@ export const withOpenTransaction = async <T>(fn: () => Promise<T>): Promise<T> =
 export const transactionIsOpen = (): boolean => storage.getStore() === true;
 
 /** @throws {TransactionOpenError} when a transaction is open on this call path. */
-export const assertOutsideTransaction = (attempted: string): void => {
+export const assertOutsideTransaction = (attempted: string, why?: string): void => {
   if (transactionIsOpen()) {
-    throw new TransactionOpenError(attempted);
+    throw new TransactionOpenError(attempted, why);
   }
 };
 

@@ -47,6 +47,7 @@ import type {
   TaskReviewers,
   TaskReviewThreads,
   TaskStageExitState,
+  TaskStageOutcome,
   TicketRef,
   TicketSnapshot,
   TokenUsage,
@@ -173,9 +174,11 @@ export interface StoredTask {
    * The merge request's human review threads, open and resolved, as BD-007's review window last read
    * them (product/10:38, WP-46, migration 0048).
    *
-   * Written by {@link TaskRepository.saveReviewThreads} from the `mr.comment.debounce` job and by
-   * nothing else. `null` means **the window has not read them** — no human has commented while the
-   * task waited at `ready_for_merge` — which is a different fact from a record whose `open` is zero.
+   * Written by {@link TaskRepository.saveReviewThreads} from the `mr.comment.debounce` job and —
+   * for a review-only task, counting the platform's own findings (WP-73, backlog 209) — from the
+   * `review_only_observe` duty. `null` means **nobody has read them** — no human has commented
+   * while the task waited at `ready_for_merge`, or the review has not been observed — which is a
+   * different fact from a record whose `open` is zero.
    */
   readonly reviewThreads: TaskReviewThreads | null;
   /**
@@ -657,7 +660,8 @@ export interface TaskRepository {
       readonly stage: Slug;
       readonly attempt: number;
       readonly state: TaskStageExitState;
-      readonly outcome: string;
+      /** One word of `taskStageOutcomeSchema`, parsed by the store before it writes (WP-73). */
+      readonly outcome: TaskStageOutcome;
       readonly returnReason: string | null;
       readonly returnedTo: Slug | null;
     },
@@ -685,7 +689,8 @@ export interface TaskRepository {
       readonly taskId: Id;
       readonly stage: Slug;
       readonly attempt: number;
-      readonly outcome: string;
+      /** One word of `taskStageOutcomeSchema`, parsed by the store before it writes (WP-73). */
+      readonly outcome: TaskStageOutcome;
       readonly reason: string;
     },
   ): Promise<void>;

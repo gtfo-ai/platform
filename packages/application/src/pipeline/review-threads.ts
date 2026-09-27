@@ -59,17 +59,65 @@ import { collapseLines } from './verdicts.js';
  */
 export const MAX_REVIEW_FEEDBACK_CHARS = 2 * MAX_FEEDBACK_CHARS;
 
-/** Open: resolvable, not resolved, and at least one note a human wrote (BD-007's predicate). */
-export const isOpenReviewThread = (discussion: Discussion): boolean =>
-  discussion.resolvable && !discussion.resolved && discussion.notes.some((note) => !note.system);
+/**
+ * The markers the platform writes into a note it posts on a merge request — the conflict warning's
+ * `<!-- agentic:conflict-warning:<task> -->`, review-only's finding and summary markers — as one
+ * shape, `<!-- agentic:<kind>:<id> -->`, **anchored to the start of the body**: every note the
+ * platform posts opens with its marker (`conflictWarningBody`, `renderFinding`, the summary), and a
+ * human quote-reply that copies one (`> <!-- agentic:… -->`) does not open with it, so it stays a
+ * human's note (WP-73 review round 1).
+ */
+const PLATFORM_NOTE_MARKER = /^\s*<!-- agentic:[a-z][a-z0-9-]*:[^\s>]+ -->/;
 
-/** The panel's record: the window's own predicate for `open`, and resolvable-and-resolved. */
+/**
+ * Whether a note is the **platform's own** (WP-73, PROGRESS backlog 214): it carries a platform
+ * marker.
+ *
+ * **By marker, not by author**, and the reason is a fact about the port rather than a preference:
+ * the backlog asked for the binding's own account first, and `GitProviderPort` publishes no
+ * *"which account am I"* — a note's `author` is an `ExternalIdentity` nothing compares with the
+ * binding's token. The marker is **forgeable**, stated rather than implied: a human who opens a
+ * note with one hides that note from the count and from the Developer, and that is the fail-**open**
+ * direction — one open thread fewer means the review window does **not** send the task back — so a
+ * forged marker can let a `ready_for_merge` task stay Ready with a comment nobody acted on. What
+ * bounds it: the forger has to be somebody who can comment on the merge request, the thread is
+ * still on the provider for whoever merges, and a person who wants a thread ignored can already
+ * resolve it. The author check that would close it needs a port member (PROGRESS backlog 266).
+ */
+export const isPlatformNote = (note: { readonly body: string }): boolean =>
+  PLATFORM_NOTE_MARKER.test(note.body);
+
+/** A note a human wrote: not a provider system note, and not one the platform posted. */
+const isHumanNote = (note: Discussion['notes'][number]): boolean =>
+  !note.system && !isPlatformNote(note);
+
+/**
+ * Open: resolvable, not resolved, and at least one note a **human** wrote (BD-007's predicate).
+ *
+ * Until WP-73 "a human wrote" was spelt `!note.system`, so the platform's own conflict warning — a
+ * bot-authored, non-system, un-anchored thread — counted as an open review thread on the Checks
+ * panel, its text reached the Developer as reviewer feedback, and a window it armed could send a
+ * `ready_for_merge` task back by itself (PROGRESS backlog 214). **Decided**: a human's reply
+ * *inside* a platform thread makes it open — the reply is review conversation, and only the
+ * platform's own note is ignored, never the thread's human half.
+ */
+export const isOpenReviewThread = (discussion: Discussion): boolean =>
+  discussion.resolvable && !discussion.resolved && discussion.notes.some(isHumanNote);
+
+/**
+ * The panel's record: the window's own predicate for `open`, and resolvable-and-resolved with a
+ * human note — so the platform's own threads are in neither number (WP-73, backlog 214).
+ */
 export const reviewThreadCounts = (
   discussions: readonly Discussion[],
   checkedAt: string,
 ): TaskReviewThreads => ({
   open: discussions.filter(isOpenReviewThread).length,
-  resolved: discussions.filter((discussion) => discussion.resolvable && discussion.resolved).length,
+  // A platform thread nobody replied to is not a review thread either way (backlog 214).
+  resolved: discussions.filter(
+    (discussion) =>
+      discussion.resolvable && discussion.resolved && discussion.notes.some(isHumanNote),
+  ).length,
   checked_at: checkedAt,
 });
 
@@ -95,7 +143,7 @@ export const reviewThreadsReturnReason = (
   };
   const lines = [`${open.length} unresolved review thread${open.length === 1 ? '' : 's'}`];
   open.forEach((discussion, index) => {
-    const notes = discussion.notes.filter((note) => !note.system);
+    const notes = discussion.notes.filter(isHumanNote);
     notes.forEach((note, position) => {
       const tag = position === 0 ? `[thread ${index + 1}]` : `[reply ${index + 1}]`;
       const where =

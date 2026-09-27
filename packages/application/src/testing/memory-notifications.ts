@@ -28,7 +28,10 @@ export interface MemoryNotificationStore extends NotificationStore {
   readonly rows: readonly StoredNotification[];
 }
 
-export const createMemoryNotificationStore = (): MemoryNotificationStore => {
+export const createMemoryNotificationStore = (
+  /** The platform users `userName` knows, by id (WP-73) — the `users` table's stand-in. */
+  users: Readonly<Record<string, string>> = {},
+): MemoryNotificationStore => {
   const rows = new Map<Id, StoredNotification>();
   const keys = new Set<string>();
 
@@ -87,6 +90,8 @@ export const createMemoryNotificationStore = (): MemoryNotificationStore => {
         .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1))[0];
       return found === undefined ? null : clone(found);
     },
+
+    userName: async (_tx, userId) => users[userId] ?? null,
 
     projectsAwaitingDigest: async (_tx, input) => {
       const projects: Id[] = [];

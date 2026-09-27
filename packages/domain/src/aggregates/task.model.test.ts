@@ -188,13 +188,22 @@ const assertInvariants = (model: TaskModel, real: TaskReal): void => {
 };
 
 /** Runs a command that moves the machine to `target`, asserting success or rejection. */
+/**
+ * The one guard the edge table cannot state (WP-73 review round 1): `paused → ready_for_merge` and
+ * `paused → merged` are edges only for a task paused **at** `ready_for_merge`.
+ */
+const pausedTailEdgeAllowed = (model: TaskModel, target: TaskState): boolean =>
+  model.state !== 'paused' ||
+  (target !== 'ready_for_merge' && target !== 'merged') ||
+  model.currentStage === 'ready_for_merge';
+
 const transition = (
   model: TaskModel,
   real: TaskReal,
   target: TaskState,
   command: () => TaskDecision,
 ): TaskDecision | null => {
-  if (!canTransitionTask(model.state, target)) {
+  if (!canTransitionTask(model.state, target) || !pausedTailEdgeAllowed(model, target)) {
     expect(command).toThrow(IllegalTransitionError);
     return null;
   }
@@ -390,7 +399,7 @@ class TakeOver implements TaskCommand {
     transition(model, real, 'paused', () =>
       takeOverTask(
         real.task,
-        { branch: 'agentic/PROJ-1', stage: model.currentStage ?? 'implementation' },
+        { branch: 'agentic/PROJ-1', stage: model.currentStage ?? 'implementation', runId: null },
         context(real),
       ),
     );
@@ -627,6 +636,48 @@ describe('Task state machine — model-based properties', () => {
         fc.property(fc.commands(commandArbitraries, { size: '+1' }), (commands) => {
           fc.modelRun(setup, commands);
         }),
+        { numRuns: MODEL_RUNS },
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
+
+  /**
+   * WP-73 review round 1: the tail edges out of a pause exist for a pause **at** `ready_for_merge`
+   * and nowhere else — every other stage a task can be paused at is refused both edges, so a
+   * hand-back from a pause at `ci_gate` cannot put the task at Ready or record a merge.
+   */
+  it(
+    'refuses paused → ready_for_merge and paused → merged from every stage but ready_for_merge',
+    () => {
+      fc.assert(
+        fc.property(
+          fc.constantFrom(
+            ...STAGES,
+            'intake',
+            'ci_gate',
+            'business_review',
+            'rebase_gate',
+            'conflict_resolution',
+            'ready_for_merge',
+          ),
+          fc.constantFrom('manual' as const, 'budget' as const),
+          (stage, reason) => {
+            const { real } = setup();
+            let task = enterStage(real.task, { stage }, context(real)).aggregate;
+            if (stage === 'ready_for_merge') {
+              task = markReadyForMerge(task, context(real)).aggregate;
+            }
+            const paused = pauseTask(task, { reason }, context(real)).aggregate;
+            for (const command of [markReadyForMerge, recordMerge]) {
+              if (stage === 'ready_for_merge') {
+                expect(command(paused, context(real)).aggregate.state).not.toBe('paused');
+              } else {
+                expect(() => command(paused, context(real))).toThrow(IllegalTransitionError);
+              }
+            }
+          },
+        ),
         { numRuns: MODEL_RUNS },
       );
     },

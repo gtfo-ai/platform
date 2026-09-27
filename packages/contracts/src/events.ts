@@ -307,6 +307,12 @@ export const taskTakenOverEvent = defineEvent('task.taken_over', {
   branch: nonEmptyStringSchema,
   session_id: nonEmptyStringSchema.nullish(),
   stage: stageIdSchema,
+  /**
+   * The run the take-over interrupted (WP-73, PROGRESS backlog 203): `null` when no run was live in
+   * the process that answered — the take-over exported nothing — and **absent** on an event written
+   * before WP-73, whose reader can only infer the run.
+   */
+  run_id: idSchema.nullish(),
 });
 
 export const taskHandedBackEvent = defineEvent('task.handed_back', {

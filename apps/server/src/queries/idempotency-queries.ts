@@ -17,7 +17,7 @@
  */
 import type { JsonObject } from '@platform/contracts';
 import { db as dbAdapters } from '@platform/infrastructure';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, isNull, lt, sql } from 'drizzle-orm';
 import type { Database } from './identity-queries.js';
 
 const { commandIdempotency, humanActions } = dbAdapters.schema;
@@ -174,3 +174,24 @@ export const completeCommandAttempt = async (
 
 const toIso = (value: Date | string): string =>
   value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+
+/**
+ * The claims nobody completed that are older than `before`, counted by `action` — the
+ * `command_idempotency_claims_unknown` gauge's reading (WP-73, PROGRESS backlog 241).
+ *
+ * A claim past `CLAIM_IN_FLIGHT_MS` is the residue of a process that died between the claim and the
+ * audit row: its key answers `409 idempotency_attempt_unknown` for good, because nothing can tell
+ * whether the command ran. Counted by `action` only — never by key or user, because a key is caller
+ * text and a user label would put who-did-what into a metrics scrape.
+ */
+export const countStaleCommandClaims = async (
+  database: Database,
+  before: Date,
+): Promise<readonly { readonly action: string; readonly claims: number }[]> => {
+  const rows = await database
+    .select({ action: commandIdempotency.action, claims: sql<string>`count(*)` })
+    .from(commandIdempotency)
+    .where(and(isNull(commandIdempotency.completedAt), lt(commandIdempotency.claimedAt, before)))
+    .groupBy(commandIdempotency.action);
+  return rows.map((row) => ({ action: row.action, claims: Number(row.claims) }));
+};

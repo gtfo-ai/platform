@@ -360,6 +360,7 @@ process cannot answer*, never zero:
 | `platform_storage_bytes{component="knowledge_mirrors"}` | the bare git mirrors under `APP_KNOWLEDGE_MIRROR_ROOT` (processes that have it) | the 50 GB mark, as for the database |
 | `platform_storage_total_bytes{components="database+knowledge_mirrors"}` | the two lines above summed — exported only when both were measured | the disk you gave the instance |
 | `knowledge_mirror_bytes{project_id="…"}` | one project's mirror — the axis you can act on | a project that outweighs the rest |
+| `command_idempotency_claims_unknown{action="…"}` | commands whose process died between claiming their `Idempotency-Key` and recording the outcome, past the in-flight window (`CLAIM_IN_FLIGHT_MS`, `apps/server/src/routes/idempotency.ts`); the key answers `409 idempotency_attempt_unknown` for good (API roles, WP-73) | anything above 0 asks a **human check** of the resource the action names — never a delete of the row, which would let a retry perform the command a second time |
 
 `APP_TRUST_PROXY=true` is what makes the app believe `X-Forwarded-For` and `X-Forwarded-Proto`. Set
 it **only** when a proxy you control terminates TLS in front; with it on and the app reachable

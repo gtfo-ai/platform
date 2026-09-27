@@ -57,6 +57,7 @@ import {
   markQuestionEscalated,
   orderQueue,
   queueTask,
+  READY_FOR_MERGE_STAGE,
   requestApproval,
   requiresBudgetApproval,
   requiresPlanApproval,
@@ -81,6 +82,7 @@ import {
   enqueueStage,
   type PipelineOutboundData,
 } from './jobs.js';
+import { isPlatformNote } from './review-threads.js';
 import type { ProjectSettingsPort } from './settings.js';
 import {
   autonomyPresetFor,
@@ -808,7 +810,8 @@ const planApprovalGate = async (
   if (stored.task.mode === 'shadow') {
     return false;
   }
-  const settings = await options.settings.forProject(stored.task.projectId);
+  // On the handler's own connection (WP-73, backlogs 19 and 221): no borrow inside the dispatch.
+  const settings = await options.settings.forProject(stored.task.projectId, context.scope.tx);
   const pipeline = compilePipeline(stored.task.template, stored.template, stored.pipelineDial);
   const completed = stageOf(pipeline, stage);
   if (completed?.produces !== 'ImplementationPlan') {
@@ -983,7 +986,7 @@ const budgetApprovalGate = async (
   if (already !== null) {
     return false;
   }
-  const settings = await options.settings.forProject(stored.task.projectId);
+  const settings = await options.settings.forProject(stored.task.projectId, context.scope.tx);
   const preset = autonomyPresetFor(settings);
   if (preset === null) {
     // Never materialised: the pre-WP-28 behaviour, which is no budget gate at all. A named branch
@@ -1371,28 +1374,54 @@ const mergeRequestHandler = (options: PipelineSagaOptions): EventHandler => ({
     if (stored === null) {
       return;
     }
+    /** Parks the task with a brief, closing the stage row it was at with the event's name. */
+    const escalateFor = async (
+      outcome: 'mr.closed' | 'mr.merged',
+      reason: string,
+      brief: string,
+    ) => {
+      const escalated = escalateTask(
+        stored.task,
+        { reason, blockerBrief: brief },
+        contextFor(options, stored.task.id, event.id),
+      );
+      await options.store.tasks.save(context.scope.tx, { ...stored, task: escalated.aggregate });
+      await closeParkedStageRow(options.store, context.scope.tx, escalated, outcome);
+      await context.emit(escalated.events);
+    };
     if (event.type === 'mr.closed') {
       if (stored.task.state === 'done' || stored.task.state === 'cancelled') {
         return;
       }
       // product/04 S7: "MR close/decline → `Needs human` with reason".
-      const escalated = escalateTask(
-        stored.task,
-        {
-          reason: 'the merge request was closed',
-          blockerBrief:
-            `The merge request for ${stored.task.ticket.key} was closed without being merged. ` +
-            'Say why on the ticket: if the approach was wrong, hand the task back at Architecture; if the work is not wanted, cancel the task.',
-        },
-        contextFor(options, stored.task.id, event.id),
+      await escalateFor(
+        'mr.closed',
+        'the merge request was closed',
+        `The merge request for ${stored.task.ticket.key} was closed without being merged. ` +
+          'Say why on the ticket: if the approach was wrong, hand the task back at Architecture; if the work is not wanted, cancel the task.',
       );
-      await options.store.tasks.save(context.scope.tx, { ...stored, task: escalated.aggregate });
-      await closeParkedStageRow(options.store, context.scope.tx, escalated, 'mr.closed');
-      await context.emit(escalated.events);
       return;
     }
     const stage = stored.task.currentStage;
-    if (stage === null || stored.task.state !== 'ready_for_merge') {
+    if (stage === null) {
+      return;
+    }
+    if (stored.task.state === 'paused' && stage !== READY_FOR_MERGE_STAGE) {
+      // Q104: a merge of a task paused at any **other** stage is not the decision the pause was
+      // waiting for — the pipeline never got the change to Ready — so it is escalated with a brief
+      // rather than dropped, which is what this branch did before WP-73.
+      await escalateFor(
+        'mr.merged',
+        'the merge request was merged while the task was paused before it was ready',
+        `The merge request for ${stored.task.ticket.key} was merged on the provider while the task was paused at ${stage}, ` +
+          'before the pipeline had marked it ready. Check what was merged; then cancel the task, or hand it back if work remains.',
+      );
+      return;
+    }
+    // `paused` here is a task paused **at** `ready_for_merge` (Q104, answer (a)): the merge is the
+    // human decision the pause held the platform back for, so it ends the pause — `recordMerge`
+    // emits `task.resumed` before the merge's own `task.stage.entered` (backlog 244).
+    if (stored.task.state !== 'ready_for_merge' && stored.task.state !== 'paused') {
       return;
     }
     await step(options, context, stored, {
@@ -1423,6 +1452,12 @@ const reviewCommentHandler = (options: PipelineSagaOptions): EventHandler => ({
       return;
     }
     if (event.payload.resolved) {
+      return;
+    }
+    if (isPlatformNote({ body: event.payload.text })) {
+      // The platform's own note — a conflict warning, a review-only finding — arriving back as a
+      // Note hook is not a reviewer speaking, so it arms no window (WP-73, backlog 214). The
+      // window's own predicate ignores it too, so this is the cheaper half, not the only one.
       return;
     }
     const stored = await options.store.tasks.findByMergeRequest(context.scope.tx, {
@@ -1500,7 +1535,7 @@ const schedulerHandler = (options: PipelineSagaOptions): EventHandler => ({
       return;
     }
     const projectId = event.payload.project_id;
-    const settings = await options.settings.forProject(projectId);
+    const settings = await options.settings.forProject(projectId, context.scope.tx);
     const counts = await options.store.tasks.counts(context.scope.tx, projectId);
     if (!evaluateTaskAdmission(counts, settings.wip).admitted) {
       return;

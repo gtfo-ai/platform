@@ -7,8 +7,11 @@ import { MAX_FEEDBACK_CHARS } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { exactSecretRedactor } from '../integrations/redaction.js';
 import type { Discussion } from '../ports/integrations/git-provider.js';
+import { conflictWarningMarker } from './conflict-warning.js';
+import { reviewMarkerFor, reviewSummaryMarkerFor } from './review-only.js';
 import {
   isOpenReviewThread,
+  isPlatformNote,
   MAX_REVIEW_FEEDBACK_CHARS,
   reviewThreadCounts,
   reviewThreadsReturnReason,
@@ -56,6 +59,51 @@ describe('which threads are open, and what the panel counts', () => {
     expect(threads.map(isOpenReviewThread)).toEqual([true, false, false, false]);
     expect(reviewThreadCounts(threads, AT)).toEqual({ open: 1, resolved: 1, checked_at: AT });
     expect(reviewThreadCounts([], AT)).toEqual({ open: 0, resolved: 0, checked_at: AT });
+  });
+});
+
+/**
+ * WP-73, PROGRESS backlog 214: the platform's own conflict warning is not a human review thread —
+ * not on the panel, not in the Developer's feedback — and a human reply inside it is.
+ */
+describe('the platform’s own threads (backlog 214)', () => {
+  const WARNING = `${conflictWarningMarker('00000000-0000-4000-8000-0000000000b1' as never)}\n**Heads up:** another open merge request changes src/totals.ts.`;
+
+  it('counts a conflict-warning thread alone as no open thread, and returns nothing on it', () => {
+    const threads = [thread([note(WARNING)])];
+    expect(threads.map(isOpenReviewThread)).toEqual([false]);
+    expect(reviewThreadCounts(threads, AT).open).toBe(0);
+  });
+
+  it('counts the warning thread open once a human replies in it, and quotes the human alone', () => {
+    const replied = thread([note(WARNING), note('I will rebase after lunch')]);
+    expect(isOpenReviewThread(replied)).toBe(true);
+    const { reason } = reviewThreadsReturnReason([replied], none);
+    expect(reason).toContain('I will rebase after lunch');
+    expect(reason).not.toContain('Heads up');
+    expect(reason).not.toContain('agentic:conflict-warning');
+  });
+
+  it('recognises every marker the platform posts on a merge request, and not ordinary text', () => {
+    const task = '00000000-0000-4000-8000-0000000000b1' as never;
+    for (const marker of [
+      conflictWarningMarker(task),
+      reviewMarkerFor(task),
+      reviewSummaryMarkerFor(task),
+    ]) {
+      expect(isPlatformNote({ body: `${marker}\nbody` }), marker).toBe(true);
+    }
+    expect(isPlatformNote({ body: 'agentic: please look at this' })).toBe(false);
+  });
+
+  it('keeps a human quote-reply that copies the marker a human note (review round 1)', () => {
+    const quoted = `> ${WARNING.replace('\n', '\n> ')}\n\nI disagree, this overlap is fine.`;
+    expect(isPlatformNote({ body: quoted })).toBe(false);
+    // A marker further down a human's own note does not make it the platform's either.
+    expect(isPlatformNote({ body: `see the warning\n${WARNING}` })).toBe(false);
+    const replied = thread([note(quoted)]);
+    expect(isOpenReviewThread(replied)).toBe(true);
+    expect(reviewThreadsReturnReason([replied], none).reason).toContain('I disagree');
   });
 });
 

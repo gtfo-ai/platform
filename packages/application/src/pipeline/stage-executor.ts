@@ -49,6 +49,7 @@ import type {
   JsonValue,
   Slug,
 } from '@platform/contracts';
+import { stageVerdictSchema } from '@platform/contracts';
 import type { CommandContext, PipelineStage, Run } from '@platform/domain';
 import {
   askQuestion,
@@ -135,6 +136,14 @@ export interface StageRunRequest {
     readonly model?: string;
     readonly effort?: Effort;
   };
+  /**
+   * The paths the task's own merge request changes, read by the `stage.execute` job before a
+   * **Reviewer** run of a pipeline task (WP-73, PROGRESS backlog 218), redacted. `undefined` when no
+   * read was made — any other role, a task with no merge request, or a review of a merge request the
+   * platform already holds (`reviewSubject`). {@link reviewChecklistsOf} matches risk classes on
+   * them beside the Implementation Plan's paths.
+   */
+  readonly mergeRequestPaths?: readonly string[];
 }
 
 /** What a planner returns: the spec the runner is given, and the audit record of what went in. */
@@ -358,6 +367,12 @@ export interface StageExecutionJob {
     readonly model?: string;
     readonly effort?: Effort;
   };
+  /**
+   * {@link StageRunRequest.mergeRequestPaths}, read by the job that fires this attempt (WP-73,
+   * backlog 218). **Never in the queue payload**: it is read fresh on every fire, outside every
+   * transaction, and a re-enqueued attempt reads again.
+   */
+  readonly mergeRequestPaths?: readonly string[];
 }
 
 /**
@@ -934,6 +949,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       returnFeedback: admission.returnFeedback,
       checkoutBase: admission.checkoutBase,
       ...(job.overrides === undefined ? {} : { overrides: job.overrides }),
+      ...(job.mergeRequestPaths === undefined ? {} : { mergeRequestPaths: job.mergeRequestPaths }),
     });
     return startTheRun(job, plan, runId);
   };
@@ -1385,7 +1401,10 @@ const record = async (
     stage: job.stage,
     attempt: job.attempt,
     state: 'completed',
-    outcome: verdict ?? 'unknown',
+    // The column's vocabulary, not the model's (WP-73, backlog 213): a verdict the interpreter
+    // does not know is recorded as `unrecognised` — the model's own word is on the artifact.
+    outcome:
+      verdict === null ? 'unknown' : (stageVerdictSchema.safeParse(verdict).data ?? 'unrecognised'),
     returnReason: null,
     returnedTo: null,
   });
