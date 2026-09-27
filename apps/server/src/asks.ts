@@ -24,7 +24,10 @@ export interface AskCompositionOptions {
     readonly ids: { next(): Id };
     readonly clock: { now(): IsoDateTime };
   };
-  /** `null` on a process with no queue: the question would be recorded and never answered. */
+  /**
+   * `null` on a process with no queue client: the question would be recorded and never answered.
+   * Since WP-72 every role that serves the API holds one (`ROLE=api`'s is enqueue-only).
+   */
   readonly jobs: Jobs | null;
   readonly logger: Logger;
 }

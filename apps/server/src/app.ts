@@ -237,8 +237,9 @@ export interface BuildAppOptions {
    * The task and run command surface (WP-15i), or `null` for a process that composed no pipeline.
    *
    * Nullable like the two above and for the same reason. Note the finer distinction this one
-   * carries **inside** the value: a process that serves the API without workers composes commands
-   * with no queue, and the four that must start a stage refuse by name (`commands.ts`).
+   * carries **inside** the value: a process composed with no queue client serves the commands
+   * with no queue, and the four that must start a stage refuse by name (`commands.ts`). Since WP-72
+   * that is no shipped role — `ROLE=api` enqueues through an enqueue-only sender.
    */
   readonly commands: TaskCommands | null;
   /**

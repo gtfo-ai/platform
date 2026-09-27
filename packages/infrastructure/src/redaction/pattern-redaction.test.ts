@@ -41,6 +41,51 @@ describe('the placeholder', () => {
   });
 });
 
+/**
+ * PROGRESS backlog 154, **decision (a)** (WP-72): a run's minted git credential is redacted by
+ * exact match only in the process that minted it, and on the shipped topology the process that
+ * stores most of what could quote it — every webhook delivery, half the outbound duties — is not
+ * that process. So the pattern rule *is* the defence there, and this block pins what it covers and
+ * what it does not, with no run-scoped registry anywhere in sight.
+ *
+ * Shapes, from GitLab's own pages (retrieved 2026-09-27): a project access token carries the
+ * personal-access-token prefix, `glpat-` by default, and an administrator may change that prefix
+ * (<https://docs.gitlab.com/administration/settings/account_and_limit_settings/>); the routable
+ * format is `glpat-<base64-payload>.<version>.<length+crc32>`
+ * (<https://handbook.gitlab.com/handbook/engineering/architecture/design-documents/cells/routable_tokens/>).
+ */
+describe('a run credential redacted in a process that never minted it (backlog 154 (a))', () => {
+  const redactor = patternRedactor();
+
+  it('redacts a GitLab project access token of the documented default shape', () => {
+    const minted = 'glpat-FAKE0minted0run0token00';
+    const outcome = redactor.redactText(
+      `git push https://agentic:${minted}@git.example.test/a.git`,
+    );
+    expect(outcome.value).not.toContain(minted);
+    expect(outcome.value).not.toContain('FAKE0minted0run0token00');
+    expect(outcome.count).toBe(1);
+    expect(detectSecrets(minted).map((hit) => hit.ruleId)).toEqual(['gitlab-token']);
+  });
+
+  it('redacts the secret part of a routable token, leaving only its version and checksum', () => {
+    const payload = 'FAKE0routable0payload0000000000';
+    const outcome = redactor.redactText(`token glpat-${payload}.01.0a1b2c3d in the log`);
+    expect(outcome.value).not.toContain(payload);
+    // What survives is `.01.0a1b2c3d` — the base-36 version and the payload length + CRC32, which
+    // GitLab's design places after the entropy. Stated rather than hidden: it is not the secret.
+    expect(outcome.value).toContain('.01.0a1b2c3d in the log');
+  });
+
+  it('does not redact a token minted under an administrator-chosen prefix — the trigger for (b)', () => {
+    // The residual decision (a) accepts, pinned so that the day a rule (or a shared registry) covers
+    // it this assertion fails and the sentences on `credentialMinting` and in `run-redaction.ts`
+    // are rewritten with it (PROGRESS backlog 259).
+    const minted = 'acmepat-FAKE0custom0prefix0token';
+    expect(redactor.redactText(minted).value).toBe(minted);
+  });
+});
+
 describe('the rule set', () => {
   const redactor = patternRedactor();
 

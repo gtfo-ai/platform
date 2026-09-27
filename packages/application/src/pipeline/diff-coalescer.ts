@@ -32,6 +32,14 @@
  *    a test harness gets its own). Two processes that both run `pipeline.outbound` jobs each read
  *    once; that is still the `K²` factor gone per process, and it is not a second copy of the
  *    provider's answer in the database — no new table holds somebody's patches (BD-022).
+ *    **The figure on the shipped topology, measured** (WP-72, PROGRESS backlog 181): `app` and
+ *    `runner` both take `pipeline.outbound`, so one gate entry reads a merge request's diff **once
+ *    per process that ran one of its duties — one or two, never more**. Counted per process through
+ *    the two-process tier (`test/e2e/topology/two-processes.e2e.test.ts`, which asserts at most one
+ *    read in each process): **one** read in four runs of that case alone, **two** in both runs of
+ *    the whole e2e tier, where the second worker is less idle when the duties are enqueued. A
+ *    shared store is not proposed: the cost is one extra read of a bounded diff per gate entry, and
+ *    no provider rate limit has been measured to bind on it.
  *  - **A window of {@link DIFF_COALESCE_WINDOW_MS}.** Long enough to span one gate entry's duties and
  *    a burst of gate entries after a default-branch move, and in the ordinary case the Developer
  *    stage's completion and the rebase gate at the same revision; a gate reached later than that

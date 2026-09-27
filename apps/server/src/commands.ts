@@ -16,14 +16,18 @@
  *
  * A process that composed no eventing has no commands, and the routes answer `503` naming the
  * missing piece rather than 404 — the shape `routes/kb.ts` established. A process that serves the
- * API **without** workers composes `jobs: null` and — this is what `runtime.ts` actually builds — a
- * live-run register that is **empty** rather than absent: `createLiveRuns()` is made once per
- * process, outside the worker branch, because the pipeline and the command surface must share one
- * instance and only the pipeline fills it. Pausing, cancelling, answering and deciding all work
- * there; the five commands that have to start a stage refuse by name rather than moving a task to a
- * stage nothing will run; a **steer** refuses by name rather than reporting a turn nobody heard;
- * and a **take-over** performs — it pauses the task and says `no_live_run`, which is what taking
- * over work that is already on the branch looks like.
+ * API **without** workers composes — this is what `runtime.ts` actually builds — an **enqueue-only**
+ * job client (WP-72; until then `jobs: null`) and a live-run register that is **empty** rather than
+ * absent: `createLiveRuns()` is made once per process, outside the worker branch, because the
+ * pipeline and the command surface must share one instance and only the pipeline fills it. Every
+ * command works there, the five that start a stage included — the worker beside it takes the stage
+ * job — except the two that must reach a live session: a **steer** refuses by name rather than
+ * reporting a turn nobody heard, and a **take-over** performs — it pauses the task and says
+ * `no_live_run`, which is what taking over work that is already on the branch looks like. On the
+ * shipped topology that is **every** steer (PROGRESS backlog 134): the process that serves the API
+ * is pinned never to hold a run, which `test/e2e/topology/two-processes.e2e.test.ts` asserts through
+ * the two processes. A composition root with no job client at all (`jobs: null`) still refuses the
+ * five by name rather than moving a task to a stage nothing will run.
  *
  * `liveRuns: null` and an empty register are the same answer to both, which is why the field keeps
  * its `null` arm for a composition root that has no pipeline at all. That is an equality rather

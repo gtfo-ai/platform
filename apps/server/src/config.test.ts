@@ -242,10 +242,40 @@ describe('pool sizing', () => {
   it('asks for less when the role runs fewer workloads', () => {
     const api = load({ ROLE: 'api' });
     const worker = load({ ROLE: 'worker' });
+    // WP-72: the API role holds the enqueue-only sender, which is one flat term **instead of**
+    // the worker runtime's `jobs`, never beside it.
     expect(requiredPoolConnections(api)).toBe(
-      POOL_RESERVATIONS.http + POOL_RESERVATIONS.maintenance,
+      POOL_RESERVATIONS.jobsSender + POOL_RESERVATIONS.http + POOL_RESERVATIONS.maintenance,
     );
     expect(requiredPoolConnections(worker)).toBeGreaterThan(requiredPoolConnections(api));
+    // The literal the operator guide's table and `.env.example` print (review round 1): the
+    // symbolic line above passes whatever the reservations say, so this is the one that holds the
+    // documented number.
+    expect(requiredPoolConnections(api)).toBe(4);
+  });
+
+  it('computes every role’s floor from the capabilities it runs, and nothing else (WP-72)', () => {
+    // Symbolic, per branch, for the four roles no tier ran before WP-72 (PROGRESS backlog 38). The
+    // e2e tier asserts that each of them is **refused** at one below this number and **starts** at
+    // it (`test/e2e/topology/two-processes.e2e.test.ts`); this pins what the number is made of.
+    const workerTerms =
+      2 +
+      1 +
+      POOL_RESERVATIONS.jobs +
+      POOL_RESERVATIONS.pipeline +
+      POOL_RESERVATIONS.knowledge +
+      POOL_RESERVATIONS.onboarding +
+      POOL_RESERVATIONS.bootstrap +
+      POOL_RESERVATIONS.maintenance;
+    for (const role of ['worker', 'runner', 'indexer']) {
+      expect(requiredPoolConnections(load({ ROLE: role })), role).toBe(workerTerms);
+    }
+    expect(requiredPoolConnections(load({ ROLE: 'all' }))).toBe(
+      workerTerms + POOL_RESERVATIONS.http,
+    );
+    expect(requiredPoolConnections(load({ ROLE: 'api' }))).toBe(
+      POOL_RESERVATIONS.jobsSender + POOL_RESERVATIONS.http + POOL_RESERVATIONS.maintenance,
+    );
   });
 
   it('refuses a pool that only satisfies the dispatcher’s own floor', () => {

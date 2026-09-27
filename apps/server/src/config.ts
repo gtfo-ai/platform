@@ -551,6 +551,15 @@ export const SERVER_CONFIG_DEFAULTS = {
 export const POOL_RESERVATIONS = {
   /** pg-boss's workers, supervision and cron. */
   jobs: 2,
+  /**
+   * The enqueue-only job client of a process that serves the API and runs no worker (WP-72).
+   *
+   * One, and flat: an enqueue is a single statement on the request's own path (the HTTP reserve's
+   * connection), and what this counts is the query pg-boss's manager runs on its own interval to
+   * refresh its queue cache — which borrows from the same pool whether or not a request is in
+   * flight. Counted **instead of** `jobs`, never beside it: a worker's runtime already includes it.
+   */
+  jobsSender: 1,
   /** Concurrent HTTP request queries — a floor, not a capacity plan. */
   http: 2,
   /** Readiness checks and partition maintenance, which must not queue behind request traffic. */
@@ -677,7 +686,13 @@ export const requiredPoolConnections = (config: ServerConfig): number => {
   // from that constant, and two readings of one number drift apart (standing rule 41).
   const perDispatch = CONNECTIONS_PER_DISPATCH + POOL_RESERVATIONS.auditPerDispatch;
   const dispatcher = capabilities.worker ? perDispatch * config.dispatch.maxConcurrency + 1 : 0;
-  const jobsReserve = capabilities.worker ? POOL_RESERVATIONS.jobs : 0;
+  // A worker's whole runtime, or — on a role that serves the API and runs no worker — the
+  // enqueue-only sender that hands a worker a command's effect (WP-72).
+  const jobsReserve = capabilities.worker
+    ? POOL_RESERVATIONS.jobs
+    : capabilities.api
+      ? POOL_RESERVATIONS.jobsSender
+      : 0;
   const pipelineReserve = capabilities.worker ? POOL_RESERVATIONS.pipeline : 0;
   const knowledgeReserve = capabilities.worker ? POOL_RESERVATIONS.knowledge : 0;
   const onboardingReserve = capabilities.worker ? POOL_RESERVATIONS.onboarding : 0;

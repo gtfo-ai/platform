@@ -6,6 +6,13 @@
  * self-hoster gets; splitting the roles across containers is the first step of technical/01's
  * scaling path and changes nothing but this variable.
  *
+ * **That sentence was asserted by nothing until WP-72** (PROGRESS backlog 38): every process any
+ * tier had started was `ROLE=all`. `test/e2e/topology/two-processes.e2e.test.ts` now starts the
+ * roles as separate processes on one database and asserts the crossings through them, and it found
+ * the one thing the variable did *not* change on its own: `ROLE=api` held no job client, so a command
+ * it answered was never performed by the worker beside it. It holds an enqueue-only one now
+ * (`enqueue-only-jobs.ts`).
+ *
  * Two properties matter more than the table itself:
  *
  * - **Every role serves the ops endpoints.** `/healthz`, `/readyz`, `/metrics` and `/api/version`

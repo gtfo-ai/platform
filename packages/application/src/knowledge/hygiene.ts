@@ -11,9 +11,10 @@
  *     of technical/07's kinds cannot be computed in this build and why.
  *  2. **It re-asks for an apply pass** for every project with a proposal that was decided and never
  *     applied. That is the recovery for the one loss that costs a human's decision: the apply
- *     wake-up is enqueued through `afterCommit` (at-most-once, TD-004) and from an API process that
- *     may hold no job runtime at all, so without this a maintainer's approval could sit in the
- *     queue for ever with nothing to move it.
+ *     wake-up is enqueued through `afterCommit` (at-most-once, TD-004) and, from a composition root
+ *     with no job client at all, not enqueued — so without this a maintainer's approval could sit
+ *     in the queue for ever with nothing to move it. (Until WP-72 that was every `ROLE=api`
+ *     process; it now enqueues through an enqueue-only sender, and the at-most-once half stays.)
  *
  * ## What it must never do, and where that line is
  *

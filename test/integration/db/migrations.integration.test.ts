@@ -36,6 +36,9 @@ const EXPECTED_TABLES = [
   'events',
   'handler_executions',
   'human_actions',
+  // WP-72, migration 0054: whether any process holds an account's inbound connection now — the
+  // question PROGRESS backlog 200 says a binding's configuration cannot answer.
+  'held_connection_liveness',
   // WP-35, migration 0030: what an operator asked the history bootstrap for, and one row per
   // mining run of it. product/19 §18's *"batches of ~20 MRs per Sonnet 5 run"* is a set of runs,
   // and nothing in this schema described one.
@@ -209,6 +212,8 @@ describe('migrate on an empty PostgreSQL 18', () => {
       row('event_dispatch', 'read_write', null),
       row('event_streams', 'read_only', null),
       row('events', 'append_only', 'occurred_at'),
+      // WP-72 (migration 0054): renewed in place and deleted by the holder that stops.
+      row('held_connection_liveness', 'read_write', null),
       // WP-35 (migration 0030): a batch moves through three statuses and a chunk is stamped once by
       // the recorder, so both are read_write.
       row('history_bootstrap_batches', 'read_write', null),

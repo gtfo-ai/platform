@@ -110,6 +110,7 @@ const optionsOf = (
     notifications: harness.notifications,
     timezone: overrides.timezone ?? 'UTC',
     organisation: harness.organisation,
+    heldConnections: harness.heldConnections,
   };
 };
 
@@ -713,6 +714,68 @@ describe('an approval notification', () => {
     expect(harness.communication?.messages).toHaveLength(1);
     expect(harness.communication?.messages[0]?.approval).toBeUndefined();
     expect(harness.communication?.messages[0]?.markdown).toContain('Decide on the task page');
+  });
+
+  /**
+   * PROGRESS backlog 200 (WP-72): a held transport posts buttons only while **a process holds it**,
+   * which the configuration cannot say. Both directions over one binding whose configuration says
+   * yes; the two-process tier asserts the same through the real row.
+   */
+  it.each([
+    { held: true, buttons: true },
+    { held: false, buttons: false },
+  ])(
+    'over a held transport, posts buttons only while a process holds it (held: $held)',
+    async ({ held, buttons }) => {
+      const harness = harnessWith({ chatConnectionHeld: held });
+      const taskId = await taskOf(harness);
+      await pendingApproval(harness, taskId);
+      harness.communication?.messages.splice(0);
+
+      await notify(harness, {
+        task_id: taskId,
+        notification_class: 'approval',
+        approval_id: APPROVAL,
+      });
+
+      expect(harness.communication?.messages).toHaveLength(1);
+      const [message] = harness.communication?.messages ?? [];
+      if (buttons) {
+        expect(message).toMatchObject({ approval: APPROVAL });
+      } else {
+        expect(message?.approval).toBeUndefined();
+        expect(message?.markdown).toContain(
+          'Decide on the task page: no process is holding this chat’s connection',
+        );
+      }
+    },
+  );
+
+  it('does not ask the liveness row for a transport it does not hold (the HTTP one)', async () => {
+    const harness = harnessWith({
+      chatConnectionHeld: false,
+      communication: {
+        capabilities: () => ({
+          threads: true,
+          buttons: true,
+          messageUpdate: true,
+          socketMode: false,
+          digest: true,
+        }),
+      },
+    });
+    const taskId = await taskOf(harness);
+    await pendingApproval(harness, taskId);
+    harness.communication?.messages.splice(0);
+
+    await notify(harness, {
+      task_id: taskId,
+      notification_class: 'approval',
+      approval_id: APPROVAL,
+    });
+
+    // A click over HTTP reaches `/webhooks/*`, which no row describes: buttons, as before WP-72.
+    expect(harness.communication?.messages[0]).toMatchObject({ approval: APPROVAL });
   });
 
   it('announces nothing for an approval somebody already decided — no row, no message', async () => {

@@ -50,6 +50,16 @@ export default async function setup(project: TestProject): Promise<() => Promise
          * that was chosen when a process needed 11 connections is not a statement about a process
          * that needs 16. A test container's backends are cheap; a red tier that names somebody
          * else's file is not.
+         *
+         * **Measured, not multiplied, since WP-72** — which started the first two-process cases
+         * (`test/e2e/topology/`). The worst case by arithmetic is far above 300: vitest runs
+         * `availableParallelism() - 1` files at once (13 on the machine measured), each instance's
+         * pool may grow to its floor + 1 (23 for `ROLE=all`), a two-process case holds two, and
+         * every instance adds its `LISTEN` client. It is not what happens, because a `pg.Pool`
+         * opens a connection only when one is borrowed. Sampled from `pg_stat_activity` (client
+         * backends) once a second across two whole `verify:e2e` runs with the two-process file in
+         * them: a peak of **134** and **125**, so 300 leaves more than twice the measured peak. The
+         * number to re-measure, rather than re-multiply, when a file adds instances.
          */
         '-c',
         'max_connections=300',

@@ -63,7 +63,17 @@ containers.
 platform gates*.** That is the honest consequence of the rule above
 ([TD-028](decisions/technical/TD-028-launcher-control-plane.md), amended 2026-09-23) and it is worth
 knowing before you meet it. The `stage.execute` jobs are still enqueued and simply **queue** rather
-than failing, so nothing is lost and the queue depth is what shows it.
+than failing, so nothing is lost. **No metric exposes that depth yet** and `/readyz` does not report
+the runner (PROGRESS backlog 135, still open), so read it from the database:
+
+```bash
+docker compose exec db psql -U app -d app -tAc \
+  "select count(*) from pgboss.job where name = 'stage.execute' and state in ('created', 'retry')"
+```
+
+(Measured at WP-72 as far as it could be: the same `pgboss.job` query, on another queue name, runs
+in the two-process e2e tier against pg-boss's real schema; this `docker compose exec` wrapper around
+it was not run.)
 
 Gate evaluation — `ci_gate`, `rebase_gate`, `merged_gate` — is a *branch of the same handler on the
 same queue*, so it stops with them. It is not given a queue of its own because `stage.execute` is
@@ -76,6 +86,53 @@ taken when a runner starts, bounded by pg-boss's 14-day default retention.
 
 Everything else — intake, the board, the knowledge index, every outbound provider call, the cost
 ledger, the audit — runs in `app`.
+
+### The topology, and splitting it further with `ROLE`
+
+A stock instance is **already two product processes**: `app` (`ROLE` from `.env`, `all` by default —
+the API *and* a worker, with no runner) and `runner` (`ROLE=runner` — a worker with the runner, and
+no API). They share nothing but the database, and everything that has to cross between them crosses
+through it. `ROLE` is also how you scale out further: the same image under a different value runs a
+different share of the work. Every role below was started in a test as its own process against a
+shared database (`test/e2e/topology/two-processes.e2e.test.ts`, WP-72), each crossing asserted
+through the processes rather than reasoned about.
+
+| `ROLE` | Serves the API, SSE and `/webhooks/*` | Runs the dispatcher and the job workers | Smallest `APP_DB_POOL_MAX` (concurrency 1) |
+|---|---|---|---|
+| `all` | yes | yes | 22 |
+| `api` | yes | no — it only **enqueues** | 4 |
+| `worker`, `runner`, `indexer` | no | yes | 20 |
+
+Each process refuses to start below its own number and names it. `runner` and `indexer` are workers
+named for what you deploy them for; whether a worker runs agents is its launcher configuration,
+never its role (above).
+
+**What crosses, and how:**
+
+- **A command's effect.** A command answered by a process that runs no worker (`ROLE=api`) is handed
+  to a worker through the job queue in the database: that role holds an enqueue-only queue client
+  and never takes a job itself (WP-72; before it, such a process held none, so a knowledge approval
+  waited for the nightly pass and every command that starts a stage was refused). On a brand-new
+  database whose worker has never started, a command that enqueues is refused with a message naming
+  the queue — start a worker first.
+- **The live run.** The runner writes the transcript and announces it with PostgreSQL `NOTIFY`; the
+  process that serves your browser reads the rows back, so the run screen fills from `app` while the
+  run executes in `runner`.
+- **Steer and take-over do not cross.** They reach only the process holding the run, and on this
+  topology the process that serves the API **never** holds one — so every steer answers `409
+  run_not_reachable` and a take-over pauses the task and exports nothing (PROGRESS backlog 134). The
+  steer limit (one message per 5 s per person) is counted per API process, so N API replicas allow N.
+- **The chat connection.** Slack's Socket Mode is held by the process that serves `/webhooks/*`, and
+  that process renews a liveness row for it every 20 s (fresh for 60 s). An approval is posted with
+  buttons only while the row is fresh; with no such process running — a worker-only deployment, or
+  `app` down — it is posted as text naming the task page instead of buttons nobody can press.
+- **A run's git credential.** It is redacted by exact value only in the runner that minted it.
+  Anything `app` stores or posts that quotes it — a webhook, a CI log, a merge-request diff — is
+  redacted by the platform's pattern rules, which match GitLab's default `glpat-` prefix. **If your
+  GitLab administrator changed the personal-access-token prefix**, a minted token is not
+  pattern-shaped and that protection does not apply (PROGRESS backlog 259).
+- **A merge request's diff** is read at most once per revision *per worker process*, so one gate
+  entry may read it once in `app` and once in `runner`.
 
 ### Requirements
 
@@ -230,12 +287,14 @@ That is a real answer, not a glitch, and the body says which check failed:
 | `queue` | pg-boss did not start | the logs name the failure |
 | `dispatch` | this process cannot handle every event the build declares consumed, so it refuses to sweep the outbox | see below |
 
-**`dispatch` is the one to know about.** `/readyz` is 503 on `ROLE=all` and `ROLE=worker` for as
-long as the process cannot compose a pipeline — it is honest rather than broken, and it is the same
-condition under which the outbox sweep deliberately does not start
+**`dispatch` is the one to know about.** `/readyz` is 503 on every worker role — `all`, `worker`,
+`runner` and `indexer` — for as long as the process cannot compose a pipeline — it is honest rather
+than broken, and it is the same condition under which the outbox sweep deliberately does not start
 ([TD-023](decisions/technical/TD-023-config-logging-metrics-otel.md)'s amendment). A stock instance
-today **does** compose one, so the check passes; if you set `ROLE` to something else, `api`, `runner`
-and `indexer` omit the check entirely rather than report it `ok`.
+today **does** compose one, so the check passes. `ROLE=api` runs no dispatcher and omits the check
+entirely rather than report it `ok`; since WP-72 it does report `queue`, for the enqueue-only client
+it hands commands to the workers through. The API ready beside a worker that is 503 for this reason
+is asserted with two processes in `test/e2e/topology/two-processes.e2e.test.ts`.
 
 Two consequences for whatever sits in front of the instance:
 
@@ -746,13 +805,16 @@ Stated here so an operator meets them in a document rather than in production:
   (WP-64, Q102; see the user guide). Its answers become knowledge proposals, never commits.
 - Every endpoint the browser application calls is served (the census in
   `apps/server/src/routes/client-census.test.ts` holds it, admitted gaps empty since WP-27, which added
-  steer, take-over and hand-back). A steer reaches only a run held by the process that serves the API;
-  in a split deployment it answers `409 run_not_reachable` and take-over exports nothing.
+  steer, take-over and hand-back). A steer reaches only a run held by the process that serves the API,
+  and on the shipped topology that process never holds one: every steer answers `409
+  run_not_reachable` and a take-over exports nothing (§1, *The topology*; PROGRESS backlog 134).
 - **Chat notifications ship since WP-32**: a project bound to a Slack integration with a channel gets a
   thread per task and the org's quiet hours and daily digest apply; an organisation-level budget has
   no channel yet. **Since WP-43 the process that serves the API (`ROLE=all` or `ROLE=api`) holds the
   Slack Socket Mode connection** — a `ROLE=worker` process holds none and names the integration in
-  its log — so an approval is posted with Approve / Request changes, and a click from an account an
+  its log — so an approval is posted with Approve / Request changes **while that process holds the
+  connection** (since WP-72 it renews a liveness row the notification band reads; with no such
+  process the approval arrives as text naming the task page), and a click from an account an
   admin has mapped on **Settings → Provider identities** is decided like one on the task page (a
   plan needs a maintainer). `APP_INTEGRATION_HOSTS` must name `slack.com` for the connection to
   open. A *reply* in a Slack thread is not yet matched to its task (PROGRESS backlog 195).

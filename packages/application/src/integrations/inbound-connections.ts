@@ -43,6 +43,18 @@
  * stopped selecting a held connection is closed. What it does **not** notice is a *changed*
  * credential on an account it already holds — a rotated app-level token needs a restart, stated in
  * the setup guide rather than implied here.
+ *
+ * ## It says that it holds each connection, where every process can read it (WP-72)
+ *
+ * PROGRESS backlog 200: the notify duty decided whether to post an approval's buttons from the
+ * binding's **configuration**, and a configuration cannot know whether any process is holding the
+ * socket — so a deployment with no process serving `/webhooks/*` posted buttons no door received.
+ * The supervisor now renews a per-account `held_connection_liveness` row (migration 0054) for every
+ * connection it holds: written **before** the state reads `open`, renewed every `renewMs`, and
+ * released when the connection is closed. The duty posts buttons only while that row is fresh on
+ * the database's clock, which is the question it always meant to ask. Held means what `open`
+ * already means here — a process has the connection and reconnects it on its own — not "the socket
+ * delivered a frame this second".
  */
 import type { Id } from '@platform/contracts';
 import { IntegrationError } from '../ports/integrations/common.js';
@@ -50,6 +62,7 @@ import type {
   BrokenHeldConnectionAccount,
   HeldConnectionAccount,
   HeldConnectionDirectory,
+  HeldConnectionLiveness,
   InboundConnection,
 } from '../ports/integrations/inbound-connection.js';
 import type { Logger } from '../ports/logger.js';
@@ -61,6 +74,13 @@ export const DEFAULT_HELD_CONNECTION_RELIST_MS = 60_000;
 /** First retry of a start that failed in a way a retry can fix; doubled per attempt. */
 export const DEFAULT_HELD_CONNECTION_RETRY_BASE_MS = 5_000;
 export const DEFAULT_HELD_CONNECTION_RETRY_MAX_MS = 300_000;
+/** How often a held connection's liveness row is renewed (WP-72, backlog 200). */
+export const DEFAULT_HELD_CONNECTION_RENEW_MS = 20_000;
+/**
+ * How long one renewal is fresh for — three renewals, so one slow or failed write does not make a
+ * held connection read as absent, and a holder that died is noticed within a minute.
+ */
+export const DEFAULT_HELD_CONNECTION_TTL_MS = 60_000;
 
 /** A timer that can be cancelled, because shutdown must not wait for a five-minute backoff. */
 export interface HeldConnectionScheduler {
@@ -92,8 +112,28 @@ export interface HeldConnectionStatus {
   readonly state: HeldConnectionState;
 }
 
+/**
+ * Where this process says, for every connection it holds, that it is holding it (WP-72, PROGRESS
+ * backlog 200) — the row the notify duty reads before it posts buttons.
+ */
+export interface HeldConnectionLivenessOptions {
+  readonly store: HeldConnectionLiveness;
+  /** Who this process is, written into the row. A diagnostic, never an authority. */
+  readonly holder: string;
+  /** @default {@link DEFAULT_HELD_CONNECTION_RENEW_MS} */
+  readonly renewMs?: number;
+  /** Must exceed `renewMs`. @default {@link DEFAULT_HELD_CONNECTION_TTL_MS} */
+  readonly ttlMs?: number;
+}
+
 export interface InboundConnectionsOptions {
   readonly directory: HeldConnectionDirectory;
+  /**
+   * The liveness row every held connection renews. **Required**: the notify duty posts buttons only
+   * while a row is fresh, so a supervisor composed without it would hold a socket that no duty
+   * believes is held — every approval would arrive as text on an instance whose buttons work.
+   */
+  readonly liveness: HeldConnectionLivenessOptions;
   /**
    * The process's webhook door, or `null` for a process that serves no `/webhooks/*` — which then
    * holds nothing and names every account it is not holding.
@@ -148,12 +188,55 @@ export const startInboundConnections = async (
   const relistMs = options.relistMs ?? DEFAULT_HELD_CONNECTION_RELIST_MS;
   const baseMs = options.retryBaseMs ?? DEFAULT_HELD_CONNECTION_RETRY_BASE_MS;
   const maxMs = options.retryMaxMs ?? DEFAULT_HELD_CONNECTION_RETRY_MAX_MS;
+  const renewMs = options.liveness.renewMs ?? DEFAULT_HELD_CONNECTION_RENEW_MS;
+  const ttlMs = options.liveness.ttlMs ?? DEFAULT_HELD_CONNECTION_TTL_MS;
+  if (ttlMs <= renewMs) {
+    throw new TypeError(
+      `a held connection's liveness TTL (${ttlMs} ms) must exceed its renewal interval (${renewMs} ms), or a held connection reads as absent between renewals`,
+    );
+  }
   const held = new Map<Id, Held>();
   /** Accounts already named as "not held by this process", so a relist does not repeat them. */
   const named = new Set<Id>();
   let stopping = false;
   let cancelRelist: (() => void) | null = null;
   let relisting: Promise<void> | null = null;
+  let cancelRenew: (() => void) | null = null;
+  let renewing: Promise<void> | null = null;
+
+  /**
+   * Says, for one account, that this process holds its connection (WP-72, backlog 200).
+   *
+   * A failed write is **logged, never thrown**: the connection is open and deliveries reach the
+   * ingress whatever the row says, and the cost of a missing row is the conservative one — the
+   * notify duty posts text naming the task page instead of buttons — until the next renewal lands.
+   */
+  const renewLiveness = async (entry: Held): Promise<void> => {
+    try {
+      await options.liveness.store.renew(
+        entry.account.integrationId,
+        options.liveness.holder,
+        ttlMs,
+      );
+    } catch (error) {
+      logger.warn(
+        { ...accountFields(entry.account), err: error },
+        'the held connection is open but its liveness could not be recorded: approvals are posted as text until the next renewal succeeds',
+      );
+    }
+  };
+
+  const releaseLiveness = async (entry: Held): Promise<void> => {
+    try {
+      await options.liveness.store.release(entry.account.integrationId, options.liveness.holder);
+    } catch (error) {
+      // The row expires on its own within the TTL; a failed release costs at most that long.
+      logger.warn(
+        { ...accountFields(entry.account), err: error },
+        'the held connection was closed but its liveness row could not be removed; it expires on its own',
+      );
+    }
+  };
 
   const deliveryHandler =
     (ingress: WebhookIngress, account: HeldConnectionAccount) =>
@@ -188,7 +271,10 @@ export const startInboundConnections = async (
     entry.state = 'opening';
     entry.starting = connection
       .start()
-      .then(() => {
+      .then(async () => {
+        // The row first and the state second, so "open" is never reported for a connection no
+        // notify duty yet believes is held.
+        await renewLiveness(entry);
         entry.state = 'open';
         entry.attempt = 0;
         logger.info(
@@ -230,6 +316,9 @@ export const startInboundConnections = async (
     entry.cancelRetry = null;
     await entry.starting;
     await entry.connection?.stop();
+    if (entry.state === 'open') {
+      await releaseLiveness(entry);
+    }
   };
 
   const open = (
@@ -322,8 +411,27 @@ export const startInboundConnections = async (
     });
   };
 
+  /** Renews every open connection's row on an interval, for as long as this process holds any. */
+  const scheduleRenew = (): void => {
+    if (stopping || options.ingress === null) {
+      return;
+    }
+    cancelRenew = options.scheduler.after(renewMs, () => {
+      cancelRenew = null;
+      renewing = Promise.all(
+        [...held.values()].filter((entry) => entry.state === 'open').map(renewLiveness),
+      )
+        .then(() => undefined)
+        .finally(() => {
+          renewing = null;
+          scheduleRenew();
+        });
+    });
+  };
+
   await relist();
   scheduleRelist();
+  scheduleRenew();
 
   return {
     status: () =>
@@ -338,7 +446,10 @@ export const startInboundConnections = async (
       stopping = true;
       cancelRelist?.();
       cancelRelist = null;
+      cancelRenew?.();
+      cancelRenew = null;
       await relisting;
+      await renewing;
       const entries = [...held.values()];
       held.clear();
       for (const entry of entries) {

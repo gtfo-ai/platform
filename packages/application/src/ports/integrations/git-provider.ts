@@ -373,7 +373,21 @@ export interface GitProviderCapabilities {
   readonly draftPipelines: boolean;
   /** Thread resolution API (`resolveDiscussion`). */
   readonly discussionResolution: boolean;
-  /** Credential minting; `false` means the operator's static bot token is used as-is. */
+  /**
+   * Credential minting; `false` means the operator's static bot token is used as-is.
+   *
+   * **A trigger, not only a flag** (WP-72, PROGRESS backlog 154, decision (a)). A minted value is
+   * redacted by exact match only in the process that minted it (`RunScopedSecrets` is memory), and
+   * on the shipped topology other processes store and post text a run can quote it into — so what
+   * keeps a run credential out of *their* rows is the platform's pattern rules alone
+   * (`patternRedactor`'s `gitlab-token`). That is sufficient for exactly one shape: GitLab's
+   * documented default `glpat-` prefix, which `pattern-redaction.test.ts` pins. **The day a second
+   * provider sets this to `true`, or a GitLab binding mints under a prefix the rule does not match —
+   * an administrator can change the personal-access-token prefix, and project access tokens inherit
+   * it (<https://docs.gitlab.com/administration/settings/account_and_limit_settings/>, retrieved
+   * 2026-09-27) — decision (b) becomes required**: the value sealed in the `secrets` store, keyed by
+   * run, and read by every process's redactor (PROGRESS backlog 259).
+   */
   readonly credentialMinting: boolean;
 }
 

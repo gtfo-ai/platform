@@ -24,6 +24,16 @@
 | Events | `GET /events?topics=org,project:<id>,task:<id>,run:<id>` (SSE), `POST /events/subscriptions` (add/remove topics for the connection id) |
 | Ops | `GET /healthz`, `GET /readyz`, `GET /metrics` (Prometheus; optional basic auth), `GET /api/version` |
 
+> **`/readyz` answers per process, and a split deployment has two answers (WP-72).** Every role
+> reports `database` and `migrations`; every role that holds a job client reports `queue` — which
+> since WP-72 is every role, because `ROLE=api` holds an **enqueue-only** pg-boss client it hands a
+> command's effect to the workers through (`apps/server/src/enqueue-only-jobs.ts`); every role that
+> runs a dispatcher — `all`, `worker`, `runner`, `indexer` — reports `dispatch`, which is `down`
+> while the process cannot compose a complete consumer (TD-023's amendment). So a split deployment
+> can legitimately show the API process **ready** beside a worker that is **503 for `dispatch`**, and
+> `test/e2e/topology/two-processes.e2e.test.ts` asserts exactly that through two processes on one
+> database. Neither answer reports the runner or the launcher (PROGRESS backlog 135).
+
 > **Five of the Knowledge row's eight endpoints are served** — four since WP-18b and `kb/health`
 > since WP-15h part 2 — and the other three are not, which is worth stating because the row reads as
 > one surface. Served: `GET …/kb/tree`, `GET …/kb/doc?path=`, `GET …/kb/proposals`,

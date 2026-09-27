@@ -24,8 +24,11 @@
  *
  * ## The enqueue is optional, and the residual is stated
  *
- * A process that serves the API may hold no job runtime (`ROLE=api` runs no pg-boss), so this
- * command takes `jobs` as **nullable** and says what that costs rather than pretending otherwise:
+ * A composition root may hold no job client, so this command takes `jobs` as **nullable** and says
+ * what that costs rather than pretending otherwise (until WP-72 that was every `ROLE=api` process;
+ * it now holds an enqueue-only sender, `apps/server/src/enqueue-only-jobs.ts`, and the approval is
+ * committed by the worker beside it — asserted through two processes in
+ * `test/e2e/topology/two-processes.e2e.test.ts`):
  * with a job runtime the commit happens in seconds; without one the decision waits for the nightly
  * hygiene pass, which re-asks for an apply for every project with a decided-but-unapplied proposal.
  * Nothing is lost either way, which is the property that made this acceptable — the *decision* is

@@ -76,6 +76,7 @@ import {
 import { composeBreakdown } from './breakdown.js';
 import { createTaskCommands } from './commands.js';
 import { loadServerConfig, type ServerConfig } from './config.js';
+import { enqueueOnlyJobs } from './enqueue-only-jobs.js';
 import { composeInboundConnections } from './inbound-connections.js';
 import {
   composeKnowledgeIndexing,
@@ -108,7 +109,9 @@ export interface ServerRuntime {
   readonly config: ServerConfig;
   readonly app: FastifyInstance;
   /**
-   * The job runtime this process started, or `null` for a role that starts none (`ROLE=api`).
+   * The job client this process started — the whole runtime on a worker role, the enqueue-only
+   * sender on `ROLE=api` (WP-72) — or `null` for a role that starts none (none exists in this
+   * build).
    *
    * A **labelled seam**, and the only caller is the e2e tier (WP-15d): a job is at-least-once and
    * pg-boss re-delivers one whose lease expired, and there is no other way to ask a running
@@ -287,20 +290,37 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
      * (WP-27: steer and take-over).
      *
      * One per process, built before either consumer: `composePipeline` wraps the agent runner with
-     * it and `createTaskCommands` looks runs up in it. It fills only on a process that runs stages,
-     * so on an API-only role it stays empty and both commands refuse by name — which is what a
-     * caller needs to be told, because the session is genuinely somewhere else (Q52).
+     * it and `createTaskCommands` looks runs up in it. It fills only on a process that **runs
+     * agents** — on the shipped topology `runner`, never `app` — so on every process that serves the
+     * API it stays empty: a steer refuses by name (`run_not_reachable`) and a take-over pauses the
+     * task and reports `no_live_run`, which is what a caller needs to be told, because the session is
+     * genuinely somewhere else (Q52, PROGRESS backlog 134; the steer asserted through two processes
+     * in `test/e2e/topology/two-processes.e2e.test.ts`).
      */
     const liveRuns = createLiveRuns();
 
     let jobsStarted = false;
     let jobs: Jobs | null = null;
-    if (capabilities.worker) {
+    /**
+     * **Every role that serves the API or runs workers holds a job client** (WP-72).
+     *
+     * A worker's is the whole runtime. An API-only process's (`ROLE=api`) is a **sender**: pg-boss
+     * with supervision and cron evaluation off, wrapped by `enqueueOnlyJobs` so that it can hand a
+     * worker the effect of a command and can never take a job itself. Until WP-72 that role held
+     * none, so a command answered on it was never performed by the worker beside it — a knowledge
+     * approval waited for the nightly pass and every command that starts a stage refused by name —
+     * and the first two-process tier is what measured it (`test/e2e/topology/`).
+     */
+    if (capabilities.worker || capabilities.api) {
       const jobsRuntime = jobsAdapters.createPgBossJobs({
         database: jobsAdapters.asJobsDatabase(database.pool),
         schema: config.jobs.schema,
         pollingIntervalSeconds: config.jobs.pollingIntervalSeconds,
         cronMonitorIntervalSeconds: config.jobs.cronMonitorIntervalSeconds,
+        // A sender runs neither pg-boss's maintenance nor its cron evaluation: both are the
+        // workers', and a second copy of either in every API replica is load with no owner.
+        supervise: capabilities.worker,
+        schedule: capabilities.worker,
         // pg-boss reports background failures here; the default writes a process warning, which no
         // log aggregator collects.
         onError: (error: unknown) => {
@@ -334,10 +354,11 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
        *
        * Nothing in production passes it: `startRuntime()` with no options composes the real `Jobs`.
        */
-      jobs =
+      const wrapped =
         options.pipeline?.jobs === undefined
           ? jobsRuntime.jobs
           : options.pipeline.jobs(jobsRuntime.jobs);
+      jobs = capabilities.worker ? wrapped : enqueueOnlyJobs(wrapped, config.role);
       stopCallbacks.unshift({
         name: 'jobs',
         stop: async () => {
@@ -345,7 +366,8 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           await jobsRuntime.stop();
         },
       });
-
+    }
+    if (capabilities.worker && jobs !== null) {
       // WP-03 built the daily partition cron and WP-05 the registration; this call is what makes
       // it run. Without it a long-lived instance eventually inserts into a month with no partition.
       const maintenance = await jobsAdapters.registerPartitionMaintenance(jobs, {
@@ -636,7 +658,10 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
      * Composed for every process that serves the API, worker or not: reading the proposal queue and
      * recording a maintainer's decision need the pool and nothing else, and `decide.ts` takes the
      * nullable `Jobs` on purpose — with one, the commit happens now; without one, the decision is
-     * recorded and the nightly hygiene pass applies it.
+     * recorded and the nightly hygiene pass applies it. Since WP-72 every process that serves the
+     * API holds one (`ROLE=api`'s is the enqueue-only sender), so the commit is asked for at once
+     * and performed by whichever worker takes `knowledge.apply`; the `null` arm is a composition
+     * root with no job client at all.
      */
     /**
      * The onboarding wizard's commands for the API half (WP-21).
@@ -644,6 +669,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
      * Composed for every process that serves the API. `jobs` is the one that decides what it can
      * do: a discovery start **needs** a queue (the task would sit at a stage nothing runs), so the
      * command refuses by name on a process with none rather than creating a task that never moves.
+     * Since WP-72 no process that serves the API is one: `ROLE=api` enqueues through its sender.
      */
     const onboardingCommands = capabilities.api
       ? createOnboardingCommands({
@@ -674,6 +700,8 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
      * Composed for every process that serves the API. `jobs` is what decides how much of it works:
      * without a queue, pausing, cancelling, answering and deciding are all served, and the four
      * commands that start a stage refuse by name rather than moving a task to a stage nothing runs.
+     * Since WP-72 every role that serves the API holds a queue client, so that arm is reached only
+     * by a composition root that builds none.
      */
     const taskCommands = capabilities.api
       ? createTaskCommands({ eventing, jobs, liveRuns, logger: loggerPort })
@@ -684,7 +712,8 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
      *
      * Composed for every process that serves the API, like `taskCommands`. `jobs` decides how much
      * of it works: without a queue the reads still answer and the write refuses by name, because a
-     * recorded question nothing will ever pick up is worse than a refusal.
+     * recorded question nothing will ever pick up is worse than a refusal (since WP-72, only a
+     * composition root with no job client at all is such a process).
      */
     /**
      * The epic split's API half (WP-40): the decision and the queue read, over one pipeline store.
@@ -958,7 +987,9 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       version: buildInfo(env),
       readiness: createReadinessCheck({
         database: database.db,
-        jobsStarted: capabilities.worker ? () => jobsStarted : null,
+        // Every role that holds a job client reports it (WP-72): an API process whose sender did
+        // not start refuses every command that hands a worker its effect.
+        jobsStarted: capabilities.worker || capabilities.api ? () => jobsStarted : null,
         // The same predicate the sweep gate uses, deliberately (rule 41): a process that refused to
         // start the sweep must not report ready to do the work it refused. `null` for `ROLE=api`,
         // which legitimately runs no dispatcher at all.

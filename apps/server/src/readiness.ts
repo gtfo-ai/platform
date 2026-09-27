@@ -20,7 +20,10 @@ import type { CheckStatus, ReadinessReport } from './routes/ops.js';
 
 export interface ReadinessOptions {
   readonly database: Database;
-  /** `null` when this process runs no job runtime (`ROLE=api`). */
+  /**
+   * `null` when this process holds no job client. Since WP-72 every shipped role holds one —
+   * `ROLE=api`'s is the enqueue-only sender — so every role reports `queue`.
+   */
   readonly jobsStarted: (() => boolean) | null;
   /**
    * Can this process's dispatcher actually advance an event? `null` when it runs none (`ROLE=api`).

@@ -50,8 +50,10 @@ describe('Drizzle schema', () => {
     // (migration 0050, WP-63, PROGRESS backlog 44), plus `command_idempotency` — the
     // `Idempotency-Key` record a command claims before it performs, which `human_actions` could not
     // be because it is append-only and already holds the duplicates a unique index would refuse
-    // (migration 0053, WP-67, PROGRESS backlog 47).
-    expect(tables.length).toBe(65);
+    // (migration 0053, WP-67, PROGRESS backlog 47), plus `held_connection_liveness` — whether any
+    // process holds an account's inbound connection now, which no configuration can answer and
+    // which the notify duty asks before it posts buttons (migration 0054, WP-72, backlog 200).
+    expect(tables.length).toBe(66);
   });
 
   it('names every table and column in snake_case, matching the wire format', () => {

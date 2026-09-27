@@ -72,6 +72,14 @@
  * than discovered, and is the same trade every in-memory limiter in this repository makes. What it
  * protects is not the platform but the **run**: each steer is a turn the model pays for, and a
  * stuck key would spend a run's budget on repetition.
+ *
+ * **On the shipped topology the N is moot, and the window is spent on a refusal** (WP-72). The
+ * process that serves the API is pinned never to hold a run (TD-028, PROGRESS backlog 134), so every
+ * steer that reaches the gate is then refused `409 run_not_reachable` — asserted through two
+ * processes in `test/e2e/topology/two-processes.e2e.test.ts` — and the gate has already recorded
+ * the attempt, so a person who retries within five seconds is told `429` about a message that could
+ * never have been delivered. That is the fail-closed direction and costs nothing but the wording;
+ * the N-containers arithmetic becomes real the day a process that serves the API can reach a run.
  */
 
 import type { RunStatus, TaskState, UserRole } from '@platform/contracts';

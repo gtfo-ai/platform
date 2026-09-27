@@ -53,7 +53,13 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { ClaudeRunner, Jobs, PlatformToolPort, RunSpec } from '@platform/application';
+import type {
+  ClaudeRunner,
+  GitProviderPort,
+  Jobs,
+  PlatformToolPort,
+  RunSpec,
+} from '@platform/application';
 import type {
   DomainEvent,
   Id,
@@ -91,7 +97,12 @@ import {
   scriptedWorkspaces,
   type WorkspaceRelease,
 } from './agent-workspace.js';
-import { type Instance, ROLE_ALL_POOL_FLOOR, startInstance } from './instance.js';
+import {
+  type Instance,
+  ROLE_ALL_POOL_FLOOR,
+  type StartInstanceOptions,
+  startInstance,
+} from './instance.js';
 import { type FakeSlack, SLACK_E2E_CONFIG, SLACK_E2E_HOST, SLACK_E2E_SECRETS } from './slack.js';
 
 export const GIT_INTEGRATION_ID = '00000000-0000-4000-8000-00000000a001' as Id;
@@ -184,8 +195,54 @@ export interface KbSearchCall {
   readonly result: unknown;
 }
 
+/**
+ * One provider call a process made through the fake git provider — WP-72's attribution.
+ *
+ * The fakes are **one** object shared by every process a test starts, which is right: the provider
+ * is somebody else's server and both containers talk to the same one. What a two-process assertion
+ * needs besides is *which* process made a call, so each process's registry hands out its own
+ * recording view of the shared fake, and the view names the process.
+ */
+export interface GitCall {
+  readonly process: string;
+  readonly method: string;
+}
+
+/** A second `apps/server` process on the harness's database (WP-72, PROGRESS backlog 38). */
+export interface AddProcessOptions {
+  /** Names the process in {@link PipelineE2E.gitCalls}. */
+  readonly name: string;
+  readonly role: string;
+  /**
+   * Which runner this process composes — {@link StartPipelineOptions.agent}'s three modes. `none`
+   * is what the shipped `app` container is: no launcher, so it subscribes neither `stage.execute`
+   * nor `task.ask` (TD-028 decision 5).
+   */
+  readonly agent?: 'fake-runner' | 'real-over-fake-cli' | 'none';
+  /** `null` starts the process with no pipeline — the `sweepReadiness` seam, for `/readyz`. */
+  readonly pipeline?: null;
+  /**
+   * Merged over the harness's own environment **and the primary's `env`**, which every process
+   * shares — so a primary started with `APP_DB_POOL_MAX` at its own role's floor hands that number
+   * to this one too unless it is set again here.
+   */
+  readonly env?: Readonly<Record<string, string>>;
+  readonly logDestination?: StartInstanceOptions['logDestination'];
+}
+
 export interface PipelineE2E {
   readonly instance: Instance;
+  /**
+   * Starts another whole `apps/server` process against this harness's database, with the same
+   * provider doubles and the same scenarios, and stops it before the primary on {@link stop}.
+   *
+   * WP-72: no tier had ever started two processes with different `ROLE`s, and TD-028 makes that
+   * the shipped topology. The primary keeps serving whatever it was started as; this is the other
+   * container.
+   */
+  addProcess(options: AddProcessOptions): Promise<Instance>;
+  /** Every call a process made through the fake git provider, in order (WP-72). */
+  gitCalls(): readonly GitCall[];
   readonly world: SeededWorld;
   readonly database: MigratedDatabase;
   readonly git: ReturnType<typeof createFakeGitProvider>;
@@ -513,6 +570,10 @@ export interface StartPipelineOptions {
   readonly kbSearchQuery?: string;
   /** Extra environment for the instance — `APP_DB_POOL_MAX` at the shipped default, say. */
   readonly env?: Readonly<Record<string, string>>;
+  /** The primary's `ROLE` (WP-72). Absent is `all`, which is what every file before it ran. */
+  readonly role?: string;
+  /** Names the primary in {@link PipelineE2E.gitCalls}. @default 'primary' */
+  readonly processName?: string;
   /**
    * Wraps the `Jobs` the pipeline enqueues through — the labelled seam of
    * {@link PipelineComposition.jobs} (WP-15c).
@@ -899,23 +960,45 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
     };
   }
 
+  /**
+   * Each process's own view of the one fake git provider, recording which process made each call
+   * (WP-72). A `Proxy` rather than a copy, so every method is the fake's own, bound to the fake —
+   * the recording is the only thing it adds.
+   */
+  const gitCalls: GitCall[] = [];
+  const recordingGit = (processName: string): GitProviderPort =>
+    new Proxy(git, {
+      get: (target, property, receiver) => {
+        const value = Reflect.get(target, property, receiver) as unknown;
+        if (typeof value !== 'function') {
+          return value;
+        }
+        return (...args: unknown[]) => {
+          gitCalls.push({ process: processName, method: String(property) });
+          return (value as (...parameters: unknown[]) => unknown).apply(target, args);
+        };
+      },
+    });
+
   // The fakes reach the pipeline the way a real provider does: through the registry, resolved by
   // the `provider` column of the seeded `integrations` row (WP-15a).
-  const registry = (registryOptions: PipelineProviderRegistryOptions): IntegrationRegistry =>
-    createIntegrationRegistry([
-      fakeGitRegistration({ port: git, token: GIT_BINDING_TOKEN }),
-      fakeTaskManagementRegistration({ port: tickets, token: TICKET_BINDING_TOKEN }),
-      options.slack === undefined
-        ? fakeCommunicationRegistration({ port: chat, token: CHAT_BINDING_TOKEN })
-        : // WP-43: the production registration, with the process's clock and timer, over the
-          // fake's two network edges — exactly what `createPipelineProviderRegistry` builds.
-          createSlackRegistration({
-            clock: registryOptions.clock,
-            timer: registryOptions.timer,
-            fetch: options.slack.fetch,
-            connect: options.slack.connect,
-          }),
-    ]);
+  const registryFor =
+    (processName: string) =>
+    (registryOptions: PipelineProviderRegistryOptions): IntegrationRegistry =>
+      createIntegrationRegistry([
+        fakeGitRegistration({ port: recordingGit(processName), token: GIT_BINDING_TOKEN }),
+        fakeTaskManagementRegistration({ port: tickets, token: TICKET_BINDING_TOKEN }),
+        options.slack === undefined
+          ? fakeCommunicationRegistration({ port: chat, token: CHAT_BINDING_TOKEN })
+          : // WP-43: the production registration, with the process's clock and timer, over the
+            // fake's two network edges — exactly what `createPipelineProviderRegistry` builds.
+            createSlackRegistration({
+              clock: registryOptions.clock,
+              timer: registryOptions.timer,
+              fetch: options.slack.fetch,
+              connect: options.slack.connect,
+            }),
+      ]);
 
   /**
    * The `real-over-fake-cli` half (WP-15g): a provisioner whose process is a scripted CLI, and the
@@ -937,36 +1020,71 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
       await options.onAgentSpec?.(spec);
     },
   );
-  const realRunner = options.agent === 'real-over-fake-cli';
-  const noRunner = options.agent === 'none';
+  /**
+   * One `apps/server` process of this harness — the primary, or one {@link PipelineE2E.addProcess}
+   * starts beside it (WP-72). Every process gets the same environment, the same doubles and the
+   * same scenarios; what differs is its `ROLE`, its runner and its view of the git fake.
+   */
+  const startProcess = async (proc: {
+    readonly name: string;
+    readonly role: string | undefined;
+    readonly agent: 'fake-runner' | 'real-over-fake-cli' | 'none' | undefined;
+    readonly label: string;
+    readonly database: MigratedDatabase | undefined;
+    readonly pipeline: null | undefined;
+    readonly env: Readonly<Record<string, string>> | undefined;
+    readonly logDestination?: AddProcessOptions['logDestination'];
+  }): Promise<Instance> => {
+    const realRunner = proc.agent === 'real-over-fake-cli';
+    const noRunner = proc.agent === 'none';
+    return startInstance({
+      label: proc.label,
+      ...(proc.role === undefined ? {} : { role: proc.role }),
+      ...(proc.database === undefined ? {} : { database: proc.database }),
+      ...(proc.logDestination === undefined ? {} : { logDestination: proc.logDestination }),
+      env: {
+        APP_SECRET_KEY,
+        // Turn the instance's own timers down rather than sleeping in the assertions.
+        APP_JOBS_POLL_INTERVAL_SECONDS: '0.5',
+        APP_DISPATCH_POLL_INTERVAL_MS: '25',
+        // One connection above `instance.ts`'s exact floor, which that file reads off
+        // `requiredPoolConnections` (WP-56) — derived here from the same number rather than
+        // spelled, so a worker added to `POOL_RESERVATIONS` moves both lines at once.
+        APP_DB_POOL_MAX: String(ROLE_ALL_POOL_FLOOR + 1),
+        // The credential `composeAgentRunner` refuses to compose a runner without in `api` mode. It
+        // is planted rather than absent precisely so the redaction assertions have something to
+        // look for.
+        ...(realRunner ? { ANTHROPIC_API_KEY: PLANTED_MODEL_KEY } : {}),
+        // WP-51's allow-list is closed by default; the fake Slack's host is declared, and nothing
+        // else.
+        ...(options.slack === undefined ? {} : { APP_INTEGRATION_HOSTS: SLACK_E2E_HOST }),
+        ...options.env,
+        ...proc.env,
+      },
+      // No `auditLog` and no `idempotency`: the instance builds both from its own pool (WP-15b).
+      pipeline:
+        proc.pipeline === null
+          ? null
+          : {
+              registry: registryFor(proc.name),
+              ...(realRunner ? { workspaces: scripted.provisioner } : {}),
+              ...(realRunner || noRunner ? {} : { runner }),
+              ...(options.jobs === undefined ? {} : { jobs: options.jobs }),
+            },
+    });
+  };
 
-  const instance = await startInstance({
+  const instance = await startProcess({
+    name: options.processName ?? 'primary',
+    role: options.role,
+    agent: options.agent,
     label: options.label ?? 'pipeline',
-    ...(options.reuse === undefined ? {} : { database: options.reuse.database }),
-    env: {
-      APP_SECRET_KEY,
-      // Turn the instance's own timers down rather than sleeping in the assertions.
-      APP_JOBS_POLL_INTERVAL_SECONDS: '0.5',
-      APP_DISPATCH_POLL_INTERVAL_MS: '25',
-      // One connection above `instance.ts`'s exact floor, which that file reads off
-      // `requiredPoolConnections` (WP-56) — derived here from the same number rather than spelled,
-      // so a worker added to `POOL_RESERVATIONS` moves both lines at once.
-      APP_DB_POOL_MAX: String(ROLE_ALL_POOL_FLOOR + 1),
-      // The credential `composeAgentRunner` refuses to compose a runner without in `api` mode. It is
-      // planted rather than absent precisely so the redaction assertions have something to look for.
-      ...(realRunner ? { ANTHROPIC_API_KEY: PLANTED_MODEL_KEY } : {}),
-      // WP-51's allow-list is closed by default; the fake Slack's host is declared, and nothing else.
-      ...(options.slack === undefined ? {} : { APP_INTEGRATION_HOSTS: SLACK_E2E_HOST }),
-      ...options.env,
-    },
-    // No `auditLog` and no `idempotency`: the instance builds both from its own pool (WP-15b).
-    pipeline: {
-      registry,
-      ...(realRunner ? { workspaces: scripted.provisioner } : {}),
-      ...(realRunner || noRunner ? {} : { runner }),
-      ...(options.jobs === undefined ? {} : { jobs: options.jobs }),
-    },
+    database: options.reuse?.database,
+    pipeline: undefined,
+    env: undefined,
   });
+  /** Started by `addProcess`, stopped before the primary — which owns the database. */
+  const added: Instance[] = [];
 
   const pool = createTestPool(instance.database.connectionString, { max: 4 });
   const { projectId, userId } =
@@ -1031,6 +1149,21 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
 
   return {
     instance,
+    addProcess: async (proc) => {
+      const started = await startProcess({
+        name: proc.name,
+        role: proc.role,
+        agent: proc.agent,
+        label: `${options.label ?? 'pipeline'}-${proc.name}`,
+        database: instance.database,
+        pipeline: proc.pipeline,
+        env: proc.env,
+        logDestination: proc.logDestination,
+      });
+      added.push(started);
+      return started;
+    },
+    gitCalls: () => [...gitCalls],
     world,
     database: instance.database,
     git,
@@ -1260,6 +1393,11 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
     stop: async () => {
       await inbound.stop();
       await pool.end();
+      // The added processes first and in reverse: none of them owns the database, and the
+      // primary's `stop` drops it.
+      for (const other of added.splice(0).reverse()) {
+        await other.stop();
+      }
       await instance.stop();
     },
   };

@@ -353,10 +353,13 @@ Click a run. Header metrics, then three tabs:
 You can **cancel** the run (member), **retry** it with a different model or effort (member — this
 creates a *new* run rather than changing this one), and leave **feedback** scoped to the stage.
 
-**Steering a live run is the one thing the application asks for and the server does not serve.** It
-pushes a turn into a session that is already running, which needs a transport to the running
-container that this build does not have. Cancelling has the same limit from the other side: it ends
-the run as a *record*, and does not interrupt what is executing.
+**Steering a live run is served, and on a stock instance it is always refused.** It pushes a turn
+into a session that is already running, which only the process running that session can do — and on
+the shipped topology the process that serves this application never runs one (the `runner` container
+does). So the button answers `409 run_not_reachable`, by name, rather than accepting a message nobody
+would hear; asserted through the two processes at WP-72 (PROGRESS backlog 134 owns the transport).
+Cancelling has the same limit from the other side: it ends the run as a *record*, and does not
+interrupt what is executing.
 
 One tab can answer "not available" rather than showing you a document, and that too is deliberate:
 
@@ -495,7 +498,7 @@ In one place, so it is not spread across thirteen sections:
 
 | Not built | Where you meet it |
 |---|---|
-| Steering a live run | run detail — the only endpoint the application calls that the server does not serve |
+| Steering a live run | run detail — served, and refused `409 run_not_reachable` on every stock instance, because the process that serves the application never holds a run |
 | Ask the task a question | task detail |
 | The business interview as a *conversation* with the Product Manager role (the form is built; Q102) | onboarding step 3 |
 | Committing `.agentic/` configuration from the wizard itself (the project settings page does it) | onboarding step 5 |

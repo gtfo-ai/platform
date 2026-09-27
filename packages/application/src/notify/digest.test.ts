@@ -96,6 +96,7 @@ const optionsOf = (harness: PipelineHarness, now: string, timezone = 'UTC'): Not
     notifications: harness.notifications,
     timezone,
     organisation: harness.organisation,
+    heldConnections: harness.heldConnections,
   };
 };
 

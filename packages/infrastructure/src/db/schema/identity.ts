@@ -184,6 +184,18 @@ export const bindings = pgTable('bindings', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/**
+ * Whether a process holds an account's inbound connection **now** (migration 0054, WP-72, PROGRESS
+ * backlog 200). One row per integration, renewed by its holder; fresh while `expires_at > now()`,
+ * both halves on the database's clock. The migration's header carries the reasoning.
+ */
+export const heldConnectionLiveness = pgTable('held_connection_liveness', {
+  integrationId: uuid('integration_id').primaryKey(),
+  holder: text('holder').notNull(),
+  renewedAt: timestamp('renewed_at', { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+});
+
 /** Append-only, monthly partitions. Secret values appear as "changed" (technical/03). */
 export const configAudit = pgTable(
   'config_audit',

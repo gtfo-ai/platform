@@ -901,6 +901,10 @@ export const composePipeline = async (
       secretKey: options.secretKey,
       stack,
     }),
+    // WP-72 (backlog 200): whether any process holds a chat account's held connection now — the
+    // row `inbound-connections.ts` renews in whichever process serves the webhooks, read here in
+    // whichever process runs the notify duty. On the shipped topology those can be two containers.
+    heldConnections: integrationAdapters.createPostgresHeldConnectionLiveness(options.pool),
     // WP-34: shadow mode's batches, tickets and reports. Required rather than optional for the
     // reason `notifications` is — `EVENT_CONSUMPTION` declares `shadow.report.created` handled, so
     // a process that composed the pipeline without it would sweep an event it promised a consumer

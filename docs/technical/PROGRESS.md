@@ -8508,7 +8508,7 @@ remove the option or pass it into the run body, one or the other. Related, for t
 TD-026:17 said the mirror is mounted *"at `/cache`"*; the working tree already carries its WP-75
 correction (`/cache/<cacheKey>.git`, uncommitted, TD-026:17-18), so nothing is owed there beyond the commit.
 
-### 154. **The run credential's exact-match redaction lives in the memory of the process that minted it, and on the shipped topology that is never the only process taking `pipeline.outbound` jobs — so text quoting the token that another worker stores or posts is redacted by the pattern rules alone, which match GitLab's documented `glpat-` shape and nothing the tree has ever asserted a minted token to be** (TODO, **nit-to-small** — **live on `docker compose up`**, not only on a hand-split deployment (the implementer's *"latent on `ROLE=all`"* is corrected below); in the normal path the string such a job sees is **already revoked**, and the window in which it is live is backlog **155**'s; **owned by WP-72** (refiner, session 8) for the assertion and the decision; found by WP-76, session 8, graded by the refiner)
+### 154. **The run credential's exact-match redaction lives in the memory of the process that minted it, and on the shipped topology that is never the only process taking `pipeline.outbound` jobs — so text quoting the token that another worker stores or posts is redacted by the pattern rules alone, which match GitLab's documented `glpat-` shape and nothing the tree has ever asserted a minted token to be** (**RESOLVED** by WP-72 at `WP72SHA`, session 8 — see `#### WP-72`: decision (a) taken and pinned, decision (b) filed as **259** — TODO, **nit-to-small** — **live on `docker compose up`**, not only on a hand-split deployment (the implementer's *"latent on `ROLE=all`"* is corrected below); in the normal path the string such a job sees is **already revoked**, and the window in which it is live is backlog **155**'s; **owned by WP-72** (refiner, session 8) for the assertion and the decision; found by WP-76, session 8, graded by the refiner)
 
 **What is wrong.** TD-028's WP-76 amendment, decision 8, asks the run's git credential to join the
 run's redactors. WP-76 built that as `createRunScopedSecrets`
@@ -9695,7 +9695,7 @@ replayed. One stats case: two gate entries at one revision count one pair.
 
 **Depends on / owner.** WP-59, WP-41. **Proposed owner WP-61** (refiner, session 8). Related: **65**.
 
-### 181. **The diff coalescer is per process, so on the shipped topology the app and the runner each make the read once** (TODO, **nit** — bandwidth only, stated in the module's docblock (`packages/application/src/pipeline/diff-coalescer.ts:30-34`); the implementer's claim that both processes take `pipeline.outbound` is **as reported** — `compose.yml:226` does run the runner as a worker; **needs measurement** of the split; proposed owner **WP-72** (refiner, session 8); found by WP-59, session 8)
+### 181. **The diff coalescer is per process, so on the shipped topology the app and the runner each make the read once** (**RESOLVED** by WP-72 at `WP72SHA`, session 8 — see `#### WP-72`: measured per process, no shared store — TODO, **nit** — bandwidth only, stated in the module's docblock (`packages/application/src/pipeline/diff-coalescer.ts:30-34`); the implementer's claim that both processes take `pipeline.outbound` is **as reported** — `compose.yml:226` does run the runner as a worker; **needs measurement** of the split; proposed owner **WP-72** (refiner, session 8); found by WP-59, session 8)
 
 The implementer, quoted: *"two processes running `pipeline.outbound` (the app and the runner, WP-53)
 each read once. Cross-process coalescing would need a store and is only bandwidth."* **Done**: WP-72's
@@ -10066,7 +10066,7 @@ the route's rule; the WP-43 e2e's approve step asserts the row over both transpo
 rules the inbox row is the audit, technical/08:201 says so and the task audit panel joins it — one of the two, not
 neither. **Depends on** WP-43.
 
-### 200. **"A click can arrive" is read from the binding's configuration, not from whether any process holds the socket, so a deployment with no `api` process posts buttons nothing receives** (TODO, **small** — **latent** on the shipped compose (`app` serves the API), **live** on any worker-only topology; **read off the tree**; proposed owner **WP-72** (refiner, session 8); found by WP-43, session 8)
+### 200. **"A click can arrive" is read from the binding's configuration, not from whether any process holds the socket, so a deployment with no `api` process posts buttons nothing receives** (**RESOLVED** by WP-72 at `WP72SHA`, session 8 — see `#### WP-72`: `held_connection_liveness`, migration 0054 — TODO, **small** — **latent** on the shipped compose (`app` serves the API), **live** on any worker-only topology; **read off the tree**; proposed owner **WP-72** (refiner, session 8); found by WP-43, session 8)
 
 `clickCanArrive = signingSecret !== null && (!config.socket_mode || appToken !== null)`
 (`packages/integrations/src/providers/slack/provider.ts:296`) becomes `capabilities().buttons`, which the notify
@@ -11173,6 +11173,147 @@ Whether `paused → returned` should exist too (so return-to-stage works from an
 **What it costs to leave.** Rule 20's worst shape — a check that did nothing reporting success. `notices:check` (`package.json:39`) is a step of `verify:static`, so an invocation through a symlinked absolute path passes without comparing anything; `version.mjs --github-output` (`image.yml:95`) would emit no version, and the next `scripts/*.mjs` that copies the idiom inherits it. Invoked as `node scripts/…` from a checkout, `argv[1]` resolves against the working directory, which is why CI and `pnpm` are not affected today.
 
 **What "done" looks like.** The three guards compare against `realpathSync(process.argv[1])` (one helper beside `ts-source-resolver.mjs` or in each — a matter for the implementer); one case per script, or one shared case, runs it through a symlinked directory and asserts it *did* its work (for `notices.mjs --check`, that a stale file fails); and `changelog.test.ts:480-483`'s workaround and comment are then removed, so the test stops hiding the thing it found. `import.meta.main` is the alternative, but whether every `engines: ">=24"` release carries it is **not verified here** — the implementer checks before choosing it. **Depends on** nothing unbuilt.
+
+### 259. **A run credential is redacted by exact value only in the process that minted it; everywhere else the pattern rule is the defence, and it misses a GitLab token minted under an administrator-chosen prefix** (small, TODO — **latent with a named trigger**: a GitLab binding with `mint_credentials: true` on an instance whose administrator changed the token prefix, **or** a second provider setting `credentialMinting`; in the normal path the quoted string is already revoked; **read off the tree**, the residual pinned by a unit case; **unowned — for the M5 architect pass**; decision (b) of backlog **154**, filed by WP-72, session 8)
+
+**What is wrong.** Backlog 154 offered two decisions. WP-72 took (a): the pattern rule `gitlab-token` is the
+defence in a process that never minted, which on the shipped topology is `app`, the process that handles every
+webhook and about half the outbound duties. (a) holds for GitLab's default `glpat-` shape and for nothing else.
+
+**Evidence.** WP-72 notes, quoted: *"GitLab's admin settings page
+(<https://docs.gitlab.com/administration/settings/account_and_limit_settings/>, retrieved 2026-09-27) says an
+administrator can change the personal-access-token prefix and project access tokens inherit it — so on such an
+instance a minted token is not pattern-shaped and (a) does not hold."* On the tree:
+- The residual is pinned. `packages/infrastructure/src/redaction/pattern-redaction.test.ts` › "does not redact a token minted under an administrator-chosen prefix — the trigger for (b)" (`:80-86`) asserts that `acmepat-FAKE0custom0prefix0token` comes out of `patternRedactor()` unchanged.
+- The trigger is written on the port (`packages/application/src/ports/integrations/git-provider.ts:376-391`, `credentialMinting`), and it names this entry.
+- The exact-match registry is per-process memory (`packages/application/src/pipeline/run-redaction.ts:116-`).
+- Two limits, as WP-72 stated them: the token was **planted, not minted**, because minting needs the launcher's control plane and only the Docker tier has it; and the platform itself never writes the token. Only the agent can put it into text (BD-025 §3's accepted exposure).
+
+**What it costs to leave.** On a custom-prefix instance, a minted token that a run quoted into a commit, a CI
+log or an MR is stored verbatim in `app`'s rows, and posted verbatim by duties that `app` runs. Normally the
+token has been revoked by then. The live window is backlog 155's, which WP-77 resolved.
+
+**What "done" looks like.** (b) as backlog 154 specifies it:
+- the minted value is sealed in the existing envelope-encrypted `secrets` store, keyed by run id with its `expires_at`;
+- every process's run-scoped registry reads it at call time;
+- expired rows are deleted.
+
+It is asserted **through two processes with a real mint**. That needs the Docker tier, or a launcher double that
+mints through the fake git provider, and choosing between them is part of this work. The pinned residual case
+then fails and is inverted, and the sentences on `credentialMinting` and in `run-redaction.ts` are rewritten
+with it. Needs a decision first: whether a cleartext-recoverable copy of a live credential in the database
+(sealed, but readable by every product process) is an acceptable trade against a redaction gap. That is a
+BD-002/TD-012 question, which is why the owner is the architect rather than the sweep.
+
+**Depends on.** WP-72 (the two-process tier), WP-76, WP-77. Related: 154, 155, Q55, TD-012.
+
+### 260. **The fake provider registrations drop the redactor the loader hands `create`, so in the e2e tier a fake's normalised inbound events are unredacted — a test-double gap, not a production leak — and no test anywhere asserts the pattern-rule half of an inbound *event*** (small, TODO — **test-only**: production verified **not affected**, read off the tree, nothing run; folded into **WP-73**; found by WP-72, session 8)
+
+**What is wrong / the evidence.** WP-72 notes, quoted: *"the `mr.review.comment` **event** carried the value
+unredacted — measured — because the fake registration ignores the caller's redactor"*, and *"a `glpat-` value in
+a fake-git review comment reached `events.payload` while the `inbox` row was redacted."* On the tree: all three
+fake `create`s check the token and return the prebuilt port, and none of them reads `input.redactor`
+(`packages/integrations/src/bindings/fake-registrations.ts:62-64`, `:93-95`, `:109-111`). The fakes are
+composed only by `test/e2e/support/pipeline.ts:989-992`, and no production root imports them.
+
+**Is production affected? No, as far as the tree shows.** The ingress does not redact event drafts. It
+appends `draft.payload` as the normaliser returned it (`packages/application/src/integrations/inbound.ts:489-534`),
+so the guarantee belongs to each adapter. Every real inbound adapter keeps it:
+- The production loader builds `composeSecretRedactors(bindingSecretRedactor(injected), platformRedactor)` (`packages/integrations/src/bindings/inbound-loader.ts:141`) and passes it to `create` (`:157-162`). The `platformRedactor` is `patternRedactor()` (`apps/server/src/pipeline.ts:541`).
+- GitLab composes `options.redactor` (`gitlab/provider.ts:244-245`) and hands the result to `normalise` (`:449-451`), which redacts the whole body before any branch reads it (`gitlab/inbound.ts:434-438`).
+- Slack does the same (`slack/provider.ts:280-281`, `:435`; `slack/inbound.ts:440`), and so does Jira (`jira-cloud/index.ts:237-238`; `jira-cloud/webhook.ts:471`).
+- `packages/integrations/src/providers/inbound-redaction.test.ts` holds every provider directory to the **binding-secret** half at the event level.
+
+**The gap that is real.** That file deliberately disarms the caller's redactor (its docblock, `:17-20`). So the
+**pattern** half of an inbound event is composed in production but asserted nowhere. A token of another
+binding, or a run credential quoted in an MR comment, is exactly what 154's decision (a) relies on. WP-72's
+two-process case asserted only the `inbox` row, because the fake left it nothing else to assert.
+
+**What it costs to leave.** A regression that drops `options.redactor` from a real adapter's composition is
+caught by no tier. The first sign would be a credential in the append-only `events` table (BD-003), which
+cannot be taken back.
+
+**What "done" looks like.**
+1. The three fake registrations apply `input.redactor` to the delivery before their normaliser reads it, as every real adapter does. Anything left undone is written into each fake's divergence register.
+2. The shipped-topology case in `test/e2e/topology/two-processes.e2e.test.ts` extends its planted-`glpat-` assertion to the `mr.review.comment` row in `events.payload`, both ways: placeholder present, planted value absent.
+3. A canary: the fake's redaction removed makes that case fail.
+
+The ingress redacting drafts itself (a second pass at `inbound.ts:507`) is **not** proposed here. It would be defence in depth, and it is an architect's call.
+
+**Depends on.** WP-72. Related: 154, 259, BD-022, TD-012.
+
+### 261. **The shared comment stripper that nine source guards read through treats a `/*` inside a string or a `//` comment as a block-comment opener, and deletes everything up to the next `*/`** (small, TODO — **latent**, instrument defect; the census case is **measured** by WP-72, and the other guards' exposure **needs measurement**; folded into **WP-73**; found by WP-72, session 8; its scope widened by the refiner)
+
+**What is wrong / the evidence.** WP-72 notes, quoted: *"a comment naming `` `/webhooks/*` `` inside
+`createPipelineRuntime({…})` hid `heldConnections` **and** `shadow` from the census (measured, then reworded).
+The census docblock lists its blind spots and not this one."*
+
+**Correction to the report: the parser is not the census's own.** `apps/server/src/pipeline-census.test.ts:46-47`
+reads every source through `withoutComments` from `apps/server/src/routes/web-sources.ts:51-60`. That function
+runs `/\/\*[\s\S]*?\*\//g` over the raw text **before** it drops comment-only lines. So a `/*` in a `//` line, in
+a trailing `//` comment, or inside a string literal opens a pseudo-comment that swallows code up to the next
+real `*/`. Nine files import it (`git grep -l withoutComments`):
+- `pipeline-census`, `run-secrets-composition`, `queries/integration-config-writers`, `routes/endpoint-callers`, `routes/client-census` and `routes/settings-mirror` under `apps/server/src`;
+- `task-save-sites`, `wip-commit-sites` and `compile-sites` under `packages/application/src/pipeline`.
+
+`apps/launcher/src/docker-access.test.ts:77-88` has its own line-based stripper and is **not** affected.
+
+Live triggers outside a block comment exist in production sources today:
+- `apps/server/src/auth/plugin.ts:213` (`url: '/api/auth/*'`);
+- `apps/server/src/workspaces.ts:72` (`['agentic/*']`, which swallows `:72-81`, a declaration tail and a docblock);
+- `apps/server/src/routes/kb.ts:311`;
+- `apps/server/src/routes/project-config.ts:179`.
+
+**What it costs to leave.** The direction depends on the guard. In a census of what must be **present** (the
+pipeline census), a hidden key is a false alarm, which is how WP-72 found this. In a census of what must be
+**absent** (task-save sites, WIP-commit sites, compile sites, integration-config writers), a hidden region is a
+**false negative**: a forbidden call placed after such a literal passes. That is rule 20's worst shape in the
+instruments that exist to stop it. **Needs measurement**: whether any guard's stripped text differs today
+between this stripper and a correct one.
+
+**What "done" looks like.**
+- `withoutComments` becomes string- and template-aware: either the TypeScript scanner (already a dependency) or a small state machine over `'`, `"`, `` ` ``, `//` and `/* */`.
+- Unit cases: `'/*'` in a string, `// /*` in a line comment, and `/*` in a trailing comment, each leaving the code after it intact.
+- The measurement above is taken and stated. Any guard whose verdict changes is fixed or filed by number.
+- The census docblock's "What it cannot see" is corrected.
+
+**Depends on.** Nothing.
+
+### 262. **On a split install whose worker has never started, the API process refuses every command that enqueues, because pg-boss queues are declared only by the workers that serve them** (nit-to-small, TODO — **latent on the shipped compose**: `app` runs `ROLE=all` (`.env.example:28`), which is a worker and declares its queues at boot; **live** on the documented `ROLE=api` + `ROLE=worker` split, from the first boot until the worker's first successful start. That window is indefinite if the worker is refused at its own pool floor. **Read off the tree**; the HTTP status and the commit ordering **need measurement**. The operator-guide sentence is folded into **WP-73**; the declaration fix is **unowned, for the M5 architect pass**. A residual named by WP-72, session 8, graded by the refiner)
+
+**What is wrong / the evidence.** `apps/server/src/enqueue-only-jobs.ts:29-35`, quoted: *"pg-boss 12 refuses
+`send` for an unknown queue … On an installation whose worker has **never** started against this database, a
+command that enqueues is therefore refused with `QueueNotDeclaredError` rather than silently queued."* Queue
+declarations are scattered across compositions (`defineQueue` calls, for example
+`packages/infrastructure/src/jobs/maintenance.ts:44` and `packages/infrastructure/src/cost/price-list-maintenance.ts:117`),
+so no single place could declare them all. No route translates `QueueNotDeclaredError`: its only occurrences are
+in that module. **Needs measurement**:
+- (1) what status the caller receives (probably the generic 500);
+- (2) whether the command's own transaction has already committed when the enqueue is refused. WP-72's notes say a knowledge approval is otherwise picked up by the nightly pass. Whether a stage-starting command has a recovery path is not shown.
+
+**What it costs to leave.** The failure an operator most plausibly meets: a worker refused at startup for its
+pool floor, which WP-72 made strict, beside an API that serves the SPA. Every command then errors with a
+pg-boss queue name the operator has no guide sentence for.
+
+**What "done" looks like.**
+- **Now (WP-73):** one sentence in the operator guide's new *The topology, and splitting it further with `ROLE`* section: on a new database, start a worker first, and this is the error you see if you do not.
+- **Later (architect):** the queue declarations become one table that the workers' compositions read, and `migrate` declares every queue from it. `migrate` already installs pg-boss's schema (`apps/server/src/migrate.ts:55`) and runs before every product process. After that change, a first-boot enqueue cannot meet an undeclared queue. The alternative, the API sender calling `createQueue` with default options, is refused here: the worker's options (retry, dead-letter) would then depend on which process booted first.
+
+**Depends on.** WP-72. Related: TD-028 decision 5/6.
+
+### 263. **A steer the platform refuses still records the person's five-second window, and the 429 that follows says "the run is still listening" about a run no process serving the API can reach** (nit, TODO — **live on every stock instance**: every steer to `app` is `409 run_not_reachable` (backlog 134); costs only wording and a five-second wait; read off the tree; folded into **WP-73**; a residual named by WP-72, session 8)
+
+**Evidence.** `steerGate.allow(userId)` records the attempt before `steerRun` is called
+(`apps/server/src/routes/commands.ts:1013-1028`). The module note already states the consequence
+(`:76-82`: *"a person who retries within five seconds is told `429` about a message that could never have been
+delivered"*). The 429's text (`:1017`) claims *"the run is still listening"*.
+
+**What "done" looks like.** The slot is **refunded** when `steerRun` refuses. It is not recorded afterwards,
+because recording after the call would let two concurrent steers through. One route case: a refused steer, then
+an immediate second steer, gets the refusal again and not a 429. The 429 wording stops asserting that the run
+is listening. The module note's sentence is corrected (rule 83).
+
+**Depends on.** Nothing. Related: 134.
 
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
@@ -13005,7 +13146,7 @@ derivable and the only one an operator reads at the moment the program refuses t
 **The transferable half held**: this sweep was driven from the **constant** rather than from the diff, which
 is exactly what the previous instance said it would take.
 
-### 38. **`ROLE` splits the product across containers and no tier has ever started two processes with different roles** (TODO — **no work package owns it**; the general form of a risk WP-18b stated about one command)
+### 38. **`ROLE` splits the product across containers and no tier has ever started two processes with different roles** (**RESOLVED** by WP-72 at `WP72SHA`, session 8 — see `#### WP-72`: the two-process tier `test/e2e/topology/two-processes.e2e.test.ts` — TODO — **no work package owns it**; the general form of a risk WP-18b stated about one command)
 > **M4 (architect, session 6): folded into WP-72.**
 
 **What is wrong.** `ROLE` is the platform's scaling story — *“splitting the roles across containers is the
@@ -33728,3 +33869,178 @@ planted in `image.yml`'s meta script → the census fails naming `image.yml line
 re-run over the new `image.yml`: 0 and 0 (images removed after; 13 containers, 102 volumes). **Not
 observed**: that download-artifact v7 reads what upload-artifact v7 wrote in another job — documented, not
 seen here; the first push after the switch is the measurement, which `docs/TODO.md`'s first-cut row names.
+
+#### WP-72
+
+**Implemented** (implementer, session 8): the row's five criteria and the refiner's three addenda (backlog
+**154**, **181**, **200**), folding backlog **38**. One new e2e file carries every crossing:
+`test/e2e/topology/two-processes.e2e.test.ts`, five cases, each process a whole `apps/server` started by the
+existing harness (`startPipeline` gained `role`, `processName`, `addProcess` and `gitCalls`; every process gets
+its own recording view of the one fake git provider, so a provider call is **attributed** to a process).
+
+1. **Two instances, one database** — every case. The shipped topology is `app` (`ROLE=all`, `agent: 'none'`: no
+   launcher, so no `stage.execute`) beside `runner` (`ROLE=runner`, the only runner); the scaling split is
+   `ROLE=api` beside `ROLE=worker`.
+2. **One assertion per crossing, through the processes.**
+   - *A command answered by one process is performed by another* —
+     `test/e2e/topology/two-processes.e2e.test.ts` › "commits, in the worker, a knowledge approval the API
+     answered": `POST …/kb/proposals/:id/approve` on `ROLE=api` answers 200, the proposal row reaches `applied`,
+     the one `commitFiles` call is attributed to `worker`, and the `knowledge.apply` job is `completed`.
+     **This crossing did not exist before WP-72**: `ROLE=api` held no job client (`jobs: null`), so the decision
+     waited for the nightly hygiene pass and every command that starts a stage was refused. The fix is
+     `apps/server/src/enqueue-only-jobs.ts`: `ROLE=api` now starts pg-boss with supervision and cron off and hands
+     its compositions a wrapper that lets `enqueue` through and **refuses by name** `work`, `defineQueue`,
+     `scheduleCron`, `unscheduleCron` and `listCronSchedules` (`EnqueueOnlyJobsError`), so the role still takes
+     no job by construction; an enqueue to a queue no worker ever declared is `QueueNotDeclaredError`, naming it.
+   - *A transcript produced by one process is streamed by another* — the shipped-topology case holds the run at
+     its workspace, opens `/events?topics=run:<id>` on `app`, releases it, and reads the `assistant` frame the
+     runner produced, both directions on the redaction (placeholder present, `PLANTED_MODEL_KEY` absent).
+   - *API ready while the worker is 503 for the documented reason* —
+     `test/e2e/topology/two-processes.e2e.test.ts` › "answers ready on the API while a worker that cannot
+     compose a pipeline is 503 for that reason": `ROLE=api` 200 with exactly `{database, migrations, queue}`;
+     `ROLE=worker` with `pipeline: null` 503 with `dispatch: down`.
+   - *Each process refuses below its own floor* —
+     `test/e2e/topology/two-processes.e2e.test.ts` › "refuses to start one below its own floor, and starts at
+     it — every role": `api`, `worker`, `runner`, `indexer` and `all`, each refused at floor − 1 with
+     `UndersizedPoolError` naming the role and the number, and each started at exactly the floor (both
+     directions). The arithmetic is pinned symbolically by `apps/server/src/config.test.ts` › "computes every
+     role’s floor from the capabilities it runs, and nothing else (WP-72)". Floors at the defaults: `all` 22,
+     `worker`/`runner`/`indexer` 20, `api` **4** (was 3: `POOL_RESERVATIONS.jobsSender = 1` for the sender's
+     queue-cache refresh, counted instead of `jobs`, never beside it).
+3. **The connection budget, measured rather than multiplied.** Sampled `pg_stat_activity` (client backends) once a
+   second across both whole `verify:e2e` runs with this file in them: peak **134** and **125** against
+   `max_connections=300` — more than twice the peak, so 300 stays. The arithmetic worst case (13 parallel files
+   × pool floors) is far above 300 and is not what happens, because a pool opens only what is borrowed; the
+   statement is in `test/integration/support/global-setup.ts`. Every two-process case runs its non-`all`
+   processes at exactly their floor (the `api` at 4, the runner and worker at 20).
+4. **What a user sees.** A steer to `app` while the runner holds the run: **409 `run_not_reachable`** and no
+   `run.steered` event (backlog 134's certainty, asserted). The per-process steer limiter's N-containers
+   consequence was already stated at `apps/server/src/routes/commands.ts`; added: on the shipped topology N is
+   moot and the gate records the attempt **before** the refusal, so a refused steer spends the person's window.
+5. **Compose and the operator guide.** `runner` already existed with its own environment list (WP-53); nothing
+   was missing that is this row's, so no service was added. Comments corrected (below). The operator guide
+   gains *The topology, and splitting it further with `ROLE`* (roles, floors, what crosses and how).
+
+**Addenda.**
+- **154 — decision (a), taken, and why (b) is now filed rather than dismissed.** The pattern rule is the defence
+  in a process that never minted (on the shipped topology, `app`: every webhook and half the outbound duties).
+  Pinned by `packages/infrastructure/src/redaction/pattern-redaction.test.ts` › "redacts a GitLab project
+  access token of the documented default shape" and › "redacts the secret part of a routable token, leaving
+  only its version and checksum"; asserted through two processes in the shipped case (a `glpat-` value quoted
+  in a review comment posted to `app` is absent from the `inbox` row, a `[REDACTED` placeholder present, the
+  row's `redaction_count` > 0). **The entry's "unverified" is now verified the wrong way**: GitLab's admin
+  settings page (<https://docs.gitlab.com/administration/settings/account_and_limit_settings/>, retrieved
+  2026-09-27) says an administrator can change the personal-access-token prefix and project access tokens
+  inherit it — so on such an instance a minted token is not pattern-shaped and (a) does not hold. Pinned as the
+  residual by › "does not redact a token minted under an administrator-chosen prefix — the trigger for (b)",
+  the trigger written on `GitProviderCapabilities.credentialMinting`, and (b) filed as **259**. Two limits,
+  stated: the token is **planted, not minted** (a mint needs the launcher's control plane, which only the Docker
+  tier has); and the `mr.review.comment` **event** carried the value unredacted — measured — because the fake
+  registration ignores the caller's redactor, which is **260**, not a production claim.
+- **181 — the figure.** Per process through `gitCalls`, after the `pipeline.outbound` queue and the dispatch
+  queue drained: `{"runner":1}` in four runs of the case alone, `{"app":1,"runner":1}` in both whole-tier runs.
+  The case asserts at most one read per process and equality with the audit rows; the figure is stated at
+  `packages/application/src/pipeline/diff-coalescer.ts`. No shared store proposed.
+- **200 — the liveness row.** Migration **0054** `held_connection_liveness` (one row per integration, `holder`,
+  `renewed_at`, `expires_at`; `read_write`; Drizzle + parity; `EXPECTED_TABLES`, the policy row and the schema
+  count updated), port `HeldConnectionLiveness`, adapter `createPostgresHeldConnectionLiveness` (every instant is
+  the database's `now()`), renewed by `startInboundConnections` **before** a connection reads `open`, every 20 s,
+  fresh 60 s, released on close only if the holder still owns the row. The notify duty posts buttons over a held
+  transport (`capabilities().socketMode`) only while the row is fresh, else text: *"Decide on the task page: no
+  process is holding this chat’s connection, so a click would reach nobody."* Asserted with and without an API
+  process by `test/e2e/topology/two-processes.e2e.test.ts` › "posts text from a worker with no API process, and
+  buttons once an API process holds it" (the second approval's buttons, the first approval's none), plus
+  `packages/application/src/integrations/inbound-connections.test.ts` › "is written before the connection reads
+  open, renewed on the interval, and released at close", `packages/application/src/notify/notify.test.ts` ›
+  "does not ask the liveness row for a transport it does not hold (the HTTP one)" and
+  `test/integration/integrations/held-connection-liveness.integration.test.ts` › "reads freshness off the
+  database clock: an expired row is not held".
+
+**Decisions and assumptions** (each also at its line).
+- **`ROLE=api` holds an enqueue-only job client** — the row's first crossing could not pass otherwise, and TD-028
+  decision 6 names `ROLE=api` beside a runner as supported. Its readiness now reports `queue`. Residual, stated at
+  the module: on a database whose worker has never started, a command that enqueues is refused naming the queue.
+- **The fake chat's `socketMode` default is now `false`** (divergence 9 in its register): it opens no socket
+  (`host: null`) and receives clicks only through `/webhooks/*`, and a `true` would have made every fake-chat
+  approval text for a reason untrue of it. The application harness gained `chatConnectionHeld` (default held).
+- **An HTTP-transport binding is not asked the liveness question**: its click reaches `/webhooks/*`, which no row
+  describes. That no process may be serving `/webhooks/*` at all is the operator's routing, not this row's.
+- **135 is declined by WP-72**, by number as its entry asks: the runner readiness check needs a decision (which
+  process, which signal) and the queue gauge a metric design, neither this row's crossings. The two sentences it
+  names that pointed at the missing channel are corrected (below), and the operator guide now gives the query
+  that reads the `stage.execute` depth. 135 stays **unowned**.
+
+**Canaries** (each reverted, md5-confirmed): the worker's `knowledge.apply` subscription removed
+(`packages/application/src/knowledge/runtime.ts`) → the knowledge case fails, *"never reached the approved proposal
+to be applied"*; the floor refusal skipped for `ROLE=indexer` (`apps/server/src/config.ts`) → the floors case
+fails, *"ROLE=indexer started with APP_DB_POOL_MAX=19"*; the duty's liveness answer forced to "held"
+(`packages/application/src/notify/duty.ts`) → the buttons case fails on the worker-only approval's buttons.
+
+**Sentences falsified.** Changed: `apps/server/src/role.ts` header (*"changes nothing but this variable"* —
+asserted now, with what it did not change); `apps/server/src/commands.ts` (*"composes `jobs: null` … the five
+commands that have to start a stage refuse by name"*); `runtime.ts`'s `ServerRuntime.jobs` (*"`null` for a role
+that starts none (`ROLE=api`)"*), the live-runs docblock (*"both commands refuse by name"* — a take-over never
+did), and four composition comments; `readiness.ts` (*"`null` … (`ROLE=api`)"*); `knowledge.ts` (two);
+`decide.ts` (*"`ROLE=api` runs no pg-boss"*); `hygiene.ts`; `app.ts`; `asks.ts`; `run-redaction.ts` (*"a
+`ROLE`-split deployment"* → the shipped topology, as 154 asked); `notify/options.ts` (*"Three fields"*); the
+duty's WP-43 residual comment; `compose.yml` (*"the queue depth is the metric that shows it"*, and the launcher's
+*"`/readyz` on `app` is where an operator looks"* — 135's two sentences); the operator guide (*"the queue depth
+is what shows it"*, *"`api`, `runner` and `indexer` omit the check entirely"* — false for `runner` and `indexer`,
+which are workers, *"in a split deployment it answers `409 run_not_reachable`"* — every stock instance, the
+Slack paragraph gains the liveness condition); the user guide (*"the one thing the application asks for and the
+server does not serve"* and its *Not built* row — served since WP-27 and refused on every stock instance);
+technical/08 gains the per-role readiness note. **Left, not mine** (exact text below): TD-028's Consequences
+bullet and decision 6 (a decision record); the user guide's *Not built* row *"Ask the task a question"* (asks
+shipped at WP-31 — not verified here, so not changed; for WP-73).
+
+**For the orchestrator — exact text.**
+- **TD-028, an amendment**: *"**Amendment (WP-72, 2026-09-27) — the crossings of the shipped topology, and the
+  API role's queue client.** The two product processes share nothing but the database, and each crossing is
+  asserted through two processes in `test/e2e/topology/two-processes.e2e.test.ts`: (1) a command's effect —
+  answered by a process that runs no worker, performed by a worker through the job queue; since WP-72 `ROLE=api`
+  holds an **enqueue-only** pg-boss client (supervision and cron off, every worker operation refused by name,
+  `apps/server/src/enqueue-only-jobs.ts`), which it did not before, so on `ROLE=api` a knowledge approval waited
+  for the nightly pass and every command that starts a stage was refused; (2) a run's transcript — written by
+  the runner, streamed by the process that serves the API over `NOTIFY` and a read-back; (3) readiness —
+  per process, `dispatch` only on worker roles; (4) the chat socket — held by the process that serves
+  `/webhooks/*`, which renews `held_connection_liveness` (migration 0054) so an approval is posted with buttons
+  only while some process holds it; (5) steer and take-over do **not** cross: on this topology the process that
+  serves the API never holds a run, so every steer is refused `run_not_reachable` (PROGRESS backlog 134); (6) a
+  run credential is redacted by exact value only in the runner, and elsewhere by the pattern rules alone, which
+  cover GitLab's default `glpat-` prefix and not an administrator-chosen one (PROGRESS backlog 154, decision (a);
+  (b) filed as 259). The Consequences bullet's *'the queue depth is a metric, `/readyz` reports the runner as
+  absent'* remains unbuilt and unowned (PROGRESS backlog 135, declined by WP-72)."*
+- **CLAUDE.md**, after the transport bullet's last sentence (*"…and it is not a `verify` target for the reason
+  none of the Docker checks are."*), add: *"**Two processes, asserted** (WP-72): `test/e2e/topology/` starts
+  `app` and `runner` — and `ROLE=api` beside `ROLE=worker` — as separate processes on one database and asserts
+  each crossing through them; `ROLE=api` holds an **enqueue-only** job client (`apps/server/src/enqueue-only-jobs.ts`)
+  so a command it answers is performed by a worker, and the chat socket's holder renews `held_connection_liveness`
+  (migration 0054), which the notify duty reads before posting buttons."*
+
+**Discovered work** (next free backlog numbers).
+- **259** Decision (b) for backlog 154: a run credential sealed in the `secrets` store keyed by run with its
+  `expires_at`, read into every process's run-scoped registry at call time. Required on any GitLab whose
+  administrator changed the personal-access-token prefix (documented above) and on the day a second provider sets
+  `credentialMinting`; until then a minted token quoted in text `app` stores survives there.
+- **260** The fake registrations (`packages/integrations/src/bindings/fake-registrations.ts`) ignore the redactor
+  the loader passes to `create`, so a fake's normalised inbound events are never redacted by the platform
+  redactor: measured at WP-72, a `glpat-` value in a fake-git review comment reached `events.payload` while the
+  `inbox` row was redacted. No production claim (real adapters redact the whole delivery), but no e2e can assert
+  the event half, and the divergence is in no register.
+- **261** `apps/server/src/pipeline-census.test.ts`'s object-literal parser treats `/*` inside a `//` comment as a
+  block-comment opener, so every key after such a comment is invisible: a comment naming `` `/webhooks/*` `` inside
+  `createPipelineRuntime({…})` hid `heldConnections` **and** `shadow` from the census (measured, then reworded).
+  The census docblock lists its blind spots and not this one.
+
+**Residuals, stated.** The `ROLE=api` sender cannot enqueue to a queue no worker has declared (first boot of a
+split install; named error). A refused steer spends the person's five-second window. The liveness row answers
+*some process holds the connection*, not *the socket delivered a frame this second* — the same meaning `open`
+already had. The operator guide's `docker compose exec db psql …` wrapper was not run: its query was (in the e2e
+tier, on another queue), and a compose project's teardown with volumes is blocked in this environment.
+
+**Verification.** Load before each tier: `verify` 9.55; `verify:integration` 16.41 → 13.55 → 11.85 (three
+readings in one minute, run at the third); `verify:e2e` 8.58 and 7.31; image build 6.98. `pnpm run -s verify`
+**PASS**; `verify:integration` **PASS** (58 files, 610 tests); `verify:e2e` **PASS twice** (43 files, 220 tests,
+445 s and 449 s); the shipped-topology case alone three more times, green. `node scripts/compose-stock-check.mjs`
+**PASS** against `platform:dev` and `platform-launcher:dev` rebuilt from this tree. Docker afterwards: 13
+containers (the user's), 102 volumes.

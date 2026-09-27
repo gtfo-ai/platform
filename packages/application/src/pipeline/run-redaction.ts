@@ -113,10 +113,17 @@ export const injectedSecretRedactorForEnvironment = (
  *
  * ## What it does not reach
  *
- * Another **process**: the registry is memory. A `pipeline.outbound` job run by a worker that did
- * not mint (a `ROLE`-split deployment) does not know the value, so a CI log it reads while the
- * token is live is redacted only by the pattern rules. Stated, and filed rather than solved here
- * (PROGRESS backlog **154**).
+ * Another **process**: the registry is memory. **On the shipped topology that is not an edge
+ * case**: `app` never mints (it composes no provisioner) and serves every webhook, and it takes
+ * `pipeline.outbound` jobs beside `runner`, so a CI log, an MR diff or an MR comment quoting a run
+ * credential is stored or posted by a process that never knew the value. What redacts it there is
+ * the pattern rules alone. **WP-72 took decision (a)** for PROGRESS backlog **154**: that is
+ * sufficient for GitLab's documented default shape (`glpat-…`, pinned by
+ * `pattern-redaction.test.ts` and asserted through the two processes by
+ * `test/e2e/topology/two-processes.e2e.test.ts`), and it is **not** sufficient for a GitLab whose
+ * administrator changed the token prefix, or for a second minting provider — the trigger for
+ * decision (b), a registry shared through the `secrets` store, is written on
+ * `GitProviderCapabilities.credentialMinting` and filed as backlog **259**.
  *
  * **Nor a process that died** — the crash path. The registry dies with the runner that minted, and
  * so did the one revoke that runner owed. Since WP-77 the revoke is recovered
@@ -124,7 +131,8 @@ export const injectedSecretRedactorForEnvironment = (
  * audit row confirms revoked is revoked by address from the mint's `revoke_id`, a pass interval
  * after the run ends. The *redaction* is not recovered: no other process ever held the value, so
  * text quoting it that another process stores in that window is covered by the pattern rules
- * alone — backlog 154's gap, for a window this row bounds rather than one that lasts to expiry.
+ * alone — backlog 154's decision (a), for a window this row bounds rather than one that lasts to
+ * expiry.
  */
 export interface RunScopedSecrets {
   /** Registers a value minted for `runId`. Refuses one too short to redact, rather than dropping it. */

@@ -61,3 +61,24 @@ export interface HeldConnectionDirectory {
   /** Every account whose configuration selects a held inbound connection, in a stable order. */
   list(): Promise<readonly (HeldConnectionAccount | BrokenHeldConnectionAccount)[]>;
 }
+
+/**
+ * Whether **any** process is holding an account's inbound connection now — WP-72, PROGRESS backlog
+ * 200 (migration 0054).
+ *
+ * A binding's configuration answers "*could* a click arrive?" (`capabilities().buttons`); only a
+ * process holding the socket answers "*will* it?". The holder renews a per-account row while it
+ * holds the connection and the notify duty reads it before it posts buttons, so a deployment with
+ * no process serving `/webhooks/*` posts text naming the task page instead of a dead control.
+ *
+ * Every instant is the **database's**: `renew` writes `expires_at = now() + ttl` and `isHeld`
+ * compares with `now()`, so two processes whose clocks disagree cannot disagree about a holder.
+ */
+export interface HeldConnectionLiveness {
+  /** Writes or extends the account's row: held by `holder` until `ttlMs` past the database's now. */
+  renew(integrationId: Id, holder: string, ttlMs: number): Promise<void>;
+  /** Deletes the row, but only while `holder` is still the one named in it. */
+  release(integrationId: Id, holder: string): Promise<void>;
+  /** True while some holder's last renewal has not expired. */
+  isHeld(integrationId: Id): Promise<boolean>;
+}

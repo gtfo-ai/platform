@@ -14,6 +14,8 @@
  * holds nothing and names every account it is not holding. See `inbound-connections.ts` in the
  * application ring for the two-replica consequence.
  */
+import { randomUUID } from 'node:crypto';
+import { hostname } from 'node:os';
 import type {
   HeldConnectionScheduler,
   InboundConnectionsHandle,
@@ -22,6 +24,7 @@ import type {
 } from '@platform/application';
 import { startInboundConnections } from '@platform/application';
 import {
+  integrations as integrationAdapters,
   redaction as redactionAdapters,
   secrets as secretAdapters,
 } from '@platform/infrastructure';
@@ -73,6 +76,16 @@ export const composeInboundConnections = async (
       executor: options.stack.executor,
       integrationIds: async () => secretAdapters.listIntegrationIds(options.pool),
     }),
+    /**
+     * WP-72 (PROGRESS backlog 200): every connection this process holds is renewed into
+     * `held_connection_liveness`, which the notify duty reads before it posts buttons. The holder
+     * names the role, the host and this process — a diagnostic for an operator reading the row,
+     * never an authority anything checks.
+     */
+    liveness: {
+      store: integrationAdapters.createPostgresHeldConnectionLiveness(options.pool),
+      holder: `${options.role}@${hostname()}:${randomUUID().slice(0, 8)}`.slice(0, 200),
+    },
     ingress: options.ingress,
     role: options.role,
     scheduler: processScheduler,

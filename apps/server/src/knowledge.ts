@@ -165,7 +165,9 @@ export interface KnowledgeCommandOptions {
   readonly pool: pg.Pool;
   readonly eventing: ReturnType<typeof eventingAdapters.createEventing>;
   /**
-   * The job runtime, or `null` on a process that runs no workers (`ROLE=api`).
+   * The job client, or `null` on a composition root that builds none. Since WP-72 `ROLE=api`
+   * holds the enqueue-only sender (`enqueue-only-jobs.ts`), so on the shipped roles this is never
+   * `null` and an approval is committed by whichever worker takes `knowledge.apply`.
    *
    * Not an omission: `decide.ts` takes a nullable `Jobs` on purpose and states the cost — with one,
    * an approved proposal is committed in seconds; without one, the decision is still recorded and
@@ -186,7 +188,9 @@ export interface KnowledgeCommandOptions {
  * Composed separately from the queues because the two answer to different capabilities: a process
  * that serves the API can read the proposal queue and record a decision on it with nothing but the
  * pool, while *applying* one needs a job runtime and an integrations loader. A deployment split into
- * `ROLE=api` and `ROLE=worker` therefore keeps a working knowledge screen.
+ * `ROLE=api` and `ROLE=worker` therefore keeps a working knowledge screen — and since WP-72 the
+ * approval it records is committed in seconds by the worker, which
+ * `test/e2e/topology/two-processes.e2e.test.ts` asserts through the two processes.
  */
 export const createKnowledgeCommands = (options: KnowledgeCommandOptions): KnowledgeCommands => {
   const proposals = new knowledgeAdapters.PostgresProposalStore(options.pool);

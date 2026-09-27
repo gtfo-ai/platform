@@ -272,10 +272,21 @@ export const runNotification = async (
        * `buttons` from its own configuration — for Slack, the transport it is set to receive on
        * and the credentials that transport needs — so a binding that could never deliver a click
        * gets the same notification as text, which names the task page as the place to decide.
-       * What no adapter can answer is whether a process is holding the socket *right now*; that
-       * residual is named in PROGRESS under WP-43 rather than implied here.
+       *
+       * **And, for a held transport, only while a process holds it** (WP-72, PROGRESS backlog
+       * 200). What no adapter can answer is whether a process is holding the socket *right now* —
+       * on a deployment with no process serving `/webhooks/*` the configuration still said yes —
+       * so the duty asks the liveness row the holder renews (migration 0054) instead of inferring
+       * it. Outside every transaction, like the rest of this phase; a stale or absent row posts
+       * text naming the task page, which is the conservative direction.
        */
-      if (chat.port.capabilities().buttons) {
+      const capabilities = chat.port.capabilities();
+      const unreachable = !capabilities.buttons
+        ? 'this chat binding cannot receive a click'
+        : capabilities.socketMode && !(await options.heldConnections.isHeld(chat.ref.integrationId))
+          ? 'no process is holding this chat’s connection, so a click would reach nobody'
+          : null;
+      if (unreachable === null) {
         buttonsAt = await chats.approval(
           {
             thread,
@@ -291,8 +302,7 @@ export const runNotification = async (
             thread,
             body: notificationBody({
               ...draft,
-              detail:
-                `${draft.detail ?? ''}\nDecide on the task page: this chat binding cannot receive a click.`.trim(),
+              detail: `${draft.detail ?? ''}\nDecide on the task page: ${unreachable}.`.trim(),
             }),
             idempotencyKey,
           },

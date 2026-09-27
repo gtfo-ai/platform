@@ -68,7 +68,15 @@
 # its own because `stage.execute` is `stately` with `singletonKey: task:<id>`, which is what enforces
 # *a task never runs two stages at once*; a second queue would let a gate and a stage for one task
 # run concurrently. Nothing is lost, only delayed — the jobs are durable and are taken when a runner
-# starts — and the queue depth is the metric that shows it.
+# starts. **No metric shows that queue depth yet**, and `/readyz` does not report the runner
+# (PROGRESS backlog 135): `docs/operator-guide.md` §1 gives the query that reads it.
+#
+# **The split is asserted, not assumed** (WP-72): `test/e2e/topology/two-processes.e2e.test.ts`
+# starts two processes on one database — `ROLE=api` beside `ROLE=worker`, the split this file's `app`
+# (`ROLE=all`) and `runner` generalise — and asserts each crossing between them
+# through the processes — the run executed in `runner` and streamed from `app`, a steer to `app`
+# refused by name, the approval buttons posted only while a process holds the chat socket, and a run
+# credential quoted in a webhook redacted by a process that never minted it.
 
 name: agentic
 
@@ -364,9 +372,10 @@ services:
     # No healthcheck, still. Since WP-53 this process *does* have an HTTP surface, but only when
     # `APP_LAUNCHER_TOKEN` is set — and `GET /v1/health` is authenticated, so a check would have to
     # carry the token and would report "unhealthy" for the legitimate no-token deployment. The
-    # runner's own start-up log names the launcher it reached, and `/readyz` on `app` is where an
-    # operator looks. A check that cannot fail, or that fails for a supported configuration, is
-    # worse than none (standing rule 3).
+    # runner's own start-up log names the launcher it reached. `/readyz` reports neither the
+    # launcher nor the runner — this comment used to send the operator there, and that check cannot
+    # answer (PROGRESS backlog 135). A check that cannot fail, or that fails for a supported
+    # configuration, is worse than none (standing rule 3).
     restart: unless-stopped
 
   # technical/11 § Compose. Writes a compressed dump per schedule to its own volume; `pg_dump`

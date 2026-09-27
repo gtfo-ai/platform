@@ -13,6 +13,7 @@ import { IntegrationError, type WebhookDelivery } from '../ports/integrations/co
 import type {
   BrokenHeldConnectionAccount,
   HeldConnectionAccount,
+  HeldConnectionLiveness,
   InboundConnection,
 } from '../ports/integrations/inbound-connection.js';
 import type { Logger } from '../ports/logger.js';
@@ -126,6 +127,27 @@ const ingressDouble = () => {
   return { ingress, calls };
 };
 
+/** A liveness store that records what it was told, in order (WP-72, backlog 200). */
+const livenessDouble = (options: { readonly failRenew?: boolean } = {}) => {
+  const calls: string[] = [];
+  const store: HeldConnectionLiveness = {
+    renew: async (integrationId, holder, ttlMs) => {
+      calls.push(`renew ${integrationId.slice(-2)} ${holder} ${ttlMs}`);
+      if (options.failRenew === true) {
+        throw new Error('connection terminated');
+      }
+    },
+    release: async (integrationId, holder) => {
+      calls.push(`release ${integrationId.slice(-2)} ${holder}`);
+    },
+    isHeld: async () => false,
+  };
+  return {
+    calls,
+    options: { store, holder: 'api@test', renewMs: 20_000, ttlMs: 60_000 },
+  };
+};
+
 const settle = async (): Promise<void> => {
   for (let round = 0; round < 10; round += 1) {
     await Promise.resolve();
@@ -140,6 +162,7 @@ describe('a process that serves /webhooks/*', () => {
 
     const handle = await startInboundConnections({
       directory: { list: async () => [account(A, double)] },
+      liveness: livenessDouble().options,
       ingress,
       role: 'all',
       scheduler: clock.scheduler,
@@ -162,6 +185,7 @@ describe('a process that serves /webhooks/*', () => {
     const clock = manualScheduler();
     const handle = await startInboundConnections({
       directory: { list: async () => [account(A, first), account(B, second)] },
+      liveness: livenessDouble().options,
       ingress: ingressDouble().ingress,
       role: 'api',
       scheduler: clock.scheduler,
@@ -186,6 +210,7 @@ describe('a process that serves /webhooks/*', () => {
     const { logger, lines } = recordingLogger();
     const handle = await startInboundConnections({
       directory: { list: async () => [account(A, double)] },
+      liveness: livenessDouble().options,
       ingress: ingressDouble().ingress,
       role: 'all',
       scheduler: clock.scheduler,
@@ -217,6 +242,7 @@ describe('a process that serves /webhooks/*', () => {
     const { logger, lines } = recordingLogger();
     const handle = await startInboundConnections({
       directory: { list: async () => [account(A, double)] },
+      liveness: livenessDouble().options,
       ingress: ingressDouble().ingress,
       role: 'all',
       scheduler: clock.scheduler,
@@ -237,6 +263,7 @@ describe('a process that serves /webhooks/*', () => {
   it('names an account that cannot hold a connection as configured, and opens nothing for it', async () => {
     const { logger, lines } = recordingLogger();
     const handle = await startInboundConnections({
+      liveness: livenessDouble().options,
       directory: {
         list: async () => [
           {
@@ -274,6 +301,7 @@ describe('a process that serves /webhooks/*', () => {
     const { logger, lines } = recordingLogger();
     const handle = await startInboundConnections({
       directory: { list: async () => [broken] },
+      liveness: livenessDouble().options,
       ingress: ingressDouble().ingress,
       role: 'all',
       scheduler: manualScheduler().scheduler,
@@ -294,6 +322,7 @@ describe('a process that serves /webhooks/*', () => {
     const clock = manualScheduler();
     const handle = await startInboundConnections({
       directory: { list: async () => listed },
+      liveness: livenessDouble().options,
       ingress: ingressDouble().ingress,
       role: 'all',
       scheduler: clock.scheduler,
@@ -321,6 +350,7 @@ describe('a process that serves /webhooks/*', () => {
     ]);
     const handle = await startInboundConnections({
       directory: { list: async () => [account(A, double)] },
+      liveness: livenessDouble().options,
       ingress: ingressDouble().ingress,
       role: 'all',
       scheduler: manualScheduler().scheduler,
@@ -342,6 +372,7 @@ describe('a process that serves no /webhooks/*', () => {
     const { logger, lines } = recordingLogger();
     const handle = await startInboundConnections({
       directory: { list: async () => [account(A, double)] },
+      liveness: livenessDouble().options,
       ingress: null,
       role: 'worker',
       scheduler: clock.scheduler,
@@ -358,5 +389,99 @@ describe('a process that serves no /webhooks/*', () => {
     expect(named[0]?.fields).toMatchObject({ integration: 'slack a1', role: 'worker' });
     expect(named[0]?.message).toContain('ROLE=worker serves no /webhooks/*');
     await handle.stop();
+  });
+});
+
+describe('the liveness row a held connection renews (WP-72, PROGRESS backlog 200)', () => {
+  it('is written before the connection reads open, renewed on the interval, and released at close', async () => {
+    const double = connectionDouble([]);
+    const liveness = livenessDouble();
+    const clock = manualScheduler();
+    const handle = await startInboundConnections({
+      directory: { list: async () => [account(A, double)] },
+      liveness: liveness.options,
+      ingress: ingressDouble().ingress,
+      role: 'api',
+      scheduler: clock.scheduler,
+    });
+    await settle();
+
+    expect(handle.status()[0]?.state).toBe('open');
+    expect(liveness.calls).toEqual(['renew a1 api@test 60000']);
+
+    clock.fire(20_000);
+    await settle();
+    expect(liveness.calls).toEqual(['renew a1 api@test 60000', 'renew a1 api@test 60000']);
+
+    await handle.stop();
+    expect(liveness.calls.at(-1)).toBe('release a1 api@test');
+    // No renewal outlives the handle.
+    expect(clock.live()).toEqual([]);
+  });
+
+  it('writes nothing for a connection that never opened, and nothing on a process that holds none', async () => {
+    const refused = connectionDouble([
+      async () => {
+        throw new IntegrationError('unauthorised', 'slack', 'invalid_auth');
+      },
+    ]);
+    const onApi = livenessDouble();
+    const api = await startInboundConnections({
+      directory: { list: async () => [account(A, refused)] },
+      liveness: onApi.options,
+      ingress: ingressDouble().ingress,
+      role: 'api',
+      scheduler: manualScheduler().scheduler,
+    });
+    await settle();
+    await api.stop();
+    expect(onApi.calls).toEqual([]);
+
+    const onWorker = livenessDouble();
+    const clock = manualScheduler();
+    const worker = await startInboundConnections({
+      directory: { list: async () => [account(B, connectionDouble([]))] },
+      liveness: onWorker.options,
+      ingress: null,
+      role: 'worker',
+      scheduler: clock.scheduler,
+    });
+    // A process with no door schedules no renewal at all.
+    expect(clock.live().filter((entry) => entry.ms === 20_000)).toEqual([]);
+    await worker.stop();
+    expect(onWorker.calls).toEqual([]);
+  });
+
+  it('keeps the connection open when the row cannot be written, and says so', async () => {
+    const double = connectionDouble([]);
+    const { logger, lines } = recordingLogger();
+    const handle = await startInboundConnections({
+      directory: { list: async () => [account(A, double)] },
+      liveness: livenessDouble({ failRenew: true }).options,
+      ingress: ingressDouble().ingress,
+      role: 'api',
+      scheduler: manualScheduler().scheduler,
+      logger,
+    });
+    await settle();
+
+    expect(handle.status()[0]?.state).toBe('open');
+    expect(lines.find((line) => line.level === 'warn')?.message).toContain(
+      'approvals are posted as text until the next renewal succeeds',
+    );
+    await handle.stop();
+  });
+
+  it('refuses a TTL that does not outlast the renewal interval', async () => {
+    const liveness = livenessDouble();
+    await expect(
+      startInboundConnections({
+        directory: { list: async () => [] },
+        liveness: { ...liveness.options, renewMs: 60_000, ttlMs: 60_000 },
+        ingress: null,
+        role: 'api',
+        scheduler: manualScheduler().scheduler,
+      }),
+    ).rejects.toThrow(/must exceed its renewal interval/);
   });
 });

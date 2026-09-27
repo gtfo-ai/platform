@@ -42,6 +42,13 @@
  *     never an exception** (standing rule 20, added at WP-10). A body that is not JSON at all is
  *     `malformed_payload` rather than a `SyntaxError` thrown out of `normalise`, which is what it
  *     used to be.
+ *  9. **Different, and honest about it — `socketMode` is `false` by default** (WP-72). The fake
+ *     opens no socket (its `host` is `null`) and receives a click only through `/webhooks/*`, so a
+ *     capability claiming a held transport was a claim nothing held. It mattered once the notify
+ *     duty began asking whether a process holds a held transport before posting buttons (PROGRESS
+ *     backlog 200): a fake that said `true` would have its approvals posted as text on every
+ *     instance, for a reason that is not true of it. A test that wants the held-transport branch
+ *     passes `capabilities: { socketMode: true }`.
  */
 import {
   type ApprovalPost,
@@ -197,7 +204,7 @@ export const createFakeCommunication = (options: FakeCommunicationOptions): Fake
     threads: true,
     buttons: true,
     messageUpdate: true,
-    socketMode: true,
+    socketMode: false,
     digest: true,
     ...options.capabilities,
   };
