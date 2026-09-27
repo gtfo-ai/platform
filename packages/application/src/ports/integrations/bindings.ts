@@ -71,7 +71,7 @@ export interface IntegrationAccount {
 
 export interface BindingRepository {
   /** Every binding of a project, in a stable order (type, then provider, then name). */
-  forProject(projectId: Id): Promise<readonly ProjectBinding[]>;
+  readonly forProject: (projectId: Id) => Promise<readonly ProjectBinding[]>;
   /** The account and its bindings, or `null` when no integration has that id. */
-  forIntegration(integrationId: Id): Promise<IntegrationAccount | null>;
+  readonly forIntegration: (integrationId: Id) => Promise<IntegrationAccount | null>;
 }

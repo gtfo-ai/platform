@@ -9,6 +9,8 @@
  * not, because "no answer" is the branch a reader is most likely to be given wrongly.
  */
 import fc from 'fast-check';
+// The package's fixed fast-check seed (PROGRESS backlog 253) is set by importing this module.
+import '../testing/property.js';
 import { describe, expect, it } from 'vitest';
 import {
   compareShadowDiffs,

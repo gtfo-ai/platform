@@ -77,6 +77,21 @@ import {
   type PipelineIntegrationsPort,
 } from './integrations.js';
 
+/**
+ * How many files of one merge request are compared.
+ *
+ * It lives here, beside the one cache every reader of a merge request's diff goes through, rather
+ * than in `conflict-warning.ts` where it was declared: `review-paths.ts` reads it too, and importing
+ * it from there closed a value-import cycle `jobs.ts` → `review-paths.ts` → `conflict-warning.ts`
+ * → `jobs.ts` (biome's `noImportCycles`, PROGRESS backlog 251).
+ *
+ * A hundred, which is two and a half times the forty a review-only prompt carries
+ * (`MAX_MR_FILES`), because nothing here goes in a prompt: the patches are discarded and only the
+ * paths are kept. A merge request larger than this is compared on its first hundred files and the
+ * result carries `truncated`, so "no overlap" is never mistaken for "nothing to find".
+ */
+export const MAX_CONFLICT_FILES = 100;
+
 /** How long one answer is served — see the module docblock for why this is a bound, not a TTL. */
 export const DIFF_COALESCE_WINDOW_MS = 15 * 60_000;
 

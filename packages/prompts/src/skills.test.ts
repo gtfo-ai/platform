@@ -11,9 +11,13 @@
  * container in `test/e2e/workspace/docker-workspace.e2e.test.ts`, because a fake provider and
  * `FakeClaudeRunner` will happily pass a run whose skills were never copied (standing rule 82).
  */
-import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
+  loadPlatformSkills,
   MAX_SKILL_BYTES,
   PLATFORM_SKILL_NAMES,
   PLATFORM_SKILL_VERSIONS,
@@ -117,5 +121,67 @@ describe('parseSkillFrontmatter', () => {
   it('reads a value containing a colon, because a description usually does', () => {
     const parsed = parseSkillFrontmatter('---\nname: kb\ndescription: a: b\n---\n\nb\n', 'x');
     expect(parsed.description).toBe('a: b');
+  });
+});
+
+/**
+ * The loader's refusals, each against a scratch directory (PROGRESS backlog 254). They run at
+ * import over the shipped directory, which never trips them, so until WP-73 they were the prompts
+ * ring's five uncovered `skills.ts` branches and nothing showed that any of them refused.
+ */
+describe('loadPlatformSkills refuses', () => {
+  const scratch: string[] = [];
+  afterEach(() => {
+    for (const directory of scratch.splice(0)) {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  /** A skills root holding `skills`, each a directory with the given `SKILL.md` text. */
+  const root = (skills: Record<string, string>): URL => {
+    const directory = mkdtempSync(join(tmpdir(), 'wp73-skills-'));
+    scratch.push(directory);
+    for (const [name, text] of Object.entries(skills)) {
+      mkdirSync(join(directory, name));
+      writeFileSync(join(directory, name, 'SKILL.md'), text);
+    }
+    return pathToFileURL(`${directory}/`);
+  };
+  const skill = (name: string): string => `---\nname: ${name}\ndescription: d\n---\nbody\n`;
+
+  it('a root that cannot be read, rather than answering no skills', () => {
+    const missing = new URL('does-not-exist/', root({}));
+    expect(() => loadPlatformSkills({ root: missing, versions: {} })).toThrow(/cannot be read/);
+  });
+
+  it('an empty root', () => {
+    expect(() => loadPlatformSkills({ root: root({}), versions: {} })).toThrow(/is empty/);
+  });
+
+  it('a version declared for a skill with no directory', () => {
+    const source = { root: root({ kb: skill('kb') }), versions: { kb: '1', retro: '1' } };
+    expect(() => loadPlatformSkills(source)).toThrow(/no directory: retro/);
+  });
+
+  it('a skill over the size cap', () => {
+    const big = skill('kb') + 'x'.repeat(MAX_SKILL_BYTES);
+    expect(() => loadPlatformSkills({ root: root({ kb: big }), versions: { kb: '1' } })).toThrow(
+      /the cap is/,
+    );
+  });
+
+  it('a skill whose frontmatter name is not its directory', () => {
+    const source = { root: root({ kb: skill('knowledge') }), versions: { kb: '1' } };
+    expect(() => loadPlatformSkills(source)).toThrow(/declares name "knowledge"/);
+  });
+
+  it('a skill with no declared version', () => {
+    const source = { root: root({ kb: skill('kb') }), versions: {} };
+    expect(() => loadPlatformSkills(source)).toThrow(/no version is declared/);
+  });
+
+  it('and loads a well-formed root', () => {
+    const source = { root: root({ kb: skill('kb') }), versions: { kb: '3' } };
+    expect(loadPlatformSkills(source).kb?.version).toBe('3');
   });
 });

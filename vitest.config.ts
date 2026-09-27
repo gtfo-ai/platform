@@ -82,10 +82,12 @@ export interface CoverageExclusion {
   /** The file that drives it, which names it; `scripts/coverage-budget.test.ts` reads both. */
   readonly exercisedBy: string;
   /**
-   * Which tier that is — and so whether `verify` runs it. Only `process` is inside `verify`;
-   * `integration` gates on `verify:integration`, and `image` on nothing but the image starting.
+   * Which tier that is — and so whether `verify` runs it. `process` and `unit` are inside `verify`
+   * (a `unit` driver starts the file as a subprocess, which reports no coverage to the run that
+   * started it); `integration` gates on `verify:integration`, and `image` on nothing but the image
+   * starting.
    */
-  readonly tier: 'process' | 'integration' | 'image';
+  readonly tier: 'process' | 'unit' | 'integration' | 'image';
 }
 
 /**
@@ -95,9 +97,10 @@ export interface CoverageExclusion {
  * else by path. So a new entry is a decision somebody makes in two files rather than a line somebody
  * adds under a precedent.
  *
- * Every entry says **which tier** drives it, and three of the four are tiers `verify` does not run —
+ * Every entry says **which tier** drives it, and two of the four are tiers `verify` does not run —
  * which is the honest shape of an exclusion: the code is exercised somewhere, just not where the
- * number is counted.
+ * number is counted. The other two are driven inside `verify`, as subprocesses, which is why their
+ * lines are still not counted.
  *
  * `packages/infrastructure/src/db/client.ts` **was** on this list, as a pool with no branch of its own
  * exercised only by the integration tier; since the `'error'` listener fix its unit test
@@ -106,14 +109,15 @@ export interface CoverageExclusion {
  */
 export const COVERAGE_EXCLUDED_FILES: readonly CoverageExclusion[] = [
   {
-    // The one-shot `migrate` CLI: environment in, one JSON line per step out, exit code. No test
-    // tier starts it — the integration harness calls `runMigrations` directly — so what drives it
-    // is the image: compose's `migrate` service runs this exact file. Its two exit codes are
-    // unasserted anywhere (PROGRESS backlog 252).
+    // The one-shot `migrate` CLI: environment in, one JSON line per step out, exit code. Its two
+    // failure exit codes are asserted by starting it as a process from the unit tier (PROGRESS
+    // backlog 252), which reports no coverage back; its success path is the image's — compose's
+    // `migrate` service runs this exact file — while the integration harness calls `runMigrations`
+    // directly.
     path: 'apps/server/src/migrate.ts',
     kind: 'process entrypoint',
-    exercisedBy: 'compose.yml',
-    tier: 'image',
+    exercisedBy: 'apps/server/src/migrate.test.ts',
+    tier: 'unit',
   },
   {
     // The launcher's process entrypoint: environment in, signals mapped, `process.exit` out. Every
@@ -189,6 +193,12 @@ interface CoverageThresholds {
  *
  * `scripts/coverage-budget.test.ts` holds the partition: every file coverage counts matches
  * **exactly one** ring's glob, so a new directory cannot fall between two rings or into none.
+ *
+ * **`!(x)` is a prefix refusal, not a name refusal** (picomatch 4.0.7, PROGRESS backlog 255): it
+ * rejects every name that *begins* with `x`, so a directory `runlet2/` or a file `testing2.ts`
+ * matches **no** ring below and the partition census fails naming it with `rings: []`. The file is
+ * not at fault then; the glob is — rewrite it with an explicit exclusion of the one directory or
+ * file (`runlet/`, `testing/`, `testing.ts`) rather than renaming the newcomer.
  */
 export const COVERAGE_RINGS: Readonly<
   Record<
@@ -214,8 +224,7 @@ export const COVERAGE_RINGS: Readonly<
   },
   prompts: {
     glob: 'packages/prompts/src/{!(testing).ts,!(testing)/**/!(testing).ts}',
-    thresholds: { lines: 80, branches: 70, functions: 80, statements: 80 },
-    owes: 'branches: 8 of 34, in `evals.ts` (3) and `skills.ts` (5) — two items of slack is six points here',
+    thresholds: { lines: 80, branches: 80, functions: 80, statements: 80 },
   },
   infrastructure: {
     glob: 'packages/infrastructure/src/{!(testing).ts,!(runlet|testing)/**/!(testing).ts}',

@@ -97,9 +97,9 @@ export interface InboxStore {
    * Insert-if-absent, **in the caller's transaction**, so the row and the events the delivery
    * produced commit together. True when this row is new.
    */
-  record(tx: Transaction, delivery: InboxDelivery): Promise<boolean>;
+  readonly record: (tx: Transaction, delivery: InboxDelivery) => Promise<boolean>;
   /** The cheap "have I seen this?" read, outside any transaction. */
-  find(provider: string, deliveryId: string): Promise<InboxDelivery | null>;
+  readonly find: (provider: string, deliveryId: string) => Promise<InboxDelivery | null>;
 }
 
 // ── The inbound audit row ────────────────────────────────────────────────────
@@ -140,7 +140,7 @@ export interface InboundDeliveryRecord {
  * this delivery produced are the normalised ones or none.
  */
 export interface InboundAuditLog {
-  record(entry: InboundDeliveryRecord): Promise<void>;
+  readonly record: (entry: InboundDeliveryRecord) => Promise<void>;
 }
 
 // ── Resolving `integrations.id` into an adapter ──────────────────────────────
@@ -194,5 +194,5 @@ export interface ResolvedInboundIntegration {
  * configuration, not to the delivery).
  */
 export interface InboundIntegrationLoader {
-  forIntegration(integrationId: Id): Promise<ResolvedInboundIntegration | null>;
+  readonly forIntegration: (integrationId: Id) => Promise<ResolvedInboundIntegration | null>;
 }

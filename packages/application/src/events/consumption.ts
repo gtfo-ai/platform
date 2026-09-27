@@ -37,9 +37,9 @@
  * technical/02's column would stop the outbox worker in every build that exists today, including
  * the one whose e2e walks a ticket to `task.completed`.
  *
- * The table below is therefore **what this build consumes**, and every `unconsumed` entry names an
- * address: the work package that will flip it, or — when nothing will, because the *event* cannot
- * answer the question — the backlog entry that says so. `mr.updated` was the second kind until
+ * The table below is therefore **what this build consumes**, and every `unconsumed` entry has an
+ * address in {@link UNCONSUMED_OWNERS}: the work package that will flip it, or `null` when nothing
+ * is scheduled to — with the reason beside the row. `mr.updated` was the second kind until
  * WP-60 found a question it *can* answer (the revision), and is `handled` since.
  *
  * The properties the amendment is protecting are unchanged: a sweeper
@@ -68,9 +68,10 @@ export type EventConsumption = 'handled' | 'unconsumed';
  * The catalogue as code. Keys are held to `DOMAIN_EVENT_TYPES` by `consumption.test.ts`, so adding
  * an event type without deciding this is a build failure rather than a silent `undefined`.
  *
- * Each `unconsumed` entry carries the work package that will flip it, because "nothing handles this"
- * and "nothing handles this *yet*" need different answers when someone reads the row (rule 18's
- * shape: the absent case must not be the quiet one).
+ * Each `unconsumed` entry has an owner in {@link UNCONSUMED_OWNERS} — the work package that will
+ * flip it, or `null` — because "nothing handles this" and "nothing handles this *yet*" need
+ * different answers when someone reads the row (rule 18's shape: the absent case must not be the
+ * quiet one).
  */
 export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumption>> = {
   /**
@@ -93,7 +94,7 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   'ticket.matched': 'handled',
   'task.created': 'handled',
   'task.queued': 'handled',
-  'task.dequeued': 'unconsumed', // WP-15's scheduler emits it; nothing listens. WP-20 shipped without a projection of it; the statistics screen's queue-wait metric names it absent for that reason.
+  'task.dequeued': 'unconsumed', // WP-15's scheduler emits it; nothing listens. WP-20 shipped without a projection of it; the statistics screen's queue-wait metric names it absent for that reason. No owner.
   'task.stage.entered': 'handled',
   'task.stage.completed': 'handled',
   'task.stage.returned': 'handled',
@@ -212,11 +213,13 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   // work package owns it; PROGRESS's discovered work says so.
   'ticket.status.changed': 'unconsumed', // Task sync (technical/02); no owner.
 
-  'run.created': 'unconsumed', // UI band, WP-20's realtime projection.
-  'run.started': 'unconsumed', // UI band, WP-20.
-  'workspace.provisioned': 'unconsumed', // UI band, WP-20.
-  'workspace.destroyed': 'unconsumed', // WP-20.
-  'workspace.exported': 'unconsumed', // WP-20.
+  // technical/02's UI band. These five named WP-20 as their owner until WP-73, and WP-20 was DONE
+  // without them — the run screen reads rows, not these events — so they have no owner (backlog 1).
+  'run.created': 'unconsumed',
+  'run.started': 'unconsumed',
+  'workspace.provisioned': 'unconsumed',
+  'workspace.destroyed': 'unconsumed',
+  'workspace.exported': 'unconsumed',
   /**
    * **Consumed since WP-60 — for the revision it carries, not as activity** (PROGRESS backlog 182).
    *
@@ -264,7 +267,7 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   'budget.exhausted': 'handled',
   // Still unconsumed, and deliberately outside the notify band: a window rolling over is not news
   // (product/18:33's classes are the ones a human acts on), and nothing emits it in this build
-  // either (`cost/window.ts`). The UI band is WP-20's.
+  // either (`cost/window.ts`). The UI band has no owner.
   'budget.reset': 'unconsumed',
   'feedback.received': 'unconsumed', // Feedback intake agent; no work package owns it (WP-24 is review-only mode).
   // Emitted since WP-18b, and unconsumed **by decision** rather than by omission. technical/02's
@@ -274,12 +277,16 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   // indexer reads the **default branch** (BD-025) — so rebuilding on `applied` would re-read a tree
   // that has not changed. The rebuild happens when a human merges that MR, on `mr.merged`, which is
   // consumed. The UI half is a read model nothing builds yet.
-  'knowledge.proposal.created': 'unconsumed', // Librarian, WP-18b.
-  'knowledge.proposal.applied': 'unconsumed', // WP-18b; see above — `mr.merged` triggers the index.
-  'knowledge.proposal.rejected': 'unconsumed', // WP-18b.
+  'knowledge.proposal.created': 'unconsumed', // Emitted by the Librarian since WP-18b.
+  'knowledge.proposal.applied': 'unconsumed', // Since WP-18b; see above — `mr.merged` triggers the index.
+  'knowledge.proposal.rejected': 'unconsumed', // Since WP-18b.
   'knowledge.index.rebuilt': 'unconsumed', // `—` in technical/02: unconsumed by design, not by omission.
-  'readiness.evaluated': 'unconsumed', // Policy suggestions, WP-21.
-  'config.changed': 'unconsumed', // Audit projection and effective-config rebuild, WP-21.
+  // Both named WP-21 as their owner until WP-73, and WP-21 was DONE without consuming either:
+  // readiness is re-read from `readiness_evaluations`, and the effective configuration is read at
+  // each stage rather than rebuilt on an event. Policy suggestions and the audit projection have
+  // no work package (backlog 1).
+  'readiness.evaluated': 'unconsumed',
+  'config.changed': 'unconsumed',
   // technical/03 attributes an audit and a health projection to "WP-19", and WP-19's plan row does
   // not carry them: it is the cost ledger, the rollups, the budgets, the price job, the estimates
   // and the backfill. They have no work package, which is why no number is named here.
@@ -333,6 +340,50 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
   // projection over the batch's rows, not a number a handler accumulates.
   'shadow.report.created': 'handled',
 };
+
+/**
+ * Why each `unconsumed` row is unconsumed — a work package that will consume it, or `null` when
+ * nothing will (PROGRESS backlog 1's remainder, closed at WP-73).
+ *
+ * The table above is *derived from* the implementation, so a row left `unconsumed` after the work
+ * package it names has landed re-opens the hole silently — which is what five rows did: they named
+ * WP-20 and WP-21 for sessions after both were DONE. So the owner is **data**, not a comment, and
+ * two things read it. `consumption.test.ts` refuses an owner the ledger records as DONE (the
+ * orchestrator's status column, `docs/technical/PROGRESS.md`), and the work package that flips a row
+ * to `handled` asserts {@link unconsumedRowsOwnedBy} is empty for itself — the check is held by the
+ * work package that owns the row rather than by a list somebody maintains beside it.
+ *
+ * `null` today for every row: none of them has a consumer scheduled. A row whose consumer gets a
+ * plan row names it here, and that row's own DONE is then what fails the test until it flips.
+ */
+export const UNCONSUMED_OWNERS: Readonly<Partial<Record<DomainEventType, `WP-${string}` | null>>> =
+  {
+    'task.dequeued': null,
+    'ticket.status.changed': null,
+    'run.created': null,
+    'run.started': null,
+    'workspace.provisioned': null,
+    'workspace.destroyed': null,
+    'workspace.exported': null,
+    'budget.reset': null,
+    'feedback.received': null,
+    'knowledge.proposal.created': null,
+    'knowledge.proposal.applied': null,
+    'knowledge.proposal.rejected': null,
+    'knowledge.index.rebuilt': null,
+    'readiness.evaluated': null,
+    'config.changed': null,
+    'integration.action.performed': null,
+    'integration.action.failed': null,
+    'task.mr.measured': null,
+    'ticket.bug.traced': null,
+  };
+
+/** The rows still `unconsumed` that name `workPackage` as the one that will consume them. */
+export const unconsumedRowsOwnedBy = (workPackage: string): DomainEventType[] =>
+  (Object.entries(UNCONSUMED_OWNERS) as [DomainEventType, string | null][])
+    .filter(([type, owner]) => owner === workPackage && EVENT_CONSUMPTION[type] === 'unconsumed')
+    .map(([type]) => type);
 
 /** Every type this build says something must handle, in this table's declaration order. */
 export const HANDLED_EVENT_TYPES: readonly DomainEventType[] = Object.entries(EVENT_CONSUMPTION)

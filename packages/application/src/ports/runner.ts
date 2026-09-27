@@ -62,9 +62,9 @@ export type CancelTimer = () => void;
  */
 export interface RunnerClock {
   /** Epoch milliseconds. Only differences are meaningful. */
-  now(): number;
+  readonly now: () => number;
   /** Runs `callback` after `delayMs` have passed on this clock. */
-  setTimer(delayMs: number, callback: () => void): CancelTimer;
+  readonly setTimer: (delayMs: number, callback: () => void) => CancelTimer;
 }
 
 // ── RunSpec ──────────────────────────────────────────────────────────────────
@@ -288,7 +288,7 @@ export interface RunOutcome {
  * row, not a second obligation on the caller.
  */
 export interface RunTranscriptSink {
-  append(event: TranscriptEvent): Promise<void>;
+  readonly append: (event: TranscriptEvent) => Promise<void>;
 }
 
 /** What `canUseTool` asks a human (technical/04) — the ask-list half of BD-025. */
@@ -320,27 +320,39 @@ export interface ToolApprovalPort {
    * Opens a blocking Question and waits. An implementation that cannot reach a human — or whose
    * deadline passes — resolves `deny`; it never throws to mean "no".
    */
-  requestApproval(request: ToolApprovalRequest): Promise<ToolApprovalDecision>;
+  readonly requestApproval: (request: ToolApprovalRequest) => Promise<ToolApprovalDecision>;
 }
 
 /** The in-process MCP server's nine tools (technical/04). Inputs are model-written, so untrusted. */
 export interface PlatformToolPort {
   /** Blocking question with a blocker brief; returns the human's answer text. */
-  askHuman(input: AskHumanInput, context: PlatformToolContext): Promise<string>;
-  notifyHuman(input: NotifyHumanInput, context: PlatformToolContext): Promise<void>;
-  reportProgress(input: ReportProgressInput, context: PlatformToolContext): Promise<void>;
-  getTaskContext(input: GetTaskContextInput, context: PlatformToolContext): Promise<JsonValue>;
-  kbSearch(input: KbSearchInput, context: PlatformToolContext): Promise<JsonValue>;
-  addTicketComment(input: AddTicketCommentInput, context: PlatformToolContext): Promise<JsonValue>;
-  openMergeRequest(input: OpenMrInput, context: PlatformToolContext): Promise<JsonValue>;
-  updateMrDescription(
+  readonly askHuman: (input: AskHumanInput, context: PlatformToolContext) => Promise<string>;
+  readonly notifyHuman: (input: NotifyHumanInput, context: PlatformToolContext) => Promise<void>;
+  readonly reportProgress: (
+    input: ReportProgressInput,
+    context: PlatformToolContext,
+  ) => Promise<void>;
+  readonly getTaskContext: (
+    input: GetTaskContextInput,
+    context: PlatformToolContext,
+  ) => Promise<JsonValue>;
+  readonly kbSearch: (input: KbSearchInput, context: PlatformToolContext) => Promise<JsonValue>;
+  readonly addTicketComment: (
+    input: AddTicketCommentInput,
+    context: PlatformToolContext,
+  ) => Promise<JsonValue>;
+  readonly openMergeRequest: (
+    input: OpenMrInput,
+    context: PlatformToolContext,
+  ) => Promise<JsonValue>;
+  readonly updateMrDescription: (
     input: UpdateMrDescriptionInput,
     context: PlatformToolContext,
-  ): Promise<JsonValue>;
-  createFollowupTicket(
+  ) => Promise<JsonValue>;
+  readonly createFollowupTicket: (
     input: CreateFollowupInput,
     context: PlatformToolContext,
-  ): Promise<JsonValue>;
+  ) => Promise<JsonValue>;
 }
 
 export interface PlatformToolContext {
@@ -442,9 +454,9 @@ export interface SessionMirrorKey {
  * run can be resumed on another host.
  */
 export interface SessionMirrorPort {
-  append(key: SessionMirrorKey, entries: readonly JsonObject[]): Promise<void>;
-  load(key: SessionMirrorKey): Promise<JsonObject[] | null>;
-  listSubkeys?(key: Omit<SessionMirrorKey, 'subpath'>): Promise<string[]>;
+  readonly append: (key: SessionMirrorKey, entries: readonly JsonObject[]) => Promise<void>;
+  readonly load: (key: SessionMirrorKey) => Promise<JsonObject[] | null>;
+  readonly listSubkeys?: (key: Omit<SessionMirrorKey, 'subpath'>) => Promise<string[]>;
 }
 
 // ── The port itself ──────────────────────────────────────────────────────────
@@ -510,9 +522,9 @@ export interface RunHandle {
   /** Resolves once — a run has exactly one outcome, however it ended. */
   readonly outcome: Promise<RunOutcome>;
   /** Pushes a user turn into the live session (technical/04 § "Steering"). */
-  steer(message: SteerMessage): Promise<void>;
+  readonly steer: (message: SteerMessage) => Promise<void>;
   /** `interrupt()` then end the run; a take-over also says what its workspace owes. */
-  stop(stop: RunStop): Promise<void>;
+  readonly stop: (stop: RunStop) => Promise<void>;
 }
 
 export interface ClaudeRunner {
@@ -520,7 +532,7 @@ export interface ClaudeRunner {
    * Starts a run. Returns as soon as the session is being established; everything else is observed
    * through the transcript sink and the returned {@link RunHandle}.
    */
-  start(spec: RunSpec): RunHandle;
+  readonly start: (spec: RunSpec) => RunHandle;
 }
 
 /**

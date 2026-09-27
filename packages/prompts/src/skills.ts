@@ -144,10 +144,10 @@ export const parseSkillFrontmatter = (
  * versions in **both** directions, so a skill added without a version — and a version declared for
  * a skill nobody wrote — are each a startup failure rather than a silent omission.
  */
-export const platformSkillDirectories = (): readonly string[] => {
+export const platformSkillDirectories = (root: URL = skillsRoot): readonly string[] => {
   let entries: readonly string[];
   try {
-    entries = readdirSync(fileURLToPath(skillsRoot), { withFileTypes: true })
+    entries = readdirSync(fileURLToPath(root), { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .sort();
@@ -155,18 +155,33 @@ export const platformSkillDirectories = (): readonly string[] => {
     // Rules 18/31/55: an absent directory is a refusal, never an empty list that reads as "this
     // deployment ships no skills".
     throw new Error(
-      `${fileURLToPath(skillsRoot)} cannot be read, so this deployment has no platform skills at all`,
+      `${fileURLToPath(root)} cannot be read, so this deployment has no platform skills at all`,
       { cause },
     );
   }
   if (entries.length === 0) {
-    throw new Error(`${fileURLToPath(skillsRoot)} is empty; the platform ships ten skills`);
+    throw new Error(`${fileURLToPath(root)} is empty; the platform ships ten skills`);
   }
   return entries;
 };
 
-const load = (name: string): PlatformSkill => {
-  const file = platformSkillPath(name);
+/**
+ * Where the skills are read from and which versions they are held to — the shipped directory and
+ * {@link PLATFORM_SKILL_VERSIONS} everywhere but in `skills.test.ts`, which hands in a scratch
+ * directory so each refusal below is asserted rather than only written (PROGRESS backlog 254).
+ */
+export interface PlatformSkillSource {
+  readonly root: URL;
+  readonly versions: Readonly<Record<string, string | undefined>>;
+}
+
+const SHIPPED_SKILLS: PlatformSkillSource = {
+  root: skillsRoot,
+  versions: PLATFORM_SKILL_VERSIONS,
+};
+
+const load = (name: string, source: PlatformSkillSource): PlatformSkill => {
+  const file = fileURLToPath(new URL(`${name}/SKILL.md`, source.root));
   const size = statSync(file).size;
   if (size > MAX_SKILL_BYTES) {
     throw new Error(`${file} is ${String(size)} bytes; the cap is ${String(MAX_SKILL_BYTES)}`);
@@ -179,11 +194,28 @@ const load = (name: string): PlatformSkill => {
         `${JSON.stringify(name)}; the CLI takes the directory name, so the two must agree`,
     );
   }
-  const version = (PLATFORM_SKILL_VERSIONS as Record<string, string | undefined>)[name];
+  const version = source.versions[name];
   if (version === undefined) {
     throw new Error(`${file} exists but no version is declared for it in PLATFORM_SKILL_VERSIONS`);
   }
   return { name, version, description: frontmatter.description, text };
+};
+
+/** Every skill under `source.root`, each held to a declared version, and every version to a skill. */
+export const loadPlatformSkills = (
+  source: PlatformSkillSource = SHIPPED_SKILLS,
+): Readonly<Record<string, PlatformSkill>> => {
+  const directories = platformSkillDirectories(source.root);
+  const declared = Object.keys(source.versions).sort();
+  const missing = declared.filter((name) => !directories.includes(name));
+  if (missing.length > 0) {
+    throw new Error(
+      `PLATFORM_SKILL_VERSIONS declares skills with no directory: ${missing.join(', ')}`,
+    );
+  }
+  return Object.freeze(
+    Object.fromEntries(directories.map((name) => [name, load(name, source)] as const)),
+  );
 };
 
 /**
@@ -192,17 +224,7 @@ const load = (name: string): PlatformSkill => {
  * process that provisions workspaces should fail to start rather than hand out a workspace with a
  * hole in it.
  */
-export const PLATFORM_SKILLS: Readonly<Record<string, PlatformSkill>> = (() => {
-  const directories = platformSkillDirectories();
-  const declared = Object.keys(PLATFORM_SKILL_VERSIONS).sort();
-  const missing = declared.filter((name) => !directories.includes(name));
-  if (missing.length > 0) {
-    throw new Error(
-      `PLATFORM_SKILL_VERSIONS declares skills with no directory: ${missing.join(', ')}`,
-    );
-  }
-  return Object.freeze(Object.fromEntries(directories.map((name) => [name, load(name)] as const)));
-})();
+export const PLATFORM_SKILLS: Readonly<Record<string, PlatformSkill>> = loadPlatformSkills();
 
 /** The ten names, sorted — read off disk, so a new skill joins it by existing. */
 export const PLATFORM_SKILL_NAMES: readonly string[] = Object.keys(PLATFORM_SKILLS);

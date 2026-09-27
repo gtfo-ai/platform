@@ -20,8 +20,9 @@
  * run build` bundles this entry to `dist/agentic-runlet.mjs` (zod and the frame codec travel with
  * it), and `docker/runtime.Dockerfile` copies that one file in as `/usr/local/bin/agentic-runlet`.
  * The narrow `@platform/infrastructure/runlet` subpath is what makes that bundle small and honest —
- * the package **root** barrel reaches `pg`, `pg-boss`, the Agent SDK and (through
- * `runlet/testing.ts`) `vitest`, none of which belongs in a run container. See
+ * the package **root** barrel reaches `pg`, `pg-boss` and the Agent SDK, none of which belongs in a
+ * run container (the one runlet module that imports `vitest`, `structural-wait.ts`, is kept out of
+ * every barrel; `runlet/testing.ts` never imported it — PROGRESS backlog 250). See
  * `packages/infrastructure/src/runlet/entry.ts`. Nothing in this file assumes either arrangement:
  * it runs the same from source under `scripts/ts-source-resolver.mjs`.
  */

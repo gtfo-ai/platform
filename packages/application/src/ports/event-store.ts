@@ -40,7 +40,10 @@ export interface EventAppender {
    * @throws {StreamConflictError} when a `stream_seq` is not `last + 1` for its stream.
    * @throws {PartitionWindowError} when `occurred_at` has no monthly partition.
    */
-  append(events: readonly DomainEvent[], options?: AppendOptions): Promise<readonly StoredEvent[]>;
+  readonly append: (
+    events: readonly DomainEvent[],
+    options?: AppendOptions,
+  ) => Promise<readonly StoredEvent[]>;
 }
 
 export interface ReadStreamOptions {
@@ -82,16 +85,16 @@ export interface PendingDispatchRequest {
  * once: two events of one stream can never be handed out together.
  */
 export interface EventStore {
-  readStream(
+  readonly readStream: (
     streamType: StreamType,
     streamId: Id,
     options?: ReadStreamOptions,
-  ): Promise<readonly StoredEvent[]>;
+  ) => Promise<readonly StoredEvent[]>;
 
   /** The `stream_seq` the next append to this stream must carry (`last + 1`, so 1 when empty). */
-  nextStreamSequence(streamType: StreamType, streamId: Id): Promise<number>;
+  readonly nextStreamSequence: (streamType: StreamType, streamId: Id) => Promise<number>;
 
-  readAt(position: number): Promise<StoredEvent | null>;
+  readonly readAt: (position: number) => Promise<StoredEvent | null>;
 
   /**
    * A window of the log in position order (see {@link ReadRangeRequest}).
@@ -99,10 +102,12 @@ export interface EventStore {
    * It reads `events` and **not** `event_dispatch`: an event whose dispatch completed has no queue
    * row left, and those are exactly the events a backfill exists for.
    */
-  readRange(request: ReadRangeRequest): Promise<readonly StoredEvent[]>;
+  readonly readRange: (request: ReadRangeRequest) => Promise<readonly StoredEvent[]>;
 
   /** Events whose dispatch is due, earliest-pending-per-stream first, in position order. */
-  readPendingDispatch(request: PendingDispatchRequest): Promise<readonly StoredEvent[]>;
+  readonly readPendingDispatch: (
+    request: PendingDispatchRequest,
+  ) => Promise<readonly StoredEvent[]>;
 
   /**
    * How many events are waiting to be dispatched (queue depth, for tests and metrics).
@@ -111,7 +116,7 @@ export interface EventStore {
    * would publish a backlog that no amount of draining can clear. It is counted by
    * {@link countDeadLettered} instead, and the two together are the whole of `event_dispatch`.
    */
-  countPendingDispatch(): Promise<number>;
+  readonly countPendingDispatch: () => Promise<number>;
 
   /**
    * How many events spent their attempt bound and left the queue (WP-49).
@@ -119,5 +124,5 @@ export interface EventStore {
    * The number that tells a poisoned event from a busy queue: the backlog gauge rises under load
    * and falls again, this one only rises — and only when something is permanently failing.
    */
-  countDeadLettered(): Promise<number>;
+  readonly countDeadLettered: () => Promise<number>;
 }

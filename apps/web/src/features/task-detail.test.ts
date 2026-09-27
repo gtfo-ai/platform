@@ -264,6 +264,20 @@ describe('the dependency status on the Checks panel', () => {
     );
   });
 
+  it('stops promising a resume once the task was cancelled while it waited (backlog 265)', () => {
+    const deferredBlock = gated({ decision: 'block', deferred_stage: 'implementation' });
+    const deferredAsk = gated({ question_id: null, deferred_stage: 'implementation' });
+    for (const deferred of [deferredBlock, deferredAsk]) {
+      expect(dependencyValueText(deferred, 'cancelled')).toBe(
+        '1 added · not applied — the task was cancelled',
+      );
+      expect(dependencyBasisText(deferred, 'cancelled')).toContain('the policy was never applied');
+      expect(dependencyBasisText(deferred, 'cancelled')).not.toContain('when it resumes');
+    }
+    // A task still paused keeps the promise, because it can still be kept.
+    expect(dependencyValueText(deferredBlock, 'paused')).toBe('1 added · blocked on resume');
+  });
+
   it('says what the policy did, and counts the packages', () => {
     expect(
       dependencyValueText(gated({ question_id: '00000000-0000-4000-8000-000000000009' })),

@@ -9,10 +9,10 @@
 export type LogFields = Readonly<Record<string, unknown>>;
 
 export interface Logger {
-  debug(fields: LogFields, message: string): void;
-  info(fields: LogFields, message: string): void;
-  warn(fields: LogFields, message: string): void;
-  error(fields: LogFields, message: string): void;
+  readonly debug: (fields: LogFields, message: string) => void;
+  readonly info: (fields: LogFields, message: string) => void;
+  readonly warn: (fields: LogFields, message: string) => void;
+  readonly error: (fields: LogFields, message: string) => void;
 }
 
 /** Discards everything. The default, so nothing in this ring logs unless a root wires it up. */

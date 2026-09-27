@@ -14,7 +14,13 @@ import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { agentRoleSchema, artifactDataSchemas } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
-import { artifactSchemaPathFor, caseArtifactType, ROLE_EVALS, roleEvalPath } from './evals.js';
+import {
+  artifactSchemaPathFor,
+  caseArtifactType,
+  parseRoleEvalSet,
+  ROLE_EVALS,
+  roleEvalPath,
+} from './evals.js';
 
 const ROLES = agentRoleSchema.options;
 const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
@@ -95,5 +101,39 @@ describe.each(ROLES.map((role) => [role] as const))('the %s eval set', (role) =>
       expect(json, `${entry.id} has an is-json assertion`).toBeDefined();
       expect(json?.value, entry.id).toContain(artifactSchemaPathFor(type).replace('schemas/', ''));
     }
+  });
+});
+
+/**
+ * The three refusals of the loader, each asserted (PROGRESS backlog 254): they run at import over
+ * the shipped files, which never trip them, so until WP-73 they were the prompts ring's three
+ * uncovered `evals.ts` branches and nothing showed that any of them refused.
+ */
+describe('parseRoleEvalSet', () => {
+  const set = (overrides: Record<string, unknown>): string =>
+    JSON.stringify({ role: 'developer', artifact_type: null, cases: [], ...overrides });
+
+  it('refuses a set filed under a role it does not declare, naming both', () => {
+    expect(() => parseRoleEvalSet('reviewer', set({}), 'reviewer/evals/cases.json')).toThrow(
+      /reviewer\/evals\/cases\.json declares role "developer"/,
+    );
+  });
+
+  it('refuses a set whose artifact type does not exist', () => {
+    expect(() => parseRoleEvalSet('developer', set({ artifact_type: 'Nope' }), 'x')).toThrow(
+      'x names an unknown artifact type',
+    );
+  });
+
+  it('refuses a case whose own artifact type does not exist, naming the case', () => {
+    const text = set({ cases: [{ id: 'dev-9', artifact_type: 'Nope' }] });
+    expect(() => parseRoleEvalSet('developer', text, 'x')).toThrow(
+      'x case dev-9 names an unknown artifact type',
+    );
+  });
+
+  it('accepts a set that names real artifact types', () => {
+    const text = set({ cases: [{ id: 'dev-1', artifact_type: 'RefinedSpec' }] });
+    expect(parseRoleEvalSet('developer', text, 'x').cases).toHaveLength(1);
   });
 });

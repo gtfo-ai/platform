@@ -11,6 +11,7 @@
  * (standing rule 68): every type marked `handled` gets a case that removes exactly that handler and
  * asserts the sweep is refused *and* that the message names it.
  */
+import { readFileSync } from 'node:fs';
 import { DOMAIN_EVENT_TYPES, type DomainEventType } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { costHandlers } from '../cost/runtime.js';
@@ -21,7 +22,13 @@ import { createMemoryCostStore } from '../testing/memory-cost.js';
 import { createMemoryHumanTimeStore } from '../testing/memory-human-time.js';
 import { createMemoryStatsStore } from '../testing/memory-stats.js';
 import { createPipelineHarness } from '../testing/pipeline-harness.js';
-import { EVENT_CONSUMPTION, HANDLED_EVENT_TYPES, sweepReadiness } from './consumption.js';
+import {
+  EVENT_CONSUMPTION,
+  HANDLED_EVENT_TYPES,
+  sweepReadiness,
+  UNCONSUMED_OWNERS,
+  unconsumedRowsOwnedBy,
+} from './consumption.js';
 import type { EventHandler } from './handler.js';
 import { HandlerRegistry } from './handler.js';
 
@@ -158,12 +165,12 @@ describe('sweepReadiness', () => {
  * a row marked `handled` that nothing registers — and nothing would notice. This binds the two:
  * `createPipelineHarness` composes the same handlers `apps/server` registers.
  *
- * **It guards one direction, and the other is stated rather than built.** A row that stays
- * `unconsumed` after its consumer ships would need the test to know which work packages have landed
- * — a second hand-maintained list, which is rule 7's shape and would drift the same way. The cheap
- * half of it is here: every `unconsumed` row carries the work package that flips it, so the WP's own
- * definition of done is where the question gets asked. A mechanical version would have to read the
- * plan's status column, which is a guard reading a document nobody validates.
+ * **The other direction since WP-73** (PROGRESS backlog 1): a row that stays `unconsumed` after the
+ * work package it names has landed. Five rows did exactly that — they named WP-20 and WP-21 for
+ * sessions after both were DONE — so the owner is data (`UNCONSUMED_OWNERS`), each flipping work
+ * package asserts `unconsumedRowsOwnedBy` is empty for itself, and the last case in this block
+ * refuses an owner the ledger's status column records as DONE. That column is the orchestrator's,
+ * written at every commit; it is read rather than copied, so there is no second list to drift.
  */
 describe('the declared table against the composed registrations', () => {
   /**
@@ -232,6 +239,7 @@ describe('the declared table against the composed registrations', () => {
     // since WP-65, whose second handler edits a settled approval's message on
     // `task.approval.decided` (already `handled` by the pipeline — a second consumer moves nothing).
     expect(owned.length).toBe(10);
+    expect(unconsumedRowsOwnedBy('WP-32')).toEqual([]);
     for (const type of owned) {
       expect({ type, consumption: EVENT_CONSUMPTION[type] }).toEqual({
         type,
@@ -248,6 +256,7 @@ describe('the declared table against the composed registrations', () => {
       handler.eventTypes === 'all' ? [] : [...handler.eventTypes],
     );
     expect(owned).toContain('run.steered');
+    expect(unconsumedRowsOwnedBy('WP-29')).toEqual([]);
     for (const type of owned) {
       expect({ type, consumption: EVENT_CONSUMPTION[type] }).toEqual({
         type,
@@ -264,6 +273,7 @@ describe('the declared table against the composed registrations', () => {
       },
     }).flatMap((handler) => (handler.eventTypes === 'all' ? [] : [...handler.eventTypes]));
     expect(owned.length).toBeGreaterThan(0);
+    expect(unconsumedRowsOwnedBy('WP-19')).toEqual([]);
     for (const type of owned) {
       expect({ type, consumption: EVENT_CONSUMPTION[type] }).toEqual({
         type,
@@ -271,4 +281,49 @@ describe('the declared table against the composed registrations', () => {
       });
     }
   });
+
+  /** Every `unconsumed` row has an owner entry, and no owner entry is for a `handled` row. */
+  it('addresses every unconsumed row, and only those', () => {
+    const unconsumed = Object.entries(EVENT_CONSUMPTION)
+      .filter(([, consumption]) => consumption === 'unconsumed')
+      .map(([type]) => type)
+      .sort();
+    expect(Object.keys(UNCONSUMED_OWNERS).sort()).toEqual(unconsumed);
+  });
+
+  it('names no owner the ledger records as DONE (PROGRESS backlog 1)', () => {
+    const ledger = readFileSync(
+      new URL('../../../../docs/technical/PROGRESS.md', import.meta.url),
+      'utf8',
+    );
+    const done = doneWorkPackages(ledger);
+    // Calibration (standing rule 44): the parse must find the ledger's DONE rows, or an empty set
+    // would pass every owner. WP-19, WP-20 and WP-21 are three it must see.
+    expect(done).toEqual(expect.arrayContaining(['WP-19', 'WP-20', 'WP-21']));
+    expect(staleOwners(UNCONSUMED_OWNERS, done)).toEqual([]);
+    // …and a planted owner that has landed is named, which is the refusal this case exists for.
+    expect(staleOwners({ 'run.created': 'WP-20', 'config.changed': 'WP-999' }, done)).toEqual([
+      'run.created → WP-20',
+    ]);
+  });
 });
+
+/** The work packages a status row of the ledger records as `DONE`, in either table layout. */
+const doneWorkPackages = (ledger: string): string[] =>
+  ledger.split('\n').flatMap((line) => {
+    const cells = line.split('|').map((cell) => cell.trim());
+    const id = cells[1] ?? '';
+    // `DONE` may carry a qualifier in its cell — WP-15h reads `DONE (**parts 1 and 2** …)` (review
+    // round 1), so a status cell counts when it *starts* with the word.
+    return /^WP-\d+[a-z]?$/.test(id) && cells.slice(2).some((cell) => /^DONE\b/.test(cell))
+      ? [id]
+      : [];
+  });
+
+const staleOwners = (
+  owners: Readonly<Partial<Record<string, string | null>>>,
+  done: readonly string[],
+): string[] =>
+  Object.entries(owners)
+    .filter(([, owner]) => owner !== null && owner !== undefined && done.includes(owner))
+    .map(([type, owner]) => `${type} → ${owner}`);

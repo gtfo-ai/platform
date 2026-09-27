@@ -70,7 +70,7 @@ import type { EventHandler, HandlerContext } from '../events/handler.js';
 import type { FileDiff, MergeRequestRefInput } from '../ports/integrations/git-provider.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
-import { coalescedMergeRequestDiff } from './diff-coalescer.js';
+import { coalescedMergeRequestDiff, MAX_CONFLICT_FILES } from './diff-coalescer.js';
 import { integrationsForProject, noRunScopedSecrets, reviewWrites } from './integrations.js';
 import { enqueueOutbound, type PipelineOutboundData } from './jobs.js';
 import { REBASE_GATE_STAGE, type RebaseJobOptions } from './rebase.js';
@@ -86,16 +86,6 @@ import { PIPELINE_ACTOR, type StoredTask } from './store.js';
  * bound is the project's own concurrency; it exists for the project that raised it.
  */
 export const MAX_CONFLICT_PEERS = 10;
-
-/**
- * How many files of one merge request are compared.
- *
- * A hundred, which is two and a half times the forty a review-only prompt carries
- * (`MAX_MR_FILES`), because nothing here goes in a prompt: the patches are discarded and only the
- * paths are kept. A merge request larger than this is compared on its first hundred files and the
- * result carries `truncated`, so "no overlap" is never mistaken for "nothing to find".
- */
-export const MAX_CONFLICT_FILES = 100;
 
 /**
  * The idempotency key of one warning.

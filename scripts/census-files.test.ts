@@ -131,3 +131,66 @@ describe('censusFiles', () => {
     expect(censusFiles(root, { include: (path) => path.endsWith('.ts') }).length).toBe(4);
   });
 });
+
+/**
+ * **Who may import this helper — the reach `biome.json` gives it and does not narrow** (PROGRESS
+ * backlog 248).
+ *
+ * The dependency rule's relative-path group carries `!**\/scripts/census-files.mjs` in **every**
+ * ring's override, because the rings are the overrides and a test is not a ring: a biome override
+ * replaces a rule's options rather than merging them, so a test-only exemption would have to repeat
+ * each ring's `@platform/*` group in a second override per ring. So the linter lets any file in any
+ * ring import it — a `packages/domain` source, which CLAUDE.md says does no I/O, included — and
+ * this census is what narrows it: an importer must be a test file, a script, a `test/` harness, or
+ * `apps/server/src/routes/web-sources.ts`, whose own importers must in turn be tests. It reads
+ * tracked **and** untracked files (standing rule 85), and its planted case below is the calibration.
+ */
+const IMPORTS_CENSUS_HELPER = /(?:from|import\()\s*['"][^'"]*\/census-files\.mjs['"]/;
+const IMPORTS_WEB_SOURCES = /(?:from|import\()\s*['"][^'"]*\/web-sources\.js['"]/;
+const TEST_SOURCE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
+const CENSUS_HELPER_SEAM = 'apps/server/src/routes/web-sources.ts';
+
+/** Every file that reaches the helper from a ring's production sources. */
+const productionImporters = (root: string): string[] =>
+  censusFiles(root, {
+    include: (path) => /\.(?:[cm]?[jt]sx?)$/.test(path) && !path.startsWith('node_modules/'),
+  }).flatMap(({ path, contents }) => {
+    if (path.startsWith('scripts/') || path.startsWith('test/') || TEST_SOURCE.test(path)) {
+      return [];
+    }
+    if (IMPORTS_CENSUS_HELPER.test(contents) && path !== CENSUS_HELPER_SEAM) {
+      return [path];
+    }
+    return IMPORTS_WEB_SOURCES.test(contents) ? [path] : [];
+  });
+
+describe('who may import census-files.mjs', () => {
+  it('is imported from a production source nowhere in this repository', () => {
+    const root = new URL('..', import.meta.url).pathname;
+    expect(productionImporters(root)).toEqual([]);
+  });
+
+  it('refuses a planted production import, tracked or untracked, and admits a test', () => {
+    const root = repository();
+    const git = (...args: string[]): void => {
+      execFileSync('git', args, { cwd: root, stdio: 'ignore' });
+    };
+    mkdirSync(join(root, 'packages/domain/src'), { recursive: true });
+    mkdirSync(join(root, 'apps/server/src/routes'), { recursive: true });
+    const helper = "import { censusPaths } from '../../../scripts/census-files.mjs';\n";
+    writeFileSync(join(root, 'packages/domain/src/tracked.ts'), helper);
+    writeFileSync(join(root, 'packages/domain/src/untracked.ts'), helper);
+    writeFileSync(join(root, 'packages/domain/src/fine.test.ts'), helper);
+    writeFileSync(join(root, CENSUS_HELPER_SEAM), helper);
+    writeFileSync(
+      join(root, 'apps/server/src/leak.ts'),
+      "import { readSource } from './routes/web-sources.js';\n",
+    );
+    git('add', 'packages/domain/src/tracked.ts');
+    expect(productionImporters(root)).toEqual([
+      'apps/server/src/leak.ts',
+      'packages/domain/src/tracked.ts',
+      'packages/domain/src/untracked.ts',
+    ]);
+  });
+});

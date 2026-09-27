@@ -19,13 +19,13 @@ export interface InboundConnection {
    * Opens the connection. Resolves once the provider has accepted it; rejects with an
    * `IntegrationError` whose `retryable` says whether trying again later could help.
    */
-  start(): Promise<void>;
+  readonly start: () => Promise<void>;
   /**
    * Closes it and waits for every delivery already received to be handled. After it resolves, no
    * reconnect is scheduled and no delivery reaches the ingress (standing rules 51 and 85: a
    * resolved `stop` must mean the connection is gone, not that closing was requested).
    */
-  stop(): Promise<void>;
+  readonly stop: () => Promise<void>;
 }
 
 /** One account whose configuration selects a held connection, ready to be opened. */
@@ -43,7 +43,7 @@ export interface HeldConnectionAccount {
    * @throws when the account cannot hold one at all — no app-level token, no signing secret —
    * which no retry fixes.
    */
-  open(onDelivery: (delivery: WebhookDelivery) => Promise<void>): InboundConnection;
+  readonly open: (onDelivery: (delivery: WebhookDelivery) => Promise<void>) => InboundConnection;
 }
 
 /**
@@ -74,7 +74,7 @@ export type HeldConnectionFingerprint = string;
 
 export interface HeldConnectionDirectory {
   /** Every account whose configuration selects a held inbound connection, in a stable order. */
-  list(): Promise<readonly (HeldConnectionAccount | BrokenHeldConnectionAccount)[]>;
+  readonly list: () => Promise<readonly (HeldConnectionAccount | BrokenHeldConnectionAccount)[]>;
 }
 
 /**
@@ -91,9 +91,9 @@ export interface HeldConnectionDirectory {
  */
 export interface HeldConnectionLiveness {
   /** Writes or extends the account's row: held by `holder` until `ttlMs` past the database's now. */
-  renew(integrationId: Id, holder: string, ttlMs: number): Promise<void>;
+  readonly renew: (integrationId: Id, holder: string, ttlMs: number) => Promise<void>;
   /** Deletes the row, but only while `holder` is still the one named in it. */
-  release(integrationId: Id, holder: string): Promise<void>;
+  readonly release: (integrationId: Id, holder: string) => Promise<void>;
   /** True while some holder's last renewal has not expired. */
-  isHeld(integrationId: Id): Promise<boolean>;
+  readonly isHeld: (integrationId: Id) => Promise<boolean>;
 }

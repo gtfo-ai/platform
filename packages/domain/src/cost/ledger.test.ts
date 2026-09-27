@@ -98,6 +98,32 @@ describe('ledgerEntriesForRun — the reported branch', () => {
     expect(derived.entries[1]?.primary).toBe(false);
   });
 
+  /**
+   * A per-model figure the producer did not report, under a reported run total (PROGRESS backlog
+   * 253). Its `?? 0` sides were reached only by the property below, on the rare draw whose money
+   * arbitrary lands on zero — so the domain ring's coverage moved by two branches between runs of
+   * one tree. This pins them with an example.
+   */
+  it('splits the invoice when one model reported no figure of its own, and still totals to it', () => {
+    const derived = ledgerEntriesForRun(
+      CONTEXT,
+      spend({
+        usd: 1,
+        modelUsage: [
+          modelUsage('claude-opus-5', { input_tokens: 100_000 }, 0),
+          modelUsage('claude-haiku-4-5', { input_tokens: 10_000 }, 0.4),
+        ],
+      }),
+      ALL_PRICED,
+    );
+    expect(spendTotalUsd(derived.entries)).toBe(1);
+    expect(derived.entries.map((entry) => [entry.model, entry.usdReported, entry.usd])).toEqual([
+      ['claude-opus-5', null, 0.6],
+      ['claude-haiku-4-5', 0.4, 0.4],
+    ]);
+    expect(derived.residualUsd).toBeCloseTo(0.6, 6);
+  });
+
   it('keeps a model with no price row, because the invoice does not need the table', () => {
     const derived = ledgerEntriesForRun(
       CONTEXT,

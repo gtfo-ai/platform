@@ -27,6 +27,9 @@
     "enabled": true,
     "rules": {
       "preset": "recommended",
+      "suspicious": {
+        "noImportCycles": "error"
+      },
       "style": {
         "noRestrictedImports": {
           "level": "error",
@@ -223,6 +226,19 @@
                   }
                 ]
               }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["packages/application/src/ports/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "useConsistentMethodSignatures": {
+              "level": "error",
+              "options": { "style": "property" }
             }
           }
         }

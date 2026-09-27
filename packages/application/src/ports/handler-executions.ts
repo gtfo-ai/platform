@@ -57,19 +57,19 @@ export interface HandlerExecutionWriter {
    * delivery is a duplicate and must be skipped. Concurrent claimants of the same pair serialise
    * on the row.
    */
-  claim(position: number, handler: HandlerRef): Promise<boolean>;
+  readonly claim: (position: number, handler: HandlerRef) => Promise<boolean>;
 
   /**
    * Marks a handler as succeeded, inserting the row when there is none — which is how the
    * `$dispatch` marker is written, since nothing ever claims it.
    */
-  complete(position: number, handler: HandlerRef): Promise<void>;
+  readonly complete: (position: number, handler: HandlerRef) => Promise<void>;
 
   /**
    * Records the failure of a handler whose own transaction rolled back. Called from the
    * dispatcher's transaction, which commits, so `attempts` and `error` survive.
    */
-  recordFailure(position: number, handler: HandlerRef, error: string): Promise<void>;
+  readonly recordFailure: (position: number, handler: HandlerRef, error: string) => Promise<void>;
 
   /**
    * Durably skips `remaining` because a higher-priority handler called `stop()`.
@@ -80,10 +80,14 @@ export interface HandlerExecutionWriter {
    * `stopped` rows keep the silenced handlers from running. A handler that already succeeded is
    * left alone; that cannot be unrung.
    */
-  markStopped(position: number, remaining: readonly HandlerRef[], reason: string): Promise<void>;
+  readonly markStopped: (
+    position: number,
+    remaining: readonly HandlerRef[],
+    reason: string,
+  ) => Promise<void>;
 }
 
 /** Connection-scoped reads, for the dispatcher's own assertions, tests and operations. */
 export interface HandlerExecutionReader {
-  read(position: number): Promise<readonly HandlerExecutionRecord[]>;
+  readonly read: (position: number) => Promise<readonly HandlerExecutionRecord[]>;
 }

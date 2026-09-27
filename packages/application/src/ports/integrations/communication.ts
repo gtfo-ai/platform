@@ -112,16 +112,24 @@ export interface CommunicationPort extends IntegrationPort<CommunicationCapabili
    * *error string*, not the status — posting into the void would make a lost notification look
    * delivered.
    */
-  postTaskThread(request: {
+  readonly postTaskThread: (request: {
     readonly channel: string;
     readonly taskId: Id;
     readonly body: MessageBody;
-  }): Promise<ThreadRef>;
+  }) => Promise<ThreadRef>;
 
-  postQuestion(thread: ThreadRef, question: QuestionPost, body: MessageBody): Promise<MessageRef>;
-  postApproval(thread: ThreadRef, approval: ApprovalPost, body: MessageBody): Promise<MessageRef>;
+  readonly postQuestion: (
+    thread: ThreadRef,
+    question: QuestionPost,
+    body: MessageBody,
+  ) => Promise<MessageRef>;
+  readonly postApproval: (
+    thread: ThreadRef,
+    approval: ApprovalPost,
+    body: MessageBody,
+  ) => Promise<MessageRef>;
   /** A plain notification in the task thread: picked up, ready for merge, escalation, budget. */
-  postMessage(thread: ThreadRef, body: MessageBody): Promise<MessageRef>;
+  readonly postMessage: (thread: ThreadRef, body: MessageBody) => Promise<MessageRef>;
 
   /**
    * One message in the channel, outside every thread (WP-32).
@@ -140,7 +148,7 @@ export interface CommunicationPort extends IntegrationPort<CommunicationCapabili
    * refusal `postTaskThread` makes, and for the same reason: posting into the void would make a
    * lost notification look delivered.
    */
-  postChannelMessage(channel: string, body: MessageBody): Promise<MessageRef>;
+  readonly postChannelMessage: (channel: string, body: MessageBody) => Promise<MessageRef>;
 
   /**
    * Edits a message in place — an answered question becomes "answered by …", an expired approval
@@ -148,9 +156,9 @@ export interface CommunicationPort extends IntegrationPort<CommunicationCapabili
    *
    * @throws {IntegrationUnsupportedError} when `capabilities().messageUpdate` is false.
    */
-  updateMessage(ref: MessageRef, body: MessageBody): Promise<MessageRef>;
+  readonly updateMessage: (ref: MessageRef, body: MessageBody) => Promise<MessageRef>;
 
-  postDigest(channel: string, items: readonly DigestItem[]): Promise<MessageRef>;
+  readonly postDigest: (channel: string, items: readonly DigestItem[]) => Promise<MessageRef>;
 
   /**
    * Maps a chat user onto a verified identity by email (product/08), or `null` when unknown.
@@ -162,10 +170,10 @@ export interface CommunicationPort extends IntegrationPort<CommunicationCapabili
    * WP-43's screen), and nothing yet asks this method to suggest one. Guessing a mapping from an
    * email is refused (BD-022, Q10); `createPostgresIdentityDirectory`'s docblock carries why.
    */
-  resolveIdentity(query: {
+  readonly resolveIdentity: (query: {
     readonly providerUserId?: string;
     readonly email?: string;
-  }): Promise<ExternalIdentity | null>;
+  }) => Promise<ExternalIdentity | null>;
 
   readonly inbound: InboundNormaliser<CommunicationInboundEvent>;
 }

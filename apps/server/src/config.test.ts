@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   loadServerConfig,
   POOL_RESERVATIONS,
+  poolTerms,
   requiredPoolConnections,
   SERVER_CONFIG_DEFAULTS,
   type ServerConfig,
@@ -296,17 +297,37 @@ describe('pool sizing', () => {
     // take-over deadlines, which is the architect's ruling and the reason this moved by exactly one.
     expect((thrown as UndersizedPoolError).required).toBe(22);
     expect((thrown as Error).message).toMatch(/APP_DB_POOL_MAX/);
-    // PROGRESS backlog 22's **site 3**, derived rather than spelled since WP-31 round 2. The
-    // message used to say "the pipeline's five job workers" beside a `POOL_RESERVATIONS.pipeline`
-    // of 6 — the first time the class reached an *error message*, and the one sentence an operator
-    // reads at the moment the program refuses to start. Comparing it against the constant is the
-    // point: a word written back in fails here.
-    expect((thrown as Error).message).toContain(
-      `the pipeline's ${POOL_RESERVATIONS.pipeline} job workers`,
-    );
-    expect((thrown as Error).message).toContain(
-      `the knowledge base's ${POOL_RESERVATIONS.knowledge}`,
-    );
+    // PROGRESS backlog 22's **site 3**. The message used to say "the pipeline's five job workers"
+    // beside a `POOL_RESERVATIONS.pipeline` of 6, and once the counts were interpolated it still
+    // enumerated the workloads in prose and had lost the bootstrap worker since WP-35. It now lists
+    // exactly the terms the floor sums, so both are compared here against the reservations rather
+    // than against words: every flat reservation the role counts appears with its own number.
+    const refused = thrown as UndersizedPoolError;
+    expect(refused.terms.reduce((sum, term) => sum + term.connections, 0)).toBe(refused.required);
+    for (const term of refused.terms) {
+      expect(refused.message).toContain(`${term.connections} for ${term.what}`);
+    }
+    expect(refused.terms.map((term) => term.connections)).toEqual([
+      3,
+      POOL_RESERVATIONS.jobs,
+      POOL_RESERVATIONS.http,
+      POOL_RESERVATIONS.maintenance,
+      POOL_RESERVATIONS.pipeline,
+      POOL_RESERVATIONS.knowledge,
+      POOL_RESERVATIONS.onboarding,
+      POOL_RESERVATIONS.bootstrap,
+    ]);
+    expect(refused.message).toContain('the history-bootstrap worker');
+  });
+
+  it('names only the terms a role counts, and the enqueue-only sender instead of pg-boss (WP-72)', () => {
+    const api = poolTerms(load({ ROLE: 'api' }));
+    expect(api.map((term) => term.connections)).toEqual([
+      POOL_RESERVATIONS.jobsSender,
+      POOL_RESERVATIONS.http,
+      POOL_RESERVATIONS.maintenance,
+    ]);
+    expect(api.map((term) => term.what).join(' ')).not.toMatch(/dispatcher|pipeline/);
   });
 
   /**
@@ -340,6 +361,83 @@ describe('pool sizing', () => {
     expect(Number(documented)).toBeGreaterThanOrEqual(requiredPoolConnections(config));
   });
 
+  /**
+   * The numbers that must live outside the sources — `.env.example`'s sum and shape beside
+   * `APP_DB_POOL_MAX`, and the operator guide's per-role table — held to `requiredPoolConnections`
+   * rather than re-derived by a reader (PROGRESS backlog 22, WP-73).
+   *
+   * **Two concurrencies, not one**: `3N + 8`, `2N + 9` and `2N + 10` agree or nearly agree at N=1
+   * and separate at N=4, which is how a stale shape survived a one-point check. Each number is
+   * parsed from the sentence that prints it, so a sentence reworded out from under its pattern
+   * fails here rather than going unchecked.
+   */
+  const envExampleText = (): string =>
+    readFileSync(new URL('../../../.env.example', import.meta.url), 'utf8');
+  const matched = (text: string, pattern: RegExp, what: string): RegExpExecArray => {
+    const match = pattern.exec(text);
+    if (match === null) {
+      throw new Error(`${what}: the sentence that prints it no longer matches ${pattern}`);
+    }
+    return match;
+  };
+  const floorAt = (concurrency: number, role = 'all'): number =>
+    requiredPoolConnections(
+      load({
+        ROLE: role,
+        APP_DISPATCH_MAX_CONCURRENCY: String(concurrency),
+        APP_DB_POOL_MAX: '1000',
+      }),
+    );
+
+  it('prints the floor .env.example states, and its shape at two concurrencies', () => {
+    const text = envExampleText();
+    const sum = Number(
+      matched(text, /\n#\s+\+ \d+ bootstrap \+ \d+ HTTP \+ \d+ maintenance = (\d+),/, 'the sum')[1],
+    );
+    const shape = matched(
+      text,
+      /i\.e\. (\d+) \* APP_DISPATCH_MAX_CONCURRENCY \+ (\d+)\./,
+      'the shape',
+    );
+    const [coefficient, constant] = [Number(shape[1]), Number(shape[2])];
+    expect(sum).toBe(floorAt(1));
+    for (const concurrency of [1, 4]) {
+      expect({ concurrency, printed: coefficient * concurrency + constant }).toEqual({
+        concurrency,
+        printed: floorAt(concurrency),
+      });
+    }
+    const worker = matched(
+      text,
+      /ROLE=worker, runner and indexer need the same sum without the \d+ HTTP \((\d+)\)/,
+      'the worker floor',
+    );
+    const api = matched(text, /ROLE=api needs [^=]*= (\d+)\./, 'the api floor');
+    expect([Number(worker[1]), Number(api[1])]).toEqual([floorAt(1, 'worker'), floorAt(1, 'api')]);
+    // "N is that floor plus one connection of slack": the value and the sentence beside it.
+    const slack = matched(
+      text,
+      /\n# (\d+) is that floor plus one connection of slack/,
+      'the slack',
+    );
+    expect(Number(slack[1])).toBe(Number(envExampleValue('APP_DB_POOL_MAX')));
+    expect(Number(envExampleValue('APP_DB_POOL_MAX'))).toBe(floorAt(1) + 1);
+  });
+
+  it('prints each role’s floor in the operator guide as requiredPoolConnections computes it', () => {
+    const guide = readFileSync(new URL('../../../docs/operator-guide.md', import.meta.url), 'utf8');
+    const row = (label: string): number =>
+      Number(matched(guide, new RegExp(`\\n\\| ${label} \\|[^\\n]*\\| (\\d+) \\|\\n`), label)[1]);
+    expect(row('`all`')).toBe(floorAt(1, 'all'));
+    expect(row('`api`')).toBe(floorAt(1, 'api'));
+    for (const role of ['worker', 'runner', 'indexer']) {
+      expect({ role, printed: row('`worker`, `runner`, `indexer`') }).toEqual({
+        role,
+        printed: floorAt(1, role),
+      });
+    }
+  });
+
   it('starts on the code default too, so the two shipped values cannot drift apart unnoticed', () => {
     // The other half: `load()` with nothing set goes through `db.loadDatabaseConfig`'s own default,
     // which is a *second* value for the same knob. Both must clear the floor; when one stops
@@ -349,6 +447,10 @@ describe('pool sizing', () => {
     expect(Number(envExampleValue('APP_DB_POOL_MAX'))).toBeGreaterThanOrEqual(
       config.database.poolMax,
     );
+    // The relationship `DATABASE_CONFIG_DEFAULTS.poolMax`'s docblock states as intended (backlog 22
+    // criterion 3): the code default is the `ROLE=all` floor exactly, the least a process with no
+    // environment starts on; `.env.example`'s value, one above it, is the one an installation runs.
+    expect(config.database.poolMax).toBe(requiredPoolConnections(config));
   });
 });
 

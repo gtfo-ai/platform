@@ -51,6 +51,7 @@ import type {
   TaskReviewThreads,
   TaskStageOutcome,
   TaskStageOutcomeWord,
+  TaskState,
 } from '@platform/contracts';
 import {
   acceptanceVerdictDataSchema,
@@ -218,6 +219,15 @@ const isDeferred = (dependencies: TaskDependencies): boolean =>
   (dependencies.deferred_stage ?? null) !== null;
 
 /**
+ * A deferred ending on a task that was **cancelled** while it waited, which will never resume
+ * (PROGRESS backlog 265). The record keeps `deferred_stage` — nothing wakes the resume job for a
+ * cancel, and clearing it would be a second writer of `tasks.dependencies` for the sake of a label
+ * — so the panel is what reads the state and stops promising a resume that cannot happen.
+ */
+const isAbandonedDeferral = (dependencies: TaskDependencies, state: TaskState | null): boolean =>
+  isDeferred(dependencies) && state === 'cancelled';
+
+/**
  * The dependency item's value — product/04:58, product/10:38's *"dependency status"* (WP-38).
  *
  * Four answers and none of them is a zero standing in for a missing one (standing rule 16, the same
@@ -231,7 +241,10 @@ const isDeferred = (dependencies: TaskDependencies): boolean =>
  *  - `blocked` / `waiting` — the policy stopped the task or is asking a human about it, which is the
  *    fact a maintainer looking at a merge request needs first.
  */
-export const dependencyValueText = (dependencies: TaskDependencies | null): string => {
+export const dependencyValueText = (
+  dependencies: TaskDependencies | null,
+  state: TaskState | null = null,
+): string => {
   if (dependencies === null) {
     return 'not checked';
   }
@@ -239,6 +252,9 @@ export const dependencyValueText = (dependencies: TaskDependencies | null): stri
     return dependencies.unread.length === 0 ? 'none added' : 'none read';
   }
   const added = `${dependencies.added.length} added`;
+  if (isAbandonedDeferral(dependencies, state)) {
+    return `${added} · not applied — the task was cancelled`;
+  }
   switch (dependencies.decision) {
     case 'block':
       // A deferred block (WP-67): the task was at a human-owned stop when the gate ran, and the
@@ -269,7 +285,10 @@ export const dependencyValueText = (dependencies: TaskDependencies | null): stri
  * than about the package: no registry host is declared (`APP_DEPENDENCY_REGISTRY_HOSTS`), so the
  * platform asked nobody.
  */
-export const dependencyBasisText = (dependencies: TaskDependencies | null): string => {
+export const dependencyBasisText = (
+  dependencies: TaskDependencies | null,
+  state: TaskState | null = null,
+): string => {
   if (dependencies === null) {
     return 'No implementation stage has completed on this task yet, so no diff has been read.';
   }
@@ -301,13 +320,15 @@ export const dependencyBasisText = (dependencies: TaskDependencies | null): stri
     })
     .join(', ');
   const truncated = dependencies.truncated ? ' The list was cut, so there may be more.' : '';
-  const unasked = isDeferred(dependencies)
-    ? dependencies.decision === 'ask'
-      ? ' A person had stopped the task when the gate ran, so the question is asked when the task resumes.'
-      : ' A person had stopped the task when the gate ran, so it goes back to the stage that added the package when it resumes.'
-    : dependencies.decision === 'ask' && dependencies.question_id === null
-      ? ' The task had already moved past the point where the platform parks it, and a task that has passed review is not interrupted with a question, so nobody was asked — decide here before you merge.'
-      : '';
+  const unasked = isAbandonedDeferral(dependencies, state)
+    ? ' A person had stopped the task when the gate ran, and it was cancelled before it resumed, so the policy was never applied.'
+    : isDeferred(dependencies)
+      ? dependencies.decision === 'ask'
+        ? ' A person had stopped the task when the gate ran, so the question is asked when the task resumes.'
+        : ' A person had stopped the task when the gate ran, so it goes back to the stage that added the package when it resumes.'
+      : dependencies.decision === 'ask' && dependencies.question_id === null
+        ? ' The task had already moved past the point where the platform parks it, and a task that has passed review is not interrupted with a question, so nobody was asked — decide here before you merge.'
+        : '';
   return `${packages}.${truncated}${unasked}${unread}`;
 };
 
@@ -1473,7 +1494,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
           */}
           <Metric
             label="Dependencies"
-            value={dependencyValueText(task.dependencies)}
+            value={dependencyValueText(task.dependencies, task.state)}
             definition="Packages this change adds to a manifest or lockfile, and what the project's policy did about them (product/04:58): 'allow' proceeds, 'ask' raises the question below, 'block' sends the task back. Licence and last release come from a package registry an operator has declared; with none declared the platform asks nobody and says so."
           />
           {/*
@@ -1481,7 +1502,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
             (BD-022) — so the sentence goes through `UntrustedText` like every other one here.
           */}
           <p className="-mt-2 text-[11px] text-fg-muted">
-            <UntrustedText value={dependencyBasisText(task.dependencies)} />
+            <UntrustedText value={dependencyBasisText(task.dependencies, task.state)} />
           </p>
           {/*
             The package's page on the registry, when the platform asked one and it answered.

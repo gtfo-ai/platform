@@ -66,6 +66,15 @@ const withDeadline = async <T>(promise: Promise<T>, ms: number, fallback: T): Pr
  *
  * Exported so the comparison can be tested without a database — the interesting cases are a
  * database ahead of the code and one behind it, and neither is convenient to produce for real.
+ *
+ * **It is one of two readers of `platform_migrations`** (PROGRESS backlog 119): the other is
+ * `findUnknownMigrations` in `packages/infrastructure/src/db/migrator.ts`, behind
+ * `assertSchemaIsKnown`, which refuses to **start** on an unknown migration while this reports
+ * `down` for an unknown *or* a pending one — a rollback cannot be served, a migration still running
+ * can wait. They agree because both take the known half from one `loadMigrations`, not by
+ * construction, and they read the table with different queries (that one returns nothing when the
+ * table does not exist yet; this one's caller throws and reports `database: 'down'`), so a change
+ * to what "applied" means has to be made in both.
  */
 export const migrationStatus = (
   known: readonly string[],

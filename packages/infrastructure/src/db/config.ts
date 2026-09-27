@@ -92,18 +92,17 @@ export const DATABASE_CONFIG_DEFAULTS = {
    * the floor does not degrade, it **refuses to boot** with `UndersizedPoolError`, which is how
    * every work package that added a worker found this line.
    *
-   * Two facts a reader needs, both true at WP-56 and both checkable rather than restated. **This
-   * value equals the `ROLE=all` floor exactly, with no slack** — it was *"the floor plus one"* until
-   * WP-31's `task.ask` worker raised the floor onto it, and the sentence claiming the slack was
-   * still here after the floor had moved, which is backlog 22's site 6. It has moved three times
-   * since, with `bootstrap.history` (WP-35), `maintenance.schedule` (WP-36) and `deadline.sweep`
-   * (WP-56). And **the two shipped defaults for this one knob differ**: this one, which a process
-   * with no `.env` gets, and `.env.example`'s `APP_DB_POOL_MAX`, which an operator copies and which
-   * stays one above this. Both are **held to the
-   * floor** — `apps/server/src/config.test.ts` reads `APP_DB_POOL_MAX` out of `.env.example` and
-   * asserts each value clears `requiredPoolConnections` — so neither can fall under it unnoticed.
-   * What is still unstated is which of the two is *intended*, and that is backlog 22's remaining
-   * half rather than a thing to guess at here.
+   * **The two shipped defaults for this one knob differ, and `.env.example`'s is the intended one**
+   * (PROGRESS backlog 22, criterion 3, decided at WP-73). An installation runs with the whole `.env`
+   * (`compose.yml` hands it to `app` through `env_file` since WP-50), so `.env.example`'s
+   * `APP_DB_POOL_MAX` — the `ROLE=all` floor plus one connection of slack — is what an operator
+   * gets. This value is the **floor exactly**, and only that: the least a process started with no
+   * environment at all (`pnpm dev`, a harness) can start on, never a sizing. It was *"the floor plus
+   * one"* until WP-31's `task.ask` worker raised the floor onto it, and a sentence here claimed the
+   * slack after the floor had moved (backlog 22's site 6). Both relationships are asserted rather
+   * than restated — `apps/server/src/config.test.ts` holds this value **equal** to
+   * `requiredPoolConnections` at the defaults and `.env.example`'s to one above it — so a worker
+   * added to the pool fails a test until both move.
    */
   poolMax: 22,
   connectionTimeoutMs: 10_000,

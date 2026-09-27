@@ -75,7 +75,7 @@ export interface IntegrationActionEntry {
  * quietly performing unrecorded work (BD-003).
  */
 export interface IntegrationAuditLog {
-  record(entry: IntegrationActionEntry): Promise<void>;
+  readonly record: (entry: IntegrationActionEntry) => Promise<void>;
 }
 
 /** The catalogue events an entry produces. See this file's docblock for the mapping. */
@@ -179,8 +179,8 @@ export const idempotencyStorageKey = (scope: IdempotencyScope): string =>
  * everything".
  */
 export interface IdempotencyStore {
-  get(scope: IdempotencyScope): Promise<JsonValue | undefined>;
-  put(scope: IdempotencyScope, result: JsonValue): Promise<void>;
+  readonly get: (scope: IdempotencyScope) => Promise<JsonValue | undefined>;
+  readonly put: (scope: IdempotencyScope, result: JsonValue) => Promise<void>;
 }
 
 // ── Redaction (TD-012) ───────────────────────────────────────────────────────
@@ -198,8 +198,8 @@ export interface RedactionOutcome<T> {
  * that defaults to "do nothing" is indistinguishable, at the call site, from one that works.
  */
 export interface SecretRedactor {
-  redactJson(value: JsonObject): RedactionOutcome<JsonObject>;
-  redactText(text: string): RedactionOutcome<string>;
+  readonly redactJson: (value: JsonObject) => RedactionOutcome<JsonObject>;
+  readonly redactText: (text: string) => RedactionOutcome<string>;
 }
 
 // ── Time ─────────────────────────────────────────────────────────────────────
@@ -213,6 +213,6 @@ export interface SecretRedactor {
  */
 export interface IntegrationTimer {
   /** Monotonic-ish milliseconds; only differences are meaningful. */
-  now(): number;
-  sleep(milliseconds: number): Promise<void>;
+  readonly now: () => number;
+  readonly sleep: (milliseconds: number) => Promise<void>;
 }

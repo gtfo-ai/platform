@@ -134,8 +134,8 @@ const world = (options: WorldOptions = {}) => {
     },
     taskManagement: {
       // A provider answers at most `limit` matches, which is what the batch-level cut is read off.
-      matchTickets: async (_rule: unknown, query: { readonly limit: number }) =>
-        (options.matches ?? ['ACME-3']).slice(0, query.limit).map(
+      matchTickets: async (_rule: unknown, query?: { readonly limit?: number }) =>
+        (options.matches ?? ['ACME-3']).slice(0, query?.limit).map(
           (key) =>
             ({
               ref: {

@@ -73,23 +73,26 @@ export type BroadcastListener = (message: BroadcastMessage) => void;
 
 export interface BroadcastSubscription {
   /** Stops delivery to this listener. Idempotent. */
-  close(): Promise<void>;
+  readonly close: () => Promise<void>;
 }
 
 export interface Broadcast {
   /** Publishes outside any transaction — delivered immediately, best effort. */
-  publish(message: BroadcastMessage): Promise<void>;
+  readonly publish: (message: BroadcastMessage) => Promise<void>;
 
   /** Delivers every message published on `topics` until the subscription is closed. */
-  subscribe(topics: readonly string[], listener: BroadcastListener): Promise<BroadcastSubscription>;
+  readonly subscribe: (
+    topics: readonly string[],
+    listener: BroadcastListener,
+  ) => Promise<BroadcastSubscription>;
 
   /** Releases the transport. Idempotent. */
-  close(): Promise<void>;
+  readonly close: () => Promise<void>;
 }
 
 /** Transaction-bound publish: delivered when — and only when — the transaction commits. */
 export interface TransactionalBroadcast {
-  publish(message: BroadcastMessage): Promise<void>;
+  readonly publish: (message: BroadcastMessage) => Promise<void>;
 }
 
 /** Thrown rather than truncating: a silently shortened notification is a debugging trap. */

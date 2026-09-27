@@ -67,8 +67,8 @@ import type { EventHandler, HandlerContext } from '../events/handler.js';
 import type { InboundIdentityDirectory } from '../integrations/inbound.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
-import { MAX_CONFLICT_FILES } from './conflict-warning.js';
-import { coalescedMergeRequestDiff } from './diff-coalescer.js';
+import { coalescedMergeRequestDiff, MAX_CONFLICT_FILES } from './diff-coalescer.js';
+
 import {
   gitReads,
   integrationsForProject,

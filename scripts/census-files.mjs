@@ -29,7 +29,12 @@
  * `check-conflict.mjs`) and the unit-tier censuses under `packages/`, `apps/` and `scripts/`. A
  * census under `packages/` or `apps/` imports it by relative path, which the dependency rule in
  * `biome.json` denies for everything else under `scripts/` — this one file is re-allowed there by
- * name, because it is test infrastructure and belongs to no ring. `census-files.test.ts` builds a
+ * name, because it is test infrastructure and belongs to no ring. **The re-allowance reaches every
+ * file of every ring, production sources included** (PROGRESS backlog 248): the rings are the
+ * overrides, and scoping it to tests would repeat each ring's whole rule in a second override. What
+ * narrows it is a census in `census-files.test.ts` (*who may import census-files.mjs*), which refuses
+ * a production importer other than `apps/server/src/routes/web-sources.ts` and a production importer
+ * of that. `census-files.test.ts` builds a
  * repository with a tracked, an untracked, an ignored, a vanished and an unreadable path and holds
  * all five answers.
  *

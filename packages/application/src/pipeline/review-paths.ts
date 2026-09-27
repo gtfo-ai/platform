@@ -25,8 +25,8 @@
 import type { PipelineStage } from '@platform/domain';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
-import { MAX_CONFLICT_FILES } from './conflict-warning.js';
-import { coalescedMergeRequestDiff } from './diff-coalescer.js';
+import { coalescedMergeRequestDiff, MAX_CONFLICT_FILES } from './diff-coalescer.js';
+
 import { integrationsForProject, noRunScopedSecrets } from './integrations.js';
 import type { PipelineSagaOptions } from './saga.js';
 import type { StoredTask } from './store.js';

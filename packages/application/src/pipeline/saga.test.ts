@@ -2662,7 +2662,7 @@ describe('the ticket’s own words (WP-15f)', () => {
     const double = ticketDouble(calls);
     const harness = harnessWith({
       taskManagement: {
-        readTicket: async (ref: never) => ({ ...(await double.readTicket(ref)), description }),
+        readTicket: async (ref) => ({ ...(await double.readTicket(ref)), description }),
       },
       runs: {
         ...happyRuns(),
@@ -2725,7 +2725,7 @@ describe('the ticket’s own words (WP-15f)', () => {
     const double = ticketDouble(calls);
     const harness = harnessWith({
       taskManagement: {
-        readTicket: async (ref: never) => ({
+        readTicket: async (ref) => ({
           ...(await double.readTicket(ref)),
           description: `${BODY} use ${SECRET} to reproduce`,
         }),

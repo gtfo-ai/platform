@@ -30,13 +30,12 @@
  * arithmetic claim cannot be maintained from inside one file). What a worker added here owes is
  * one line in that constant, and `config.test.ts` is what notices.
  *
- * **One thing a handler still does inside its transaction is read `ProjectSettingsPort`**, which in
- * `apps/server` is a `projects` query on a connection borrowed inside the handler's. It is a
- * transient borrow of the local database rather than a connection held across a third party's
- * latency, so it contends where a provider call stalled — every other borrower releases without
- * waiting on a dispatch, so there is no hold-and-wait cycle — and the reservations below cover it.
- * It is filed as discovered work rather than fixed here: the honest fix is for the port to take the
- * caller's transaction.
+ * **A handler's settings read borrows nothing since WP-73.** Until then a handler read
+ * `ProjectSettingsPort` on a connection borrowed inside its own transaction — a third, uncounted
+ * connection per dispatch (PROGRESS backlogs 19 and 221). The port now takes the caller's
+ * transaction, and a read with none handed in is refused while one is open
+ * (`assertSettingsReadOutsideTransaction`, `settings.ts`), so "a dispatch holds two" is true of
+ * what it borrows as well.
  */
 
 import { type AskRuntimeOptions, composeAsk } from '../ask/runtime.js';

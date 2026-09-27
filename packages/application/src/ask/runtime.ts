@@ -7,9 +7,9 @@
  * second copy of technical/02's table.
  *
  * **One more pooled connection.** The `task.ask` worker holds one during each of its transactions,
- * on top of the dispatcher's `2 × concurrency + 1` and the four workers the pipeline already starts.
- * `POOL_RESERVATIONS.pipeline` moved from 5 to 6 with this file, and that sentence is why a reader
- * of `apps/server/src/config.ts` can reach the number.
+ * on top of the dispatcher's `2 × concurrency + 1` and the workers the pipeline already starts.
+ * `POOL_RESERVATIONS.pipeline` (`apps/server/src/config.ts`) counts it — it moved by one with this
+ * file — and that constant, not this sentence, is where the number lives (PROGRESS backlog 22).
  */
 import type { Id } from '@platform/contracts';
 import type { BudgetGuard } from '../cost/guard.js';

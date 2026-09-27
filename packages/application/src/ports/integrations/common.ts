@@ -403,7 +403,7 @@ export interface NormalisedDelivery<TType extends DomainEventType = DomainEventT
  */
 export interface InboundNormaliser<TType extends DomainEventType = DomainEventType> {
   /** Constant-time signature/token check. A bad signature is `false`, never an exception. */
-  verify(delivery: WebhookDelivery): boolean;
+  readonly verify: (delivery: WebhookDelivery) => boolean;
 
   /**
    * The idempotency key of this delivery — Jira's `X-Atlassian-Webhook-Identifier`, GitLab's
@@ -451,9 +451,12 @@ export interface InboundNormaliser<TType extends DomainEventType = DomainEventTy
    *
    * @throws {IntegrationError} `invalid_request` when the delivery carries nothing to key on.
    */
-  deliveryKey(delivery: WebhookDelivery): string;
+  readonly deliveryKey: (delivery: WebhookDelivery) => string;
 
-  normalise(delivery: WebhookDelivery, context: InboundContext): Promise<NormalisedDelivery<TType>>;
+  readonly normalise: (
+    delivery: WebhookDelivery,
+    context: InboundContext,
+  ) => Promise<NormalisedDelivery<TType>>;
 }
 
 // ── The base every type port extends ─────────────────────────────────────────
@@ -464,9 +467,9 @@ export interface InboundNormaliser<TType extends DomainEventType = DomainEventTy
  */
 export interface IntegrationPort<TCapabilities> {
   readonly ref: IntegrationRef;
-  capabilities(): TCapabilities;
+  readonly capabilities: () => TCapabilities;
   /** Read-only probe. Never mutates, so it is safe to run from the settings UI on demand. */
-  testConnection(): Promise<HealthProbe>;
+  readonly testConnection: () => Promise<HealthProbe>;
 }
 
 export type { ExternalIdentity };

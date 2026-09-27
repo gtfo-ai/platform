@@ -47,5 +47,5 @@ export interface SecretStore {
    *
    * @throws {SecretResolutionError} when a row is missing, undecryptable, or collides on a field.
    */
-  resolve(secretIds: readonly Id[]): Promise<Readonly<Record<string, string>>>;
+  readonly resolve: (secretIds: readonly Id[]) => Promise<Readonly<Record<string, string>>>;
 }

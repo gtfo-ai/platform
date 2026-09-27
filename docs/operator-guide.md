@@ -103,7 +103,7 @@ through the processes rather than reasoned about.
 | `api` | yes | no — it only **enqueues** | 4 |
 | `worker`, `runner`, `indexer` | no | yes | 20 |
 
-Each process refuses to start below its own number and names it. `runner` and `indexer` are workers
+Each process refuses to start below its own number and names it, listing what the number is made of. The table is held to the code by a test (`apps/server/src/config.test.ts`), so it moves when a workload is added. `runner` and `indexer` are workers
 named for what you deploy them for; whether a worker runs agents is its launcher configuration,
 never its role (above).
 

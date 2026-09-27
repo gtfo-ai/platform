@@ -88,26 +88,35 @@ export const roleEvalPath = (role: AgentRole): string =>
 export const artifactSchemaPathFor = (type: ArtifactType): string =>
   `schemas/artifacts/${type.replaceAll(/(?<!^)([A-Z])/g, '-$1').toLowerCase()}.schema.json`;
 
-const load = (role: AgentRole): RoleEvalSet => {
-  const parsed = JSON.parse(readFileSync(roleEvalPath(role), 'utf8')) as RoleEvalSet;
+/**
+ * One role's case set, read from `text` and refused when it is filed under the wrong role or names
+ * an artifact type that does not exist. `where` is only what the refusal names — the file on disk
+ * in production, a label in `evals.test.ts`, which is how each refusal is asserted rather than only
+ * written (PROGRESS backlog 254).
+ */
+export const parseRoleEvalSet = (role: AgentRole, text: string, where: string): RoleEvalSet => {
+  const parsed = JSON.parse(text) as RoleEvalSet;
   if (parsed.role !== role) {
     throw new Error(
-      `${roleEvalPath(role)} declares role ${JSON.stringify(parsed.role)}; a case set filed under the wrong role is a role with no cases`,
+      `${where} declares role ${JSON.stringify(parsed.role)}; a case set filed under the wrong role is a role with no cases`,
     );
   }
   if (parsed.artifact_type !== null && !artifactTypeSchema.options.includes(parsed.artifact_type)) {
-    throw new Error(`${roleEvalPath(role)} names an unknown artifact type`);
+    throw new Error(`${where} names an unknown artifact type`);
   }
   for (const entry of parsed.cases) {
     if (
       entry.artifact_type !== undefined &&
       !artifactTypeSchema.options.includes(entry.artifact_type)
     ) {
-      throw new Error(`${roleEvalPath(role)} case ${entry.id} names an unknown artifact type`);
+      throw new Error(`${where} case ${entry.id} names an unknown artifact type`);
     }
   }
   return parsed;
 };
+
+const load = (role: AgentRole): RoleEvalSet =>
+  parseRoleEvalSet(role, readFileSync(roleEvalPath(role), 'utf8'), roleEvalPath(role));
 
 /** The artifact a case is about: its own when it names one, otherwise the set's. */
 export const caseArtifactType = (set: RoleEvalSet, entry: EvalCase): ArtifactType | null =>

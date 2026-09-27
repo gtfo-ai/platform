@@ -419,19 +419,19 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
    * suite asserts it, and a provider work package should learn it from the port rather than from a
    * failing suite (WP-07 review round 1).
    */
-  cloneUrl(project: string, credential: MintedCredential): string;
+  readonly cloneUrl: (project: string, credential: MintedCredential) => string;
 
   /**
    * Mints a short-lived credential for one workspace.
    *
    * @throws {IntegrationUnsupportedError} when `capabilities().credentialMinting` is false.
    */
-  mintCredential(request: {
+  readonly mintCredential: (request: {
     readonly project: string;
     readonly scope: CredentialScope;
     readonly branchPatterns?: readonly string[];
     readonly ttlSeconds: number;
-  }): Promise<MintedCredential>;
+  }) => Promise<MintedCredential>;
 
   /**
    * Revokes a credential minted earlier. Safe to call twice — the second call is a no-op, and an
@@ -458,7 +458,7 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
    * @throws {IntegrationError} `not_found` when the provider denies knowing a credential this
    * adapter did not mint. `invalid_request` when `revokeId` is not a handle this adapter wrote.
    */
-  revokeCredential(address: CredentialRevocationAddress): Promise<void>;
+  readonly revokeCredential: (address: CredentialRevocationAddress) => Promise<void>;
 
   /**
    * Writes a set of whole files as **one commit**, on a branch, through the provider's API.
@@ -475,11 +475,14 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
    * @throws {IntegrationError} as above; `not_found` for a project or a `start_branch` that is not
    * there.
    */
-  commitFiles(request: CommitFilesRequest): Promise<CommitRef>;
+  readonly commitFiles: (request: CommitFilesRequest) => Promise<CommitRef>;
 
-  openMergeRequest(draft: MergeRequestDraft): Promise<MergeRequest>;
-  updateMergeRequest(ref: MergeRequestRefInput, update: MergeRequestUpdate): Promise<MergeRequest>;
-  getMergeRequest(ref: MergeRequestRefInput): Promise<MergeRequest>;
+  readonly openMergeRequest: (draft: MergeRequestDraft) => Promise<MergeRequest>;
+  readonly updateMergeRequest: (
+    ref: MergeRequestRefInput,
+    update: MergeRequestUpdate,
+  ) => Promise<MergeRequest>;
+  readonly getMergeRequest: (ref: MergeRequestRefInput) => Promise<MergeRequest>;
 
   /**
    * Closes a merge request without merging it — product/04:86's *"the old MR is closed"* (WP-59,
@@ -525,14 +528,17 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
    */
   readonly getMergeRequestDiffStats: (ref: MergeRequestRefInput) => Promise<DiffStats | null>;
 
-  listDiscussions(ref: MergeRequestRefInput): Promise<readonly Discussion[]>;
-  replyToDiscussion(
+  readonly listDiscussions: (ref: MergeRequestRefInput) => Promise<readonly Discussion[]>;
+  readonly replyToDiscussion: (
     ref: MergeRequestRefInput,
     discussionId: string,
     markdown: string,
-  ): Promise<Discussion>;
+  ) => Promise<Discussion>;
   /** Idempotent: resolving an already-resolved thread succeeds and changes nothing. */
-  resolveDiscussion(ref: MergeRequestRefInput, discussionId: string): Promise<Discussion>;
+  readonly resolveDiscussion: (
+    ref: MergeRequestRefInput,
+    discussionId: string,
+  ) => Promise<Discussion>;
   /**
    * A thread on a merge request — anchored to a diff line, or on the merge request itself.
    *
@@ -552,14 +558,14 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
    *
    * @throws {IntegrationError} `invalid_request` when exactly one of `path` and `line` is given.
    */
-  createDiscussion(
+  readonly createDiscussion: (
     ref: MergeRequestRefInput,
     note: {
       readonly path?: string | null;
       readonly line?: number | null;
       readonly markdown: string;
     },
-  ): Promise<Discussion>;
+  ) => Promise<Discussion>;
 
   /**
    * The files a merge request changes, with their patches — technical/04's *"`review_only` |
@@ -585,13 +591,13 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
    *
    * @throws {IntegrationError} `not_found` when the merge request does not exist.
    */
-  getMergeRequestDiff(
+  readonly getMergeRequestDiff: (
     ref: MergeRequestRefInput,
     options: { readonly limit: number },
-  ): Promise<readonly FileDiff[]>;
+  ) => Promise<readonly FileDiff[]>;
 
   /** Latest pipeline for a commit, or `null` when none has run yet. */
-  getPipelineStatus(project: string, headSha: string): Promise<PipelineStatus | null>;
+  readonly getPipelineStatus: (project: string, headSha: string) => Promise<PipelineStatus | null>;
   /**
    * The **tail** of a job log: CI logs are large and untrusted (BD-022).
    *
@@ -616,13 +622,15 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
    * both options and what each costs. Also still open: the count of what was removed is reported
    * through the adapter's `onRedaction`, which nothing yet persists.
    */
-  getJobLog(
+  readonly getJobLog: (
     project: string,
     logRef: string,
     options?: { readonly tailBytes?: number },
-  ): Promise<string>;
+  ) => Promise<string>;
 
-  getDefaultBranchHead(project: string): Promise<{ readonly branch: string; readonly sha: string }>;
+  readonly getDefaultBranchHead: (
+    project: string,
+  ) => Promise<{ readonly branch: string; readonly sha: string }>;
 
   /**
    * Is `branch` protected against a direct push?
@@ -639,7 +647,7 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
    *
    * @throws {IntegrationError} `not_found` when the branch does not exist on the project.
    */
-  isBranchProtected(project: string, branch: string): Promise<boolean>;
+  readonly isBranchProtected: (project: string, branch: string) => Promise<boolean>;
   /**
    * The `CODEOWNERS` **at `ref`**, parsed, or `null` when that ref has none.
    *
@@ -651,7 +659,7 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
    * shared contract suite asserts it both ways ("reads CODEOWNERS at the ref it was asked for, and
    * never another ref's") rather than leaving it to this sentence (standing rule 3).
    */
-  readCodeowners(project: string, ref: string): Promise<CodeownersRules | null>;
+  readonly readCodeowners: (project: string, ref: string) => Promise<CodeownersRules | null>;
 
   /**
    * The provider's own account identifier for a handle, or `null` when it does not name one
@@ -674,13 +682,13 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
    *
    * @throws {IntegrationError} only for transport-level failures — never for an unknown handle.
    */
-  resolveUserId(handle: string): Promise<string | null>;
+  readonly resolveUserId: (handle: string) => Promise<string | null>;
 
-  listMergedMergeRequests(
+  readonly listMergedMergeRequests: (
     project: string,
     since: string,
     limit: number,
-  ): Promise<readonly MergedMergeRequest[]>;
+  ) => Promise<readonly MergedMergeRequest[]>;
 
   /**
    * The repository's commits on the default branch since an instant, newest first (WP-35).
@@ -700,10 +708,10 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
    * the batch as having no commit half rather than failing it (standing rule 20: this is a read the
    * bootstrap can do without).
    */
-  listCommits(
+  readonly listCommits: (
     project: string,
     options: { readonly since: string; readonly limit: number },
-  ): Promise<readonly RepositoryCommit[]>;
+  ) => Promise<readonly RepositoryCommit[]>;
 
   readonly inbound: InboundNormaliser<GitProviderInboundEvent>;
 }

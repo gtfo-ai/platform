@@ -100,26 +100,29 @@ export interface ObservabilityErrorsCapabilities {
 // ── The port ─────────────────────────────────────────────────────────────────
 
 export interface ObservabilityErrorsPort extends IntegrationPort<ObservabilityErrorsCapabilities> {
-  getIssue(ref: { readonly id: string }): Promise<Issue>;
+  readonly getIssue: (ref: { readonly id: string }) => Promise<Issue>;
   /** The latest event of an issue, or `null` when the retention window has dropped them all. */
-  getLatestEvent(ref: { readonly id: string }): Promise<ErrorEvent | null>;
+  readonly getLatestEvent: (ref: { readonly id: string }) => Promise<ErrorEvent | null>;
 
-  searchIssues(request: {
+  readonly searchIssues: (request: {
     readonly project: string;
     /** Provider query syntax; passed through verbatim, never interpolated from ticket text. */
     readonly query: string;
     readonly since?: string | null;
     readonly limit?: number;
-  }): Promise<readonly Issue[]>;
+  }) => Promise<readonly Issue[]>;
 
-  linkMergeRequest(ref: { readonly id: string }, mrUrl: string): Promise<void>;
-  comment(ref: { readonly id: string }, text: string): Promise<{ readonly id: string }>;
+  readonly linkMergeRequest: (ref: { readonly id: string }, mrUrl: string) => Promise<void>;
+  readonly comment: (
+    ref: { readonly id: string },
+    text: string,
+  ) => Promise<{ readonly id: string }>;
   /** Idempotent: resolving an already-resolved issue succeeds and changes nothing. */
-  resolve(
+  readonly resolve: (
     ref: { readonly id: string },
     options?: { readonly inRelease?: string | null },
-  ): Promise<Issue>;
+  ) => Promise<Issue>;
 
   /** What an agent may be given inside a run (technical/06 § "Agent tooling exposure"). */
-  agentTooling(): AgentTooling;
+  readonly agentTooling: () => AgentTooling;
 }

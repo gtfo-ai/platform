@@ -108,9 +108,9 @@ import {
 } from '../ports/dependency-metadata.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
-import { MAX_CONFLICT_FILES } from './conflict-warning.js';
 import { questionDeadlineRule } from './deadline-rules.js';
-import { coalescedMergeRequestDiff } from './diff-coalescer.js';
+import { coalescedMergeRequestDiff, MAX_CONFLICT_FILES } from './diff-coalescer.js';
+
 import { integrationsForProject, noRunScopedSecrets } from './integrations.js';
 import { enqueueOutbound, enqueueStage, type PipelineOutboundData } from './jobs.js';
 import type { RebaseJobOptions } from './rebase.js';

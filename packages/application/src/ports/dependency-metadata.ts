@@ -38,7 +38,7 @@ export interface DependencyMetadataLookup {
 
 export interface DependencyMetadataPort {
   /** Never throws, never invents; see the module docblock. */
-  describe(lookup: DependencyMetadataLookup): Promise<DependencyMetadata>;
+  readonly describe: (lookup: DependencyMetadataLookup) => Promise<DependencyMetadata>;
 }
 
 /** The answer when nothing was asked, spelled once so no caller builds it by hand. */

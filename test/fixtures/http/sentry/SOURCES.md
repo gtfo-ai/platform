@@ -72,13 +72,20 @@ All retrieved **2026-09-10**.
   `-ConcurrentRemaining` response headers, `-Reset` being "measured in UTC seconds from epoch", and
   "the server will respond with a 429 HTTP status code … comes with a Retry-After header". No
   numbers are published, which is why the registration's budget is recorded as a choice.
-- `https://docs.sentry.io/cli/` — the documented command groups of `sentry-cli`: installation,
-  configuration, releases, debug information files, sending events, code mappings, logs, snapshots,
-  crons. **No `issues` group.** **No fixture**; cited by the agent-tooling decision.
+- `https://docs.sentry.io/cli/` — the documented command groups of `sentry-cli` (retrieved
+  2026-09-10): installation, configuration, releases, debug information files, sending events, code
+  mappings, logs, snapshots, crons. **No `issues` group on the page — and the page is incomplete for
+  the pinned binary**: `sentry-cli` **3.7.0** (`docker/runtime.Dockerfile`'s `SENTRY_CLI_VERSION`)
+  has `issues list` (`--org`, `--project`, `--query`, `--max-rows`) and `events list`, read from
+  `--help` inside `platform-runtime:dev` on 2026-09-13 (WP-14a) and again on 2026-09-27 (WP-73,
+  PROGRESS backlog 41). So this line is **not** evidence that the CLI cannot read an issue. The
+  agent-tooling decision (`cli: null` in `providers/sentry/provider.ts`) rests on the environment
+  an issue query authenticates with being unverified, not on this page. **No fixture**.
 - `https://docs.sentry.io/cli/configuration/` — `SENTRY_AUTH_TOKEN`, `SENTRY_API_KEY`,
   `SENTRY_DSN`, `SENTRY_URL` (default `https://sentry.io/`), `SENTRY_ORG`, `SENTRY_PROJECT` and the
-  rest. **No fixture**; the environment contract that *would* have been declared if the CLI could
-  read an issue.
+  rest. **No fixture**; the environment contract that *would* be declared once an issue query is
+  shown to authenticate with it (it can read one — see the line above — which is not yet the same
+  thing).
 - `https://mcp.sentry.dev/` — the hosted MCP server: `https://mcp.sentry.dev/mcp`, the
   `…/mcp/{organizationSlug}/{projectSlug}` scoping, and "All connections use OAuth. The first
   connection will trigger an authentication flow to connect to your Sentry account." **No fixture**;

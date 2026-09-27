@@ -32,6 +32,11 @@
  * found, so a parser that silently returned nothing fails here instead of passing vacuously. It
  * says nothing about whether a passed collaborator *works*; that is the e2e's, and it is the tier
  * this file exists to stop paying for a missing key.
+ *
+ * It reads sources through `withoutComments`, which until WP-73 took a `/*` inside a string or a
+ * `//` comment for a block-comment opener and deleted the code up to the next `*\/` — WP-72 lost
+ * `heldConnections` and `shadow` from this census to a comment naming `/webhooks/*` (PROGRESS
+ * backlog 261). The stripper is a scanner now, and its own docblock states its one heuristic.
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';

@@ -200,13 +200,13 @@ export type TaskManagementInboundEvent =
 // ── The port ─────────────────────────────────────────────────────────────────
 
 export interface TaskManagementPort extends IntegrationPort<TaskManagementCapabilities> {
-  readTicket(ref: TicketRefInput): Promise<Ticket>;
+  readonly readTicket: (ref: TicketRefInput) => Promise<Ticket>;
 
   /** Polling fallback (product/08: every 60 s when no public URL). `since` narrows the window. */
-  matchTickets(
+  readonly matchTickets: (
     rule: TicketMatchRule,
     options?: { readonly since?: string | null; readonly limit?: number },
-  ): Promise<readonly TicketMatch[]>;
+  ) => Promise<readonly TicketMatch[]>;
 
   /**
    * Moves the ticket to a status **by name**, resolving the provider's transition at runtime.
@@ -215,37 +215,41 @@ export interface TaskManagementPort extends IntegrationPort<TaskManagementCapabi
    * error. A target that exists nowhere in the workflow is an `invalid_request` failure — loudly,
    * because a silently ignored transition looks like a working status mapping (product/08).
    */
-  transition(
+  readonly transition: (
     ref: TicketRefInput,
     targetStatusName: string,
     fields?: Readonly<Record<string, unknown>>,
-  ): Promise<TransitionResult>;
+  ) => Promise<TransitionResult>;
 
   /** BD-023: creates the marked comment on first call, edits it in place afterwards. */
-  upsertWorkpad(ref: TicketRefInput, markerId: string, markdown: string): Promise<CommentRef>;
+  readonly upsertWorkpad: (
+    ref: TicketRefInput,
+    markerId: string,
+    markdown: string,
+  ) => Promise<CommentRef>;
 
   /** A new comment every time — questions and linter output must notify (product/08). */
-  addComment(
+  readonly addComment: (
     ref: TicketRefInput,
     markdown: string,
     options?: { readonly markerId?: string | null },
-  ): Promise<CommentRef>;
+  ) => Promise<CommentRef>;
 
-  setLabels(
+  readonly setLabels: (
     ref: TicketRefInput,
     add: readonly string[],
     remove: readonly string[],
-  ): Promise<readonly string[]>;
+  ) => Promise<readonly string[]>;
 
-  linkMergeRequest(ref: TicketRefInput, mrUrl: string): Promise<void>;
+  readonly linkMergeRequest: (ref: TicketRefInput, mrUrl: string) => Promise<void>;
 
-  createTicket(draft: TicketDraft): Promise<TicketRefInput>;
+  readonly createTicket: (draft: TicketDraft) => Promise<TicketRefInput>;
 
   /** Maps a provider user or an email onto a verified identity, or `null` when unknown. */
-  resolveIdentity(query: {
+  readonly resolveIdentity: (query: {
     readonly providerUserId?: string;
     readonly email?: string;
-  }): Promise<ExternalIdentityValue | null>;
+  }) => Promise<ExternalIdentityValue | null>;
 
   readonly inbound: InboundNormaliser<TaskManagementInboundEvent>;
 }

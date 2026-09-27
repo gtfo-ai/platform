@@ -29,7 +29,7 @@
  *
  * A path the app builds from pieces (`'/api/' + resource`), a path in a `*.test.ts`/`*.test.tsx`
  * file (deliberately out of scope — `api/http.test.ts` names `/api/thing`, which is not an
- * endpoint), and a path in a comment (block comments and comment-only lines are stripped, which
+ * endpoint), and a path in a comment (every comment is stripped, trailing ones included, which
  * the first case below asserts over `clientPaths` itself — it used to be asserted against
  * `endpoints.ts`'s docblock naming `GET /api/org/stats`, and WP-41 made the app a real caller of
  * that path). It also says nothing about the *shape* either side expects; that is

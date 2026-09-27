@@ -30,5 +30,5 @@ export interface UnitOfWork {
    * Nested calls are not supported — the dispatcher deliberately runs each handler in its own
    * transaction so a failure rolls back that handler alone.
    */
-  transaction<T>(fn: (scope: TransactionScope) => Promise<T>): Promise<T>;
+  readonly transaction: <T>(fn: (scope: TransactionScope) => Promise<T>) => Promise<T>;
 }

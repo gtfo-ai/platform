@@ -431,11 +431,11 @@ export interface WorkspaceProvider {
    * Idempotent, and safe to call concurrently for *different* projects. Two runs of the same
    * project serialise: a mirror is one directory and two fetches into it race.
    */
-  updateMirror(input: {
+  readonly updateMirror: (input: {
     readonly projectId: string;
     readonly repo: WorkspaceRepo;
     readonly credential: WorkspaceGitCredential | null;
-  }): Promise<{ readonly cachePath: string; readonly updated: boolean }>;
+  }) => Promise<{ readonly cachePath: string; readonly updated: boolean }>;
 
   /**
    * Creates the whole run: network, volume, control directory, egress sidecar, workspace
@@ -446,10 +446,10 @@ export interface WorkspaceProvider {
    * removes what it made before it throws, because the alternative is a container running an agent
    * that no handle names.
    */
-  create(spec: WorkspaceSpec): Promise<WorkspaceHandle>;
+  readonly create: (spec: WorkspaceSpec) => Promise<WorkspaceHandle>;
 
   /** The control-socket coordinates for a created workspace. */
-  attach(handle: WorkspaceHandle): Promise<WorkspaceAttachment>;
+  readonly attach: (handle: WorkspaceHandle) => Promise<WorkspaceAttachment>;
 
   /**
    * Stops the run container: SIGTERM, then SIGKILL after `stopGraceSeconds`.
@@ -460,7 +460,7 @@ export interface WorkspaceProvider {
    * descendants"). Only the container's pid namespace ending takes the grandchild with it.
    * Idempotent: stopping a container that has already exited is a no-op.
    */
-  kill(handle: WorkspaceHandle): Promise<void>;
+  readonly kill: (handle: WorkspaceHandle) => Promise<void>;
 
   /**
    * Take-over export (technical/05 §6): commit and push the work-in-progress branch, and
@@ -469,11 +469,11 @@ export interface WorkspaceProvider {
    * @throws {WorkspaceError} `invalid_spec` for a handle whose `cacheKey` is `null`: a workspace
    * with no checkout has no branch to push and no tree to archive (WP-74).
    */
-  export(
+  readonly export: (
     handle: WorkspaceHandle,
     request: WorkspaceExportRequest,
     credential: WorkspaceGitCredential | null,
-  ): Promise<WorkspaceExport>;
+  ) => Promise<WorkspaceExport>;
 
   /**
    * Ends the run: stop and remove the container and the sidecar, remove the network and the
@@ -482,7 +482,7 @@ export interface WorkspaceProvider {
    * Idempotent, and it stops the container even when the shim has already exited: "the shim
    * exited" is not "the workspace's processes are gone".
    */
-  destroy(handle: WorkspaceHandle): Promise<void>;
+  readonly destroy: (handle: WorkspaceHandle) => Promise<void>;
 
   /**
    * Keeps this run's workspace until `keepUntil` — technical/05 §5's *"14 days for
@@ -502,10 +502,10 @@ export interface WorkspaceProvider {
    *
    * @throws {WorkspaceError} `not_found` when this provider has no such run.
    */
-  extendRetention(
+  readonly extendRetention: (
     handle: WorkspaceHandle,
     keepUntil: string,
-  ): Promise<{ readonly keepUntil: string }>;
+  ) => Promise<{ readonly keepUntil: string }>;
 
   /**
    * Removes every workspace volume whose `keep_until` has passed (technical/05 §5), reporting
@@ -515,7 +515,7 @@ export interface WorkspaceProvider {
    * removed with it; the report's `keepUntil` is the effective one, so a reader never sees the
    * three-day label on a workspace that is being kept for fourteen days.
    */
-  purgeExpired(now: Date): Promise<PurgeReport>;
+  readonly purgeExpired: (now: Date) => Promise<PurgeReport>;
 }
 
 /**

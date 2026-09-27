@@ -224,6 +224,12 @@ const applyMigration = async (client: MigrationClient, migration: Migration): Pr
 /**
  * Fails when the database carries a migration this build does not know about — the "app refuses to
  * start when the DB schema is newer than the code" rule of TD-019. Safe to call from any process.
+ *
+ * **One of two readers of `platform_migrations`** (PROGRESS backlog 119): `/readyz`'s
+ * `migrationStatus` (`apps/server/src/readiness.ts`) is the other, and its verdict differs on
+ * purpose — it reports `down` for a pending migration too, which is a deployment still migrating
+ * rather than a rollback, while this refuses a process only for an unknown one. Its docblock names
+ * the query each uses; a change to what "applied" means belongs in both.
  */
 export const findUnknownMigrations = async (
   client: MigrationReader,

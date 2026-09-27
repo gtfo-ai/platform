@@ -24,7 +24,7 @@ import {
 import { providerModeSchema } from '@platform/contracts';
 import { db, eventing, jobs } from '@platform/infrastructure';
 import * as z from 'zod';
-import { ROLES, roleCapabilities } from './role.js';
+import { ROLES, type RoleCapabilities, roleCapabilities } from './role.js';
 
 export type EnvLike = Readonly<Record<string, string | undefined>>;
 
@@ -517,36 +517,29 @@ export const SERVER_CONFIG_DEFAULTS = {
  *
  * So the composition root adds its own floor on top, per workload it actually starts.
  *
- * **The whole sum, at the shipped defaults** (`ROLE=all`, `APP_DISPATCH_MAX_CONCURRENCY=1`), so
- * that nobody has to reassemble it from six docblocks:
- * `2 × 1 + 1` dispatch `+ 2` pg-boss `+ 8` pipeline workers `+ 4` knowledge workers
- * `+ 1` onboarding worker `+ 1` bootstrap worker `+ 2` HTTP `+ 1` maintenance = **22**, against
- * `.env.example`'s `APP_DB_POOL_MAX=23`. The *shape* is **`2N + 20`** since WP-56 registered
- * `deadline.sweep` beside them, and the changes behind it are
- * worth keeping apart. WP-15b's arithmetic was `3N + 8` — a third connection per
- * dispatch, because the audit row opened a transaction inside the handler's; WP-15d removed that
- * nesting, so the term that scales with concurrency shrank from 3 to 2 and the shape became
- * `2N + 9`, which agreed with the old one at N=1 (both 11). WP-15c then added a **fourth** flat
- * job worker (`pipeline.intake.reconcile`), making it `2N + 10`, and WP-18a added the knowledge
- * index worker: `2N + 11` — 13 at N=1. WP-18b added the Librarian's three
- * (`knowledge.proposals`, `knowledge.apply`, `knowledge.hygiene`): `2N + 14` — 16 at N=1. WP-21
- * added `onboarding.discovery`: `2N + 15` — 17 at N=1. WP-32 added the digest tick
- * (`notify.digest`): `2N + 16` — 18 at N=1. WP-31 added `task.ask`: `2N + 17` — 19 at N=1. WP-35
- * added `bootstrap.history`: `2N + 18` — 20 at N=1, **and this paragraph was not updated with it**,
- * which is why the sum above read 19 while the floor was 20 (backlog 22's site 1, stale a third
- * time). WP-36 added the maintenance schedule (`maintenance.schedule`):
- * `2N + 19` — 21 at N=1. WP-56 added the deadline timers (`deadline.sweep`, **one** worker for
- * the question, approval and take-over deadlines, by the architect's ruling rather than one per
- * timer): **`2N + 20`** — **22 at N=1**, and **28 at N=4** where `3N + 8` would have been 20. The
- * shape crossing over at high concurrency is the honest consequence of flat workers: they do not
- * scale with dispatch, and they are real.
+ * **The whole sum is not written out here.** `requiredPoolConnections` states it (every term below,
+ * through `poolTerms`), and the two places that must carry it as a number do so because they are
+ * read before the program exists: `.env.example`, beside `APP_DB_POOL_MAX`, prints the sum at the
+ * shipped defaults and its shape in `APP_DISPATCH_MAX_CONCURRENCY`, and the operator guide prints
+ * each role's floor. `config.test.ts` reads both files and holds every one of those numbers to
+ * `requiredPoolConnections` — the shape at **two** concurrencies, because a stale shape and the
+ * current one can agree at one. This paragraph carried its own copy until WP-73 and went stale
+ * three times (PROGRESS backlog 22's site 1); rule 63 is why it points instead.
  *
- * **This paragraph is PROGRESS backlog 22's site 1, and it has now gone stale twice** — at WP-32
- * and at WP-31, both times with all three numbers wrong at once, in the paragraph written to stop
- * exactly that. The transferable half is recorded there: the sweep has to be driven from
- * {@link POOL_RESERVATIONS}, not from the diff, because half the sites are in files the change
- * already opened and the ones that get missed are in the *same file* as the ones that get fixed.
- * `config.test.ts` asserts the sum symbolically, so the numbers here are prose and only prose.
+ * **How the shape got here**, which is history rather than a claim about today: WP-15b's
+ * arithmetic was `3N + 8` — a third connection per dispatch, because the audit row opened a
+ * transaction inside the handler's; WP-15d removed that nesting, so the term that scales with
+ * concurrency shrank from 3 to 2 and the shape became `2N + 9`. Every work package since has added
+ * a **flat** term (a job worker holds one connection, whatever the dispatch concurrency), so the
+ * constant grew and the coefficient did not: the reconciler (WP-15c), the knowledge workers (WP-18a,
+ * WP-18b), onboarding (WP-21), the digest tick (WP-32), `task.ask` (WP-31), the history bootstrap
+ * (WP-35), the maintenance schedule (WP-36) and the deadline timers (WP-56). The shape crossing
+ * over the old one at high concurrency is the honest consequence of flat workers: they do not scale
+ * with dispatch, and they are real.
+ *
+ * The transferable half is PROGRESS backlog 22's: a change to a reservation is swept from
+ * {@link POOL_RESERVATIONS}, not from the diff, because the sites that get missed are in the files
+ * the change already opened.
  */
 export const POOL_RESERVATIONS = {
   /** pg-boss's workers, supervision and cron. */
@@ -610,7 +603,7 @@ export const POOL_RESERVATIONS = {
    * nightly pass). Each holds one connection for its own write transaction, and the apply job's two
    * provider calls happen **outside** it — `integrations.forProject` and the executor both refuse to
    * run inside a transaction — so each is a flat term rather than a per-dispatch one, exactly like
-   * the pipeline's four.
+   * the pipeline's workers.
    *
    * Counted under `worker`, and unconditionally: the index job is registered even when
    * `APP_KNOWLEDGE_MIRROR_ROOT` is unset, because the refusal it then reports is the thing that
@@ -628,10 +621,11 @@ export const POOL_RESERVATIONS = {
    * still one. Everything before that transaction is a read — the
    * project row, the artifact, the index, and the git-provider call R9 needs — and both
    * `integrations.forProject` and the executor refuse to run inside a transaction, so the term is
-   * flat like the pipeline's four and the knowledge base's four rather than per dispatch.
+   * flat like the pipeline's and the knowledge base's workers rather than per dispatch.
    *
-   * Counted under `worker` and unconditionally, for the reason the other two are: a reservation
-   * that shrank with a setting would be a floor an operator could lower by accident.
+   * Counted under `worker` and unconditionally, for the reason the pipeline's and the knowledge
+   * base's are: a reservation that shrank with a setting would be a floor an operator could lower
+   * by accident.
    */
   onboarding: 1,
   /**
@@ -643,12 +637,12 @@ export const POOL_RESERVATIONS = {
    * cannot contend — every recording is caused by a run the collection started — so the term is one
    * rather than two (`JOB_QUEUES.historyBootstrap` carries the argument).
    *
-   * Flat rather than per dispatch, for the reason the other four are: every provider read the
+   * Flat rather than per dispatch, for the reason the other worker terms are: every provider read the
    * collection makes happens **outside** a transaction (`integrationsForProject` and the executor
    * both refuse to run inside one), so a read replaces the worker's connection rather than nesting
    * inside it.
    *
-   * Counted under `worker` and unconditionally, for the reason the other three are: a reservation
+   * Counted under `worker` and unconditionally, for the reason the other worker terms are: a reservation
    * that shrank with a setting would be a floor an operator could lower by accident.
    */
   bootstrap: 1,
@@ -678,53 +672,89 @@ export const POOL_RESERVATIONS = {
   auditPerDispatch: 0,
 } as const;
 
-/** The smallest `APP_DB_POOL_MAX` that can serve this configuration's workloads. */
-export const requiredPoolConnections = (config: ServerConfig): number => {
+/** One workload's share of the pool, as `requiredPoolConnections` counts it and the refusal names it. */
+export interface PoolTerm {
+  readonly connections: number;
+  /** What holds them, in the words `UndersizedPoolError` prints. */
+  readonly what: string;
+}
+
+type FlatReservation = Exclude<keyof typeof POOL_RESERVATIONS, 'auditPerDispatch'>;
+
+/**
+ * Which role counts each flat reservation, and what the refusal calls it — keyed by
+ * {@link POOL_RESERVATIONS} itself, so a reservation added there without a line here is a type error
+ * rather than a term the sum counts and the message forgets (PROGRESS backlog 22's site 3, which
+ * enumerated the workers in prose and lost `bootstrap` at WP-35). `auditPerDispatch` is not flat: it
+ * is part of the dispatcher's per-dispatch term below.
+ */
+const FLAT_POOL_TERMS: {
+  readonly [K in FlatReservation]: {
+    readonly what: string;
+    readonly counted: (capabilities: RoleCapabilities) => boolean;
+  };
+} = {
+  jobs: { what: "pg-boss's workers, supervision and cron", counted: (c) => c.worker },
+  // Instead of `jobs`, never beside it (WP-72).
+  jobsSender: { what: 'the enqueue-only pg-boss sender', counted: (c) => c.api && !c.worker },
+  http: { what: 'HTTP request queries', counted: (c) => c.api },
+  maintenance: { what: 'readiness checks and partition maintenance', counted: () => true },
+  pipeline: { what: "the pipeline's job workers, one each", counted: (c) => c.worker },
+  knowledge: { what: "the knowledge base's job workers, one each", counted: (c) => c.worker },
+  onboarding: { what: 'the onboarding worker', counted: (c) => c.worker },
+  bootstrap: { what: 'the history-bootstrap worker', counted: (c) => c.worker },
+};
+
+/** The terms of this configuration's pool floor, in the order the refusal lists them. */
+export const poolTerms = (config: ServerConfig): readonly PoolTerm[] => {
   const capabilities = roleCapabilities(config.role);
   // `CONNECTIONS_PER_DISPATCH` rather than a literal 2: `createEventing` enforces its own floor
   // from that constant, and two readings of one number drift apart (standing rule 41).
   const perDispatch = CONNECTIONS_PER_DISPATCH + POOL_RESERVATIONS.auditPerDispatch;
-  const dispatcher = capabilities.worker ? perDispatch * config.dispatch.maxConcurrency + 1 : 0;
-  // A worker's whole runtime, or — on a role that serves the API and runs no worker — the
-  // enqueue-only sender that hands a worker a command's effect (WP-72).
-  const jobsReserve = capabilities.worker
-    ? POOL_RESERVATIONS.jobs
-    : capabilities.api
-      ? POOL_RESERVATIONS.jobsSender
-      : 0;
-  const pipelineReserve = capabilities.worker ? POOL_RESERVATIONS.pipeline : 0;
-  const knowledgeReserve = capabilities.worker ? POOL_RESERVATIONS.knowledge : 0;
-  const onboardingReserve = capabilities.worker ? POOL_RESERVATIONS.onboarding : 0;
-  const bootstrapReserve = capabilities.worker ? POOL_RESERVATIONS.bootstrap : 0;
-  const httpReserve = capabilities.api ? POOL_RESERVATIONS.http : 0;
-  return (
-    dispatcher +
-    jobsReserve +
-    pipelineReserve +
-    knowledgeReserve +
-    onboardingReserve +
-    bootstrapReserve +
-    httpReserve +
-    POOL_RESERVATIONS.maintenance
-  );
+  const concurrency = config.dispatch.maxConcurrency;
+  const dispatcher: PoolTerm[] = capabilities.worker
+    ? [
+        {
+          connections: perDispatch * concurrency + 1,
+          what: `the event dispatcher at APP_DISPATCH_MAX_CONCURRENCY=${concurrency} (${perDispatch} per dispatch — its own transaction and the handler's — and one for the sweep)`,
+        },
+      ]
+    : [];
+  const flat = (Object.keys(FLAT_POOL_TERMS) as FlatReservation[])
+    .filter((key) => FLAT_POOL_TERMS[key].counted(capabilities))
+    .map((key) => ({ connections: POOL_RESERVATIONS[key], what: FLAT_POOL_TERMS[key].what }));
+  return [...dispatcher, ...flat];
 };
+
+/** The smallest `APP_DB_POOL_MAX` that can serve this configuration's workloads. */
+export const requiredPoolConnections = (config: ServerConfig): number =>
+  poolTerms(config).reduce((sum, term) => sum + term.connections, 0);
 
 /** Thrown at boot rather than deadlocking later; see `requiredPoolConnections`. */
 export class UndersizedPoolError extends Error {
   readonly poolMax: number;
   readonly required: number;
+  readonly terms: readonly PoolTerm[];
 
-  constructor(poolMax: number, required: number, role: string) {
+  constructor(poolMax: number, terms: readonly PoolTerm[], role: string) {
+    const required = terms.reduce((sum, term) => sum + term.connections, 0);
     super(
-      // The two counts are **interpolated**, not spelled: this message is PROGRESS backlog 22's
-      // site 3 — the one that entry has twice called "genuinely derivable" — and at WP-31 it
-      // crossed from un-derived to **false**, saying "five" beside a `POOL_RESERVATIONS.pipeline`
-      // of 6, in the one sentence an operator reads at the moment the program refuses to start.
-      `APP_DB_POOL_MAX is ${poolMax}, but ROLE=${role} needs at least ${required} connections: every in-flight dispatch holds two at once (its own transaction and the handler's), the sweep needs one to read with, and pg-boss, the pipeline's ${POOL_RESERVATIONS.pipeline} job workers, the knowledge base's ${POOL_RESERVATIONS.knowledge}, the onboarding worker, the partition-maintenance cron and every HTTP request query share the same pool. Raise APP_DB_POOL_MAX to ${required} or more, or lower APP_DISPATCH_MAX_CONCURRENCY.`,
+      // **Derived, term by term** — PROGRESS backlog 22's site 3, the one sentence an operator
+      // reads at the moment the program refuses to start. It spelled "five" beside a pipeline
+      // reservation of 6 at WP-31, and after that was interpolated it still enumerated the other
+      // workloads in prose and had lost the bootstrap worker since WP-35. It now lists exactly the
+      // terms `requiredPoolConnections` summed, so it cannot name a workload the sum does not
+      // count or omit one it does.
+      `APP_DB_POOL_MAX is ${poolMax}, but ROLE=${role} needs at least ${required} connections from the one pool: ${terms
+        .map((term) => `${term.connections} for ${term.what}`)
+        .join(
+          '; ',
+        )}. Raise APP_DB_POOL_MAX to ${required} or more, or lower APP_DISPATCH_MAX_CONCURRENCY.`,
     );
     this.name = 'UndersizedPoolError';
     this.poolMax = poolMax;
     this.required = required;
+    this.terms = terms;
   }
 }
 
@@ -968,9 +998,9 @@ export const loadServerConfig = (env: EnvLike = process.env): ServerConfig => {
     );
   }
 
-  const required = requiredPoolConnections(config);
-  if (config.database.poolMax < required) {
-    throw new UndersizedPoolError(config.database.poolMax, required, config.role);
+  const terms = poolTerms(config);
+  if (config.database.poolMax < terms.reduce((sum, term) => sum + term.connections, 0)) {
+    throw new UndersizedPoolError(config.database.poolMax, terms, config.role);
   }
 
   return config;

@@ -96,13 +96,13 @@ export interface ObservabilityLogsPort extends IntegrationPort<ObservabilityLogs
    * @throws {IntegrationError} `invalid_request` when the range or the limit exceeds the caps in
    * `capabilities()`, or when `from` is not before `to`.
    */
-  queryRange(query: LogRangeQuery): Promise<LogQueryResult>;
+  readonly queryRange: (query: LogRangeQuery) => Promise<LogQueryResult>;
 
   /** Label names, or the values of one label. */
-  labels(name?: string): Promise<LabelValues>;
+  readonly labels: (name?: string) => Promise<LabelValues>;
 
   /** Label sets matching a selector since an instant — the "narrow the stream" recipe step. */
-  series(selector: string, since: string): Promise<readonly Record<string, string>[]>;
+  readonly series: (selector: string, since: string) => Promise<readonly Record<string, string>[]>;
 
-  agentTooling(): AgentTooling;
+  readonly agentTooling: () => AgentTooling;
 }

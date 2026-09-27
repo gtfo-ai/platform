@@ -185,9 +185,13 @@ describe('the coverage exclusions', () => {
         ? 'process'
         : exclusion.exercisedBy.endsWith('.integration.test.ts')
           ? 'integration'
-          : exclusion.exercisedBy.includes('.test.')
-            ? 'another tier'
-            : 'image';
+          : /\.test\.tsx?$/.test(exclusion.exercisedBy) &&
+              !exclusion.exercisedBy.includes('.contract.') &&
+              !exclusion.exercisedBy.includes('.e2e.')
+            ? 'unit'
+            : exclusion.exercisedBy.includes('.test.')
+              ? 'another tier'
+              : 'image';
       expect({ path: exclusion.path, tier: exclusion.tier }).toEqual({
         path: exclusion.path,
         tier,

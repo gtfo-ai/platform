@@ -9,6 +9,8 @@
  */
 import type { DependencyPolicyValue } from '@platform/contracts';
 import fc from 'fast-check';
+// The package's fixed fast-check seed (PROGRESS backlog 253) is set by importing this module.
+import '../testing/property.js';
 import { describe, expect, it } from 'vitest';
 import {
   boundReportedDependencies,

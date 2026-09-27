@@ -56,10 +56,10 @@ export interface DispatchAttemptEnding {
 
 export interface DispatchQueue {
   /** Takes the event's queue row for the life of this transaction, without waiting. */
-  claim(position: number): Promise<DispatchClaim>;
+  readonly claim: (position: number) => Promise<DispatchClaim>;
 
   /** Removes the event from the queue: its dispatch finished. */
-  complete(position: number): Promise<void>;
+  readonly complete: (position: number) => Promise<void>;
 
   /**
    * Records one failed attempt and decides what happens to the event (WP-49).
@@ -78,7 +78,10 @@ export interface DispatchQueue {
    * Both are one statement, so the count that decides cannot be read before the increment that
    * changes it.
    */
-  failAttempt(position: number, failure: DispatchFailure): Promise<DispatchAttemptEnding>;
+  readonly failAttempt: (
+    position: number,
+    failure: DispatchFailure,
+  ) => Promise<DispatchAttemptEnding>;
 
   /**
    * Whether an earlier event of the same stream is still queued.
@@ -87,7 +90,11 @@ export interface DispatchQueue {
    * only once every lower `stream_seq` of its stream has left the queue — or been dead-lettered,
    * which is how a poisoned event stops blocking the events behind it.
    */
-  hasEarlierPending(streamType: StreamType, streamId: Id, streamSeq: number): Promise<boolean>;
+  readonly hasEarlierPending: (
+    streamType: StreamType,
+    streamId: Id,
+    streamSeq: number,
+  ) => Promise<boolean>;
 }
 
 /** One queued event, for tests and for the queue-depth metric. */

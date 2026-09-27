@@ -146,9 +146,11 @@ export type SentryProvider = ObservabilityErrorsPort;
  *    wanting to ship a token has to change the type. Declaring it would be a promise the runner
  *    cannot keep;
  *  - the classic `sentry-cli` documents its environment (`SENTRY_AUTH_TOKEN`, `SENTRY_ORG`,
- *    `SENTRY_PROJECT`, `SENTRY_URL`) but **no issue commands at all**: its documented sections are
- *    releases, debug files, send-event, code mappings, logs, snapshots and crons
- *    (<https://docs.sentry.io/cli/>, retrieved 2026-09-10);
+ *    `SENTRY_PROJECT`, `SENTRY_URL`), and its documentation page lists no issue commands — releases,
+ *    debug files, send-event, code mappings, logs, snapshots and crons
+ *    (<https://docs.sentry.io/cli/>, retrieved 2026-09-10) — **but the pinned binary has them**
+ *    (the measurement at the end of this docblock), so what keeps it undeclared is the environment
+ *    an issue query authenticates with, which nobody has verified;
  *  - the new interactive CLI is announced on that same page and its documentation lives off the
  *    vendor's documentation site; nobody here has run it.
  *
@@ -169,8 +171,10 @@ export type SentryProvider = ObservabilityErrorsPort;
  * `issues list --query --max-rows` and `events list` — read from `--help` inside `platform-runtime:dev`
  * on 2026-09-13. The documentation page cited above (retrieved 2026-09-10) lists neither. That does
  * not change `cli: null` here, because what is still unverified is the *environment* an issue query
- * authenticates with; it is in the ledger's discovered work so that the next person weighs a
- * measurement rather than re-reading the same page.
+ * authenticates with. Re-read on 2026-09-27 (WP-73): `issues list --org --project --query
+ * --max-rows` and `events list`, the same. The corpus statement
+ * (`test/fixtures/http/sentry/SOURCES.md`) carries both dates beside the page (PROGRESS backlog 41),
+ * so the next person weighs a measurement rather than re-reading the same page.
  */
 export const SENTRY_AGENT_TOOLING: AgentTooling = {
   cli: null,
