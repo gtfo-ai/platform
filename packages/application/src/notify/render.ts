@@ -138,6 +138,45 @@ const TITLE_OF: Readonly<Record<NotificationClass, (name: string) => string>> = 
   budget_threshold: (name) => `${name} is close to its budget`,
   budget_exhausted: (name) => `${name} has spent its budget`,
   approval: (name) => `${name} is waiting for an approval`,
+  maintenance_report: (name) => `Maintenance pass for ${name}`,
+};
+
+/** A markdown inline link, `[label](target)` — the same shape the Slack converter turns into one. */
+const MARKDOWN_LINK = /\[([^\]]*)\]\(([^\s)]+)\)/g;
+
+/**
+ * Every markdown link in `text` replaced by its bare target — **the label is dropped** (WP-65,
+ * PROGRESS backlog 215).
+ *
+ * A notification's detail carries somebody else's words: a return reason's first line is a
+ * reviewer model's summary on a verdict return, a blocker brief may be a model's, a question is a
+ * model's. Chat renders markdown, so `[Approve](https://attacker.example)` would reach the channel
+ * as a link labelled *Approve* under the platform's bot identity, inside the platform's own
+ * sentence — one misleading click the bot appears to vouch for (BD-022). Mentions and broadcasts
+ * are already inert (`toMrkdwn`); this closes the label. The URL stays, as its own text: a reader
+ * sees where it goes before following it, and a provider's autolinker still makes it clickable.
+ *
+ * One rule for the class rather than one per event: it is applied to every detail and to the
+ * subject's name (a ticket key is provider text too), so no event needs its own. The title's
+ * sentence and the task URL are platform text and are not links.
+ *
+ * Applied **to a fixpoint**, because one pass can build a link out of what it removed:
+ * `[x]([y](https://a))` matches with target `[y](https://a`, and the bare target plus the trailing
+ * `)` is `[y](https://a)` — a new labelled link. Every replacement removes at least four
+ * characters, so the loop ends.
+ */
+export const unlabelledLinks = (text: string): string => {
+  let current = text;
+  for (;;) {
+    const next = current.replace(
+      MARKDOWN_LINK,
+      (_match: string, _label: string, target: string) => target,
+    );
+    if (next === current) {
+      return current;
+    }
+    current = next;
+  }
 };
 
 export const notificationDraft = (input: {
@@ -146,11 +185,17 @@ export const notificationDraft = (input: {
   /** The event's own words: a return reason, a blocker brief, a question, a budget line. */
   readonly detail: string | null;
 }): NotificationDraft => {
-  const name = boundText(input.subject.name, NOTIFICATION_KEY_MAX);
+  const name = boundText(unlabelledLinks(input.subject.name), NOTIFICATION_KEY_MAX);
   return {
     notificationClass: input.notificationClass,
     title: boundText(TITLE_OF[input.notificationClass](name), NOTIFICATION_TITLE_MAX),
-    detail: input.detail === null ? null : boundText(input.detail, NOTIFICATION_DETAIL_MAX),
+    // Unlabelled **before** the cut: a link cut in half is no longer a link this can see, and the
+    // cut half would be rendered by nothing (no closing parenthesis), so the order is safe only
+    // this way round.
+    detail:
+      input.detail === null
+        ? null
+        : boundText(unlabelledLinks(input.detail), NOTIFICATION_DETAIL_MAX),
     url: boundUrl(input.subject.url),
   };
 };
@@ -171,3 +216,38 @@ export const notificationBody = (draft: NotificationDraft): MessageBody => ({
     ...(draft.url === null ? [] : [draft.url]),
   ].join('\n'),
 });
+
+/** How an approval was settled, as the approval aggregate records it. */
+export type SettledApprovalOutcome = 'approved' | 'rejected' | 'expired';
+
+/** The platform's sentence for each outcome, and who decided it — never a provider string. */
+const SETTLED_APPROVAL_TEXT: Readonly<Record<SettledApprovalOutcome, string>> = {
+  approved: 'Approved by a maintainer. The task page names who.',
+  rejected: 'Changes requested by a maintainer. The task page names who.',
+  expired: 'Expired: nobody decided before the deadline, so the deadline did.',
+};
+
+/**
+ * The edited approval message — the same message with its buttons gone and the outcome in their
+ * place (WP-65, PROGRESS backlog 202).
+ *
+ * `markdown` only, never `blocks`, for {@link notificationBody}'s reason — and because a body with
+ * no blocks is what makes the Slack adapter render plain sections, which is the whole point: the
+ * buttons are removed by being absent. The decider is named by role rather than by name: the
+ * application ring has no user directory to ask, and the task page, which the link points at,
+ * shows the decision with its person.
+ */
+export const settledApprovalBody = (input: {
+  readonly subject: NotificationSubject;
+  readonly outcome: SettledApprovalOutcome;
+}): MessageBody => {
+  const name = boundText(unlabelledLinks(input.subject.name), NOTIFICATION_KEY_MAX);
+  const url = boundUrl(input.subject.url);
+  return {
+    markdown: [
+      `**${boundText(`${name}: the approval is settled`, NOTIFICATION_TITLE_MAX)}**`,
+      SETTLED_APPROVAL_TEXT[input.outcome],
+      ...(url === null ? [] : [url]),
+    ].join('\n'),
+  };
+};

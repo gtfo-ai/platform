@@ -256,9 +256,9 @@ export const EVENT_CONSUMPTION: Readonly<Record<DomainEventType, EventConsumptio
    * (`cost/guard.ts` says why) and not this handler: telling somebody is not the same as stopping
    * something, and a notification that failed must never be what lets a run start.
    *
-   * The **organisation**-scoped budget is the one case this cannot notify: a chat binding belongs
-   * to a project and an org budget's payload carries no `project_id`, so `decideNotification`
-   * returns `null` for it with the reason written at the line. Filed as discovered work.
+   * The **organisation**-scoped budget has no project and therefore no binding; since WP-65 it is
+   * delivered to the organisation's own chat account's channel through the `notify_organisation`
+   * duty (PROGRESS backlog 80, answer (c)), and it was `null` — no notification at all — before.
    */
   'budget.threshold.reached': 'handled',
   'budget.exhausted': 'handled',

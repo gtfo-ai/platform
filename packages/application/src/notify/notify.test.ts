@@ -26,10 +26,13 @@ import {
   type PipelineHarness,
   testClock,
 } from '../testing/pipeline-harness.js';
+import { approvalSettledKey, runApprovalSettled } from './approval-settled.js';
 import { runNotification } from './duty.js';
-import { decideNotification, notifyHandler } from './handlers.js';
+import { approvalSettledHandler, decideNotification, notifyHandler } from './handlers.js';
 import type { NotifyOptions } from './options.js';
+import { runOrganisationNotification } from './organisation.js';
 import { digestSettingsOf } from './policy.js';
+import { awaitsImmediateRetry, type StoredNotification } from './ports.js';
 import {
   boundText,
   boundUrl,
@@ -38,6 +41,7 @@ import {
   NOTIFICATION_URL_MAX,
   notificationBody,
   notificationDraft,
+  unlabelledLinks,
 } from './render.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b1';
@@ -105,6 +109,7 @@ const optionsOf = (
     unitOfWork: markTransactions(harness.memory),
     notifications: harness.notifications,
     timezone: overrides.timezone ?? 'UTC',
+    organisation: harness.organisation,
   };
 };
 
@@ -157,7 +162,7 @@ describe('what an event would say', () => {
     });
   });
 
-  it('refuses an organisation-scoped budget, which has no project and therefore no channel', () => {
+  it('routes an organisation-scoped budget to the organisation, and a project’s to the project (WP-65)', () => {
     const budget = (projectId: string | null) =>
       domainEventSchemasByType['budget.exhausted'].parse({
         id: '00000000-0000-4000-9000-00000000dd02',
@@ -179,8 +184,17 @@ describe('what an event would say', () => {
           spent_usd: 12.5,
         },
       }) as DomainEvent;
-    expect(decideNotification(budget(null))).toBeNull();
+    // Backlog 80: it was `null` — decided, and heard by nobody. It is the organisation's now.
+    expect(decideNotification(budget(null))).toMatchObject({
+      notificationClass: 'budget_exhausted',
+      projectId: null,
+      taskId: null,
+      subject: 'The organisation',
+      detail: expect.stringContaining('$12.50 of $10.00'),
+    });
+    // Criterion 3: the project-scoped path is unchanged.
     expect(decideNotification(budget(PROJECT))).toMatchObject({
+      projectId: PROJECT,
       notificationClass: 'budget_exhausted',
       taskId: null,
       subject: 'This project',
@@ -419,6 +433,53 @@ describe('what the duty refuses', () => {
      */
     expect(harness.communication?.messages).toHaveLength(1);
     expect(harness.communication?.messages[0]?.thread).not.toBeNull();
+  });
+
+  /**
+   * The project path's half of the same fix: with the digest **off**, nothing but the job's retry
+   * can deliver an immediate notification whose first post failed.
+   */
+  it('delivers on the job’s retry when the first post failed, on a project with the digest off', async () => {
+    let failures = 0;
+    const harness = harnessWith({
+      settings: { config: { features: { digest: { enabled: false } } } },
+      communication: {
+        postMessage: async (thread: { channel: string; thread_id: string }) => {
+          if (failures > 0) {
+            failures -= 1;
+            throw new Error('chat provider unavailable');
+          }
+          return {
+            provider: 'fake-chat',
+            channel: thread.channel,
+            message_id: 'esc-1',
+            thread_id: thread.thread_id,
+            url: null,
+          };
+        },
+      },
+    });
+    const taskId = await taskOf(harness);
+    // Armed after intake, whose own drain posts through the same port.
+    failures = 1;
+    const okPosts = () =>
+      harness.audit.entries.filter(
+        (entry) => entry.action === 'post_message' && entry.status === 'ok',
+      ).length;
+    const before = okPosts();
+    const escalate = () =>
+      notify(harness, {
+        task_id: taskId,
+        notification_class: 'escalation',
+        notification_detail: 'Look at the merge request',
+      });
+    await expect(escalate()).rejects.toThrow();
+    await escalate();
+    await escalate();
+    const rows = harness.notifications.rows.filter((row) => row.causeEventId === CAUSE);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.deliveredAs).toBe('immediate');
+    expect(okPosts() - before, 'one successful post for the escalation').toBe(1);
   });
 
   it('stays quiet about a platform-issued ticket’s lifecycle, but not about its escalation', async () => {
@@ -670,5 +731,375 @@ describe('an approval notification', () => {
     expect(
       harness.notifications.rows.filter((row) => row.notificationClass === 'approval'),
     ).toEqual([]);
+  });
+
+  /** Settles the approval the way the aggregate would — the row's status, decided now. */
+  const settle = async (
+    harness: PipelineHarness,
+    status: 'approved' | 'rejected' | 'expired',
+  ): Promise<void> => {
+    await harness.memory.transaction(async (scope) => {
+      const stored = await harness.store.approvals.load(scope.tx, APPROVAL);
+      if (stored === null) {
+        throw new Error('no approval to settle');
+      }
+      await harness.store.approvals.save(scope.tx, {
+        ...stored,
+        approval: {
+          ...stored.approval,
+          status,
+          decidedAt: '2026-06-01T10:00:00.000Z' as never,
+          sequence: stored.approval.sequence + 1,
+        },
+      });
+    });
+  };
+
+  const settled = async (harness: PipelineHarness, decision: string): Promise<void> => {
+    await runApprovalSettled(optionsOf(harness), {
+      duty: 'approval_settled',
+      project_id: PROJECT,
+      cause_event_id: '00000000-0000-4000-9000-00000000ca77',
+      approval_id: APPROVAL,
+      approval_decision: decision,
+    });
+  };
+
+  /**
+   * **A settled approval's buttons are removed** (WP-65, PROGRESS backlog 202). Read back from the
+   * fake's recorded update *and* from the executor's audit row (rule 79), once per outcome.
+   */
+  for (const [outcome, sentence] of [
+    ['approved', 'Approved by a maintainer'],
+    ['rejected', 'Changes requested by a maintainer'],
+    ['expired', 'Expired: nobody decided before the deadline'],
+  ] as const) {
+    it(`edits the posted message when the approval is ${outcome}, and its buttons are gone`, async () => {
+      const harness = harnessWith();
+      const taskId = await taskOf(harness);
+      await pendingApproval(harness, taskId);
+      await notify(harness, {
+        task_id: taskId,
+        notification_class: 'approval',
+        approval_id: APPROVAL,
+      });
+      const posted = harness.notifications.rows.find((row) => row.notificationClass === 'approval');
+      expect(posted?.approvalId).toBe(APPROVAL);
+      expect(
+        posted?.messageRef?.message_id,
+        'the address is recorded with the delivery',
+      ).toBeTruthy();
+
+      await settle(harness, outcome);
+      await settled(harness, outcome);
+
+      const updates = harness.communication?.updates ?? [];
+      expect(updates).toHaveLength(1);
+      expect(updates[0]?.message_id).toBe(posted?.messageRef?.message_id);
+      expect(updates[0]?.markdown).toContain(sentence);
+      expect(updates[0]?.markdown).toContain(`${TICKET_KEY}: the approval is settled`);
+      const audit = harness.audit.entries.filter((entry) => entry.action === 'update_message');
+      expect(audit).toHaveLength(1);
+      expect(audit[0]?.status).toBe('ok');
+
+      // A redelivered wake-up replays under the same key instead of editing twice.
+      await settled(harness, outcome);
+      expect(harness.communication?.updates).toHaveLength(1);
+    });
+  }
+
+  it('edits nothing while the approval is pending, or when no message with buttons was posted', async () => {
+    const harness = harnessWith();
+    const taskId = await taskOf(harness);
+    await pendingApproval(harness, taskId);
+    await settled(harness, 'approved');
+    expect(harness.communication?.updates).toEqual([]);
+
+    await settle(harness, 'approved');
+    // No `approval` notification was ever delivered, so there is no address to edit.
+    await settled(harness, 'approved');
+    expect(harness.communication?.updates).toEqual([]);
+  });
+
+  it('leaves a provider that cannot edit alone rather than posting a second message', async () => {
+    const harness = harnessWith({
+      communication: {
+        capabilities: () => ({
+          threads: true,
+          buttons: true,
+          messageUpdate: false,
+          socketMode: true,
+          digest: true,
+        }),
+      },
+    });
+    const taskId = await taskOf(harness);
+    await pendingApproval(harness, taskId);
+    await notify(harness, {
+      task_id: taskId,
+      notification_class: 'approval',
+      approval_id: APPROVAL,
+    });
+    const before = harness.communication?.messages.length ?? 0;
+    await settle(harness, 'expired');
+    await settled(harness, 'expired');
+    expect(harness.communication?.updates).toEqual([]);
+    expect(harness.communication?.messages).toHaveLength(before);
+  });
+
+  it('closes the race: an approval settled while its buttons were being posted is edited by the posting duty', async () => {
+    let settleDuringPost: (() => Promise<void>) | null = null;
+    const harness = harnessWith({
+      communication: {
+        postApproval: async (thread, approval) => {
+          // The person decides on the task page while the post is in flight.
+          await settleDuringPost?.();
+          return {
+            provider: 'fake-chat',
+            channel: thread.channel,
+            message_id: `approval-${approval.id}`,
+            thread_id: thread.thread_id,
+            url: null,
+          };
+        },
+      },
+    });
+    const taskId = await taskOf(harness);
+    await pendingApproval(harness, taskId);
+    settleDuringPost = async () => {
+      await settle(harness, 'approved');
+      // The settled duty runs now, finds no address yet, and stops.
+      await settled(harness, 'approved');
+    };
+    await notify(harness, {
+      task_id: taskId,
+      notification_class: 'approval',
+      approval_id: APPROVAL,
+    });
+
+    const updates = harness.communication?.updates ?? [];
+    expect(updates, 'the posting duty edited it after recording the address').toHaveLength(1);
+    expect(updates[0]?.message_id).toBe(`approval-${APPROVAL}`);
+    expect(approvalSettledKey(APPROVAL as Id)).toBe(`notify:approval-settled:${APPROVAL}`);
+  });
+
+  it('is woken by task.approval.decided in the notify band, after the commit', () => {
+    const handler = approvalSettledHandler({} as never);
+    expect(handler.priority).toBe(210);
+    expect(handler.eventTypes).toEqual(['task.approval.decided']);
+  });
+});
+
+/**
+ * **An organisation budget has a channel** (WP-65, PROGRESS backlog 80, answer (c)).
+ *
+ * The countable effect is the executor's audit row (rule 79), not the port's return value: exactly
+ * one `post_channel_message`, attributed to the **organisation's** account (its own integration id)
+ * and to no project; and a replay of the same wake-up adds none.
+ */
+describe('an organisation-scoped notification', () => {
+  const orgExhausted = (): DomainEvent => {
+    stream += 1;
+    const suffix = stream.toString(16).padStart(12, '0');
+    const budget = `00000000-0000-4000-8000-${suffix}`;
+    return domainEventSchemasByType['budget.exhausted'].parse({
+      id: `00000000-0000-4000-9000-${suffix}`,
+      stream_type: 'budget',
+      stream_id: budget,
+      stream_seq: 1,
+      correlation_id: null,
+      cause_event_id: null,
+      actor: { kind: 'system', component: 'pipeline' },
+      occurred_at: '2026-06-01T09:00:00.000Z',
+      type: 'budget.exhausted',
+      payload: {
+        project_id: null,
+        budget_id: budget,
+        scope: 'org',
+        scope_id: null,
+        window: 'month',
+        limit_usd: 100,
+        spent_usd: 100.25,
+      },
+    }) as DomainEvent;
+  };
+
+  it('posts exactly one message to the organisation’s own channel, audited to its account and no project', async () => {
+    const harness = harnessWith({ organisationCommunication: {} });
+    const event = orgExhausted();
+    await harness.publish([event]);
+
+    const audit = harness.audit.entries.filter((entry) => entry.action === 'post_channel_message');
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({
+      integrationId: harness.organisationCommunication?.port.ref.integrationId,
+      projectId: null,
+      taskId: null,
+      status: 'ok',
+    });
+    expect(harness.organisationCommunication?.messages).toEqual([
+      expect.objectContaining({ channel: '#org-alerts', thread: null }),
+    ]);
+    expect(harness.organisationCommunication?.messages[0]?.markdown).toContain(
+      'The organisation has spent its budget',
+    );
+    // Never a project's channel: the project binding said nothing.
+    expect(harness.communication?.messages).toEqual([]);
+
+    const rows = harness.notifications.rows.filter((row) => row.projectId === null);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      notificationClass: 'budget_exhausted',
+      taskId: null,
+      urgent: true,
+      deliveredAs: 'immediate',
+    });
+
+    // A duplicated wake-up — pg-boss is at-least-once — runs the same duty for the same event again.
+    await runOrganisationNotification(optionsOf(harness), {
+      duty: 'notify_organisation',
+      cause_event_id: event.id,
+      notification_class: 'budget_exhausted',
+      notification_subject: 'The organisation',
+      notification_detail: 'replayed',
+    });
+    expect(
+      harness.audit.entries.filter((entry) => entry.action === 'post_channel_message'),
+    ).toHaveLength(1);
+    expect(harness.organisationCommunication?.messages).toHaveLength(1);
+  });
+
+  /**
+   * **The retry of a failed post delivers** (WP-65 review round 1). The row is recorded before the
+   * post, so the job's retry meets `record → false`; it must read the row back and post, not read
+   * "already recorded" as "already told". One failed and one successful audit row, one message.
+   */
+  it('delivers on the job’s retry when the first post failed, exactly once', async () => {
+    let failures = 1;
+    const harness = harnessWith({
+      organisationCommunication: {
+        postChannelMessage: async (channel: string) => {
+          if (failures > 0) {
+            failures -= 1;
+            throw new Error('chat provider unavailable');
+          }
+          return {
+            provider: 'fake-chat',
+            channel,
+            message_id: 'org-1',
+            thread_id: null,
+            url: null,
+          };
+        },
+      },
+    });
+    const data = {
+      duty: 'notify_organisation' as const,
+      cause_event_id: '00000000-0000-4000-9000-00000000ca65',
+      notification_class: 'budget_exhausted',
+      notification_subject: 'The organisation',
+      notification_detail: '$100.25 of $100.00 spent in the month window.',
+    };
+    await expect(runOrganisationNotification(optionsOf(harness), data)).rejects.toThrow();
+    expect(harness.notifications.rows[0]?.deliveredAt, 'recorded, not delivered').toBeNull();
+
+    await runOrganisationNotification(optionsOf(harness), data); // pg-boss's retry
+    await runOrganisationNotification(optionsOf(harness), data); // and a late duplicate
+
+    const posts = harness.audit.entries.filter((entry) => entry.action === 'post_channel_message');
+    expect(posts.filter((entry) => entry.status === 'ok')).toHaveLength(1);
+    expect(posts.filter((entry) => entry.status !== 'ok').length).toBeGreaterThan(0);
+    expect(harness.notifications.rows).toHaveLength(1);
+    expect(harness.notifications.rows[0]?.deliveredAs).toBe('immediate');
+  });
+
+  it('tells nobody — and writes no row — when the organisation has no chat account', async () => {
+    const harness = harnessWith();
+    await harness.publish([orgExhausted()]);
+    expect(
+      harness.audit.entries.filter((entry) => entry.action === 'post_channel_message'),
+    ).toEqual([]);
+    expect(harness.notifications.rows.filter((row) => row.projectId === null)).toEqual([]);
+  });
+
+  it('keeps a project’s own exhaustion on the project’s binding (criterion 3)', async () => {
+    const harness = harnessWith({ organisationCommunication: {} });
+    await notify(harness, {
+      notification_class: 'budget_exhausted',
+      notification_subject: 'This project',
+      notification_detail: '$12.50 of $10.00 spent in the month window.',
+    });
+    expect(harness.communication?.messages).toHaveLength(1);
+    expect(harness.organisationCommunication?.messages).toEqual([]);
+    expect(harness.notifications.rows[0]?.projectId).toBe(PROJECT);
+  });
+});
+
+/**
+ * **A link in a notification's detail is posted without its label** (WP-65, PROGRESS backlog 215).
+ */
+describe('links in a notification’s detail', () => {
+  it('drops the label and keeps the target, to a fixpoint', () => {
+    expect(unlabelledLinks('see [Approve](https://attacker.example/x) now')).toBe(
+      'see https://attacker.example/x now',
+    );
+    // One pass would rebuild `[y](https://a)` out of what it removed.
+    expect(unlabelledLinks('[x]([y](https://a.example))')).toBe('https://a.example');
+    expect(unlabelledLinks('no links here')).toBe('no links here');
+    // A mention written as a link keeps no brackets either; `toMrkdwn` keeps it inert.
+    expect(unlabelledLinks('[urgent](!channel)')).toBe('!channel');
+  });
+
+  it('applies to the detail and to the subject’s name, never to the platform’s own sentence', () => {
+    const draft = notificationDraft({
+      notificationClass: 'stage_returned',
+      subject: { name: '[ACME-1](https://evil.example)', url: TICKET_URL },
+      detail: 'review → implementation: [summary] [Approve](https://attacker.example) <!channel>',
+    });
+    expect(draft.title).toBe('https://evil.example went back a stage');
+    expect(draft.detail).toBe(
+      'review → implementation: [summary] https://attacker.example <!channel>',
+    );
+    expect(draft.url).toBe(TICKET_URL);
+  });
+});
+
+describe('which recorded row a retried wake-up still delivers', () => {
+  const row = (overrides: Partial<StoredNotification>): StoredNotification => ({
+    id: '00000000-0000-4000-8000-000000000001' as Id,
+    projectId: null,
+    taskId: null,
+    approvalId: null,
+    notificationClass: 'budget_exhausted',
+    causeEventId: '00000000-0000-4000-8000-000000000002' as Id,
+    title: 'Budget exhausted',
+    detail: null,
+    url: null,
+    urgent: true,
+    plannedDelivery: 'immediate',
+    mode: 'normal',
+    createdAt: '2026-09-27T08:00:00.000Z' as StoredNotification['createdAt'],
+    redactionCount: 0,
+    messageRef: null,
+    deliveredAt: null,
+    deliveredAs: null,
+    digestDay: null,
+    ...overrides,
+  });
+
+  it('delivers an immediate row nobody delivered or claimed', () => {
+    expect(awaitsImmediateRetry(row({}))).toBe(true);
+  });
+
+  it('posts nothing for a row a digest has claimed, a delivered row, a digest-planned row or none', () => {
+    // The digest owns a row it claimed: re-posting it from the retry would send it twice.
+    expect(awaitsImmediateRetry(row({ digestDay: '2026-09-27' }))).toBe(false);
+    expect(
+      awaitsImmediateRetry(
+        row({ deliveredAt: '2026-09-27T08:01:00.000Z' as StoredNotification['createdAt'] }),
+      ),
+    ).toBe(false);
+    expect(awaitsImmediateRetry(row({ plannedDelivery: 'digest' }))).toBe(false);
+    expect(awaitsImmediateRetry(null)).toBe(false);
   });
 });

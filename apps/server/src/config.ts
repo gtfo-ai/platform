@@ -58,6 +58,7 @@ const SOURCE_VARIABLE: Record<string, string> = {
   trustProxy: 'APP_TRUST_PROXY',
   providerMode: 'APP_PROVIDER_MODE',
   knowledgeMirrorRoot: 'APP_KNOWLEDGE_MIRROR_ROOT',
+  knowledgeMirrorMaxBytes: 'APP_KNOWLEDGE_MIRROR_MAX_BYTES',
   workspaceExportDir: 'APP_WORKSPACE_EXPORT_DIR',
   webRoot: 'APP_WEB_ROOT',
   integrationSecretEnv: 'APP_INTEGRATION_SECRET_ENV',
@@ -304,6 +305,20 @@ const serverConfigFields = z.strictObject({
       'must be an absolute path, e.g. /var/lib/app/knowledge: it names a data volume, not a place relative to the working directory',
     )
     .nullable(),
+
+  /**
+   * `APP_KNOWLEDGE_MIRROR_MAX_BYTES` — the ceiling on the knowledge mirrors' total bytes, past which
+   * the **least recently used** mirror is removed after an index run (WP-65, Q63).
+   *
+   * **No default: unset is no ceiling**, Q63's recommended default. A mirror is a rebuildable cache
+   * (BD-012) and removing one costs its project a full re-clone on its next index run, so a ceiling
+   * an operator did not choose would trade disk for exactly that, at a moment nobody picked. The
+   * storage gauge (`platform_storage_bytes{component="knowledge_mirrors"}`) is what an operator
+   * reads to choose one. Eviction is by last **use**, never by age — the oldest mirror is often the
+   * most active project's — and never touches a mirror used within the last hour
+   * (`MIRROR_EVICTION_MIN_IDLE_MS`).
+   */
+  knowledgeMirrorMaxBytes: z.int().positive().nullable(),
 
   /**
    * `APP_WORKSPACE_EXPORT_DIR` — where the launcher writes take-over tarballs, read here so
@@ -704,7 +719,7 @@ const readSecret = (name: string, env: EnvLike): string | undefined =>
   db.readEnvWithFile(name, env);
 
 /** Leaves anything unparseable in place so the schema reports it against the right variable. */
-const numberFromEnv = (raw: string | undefined, fallback: number): unknown => {
+const numberFromEnv = (raw: string | undefined, fallback: number | null): unknown => {
   const value = raw?.trim();
   if (value === undefined || value === '') {
     return fallback;
@@ -874,6 +889,7 @@ export const loadServerConfig = (env: EnvLike = process.env): ServerConfig => {
         ? SERVER_CONFIG_DEFAULTS.modelEgressHosts
         : hostListFromEnv(env.APP_MODEL_EGRESS_HOSTS),
     knowledgeMirrorRoot: nullableString(env.APP_KNOWLEDGE_MIRROR_ROOT),
+    knowledgeMirrorMaxBytes: numberFromEnv(env.APP_KNOWLEDGE_MIRROR_MAX_BYTES, null),
     workspaceExportDir: nullableString(env.APP_WORKSPACE_EXPORT_DIR),
     webRoot: nullableString(env.APP_WEB_ROOT),
     integrationSecretEnv: nameListFromEnv(env.APP_INTEGRATION_SECRET_ENV),

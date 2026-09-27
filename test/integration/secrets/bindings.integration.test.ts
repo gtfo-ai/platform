@@ -165,6 +165,32 @@ describe('the binding repository on a real database', () => {
     expect(bindings.find((binding) => binding.name === 'a account')?.secretIds).toEqual([]);
   });
 
+  /**
+   * WP-65 (backlog 80): the organisation's communication accounts, **unmerged** — the account's own
+   * config is the organisation's channel choice, and a binding's overlay is a project's.
+   */
+  it('lists the communication accounts with the account’s own config, oldest first', async () => {
+    await insertBinding(
+      'communication',
+      'slack',
+      'acme slack',
+      { channel: '#org-alerts', team_id: 'T0FAKETEAM1' },
+      { channel: '#api-only' },
+      [],
+    );
+    const accounts = await secretAdapters.listCommunicationAccounts(pool);
+    const slack = accounts.find((account) => account.name === 'acme slack');
+    expect(slack).toMatchObject({
+      type: 'communication',
+      provider: 'slack',
+      config: { channel: '#org-alerts', team_id: 'T0FAKETEAM1' },
+      bindings: [],
+    });
+    // Never another type's account.
+    expect(accounts.every((account) => account.type === 'communication')).toBe(true);
+    expect(accounts.some((account) => account.provider === 'gitlab')).toBe(false);
+  });
+
   it('answers nothing for a project with no bindings, rather than every binding', async () => {
     const other = await pool.query<{ id: string }>(
       `insert into projects (org_id, key, name, repo_url)

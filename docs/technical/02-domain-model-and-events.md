@@ -175,7 +175,7 @@ trade). `mr.updated` was the one entry that named a backlog entry instead — it
 | `task.question.asked` | Stage executor | question | Ticket comment (110), Slack (210), UI inbox (220), timer (15) |
 | `task.question.answered` | Question | question, answer, author, channel | Pipeline resume (10), other channels update (110) |
 | `task.question.expired` | Timer | question | Escalation (10) |
-| `task.approval.requested` / `.decided` | Pipeline / Approval (`.decided` with `expired` from the timer, WP-56) | approval | Slack buttons (210), pipeline (10), timer (15, `.requested` — WP-56) |
+| `task.approval.requested` / `.decided` | Pipeline / Approval (`.decided` with `expired` from the timer, WP-56) | approval | Slack buttons (210), pipeline (10), timer (15, `.requested` — WP-56); `.decided` also edits the posted message to remove its buttons (210, `approval_settled` duty — WP-65) |
 | `task.escalated` | Pipeline | task, reason, blocker brief | Ticket (110), Slack (210) |
 | `task.paused` / `task.resumed` | Budget/Human | task, reason | UI, workpad |
 | `task.taken_over` / `task.handed_back` | Human | task, branch, session, stage | Workspace export (10), ticket (110), timer (15, `.taken_over` — WP-56) |
@@ -197,7 +197,7 @@ trade). `mr.updated` was the one entry that named a backlog entry instead — it
 | `mr.review.comment` | git adapter | mr, thread id, author identity, text, resolved | Batching/debounce (10), feedback intake (30), human time (230, WP-29) |
 | `ci.pipeline.finished` | git adapter | mr, head sha, status, failed jobs, log refs, coverage | CI gate (10 decides, and since WP-60 review round 2 the `ci_settle` duty settles **only** a pipeline that ran on the merge request's live head, read from the provider outside the transaction), flaky detector (15) |
 | `default_branch.moved` | git adapter | project, new head | Rebase gate (10), KB index (40) |
-| `budget.threshold.reached` / `budget.exhausted` / `budget.reset` | Budget projection | scope, window, pct | Scheduler (10), Slack (210, WP-32 — `reset` excepted: a window rolling over is not news) |
+| `budget.threshold.reached` / `budget.exhausted` / `budget.reset` | Budget projection | scope, window, pct | Scheduler (10), Slack (210, WP-32 — `reset` excepted: a window rolling over is not news; an **organisation** window, which has no project, goes to the organisation's own chat account's channel since WP-65) |
 | `feedback.received` | Feedback | feedback | Feedback intake agent (30) |
 | `knowledge.proposal.created` / `.applied` / `.rejected` | Librarian / Human | proposal | Index rebuild (40), UI |
 | `knowledge.index.rebuilt` | Indexer | project, commit | — |

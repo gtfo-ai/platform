@@ -373,6 +373,29 @@ Approvals work the same way: the plan-approval gate is what the **Supervised** a
 on above a certain task size, and any maintainer can decide it. An approval nobody decides expires on
 the same calendar and at the same timeout as a question, and moves the task to needing a human too.
 
+Once an approval is decided — here, on the task page, or with a button — or expires, its Slack
+message is **edited**: the buttons are removed and the message says how it was settled (approved,
+changes requested, or expired), naming the decider by role; the task page names the person. A chat
+provider that cannot edit a message keeps the buttons, and a late press is refused by the approval
+rather than recorded.
+
+### What reaches the chat channel
+
+Links a model wrote — in a review's summary, a blocker brief, a question — are posted **as their bare
+address**, never under the label the model gave them, so the bot never shows a link whose text says
+one thing and whose target is another. The ticket's own link is the platform's and stays a link.
+
+Two messages come from the platform rather than from a task:
+
+- **An organisation budget that is spent** is posted **once**, to the channel your organisation's
+  chat integration names in its own settings (not a project's channel). If that integration names no
+  channel, nobody is told in chat — the operator sees it in the server log — and if two chat
+  integrations each name one, the platform refuses to pick and says so in the log.
+- **The nightly maintenance pass's report** — which chores it created, which it could not perform and
+  why, whether the maintenance budget stopped it — is a line in the project's **daily digest**, once
+  per chore period, and again only when something new happened. A project with the digest off or no
+  chat binding gets no report line; the server log says it instead.
+
 ## 7. Knowledge
 
 **A project → knowledge.** Three things:

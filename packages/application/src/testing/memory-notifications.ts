@@ -14,6 +14,7 @@
  * | 3 | `record` compares `(projectId, causeEventId, notificationClass)` by string key; PostgreSQL enforces it with a unique index. | **same** | Both answer `false` for a repeat, which is what makes an at-least-once wake-up idempotent. |
  * | 4 | Everything is returned by structural clone. | **stricter** | A caller mutating what it read cannot change the store, which PostgreSQL also does not allow. |
  * | 5 | `projectsAwaitingDigest` returns projects in insertion order; the SQL adapter orders by the oldest undelivered row. | **different** | Both are stable and neither is part of the contract: the suite asserts membership, never order, because two projects' digests are independent messages. |
+ * | 6 | An organisation-scoped row (`projectId: null`) is keyed as the string `null`, so two such rows with one cause and class collide — PostgreSQL gets the same answer from migration 0051's `nulls not distinct`. | **same** | The default `NULLS DISTINCT` would have been *kinder* than this; the contract suite asserts the collision on both stores, so the two cannot drift apart silently. |
  */
 import type { Id, IsoDateTime } from '@platform/contracts';
 import type { NotificationEntry, NotificationStore, StoredNotification } from '../notify/ports.js';
@@ -46,7 +47,14 @@ export const createMemoryNotificationStore = (): MemoryNotificationStore => {
         return false;
       }
       keys.add(key);
-      rows.set(entry.id, { ...entry, deliveredAt: null, deliveredAs: null, digestDay: null });
+      rows.set(entry.id, {
+        ...entry,
+        approvalId: entry.approvalId ?? null,
+        messageRef: null,
+        deliveredAt: null,
+        deliveredAs: null,
+        digestDay: null,
+      });
       return true;
     },
 
@@ -55,13 +63,40 @@ export const createMemoryNotificationStore = (): MemoryNotificationStore => {
       if (row === undefined) {
         throw new Error(`no notification ${input.id}`);
       }
-      rows.set(input.id, { ...row, deliveredAt: input.at, deliveredAs: input.via });
+      rows.set(input.id, {
+        ...row,
+        deliveredAt: input.at,
+        deliveredAs: input.via,
+        ...(input.messageRef === undefined ? {} : { messageRef: input.messageRef }),
+      });
+    },
+
+    findByCause: async (_tx, key) => {
+      const found = [...rows.values()].find(
+        (row) =>
+          row.projectId === key.projectId &&
+          row.causeEventId === key.causeEventId &&
+          row.notificationClass === key.notificationClass,
+      );
+      return found === undefined ? null : clone(found);
+    },
+
+    approvalMessage: async (_tx, approvalId) => {
+      const found = [...rows.values()]
+        .filter((row) => row.approvalId === approvalId && row.messageRef !== null)
+        .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1))[0];
+      return found === undefined ? null : clone(found);
     },
 
     projectsAwaitingDigest: async (_tx, input) => {
       const projects: Id[] = [];
       for (const row of rows.values()) {
-        if (undelivered(row, input.before) && !projects.includes(row.projectId)) {
+        // An organisation-scoped row has no project digest to ride in (WP-65).
+        if (
+          row.projectId !== null &&
+          undelivered(row, input.before) &&
+          !projects.includes(row.projectId)
+        ) {
           projects.push(row.projectId);
         }
       }

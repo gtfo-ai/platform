@@ -34,14 +34,26 @@
  */
 import type { Id, IsoDateTime, NotificationClass, TaskMode } from '@platform/contracts';
 import type { NotificationDelivery } from '@platform/domain';
+import type { MessageRef } from '../ports/integrations/communication.js';
 import type { Transaction } from '../ports/transaction.js';
 
 /** What the duty records before it tries to deliver anything. */
 export interface NotificationEntry {
   readonly id: Id;
-  readonly projectId: Id;
+  /**
+   * `null` for an **organisation-scoped** notification (WP-65, backlog 80): an organisation budget
+   * has no project, and it is delivered to the organisation's own chat account's channel rather
+   * than to any project's binding. Migration 0051 keeps such rows deduplicated (`nulls not
+   * distinct`).
+   */
+  readonly projectId: Id | null;
   /** `null` for a notification about a project rather than a task — a budget window. */
   readonly taskId: Id | null;
+  /**
+   * The approval an `approval` notification asked about (WP-65, backlog 202), so the message can be
+   * found again once the approval is decided or expires. Absent for every other class.
+   */
+  readonly approvalId?: Id | null;
   readonly notificationClass: NotificationClass;
   /** The event that caused it. Half of the unique key, and the identity a replay is keyed by. */
   readonly causeEventId: Id;
@@ -72,6 +84,9 @@ export interface NotificationEntry {
 
 /** A recorded notification, as the digest reads it back. */
 export interface StoredNotification extends NotificationEntry {
+  readonly approvalId: Id | null;
+  /** Where the provider put the message, when an immediate delivery recorded it (WP-65). */
+  readonly messageRef: MessageRef | null;
   readonly deliveredAt: IsoDateTime | null;
   readonly deliveredAs: NotificationDelivery | null;
   /** `YYYY-MM-DD` in the organisation's zone, set when a digest claims the row. */
@@ -94,8 +109,36 @@ export interface NotificationStore {
       readonly id: Id;
       readonly at: IsoDateTime;
       readonly via: NotificationDelivery;
+      /**
+       * The provider's address of the posted message, **redacted** by the caller — recorded for an
+       * approval only, whose buttons a later duty removes (WP-65, backlog 202). Absent leaves the
+       * column as it was.
+       */
+      readonly messageRef?: MessageRef | null;
     },
   ): Promise<void>;
+
+  /**
+   * The row a `(project, cause event, class)` key names, or `null` — what a retried wake-up reads
+   * when `record` answers `false` (WP-65 review round 1). A duplicate is only a reason to stop when
+   * the first attempt **delivered**; one whose provider call threw left an undelivered `immediate`
+   * row, and the retry must deliver it rather than read "already recorded" as "already told".
+   */
+  findByCause(
+    tx: Transaction,
+    key: {
+      readonly projectId: Id | null;
+      readonly causeEventId: Id;
+      readonly notificationClass: NotificationClass;
+    },
+  ): Promise<StoredNotification | null>;
+
+  /**
+   * The message that asked about this approval, or `null` when none was posted with an address —
+   * the approval was announced as a digest line, as text through a binding that cannot receive a
+   * click, or never (WP-65, backlog 202).
+   */
+  approvalMessage(tx: Transaction, approvalId: Id): Promise<StoredNotification | null>;
 
   /**
    * Every project with an undelivered notification older than `before` — the digest's fan-out.
@@ -154,3 +197,16 @@ export interface NotificationStore {
     input: { readonly projectId: Id; readonly day: string },
   ): Promise<boolean>;
 }
+
+/**
+ * Whether a retried wake-up that found its row already recorded must still deliver it (WP-65 review
+ * round 1): planned `immediate`, never delivered, and not claimed by a digest — i.e. an earlier
+ * attempt of the same job recorded it and then failed at the provider. Such a retry posts under the
+ * **same** idempotency key, so a provider call that had in fact succeeded is replayed by the
+ * executor rather than posted twice.
+ */
+export const awaitsImmediateRetry = (row: StoredNotification | null): row is StoredNotification =>
+  row !== null &&
+  row.deliveredAt === null &&
+  row.plannedDelivery === 'immediate' &&
+  row.digestDay === null;

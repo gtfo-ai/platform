@@ -228,8 +228,10 @@ describe('the declared table against the composed registrations', () => {
     const owned = notifyHandlers({} as never).flatMap((handler) =>
       handler.eventTypes === 'all' ? [] : [...handler.eventTypes],
     );
-    // Nine since WP-43, which added `task.approval.requested` once a button could be pressed.
-    expect(owned.length).toBe(9);
+    // Nine since WP-43, which added `task.approval.requested` once a button could be pressed; ten
+    // since WP-65, whose second handler edits a settled approval's message on
+    // `task.approval.decided` (already `handled` by the pipeline — a second consumer moves nothing).
+    expect(owned.length).toBe(10);
     for (const type of owned) {
       expect({ type, consumption: EVENT_CONSUMPTION[type] }).toEqual({
         type,

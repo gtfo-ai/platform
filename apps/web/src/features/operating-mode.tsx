@@ -198,7 +198,7 @@ export const FEATURE_CARDS: readonly FeatureCard[] = [
     cost: 'the budget you set',
     touches: 'opens merge requests',
     caveat:
-      'Two of the five chore types run in this build — dependency bumps, from what the dependency gate recorded about this project’s packages, and knowledge-base hygiene, from the nightly pass. The other three are refused by name when they are configured, and the scheduler says so each time: Flaky tests and docs drift have no detector in this build, and lint debt would need an agent run to execute one of your project’s commands, which none may.',
+      'Two of the five chore types run in this build — dependency bumps, from what the dependency gate recorded about this project’s packages, and knowledge-base hygiene, from the nightly pass. The other three are refused by name when they are configured, and the nightly pass reports them in the project’s daily digest (in the server log when the project has no digest or no chat binding): Flaky tests and docs drift have no detector in this build, and lint debt has no finding source — nothing records your project’s lint output for a chore to be briefed from.',
   },
   {
     key: 'digest',

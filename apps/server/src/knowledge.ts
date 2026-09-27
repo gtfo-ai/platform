@@ -120,6 +120,11 @@ export interface ComposeKnowledgeOptions {
   readonly registry: IntegrationRegistry;
   /** `APP_KNOWLEDGE_MIRROR_ROOT`. `null` is unset, and it never defaults to a path (TD-026 §5). */
   readonly mirrorRoot: string | null;
+  /**
+   * `APP_KNOWLEDGE_MIRROR_MAX_BYTES` (WP-65, Q63): the ceiling eviction by last use keeps the
+   * mirrors under after each index run. `null` is no ceiling, and nothing is ever evicted.
+   */
+  readonly mirrorMaxBytes: number | null;
   readonly logger: Logger;
 }
 
@@ -365,6 +370,51 @@ export const composeKnowledgeIndexing = async (
     logger: options.logger,
   });
 
+  /**
+   * **Eviction by last use** (WP-65, Q63), after an index run — the moment a mirror may have grown
+   * (a first clone, a fetch). Nothing happens without `APP_KNOWLEDGE_MIRROR_MAX_BYTES`. The mirror
+   * just read is never a candidate, nor is any used in the last hour; see `mirror-storage.ts` for
+   * the rest. A failure here is the ceiling's, not the index run's: named and left.
+   */
+  const evictMirrors = async (projectId: Id): Promise<void> => {
+    if (options.mirrorRoot === null || options.mirrorMaxBytes === null) {
+      return;
+    }
+    try {
+      const eviction = await knowledgeAdapters.evictKnowledgeMirrors({
+        root: options.mirrorRoot,
+        ceilingBytes: options.mirrorMaxBytes,
+        now: new Date(),
+        keepProjectId: projectId,
+      });
+      if (eviction === null) {
+        return;
+      }
+      for (const evicted of eviction.evicted) {
+        options.logger.info(
+          {
+            project_id: evicted.projectId,
+            bytes: evicted.bytes,
+            last_used_at: evicted.lastUsedAt,
+            ceiling_bytes: options.mirrorMaxBytes,
+          },
+          'knowledge mirror evicted: the least recently used mirror was removed to keep the mirrors under APP_KNOWLEDGE_MIRROR_MAX_BYTES; its next index run re-clones it',
+        );
+      }
+      if (eviction.stillOver) {
+        options.logger.warn(
+          { bytes: eviction.bytesAfter, ceiling_bytes: options.mirrorMaxBytes },
+          'knowledge mirrors are over APP_KNOWLEDGE_MIRROR_MAX_BYTES and every remaining mirror is in use or was used within the hour; nothing more was removed',
+        );
+      }
+    } catch (cause) {
+      options.logger.warn(
+        { err: cause, project_id: projectId },
+        'knowledge mirror eviction failed; the index run is unaffected',
+      );
+    }
+  };
+
   const runtime = createKnowledgeIndexRuntime({
     jobs: options.jobs,
     indexer,
@@ -389,6 +439,7 @@ export const composeKnowledgeIndexing = async (
         if (shouldRecheckAfterIndex(run)) {
           await enqueueReadinessRecheck(options.jobs, { projectId, commitSha });
         }
+        await evictMirrors(projectId);
       }
     },
   });

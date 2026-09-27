@@ -36,7 +36,10 @@ import { allowAnyIntegrationHost } from '../integrations/egress.js';
 import { exactSecretRedactor, type InjectedSecret } from '../integrations/redaction.js';
 import { createContextPackAssembler } from '../knowledge/context-pack.js';
 import type { HumanCommandDependencies, TaskCommandDependencies } from '../pipeline/commands.js';
-import type { PipelineIntegrations } from '../pipeline/integrations.js';
+import type {
+  OrganisationIntegrationsPort,
+  PipelineIntegrations,
+} from '../pipeline/integrations.js';
 import { staticPipelineIntegrations } from '../pipeline/integrations.js';
 import type { StageExecuteData } from '../pipeline/jobs.js';
 import { createStageRunPlanner, SKILLS_BY_ROLE } from '../pipeline/planner.js';
@@ -288,6 +291,12 @@ export interface HarnessOptions {
   readonly taskManagement?: Partial<TaskManagementPort> | null;
   /** The chat binding. **Absent by default** — see {@link HarnessCommunication} (WP-32). */
   readonly communication?: Partial<CommunicationPort> | null;
+  /**
+   * The **organisation's own** chat account (WP-65, backlog 80) — a second, separate stub with its
+   * own integration id, so a case can tell the organisation's message from a project's. Absent by
+   * default, which is an organisation with no communication account.
+   */
+  readonly organisationCommunication?: Partial<CommunicationPort> | null;
   /** The organisation's zone, which the digest and quiet hours are read in (Q38). */
   readonly timezone?: string;
   /**
@@ -351,6 +360,10 @@ export interface PipelineHarness {
   /** The notification outbox the band writes to, and the chat double, when one was asked for. */
   readonly notifications: MemoryNotificationStore;
   readonly communication: HarnessCommunication | null;
+  /** The organisation's own chat account, when one was asked for (WP-65). */
+  readonly organisationCommunication: HarnessCommunication | null;
+  /** The port the runtime's notify band resolves it through. */
+  readonly organisation: OrganisationIntegrationsPort;
   /** The store the planner's context-pack assembler reads; seed it to get a non-empty pack. */
   readonly knowledge: MemoryKnowledgeStore;
   /** The ledger's store when `cost: true` was asked for, and `null` otherwise. */
@@ -495,16 +508,20 @@ export interface HarnessCommunication {
     /** Set for an approval posted with its buttons (`postApproval`, WP-43). */
     approval?: string;
   }[];
+  /** Every `updateMessage` the port received, in order (WP-65, backlog 202). */
+  readonly updates: { message_id: string; markdown: string }[];
   readonly port: CommunicationPort;
 }
 
 const stubCommunication = (
   overrides: Partial<CommunicationPort> | null | undefined,
+  integrationId = '00000000-0000-4000-8000-00000000a003',
 ): HarnessCommunication | null => {
   if (overrides === null || overrides === undefined) {
     return null;
   }
   const messages: HarnessCommunication['messages'] = [];
+  const updates: HarnessCommunication['updates'] = [];
   let counter = 0;
   const next = (): string => {
     counter += 1;
@@ -512,7 +529,7 @@ const stubCommunication = (
   };
   const port = {
     ref: {
-      integrationId: '00000000-0000-4000-8000-00000000a003',
+      integrationId,
       provider: 'fake-chat',
       type: 'communication',
     },
@@ -584,9 +601,16 @@ const stubCommunication = (
       });
       return { provider: 'fake-chat', channel, message_id: id, thread_id: null, url: null };
     },
+    updateMessage: async (
+      message: { provider: string; channel: string; message_id: string },
+      body: { markdown: string },
+    ) => {
+      updates.push({ message_id: message.message_id, markdown: body.markdown });
+      return { ...message };
+    },
     ...overrides,
   } as unknown as CommunicationPort;
-  return { messages, port };
+  return { messages, updates, port };
 };
 
 const stubTaskManagement = (
@@ -819,6 +843,10 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
   const gitPort = stubGit(options.git);
   const taskManagementPort = stubTaskManagement(options.taskManagement);
   const communication = stubCommunication(options.communication);
+  const organisationCommunication = stubCommunication(
+    options.organisationCommunication,
+    '00000000-0000-4000-8000-00000000a0a9',
+  );
   const notifications = createMemoryNotificationStore();
   // WP-34: the shadow batch's store. Composed unconditionally, because `createPipelineRuntime`
   // requires it — `EVENT_CONSUMPTION` declares `shadow.report.created` handled.
@@ -877,6 +905,26 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
           },
   };
 
+  // WP-65: the organisation's own account, through the same executor as the project's, so its
+  // audit rows land in the same log a case reads.
+  const organisation: OrganisationIntegrationsPort = {
+    forOrganisation: async () => ({
+      executor: integrations.executor,
+      git: null,
+      taskManagement: null,
+      communication:
+        organisationCommunication === null
+          ? null
+          : {
+              port: organisationCommunication.port,
+              ref: organisationCommunication.port.ref,
+              channel: '#org-alerts',
+              digestChannel: '#org-alerts',
+              redactor: options.chatRedactor ?? exactSecretRedactor([]),
+            },
+    }),
+  };
+
   const settings: ProjectSettings = defaultProjectSettings(projectId, {
     templates: SHIPPED_TEMPLATES as Readonly<Record<string, PipelineTemplate>>,
     ...options.settings,
@@ -931,6 +979,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     ...(options.runsAgents === undefined ? {} : { runsAgents: options.runsAgents }),
     notifications,
     timezone: options.timezone ?? 'UTC',
+    organisation,
     calendar,
     // One composed set for the harness's one project. Production reads the `bindings` table
     // through `createPipelineIntegrationsLoader` (WP-15a).
@@ -1198,6 +1247,8 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     integrations,
     notifications,
     communication,
+    organisationCommunication,
+    organisation,
     knowledge,
     cost,
     shadow,

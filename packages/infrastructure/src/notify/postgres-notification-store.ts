@@ -29,6 +29,7 @@
  *    residual it leaves (a delivery still in flight after the caller's grace) is stated there.
  */
 import type {
+  MessageRef,
   NotificationEntry,
   NotificationStore,
   StoredNotification,
@@ -46,7 +47,7 @@ const iso = (value: Date | string | null): IsoDateTime | null =>
 
 interface NotificationRow extends Record<string, unknown> {
   id: string;
-  project_id: string;
+  project_id: string | null;
   task_id: string | null;
   class: string;
   cause_event_id: string;
@@ -61,6 +62,8 @@ interface NotificationRow extends Record<string, unknown> {
   delivered_as: string | null;
   digest_day: Date | string | null;
   redaction_count: number;
+  approval_id: string | null;
+  message_ref: unknown;
 }
 
 /**
@@ -84,7 +87,7 @@ const day = (value: Date | string | null): string | null => {
 
 const toStored = (row: NotificationRow): StoredNotification => ({
   id: row.id as Id,
-  projectId: row.project_id as Id,
+  projectId: row.project_id === null ? null : (row.project_id as Id),
   taskId: row.task_id === null ? null : (row.task_id as Id),
   notificationClass: row.class as NotificationClass,
   causeEventId: row.cause_event_id as Id,
@@ -99,6 +102,14 @@ const toStored = (row: NotificationRow): StoredNotification => ({
   deliveredAs: row.delivered_as === null ? null : (row.delivered_as as NotificationDelivery),
   digestDay: day(row.digest_day),
   redactionCount: row.redaction_count,
+  approvalId: row.approval_id === null ? null : (row.approval_id as Id),
+  // Written only by `markDelivered` from a `MessageRef` the duty already holds; a cast rather than a
+  // parse for the reason `replayable` gives in `pipeline/integrations.ts` — the stored value is
+  // redacted, and a parse that refused a redacted id would turn a stale button into a failing job.
+  messageRef:
+    row.message_ref !== null && typeof row.message_ref === 'object'
+      ? (row.message_ref as MessageRef)
+      : null,
 });
 
 export const createPostgresNotificationStore = (): NotificationStore => ({
@@ -106,8 +117,8 @@ export const createPostgresNotificationStore = (): NotificationStore => ({
     const { rows } = await sqlOf(tx).query<{ id: string }>(
       `insert into notifications (
          id, project_id, task_id, class, cause_event_id, title, detail, url,
-         urgent, planned_delivery, mode, created_at, redaction_count
-       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+         urgent, planned_delivery, mode, created_at, redaction_count, approval_id
+       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        on conflict (project_id, cause_event_id, class) do nothing
        returning id`,
       [
@@ -124,16 +135,56 @@ export const createPostgresNotificationStore = (): NotificationStore => ({
         entry.mode,
         entry.createdAt,
         entry.redactionCount,
+        entry.approvalId ?? null,
       ],
     );
     return rows.length === 1;
   },
 
   markDelivered: async (tx, input) => {
+    if (input.messageRef === undefined) {
+      await sqlOf(tx).query(
+        'update notifications set delivered_at = $2, delivered_as = $3 where id = $1',
+        [input.id, input.at, input.via],
+      );
+      return;
+    }
     await sqlOf(tx).query(
-      'update notifications set delivered_at = $2, delivered_as = $3 where id = $1',
-      [input.id, input.at, input.via],
+      `update notifications
+          set delivered_at = $2, delivered_as = $3, message_ref = $4::jsonb
+        where id = $1`,
+      [
+        input.id,
+        input.at,
+        input.via,
+        input.messageRef === null ? null : JSON.stringify(input.messageRef),
+      ],
     );
+  },
+
+  findByCause: async (tx, key) => {
+    // `is not distinct from`, because the organisation's rows have a null project and `=` never
+    // matches null — the query's half of migration 0051's `nulls not distinct`.
+    const { rows } = await sqlOf(tx).query<NotificationRow>(
+      `select * from notifications
+        where project_id is not distinct from $1::uuid
+          and cause_event_id = $2 and class = $3`,
+      [key.projectId, key.causeEventId, key.notificationClass],
+    );
+    const row = rows[0];
+    return row === undefined ? null : toStored(row);
+  },
+
+  approvalMessage: async (tx, approvalId) => {
+    const { rows } = await sqlOf(tx).query<NotificationRow>(
+      `select * from notifications
+        where approval_id = $1 and message_ref is not null
+        order by created_at
+        limit 1`,
+      [approvalId],
+    );
+    const row = rows[0];
+    return row === undefined ? null : toStored(row);
   },
 
   projectsAwaitingDigest: async (tx, input) => {
@@ -141,6 +192,8 @@ export const createPostgresNotificationStore = (): NotificationStore => ({
       `select project_id
          from notifications
         where delivered_at is null and created_at < $1
+          -- An organisation-scoped row (WP-65) has no project digest to ride in.
+          and project_id is not null
         group by project_id
         order by min(created_at)
         limit $2`,
@@ -196,3 +249,40 @@ export const createPostgresNotificationStore = (): NotificationStore => ({
     return rows[0]?.exists === true;
   },
 });
+
+/**
+ * How many notifications nobody was told about, past the point where anything will still try —
+ * the reading behind the `notifications_undelivered` gauge (WP-65, PROGRESS backlog 81).
+ *
+ * Two bounds, because "undelivered" means two different things by plan:
+ *
+ *  - a row planned **`immediate`** is past hope once it is older than the `pipeline.outbound`
+ *    job's own retry window. Each retry of the notify duty re-delivers a recorded, undelivered
+ *    row (`awaitsImmediateRetry`, WP-65 review round 1), so past the window every one of the
+ *    job's attempts — three on the shipped policy — has **tried and failed**, not merely been
+ *    skipped. After that, on a project with the digest **off** (and for every organisation-scoped
+ *    row, which has no digest) nothing carries it, which is the case backlog 81 found silent;
+ *  - a row planned **`digest`** is waiting on purpose until the next digest, so it is only counted
+ *    once a whole day, the digest's tick and the digest job's own retries have passed.
+ *
+ * Kept beside the store rather than on the `NotificationStore` port, for `listIntegrationIds`'
+ * reason: the pipeline never asks it, and a port method only a metrics sampler calls is a method
+ * every double would implement for nothing. One statement, and both counts are answered off the
+ * partial index migration 0023 already has (`notifications_undelivered_idx … where delivered_at is
+ * null`).
+ */
+export const countStaleUndeliveredNotifications = async (
+  sql: SqlExecutor,
+  input: { readonly immediateBefore: IsoDateTime; readonly digestBefore: IsoDateTime },
+): Promise<{ readonly immediate: number; readonly digest: number }> => {
+  const { rows } = await sql.query<{ immediate: string; digest: string }>(
+    `select count(*) filter (where planned_delivery = 'immediate' and created_at < $1) as immediate,
+            count(*) filter (where planned_delivery = 'digest' and created_at < $2) as digest
+       from notifications
+      where delivered_at is null
+        and created_at < greatest($1::timestamptz, $2::timestamptz)`,
+    [input.immediateBefore, input.digestBefore],
+  );
+  const row = rows[0];
+  return { immediate: Number(row?.immediate ?? 0), digest: Number(row?.digest ?? 0) };
+};

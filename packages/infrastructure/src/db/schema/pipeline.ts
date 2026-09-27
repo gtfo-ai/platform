@@ -396,7 +396,8 @@ export const humanActions = pgTable('human_actions', {
  */
 export const notifications = pgTable('notifications', {
   id: uuid('id').primaryKey().default(uuidv7),
-  projectId: uuid('project_id').notNull(),
+  // Null for an organisation-scoped notification (migration 0051, WP-65).
+  projectId: uuid('project_id'),
   taskId: uuid('task_id'),
   class: text('class').notNull(),
   causeEventId: uuid('cause_event_id').notNull(),
@@ -411,6 +412,9 @@ export const notifications = pgTable('notifications', {
   deliveredAs: text('delivered_as'),
   digestDay: date('digest_day'),
   redactionCount: integer('redaction_count').notNull().default(0),
+  // Migration 0051 (WP-65, backlog 202): which approval a posted message asked about, and where it is.
+  approvalId: uuid('approval_id'),
+  messageRef: jsonb('message_ref').$type<JsonObject | null>(),
 });
 
 /**

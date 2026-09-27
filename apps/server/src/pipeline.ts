@@ -57,6 +57,7 @@ import type {
   Jobs,
   LiveRuns,
   Logger,
+  OrganisationIntegrationsPort,
   PipelineIntegrationsPort,
   PipelineRuntime,
   PlatformToolPort,
@@ -78,6 +79,7 @@ import {
   createIntegrationActionExecutor,
   createIntegrationEgressPolicy,
   createLateCostRecorder,
+  createMaintenanceReportSink,
   createPipelineRuntime,
   createRunScopedSecrets,
   createRunStopReasons,
@@ -126,6 +128,7 @@ import type { IntegrationRegistry } from '@platform/integrations';
 import {
   createBoundSkillsReader,
   createInboundIntegrationLoader,
+  createOrganisationIntegrationsLoader,
   createPipelineIntegrationsLoader,
   createPipelineProviderRegistry,
   type PipelineProviderRegistryOptions,
@@ -762,6 +765,28 @@ export const createProjectIntegrationsPort = (options: {
     },
   });
 
+/**
+ * The organisation's own chat account, for the notification with no project (WP-65, PROGRESS
+ * backlog 80): the same stack — registry, executor, `platformRedactor` — as every project's
+ * adapters, so the organisation's calls share one idempotency store, one rate-limit budget per
+ * account and one audit log with them.
+ */
+export const createOrganisationIntegrationsPort = (options: {
+  readonly pool: pg.Pool;
+  readonly secretKey: string;
+  readonly stack: IntegrationStack;
+}): OrganisationIntegrationsPort =>
+  createOrganisationIntegrationsLoader({
+    communicationAccounts: async () => secretAdapters.listCommunicationAccounts(options.pool),
+    secrets: secretAdapters.createPostgresSecretStore({
+      sql: options.pool,
+      key: secretAdapters.deriveSecretKey(options.secretKey),
+    }),
+    registry: options.stack.registry,
+    executor: options.stack.executor,
+    platformRedactor: options.stack.platformRedactor,
+  });
+
 export const composePipeline = async (
   options: ComposePipelineOptions,
 ): Promise<ComposedPipeline> => {
@@ -853,6 +878,8 @@ export const composePipeline = async (
   /** WP-77: one instance for the recovery pass that finds and the duty that re-validates. */
   const runCredentialStore = recoveryAdapters.createPostgresRunCredentialStore();
   const maintenanceStore = new maintenanceAdapters.PostgresMaintenanceStore();
+  /** One outbox for the notify band and the maintenance pass's report (WP-65), which both write it. */
+  const notifications = notifyAdapters.createPostgresNotificationStore();
 
   const runtime = createPipelineRuntime({
     store,
@@ -867,7 +894,13 @@ export const composePipeline = async (
     // WP-32: the notification outbox, and the zone the digest and quiet hours are read in. Both are
     // required by `PipelineRuntimeOptions` rather than optional, because a process that composed
     // the pipeline without them would run the notify band on nothing.
-    notifications: notifyAdapters.createPostgresNotificationStore(),
+    notifications,
+    // WP-65 (backlog 80): the organisation's own chat account, for an organisation budget.
+    organisation: createOrganisationIntegrationsPort({
+      pool: options.pool,
+      secretKey: options.secretKey,
+      stack,
+    }),
     // WP-34: shadow mode's batches, tickets and reports. Required rather than optional for the
     // reason `notifications` is — `EVENT_CONSUMPTION` declares `shadow.report.created` handled, so
     // a process that composed the pipeline without it would sweep an event it promised a consumer
@@ -1288,6 +1321,16 @@ export const composePipeline = async (
     // TD-012 step 2 over the brief: a chore's evidence is repository paths, package names and a
     // registry's own strings, and the column it lands in is read into every prompt of the task.
     redactor: redactionAdapters.patternRedactor(),
+    // WP-65 (backlog 107): the pass's report, published in the project's daily digest.
+    report: createMaintenanceReportSink({
+      settings,
+      integrations,
+      unitOfWork: options.eventing.unitOfWork,
+      notifications,
+      ids,
+      clock: { now: nowIso },
+      logger: options.logger,
+    }),
     logger: options.logger,
   });
 

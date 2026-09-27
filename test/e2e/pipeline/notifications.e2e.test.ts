@@ -26,6 +26,7 @@ import { jobs as jobsAdapters } from '@platform/infrastructure';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   CHAT_CHANNEL,
+  CHAT_INTEGRATION_ID,
   inboundEvent,
   type PipelineE2E,
   startPipeline,
@@ -202,6 +203,99 @@ describe('the notification band, through a composed instance', () => {
     expect(digests[0]?.markdown).toContain('ACME-1 picked up');
     const audit = await pipeline.auditRows();
     expect(audit.filter((row) => row.action === 'post_digest')).toHaveLength(1);
+  });
+
+  /**
+   * **WP-65 criterion 1 (PROGRESS backlog 80)**: an organisation budget that is spent produces
+   * exactly one chat message — to the channel the organisation's **own** chat account names in
+   * `integrations.config`, read by `createOrganisationIntegrationsLoader` with no binding — and the
+   * count is the `integration_actions` row the instance's own audit adapter wrote (rule 79), with no
+   * project on it. A redelivered wake-up — the same outbound job enqueued again from a second
+   * pg-boss client, which is what a second replica is — adds none.
+   */
+  it('tells the organisation’s own channel once about a spent organisation budget, and a replay adds nothing', async () => {
+    const pipeline = await startPipeline({
+      scenarios: featureScenarios,
+      label: 'notify-org',
+      tickets: TICKETS,
+    });
+    harness = pipeline;
+    const event = inboundEvent('budget.exhausted', {
+      project_id: null,
+      budget_id: '00000000-0000-4000-8000-0000000065b1',
+      scope: 'org',
+      scope_id: null,
+      window: 'month',
+      limit_usd: 100,
+      spent_usd: 100.5,
+    });
+    await pipeline.publish([event]);
+
+    const organisationRows = () =>
+      pipeline.query<{ class: string; delivered_at: string | null; task_id: string | null }>(
+        'select class, delivered_at, task_id from notifications where project_id is null',
+      );
+    await pipeline.waitFor('the organisation notification to be delivered', async () =>
+      (await organisationRows()).some((row) => row.delivered_at !== null),
+    );
+
+    const posted = async () =>
+      (await pipeline.auditRows()).filter((row) => row.action === 'post_channel_message');
+    expect(await posted()).toHaveLength(1);
+    expect((await posted())[0]).toMatchObject({ status: 'ok', project_id: null, task_id: null });
+    const [integration] = await pipeline.query<{ integration_id: string }>(
+      "select integration_id from integration_actions where action = 'post_channel_message'",
+    );
+    expect(integration?.integration_id, 'keyed by the account, the only credential in scope').toBe(
+      CHAT_INTEGRATION_ID,
+    );
+    const messages = pipeline.chat
+      .messagesIn(CHAT_CHANNEL)
+      .filter((message) => message.markdown.includes('The organisation has spent its budget'));
+    expect(messages).toHaveLength(1);
+    expect(await organisationRows()).toEqual([
+      expect.objectContaining({ class: 'budget_exhausted', task_id: null }),
+    ]);
+
+    // The replay: the same wake-up, enqueued again by a second pg-boss client.
+    const completed = async () =>
+      Number(
+        (
+          await pipeline.query<{ n: string }>(
+            "select count(*) as n from pgboss.job where name = 'pipeline.outbound' and state = 'completed' and data->>'duty' = 'notify_organisation'",
+          )
+        )[0]?.n ?? 0,
+      );
+    const before = await completed();
+    const runtime = jobsAdapters.createPgBossJobs({
+      connectionString: pipeline.database.connectionString,
+    });
+    await runtime.start();
+    try {
+      await runtime.jobs.enqueue({
+        queue: 'pipeline.outbound',
+        data: {
+          duty: 'notify_organisation',
+          cause_event_id: event.id,
+          notification_class: 'budget_exhausted',
+          notification_subject: 'The organisation',
+          notification_detail: 'replayed',
+        },
+      });
+    } finally {
+      await runtime.stop();
+    }
+    await pipeline.waitFor(
+      'the replayed wake-up to complete',
+      async () => (await completed()) > before,
+    );
+    expect(await posted(), 'a replay posts nothing').toHaveLength(1);
+    expect(
+      pipeline.chat
+        .messagesIn(CHAT_CHANNEL)
+        .filter((message) => message.markdown.includes('The organisation has spent its budget')),
+    ).toHaveLength(1);
+    expect(await organisationRows()).toHaveLength(1);
   });
 
   it('schedules the digest tick in the organisation’s zone', async () => {

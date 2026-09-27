@@ -243,8 +243,60 @@ export const integrationsForProject = async (
   return port.forProject(projectId, scope);
 };
 
+/**
+ * The organisation's own integrations — the ones an organisation-scoped call goes through, with
+ * **no binding** (WP-65, PROGRESS backlog 80).
+ *
+ * `PipelineIntegrationsPort` answers per project, because a binding is a project's use of an
+ * account; an organisation budget has no project, so it cannot ask that question at all. What the
+ * organisation has instead is the **account**: `integrations` is org-scoped by construction, and a
+ * communication account names its own default channel in `integrations.config` — the channel a
+ * project's binding overrides. That channel is one a human already chose, which is why backlog 80
+ * took answer (c) rather than a fan-out to every project's channel.
+ *
+ * The answer has the same shape as a project's, with `git` and `taskManagement` always `null`, so
+ * the call helpers below serve both unchanged. Every call made through it is still an
+ * `IntegrationActionExecutor` call, and the executor's audit row, idempotency record and rate-limit
+ * budget are keyed by `integrations.id` — the **account's** own id, which is the honest attribution:
+ * it is that account's credential in scope and no project's. The row's project is `null` rather
+ * than an arbitrary project the account happens to be bound to (CLAUDE.md, WP-51's rule).
+ *
+ * @throws when the organisation's communication account exists and cannot be built, or when there
+ * are **two** — the same refusal a project with two chat bindings gets, because choosing one by sort
+ * order would make where the organisation's budget alarm goes depend on a name somebody typed.
+ */
+export interface OrganisationIntegrationsPort {
+  forOrganisation(scope: IntegrationCallScope): Promise<PipelineIntegrations>;
+}
+
+/** The organisation's door, guarded like {@link integrationsForProject}. */
+export const integrationsForOrganisation = async (
+  port: OrganisationIntegrationsPort,
+  scope: IntegrationCallScope,
+): Promise<PipelineIntegrations> => {
+  assertOutsideTransaction('integrations.forOrganisation');
+  return port.forOrganisation(scope);
+};
+
+/** An organisation with no chat account: every binding `null`, the unit tier's default. */
+export const noOrganisationIntegrations = (
+  executor: IntegrationActionExecutor,
+): OrganisationIntegrationsPort => ({
+  forOrganisation: async () => ({
+    executor,
+    git: null,
+    taskManagement: null,
+    communication: null,
+  }),
+});
+
 interface CallContext {
-  readonly projectId: Id;
+  /**
+   * `null` for an organisation-scoped call (WP-65) — made through an integration with no binding,
+   * audited against that integration and against no project, because no project's credential or
+   * configuration was in scope.
+   */
+  readonly projectId: Id | null;
   readonly taskId: Id | null;
 }
 
@@ -1476,6 +1528,40 @@ export const communicationWrites = (integrations: PipelineIntegrations) => ({
         thread_id: input.thread.thread_id,
         url: null,
       }),
+      (result) => ({ channel: result.channel, message_id: result.message_id }),
+      replayable<MessageRef>(input.idempotencyKey),
+    );
+  },
+
+  /**
+   * Edits a posted message in place — the settled approval's buttons removed (WP-65, PROGRESS
+   * backlog 202), `updateMessage` finally having a caller.
+   *
+   * The caller has already asked `capabilities().messageUpdate`; a provider that cannot edit
+   * throws `IntegrationUnsupportedError` rather than posting a second message, which is the right
+   * failure — a second message saying "decided" beside live buttons would still be a lie. Keyed by
+   * the caller, so a retried job replays the stored `MessageRef` instead of editing twice.
+   */
+  updateMessage: async (
+    input: {
+      readonly message: MessageRef;
+      readonly body: MessageBody;
+      readonly idempotencyKey: string;
+    },
+    context: CallContext & { readonly mode: TaskMode },
+  ): Promise<MessageRef | null> => {
+    const chat = integrations.communication;
+    if (chat === null) {
+      return null;
+    }
+    return mutate(
+      integrations,
+      chat.ref,
+      'update_message',
+      { channel: input.message.channel, message_id: input.message.message_id },
+      context,
+      async () => chat.port.updateMessage(input.message, input.body),
+      () => ({ ...input.message }),
       (result) => ({ channel: result.channel, message_id: result.message_id }),
       replayable<MessageRef>(input.idempotencyKey),
     );

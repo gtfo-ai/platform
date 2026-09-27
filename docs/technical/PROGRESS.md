@@ -10840,6 +10840,91 @@ docblock, evidence platform text only as WP-64's R8 is, asserted both directions
 half: which CI configuration paths the two shipped git providers' repositories actually use. **Depends on** WP-64, and
 for R4 on flaky detection (unowned, product/04:65). Related: **230**, **226**.
 
+### 236. **A failed organisation budget message is attempted once, however many times its job runs: the job's retries stop at the row the first attempt recorded, so the one alarm that stops every project is lost to a single transient chat failure — and the implementer's "three attempts" are the executor's, not the job's** (**(1) RESOLVED in WP-65's review round 1** — the job retry now re-posts an undelivered, unclaimed `immediate` row under the same key, organisation and project paths, one unit case each; **(2) TODO, unowned** — the re-post beyond the job and Q103's missing row; the text below is the pre-fix reading and its line numbers are of that tree; originally **small-to-major** — the remainder of backlog **81**'s *"nothing ever retries it"*, which WP-65 answered with a gauge (its criterion 4, *"a metric, not a screen"*) and not a retry; now reaching backlog **80**'s alarm; **live** from WP-65 (commit pending) whenever an organisation budget crosses while the chat provider fails; **read off the tree, not measured** (rule 66); the job-retry half proposed for **WP-73** (refiner, session 8), the beyond-the-job retry **unowned** — for the M5 architect pass; found by WP-65, session 8)
+
+**What is wrong.** The implementer, quoted: *"a failed `notify_organisation` delivery is never retried beyond the job's
+own three attempts: no digest carries an organisation row. The gauge now counts it; nothing re-posts it."* The refiner's
+reading narrows it. `runOrganisationNotification` records the row **before** it posts
+(`packages/application/src/notify/organisation.ts:99-116`) and returns at *"this organisation notification is already
+recorded"* when `record` answers false (`:118-124`); the post is `:126-134` and `markDelivered` follows it (`:136-142`).
+So when the post throws, pg-boss's retries (`PIPELINE_OUTBOUND_RETRY.retryLimit: 2`,
+`packages/application/src/pipeline/jobs.ts:383-387`) re-enter, meet the recorded row and **succeed without posting**.
+The three attempts are `IntegrationActionExecutor`'s in-call retries (`maxAttempts: 3`,
+`packages/application/src/integrations/action-executor.ts:368`), and they apply **only to a retryable error**
+(`:703-706`): a revoked token or a `channel_not_found` fails on the first. The project path has the same shape
+(`notify/duty.ts:175-198`) and relies on the digest to carry the row (`duty.ts:28-29`); for a digest-off project and for
+every organisation row there is no digest, which is exactly 81's case. **Two neighbours this reading adds.** (1) The
+gauge's 48-minute window is derived from the job's retry schedule (`retryWindowMs(PIPELINE_OUTBOUND_RETRY)`, WP-65's
+criterion 4), which before the fix never re-posted — so the window was waiting for nothing; since the fix it is the span
+in which every attempt the queue makes has been tried, which is what its docblock and the operator guide now say. (2) Q103's refusal (two accounts each naming a channel) throws in `integrationsForOrganisation` (`:67-70`) **before**
+`record`, so that configuration leaves **no** `notifications` row and the gauge cannot count it: the job fails its three
+runs and the only traces are the log lines and the failed job. **Needs measurement:** both halves are read, not run — a
+unit case with the organisation stub's post throwing once, then the job re-run, would confirm the first in one test.
+
+**Cost to leave.** An organisation cap at 100 % stops every project's runs; if the one message fails it is never sent
+again, and the operator learns from the gauge only if they alert on it (the operator guide's §3 table now lists it).
+Backlog 80's cost — *"the stop nobody hears about is the loudest one"* — returns through a transient failure instead of a
+missing table. **What would make it urgent:** any instance whose chat provider has an outage window, or whose token is
+rotated, while an org cap is set (`PUT /api/org/budgets` has shipped since WP-30).
+
+**Done.** (1) **Done in WP-65, not WP-73** (`awaitsImmediateRetry`, `NotificationStore.findByCause`; the digest-claimed guard has its own unit case since review round 2): a job retry that finds its row recorded **and undelivered** posts again under the **same**
+executor idempotency key (`notify:<cause>:<class>`), so a retry after a post that *succeeded* but whose `markDelivered`
+failed replays rather than double-posts — safe as read: the executor stores the idempotency record on the **success**
+path only (the lookup is `action-executor.ts:914-929`; its comment names *"the `put` on the success path"*), so a failed
+call leaves nothing to replay and a succeeded one replays; for both paths, organisation and project, with a unit
+case per path read back from the audit rows (one `failed`, one `ok`), and the gauge's window sentence corrected with it.
+(2) **Unowned:** a re-post beyond the job — a sweep over undelivered `immediate` rows past the window, bounded per row —
+and a row (or a counted refusal) for Q103's refused configuration so the gauge sees it. **Depends on** WP-65. Related:
+**80**, **81**, **Q103**, **235**.
+
+### 233. **An answered or expired question's chat message is never edited, as `updateMessage`'s docblock promises — but there is no button to go stale, because `postQuestion` still has no caller; this rides with backlog 195** (nit, TODO — a docblock promise and a follow-on of **195**, not a live control: a question goes out as a plain message; **read off the tree**; **unowned**, with **195**, which wants a row of its own — for the M5 architect pass; found by WP-65, session 8)
+
+The implementer, quoted: *"`updateMessage`'s own docblock promises 'an answered question becomes "answered by …"', and
+WP-65 gave the method its first caller for approvals only. A question's buttons (`postQuestion`) stay live after it is
+answered on the task page or expires."* The docblock is `packages/application/src/ports/integrations/communication.ts:146`.
+**The second sentence does not hold on this tree**: `postQuestion` (`communication.ts:121`) has no caller outside tests
+and fakes (grep), so a question is posted with `postMessage` and carries no button — backlog 195's cause (2). What is true
+is smaller: the question's message never says it was answered, and `questions` has no column holding the message's
+address. **Done:** when 195 posts questions through `postQuestion`, the address is recorded as WP-65 recorded the
+approval's, and `task.question.answered`/expiry edits it through `approval_settled`'s pattern (`notify/approval-settled.ts`),
+a unit case per outcome read back from the fake's update and the executor's `update_message` row. Until then, nothing.
+**Depends on** 195, WP-65. Related: **202**.
+
+### 234. **The edited approval message names the decider by role, while the event already carries who decided** (nit, TODO — **live** from WP-65 (commit pending), a label only; **read off the tree**; proposed owner **WP-73** (refiner, session 8); found by WP-65, session 8)
+
+The edit reads *"Approved by a maintainer. The task page names who."* (`packages/application/src/notify/render.ts:225-226`;
+the reason at `:236`). The implementer, quoted: *"the application ring has no user-directory port, so the refiner's 'the
+outcome and the decider' is half met. A port (or the display name on `task.approval.decided`) would close it."* Refiner's
+addition: the event already has `decided_by_user_id` (`packages/contracts/src/events.ts:284`), so what is missing is the
+**name**, not the identity. **Done:** the settled message names the user — through a narrow user-lookup port read in the
+duty's call phase, or a display name recorded on the event at decision time (the second changes `schemas/`); `expired`
+keeps naming no one; a unit case per outcome. If a person's name in a chat channel is a product question, it is Q-worthy,
+not this entry's. **Depends on** WP-65. Related: **202**.
+
+### 235. **An organisation notification ignores quiet hours, because they are a project setting and the organisation has no settings document** (nit, TODO — **working as designed** and stated at the line (`notify/organisation.ts:21-25`); **live** only for `budget_threshold`: `budget_exhausted` is urgent and bypasses quiet hours on the project path too (product/18:33); **unowned** — with the organisation settings document, for the M5 architect pass; found by WP-65, session 8)
+
+The implementer, quoted: *"an organisation-scoped notification is always `immediate`, so an organisation budget crossing
+its threshold at 03:00 posts at 03:00: quiet hours are a project setting and there is no organisation settings document
+(technical/08: `PATCH /api/org` unbuilt). Also where Q103's answer (c), an `organisation_default` flag, would live."* The
+real cost is one non-urgent message outside hours; digesting it has the further cost that an organisation row then needs
+a digest producer of its own (backlog **236**). **Done:** when the organisation settings document exists, it carries
+quiet hours (and Q103 (c)'s default account), and `runOrganisationNotification` asks `notificationDelivery` as the project
+duty does. **Depends on** `PATCH /api/org` (unbuilt, technical/08:14) — the same missing writer as backlog **223**.
+Related: **Q103**, **236**.
+
+### 232. **product/19 §20's storage gauge is an org-dashboard panel with a 50 GB warning and a confirmed month-partition purge; this build has the numbers as Prometheus metrics and nothing that reads them** (small, TODO — a product feature not built, **not** a defect: product/19:159 now names this entry and the operator guide documents the metrics (`docs/operator-guide.md:300-302`, §6); **read off the tree**; **unowned** — for the M5 architect pass; found by WP-65, session 8)
+
+WP-65's decision (f), quoted: *"The storage gauge is Prometheus metrics, not product/19 §20's org-dashboard panel (which
+does not exist for the database line either)."* The metrics are `platform_storage_bytes{component}`,
+`platform_storage_total_bytes` and `knowledge_mirror_bytes{project_id}` (`apps/server/src/metrics.ts:176-188`); no route
+and no screen under `apps/web/src` reads them (grep), and product/19 §20's three other parts — *monthly growth*, the 50 GB
+warning suggesting `APP_TRANSCRIPT_RETENTION_DAYS`, and the purge *"with a confirmation listing affected months"* — have
+no producer. **Needs reading before scoping:** whether the transcript tables are partitioned by month at all, which
+decides whether the purge is a command or a migration. **Cost to leave:** an operator without Prometheus sees no storage
+number; the one with it has everything but the warning and the purge. **Done:** an org-dashboard panel over a read route
+(one row per component, mirrors per project, the growth over the last month), a warning at 50 GB, and the purge as a
+confirmed command — or product/19 §20 amended to the metrics. **Depends on** WP-65. Related: **Q63**.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -32303,3 +32388,183 @@ baseline, and the verification one now holds a verb the implementation one does 
 technical/04's verification baseline and `docs/TODO.md`'s setup-script item say what runs it now.
 `pnpm run -s verify` **PASS** (8099); the onboarding integration file and the readiness-loop e2e
 **PASS** alone, each after a reading under 12.
+
+#### WP-65
+
+**Implemented** (implementer, session 8): backlog **80**, **81**, **107**, **Q63**'s operator half,
+and the refiner's addenda **141**, **202** and **215**. The six criteria and the three addenda,
+where each lands:
+
+1. **An organisation budget is heard, exactly once, from the organisation's own channel** (80,
+   answer (c) as ruled). `decideNotification` no longer returns `null` for a window with no project:
+   it decides an organisation-scoped notification, and `notifyHandler` enqueues the one
+   `pipeline.outbound` duty with no project, `notify_organisation`
+   (`packages/application/src/notify/organisation.ts`). Its payload is a type of its own
+   (`OrganisationOutboundData`, discriminated by the duty name and narrowed in
+   `pipelineOutboundHandler` before anything reads `project_id`) rather than a `PipelineOutboundData`
+   with an optional `project_id`, which would have made twenty-odd `data.project_id as Id` casts
+   compile over `undefined`. The account is built **with no binding** by
+   `createOrganisationIntegrationsLoader` (`packages/integrations/src/bindings/organisation-loader.ts`)
+   through the guarded door `integrationsForOrganisation`: the registration, the decrypted
+   credentials, the provider's strict schema over the account's **own** `integrations.config`, the
+   channel read back out of the validated config. Every call is an ordinary executor call, keyed by
+   the account's `integrations.id` and by **no project** — stated at the line, in the loader's
+   docblock and in technical/06 § "Outbound: actions". Asserted on the audit row, not the return:
+   `packages/application/src/notify/notify.test.ts` › "posts exactly one message to the organisation’s own channel, audited to its account and no project"
+   (one `post_channel_message`, the organisation stub's integration id, `projectId: null`, and a
+   replayed wake-up adds none), and `test/e2e/pipeline/notifications.e2e.test.ts` › "tells the organisation’s own channel once about a spent organisation budget, and a replay adds nothing"
+   (the `integration_actions` row the instance's own audit adapter wrote, `integration_id` = the
+   chat account, `project_id` null; the replay enqueued from a second pg-boss client).
+2. **Migration 0051, `nulls not distinct`.** `notifications.project_id` drops `not null`; the unique
+   key is re-declared `unique nulls not distinct (project_id, cause_event_id, class)` under the same
+   name, so `on conflict (…)` infers the same arbiter; a check refuses an organisation-scoped row
+   that names a task. Drizzle updated (`schema/pipeline.ts`); the parity test compares nullability.
+   Asserted at the constraint: `test/integration/notify/postgres-notification-store.integration.test.ts` › "refuses a second organisation-scoped row for one cause event and class",
+   and on both stores through the contract suite
+   (`test/contract/support/notification-store-suite.ts` › "records an organisation-scoped notification once per cause and class").
+3. **The project path is unchanged, asserted**: `notify.test.ts` › "keeps a project’s own exhaustion on the project’s binding (criterion 3)"
+   and the `decideNotification` case that pins both directions. Every WP-32 case passes unchanged.
+4. **The undelivered gauge — a metric, not a screen.** `notifications_undelivered{planned}` beside
+   `event_dispatch_pending` (same `capabilities.worker` condition), counting undelivered rows past
+   their plan's **own** retry window, one statement on the existing partial index
+   (`countStaleUndeliveredNotifications`, `postgres-notification-store.ts`). The window is derived,
+   not chosen: `retryWindowMs(PIPELINE_OUTBOUND_RETRY)` (`pipeline/jobs.ts`) — every attempt's
+   expiry plus every backoff delay at pg-boss 12.30's worst case, read from its `plans.js` — is
+   **48 minutes**; a digest row waits a day, a tick and the digest job's own window
+   (`notify/undelivered.ts`). Labelled, so a process that does not sample it exports no series.
+5. **The maintenance report in the digest, and the refusal drops to `info` because it has a
+   reader** (107). `createMaintenanceReportSink` (`notify/maintenance-report.ts`) records the pass's
+   per-project report as a `maintenance_report` row planned for the **digest** — only for a project
+   whose digest is on and which has a chat binding, so it is never a row nothing can deliver. The
+   scheduler now says its refusals after publishing (`reportProject`): `info` when the report was
+   recorded or already recorded this period, `warn` when it has no reader, and `warn` with
+   `report: 'failed'` when publishing throws, which never stops the pass. The configuration schema
+   is **not** touched for the chore types. Six cases under
+   `packages/application/src/maintenance/scheduler.test.ts` › "is not recorded again in the same period when nothing new happened"
+   and its five siblings.
+6. **The storage gauge and eviction by last use** (Q63 (1) and (2)).
+   `platform_storage_bytes{component="database"|"knowledge_mirrors"}`, the total as
+   `platform_storage_total_bytes{components="database+knowledge_mirrors"}` exported **only** when
+   both were measured on that scrape, and `knowledge_mirror_bytes{project_id}`
+   (`apps/server/src/metrics.ts`, samplers in `apps/server/src/storage.ts`, the walk in
+   `packages/infrastructure/src/knowledge/mirror-storage.ts`). `APP_KNOWLEDGE_MIRROR_MAX_BYTES`
+   (unset = no ceiling, Q63's default) evicts after each index run, least recently **used** first:
+   a prepared mirror read stamps `agentic-last-used` in the mirror (`git-vault.ts`), and eviction
+   never removes the mirror just read or one used within the hour.
+   `mirror-storage.test.ts` › "removes the least recently used mirror first — not the oldest — until under the ceiling"
+   plants the case where age and use disagree.
+
+**Addenda.** **141**: the lint chore stays off and its code now names what is missing —
+`no_lint_finding_source` (a chore is briefed from findings the platform holds, and nothing records a
+project's lint output), not `no_project_command`, which WP-54 made false; the wizard's maintenance
+caveat said the same false thing and is corrected. **202**: the notify duty records the posted
+approval's address (`approval_id`, `message_ref`, redacted) with its delivery; `task.approval.decided`
+wakes the `approval_settled` duty (`notify/approval-settled.ts`), which edits the message through
+`updateMessage` — its first caller — via the executor, keyed by the approval, once per outcome
+(three cases generated from one table in `notify.test.ts`'s approval block, one per outcome, each
+read back from the fake's recorded update **and** the executor's `update_message` audit row). The race (settled while the buttons were being posted) is closed from both
+ends: the posting duty re-asks after recording the address, same idempotency key
+(`notify.test.ts` › "closes the race: an approval settled while its buttons were being posted is edited by the posting duty").
+**215**: the render side, one rule for the class — `unlabelledLinks` (`notify/render.ts`) replaces
+every markdown link in a notification's **detail** and in the subject's name by its bare target, to
+a fixpoint (one pass can rebuild a link out of what it removed); the platform's own sentence and the
+ticket URL keep theirs. The chain is driven from `verdictReturnReason` through `decideNotification`,
+`notificationDraft` and `notificationBody` into the Slack adapter's request:
+`packages/integrations/src/providers/slack/notification-links.test.ts` › "posts a reviewer model’s labelled link as the bare URL, and its broadcast inert",
+and a `blocker_brief` case beside it. The comment at `handlers.ts`'s return case now says what the
+first line is for each return kind. This also closes 211's link-label residual for human returns,
+because it is the same detail.
+
+**Decisions and assumptions** (each stated at its line):
+- (a) The organisation's channel is the one its communication account names **in its own config**;
+  an account whose own config names none is *the organisation chose no channel* (no row, a `warn`
+  naming it); **two** accounts that each name one are refused by name (`BindingLoadError`) — **Q103**
+  filed with the recommendation implemented.
+- (b) An organisation notification is always `immediate` and its `urgent` is the platform default:
+  quiet hours and the digest are *project* settings, and there is no organisation settings document
+  (`PATCH /api/org` is unbuilt). So a failed one is never carried by a digest; the gauge counts it.
+- (c) `maintenance_report` is a notification class but **not** one `features.digest.urgent` may name
+  (`urgentNotificationClassSchema`): the pass is a 04:35 cron with nobody to interrupt, and an
+  accepted value that changes nothing is backlog 58/60's defect. The generated schemas are
+  byte-identical (the enum's members did not change).
+- (d) One report per project per chore **period**, re-recorded only when there is news — the chore
+  types with a task this period (created *or* already created) and the budget stop. The row's
+  `cause_event_id` is a name-derived, **non-cryptographic** uuid (`nameDerivedId`): the application
+  ring has no hash port, and the id has to be distinct only among one project's reports.
+- (e) The settled message names the decider **by role** ("a maintainer … the task page names who"):
+  the application ring has no user directory to ask. A provider without `messageUpdate` keeps its
+  buttons, named in an `info` line, and never gets a second message.
+- (f) The storage gauge is Prometheus metrics, not product/19 §20's org-dashboard panel (which does
+  not exist for the database line either). The mirror walk is cached 60 s per process; bytes are
+  allocated bytes (`blocks × 512`, what `du` reports) where the platform reports blocks.
+- (g) Eviction runs in the index job's `afterIndex`, after the configuration refresh and the
+  readiness re-check; a mirror with no stamp (from before this build) is dated by its directory's
+  modification time.
+
+**Sentences falsified, changed**: `handlers.ts` (the org-budget docblock and the return case),
+`consumption.ts`'s org-budget sentence, `git-vault.ts`'s *"nothing ever removes it … no gauge"*,
+`chores.ts`'s lint entry and code, the wizard's maintenance caveat
+(`apps/web/src/features/operating-mode.tsx`), `scheduler.ts`'s *"the log line naming the refusal"*,
+`notify/options.ts`'s *"Two fields"*, `consumption.test.ts`'s *"Nine"*, technical/02's two
+consumer cells, technical/03's `notifications` row, technical/06 (a new bullet), the operator guide
+(§3 *Metrics worth an alert*, §6 *Disk*), the user guide §6, `.env.example`, and a status note on
+Q63. **Left, and named for whoever owns them** (not this implementer's to edit): product/19 §20 —
+*"Org dashboard shows transcript storage size and monthly growth"* → add *"and the knowledge mirrors'
+bytes beside the database's, per project; mirrors are evicted by last use under
+`APP_KNOWLEDGE_MIRROR_MAX_BYTES` (WP-65)"*; product/18:33 — the notification classes → add
+*"an organisation budget goes to the organisation's own chat account's channel"*; product/18:31 —
+add *"the nightly pass reports in the project's daily digest"*.
+
+**Discovered work** (for the refiner; next free backlog number **232**, none fixed here):
+- **232** — product/19 §20's *storage gauge* is an **org-dashboard panel** with a 50 GB warning and a
+  month-partition purge; this build has the numbers only as Prometheus metrics (WP-65). No screen, no
+  warning, no purge command reads them — the database line included.
+- **233** — an answered **question**'s chat message is never edited either: `updateMessage`'s own
+  docblock promises *"an answered question becomes 'answered by …'"*, and WP-65 gave the method its
+  first caller for approvals only. A question's buttons (`postQuestion`) stay live after it is
+  answered on the task page or expires. Same shape as 202; `questions` has no address column.
+- **234** — a settled approval's message names the decider **by role**: the application ring has no
+  user-directory port, so the refiner's *"the outcome and the decider"* is half met. A port (or the
+  display name on `task.approval.decided`) would close it.
+- **235** — an organisation-scoped notification is always `immediate`, so an organisation budget
+  crossing its **threshold** at 03:00 posts at 03:00: quiet hours are a project setting and there is
+  no organisation settings document (technical/08: `PATCH /api/org` unbuilt). Also where Q103's
+  answer (c), an `organisation_default` flag, would live.
+- **236** — a `notify_organisation` delivery gets the job's own three attempts (each re-posts the
+  recorded row since review round 1) and nothing after them: no digest carries an organisation row.
+  The gauge counts one that failed all three; nothing re-posts it later.
+
+**Verification** (new files marked intent-to-add before any run meant to certify them):
+`pnpm run -s verify` **PASS** (8145 passed, 14 skipped); `verify:integration` **PASS** (589);
+`verify:e2e` **PASS** (215, the new organisation case included); `verify:ui` **PASS** (382);
+`verify:web-e2e` **PASS** (47). `node scripts/compose-stock-check.mjs` **PASS** after rebuilding
+`platform:dev` and `platform-launcher:dev` (rule 71: `.env.example` and `loadServerConfig` gained
+`APP_KNOWLEDGE_MIRROR_MAX_BYTES`). Mutation (copy, md5-confirmed revert): migration 0051 with
+`nulls not distinct` removed fails both the contract case and the constraint case by name. Docker
+after each tier: no container of this run left, volumes 102 before and after.
+`scripts/citations.test.ts` green over these notes. **Load discipline, stated rather than smoothed
+over**: one `verify` was started in the same command as the reading that preceded it (27.46 —
+over the bar; the rule is read, decide, then run); the integration tier's first series of five
+readings stayed over 12 and it was **not** run on that series — it ran on a second, bounded series
+whose fifth reading was 9.08, and every later tier ran on a reading under 12.
+
+**Review round 1 (REQUEST_CHANGES), addressed.** (1) **A duplicate is not a delivery**: the notify
+duties record the row before posting, so a failed post made pg-boss's retry meet `record → false`
+and stop — the organisation alarm had one attempt. `NotificationStore.findByCause` (both stores,
+`is not distinct from` for the null project; contract case) and `awaitsImmediateRetry`
+(`notify/ports.ts`): a retry re-reads the row and re-posts an undelivered, unclaimed `immediate`
+one under the same idempotency key. **Applied to the project path too** (`duty.ts`), because a
+project with the digest off had the same single attempt; with the digest on the digest carried it.
+`notify.test.ts` › "delivers on the job’s retry when the first post failed, exactly once" and
+`notify.test.ts` › "delivers on the job’s retry when the first post failed, on a project with the digest off";
+canary: the predicate forced false fails both by name. The gauge's docblocks, the operator guide's
+row and backlog 236 now say every attempt *tried*. (2) The mirror is stamped **before** any git work
+on an existing mirror as well as after the read is prepared (`git-vault.ts`); the
+"by construction" sentence is replaced by the residual (a fetch over an hour, a first clone);
+`git-vault.test.ts` › "is stamped before the fetch, so an eviction during the fetch does not remove it"
+runs an eviction inside the fetch through the process seam; canary: removing the early stamp fails
+it. (3) `bytesUnder` counts a vanished path as 0 and a mirror that vanishes mid-measure is left out;
+`collect` isolates the WP-65 samplers, a failing one exporting no series
+(`apps/server/src/metrics.test.ts` › "isolates a failing sampler: its gauges go absent and the dispatch backlog is still scraped").
+(4) The executor's docblock states the organisation-scoped shape. (5) `listCommunicationAccounts`
+says it is single-tenant (BD-009). (6) technical/12 has `APP_KNOWLEDGE_MIRROR_MAX_BYTES`.

@@ -44,9 +44,12 @@ describe('the chore catalogue', () => {
     expect(choreRefusalOf('kb')).toBeNull();
     expect(choreRefusalOf('flaky')?.reason).toBe('no_flaky_detection');
     expect(choreRefusalOf('docs')?.reason).toBe('no_drift_detector');
-    expect(choreRefusalOf('lint')?.reason).toBe('no_project_command');
+    // WP-65 (backlog 141): the code names what is missing now that WP-54 lets a run execute the
+    // project's command — a finding source, not a capability.
+    expect(choreRefusalOf('lint')?.reason).toBe('no_lint_finding_source');
     // The sentence a human reads names *why*, not just *that* — rule 18's whole point.
-    expect(choreRefusalOf('lint')?.detail).toContain('project command');
+    expect(choreRefusalOf('lint')?.detail).toContain('finding source');
+    expect(choreRefusalOf('lint')?.detail).not.toContain('cannot execute');
     expect(choreRefusalOf('flaky')?.detail).toContain('flaky');
     expect(choreRefusalOf('docs')?.detail).toContain('drift');
   });

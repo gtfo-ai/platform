@@ -29,7 +29,12 @@
  */
 import type { ApprovalKind, DomainEvent, NotificationClass } from '@platform/contracts';
 import type { EventHandler, HandlerContext } from '../events/handler.js';
-import { enqueueOutbound, type PipelineOutboundData } from '../pipeline/jobs.js';
+import {
+  enqueueOrganisationOutbound,
+  enqueueOutbound,
+  type OrganisationOutboundData,
+  type PipelineOutboundData,
+} from '../pipeline/jobs.js';
 import type { PipelineSagaOptions } from '../pipeline/saga.js';
 import { boundText, NOTIFICATION_DETAIL_MAX } from './render.js';
 
@@ -52,7 +57,8 @@ export const NOTIFIED_EVENT_TYPES = [
 
 interface Decided {
   readonly notificationClass: NotificationClass;
-  readonly projectId: string;
+  /** `null` for an organisation-scoped notification — an organisation budget (WP-65). */
+  readonly projectId: string | null;
   readonly taskId: string | null;
   /** Platform text naming what this is about when there is no task to name it. */
   readonly subject: string | null;
@@ -101,14 +107,20 @@ export const decideNotification = (event: DomainEvent): Decided | null => {
         projectId: event.payload.project_id,
         taskId: event.payload.task_id,
         subject: null,
-        // **The reason's first line only** (WP-46 review round 1, PROGRESS backlog 211). A return
-        // reason can carry somebody else's text — a human reviewer's MR comments since WP-46, a
-        // model's findings since WP-55 — and chat renders markup: `toMrkdwn` escapes `& < >`, but a
-        // `[label](url)` becomes a link with the commenter's label, posted under the platform's
-        // identity. The first line is the one the platform controls for a human-comment return —
-        // the thread count, every comment below it being collapsed onto a line of its own
-        // (`review-threads.ts`) — so the chat says *that* the task went back and how many threads,
-        // and the words stay on the task, behind its link.
+        // **The reason's first line only** (WP-46 review round 1, PROGRESS backlog 211), and what
+        // that first line *is* depends on who returned the task (WP-65, backlog 215):
+        //  - a **human-comment** return: platform text — the thread count, every comment below it
+        //    collapsed onto a line of its own (`review-threads.ts`);
+        //  - a **review-verdict** return: `[summary] ` is the platform's tag and everything after
+        //    it is the reviewer **model's** summary (`verdicts.ts`, `verdictReturnReason`);
+        //  - an **acceptance-verdict** return: a `[not met]` line carrying the model's evidence;
+        //  - a gate's or a policy's return: platform text naming the gate.
+        // So the first line may be model text steered by the code it reviewed (BD-022), and chat
+        // renders markup. The line is therefore not trusted to be link-free: every link in a
+        // notification's **detail** is rendered label-less by `notificationDraft`
+        // (`unlabelledLinks`, `render.ts`), so a `[Approve](https://…)` reaches the channel as the
+        // bare URL rather than as a label the bot appears to vouch for. The rest of the reason
+        // stays on the task, behind its link.
         detail: `${event.payload.from_stage} → ${event.payload.to_stage}: ${firstLine(event.payload.reason)}`,
       };
     case 'task.question.asked':
@@ -161,26 +173,27 @@ export const decideNotification = (event: DomainEvent): Decided | null => {
     case 'budget.threshold.reached':
     case 'budget.exhausted': {
       /**
-       * **An org-scoped budget has no project and therefore no channel** (standing rule 18's
-       * shape: the absent case must not be the quiet one).
+       * **An organisation budget has no project** (WP-65, PROGRESS backlog 80).
        *
-       * A chat binding belongs to a project (`bindings`), so a budget whose `project_id` is null —
-       * which is exactly BD-010's organisation cap — cannot be routed to a channel by this build.
-       * Returning `null` here is what makes that a *decision* with a name rather than a crash in
-       * the duty, and it is recorded as discovered work rather than answered by picking an
-       * arbitrary project's channel.
+       * BD-010's organisation cap is the one budget that stops every project, and its payload
+       * carries `project_id: null`. It was `null` here — decided, logged, and heard by nobody —
+       * until WP-65 gave it a channel: the organisation's **own** chat account's, which a human
+       * already chose (`integrations.config`), delivered by the `notify_organisation` duty. It is
+       * never routed to an arbitrary project's binding, which would read as that project's cap.
        */
-      const projectId = event.payload.project_id;
-      if (projectId === null || projectId === undefined) {
-        return null;
-      }
+      const projectId = event.payload.project_id ?? null;
       const spent = `${money(event.payload.spent_usd)} of ${money(event.payload.limit_usd)}`;
       return {
         notificationClass:
           event.type === 'budget.exhausted' ? 'budget_exhausted' : 'budget_threshold',
         projectId,
         taskId: null,
-        subject: event.payload.scope === 'task' ? 'This task' : 'This project',
+        subject:
+          event.payload.scope === 'org'
+            ? 'The organisation'
+            : event.payload.scope === 'task'
+              ? 'This task'
+              : 'This project',
         detail:
           event.type === 'budget.exhausted'
             ? `${spent} spent in the ${event.payload.window} window. New runs are blocked until the window resets or the cap is raised.`
@@ -202,6 +215,21 @@ export const notifyHandler = (options: PipelineSagaOptions): EventHandler => ({
     if (decided === null) {
       return;
     }
+    const detail =
+      decided.detail === null ? null : boundText(decided.detail, NOTIFICATION_DETAIL_MAX);
+    if (decided.projectId === null) {
+      const organisation: OrganisationOutboundData = {
+        duty: 'notify_organisation',
+        cause_event_id: event.id,
+        notification_class: decided.notificationClass,
+        ...(decided.subject === null ? {} : { notification_subject: decided.subject }),
+        ...(detail === null ? {} : { notification_detail: detail }),
+      };
+      context.afterCommit(async () => {
+        await enqueueOrganisationOutbound(options.jobs, organisation);
+      });
+      return;
+    }
     const data: PipelineOutboundData = {
       duty: 'notify',
       project_id: decided.projectId,
@@ -210,9 +238,7 @@ export const notifyHandler = (options: PipelineSagaOptions): EventHandler => ({
       notification_class: decided.notificationClass,
       ...(decided.subject === null ? {} : { notification_subject: decided.subject }),
       ...(decided.approvalId === undefined ? {} : { approval_id: decided.approvalId }),
-      ...(decided.detail === null
-        ? {}
-        : { notification_detail: boundText(decided.detail, NOTIFICATION_DETAIL_MAX) }),
+      ...(detail === null ? {} : { notification_detail: detail }),
     };
     context.afterCommit(async () => {
       await enqueueOutbound(options.jobs, data);
@@ -220,7 +246,44 @@ export const notifyHandler = (options: PipelineSagaOptions): EventHandler => ({
   },
 });
 
-/** Everything the notification band registers. One entry today; the shape the others have. */
+/**
+ * **A settled approval's message loses its buttons** (WP-65, PROGRESS backlog 202).
+ *
+ * WP-43 posts an approval with Approve / Request changes buttons, and nothing ever edited that
+ * message: once the approval was decided on the task page — or expired at its deadline (WP-56) —
+ * the buttons stayed live, and a press was recorded as `decision_refused: already_decided`. The
+ * aggregate refused correctly; the control lied. So the decision wakes a `pipeline.outbound` duty
+ * that edits the message through `updateMessage` to say how it was settled, and a message with no
+ * buttons is the answer to a press nobody should make.
+ *
+ * Decides nothing about *whether* a message exists — the duty asks the outbox row, on fire, because
+ * the notify duty that posted it may be minutes behind this one.
+ */
+export const approvalSettledHandler = (options: PipelineSagaOptions): EventHandler => ({
+  name: 'notify.approval_settled',
+  priority: NOTIFY_PRIORITY,
+  eventTypes: ['task.approval.decided'],
+  handle: async (context: HandlerContext) => {
+    const event = context.event.event;
+    if (event.type !== 'task.approval.decided') {
+      return;
+    }
+    const data: PipelineOutboundData = {
+      duty: 'approval_settled',
+      project_id: event.payload.project_id,
+      task_id: event.payload.task_id,
+      cause_event_id: event.id,
+      approval_id: event.payload.approval_id,
+      approval_decision: event.payload.decision,
+    };
+    context.afterCommit(async () => {
+      await enqueueOutbound(options.jobs, data);
+    });
+  },
+});
+
+/** Everything the notification band registers. */
 export const notifyHandlers = (options: PipelineSagaOptions): readonly EventHandler[] => [
   notifyHandler(options),
+  approvalSettledHandler(options),
 ];

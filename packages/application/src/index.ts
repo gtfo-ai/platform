@@ -95,12 +95,16 @@ export * from './knowledge/text-search-record.js';
 export * from './maintenance/ports.js';
 export * from './maintenance/scheduler.js';
 // The notification band, the digest and quiet hours (WP-32)
+export * from './notify/approval-settled.js';
 export * from './notify/digest.js';
 export * from './notify/handlers.js';
+export * from './notify/maintenance-report.js';
 export * from './notify/options.js';
+export * from './notify/organisation.js';
 export * from './notify/policy.js';
 export * from './notify/ports.js';
 export * from './notify/render.js';
+export * from './notify/undelivered.js';
 // Onboarding: the wizard's discovery run and the readiness evaluation (WP-21)
 export * from './onboarding/discovery.js';
 export * from './onboarding/evaluate-readiness.js';

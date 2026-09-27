@@ -13,9 +13,14 @@
 import type { Id, IsoDateTime } from '@platform/contracts';
 import { choreTicketKey } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
-import { PLATFORM_TICKET_PROVIDER } from '../pipeline/integrations.js';
+import {
+  createMaintenanceReportSink,
+  type MaintenanceReportSink,
+} from '../notify/maintenance-report.js';
+import { PLATFORM_TICKET_PROVIDER, staticPipelineIntegrations } from '../pipeline/integrations.js';
 import { staticProjectSettings } from '../pipeline/settings.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
+import type { Logger } from '../ports/logger.js';
 import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
 import type { KbHygieneReport, MaintenanceStore, StaleDependency } from './ports.js';
 import {
@@ -97,13 +102,48 @@ const STALE: readonly StaleDependency[] = [
   },
 ];
 
-const harnessWith = (config: Record<string, unknown>): PipelineHarness =>
-  createPipelineHarness({ projectId: PROJECT, settings: { config: config as never } });
+const harnessWith = (
+  config: Record<string, unknown>,
+  options: { readonly chat?: boolean } = {},
+): PipelineHarness =>
+  createPipelineHarness({
+    projectId: PROJECT,
+    settings: { config: config as never },
+    ...(options.chat === true ? { communication: {} } : {}),
+  });
+
+/** Every line a pass logs, by level — what the refusal's level is asserted on (WP-65). */
+interface LoggedLine {
+  readonly level: 'debug' | 'info' | 'warn' | 'error';
+  readonly fields: Readonly<Record<string, unknown>>;
+  readonly message: string;
+}
+const recordingLogger = (): Logger & { readonly lines: LoggedLine[] } => {
+  const lines: LoggedLine[] = [];
+  const at =
+    (level: LoggedLine['level']) =>
+    (fields: Readonly<Record<string, unknown>>, message: string) => {
+      lines.push({ level, fields, message });
+    };
+  return { lines, debug: at('debug'), info: at('info'), warn: at('warn'), error: at('error') };
+};
+
+/** The real sink over the harness — the project's digest and chat binding decide the reader. */
+const sinkOf = (harness: PipelineHarness, logger?: Logger): MaintenanceReportSink =>
+  createMaintenanceReportSink({
+    settings: staticProjectSettings(() => harness.settings),
+    integrations: staticPipelineIntegrations(harness.integrations),
+    unitOfWork: harness.memory,
+    notifications: harness.notifications,
+    ids: harness.ids,
+    clock: { now: () => harness.clock.now() },
+    ...(logger === undefined ? {} : { logger }),
+  });
 
 const pass = async (
   harness: PipelineHarness,
   store: MaintenanceStore,
-  overrides: { readonly timezone?: string } = {},
+  overrides: { readonly timezone?: string; readonly logger?: Logger } = {},
 ) =>
   runMaintenancePass({
     unitOfWork: harness.memory,
@@ -117,6 +157,8 @@ const pass = async (
     timezone: overrides.timezone ?? 'UTC',
     baseUrl: 'https://app.example.test',
     redactor: countingRedactor,
+    report: sinkOf(harness, overrides.logger),
+    ...(overrides.logger === undefined ? {} : { logger: overrides.logger }),
   });
 
 const loadChore = async (harness: PipelineHarness, key: string) =>
@@ -368,6 +410,7 @@ describe('one maintenance pass', () => {
       timezone: 'UTC',
       baseUrl: 'https://app.example.test',
       redactor: countingRedactor,
+      report: sinkOf(harness),
     });
     const handler = harness.jobs.handlers.get(MAINTENANCE_SCHEDULE_QUEUE);
     await handler?.({
@@ -580,6 +623,7 @@ describe('the schedule itself', () => {
       timezone: 'Europe/Prague',
       baseUrl: 'https://app.example.test',
       redactor: countingRedactor,
+      report: sinkOf(harness),
     });
 
     const crons = await harness.jobs.listCronSchedules();
@@ -591,5 +635,141 @@ describe('the schedule itself', () => {
       timezone: 'Europe/Prague',
     });
     expect(harness.jobs.handlers.has(MAINTENANCE_SCHEDULE_QUEUE)).toBe(true);
+  });
+});
+
+/**
+ * **The pass's report reaches the daily digest, and a refusal with a reader is not a `warn`** (WP-65,
+ * PROGRESS backlog 107).
+ *
+ * The pass used to report to a log line alone and re-announce every refused chore type at `warn` on
+ * every daily tick. These cases hold the three halves of the fix: the report is a digest-planned
+ * notification row; a refusal that reached it is logged at `info`; and a refusal with no reader
+ * (no chat binding) stays a `warn`, because the log is then the only place it is said.
+ */
+describe('the pass’s report', () => {
+  const STOCK = {
+    features: {
+      maintenance: { enabled: true, schedule: 'weekly', chores: ['deps', 'flaky', 'docs'] },
+      digest: { enabled: true, at: '09:00', quiet_hours: null },
+    },
+  };
+
+  it('is recorded once for the digest, and its refusals are logged at info because they have a reader', async () => {
+    const harness = harnessWith(STOCK, { chat: true });
+    const logger = recordingLogger();
+    await pass(harness, storeDouble({ stale: STALE }), { logger });
+
+    const reports = harness.notifications.rows.filter(
+      (row) => row.notificationClass === 'maintenance_report',
+    );
+    expect(reports).toHaveLength(1);
+    const report = reports[0];
+    expect(report?.plannedDelivery, 'the digest, at the pass’s own grain').toBe('digest');
+    expect(report?.detail).toContain('Created: deps (1 finding)');
+    expect(report?.detail).toContain('flaky (no_flaky_detection)');
+    expect(report?.detail).toContain('docs (no_drift_detector)');
+
+    const refusals = logger.lines.filter((line) => line.message.includes('cannot perform it'));
+    expect(refusals.map((line) => line.fields.chore).sort()).toEqual(['docs', 'flaky']);
+    expect(new Set(refusals.map((line) => line.level))).toEqual(new Set(['info']));
+  });
+
+  it('is not recorded again in the same period when nothing new happened', async () => {
+    const harness = harnessWith(STOCK, { chat: true });
+    await pass(harness, storeDouble({ stale: STALE }));
+    const logger = recordingLogger();
+    // The next day of the same ISO week: `deps` is `already_created`, the refusals are the same.
+    harness.clock.advance(24 * 60 * 60 * 1000);
+    const second = await pass(harness, storeDouble({ stale: STALE }), { logger });
+
+    expect(second.results[0]?.chores.find((entry) => entry.chore === 'deps')?.outcome.status).toBe(
+      'already_created',
+    );
+    expect(
+      harness.notifications.rows.filter((row) => row.notificationClass === 'maintenance_report'),
+    ).toHaveLength(1);
+    const refusals = logger.lines.filter((line) => line.message.includes('cannot perform it'));
+    expect(refusals).toHaveLength(2);
+    expect(
+      refusals.every((line) => line.level === 'info' && line.fields.report === 'already_reported'),
+    ).toBe(true);
+  });
+
+  it('is recorded again in the same period when a later pass creates a chore', async () => {
+    const harness = harnessWith(STOCK, { chat: true });
+    // Monday: nothing established for `deps`.
+    await pass(harness, storeDouble());
+    harness.clock.advance(24 * 60 * 60 * 1000);
+    // Tuesday: the registry now reports a stale package, and the chore is created — news.
+    await pass(harness, storeDouble({ stale: STALE }));
+    const reports = harness.notifications.rows.filter(
+      (row) => row.notificationClass === 'maintenance_report',
+    );
+    expect(reports).toHaveLength(2);
+    expect(reports[0]?.detail).toContain('Nothing to do: deps');
+    expect(reports[1]?.detail).toContain('Created: deps');
+  });
+
+  it('keeps a refusal at warn when the project has no chat binding, and records nothing', async () => {
+    const harness = harnessWith(STOCK);
+    const logger = recordingLogger();
+    await pass(harness, storeDouble({ stale: STALE }), { logger });
+    expect(harness.notifications.rows).toHaveLength(0);
+    const refusals = logger.lines.filter((line) => line.message.includes('cannot perform it'));
+    expect(refusals).toHaveLength(2);
+    expect(
+      refusals.every((line) => line.level === 'warn' && line.fields.report === 'no_reader'),
+    ).toBe(true);
+  });
+
+  it('keeps a refusal at warn when the project has switched its digest off', async () => {
+    const harness = harnessWith(
+      { features: { ...STOCK.features, digest: { enabled: false } } },
+      { chat: true },
+    );
+    const logger = recordingLogger();
+    await pass(harness, storeDouble(), { logger });
+    expect(
+      harness.notifications.rows.filter((row) => row.notificationClass === 'maintenance_report'),
+    ).toHaveLength(0);
+    expect(
+      logger.lines
+        .filter((line) => line.message.includes('cannot perform it'))
+        .every((line) => line.level === 'warn'),
+    ).toBe(true);
+  });
+
+  it('never stops the pass when publishing fails — the refusal is logged at warn instead', async () => {
+    const harness = harnessWith(STOCK, { chat: true });
+    const logger = recordingLogger();
+    const report = await runMaintenancePass({
+      unitOfWork: harness.memory,
+      store: harness.store,
+      maintenance: storeDouble({ stale: STALE }),
+      settings: staticProjectSettings(() => harness.settings),
+      jobs: harness.jobs,
+      ids: harness.ids,
+      clock: { now: () => harness.clock.now() as IsoDateTime },
+      projects: async () => [PROJECT],
+      timezone: 'UTC',
+      baseUrl: 'https://app.example.test',
+      redactor: countingRedactor,
+      report: {
+        publish: async () => {
+          throw new Error('outbox unavailable');
+        },
+      },
+      logger,
+    });
+    expect(report.created).toBe(1);
+    expect(
+      logger.lines.some((line) => line.message.includes('publishing the pass’s report failed')),
+    ).toBe(true);
+    expect(
+      logger.lines
+        .filter((line) => line.message.includes('cannot perform it'))
+        .every((line) => line.level === 'warn' && line.fields.report === 'failed'),
+    ).toBe(true);
   });
 });

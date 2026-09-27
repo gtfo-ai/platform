@@ -85,6 +85,7 @@ import {
 } from '@platform/application';
 import type { Id } from '@platform/contracts';
 import { mirrorCacheKeyFor } from '../workspace/spec.js';
+import { markMirrorUsed } from './mirror-storage.js';
 
 /**
  * A username and password for `git`'s credential helper.
@@ -128,6 +129,12 @@ export interface GitVaultOptions {
   /** The one seam: everything that is not a process launch is testable without spawning git. */
   readonly git?: GitProcessRunner;
   readonly logger?: Logger;
+  /**
+   * The instant a prepared read stamps on the mirror as its last use (WP-65,
+   * `mirror-storage.ts`). Defaults to the wall clock: the stamp is compared with the same clock by
+   * the eviction, and nothing else reads it.
+   */
+  readonly now?: () => Date;
 }
 
 // ── The process seam ─────────────────────────────────────────────────────────
@@ -572,6 +579,31 @@ const prepareMirrorRead = async (
   const present = await directoryExists(mirror);
 
   /**
+   * The mirror's **last use** (WP-65, Q63): eviction under `APP_KNOWLEDGE_MIRROR_MAX_BYTES` removes
+   * the least recently used mirror first, and this is what "used" means — a read the adapter is
+   * preparing, pinned or not, refreshed or not. It is stamped **twice** (review round 1): here,
+   * before any git work, because a fetch into a mirror the stamp still called idle was exactly
+   * what another process (`app` and `runner` share the volume) could `rm -r` mid-fetch; and again
+   * once the read is prepared, so a fresh clone — which cannot be stamped before it exists, since
+   * `git clone` refuses a non-empty target — carries one too. A stamp that cannot be written costs
+   * the eviction order its accuracy for this mirror and nothing else, so the read goes on and the
+   * failure is named.
+   */
+  const stamp = async (): Promise<void> => {
+    try {
+      await markMirrorUsed(mirror, (options.now ?? (() => new Date()))());
+    } catch (cause) {
+      (options.logger ?? silentLogger).warn(
+        { project_id: request.projectId, err: cause },
+        'knowledge mirror: the last-use stamp could not be written; eviction by last use will read this mirror as older than it is',
+      );
+    }
+  };
+  if (present) {
+    await stamp();
+  }
+
+  /**
    * Skip the fetch only when the pinned commit is already **on the default branch** here.
    *
    * TD-026 says "skipped when the requested commit is already present"; present is not
@@ -600,14 +632,17 @@ const prepareMirrorRead = async (
       }
     } else {
       /**
-       * The mirror is created here and **nothing ever removes it** (Q63).
+       * The mirror is created here (Q63).
        *
        * One bare clone per project appears on that project's first index run, on the operator's
-       * data volume, and there is no ceiling, no eviction and no gauge: BD-012 makes it a
-       * derived cache that is safe to delete by hand, and Q63's recommendation is explicitly to
-       * *not* build a ceiling that would silently evict an active project's mirror at the worst
-       * moment. The residual is therefore disk growth proportional to the sum of the customers'
-       * repositories, stated here because this line is where it happens.
+       * data volume. Since WP-65 it is **measured** — `platform_storage_bytes{component=
+       * "knowledge_mirrors"}` and `knowledge_mirror_bytes{project_id}` (`mirror-storage.ts`) — and
+       * it is removed only under an operator-declared ceiling (`APP_KNOWLEDGE_MIRROR_MAX_BYTES`,
+       * unset by default, so **by default nothing removes it**), least recently used first and never
+       * within an hour of a read: BD-012 makes it a derived cache that is safe to delete, and Q63's
+       * recommendation is explicitly to *not* evict an active project's mirror at the worst moment.
+       * The residual on a stock instance is therefore disk growth proportional to the sum of the
+       * customers' repositories — now on a gauge rather than invisible.
        */
       const clone = await run(['clone', '--mirror', '--', repoUrl, mirror], {
         withCredential: true,
@@ -643,6 +678,8 @@ const prepareMirrorRead = async (
     }
     commit = request.commitSha;
   }
+  // The second stamp (see `stamp` above): the one a fresh clone gets.
+  await stamp();
   return { status: 'ok', commit, refreshed, inMirror };
 };
 

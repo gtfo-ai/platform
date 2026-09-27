@@ -119,19 +119,22 @@ describe('the run credentials reach every sink WP-76 composed them into', () => 
   });
 
   it.each([
-    ['the executor', /^\s*redactor: platformRedactor,$/m],
-    ['the stack it returns', /^\s*platformRedactor,$/m],
+    ['the executor', /^\s*redactor: platformRedactor,$/m, 1],
+    ['the stack it returns', /^\s*platformRedactor,$/m, 1],
+    // Two loaders since WP-65: a project's bindings, and the organisation's own chat account
+    // (`createOrganisationIntegrationsPort`) — both built over the one stack.
     [
-      'the binding loader’s platform redactor',
+      'the binding loaders’ platform redactor',
       /^\s*platformRedactor: options\.stack\.platformRedactor,$/m,
+      2,
     ],
-    ['the stage executor’s artifact write', /^\s*redactor: stack\.platformRedactor,$/m],
-    ['the minter, through the stack', /^\s*runSecrets: options\.stack\.runSecrets,$/m],
-  ])('%s is handed the stack’s redactor or registry', (_sink, line) => {
+    ['the stage executor’s artifact write', /^\s*redactor: stack\.platformRedactor,$/m, 1],
+    ['the minter, through the stack', /^\s*runSecrets: options\.stack\.runSecrets,$/m, 1],
+  ])('%s is handed the stack’s redactor or registry', (_sink, line, sites) => {
     const file = _sink === 'the minter, through the stack' ? 'workspaces.ts' : 'pipeline.ts';
     const source = withoutComments(
       readFileSync(join(repositoryRoot, 'apps/server/src', file), 'utf8'),
     );
-    expect(source.match(new RegExp(line.source, 'gm'))).toHaveLength(1);
+    expect(source.match(new RegExp(line.source, 'gm'))).toHaveLength(sites);
   });
 });

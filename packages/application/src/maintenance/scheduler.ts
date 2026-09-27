@@ -65,6 +65,10 @@ import {
   maintenanceConfigOf,
   renderChoreBrief,
 } from '@platform/domain';
+import type {
+  MaintenanceReportPublication,
+  MaintenanceReportSink,
+} from '../notify/maintenance-report.js';
 import { PLATFORM_TICKET_PROVIDER } from '../pipeline/integrations.js';
 import { enqueueStage } from '../pipeline/jobs.js';
 import type { ProjectSettingsPort } from '../pipeline/settings.js';
@@ -194,6 +198,12 @@ export interface MaintenanceOptions {
    * read into every prompt of the task.
    */
   readonly redactor: SecretRedactor;
+  /**
+   * Where each project's report is published — the project's daily digest (WP-65, PROGRESS backlog
+   * 107). Required: the report is the only answer to *"what did last night's pass do?"*, and it is
+   * what lets a repeated refusal drop to `info` — an optional sink is one production would omit.
+   */
+  readonly report: MaintenanceReportSink;
   readonly logger?: Logger;
 }
 
@@ -274,7 +284,9 @@ export const runMaintenancePass = async (
       : [input.projectId];
   const results: ProjectMaintenanceReport[] = [];
   for (const projectId of projects) {
-    results.push(await scheduleProject(options, projectId));
+    const result = await scheduleProject(options, projectId);
+    await reportProject(options, result);
+    results.push(result);
   }
   const chores = results.flatMap((result) => result.chores);
   const report: MaintenancePassReport = {
@@ -318,8 +330,9 @@ const scheduleProject = async (
 
   /**
    * The refusals are decided **before** any transaction opens, so a build that can perform none of
-   * a project's chore types opens none at all — and so that the log line naming the refusal is the
-   * same whether or not a task was created afterwards (rule 18: the absent case is never quiet).
+   * a project's chore types opens none at all. They are *said* after the pass, by `reportProject`,
+   * because since WP-65 where they are said — the digest, or only the log — depends on whether the
+   * report has a reader (rule 18: the absent case is never quiet).
    */
   const chores: ChoreResult[] = [];
   const performable: MaintenanceChoreType[] = [];
@@ -329,14 +342,12 @@ const scheduleProject = async (
       performable.push(chore);
       continue;
     }
+    // Logged by `reportProject` once the report is published, because the level depends on
+    // whether the refusal has a reader (WP-65).
     chores.push({
       chore,
       outcome: { status: 'refused', reason: refusal.reason, detail: refusal.detail },
     });
-    logger.warn(
-      { project_id: projectId, chore, reason: refusal.reason, period },
-      `the ${chore} chore is configured and this build cannot perform it: ${refusal.detail}`,
-    );
   }
 
   const enqueued: { readonly work: Awaited<ReturnType<typeof applyDecision>>['work'] }[] = [];
@@ -511,6 +522,56 @@ const scheduleProject = async (
     }
   }
   return { projectId, period, blocker: null, chores };
+};
+
+/**
+ * Publishes a project's report and says its refusals at the level their reader earns (WP-65,
+ * PROGRESS backlog 107).
+ *
+ * A refusal reaches a human **in the digest** when the report was recorded or already recorded this
+ * period, and then its log line is `info` — there is a reader, and the daily `warn` it replaces was
+ * 730 lines a year per stock project in the channel an operator watches for real failures. Where the
+ * report has no reader (digest off, no chat binding) the line stays `warn`, because the log is then
+ * the only place it is said (standing rule 18).
+ *
+ * A publication that throws is the report's failure, not the pass's: it is logged with the report's
+ * outcome and the pass goes on to the next project, since the chores it created are already
+ * committed and a failed notification must never be what stops maintenance.
+ */
+const reportProject = async (
+  options: MaintenanceOptions,
+  report: ProjectMaintenanceReport,
+): Promise<void> => {
+  const logger = options.logger ?? silentLogger;
+  let publication: MaintenanceReportPublication | 'failed';
+  try {
+    publication = await options.report.publish(report);
+  } catch (cause) {
+    logger.warn(
+      { project_id: report.projectId, err: cause },
+      'maintenance report: publishing the pass’s report failed; its refusals are logged instead',
+    );
+    publication = 'failed';
+  }
+  const hasReader = publication === 'recorded' || publication === 'already_reported';
+  for (const entry of report.chores) {
+    if (entry.outcome.status !== 'refused') {
+      continue;
+    }
+    const fields = {
+      project_id: report.projectId,
+      chore: entry.chore,
+      reason: entry.outcome.reason,
+      period: report.period,
+      report: publication,
+    };
+    const message = `the ${entry.chore} chore is configured and this build cannot perform it: ${entry.outcome.detail}`;
+    if (hasReader) {
+      logger.info(fields, message);
+    } else {
+      logger.warn(fields, message);
+    }
+  }
 };
 
 /**

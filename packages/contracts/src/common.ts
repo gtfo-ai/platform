@@ -184,9 +184,31 @@ export const notificationClassSchema = z.enum([
    * Posted with Approve / Request changes buttons when the binding can receive a click.
    */
   'approval',
+  /**
+   * What last night's maintenance pass did for the project — created, refused, over budget
+   * (WP-65, PROGRESS backlog 107). Written by the pass itself, **always** planned for the digest:
+   * it is a per-pass report, and the digest is the surface at the pass's own grain. It is therefore
+   * not a class an operator may list as urgent — see {@link urgentNotificationClassSchema}.
+   */
+  'maintenance_report',
 ]);
 
 export type NotificationClass = z.infer<typeof notificationClassSchema>;
+
+/**
+ * The classes `features.digest.urgent` may name (WP-65).
+ *
+ * Every class but `maintenance_report`, which only ever travels in the digest: the pass that writes
+ * it is a cron at 04:35 with nobody to interrupt, and accepting the value would be a stored key that
+ * changes nothing — the defect PROGRESS backlog 58 and 60 are instances of. A configuration that
+ * names it is refused by the schema with the path, which is the loud direction; no configuration
+ * could have named it before this build, because the class did not exist.
+ */
+export const urgentNotificationClassSchema = notificationClassSchema.exclude([
+  'maintenance_report',
+]);
+
+export type UrgentNotificationClass = z.infer<typeof urgentNotificationClassSchema>;
 
 /** Task state machine (technical/02). `returned` carries the target stage in the payload. */
 export const taskStateSchema = z.enum([

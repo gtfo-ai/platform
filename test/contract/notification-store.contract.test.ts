@@ -19,6 +19,7 @@ runNotificationStoreContract({
     tx: { adapter: 'memory' } as never,
     projectId: PROJECT,
     taskId: TASK,
+    approvalId: '00000000-0000-4000-8000-0000000000e1' as Id,
     cleanup: async () => {},
   }),
 });

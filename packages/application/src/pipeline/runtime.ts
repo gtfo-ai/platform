@@ -64,8 +64,8 @@ import { dependencyGateHandlers } from './dependency-gate.js';
 import { epicSplitHandlers } from './epic-split.js';
 import {
   declarePipelineQueues,
+  type OutboundJobData,
   type PipelineJobOptions,
-  type PipelineOutboundData,
   type ReviewWindowData,
   reviewWindowHandler,
   type StageExecuteData,
@@ -391,7 +391,7 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
         }),
       );
       workers.push(
-        await options.jobs.work<PipelineOutboundData>({
+        await options.jobs.work<OutboundJobData>({
           queue: JOB_QUEUES.pipelineOutbound,
           handler: pipelineOutboundHandler(outboundOptions),
           /**

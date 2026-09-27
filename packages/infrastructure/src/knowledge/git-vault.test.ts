@@ -15,7 +15,7 @@
  * writes the right rows and leaves the wrong ones alone.
  */
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -41,6 +41,7 @@ import {
   unavailableRepositoryFileSource,
   unavailableVaultSource,
 } from './git-vault.js';
+import { evictKnowledgeMirrors, markMirrorUsed } from './mirror-storage.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -399,6 +400,40 @@ describe('createGitVaultSource', () => {
     for (const document of snapshot.documents) {
       expect(document.contentHash).toBe(blobs.get(document.path));
     }
+  });
+});
+
+/**
+ * **A mirror being prepared is not evicted** (WP-65 review round 1). Another process on the shared
+ * `knowledge` volume may evict while this one fetches; the read stamps the mirror **before** it runs
+ * git, so a mirror whose last stamp was hours old is not "idle" the moment its fetch starts. The
+ * eviction here runs *inside* the fetch, through the process seam, at the worst moment.
+ */
+describe('a mirror being prepared', () => {
+  it('is stamped before the fetch, so an eviction during the fetch does not remove it', async () => {
+    expectOk(await read());
+    const mirror = path.join(mirrorRoot, `p${PROJECT.replaceAll('-', '')}`);
+    const hoursAgo = new Date(Date.now() - 10 * 60 * 60 * 1000);
+    await markMirrorUsed(mirror, hoursAgo);
+    await utimes(mirror, hoursAgo, hoursAgo);
+
+    let evicted: readonly string[] | null = null;
+    const evictingDuringFetch: GitProcessRunner = {
+      run: async (args, options) => {
+        if (args.includes('update') && evicted === null) {
+          const eviction = await evictKnowledgeMirrors({
+            root: mirrorRoot,
+            ceilingBytes: 1,
+            now: new Date(),
+          });
+          evicted = eviction?.evicted.map((entry) => entry.key) ?? [];
+        }
+        return nodeGitProcessRunner.run(args, options);
+      },
+    };
+    const snapshot = expectOk(await read({ git: evictingDuringFetch }));
+    expect(evicted, 'the eviction ran during the fetch').toEqual([]);
+    expect(snapshot.documents.length).toBeGreaterThan(0);
   });
 });
 

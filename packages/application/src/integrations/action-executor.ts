@@ -49,6 +49,16 @@
  * per-integration rate limiter. A second platform-owned call meets this decision instead of
  * re-deriving it.
  *
+ * **The third shape: an organisation-scoped call** (WP-65, PROGRESS backlog 80). It has an
+ * `integrations` row and a credential but **no binding** — the organisation budget's alarm, posted
+ * to the channel the organisation's own communication account names. It goes through this door
+ * like a binding's call, and everything above applies unchanged, because everything above is keyed
+ * by `integrations.id`: the audit row names that **account** and carries `project_id: null`, the
+ * idempotency record and the rate-limit budget are the account's. That is the honest attribution —
+ * the account's credential and no project's configuration was in scope — and it is why the request
+ * leaves `projectId` null rather than borrowing a project the account happens to be bound to. The
+ * account is built by `createOrganisationIntegrationsLoader` (`@platform/integrations`).
+ *
  * ## What the type system enforces, and what the runtime enforces after it
  *
  * A **mutating** request must supply `mode`, `shadowResult` and `describeResult`. All three are

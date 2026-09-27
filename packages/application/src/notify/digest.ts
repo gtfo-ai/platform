@@ -96,6 +96,16 @@ export const DIGEST_ITEM_LIMIT = 50;
  */
 export const DIGEST_IMMEDIATE_GRACE_MS = 120_000;
 
+/**
+ * `notify.digest`'s retry policy, named for the reason `PIPELINE_OUTBOUND_RETRY` is: the
+ * undelivered gauge derives how long a digest row may legitimately wait from it (WP-65).
+ */
+export const DIGEST_RETRY = {
+  retryLimit: 2,
+  retryDelaySeconds: 60,
+  retryBackoff: true,
+} as const;
+
 /** `at` minus `ms`, in the platform's wire format. The clock is the caller's. */
 const instantBefore = (at: IsoDateTime, ms: number): IsoDateTime =>
   new Date(Date.parse(at) - ms).toISOString() as IsoDateTime;
@@ -238,9 +248,7 @@ export const startDigestRuntime = async (options: NotifyOptions): Promise<JobWor
   await options.jobs.defineQueue({
     name: JOB_QUEUES.notifyDigest,
     policy: 'exclusive',
-    retryLimit: 2,
-    retryDelaySeconds: 60,
-    retryBackoff: true,
+    ...DIGEST_RETRY,
   });
   await options.jobs.scheduleCron({
     queue: JOB_QUEUES.notifyDigest,

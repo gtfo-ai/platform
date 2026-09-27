@@ -28,12 +28,16 @@
  *  - **`flaky`** — refused. product/04:65 says it in the platform's own words: *"The tamper check,
  *    the reproduction gate and flaky detection are not implemented"*, so no signal exists to brief a
  *    run on.
- *  - **`lint`** — refused. It was refused for PROGRESS backlog **49** — no run of any role could
- *    execute a project command, so a lint-debt run could not run the linter it exists for — and
- *    **WP-54 closed that** (Q69 (ii): the implementation baseline carries the project's declared
- *    commands). Turning the chore on is a change to what a scheduled chore *does* — its brief, its
- *    finding and its budget — and is recorded as discovered work rather than switched on in the
- *    change that made it possible, so the refusal stands and its reason says why.
+ *  - **`lint`** — refused, and since WP-65 (PROGRESS backlog 141) the refusal names what is
+ *    actually missing. It was first refused for backlog **49** — no run of any role could execute a
+ *    project command — and **WP-54 closed that** (Q69 (ii)), so the old code `no_project_command`
+ *    named a condition that was no longer true. What is missing now is a **finding source**: the two
+ *    performed chores are briefed from evidence the platform already holds (a hygiene report, the
+ *    dependency gate's registry answers) and create no task when there is none, while nothing on
+ *    this build records a project's lint output — so a lint chore would be a task briefed on
+ *    nothing, spending the maintenance budget to find out whether there is work. Turning it on is a
+ *    decision about what a scheduled chore does (its brief, its finding, its budget), not a missing
+ *    capability; the code is `no_lint_finding_source` and the sentence says so.
  *
  * A refusal here is **not** a silent skip anywhere: the scheduler logs it by name, reports it, and
  * the wizard's own feature card names which chore types this build performs.
@@ -64,7 +68,7 @@ export { MAINTENANCE_CHORE_TYPES };
 export type MaintenanceChoreRefusal =
   | 'no_drift_detector'
   | 'no_flaky_detection'
-  | 'no_project_command';
+  | 'no_lint_finding_source';
 
 export interface MaintenanceChoreEntry {
   /** What a task of this type is briefed to do, in one sentence. */
@@ -102,9 +106,9 @@ export const MAINTENANCE_CHORES = {
   },
   lint: {
     does: 'pay down lint debt',
-    refusal: 'no_project_command',
+    refusal: 'no_lint_finding_source',
     detail:
-      'this build schedules no lint-debt chore: it was refused because no run could execute a project command (PROGRESS backlog 49), which WP-54 closed, and turning the chore on is recorded as a change of its own rather than made silently',
+      'this build schedules no lint-debt chore: a chore is briefed from findings the platform already holds, and nothing records a project’s lint output — a run can execute the project’s declared lint command since WP-54, so what is missing is a finding source, not a capability',
   },
   kb: {
     does: 'clear the knowledge-base findings the nightly hygiene pass recorded',

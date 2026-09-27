@@ -32,6 +32,13 @@ export interface Metrics {
   readonly eventDispatchPending: Gauge<never>;
   /** Events that spent their dispatch attempt bound and left the queue (WP-49). */
   readonly eventDispatchDeadLettered: Gauge<never>;
+  /** Notifications nobody was told about past their own retry window, by plan (WP-65). */
+  readonly notificationsUndelivered: Gauge<'planned'>;
+  /** The instance's storage, by component, and the total of the components it names (WP-65). */
+  readonly storageBytes: Gauge<'component'>;
+  readonly storageTotalBytes: Gauge<'components'>;
+  /** One knowledge mirror's bytes, per project (WP-65, Q63). */
+  readonly knowledgeMirrorBytes: Gauge<'project_id'>;
   /** Sets the gauges that have to be sampled rather than incremented. Called on scrape. */
   readonly collect: () => Promise<void>;
 }
@@ -41,9 +48,45 @@ export interface MetricsOptions {
   readonly pendingDispatch?: () => Promise<number>;
   /** The same, for the dead letters (WP-49). Absent and present together with `pendingDispatch`. */
   readonly deadLettered?: () => Promise<number>;
+  /**
+   * The undelivered notifications past their plan's retry window (WP-65, PROGRESS backlog 81).
+   * Absent and present together with `pendingDispatch`: it is the notify band's half of the same
+   * question — *what did the platform decide to do and not do* — and is registered beside it.
+   */
+  readonly undeliveredNotifications?: () => Promise<{
+    readonly immediate: number;
+    readonly digest: number;
+  }>;
+  /**
+   * The storage gauge's two lines (WP-65, Q63, product/19 §20): the database's bytes, and the
+   * knowledge mirrors' — `null` for a process with no `APP_KNOWLEDGE_MIRROR_ROOT`, which then
+   * exports the database line alone and **no total**, because a total that silently left the
+   * mirrors out is the one-number-and-then-out-of-disk-somewhere-else answer Q63 refuses.
+   */
+  readonly storage?: {
+    readonly database: () => Promise<number>;
+    readonly mirrors:
+      | (() => Promise<{
+          readonly totalBytes: number;
+          readonly mirrors: readonly { readonly projectId: string; readonly bytes: number }[];
+        } | null>)
+      | null;
+  };
+  /**
+   * Told when an isolated sampler throws (WP-65 review round 2): its series is then absent from the
+   * scrape, and without a log line an operator could not tell a failing measurement from a gauge
+   * this process never registers.
+   */
+  readonly onSamplerError?: (
+    sampler: 'undelivered_notifications' | 'storage',
+    error: unknown,
+  ) => void;
   /** Node process metrics (heap, event loop lag, handles). @default true */
   readonly defaultMetrics?: boolean;
 }
+
+/** The label value of the total: the components it is the sum of, so a reader need not guess. */
+export const STORAGE_TOTAL_COMPONENTS = 'database+knowledge_mirrors';
 
 /** Buckets for a web API: sub-millisecond is noise, anything over 10 s is one bucket. */
 const DURATION_BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10];
@@ -108,6 +151,79 @@ export const createMetrics = (options: MetricsOptions = {}): Metrics => {
     registers: options.deadLettered === undefined ? [] : [registry],
   });
 
+  /**
+   * **Notifications nobody was told about** (WP-65, PROGRESS backlog 81) — a metric, not a screen.
+   *
+   * `delivered_at` is the only column that says a human was told, and until this gauge nothing
+   * read it to ask who was not. It counts undelivered rows **older than their plan's own retry
+   * window** (`undeliveredNotificationBounds`), so a delivery still in flight or a digest line held
+   * until the morning is not a failure here. On the shipped defaults (quiet hours off) the
+   * `immediate` series is exactly the failures nothing will retry: a revoked chat token shows up
+   * here instead of as an absence of messages.
+   *
+   * Labelled, so a process that does not sample it exports no series at all rather than a `0` that
+   * reads as a measurement.
+   */
+  const notificationsUndelivered = new Gauge({
+    name: 'notifications_undelivered',
+    help: 'Chat notifications not delivered after their plan’s retry window (immediate: pipeline.outbound; digest: a day plus the digest job), by planned delivery (WP-65).',
+    labelNames: ['planned'] as const,
+    registers: options.undeliveredNotifications === undefined ? [] : [registry],
+  });
+
+  /**
+   * **The storage gauge** (WP-65, Q63, product/19 §20): database and knowledge-mirror bytes as two
+   * lines under one total, the mirrors broken down per project.
+   *
+   * Two lines because they grow for different reasons — the database with the platform's own
+   * activity (transcripts, events), a mirror with the size of a customer's repository — and an
+   * operator who sees one number and then runs out of disk somewhere else has been told the wrong
+   * thing. The total is labelled with the components it sums and exported **only** when both were
+   * measured on this scrape.
+   */
+  const storageBytes = new Gauge({
+    name: 'platform_storage_bytes',
+    help: 'Bytes the instance stores, by component: database (pg_database_size) and knowledge_mirrors (APP_KNOWLEDGE_MIRROR_ROOT, allocated bytes) (WP-65).',
+    labelNames: ['component'] as const,
+    registers: options.storage === undefined ? [] : [registry],
+  });
+  const storageTotalBytes = new Gauge({
+    name: 'platform_storage_total_bytes',
+    help: 'The sum of the platform_storage_bytes components named in the label; exported only when every one of them was measured (WP-65).',
+    labelNames: ['components'] as const,
+    registers: options.storage?.mirrors == null ? [] : [registry],
+  });
+  const knowledgeMirrorBytes = new Gauge({
+    name: 'knowledge_mirror_bytes',
+    help: 'One project’s bare knowledge mirror under APP_KNOWLEDGE_MIRROR_ROOT, allocated bytes (WP-65, Q63).',
+    labelNames: ['project_id'] as const,
+    registers: options.storage?.mirrors == null ? [] : [registry],
+  });
+
+  /** The storage gauge's reading: every series rebuilt from this scrape (WP-65). */
+  const sampleStorage = async (storage: NonNullable<MetricsOptions['storage']>): Promise<void> => {
+    const database = await storage.database();
+    storageBytes.set({ component: 'database' }, database);
+    if (storage.mirrors === null) {
+      return;
+    }
+    const mirrors = await storage.mirrors();
+    // Every series is rebuilt from this scrape's reading, so an evicted mirror's line disappears
+    // rather than keeping its last value, and an unreadable root exports no mirror line and no
+    // total — absent, not zero (standing rule 16).
+    knowledgeMirrorBytes.reset();
+    storageTotalBytes.reset();
+    if (mirrors === null) {
+      storageBytes.remove({ component: 'knowledge_mirrors' });
+      return;
+    }
+    storageBytes.set({ component: 'knowledge_mirrors' }, mirrors.totalBytes);
+    for (const mirror of mirrors.mirrors) {
+      knowledgeMirrorBytes.set({ project_id: mirror.projectId }, mirror.bytes);
+    }
+    storageTotalBytes.set({ components: STORAGE_TOTAL_COMPONENTS }, database + mirrors.totalBytes);
+  };
+
   return {
     registry,
     httpRequestDuration,
@@ -115,12 +231,41 @@ export const createMetrics = (options: MetricsOptions = {}): Metrics => {
     sseFramesSent,
     eventDispatchPending,
     eventDispatchDeadLettered,
+    notificationsUndelivered,
+    storageBytes,
+    storageTotalBytes,
+    knowledgeMirrorBytes,
     collect: async () => {
       if (options.pendingDispatch !== undefined) {
         eventDispatchPending.set(await options.pendingDispatch());
       }
       if (options.deadLettered !== undefined) {
         eventDispatchDeadLettered.set(await options.deadLettered());
+      }
+      /**
+       * The WP-65 samplers are each **isolated** (review round 1): one that throws exports no series
+       * for its gauges — absent, never a stale value or a zero (standing rule 16) — and does not
+       * fail the scrape, so an unreadable mirror root cannot take `event_dispatch_pending` with it.
+       */
+      if (options.undeliveredNotifications !== undefined) {
+        try {
+          const counts = await options.undeliveredNotifications();
+          notificationsUndelivered.set({ planned: 'immediate' }, counts.immediate);
+          notificationsUndelivered.set({ planned: 'digest' }, counts.digest);
+        } catch (error) {
+          notificationsUndelivered.reset();
+          options.onSamplerError?.('undelivered_notifications', error);
+        }
+      }
+      if (options.storage !== undefined) {
+        try {
+          await sampleStorage(options.storage);
+        } catch (error) {
+          storageBytes.reset();
+          storageTotalBytes.reset();
+          knowledgeMirrorBytes.reset();
+          options.onSamplerError?.('storage', error);
+        }
       }
     },
   };

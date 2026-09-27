@@ -28,7 +28,7 @@
  *  6. **Deliver, or leave it for the digest.** An immediate delivery that throws leaves the row
  *     undelivered, which means the next digest carries it: a failure is a delay, never a loss.
  */
-import type { Id, IsoDateTime, NotificationClass, TaskMode } from '@platform/contracts';
+import type { Id, IsoDateTime, JsonObject, NotificationClass, TaskMode } from '@platform/contracts';
 import { notificationClassSchema } from '@platform/contracts';
 import { isUrgentNotification, notificationDelivery, toApprovalRecord } from '@platform/domain';
 import {
@@ -38,10 +38,13 @@ import {
   noRunScopedSecrets,
 } from '../pipeline/integrations.js';
 import type { PipelineOutboundData } from '../pipeline/jobs.js';
+import type { MessageRef } from '../ports/integrations/communication.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
+import { settleApprovalMessage } from './approval-settled.js';
 import type { NotifyOptions } from './options.js';
 import { digestSettingsOf, localMinutesOf } from './policy.js';
+import { awaitsImmediateRetry } from './ports.js';
 import { notificationBody, notificationDraft } from './render.js';
 
 /** The classes a task with no human-visible ticket is not worth announcing. */
@@ -169,10 +172,10 @@ export const runNotification = async (
     detail: redactedDetail.value,
   });
 
-  const id = options.ids.next();
+  const fresh = options.ids.next();
   const recorded = await options.unitOfWork.transaction(async (scope) =>
     options.notifications.record(scope.tx, {
-      id,
+      id: fresh,
       projectId,
       taskId: stored?.task.id ?? null,
       notificationClass,
@@ -185,16 +188,41 @@ export const runNotification = async (
       mode,
       createdAt: at,
       redactionCount: redactedDetail.count + redactedSubject.count + redactedUrl.count,
+      // WP-65 (backlog 202): which approval the message asks about, so a later decision can find it.
+      ...(approval === null ? {} : { approvalId: approval.approval.id }),
     }),
   );
+  /**
+   * **A duplicate is not a delivery** (WP-65 review round 1, the same shape as
+   * `organisation.ts`). The row is recorded before the provider is called, so a provider failure
+   * makes pg-boss retry this job into a `record` that answers `false`. For a project with the
+   * digest **on**, the next digest would carry the row anyway (late, not lost); for one that
+   * switched it **off**, nothing would, and the notification had one attempt. So the
+   * retry reads the row back and delivers an undelivered, unclaimed `immediate` one under the same
+   * idempotency keys, which the executor replays if the first attempt had in fact succeeded.
+   *
+   * **Residual, stated** (review round 2): on a digest-on project a retry that lands after
+   * `DIGEST_IMMEDIATE_GRACE_MS` can read the row unclaimed an instant before a digest tick claims
+   * it, and then both post it — one duplicate line, never a lost one. `markDelivered` does not
+   * guard on `delivered_at is null`, so the later of the two writes wins the row's delivery record.
+   */
+  let id = fresh;
+  let plan = delivery;
   if (!recorded) {
-    logger.debug(
-      { project_id: projectId, cause_event_id: causeEventId },
-      'notify: this notification is already recorded',
+    const existing = await options.unitOfWork.transaction(async (scope) =>
+      options.notifications.findByCause(scope.tx, { projectId, causeEventId, notificationClass }),
     );
-    return;
+    if (!awaitsImmediateRetry(existing)) {
+      logger.debug(
+        { project_id: projectId, cause_event_id: causeEventId },
+        'notify: this notification is already delivered or held for the digest',
+      );
+      return;
+    }
+    id = existing.id;
+    plan = existing.plannedDelivery;
   }
-  if (delivery === 'digest') {
+  if (plan === 'digest') {
     logger.debug(
       { project_id: projectId, notification_class: notificationClass },
       'notify: held for the next digest (quiet hours)',
@@ -204,6 +232,8 @@ export const runNotification = async (
 
   const chats = communicationWrites(integrations);
   const context = { projectId, taskId: stored?.task.id ?? null, mode };
+  /** The posted approval's address, when it was posted with buttons (WP-65, backlog 202). */
+  let buttonsAt: MessageRef | null = null;
   const body = notificationBody(draft);
   const idempotencyKey = `notify:${causeEventId}:${notificationClass}`;
   if (stored === null) {
@@ -246,7 +276,7 @@ export const runNotification = async (
        * residual is named in PROGRESS under WP-43 rather than implied here.
        */
       if (chat.port.capabilities().buttons) {
-        await chats.approval(
+        buttonsAt = await chats.approval(
           {
             thread,
             approval: toApprovalRecord(approval.approval),
@@ -274,11 +304,33 @@ export const runNotification = async (
     }
   }
 
+  /**
+   * The address is **redacted** before it is stored, like everything else this row holds (a
+   * provider's own ids are provider text). A redaction inside an id would make the later edit miss
+   * its message and fail `not_found` — the loud direction, and a case no provider's id shape reaches.
+   */
+  const messageRef =
+    buttonsAt === null
+      ? undefined
+      : (chat.redactor.redactJson(buttonsAt as unknown as JsonObject)
+          .value as unknown as MessageRef);
   await options.unitOfWork.transaction(async (scope) =>
     options.notifications.markDelivered(scope.tx, {
       id,
       at: options.clock.now() as IsoDateTime,
       via: 'immediate',
+      ...(messageRef === undefined ? {} : { messageRef }),
     }),
   );
+
+  if (buttonsAt !== null && approval !== null) {
+    /**
+     * **The race's second end** (`approval-settled.ts`): the approval was pending when this duty
+     * read it, and a person or the deadline may have settled it while the buttons were being
+     * posted — in which case the settled duty already ran, found no address, and stopped. So ask
+     * again now that the address is recorded; the shared idempotency key makes a double edit a
+     * replay.
+     */
+    await settleApprovalMessage(options, { projectId, approvalId: approval.approval.id });
+  }
 };

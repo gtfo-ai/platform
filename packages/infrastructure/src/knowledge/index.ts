@@ -9,6 +9,7 @@
 export * from './ctags.js';
 export * from './filesystem-vault.js';
 export * from './git-vault.js';
+export * from './mirror-storage.js';
 export * from './postgres-code-map-store.js';
 export * from './postgres-knowledge-store.js';
 export * from './postgres-proposal-store.js';

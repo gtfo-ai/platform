@@ -236,6 +236,8 @@ const compose = async (options: { readonly mirrorRoot?: string | null } = {}) =>
     secretKey: SECRET_KEY,
     registry,
     mirrorRoot: options.mirrorRoot === undefined ? mirrorRoot : options.mirrorRoot,
+    // WP-65: no ceiling, the shipped default — this tier is about the index, not eviction.
+    mirrorMaxBytes: null,
     logger: recordingLogger(),
   });
 

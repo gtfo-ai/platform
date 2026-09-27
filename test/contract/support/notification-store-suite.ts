@@ -30,6 +30,8 @@ export interface NotificationStoreHarness {
     readonly projectId: Id;
     /** A task of that project, or `null` for a store that does not enforce the reference. */
     readonly taskId: Id | null;
+    /** An approval on that task, for the message-address cases (WP-65). */
+    readonly approvalId: Id;
     cleanup(): Promise<void>;
   }>;
 }
@@ -257,6 +259,75 @@ export const runNotificationStoreContract = (harness: NotificationStoreHarness):
         redactionCount: 2,
         title: recorded.title,
         detail: recorded.detail,
+      });
+    });
+
+    /**
+     * **An organisation-scoped row still deduplicates** (WP-65, PROGRESS backlog 80, criterion 2).
+     * PostgreSQL's default `NULLS DISTINCT` would have made two rows with a null project never equal
+     * — the dedup guarantee gone for exactly the rows that became organisation-scoped. Migration
+     * 0051 declares the key `nulls not distinct`, and the in-memory store keys `null` as a value.
+     */
+    it('records an organisation-scoped notification once per cause and class', async () => {
+      const first = entry({ projectId: null, notificationClass: 'budget_exhausted' });
+      expect(await store.record(tx, first)).toBe(true);
+      expect(await store.record(tx, { ...first, id: nextId() }), 'a replay is refused').toBe(false);
+      // The same cause and class for a project is a different notification.
+      expect(await store.record(tx, { ...first, id: nextId(), projectId: context.projectId })).toBe(
+        true,
+      );
+    });
+
+    it('finds a row by its key, a null project included, and nothing for another key', async () => {
+      const org = entry({ projectId: null, notificationClass: 'budget_exhausted' });
+      await store.record(tx, org);
+      const key = { causeEventId: org.causeEventId, notificationClass: org.notificationClass };
+      expect(await store.findByCause(tx, { projectId: null, ...key })).toMatchObject({
+        id: org.id,
+        projectId: null,
+        deliveredAt: null,
+      });
+      expect(await store.findByCause(tx, { projectId: context.projectId, ...key })).toBeNull();
+    });
+
+    it('never lists an organisation-scoped row for a project digest', async () => {
+      await store.record(tx, entry({ projectId: null, notificationClass: 'budget_exhausted' }));
+      const listed = await store.projectsAwaitingDigest(tx, {
+        before: '2026-06-02T09:00:00.000Z' as IsoDateTime,
+        limit: 10,
+      });
+      expect(listed).not.toContain(null);
+    });
+
+    /** WP-65, backlog 202: the address of a posted approval, found again by the approval. */
+    it('finds an approval’s message by the approval, once the delivery recorded its address', async () => {
+      const posted = entry({
+        notificationClass: 'approval',
+        plannedDelivery: 'immediate',
+        taskId: context.taskId,
+        approvalId: context.approvalId,
+      });
+      await store.record(tx, posted);
+      expect(await store.approvalMessage(tx, context.approvalId), 'no address yet').toBeNull();
+
+      const ref = {
+        provider: 'fake-chat',
+        channel: '#agentic',
+        message_id: 'm-7',
+        thread_id: 't-1',
+        url: null,
+      };
+      await store.markDelivered(tx, {
+        id: posted.id,
+        at: '2026-06-01T23:01:00.000Z' as IsoDateTime,
+        via: 'immediate',
+        messageRef: ref,
+      });
+      const found = await store.approvalMessage(tx, context.approvalId);
+      expect(found).toMatchObject({
+        id: posted.id,
+        approvalId: context.approvalId,
+        messageRef: ref,
       });
     });
 

@@ -38,8 +38,10 @@
  *    both refuse if a later change tries (`events/open-transaction.ts`).
  */
 import { type AskMirrorOptions, runAskMirror } from '../ask/mirror.js';
+import { runApprovalSettled } from '../notify/approval-settled.js';
 import { runNotification } from '../notify/duty.js';
 import type { NotifyOptions } from '../notify/options.js';
+import { runOrganisationNotification } from '../notify/organisation.js';
 import type { JobHandler } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
@@ -55,7 +57,7 @@ import { runCoverage } from './coverage.js';
 import { type DeliveryMeasuresOptions, runBugTrace, runMergeMeasure } from './delivery-measures.js';
 import { type DependencyGateOptions, runDependencyGate } from './dependency-gate.js';
 import { runBreakdownCreate, runSpikeReport } from './epic-split.js';
-import type { PipelineOutboundData } from './jobs.js';
+import type { OutboundJobData } from './jobs.js';
 import { runReviewOnlyCheck, runReviewOnlyObservation, runReviewOnlyPost } from './review-only.js';
 import { type RiskRoutingOptions, runRiskRouting } from './risk-routing.js';
 import { type PipelineSagaOptions, runIntakeCheck } from './saga.js';
@@ -88,10 +90,15 @@ export interface PipelineOutboundOptions
  */
 export const pipelineOutboundHandler = (
   options: PipelineOutboundOptions,
-): JobHandler<PipelineOutboundData> => {
+): JobHandler<OutboundJobData> => {
   const logger: Logger = options.logger ?? silentLogger;
   return async (job) => {
     const { data } = job;
+    if (data.duty === 'notify_organisation') {
+      // The one duty with no project (WP-65): narrowed here, before anything reads `project_id`.
+      await runOrganisationNotification(options, data);
+      return;
+    }
     switch (data.duty) {
       case 'intake_check':
         await runIntakeCheck(options, data);
@@ -137,6 +144,9 @@ export const pipelineOutboundHandler = (
         return;
       case 'notify':
         await runNotification(options, data);
+        return;
+      case 'approval_settled':
+        await runApprovalSettled(options, data);
         return;
       case 'ask_answer':
         await runAskMirror(options, data);

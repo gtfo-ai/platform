@@ -143,6 +143,12 @@ export interface PipelineOutboundData {
     | 'shadow_report'
     /** WP-32, the notify band: say one thing in the project's chat channel. */
     | 'notify'
+    /**
+     * WP-65, PROGRESS backlog 202: an approval posted with buttons was decided or expired, so the
+     * message is edited through `updateMessage` to say so — its buttons are a control that lies
+     * once the aggregate has settled. `approval_id` names it; the row holds the rest.
+     */
+    | 'approval_settled'
     /** WP-31, ask-the-task: mirror an answer into the ticket thread (product/10:57). */
     | 'ask_answer'
     /**
@@ -277,7 +283,12 @@ export interface PipelineOutboundData {
   /** Platform text naming what the notification is about when there is no task — a budget window. */
   readonly notification_subject?: string;
   /**
-   * `notify` with class `approval` only (WP-43): which approval. The duty reloads the row and
+   * `approval_settled` only (WP-65): how the approval was settled, from the event — the one fact
+   * the edited message states that the row, reloaded on fire, must agree with.
+   */
+  readonly approval_decision?: string;
+  /**
+   * `notify` with class `approval` (WP-43), and `approval_settled` (WP-65): which approval. The duty reloads the row and
    * posts nothing for one that is no longer pending — a timer and a person may both have got there
    * first, and a button on a decided approval is the dead control WP-32 refused to ship.
    */
@@ -301,7 +312,40 @@ export interface PipelineOutboundData {
  * what it should do from committed state rather than trusting the payload.
  */
 export const enqueueOutbound = async (jobs: Jobs, data: PipelineOutboundData): Promise<void> => {
-  await jobs.enqueue<PipelineOutboundData>({ queue: JOB_QUEUES.pipelineOutbound, data });
+  await jobs.enqueue<OutboundJobData>({ queue: JOB_QUEUES.pipelineOutbound, data });
+};
+
+/**
+ * The one outbound duty with **no project** — an organisation-scoped notification (WP-65, PROGRESS
+ * backlog 80).
+ *
+ * A type of its own rather than a `PipelineOutboundData` with an absent `project_id`, because every
+ * other duty reads `project_id` and a field that is optional for one duty is optional for all of
+ * them: twenty-odd `data.project_id as Id` casts would then compile over `undefined`. Here the
+ * duty name is the discriminant, the queue handler narrows on it before anything reads a project,
+ * and this payload has no `project_id` to read.
+ *
+ * It carries what `notify` carries for a budget window — the class and the event's own two numbers
+ * as platform text — and nothing a row could answer.
+ */
+export interface OrganisationOutboundData {
+  readonly duty: 'notify_organisation';
+  readonly cause_event_id: string;
+  readonly notification_class: string;
+  readonly notification_subject?: string;
+  readonly notification_detail?: string;
+  readonly [key: string]: unknown;
+}
+
+/** Everything `pipeline.outbound` carries: a project's duty, or the organisation's one. */
+export type OutboundJobData = PipelineOutboundData | OrganisationOutboundData;
+
+/** {@link enqueueOutbound} for the organisation's duty; the same queue and the same `afterCommit` rule. */
+export const enqueueOrganisationOutbound = async (
+  jobs: Jobs,
+  data: OrganisationOutboundData,
+): Promise<void> => {
+  await jobs.enqueue<OutboundJobData>({ queue: JOB_QUEUES.pipelineOutbound, data });
 };
 
 export const declarePipelineQueues = async (jobs: Jobs): Promise<void> => {
@@ -327,10 +371,51 @@ export const declarePipelineQueues = async (jobs: Jobs): Promise<void> => {
     // `standard`, not `stately`: see `JOB_QUEUES.pipelineOutbound`. A dropped wake-up would take
     // the event's blocker brief with it, and that is the one thing a render cannot re-derive.
     policy: 'standard',
-    retryLimit: 2,
-    retryDelaySeconds: 30,
-    retryBackoff: true,
+    ...PIPELINE_OUTBOUND_RETRY,
   });
+};
+
+/**
+ * `pipeline.outbound`'s retry policy, named so that the one number derived from it cannot drift
+ * from it (WP-65): {@link retryWindowMs} is what the `notifications_undelivered` gauge waits before
+ * it counts an immediate notification nobody was told about.
+ */
+export const PIPELINE_OUTBOUND_RETRY = {
+  retryLimit: 2,
+  retryDelaySeconds: 30,
+  retryBackoff: true,
+} as const;
+
+/** The `Jobs` port's default `expireInSeconds`, which `pipeline.outbound` does not override. */
+export const DEFAULT_JOB_EXPIRE_SECONDS = 15 * 60;
+
+/**
+ * The longest a queue can still be trying a job after it was enqueued — **every** attempt's
+ * expiry plus every retry delay, at the worst case of each.
+ *
+ * The delays are pg-boss's own backoff, read from its source rather than assumed (`pg-boss@12.30.0`,
+ * `dist/plans.js`, the `start_after` expression of the fail path): retry *n* (counting from zero)
+ * waits `retry_delay × (2^(n+1)/2 + 2^(n+1)/2 × random())`, so at most `retry_delay × 2^(n+1)`;
+ * without backoff it waits `retry_delay`. An attempt may also hold the job for its whole expiry
+ * before the queue calls it lost and retries it — that term dominates, and it is why the window of
+ * `pipeline.outbound` is about 48 minutes rather than the three the delays alone would suggest.
+ * An over-estimate is the safe direction: a gauge that waits too long reports a failure late, one
+ * that waits too little reports a delivery that is still in flight as a failure.
+ */
+export const retryWindowMs = (policy: {
+  readonly retryLimit: number;
+  readonly retryDelaySeconds: number;
+  readonly retryBackoff: boolean;
+  readonly expireInSeconds?: number;
+}): number => {
+  const expire = policy.expireInSeconds ?? DEFAULT_JOB_EXPIRE_SECONDS;
+  let delays = 0;
+  for (let retry = 0; retry < policy.retryLimit; retry += 1) {
+    delays += policy.retryBackoff
+      ? Math.max(policy.retryDelaySeconds, 1) * 2 ** (retry + 1)
+      : policy.retryDelaySeconds;
+  }
+  return (delays + (policy.retryLimit + 1) * expire) * 1000;
 };
 
 /**

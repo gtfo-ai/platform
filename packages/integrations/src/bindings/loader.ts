@@ -97,12 +97,13 @@ import type { IntegrationPortByType, IntegrationRegistry } from '../registry.js'
 
 export class BindingLoadError extends Error {
   override readonly name = 'BindingLoadError';
-  readonly projectId: Id;
+  /** `null` for the organisation's own account, which is built with no project (WP-65). */
+  readonly projectId: Id | null;
   /** The binding that could not be built, or `null` when the project's *set* is the problem. */
   readonly bindingId: Id | null;
 
   constructor(
-    projectId: Id,
+    projectId: Id | null,
     bindingId: Id | null,
     message: string,
     options: { cause?: unknown } = {},

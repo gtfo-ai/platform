@@ -25,7 +25,6 @@ import {
   effortSchema,
   MAX_ROUTED_REVIEWERS,
   nonEmptyStringSchema,
-  notificationClassSchema,
   pathPatternSchema,
   SLUG_PATTERN,
   severitySchema,
@@ -36,6 +35,7 @@ import {
   timeOfDaySchema,
   tokenCountSchema,
   unitIntervalSchema,
+  urgentNotificationClassSchema,
   usdSchema,
 } from './common.js';
 import { customStageSchema } from './pipeline.js';
@@ -632,7 +632,7 @@ export const featuresConfigSchema = z.strictObject({
         .strictObject({ from: timeOfDaySchema, to: timeOfDaySchema })
         .nullable()
         .optional(),
-      urgent: z.array(notificationClassSchema).optional(),
+      urgent: z.array(urgentNotificationClassSchema).optional(),
     })
     .optional(),
   shadow_mode: z

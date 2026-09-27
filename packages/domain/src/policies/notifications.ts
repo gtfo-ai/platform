@@ -25,7 +25,7 @@
  * Nothing here can answer `'drop'`, and that is the point: quiet hours **defer and never drop**.
  * The two deliveries are the only two values {@link NotificationDelivery} has.
  */
-import type { NotificationClass } from '@platform/contracts';
+import type { NotificationClass, UrgentNotificationClass } from '@platform/contracts';
 
 /**
  * product/18:33's *"urgent classes (escalation, budget 100%)"*, as the shipped default.
@@ -34,7 +34,7 @@ import type { NotificationClass } from '@platform/contracts';
  * `readonly` array (`DEFAULT_LINT_ISSUE_TYPES`), and consistency is worth more here than a defence
  * against a caller that would have to cast to break it.
  */
-export const DEFAULT_URGENT_NOTIFICATION_CLASSES: readonly NotificationClass[] = [
+export const DEFAULT_URGENT_NOTIFICATION_CLASSES: readonly UrgentNotificationClass[] = [
   'escalation',
   'budget_exhausted',
 ];

@@ -144,3 +144,44 @@ export const listIntegrationIds = async (sql: SqlExecutor): Promise<readonly Id[
   );
   return rows.map((row) => row.id as Id);
 };
+
+/**
+ * Every `communication` account of the organisation, oldest first, with **no binding overlay** —
+ * what the organisation-scoped notification is built from (WP-65, PROGRESS backlog 80).
+ *
+ * `config` is the account's own document, because the question is *which channel did the
+ * organisation choose*, and a binding's channel is a project's answer to a different one. Kept
+ * **Single-tenant by design (BD-009)**: it lists every communication account in the database and does
+ * **not** filter by `org_id`, because an instance serves one organisation. A multi-tenant build
+ * would have to pass the organisation here, or an organisation's alarm could reach another's
+ * channel.
+ *
+ * Kept beside {@link listIntegrationIds} rather than on the `BindingRepository` port for that function's
+ * reason: the pipeline's project path never lists accounts. `bindings` is left empty — the
+ * organisation's path does not read them, and filling it would be a join nothing uses.
+ */
+export const listCommunicationAccounts = async (
+  sql: SqlExecutor,
+): Promise<readonly IntegrationAccount[]> => {
+  const { rows } = await sql.query<{
+    id: string;
+    provider: string;
+    name: string;
+    config: unknown;
+    secret_ids: string[] | null;
+  }>(
+    `select id, provider, name, config, secret_ids
+       from integrations
+      where type = 'communication'
+      order by created_at, id`,
+  );
+  return rows.map((row) => ({
+    integrationId: row.id as Id,
+    type: 'communication' as IntegrationType,
+    provider: row.provider,
+    name: row.name,
+    config: asObject(row.config),
+    secretIds: (row.secret_ids ?? []) as Id[],
+    bindings: [],
+  }));
+};

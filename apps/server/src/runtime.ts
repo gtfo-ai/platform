@@ -51,12 +51,15 @@ import {
   SHADOW_BATCH_BLOCKED_DETAIL,
   shadowBatchBlocker,
   sweepReadiness,
+  undeliveredNotificationBounds,
 } from '@platform/application';
+import type { IsoDateTime } from '@platform/contracts';
 import {
   cost as costAdapters,
   db as dbAdapters,
   eventing as eventingAdapters,
   jobs as jobsAdapters,
+  notify as notifyAdapters,
 } from '@platform/infrastructure';
 import type { FastifyInstance } from 'fastify';
 import type pg from 'pg';
@@ -97,6 +100,7 @@ import { roleCapabilities, roleIsIdle } from './role.js';
 import { createShadowCommands } from './shadow.js';
 import { SseHub } from './sse/hub.js';
 import { startTranscriptBridge } from './sse/transcript-bridge.js';
+import { createStorageSamplers } from './storage.js';
 import { BUNDLED_WEB_ROOT } from './web/bundle.js';
 import { composeRunWorkspaces } from './workspaces.js';
 
@@ -229,8 +233,27 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
             // condition as the backlog, because they answer one question between them and a
             // process that cannot measure one cannot measure the other.
             deadLettered: async () => eventing.store.countDeadLettered(),
+            // WP-65 (backlog 81): the notify band's half of the same question, registered beside
+            // the backlog — the notifications the platform decided to send and nobody received,
+            // past their plan's own retry window.
+            undeliveredNotifications: async () =>
+              notifyAdapters.countStaleUndeliveredNotifications(
+                database.pool,
+                undeliveredNotificationBounds(new Date().toISOString() as IsoDateTime),
+              ),
           }
         : {}),
+      // WP-65 (Q63): the storage gauge. The database line in every process that has a database;
+      // the mirror line and the total only where `APP_KNOWLEDGE_MIRROR_ROOT` is set.
+      storage: createStorageSamplers({
+        pool: database.pool,
+        mirrorRoot: config.knowledgeMirrorRoot,
+      }),
+      onSamplerError: (sampler, error) =>
+        logger.warn(
+          { sampler, err: error },
+          'metrics: a sampler failed; its series is absent from this scrape',
+        ),
     });
 
     /**
@@ -500,6 +523,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           secretKey: config.secretKey,
           registry: (stack as NonNullable<typeof stack>).registry,
           mirrorRoot: config.knowledgeMirrorRoot,
+          mirrorMaxBytes: config.knowledgeMirrorMaxBytes,
           logger: loggerPort,
         });
         for (const handler of knowledge.handlers) {

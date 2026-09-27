@@ -285,6 +285,23 @@ is the failure you get for leaving both on.
 `.env.example`, which means **`/metrics` is open** — set them, or keep the port off the public
 network.
 
+### Metrics worth an alert
+
+`/metrics` is Prometheus text. Besides the Node process and HTTP metrics, these are the platform's
+own, and each is exported **only** by a process that can measure it — a missing series means *this
+process cannot answer*, never zero:
+
+| Metric | What it says | Alert on |
+|---|---|---|
+| `event_dispatch_pending` | events committed and not yet dispatched (worker roles) | a value that keeps growing |
+| `event_dispatch_dead_lettered` | events that spent `APP_DISPATCH_MAX_ATTEMPTS` and left the queue | anything above 0 |
+| `notifications_undelivered{planned="immediate"}` | chat notifications nobody received, past `pipeline.outbound`'s whole retry window (about 48 minutes), after every one of the job's three attempts tried to deliver and failed — on a project with the digest off, and for every organisation budget alarm, **nothing retries them after that** (WP-65) | anything above 0: a revoked chat token shows up here, not as an absence of messages |
+| `notifications_undelivered{planned="digest"}` | lines held for a digest that has not carried them a day later | anything above 0 |
+| `platform_storage_bytes{component="database"}` | `pg_database_size` of the platform's database | growth; see §6 |
+| `platform_storage_bytes{component="knowledge_mirrors"}` | the bare git mirrors under `APP_KNOWLEDGE_MIRROR_ROOT` (processes that have it) | the 50 GB mark, as for the database |
+| `platform_storage_total_bytes{components="database+knowledge_mirrors"}` | the two lines above summed — exported only when both were measured | the disk you gave the instance |
+| `knowledge_mirror_bytes{project_id="…"}` | one project's mirror — the axis you can act on | a project that outweighs the rest |
+
 `APP_TRUST_PROXY=true` is what makes the app believe `X-Forwarded-For` and `X-Forwarded-Proto`. Set
 it **only** when a proxy you control terminates TLS in front; with it on and the app reachable
 directly, a client can forge its own address.
@@ -555,6 +572,23 @@ docker compose start app launcher
 | `agentic-ctl` | one directory per live run, holding that run's control socket and token | **live credentials** with the lifetime of a run. Backing them up copies secrets out of their scope, and restoring them restores nothing: the runs are gone |
 | `exports` | take-over export tarballs | the **user's** artefacts, served to them at `GET /api/runs/<run>/export.tar` (the `app` container reads the volume through `APP_WORKSPACE_EXPORT_DIR`) and **removed after 14 days** by the launcher's retention sweep — the taken-over workspace's own window (WP-44, Q93). The branch is on the git host either way |
 | `agentic-repo-cache` | the launcher's per-project bare mirrors | a cache, re-created on the next run |
+
+### Disk: the database and the mirrors
+
+Two things grow on the instance's disk and they grow for different reasons, so the storage gauge
+reports them as **two lines under one total** (§3): the **database** grows with the platform's own
+activity (transcripts, events), and the **knowledge mirrors** grow with the size of your projects'
+repositories — one bare clone per project, appearing on that project's first index run (TD-026). A
+single monorepo can outweigh a year of transcripts.
+
+A mirror is a cache ([BD-012](decisions/business/BD-012-knowledge-in-repo.md)): deleting one costs
+its project a full re-clone on its next index run and nothing else. `APP_KNOWLEDGE_MIRROR_MAX_BYTES`
+puts a ceiling on their total; **unset, the default, there is none**. When set, after each index run
+the mirror **used least recently** is removed until the total is under it — by last use, never by
+age, because the oldest mirror is often the most active project's, and never one used within the
+last hour. The run that crosses it logs `knowledge mirror evicted` per mirror, and
+`knowledge mirrors are over APP_KNOWLEDGE_MIRROR_MAX_BYTES` when every remaining one is in use.
+Choose the ceiling from `knowledge_mirror_bytes`, not from a guess.
 
 And one thing to know at teardown time: `docker compose down -v` removes every volume compose
 declares, `agentic-ctl` included (measured on a full instance: containers, volumes and networks all

@@ -95,6 +95,7 @@ const optionsOf = (harness: PipelineHarness, now: string, timezone = 'UTC'): Not
     unitOfWork: markTransactions(harness.memory),
     notifications: harness.notifications,
     timezone,
+    organisation: harness.organisation,
   };
 };
 
@@ -403,6 +404,8 @@ describe('the digest', () => {
         mode: 'normal',
         createdAt: '2026-06-01T23:00:00.000Z',
         redactionCount: 0,
+        approvalId: null,
+        messageRef: null,
         deliveredAt: null,
         deliveredAs: null,
         digestDay: null,
