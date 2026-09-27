@@ -18,7 +18,7 @@
 > **"Architect ruling (M4, session 6)"** at the end of this file. This session is started with `/orchestrate`,
 > which loads `docs/technical/15-orchestrator-prompt.md`; that document, not a pasted prompt, is now the loop.
 
-**Session 8 — 2026-09-25.** `main` opened at **`c1cc951`**, tree clean, and every run on the last three heads read **completed success** — WP-53's `ci` `35879384310` and `image` `35879384479` (PENDING in session 7's note) included, with zero `release` runs. **WP-54 is DONE at `3288496`** (its `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success**; its docs commit `bdcfbe2` read `ci` `36165713727` and `image` `36165713682` **completed success**). **WP-74 is DONE at `91e0140`** (`ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs; the docs commit that carries this sentence has its own runs, **PENDING — read to `completed` before the next row**) — backlog 82 and 147 closed, `verify:e2e` green on this machine again. **Two majors had no owner and now do**: backlog **148** (a run's `/cache` is the whole mirror volume) as **WP-75** and **133** (the launcher cannot authenticate to git) as **WP-76**, both placed right after WP-74. Machine baseline: `docker volume ls | wc -l` = **102** (the two new volumes are the user's own `speedpuzzlingcz` postgres containers, not this repository's). **Three things for the next session.** (1) **The load gate, not the work, set the pace**: one-minute load was 20–175 for most of the day (Spotlight's `mds_stores` at ~250 % and the user's containers; this session's own processes were ~6 %), so the implementer spent six of its seven hours waiting — and its waits were **unbounded `until` loops** that each tool timeout orphaned: 25 of them, killed by the orchestrator after the user asked why 24 shells were running. **Every brief now says: a load check is five readings a minute apart, then a report — never an unbounded loop, never a background shell left behind.** (2) **`verify:e2e` is red on this machine for a reason that is not the tree**: backlog **147**, reproduced on a clean `main` worktree; until WP-74 closes it, every row's e2e verdict carries that one named failure and the rest is read as the verdict. A likely cause (the refiner's, unmeasured) is macOS writing into the bind-backed control volume between the two teardown helpers. (3) **A floor list is an enumeration**: WP-54's review found seven, then five, spellings past it, and BD-025 now says so rather than claiming a boundary. **WP-75 is DONE at `1b0af26`** (`ci` `36200943398` and `image` `36200943454` **completed success**; WP-74's docs commit `6972cbc` read `ci` `36175963207` and `image` `36175963205` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 148 and 152 closed. **The TD-028 amendment WP-76 needed exists** (the architect's, session 8: the runner mints a run-scoped credential through `IntegrationActionExecutor` and passes it on the create request; Q98 filed). **WP-76 is DONE at `52495cb`** (`ci` `36208771351` and `image` `36208771353` **completed success**; WP-75's docs commit `355f444` read `ci` `36201525827` and `image` `36201525825` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 133 closed: a private repository mirrors, the developer stage can push, and the run's credential is minted, audited and revoked. **WP-55 is DONE at `a72aaa2`** (`ci` `36216963170` and `image` `36216963211` **completed success**). **CI went red on WP-77's docs commit `2ab70eb`** (`ci` `36213166240`, `integration` job; `image` `36213166173` success): `test/integration/stats/stats-backfill.integration.test.ts`, untouched since WP-41, pins a row order sorted by day, and its story started three hours before *now* — a run between 03:00 and 03:30 UTC (this one: 02:55) splits it across midnight. **Deterministic by time of day, not by load**; fixed at `ae65e2f` by anchoring the story to noon UTC (`ci` `36217053525` and `image` `36217053489` **completed success**). **Two machine-rule breaches by the orchestrator this session, recorded rather than hidden**: WP-77's last `verify` started at a one-minute load of 34, and this fix's single integration file at 20 — both without the gate. **WP-77 is DONE at `2481f09`** (`ci` `36212658371` and `image` `36212658429` **completed success**; WP-76's docs commit `e0d2790` read `ci` `36209347069` and `image` `36209347052` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 155 closed. **WP-56 is DONE at `e0e877d`** (`ci` `36221858072` and `image` `36221858076` **completed success**; WP-55's docs commit `6083512` read `ci` `36217921241` and `image` `36217921292` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-57 is DONE at `933c58f`** (`image` success; `ci` success after one `--failed` rerun of an Alpine-mirror outage; WP-56's docs commit `f7c09c1` read `ci` `36222374356` and `image` `36222374355` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-58 is DONE at `c2f15f3`** (`ci` `36230652056` and `image` `36230652049` **completed success**; WP-57's docs commit `715320b` read `ci` `36226205654` and `image` `36226205639` **completed success**; this docs commit's runs **PENDING**). **WP-59 is DONE at `5910ecf`** (`ci` `36236800859` and `image` `36236800844` **completed success**; WP-58's docs commit `90f431c` read `ci` `36231164931` and `image` `36231164932` **completed success**; this docs commit's runs **PENDING**) — and standing rule **91** recorded. **WP-60 is DONE at `eb7ee6a`** (`ci` `36243497973` and `image` `36243497972` **completed success**; WP-59's docs commit `9a5fbbf` read `ci` `36237315363` and `image` `36237315492` **completed success**; this docs commit's runs **PENDING**). **WP-61 is DONE at `8dbebd9`** (`ci` `36248633792` and `image` `36248633812` **completed success**; WP-60's docs commit `ce074f4` read `ci` `36243993210` and `image` `36243993219` **completed success**; this docs commit's runs **PENDING**). **WP-43 is DONE at `b4c23bc`** (`ci` `36253785415` and `image` `36253785435` **completed success**; WP-61's docs commit `16d7082` read `ci` `36249210359` and `image` `36249210391` **completed success**; this docs commit's runs **PENDING**). **WP-44 is DONE at `7ebdc93`** (`ci` `36260154407` and `image` `36260154412` **completed success**; WP-43's docs commit `b6c7159` read `ci` `36254398544` and `image` `36254398567` **completed success**; this docs commit's runs **PENDING**). **WP-46 is DONE at `8407605`** (`ci` `36264648150` and `image` `36264648144` **completed success**; WP-44's docs commit `bcef1f8` read `ci` `36260965347` and `image` `36260965363` **completed success**; this docs commit's runs **PENDING**). **WP-45 is DONE at `0962369`** (`ci` `36269315614` and `image` `36269315658` **completed success**; WP-46's docs commit `c8b3af3` read `ci` `36265244106` and `image` `36265244132` **completed success**; this docs commit's runs **PENDING**). **WP-62 is DONE at `544340e`** (`ci` `36274035697` and `image` `36274035706` **completed success**; WP-45's docs commit `1cc3dff` read `ci` `36269907267` and `image` `36269907305` **completed success**; this docs commit's runs **PENDING**). **WP-63 is DONE at `0f55153`** (`ci` `36280255016` and `image` `36280255019` **completed success**; WP-62's docs commit `e1aa8fd` read `ci` `36274592131` and `image` `36274592160` **completed success**; this docs commit's runs **PENDING**). **Next: WP-64**, then WP-65 … WP-73 — ten rows remain in M4. **Session pace**: eighteen rows in about 60 h. **The founder has five open questions from this session to answer or reverse**: Q95 (approvals expire), Q97, Q98 (a), Q101 (the repository file tightens only) — each implemented per its recommendation and recorded — and Q99/Q100 (not built). **Session pace**: seventeen rows in about 57 h. **Session pace**: sixteen rows in about 54 h. **Session pace**: fifteen rows in about 51 h. **Session pace**: fourteen rows in about 48 h. **For the M5 architect pass, collected this session**: backlog 195 (chat thread replies and answers), 199 (chat `human_actions`), 187 (no Jira poller, four documents say there is), 173 (the Czech token under-count), 171 (retrieval precision after the floor). **Session pace**: thirteen rows in about 45 h. **Session pace**: twelve rows in about 42 h. **Session pace**: eleven rows in about 38 h. **Session pace**: ten rows (WP-54, 74, 75, 76, 77, 55, 56, 57, 58, 59) in about 34 h. **Session pace**: seven rows (WP-54, 74, 75, 76, 77, 55, 56) in about 28 h, roughly half of it the load gate. **Pace this session**: four rows (WP-54, 74, 75, 76) plus the architect's WP-76 decision in about 17 h 30 min, of which the load gate held the tiers for roughly half; the three security rows each took three review rounds because each round found a way past the one before. Pace: WP-54 took about 8 h 20 min, most of it waiting on load; WP-74 about 2 h 30 min at a load that allowed its tiers.
+**Session 8 — 2026-09-25.** `main` opened at **`c1cc951`**, tree clean, and every run on the last three heads read **completed success** — WP-53's `ci` `35879384310` and `image` `35879384479` (PENDING in session 7's note) included, with zero `release` runs. **WP-54 is DONE at `3288496`** (its `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success**; its docs commit `bdcfbe2` read `ci` `36165713727` and `image` `36165713682` **completed success**). **WP-74 is DONE at `91e0140`** (`ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs; the docs commit that carries this sentence has its own runs, **PENDING — read to `completed` before the next row**) — backlog 82 and 147 closed, `verify:e2e` green on this machine again. **Two majors had no owner and now do**: backlog **148** (a run's `/cache` is the whole mirror volume) as **WP-75** and **133** (the launcher cannot authenticate to git) as **WP-76**, both placed right after WP-74. Machine baseline: `docker volume ls | wc -l` = **102** (the two new volumes are the user's own `speedpuzzlingcz` postgres containers, not this repository's). **Three things for the next session.** (1) **The load gate, not the work, set the pace**: one-minute load was 20–175 for most of the day (Spotlight's `mds_stores` at ~250 % and the user's containers; this session's own processes were ~6 %), so the implementer spent six of its seven hours waiting — and its waits were **unbounded `until` loops** that each tool timeout orphaned: 25 of them, killed by the orchestrator after the user asked why 24 shells were running. **Every brief now says: a load check is five readings a minute apart, then a report — never an unbounded loop, never a background shell left behind.** (2) **`verify:e2e` is red on this machine for a reason that is not the tree**: backlog **147**, reproduced on a clean `main` worktree; until WP-74 closes it, every row's e2e verdict carries that one named failure and the rest is read as the verdict. A likely cause (the refiner's, unmeasured) is macOS writing into the bind-backed control volume between the two teardown helpers. (3) **A floor list is an enumeration**: WP-54's review found seven, then five, spellings past it, and BD-025 now says so rather than claiming a boundary. **WP-75 is DONE at `1b0af26`** (`ci` `36200943398` and `image` `36200943454` **completed success**; WP-74's docs commit `6972cbc` read `ci` `36175963207` and `image` `36175963205` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 148 and 152 closed. **The TD-028 amendment WP-76 needed exists** (the architect's, session 8: the runner mints a run-scoped credential through `IntegrationActionExecutor` and passes it on the create request; Q98 filed). **WP-76 is DONE at `52495cb`** (`ci` `36208771351` and `image` `36208771353` **completed success**; WP-75's docs commit `355f444` read `ci` `36201525827` and `image` `36201525825` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 133 closed: a private repository mirrors, the developer stage can push, and the run's credential is minted, audited and revoked. **WP-55 is DONE at `a72aaa2`** (`ci` `36216963170` and `image` `36216963211` **completed success**). **CI went red on WP-77's docs commit `2ab70eb`** (`ci` `36213166240`, `integration` job; `image` `36213166173` success): `test/integration/stats/stats-backfill.integration.test.ts`, untouched since WP-41, pins a row order sorted by day, and its story started three hours before *now* — a run between 03:00 and 03:30 UTC (this one: 02:55) splits it across midnight. **Deterministic by time of day, not by load**; fixed at `ae65e2f` by anchoring the story to noon UTC (`ci` `36217053525` and `image` `36217053489` **completed success**). **Two machine-rule breaches by the orchestrator this session, recorded rather than hidden**: WP-77's last `verify` started at a one-minute load of 34, and this fix's single integration file at 20 — both without the gate. **WP-77 is DONE at `2481f09`** (`ci` `36212658371` and `image` `36212658429` **completed success**; WP-76's docs commit `e0d2790` read `ci` `36209347069` and `image` `36209347052` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 155 closed. **WP-56 is DONE at `e0e877d`** (`ci` `36221858072` and `image` `36221858076` **completed success**; WP-55's docs commit `6083512` read `ci` `36217921241` and `image` `36217921292` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-57 is DONE at `933c58f`** (`image` success; `ci` success after one `--failed` rerun of an Alpine-mirror outage; WP-56's docs commit `f7c09c1` read `ci` `36222374356` and `image` `36222374355` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-58 is DONE at `c2f15f3`** (`ci` `36230652056` and `image` `36230652049` **completed success**; WP-57's docs commit `715320b` read `ci` `36226205654` and `image` `36226205639` **completed success**; this docs commit's runs **PENDING**). **WP-59 is DONE at `5910ecf`** (`ci` `36236800859` and `image` `36236800844` **completed success**; WP-58's docs commit `90f431c` read `ci` `36231164931` and `image` `36231164932` **completed success**; this docs commit's runs **PENDING**) — and standing rule **91** recorded. **WP-60 is DONE at `eb7ee6a`** (`ci` `36243497973` and `image` `36243497972` **completed success**; WP-59's docs commit `9a5fbbf` read `ci` `36237315363` and `image` `36237315492` **completed success**; this docs commit's runs **PENDING**). **WP-61 is DONE at `8dbebd9`** (`ci` `36248633792` and `image` `36248633812` **completed success**; WP-60's docs commit `ce074f4` read `ci` `36243993210` and `image` `36243993219` **completed success**; this docs commit's runs **PENDING**). **WP-43 is DONE at `b4c23bc`** (`ci` `36253785415` and `image` `36253785435` **completed success**; WP-61's docs commit `16d7082` read `ci` `36249210359` and `image` `36249210391` **completed success**; this docs commit's runs **PENDING**). **WP-44 is DONE at `7ebdc93`** (`ci` `36260154407` and `image` `36260154412` **completed success**; WP-43's docs commit `b6c7159` read `ci` `36254398544` and `image` `36254398567` **completed success**; this docs commit's runs **PENDING**). **WP-46 is DONE at `8407605`** (`ci` `36264648150` and `image` `36264648144` **completed success**; WP-44's docs commit `bcef1f8` read `ci` `36260965347` and `image` `36260965363` **completed success**; this docs commit's runs **PENDING**). **WP-45 is DONE at `0962369`** (`ci` `36269315614` and `image` `36269315658` **completed success**; WP-46's docs commit `c8b3af3` read `ci` `36265244106` and `image` `36265244132` **completed success**; this docs commit's runs **PENDING**). **WP-62 is DONE at `544340e`** (`ci` `36274035697` and `image` `36274035706` **completed success**; WP-45's docs commit `1cc3dff` read `ci` `36269907267` and `image` `36269907305` **completed success**; this docs commit's runs **PENDING**). **WP-63 is DONE at `0f55153`** (`ci` `36280255016` and `image` `36280255019` **completed success**; WP-62's docs commit `e1aa8fd` read `ci` `36274592131` and `image` `36274592160` **completed success**; this docs commit's runs **PENDING**). **WP-64 is DONE at `39e7d7a`** (`ci` `36285837440` and `image` `36285837392` **completed success**; WP-63's docs commit `bbce2aa` read `ci` `36280816047` and `image` `36280816050` **completed success**; this docs commit's runs **PENDING**). **Next: WP-65**, then WP-66 … WP-73 — nine rows remain in M4. **Session pace**: nineteen rows in about 63 h. **Session pace**: eighteen rows in about 60 h. **The founder has five open questions from this session to answer or reverse**: Q95 (approvals expire), Q97, Q98 (a), Q101 (the repository file tightens only) — each implemented per its recommendation and recorded — and Q99/Q100 (not built). **Session pace**: seventeen rows in about 57 h. **Session pace**: sixteen rows in about 54 h. **Session pace**: fifteen rows in about 51 h. **Session pace**: fourteen rows in about 48 h. **For the M5 architect pass, collected this session**: backlog 195 (chat thread replies and answers), 199 (chat `human_actions`), 187 (no Jira poller, four documents say there is), 173 (the Czech token under-count), 171 (retrieval precision after the floor). **Session pace**: thirteen rows in about 45 h. **Session pace**: twelve rows in about 42 h. **Session pace**: eleven rows in about 38 h. **Session pace**: ten rows (WP-54, 74, 75, 76, 77, 55, 56, 57, 58, 59) in about 34 h. **Session pace**: seven rows (WP-54, 74, 75, 76, 77, 55, 56) in about 28 h, roughly half of it the load gate. **Pace this session**: four rows (WP-54, 74, 75, 76) plus the architect's WP-76 decision in about 17 h 30 min, of which the load gate held the tiers for roughly half; the three security rows each took three review rounds because each round found a way past the one before. Pace: WP-54 took about 8 h 20 min, most of it waiting on load; WP-74 about 2 h 30 min at a load that allowed its tiers.
 
 **Session 7 so far.** `main` opened at **`cc80fc3`**, tree clean, its `ci` `35114407808` and `image`
 `35114407731` both **completed success** with **zero `release` runs on the sha** — the first head to show
@@ -8098,7 +8098,7 @@ one-line note that its pre-fetch clause was not delivered, rather than silently 
 DONE and claims it. Depends on WP-11 (the clients), WP-15d (the outbound shape), WP-17 (the
 planner's data blocks). Related: **140** (the observability egress hosts), **Q16**, **Q43**.
 
-### 144. **R6's `.agentic/workspace/setup` form has no named verb, so discovery reads that script instead of running it** (TODO, nit — **working as designed and now stated in product/19 §5 and at R6's detection line**; one form of one criterion; owner **WP-64**; found by WP-54, session 8)
+### 144. **R6's `.agentic/workspace/setup` form has no named verb, so discovery reads that script instead of running it** (**RESOLVED** at `39e7d7a`, WP-64, session 8 — TODO, nit — **working as designed and now stated in product/19 §5 and at R6's detection line**; one form of one criterion; owner **WP-64**; found by WP-54, session 8)
 
 **What is wrong.** product/17's R6 is detected by a one-command setup *"executed in the
 workspace"*. Since WP-54 a `make` target or package script is executed; a
@@ -10434,7 +10434,7 @@ too (*"review requested changes: 2 blockers, 1 major"*) — is equally acceptabl
 prompt says bounds what a model writes, so the fix is on the render side. **Depends on** WP-46 (`8407605`), WP-55.
 Related: **211**, **195**.
 
-### 216. **The Discovery prompt still lists five risk classes and sends a sixth to `questions`, so `public_api` — proposed by the platform's table since WP-45 — never carries paths a Discovery run saw** (TODO, **small** — a prompt/table disagreement, not a safety gap: the proposal is never auto-applied; **live** on every discovery run since WP-45; **read off the tree, not measured**; proposed owner **WP-64** (refiner, session 8); found by WP-45, session 8)
+### 216. **The Discovery prompt still lists five risk classes and sends a sixth to `questions`, so `public_api` — proposed by the platform's table since WP-45 — never carries paths a Discovery run saw** (**RESOLVED** at `39e7d7a`, WP-64, session 8 — TODO, **small** — a prompt/table disagreement, not a safety gap: the proposal is never auto-applied; **live** on every discovery run since WP-45; **read off the tree, not measured**; proposed owner **WP-64** (refiner, session 8); found by WP-45, session 8)
 
 **What is wrong.** `PROPOSED_RISK_CLASSES` gained `public_api: ['checklist:public_api']` at WP-45
 (`packages/domain/src/policies/risk-classes.ts:233-235`) and `record.ts` keeps a model that names it
@@ -10741,6 +10741,104 @@ transaction, never in the settings port, which is called from handler transactio
 second is the cheaper and is the audit technical/12 promises. **Depends on** WP-63 (commit pending). Related:
 **221**, **19**; the mirror-contention risk the same WP-63 note raises is `docs/TODO.md`'s *"Concurrent fetch into
 one mirror"* item, updated there rather than numbered here.
+
+### 228. **`readiness.evaluated` is in the catalogue with two named producers and a named consumer, and none of the three exists — so a readiness level can change, since WP-64 after any merge, and nothing on the event bus or the SSE stream says it did** (TODO, **small** — **latent**: no consumer either, so nothing waits for it today; half a documentation defect; **read off the tree, not measured**; folded into **WP-73** (refiner, session 8); found by WP-64, session 8)
+
+**What is wrong.** technical/02:204 declares *"`readiness.evaluated` | Discovery / CI gate | project, level, criteria |
+Policy suggestions (20), UI"*. The event is defined (`packages/contracts/src/events.ts:796`) and declared
+`'unconsumed', // Policy suggestions, WP-21.` (`packages/application/src/events/consumption.ts:281`). The implementer,
+quoted: *"Neither the discovery recorder nor the re-check emits it, so nothing can react to a level change; the SSE
+`project:*` topic does not see one."* Refiner read: `git grep` for the event name over `apps/` and `packages/` finds only
+the definition, the catalogue test and the consumption row — no append, and no reader in `apps/web`. Both producers
+that *do* exist write through the one call, `readiness.record(scope.tx, evaluation)`
+(`packages/application/src/onboarding/record.ts:381`, `packages/application/src/onboarding/recheck.ts:182`), and the
+CI gate is not a readiness producer at all (R3's re-check reads stored `ci.pipeline.finished` events instead).
+
+**Cost to leave.** Small today: the level is advisory on this build (`suggestedAutonomyCap`,
+`packages/domain/src/policies/autonomy.ts:181`, and the dashboard badge), and every reader queries the row. It becomes
+real with the first consumer the catalogue already promises — policy suggestions, or product/17's *"trend over time"*
+on a live project page — which would have to poll. **Done** — either both producers append `readiness.evaluated`
+(project, level, criteria) in the **same** transaction as `readiness.record`, asserted by a countable effect (one event
+per recorded row, none for a re-check that answered `unchanged`), with the consumption row left `unconsumed` until a
+reader exists (backlog **1**'s rule); **or** technical/02:204 names the event as declared with no producer on this
+build. The first is recommended: the call site is shared, so it is one line per producer and one test. technical/02's
+*"Discovery / CI gate"* is wrong either way — the producers are discovery and the post-merge re-check. **Depends on**
+nothing unbuilt. Related: **1**, **46**.
+
+### 229. **A Discovery draft's page is labelled `technical` whatever its path, so a model-written `business/*` page reaches the queue mislabelled — and, once approved, credits R12 exactly as the interview's human-written page would** (nit, TODO — the prompt now forbids the path, the platform does not; **live** on any discovery run whose draft names a `business/` path, which is **unmeasured** (WP-64 criterion 6: the tier's model is scripted, `pnpm eval` cannot run); folded into **WP-73** (refiner, session 8); found by WP-64, session 8)
+
+**What is wrong.** `proposalsFrom` sets `kind: 'technical' as const` for every drafted document
+(`packages/application/src/onboarding/record.ts:252`), taking `target_path` from the model. The implementer, quoted:
+*"a discovery draft that names `business/overview.md` is labelled technical in the queue (and, once approved, counts
+toward the business score). The prompt now forbids it; the platform does not."* **Graded by the refiner:** the label
+itself changes no behaviour — `git grep` finds no branch on a proposal's `kind` in `packages/` or `apps/` outside an
+eval case — so the mislabel misinforms the maintainer reading the queue and nothing else. The score half is by
+**path**, not kind: `knowledgeCompleteness` counts a section when a document exists at its path
+(`packages/domain/src/readiness/criteria.ts:353-362`), so an approved model page at `business/overview.md` credits R12
+whatever its label. That is the part worth a line: Q102's reason (1) is that a business page should be what the
+interviewee said, not a model's summary of them.
+
+**Cost to leave.** A nit while the prompt holds; a model-authored business page is still approved by a human
+(discovery proposals are forced into the queue). **Done** — `proposalsFrom` refuses a drafted path under `business/`
+(dropped and counted in what the recorder returns, the interview being the business producer), **or** derives `kind`
+from the path; the row picks one and states why, with a unit case per branch. Refusing is recommended for Q102's
+reason. **Depends on** nothing. Related: **45**, **Q102**, **216**.
+
+### 230. **Discovery runs once per project, so nine of the fourteen readiness criteria — R1 among them — keep their onboarding answer forever, and because every rung of the ladder needs at least one of the nine, a project's level can rise after onboarding only if discovery had already passed that rung's carried criteria** (TODO, **major** against product/17's purpose, **not** a safety defect — the level only under-reports and is advisory on this build; **live** on every onboarded project since WP-64; **read off the tree, not measured**; **no M4 row owns the producer** — for the M5 architect pass; the one sentence folded into **WP-73** (refiner, session 8); found by WP-64, session 8)
+
+**What is wrong.** product/17:11 promises criteria *"re-checked after every merged task (cheap: mostly file and
+CI-event inspection)"*, and product/19:55 names R1's producers as *"discovery; weekly maintenance check"*. WP-64 built
+the re-check and stated its split in the table: `recheck: 'carried'` for R1, R2, R4, R5, R6, R7, R10, R13, R14
+(`packages/domain/src/readiness/criteria.ts:107`–`:232`), five of fourteen answered afresh. The only producer of a
+fresh answer for the nine is a discovery run, and `startProjectDiscovery` is idempotent on the project **by decision**:
+*"this project already has a discovery task; re-running discovery would spend a second budget for the same question"*
+(`packages/application/src/onboarding/discovery.ts:173`). The implementer, quoted: *"Discovery cannot be re-run on a
+project, so R1, R2, R4–R7, R10, R13 and R14 are frozen at the first run"*, and backlog 46's own example *"is **still
+true for R1**"*. **The rung arithmetic** (refiner, from `READINESS_LEVEL_REQUIREMENTS`,
+`packages/domain/src/readiness/criteria.ts:254-258`): level 1 needs R1 (carried) + R3; level 2 adds R2, R4, R5
+(carried) + R9; level 3 adds R6, R10 (carried) + R8, R12; level 4 adds R7, R13, R14 (carried) + R11. Every rung holds a
+carried criterion, so the re-check can move a level only where discovery already passed that rung's carried ones — a
+project onboarded with R1 false is **level 0 permanently**, and `suggestedAutonomyCap(0)` suggests at most `assist`
+(`packages/domain/src/policies/autonomy.ts:181-185`) for as long as the project exists. **A sentence that says
+otherwise:** the settings mirror table's step-2 row reads *"re-run discovery and read the readiness ladder"*
+(`apps/web/src/features/project-settings.tsx:13`), while the command answers `started: false`.
+
+**Cost to leave.** product/17 exists so teams know *"what the cheapest next improvement is"*; a team that adds the test
+suite R1 names is never told, and the badge and the suggested cap keep the onboarding answer. The direction is safe
+(under-reporting only), and nothing on this build enforces a level — which is why this is major on value and not on
+safety. **What would make it urgent:** the first level-driven behaviour product/17 § "Levels" describes (level 0
+restricting `feature`/`bug`) — at that point a stale R1 would be restricting work, not just a badge.
+
+**Done.** (1) A producer for the carried criteria, decided at the row between: **(a)** a maintainer-triggered
+*re-evaluate readiness* command that opens a **new** discovery task (idempotent while one is open, not per project;
+budgeted, transcribed and recorded through the same `readiness.record` path — which reverses the stated decision at
+`discovery.ts:173`, so the row writes the reason), and **(b)** product/19:55's weekly maintenance check for R1 on the
+maintenance scheduler. (a) is the smaller and covers all nine; (b) is what product/19 names for R1. Asserted by a
+countable effect: a fixture repository onboarded with R1 false, a test suite merged, the producer run, and the level
+read back at 0 then ≥ 1. (2) **WP-73:** the mirror table's step-2 sentence says what the build does. product/17:11's
+sentence is already proposed for the orchestrator in the WP-64 notes and is not repeated here. **Depends on** WP-64
+(the re-check and its split). Related: **46**, **231**, **Q102**.
+
+### 231. **Three carried criteria have a cheaper answer than a discovery run, and each is a different kind of decision: R10 and R13 are tree reads a named path widening could make, and R4 is blocked on flaky detection, which this build does not have at all** (TODO, **small** per criterion — each a decision rather than a line; **latent** until 230's producer question is settled, since these narrow what that producer must re-answer; **read off the tree, not measured**; **no M4 row owns it** — for the M5 architect pass; found by WP-64, session 8)
+
+**What is wrong.** The implementer, quoted: *"R10 and R13 could join the tree reads (an MR template path, a commitlint
+or gitleaks config), and R4 needs the flaky-rerun statistic product/19 §5 defines; each is a widening of
+`REPOSITORY_FILE_PATHS` or a new projection, so each is a decision rather than a line."* Refiner read, per criterion:
+**R10** — product/19:64 passes it on *"files present or KB `conventions.md` states them"*, so half of it is an index
+read, not a tree read. **R13** — product/19:67, *"CI job or pre-commit config detected"*: a pre-commit config is a
+named path, but a *CI job* lives in CI configuration whose paths vary by provider (and some by glob), while
+`REPOSITORY_FILE_PATHS` (`packages/application/src/config/repository-config.ts:87`) is widened **by name, never by glob**
+(backlog 226's rule). **R4** — product/19:58 defines *"flaky reruns / CI gate evaluations over 30 days < 5 %"*, and the
+numerator does not exist: `packages/domain/src/maintenance/chores.ts:28-29` refuses the `flaky` chore because
+product/04:65 says *"flaky detection is not implemented"*. So R4 is not a re-check gap but an absent input, and it
+belongs with flaky detection, not with the tree reads.
+
+**Cost to leave.** Small: each stays at its discovery answer (230's cost, three criteria of nine). **Done** — R10 and
+R13 moved to `recheck: 'tree'` (or R10 to an index read) with each path named in `REPOSITORY_FILE_PATHS` and its
+docblock, evidence platform text only as WP-64's R8 is, asserted both directions on a fixture repository; R4 stays
+`carried` with its `recheckReason` naming flaky detection, until that is built. **Needs measurement** before the R13
+half: which CI configuration paths the two shipped git providers' repositories actually use. **Depends on** WP-64, and
+for R4 on flaky detection (unowned, product/04:65). Related: **230**, **226**.
 
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
@@ -13233,7 +13331,7 @@ still unread, for a new reason"* is blocked on, so whoever widens `VaultSource` 
 half depends on nothing that does not exist. **Not WP-30's**: that row's *"settings mirror"* is
 BD-028's UI mirror of wizard step 4, not a commit to the repository.
 
-### 45. **The business interview is the one wizard step of five that no work package owns, and without it repository readiness cannot reach level 3** (TODO — **no work package owns it**; found by WP-21, session 5)
+### 45. **The business interview is the one wizard step of five that no work package owns, and without it repository readiness cannot reach level 3** (**RESOLVED** at `39e7d7a`, WP-64, session 8 — TODO — **no work package owns it**; found by WP-21, session 5)
 > **M4 (architect, session 6): folded into WP-64.**
 
 **What is wrong.** product/06 § "Step 3" is a conversational form driven by the Product Manager role
@@ -13279,7 +13377,7 @@ wizard e2e's `kb_proposals` rows would settle it.
 invented paths inherits the problem. Product Manager role prompt and evals exist
 (`packages/prompts/roles/product_manager/`). Nothing else.
 
-### 46. **Readiness is evaluated once, at discovery, and product/17 asks for a re-check after every merged task** (TODO — **no work package owns it**; found by WP-21, session 5)
+### 46. **Readiness is evaluated once, at discovery, and product/17 asks for a re-check after every merged task** (**RESOLVED** at `39e7d7a`, WP-64, session 8 — TODO — **no work package owns it**; found by WP-21, session 5)
 > **M4 (architect, session 6): folded into WP-64.**
 
 **What is wrong.** product/17:11: criteria are *"detected automatically by the Discovery agent at
@@ -14324,7 +14422,7 @@ file, or the first work package that touches upgrade behaviour.
 | WP-45 | **Review checklists, and the Reviewer pass a shadow report needs** | DONE | `0962369` | **Folded backlog 91 and 100; implemented Q83.** All six risk classes proposed (`public_api` offered, `payments` with both requirements); named review checklists (`policies.review_checklists`, `checklist:<name>`, an undefined list refused at write and read) delivered to the Reviewer inside `review_checklist` data blocks with a total cap; `checklists_applied` recorded and **overwritten by the executor**; reviewer prompt **v3** with three eval cases (the eval check exits 1 by design — no model credential); one shadow review task per ticket over the **human** MR, findings stored and posted nowhere, the comparison two sides or nothing and labelled as measured against the agent's own specification (**product/19 §13 amended by the orchestrator**). **One review round** (APPROVE-with-nits; the missing test graded major — a review that escalated left its report unwritten with every test green — added and re-canaried). **Orchestrator verification**: `PASS: verify` (415 files, 7920 passed), `PASS: verify:integration` (575), `PASS: verify:e2e` **twice** (212/212), `PASS: verify:ui` (371), `PASS: verify:web-e2e` (47). CI on `0962369`: `ci` `36269315614` and `image` `36269315658` **completed success**, zero `release` runs. Criterion (8) (the review pass's cost) stays unmeasured in `docs/TODO.md`. Discovered work: backlog **216**–**219** | Depends on WP-37, WP-24, WP-34, WP-17, TD-016. Folds backlog **91** (major), **100**; implements **Q83**. The only M4 row that opens the reviewer's prompt and its eval cases. Telling the truth about `payments` lands first and needs no answer |
 | WP-62 | **The dial's remaining policies get readers** | DONE | `544340e` | **Folded backlog 72 (a) and (b) and 208; implemented Q78 and Q79.** The dial's value applies where the project document is silent and a document key wins where it speaks (**BD-027 amended by the orchestrator**: overridable where something reads the override; the organisation cap limits the level, not the keys — a clarification, the reviewer found no ceiling in BD-027 or product/19); thirteen policies read, two stated unread and marked; business review and the scope halt reach the pipeline through a dial **frozen on the task** (migration **0049**), none of the **24** `compilePipeline` call sites (a census; the row said fifteen) asking the settings port; Assist parks in `needs_human` after architecture, continued by hand-back. **Review found the plan-approval gate standing aside on Assist on a misread of product/19 §11** (the "—" is Observe's) — a member's hand-back could have taken an unapproved `auth/**` plan into implementation; the gate runs again, and **fixing it exposed an older hole**: hand-back accepted a task waiting for plan approval at every dial position — now 409, with a test that failed before the fix. **One review round** (REQUEST_CHANGES: that gate; a false user-guide sentence about frozen vs live policies; a census regex accepting any receiver; a malformed dial taking down other tasks' list reads). **Orchestrator verification**: `PASS: verify` (418 files, 7957 passed), `PASS: verify:integration` (577), `PASS: verify:e2e` **twice** (212/212), `PASS: verify:ui` (376), `PASS: verify:web-e2e` (47). CI on `544340e`: `ci` `36274035697` and `image` `36274035706` **completed success**, zero `release` runs. Discovered work: backlog **220**, **221** (folded into 19), **Q99**, **Q100**; for the M5 pass, the reviewer's founder note — after an Assist hand-back, business review cannot be chosen at all | Depends on WP-30, WP-28, WP-18b, WP-05; BD-027:14. Folds backlog **72** (a) and (b) (major); implements **Q78**, **Q79**. `businessReview` builds the carrier, `stopAfterStage` rides on it; the compile-step signature change reaches fifteen call sites |
 | WP-63 | **`.agentic/config.yml` reaches the repository, and the `repo` layer is read back** | DONE | `0f55153` | **Folded backlog 44, 146's first half and 224; implemented Q94.** A configuration export (an `agentic/config/*` MR through the executor, never a direct commit — now a mechanical `agentic/` check) and the repository's default-branch `.agentic/config.yml` read back as the `repo` layer: bounded YAML (aliases capped, duplicate keys, `__proto__` and every explicit tag refused, nothing on stderr), re-checked on read, never recorded over a newer reading; an invalid file refuses the project's runs by key path (migration **0050**, dependency `yaml@2.9.0`). **Review measured that the file — writable by merge rights — accepted admin-only settings** (`protected_paths: []` dropped BD-024's tamper protection); **the orchestrator ruled tighten-only and filed Q101 for the founder**: every key graded, held to the schema by a structural drift test; protected paths, reviewers, risk classes and checklists are unions; the dial, its override keys and every review-relaxing policy not applied; the file narrows commands again after the settings, tested on both planners' run paths. **BD-025 amended by the orchestrator** (the organisation layer is composed since WP-63), technical/12 and product/06 corrected. **Three review rounds**; the orchestrator's canaries after R2 (protected paths by replace, a weaker same-name risk class, tags accepted) all dead by name. **Orchestrator verification**: `PASS: verify` (424 files, 8039 passed), `PASS: verify:integration` (579), `PASS: verify:e2e` **twice** (213/213), `PASS: verify:ui` (378), `PASS: verify:web-e2e` (47). CI on `0f55153`: `ci` `36280255016` and `image` `36280255019` **completed success**, zero `release` runs. Discovered work: backlog **223**, **225**–**227**, **Q101**; for the M5 pass, the reviewer-ordering defect review found (a file's reviewers can displace a class's required reviewer when the settings are silent) | Depends on WP-21, WP-18b, WP-18a, WP-30. Folds backlog **44** (major). **Q94** decides precedence and whether a direct commit is ever allowed |
-| WP-64 | **Readiness stops being frozen at discovery, and the wizard's step 3 exists** | TODO | — | Depends on WP-21, WP-18a/b, WP-17; Q68 is answered. Folds backlog **46** (major), **45** (major). The completeness must move **as a number**: *"the pages were drafted"* and *"the score moved"* are different claims |
+| WP-64 | **Readiness stops being frozen at discovery, and the wizard's step 3 exists** | DONE | `39e7d7a` | **Folded backlog 45, 46, 144, 216.** A readiness re-check whenever the index reads a new default-branch commit — R3 from CI events, R8 from the files, R9/R11/R12 from the platform's own records, the other nine carried and saying so — writing a `recheck` evaluation and the narrow level update in one transaction; the wizard's step 3 business interview as a form whose answers become proposals, never commits (redacted, bounded, NUL refused, frontmatter platform text, the audit row in the proposals' own transaction under an advisory lock); discovery runs `./.agentic/workspace/setup` by its literal path; discovery prompt **v5** with `public_api`. The e2e merges the interview pages (completeness **0.8**, as a number) then a task adding `CLAUDE.md` (level 2 → 3). **One review round**, APPROVE-with-nits, **six canaries dead by name** (the trigger's in the e2e itself); "not applicable" counting toward completeness is product/06's own rule, noted against Q68 (b). The orchestrator amended product/06, /13, /17, /19, BD-025, technical/02 and CLAUDE.md. **Orchestrator verification**: `PASS: verify` (429 files, 8099 passed), `PASS: verify:integration` (582), `PASS: verify:e2e` **twice** (214/214), `PASS: verify:ui` (382), `PASS: verify:web-e2e` (47). CI on `39e7d7a`: `ci` `36285837440` and `image` `36285837392` **completed success**, zero `release` runs. Criterion (6) needs a real model. Discovered work: backlog **228**–**231** (**230 major, for M5**: discovery cannot be re-run, so readiness is frozen on the nine carried criteria), **Q102** | Depends on WP-21, WP-18a/b, WP-17; Q68 is answered. Folds backlog **46** (major), **45** (major). The completeness must move **as a number**: *"the pages were drafted"* and *"the score moved"* are different claims |
 | WP-65 | **The organisation's own channel, the undelivered metric, the maintenance report, and the storage gauge** | TODO | — | Depends on WP-32, WP-30, WP-36, WP-18a. Folds backlog **80** (major), **81**, **107**, and **Q63**'s operator-facing half. Backlog 80 takes answer (c), the account's channel; the migration carries `nulls not distinct` |
 | WP-66 | **The history bootstrap says how much it read** | TODO | — | Depends on WP-35, WP-18b. Folds backlog **102**, **103**. One column, one `set` clause, one line on the panel — deliberately **not** behind the statistics row. **Refiner (session 6): also folds backlog 124's first half** — `docs/technical/03-data-model.md` has no entry for `history_bootstrap_batches` or `history_bootstrap_chunks` at all, so this row's own migration would otherwise add a second undocumented column to a table with no documented home; the page is amended **before** the migration (criterion (8)). The rest of 124 — the other ten tables with no entry, and the check that would stop the drift — stays unowned and must **not** go to WP-73, which would then be editing the same page |
 | WP-67 | **The idempotency record, the gate that asks again, and the requester nobody wrote** | TODO | — | Depends on WP-15i, WP-21, WP-34, WP-38, WP-37. Folds backlog **47** (major), **99**, **96** (major), **92**. **Q91** decides the `ready_for_merge` case; only the human-owned stops are built if the recommendation stands |
@@ -32034,3 +32132,174 @@ waits for the orchestrator's tiers.
 readings (14.8 → 11.9, spaced with typecheck, lint and the touched unit files);
 `scripts/citations.test.ts` green. Not run: the Docker and UI tiers (no change reaches them beyond
 the unit-tested read path; the orchestrator's tiers follow).
+
+#### WP-64
+
+**Implemented** (implementer, session 8): backlog **46** (the re-check), **45** (the interview),
+**144** (the setup verb) and **216** (`public_api` in the Discovery prompt). The six criteria and the
+two addenda, where each lands:
+
+1. **The re-check, triggered by a merge and asserted through one.** `onboarding/recheck.ts` is the
+   `recheck` producer `readiness_evaluations.source` has named since WP-21: one pure fold
+   (`recheckReadiness`, `evaluate-readiness.ts`) and one `ReadinessStore.record` — the same call
+   discovery makes, so the row and the narrow `projects.readiness_level` write are one transaction.
+   **The trigger is the index run, not `mr.merged` itself**: `knowledge/index-job.ts`'s
+   `afterIndex` hook now receives `{reason, status}`, and `apps/server/src/knowledge.ts` enqueues a
+   re-check when the run **indexed a commit it had not read** (`shouldRecheckAfterIndex`). Two
+   reasons, both measured against the tree rather than assumed: R12 is scored from the index, so a
+   re-check woken by `mr.merged` directly races the index run and scores the previous commit; and
+   the index queue is `stately` per project, so keying on the run's *reason* would lose a merge
+   collapsed into a queued task-start run (that was the first draft). A merge into a non-default
+   branch reads the same commit (`unchanged`) and writes no row. The job rides the
+   `onboarding.discovery` queue with `kind: 'readiness_recheck'` (one worker, no new pool term —
+   `POOL_RESERVATIONS.onboarding` stays 1), is skipped by name for a never-evaluated project (so the
+   409 stays honest), and pins the file read to the index run's commit.
+   `test/e2e/onboarding/readiness-loop.e2e.test.ts` merges a **task** whose change adds a
+   `CLAUDE.md` linking to the knowledge index on a real fixture repository, and the level moves 2 → 3
+   with R8's evidence naming the merged commit; nothing in the file calls the evaluator. Mutation
+   (copy, md5-confirmed revert): making the hook never enqueue fails the e2e by name at *"the
+   re-check after the knowledge merge"*.
+2. **The split, stated in the table** — `READINESS_CRITERIA[].recheck` and `recheckReason`
+   (`packages/domain/src/readiness/criteria.ts`), pinned by `criteria.test.ts` › "states how the re-check after a merge answers each criterion":
+   **platform** R9, R11, R12 (asked again, the discovery function); **tree** R8 (`CLAUDE.md` and
+   `AGENTS.md` at the merged commit through `RepositoryFileSource`, no checkout, both directions);
+   **ci_events** R3 (pass-only: one stored `ci.pipeline.finished` carrying an MR in 30 days —
+   product/19 §5's own rule for R3 — passes it; silence carries, because an empty window is not a CI
+   that does not run); **carried** R1, R2, R4, R5, R6, R7, R10, R13, R14 (need a run or a judgement;
+   evidence says *"carried from the discovery evaluation of … (not re-checked after a merge: …)"*,
+   never re-prefixed on a second carry). **Five of fourteen**, so product/17's *"mostly file and
+   CI-event inspection"* is not true of this build — the sentence for the orchestrator is below.
+   The widening this needed is stated at `REPOSITORY_FILE_PATHS`: `AGENTS.md` joins `CLAUDE.md`
+   (already indexed, so no new exposure); the evidence is platform text only — a path, a line
+   count, a sha — never a byte of the file (`readiness/recheck.test.ts` › "writes platform text only: no byte of the file reaches the evidence").
+   A re-check row stores `detected_by: platform` for R8 and an observed R3 (the field is *who
+   answered it*), and `GET …/readiness` now publishes the row's value, floored at `platform` for
+   R9, R11 and R12 — it used to recompute the field from the table, which the first full e2e pass
+   caught (`read-api.integration.test.ts` holds both directions).
+3. **Step 3 through the proposal queue.** `POST /api/projects/:id/interview`
+   (`apps/server/src/routes/onboarding.ts`, `kb.write`, `Idempotency-Key` required, one
+   `human_actions` row carrying sections, proposal ids and the redaction count — **never an
+   answer** —, a replay `performed: false`, a different body `409 idempotency_key_reused`) →
+   `recordBusinessInterview` (`packages/application/src/onboarding/interview.ts`): one `kb_proposals`
+   row per answered or not-applicable section, source **`human`** (its first writer), kind
+   `business`, forced into the queue by `DISCOVERY_PROPOSAL_THRESHOLDS`. Bounds: 12 000 characters
+   an answer and 1 000 a reason, refused above at the door and cut again **after** redaction,
+   announced in the page; derived from `MAX_PROPOSAL_DELTA_BYTES` (48 000 worst-case bytes of answer
+   plus the page's platform text), and `interview.test.ts` (domain) renders the worst case under
+   the budget. The page is `renderInterviewPage`'s: frontmatter and headings are platform text, the
+   answer byte for byte in the body, so an answer cannot give its page a `paths:` glob or a scope
+   (`readiness/interview.test.ts` › "gives an answer no way into the frontmatter"). The web form is
+   `features/business-interview.tsx`, rendered by the wizard's step 3 **and** the settings page's
+   *Business context* (the mirror census sees `recordInterview` from both).
+4. **Completeness above 0.7, as a number.** The e2e reads R12's number off the platform's evidence
+   (0.8) **and** recomputes it from the `kb_documents` rows (0.8), naming the two missing sections.
+   The arithmetic is stated where it bites: the interview alone reaches exactly 7/10 = the
+   threshold, so *above* needs one technical page — which discovery drafts
+   (`readiness/interview.test.ts` › "reaches R12 alone at exactly the threshold, and above it with one discovery page").
+5. **R9, R11, R12 never from a model.** The re-check calls the same `platformAnswer` discovery
+   does and never carries those three; `evaluate-readiness.test.ts` › "asks the platform again for R9, R11 and R12 and never carries them (criterion 5)"
+   starts from a draft that claimed all fourteen; the e2e's draft claims R9 and R12 and neither
+   evidence survives.
+6. **The measurement — not settleable here, stated.** Whether a real discovery run drafts a
+   `business/*` page is a question about a model and this tier's model is scripted; `pnpm eval`
+   cannot run (the WP-17 blocker). Done instead: the prompt now says *technical pages only* and
+   sends business facts to `questions` (eval case `disc-drafts-no-business-page`), and the e2e
+   asserts the scripted draft's proposals are all `technical/`. What the platform does with a
+   business path from a draft is backlog 229 below.
+
+**Addendum 144.** `WORKSPACE_SETUP_ALLOW = ['./.agentic/workspace/setup']` in
+`DEFAULT_VERIFICATION_ALLOW` only (discovery, Reviewer, Acceptance Tester), the literal and no
+argument form. **Decision: outside `PROJECT_COMMAND_ALLOW`** — it is the platform's documented path,
+not a project-declared command, so a project's `commands.allow` does not narrow it away (backlog
+139's worry does not arise) and a project that does not want it writes it into `commands.block`
+(`command-policy.test.ts` › "is outside the project-command class, so a project’s allow does not narrow it away").
+The body is repository content — BD-025's WP-54-amendment residual, the same as `make setup`,
+stated at the constant. R6's detection line, the prompt's R6 row and its "what you may run" list
+name it; eval case `disc-runs-the-workspace-setup-script`.
+
+**Addendum 216.** The prompt's risk-class table gains `public_api`; the rule's sentence no longer
+says a sixth class belongs in `questions`; `ROLE_PROMPT_VERSIONS.discovery` 4 → **5**; eval case
+`disc-names-public-api-from-an-openapi-document`, and the two cases that listed five names list six.
+**Held to `PROPOSED_RISK_CLASSES` by a test**, both directions:
+`test/contract/prompts/discovery-tables.contract.test.ts` (in the contract tier because
+`@platform/prompts` and `@platform/domain` may not import each other) — it also holds the prompt's
+readiness table to the agent-detected rows of `READINESS_CRITERIA`. `record.ts`'s rule-1 residual
+sentence is replaced by a pointer to that test.
+
+**Decisions and assumptions.**
+- **"The six business paths" is seven.** Q68's six mapped paths plus `business/direction.md`
+  (product/05's), because product/19 §8's *Direction* section has an answer. The eighth section,
+  *Communication*, writes `business/communication.md`, which is **not** scored — folding it into
+  review expectations would have credited a section nobody answered.
+- **"Not applicable" is a page.** product/06 counts a section *"filled or explicitly marked not
+  applicable"*; Q68 scores by page existence, so the mark reaches the score with no column and no
+  state. That answers Q68 (b) **for a project that ran the interview** only.
+- **The form has no model** (Q102, filed with the recommendation implemented).
+- **Permission `kb.write`** (maintainer), the knowledge base's own write permission, which had no
+  route until now.
+- **Discovery runs once per project** (`startProjectDiscovery` is idempotent on the project), so the
+  nine carried criteria keep the discovery answer indefinitely — backlog 46's own example (*"a team
+  that adds the test suite R1 wanted is never told"*) is **still true for R1**. Filed as 230.
+
+**Sentences falsified.** Changed here: `docs/user-guide.md` step 2 (the "evaluated once" sentence,
+now the re-check table), step 3 (was *not built*) and §13's two rows; `docs/operator-guide.md`'s
+*not built* bullet; `docs/technical/08` (the route), `docs/technical/03` (`source` values);
+`criteria.ts` R6's detection; `record.ts`'s `public_api` residual; the `onboarding.tsx` and
+`project-settings.tsx` *Not built* panels; the WP-63 docblocks of `REPOSITORY_FILE_PATHS` and
+`createGitRepositoryFileSource` (two paths → three). **Left for the orchestrator** (product and
+decisions are not mine), with text:
+- product/17:11 — *"re-checked after every merged task (cheap: mostly file and CI-event
+  inspection)"* → *"re-checked after every merge onto the default branch without a run: R3 from CI
+  events, R8 from the files, R9, R11 and R12 from the platform's own records; the other nine keep the
+  answer discovery gave"*.
+- product/06 § "Readiness" — *"It is computed at the end of technical discovery"* → add *"and
+  re-checked after every merge (product/17)"*; § "Step 3" — Q102's amendment once ruled (*"as built,
+  the question bank as a form; answers become proposals, never commits"*).
+- product/19 §5 R6 row — *"a `.agentic/workspace/setup` script, a devcontainer or a compose target
+  is read, not run — no named verb covers a script path"* → *"`./.agentic/workspace/setup` is run by
+  its literal path (WP-64); a devcontainer or a compose target is read — `docker *` is blocked"*;
+  §8 — *"stores answers verbatim plus an English summary line"* → *"verbatim"* (Q102).
+- product/13's Discovery row (WP-54's amendment) — add the setup script to what it runs.
+- CLAUDE.md's "Onboarding, discovery and readiness" bullet — one sentence for the re-check and step 3.
+- technical/02:204 — `readiness.evaluated` names *"Discovery / CI gate"* as producers; neither
+  emits it (228).
+
+**Discovered work** (for the refiner):
+- **228** — `readiness.evaluated` has **no producer** (`consumption.ts:281` declares it unconsumed;
+  technical/02:204 names Discovery and the CI gate). Neither the discovery recorder nor the re-check
+  emits it, so nothing can react to a level change; the SSE `project:*` topic does not see one.
+- **229** — `record.ts` stores every drafted page as `kind: 'technical'` whatever its path, so a
+  discovery draft that names `business/overview.md` is labelled technical in the queue (and, once
+  approved, counts toward the business score). The prompt now forbids it; the platform does not.
+- **230** — Discovery cannot be re-run on a project, so R1, R2, R4–R7, R10, R13 and R14 are frozen
+  at the first run: a *"re-run discovery"* command (a second budgeted run, maintainer-triggered) or
+  product/19 §5's *"weekly maintenance check"* for R1 is the missing producer. Related sentence:
+  `apps/web/src/features/project-settings.tsx`'s mirror table says step 2 is *"re-run discovery"*,
+  and the command answers `started: false` for a project that already has a discovery task.
+- **231** — R10 and R13 could join the tree reads (an MR template path, a commitlint or gitleaks
+  config), and R4 needs the flaky-rerun statistic product/19 §5 defines; each is a widening of
+  `REPOSITORY_FILE_PATHS` or a new projection, so each is a decision rather than a line.
+
+**Verification** (every tier after a bounded load check under 12; the new files marked intent-to-add
+first): `pnpm run -s verify` **PASS** (8095 passed, 14 skipped); `verify:integration` **PASS** (580);
+`verify:ui` **PASS** (382); `verify:web-e2e` **PASS** (47); `verify:e2e` — the first full pass
+failed one case of the new file (`detected_by` recomputed by the read, fixed above; 213/214), the
+file alone then **PASS**, and the full rerun **PASS** (214/214).
+`scripts/citations.test.ts` green over these notes. `pnpm eval --check` exits 1 by design (the
+WP-17 blocker); the eval cases are held offline by `evals.test.ts`. Docker after each tier: no
+container of this run left, volumes 101 before and after.
+
+**Review round 1 (APPROVE-with-nits), addressed.** (1) An interview answer or reason with U+0000 is
+a 400 naming the field (`api.test.ts` › "refuses a NUL in an answer or a reason, and names where"),
+not a 500 from `text`/`jsonb`. (2) The `human_actions` row is written **in the proposals'
+transaction**: `recordBusinessInterview` takes a `claim`, and `claimIdempotentAttemptInTransaction`
+(`queries/onboarding-queries.ts`) takes an advisory lock on `(user, action, key)`, re-reads and
+inserts; a refused claim rolls everything back and the route answers `performed: false` from the
+recorded attempt (`onboarding.integration.test.ts` › "lets exactly one of two racing transactions record the attempt";
+`onboarding/interview.test.ts` › "queues nothing and answers replayed when the claim is refused").
+(3) A carried criterion keeps who answered it. (4) `intersectWithOrganisationMaximum`'s "by
+construction" sentence corrected: with no organisation `allow` each role keeps its shipped
+baseline, and the verification one now holds a verb the implementation one does not. (5)
+technical/04's verification baseline and `docs/TODO.md`'s setup-script item say what runs it now.
+`pnpm run -s verify` **PASS** (8099); the onboarding integration file and the readiness-loop e2e
+**PASS** alone, each after a reading under 12.
