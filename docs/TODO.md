@@ -161,7 +161,7 @@ Product-definition items were decided on 2026-08-28 and moved into `product/19-o
 - [ ] Better Auth api-key hashing at rest — WP-06 deferred it: the plan row names "email/password, sessions, admin" and not API keys, so `@better-auth/api-key` is not installed and personal access tokens (TD-022) are unimplemented. Revisit with the work package that needs script access.
 - [ ] pg-boss `stop()` graceful options and behaviour with long-running run jobs — WP-05.
 - [ ] Which runc version uses `cgroup.kill`; gVisor host-side cgroup enforcement — WP-14.
-- [ ] TypeScript 7 (Go compiler) toolchain compatibility (Vitest, Biome, Stryker) — WP-00 (fall back to 6.x).
+- [ ] TypeScript 7 (Go compiler) toolchain compatibility (Vitest, Biome, Stryker) — WP-00 (fall back to 6.x). **Stryker half read (architect, session 8, `docs/research/14-stryker-vitest5-typescript7.md`)**: StrykerJS 10.0.0 crashes at start on TypeScript 7 outside `inPlace` (PR #6231 open) and reports every covered mutant *Survived* on Vitest 5 (issue #6210, PR #6220 open); two workarounds are `[unverified]` — `coverageAnalysis: "all"` sidestepping the name filter, and TypeScript 6 installed as `typescript`. WP-78 (M5) waits on a published release carrying both fixes.
 - [ ] promptfoo Agent SDK provider behaviour with `setting_sources` and fixture repos — WP-17.
 - [ ] Embedding throughput on 4 vCPU for Qwen3-Embedding-0.6B int8 via transformers.js — phase-2 spike (TD-009).
 - [ ] Transcript import into a developer's local Claude Code for take-over (`claude --resume` with an exported JSONL) — WP-27.

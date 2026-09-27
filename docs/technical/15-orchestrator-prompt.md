@@ -26,10 +26,11 @@ the Resume note says otherwise. (6) The open backlog headings, `docs/OPEN-QUESTI
 and the blocker briefs. Then fill the Resume note's PENDING run ids in with your first ledger
 commit.
 
-**Two standing facts about CI.** Since `2ac17b4` (TD-019's continuous-deployment amendment) the
-`release` workflow is `workflow_dispatch` only and **no push starts it**: a push to `main` shows `ci`
-and `image` and nothing else, so a `release` run on a push sha is itself a defect of the tree, never
-the old *"not permitted to create or approve pull requests"* line to be recorded as expected. **WP-33** stays blocked
+**Two standing facts about CI.** Since WP-71 (`dadb543`) there is **no `release` workflow**: a push
+to `main` shows `ci` and `image` (and `base-image` when a Dockerfile changed), and `image`'s own
+`release` **job** is **skipped** while the repository variable `RELEASE_VERSIONING` is unset — a
+`release` job that ran, or a tag or GitHub Release that appeared, on a push sha is a defect of the
+tree (or the founder has set the switch; check `gh variable list` before calling it one). **WP-33** stays blocked
 on a human model credential — never wait on it; if the blocker brief in `PROGRESS.md` says the
 credential now exists, WP-33 becomes the first row.
 
@@ -91,7 +92,7 @@ vitest's coverage directory: sequence your `verify` and a reviewer's, never over
    APPROVE-with-nits ends the review: fix the nits yourself, run `verify`, record them.
 5. Commit from a message prepared in the scratchpad (what was wrong, what the change does, the
    backlog entries closed, the review rounds), push, poll `gh run list` in the background until every
-   workflow on the sha is `completed`, confirm the `release` line.
+   workflow on the sha is `completed`, confirm `image`'s `release` job is `skipped`.
 6. The ledger row from a draft applied by a script that asserts each anchor occurs exactly once:
    the M4 status row (DONE, sha, dependencies, what it folded, the review rounds with the canaries,
    your verification verdicts, the CI ids), each folded backlog heading marked `**RESOLVED** at

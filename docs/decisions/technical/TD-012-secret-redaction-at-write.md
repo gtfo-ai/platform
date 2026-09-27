@@ -46,3 +46,35 @@ a default is indistinguishable from a redactor that stopped working — the argu
 **The redactor is the run's own**, built from `RunSpec.env` and `RunSpec.secretEnvNames` — the same
 construction `apps/server/src/agent.ts` uses for the transcript sink — so an artifact and the
 transcript of the run that produced it cannot name different secrets.
+
+## Amendment (M5 architect pass, session 8, 2026-09-27) — a minted credential is redacted everywhere by its *shape*, never by a stored copy of its value
+
+**The gap.** Step (1)'s exact-match replacement of a *minted* run credential lives only in the memory
+of the process that minted it (`packages/application/src/pipeline/run-redaction.ts:96-126`, WP-72's
+decision (a) of PROGRESS backlog 154). Every other process — on the shipped topology that is `app`,
+which handles every webhook — relies on step (2)'s gitleaks-derived `gitlab-token` rule, which knows
+GitLab's default `glpat-` prefix and nothing else. GitLab lets an administrator change the token prefix
+and project access tokens inherit it (the citation is in backlog **259**), so on such an instance a
+minted credential quoted back in a merge-request comment reaches `events.payload` unredacted in every
+process but one.
+
+**Decision.** The minting process records, beside the mint's audit row, a **non-secret shape** of the
+credential — its observed prefix (the characters before the provider's documented random part), its
+character class and its length — and every process compiles one additional step-(2) rule per recorded
+shape from those rows at composition and on the existing configuration refresh. A shape is never a
+value: it names no characters of the random part, so storing it breaks neither BD-002 nor this record's
+*"originals are never stored"*. The rule over-redacts any other token of the same shape, which is the
+safe direction and is counted in `redaction_count` like every other rule.
+
+A provider that declares `credentialMinting` must also declare that its minted values **have** a stable
+shape; a provider that cannot is refused minting (the capability is declined at registration) until a
+decision on a shared exact-value registry exists. That registry — the minted value sealed in `secrets`
+per run and readable by every product process (backlog 259's option (b)) — is **rejected for 0.1**:
+it puts a recoverable copy of a live push credential in the one database every product process can
+read, which is precisely the copy this record exists to prevent, and it buys nothing over the shape
+rule for the one minting provider this build ships.
+
+*Consequences.* One table or column for the shapes (migration, technical/03 amended); the stale
+sentence at `packages/application/src/ports/integrations/git-provider.ts:377` (*"`false` means the
+operator's static bot token is used as-is"*, contradicting TD-028 decision 6) is corrected in the same
+change. Built by M5 **WP-80**.

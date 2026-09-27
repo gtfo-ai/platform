@@ -285,3 +285,60 @@ before any connect (`assertSocketHost`, the folded half of PROGRESS backlog 196)
 held socket, including one whose open was still in flight when the stop began.
 
 **Amendment (WP-72, 2026-09-27) — the crossings of the shipped topology, and the API role's queue client.** The two product processes share nothing but the database, and each crossing is asserted through two processes in `test/e2e/topology/two-processes.e2e.test.ts`: (1) a command's effect — answered by a process that runs no worker, performed by a worker through the job queue; since WP-72 `ROLE=api` holds an **enqueue-only** pg-boss client (supervision and cron off, every worker operation refused by name, `apps/server/src/enqueue-only-jobs.ts`), which it did not before, so on `ROLE=api` a knowledge approval waited for the nightly pass and every command that starts a stage was refused; (2) a run's transcript — written by the runner, streamed by the process that serves the API over `NOTIFY` and a read-back; (3) readiness — per process, `dispatch` only on worker roles; (4) the chat socket — held by the process that serves `/webhooks/*`, which renews `held_connection_liveness` (migration 0054) so an approval is posted with buttons only while some process holds it; (5) steer and take-over do **not** cross: on this topology the process that serves the API never holds a run, so every steer is refused `run_not_reachable` (PROGRESS backlog 134); (6) a run credential is redacted by exact value only in the runner, and elsewhere by the pattern rules alone, which cover GitLab's default `glpat-` prefix and not an administrator-chosen one (PROGRESS backlog 154, decision (a); (b) filed as 259). The Consequences bullet's *'the queue depth is a metric, `/readyz` reports the runner as absent'* remains unbuilt and unowned (PROGRESS backlog 135, declined by WP-72).
+
+## Amendment (M5 architect pass, session 8, 2026-09-27) — a command reaches a run through the database, and an unbound credential is revoked through the integration that minted it
+
+Two decisions M5's rows need before code, both on this record because both are consequences of
+decision 6's two-process topology. Neither changes decisions 1–8.
+
+**9. A human command for a live run (steer, take-over's stop) reaches the process holding it through
+the database, never through a new network route.** PROGRESS backlog **134** measured the cost of
+decision 6: the process serving the API is pinned never to hold a run (`apps/server/src/role.ts:106`,
+`runner: { api: false, … }`), the live-run register is per process, so `steerRunCommand` refuses every
+steer on the shipped topology (`packages/application/src/pipeline/commands.ts:1295-1297`) and a
+take-over records `runId: null` (`:1409`). The shape:
+- the API process **records** the command — a `run_commands` row (run id, kind, redacted payload,
+  actor, `Idempotency-Key`-derived id) in the same transaction as the aggregate operation and the
+  `human_actions` row the route already writes — and answers `202 accepted`, never a claim that the
+  model heard it;
+- it wakes the holder with `pg_notify` on a channel keyed by `runs.lease_owner` (the column WP-47 gave a
+  writer, `0004_pipeline.sql:90`); the process that holds the lease `LISTEN`s through the existing
+  broadcast adapter (`packages/infrastructure/src/broadcast/postgres-broadcast.ts`) and **also polls its
+  own leased runs' pending rows on the heartbeat**, because a notification is not delivered to a process
+  that was reconnecting — the notify is latency, the poll is the guarantee;
+- the holder applies the command to its in-process register, stamps `applied_at` or a typed
+  `refused_reason` (run no longer live, register miss), and the task screen reads that stamp; a row
+  still pending when the run ends is closed `run_ended` by the run's own ending, in its transaction;
+- the single-process mode (`ROLE=all`) takes the same path, so there is one mechanism to test.
+
+*Alternatives rejected:* HTTP from the API process to the runner (gives the runner an inbound
+listener and an address, which decision 2 exists to avoid, and a second authenticated surface); a
+pg-boss job per command (at-least-once to *any* subscribed worker, while the command must reach the one
+process holding the run); routing the API role's steer to "whichever process" by retry (the lottery
+`role.ts` already refuses).
+
+**10. A minted run credential whose project is no longer bound to the minting integration is revoked
+through the minting integration.** PROGRESS backlog **156** half 3. Since WP-73b the recovery pass
+*reports* such a credential and leaves it live to its expiry
+(`packages/application/src/recovery/run-credential.ts:64-69`), because the query requires the mint's
+`integration_id` to be the project's git binding still. The join exists to stop an address reaching a
+host that did not issue it; the minting integration is **by construction** that host, and the audit,
+idempotency and rate-limit records are already keyed by `integrations.id` (technical/06, WP-51), so a
+revoke through it is truthful in every record it writes. So:
+- the revoke (teardown and recovery alike) builds its adapter from the **minting `integrations.id`**,
+  bound or not; the binding join is dropped from the recovery predicate and kept as the *refusal* in the
+  one case it was right about — a revoke must never go through an integration **other** than the one
+  that minted (WP-73b's teardown refusal stands);
+- when the minting `integrations` row itself is gone (deleted), the credential is reported exactly as
+  today and lives to its expiry — there is no host left the platform may call;
+- WP-73b's report line becomes a revoke attempt, one per `revoke_id`, and a `not_found` answer stays
+  *unconfirmed*, never *revoked*.
+
+*Alternatives rejected:* refusing a binding change while an unexpired, unconfirmed credential exists
+(makes an operator's provider swap hostage to a crashed run for up to 48 hours); keeping *report and
+expire* (a known live push credential the platform could revoke and chooses not to).
+
+*Consequences.* A migration for `run_commands`; the steer route's answer changes from a synchronous
+delivery to *accepted, then applied or refused* on the run screen; `docs/technical/05` § 2 and
+`docs/technical/08`'s steer and take-over rows are amended by the row that builds decision 9 (M5
+**WP-85**), and decision 10 by **WP-80**.
