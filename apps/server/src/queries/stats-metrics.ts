@@ -171,6 +171,50 @@ export const bucketsOf = (
   return buckets;
 };
 
+// ── The bound on what one answer is folded from ─────────────────────────────
+
+/**
+ * The most delivered — or started — tasks one answer may be folded from.
+ *
+ * 5 000 is two orders of magnitude past what a self-hosted instance delivers in a year at
+ * product/19's own dogfood volumes, and it is a bound on **memory**, not a quota: the per-task rows
+ * are the only unbounded input to the fold.
+ */
+export const MAX_TASK_ROWS = 5_000;
+
+/** Raised when a range holds more tasks than one answer may be folded from. */
+export class StatsRangeTooLargeError extends Error {
+  override readonly name = 'StatsRangeTooLargeError';
+  readonly kind: 'started' | 'delivered';
+  readonly limit: number;
+  constructor(kind: 'started' | 'delivered', limit: number) {
+    super(
+      `this range covers more than ${limit} ${kind} tasks, which is more than one statistics answer is folded from; narrow the range or the project`,
+    );
+    this.kind = kind;
+    this.limit = limit;
+  }
+}
+
+/**
+ * The per-task rows a read returned, or the refusal by name when there are more than
+ * {@link MAX_TASK_ROWS} of them — a truncated total is indistinguishable from a real one on a screen.
+ *
+ * The comparison lives **here**, in the module the unit tier covers, rather than beside the SQL in
+ * `stats-queries.ts`, which is excluded from coverage (WP-70, PROGRESS backlog 115): the one branch
+ * of that file that was not a `where` clause is the one a unit test can reach without a database.
+ * The reads ask for `MAX_TASK_ROWS + 1` rows so that "exactly at the bound" and "past it" differ.
+ */
+export const boundTaskRows = <Row>(
+  kind: 'started' | 'delivered',
+  rows: readonly Row[],
+): readonly Row[] => {
+  if (rows.length > MAX_TASK_ROWS) {
+    throw new StatsRangeTooLargeError(kind, MAX_TASK_ROWS);
+  }
+  return rows;
+};
+
 // ── The rows this fold is made of ────────────────────────────────────────────
 
 /** One task that was **started** in the range, with what a human had to do about it. */

@@ -26,7 +26,23 @@
 - Golden transcripts cover: sub-agents, compaction, denied tools, budget stop, structured output failure, steer, interrupt.
 
 ## Coverage and gates
-- Thresholds in `vitest.config.ts`: domain 90 % lines / 85 % branches / 90 % functions; overall 80 %; `coverage.include` explicit. Codecov for visibility (not required).
+- Thresholds in `vitest.config.ts`, **per ring and with no global threshold** (WP-70, PROGRESS backlog 87): the bar is 80 % on every metric, and the domain's 90 % lines / 85 % branches / 90 % functions / 90 % statements. A ring whose measured figure clears the bar by the slack — two points or two items, whichever is larger — is held to the bar; one that does not is held to `floor(measured − slack)` and carries an `owes` line naming the files the debt is in. `COVERAGE_RINGS` is the table and `scripts/coverage-budget.test.ts` holds it as a partition: every file coverage counts matches exactly one ring's glob, by vitest's own `picomatch`. There is no global threshold because vitest counts every file into it even when a glob already holds it, so a global number puts every ring's noise and debt into every other ring's gate — it read 80.02 % against 80 when WP-70 opened. `coverage.include` is explicit; `coverage.exclude` names four source files, each a census entry (`COVERAGE_EXCLUDED_FILES`) that says which file drives it and in which tier — only the `process` tier is inside `verify`. Codecov for visibility (not required).
+- The ring table, measured at WP-70 (`unit`+`contract`+`process`, json-summary; branches covered/total):
+
+  | Ring | Glob (short) | Branches | % | Thresholds | Branch margin |
+  |---|---|---|---|---|---|
+  | domain | `packages/domain/src` | 1687–1689 / 1795 | 93.98–94.09 | lines 90, branches 85, functions 90, statements 90 | 8.98 |
+  | contracts | `packages/contracts/src` | 114 / 114 | 100.00 | 80 on all four | 20.00 |
+  | application | `packages/application/src` | 4342 / 5144 | 84.41 | 80 on all four | 4.41 |
+  | integrations | `packages/integrations/src` | 2602 / 3014 | 86.33 | 80 on all four | 6.33 |
+  | prompts | `packages/prompts/src` | 26 / 34 | 76.47 | branches 70, rest 80 | 6.47 (two branches) |
+  | infrastructure | `packages/infrastructure/src` minus `runlet/` | 2010 / 2868 | 70.08 | branches 68, lines 79, functions 66, statements 78 | 2.08 |
+  | runlet | `packages/infrastructure/src/runlet` | 309 / 369 | 83.74 | 80 on all four | 3.74 (thirteen branches) |
+  | server | `apps/server/src` | 1314 / 2309 | 56.91 | branches 54, lines 63, functions 50, statements 62 | 2.91 |
+  | launcher | `apps/launcher/src` | 166 / 187 | 88.77 | functions 76, rest 80 | 8.77 |
+  | test support | `packages/*/src/testing/`, `**/testing.ts` | 1032 / 1168 | 88.36 | 80 on all four | 8.36 |
+
+  Run-to-run variance, per file, over WP-70's seven coverage runs with the files WP-70 itself edited subtracted (one-minute load 5.9–11.7 at each start): **two branches**, both in `packages/domain/src/cost/ledger.ts` (`?? 0` at lines 334 and 341), reached by an unseeded property test on some draws and not others; no runlet file moved. WP-69's 79.99 % and then 80.02 % globally straddled a test the orchestrator added, so it is not evidence of scheduling noise (PROGRESS, WP-70). The smallest branch margin above in branches is prompts' two, and in the two debt rings it is fifty-nine (infrastructure) and sixty-seven (server).
 - Required checks on `main` (ruleset + merge queue): lint, typecheck, unit, contract, integration, e2e-fake-claude, ui, dco, commitlint.
 - Flake policy: `--repeats` nightly; a flaky test is quarantined with an issue within a day.
 

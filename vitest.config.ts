@@ -66,6 +66,182 @@ export const PROCESS_SUITES = [
   'packages/infrastructure/src/runlet/structural-wait.test.ts',
 ];
 
+/** What coverage measures: the source rings the `unit`, `contract` and `process` projects reach. */
+export const COVERAGE_INCLUDE = [
+  'packages/*/src/**/*.ts',
+  'apps/server/src/**/*.ts',
+  'apps/launcher/src/**/*.ts',
+  'apps/runlet/src/**/*.ts',
+];
+
+/** A source file taken out of the coverage denominator, and the evidence that nothing is hidden. */
+export interface CoverageExclusion {
+  readonly path: string;
+  /** Why it has nothing a counted tier could assert — the only two kinds admitted so far. */
+  readonly kind: 'process entrypoint' | 'database reads';
+  /** The file that drives it, which names it; `scripts/coverage-budget.test.ts` reads both. */
+  readonly exercisedBy: string;
+  /**
+   * Which tier that is — and so whether `verify` runs it. Only `process` is inside `verify`;
+   * `integration` gates on `verify:integration`, and `image` on nothing but the image starting.
+   */
+  readonly tier: 'process' | 'integration' | 'image';
+}
+
+/**
+ * The files coverage does not count (WP-70, PROGRESS backlog 115) — **a census, not a list**:
+ * `scripts/coverage-budget.test.ts` pins these paths in both directions, checks that each
+ * `exercisedBy` file exists and names the excluded one, and that `coverage.exclude` holds nothing
+ * else by path. So a new entry is a decision somebody makes in two files rather than a line somebody
+ * adds under a precedent.
+ *
+ * Every entry says **which tier** drives it, and three of the four are tiers `verify` does not run —
+ * which is the honest shape of an exclusion: the code is exercised somewhere, just not where the
+ * number is counted.
+ *
+ * `packages/infrastructure/src/db/client.ts` **was** on this list, as a pool with no branch of its own
+ * exercised only by the integration tier; since the `'error'` listener fix its unit test
+ * (`db/pool-errors.test.ts`) builds the pool itself, so the tier coverage counts reaches it and it is
+ * counted again (WP-70).
+ */
+export const COVERAGE_EXCLUDED_FILES: readonly CoverageExclusion[] = [
+  {
+    // The one-shot `migrate` CLI: environment in, one JSON line per step out, exit code. No test
+    // tier starts it — the integration harness calls `runMigrations` directly — so what drives it
+    // is the image: compose's `migrate` service runs this exact file. Its two exit codes are
+    // unasserted anywhere (PROGRESS backlog 252).
+    path: 'apps/server/src/migrate.ts',
+    kind: 'process entrypoint',
+    exercisedBy: 'compose.yml',
+    tier: 'image',
+  },
+  {
+    // The launcher's process entrypoint: environment in, signals mapped, `process.exit` out. Every
+    // decision it could get wrong is in `runtime.ts`, which the unit tier drives; this file is run
+    // by the launcher image's `CMD` and by no test.
+    path: 'apps/launcher/src/index.ts',
+    kind: 'process entrypoint',
+    exercisedBy: 'docker/launcher.Dockerfile',
+    tier: 'image',
+  },
+  {
+    // The run shim's entrypoint: `process.env` in, `process.exit` out, every decision delegated to
+    // `packages/infrastructure/src/runlet`. The conformance suite starts this exact file as a real
+    // process against a real socket, in the `process` project (WP-69) — inside `verify` — and a
+    // subprocess reports no coverage to the run that started it.
+    path: 'apps/runlet/src/index.ts',
+    kind: 'process entrypoint',
+    exercisedBy: 'packages/infrastructure/src/runlet/conformance.contract.test.ts',
+    tier: 'process',
+  },
+  {
+    // WP-41's statistics reads: fourteen SQL statements and their row mappers, nothing a unit test
+    // could reach without a database. They are driven by the **integration** tier, which collects
+    // no coverage and which `verify` does not run (`verify:integration` does). The one branch that
+    // was not a `where` clause — the refusal of a range holding more than `MAX_TASK_ROWS` tasks —
+    // moved to `boundTaskRows` in `queries/stats-metrics.ts` (WP-70), which is counted, and whose
+    // unit case asserts both kinds at the bound; the integration tier asserts both call sites.
+    path: 'apps/server/src/queries/stats-queries.ts',
+    kind: 'database reads',
+    exercisedBy: 'test/integration/stats/stats-queries.integration.test.ts',
+    tier: 'integration',
+  },
+];
+
+interface CoverageThresholds {
+  readonly branches: number;
+  readonly lines: number;
+  readonly functions: number;
+  readonly statements: number;
+}
+
+/**
+ * The coverage budget, **per ring** (WP-70, PROGRESS backlog 87) — where coverage is owed, rather
+ * than one average that lets the rings which carry it hide the rings which owe it.
+ *
+ * **Why not one global number.** The measurement that opened WP-70 (technical/10 § Coverage and
+ * gates has the table) put the global branch figure at 80.02 % against 80, and every ring's number
+ * is a weighted part of it: `packages/application` at 84 % and `packages/integrations` at 86 % were
+ * paying for `apps/server` at 57 % and `packages/infrastructure` at 70 %. A module added anywhere
+ * moved a gate nobody in that ring could see, and so did noise: WP-70's own runs over one tree
+ * moved by two branches inside `packages/domain/src/cost/ledger.ts`, which an unseeded property
+ * test reaches on some draws and not others. vitest counts every file into the global figure even when a glob
+ * already holds it (`resolveThresholds`, vitest 5.0.0), so a global threshold cannot be kept beside
+ * these without re-importing all of that; it is **not** set. `text-summary` still prints it.
+ *
+ * **The rule every number below follows.** Each ring is held to the bar technical/10 sets (80, and
+ * the domain's 90/85/90/90) where its measured figure clears that bar by the slack, and otherwise to
+ * `floor(measured − slack)`, where slack is **two points or two items, whichever is larger** — so a
+ * three-file ring is not held to one branch. A threshold under the bar is **debt, named**: the
+ * `owes` line says which files carry it. Paying it raises the number; nothing lowers one without a
+ * measurement that says why.
+ *
+ * **The runlet ring.** The run shim's modules (`packages/infrastructure/src/runlet/`) are the files
+ * the `process` project covers, whose covered branches can depend on process scheduling, so they
+ * are a ring of their own and their noise lands on their own gate: 83.74 % against 80 is thirteen
+ * branches of margin, and no run WP-70 made moved one of them.
+ *
+ * **Test support is a ring of its own**, not part of the product rings' denominators: the in-memory
+ * doubles and the harness under `packages/*\/src/testing/` and the `testing.ts` modules are imported
+ * by no production module (a grep, WP-70 — nothing enforces it), and counting them inside
+ * `packages/application` raised that ring from 84.41 % to 85.33 % branches. They are still
+ * measured, because the harness is code the tests trust.
+ *
+ * `scripts/coverage-budget.test.ts` holds the partition: every file coverage counts matches
+ * **exactly one** ring's glob, so a new directory cannot fall between two rings or into none.
+ */
+export const COVERAGE_RINGS: Readonly<
+  Record<
+    string,
+    { readonly glob: string; readonly thresholds: CoverageThresholds; readonly owes?: string }
+  >
+> = {
+  domain: {
+    glob: 'packages/domain/src/{!(testing).ts,!(testing)/**/!(testing).ts}',
+    thresholds: { lines: 90, branches: 85, functions: 90, statements: 90 },
+  },
+  contracts: {
+    glob: 'packages/contracts/src/{!(testing).ts,!(testing)/**/!(testing).ts}',
+    thresholds: { lines: 80, branches: 80, functions: 80, statements: 80 },
+  },
+  application: {
+    glob: 'packages/application/src/{!(testing).ts,!(testing)/**/!(testing).ts}',
+    thresholds: { lines: 80, branches: 80, functions: 80, statements: 80 },
+  },
+  integrations: {
+    glob: 'packages/integrations/src/{!(testing).ts,!(testing)/**/!(testing).ts}',
+    thresholds: { lines: 80, branches: 80, functions: 80, statements: 80 },
+  },
+  prompts: {
+    glob: 'packages/prompts/src/{!(testing).ts,!(testing)/**/!(testing).ts}',
+    thresholds: { lines: 80, branches: 70, functions: 80, statements: 80 },
+    owes: 'branches: 8 of 34, in `evals.ts` (3) and `skills.ts` (5) — two items of slack is six points here',
+  },
+  infrastructure: {
+    glob: 'packages/infrastructure/src/{!(testing).ts,!(runlet|testing)/**/!(testing).ts}',
+    thresholds: { lines: 79, branches: 68, functions: 66, statements: 78 },
+    owes: 'branches: 858 uncovered, 541 of them in the `postgres-*` stores, which the integration tier drives against PostgreSQL 18 and collects no coverage from; then `workspace/` 95 and `runner/` 94',
+  },
+  runlet: {
+    glob: 'packages/infrastructure/src/runlet/{**/,}!(testing).ts',
+    thresholds: { lines: 80, branches: 80, functions: 80, statements: 80 },
+  },
+  server: {
+    glob: 'apps/server/src/**/*.ts',
+    thresholds: { lines: 63, branches: 54, functions: 50, statements: 62 },
+    owes: 'branches: 995 uncovered — `queries/*.ts` 426, `routes/*` 280, `runtime.ts` 91, `knowledge.ts` 44, `pipeline.ts` 31: SQL and composition the integration and e2e tiers drive, uncounted',
+  },
+  launcher: {
+    glob: 'apps/launcher/src/**/*.ts',
+    thresholds: { lines: 80, branches: 80, functions: 76, statements: 80 },
+    owes: 'functions: 10 of 52 — `logging.ts` 6, `runtime.ts` 3, `export-retention.ts` 1 — and two items of slack is four points here',
+  },
+  'test support': {
+    glob: 'packages/*/src/{testing/**/*.ts,**/testing.ts}',
+    thresholds: { lines: 80, branches: 80, functions: 80, statements: 80 },
+  },
+};
+
 /**
  * Test tiers per docs/technical/10-testing-strategy.md.
  *
@@ -182,61 +358,21 @@ export default defineConfig({
     ],
     coverage: {
       provider: 'v8',
-      reporter: ['text-summary', 'lcov'],
+      // `json-summary` writes `coverage/coverage-summary.json`, the per-file figures the ring table
+      // in technical/10 was measured from (WP-70) — so the next reading is a file, not a scrollback.
+      reporter: ['text-summary', 'json-summary', 'lcov'],
       reportsDirectory: './coverage',
-      // Explicit include: only the rings exercised by the unit + contract tiers.
-      include: [
-        'packages/*/src/**/*.ts',
-        'apps/server/src/**/*.ts',
-        'apps/launcher/src/**/*.ts',
-        'apps/runlet/src/**/*.ts',
-      ],
+      include: COVERAGE_INCLUDE,
       exclude: [
         ...excludeEverywhere,
         '**/*.test.ts',
         '**/*.d.ts',
-        // Thin I/O shells with no branch of their own: a `pg` pool built from validated config, and
-        // the one-shot CLI that maps a report onto stdout. Both are exercised end to end by the
-        // `integration` tier, which runs a real PostgreSQL 18 and does not collect coverage. The
-        // one decision the pool makes — what to do with an `'error'` event — deliberately lives in
-        // `pool-errors.ts`, which is *not* excluded, so the exclusion here stays a statement about
-        // wiring rather than a place a branch can hide.
-        'packages/infrastructure/src/db/client.ts',
-        'apps/server/src/migrate.ts',
-        // The launcher's process entrypoint: environment in, signals mapped, `process.exit` out.
-        // Every decision it could get wrong is in `runtime.ts`, which the unit tier drives.
-        'apps/launcher/src/index.ts',
-        // The run shim's entrypoint: `process.env` in, `process.exit` out, every decision it makes
-        // delegated to `packages/infrastructure/src/runlet`. The contract tier starts this exact
-        // file as a real process against a real socket
-        // (`packages/infrastructure/src/runlet/conformance.contract.test.ts`), which is the only
-        // way to exercise an entrypoint and collects no coverage from a subprocess.
-        'apps/runlet/src/index.ts',
-        // WP-41's statistics **reads**: eight SQL statements and their row mappers, and nothing a
-        // unit test could reach without a database — every branch in the file is a `where` clause or
-        // a `numeric`-to-number conversion. They are driven end to end by
-        // `test/integration/stats/stats-queries.integration.test.ts`, which runs a real PostgreSQL
-        // 18 and collects no coverage, and the arithmetic they feed is `queries/stats-metrics.ts`,
-        // which is *not* excluded: every definition, ratio, cap and stated absence is asserted in
-        // the unit tier against rows a test wrote. The one **guard** this file owns — the refusal
-        // of a range holding more tasks than one answer is folded from — has a case of its own on
-        // that tier, so the exclusion stays a statement about wiring rather than a place a branch
-        // can hide (the reasoning `db/client.ts` established above).
-        'apps/server/src/queries/stats-queries.ts',
+        ...COVERAGE_EXCLUDED_FILES.map((exclusion) => exclusion.path),
       ],
-      thresholds: {
-        lines: 80,
-        branches: 80,
-        functions: 80,
-        statements: 80,
-        // The domain ring carries the strictest budget (technical/10).
-        'packages/domain/src/**/*.ts': {
-          lines: 90,
-          branches: 85,
-          functions: 90,
-          statements: 90,
-        },
-      },
+      // Per ring, and **no global threshold** ({@link COVERAGE_RINGS} says why).
+      thresholds: Object.fromEntries(
+        Object.values(COVERAGE_RINGS).map((ring) => [ring.glob, ring.thresholds]),
+      ),
     },
   },
 });

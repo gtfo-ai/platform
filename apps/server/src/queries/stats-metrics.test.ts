@@ -11,14 +11,17 @@ import type { IsoDateTime, StatMetric, StatMetricId } from '@platform/contracts'
 import { orgStatsResponseSchema } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import {
+  boundTaskRows,
   bucketStartOf,
   bucketsOf,
   foldStats,
+  MAX_TASK_ROWS,
   RANGE_DAYS,
   resolveRange,
   STATS_CATALOGUE,
   STATS_CSV_HEADER,
   STATS_METRIC_IDS,
+  StatsRangeTooLargeError,
   type StatsSources,
   statsToCsv,
 } from './stats-metrics.js';
@@ -511,4 +514,35 @@ describe('defect escape', () => {
     expect(definition).toContain('link on the bug ticket');
     expect(definition).toContain('never by its title, never by timing');
   });
+});
+
+/**
+ * The one guard the statistics reads own (WP-70, PROGRESS backlog 115). It used to be two `if`s in
+ * `stats-queries.ts`, which coverage excludes, and was asserted only by the integration tier —
+ * which `verify` does not run — and there only for `started`: nothing in any tier made the
+ * `delivered` site fire. The comparison is here now, so both kinds are asserted where they are
+ * counted, at the bound and one past it (standing rule 42).
+ */
+describe('the bound on what one answer is folded from', () => {
+  const rows = (count: number): readonly number[] => Array.from({ length: count }, (_, i) => i);
+
+  it.each(['started', 'delivered'] as const)(
+    'serves %s rows at the bound and refuses them one past it, by name',
+    (kind) => {
+      const atBound = rows(MAX_TASK_ROWS);
+      expect(boundTaskRows(kind, atBound)).toBe(atBound);
+
+      const refusal = (() => {
+        try {
+          boundTaskRows(kind, rows(MAX_TASK_ROWS + 1));
+        } catch (error) {
+          return error;
+        }
+        return undefined;
+      })();
+      expect(refusal).toBeInstanceOf(StatsRangeTooLargeError);
+      expect(refusal).toMatchObject({ kind, limit: MAX_TASK_ROWS });
+      expect((refusal as Error).message).toContain(`more than ${MAX_TASK_ROWS} ${kind} tasks`);
+    },
+  );
 });

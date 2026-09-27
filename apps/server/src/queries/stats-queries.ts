@@ -70,9 +70,11 @@ import type {
   WithheldReviewMinutes,
 } from './stats-metrics.js';
 import {
+  boundTaskRows,
   DEFECT_ESCAPE_WINDOW_DAYS,
   LINT_EDIT_WINDOW_HOURS,
   LINT_IMPROVEMENT_FIELDS,
+  MAX_TASK_ROWS,
 } from './stats-metrics.js';
 
 const { organizations } = dbAdapters.schema;
@@ -80,27 +82,10 @@ const { organizations } = dbAdapters.schema;
 export type Database = dbAdapters.Database;
 
 /**
- * The most delivered — or started — tasks one answer may be folded from.
- *
- * 5 000 is two orders of magnitude past what a self-hosted instance delivers in a year at
- * product/19's own dogfood volumes, and it is a bound on **memory**, not a quota: the per-task rows
- * are the only unbounded input here.
+ * The bound and its refusal live in the pure half (WP-70), where the unit tier reaches the
+ * comparison; they are re-exported so the route and the integration tier keep one import.
  */
-export const MAX_TASK_ROWS = 5_000;
-
-/** Raised when a range holds more tasks than one answer may be folded from. */
-export class StatsRangeTooLargeError extends Error {
-  override readonly name = 'StatsRangeTooLargeError';
-  readonly kind: 'started' | 'delivered';
-  readonly limit: number;
-  constructor(kind: 'started' | 'delivered', limit: number) {
-    super(
-      `this range covers more than ${limit} ${kind} tasks, which is more than one statistics answer is folded from; narrow the range or the project`,
-    );
-    this.kind = kind;
-    this.limit = limit;
-  }
-}
+export { MAX_TASK_ROWS, StatsRangeTooLargeError } from './stats-metrics.js';
 
 /** The organisation's zone, with `resolveBudgetTimezone`'s verdict rather than the raw column. */
 export const findOrganisationTimezone = async (
@@ -215,10 +200,10 @@ const startedTasks = async (
        and ${dayFilter('t.created_at', bounds, 't.project_id')}
      limit ${MAX_TASK_ROWS + 1}
   `);
-  if (rows.length > MAX_TASK_ROWS) {
-    throw new StatsRangeTooLargeError('started', MAX_TASK_ROWS);
-  }
-  return rows.map((row) => ({ startedDay: row.started_day, intervened: row.intervened === true }));
+  return boundTaskRows('started', rows).map((row) => ({
+    startedDay: row.started_day,
+    intervened: row.intervened === true,
+  }));
 };
 
 /**
@@ -265,10 +250,7 @@ const deliveredTasks = async (
        and ${dayFilter('d.merged_at', bounds, 'd.project_id')}
      limit ${MAX_TASK_ROWS + 1}
   `);
-  if (rows.length > MAX_TASK_ROWS) {
-    throw new StatsRangeTooLargeError('delivered', MAX_TASK_ROWS);
-  }
-  return rows.map((row) => ({
+  return boundTaskRows('delivered', rows).map((row) => ({
     mergedDay: row.merged_day,
     cycleHours: number(row.cycle_hours),
     agentHours: number(row.agent_hours),

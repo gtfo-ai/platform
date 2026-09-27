@@ -575,9 +575,11 @@ describe('the statistics reads (PostgreSQL)', () => {
   });
 
   it('refuses a range with more tasks than one answer is folded from, rather than serving it short', async () => {
-    // The one **guard** this module owns, and the reason `stats-queries.ts` is excluded from the
-    // unit tier's coverage rather than quietly uncovered: a truncated total is indistinguishable
-    // from a real one on a screen, so the read fails by name and the route answers 409.
+    // The one **guard** these reads carry: a truncated total is indistinguishable from a real one on
+    // a screen, so the read fails by name and the route answers 409. The comparison itself is
+    // `boundTaskRows` in `stats-metrics.ts` since WP-70, asserted at the bound for both kinds in
+    // the unit tier; this case asserts that the SQL asks for one row past the bound, so the
+    // comparison has something to refuse.
     const project = await seedProject('bulk');
     await pool.query(
       `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, created_at)
@@ -587,11 +589,43 @@ describe('the statistics reads (PostgreSQL)', () => {
     );
 
     await expect(read(project)).rejects.toThrow(StatsRangeTooLargeError);
+    await expect(read(project)).rejects.toMatchObject({ kind: 'started' });
     // …and one row under the bound is served, so the refusal is a boundary rather than a ceiling
     // nobody can reach (standing rule 42).
     await pool.query('delete from tasks where ticket_key = $1', [`BULK-${MAX_TASK_ROWS + 1}`]);
     const sources = await read(project);
     expect(sources.startedTasks).toHaveLength(MAX_TASK_ROWS);
+  }, 120_000);
+
+  it('refuses a range with more delivered tasks than one answer is folded from, at its own site', async () => {
+    // The `delivered` site had no assertion in any tier until WP-70 (PROGRESS backlog 115): the
+    // case above seeds tasks and no `stats_task_delivery` rows, so only `started` could fire. These
+    // tasks were created long before the range and merged inside it, so the `started` read sees
+    // none of them and the refusal can come from nowhere but the delivered read.
+    const project = await seedProject('bulk-delivered');
+    await pool.query(
+      `with created as (
+         insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, created_at)
+         select $1, 'fake-jira', 'DLV-' || g, 'https://jira.example.test/x', 'feature', $2
+           from generate_series(1, ${MAX_TASK_ROWS + 1}) as g
+         returning id, project_id
+       )
+       insert into stats_task_delivery (task_id, project_id, merged_at)
+       select id, project_id, $3 from created`,
+      [project, at(-60 * 24 * 60), at(-10)],
+    );
+
+    const refusal = await read(project).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(refusal).toBeInstanceOf(StatsRangeTooLargeError);
+    expect(refusal).toMatchObject({ kind: 'delivered', limit: MAX_TASK_ROWS });
+    // …and one row under the bound is served (standing rule 42).
+    await pool.query('delete from tasks where ticket_key = $1', [`DLV-${MAX_TASK_ROWS + 1}`]);
+    const sources = await read(project);
+    expect(sources.deliveredTasks).toHaveLength(MAX_TASK_ROWS);
+    expect(sources.startedTasks).toEqual([]);
   }, 120_000);
 
   /**

@@ -4360,7 +4360,7 @@ is lost.
 **Depends on / owner.** **No work package owns it.** Cheapest owner: whoever next opens
 `apps/web/src/features/ask-thread.tsx` or the knowledge screen; the two halves are independent.
 
-### 87. **The global branch-coverage threshold has 0.05 points of headroom, so the next work package pays a debt it did not create — and the cheap way out removes an instrument that has already found four defects** (TODO, small — **no work package owns it**; reported by WP-31's implementer, session 5; the figure is **not re-measured here**, rule 66)
+### 87. **The global branch-coverage threshold has 0.05 points of headroom, so the next work package pays a debt it did not create — and the cheap way out removes an instrument that has already found four defects** (**RESOLVED** at `WP70SHA`, WP-70, session 8 — per-ring thresholds, no global one; the residual is backlog **254** — TODO, small — **no work package owns it**; reported by WP-31's implementer, session 5; the figure is **not re-measured here**, rule 66)
 > **M4 (architect, session 6): folded into WP-70.**
 
 **What is wrong.** `verify:tests` enforces `branches: 80` over
@@ -11112,6 +11112,42 @@ Whether `paused → returned` should exist too (so return-to-stage works from an
 
 **Done.** **Needs measurement:** `biome lint` with `noImportCycles` on, finding count over the tree. If it is zero or the six are rewritten to `import type`, the rule goes on at `error` in `biome.json` (no new dependency, no new `verify` target); a planted two-module value cycle is refused, measured. If the count is large, the entry is updated with it and returned unowned rather than landed red (WP-71's rule for linters). **Depends on** nothing unbuilt.
 
+### 252. **`apps/server/src/migrate.ts` has two failure exit codes and no tier asserts either — the image is its only driver** (nit, TODO — **latent**: nothing reads the difference between 1 and 2 today; read off the tree; **folded into WP-73**; found by WP-70, session 8)
+
+**What is wrong / the evidence.** `migrate.ts:38` returns **2** when `db.loadDatabaseConfig` throws and `:68` returns **1** when `runMigrations` rejects; `:72` makes either the process exit code. `git grep` for `migrate.ts`/`migrate.js` over `test/`, `scripts/` and `.github/` finds no test that starts it: its drivers are `compose.yml:109` (the `migrate` service) and `package.json:34` (`db:migrate`). WP-70 moved the reason onto the exclusion census (`vitest.config.ts:109-117`, `tier: 'image'`), replacing the falsified *"exercised end to end by the integration tier"* (WP-70 notes, *Sentences falsified*).
+
+**What it costs to leave.** Small. Compose gates `app` on `service_completed_successfully` (`compose.yml:192`, `:260`), which reads zero versus non-zero, so a swapped 1/2 breaks nothing that exists; a change that made a failure exit **0** would start `app` on an unmigrated schema, and `assertSchemaIsKnown` refuses only a schema *ahead* of the build.
+
+**Done.** Two cases that spawn the file as a process, no Docker and no database: an environment with no `DATABASE_URL` exits **2** with the `invalid database configuration` line; a well-formed URL to a port nothing listens on exits **1** with `migration failed`. If they sit in the `process` project, the file leaves `COVERAGE_EXCLUDED_FILES` (the census then requires its entry to go). **Depends on** nothing unbuilt.
+
+### 253. **Two branches of `packages/domain/src/cost/ledger.ts` are covered on some fast-check draws and not others, so a coverage figure varies by two branches between runs of one tree** (nit, TODO — **no gate at risk**: the domain ring's branch margin is ~9 points; **folded into WP-73**; found by WP-70, session 8)
+
+**What is wrong / the evidence.** WP-70 notes, item 3, quoted: *"Seven runs … diffed per file off `coverage-summary.json` (and per branch off `coverage-final.json` for the four) with WP-70's own edits subtracted: **two branches** moved, both `?? 0` in `packages/domain/src/cost/ledger.ts:334` and `:341`, covered on some fast-check draws and not others (the property tests are unseeded)."* Both are `entry.usd ?? 0` in the reported-total path (`ledger.ts:333-341`). The property that reaches the path is `ledger.test.ts:349-382`; its `money` arbitrary never yields `null`, so **which** draw covers the `null` side is **a hypothesis** (the refiner's reading: a draw whose split falls back to an entry with no per-model figure) — not measured.
+
+**What it costs to leave.** Every before/after coverage comparison carries ±2 branches of noise nobody can attribute; WP-69's 79.99 → 80.02 was read as scheduling noise until WP-70 found a test between the two figures.
+
+**Done.** One **example** case in `ledger.test.ts`: a reported run total with a per-model entry whose `usd` is `null`, asserting the entries still sum to the invoice — which makes both branches deterministic without seeding fast-check. **Needs measurement** to close: two coverage runs of the domain ring with no branch moving in `ledger.ts`. **Depends on** nothing.
+
+### 254. **With no global threshold, the overall coverage figure is ungated, no ring floor is pinned, and a debt ring can grow at its floor — the small-denominator ring fails on the first untested function and the cheapest way out is to lower it** (small, TODO — **design, not a defect**: WP-70 removed the global threshold deliberately; **ratchet unowned, for the M5 architect pass**; the prompts-ring payment is **folded into WP-73**; found by WP-70, session 8, the prompts half assessed by the refiner at the orchestrator's request)
+
+**What is wrong.** Three sides of one cause — **a floor is a free number**. (a) `vitest.config.ts:372-375` builds `thresholds` from `COVERAGE_RINGS` alone, and `scripts/coverage-budget.test.ts:97` refuses a global one (vitest counts every file into it; WP-70 notes, item 2); `text-summary` prints the global figure and nothing gates it. (b) The census requires an `owes` line below the bar (`coverage-budget.test.ts:110-125`) but does not pin the number: `server` branches 54 → 50 passes every check. (c) The margins are in **points**, so their size in branches follows the denominator. technical/10's table: infrastructure 70.08 % of 2868 against 68 (**59** branches), server 56.91 % of 2309 against 54 (**67**), prompts **26/34** against **70** (`vitest.config.ts:215-218`).
+
+**The prompts arithmetic** (refiner, from the table's figures; not re-measured, rule 66). The ring passes while covered ≥ 0.70 × total: it survives losing **2** covered branches (24/34 = 70.6 %), fails at 3 (23/34 = 67.6 %), and fails when a change adds **4 uncovered** branches (26/38 = 68.4 %) — one untested function with two `if`s. `packages/prompts/src/*.ts` has been touched by 13 commits, every role-adding work package (`git log`). **Judgement: the pressure is intended, the exit is the trap.** A red prompts ring means a change added untested branches to a 34-branch package, which the house rule already forbids; but nothing refuses the cheap response — lower 70 to 66 and add nothing — which is exactly how backlog 87 said the instrument would be lost. The debt's owner is named (*"`evals.ts` (3) and `skills.ts` (5)"*, `vitest.config.ts:218`), eight branches in 326 lines.
+
+**What it costs to leave.** (a)/(b): the overall figure can fall without any gate going red — a new 100-branch server module at 0 % leaves the ring at 54.5 % — and every floor can be lowered without a record. (c): the next prompts change pays for a debt it did not create, the shape backlog 87 was filed against.
+
+**Done.** Owned by **WP-73**: the eight owed prompts branches are covered and the ring goes to the bar (80 on all four, `owes` removed); at 34/34 the ring then has ~6 branches of slack. **Unowned (M5 architect)**: the census pins each ring's thresholds as a table, so lowering one is an edit in two places with a PROGRESS entry, and a ratchet — a floor is raised when the ring clears it by the slack — decided with where it runs (a check that fails when a floor is *below* `floor(measured − slack)` needs a coverage run, so it cannot live in the census as written). **Needs measurement** for the ratchet: how far the two debt rings move per work package. **Depends on** WP-70 landing.
+
+*Addendum (WP-70 review round 1, measured by the reviewer):* the old global threshold admitted about **3** branches of loss in total; the new debt-ring floors admit **67** (server) and **59** (infrastructure), and those two rings measured **zero** run-to-run variance — so a wholly untested new module of up to about **124** branches (server) or **87** (infrastructure) passes. The floors are honest by their stated rule (a floor near the measured value, the debt named); what they are not is tight. A ratchet — or floors set at the measured value minus the measured variance — is this entry's answer, and it is stated as TD-015's WP-70 residual.
+
+### 255. **picomatch's `!(x)` refuses every name that *begins* with `x`, so a directory `runlet2/` or a file `testing2.ts` falls out of every ring glob** (nit, TODO — **latent**: no such path exists; the partition census fails loudly rather than mis-assigning; the sentence **folded into WP-73**; found by WP-70, session 8, reproduced by the refiner)
+
+**Evidence.** WP-70 measured picomatch 4.0.7 rejecting `runlet2/`, `runlets/`, `testing-x/` and `testing2.ts`. Reproduced by the refiner with vitest's own picomatch (4.0.7) against `vitest.config.ts:221`'s glob: `runlet2/x.ts`, `runlets/x.ts`, `testing-x/a.ts`, `testing2.ts` → `false`, `db/x.ts` → `true`; the prompts ring (`:216`) rejects `testing2.ts` too, and `**/testing.ts` (`:240`) does not take it. `git ls-files` finds no such name under any `packages/*/src` whose ring uses `!(runlet…)`/`!(testing)` (`packages/contracts/src/runlet.ts` is under `!(testing)` only). `coverage-budget.test.ts:78-83` fails naming the path with `rings: []`, and `:87` pins the `runlet2/` case.
+
+**What it costs to leave.** Nothing until such a name is created; then the census fails with no hint that the glob, not the file, is the cause.
+
+**Done.** One sentence at `COVERAGE_RINGS` stating the prefix semantics and that a colliding name needs the globs rewritten (for example `!(runlet|testing)` → an explicit exclusion of `runlet/` and `testing/`). **Trigger**: the first such directory or file. **Depends on** nothing.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -14174,7 +14210,7 @@ Playwright fake backend composes the same string itself (`test/web-e2e/support/f
 and already differs from production — it omits the `role … may not perform …` wrapper entirely — so
 the browser tier has never seen the sentence this entry is about.
 
-### 115. **A query module is excluded from unit coverage for the first time, and the one branch that is not wiring is asserted only in the tier that collects none** (nit-to-small, TODO — **working as designed**, one precedent to bound before it is inherited by citation; **no work package owns it**; found by WP-41, confirmed off the tree by the refiner, session 5)
+### 115. **A query module is excluded from unit coverage for the first time, and the one branch that is not wiring is asserted only in the tier that collects none** (**RESOLVED** at `WP70SHA`, WP-70, session 8 — the exclusion list is a census and the branch moved to `stats-metrics.ts` — nit-to-small, TODO — **working as designed**, one precedent to bound before it is inherited by citation; **no work package owns it**; found by WP-41, confirmed off the tree by the refiner, session 5)
 > **M4 (architect, session 6): folded into WP-70.**
 
 `vitest.config.ts:167-177` adds `apps/server/src/queries/stats-queries.ts` to the coverage
@@ -14701,7 +14737,7 @@ file, or the first work package that touches upgrade behaviour.
 | WP-66 | **The history bootstrap says how much it read** | DONE | `41bb75f` | **Folded backlog 102, 103 and 124's first half.** A chunk stores the mining run's own claim of merge requests read (`merge_requests_read`, migration **0052**, nullable, stored as `min(claim, shown)` with the raw claim logged, `history_bootstrap_chunks_read_within_shown` the database's half) in the same `markChunkRecorded` call as the other counters; the batch DTO publishes `merge_requests_read_claimed`/`merge_requests_read_of` over the **claiming** runs only, and the panel shows the pair labelled as the runs' own account, never a ratio. `sample.ts`/`collect.ts` say which constants are derived and which chosen; the sample fixture parses through the strict schema; technical/03 documents both bootstrap tables column for column. **Coverage was not raised**: criterion (5)'s intermediate is a no-op (the fetch already equals the chunks' ticket slots) — the row carries an amendment note. **One review round**, APPROVE-with-nits, four canaries dead by name; the orchestrator fixed both nits (a negative claim now throws instead of clamping to *read nothing*, rule 16; the panel and the user guide say *the runs that reported a count*). **Orchestrator verification**: `PASS: verify` (434 files, 8165 passed, re-run after the nits), `PASS: verify:integration` (593), `PASS: verify:e2e` **twice** (215/215), `PASS: verify:ui` (384, re-run after the nits — **at load 29.6, a breach of the gate by the orchestrator**: the reading and the run were chained in one command after `verify`; recorded, not repeated), `PASS: verify:web-e2e` (47). CI on `41bb75f`: `ci` `36293943961` and `image` `36293943938` **completed success**, zero `release` runs. Discovered work: backlog **237** and **239** (to WP-73), **238** (unowned, M5) | Depends on WP-35, WP-18b. Folds backlog **102**, **103**, and **124**'s first half |
 | WP-67 | **The idempotency record, the gate that asks again, and the requester nobody wrote** | DONE | `637c48a` | **Folded backlog 47, 99, 96, 92 (half a); Q91 answered per its recommendation.** `command_idempotency` (migration **0053**, backfill keeps the first of any duplicate, retention none): a key is **claimed before the effect**, released only when the effect itself threw, completed by the `human_actions` row in one transaction, and a claim whose process died answers `idempotency_attempt_unknown` after 5 min and is never re-claimed — nine routes on it, the interview claiming inside its own transaction, the two natural-key creates a stated divergence; two simultaneous same-key commands perform **once** at the integration tier with real interleaved transactions (and an e2e pair inside `command-api.e2e.test.ts`). The shadow batch replays its first batch. The dependency gate defers an `ask`/`block` at a human-owned stop to `task.resumed` (a `dependency_gate_resume` duty, `tasks.dependencies.deferred_stage`), never asks past review. Discovery, shadow-batch and bootstrap tasks write `requested_by_user_id`, and the requester-routing fallback — which could never fire — now does. **Two review rounds.** Round 1 REQUEST_CHANGES: the claim was released on **any** throw, including after the effect committed (an audit-insert failure let a retry perform twice) — fixed with an effect-returned marker in all nine routes; plus the resume filter's test and the ask deferred at a `ready_for_merge` pause whose resume is **refused** (measured — backlog **244**, a live major that predates WP-67: a task paused at `ready_for_merge` is stranded and a provider merge meanwhile is dropped; folded into WP-73 with **Q104**). Round 2 APPROVE-with-nits, fixed by the orchestrator: an integration case where the completion fails **after** the audit insert (a trigger scoped to one key; the split-transaction canary had survived, now dead by name) and backlog 244 cited at both dependency-gate docblocks. The orchestrator amended CLAUDE.md's two idempotency sentences. **Orchestrator verification** (after round 1's fixes): `PASS: verify` (435 files, 8185 passed; re-run after the nits), `PASS: verify:integration` (601; the idempotency file 9/9 after the nits), `PASS: verify:e2e` **twice** (215/215), `PASS: verify:ui` (385), `PASS: verify:web-e2e` (47). CI on `637c48a`: `ci` `36299739998` and `image` `36299740056` **completed success**, zero `release` runs. Discovered work: backlog **240**–**244** (241, 242, 244 to WP-73; 240, 243 unowned for M5), **Q104** | Depends on WP-15i, WP-21, WP-34, WP-38, WP-37. Folds backlog **47** (major), **99**, **96** (major), **92** |
 | WP-68 | **The guards see what they claim to see** | DONE | `c6d3f97` | **Folded backlog 8, 10, 30, 3, 111, 9, 6, 130.** The pre-commit secret scan **refuses a zero-byte result** (measured: a staged secret in a linked worktree scanned as 0 bytes, *no leaks found*, exit 0) and scans a worktree through a read-only, `--network=none` container fallback that finds the planted leak; an empty or deletion-only staged diff still passes. `scripts/census-files.mjs` is the one helper — git's list plus the untracked-but-not-ignored set, minus what vanished, reporting an unreadable path — and all 20 listing sites read through it, so **standing rule 91 is retired**. `createTestClient` owns every bare test client (48 sites; measured: a listener-less, pool-less client dies on an uncaught `57P01`, 2 of 2) and a census refuses any other; a census holds `integrations.config` to one writer; the citation oracle over-approximates its parser (it found two real citations nothing had been reading). **One review round**, APPROVE-with-nits, six canaries dead by name (the reviewer ran the real pinned binary through the wrapper in a scratch repository); the orchestrator fixed the nits: the migrator exemption cites **247**, four stale *tracked* sentences (CONTRIBUTING, `citations.ts`, `citations.test.ts`, CLAUDE.md's heading), the client census's unseen spellings stated, and the lint exemption's ring-wide reach filed as backlog **248** (to WP-73). The orchestrator amended CLAUDE.md's census sentences. **Orchestrator verification**: `PASS: verify` (438 files, 8204 passed; re-run after the nits), `PASS: verify:integration` (605), `PASS: verify:e2e` **twice** (215/215), `PASS: verify:ui` (385), `PASS: verify:web-e2e` (47). CI on `c6d3f97`: `ci` `36303450682` and `image` `36303450685` **completed success**, zero `release` runs. Criterion (7): session 8 used no linked worktrees and earlier sessions' are pruned, so whether they were scanned cannot be established. Discovered work: backlog **245** (not a live hole: a default provider host is unchecked at the write, refused at the call), **246**, **247**, **248** — all to WP-73 | Depends on nothing unbuilt. Folds backlog **8** (major), **10**, **30**, **3**, **111**, **9**, **6**, **130** |
-| WP-69 | **The harness cannot script what production would refuse** | DONE | `f309a53` | **Folded backlog 77, 25, 21, 4, 183, 184.** The pipeline harness parses every scripted artifact against the stage's declared schema and throws with the issue: the detector found **23 invalid scripts in 11 files** where the grep had found two, all fixed on the fixture side with no schema, prompt or `schemas/` file touched, and the three declared `deliberatelyInvalid` exemptions pinned by a census (review round 1). The five hand-written deadlines are structural waits taking 75 % of the running test's **resolved** budget (read off vitest, not inferred — `contract` resolves to 5 s and the conformance suite had set 60 s itself since WP-13, so backlog 25's *raised since* was false) in a new vitest **`process`** project that runs after unit and contract, one file at a time, 120 s per test, inside `pnpm test` and so inside CI's unit job — held both ways by `scripts/verify.test.ts`. No runtime import cycle exists (madge, type-only imports skipped, 0 now and 0 at `8ae121c`); the import rule is written in the e2e harness docblock. **One review round**, APPROVE-with-nits (eight fixture files checked, no assertion changed meaning); the orchestrator fixed the nits: the exemption census, CONTRIBUTING's pre-push line, the membership guard's unseen spellings, and the PROGRESS sentence that claimed every conformance await is bounded (it is not — stated). Canary 3 (`settlesWithin` without `clearTimeout`) is **not observable by any test**, recorded. **Branch coverage** fell to **79.99 %** on the orchestrator's first run (the implementer measured 80.01 %; the `process` tier's coverage varies with scheduling) — the orchestrator added a structural-wait test for the two budget fallbacks, back to **80.02 %**, and the margin is backlog **87**, now urgent in WP-70. **Orchestrator verification**: `PASS: verify` (440 files, 8224 passed), `PASS: verify:integration` (605), `PASS: verify:e2e` **twice** (215/215), `PASS: verify:ui` (385), `PASS: verify:web-e2e` (47). CI on `f309a53`: `ci` `36308486218` and `image` `36308485860` **completed success**, zero `release` runs. Discovered work: backlog **249** (unowned, M5), **250**, **251** (to WP-73) | Depends on WP-13, WP-15, WP-28. Folds backlog **77**, **25**, **21**, **4**, **183**, **184** |
+| WP-69 | **The harness cannot script what production would refuse** | DONE | `f309a53` | **Folded backlog 77, 25, 21, 4, 183, 184.** The pipeline harness parses every scripted artifact against the stage's declared schema and throws with the issue: the detector found **23 invalid scripts in 11 files** where the grep had found two, all fixed on the fixture side with no schema, prompt or `schemas/` file touched, and the three declared `deliberatelyInvalid` exemptions pinned by a census (review round 1). The five hand-written deadlines are structural waits taking 75 % of the running test's **resolved** budget (read off vitest, not inferred — `contract` resolves to 5 s and the conformance suite had set 60 s itself since WP-13, so backlog 25's *raised since* was false) in a new vitest **`process`** project that runs after unit and contract, one file at a time, 120 s per test, inside `pnpm test` and so inside CI's unit job — held both ways by `scripts/verify.test.ts`. No runtime import cycle exists (madge, type-only imports skipped, 0 now and 0 at `8ae121c`); the import rule is written in the e2e harness docblock. **One review round**, APPROVE-with-nits (eight fixture files checked, no assertion changed meaning); the orchestrator fixed the nits: the exemption census, CONTRIBUTING's pre-push line, the membership guard's unseen spellings, and the PROGRESS sentence that claimed every conformance await is bounded (it is not — stated). Canary 3 (`settlesWithin` without `clearTimeout`) is **not observable by any test**, recorded. **Branch coverage** fell to **79.99 %** on the orchestrator's first run (the implementer measured 80.01 %; *the orchestrator wrote here that the `process` tier's coverage varies with scheduling — **false**, corrected at WP-70: seven measured runs moved 2 branches, both from an unseeded domain property test, none in the runlet; and the 79.99→80.02 pair was not one tree, the orchestrator's own test landed between them*) — the orchestrator added a structural-wait test for the two budget fallbacks, back to **80.02 %**, and the margin is backlog **87**, now urgent in WP-70. **Orchestrator verification**: `PASS: verify` (440 files, 8224 passed), `PASS: verify:integration` (605), `PASS: verify:e2e` **twice** (215/215), `PASS: verify:ui` (385), `PASS: verify:web-e2e` (47). CI on `f309a53`: `ci` `36308486218` and `image` `36308485860` **completed success**, zero `release` runs. Discovered work: backlog **249** (unowned, M5), **250**, **251** (to WP-73) | Depends on WP-13, WP-15, WP-28. Folds backlog **77**, **25**, **21**, **4**, **183**, **184** |
 | WP-70 | **Coverage: where the debt is, and what may be excluded** | TODO | — | Depends on nothing unbuilt. Folds backlog **87**, **115**. Opens with the measurement `docs/TODO.md` already asks for; the answer is a budget that says **where** coverage is owed, never *"write more tests"* |
 | WP-71 | **The CI surface: the linters, SAST, mutation, the changelog and the tag nobody decided** | TODO | — | Depends on WP-42, WP-22, TD-017, TD-015, TD-019. Folds backlog **116**, **117**, **118**; implements **Q96** (the user's decision, session 6: continuous deployment — every push to `main` is a release, versions computed from the commits and tagged by the workflow itself, no release PR, the changelog in the release body, and **`latest` kept** as the newest push, which answers **Q89** the other way; the architect amends **TD-019** first, docs win) — Q89's "stop publishing `latest`" is **superseded**. CodeQL is a **setting** an administrator applies, not a file |
 | WP-72 | **Two processes, one database: the `ROLE` split exercised** | TODO | — | Depends on **TD-028**, WP-53, WP-22, WP-06a, WP-18b, WP-43. Folds backlog **38** (major). TD-028 makes this the shipped topology, so the row asserts the deployment rather than an option. **Refiner (session 6), a trip-wire this row is the first to meet (backlog 127, owned by WP-73)**: `readLauncherConfig` filters by the `APP_WORKSPACE_` prefix and strict-parses, so a launcher-role process handed WP-50's `.env` **fails at start-up** on `APP_WORKSPACE_ROOT`, a knob nothing reads |
@@ -33351,3 +33387,117 @@ fail, including › "refuses the fixture that was invalid from WP-15 to WP-28, n
 timeout: four with `StructuralWaitExpiredError: waited for the shim to spawn …` (the pid-file
 waits and `spawn.ok`), the SDK case with the transport's `the shim refused the connection`, the
 16 MiB case on its byte count (0).
+
+#### WP-70
+
+**Implemented** (implementer, session 8): backlog **87** and **115**, criterion by criterion.
+
+1. **Measured first**, on the untouched tree at `5970a64` (`unit`+`contract`+`process` with the
+   `json-summary` and `json` reporters into the scratchpad, one-minute load 11.59 at the start):
+   global branches **13598/16993 = 80.02 %**. Per ring, branches covered/total: `apps/server`
+   1312/2307 (**56.87 %**), `packages/infrastructure` 2499/3460 counting its two `testing.ts`
+   modules (2315/3230 = **71.67 %** without them), `packages/application` 4342/5144 (**84.41 %**
+   without `src/testing/`), `packages/integrations` 2602/3014 (86.33 %), `packages/domain`
+   1689/1795 (94.09 %), `packages/contracts` 114/114, `packages/prompts` 26/34 (76.47 %),
+   `apps/launcher` 166/187 (88.77 %). **The debt is concentrated, not spread**: `apps/server`'s
+   995 uncovered are `queries/*.ts` 426, `routes/*` 280, `runtime.ts` 91, `knowledge.ts` 44,
+   `pipeline.ts` 31; `packages/infrastructure`'s 858 (outside `runlet/`) are 541 in the
+   `postgres-*` stores — code the integration and e2e tiers drive and which collect no coverage.
+   **Test support is cushion, not debt**: the 22 modules under `packages/*/src/testing/` and the
+   `testing.ts` files are 1032/1168 (88.36 %) and lifted `packages/application` from 84.41 % to
+   85.33 %. The largest single files: `infrastructure/src/pipeline/postgres-pipeline-store.ts`
+   0/208, `server/src/queries/pipeline-queries.ts` 3/141, `server/src/routes/onboarding.ts` 4/103,
+   `server/src/runtime.ts` 0/91.
+2. **Per-ring thresholds, and no global one** (`COVERAGE_RINGS` in `vitest.config.ts`). vitest
+   5.0.0 counts **every** file into the global figure even when a glob already holds it (read in
+   `resolveThresholds`: *"Global threshold is for all files, even if they are included by glob
+   patterns"*), so a global threshold kept beside the rings re-imports every ring's noise and
+   debt into every gate; it is removed, and `text-summary` still prints the figure. Ten rings
+   partition the counted files: domain, contracts, application, integrations, prompts,
+   infrastructure (minus `runlet/`), **runlet** (the files the `process` project covers), server,
+   launcher, **test support** (`packages/*/src/testing/**`, `**/testing.ts`). The rule for every
+   number: the bar (80, the domain's 90/85/90/90) where the measured figure clears it by the slack,
+   otherwise `floor(measured − slack)` with an `owes` line naming the files; slack is **two points
+   or two items, whichever is larger**. The table with margins is in technical/10 § Coverage and
+   gates. Below the bar: server (B 54 / L 63 / F 50 / S 62), infrastructure (68 / 79 / 66 / 78),
+   prompts branches 70, launcher functions 76. **Assumption**: removing the global threshold is not
+   "lowering the global number" — every ring that carried it (application, integrations, domain)
+   is now held at 80 or better on its own, where before it could fall as far as the others let it;
+   the trade is that the global figure itself is no longer gated and can drift if a debt ring
+   grows at its floor (filed as 254).
+3. **Variance.** Seven runs — four coverage runs (loads at start 11.59, 5.91, 7.06, 7.84) and the
+   three `verify` runs (11.64, 8.54, 10.74) — diffed per file off `coverage-summary.json` (and per branch off
+   `coverage-final.json` for the four) with WP-70's own edits subtracted: **two branches** moved, both
+   `?? 0` in `packages/domain/src/cost/ledger.ts:334` and `:341`, covered on some fast-check draws
+   and not others (the property tests are unseeded). **No runlet branch moved** at these loads;
+   WP-69's 79.99 → 80.02 was not reproduced, and no synthetic load was applied to provoke it. The
+   runlet ring holds 13 branches of margin; the domain ring nine points. **The premise that the
+   `process` project's coverage is timing-dependent is not supported by anything WP-70 measured**:
+   the brief says WP-69's 79.99 % and 80.02 % were over one tree, but the WP-69 row says the
+   orchestrator added a structural-wait test for the two budget fallbacks between them, and
+   `git show f309a53` has that file's eight cases — so the three-hundredths are at least partly a
+   test, not scheduling. The runlet ring is its own ring anyway, because it is the one place such
+   noise *could* arise; if it does, it now lands on a gate with thirteen branches of margin.
+4. **The exclusion list is a census** (`COVERAGE_EXCLUDED_FILES`, held by
+   `scripts/coverage-budget.test.ts`): pinned both directions, each entry names the file that
+   drives it and that file must name it, each says its tier (`process`, `integration`, `image`),
+   and `coverage.exclude` may name no other source file. **And** the one real branch moved:
+   `boundTaskRows` in `apps/server/src/queries/stats-metrics.ts` (with `MAX_TASK_ROWS` and
+   `StatsRangeTooLargeError`, re-exported from `stats-queries.ts` so the route and the integration
+   test keep their imports). `packages/infrastructure/src/db/client.ts` is **no longer excluded**:
+   `db/pool-errors.test.ts` builds the pool in the unit tier, so the file was reached where it was
+   not counted (4/7 branches now counted).
+5. **The `delivered` throw site has cases**: the unit tier asserts both kinds at the bound and one
+   past it (`stats-metrics.test.ts`, "the bound on what one answer is folded from"), and
+   `test/integration/stats/stats-queries.integration.test.ts` › "refuses a range with more delivered tasks than one answer is folded from, at its own site"
+   seeds 5 001 tasks created sixty days before the range and merged inside it, so only the
+   delivered read can refuse, and asserts `kind: 'delivered'` and the boundary at 5 000.
+6. **The comment says which tier**: the stats entry now says the integration tier, which `verify`
+   does not run (`verify:integration` does).
+
+**Canaries** (each on the config, reverted md5-confirmed): a runlet glob that matches nothing, a
+fifth exclusion, a global `branches: 80` → four cases of `scripts/coverage-budget.test.ts` fail,
+among them › "holds every counted file in exactly one ring" listing every runlet file; an
+`exercisedBy` that does not name its file, a wrong tier, a debt ring without `owes` → three more
+fail. **The glob is vitest's own**: runlet's branches set to 84 made the coverage run exit 1 with
+`ERROR: Coverage for branches (83.73%) does not meet "packages/infrastructure/src/runlet/{**/,}!(testing).ts" threshold (84%)`.
+The census requires `picomatch` from vitest's own location because Node's `path.matchesGlob`
+answers `packages/infrastructure/src/runlet2/x.ts` differently (true against picomatch's false).
+
+**Sentences falsified.** Changed: `vitest.config.ts`'s *"Both are exercised end to end by the
+integration tier"* for `migrate.ts` (no test tier starts it; only compose's `migrate` service) and
+*"a pg pool … exercised end to end by the integration tier"* as the reason to exclude
+`db/client.ts` (the unit tier reaches it); *"The contract tier starts this exact file"* for
+`apps/runlet/src/index.ts` (the `process` project since WP-69); *"eight SQL statements"* (fourteen
+reads); *"has a case of its own on that tier"*; *"Explicit include: only the rings exercised by the
+unit + contract tiers"* (three projects); technical/10's *"overall 80 %"*; CONTRIBUTING's *"80 %
+overall"*; `docs/TODO.md`'s open question, now answered and checked. **Left, not mine**: backlog 87's
+and 115's status lines (the refiner's); PROGRESS's WP-69 row sentence *"the margin is backlog 87"*.
+
+**Discovered work.**
+- **252** `apps/server/src/migrate.ts` has two exit codes (2 for an invalid configuration, 1 for a
+  failed migration) that no tier asserts; the image is its only driver.
+- **253** Unseeded property tests make coverage depend on the draw (`ledger.ts:334`/`:341`); an
+  example case for a `null` per-model figure in the reported path would make the branch
+  deterministic without seeding fast-check.
+- **254** With no global threshold the overall figure is ungated; a debt ring can grow at its floor
+  and pull it down. A ratchet (raise a floor when a ring clears it by the slack) is the obvious
+  follow-up and was not built.
+- **255** picomatch 4.0.7's `!(runlet|testing)` rejects any name *beginning* with those words —
+  measured on `runlet2/`, `runlets/`, `testing-x/` and a file `testing2.ts`; the partition census
+  fails loudly on such a path rather than mis-assigning it, but the ring globs would need
+  rewriting the day one exists.
+
+**Verification** (each tier after a one-minute load reading under 12. Two bounded sets of five
+readings — 27.56 → 14.17 and 35.10 → 20.44 — ended with **no run**, and the edits went on
+meanwhile; a first set reached 11.59 on its fifth. **Recorded rather than hidden**: `sleep 60` was
+refused, so until a backgrounded `sleep 60; uptime` was used the readings in a set were seconds
+apart rather than a minute; Docker held alone, and after each Docker tier no container of this repository's but the
+Testcontainers reaper and `docker volume ls | wc -l` = 102): `pnpm run -s verify` **PASS three times**
+(441 files, 8235 passed, 14 skipped; global branches 80.00 %, 80.01 %, 80.01 %, no ring threshold
+failed; the third after the last comment edits); `pnpm run -s verify:integration` **PASS** (57 files, 606); `scripts/citations.test.ts`
+green over these notes. **Canaries** beyond the config ones above, each reverted md5-confirmed: a
+directory entry (`apps/server/src/queries/**`) added to `coverage.exclude` → › "are the only
+entries coverage.exclude adds to the shared globs" fails; `deliveredTasks` calling
+`boundTaskRows('started', …)` → the new integration case fails on `kind` (`"started"` for
+`"delivered"`).

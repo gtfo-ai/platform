@@ -111,7 +111,7 @@ section table. It is a document this repository renders, not one a workflow writ
 
 - Small and focused. Tests are part of the change, not a follow-up (see [`docs/technical/10-testing-strategy.md`](docs/technical/10-testing-strategy.md)): unit and property tests for domain code, contract tests for every integration port, golden fixtures for SDK streams, fake-Claude e2e for pipeline changes.
 - `pnpm run -s verify` must be green before you open the PR; CI runs the same targets plus the integration, e2e, ui, secret-scan, commitlint and DCO jobs.
-- Coverage thresholds hold: 80 % overall, 90 % lines / 85 % branches / 90 % functions in `packages/domain`.
+- Coverage thresholds hold **per ring** (`COVERAGE_RINGS` in `vitest.config.ts`; there is no overall threshold since WP-70): 80 % on every metric, 90 % lines / 85 % branches / 90 % functions / 90 % statements in `packages/domain`, and a named, lower floor for the rings that carry debt — `apps/server`, `packages/infrastructure`, and one metric each of `packages/prompts` and `apps/launcher`. A file in a new directory must fall in exactly one ring (`scripts/coverage-budget.test.ts`), and a new coverage exclusion is an entry in `COVERAGE_EXCLUDED_FILES` and in that test.
 - Update `.env.example` with every new environment variable and `CLAUDE.md` when a command or convention changes.
 
 ## Never
