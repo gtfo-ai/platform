@@ -19,8 +19,12 @@
  * the model. Those meet each other once, against a daemon, in
  * `node scripts/runlet-launcher-check.mjs`, which is not a `verify` target because it needs Docker.
  */
-import type { RunSpec } from '@platform/application';
-import { runner as runnerAdapters, workspace as workspaceAdapters } from '@platform/infrastructure';
+import { RUN_CREDENTIAL_TTL_SECONDS, type RunSpec } from '@platform/application';
+import {
+  type launcher as launcherAdapters,
+  runner as runnerAdapters,
+  workspace as workspaceAdapters,
+} from '@platform/infrastructure';
 
 /**
  * The model credential the instance is started with, and the value every redaction assertion looks
@@ -311,3 +315,42 @@ export const scriptedWorkspaces = (
     },
   };
 };
+
+/**
+ * A scripted provisioner that **mints the run's git credential first**, through the production
+ * minter of the process it runs in (WP-80) — `PipelineComposition.mintingWorkspaces`.
+ *
+ * What the launcher provisioner does around its create, minus the container: mint through the
+ * process's binding loader and `IntegrationActionExecutor` (so the audit row, the shape row beside
+ * it and the process's run-secret registry are production writes), hand the scripted CLI its turn,
+ * and revoke once after the workspace is released. `projectFor` answers what
+ * `createRunWorkspaceProjectSource` would read off `projects`.
+ */
+export const mintingProvisioner = (
+  inner: runnerAdapters.RunWorkspaceProvisioner,
+  minter: launcherAdapters.RunGitCredentialMinter,
+  projectFor: (spec: RunSpec) => launcherAdapters.RunWorkspaceProject,
+): runnerAdapters.RunWorkspaceProvisioner => ({
+  provision: async (spec) => {
+    const minted = await minter.mint({
+      spec,
+      project: projectFor(spec),
+      scope: 'push',
+      ttlSeconds: RUN_CREDENTIAL_TTL_SECONDS,
+    });
+    if (minted.kind !== 'minted') {
+      throw new Error(`the e2e runner could not mint a run credential: ${minted.reason}`);
+    }
+    const workspace = await inner.provision(spec);
+    return {
+      ...workspace,
+      release: async (ending) => {
+        try {
+          await workspace.release(ending);
+        } finally {
+          await minted.credential.revoke();
+        }
+      },
+    };
+  },
+});

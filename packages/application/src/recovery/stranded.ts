@@ -816,10 +816,11 @@ export const runStrandedRecovery = async (
       ended: 0,
     });
     /**
-     * WP-73b, backlog 156 half 1: what the site above cannot reach — a mint whose integration the
-     * project no longer binds — is **reported**, once per address per process
-     * (`UnreachableRunCredentialReports`), and never revoked: sending the address anywhere is half
-     * 3's decision. `found` counts what this pass reported, so a repeat reads 0.
+     * WP-73b, backlog 156: what the site above cannot reach is **reported**, once per address per
+     * process (`UnreachableRunCredentialReports`), and never revoked. Since WP-80 (TD-028 decision
+     * 10) an *unbound* minting integration is reached — the revoke is built from it — so what is
+     * left here is a mint whose integration **row is gone**: no host remains to send the address
+     * to. `found` counts what this pass reported, so a repeat reads 0.
      */
     let reported = 0;
     for (const credential of found.unreachableCredentials) {
@@ -837,7 +838,7 @@ export const runStrandedRecovery = async (
           scope: credential.scope,
           expires_at: credential.expiresAt,
         },
-        'a terminal run’s git credential was never confirmed revoked, and the integration that minted it is no longer bound to the project, so the recovery pass will not revoke it: it is live until it expires — revoke it by hand in the provider (PROGRESS backlog 156)',
+        'a terminal run’s git credential was never confirmed revoked, and the integration that minted it no longer exists, so there is no host the recovery pass may send its address to: it is live until it expires — revoke it by hand in the provider (TD-028 decision 10, PROGRESS backlog 156)',
       );
     }
     sites.push({ site: 'run_credential_unreachable', found: reported, reEnqueued: 0, ended: 0 });

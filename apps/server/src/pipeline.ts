@@ -105,7 +105,11 @@ import type { Id, IsoDateTime, MaterialisedAutonomy } from '@platform/contracts'
 import { materialisedAutonomySchema } from '@platform/contracts';
 import type { ConfigValues } from '@platform/domain';
 import { SHIPPED_TEMPLATES } from '@platform/domain';
-import type { jobs as jobsAdapters, runner as runnerAdapters } from '@platform/infrastructure';
+import type {
+  jobs as jobsAdapters,
+  launcher as launcherAdapters,
+  runner as runnerAdapters,
+} from '@platform/infrastructure';
 import {
   ask as askAdapters,
   bootstrap as bootstrapAdapters,
@@ -237,6 +241,21 @@ export interface PipelineComposition {
    * exactly the assertion `FakeClaudeRunner` can never fail (standing rule 82).
    */
   readonly workspaces?: runnerAdapters.RunWorkspaceProvisioner;
+  /**
+   * {@link PipelineComposition.workspaces}, built over **this process's production run-credential
+   * minter** — a labelled seam, and the only caller is the e2e tier (WP-80).
+   *
+   * The launcher provisioner mints each run's git credential through `createRunGitCredentialMinter`
+   * (`apps/server/src/workspaces.ts`) — the process's own binding loader, executor and run-secret
+   * registry — and a scripted provisioner has no minter, so before WP-80 no process of the e2e tier
+   * ever minted. Given this, `startRuntime` hands the factory the same minter a launcher-configured
+   * process would compose, so a test can assert what a mint in one process leaves for another (the
+   * shape row beside its audit row, TD-012's M5 amendment) through production code. `workspaces`
+   * wins when both are given, as it already wins over the launcher.
+   */
+  readonly mintingWorkspaces?: (
+    minter: launcherAdapters.RunGitCredentialMinter,
+  ) => runnerAdapters.RunWorkspaceProvisioner;
   /**
    * Wraps the `Jobs` **this whole process** enqueues through — a **labelled seam**, and the only
    * caller is the e2e tier (WP-15c, widened at WP-36).
@@ -422,7 +441,8 @@ export const composeIntegrationStack = (
    * one registry of the process**, built here and nowhere else (`run-secrets-composition.test.ts`
    * counts the construction sites), so the minter (`composeRunWorkspaces`, handed
    * `stack.runSecrets`) and every redactor below read the same values. Memory: it reaches nothing
-   * another process writes (backlog 154).
+   * another process writes (backlog 154) — another process's minted values are redacted here by
+   * their recorded shape instead (WP-80, `startMintedCredentialShapeRefresh` in `runtime.ts`).
    */
   const runSecrets = createRunScopedSecrets({ now: () => Date.now() });
   const platformRedactor = platformRedactorFor(runSecrets);
@@ -758,7 +778,8 @@ export const createProjectIntegrationsPort = (options: {
     // `composeWebhookIngress` passes, and now for the second sink: WP-15f writes the ticket's text
     // to `tasks.ticket_snapshot`, which is read into every prompt. No task DTO serves it yet.
     // WP-76: and the run credentials this process minted, so a CI log or a review thread handled
-    // here while one is live has it replaced (another process's are out of reach: backlog 154).
+    // here while one is live has it replaced by name. Another process's are replaced by their
+    // recorded shape, which the pattern half applies (WP-80, backlog 259).
     platformRedactor: options.stack.platformRedactor,
     gitProjectPath: async (projectId) => {
       const { rows } = await options.pool.query<{ repo_url: string }>(

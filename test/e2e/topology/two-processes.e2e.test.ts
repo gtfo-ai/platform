@@ -27,10 +27,10 @@
  *     (backlog 200, migration 0054).
  *  6. **A run credential quoted in text a process that never minted it stores** is absent from the
  *     `inbox` row it writes and, since WP-73b, from the `mr.review.comment` event it appends
- *     (backlog 154, decision (a): the pattern rule is the defence there; backlog 260). The
- *     token is planted rather than minted — a mint needs the launcher's control plane, which only
- *     the Docker tier has — and that is the whole of decision (a)'s claim: whatever minted it, the
- *     process storing the text never knew the value.
+ *     (backlog 154, decision (a): the pattern rule is the defence there; backlog 260). A planted
+ *     `glpat-` token is caught by the gitleaks rule; since WP-80 a token the runner **minted**
+ *     through its production minter, under a prefix no gitleaks rule knows (backlog 259), is caught
+ *     by the shape the runner recorded beside the mint's audit row (TD-012's M5 amendment).
  *  7. **The diff coalescer is per process**, so one gate entry costs one read *per process that ran
  *     one of its duties* (backlog 181) — counted here, and the figure is stated at the coalescer.
  *
@@ -44,6 +44,7 @@
  * `test/integration/support/global-setup.ts`.
  */
 import type { RunRecord } from '@platform/contracts';
+import { redaction as redactionAdapters } from '@platform/infrastructure';
 import { loadServerConfig, requiredPoolConnections, UndersizedPoolError } from '@platform/server';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createMigratedDatabase } from '../../integration/support/migrated.js';
@@ -65,6 +66,9 @@ import {
 import { featureScenarios, TICKETS } from '../support/scenarios.js';
 import { createFakeSlack, type FakeSlack, findApprovalButton } from '../support/slack.js';
 import { SseStream } from '../support/sse-client.js';
+
+/** The custom token prefix the fake git mints under (WP-80) — no gitleaks rule knows it. */
+const MINTED_PREFIX = 'acmepat-';
 
 /** `requiredPoolConnections` for one role at the default concurrency, from its own config. */
 const floorOf = (role: string): number =>
@@ -150,6 +154,9 @@ describe('the shipped topology: app (ROLE=all, no launcher) beside runner (ROLE=
       tickets: TICKETS,
       agent: 'none',
       processName: 'app',
+      // WP-80: the fake git mints under a prefix no gitleaks rule knows — backlog 259's trigger, a
+      // GitLab administrator's custom personal-access-token prefix.
+      gitCredentialPrefix: MINTED_PREFIX,
       onAgentSpec: async (spec) => {
         if (firstRunId !== null) {
           return;
@@ -172,6 +179,8 @@ describe('the shipped topology: app (ROLE=all, no launcher) beside runner (ROLE=
       role: 'runner',
       agent: 'real-over-fake-cli',
       env: { APP_DB_POOL_MAX: String(floorOf('runner')) },
+      // WP-80: each run's git credential is minted by the runner's production minter.
+      mintsRunCredentials: true,
     });
     const app = await signIn(pipeline.instance.baseUrl);
 
@@ -295,6 +304,67 @@ describe('the shipped topology: app (ROLE=all, no launcher) beside runner (ROLE=
     const eventText = JSON.stringify(comments[0]?.payload);
     expect(eventText).not.toContain(mintedShape);
     expect(eventText).toContain('[REDACTED');
+
+    // ── crossing 6, WP-80: a credential the runner **minted**, under a custom prefix ────────────
+    // TD-012's M5 amendment (PROGRESS backlog 259). The runner minted every run's credential through
+    // its production minter; `app` never minted — every `mintCredential` the provider saw came from
+    // the runner — so no exact-value registry in `app`'s stack ever held one, and the `glpat-` rule
+    // cannot match this prefix. What redacts it in `app` is the shape the runner recorded beside the
+    // mint's audit row, compiled into `app`'s rules by its refresh.
+    const mints = pipeline.gitCalls().filter((call) => call.method === 'mintCredential');
+    expect(mints.length).toBeGreaterThan(0);
+    expect(new Set(mints.map((call) => call.process))).toEqual(new Set(['runner']));
+    const minted = pipeline.git.credentials.find((row) => row.value.startsWith(MINTED_PREFIX));
+    expect(minted, 'the runner minted under the custom prefix').toBeDefined();
+    const mintedValue = minted?.value as string;
+    // The shape row, beside the mint's audit row: a prefix, a class and a length — no value.
+    const shapes = await pipeline.query<{ prefix: string; charset: string; length: number }>(
+      'select prefix, charset, length from minted_credential_shapes',
+    );
+    expect(shapes).toEqual([
+      { prefix: MINTED_PREFIX, charset: 'alnum', length: mintedValue.length },
+    ]);
+    expect(
+      JSON.stringify(await pipeline.query('select * from minted_credential_shapes')),
+    ).not.toContain(mintedValue);
+    expect(
+      (await pipeline.auditRows()).filter((row) => row.action === 'mint_credential').length,
+    ).toBe(mints.length);
+    // Rule 87: the shape was recorded at the first mint, long before this line, and a process
+    // refreshes every few seconds; the wait binds the rule being installed rather than a sleep.
+    // **In this tier the processes share one Node module graph**, so the installed set is shared
+    // too: what this proves is that the value reaches no row `app` writes through its exact-value
+    // path (its stack never held it) and is caught by a rule compiled from the database's shape
+    // rows — not that `app`'s own timer was the one that installed it. The per-process read is
+    // asserted in `test/integration/redaction/minted-credential-shapes.integration.test.ts`.
+    await pipeline.waitFor('the minted shape to be compiled into the redaction rules', async () =>
+      redactionAdapters
+        .installedMintedCredentialShapeRules()
+        .some((rule) => new RegExp(rule.pattern.source).test(mintedValue)),
+    );
+    const quoted = pipeline.git.emitReviewComment({
+      project: GIT_PROJECT,
+      iid: pipeline.world.mr.iid,
+      discussionId: 'disc-topology-minted',
+      authorId: 'someone',
+      // Bare, and on purpose: inside a URL's userinfo the `connection-string` rule would redact it
+      // whatever its shape (measured — the canary passed until this quote lost its URL), so the
+      // only rule that can see this spelling is the minted shape's.
+      text: `the job log printed the run's token ${mintedValue} before the push`,
+    });
+    const delivered = await pipeline.deliverGit(quoted);
+    expect(delivered.status, JSON.stringify(delivered.body)).toBe(202);
+    const mintedComments = await pipeline.query<{ payload: unknown }>(
+      "select payload from events where type = 'mr.review.comment' and payload ->> 'thread_id' = 'disc-topology-minted'",
+    );
+    expect(mintedComments).toHaveLength(1);
+    const mintedText = JSON.stringify(mintedComments[0]?.payload);
+    expect(mintedText).not.toContain(mintedValue);
+    expect(mintedText).toContain(redactionAdapters.redactionPlaceholder(mintedValue));
+    const mintedInbox = await pipeline.query<{ payload: unknown }>(
+      "select payload from inbox where provider = 'fake-git' order by received_at desc limit 1",
+    );
+    expect(JSON.stringify(mintedInbox[0]?.payload)).not.toContain(mintedValue);
   }, 300_000);
 });
 

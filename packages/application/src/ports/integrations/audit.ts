@@ -26,6 +26,7 @@
  * must use it rather than deciding for itself, which is what the port's contract suite checks.
  */
 import type { Id, IsoDateTime, JsonObject, JsonValue } from '@platform/contracts';
+import type { MintedCredentialShapeRecord } from '../../integrations/credential-shape.js';
 import type { NormalisedEvent } from './common.js';
 
 /** Direction of a recorded call (`integration_actions.direction`, technical/03). */
@@ -64,6 +65,14 @@ export interface IntegrationActionEntry {
   readonly redactionCount: number;
   /** How many provider attempts this action took, including the successful one. */
   readonly attempts: number;
+  /**
+   * The non-secret shape of the credential an `ok` `mint_credential` minted (WP-80, TD-012's M5
+   * amendment) — absent on every other entry. An adapter that persists entries writes it **in the
+   * row's own transaction** (`minted_credential_shapes`), so every process can compile a redaction
+   * rule for a value only the minting process ever held. Already parsed by the executor; never a
+   * character of the credential's random part.
+   */
+  readonly credentialShape?: MintedCredentialShapeRecord;
 }
 
 /**

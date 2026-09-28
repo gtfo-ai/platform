@@ -130,11 +130,16 @@ never its role (above).
   that process renews a liveness row for it every 20 s (fresh for 60 s). An approval is posted with
   buttons only while the row is fresh; with no such process running — a worker-only deployment, or
   `app` down — it is posted as text naming the task page instead of buttons nobody can press.
-- **A run's git credential.** It is redacted by exact value only in the runner that minted it.
-  Anything `app` stores or posts that quotes it — a webhook, a CI log, a merge-request diff — is
-  redacted by the platform's pattern rules, which match GitLab's default `glpat-` prefix. **If your
-  GitLab administrator changed the personal-access-token prefix**, a minted token is not
-  pattern-shaped and that protection does not apply (PROGRESS backlog 259).
+- **A run's git credential.** The runner that minted it redacts it by exact value. Every other
+  process — `app` above all, which stores and posts what quotes it: a webhook, a CI log, a
+  merge-request diff — redacts it by its recorded *shape* (the prefix, GitLab's random part, the
+  length), which the runner writes beside the mint's audit row and every process re-reads every few
+  seconds (WP-80). **If your GitLab administrator changed the personal-access-token prefix**, set
+  the GitLab integration's `token_prefix` to it: a minted token that does not start with
+  `token_prefix` is revoked and refused rather than used, because no other process could redact it.
+  A credential minted through an integration the project has since been unbound from is still
+  revoked through that integration; one whose integration row is gone is reported and lives to its
+  expiry.
 - **A merge request's diff** is read at most once per revision *per worker process*, so one gate
   entry may read it once in `app` and once in `runner`.
 

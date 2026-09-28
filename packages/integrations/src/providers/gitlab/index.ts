@@ -84,6 +84,9 @@ export const gitlabProviderRegistration: ProviderRegistration<'git'> = {
   // `buildCloneUrl` already sends for a minted token, and GitLab accepts any non-blank one beside a
   // project or personal access token (the citation is on `GitStaticCredential.username`).
   gitCredential: { passwordField: 'token', username: 'oauth2' },
+  // WP-80 (TD-012's M5 amendment): a minted token is `token_prefix` followed by GitLab's random
+  // part, so its shape is stable and declared — the registry refuses minting without this.
+  credentialMinting: { shape: 'stable' },
   create: (input) =>
     createGitLabProvider({
       integrationId: input.integrationId,

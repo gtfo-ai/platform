@@ -110,6 +110,7 @@ const truncate = async (): Promise<void> => {
   // which is what lets a suite reset between cases.
   await pool.query('truncate integration_actions, events, event_dispatch, event_streams cascade');
   await pool.query('truncate integration_idempotency');
+  await pool.query('truncate minted_credential_shapes');
 };
 
 const auditLog = () =>
@@ -178,6 +179,87 @@ runIdempotencyStoreContract('postgres adapter', async (): Promise<IdempotencyCon
     otherIntegrationId,
     cleanup: truncate,
   };
+});
+
+/**
+ * WP-80 (TD-012's M5 amendment), criterion (2): the minted credential's non-secret shape is written
+ * **beside the mint's audit row, in its transaction** — so it rolls back with the row, and a mint on
+ * record always has its shape on record for every other process to compile.
+ */
+describe('a minted credential’s shape beside its audit row (WP-80)', () => {
+  beforeEach(truncate);
+
+  const SHAPE = { prefix: 'acmepat-', charset: 'token_dotted', length: 31 } as const;
+  const mintEntry = (expiresAt: string, overrides: Partial<IntegrationActionEntry> = {}) =>
+    auditEntryFor(
+      { integrationId, projectId, taskId },
+      {
+        action: 'mint_credential',
+        result: { scope: 'push', expires_at: expiresAt, revoke_id: 'acme/api#1' },
+        credentialShape: { shape: SHAPE, expiresAt },
+        ...overrides,
+      },
+    );
+  const shapes = async () =>
+    (
+      await pool.query<{ prefix: string; charset: string; length: number; expires_at: Date }>(
+        'select prefix, charset, length, expires_at from minted_credential_shapes',
+      )
+    ).rows.map((row) => ({ ...row, expires_at: row.expires_at.toISOString() }));
+
+  it('writes the shape with the row, one per shape, keeping the latest expiry', async () => {
+    await auditLog().record(mintEntry('2026-06-03T00:00:00.000Z'));
+    await auditLog().record(mintEntry('2026-06-05T00:00:00.000Z'));
+    await auditLog().record(mintEntry('2026-06-04T00:00:00.000Z'));
+
+    expect((await rows()).map((row) => row.action)).toEqual([
+      'mint_credential',
+      'mint_credential',
+      'mint_credential',
+    ]);
+    expect(await shapes()).toEqual([{ ...SHAPE, expires_at: '2026-06-05T00:00:00.000Z' }]);
+  });
+
+  it('rolls the shape back with the row when the append loses the stream sequence', async () => {
+    await auditLog().record(auditEntryFor({ integrationId, projectId, taskId }));
+    const stale = integrationAdapters.createPostgresIntegrationAuditLog({
+      unitOfWork: eventing.unitOfWork,
+      eventStore: { nextStreamSequence: async () => 1 },
+      ids: { next: () => randomUUID() as Id },
+      maxSequenceAttempts: 1,
+    });
+
+    await expect(stale.record(mintEntry('2026-06-03T00:00:00.000Z'))).rejects.toBeInstanceOf(
+      StreamConflictError,
+    );
+    expect((await rows()).map((row) => row.action)).toEqual(['add_comment']);
+    expect(await shapes()).toEqual([]);
+  });
+
+  it('writes no shape for an entry that did not perform the mint', async () => {
+    await auditLog().record(mintEntry('2026-06-03T00:00:00.000Z', { status: 'would_have' }));
+    await auditLog().record(
+      mintEntry('2026-06-03T00:00:00.000Z', { status: 'failed', error: 'refused', result: null }),
+    );
+    expect(await shapes()).toEqual([]);
+  });
+
+  it('refuses, at the database, a shape the application schema would refuse', async () => {
+    await expect(
+      pool.query(
+        `insert into minted_credential_shapes (integration_id, prefix, charset, length, expires_at)
+         values ($1, 'a b', 'alnum', 20, now())`,
+        [integrationId],
+      ),
+    ).rejects.toMatchObject({ code: '23514' });
+    await expect(
+      pool.query(
+        `insert into minted_credential_shapes (integration_id, prefix, charset, length, expires_at)
+         values ($1, 'acmepat-', '.*', 20, now())`,
+        [integrationId],
+      ),
+    ).rejects.toMatchObject({ code: '23514' });
+  });
 });
 
 describe('the audit row and its event are one transaction', () => {

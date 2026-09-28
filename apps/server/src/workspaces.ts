@@ -44,8 +44,10 @@ import type {
 } from '@platform/application';
 import {
   integrationsForProject,
+  mintingIntegrationFor,
   noRunScopedSecrets,
   RUN_CREDENTIAL_TTL_SECONDS,
+  runCredentialRevocations,
   runCredentialWrites,
   runGitCredentialSecretName,
 } from '@platform/application';
@@ -127,8 +129,10 @@ export const createRunWorkspaceProjectSource = (
  * never push (Q98 (a) — a `read` mint is the one mutation the executor lets it perform). The
  * provisioner accepts that narrower answer for a writing spec and would refuse a wider one.
  *
- * Both calls resolve the bindings per call (Q55): the revoke's scope carries the run's own
- * credential as a run-scoped secret, so an error a provider returns on revocation is redacted.
+ * Both calls resolve their integration per call (Q55): the revoke's scope carries the run's own
+ * credential as a run-scoped secret, so an error a provider returns on revocation is redacted. The
+ * mint goes through the project's git binding; the revoke through the integration that minted,
+ * whether or not the project still binds it (TD-028 decision 10, WP-80).
  */
 export const createRunGitCredentialMinter = (options: {
   readonly pool: pg.Pool;
@@ -164,18 +168,24 @@ export const createRunGitCredentialMinter = (options: {
       return minted;
     }
     const { credential, handle } = minted;
-    const revoke = async (): Promise<void> =>
-      runCredentialWrites(
-        // The value itself, not a registry lookup: the revocation's own scope must name the token
-        // whatever the registry holds by then (review round 2).
-        await integrationsForProject(options.integrations, spec.projectId, {
-          runScopedSecrets: [
-            { name: runGitCredentialSecretName(spec.runId), value: credential.value },
-          ],
-        }),
-        // The handle names the binding that minted; a project re-bound since is refused rather
-        // than sent this address (PROGRESS backlog 156).
-      ).revoke(handle, context);
+    const revoke = async (): Promise<void> => {
+      // TD-028 decision 10 (WP-80): through the integration that **minted**, bound or not — a
+      // project unbound or re-bound while the run was live still has the token revoked on the host
+      // that issued it. The value itself is the call's run-scoped secret, not a registry lookup: the
+      // revocation's own scope must name the token whatever the registry holds by then (WP-76
+      // review round 2).
+      const minting = await mintingIntegrationFor(options.integrations, handle.integrationId, {
+        runScopedSecrets: [
+          { name: runGitCredentialSecretName(spec.runId), value: credential.value },
+        ],
+      });
+      if (minting === null) {
+        throw new Error(
+          `the integration ${handle.integrationId} that minted run ${spec.runId}'s credential no longer exists, so there is no host its address may be sent to; it lives until ${credential.expiresAt} (TD-028 decision 10, PROGRESS backlog 156)`,
+        );
+      }
+      await runCredentialRevocations(minting).revoke(handle, context);
+    };
     // Before anything else can see it: from this line every redactor over the registry replaces it.
     // It cannot refuse here: the registry's one refusal is a value shorter than `MIN_SECRET_LENGTH`,
     // and `runCredentialWrites.mint` has already refused — and revoked — such a value before

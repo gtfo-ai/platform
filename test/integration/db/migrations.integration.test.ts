@@ -65,6 +65,9 @@ const EXPECTED_TABLES = [
   // proposed nothing"* and *"it never ran"* are the same query result (standing rule 18), which is
   // what kept the curation out of the lost-wake-up recovery table.
   'knowledge_curations',
+  // WP-80, migration 0057: the non-secret shape of every minted run credential, from which every
+  // process compiles a redaction rule for a value only its minter held (TD-012's M5 amendment).
+  'minted_credential_shapes',
   'notifications',
   'organizations',
   'platform_migrations',
@@ -244,6 +247,8 @@ describe('migrate on an empty PostgreSQL 18', () => {
       // WP-58 (migration 0042): Q58's statistics, replaced per index run like the refusals.
       row('kb_term_statistics', 'read_write', null),
       row('knowledge_curations', 'read_write', null),
+      // WP-80 (migration 0057): an upsert moves a shape's `expires_at` forward.
+      row('minted_credential_shapes', 'read_write', null),
       // WP-32 (migration 0023): the notification outbox. `read_write` because a row is updated
       // twice at most — claimed by a digest, then delivered — and registered rather than defaulted
       // so the "registry lists every table" invariant above stays true.

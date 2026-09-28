@@ -20,6 +20,9 @@
  *    binding loader resolves a chat binding with no channel and the symptom is a notification that
  *    was never posted — a failure with no error, which is the kind this file exists to convert
  *    into a boot-time refusal.
+ *  - **a provider that mints run credentials must declare a stable credential shape** (WP-80,
+ *    TD-012's M5 amendment). Without one its minted values would be redacted only in the process
+ *    that minted them, so the registration is refused by name.
  */
 import type {
   AgentTooling,
@@ -128,6 +131,23 @@ export interface CommunicationChannelFields {
 }
 
 /**
+ * A git provider's declaration that it mints run credentials — WP-80, TD-012's M5 amendment.
+ *
+ * A minted value is redacted by exact value only in the process that minted it; every other process
+ * redacts it by the **shape** the minting process recorded (`MintedCredential.shape`). A provider
+ * whose values have no stable shape — no declared prefix, no closed class — would be redacted
+ * nowhere but in its minter, so such a provider is refused minting **at registration**:
+ * `shape: 'stable'` is the only accepted value, and a registration that declares minting with
+ * anything else is refused by name. A port that reports `credentialMinting: true` from a
+ * registration that declares nothing has the capability **declined** by the binding loader, so the
+ * declaration, not the adapter's flag, is what admits minting. `'unstable'` exists so a provider can
+ * say so honestly and be refused, rather than omit the key and be declined silently.
+ */
+export interface CredentialMintingDeclaration {
+  readonly shape: 'stable' | 'unstable';
+}
+
+/**
  * What the composition gives a held connection (WP-43): where its deliveries go, and the executor
  * every outbound call it makes on the binding's behalf passes through.
  */
@@ -201,6 +221,12 @@ export interface ProviderRegistration<TType extends IntegrationType> {
    * Must exist in `configSchema`, checked at registration like `secretFields`. Absent is none.
    */
   readonly accountOnlyFields?: readonly string[];
+  /**
+   * For a `git` provider that can mint run credentials: its declaration that minted values have a
+   * stable shape (WP-80, {@link CredentialMintingDeclaration}). Absent means this provider does not
+   * mint, whatever its port says. Refused for any other type, and refused unless `shape: 'stable'`.
+   */
+  readonly credentialMinting?: CredentialMintingDeclaration;
   create(input: ProviderCreateInput): IntegrationPortByType[TType];
 }
 
@@ -280,6 +306,23 @@ export const createIntegrationRegistry = (
         throw new ProviderRegistrationError(
           registration.id,
           'git credential username is blank; git sends it verbatim and a blank one fails the fetch',
+        );
+      }
+    }
+    const minting = registration.credentialMinting;
+    if (minting !== undefined) {
+      if (registration.type !== 'git') {
+        throw new ProviderRegistrationError(
+          registration.id,
+          `declares credential minting but is a "${registration.type}" provider; only a git binding mints run credentials`,
+        );
+      }
+      if (minting.shape !== 'stable') {
+        throw new ProviderRegistrationError(
+          registration.id,
+          'declares credential minting without a stable credential shape; a minted value would be ' +
+            'redacted by exact value only in the process that minted it and verbatim everywhere else, ' +
+            'so minting is refused until the provider declares a stable shape (TD-012, WP-80)',
         );
       }
     }

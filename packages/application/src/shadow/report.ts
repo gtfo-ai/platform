@@ -56,16 +56,20 @@ import {
   buildEvent,
   compareShadowDiffs,
   compilePipeline,
+  escalateTask,
+  IllegalTransitionError,
   type ShadowDiffSummary,
   stageOf,
 } from '@platform/domain';
-import { redactArtifactData } from '../artifacts/redaction.js';
+import { ArtifactIdentifierSecretError, redactArtifactData } from '../artifacts/redaction.js';
 import type { EventHandler, HandlerContext } from '../events/handler.js';
 import { noSecretsRedactor } from '../integrations/redaction.js';
 import { gitReads, integrationsForProject, noRunScopedSecrets } from '../pipeline/integrations.js';
 import { enqueueOutbound, type PipelineOutboundData } from '../pipeline/jobs.js';
 import type { PipelineSagaOptions } from '../pipeline/saga.js';
-import { PIPELINE_ACTOR } from '../pipeline/store.js';
+import { PIPELINE_ACTOR, type StoredTask } from '../pipeline/store.js';
+import { retryOnTaskConflict } from '../pipeline/task-conflict.js';
+import { closeParkedStageRow } from '../pipeline/transitions.js';
 import type { Discussion, FileDiff } from '../ports/integrations/git-provider.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
@@ -273,6 +277,40 @@ export const runShadowReport = async (
     agentAcceptance: parsedOrNull(acceptanceVerdictDataSchema, judged.acceptance?.data),
   });
 
+  /**
+   * TD-012 at this write — **the project's git binding redactor** (WP-80, PROGRESS backlog 131).
+   *
+   * The executor redacts the **audit row** and returns the provider's result untouched (standing
+   * rule 31's note; only a `replayed` answer comes back redacted), so the provider-derived strings
+   * this document carries — `human_mr` (the provider's merged-merge-request entry), the ticket key
+   * and the prose `notes` builds around them — arrive exactly as the provider sent them. The run's
+   * own words (the human review's findings, since WP-45) were redacted with that run's redactor
+   * when its artifact was written; they are read back from it, not from the run. What applies here
+   * is the redactor `review-only.ts` uses for the same class of write: `GitBinding.redactor`, the
+   * binding's credentials (TD-012 step 1) composed with the process's pattern rules and every
+   * minted credential's shape (step 2). A **run-scoped** redactor is not reachable and would be
+   * wrong — the runs are over and their `RunSpec`s gone (backlog 131, point 6).
+   *
+   * `noSecretsRedactor()` only for a project with **no** git binding: then no provider read above
+   * happened and the document carries no provider string to redact.
+   *
+   * {@link redactArtifactData} runs the **identifier** half first and whole: a `human_mr.branch`
+   * or `url` carrying a secret is refused rather than rewritten, because a redacted identifier
+   * addresses the wrong row. Its ending is stated below.
+   */
+  const redactor = integrations.git?.redactor ?? noSecretsRedactor();
+  let redacted: ReturnType<typeof redactArtifactData>;
+  try {
+    redacted = redactArtifactData('ShadowReport', report as unknown as JsonValue, redactor);
+  } catch (error) {
+    if (!(error instanceof ArtifactIdentifierSecretError)) {
+      throw error;
+    }
+    await escalateRefusedShadowReport(options, stored, error);
+    return;
+  }
+  const document = redacted.data as unknown as ShadowReportData;
+
   const artifactId = options.ids.next();
   const wrote = await options.unitOfWork.transaction(async (scope) => {
     // Re-loaded inside the transaction: `task.sequence` is the next `stream_seq`, and the log
@@ -281,57 +319,27 @@ export const runShadowReport = async (
     if (current === null) {
       return false;
     }
+    /**
+     * **One document, stored twice, redacted once** (WP-80, backlog 131 point 4): the task page
+     * reads `artifacts` like it does for every other stage output, and the batch reads
+     * `shadow_reports` without scanning a task's artifacts. Until WP-80 the second copy was the
+     * pre-redaction object, byte-identical to the artifact only because the redactor was empty;
+     * both are now the redacted document, and `shadow_reports.redaction_count` is the same count as
+     * the artifact's (migration 0057).
+     */
     const inserted = await options.shadow.insertReport(scope.tx, {
       taskId: stored.task.id,
-      humanMr,
-      comparison: report,
+      humanMr: document.human_mr ?? null,
+      comparison: document,
+      redactionCount: redacted.count,
     });
     if (!inserted) {
       return false;
     }
-    /**
-     * The same document on the task's own artifact list.
-     *
-     * Two readers, one write, in one transaction: the task page reads `artifacts` like it does for
-     * every other stage output, and the batch reads `shadow_reports` without scanning a task's
-     * artifacts. The report is written once and never updated (the table's primary key is the task),
-     * so there is no window in which the two could disagree — which is the objection a second copy
-     * usually deserves.
-     */
     const version = await options.store.artifacts.nextVersion(
       scope.tx,
       stored.task.id,
       'ShadowReport',
-    );
-    /**
-     * TD-012 at this write, with an **empty** redactor — and the honest reason, corrected in round
-     * 2 (PROGRESS backlog **131**).
-     *
-     * The reason first written here was false and was the sentence standing rule **31** exists to
-     * refute: it claimed the provider reads above arrive already redacted because
-     * `IntegrationActionExecutor` redacted them. The executor redacts the **audit row** and returns
-     * the provider's result untouched; only the `replayed` branch returns a redacted value, and a
-     * first call never takes it. Rule 3 is why this matters: an invariant asserted in a comment is
-     * not evidence it holds, and that comment would have been the next reader's evidence.
-     *
-     * The true position, stated rather than dressed up. This document is **not** a run's structured
-     * output — no run produced it, so there is no `RunSpec` and therefore no TD-012 step **1** set
-     * to build from, which is the one thing genuinely absent here. Step **2**, the platform's own
-     * pattern rules, needs neither a run nor a binding and is *not* applied; a binding-scoped
-     * redactor (`GitBinding.redactor`, the one `review-only.ts` uses) is even in lexical scope
-     * three lines above. Both are left for backlog **131**, which also records that the same
-     * document is stored a second time in `shadow_reports.comparison` and that the `0` this write
-     * produces is indistinguishable from a redactor that ran and found nothing.
-     *
-     * {@link redactArtifactData} is still called rather than skipped, because the **identifier**
-     * half of the policy is not about secrets: it refuses a `human_mr.url` or a `ticket` the
-     * platform would go on to address something with, and that check is worth running over a
-     * document assembled from provider text whatever redactor it is given.
-     */
-    const redacted = redactArtifactData(
-      'ShadowReport',
-      report as unknown as JsonValue,
-      noSecretsRedactor(),
     );
     await options.store.artifacts.insert(scope.tx, {
       id: artifactId,
@@ -339,7 +347,7 @@ export const runShadowReport = async (
       type: 'ShadowReport',
       version,
       markdown: null,
-      data: redacted.data as unknown as never,
+      data: document as unknown as never,
       schemaVersion: '1',
       // No run produced it: the platform computed it from rows and two provider reads.
       producedByRunId: null,
@@ -382,6 +390,81 @@ export const runShadowReport = async (
     wrote
       ? 'a shadow report was written'
       : 'this shadow task already had a report; nothing was written twice',
+  );
+};
+
+/**
+ * **The ending of an identifier refusal inside this duty** (WP-80, PROGRESS backlog 131 point 3).
+ *
+ * TD-012's WP-52 amendment says an identifier carrying a secret makes *"the write fail by name and
+ * the run escalate"*, and this write has no run: it is a `pipeline.outbound` job. Thrown, the
+ * refusal would take the job's retry-and-dead-letter path (WP-49) and be retried although it can
+ * never succeed — the document is computed from rows that will say the same thing next time. So the
+ * duty **fails** — nothing is written, no `shadow_reports` row, no artifact, no
+ * `shadow.report.created` — and the task is **escalated** with a brief naming the field, in a
+ * transaction of its own, and the job ends. The reachable case is `human_mr.branch`, a name somebody
+ * outside the organisation chose, on a batch row written before WP-80 redacted `human_mr` at the
+ * batch (migration 0057).
+ *
+ * A task that cannot be escalated from where it stands (`IllegalTransitionError`) is logged and
+ * consumed, as `escalateTaskAfterConflict` does: nothing was written, and there is nothing to park.
+ */
+const escalateRefusedShadowReport = async (
+  options: ShadowReportOptions,
+  stored: StoredTask,
+  refusal: ArtifactIdentifierSecretError,
+): Promise<void> => {
+  const logger = options.logger ?? silentLogger;
+  logger.error(
+    { task_id: stored.task.id, path: refusal.path },
+    'the shadow report carries a secret in a field the platform reads as an identifier, so it was not written; the task is escalated rather than the job retried (TD-012, PROGRESS backlog 131)',
+  );
+  await retryOnTaskConflict(
+    {
+      taskId: stored.task.id,
+      what: 'escalating a refused shadow report',
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
+    },
+    async () =>
+      options.unitOfWork.transaction(async (scope) => {
+        const current = await options.store.tasks.load(scope.tx, stored.task.id);
+        if (current === null) {
+          return;
+        }
+        try {
+          const escalated = escalateTask(
+            current.task,
+            {
+              reason: `the shadow report was refused: "${refusal.path}" carries a secret`,
+              blockerBrief:
+                `The shadow report for ${current.task.ticket.key} was not written: the field ` +
+                `"${refusal.path}" carries a value the platform's redactor recognises as a secret, and ` +
+                'the platform reads that field as an identifier, so it refuses the document rather ' +
+                'than rewriting it (TD-012). The value came from the provider — most likely a branch ' +
+                'name on the human merge request. Check that merge request, rotate the credential if ' +
+                'it is real, and close the task; nothing was stored.',
+            },
+            {
+              ids: options.ids,
+              actor: PIPELINE_ACTOR,
+              clock: options.clock as never,
+              correlationId: current.task.id,
+              causeEventId: null,
+            },
+          );
+          await options.store.tasks.save(scope.tx, { ...current, task: escalated.aggregate });
+          await closeParkedStageRow(options.store, scope.tx, escalated, 'escalated');
+          await scope.events.append(escalated.events);
+        } catch (error) {
+          if (!(error instanceof IllegalTransitionError)) {
+            throw error;
+          }
+          logger.warn(
+            { task_id: current.task.id, state: current.task.state },
+            'a refused shadow report could not escalate its task from where it stands; nothing was written',
+          );
+        }
+      }),
   );
 };
 

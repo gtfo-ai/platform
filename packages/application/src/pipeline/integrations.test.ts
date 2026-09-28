@@ -39,6 +39,7 @@ import type { PipelineIntegrations } from './integrations.js';
 import {
   gitReads,
   integrationsForProject,
+  mintingIntegrationFor,
   noRunScopedSecrets,
   PLATFORM_TICKET_PROVIDER,
   staticPipelineIntegrations,
@@ -292,5 +293,44 @@ describe('the refusals that keep a provider call out of a transaction', () => {
     await expect(
       ticketWrites(integrations).transition(ticket, 'In Progress', context),
     ).rejects.toThrow('the executor was entered');
+  });
+});
+
+/**
+ * WP-80 (TD-028 decision 10): the minting integration has a door of its own,
+ * `mintingIntegrationFor`, guarded like `integrationsForProject` — a revocation is a provider call,
+ * never made inside a transaction. Nothing in the application ring calls the port member directly.
+ */
+describe('the minting integration’s door (WP-80)', () => {
+  const APPLICATION = join(RING, '..');
+  const walk = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+      entry.isDirectory()
+        ? walk(join(dir, entry.name))
+        : entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts')
+          ? [join(dir, entry.name)]
+          : [],
+    );
+
+  it('is the only caller of forMintingIntegration outside the port’s own module', () => {
+    const callers = walk(APPLICATION)
+      .filter((file) => !file.endsWith(join('pipeline', 'integrations.ts')))
+      .filter((file) => /\.\s*forMintingIntegration\s*\(/.test(readFileSync(file, 'utf8')));
+    expect(callers).toEqual([]);
+  });
+
+  it('refuses inside an open transaction', async () => {
+    const port = staticPipelineIntegrations({
+      executor: {} as IntegrationActionExecutor,
+      git: null,
+      taskManagement: null,
+      communication: null,
+    });
+    await expect(
+      withOpenTransaction(async () =>
+        mintingIntegrationFor(port, 'a' as Id, { runScopedSecrets: [] }),
+      ),
+    ).rejects.toBeInstanceOf(TransactionOpenError);
+    expect(await mintingIntegrationFor(port, 'a' as Id, { runScopedSecrets: [] })).toBeNull();
   });
 });

@@ -6,6 +6,7 @@ import type { ConfigSource, JsonObject, MaterialisedAutonomy } from '@platform/c
 import { sql } from 'drizzle-orm';
 import {
   boolean,
+  integer,
   jsonb,
   pgTable,
   primaryKey,
@@ -195,6 +196,26 @@ export const heldConnectionLiveness = pgTable('held_connection_liveness', {
   renewedAt: timestamp('renewed_at', { withTimezone: true }).notNull().defaultNow(),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
 });
+
+/**
+ * The non-secret shape of every run credential the platform minted (WP-80, migration 0057,
+ * TD-012's M5 amendment) — one row per distinct shape per integration, the latest expiry kept.
+ */
+export const mintedCredentialShapes = pgTable(
+  'minted_credential_shapes',
+  {
+    integrationId: uuid('integration_id').notNull(),
+    prefix: text('prefix').notNull(),
+    charset: text('charset').notNull(),
+    length: integer('length').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.integrationId, table.prefix, table.charset, table.length] }),
+  ],
+);
 
 /** Append-only, monthly partitions. Secret values appear as "changed" (technical/03). */
 export const configAudit = pgTable(

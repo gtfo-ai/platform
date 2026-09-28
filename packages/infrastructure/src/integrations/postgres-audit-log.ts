@@ -14,6 +14,11 @@
  * the executor calls `record()` from outside any transaction of the platform's, in the middle of a
  * provider call, and BD-003 wants the pair atomic anyway.
  *
+ * **A third write, for one action** (WP-80): an `ok` `mint_credential` entry carries the minted
+ * value's non-secret shape, and it is upserted into `minted_credential_shapes` in the same
+ * transaction — TD-012's M5 amendment asks for the shape *beside the mint's audit row, in its
+ * transaction*, so no process can read a mint on record whose shape is not.
+ *
  * ## Allocating a stream sequence outside a saga
  *
  * `NormalisedEvent` carries `type`, `payload` and `actor` and stops there **on purpose**: a
@@ -83,6 +88,19 @@ const INSERT_ACTION = `insert into integration_actions
   values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12)`;
 
 /**
+ * The minted credential's shape, upserted **in the audit row's transaction** (WP-80, TD-012's M5
+ * amendment, migration 0057). One row per distinct shape per integration; a later mint of the same
+ * shape moves `expires_at` forward and never back, so a short-lived mint cannot shorten the window
+ * a longer-lived one of the same shape still needs.
+ */
+const UPSERT_SHAPE = `insert into minted_credential_shapes
+    (integration_id, prefix, charset, length, expires_at)
+  values ($1, $2, $3, $4, $5::timestamptz)
+  on conflict (integration_id, prefix, charset, length) do update
+    set expires_at = greatest(minted_credential_shapes.expires_at, excluded.expires_at),
+        updated_at = now()`;
+
+/**
  * The envelope this adapter puts around each draft.
  *
  * Parsed with the catalogue schema before it reaches `append`, so a draft the `events` table would
@@ -144,6 +162,16 @@ export const createPostgresIntegrationAuditLog = (
         entry.attempts,
         entry.occurredAt,
       ]);
+      const shape = entry.status === 'ok' ? entry.credentialShape : undefined;
+      if (shape !== undefined) {
+        await postgresTransaction(scope.tx).client.query(UPSERT_SHAPE, [
+          entry.integrationId,
+          shape.shape.prefix,
+          shape.shape.charset,
+          shape.shape.length,
+          shape.expiresAt,
+        ]);
+      }
       if (drafts.length > 0) {
         await scope.events.append(
           drafts.map((draft, index) =>

@@ -45,7 +45,7 @@
  *
  * The pass's reads are one transaction (`./stranded.ts`); the revoke is a provider call, so it
  * leaves through `pipeline.outbound` — WP-15d's shape, a duty per credential enqueued **after**
- * that transaction commits, which `assertOutsideTransaction` inside `runCredentialWrites().recover`
+ * that transaction commits, which `assertOutsideTransaction` inside `runCredentialRevocations().recover`
  * refuses to break. The duty **re-validates on fire** with the same predicate for its one address
  * (TD-004: a job is a wake-up, not a message), so a wake-up enqueued twice — a pass that ran again
  * before the first job was taken — finds the first attempt's row and does nothing.
@@ -58,14 +58,27 @@
  * pass interval behind *and* two consumers; a claim column would close it at the cost of a mark the
  * row's bound is meant not to need.
  *
+ * ## Through the integration that minted it, bound or not (WP-80)
+ *
+ * TD-028 decision 10 (M5 amendment), PROGRESS backlog 156 half 3. Until WP-80 the finding query
+ * required the mint's `integration_id` to be the project's git binding still, and a credential
+ * minted through an integration the project had since been unbound from was only *reported*
+ * (WP-73b) and left live for up to 48 hours. The join existed to keep an address from reaching a
+ * host that did not issue it; the minting integration **is** that host, by construction, so the
+ * binding is no longer asked: the revoke is built from the minting `integrations.id`
+ * (`PipelineIntegrationsPort.forMintingIntegration`) and writes one audit row under it. What the
+ * join was right about stays, and is structural: `runCredentialRevocations` refuses any integration
+ * but the minting one.
+ *
  * ## What it does not reach
  *
- *  - a credential minted through a git binding the project is **no longer bound to**: the finding
- *    query requires the mint's `integration_id` to be the project's git binding still, because a
- *    `revoke_id` is an address on that binding's host and no other binding may be sent it. Such a
- *    token lives to its expiry; since WP-73b the pass **reports** it — one warning per address per
- *    process, naming run, integration, `revoke_id` and `expires_at` — through a sibling read with
- *    the binding negated (PROGRESS backlog 156 half 1). Revoking it is half 3, not decided;
+ *  - a credential whose minting **integration row is gone**: there is no host left the platform may
+ *    send the address to. `integration_actions.integration_id` has a restricting foreign key, so an
+ *    integration with a mint on record cannot be deleted on this schema — this is the branch for a
+ *    row removed past that constraint (a restore, a hand edit) — and the pass **reports** it, one
+ *    warning per address per process, through a sibling read of the same predicate
+ *    (`unreachableRunCredentials`), and never calls anybody. The duty that finds the row gone
+ *    between the pass and its firing says so the same way;
  *  - a mint whose response was lost (TD-028's residual): no `revoke_id` was ever recorded;
  *  - a run that is **not terminal**: a live run's credential is its runner's. The lease sweep ends a
  *    run nobody is renewing, and the pass after that reaches its credential here — which, for a
@@ -79,12 +92,12 @@
  */
 import type { Id, IsoDateTime } from '@platform/contracts';
 import {
-  integrationsForProject,
+  mintingIntegrationFor,
   noRunScopedSecrets,
   type PipelineIntegrationsPort,
   type RecoverableRunCredential,
   type RunCredentialRecovery,
-  runCredentialWrites,
+  runCredentialRevocations,
 } from '../pipeline/integrations.js';
 import type { PipelineOutboundData } from '../pipeline/jobs.js';
 import type { Jobs } from '../ports/jobs.js';
@@ -112,10 +125,10 @@ export interface UnrevokedRunCredentialStore {
     query: UnrevokedRunCredentialQuery,
   ): Promise<readonly RecoverableRunCredential[]>;
   /**
-   * The same predicate with the binding **negated** (WP-73b, PROGRESS backlog 156 half 1): the
-   * unrevoked, unexpired mints whose minting integration is no longer a binding of the project, so
-   * {@link unrevokedRunCredentials} will never reach them. The pass reports them; it does not revoke
-   * them — whether it may is backlog 156's half 3, an architect decision.
+   * The same predicate for the mints whose minting **integration row no longer exists** (WP-80;
+   * WP-73b's read, whose question was *no longer bound* until TD-028 decision 10 made an unbound
+   * integration revocable). {@link unrevokedRunCredentials} will never reach them, because there is
+   * no host to send the address to: the pass reports them and calls nobody.
    */
   unreachableRunCredentials(
     tx: Transaction,
@@ -154,15 +167,17 @@ export const runCredentialRecoveryHorizonMs = (ttlSeconds: number): number =>
   ttlSeconds * 1000 + PROVIDER_EXPIRY_ROUNDING_MS;
 
 /**
- * **How often an unreachable credential is reported** (WP-73b, PROGRESS backlog 156 half 1).
+ * **How often an unreachable credential is reported** (WP-73b, PROGRESS backlog 156 half 1; since
+ * WP-80 *unreachable* means *its minting integration row is gone*).
  *
  * The finding read answers the same credential on every pass until it expires — up to 48 hours of
  * one-minute passes — and a warning repeated two thousand times is a warning nobody reads. So the
  * site remembers, **in this process**, the addresses it has reported, and reports each once:
  * a restart reports it once more, which is the bound, stated rather than hidden. Nothing is written
- * to the database for it — the report is a log line, not a claim, and a mark would be a column of
- * its own for a question (half 3) nobody has answered. An entry is forgotten once its credential's
- * recorded expiry has passed, so the memory holds at most the unexpired unreachable credentials.
+ * to the database for it — the report is a log line, not a claim, and there is nothing the platform
+ * could do with a mark: no host is left to revoke through. An entry is forgotten once its
+ * credential's recorded expiry has passed, so the memory holds at most the unexpired unreachable
+ * credentials.
  */
 export interface UnreachableRunCredentialReports {
   /** `true` the first time this process meets `revokeId`; drops entries expired at `now`. */
@@ -272,7 +287,7 @@ export interface RunCredentialRevocationOptions {
  *
  * It never throws for the revoke's own outcome. The job's retry would be a second attempt, which
  * the row's bound forbids; the attempt's audit row is already written, so the next pass does not
- * find this address again. What it throws for is what happens **before** the executor — the binding
+ * find this address again. What it throws for is what happens **before** the executor — the minting integration
  * failed to load — which wrote no row, so the retry, and the next pass after it, are still inside
  * the bound.
  */
@@ -305,21 +320,31 @@ export const runRunCredentialRevocation = async (
   if (credential === null) {
     return;
   }
-  const integrations = await integrationsForProject(
-    options.integrations,
-    credential.projectId,
-    noRunScopedSecrets(),
-  );
   const fields = {
     project_id: credential.projectId,
     task_id: credential.taskId,
     run_id: credential.runId,
+    integration_id: credential.integrationId,
     scope: credential.scope,
     expires_at: credential.expiresAt,
   };
+  // TD-028 decision 10 (WP-80): the integration that minted, bound or not — never the project's
+  // current git binding, which is a different integration exactly when this matters.
+  const minting = await mintingIntegrationFor(
+    options.integrations,
+    credential.integrationId,
+    noRunScopedSecrets(),
+  );
+  if (minting === null) {
+    logger.error(
+      { ...fields, revoke_id: credential.revokeId },
+      'the integration that minted this run credential no longer exists, so there is no host the platform may send its address to; nothing was called and the token lives until it expires — revoke it by hand in the provider (TD-028 decision 10, PROGRESS backlog 156)',
+    );
+    return;
+  }
   let outcome: RunCredentialRecovery;
   try {
-    outcome = await runCredentialWrites(integrations).recover(credential);
+    outcome = await runCredentialRevocations(minting).recover(credential);
   } catch (error) {
     logger.error(
       { ...fields, err: error },

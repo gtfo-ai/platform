@@ -19,10 +19,13 @@
  * `endedAfter`, and a revoke comes after its mint — so the bound is correct *and* lets PostgreSQL
  * prune the table's monthly partitions.
  *
- * **The binding that minted must still be the project's git binding.** `revoke_id` is an address on
- * that binding's host; the join is what keeps a re-bound project's old address from being sent to a
- * new server. What that join leaves out is read by `unreachableRunCredentials`, the same predicate
- * with the binding negated, and **reported**, never revoked (WP-73b, PROGRESS backlog 156 half 1).
+ * **No binding is asked** (WP-80, TD-028 decision 10). Until WP-80 the read joined `bindings`, so a
+ * credential minted through an integration the project had since been unbound from was never found
+ * and only reported. The revoke is now built from the **minting** integration, bound or not, which
+ * is the host that issued the address by construction — so the join is gone and the refusal it
+ * stood for lives in `runCredentialRevocations` (never an integration but the minting one). What is
+ * left out is a mint whose **integration row no longer exists**: `unreachableRunCredentials` reads
+ * that, the same predicate with the integration negated, and it is **reported**, never revoked.
  */
 import type {
   CredentialScope,
@@ -56,7 +59,7 @@ interface Row extends Record<string, unknown> {
  *
  * `$1` the live statuses, `$2` `now`, `$3` `endedAfter`.
  */
-const fromAndPredicate = (binding: 'bound' | 'unbound'): string => `
+const fromAndPredicate = (integration: 'present' | 'gone'): string => `
    from runs r
    join tasks t on t.id = r.task_id
    join integration_actions m
@@ -74,10 +77,7 @@ const fromAndPredicate = (binding: 'bound' | 'unbound'): string => `
           -- the revoke is harmless if it is not, and the one attempt still bounds it.
           else true
         end
-   ${BINDING_CLAUSE[binding]}
-   join integrations i
-     on i.id = m.integration_id
-    and i.type = 'git'
+   ${INTEGRATION_CLAUSE[integration]}
   where r.status <> all($1::run_status[])
     and r.ended_at is not null
     and not exists (
@@ -94,29 +94,25 @@ const fromAndPredicate = (binding: 'bound' | 'unbound'): string => `
            (v.status = 'ok' and v.result ->> 'revoked' = 'true')
            or v.payload ->> 'origin' = 'recovery'
          )
-    )${binding === 'unbound' ? UNBOUND_PREDICATE : ''}`;
+    )${integration === 'gone' ? GONE_PREDICATE : ''}`;
 
 /**
- * The one clause the two finding reads differ by (WP-73b, PROGRESS backlog 156 half 1). `bound` is
- * the recovery's: the minting integration must still be a binding of the project. `unbound` is the
- * report's sibling: it must not be — which the join cannot say, so the join is dropped and a
- * `not exists` on the same `(project_id, integration_id)` pair joins the `where` instead.
+ * The one clause the two finding reads differ by (WP-80; WP-73b's split, whose question was the
+ * binding until TD-028 decision 10). `present` is the recovery's: the minting integration exists and
+ * is a git integration — bound to the project or not. `gone` is the report's: no integration row
+ * has that id, which the join cannot say, so it is dropped and a `not exists` joins the `where`.
  */
-const BINDING_CLAUSE = {
-  bound: `join bindings b
-     on b.project_id = r.project_id
-    and b.integration_id = m.integration_id`,
-  unbound: '',
+const INTEGRATION_CLAUSE = {
+  present: `join integrations i
+     on i.id = m.integration_id
+    and i.type = 'git'`,
+  gone: '',
 } as const;
 
-const UNBOUND_PREDICATE = `
-    and not exists (
-      select 1 from bindings b
-       where b.project_id = r.project_id
-         and b.integration_id = m.integration_id
-    )`;
+const GONE_PREDICATE = `
+    and not exists (select 1 from integrations i where i.id = m.integration_id)`;
 
-const FROM_AND_PREDICATE = fromAndPredicate('bound');
+const FROM_AND_PREDICATE = fromAndPredicate('present');
 
 const SELECT = `select r.id as run_id, r.task_id, r.project_id, t.mode::text as mode,
                        m.integration_id, m.result ->> 'revoke_id' as revoke_id,
@@ -159,7 +155,7 @@ export const createPostgresRunCredentialStore = (): UnrevokedRunCredentialStore 
     // so each pass reaches the next unreported rows rather than the same oldest `limit` again.
     const { rows } = await sqlOf(tx).query<Row>(
       `${SELECT}
-       ${fromAndPredicate('unbound')}
+       ${fromAndPredicate('gone')}
           and r.ended_at < $4::timestamptz
           and r.ended_at >= $3::timestamptz
           and (m.integration_id::text, m.result ->> 'revoke_id') not in (

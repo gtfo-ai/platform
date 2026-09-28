@@ -114,6 +114,9 @@ const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
   ['packages/application/src/pipeline/stage-executor.ts', 6],
   ['packages/application/src/pipeline/transitions.ts', 5],
   ['packages/application/src/pipeline/task-conflict.ts', 1],
+  // WP-80 (PROGRESS backlog 131): the shadow report's identifier refusal escalates its task from
+  // the `pipeline.outbound` job, in a transaction of its own, under `retryOnTaskConflict`.
+  ['packages/application/src/shadow/report.ts', 1],
 ]);
 
 /** Tracked *and* committable-but-untracked, which is the tree the pre-push hook sees (rule 85). */
@@ -163,7 +166,7 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     );
   });
 
-  it('counts thirty-two, which is the number the change states', () => {
+  it('counts thirty-three, which is the number the change states', () => {
     // Twenty-one inherited from WP-15d (`saga.ts` 11, `transitions.ts` 5, `stage-executor.ts` 5 —
     // backlog 18 counted twenty before `stage-executor.ts` gained its fifth) plus the one
     // `escalateTaskAfterConflict` adds, which is the ending for the other twenty-one; plus four
@@ -192,8 +195,11 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     // **Plus one at WP-63**: the stage executor's admission refusal — a repository configuration
     // that does not parse escalates the task before any run exists, in `admit`'s own transaction,
     // with the executor's retry and `escalateOnConflict` as its ending.
+    // **Plus one at WP-80**: the shadow report's identifier refusal (backlog 131), which fails the
+    // `pipeline.outbound` duty and escalates the task in its own transaction, with the job's
+    // `retryOnTaskConflict` as its retry and `IllegalTransitionError` logged as its ending.
     const total = [...census().values()].reduce((sum, count) => sum + count, 0);
-    expect(total).toBe(32);
+    expect(total).toBe(33);
     expect([...EXPECTED_SITES.values()].reduce((sum, count) => sum + count, 0)).toBe(total);
   });
 

@@ -71,6 +71,7 @@ import type {
 import { domainEventSchemasByType } from '@platform/contracts';
 import {
   eventing as eventingAdapters,
+  type launcher as launcherAdapters,
   runner as runnerAdapters,
   secrets as secretAdapters,
 } from '@platform/infrastructure';
@@ -92,6 +93,7 @@ import type { MigratedDatabase } from '../../integration/support/migrated.js';
 import { createTestPool } from '../../integration/support/postgres.js';
 import {
   type AgentRunCapture,
+  mintingProvisioner,
   PLANTED_MODEL_KEY,
   type ScenarioBash,
   scriptedWorkspaces,
@@ -228,6 +230,13 @@ export interface AddProcessOptions {
    */
   readonly env?: Readonly<Record<string, string>>;
   readonly logDestination?: StartInstanceOptions['logDestination'];
+  /**
+   * WP-80: in `real-over-fake-cli` mode, mint each run's git credential through this process's
+   * **production** minter before the scripted CLI plays (`PipelineComposition.mintingWorkspaces`),
+   * and revoke it after the release — so the mint's audit row and its shape row are written by
+   * this process. Off by default: no other case mints.
+   */
+  readonly mintsRunCredentials?: boolean;
 }
 
 export interface PipelineE2E {
@@ -653,6 +662,13 @@ export interface StartPipelineOptions {
    */
   readonly gitProjects?: readonly string[];
   /**
+   * The prefix of every credential the fake git provider mints (WP-80, the fake's
+   * `credentialPrefix`). Absent keeps `fake_credential_<n>`. The two-process case sets one no
+   * gitleaks rule knows, which is backlog 259's trigger. Setting it also starts the fake's clock at
+   * the wall clock, so what it mints expires in the future and its shape is live.
+   */
+  readonly gitCredentialPrefix?: string;
+  /**
    * WP-43: the chat binding is the **real** Slack registration, over this fake Web API and Socket
    * Mode connection, instead of `fake-communication`. The seeded account is `provider: 'slack'`
    * with Socket Mode on (its default) and three sealed credentials, and the instance's
@@ -799,6 +815,12 @@ export const seedIntegrations = async (
 export const startPipeline = async (options: StartPipelineOptions): Promise<PipelineE2E> => {
   const git = createFakeGitProvider({
     integrationId: GIT_INTEGRATION_ID,
+    // A minted credential's expiry is counted on the fake's own clock, which starts at a fixed epoch
+    // in the past; a shape whose credential has expired compiles no rule (`expires_at > now()`), so
+    // a case that mints for real starts the fake's clock at the wall clock (WP-80).
+    ...(options.gitCredentialPrefix === undefined
+      ? {}
+      : { credentialPrefix: options.gitCredentialPrefix, clockStart: new Date().toISOString() }),
     projects: [
       {
         path: GIT_PROJECT,
@@ -1034,8 +1056,10 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
     readonly pipeline: null | undefined;
     readonly env: Readonly<Record<string, string>> | undefined;
     readonly logDestination?: AddProcessOptions['logDestination'];
+    readonly mintsRunCredentials?: boolean;
   }): Promise<Instance> => {
     const realRunner = proc.agent === 'real-over-fake-cli';
+    const minting = realRunner && proc.mintsRunCredentials === true;
     const noRunner = proc.agent === 'none';
     return startInstance({
       label: proc.label,
@@ -1067,7 +1091,20 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
           ? null
           : {
               registry: registryFor(proc.name),
-              ...(realRunner ? { workspaces: scripted.provisioner } : {}),
+              ...(realRunner && !minting ? { workspaces: scripted.provisioner } : {}),
+              ...(minting
+                ? {
+                    mintingWorkspaces: (minter: launcherAdapters.RunGitCredentialMinter) =>
+                      mintingProvisioner(scripted.provisioner, minter, () => ({
+                        repoUrl: `https://git.example.test/${GIT_PROJECT}.git`,
+                        defaultBranch: 'main',
+                        projectPath: GIT_PROJECT,
+                        gitHost: 'git.example.test',
+                        branchPatterns: ['agentic/*'],
+                        containerEnv: {},
+                      })),
+                  }
+                : {}),
               ...(realRunner || noRunner ? {} : { runner }),
               ...(options.jobs === undefined ? {} : { jobs: options.jobs }),
             },
@@ -1159,6 +1196,9 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
         pipeline: proc.pipeline,
         env: proc.env,
         logDestination: proc.logDestination,
+        ...(proc.mintsRunCredentials === undefined
+          ? {}
+          : { mintsRunCredentials: proc.mintsRunCredentials }),
       });
       added.push(started);
       return started;

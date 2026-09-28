@@ -34,6 +34,7 @@ import {
   type IntegrationActionExecutor,
   SHADOW_RUN_CREDENTIAL_CARVE_OUT,
 } from '../integrations/action-executor.js';
+import { hasMintedCredentialShape } from '../integrations/credential-shape.js';
 import {
   exactSecretRedactor,
   type InjectedSecret,
@@ -61,6 +62,7 @@ import type {
   MergeRequest,
   MergeRequestRefInput,
   MintedCredential,
+  MintedRunCredential,
   PipelineStatus,
   RepositoryCommit,
 } from '../ports/integrations/git-provider.js';
@@ -197,8 +199,9 @@ export interface IntegrationCallScope {
  * checkout, and the one call made with a run's scope is its **revocation**
  * (`apps/server/src/workspaces.ts`). Everything here runs in a job or a handler after the run, and
  * what reaches it instead is the composition root's process-wide registry of the credentials that
- * process minted, composed into each binding's platform redactor — which is out of reach of a
- * process that did not mint (PROGRESS backlog 154).
+ * process minted, composed into each binding's platform redactor, and — since WP-80 — the step-2
+ * rule every process compiles from each minted credential's recorded shape, which is what reaches
+ * a process that did not mint (TD-012's M5 amendment, PROGRESS backlog 259).
  */
 export const noRunScopedSecrets = (): IntegrationCallScope => ({ runScopedSecrets: [] });
 
@@ -216,12 +219,83 @@ export const noRunScopedSecrets = (): IntegrationCallScope => ({ runScopedSecret
  */
 export interface PipelineIntegrationsPort {
   forProject(projectId: Id, scope: IntegrationCallScope): Promise<PipelineIntegrations>;
+  /**
+   * **The integration that minted a run credential, bound or not** — TD-028 decision 10 (M5
+   * amendment), WP-80, PROGRESS backlog 156 half 3.
+   *
+   * A minted credential's `revoke_id` is an address on the host of the integration that minted
+   * it, and that integration is by construction the host that issued it; the executor's audit,
+   * idempotency and rate-limit records are keyed by `integrations.id` already. So the revoke —
+   * teardown and recovery alike — is built from the **minting** `integrations.id`, whether or not
+   * the project still binds it, and never from the project's current git binding, which is a
+   * different integration exactly in the case that matters.
+   *
+   * `null` when no integration has that id any more: there is then no host the platform may send
+   * the address to, and the caller reports the credential and leaves it to its expiry.
+   *
+   * @throws {Error} when the integration exists and cannot be built, or is not a git integration —
+   * the loader's *broken is not absent* rule (standing rule 20).
+   */
+  forMintingIntegration(
+    integrationId: Id,
+    scope: IntegrationCallScope,
+  ): Promise<MintingIntegration | null>;
 }
 
-/** One already-composed set for every project: the unit tier's case, and a single-project instance. */
+/**
+ * The git integration a credential was minted through, built from its account alone — enough to
+ * revoke by address and nothing more (WP-80). No repository path: a revocation address carries its
+ * own project (`revokeId`, standing rule 19), and a binding's path is exactly what an unbound
+ * integration no longer has.
+ */
+export interface MintingIntegration {
+  readonly executor: IntegrationActionExecutor;
+  readonly port: GitProviderPort;
+  readonly ref: IntegrationRef;
+  /** Both TD-012 steps, as the loader composes them for a binding. */
+  readonly redactor: SecretRedactor;
+}
+
+/** The project's git binding as a {@link MintingIntegration} — what a mint's own refusal revokes through. */
+export const mintingIntegrationOf = (
+  integrations: PipelineIntegrations,
+): MintingIntegration | null =>
+  integrations.git === null
+    ? null
+    : {
+        executor: integrations.executor,
+        port: integrations.git.port,
+        ref: integrations.git.ref,
+        redactor: integrations.git.redactor,
+      };
+
+/**
+ * One already-composed set for every project: the unit tier's case, and a single-project instance.
+ * Its minting integration is its git binding when the id matches, and `null` — a deleted
+ * integration — otherwise.
+ */
 export const staticPipelineIntegrations = (
   integrations: PipelineIntegrations,
-): PipelineIntegrationsPort => ({ forProject: async () => integrations });
+): PipelineIntegrationsPort => ({
+  forProject: async () => integrations,
+  forMintingIntegration: async (integrationId) =>
+    integrations.git?.ref.integrationId === integrationId
+      ? mintingIntegrationOf(integrations)
+      : null,
+});
+
+/**
+ * The door to {@link PipelineIntegrationsPort.forMintingIntegration}, guarded like
+ * {@link integrationsForProject}: a revoke is a provider call and none is made inside a transaction.
+ */
+export const mintingIntegrationFor = async (
+  port: PipelineIntegrationsPort,
+  integrationId: Id,
+  scope: IntegrationCallScope,
+): Promise<MintingIntegration | null> => {
+  assertOutsideTransaction('integrations.forMintingIntegration');
+  return port.forMintingIntegration(integrationId, scope);
+};
 
 /**
  * **The door.** Every pipeline path that wants a provider starts here, and it refuses to open
@@ -803,9 +877,9 @@ export const ticketWrites = (integrations: PipelineIntegrations) => ({
    * a run: this job holds no run-scoped secret set of its own. Since WP-76 a lint run **is** minted
    * a credential — a `read` one, because `TOOLS_BY_ROLE.product_manager` is `['Read','Glob','Grep']`
    * and `runIsReadOnly` is true — and it is revoked when the run ends; the composition root's
-   * platform redactor carries the run-scoped secrets **its own process** minted, so the residual is
-   * a deployment whose outbound job runs in a process that did not mint (PROGRESS backlog 154), and
-   * what it could leak there is a revoked read token.
+   * platform redactor carries the run-scoped secrets **its own process** minted by exact value, and
+   * since WP-80 every process's step-2 rules carry each minted credential's recorded shape, so an
+   * outbound job in a process that did not mint replaces it too (PROGRESS backlog 259).
    *
    * `idempotencyKey` is the caller's and identifies *the lint*, not the wake-up: product/19 § 17
    * says the comment is never re-posted, so a redelivery **and** a re-run of the stage must both
@@ -1230,8 +1304,9 @@ export const knowledgeWrites = (integrations: PipelineIntegrations) => ({
  * credential helper, and which is **revoked when the run ends**, before this job runs. The
  * composition root composes the run-scoped secrets **its own process** minted into every binding's
  * platform redactor (`apps/server/src/pipeline.ts`), held until the token expires, so a thread
- * posted from the process that ran the review has it replaced; one posted from a process that did
- * not mint does not, and that residual — a revoked read token in a thread — is PROGRESS backlog 154.
+ * posted from the process that ran the review has it replaced by name; one posted from a process
+ * that did not mint has it replaced by the step-2 rule compiled from its recorded shape (WP-80,
+ * TD-012's M5 amendment — until then that residual was PROGRESS backlog 154's).
  */
 export const reviewWrites = (integrations: PipelineIntegrations) => ({
   /**
@@ -1688,7 +1763,7 @@ export interface RunCredentialRequest {
 export type RunCredentialMint =
   | {
       readonly kind: 'minted';
-      readonly credential: MintedCredential;
+      readonly credential: MintedRunCredential;
       readonly ref: IntegrationRef;
       /** What the teardown revoke takes: the address, and the binding that minted it (backlog 156). */
       readonly handle: RunCredentialHandle;
@@ -1696,8 +1771,9 @@ export type RunCredentialMint =
   | { readonly kind: 'unavailable'; readonly reason: string };
 
 /**
- * Minting and revoking the run-scoped git credential — **through the executor, keyed by the git
- * binding, with no idempotency key** (TD-028's WP-76 amendment, decisions 1, 5 and 7).
+ * Minting the run-scoped git credential — **through the executor, keyed by the git binding, with
+ * no idempotency key** (TD-028's WP-76 amendment, decisions 1, 5 and 7). Revoking it is
+ * {@link runCredentialRevocations}, keyed by the integration that minted it (decision 10, WP-80).
  *
  * No key, because the executor stores a *redacted* result and a replay would answer with
  * `[REDACTED:…]` where the token was — its own docblock asks exactly this of "a minted credential".
@@ -1726,124 +1802,154 @@ const describeRevokeFailure = (error: unknown, value: string): string => {
   return exactSecretRedactor([{ name: 'refused_run_credential', value }]).redactText(text).value;
 };
 
-export const runCredentialWrites = (integrations: PipelineIntegrations) => {
-  const writes = {
-    mint: async (request: RunCredentialRequest): Promise<RunCredentialMint> => {
-      const git = integrations.git;
-      if (git === null) {
-        return {
-          kind: 'unavailable',
-          reason: `project ${request.projectId} has no git binding, so no run credential can be minted for it`,
-        };
-      }
-      if (!git.port.capabilities().credentialMinting) {
-        return {
-          kind: 'unavailable',
-          reason:
-            `the git binding ${git.ref.integrationId} (${git.ref.provider}) cannot mint run credentials — ` +
-            'its minting setting is off (GitLab: `mint_credentials: true` on the integration, which needs ' +
-            'project access tokens: GitLab Premium on GitLab.com, any self-managed tier). The binding’s own ' +
-            'token is never sent instead (TD-028, WP-76 amendment decision 6)',
-        };
-      }
-      assertOutsideTransaction('the provider mutation "mint_credential"');
-      const readScoped = request.scope === 'read';
-      const outcome = await integrations.executor.execute<MintedCredential | null>({
-        integration: git.ref,
-        action: 'mint_credential',
-        payload: {
+export const runCredentialWrites = (integrations: PipelineIntegrations) => ({
+  mint: async (request: RunCredentialRequest): Promise<RunCredentialMint> => {
+    const git = integrations.git;
+    if (git === null) {
+      return {
+        kind: 'unavailable',
+        reason: `project ${request.projectId} has no git binding, so no run credential can be minted for it`,
+      };
+    }
+    if (!git.port.capabilities().credentialMinting) {
+      return {
+        kind: 'unavailable',
+        reason:
+          `the git binding ${git.ref.integrationId} (${git.ref.provider}) cannot mint run credentials — ` +
+          'its minting setting is off (GitLab: `mint_credentials: true` on the integration, which needs ' +
+          'project access tokens: GitLab Premium on GitLab.com, any self-managed tier). The binding’s own ' +
+          'token is never sent instead (TD-028, WP-76 amendment decision 6)',
+      };
+    }
+    assertOutsideTransaction('the provider mutation "mint_credential"');
+    const readScoped = request.scope === 'read';
+    const outcome = await integrations.executor.execute<MintedRunCredential | null>({
+      integration: git.ref,
+      action: 'mint_credential',
+      payload: {
+        project: git.project,
+        scope: request.scope,
+        ttl_seconds: request.ttlSeconds,
+        run_id: request.runId,
+        task_mode: request.mode,
+      },
+      mutating: true,
+      mode: request.mode,
+      projectId: request.projectId,
+      taskId: request.taskId,
+      perform: async () =>
+        git.port.mintCredential({
           project: git.project,
           scope: request.scope,
-          ttl_seconds: request.ttlSeconds,
-          run_id: request.runId,
-          task_mode: request.mode,
-        },
-        mutating: true,
-        mode: request.mode,
-        projectId: request.projectId,
-        taskId: request.taskId,
-        perform: async () =>
-          git.port.mintCredential({
-            project: git.project,
-            scope: request.scope,
-            ...(readScoped ? {} : { branchPatterns: [...request.branchPatterns] }),
-            ttlSeconds: request.ttlSeconds,
-          }),
-        shadowResult: () => null,
-        describeResult: (minted) =>
-          minted === null
-            ? null
-            : { scope: minted.scope, expires_at: minted.expiresAt, revoke_id: minted.revokeId },
-        ...(readScoped ? { shadowCarveOut: SHADOW_RUN_CREDENTIAL_CARVE_OUT } : {}),
-      });
-      const minted = outcome.result;
-      if (minted === null) {
-        return {
-          kind: 'unavailable',
-          reason: `a shadow task is never given a ${request.scope} credential (Q98 (a) admits only a read-scoped one)`,
-        };
-      }
-      // Standing rule 18: an empty credential is not a credential, and a short one cannot be kept out
-      // of a transcript (`exactSecretRedactor` refuses it). A scope the provider changed is a
-      // provider defect that would hand a read-only run a push token.
-      //
+          ...(readScoped ? {} : { branchPatterns: [...request.branchPatterns] }),
+          ttlSeconds: request.ttlSeconds,
+        }),
+      shadowResult: () => null,
+      describeResult: (minted) =>
+        minted === null
+          ? null
+          : { scope: minted.scope, expires_at: minted.expiresAt, revoke_id: minted.revokeId },
+      // WP-80 (TD-012's M5 amendment): the value's non-secret shape, written beside this row in its
+      // transaction, so every process can redact a value only this one holds.
+      credentialShape: (minted) =>
+        minted === null ? null : { shape: minted.shape, expiresAt: minted.expiresAt },
+      ...(readScoped ? { shadowCarveOut: SHADOW_RUN_CREDENTIAL_CARVE_OUT } : {}),
+    });
+    const minted = outcome.result;
+    if (minted === null) {
+      return {
+        kind: 'unavailable',
+        reason: `a shadow task is never given a ${request.scope} credential (Q98 (a) admits only a read-scoped one)`,
+      };
+    }
+    const refusal = mintRefusal(minted, request);
+    if (refusal !== null) {
       // **Revoked before the refusal is thrown** (WP-76 review round 1): the provider has already
-      // created the token, and a refusal that left it would leave a live credential nothing holds, in
-      // no redaction registry, until GitLab's expiry. The revocation runs with the value that was
-      // actually minted, whatever its scope, and a revocation that fails is named in the refusal.
-      if (minted.value.trim().length < MIN_SECRET_LENGTH || minted.scope !== request.scope) {
-        const reason =
-          minted.scope !== request.scope
-            ? `asked for ${request.scope}, got ${minted.scope}`
-            : `its value is shorter than ${MIN_SECRET_LENGTH} characters, so it could not be redacted`;
-        const revocation = await writes.revoke(runCredentialHandle(minted, git.ref), request).then(
+      // created the token, and a refusal that left it would leave a live credential nothing holds,
+      // in no redaction registry, until its expiry. The revocation runs through the binding that
+      // just minted, and a revocation that fails is named in the refusal.
+      const minting = mintingIntegrationOf(integrations) as MintingIntegration;
+      const revocation = await runCredentialRevocations(minting)
+        .revoke(runCredentialHandle(minted, git.ref), request)
+        .then(
           () => 'it was revoked',
           (error: unknown) =>
             `its revocation failed (${describeRevokeFailure(error, minted.value)}), so it is live until the recovery pass revokes it from the audit row (PROGRESS backlog 155) or it expires at ${minted.expiresAt}`,
         );
-        throw new Error(
-          `the git binding ${git.ref.integrationId} minted a credential this platform will not use: ${reason}; ${revocation}`,
-        );
-      }
-      return {
-        kind: 'minted',
-        credential: minted,
-        ref: git.ref,
-        handle: runCredentialHandle(minted, git.ref),
-      };
-    },
+      throw new Error(
+        `the git binding ${git.ref.integrationId} minted a credential this platform will not use: ${refusal}; ${revocation}`,
+      );
+    }
+    return {
+      kind: 'minted',
+      credential: minted,
+      ref: git.ref,
+      handle: runCredentialHandle(minted, git.ref),
+    };
+  },
+});
 
+/**
+ * Why a minted value is not used, or `null`.
+ *
+ * Standing rule 18: an empty credential is not a credential, and a short one cannot be kept out of a
+ * transcript (`exactSecretRedactor` refuses it). A scope the provider changed is a provider defect
+ * that would hand a read-only run a push token. And since WP-80 a value that does not have the
+ * shape it came with cannot be redacted by any process but this one (TD-012's M5 amendment), so it
+ * is refused the same way — the hint names GitLab's setting because that is the one provider that
+ * mints, and a custom personal-access-token prefix is the ordinary way to get here.
+ */
+const mintRefusal = (minted: MintedRunCredential, request: RunCredentialRequest): string | null => {
+  if (minted.scope !== request.scope) {
+    return `asked for ${request.scope}, got ${minted.scope}`;
+  }
+  if (minted.value.trim().length < MIN_SECRET_LENGTH) {
+    return `its value is shorter than ${MIN_SECRET_LENGTH} characters, so it could not be redacted`;
+  }
+  if (!hasMintedCredentialShape(minted.shape, minted.value)) {
+    return (
+      `its value does not have the shape the provider declared (prefix "${minted.shape.prefix}", ` +
+      `${minted.shape.charset} characters, ${minted.shape.length} long), so no process but this one ` +
+      'could redact it (TD-012, WP-80) — GitLab: an instance whose administrator changed the ' +
+      'personal-access-token prefix declares it as `token_prefix` on the integration'
+    );
+  }
+  return null;
+};
+
+/**
+ * Revoking a run credential **through the integration that minted it** — TD-028 decision 10 (M5
+ * amendment), WP-80, PROGRESS backlog 156 half 3.
+ *
+ * Both the teardown revoke and the recovery revoke are built from the minting `integrations.id`
+ * ({@link PipelineIntegrationsPort.forMintingIntegration}), bound or not: a project unbound from —
+ * or re-bound away from — that integration still has its token revoked on the host that issued it,
+ * with one audit row under that integration's id. What WP-73b's refusal was right about stands and
+ * is now structural: `minting` must **be** the integration that minted, and anything else is
+ * refused before the executor, so no row is ever written under an integration that did not mint.
+ */
+export const runCredentialRevocations = (minting: MintingIntegration) => {
+  const assertMinter = (integrationId: Id, runId: Id, expiresAt: string): void => {
+    if (minting.ref.integrationId !== integrationId) {
+      throw new Error(
+        `run ${runId}'s credential was minted through the git integration ${integrationId}, and a revocation was built from ${minting.ref.integrationId}; its address is never sent to an integration that did not mint it, so it lives until ${expiresAt} (PROGRESS backlog 156)`,
+      );
+    }
+  };
+  return {
     /**
-     * Revokes a credential {@link mint} returned. Called **once** per credential by its owner (decision
+     * Revokes a credential `mint` returned. Called **once** per credential by its owner (decision
      * 5): a per-call adapter has no memory of an earlier revoke, so a second call is `not_found`
      * rather than a no-op (GitLab divergence 6).
-     *
-     * **The binding must be the one that minted** (WP-73b, PROGRESS backlog 156 half 2), as
-     * {@link recover} requires: the caller rebuilds the project's integrations at revoke time, so
-     * a project re-bound from git integration A to B while the run was live would otherwise send
-     * A's address through B — to B's host, audited as B's. A mismatch is refused before the
-     * executor, so no row is written under a binding that did not mint the credential. Whether
-     * such a credential may still be revoked through its minting integration is backlog 156's
-     * half 3, an architect decision this refusal does not take.
      */
     revoke: async (
       credential: RunCredentialHandle,
       context: Pick<RunCredentialRequest, 'runId' | 'taskId' | 'projectId' | 'mode'>,
     ): Promise<void> => {
-      const git = integrations.git;
-      if (git === null) {
-        throw new Error(
-          `project ${context.projectId} has no git binding any more, so run ${context.runId}'s credential cannot be revoked here; it lives until ${credential.expiresAt}`,
-        );
-      }
-      if (git.ref.integrationId !== credential.integrationId) {
-        throw new Error(
-          `run ${context.runId}'s credential was minted through the git binding ${credential.integrationId}, and project ${context.projectId}'s git binding is now ${git.ref.integrationId}; its address is not sent to a binding that did not mint it, so it lives until ${credential.expiresAt} (PROGRESS backlog 156)`,
-        );
-      }
+      assertMinter(credential.integrationId, context.runId, credential.expiresAt);
       assertOutsideTransaction('the provider mutation "revoke_credential"');
-      const outcome = await integrations.executor.execute<boolean>({
-        integration: git.ref,
+      const outcome = await minting.executor.execute<boolean>({
+        integration: minting.ref,
         action: 'revoke_credential',
         payload: {
           scope: credential.scope,
@@ -1856,7 +1962,7 @@ export const runCredentialWrites = (integrations: PipelineIntegrations) => {
         projectId: context.projectId,
         taskId: context.taskId,
         perform: async () => {
-          await git.port.revokeCredential({ revokeId: credential.revokeId });
+          await minting.port.revokeCredential({ revokeId: credential.revokeId });
           return true;
         },
         // Reached only if the carve-out below stopped applying: `false` is "nothing was revoked",
@@ -1883,12 +1989,8 @@ export const runCredentialWrites = (integrations: PipelineIntegrations) => {
      * mint and revoke, or whose teardown revoke failed, revoked from the **address** the mint's
      * audit row recorded — never from a credential rebuilt with an invented value (standing rule 18).
      *
-     * Four things differ from {@link revoke}, and each is the point:
+     * Three things differ from {@link revoke}, and each is the point:
      *
-     *  - **the binding must be the one that minted.** `revoke_id` is an address on the binding's
-     *    host; sending it through a *different* git binding the project was re-pointed at would
-     *    delete — or fail to find — a token on the wrong server. A mismatch is refused before the
-     *    executor is reached, so it writes no row and the caller says so;
      *  - **the payload says `origin: 'recovery'`**, which is what bounds it: the finding query
      *    excludes a `revoke_id` with any such row, whatever it says, so each address gets one
      *    attempt, bounded by the audit row that attempt writes;
@@ -1904,15 +2006,10 @@ export const runCredentialWrites = (integrations: PipelineIntegrations) => {
      *    guard swallowed would read as the one attempt spent on a token still live.
      */
     recover: async (credential: RecoverableRunCredential): Promise<RunCredentialRecovery> => {
-      const git = integrations.git;
-      if (git === null || git.ref.integrationId !== credential.integrationId) {
-        throw new Error(
-          `run ${credential.runId}'s credential was minted through the git binding ${credential.integrationId}, which is not project ${credential.projectId}'s git binding any more, so it cannot be revoked from here; it is live until ${credential.expiresAt}`,
-        );
-      }
+      assertMinter(credential.integrationId, credential.runId, credential.expiresAt);
       assertOutsideTransaction('the provider mutation "revoke_credential"');
-      const outcome = await integrations.executor.execute<RunCredentialRecovery | null>({
-        integration: git.ref,
+      const outcome = await minting.executor.execute<RunCredentialRecovery | null>({
+        integration: minting.ref,
         action: 'revoke_credential',
         payload: {
           scope: credential.scope,
@@ -1927,7 +2024,7 @@ export const runCredentialWrites = (integrations: PipelineIntegrations) => {
         taskId: credential.taskId,
         perform: async () => {
           try {
-            await git.port.revokeCredential({ revokeId: credential.revokeId });
+            await minting.port.revokeCredential({ revokeId: credential.revokeId });
             return 'revoked';
           } catch (error) {
             if (error instanceof IntegrationError && error.code === 'not_found') {
@@ -1952,13 +2049,12 @@ export const runCredentialWrites = (integrations: PipelineIntegrations) => {
       return outcome.result;
     },
   };
-  return writes;
 };
 
 /**
- * What {@link runCredentialWrites}' `revoke` reads of a credential: its address, the two facts the
- * audit row and a failure message name, and the binding that minted it (WP-73b, backlog 156 — the
- * revoke refuses any other). Never the value (WP-77).
+ * What {@link runCredentialRevocations}' `revoke` reads of a credential: its address, the two facts
+ * the audit row and a failure message name, and the integration that minted it (WP-73b, backlog 156
+ * — the revocation is built from it since WP-80 and refuses any other). Never the value (WP-77).
  */
 export type RunCredentialHandle = Pick<MintedCredential, 'revokeId' | 'scope' | 'expiresAt'> & {
   readonly integrationId: Id;
@@ -1989,7 +2085,11 @@ export interface RecoverableRunCredential {
   readonly taskId: Id;
   readonly projectId: Id;
   readonly mode: TaskMode;
-  /** The git binding the mint went through (`integration_actions.integration_id`). */
+  /**
+   * The git integration the mint went through (`integration_actions.integration_id`) — which need
+   * not be a binding of the project any more: since WP-80 the revoke is built from it, bound or not
+   * (TD-028 decision 10).
+   */
   readonly integrationId: Id;
   readonly revokeId: string;
   readonly scope: CredentialScope;

@@ -7,6 +7,7 @@
  * failure means on a Free gitlab.com plan, and the redaction TD-012 puts on a CI job log.
  */
 import {
+  hasMintedCredentialShape,
   IntegrationError,
   IntegrationUnsupportedError,
   noSecretsRedactor,
@@ -262,6 +263,56 @@ describe('credential minting', () => {
       credential.revokeId,
       'the handle is the whole revocation address, not just the token id',
     ).toBe(`${PROJECT}#58`);
+  });
+
+  /**
+   * WP-80 (TD-012's M5 amendment): the credential carries its non-secret shape, and the prefix is
+   * the binding's **declared** `token_prefix` — `glpat-` by default — never read off the value.
+   * A value that does not start with it is still returned with the declared shape; the caller's
+   * `hasMintedCredentialShape` check is what refuses (and revokes) it.
+   */
+  it('declares the shape with the binding’s token_prefix, glpat- by default', async () => {
+    const { port } = build({
+      [`POST /projects/${P}/access_tokens`]: { status: 201, body: created },
+    });
+    const credential = await port.mintCredential({
+      project: PROJECT,
+      scope: 'read',
+      ttlSeconds: 60,
+    });
+    expect(credential.shape).toEqual({
+      prefix: 'glpat-',
+      charset: 'token_dotted',
+      length: created.token.length,
+    });
+    // This fixture's value is not `glpat-`-shaped, so the platform would refuse it.
+    expect(hasMintedCredentialShape(credential.shape, credential.value)).toBe(false);
+  });
+
+  it('declares an administrator’s custom prefix, and a value minted under it has the shape', async () => {
+    const token = 'acmepat-FAKE0custom0prefix0token';
+    const { port } = build(
+      { [`POST /projects/${P}/access_tokens`]: { status: 201, body: { ...created, token } } },
+      { config: { token_prefix: 'acmepat-' } },
+    );
+    const credential = await port.mintCredential({
+      project: PROJECT,
+      scope: 'read',
+      ttlSeconds: 60,
+    });
+    expect(credential.shape).toEqual({
+      prefix: 'acmepat-',
+      charset: 'token_dotted',
+      length: token.length,
+    });
+    expect(hasMintedCredentialShape(credential.shape, credential.value)).toBe(true);
+  });
+
+  it('refuses a token_prefix outside the shape alphabet at the config', () => {
+    expect(gitlabConfigSchema.safeParse({ base_url: HOST, token_prefix: 'acme pat' }).success).toBe(
+      false,
+    );
+    expect(gitlabConfigSchema.parse({ base_url: HOST }).token_prefix).toBe('glpat-');
   });
 
   it('uses the read role and read-only scope for a read credential', async () => {

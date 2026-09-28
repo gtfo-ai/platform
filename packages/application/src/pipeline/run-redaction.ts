@@ -117,22 +117,23 @@ export const injectedSecretRedactorForEnvironment = (
  * case**: `app` never mints (it composes no provisioner) and serves every webhook, and it takes
  * `pipeline.outbound` jobs beside `runner`, so a CI log, an MR diff or an MR comment quoting a run
  * credential is stored or posted by a process that never knew the value. What redacts it there is
- * the pattern rules alone. **WP-72 took decision (a)** for PROGRESS backlog **154**: that is
- * sufficient for GitLab's documented default shape (`glpat-…`, pinned by
- * `pattern-redaction.test.ts` and asserted through the two processes by
- * `test/e2e/topology/two-processes.e2e.test.ts`), and it is **not** sufficient for a GitLab whose
- * administrator changed the token prefix, or for a second minting provider — the trigger for
- * decision (b), a registry shared through the `secrets` store, is written on
- * `GitProviderCapabilities.credentialMinting` and filed as backlog **259**.
+ * step 2: **WP-72 took decision (a)** for PROGRESS backlog **154** — the pattern rules — which was
+ * sufficient for GitLab's documented default shape (`glpat-…`) and not for a GitLab whose
+ * administrator changed the token prefix (backlog **259**). **Since WP-80** (TD-012's M5
+ * amendment) the minting process records the value's non-secret *shape* beside the mint's audit
+ * row and every process compiles it into a step-2 rule (`minted_credential_shapes`,
+ * `packages/infrastructure/src/redaction/minted-credential-shapes.ts`), so a custom prefix is
+ * covered too — asserted through the two processes by `test/e2e/topology/two-processes.e2e.test.ts`
+ * with a credential the runner minted. Decision (b), a registry of values shared through the
+ * `secrets` store, is **rejected for 0.1** by that amendment.
  *
  * **Nor a process that died** — the crash path. The registry dies with the runner that minted, and
  * so did the one revoke that runner owed. Since WP-77 the revoke is recovered
  * (`../recovery/run-credential.ts`, PROGRESS backlog **155**): a terminal run whose credential no
  * audit row confirms revoked is revoked by address from the mint's `revoke_id`, a pass interval
- * after the run ends. The *redaction* is not recovered: no other process ever held the value, so
- * text quoting it that another process stores in that window is covered by the pattern rules
- * alone — backlog 154's decision (a), for a window this row bounds rather than one that lasts to
- * expiry.
+ * after the run ends. The *redaction* does not need this registry: no other process ever held the
+ * value, and text quoting it that another process stores is covered by the step-2 rule compiled
+ * from its recorded shape (WP-80) — for as long as the shape's expiry says the credential lives.
  */
 export interface RunScopedSecrets {
   /** Registers a value minted for `runId`. Refuses one too short to redact, rather than dropping it. */

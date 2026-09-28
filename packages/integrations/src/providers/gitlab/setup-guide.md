@@ -41,6 +41,7 @@ tokens, and **Developer** for everything else.
 | `webhook_tolerance_seconds` | no (300) | How old a signed delivery may be before it is treated as a replay. |
 | `mint_credentials` | no (off) | Whether the platform may mint short-lived project access tokens. **Required for any stage that writes**, and for a private repository. See step 5. |
 | `read_access_level` / `push_access_level` | no (20 / 30) | Role given to a minted credential: 20 Reporter, 30 Developer, 40 Maintainer. |
+| `token_prefix` | no (`glpat-`) | The prefix your instance puts on every token. Change it only if an administrator changed the **Personal access token prefix** (Admin → Settings → General → Account and limit); project access tokens inherit it. See step 5. |
 
 Environment names for the bundled `glab` CLI follow TD-020: `GITLAB_HOST`, `GITLAB_TOKEN`.
 
@@ -130,6 +131,13 @@ Two things to know before you turn it on:
   GitLab will actually enforce, never the shorter one it asked for.
 - **A bot user is created per token**, named `project_<id>_bot_<random>`. Its contributions show up
   as that user.
+- **The token prefix must match your instance.** Every process of the platform redacts a minted
+  token by its recorded *shape* — `token_prefix`, then GitLab's random part, at the token's length —
+  so a run that prints its token into a CI log or a merge-request comment is redacted everywhere,
+  not only in the process that minted it. An administrator can change GitLab's default `glpat-`
+  prefix, and project access tokens inherit it; set `token_prefix` to the same value. A token that
+  does not start with `token_prefix` is **revoked and refused** at the mint, with a message naming
+  this setting, because no other process could redact it.
 
 If any prerequisite is missing, the platform refuses the mint with a message naming the tier and
 the token kind rather than surfacing GitLab's 404 — GitLab answers 404 both for "no such project"

@@ -384,6 +384,59 @@ describe('IntegrationActionExecutor', () => {
     });
   });
 
+  /**
+   * WP-80 (TD-012's M5 amendment): a mint's non-secret shape rides on its `ok` audit entry — which
+   * the Postgres adapter writes in the row's transaction — and on nothing else; a shape the schema
+   * refuses is dropped rather than written unredacted.
+   */
+  describe('a minted credential’s shape on the audit entry (WP-80)', () => {
+    const SHAPE = { prefix: 'acmepat-', charset: 'token', length: 28 } as const;
+    const mint = (overrides: Record<string, unknown> = {}) => ({
+      ...addComment(),
+      action: 'mint_credential',
+      payload: { project: 'acme/api', scope: 'push', ttl_seconds: 60 },
+      credentialShape: () => ({ shape: SHAPE, expiresAt: '2026-06-02T00:00:00.000Z' }),
+      ...overrides,
+    });
+
+    it('carries the shape on an ok entry', async () => {
+      await executor.execute(mint());
+
+      expect(auditLog.entriesFor('mint_credential')[0]?.credentialShape).toEqual({
+        shape: SHAPE,
+        expiresAt: '2026-06-02T00:00:00.000Z',
+      });
+    });
+
+    it('carries none on a would_have or a failed entry', async () => {
+      await executor.execute(mint({ mode: 'shadow' }));
+      await outcomeOf(
+        executor.execute(
+          mint({
+            perform: async () => {
+              throw new IntegrationError('forbidden', 'fake-git', 'no');
+            },
+          }),
+        ),
+      );
+
+      expect(auditLog.entries.map((entry) => [entry.status, entry.credentialShape])).toEqual([
+        ['would_have', undefined],
+        ['failed', undefined],
+      ]);
+    });
+
+    it('drops a shape the schema refuses, and still records the performed mint', async () => {
+      await executor.execute(
+        mint({ credentialShape: () => ({ shape: { ...SHAPE, charset: '.*' }, expiresAt: 'x' }) }),
+      );
+
+      const entry = auditLog.entriesFor('mint_credential')[0];
+      expect(entry?.status).toBe('ok');
+      expect(entry?.credentialShape).toBeUndefined();
+    });
+  });
+
   describe('audit (BD-003)', () => {
     it('emits performed with the redacted payload, the result and the duration', async () => {
       const outcome = await executor.execute(addComment());

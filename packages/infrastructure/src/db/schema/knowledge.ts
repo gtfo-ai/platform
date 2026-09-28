@@ -181,6 +181,8 @@ export const shadowReports = pgTable('shadow_reports', {
   taskId: uuid('task_id').primaryKey(),
   humanMrRef: jsonb('human_mr_ref').$type<MergeRequestRef>(),
   comparison: jsonb('comparison').$type<JsonObject>().notNull(),
+  /** The redaction's count (WP-80, migration 0057); `null` for a row written before it. */
+  redactionCount: integer('redaction_count'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -219,6 +221,8 @@ export const shadowBatchTickets = pgTable(
     /** How many merged merge requests matched; the report's `notes` states it when it is > 1. */
     humanMrCandidates: integer('human_mr_candidates'),
     refusedReason: text('refused_reason'),
+    /** The binding redactor's count over `human_mr_ref` (WP-80, migration 0057); `null` before. */
+    redactionCount: integer('redaction_count'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [primaryKey({ columns: [table.batchId, table.ticketKey] })],

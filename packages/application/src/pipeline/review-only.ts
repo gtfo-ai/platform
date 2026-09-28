@@ -66,8 +66,9 @@
  * the git credential helper — revoked when the run ends (TD-028's WP-76 amendment). This used to
  * read *"a review-only run has none to hold"*, which was true only because nothing minted anything.
  * The composition root composes the run-scoped secrets its **own process** minted into the binding
- * redactor, so the residual is a posting job in a process that did not mint (PROGRESS backlog 154),
- * and what could leak there is a revoked read token. The model's own
+ * redactor by exact value, and since WP-80 every process redacts any minted credential by its
+ * recorded shape (TD-012's M5 amendment, PROGRESS backlog 259), so a posting job in a process that
+ * did not mint replaces it too. The model's own
  * key is covered whatever happens, because `sk-ant-…` is a pattern rule. `artifacts.data` stored
  * the verdict **unredacted** when this was written (PROGRESS backlog 35) and is redacted at the
  * write since WP-52; this module's redaction is unchanged and still the load-bearing one here,

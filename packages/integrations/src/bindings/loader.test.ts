@@ -384,3 +384,133 @@ describe('a task-management binding that loads', () => {
     expect(redacted?.count).toBe(1);
   });
 });
+
+/**
+ * WP-80, TD-012's M5 amendment: the registration's declaration, not the adapter's flag, admits
+ * credential minting. A port that reports `credentialMinting: true` from a registration that
+ * declared no stable shape has the capability declined — its values could be redacted by no process
+ * but the one that minted them.
+ */
+describe('credential minting a registration did not declare (WP-80)', () => {
+  const claimingGit = (declared: boolean, minted: string[]): AnyProviderRegistration => ({
+    id: 'claiming-git',
+    type: 'git',
+    displayName: 'A git provider whose port says it mints',
+    configSchema: z.strictObject({ base_url: z.url(), token: z.string().nullish() }),
+    secretFields: ['token'],
+    setupGuidePath: 'packages/integrations/src/bindings/loader.test.ts',
+    agentTooling: null,
+    ...(declared ? { credentialMinting: { shape: 'stable' as const } } : {}),
+    create: ({ integrationId }) =>
+      ({
+        ref: { integrationId, provider: 'claiming-git', type: 'git', host: null },
+        capabilities: () => ({ credentialMinting: true, webhooks: true }),
+        mintCredential: async () => {
+          minted.push('asked');
+          throw new Error('the provider was asked to mint');
+        },
+        getJobLog: async () => 'a log line',
+      }) as unknown as GitProviderPort,
+  });
+  const bindingOf = () =>
+    gitBinding({ provider: 'claiming-git', config: { base_url: 'https://git.example.test' } });
+
+  it('declines it: the capability reads false and the provider is never asked', async () => {
+    const minted: string[] = [];
+    const integrations = await loaderFor({
+      registrations: [claimingGit(false, minted)],
+      bindings: [bindingOf()],
+    }).forProject(PROJECT, outsideARun);
+    const port = integrations.git?.port as GitProviderPort;
+
+    expect(port.capabilities()).toMatchObject({ credentialMinting: false, webhooks: true });
+    await expect(
+      port.mintCredential({ project: 'acme/api', scope: 'read', ttlSeconds: 60 }),
+    ).rejects.toMatchObject({ code: 'unsupported_capability' });
+    expect(minted).toEqual([]);
+    // Everything else passes through untouched.
+    expect(await port.getJobLog('acme/api', '1')).toBe('a log line');
+  });
+
+  it('admits it when the registration declares a stable shape', async () => {
+    const minted: string[] = [];
+    const integrations = await loaderFor({
+      registrations: [claimingGit(true, minted)],
+      bindings: [bindingOf()],
+    }).forProject(PROJECT, outsideARun);
+    const port = integrations.git?.port as GitProviderPort;
+
+    expect(port.capabilities().credentialMinting).toBe(true);
+    await expect(
+      port.mintCredential({ project: 'acme/api', scope: 'read', ttlSeconds: 60 }),
+    ).rejects.toThrow(/asked to mint/);
+    expect(minted).toEqual(['asked']);
+  });
+});
+
+/**
+ * WP-80, TD-028 decision 10: the integration that minted a run credential is built from its
+ * **account**, whether or not any project still binds it, so the revoke reaches the host that issued
+ * the address. `null` is the one answer for an integration row that is gone.
+ */
+describe('the minting integration (WP-80, TD-028 decision 10)', () => {
+  const accountLoader = (account: Awaited<ReturnType<BindingRepository['forIntegration']>>) => {
+    const actions = executor();
+    return createPipelineIntegrationsLoader({
+      repository: {
+        forProject: async () => {
+          throw new Error('the minting integration is not read through a project');
+        },
+        forIntegration: async () => account,
+      },
+      secrets: secretsOf({ token: BINDING_TOKEN }),
+      registry: createPipelineProviderRegistry({
+        executor: actions,
+        clock: { now: () => '2026-06-01T09:00:00.000Z' as IsoDateTime },
+        timer: { now: () => 0, sleep: async () => {} },
+      }),
+      executor: actions,
+      gitProjectPath: async () => {
+        throw new Error('a revocation needs no repository path');
+      },
+    });
+  };
+  const gitlabAccount = {
+    integrationId: GIT_INTEGRATION,
+    type: 'git' as const,
+    provider: 'gitlab',
+    name: 'acme gitlab',
+    config: { base_url: 'https://git.example.test' },
+    secretIds: ['00000000-0000-4000-8000-00000000e001' as Id],
+    // Nobody binds it any more — the case decision 10 is about.
+    bindings: [],
+  };
+
+  it('builds an unbound account’s adapter, with its own id and a redactor over its credential', async () => {
+    const minting = await accountLoader(gitlabAccount).forMintingIntegration(
+      GIT_INTEGRATION,
+      outsideARun,
+    );
+
+    expect(minting?.ref).toMatchObject({ integrationId: GIT_INTEGRATION, provider: 'gitlab' });
+    expect(minting?.redactor.redactText(`quoted ${BINDING_TOKEN}`).value).not.toContain(
+      BINDING_TOKEN,
+    );
+  });
+
+  it('answers null for an integration that no longer exists', async () => {
+    expect(
+      await accountLoader(null).forMintingIntegration(GIT_INTEGRATION, outsideARun),
+    ).toBeNull();
+  });
+
+  it('refuses an integration of another type rather than building nothing', async () => {
+    await expect(
+      accountLoader({
+        ...gitlabAccount,
+        type: 'task_management',
+        provider: 'jira-cloud',
+      }).forMintingIntegration(GIT_INTEGRATION, outsideARun),
+    ).rejects.toBeInstanceOf(BindingLoadError);
+  });
+});

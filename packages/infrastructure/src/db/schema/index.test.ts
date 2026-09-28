@@ -52,8 +52,11 @@ describe('Drizzle schema', () => {
     // be because it is append-only and already holds the duplicates a unique index would refuse
     // (migration 0053, WP-67, PROGRESS backlog 47), plus `held_connection_liveness` — whether any
     // process holds an account's inbound connection now, which no configuration can answer and
-    // which the notify duty asks before it posts buttons (migration 0054, WP-72, backlog 200).
-    expect(tables.length).toBe(66);
+    // which the notify duty asks before it posts buttons (migration 0054, WP-72, backlog 200), plus
+    // `minted_credential_shapes` — the non-secret shape of every minted run credential, from which
+    // every process compiles a redaction rule for a value only its minter held (migration 0057,
+    // WP-80, TD-012's M5 amendment, backlog 259).
+    expect(tables.length).toBe(67);
   });
 
   it('names every table and column in snake_case, matching the wire format', () => {

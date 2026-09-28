@@ -89,7 +89,7 @@ import {
   type MergeRequestDraft,
   type MergeRequestRefInput,
   type MergeRequestUpdate,
-  type MintedCredential,
+  type MintedRunCredential,
   mergeRequestSchema,
   type NormalisedDelivery,
   type PipelineStatus,
@@ -513,13 +513,23 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
       // The token was minted on `request.project`, which is not necessarily the project the
       // binding names — so the handle carries the whole address, not just the id.
       const address: RevocationAddress = { project: request.project, tokenId: created.id };
-      const credential: MintedCredential = {
+      const credential: MintedRunCredential = {
         username: 'oauth2',
         value: created.token,
         scope,
         branchPatterns: scope === 'push' ? [...(request.branchPatterns ?? ['agentic/*'])] : [],
         expiresAt: expiry.expiresAt,
         revokeId: formatRevokeId(address),
+        // WP-80 (TD-012's M5 amendment): the value's non-secret shape. The prefix is the binding's
+        // **declared** `token_prefix`, never read off the value — a GitLab token's random part may
+        // hold `-` and `_`, so no split of the value can say where a custom prefix ends — and the
+        // class covers both documented formats (legacy `[0-9a-zA-Z_-]`, routable adds `.`). The
+        // caller checks the value against it and refuses, and revokes, one that does not match.
+        shape: {
+          prefix: config.token_prefix,
+          charset: 'token_dotted',
+          length: created.token.length,
+        },
       };
       credentials.remember(credential, address);
       return credential;

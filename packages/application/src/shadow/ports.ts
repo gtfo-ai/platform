@@ -63,7 +63,10 @@ export interface ShadowBatchRow {
 export interface ShadowReportRow {
   readonly taskId: Id;
   readonly humanMr: MergeRequestRef | null;
-  /** `shadowReportDataSchema`, parsed before it is written and after it is read. */
+  /**
+   * `shadowReportDataSchema`, parsed before it is written and after it is read — the **redacted**
+   * document since WP-80, the same bytes as the `ShadowReport` artifact (backlog 131).
+   */
   readonly comparison: unknown;
   readonly createdAt: IsoDateTime;
 }
@@ -80,7 +83,15 @@ export interface ShadowStore {
     },
   ): Promise<void>;
 
-  addTicket(tx: Transaction, batchId: Id, ticket: ShadowBatchTicketRow): Promise<void>;
+  /**
+   * `redactionCount` is the binding redactor's count over `humanMr` (WP-80, migration 0057) — a
+   * write-only column: nothing reads it back but an auditor, so the read row does not carry it.
+   */
+  addTicket(
+    tx: Transaction,
+    batchId: Id,
+    ticket: ShadowBatchTicketRow & { readonly redactionCount: number },
+  ): Promise<void>;
 
   batch(tx: Transaction, batchId: Id): Promise<ShadowBatchRow | null>;
 
@@ -97,7 +108,13 @@ export interface ShadowStore {
    * `false` is what makes the report duty idempotent: the job is at-least-once, `shadow_reports` is
    * keyed by `task_id`, and a second run must not append a second `shadow.report.created`.
    */
-  insertReport(tx: Transaction, report: Omit<ShadowReportRow, 'createdAt'>): Promise<boolean>;
+  insertReport(
+    tx: Transaction,
+    report: Omit<ShadowReportRow, 'createdAt'> & {
+      /** The redaction's count over `comparison` (WP-80, migration 0057), the artifact's count. */
+      readonly redactionCount: number;
+    },
+  ): Promise<boolean>;
 
   reports(tx: Transaction, batchId: Id): Promise<readonly ShadowReportRow[]>;
 

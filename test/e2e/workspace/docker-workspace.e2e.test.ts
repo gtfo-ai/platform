@@ -42,6 +42,7 @@ import {
   type MintedCredential,
   noSecretsRedactor,
   runCredentialHandle,
+  runCredentialRevocations,
   runCredentialWrites,
 } from '@platform/application';
 import type { Id } from '@platform/contracts';
@@ -1694,17 +1695,25 @@ describe('a minted run credential against a credentialled git server (WP-76)', (
       },
     });
     const auditLog = createMemoryAuditLog();
+    const executor = createIntegrationActionExecutor({
+      egress: allowAnyIntegrationHost(),
+      auditLog,
+      redactor: noSecretsRedactor(),
+      timer: createVirtualTimer({ autoAdvance: true }),
+      clock: fixedClock('2026-06-01T09:00:00.000Z', 1000),
+    });
     const writes = runCredentialWrites({
-      executor: createIntegrationActionExecutor({
-        egress: allowAnyIntegrationHost(),
-        auditLog,
-        redactor: noSecretsRedactor(),
-        timer: createVirtualTimer({ autoAdvance: true }),
-        clock: fixedClock('2026-06-01T09:00:00.000Z', 1000),
-      }),
+      executor,
       git: { port, ref: git.ref, project: 'acme/api', redactor: noSecretsRedactor() },
       taskManagement: null,
       communication: null,
+    });
+    // WP-80 (TD-028 decision 10): revoked through the integration that minted.
+    const revocations = runCredentialRevocations({
+      executor,
+      port,
+      ref: git.ref,
+      redactor: noSecretsRedactor(),
     });
     const mint = async (runId: string, scope: 'read' | 'push') => {
       const answer = await writes.mint({
@@ -1722,7 +1731,7 @@ describe('a minted run credential against a credentialled git server (WP-76)', (
       return answer.credential;
     };
     const revoke = async (runId: string, credential: MintedCredential) =>
-      writes.revoke(runCredentialHandle(credential, git.ref), {
+      revocations.revoke(runCredentialHandle(credential, git.ref), {
         runId: runId as Id,
         taskId: randomUUID() as Id,
         projectId: randomUUID() as Id,

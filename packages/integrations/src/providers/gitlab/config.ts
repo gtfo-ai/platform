@@ -10,6 +10,7 @@
  * Secret fields carry no value here. The registry resolves them from the secret store and hands
  * them to `create` in `ProviderCreateInput.secrets`, keyed by these field names (BD-002).
  */
+import { MINTED_CREDENTIAL_PREFIX_PATTERN } from '@platform/application';
 import { httpUrlSchema } from '@platform/contracts';
 import * as z from 'zod';
 
@@ -74,6 +75,17 @@ export const gitlabConfigSchema = z.strictObject({
    * refuses to mint rather than failing inside a workspace provision.
    */
   mint_credentials: z.boolean().default(false),
+  /**
+   * The prefix of every token this instance issues — GitLab's documented default `glpat-`, which an
+   * administrator can change and project access tokens inherit
+   * (<https://docs.gitlab.com/administration/settings/account_and_limit_settings/>, retrieved
+   * 2026-09-28). **Declared rather than guessed** (WP-80, TD-012's M5 amendment): a minted run
+   * credential is redacted in every process that did not mint it by a shape whose prefix is this
+   * value, and a minted token that does not start with it is revoked and refused rather than used,
+   * because no process but its minter could redact it. The alphabet is the platform's shape
+   * alphabet (`MINTED_CREDENTIAL_PREFIX_PATTERN`), which the operator's prefix must fit.
+   */
+  token_prefix: z.string().regex(MINTED_CREDENTIAL_PREFIX_PATTERN).default('glpat-'),
   /** Role given to a minted read credential. 20 = Reporter, the lowest role that may pull code. */
   read_access_level: gitlabAccessLevelSchema.default(20),
   /** Role given to a minted push credential. 30 = Developer. */

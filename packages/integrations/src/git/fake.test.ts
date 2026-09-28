@@ -2,7 +2,7 @@
  * `FakeGitProvider` beyond the contract suite: the divergence register's claims, and the states a
  * pipeline test needs to be able to reach.
  */
-import { IntegrationUnsupportedError } from '@platform/application';
+import { hasMintedCredentialShape, IntegrationUnsupportedError } from '@platform/application';
 import { describe, expect, it } from 'vitest';
 import { createFakeGitProvider } from './fake.js';
 
@@ -52,6 +52,29 @@ describe('FakeGitProvider credentials', () => {
     });
     expect(credential.branchPatterns).toEqual([]);
     expect(credential.value).toMatch(/^fake_credential_\d+$/);
+  });
+
+  it('declares a stable shape its value has, under the default or a configured prefix (WP-80)', async () => {
+    const plain = await build().mintCredential({ project: PROJECT, scope: 'read', ttlSeconds: 60 });
+    expect(plain.shape).toEqual({
+      prefix: 'fake_credential_',
+      charset: 'alnum',
+      length: plain.value.length,
+    });
+    expect(hasMintedCredentialShape(plain.shape, plain.value)).toBe(true);
+
+    const custom = await build({ credentialPrefix: 'acmepat-' }).mintCredential({
+      project: PROJECT,
+      scope: 'read',
+      ttlSeconds: 60,
+    });
+    expect(custom.value).toMatch(/^acmepat-fake0minted0\d{8}$/);
+    expect(custom.shape).toEqual({
+      prefix: 'acmepat-',
+      charset: 'alnum',
+      length: custom.value.length,
+    });
+    expect(hasMintedCredentialShape(custom.shape, custom.value)).toBe(true);
   });
 
   it('refuses a clone URL for a credential it never minted', () => {

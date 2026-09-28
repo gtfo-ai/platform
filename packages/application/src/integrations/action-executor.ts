@@ -186,6 +186,10 @@ import {
   type IntegrationRef,
 } from '../ports/integrations/common.js';
 import { type LogFields, type Logger, silentLogger } from '../ports/logger.js';
+import {
+  type MintedCredentialShapeRecord,
+  mintedCredentialShapeRecordSchema,
+} from './credential-shape.js';
 import { type IntegrationEgressPolicy, IntegrationEgressRefusedError } from './egress.js';
 import {
   createRateLimiter,
@@ -306,7 +310,34 @@ export interface MutatingActionRequest<TResult> extends BaseActionRequest<TResul
    * (`action-executor.test.ts` drives each refusal in both modes).
    */
   readonly shadowCarveOut?: typeof SHADOW_RUN_CREDENTIAL_CARVE_OUT;
+  /**
+   * The **non-secret shape** of a credential this action minted (WP-80, TD-012's M5 amendment),
+   * or `null` for a result that minted nothing. Absent for every action but `mint_credential`.
+   *
+   * Carried on the audit entry of an `ok` outcome, and the `IntegrationAuditLog` adapter writes it
+   * **in the row's own transaction** — so a mint on record always has its shape on record, which is
+   * what every other process compiles a redaction rule from. Validated against the shape schema
+   * before it is carried: a shape is stored unredacted, so it must be a shape and nothing else.
+   */
+  credentialShape?(result: TResult): MintedCredentialShapeRecord | null;
 }
+
+/**
+ * The shape an `ok` mutation carries to its audit entry (WP-80), parsed — never taken on the
+ * request's word, because the entry writes it unredacted. A shape the schema refuses is a provider
+ * defect the caller already refuses the credential for (`runCredentialWrites.mint`), so here it is
+ * dropped rather than thrown: the audit row of a performed mint must still be written.
+ */
+const credentialShapeOf = <TResult>(
+  request: IntegrationActionRequest<TResult>,
+  result: TResult,
+): MintedCredentialShapeRecord | null => {
+  if (!request.mutating || request.credentialShape === undefined) {
+    return null;
+  }
+  const parsed = mintedCredentialShapeRecordSchema.safeParse(request.credentialShape(result));
+  return parsed.success ? parsed.data : null;
+};
 
 /** The value of {@link MutatingActionRequest.shadowCarveOut}; there is exactly one (Q98 (a)). */
 export const SHADOW_RUN_CREDENTIAL_CARVE_OUT = 'run_credential' as const;
@@ -1006,8 +1037,9 @@ export const createIntegrationActionExecutor = (
         await options.idempotencyStore.put(scope, stored.value);
       }
       const durationMs = options.timer.now() - startedAt;
-      await record(
-        buildEntry(request, {
+      const shape = credentialShapeOf(request, result);
+      await record({
+        ...buildEntry(request, {
           status: 'ok',
           result: describe(request, result),
           error: null,
@@ -1017,7 +1049,8 @@ export const createIntegrationActionExecutor = (
           // write is the one scrub that happens outside the row it is reported on.
           extraRedactions: storedRedactions,
         }),
-      );
+        ...(shape === null ? {} : { credentialShape: shape }),
+      });
       return { status: 'ok', result, attempts: attempt, durationMs };
     }
   };

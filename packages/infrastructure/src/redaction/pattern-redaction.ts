@@ -25,7 +25,12 @@
  * exists at all and why it is tuned to fire rather than to be precise.
  */
 import { createHash } from 'node:crypto';
-import type { RedactionOutcome, SecretRedactor } from '@platform/application';
+import {
+  type MintedCredentialShape,
+  mintedCredentialShapePattern,
+  type RedactionOutcome,
+  type SecretRedactor,
+} from '@platform/application';
 import type { JsonObject, JsonValue } from '@platform/contracts';
 
 /**
@@ -128,6 +133,75 @@ export const GITLEAKS_DERIVED_RULES: readonly RedactionRule[] = [
   },
 ];
 
+/** The rule id every minted-credential shape rule carries (`redaction_log.rule_id`). */
+export const MINTED_CREDENTIAL_SHAPE_RULE_ID = 'minted-credential-shape';
+
+/**
+ * **The process's minted-credential shape rules** — TD-012's M5 amendment, WP-80, PROGRESS backlog
+ * 259.
+ *
+ * A run credential is redacted by exact value only in the process that minted it; every other
+ * process redacts it by its recorded **shape** (`minted_credential_shapes`), compiled here into one
+ * step-2 rule per shape. The set is replaced wholesale by {@link installMintedCredentialShapes},
+ * which the composition root's refresher calls at start and on a timer
+ * (`./minted-credential-shapes.ts`), and it is read **at call time** by every
+ * {@link patternRedactor} built without an explicit rule list — so a redactor constructed at boot,
+ * or held in a module constant, still applies a shape recorded after it was built. That is why it
+ * is module state rather than an argument: it reaches the twenty-odd places a process builds its
+ * step-2 redactor without any of them having to be handed it, and a call site that was not handed
+ * a security dependency is exactly the defect standing rule 31 names.
+ *
+ * **Per process, which is the unit the amendment is about.** In production one product container
+ * is one Node process. The e2e tier starts several `apps/server` instances in **one** Node process,
+ * so there the set is shared by them — what that tier proves is stated where it asserts it.
+ *
+ * The shape rules run **first**: a shape is more specific than any gitleaks rule, and running it
+ * before the `generic-api-key` rule keeps its id — the one that says *a minted run credential* —
+ * in `redaction_log`.
+ */
+let mintedShapeRules: readonly RedactionRule[] = [];
+
+/**
+ * Replaces the process's shape rules with one per distinct shape, and answers how many it compiled.
+ *
+ * A shape the compiler refuses — outside the schema the migration's check constraint restates, so
+ * unreachable from a row — is skipped and counted rather than thrown: one malformed shape must not
+ * take away the rules for every other one.
+ */
+export const installMintedCredentialShapes = (
+  shapes: readonly MintedCredentialShape[],
+): { readonly installed: number; readonly refused: number } => {
+  const seen = new Set<string>();
+  const rules: RedactionRule[] = [];
+  let refused = 0;
+  for (const shape of shapes) {
+    const key = `${shape.prefix}\0${shape.charset}\0${shape.length}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    try {
+      rules.push({
+        id: MINTED_CREDENTIAL_SHAPE_RULE_ID,
+        pattern: mintedCredentialShapePattern(shape),
+      });
+    } catch {
+      refused += 1;
+    }
+  }
+  mintedShapeRules = rules;
+  return { installed: rules.length, refused };
+};
+
+/** The process's shape rules as they stand — for a test, and for a log line. */
+export const installedMintedCredentialShapeRules = (): readonly RedactionRule[] => mintedShapeRules;
+
+/** Step 2 as this process applies it now: its shape rules, then the gitleaks-derived set. */
+export const currentPatternRules = (): readonly RedactionRule[] =>
+  mintedShapeRules.length === 0
+    ? GITLEAKS_DERIVED_RULES
+    : [...mintedShapeRules, ...GITLEAKS_DERIVED_RULES];
+
 /** One replacement the engine made. */
 export interface RedactionHit {
   readonly ruleId: string;
@@ -186,14 +260,18 @@ export const detectSecrets = (
  * Object **keys** are left alone, matching WP-07's step-1 redactor: the platform never builds a key
  * out of secret material, and rewriting keys could collide two fields into one. Recorded here
  * rather than assumed away.
+ *
+ * With no `rules` it applies {@link currentPatternRules} — the process's minted-credential shape
+ * rules and then the gitleaks-derived set — read at every call (WP-80). An explicit list is used
+ * as given, which is how a test pins a rule set.
  */
-export const patternRedactor = (
-  rules: readonly RedactionRule[] = GITLEAKS_DERIVED_RULES,
-): SecretRedactor => {
+export const patternRedactor = (rules?: readonly RedactionRule[]): SecretRedactor => {
   const redactText = (text: string): RedactionOutcome<string> => {
     const hits: RedactionHit[] = [];
     let value = text;
-    for (const rule of rules) {
+    // Read per call when no list was given (WP-80): a shape recorded after this redactor was built
+    // is applied by it all the same.
+    for (const rule of rules ?? currentPatternRules()) {
       value = applyRule(value, rule, hits);
     }
     return { value, count: hits.length };

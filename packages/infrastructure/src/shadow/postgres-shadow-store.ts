@@ -130,12 +130,16 @@ export class PostgresShadowStore implements ShadowStore {
     );
   }
 
-  async addTicket(tx: Transaction, batchId: Id, ticket: ShadowBatchTicketRow): Promise<void> {
+  async addTicket(
+    tx: Transaction,
+    batchId: Id,
+    ticket: ShadowBatchTicketRow & { readonly redactionCount: number },
+  ): Promise<void> {
     await sqlOf(tx).query(
       `insert into shadow_batch_tickets
          (batch_id, ticket_key, task_id, base_sha, human_mr_ref, human_mr_source,
-          human_mr_merged_at, human_mr_candidates, refused_reason)
-       values ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9)`,
+          human_mr_merged_at, human_mr_candidates, refused_reason, redaction_count)
+       values ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10)`,
       [
         batchId,
         ticket.ticketKey,
@@ -146,6 +150,7 @@ export class PostgresShadowStore implements ShadowStore {
         ticket.mergedAt,
         ticket.candidates,
         ticket.refusedReason,
+        ticket.redactionCount,
       ],
     );
   }
@@ -198,16 +203,17 @@ export class PostgresShadowStore implements ShadowStore {
 
   async insertReport(
     tx: Transaction,
-    report: Omit<ShadowReportRow, 'createdAt'>,
+    report: Omit<ShadowReportRow, 'createdAt'> & { readonly redactionCount: number },
   ): Promise<boolean> {
     const { rowCount } = await sqlOf(tx).query(
-      `insert into shadow_reports (task_id, human_mr_ref, comparison)
-       values ($1, $2::jsonb, $3::jsonb)
+      `insert into shadow_reports (task_id, human_mr_ref, comparison, redaction_count)
+       values ($1, $2::jsonb, $3::jsonb, $4)
        on conflict (task_id) do nothing`,
       [
         report.taskId,
         report.humanMr === null ? null : JSON.stringify(report.humanMr),
         JSON.stringify(report.comparison),
+        report.redactionCount,
       ],
     );
     return (rowCount ?? 0) > 0;

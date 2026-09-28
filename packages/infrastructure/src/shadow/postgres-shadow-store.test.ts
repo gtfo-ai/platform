@@ -169,6 +169,7 @@ describe('PostgresShadowStore — the two answers idempotency rests on', () => {
         taskId: TASK as never,
         humanMr: MR as never,
         comparison: {},
+        redactionCount: 0,
       }),
     ).toBe(true);
     // `on conflict do nothing` succeeds and writes nothing; `rowCount` is the only difference.
@@ -177,6 +178,7 @@ describe('PostgresShadowStore — the two answers idempotency rests on', () => {
         taskId: TASK as never,
         humanMr: null,
         comparison: {},
+        redactionCount: 0,
       }),
     ).toBe(false);
   });
@@ -264,6 +266,7 @@ describe('PostgresShadowStore — the two answers idempotency rests on', () => {
         mergedAt: null,
         candidates: null,
         refusedReason: 'no merge base',
+        redactionCount: 0,
       }),
     ).resolves.toBeUndefined();
   });

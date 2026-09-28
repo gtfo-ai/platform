@@ -85,6 +85,7 @@ export const runShadowStoreContract = (options: {
           mergedAt: MERGED_AT,
           candidates: 3,
           refusedReason: null,
+          redactionCount: 0,
         });
         // Q82 (a)'s refusal: a ticket with **no** task, which is why the primary key is the ticket.
         await context.store.addTicket(tx, batchId, {
@@ -96,6 +97,7 @@ export const runShadowStoreContract = (options: {
           mergedAt: null,
           candidates: null,
           refusedReason: 'the human merge request publishes no merge base',
+          redactionCount: 0,
         });
       });
 
@@ -145,6 +147,7 @@ export const runShadowStoreContract = (options: {
           mergedAt: null,
           candidates: null,
           refusedReason: null,
+          redactionCount: 0,
         });
       });
       const found = await run(context, (tx) => context.store.batchOfTask(tx, context.taskIds[0]));
@@ -168,6 +171,7 @@ export const runShadowStoreContract = (options: {
           taskId: context.taskIds[0],
           humanMr: MR,
           comparison: { ticket: 'ACME-1', notes: '' },
+          redactionCount: 0,
         }),
       );
       expect(first).toBe(true);
@@ -178,6 +182,7 @@ export const runShadowStoreContract = (options: {
           taskId: context.taskIds[0],
           humanMr: null,
           comparison: { ticket: 'ACME-1', notes: 'different' },
+          redactionCount: 0,
         }),
       );
       expect(second).toBe(false);
@@ -203,6 +208,7 @@ export const runShadowStoreContract = (options: {
             mergedAt: null,
             candidates: null,
             refusedReason: null,
+            redactionCount: 0,
           });
         }
       });
@@ -215,6 +221,7 @@ export const runShadowStoreContract = (options: {
           taskId: context.taskIds[0],
           humanMr: null,
           comparison: { ticket: 'ACME-1' },
+          redactionCount: 0,
         }),
       );
       // One of two: still not done.
@@ -225,6 +232,7 @@ export const runShadowStoreContract = (options: {
           taskId: context.taskIds[1],
           humanMr: null,
           comparison: { ticket: 'ACME-2' },
+          redactionCount: 0,
         }),
       );
       expect(await run(context, (tx) => context.store.completeIfDone(tx, batchId, AT))).toBe(true);
@@ -259,11 +267,13 @@ export const runShadowStoreContract = (options: {
             mergedAt: null,
             candidates: null,
             refusedReason: null,
+            redactionCount: 0,
           });
           await context.store.insertReport(tx, {
             taskId,
             humanMr: null,
             comparison: { ticket: `K-${taskId.slice(-2)}` },
+            redactionCount: 0,
           });
         }
       });

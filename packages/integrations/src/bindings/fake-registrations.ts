@@ -113,6 +113,9 @@ export const fakeGitRegistration = (
   // through this registration resolves its credential the way production does rather than through a
   // shape only the fake has (standing rule 1).
   gitCredential: { passwordField: 'token', username: 'agentic' },
+  // WP-80: the fake's minted values have a declared prefix and an alphanumeric tail, as the real git
+  // provider's do, so the loader admits its minting on the same declaration production needs.
+  credentialMinting: { shape: 'stable' },
   create: ({ secrets, redactor }) => {
     refuseWrongToken(FAKE_GIT_PROVIDER_ID, options.token, secrets.token);
     return withInboundRedactor(options.port, redactor);

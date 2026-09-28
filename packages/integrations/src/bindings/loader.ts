@@ -64,7 +64,8 @@
  * `getJobLog`'s body. Since WP-76 a run's credential **is** minted — by the runner, through this
  * loader — and the one call made with a run's scope is its revocation; the gate runs after the
  * run, with the process-wide registry of minted credentials in its platform redactor rather than a
- * run scope (`apps/server/src/pipeline.ts`, PROGRESS backlog 154 for the process that did not mint).
+ * run scope (`apps/server/src/pipeline.ts`); a process that did not mint redacts it by its recorded
+ * shape since WP-80 (TD-012's M5 amendment, PROGRESS backlog 259).
  * The mechanism is closed here; the gate's cut stays where WP-15 put it, pinned by `gates.test.ts`.
  *
  * ## Cost, stated rather than optimised away
@@ -78,9 +79,11 @@
  */
 import type {
   BindingRepository,
+  GitProviderPort,
   InjectedSecret,
   IntegrationActionExecutor,
   IntegrationCallScope,
+  MintingIntegration,
   PipelineIntegrations,
   PipelineIntegrationsPort,
   ProjectBinding,
@@ -90,6 +93,7 @@ import type {
 import {
   bindingSecretRedactor,
   composeSecretRedactors,
+  IntegrationUnsupportedError,
   noSecretsRedactor,
 } from '@platform/application';
 import type { Id, IntegrationType } from '@platform/contracts';
@@ -179,7 +183,7 @@ interface Built<TType extends IntegrationType> {
  * silently produces a permissive result.
  */
 const channelsOf = (
-  projectId: Id,
+  projectId: Id | null,
   binding: ProjectBinding,
   config: unknown,
   fields: { readonly channel: string; readonly digestChannel?: string } | undefined,
@@ -228,12 +232,52 @@ const only = <T>(
   return first;
 };
 
+/**
+ * A git port whose registration declared no credential minting, with the capability **declined**
+ * (WP-80, TD-012's M5 amendment): `capabilities().credentialMinting` reads `false` and
+ * `mintCredential` refuses, whatever the adapter says. The registration's declaration — refused at
+ * boot unless it names a stable shape — is what admits minting, so an adapter that reports the
+ * flag without it mints nothing a process other than its minter could not redact.
+ *
+ * A `Proxy` rather than a spread: an adapter is free to be a class whose members read `this`, and a
+ * copy would detach them. A port that does not claim the capability is returned as it is.
+ */
+export const declineUndeclaredMinting = <TType extends IntegrationType>(
+  registration: ReturnType<IntegrationRegistry['get']>,
+  type: TType,
+  port: IntegrationPortByType[TType],
+): IntegrationPortByType[TType] => {
+  if (type !== 'git' || registration.credentialMinting !== undefined) {
+    return port;
+  }
+  const git = port as GitProviderPort;
+  if (!git.capabilities().credentialMinting) {
+    return port;
+  }
+  return new Proxy(git, {
+    get: (target, property, receiver) => {
+      if (property === 'capabilities') {
+        return () => ({ ...target.capabilities(), credentialMinting: false });
+      }
+      if (property === 'mintCredential') {
+        return async () => {
+          throw new IntegrationUnsupportedError(
+            registration.id,
+            'credential minting (the provider registration declares no stable credential shape, WP-80)',
+          );
+        };
+      }
+      return Reflect.get(target, property, receiver) as unknown;
+    },
+  }) as IntegrationPortByType[TType];
+};
+
 export const createPipelineIntegrationsLoader = (
   options: PipelineIntegrationsLoaderOptions,
 ): PipelineIntegrationsPort => {
   const platformRedactor = options.platformRedactor ?? noSecretsRedactor();
   const build = async <TType extends IntegrationType>(
-    projectId: Id,
+    projectId: Id | null,
     binding: ProjectBinding,
     type: TType,
     scope: IntegrationCallScope,
@@ -295,12 +339,16 @@ export const createPipelineIntegrationsLoader = (
     try {
       return {
         ...channels,
-        port: registration.create({
-          integrationId: binding.integrationId,
-          config: parsed.data,
-          secrets,
-          redactor,
-        }) as IntegrationPortByType[TType],
+        port: declineUndeclaredMinting(
+          registration,
+          type,
+          registration.create({
+            integrationId: binding.integrationId,
+            config: parsed.data,
+            secrets,
+            redactor,
+          }) as IntegrationPortByType[TType],
+        ),
         // Handed out beside the port because the one caller that stores provider **text** needs it
         // and the executor's redactor is a different one (`TaskManagementBinding.redactor`,
         // WP-15f): step 1 of TD-012 belongs to the binding, step 2 to the process.
@@ -316,7 +364,52 @@ export const createPipelineIntegrationsLoader = (
     }
   };
 
+  /**
+   * The minting integration, from its **account** alone (WP-80, TD-028 decision 10): the revoke
+   * needs the account's credential and host, and a revocation address carries its own project, so
+   * no binding — which an unbound integration no longer has — is read. Built through the same
+   * {@link build} as a binding, so the redactor, the schema check and the refusals are the ones
+   * every other adapter gets.
+   */
+  const forMintingIntegration = async (
+    integrationId: Id,
+    scope: IntegrationCallScope,
+  ): Promise<MintingIntegration | null> => {
+    const account = await options.repository.forIntegration(integrationId);
+    if (account === null) {
+      return null;
+    }
+    if (account.type !== 'git') {
+      throw new BindingLoadError(
+        null,
+        null,
+        `integration "${account.name}" (${account.provider}) minted a run credential but is a "${account.type}" integration, so no git adapter can revoke it`,
+      );
+    }
+    const built = await build(
+      null,
+      {
+        bindingId: integrationId,
+        integrationId,
+        type: 'git',
+        provider: account.provider,
+        name: account.name,
+        config: account.config,
+        secretIds: account.secretIds,
+      },
+      'git',
+      scope,
+    );
+    return {
+      executor: options.executor,
+      port: built.port,
+      ref: built.port.ref,
+      redactor: built.redactor,
+    };
+  };
+
   return {
+    forMintingIntegration,
     forProject: async (
       projectId: Id,
       scope: IntegrationCallScope,

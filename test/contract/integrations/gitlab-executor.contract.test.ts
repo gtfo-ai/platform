@@ -206,6 +206,7 @@ describe('GitLab through IntegrationActionExecutor', () => {
         branchPatterns: [],
         expiresAt: CLOCK_AT,
         revokeId: null,
+        shape: { prefix: 'glpat-', charset: 'token_dotted' as const, length: 26 },
       }),
       // The evidence a mint leaves is the handle and the expiry — never the value (BD-003).
       describeResult: (credential) => ({

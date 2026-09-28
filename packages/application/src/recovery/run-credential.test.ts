@@ -68,7 +68,10 @@ const harness = (
   options: {
     readonly revalidated?: RecoverableRunCredential | null;
     readonly revokeError?: Error;
-    readonly forProjectError?: Error;
+    /** What loading the minting integration throws, when set. */
+    readonly mintingError?: Error;
+    /** The minting integration's row is gone (WP-80). */
+    readonly mintingGone?: boolean;
   } = {},
 ) => {
   const asked: CredentialRevocationAddress[] = [];
@@ -98,12 +101,21 @@ const harness = (
     taskManagement: null,
     communication: null,
   };
+  const mintingAsked: Id[] = [];
   const port: PipelineIntegrationsPort = {
+    // WP-80 (TD-028 decision 10): the duty never reads the project's current bindings — the
+    // integration that minted is asked for by id, bound or not. Reading them is a failure here.
     forProject: async () => {
-      if (options.forProjectError !== undefined) throw options.forProjectError;
-      return integrations;
+      throw new Error('the recovery duty read the project’s bindings (WP-80 forbids it)');
     },
-  } as unknown as PipelineIntegrationsPort;
+    forMintingIntegration: async (integrationId: Id) => {
+      mintingAsked.push(integrationId);
+      if (options.mintingError !== undefined) throw options.mintingError;
+      if (options.mintingGone === true) return null;
+      const git = integrations.git as NonNullable<PipelineIntegrations['git']>;
+      return { executor, port: git.port, ref: git.ref, redactor: git.redactor };
+    },
+  };
   const store: UnrevokedRunCredentialStore = {
     unrevokedRunCredentials: async () => [],
     unreachableRunCredentials: async () => [],
@@ -124,7 +136,7 @@ const harness = (
     clock: { now: () => NOW },
     logger,
   };
-  return { asked, revalidations, lines, auditLog, store, base };
+  return { asked, revalidations, lines, auditLog, store, base, mintingAsked };
 };
 
 describe('the revoke_run_credential duty', () => {
@@ -196,9 +208,31 @@ describe('the revoke_run_credential duty', () => {
     ]);
   });
 
-  it('throws when the binding cannot be loaded — no row was written, so the retry is in bound', async () => {
+  it('asks for the integration that minted, by the id the mint recorded (TD-028 decision 10)', async () => {
+    const { mintingAsked, store, base } = harness();
+
+    await runRunCredentialRevocation({ ...base, runCredentials: store }, WAKE_UP);
+
+    expect(mintingAsked).toEqual([GIT]);
+  });
+
+  it('reports, and asks nobody, when the minting integration no longer exists', async () => {
+    const { asked, auditLog, lines, store, base } = harness({ mintingGone: true });
+
+    await expect(
+      runRunCredentialRevocation({ ...base, runCredentials: store }, WAKE_UP),
+    ).resolves.toBeUndefined();
+
+    expect(asked).toEqual([]);
+    expect(auditLog.entries).toEqual([]);
+    expect(lines).toEqual([
+      { level: 'error', message: expect.stringMatching(/no longer exists.*nothing was called/) },
+    ]);
+  });
+
+  it('throws when the minting integration cannot be loaded — no row was written, so the retry is in bound', async () => {
     const { asked, auditLog, store, base } = harness({
-      forProjectError: new Error('the binding could not be decrypted'),
+      mintingError: new Error('the binding could not be decrypted'),
     });
 
     await expect(

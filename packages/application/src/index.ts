@@ -71,6 +71,7 @@ export * from './human-time/projector.js';
 export * from './human-time/runtime.js';
 // Outbound integration actions (technical/06, WP-07)
 export * from './integrations/action-executor.js';
+export * from './integrations/credential-shape.js';
 export * from './integrations/egress.js';
 export * from './integrations/inbound.js';
 export * from './integrations/inbound-connections.js';

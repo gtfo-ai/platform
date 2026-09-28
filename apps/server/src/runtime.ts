@@ -60,6 +60,7 @@ import {
   eventing as eventingAdapters,
   jobs as jobsAdapters,
   notify as notifyAdapters,
+  redaction as redactionAdapters,
 } from '@platform/infrastructure';
 import type { FastifyInstance } from 'fastify';
 import type pg from 'pg';
@@ -105,7 +106,7 @@ import { SseHub } from './sse/hub.js';
 import { startTranscriptBridge } from './sse/transcript-bridge.js';
 import { createStorageSamplers } from './storage.js';
 import { BUNDLED_WEB_ROOT } from './web/bundle.js';
-import { composeRunWorkspaces } from './workspaces.js';
+import { composeRunWorkspaces, createRunGitCredentialMinter } from './workspaces.js';
 
 export interface ServerRuntime {
   readonly config: ServerConfig;
@@ -222,6 +223,19 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
      * reports after the process is up and serving.
      */
     await dbAdapters.assertSchemaIsKnown(database.pool);
+
+    /**
+     * WP-80 (TD-012's M5 amendment, PROGRESS backlog 259): every run credential any process minted
+     * is redacted in **this** one by its recorded shape. Loaded before anything that redacts is
+     * composed — a failed first read fails the start rather than serving with fewer rules than the
+     * database says are needed — and refreshed on a timer; every `patternRedactor()` this process
+     * builds reads the installed rules at call time. Every role, because every role stores text.
+     */
+    const shapes = await redactionAdapters.startMintedCredentialShapeRefresh({
+      sql: database.pool,
+      logger: loggerPort,
+    });
+    stopCallbacks.unshift({ name: 'minted-credential-shapes', stop: shapes.stop });
 
     const eventing = eventingAdapters.createEventing({
       pool: database.pool,
@@ -450,8 +464,24 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
          * CLI stays production code. A test that supplied one and then got the launcher client
          * instead would be a test of nothing.
          */
+        const mintingWorkspaces = options.pipeline?.mintingWorkspaces;
         const workspaces =
           options.pipeline?.workspaces ??
+          // WP-80: the e2e tier's scripted provisioner over this process's production minter — the
+          // one `composeRunWorkspaces` would build — so a run's credential is minted here for real.
+          (mintingWorkspaces === undefined || stack === null
+            ? undefined
+            : mintingWorkspaces(
+                createRunGitCredentialMinter({
+                  pool: database.pool,
+                  integrations: createProjectIntegrationsPort({
+                    pool: database.pool,
+                    secretKey: config.secretKey,
+                    stack,
+                  }),
+                  runSecrets: stack.runSecrets,
+                }),
+              )) ??
           composeRunWorkspaces({
             pool: database.pool,
             launcherUrl: config.launcherUrl,

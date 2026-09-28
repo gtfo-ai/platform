@@ -10,8 +10,9 @@
  * would miss the failed teardown, and one that ignored revoke rows would revoke the normal run
  * twice. Both directions are therefore decided by the SQL, which is why this is the tier.
  *
- * Everything that writes is the production path: the mint and the teardown revoke go through
- * `runCredentialWrites` and the real executor into the real `integration_actions`, the lease sweep
+ * Everything that writes is the production path: the mint (`runCredentialWrites`) and the teardown
+ * revoke (`runCredentialRevocations`, built from the minting integration since WP-80) go through
+ * the real executor into the real `integration_actions`, the lease sweep
  * ends the dead run through `runStrandedRecovery`, the pass finds with the Postgres store, and the
  * duty re-validates and revokes. The fake's clock starts at the wall clock because the predicate
  * compares the mint's recorded expiry with the pass's `now`.
@@ -31,9 +32,11 @@ import {
   createUnreachableRunCredentialReports,
   createVirtualTimer,
   declarePipelineQueues,
+  noRunScopedSecrets,
   noSecretsRedactor,
   RUN_CREDENTIAL_TTL_SECONDS,
   runCredentialRecoveryHorizonMs,
+  runCredentialRevocations,
   runCredentialWrites,
   runRunCredentialRevocation,
   runStrandedRecovery,
@@ -88,15 +91,59 @@ const integrationsOver = (git: FakeGitProvider): PipelineIntegrationsPort => {
     taskManagement: null,
     communication: null,
   };
-  return { forProject: async () => bound } as unknown as PipelineIntegrationsPort;
+  return {
+    forProject: async () => bound,
+    // As the production loader answers it (WP-80, TD-028 decision 10): the account row, read from
+    // the database — `null` once it is gone — and an adapter for it whether or not the project
+    // still binds it. A test that asks for another integration is a test defect, and says so.
+    forMintingIntegration: async (integrationId: Id) => {
+      const { rows } = await pool.query('select 1 from integrations where id = $1', [
+        integrationId,
+      ]);
+      if (rows.length === 0) {
+        return null;
+      }
+      if (integrationId !== git.ref.integrationId) {
+        throw new Error(`this double serves ${git.ref.integrationId}, not ${integrationId}`);
+      }
+      return { executor, port: git, ref: git.ref, redactor: noSecretsRedactor() };
+    },
+  };
 };
 
-const fakeGit = (): FakeGitProvider =>
+const fakeGit = (integrationId: Id = gitIntegrationId): FakeGitProvider =>
   createFakeGitProvider({
-    integrationId: gitIntegrationId,
+    integrationId,
     projects: [{ path: PROJECT_PATH }],
     clockStart: iso(),
   });
+
+/** A second git integration of the organisation, bound to the project (WP-80's cases). */
+const secondGitIntegration = async (name: string): Promise<Id> => {
+  const org = await pool.query<{ org_id: string }>('select org_id from projects where id = $1', [
+    projectId,
+  ]);
+  const integration = await pool.query<{ id: string }>(
+    `insert into integrations (org_id, type, provider, name)
+     values ($1, 'git', 'fake-git', $2) returning id`,
+    [org.rows[0]?.org_id, name],
+  );
+  const id = integration.rows[0]?.id as Id;
+  await pool.query('insert into bindings (project_id, integration_id) values ($1, $2)', [
+    projectId,
+    id,
+  ]);
+  return id;
+};
+
+/** The revocation door, built from the integration that minted (WP-80) — the teardown's. */
+const revocationsOver = async (port: PipelineIntegrationsPort, integrationId: Id) => {
+  const minting = await port.forMintingIntegration(integrationId, noRunScopedSecrets());
+  if (minting === null) {
+    throw new Error(`integration ${integrationId} is gone`);
+  }
+  return runCredentialRevocations(minting);
+};
 
 let ticket = 0;
 
@@ -284,14 +331,22 @@ describe('a run credential nothing confirmed revoked (WP-77, backlog 155)', () =
     const minted = await mint(port, failed, 'normal', 'push');
     git.core.script.failNext('revoke_credential', new Error('the provider went away'));
     await expect(
-      minted.writes.revoke(minted.handle, { ...failed, projectId, mode: 'normal' }),
+      (await revocationsOver(port, gitIntegrationId)).revoke(minted.handle, {
+        ...failed,
+        projectId,
+        mode: 'normal',
+      }),
     ).rejects.toThrow(/the provider went away/);
     await endRun(failed.runId);
 
     // (c) The negative: revoked normally, then ended — the same shape as (b) but for the outcome.
     const normal = await seedRun('normal', 5 * 60_000);
     const kept = await mint(port, normal, 'normal', 'push');
-    await kept.writes.revoke(kept.handle, { ...normal, projectId, mode: 'normal' });
+    await (await revocationsOver(port, gitIntegrationId)).revoke(kept.handle, {
+      ...normal,
+      projectId,
+      mode: 'normal',
+    });
     await endRun(normal.runId);
 
     // Before: nothing asked for (a) or (b); one revocation for (c).
@@ -396,78 +451,131 @@ describe('a run credential nothing confirmed revoked (WP-77, backlog 155)', () =
   });
 
   /**
-   * WP-73b, PROGRESS backlog 156 half 1, at the boundary: a teardown revoke fails, then the project
-   * is unbound from the git integration that minted — the whole-set `PUT …/bindings` an operator
-   * swaps providers with. The revoke's finding join no longer reaches the mint, so before WP-73b
-   * nothing said the token was live. Now one warning names it, across two passes, and the provider
-   * is asked nothing: `credentials[].revocations` stays 0.
+   * WP-80, TD-028 decision 10 — PROGRESS backlog 156 half 3, at the boundary: a teardown revoke
+   * fails, then the project is unbound from the git integration that minted — the whole-set `PUT
+   * …/bindings` an operator swaps providers with. Before WP-80 the pass only reported it (WP-73b)
+   * and the token lived to its expiry. Now it is revoked **through the minting integration**: the
+   * provider is asked once (`credentials[].revocations` 0 → 1) and there is one recovery row, under
+   * that integration's id.
    */
-  it('reports, once and without revoking, a credential whose minting integration was unbound', async () => {
-    const git = fakeGit();
+  it('revokes, through the integration that minted it, a credential whose project was unbound from it', async () => {
+    const mintingId = await secondGitIntegration('git-unbound');
+    const git = fakeGit(mintingId);
     const port = integrationsOver(git);
     const failed = await seedRun('normal', 5 * 60_000);
     const minted = await mint(port, failed, 'normal', 'push');
     git.core.script.failNext('revoke_credential', new Error('the provider went away'));
     await expect(
-      minted.writes.revoke(minted.handle, { ...failed, projectId, mode: 'normal' }),
+      (await revocationsOver(port, mintingId)).revoke(minted.handle, {
+        ...failed,
+        projectId,
+        mode: 'normal',
+      }),
     ).rejects.toThrow(/the provider went away/);
     await endRun(failed.runId);
     await pool.query('delete from bindings where project_id = $1 and integration_id = $2', [
       projectId,
-      gitIntegrationId,
+      mintingId,
     ]);
-    try {
-      const warnings: { fields: Record<string, unknown>; message: string }[] = [];
-      const logger: Logger = {
-        debug: () => {},
-        info: () => {},
-        warn: (fields, message) => {
-          warnings.push({ fields: fields as Record<string, unknown>, message });
-        },
-        error: () => {},
-      };
-      const unreachable = createUnreachableRunCredentialReports();
-      const runtime = await queues();
-      const first = await pass(iso(5 * 60_000), runtime.jobs, { logger, unreachable });
-      const second = await pass(iso(6 * 60_000), runtime.jobs, { logger, unreachable });
 
-      expect(first.find((site) => site.site === 'run_credential')).toMatchObject({ found: 0 });
-      const reported = warnings.filter((entry) => entry.message.includes('backlog 156'));
-      expect(reported).toHaveLength(1);
-      expect(reported[0]?.fields).toMatchObject({
-        run_id: failed.runId,
-        integration_id: gitIntegrationId,
-        revoke_id: minted.credential.revokeId,
-        expires_at: minted.credential.expiresAt,
-      });
-      expect(second.find((site) => site.site === 'run_credential_unreachable')).toMatchObject({
-        found: 0,
-      });
-      expect(
-        runtime.snapshot().filter((job) => job.data['duty'] === 'revoke_run_credential'),
-      ).toEqual([]);
-      expect(git.credentials.map((row) => row.revocations)).toEqual([0]);
-      // Review round 1: the read skips what was reported before the limit applies, so the next
-      // unreported row is reachable however long the backlog; the reported one is not answered.
-      const again = await new eventing.PostgresUnitOfWork({ pool }).transaction(async (scope) =>
-        credentialStore.unreachableRunCredentials(
-          scope.tx,
-          {
-            endedBefore: iso(5 * 60_000),
-            endedAfter: iso(-48 * 60 * 60_000),
-            now: iso(5 * 60_000),
-            limit: 10,
-          },
-          unreachable.reported(iso(5 * 60_000)),
-        ),
-      );
-      expect(again).toEqual([]);
+    const later = iso(5 * 60_000);
+    const runtime = await queues();
+    const report = await pass(later, runtime.jobs);
+    expect(report.find((site) => site.site === 'run_credential')).toMatchObject({ found: 1 });
+    expect(report.find((site) => site.site === 'run_credential_unreachable')).toMatchObject({
+      found: 0,
+    });
+    await runDuties(runtime, port, later);
+
+    expect(git.credentials.map((row) => [row.revocations, row.revoked])).toEqual([[1, true]]);
+    const rows = (
+      await pool.query<{
+        integration_id: string;
+        status: string;
+        payload: Record<string, unknown>;
+      }>(
+        `select integration_id, status, payload from integration_actions
+          where task_id = $1 and action = 'revoke_credential' order by created_at`,
+        [failed.taskId],
+      )
+    ).rows;
+    expect(rows.map((row) => [row.integration_id, row.status, row.payload['origin']])).toEqual([
+      [mintingId, 'failed', undefined],
+      [mintingId, 'ok', 'recovery'],
+    ]);
+  });
+
+  /**
+   * WP-80, TD-028 decision 10's second clause: when the minting integration **row** is gone there
+   * is no host the platform may send the address to, so the credential is reported — once, across
+   * two passes — and nobody is called. On this schema the row cannot be deleted while a mint names
+   * it (`integration_actions.integration_id` restricts — asserted first), so the deletion is made
+   * past the constraint, the way a restore or a hand edit would leave it.
+   */
+  it('reports, once and without calling anybody, a credential whose minting integration no longer exists', async () => {
+    const mintingId = await secondGitIntegration('git-deleted');
+    const git = fakeGit(mintingId);
+    const port = integrationsOver(git);
+    const failed = await seedRun('normal', 5 * 60_000);
+    const minted = await mint(port, failed, 'normal', 'push');
+    await endRun(failed.runId);
+    await pool.query('delete from bindings where integration_id = $1', [mintingId]);
+    await expect(
+      pool.query('delete from integrations where id = $1', [mintingId]),
+    ).rejects.toMatchObject({ code: '23503' });
+    const client = await pool.connect();
+    try {
+      await client.query('set session_replication_role = replica');
+      await client.query('delete from integrations where id = $1', [mintingId]);
     } finally {
-      await pool.query('insert into bindings (project_id, integration_id) values ($1, $2)', [
-        projectId,
-        gitIntegrationId,
-      ]);
+      await client.query('set session_replication_role = default');
+      client.release();
     }
+
+    const warnings: { fields: Record<string, unknown>; message: string }[] = [];
+    const logger: Logger = {
+      debug: () => {},
+      info: () => {},
+      warn: (fields, message) => {
+        warnings.push({ fields: fields as Record<string, unknown>, message });
+      },
+      error: () => {},
+    };
+    const unreachable = createUnreachableRunCredentialReports();
+    const runtime = await queues();
+    const first = await pass(iso(5 * 60_000), runtime.jobs, { logger, unreachable });
+    const second = await pass(iso(6 * 60_000), runtime.jobs, { logger, unreachable });
+
+    expect(first.find((site) => site.site === 'run_credential')).toMatchObject({ found: 0 });
+    const reported = warnings.filter((entry) => entry.message.includes('no longer exists'));
+    expect(reported).toHaveLength(1);
+    expect(reported[0]?.fields).toMatchObject({
+      run_id: failed.runId,
+      integration_id: mintingId,
+      revoke_id: minted.credential.revokeId,
+      expires_at: minted.credential.expiresAt,
+    });
+    expect(second.find((site) => site.site === 'run_credential_unreachable')).toMatchObject({
+      found: 0,
+    });
+    expect(
+      runtime.snapshot().filter((job) => job.data['duty'] === 'revoke_run_credential'),
+    ).toEqual([]);
+    expect(git.credentials.map((row) => row.revocations)).toEqual([0]);
+    // The read skips what was reported before the limit applies (WP-73b review round 1).
+    const again = await new eventing.PostgresUnitOfWork({ pool }).transaction(async (scope) =>
+      credentialStore.unreachableRunCredentials(
+        scope.tx,
+        {
+          endedBefore: iso(5 * 60_000),
+          endedAfter: iso(-48 * 60 * 60_000),
+          now: iso(5 * 60_000),
+          limit: 10,
+        },
+        unreachable.reported(iso(5 * 60_000)),
+      ),
+    );
+    expect(again).toEqual([]);
   });
 
   it('leaves a live run’s credential to its runner, and an expired one to its expiry', async () => {

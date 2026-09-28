@@ -63,7 +63,13 @@
  * new tickets up in shadow mode, because `picksUpNewTickets` and `shadowMode` are false and true at
  * exactly one dial position each and never at the same one.
  */
-import type { Id, IsoDateTime, MergeRequestRef, PipelineTemplate } from '@platform/contracts';
+import type {
+  Id,
+  IsoDateTime,
+  JsonObject,
+  MergeRequestRef,
+  PipelineTemplate,
+} from '@platform/contracts';
 import type { CommandContext } from '@platform/domain';
 import { compilePipeline, createTask, interpret } from '@platform/domain';
 import type { PipelineIntegrations, PipelineIntegrationsPort } from '../pipeline/integrations.js';
@@ -201,6 +207,36 @@ const contextFor = (
   causeEventId: null,
 });
 
+/**
+ * The human merge request as `shadow_batch_tickets.human_mr_ref` stores it — **through the project's
+ * git binding redactor** (WP-80, PROGRESS backlog 131 point 5), with the count.
+ *
+ * It is the provider's merged-merge-request entry, copied into the row the shadow report's
+ * `human_mr` is later read from; the executor redacted only its audit row and handed the entry back
+ * as the provider sent it. `GitBinding.redactor` is both TD-012 steps (the binding's credentials,
+ * then the pattern rules and every minted credential's shape). A project with no git binding read
+ * no merge request, so there is nothing to redact and the count is `0`; so does a ticket whose
+ * search matched no human merge request (`human_mr` null) — `0` there means nothing was stored, not
+ * that a stored value was left unredacted.
+ *
+ * Rewritten rather than refused: this row is not an artifact and nothing addresses a provider
+ * object by the stored ref's `branch` or `url` — the report reads the diff by `iid` — so a branch
+ * name carrying a secret is stored with a placeholder. A row written **before** this (migration
+ * 0057) is the case the report's identifier refusal is left for.
+ */
+const redactedHumanMr = (
+  match: HumanMergeRequestMatch | null,
+  integrations: PipelineIntegrations,
+): { readonly humanMr: MergeRequestRef | null; readonly redactionCount: number } => {
+  const humanMr = match?.mergeRequest ?? null;
+  const redactor = integrations.git?.redactor;
+  if (humanMr === null || redactor === undefined) {
+    return { humanMr, redactionCount: 0 };
+  }
+  const redacted = redactor.redactJson(humanMr as unknown as JsonObject);
+  return { humanMr: redacted.value as unknown as MergeRequestRef, redactionCount: redacted.count };
+};
+
 /** What one ticket resolved to before anything is written. */
 interface Resolved {
   readonly ticketKey: string;
@@ -265,7 +301,7 @@ export const startShadowBatch = async (
           ticketKey: entry.ticketKey,
           taskId: null,
           baseSha: entry.match?.baseSha ?? null,
-          humanMr: entry.match?.mergeRequest ?? null,
+          ...redactedHumanMr(entry.match, integrations),
           humanMrSource: entry.match?.source ?? null,
           mergedAt: entry.match?.mergedAt ?? null,
           candidates: entry.match?.candidates ?? null,
@@ -288,7 +324,7 @@ export const startShadowBatch = async (
           ticketKey: entry.ticketKey,
           taskId: null,
           baseSha: entry.match?.baseSha ?? null,
-          humanMr: entry.match?.mergeRequest ?? null,
+          ...redactedHumanMr(entry.match, integrations),
           humanMrSource: entry.match?.source ?? null,
           mergedAt: entry.match?.mergedAt ?? null,
           candidates: entry.match?.candidates ?? null,
@@ -363,7 +399,7 @@ export const startShadowBatch = async (
         ticketKey: entry.ticketKey,
         taskId: stored.task.id,
         baseSha: entry.match?.baseSha ?? null,
-        humanMr: entry.match?.mergeRequest ?? null,
+        ...redactedHumanMr(entry.match, integrations),
         humanMrSource: entry.match?.source ?? null,
         mergedAt: entry.match?.mergedAt ?? null,
         candidates: entry.match?.candidates ?? null,

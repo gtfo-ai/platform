@@ -19,12 +19,15 @@ import type {
   CredentialRevocationAddress,
   CredentialScope,
   GitProviderPort,
-  MintedCredential,
+  MintedRunCredential,
 } from '../ports/integrations/git-provider.js';
 import { createMemoryAuditLog, createVirtualTimer } from '../testing/memory-integrations.js';
 import {
+  type MintingIntegration,
+  mintingIntegrationOf,
   type PipelineIntegrations,
   type RecoverableRunCredential,
+  runCredentialRevocations,
   runCredentialWrites,
 } from './integrations.js';
 
@@ -40,6 +43,16 @@ const IDS = {
   projectId: '00000000-0000-4000-8000-00000000c003' as Id,
 };
 const TOKEN = 'fake_run_credential_0123456789';
+/** The shape the harness's provider declares for {@link TOKEN} (WP-80). */
+const TOKEN_SHAPE = {
+  prefix: 'fake_run_credential_',
+  charset: 'alnum',
+  length: TOKEN.length,
+} as const;
+
+/** The revocation door, built from the binding that minted — what teardown and recovery use (WP-80). */
+const revocationsOf = (integrations: PipelineIntegrations) =>
+  runCredentialRevocations(mintingIntegrationOf(integrations) as MintingIntegration);
 
 const harness = (
   options: {
@@ -48,6 +61,8 @@ const harness = (
     scopeOverride?: CredentialScope;
     /** What every `revokeCredential` throws, when set (WP-77). */
     revokeError?: Error;
+    /** The shape the provider declares, when not {@link TOKEN_SHAPE} (WP-80). */
+    shape?: MintedRunCredential['shape'];
   } = {},
 ) => {
   const minted: { scope: CredentialScope; branchPatterns: readonly string[] | undefined }[] = [];
@@ -58,7 +73,7 @@ const harness = (
     mintCredential: async (request: {
       scope: CredentialScope;
       branchPatterns?: readonly string[];
-    }): Promise<MintedCredential> => {
+    }): Promise<MintedRunCredential> => {
       minted.push({ scope: request.scope, branchPatterns: request.branchPatterns });
       return {
         username: 'oauth2',
@@ -67,6 +82,7 @@ const harness = (
         branchPatterns: request.branchPatterns ?? [],
         expiresAt: '2026-06-03T00:00:00.000Z',
         revokeId: 'acme/api#17',
+        shape: options.shape ?? TOKEN_SHAPE,
       };
     },
     revokeCredential: async (address: CredentialRevocationAddress) => {
@@ -109,7 +125,7 @@ describe('runCredentialWrites (WP-76)', () => {
     const answer = await writes.mint(request('normal', 'push'));
     expect(answer.kind).toBe('minted');
     if (answer.kind !== 'minted') return;
-    await writes.revoke(answer.handle, { ...IDS, mode: 'normal' });
+    await revocationsOf(integrations).revoke(answer.handle, { ...IDS, mode: 'normal' });
 
     expect(auditLog.entriesFor('mint_credential')).toHaveLength(1);
     expect(auditLog.entriesFor('revoke_credential')).toHaveLength(1);
@@ -148,7 +164,7 @@ describe('runCredentialWrites (WP-76)', () => {
     const answer = await writes.mint(request('shadow', 'read'));
     expect(answer.kind).toBe('minted');
     if (answer.kind !== 'minted') return;
-    await writes.revoke(answer.handle, { ...IDS, mode: 'shadow' });
+    await revocationsOf(integrations).revoke(answer.handle, { ...IDS, mode: 'shadow' });
 
     expect(auditLog.entries.map((entry) => [entry.action, entry.status])).toEqual([
       ['mint_credential', 'ok'],
@@ -266,7 +282,7 @@ describe('runCredentialWrites (WP-76)', () => {
       revokeId: 'acme/api#17',
       integrationId: GIT_REF.integrationId,
     };
-    await runCredentialWrites(integrations).revoke(push, { ...IDS, mode: 'shadow' });
+    await revocationsOf(integrations).revoke(push, { ...IDS, mode: 'shadow' });
     expect(revoked).toHaveLength(1);
   });
 
@@ -301,7 +317,7 @@ describe('runCredentialWrites (WP-76)', () => {
       integrationId: GIT_REF.integrationId,
     };
     await expect(
-      runCredentialWrites(suppressing).revoke(push, { ...IDS, mode: 'normal' }),
+      revocationsOf(suppressing).revoke(push, { ...IDS, mode: 'normal' }),
     ).rejects.toThrow(
       /was not revoked \(the executor answered would_have\); it is live until the recovery pass revokes it .* or it expires at 2026-06-03/,
     );
@@ -309,33 +325,58 @@ describe('runCredentialWrites (WP-76)', () => {
   });
 
   /**
-   * WP-73b, PROGRESS backlog 156 half 2: the teardown rebuilds the project's integrations at revoke
-   * time, so a project re-bound from git integration A to B while the run was live used to send A's
-   * address through B, audited as B's. It is refused as `recover` refuses it.
+   * WP-73b, PROGRESS backlog 156 half 2, and structural since WP-80 (TD-028 decision 10): the
+   * revocation is built from the minting integration, and one built from any other — git
+   * integration B for a credential A minted — is refused before the executor, so no row names B.
    */
-  it('refuses a teardown revoke through a git binding that did not mint the credential', async () => {
+  it('refuses a revocation built from an integration that did not mint the credential', async () => {
     const { integrations, auditLog, revoked } = harness();
-    const writes = runCredentialWrites(integrations);
-    const answer = await writes.mint(request('normal', 'push'));
+    const answer = await runCredentialWrites(integrations).mint(request('normal', 'push'));
     if (answer.kind !== 'minted') throw new Error('expected a credential');
     expect(answer.handle.integrationId).toBe(GIT_REF.integrationId);
-    const rebound: PipelineIntegrations = {
-      ...integrations,
-      git:
-        integrations.git === null
-          ? null
-          : {
-              ...integrations.git,
-              ref: { ...GIT_REF, integrationId: '00000000-0000-4000-8000-00000000a0b2' as Id },
-            },
+    const other = mintingIntegrationOf(integrations) as MintingIntegration;
+    const stranger: MintingIntegration = {
+      ...other,
+      ref: { ...GIT_REF, integrationId: '00000000-0000-4000-8000-00000000a0b2' as Id },
     };
 
     await expect(
-      runCredentialWrites(rebound).revoke(answer.handle, { ...IDS, mode: 'normal' }),
-    ).rejects.toThrow(/minted through the git binding .*a001.* is now .*a0b2.*backlog 156/);
-    // Refused before the executor: nothing reached a provider, and no row names binding B.
+      runCredentialRevocations(stranger).revoke(answer.handle, { ...IDS, mode: 'normal' }),
+    ).rejects.toThrow(/minted through the git integration .*a001.*built from .*a0b2.*backlog 156/);
+    // Refused before the executor: nothing reached a provider, and no row names integration B.
     expect(revoked).toEqual([]);
     expect(auditLog.entriesFor('revoke_credential')).toEqual([]);
+  });
+
+  /**
+   * WP-80 (TD-012's M5 amendment): the mint's audit entry carries the value's non-secret shape, so
+   * the audit adapter writes it in the row's transaction; and it carries nothing of the value.
+   */
+  it('carries the minted value’s shape on the mint’s audit entry, and never the value', async () => {
+    const { integrations, auditLog } = harness();
+    await runCredentialWrites(integrations).mint(request('normal', 'push'));
+
+    const entry = auditLog.entriesFor('mint_credential')[0];
+    expect(entry?.credentialShape).toEqual({
+      shape: TOKEN_SHAPE,
+      expiresAt: '2026-06-03T00:00:00.000Z',
+    });
+    expect(JSON.stringify(entry)).not.toContain(TOKEN);
+  });
+
+  /**
+   * WP-80: a value that does not have the shape it came with could be redacted by no process but
+   * its minter, so it is refused like a value too short to redact — and revoked first.
+   */
+  it('refuses, and revokes, a value that does not have the shape the provider declared', async () => {
+    const { integrations, auditLog, revoked } = harness({
+      shape: { prefix: 'glpat-', charset: 'token_dotted', length: TOKEN.length },
+    });
+    await expect(runCredentialWrites(integrations).mint(request('normal', 'push'))).rejects.toThrow(
+      /does not have the shape the provider declared \(prefix "glpat-".*token_prefix.*it was revoked/,
+    );
+    expect(revoked).toHaveLength(1);
+    expect(auditLog.entriesFor('revoke_credential').map((row) => row.status)).toEqual(['ok']);
   });
 
   it('refuses to mint or revoke inside an open transaction', async () => {
@@ -347,7 +388,9 @@ describe('runCredentialWrites (WP-76)', () => {
     const answer = await writes.mint(request('normal', 'push'));
     if (answer.kind !== 'minted') throw new Error('expected a credential');
     await expect(
-      withOpenTransaction(async () => writes.revoke(answer.handle, { ...IDS, mode: 'normal' })),
+      withOpenTransaction(async () =>
+        revocationsOf(integrations).revoke(answer.handle, { ...IDS, mode: 'normal' }),
+      ),
     ).rejects.toBeInstanceOf(TransactionOpenError);
     expect(minted).toHaveLength(1);
     expect(revoked).toHaveLength(0);
@@ -358,7 +401,7 @@ describe('runCredentialWrites (WP-76)', () => {
  * The recovery revoke (WP-77, PROGRESS backlog 155) — by address, through the executor, bounded by
  * its own audit row. The address is what the mint's audit row recorded; nothing here holds a value.
  */
-describe('runCredentialWrites().recover (WP-77)', () => {
+describe('runCredentialRevocations().recover (WP-77)', () => {
   const stranded = (over: Partial<RecoverableRunCredential> = {}): RecoverableRunCredential => ({
     ...IDS,
     mode: 'normal',
@@ -372,7 +415,7 @@ describe('runCredentialWrites().recover (WP-77)', () => {
   it('hands the provider the address and nothing else, and records the attempt as the recovery’s', async () => {
     const { integrations, auditLog, revoked } = harness();
 
-    expect(await runCredentialWrites(integrations).recover(stranded())).toBe('revoked');
+    expect(await revocationsOf(integrations).recover(stranded())).toBe('revoked');
 
     // Standing rule 18: the provider was given `{ revokeId }` — no value, invented or otherwise.
     expect(revoked).toEqual([{ revokeId: 'acme/api#17' }]);
@@ -400,7 +443,7 @@ describe('runCredentialWrites().recover (WP-77)', () => {
       revokeError: new IntegrationError('not_found', 'fake-git', 'no such access token'),
     });
 
-    expect(await runCredentialWrites(integrations).recover(stranded())).toBe('unconfirmed');
+    expect(await revocationsOf(integrations).recover(stranded())).toBe('unconfirmed');
 
     const rows = auditLog.entriesFor('revoke_credential');
     expect(rows.map((row) => row.status)).toEqual(['ok']);
@@ -417,7 +460,7 @@ describe('runCredentialWrites().recover (WP-77)', () => {
       revokeError: new IntegrationError('forbidden', 'fake-git', 'the binding lost access'),
     });
 
-    await expect(runCredentialWrites(integrations).recover(stranded())).rejects.toThrow(
+    await expect(revocationsOf(integrations).recover(stranded())).rejects.toThrow(
       /the binding lost access/,
     );
     const rows = auditLog.entriesFor('revoke_credential');
@@ -430,7 +473,7 @@ describe('runCredentialWrites().recover (WP-77)', () => {
     const { integrations, auditLog, revoked } = harness();
 
     expect(
-      await runCredentialWrites(integrations).recover(stranded({ mode: 'shadow', scope: 'read' })),
+      await revocationsOf(integrations).recover(stranded({ mode: 'shadow', scope: 'read' })),
     ).toBe('revoked');
 
     expect(revoked).toHaveLength(1);
@@ -452,43 +495,38 @@ describe('runCredentialWrites().recover (WP-77)', () => {
     };
 
     await expect(
-      runCredentialWrites(suppressing).recover(stranded({ mode: 'shadow', scope: 'read' })),
+      revocationsOf(suppressing).recover(stranded({ mode: 'shadow', scope: 'read' })),
     ).rejects.toThrow(/not revoked by the recovery pass \(the executor answered would_have\)/);
     expect(revoked).toEqual([]);
   });
 
-  it('refuses an address minted through a binding the project is no longer bound to', async () => {
+  it('refuses an address minted through an integration other than the one it is built from', async () => {
     const { integrations, auditLog, revoked } = harness();
 
     await expect(
-      runCredentialWrites(integrations).recover(
+      revocationsOf(integrations).recover(
         stranded({ integrationId: '00000000-0000-4000-8000-00000000a0ff' as Id }),
       ),
-    ).rejects.toThrow(/not project .* git binding any more/);
+    ).rejects.toThrow(/never sent to an integration that did not mint it.*lives until 2026-06-03/);
     // Refused before the executor: nothing sent, and no row claims an attempt.
     expect(revoked).toEqual([]);
     expect(auditLog.entries).toEqual([]);
-
-    await expect(
-      runCredentialWrites({ ...integrations, git: null }).recover(stranded()),
-    ).rejects.toThrow(/live until 2026-06-03/);
   });
 
   it('refuses to revoke inside an open transaction', async () => {
     const { integrations, revoked } = harness();
     await expect(
-      withOpenTransaction(async () => runCredentialWrites(integrations).recover(stranded())),
+      withOpenTransaction(async () => revocationsOf(integrations).recover(stranded())),
     ).rejects.toBeInstanceOf(TransactionOpenError);
     expect(revoked).toEqual([]);
   });
 
   it('hands the teardown revoke’s provider the address alone as well', async () => {
     const { integrations, revoked } = harness();
-    const writes = runCredentialWrites(integrations);
-    const answer = await writes.mint(request('normal', 'push'));
+    const answer = await runCredentialWrites(integrations).mint(request('normal', 'push'));
     if (answer.kind !== 'minted') throw new Error('expected a credential');
 
-    await writes.revoke(answer.handle, { ...IDS, mode: 'normal' });
+    await revocationsOf(integrations).revoke(answer.handle, { ...IDS, mode: 'normal' });
 
     expect(revoked).toEqual([{ revokeId: 'acme/api#17' }]);
   });

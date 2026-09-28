@@ -23,6 +23,7 @@ import {
   urlSchema,
 } from '@platform/contracts';
 import * as z from 'zod';
+import type { MintedCredentialShape } from '../../integrations/credential-shape.js';
 import { externalIdentitySchema, type InboundNormaliser, type IntegrationPort } from './common.js';
 
 // ── Data ─────────────────────────────────────────────────────────────────────
@@ -337,6 +338,24 @@ export interface MintedCredential {
 }
 
 /**
+ * What `mintCredential` answers: a {@link MintedCredential} **and its shape** (WP-80). Separate from
+ * the credential type because a credential the platform did not mint — a binding's static token
+ * handed to `cloneUrl` — has no shape to declare, and inventing one for it would be standing rule
+ * 18's shape.
+ */
+export interface MintedRunCredential extends MintedCredential {
+  /**
+   * The value's **non-secret shape** — the prefix the provider declares, a closed character class
+   * and the exact length (WP-80, TD-012's M5 amendment). The minting process records it beside the
+   * mint's audit row and every process compiles it into a redaction rule, so the value is redacted
+   * in processes that never held it. Never a character of the random part: the prefix is the
+   * provider's **declaration** (GitLab: the binding's `token_prefix`), and the caller refuses — and
+   * revokes — a value that does not have the shape it came with (`../../integrations/credential-shape.ts`).
+   */
+  readonly shape: MintedCredentialShape;
+}
+
+/**
  * **Where a minted credential can be revoked — the whole of what `revokeCredential` reads** (WP-77).
  *
  * The port used to take the whole {@link MintedCredential}, `value` included, while the shipped
@@ -374,19 +393,18 @@ export interface GitProviderCapabilities {
   /** Thread resolution API (`resolveDiscussion`). */
   readonly discussionResolution: boolean;
   /**
-   * Credential minting; `false` means the operator's static bot token is used as-is.
+   * Credential minting — whether this binding can mint a short-lived per-run credential. `false`
+   * means it cannot, and then a **writing run is refused** and a read-only run fetches anonymously;
+   * the binding's own static token is **never** handed to a run instead (TD-028's WP-76 amendment,
+   * decision 6 — the sentence this used to open with said the opposite, WP-80 corrected it).
    *
-   * **A trigger, not only a flag** (WP-72, PROGRESS backlog 154, decision (a)). A minted value is
-   * redacted by exact match only in the process that minted it (`RunScopedSecrets` is memory), and
-   * on the shipped topology other processes store and post text a run can quote it into — so what
-   * keeps a run credential out of *their* rows is the platform's pattern rules alone
-   * (`patternRedactor`'s `gitlab-token`). That is sufficient for exactly one shape: GitLab's
-   * documented default `glpat-` prefix, which `pattern-redaction.test.ts` pins. **The day a second
-   * provider sets this to `true`, or a GitLab binding mints under a prefix the rule does not match —
-   * an administrator can change the personal-access-token prefix, and project access tokens inherit
-   * it (<https://docs.gitlab.com/administration/settings/account_and_limit_settings/>, retrieved
-   * 2026-09-27) — decision (b) becomes required**: the value sealed in the `secrets` store, keyed by
-   * run, and read by every process's redactor (PROGRESS backlog 259).
+   * **A provider that sets it must also declare, at registration, that its minted values have a
+   * stable shape** (WP-80, TD-012's M5 amendment): a registration declaring minting with no stable
+   * shape is refused by name, and a port that reports `true` from a registration that declared
+   * nothing has the capability declined by the binding loader. The shape is what redacts the value
+   * in every process that did not mint it ({@link MintedRunCredential.shape}); before WP-80 those
+   * processes had only the `glpat-` pattern rule, which a GitLab administrator's custom prefix
+   * defeats (PROGRESS backlog 259).
    */
   readonly credentialMinting: boolean;
 }
@@ -431,7 +449,7 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
     readonly scope: CredentialScope;
     readonly branchPatterns?: readonly string[];
     readonly ttlSeconds: number;
-  }) => Promise<MintedCredential>;
+  }) => Promise<MintedRunCredential>;
 
   /**
    * Revokes a credential minted earlier. Safe to call twice — the second call is a no-op, and an

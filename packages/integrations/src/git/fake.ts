@@ -43,9 +43,11 @@
  *     tests green.
  *  6. **Different — shas are counters in hex and iids are sequential per project.** Deterministic,
  *     therefore fixture-friendly, and unlike a real sha they carry order.
- *  7. **Different — `mintCredential` returns a value shaped `fake_credential_<n>`.** It matches no
- *     provider's token format on purpose: a secret scanner must never find a plausible token in
- *     this repository (BD-002), and no test should be able to pattern-match a real one.
+ *  7. **Different — `mintCredential` returns a value shaped `fake_credential_<n>`** (or
+ *     `<credentialPrefix>fake0minted0<n>`, WP-80). It matches no provider's token format on purpose:
+ *     a secret scanner must never find a plausible token in this repository (BD-002), and no test
+ *     should be able to pattern-match a real one. Its `shape` is the declared prefix, `alnum`, and
+ *     the value's length.
  *  8. **Stricter — revoking a credential this fake never minted is `not_found`.** A real adapter
  *     cannot tell "already revoked" from "never existed here" when the provider denies knowing a
  *     handle it did not mint, so the port forbids it to report success (WP-09 review round 1); the
@@ -189,7 +191,7 @@ import {
   type MergeRequestRefInput,
   type MergeRequestState,
   type MergeRequestUpdate,
-  type MintedCredential,
+  type MintedRunCredential,
   mergeRequestSchema,
   type NormalisedDelivery,
   type NormalisedEvent,
@@ -250,6 +252,13 @@ export interface FakeGitOptions {
    * recovery row compares a mint's recorded expiry with the pass's own clock.
    */
   readonly clockStart?: string;
+  /**
+   * The prefix every minted value starts with (WP-80). @default `fake_credential_`, and then a
+   * value is `fake_credential_<n>` as it always was. Any other prefix is followed by
+   * `fake0minted0<n, eight digits>`, long enough for the shape's minimum length — which is how the
+   * two-process e2e mints under a prefix that no gitleaks rule knows, the case backlog 259 is about.
+   */
+  readonly credentialPrefix?: string;
 }
 
 interface StoredProject {
@@ -1032,7 +1041,11 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       }
       credentialCounter += 1;
       // Divergence 7: shaped like nothing real, so no scanner can mistake it for a token.
-      const value = `fake_credential_${credentialCounter}`;
+      const prefix = options.credentialPrefix ?? 'fake_credential_';
+      const value =
+        options.credentialPrefix === undefined
+          ? `${prefix}${credentialCounter}`
+          : `${prefix}fake0minted0${String(credentialCounter).padStart(8, '0')}`;
       const expiresAt = new Date(
         Date.parse(core.clock.now()) + request.ttlSeconds * 1000,
       ).toISOString();
@@ -1045,7 +1058,7 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
         scope: request.scope,
         revocations: 0,
       });
-      const credential: MintedCredential = {
+      const credential: MintedRunCredential = {
         username: 'oauth2',
         value,
         scope: request.scope satisfies CredentialScope,
@@ -1053,6 +1066,8 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
           request.scope === 'push' ? [...(request.branchPatterns ?? ['agentic/*'])] : [],
         expiresAt,
         revokeId: `rev-${credentialCounter}`,
+        // WP-80: the declared prefix and an alphanumeric tail — a stable shape, as the port asks.
+        shape: { prefix, charset: 'alnum', length: value.length },
       };
       return credential;
     },

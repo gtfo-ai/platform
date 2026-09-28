@@ -8,8 +8,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   composeRedactors,
+  currentPatternRules,
   detectSecrets,
   GITLEAKS_DERIVED_RULES,
+  installedMintedCredentialShapeRules,
+  installMintedCredentialShapes,
+  MINTED_CREDENTIAL_SHAPE_RULE_ID,
   patternRedactor,
   redactionPlaceholder,
 } from './pattern-redaction.js';
@@ -45,8 +49,9 @@ describe('the placeholder', () => {
  * PROGRESS backlog 154, **decision (a)** (WP-72): a run's minted git credential is redacted by
  * exact match only in the process that minted it, and on the shipped topology the process that
  * stores most of what could quote it — every webhook delivery, half the outbound duties — is not
- * that process. So the pattern rule *is* the defence there, and this block pins what it covers and
- * what it does not, with no run-scoped registry anywhere in sight.
+ * that process. So step 2 is the defence there — the gitleaks rules, and since WP-80 the shape rule
+ * compiled from what the minting process recorded (backlog 259) — and this block pins what each
+ * covers, with no run-scoped registry anywhere in sight.
  *
  * Shapes, from GitLab's own pages (retrieved 2026-09-27): a project access token carries the
  * personal-access-token prefix, `glpat-` by default, and an administrator may change that prefix
@@ -77,12 +82,96 @@ describe('a run credential redacted in a process that never minted it (backlog 1
     expect(outcome.value).toContain('.01.0a1b2c3d in the log');
   });
 
-  it('does not redact a token minted under an administrator-chosen prefix — the trigger for (b)', () => {
-    // The residual decision (a) accepts, pinned so that the day a rule (or a shared registry) covers
-    // it this assertion fails and the sentences on `credentialMinting` and in `run-redaction.ts`
-    // are rewritten with it (PROGRESS backlog 259).
+  /**
+   * WP-80 (TD-012's M5 amendment) inverted the residual WP-72 pinned here as *"does not redact a
+   * token minted under an administrator-chosen prefix — the trigger for (b)"*: the gitleaks set
+   * alone still misses it — asserted, because that is why the shape rule exists — and the process's
+   * shape rules, installed from `minted_credential_shapes`, catch it.
+   */
+  it('redacts a token minted under an administrator-chosen prefix once its shape is installed (backlog 259)', () => {
     const minted = 'acmepat-FAKE0custom0prefix0token';
-    expect(redactor.redactText(minted).value).toBe(minted);
+    expect(patternRedactor(GITLEAKS_DERIVED_RULES).redactText(minted).value).toBe(minted);
+    try {
+      installMintedCredentialShapes([
+        { prefix: 'acmepat-', charset: 'token_dotted', length: minted.length },
+      ]);
+      const outcome = redactor.redactText(`pushed with https://agentic:${minted}@git.example.test`);
+      expect(outcome.value).not.toContain(minted);
+      expect(outcome.value).toContain(redactionPlaceholder(minted));
+      expect(outcome.count).toBe(1);
+    } finally {
+      installMintedCredentialShapes([]);
+    }
+  });
+});
+
+describe('the minted-credential shape rules (WP-80, TD-012’s M5 amendment)', () => {
+  const minted = 'acmepat-FAKE0shape0rule0value00';
+  const shape = { prefix: 'acmepat-', charset: 'token', length: minted.length } as const;
+
+  it('are read at call time, so a redactor built before the install applies them', () => {
+    const early = patternRedactor();
+    try {
+      expect(early.redactText(minted).value).toBe(minted);
+      expect(installMintedCredentialShapes([shape])).toEqual({ installed: 1, refused: 0 });
+      expect(early.redactText(minted).value).toBe(redactionPlaceholder(minted));
+      expect(early.redactJson({ comment: `quoted ${minted}` }).count).toBe(1);
+    } finally {
+      installMintedCredentialShapes([]);
+    }
+    expect(early.redactText(minted).value).toBe(minted);
+  });
+
+  it('run first, so the hit is recorded under the shape rule and not the generic one', () => {
+    try {
+      installMintedCredentialShapes([shape]);
+      expect(detectSecrets(`token = ${minted}`, currentPatternRules())).toEqual([
+        { ruleId: MINTED_CREDENTIAL_SHAPE_RULE_ID, value: minted },
+      ]);
+    } finally {
+      installMintedCredentialShapes([]);
+    }
+  });
+
+  it('match exactly the recorded length of the class after the literal prefix', () => {
+    try {
+      installMintedCredentialShapes([shape]);
+      const redactor = patternRedactor();
+      // One character short of the shape is another string, left alone.
+      expect(redactor.redactText(minted.slice(0, -1)).value).toBe(minted.slice(0, -1));
+      // A prefix character is literal: `acmepatX…` is not the prefix.
+      const other = `acmepatX${minted.slice('acmepat-'.length)}`;
+      expect(redactor.redactText(other).value).toBe(other);
+    } finally {
+      installMintedCredentialShapes([]);
+    }
+  });
+
+  it('deduplicate, skip a shape the compiler refuses, and replace the set wholesale', () => {
+    try {
+      expect(
+        installMintedCredentialShapes([
+          shape,
+          shape,
+          { prefix: 'x', charset: 'alnum', length: 20 },
+        ] as never),
+      ).toEqual({ installed: 1, refused: 1 });
+      expect(installedMintedCredentialShapeRules()).toHaveLength(1);
+      installMintedCredentialShapes([]);
+      expect(installedMintedCredentialShapeRules()).toEqual([]);
+      expect(currentPatternRules()).toBe(GITLEAKS_DERIVED_RULES);
+    } finally {
+      installMintedCredentialShapes([]);
+    }
+  });
+
+  it('leave an explicit rule list alone', () => {
+    try {
+      installMintedCredentialShapes([shape]);
+      expect(patternRedactor(GITLEAKS_DERIVED_RULES).redactText(minted).value).toBe(minted);
+    } finally {
+      installMintedCredentialShapes([]);
+    }
   });
 });
 

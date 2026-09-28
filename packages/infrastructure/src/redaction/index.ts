@@ -3,4 +3,6 @@
  * steps in order. Step 1 — exact match of the secrets the platform injected — is WP-07's
  * `exactSecretRedactor` in `@platform/application`; see `pattern-redaction.ts` for the seam.
  */
+
+export * from './minted-credential-shapes.js';
 export * from './pattern-redaction.js';

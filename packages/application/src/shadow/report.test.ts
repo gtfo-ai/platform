@@ -13,8 +13,10 @@
 import type { DomainEvent, Id, IsoDateTime, MergeRequestRef } from '@platform/contracts';
 import { materialiseAutonomy, readDataBlocks } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
+import { exactSecretRedactor } from '../integrations/redaction.js';
 import { staticPipelineIntegrations } from '../pipeline/integrations.js';
 import { staticProjectSettings } from '../pipeline/settings.js';
+import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type {
   Discussion,
   FileDiff,
@@ -479,10 +481,13 @@ const walkedHarness = (
     readonly merged?: readonly MergedMergeRequest[];
     /** Extra scripts, e.g. `code_review+merge_request` for the human-MR review alone. */
     readonly runs?: Readonly<Record<string, ScriptedRun>>;
+    /** The git binding's redactor (WP-80): what the batch and the report redact with. */
+    readonly gitRedactor?: SecretRedactor;
   } = {},
 ) =>
   createPipelineHarness({
     projectId: PROJECT,
+    ...(options.gitRedactor === undefined ? {} : { gitRedactor: options.gitRedactor }),
     settings: {
       config: { features: { shadow_mode: { enabled: true } } },
       autonomy: materialiseAutonomy({ level: 'observe', at: AT, appliedBy: null }),
@@ -655,6 +660,7 @@ describe('the shadow report, through the whole walk', () => {
         taskId,
         humanMr: HUMAN_MR,
         comparison: { anything: true },
+        redactionCount: 0,
       }),
     );
     expect(inserted).toBe(false);
@@ -682,6 +688,116 @@ describe('the shadow report, through the whole walk', () => {
     // The planner maps `tasks.mode` onto `RunSpec.mode` and no tier had ever driven it.
     expect(harness.specs.length).toBeGreaterThan(0);
     expect(harness.specs.every((spec) => spec.mode === 'shadow')).toBe(true);
+  });
+});
+
+/**
+ * WP-80, PROGRESS backlog 131: every shadow write goes through the project's git binding redactor
+ * with the count recorded — the batch's `human_mr`, the report's two copies — and an identifier
+ * refusal inside the report duty fails the duty and escalates the task, as a stated ending.
+ */
+describe('the shadow writes and the binding redactor (WP-80, backlog 131)', () => {
+  const PLANTED = 'FAKE-planted-binding-secret-0001';
+  const planted = () => exactSecretRedactor([{ name: 'fake-git:token', value: PLANTED }]);
+
+  it('redacts the report through the git binding redactor, and both copies carry the count', async () => {
+    const finding = {
+      id: 'h1',
+      severity: 'major' as const,
+      category: 'security',
+      file: 'src/format.ts',
+      line: 3,
+      explanation: `The human merge request logs the token ${PLANTED}.`,
+      suggestion: null,
+    };
+    const harness = walkedHarness({
+      gitRedactor: planted(),
+      runs: { 'code_review+merge_request': completedRun({ ...REVIEW, findings: [finding] }) },
+    });
+    await startBatch(harness, ['ACME-1']);
+    await harness.drain();
+
+    const row = harness.shadow.reportRows[0] as unknown as {
+      taskId: Id;
+      comparison: unknown;
+      redactionCount: number;
+    };
+    expect(JSON.stringify(row.comparison)).not.toContain(PLANTED);
+    expect(JSON.stringify(row.comparison)).toContain('[REDACTED:integration:fake-git:token]');
+    expect(row.redactionCount).toBe(1);
+    const artifact = await harness.memory.transaction(async (scope) =>
+      harness.store.artifacts.latest(scope.tx, row.taskId, 'ShadowReport'),
+    );
+    // One document, redacted once: the artifact and the batch's copy are the same bytes and count.
+    expect(artifact?.data).toEqual(row.comparison);
+    expect(artifact?.redactionCount).toBe(1);
+  });
+
+  it('counts a report the redactor found nothing in as 0 — the redactor ran', async () => {
+    const harness = walkedHarness({ gitRedactor: planted() });
+    await startBatch(harness, ['ACME-1']);
+    await harness.drain();
+    const row = harness.shadow.reportRows[0] as unknown as { redactionCount: number };
+    expect(row.redactionCount).toBe(0);
+  });
+
+  it('stores the batch’s human merge request through the same redactor, with the count', async () => {
+    const leaky: MergeRequestRef = { ...HUMAN_MR, branch: `feature/${PLANTED}` };
+    const harness = walkedHarness({
+      gitRedactor: planted(),
+      merged: [{ ...mergedMr('ACME-1'), ref: leaky }],
+    });
+    const started = await startBatch(harness, ['ACME-1']);
+    if (started.status !== 'started') throw new Error('expected a batch');
+    const tickets = (await harness.memory.transaction(async (scope) =>
+      harness.shadow.tickets(scope.tx, started.batchId),
+    )) as unknown as readonly { humanMr: MergeRequestRef | null; redactionCount: number }[];
+
+    expect(tickets[0]?.humanMr?.branch).toBe('feature/[REDACTED:integration:fake-git:token]');
+    expect(tickets[0]?.redactionCount).toBe(1);
+    expect(JSON.stringify(tickets)).not.toContain(PLANTED);
+  });
+
+  /**
+   * The stated ending (backlog 131 point 3). A batch row written before WP-80 holds `human_mr`
+   * unredacted; the report's identifier pass refuses a branch that carries a secret rather than
+   * rewriting it. Simulated with a redactor that learns the secret after the batch was written.
+   * The duty writes nothing and does not throw — a retry could never succeed — and the task is
+   * escalated with a brief naming the field.
+   */
+  it('fails the report duty on an identifier refusal and escalates the task with a brief', async () => {
+    let armed = false;
+    const inner = planted();
+    const lateRedactor: SecretRedactor = {
+      redactText: (text) => (armed ? inner.redactText(text) : { value: text, count: 0 }),
+      redactJson: (value) => (armed ? inner.redactJson(value) : { value, count: 0 }),
+    };
+    const leaky: MergeRequestRef = { ...HUMAN_MR, branch: `feature/${PLANTED}` };
+    const harness = walkedHarness({
+      gitRedactor: lateRedactor,
+      merged: [{ ...mergedMr('ACME-1'), ref: leaky }],
+    });
+    await startBatch(harness, ['ACME-1']);
+    armed = true;
+    await harness.drain();
+
+    expect(harness.shadow.reportRows).toEqual([]);
+    expect(reportEvents(harness)).toEqual([]);
+    const shadowTask = harness.store
+      .snapshot()
+      .find((entry) => entry.task.mode === 'shadow' && entry.task.template !== 'review_only');
+    expect(shadowTask?.task.state).toBe('needs_human');
+    const escalated = harness
+      .events()
+      .filter((event) => event.type === 'task.escalated')
+      .map((event) => event.payload as { task_id: string; blocker_brief: string });
+    const brief = escalated.find((event) => event.task_id === shadowTask?.task.id)?.blocker_brief;
+    expect(brief).toContain('"human_mr.branch"');
+    expect(brief).not.toContain(PLANTED);
+    const artifacts = await harness.memory.transaction(async (scope) =>
+      harness.store.artifacts.listFor(scope.tx, shadowTask?.task.id as Id),
+    );
+    expect(artifacts.filter((entry) => entry.type === 'ShadowReport')).toEqual([]);
   });
 });
 

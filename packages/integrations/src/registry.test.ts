@@ -158,6 +158,65 @@ describe('a git provider’s static credential declaration', () => {
 });
 
 /**
+ * WP-80, TD-012's M5 amendment — criterion (3): a provider that declares credential minting must
+ * declare that its minted values have a stable shape, or it is refused **at registration, by
+ * name**. Without the shape a minted value would be redacted only in the process that minted it.
+ */
+describe('a git provider’s credential-minting declaration (WP-80)', () => {
+  const minting = (credentialMinting: unknown): AnyProviderRegistration =>
+    ({
+      ...registration(),
+      id: 'fake-minting-git',
+      type: 'git',
+      create: () => {
+        throw new Error('not built in this test');
+      },
+      credentialMinting,
+    }) as AnyProviderRegistration;
+
+  it('accepts a declaration of a stable shape', () => {
+    const registry = createIntegrationRegistry([minting({ shape: 'stable' })]);
+    expect(registry.get('git', 'fake-minting-git').credentialMinting).toEqual({ shape: 'stable' });
+  });
+
+  it.each([
+    ['an unstable shape', { shape: 'unstable' }],
+    ['no shape at all', {}],
+  ])('refuses minting declared with %s, naming the provider', (_case, declaration) => {
+    const refusal = (() => {
+      try {
+        createIntegrationRegistry([minting(declaration)]);
+        return null;
+      } catch (error) {
+        return error;
+      }
+    })();
+    expect(refusal).toBeInstanceOf(ProviderRegistrationError);
+    expect((refusal as ProviderRegistrationError).providerId).toBe('fake-minting-git');
+    expect((refusal as Error).message).toMatch(
+      /provider "fake-minting-git": declares credential minting without a stable credential shape/,
+    );
+  });
+
+  it('refuses the declaration on a provider that is not a git provider', () => {
+    expect(() =>
+      createIntegrationRegistry([
+        { ...registration(), credentialMinting: { shape: 'stable' } } as AnyProviderRegistration,
+      ]),
+    ).toThrow(/only a git binding mints run credentials/);
+  });
+
+  it('is what both git registrations this repository ships declare', async () => {
+    const { gitlabProviderRegistration } = await import('./providers/gitlab/index.js');
+    const { fakeGitRegistration } = await import('./bindings/fake-registrations.js');
+    expect(gitlabProviderRegistration.credentialMinting).toEqual({ shape: 'stable' });
+    expect(
+      fakeGitRegistration({ port: null as never, token: 'fake-token-000' }).credentialMinting,
+    ).toEqual({ shape: 'stable' });
+  });
+});
+
+/**
  * The channel declaration WP-32 added, and the boot failure it exists to be.
  *
  * A `communication` provider that declared nothing would resolve to a binding with **no channel**,
