@@ -18,6 +18,8 @@
 > **"Architect ruling (M4, session 6)"** at the end of this file. This session is started with `/orchestrate`,
 > which loads `docs/technical/15-orchestrator-prompt.md`; that document, not a pasted prompt, is now the loop.
 
+**Session 9 — 2026-09-28.** `main` opened at **`5cca72a`**, tree clean, its `ci` `36343417619` and `image` `36343417630` **completed success**, `RELEASE_VERSIONING` unset. **WP-79 is DONE at `b94a641`** (`ci` `36364266913` and `image` `36364266928` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING — read to `completed` before the next row**) — backlog 267, 273, 243 (92 b), 268 and 275 closed; **274** filed small and unowned. **One machine-rule breach by the orchestrator, recorded**: its first tier chain started `verify:e2e` at a one-minute load of 27 without gating; it was killed, which left two volumes (`agentic-e2e-cache-djzmc7`, `agentic-e2e-ctl-djzmc7`) that a user hook forbids the session to remove — **asked the user**; the tier chains since run behind a load gate of at most five readings a minute apart. Docker volume count **104** against the baseline 102 until the user removes those two. **Next: WP-80.**
+
 **Session 8 — 2026-09-25.** `main` opened at **`c1cc951`**, tree clean, and every run on the last three heads read **completed success** — WP-53's `ci` `35879384310` and `image` `35879384479` (PENDING in session 7's note) included, with zero `release` runs. **WP-54 is DONE at `3288496`** (its `ci` `36161314408` and `36161314301` and `image` `36161314361` and `36161314245` **completed success**; its docs commit `bdcfbe2` read `ci` `36165713727` and `image` `36165713682` **completed success**). **WP-74 is DONE at `91e0140`** (`ci` `36175096502` and `image` `36175096640` **completed success**, zero `release` runs; the docs commit that carries this sentence has its own runs, **PENDING — read to `completed` before the next row**) — backlog 82 and 147 closed, `verify:e2e` green on this machine again. **Two majors had no owner and now do**: backlog **148** (a run's `/cache` is the whole mirror volume) as **WP-75** and **133** (the launcher cannot authenticate to git) as **WP-76**, both placed right after WP-74. Machine baseline: `docker volume ls | wc -l` = **102** (the two new volumes are the user's own `speedpuzzlingcz` postgres containers, not this repository's). **Three things for the next session.** (1) **The load gate, not the work, set the pace**: one-minute load was 20–175 for most of the day (Spotlight's `mds_stores` at ~250 % and the user's containers; this session's own processes were ~6 %), so the implementer spent six of its seven hours waiting — and its waits were **unbounded `until` loops** that each tool timeout orphaned: 25 of them, killed by the orchestrator after the user asked why 24 shells were running. **Every brief now says: a load check is five readings a minute apart, then a report — never an unbounded loop, never a background shell left behind.** (2) **`verify:e2e` is red on this machine for a reason that is not the tree**: backlog **147**, reproduced on a clean `main` worktree; until WP-74 closes it, every row's e2e verdict carries that one named failure and the rest is read as the verdict. A likely cause (the refiner's, unmeasured) is macOS writing into the bind-backed control volume between the two teardown helpers. (3) **A floor list is an enumeration**: WP-54's review found seven, then five, spellings past it, and BD-025 now says so rather than claiming a boundary. **WP-75 is DONE at `1b0af26`** (`ci` `36200943398` and `image` `36200943454` **completed success**; WP-74's docs commit `6972cbc` read `ci` `36175963207` and `image` `36175963205` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 148 and 152 closed. **The TD-028 amendment WP-76 needed exists** (the architect's, session 8: the runner mints a run-scoped credential through `IntegrationActionExecutor` and passes it on the create request; Q98 filed). **WP-76 is DONE at `52495cb`** (`ci` `36208771351` and `image` `36208771353` **completed success**; WP-75's docs commit `355f444` read `ci` `36201525827` and `image` `36201525825` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 133 closed: a private repository mirrors, the developer stage can push, and the run's credential is minted, audited and revoked. **WP-55 is DONE at `a72aaa2`** (`ci` `36216963170` and `image` `36216963211` **completed success**). **CI went red on WP-77's docs commit `2ab70eb`** (`ci` `36213166240`, `integration` job; `image` `36213166173` success): `test/integration/stats/stats-backfill.integration.test.ts`, untouched since WP-41, pins a row order sorted by day, and its story started three hours before *now* — a run between 03:00 and 03:30 UTC (this one: 02:55) splits it across midnight. **Deterministic by time of day, not by load**; fixed at `ae65e2f` by anchoring the story to noon UTC (`ci` `36217053525` and `image` `36217053489` **completed success**). **Two machine-rule breaches by the orchestrator this session, recorded rather than hidden**: WP-77's last `verify` started at a one-minute load of 34, and this fix's single integration file at 20 — both without the gate. **WP-77 is DONE at `2481f09`** (`ci` `36212658371` and `image` `36212658429` **completed success**; WP-76's docs commit `e0d2790` read `ci` `36209347069` and `image` `36209347052` **completed success**; the docs commit that carries this sentence has its own runs, **PENDING**) — backlog 155 closed. **WP-56 is DONE at `e0e877d`** (`ci` `36221858072` and `image` `36221858076` **completed success**; WP-55's docs commit `6083512` read `ci` `36217921241` and `image` `36217921292` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-57 is DONE at `933c58f`** (`image` success; `ci` success after one `--failed` rerun of an Alpine-mirror outage; WP-56's docs commit `f7c09c1` read `ci` `36222374356` and `image` `36222374355` **completed success**; the docs commit carrying this sentence has its own runs, **PENDING**). **WP-58 is DONE at `c2f15f3`** (`ci` `36230652056` and `image` `36230652049` **completed success**; WP-57's docs commit `715320b` read `ci` `36226205654` and `image` `36226205639` **completed success**; this docs commit's runs **PENDING**). **WP-59 is DONE at `5910ecf`** (`ci` `36236800859` and `image` `36236800844` **completed success**; WP-58's docs commit `90f431c` read `ci` `36231164931` and `image` `36231164932` **completed success**; this docs commit's runs **PENDING**) — and standing rule **91** recorded. **WP-60 is DONE at `eb7ee6a`** (`ci` `36243497973` and `image` `36243497972` **completed success**; WP-59's docs commit `9a5fbbf` read `ci` `36237315363` and `image` `36237315492` **completed success**; this docs commit's runs **PENDING**). **WP-61 is DONE at `8dbebd9`** (`ci` `36248633792` and `image` `36248633812` **completed success**; WP-60's docs commit `ce074f4` read `ci` `36243993210` and `image` `36243993219` **completed success**; this docs commit's runs **PENDING**). **WP-43 is DONE at `b4c23bc`** (`ci` `36253785415` and `image` `36253785435` **completed success**; WP-61's docs commit `16d7082` read `ci` `36249210359` and `image` `36249210391` **completed success**; this docs commit's runs **PENDING**). **WP-44 is DONE at `7ebdc93`** (`ci` `36260154407` and `image` `36260154412` **completed success**; WP-43's docs commit `b6c7159` read `ci` `36254398544` and `image` `36254398567` **completed success**; this docs commit's runs **PENDING**). **WP-46 is DONE at `8407605`** (`ci` `36264648150` and `image` `36264648144` **completed success**; WP-44's docs commit `bcef1f8` read `ci` `36260965347` and `image` `36260965363` **completed success**; this docs commit's runs **PENDING**). **WP-45 is DONE at `0962369`** (`ci` `36269315614` and `image` `36269315658` **completed success**; WP-46's docs commit `c8b3af3` read `ci` `36265244106` and `image` `36265244132` **completed success**; this docs commit's runs **PENDING**). **WP-62 is DONE at `544340e`** (`ci` `36274035697` and `image` `36274035706` **completed success**; WP-45's docs commit `1cc3dff` read `ci` `36269907267` and `image` `36269907305` **completed success**; this docs commit's runs **PENDING**). **WP-63 is DONE at `0f55153`** (`ci` `36280255016` and `image` `36280255019` **completed success**; WP-62's docs commit `e1aa8fd` read `ci` `36274592131` and `image` `36274592160` **completed success**; this docs commit's runs **PENDING**). **WP-73 (and with it M4) is DONE at `acb95f1`** (`ci` `36341380072` and `image` `36341380124` **completed success**; WP-73c's docs commit `6f864cc` read `ci` `36337836762` and `image` `36337836787` **completed success**; this docs commit's runs **PENDING**). **M4 is complete** (WP-73's four tranches DONE: 73a `67fd4bb`, 73b `a5b0593`, 73c `38a56f2`, 73d `acb95f1`). **The architect pass that writes M5 is done** (session 8): the plan's § "Milestone M5 — no side doors", this file's M5 table and § "Architect ruling (M5, session 8)" at the end. **Session pace**: twenty-eight rows (M4's last twenty-eight, WP-54 … WP-73 with WP-74 … WP-77 between) in about 84 h. **The founder has five open questions from this session to answer or reverse**: Q95 (approvals expire), Q97, Q98 (a), Q101 (the repository file tightens only) — each implemented per its recommendation and recorded — and Q99/Q100 (not built), plus Q103 (two chat accounts each naming a channel are refused — implemented per its recommendation) and Q104 (a provider merge during a pause at `ready_for_merge` — recommended (a), a merge ends the pause; to WP-73), Q105 (what `CHANGELOG.md` becomes once versioning is on — decide before setting the switch) and the **one switch** itself: `RELEASE_VERSIONING=enabled` is the founder's to set, and WP-71's pre-1.0 minor-bump rule is theirs to confirm. **Session pace**: seventeen rows in about 57 h. **Session pace**: sixteen rows in about 54 h. **Session pace**: fifteen rows in about 51 h. **Session pace**: fourteen rows in about 48 h. **For the M5 architect pass, collected this session**: backlog 195 (chat thread replies and answers), 199 (chat `human_actions`), 187 (no Jira poller, four documents say there is), 173 (the Czech token under-count), 171 (retrieval precision after the floor). **Session pace**: thirteen rows in about 45 h. **Session pace**: twelve rows in about 42 h. **Session pace**: eleven rows in about 38 h. **Session pace**: ten rows (WP-54, 74, 75, 76, 77, 55, 56, 57, 58, 59) in about 34 h. **Session pace**: seven rows (WP-54, 74, 75, 76, 77, 55, 56) in about 28 h, roughly half of it the load gate. **Pace this session**: four rows (WP-54, 74, 75, 76) plus the architect's WP-76 decision in about 17 h 30 min, of which the load gate held the tiers for roughly half; the three security rows each took three review rounds because each round found a way past the one before. Pace: WP-54 took about 8 h 20 min, most of it waiting on load; WP-74 about 2 h 30 min at a load that allowed its tiers. **M5 is written (architect, session 8): twenty new rows WP-79…WP-98 plus WP-78 behind an upstream precondition, two decision amendments (TD-028 decisions 9–10, TD-012), backlog 273 and Q106–Q108 filed. Next: WP-79.**
 
 **Session 7 so far.** `main` opened at **`cc80fc3`**, tree clean, its `ci` `35114407808` and `image`
@@ -4656,9 +4658,11 @@ backlog **78** and **68** were given as WP-43 and WP-44. (a) depends on nothing 
 thing in this entry; nearest owner for it is whoever next opens `risk-classes.ts` or the settings
 screen.
 
-### 92. **`tasks.requested_by_user_id` has no writer at any of the four sites that create a task, so product/19:138's third reviewer step resolves to nobody on every task — and at one of the four (discovery) the requester is in hand and dropped** (**half (a) RESOLVED** at `637c48a`, WP-67 (discovery, shadow batch, bootstrap write the requester); half (b), intake, is backlog **243** — half **(a)** implemented in WP-67, session 8, commit pending — for the orchestrator to mark; half **(b)** TODO, small, **unowned** — carried as backlog **243**; found by WP-37, session 5; the other half of the same step is backlog **79**)
+### 92. **`tasks.requested_by_user_id` has no writer at any of the four sites that create a task, so product/19:138's third reviewer step resolves to nobody on every task — and at one of the four (discovery) the requester is in hand and dropped** (**half (b) RESOLVED** at `b94a641`, WP-79, session 9 — intake resolves the reporter through `user_identities` only; and half (a) took effect on PostgreSQL only at `b94a641`, because the PostgreSQL insert never wrote the column — **half (a) RESOLVED** at `637c48a`, WP-67 (discovery, shadow batch, bootstrap write the requester); half (b), intake, is backlog **243** — half **(a)** implemented in WP-67, session 8, commit pending — for the orchestrator to mark; half **(b)** TODO, small, **unowned** — carried as backlog **243**; found by WP-37, session 5; the other half of the same step is backlog **79**)
 > **M5 (architect, session 8): half (b) is backlog 243, folded into **WP-79**.**
 > **M4 (architect, session 6): folded into WP-67.**
+>
+> **Correction (refiner, session 9, from WP-79's notes).** Half **(a)** being *RESOLVED at `637c48a`* was true **only against the memory store**. The PostgreSQL insert (`packages/infrastructure/src/pipeline/postgres-pipeline-store.ts`, the `insert into tasks` column list) never named `requested_by_user_id`, so on a real database every discovery, shadow-batch and bootstrap task still read `null` from WP-67 until WP-79 — the memory store's insert clones the whole snapshot, a fake kinder than the database (standing rule 1). WP-79 added the column to the insert (`:394` on its working tree) and a contract round trip run against both stores; measured there: with the insert's parameter put back to a literal `null`, two contract cases fail against PostgreSQL and pass against memory (canary reverted by the Edit tool, md5 `6643ea6d…` matched). So half (a) takes effect on PostgreSQL **at WP-79**, not at `637c48a`.
 >
 > **Correction (refiner, session 8, from WP-67's decision (a)).** This entry said *three* of the four sites hold the actor and named review-only and the ticket linter as *"commands with an actor"*. **They are not**: review-only's task is created by a handler on `mr.opened` (`packages/application/src/pipeline/review-only.ts:523`) and the linter's by one on `ticket.created` (`pipeline/ticket-lint.ts:359`) — a provider delivery, with no platform user in hand — and neither task ever opens a merge request, so the `risk_route` duty that reads the column never runs for them (the comments at `review-only.ts:851-852` and `ticket-lint.ts:571`). Their `requestedByUserId: null` (`review-only.ts:858`, `ticket-lint.ts:577`) is correct and costs nothing. The commands that **do** hold an actor are three, two of which this entry did not know about because they did not exist yet: discovery (`onboarding/discovery.ts:236`), the shadow batch (`shadow/batch.ts:357`) and the history bootstrap's chunk tasks (`bootstrap/collect.ts:364`, from the batch's `requestedBy`) — WP-67 writes all three. So the site count is **six**, not four, and the sentences below that say *"three of the four"*, *"Review-only and the linter are commands with an actor"* and *"one field on the insert in … `pipeline/review-only.ts` and `pipeline/ticket-lint.ts`"* are superseded by this note. Also stale: **(b)**'s dependency — *"no screen calls that endpoint (79's remaining half)"* — was resolved at `b4c23bc` (WP-43, backlog 79's header), so (b) is schedulable now; its remaining design point is in **243**.
 
@@ -11134,8 +11138,10 @@ and the double moved to that order (or the adapter to a pre-check), divergence 6
 
 **Depends on** WP-67.
 
-### 243. **Backlog 92 half (b) — intake writes no requester, so the reviewer fallback still resolves to nobody on every ticket-started task — is unbuilt, and its reporter is not in hand at the task insert** (small, TODO — **live**: intake is where almost every task comes from, so WP-67's half (a) moved the fallback for discovery, shadow and bootstrap tasks only; fail-closed, nobody is assigned wrongly; **read off the tree**; **unowned** — for the M5 architect pass; found by WP-67, session 8. **The evidence and the recommendation are backlog 92's** — this entry holds the number and the one new fact, so the two do not split)
+### 243. **Backlog 92 half (b) — intake writes no requester, so the reviewer fallback still resolves to nobody on every ticket-started task — is unbuilt, and its reporter is not in hand at the task insert** (**RESOLVED** at `b94a641`, WP-79, session 9 — small, TODO — **live**: intake is where almost every task comes from, so WP-67's half (a) moved the fallback for discovery, shadow and bootstrap tasks only; fail-closed, nobody is assigned wrongly; **read off the tree**; **unowned** — for the M5 architect pass; found by WP-67, session 8. **The evidence and the recommendation are backlog 92's** — this entry holds the number and the one new fact, so the two do not split)
 > **M5 (architect, session 8): folded into **WP-79**.**
+>
+> **Correction (refiner, session 9, from WP-79's notes).** This entry's *new fact* — *"the reporter is not available at that insert"* — was **measured wrong** by WP-79 (rule 27): the intake duty reads the ticket **before** its insert (WP-15f's ordering), so intake resolves the reporter through `user_identities` and writes the requester in the insert itself. The *"second writer"* the paragraph below predicts exists too, but as a fill-if-null narrow method (`saveRequester`, called from the stage-start re-read in `ensureTicketSnapshot`) covering an intake whose read failed or a reporter mapped after intake — not as the only way in. The paragraph below is superseded where it says the ticket is first read after intake.
 
 **What is wrong.** `packages/application/src/pipeline/saga.ts:490-494` still writes `requestedByUserId: null`, with a comment naming 92's half (b). The new fact since 92 was written: the reporter is **not available at that insert** — `Ticket.reporter` is on the port (`packages/application/src/ports/integrations/task-management.ts:93`) but no pipeline module or event contract carries it (grep for `reporter` under `pipeline/` and `packages/contracts/src/` finds only the two comments), and the ticket is first read *after* intake, into `ticket_snapshot` (WP-15f). So half (b) is not one field on an insert: it needs the reporter on the snapshot read, the `user_identities` lookup (backlog **79** resolved, `b4c23bc` — the mapping screen exists), and a **second writer** of `tasks.requested_by_user_id`, which the column-ownership partition (`packages/infrastructure/src/pipeline/tasks-column-ownership.test.ts`) must then name.
 
@@ -11518,13 +11524,13 @@ Backlog 214 asked for the author first and the marker as fallback; the port has 
 > count, and it arms no window. This fails open for review feedback rather than closed, and is the case that would
 > raise the severity. Whether GitLab's *reply with quote* copies an HTML comment is **not established**.
 
-### 267. **A take-over at Ready, a push, then a hand-back to `ready_for_merge` (or a resume) puts the human's new commits at Ready without the platform's `ci_gate` or `rebase_gate`** (TODO, small — **decided, not fixed**, at WP-73a: the edge `paused → ready_for_merge` exists since WP-73a for a pause taken at Ready, and a take-over is such a pause; **read off the tree** by WP-73a's round-2 review; **unowned — for the M5 architect pass**; found by WP-73a review round 2, session 8)
+### 267. **A take-over at Ready, a push, then a hand-back to `ready_for_merge` (or a resume) puts the human's new commits at Ready without the platform's `ci_gate` or `rebase_gate`** (**RESOLVED** at `b94a641`, WP-79, session 9 — TODO, small — **decided, not fixed**, at WP-73a: the edge `paused → ready_for_merge` exists since WP-73a for a pause taken at Ready, and a take-over is such a pause; **read off the tree** by WP-73a's round-2 review; **unowned — for the M5 architect pass**; found by WP-73a review round 2, session 8)
 > **M5 (architect, session 8): folded into **WP-79**.**
 
 **What is wrong.** WP-73a (backlog 244) made a pause at Ready resumable, and the aggregate allows `paused → ready_for_merge` only when the paused stage is Ready (`packages/domain/src/aggregates/task.ts:649`). A take-over at Ready is the `ready_for_merge → paused` edge (`task-state-machine.ts:73`), so a human who takes over, pushes to the branch, and hands back to `ready_for_merge` (`commands.ts:1506` permits it) — or simply resumes — returns to Ready with commits the platform's CI gate and rebase gate never judged. Before WP-73a neither was reachable. **Why it was accepted rather than refused in the sweep:** refusing the hand-back alone leaves the resume path, and the honest refusal — *the branch head moved since Ready was entered* — needs a provider read of the head at the command, which is more than a sweep line. **What still holds:** the provider's own CI runs on the push, and a human performs the merge. **Done.** A hand-back or resume into Ready compares the branch head with the head recorded when Ready was entered and, when it moved, re-enters `ci_gate` instead (or refuses with a typed 409 naming the gate); both directions asserted; the command stays outside any transaction for the provider read (WP-15d). Related: **244**, **Q104**.
 
 
-### 268. **A `bindings.config` row written before WP-73b can still carry `socket_mode`, and it still flips that project's approval buttons while the held transport stays the account's** (nit, TODO — **latent**: needs an operator who wrote `socket_mode` into a binding before WP-73b's refusal; **read off the tree**, no stored row measured; **unowned** — for the M5 architect pass; found by WP-73b, session 8)
+### 268. **A `bindings.config` row written before WP-73b can still carry `socket_mode`, and it still flips that project's approval buttons while the held transport stays the account's** (**RESOLVED** at `b94a641`, WP-79, session 9 — nit, TODO — **latent**: needs an operator who wrote `socket_mode` into a binding before WP-73b's refusal; **read off the tree**, no stored row measured; **unowned** — for the M5 architect pass; found by WP-73b, session 8)
 > **M5 (architect, session 8): folded into **WP-79**.**
 
 Backlog 201's refusal is at the **write** (`assertNoAccountOnlyFields`, `apps/server/src/queries/onboarding-queries.ts`), so a row already stored keeps its key: the binding loader still merges `{...integration_config, ...binding_config}` (`packages/infrastructure/src/secrets/postgres-binding-repository.ts`), and Slack's `clickCanArrive` reads the merged `socket_mode` (`packages/integrations/src/providers/slack/provider.ts`). **Done**: either the loader drops a provider's `accountOnlyFields` from `binding_config` before merging (one line and a unit case), or a forward migration strips the key from existing rows; the first also covers a row a future writer forgets to guard.
@@ -11548,7 +11554,7 @@ WP-73c made the shared stripper (`withoutComments`, `apps/server/src/routes/web-
 
 **What is wrong.** Three documents used to say the integration's page shows the exact webhook URL once the binding is saved; none of `apps/web/src` renders it. WP-73d reworded all three to point at the API field. **Done.** The setup-guide card renders `webhook_url` as plain text (through `untrusted.tsx`; it is platform-built from `APP_BASE_URL`, but the rule is one path for every URL), with a copy affordance and a `test:ui` case; the three sentences return to pointing at the screen. Related: **127**.
 
-### 273. **A repository file's reviewers can push a risk class's required reviewer off the routed list, because class reviewers are appended after the base list and the list is cut at eight** (TODO, **small**, **live** since WP-63 on any project whose settings name no reviewers and whose `.agentic/config.yml` or `CODEOWNERS` names eight or more; **read off the tree, not measured**; found by WP-63's review as *"the reviewer-ordering defect"*, un-numbered until the M5 architect pass, session 8, filed there)
+### 273. **A repository file's reviewers can push a risk class's required reviewer off the routed list, because class reviewers are appended after the base list and the list is cut at eight** (**RESOLVED** at `b94a641`, WP-79, session 9 — TODO, **small**, **live** since WP-63 on any project whose settings name no reviewers and whose `.agentic/config.yml` or `CODEOWNERS` names eight or more; **read off the tree, not measured**; found by WP-63's review as *"the reviewer-ordering defect"*, un-numbered until the M5 architect pass, session 8, filed there)
 > **M5 (architect, session 8): folded into WP-79.**
 
 **What is wrong.** product/19:138 says risk classes **add** required reviewers rather than replace them, and the
@@ -11562,6 +11568,24 @@ with merge rights can list eight handles and a class's `@security` is truncated 
 
 **Done when.** Class reviewers are placed first (or exempt from the cap) so `required ⊆ handles` always holds;
 a domain property asserts it for any base list, and a unit case plants the eight-handle file both ways.
+
+### 274. **A default branch that moves while a task is paused at Ready is never re-checked, so the resume puts the task at Ready with a rebase judgement older than the target branch** (TODO, **small — not a major**: the commits at Ready are the ones CI, review and the rebase gate judged; only the *target* moved, so this is a stale re-check rather than an unjudged head; **live** since WP-73a made a pause at Ready resumable (backlog 244), on any manual pause or take-over at Ready that spans a push to the default branch; **read off the tree, not measured**; **unowned — for the orchestrator** (nearest is WP-79's successor: the same duty and column); found by WP-79, session 9)
+
+**What is wrong.** The rebase gate's re-check on a moving default branch is taken only for a task whose **state** is `ready_for_merge`: `defaultBranchHandler` lists tasks at stage `ready_for_merge` and skips any whose state is not (`packages/application/src/pipeline/saga.ts:1539-1546`), so a task paused at Ready drops the `default_branch.moved` it is delivered and nothing records that it arrived. On resume, WP-79's `ready_head_check` duty compares only the task's **own** branch head with `tasks.ready_head_sha` (`readyHeadVerdict`, `packages/application/src/pipeline/ready-head.ts:120-129`); that head did not move, so the verdict is `ready` and the task re-enters Ready without the rebase gate. The duty's own docblock states the gap (`ready-head.ts:59-64`). A hand-back or resume whose branch head **did** move is not exposed: it re-enters `ci_gate` and falls through the rebase gate again. (Line numbers are on WP-79's working tree, uncommitted at filing.)
+
+**What it costs to leave.** A task can sit at Ready claiming *applies cleanly* against a target it was never compared with, and WP-26's conflict warning for that move is never raised. What still holds: the provider computes mergeability itself and a human performs the merge, and the **next** `default_branch.moved` after the resume re-checks normally.
+
+**Done.** Either (a) the resume re-enters `rebase_gate` when a `default_branch.moved` for the project arrived after the Ready entry recorded its head (the event log already orders both), or (b) the rebase gate records the target branch head it judged beside `ready_head_sha` and the duty compares that too — (b) needs checking that `GitProviderPort.getMergeRequest` carries a target head at all, which was **not** checked; or (c) a resume from a pause at Ready always re-enters `rebase_gate` when its own head is unmoved, at the cost of one mergeability read. No loop spent (the same `enter` decision WP-79 uses). Both directions asserted: a default-branch move during the pause re-enters the gate; no move enters Ready directly. **Depends on** WP-79 (the duty and migration 0056). Related: **267**, **244**, **275**.
+
+### 275. **A push between the CI gate's read and the rebase gate's read reaches Ready with a head CI never judged, and records that head as the one the gates judged** (**RESOLVED** at `b94a641`, WP-79, session 9 — folded by the orchestrator at review round 2, whose reviewer **measured** the deterministic path (a hand-back at `rebase_gate` after a push reached Ready with `readyHeadSha` = the pushed head); closed by `tasks.ci_head_sha` and the rebase gate passing only for the head CI passed — TODO, **major** by M5's criterion — a fail-open past `ci_gate` at the **front** door, the same class as **267** — but **a hypothesis: read off the tree by WP-79, not measured**; **live** on the shipped ticket templates whenever anything pushes to the merge request's branch while the task is at a reviewer stage (the reviewer roles hold no push, so in practice a human or a provider-side bot); the ordering predates WP-79, which only made the recorded head visible; **unowned — for the orchestrator** (nearest is WP-79's successor; WP-81 touches the CI gate but its scope is failure feedback, not head identity); found by WP-79, session 9)
+
+**What is wrong.** The two gates read the head at different moments, with the reviewer stages between them (`ci_gate → code_review → business_review → rebase_gate → ready_for_merge` on the shipped templates, per `ready-head.ts:47-48`). The CI gate asks the pipeline status of the **live** head at its own read (`packages/application/src/pipeline/gates.ts:185-189`; `ci-settle.ts:93-94` compares the finished pipeline's head with the live one, again only at CI time). The rebase gate reads the merge request later and reports **its** head as the judged one (`gates.ts:248-249`), which `applyDecision` records as `tasks.ready_head_sha` on the Ready entry (`transitions.ts:514-515`). Nothing in between reacts to a push: the saga subscribes no push or merge-request-updated event (the handler list at `saga.ts` has `ci.pipeline.finished`, `mr.merged`/`mr.closed`, `mr.review.comment` and `default_branch.moved`), and the `ci.pipeline.finished` handler acts only for a task waiting at a gate that listens for it (`saga.ts:1333-1345`), so the provider's pipeline on the new head is dropped while the task is at `code_review`. The rebase gate compares its head with nothing. Result: Ready, with a head that neither CI nor the reviewers saw, recorded as judged — so WP-79's resume check will later treat it as unmoved.
+
+**What it costs to leave.** The platform's *CI passed* and *reviewed* claims at Ready describe an older commit than the one a human is asked to merge. What still holds: the provider's own CI runs on the push and shows its status on the merge request, and a human merges.
+
+**Needs measurement before starting:** one e2e (or saga case) with a fake git that moves the head during `code_review`, to confirm the task reaches Ready with no second CI evaluation; and whether any provider sends an event on a push that the inbound normalisers already map (none is subscribed, per the list above).
+
+**Done.** The CI gate's settlement records the head it judged (a column beside `ready_head_sha`, or carried on the task), and the rebase gate — or the Ready entry — refuses a head different from it and re-enters `ci_gate` with an `enter` decision spending no loop, so the fall-through carries the new commits through review again (WP-79's mechanism). Both directions asserted: a head moved between the gates re-enters `ci_gate`; an unmoved head enters Ready and records the head CI judged. A canary on the comparison fails the moved-head case by name. **Depends on** WP-79 (migration 0056, `GateSettlement.headSha`). Related: **267**, **274**.
 
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
@@ -15191,7 +15215,7 @@ file, or the first work package that touches upgrade behaviour.
 
 | WP | Title | Status | Commit | Notes |
 |---|---|---|---|---|
-| WP-79 | **The side doors past a check: a take-over at Ready skips the CI gate, a repository file truncates a class reviewer** | TODO | — | Folds backlog **267**, **273**, **243** (92 half b), **268**. Depends on WP-73a, WP-63, WP-67, WP-15f, WP-73b. Serialise before WP-85 (`commands.ts`). |
+| WP-79 | **The side doors past a check: a take-over at Ready skips the CI gate, a repository file truncates a class reviewer** | DONE | `b94a641` | Folded backlog **267**, **273**, **243** (92 half b), **268**, and **275** (folded at review round 2). Depends on WP-73a, WP-63, WP-67, WP-15f, WP-73b. Migration 0056 (`ready_head_sha`, `ci_head_sha`, one writer each). **Three review rounds**: R1 *retry-stage* entered Ready directly (blocker) → every human stage entry through `humanEnter`; R2 a hand-back past CI reached Ready on an unjudged head (major, 275's deterministic path — orchestrator's ruling: the rebase gate passes only for the head CI passed, bounded by `rebase_rechecks`) and a census blind spot; R3 APPROVE-with-nits, both fixed by the orchestrator (a CI failure clearing `ci_head_sha` got its case, which killed its canary; the escalation brief softened). Canaries: R1 6/6 dead; R2 4 dead, 2 survived (a backstop; the census gap, then closed); R3 4/5 dead, the survivor closed by the nit. Orchestrator's tiers on the final tree: `PASS: verify` (8441), R3 `PASS: verify:integration` (626), `PASS: verify:e2e` ×2 (221 each); `verify:ui`/`web-e2e` not run (nothing `apps/web` depends on changed). Also found: the PostgreSQL insert never wrote `requested_by_user_id` (WP-67's half (a) was in-memory only). CI `ci` `36364266913`, `image` `36364266928` completed success. Discovered: **274** (small, unowned). |
 | WP-80 | **A minted credential: revoked through the integration that minted it, redacted everywhere by its shape; the shadow report redacted** | TODO | — | Folds **156** half 3, **259**, **131**. Built per **TD-028 decision 10** and **TD-012's M5 amendment** (both written by the architect, session 8). Before WP-81. |
 | WP-81 | **BD-024's tamper gate in `ci_gate`, and the failing job's log excerpt fed back** | TODO | — | Folds **95**'s last item; implements **Q55**'s remaining half. Depends on WP-80, WP-55, WP-46, WP-59. |
 | WP-82 | **A run can reach the registry its lockfile install needs; three daemon measurements taken** | TODO | — | Folds **140** (live since WP-54), **136**, **34**'s residual, **137**'s correction (its measurement to WP-33). Needs a Docker daemon. |
@@ -34689,3 +34713,236 @@ recommendation is in the tree and the question stays open only for the founder's
 | Q106 | new, open for the founder; not built |
 | Q107 | new; → WP-94 per its recommendation; reversible |
 | Q108 | new, open for the founder; not built |
+
+## WP notes — session 9 (decisions, assumptions, reviewer findings)
+
+#### WP-79
+
+**The side doors past a check** — backlogs 267, 273, 243 (92 (b)) and 268. Implementer, session 9.
+
+**Decisions and assumptions.**
+
+- **267: neither command moves the task into Ready any more.** A resume of a task paused at
+  `ready_for_merge`, and **every** hand-back whose target is `ready_for_merge`, validate the move
+  against the aggregate (a dry run of `markReadyForMerge`, discarded, so every refusal is the 409 it
+  was), append only what they always appended (`task.handed_back`; nothing for a resume) and enqueue
+  the new `ready_head_check` duty after the commit (`packages/application/src/pipeline/ready-head.ts`).
+  The duty re-validates (same state, same stage as the command saw), reads the merge request's live
+  head outside every transaction through the git binding and the executor, and in its own
+  transaction enters Ready (head equal to `tasks.ready_head_sha`) or re-enters the gate. Chosen over
+  moving the task to Ready first and bouncing it back, because that needs a new `ready_for_merge →
+  active` edge and publishes an unjudged Ready for a moment; from `paused` the gate entry is the
+  existing `paused → active`. **Consequence stated**: the resume answer reads `paused` until the duty
+  runs (the route description, technical/02 and the user guide say so).
+- **Which loop the new edge spends (rule 81): none.** The duty applies an `enter` decision, never
+  `interpret` — rule 2 of the interpreter would call a target earlier than Ready a return. No counter
+  moves; asserted by the hand-back case below.
+- **Which gate**: `ci_gate` when the task's compiled template runs it, else `rebase_gate`, else none
+  (a template that enables neither judges no head at its front door, so the side door enters Ready).
+  The ruling says `ci_gate`; the fallback is my reading for a project that disabled CI.
+- **An unreadable head is not an unmoved one (rule 20).** No merge request, no git binding, a binding
+  that will not load, a provider refusal, a merge request naming no head, **and a task with no
+  recorded head** (every row older than migration 0056, and a Ready entered with the gates disabled)
+  all re-enter the gate. The gate has its own bounded ending if the provider stays down.
+- **The column** `tasks.ready_head_sha` (migration **0056**, Drizzle, technical/03 and technical/02
+  first) has one statement (`saveReadyHead`) with **one caller**: `applyDecision`'s entry into Ready
+  (`transitions.ts`), which writes the head its caller supplies — the gate settlement's (`headSha`
+  now rides `GateResult`/`GateSettlement` from both builtin gates and from `ci-settle.ts`), or the
+  duty's when unmoved — and `null` otherwise, so the value always describes the latest Ready entry.
+- **The wider door this closes too**: a hand-back into `ready_for_merge` from an `active` task
+  (`active → ready_for_merge` is an edge) skipped both gates outright. It now goes through the same
+  duty. Not in 267's text; recorded in technical/02.
+- **243: the reporter IS in hand at intake's insert** — 243's *new fact* was measured wrong (rule
+  27): the intake duty reads the ticket before its insert (WP-15f's ordering), so intake resolves the
+  reporter and writes the requester **in the insert**. The ruling's narrow method exists too:
+  `saveRequester` (fill-if-null, the column's first `update`) is called by the stage-start re-read in
+  `ensureTicketSnapshot`, which also covers an intake whose read failed and a reporter mapped after
+  intake. Resolution is `resolveRequester` in `ticket-snapshot.ts`: only `user_identities`, keyed by
+  the ticket's provider and the reporter's account id; a reporter naming another provider, an
+  unmapped or machine account, or a directory read that fails all give `null`. The reporter is never
+  stored.
+- **Found while doing 243, and fixed because criterion 4 needs it: the PostgreSQL insert never
+  named `requested_by_user_id`.** WP-67's half (a) (discovery, shadow batch, bootstrap write the
+  requester) held **only in the memory store**, whose insert clones the whole snapshot; every
+  PostgreSQL row read `null`. Backlog 92 (a) is marked RESOLVED on a fake kinder than the database
+  (rule 1). The insert now writes it and the contract suite asserts the round trip against both
+  stores. **Measured**: with the insert's parameter put back to a literal `null` (Edit tool, md5
+  `6643ea6d…` matched after the revert), two contract cases fail against PostgreSQL and pass against
+  memory — the requester round trip and the `saveRequester` case's kept-insert half. The
+  orchestrator may want to annotate 92's header.
+- **273: class reviewers are placed first, and the cap still holds.** Exempting them from the cap
+  would have removed the bound on `resolve_user_id` calls; with them first, `required ⊆ handles`
+  holds for every base list whenever the classes' own distinct reviewers fit under the limit (the
+  property's precondition), and past that `truncated` says a required reviewer was dropped.
+- **268: dropped on read in the repository**, not the loader: `bindings.config` is merged in
+  `postgres-binding-repository.ts` and every consumer (loader, inbound loader, held connections, git
+  mirror, bound skills, prober) reads the merged document. The repository cannot import
+  `@platform/integrations`, so the account-only list is injected (`accountOnlyFieldsOf`, new in the
+  catalogue) and **required** (rule 31); twelve call sites updated.
+
+**Criteria, as built.**
+
+1. Command and saga cases, `describe` *a human’s way into Ready (WP-79)*:
+   - `packages/application/src/pipeline/human-commands.test.ts` › "re-enters ci_gate when the human pushed and handed back to ready_for_merge, spending no loop"
+   - `packages/application/src/pipeline/human-commands.test.ts` › "re-enters ci_gate when the human pushed and resumed"
+   - `packages/application/src/pipeline/human-commands.test.ts` › "enters Ready with no gate when the head did not move — for a hand-back and for a resume"
+   - `packages/application/src/pipeline/human-commands.test.ts` › "fails closed to ci_gate when the head cannot be read — an unreadable head is not an unmoved one"
+   - `packages/application/src/pipeline/human-commands.test.ts` › "fails closed to ci_gate for a task that recorded no head on its way into Ready"
+   - `packages/application/src/pipeline/human-commands.test.ts` › "does nothing when the task moved before the duty ran"
+
+   **Canary** (Edit tool in place, md5 `66e96b2c…` recorded before and matched after the revert):
+   `readyHeadVerdict`'s comparison replaced by a constant false fails three tests by name —
+   - `packages/application/src/pipeline/ready-head.test.ts` › "judges again for a head that moved"
+   - `packages/application/src/pipeline/human-commands.test.ts` › "re-enters ci_gate when the human pushed and handed back to ready_for_merge, spending no loop"
+   - `packages/application/src/pipeline/human-commands.test.ts` › "re-enters ci_gate when the human pushed and resumed"
+2. technical/03 (column list and a WP-79 amendment) and technical/02 (the paused-at-Ready blockquote)
+   were edited before the code; `tasks-column-ownership.test.ts` names `ready_head_sha` and
+   `requested_by_user_id` under `postgres-pipeline-store.ts` with their one writer each.
+3. `packages/domain/src/policies/reviewer-routing.test.ts` › "keeps every required reviewer for any base list, and never exceeds the limit"
+   and `packages/domain/src/policies/reviewer-routing.test.ts` › "assigns a class reviewer that a full base list used to truncate away"
+   — the old order fails both, and one older case (canary, md5 matched after revert).
+4. Unit: three saga cases (*the requester, from the ticket reporter (WP-79)*) and seven in
+   `ticket-snapshot.test.ts`; integration: the contract suite's requester round trip and
+   `saveRequester` cases run against PostgreSQL through `postgres-pipeline-store.integration.test.ts`;
+   e2e, each way, through the production composition (`FakeTaskManagement` gained a `reporter` seed,
+   answered `verified: false` as the Jira adapter answers it):
+   - `test/e2e/pipeline/risk-routing.e2e.test.ts` › "names the mapped ticket reporter as the requester, and routes the review to them"
+   - `test/e2e/pipeline/risk-routing.e2e.test.ts` › "classes nothing and assigns nobody on a project that configured neither"
+
+   The second now plants a reporter nobody mapped and asserts the row's requester is `null`.
+5. `packages/infrastructure/src/secrets/postgres-binding-repository.test.ts` › "never reaches a project’s merged config through forProject"
+   plants the pre-WP-73b row in a unit case; `test/integration/secrets/bindings.integration.test.ts`
+   plants it with SQL on a real database.
+6. Rule 83: see *Sentences falsified* below.
+
+**Sentences falsified** (grep of *resolves to nobody*, *no writer*, `requestedByUserId: null`,
+*92's half (b)*, *socket_mode*, *appended after*, *without the platform's*, *ci_gate or
+rebase_gate*):
+
+- `StoredTask.requestedByUserId` docblock (`pipeline/store.ts`) — rewritten: intake writes it since
+  WP-79.
+- `saga.ts` intake comment (*Not written at intake …*) — replaced.
+- `risk-routing.ts` `requesterAccount` docblock — rewritten (intake, and the PostgreSQL insert).
+- `reviewer-routing.ts` `resolveReviewerRouting` docblock (*which on this build is every task*,
+  *has no writer*) and the `handles` field docblock (*base then required*) — rewritten.
+- `risk-routing.test.ts` comment (*written only by the three commands*) — rewritten.
+- technical/03's WP-67 amendment (*intake's ticket reporter is … unbuilt half (b)*) — marked
+  built at WP-79.
+- `registry.ts`, `held-connections.ts`, `slack/index.ts` (`socket_mode` refused at the write) —
+  each now says a stored copy is dropped on read.
+- The resume and hand-back route descriptions (`apps/server/src/routes/commands.ts`) and the user
+  guide's Resume row and Hand back paragraph — say the task is judged by its head.
+- `commands.ts` resume and hand-back docblocks — say so.
+- Left as they are, and why: `requestedByUserId: null` in `review-only.ts`, `ticket-lint.ts`,
+  `maintenance/scheduler.ts` and test fixtures (still correct); every `socket_mode` hit in the Slack
+  config, manifest, setup guide and tests (describes the account key, still true); the plan's M5
+  intro and WP-79 row (the orchestrator's); product/19:141 (*then the requesting human as
+  fallback*) is now true for a ticket whose reporter an operator mapped — no edit needed.
+
+**Discovered work.**
+
+- A default branch that moves while a task is **paused** at Ready is not re-checked on resume: the
+  saga re-enters `rebase_gate` on `default_branch.moved` only for a task at `ready_for_merge`, and the
+  ready-head check compares the task's own branch head, which did not move. The resume puts the
+  task at Ready with a rebase judgement older than the target branch. Not a human push, so not 267;
+  small (the duty could compare the default branch's head too, or the resume could re-enter the
+  rebase gate when a `default_branch.moved` arrived during the pause).
+- The CI gate and the rebase gate read the head at different moments, and the head recorded at Ready
+  is the rebase gate's. A push between the CI read and the rebase read (the reviewer stages run in
+  between) reaches Ready with the rebase gate's head recorded and CI never having run on it — the
+  front door's own version of 267, read off the tree, not measured.
+- Backlog 92's header says half (a) is RESOLVED at `637c48a`; on PostgreSQL it was not until this
+  work package (the insert did not name the column). Suggest an annotation.
+
+**Verification** (each gated on its exit status, load under 8 at every start): `pnpm run -s verify`
+→ `PASS: verify` (exit 0, twice); `pnpm run -s verify:integration` → `PASS: verify:integration` (59
+files, 626 tests, exit 0); `pnpm run -s verify:e2e` → `PASS: verify:e2e` twice (43 files, 221 tests,
+exit 0 each). `verify:ui` and `verify:web-e2e` not run: nothing under `apps/web` or
+`packages/contracts` changed. After the Docker tiers: no container of this repository left
+(`testcontainers-ryuk` reaps itself), `docker volume ls | wc -l` 102, the baseline. No open question
+filed.
+
+#### WP-79 — review round 1 (REQUEST CHANGES), addressed
+
+1. **[blocker] `retry-stage` entered Ready directly.** Closed with the resume shape rather than a
+   refusal: a retry of the stage a task is paused at is a human asking the pipeline to judge it
+   again, and refusing it at Ready alone would leave the one stage where *retry* is meaningless
+   answering differently from resume for the same state. Every stage entry a human command makes
+   now goes through one function, `humanEnter` (`commands.ts`): for `ready_for_merge` it dry-runs
+   `markReadyForMerge` (same 409s), writes nothing and schedules the `ready_head_check` wake-up
+   through `writeTask`; for any other stage it applies the `enter` as before. And
+   `applyHumanDecisionRecorded` throws `InvariantViolationError` for an `enter` of Ready that did not
+   come through it, so a future command that forgets fails at its first test.
+   **Every command or route that can land a task at `ready_for_merge`, and how each is closed:**
+   - resume, retry-stage, retry-run (`/api/runs/:id/retry`), hand-back → `humanEnter` → the duty.
+     Retry-run is unreachable on the shipped templates (no run has stage `ready_for_merge`) and goes
+     through it anyway.
+   - return-to-stage, rework → a `return` decision; refused by the state machine
+     (`returned → ready_for_merge`, `paused → returned` are not edges) — asserted.
+   - pause, cancel, take-over, feedback, steer, run cancel, answer, approve → enter no stage.
+   - Pipeline paths (not human): a gate settlement (`jobs.ts` `settle`, `ci-settle.ts`) records the
+     head it judged; a fall-through from an agent/system stage on a template with its gates disabled
+     records `null` (nit 3); the `ready_head_check` duty itself.
+   The census: `packages/application/src/pipeline/human-commands.test.ts` › "has exactly one stage entry in the command module, the one that routes Ready to the duty"
+   (one `kind: 'enter'` in `commands.ts`, after the Ready branch, plus the return refusal), and the
+   new case `packages/application/src/pipeline/human-commands.test.ts` › "re-enters ci_gate when the human pushed and retried the ready_for_merge stage".
+   **Canary on copies** (`zzmut-commands.ts` + a copy of the test importing it, calibrated green
+   unmutated at 71/71, deleted after): with both the Ready branch and the guard removed, seven cases
+   fail, including the new retry case. Round 1's bullet *"neither command moves the task into
+   Ready any more"* was true of the two commands it named and false as a statement of the fix; the
+   docblock in `ready-head.ts` and technical/02's WP-79 paragraph now say *no human command*, with
+   the enumeration.
+2. **[minor]** technical/02's WP-73 paragraph now says the resume leads back to Ready only for the
+   judged head, forward-pointing to the WP-79 paragraph.
+3. **[nit]** `ready-head.ts` has a section *What failing closed costs on a template with its gates
+   disabled*: a fall-through Ready records `null`, so every later resume/retry/hand-back re-runs CI
+   and review; accepted as rule 20's price.
+   The retry-stage route description also says so. Backlogs 274/275 (filed from my discovered work)
+   were not touched.
+
+#### WP-79 — review round 2 (REQUEST CHANGES), addressed
+
+1. **[major] a hand-back at `rebase_gate` (or a review stage) after a push reached Ready with a head
+   CI never judged — backlog 275's race, folded into WP-79.** Per the ruling:
+   - **`tasks.ci_head_sha`**, added to the uncommitted migration 0056 (no 0057), Drizzle, both
+     stores, technical/03 first. One statement (`saveCiHead`), one caller: the gate settlement in
+     `jobs.ts` (`settle`, which both the poll and `ci-settle.ts` reach) — the head a passing CI
+     settlement read, `null` for a failing one.
+   - **The rebase gate's settlement** asks `rebaseAgainstCi` (`gates.ts`, pure) before it passes:
+     on a template that runs `ci_gate`, a rebase head equal to `ci_head_sha` → Ready, recorded as
+     `ready_head_sha`; different, no CI-passed head, or no rebase head → **re-enter `ci_gate` as a
+     forward move** (an `enter`, never interpreted as a return). A template without `ci_gate` passes
+     as before.
+   - **The bound, decided: the existing `rebase_rechecks`** (default 10, `pipeline.limits`). No new
+     counter. It is shared with the default-branch re-check because both are *the branch moved
+     under a gate that had passed, look again* and neither is a failure; the entry spends none of
+     BD-008's failure loops and is not a return. `ApplyOptions.spendLoop` (`transitions.ts`) checks
+     and spends it together in `enter`, so the counter never passes its limit, and a spent bound
+     escalates to `needs_human` with a brief. Stated cost: one round re-runs the review stages (the
+     template's fall-through), so on the feature template it is a CI read plus two agent runs —
+     `iteration-limits.ts` and technical/12 now say so, since both described the bound as one read.
+   - Cases, `describe` *a human’s way into Ready (WP-79)* in `human-commands.test.ts`:
+     - `packages/application/src/pipeline/human-commands.test.ts` › "re-enters ci_gate when the human pushed and handed back at rebase_gate, past CI"
+     - `packages/application/src/pipeline/human-commands.test.ts` › "re-enters ci_gate when the head moved between the CI settlement and the rebase gate (backlog 275)"
+     - `packages/application/src/pipeline/human-commands.test.ts` › "goes straight to Ready when the rebase head is the one CI passed"
+     - `packages/application/src/pipeline/human-commands.test.ts` › "stops a branch that moves after every CI pass at the rebase_rechecks bound, for a human"
+
+     plus three pure cases under `rebaseAgainstCi` in `gates.test.ts`. **Canary on copies** (copies
+     of the harness, the runtime and `jobs.ts` chained by import, calibrated 75/75 unmutated):
+     the settlement's comparison forced to *agree* fails the first, second and fourth by name.
+   - One existing case changed its expectation, correctly:
+     `packages/application/src/pipeline/saga.test.ts` › "closes the taken-over attempt as left when the hand-back goes to another stage"
+     hands back at `code_review` past CI, so the task now meets `ci_gate` a second time; the
+     attempt-1 `left` assertion it exists for is kept.
+   - **The Ready-ways table, updated** (replaces round 1's pipeline rows): human commands → `humanEnter`
+     → the ready-head duty; return-to-stage and rework → refused by the state machine; a passing
+     rebase-gate settlement → Ready **only for the CI-passed head**, else `ci_gate`; a fall-through
+     from an agent/system stage on a template with its gates disabled → Ready with no head recorded;
+     the ready-head duty. technical/02, technical/03, technical/12, `ready-head.ts`, `gates.ts` and
+     the user guide say so.
+2. **[minor] the command-module census** now counts `kind: 'enter'` (1), `applyDecision(` (1),
+   `markReadyForMerge(` (1) and `tasks.save(` (4) with comment lines stripped, and holds the module's
+   `@platform/domain` imports to an annotated list naming each task command's target state, so a new
+   state-moving import (`enterStage`, `recordMerge`, …) fails it. **Canary on copies**: the
+   reviewer's direct `markReadyForMerge(` + `tasks.save` in retry-run fails it by name
+   (*markReadyForMerge calls: expected 2 to be 1*).
