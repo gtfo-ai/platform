@@ -55,8 +55,10 @@ describe('Drizzle schema', () => {
     // which the notify duty asks before it posts buttons (migration 0054, WP-72, backlog 200), plus
     // `minted_credential_shapes` — the non-secret shape of every minted run credential, from which
     // every process compiles a redaction rule for a value only its minter held (migration 0057,
-    // WP-80, TD-012's M5 amendment, backlog 259).
-    expect(tables.length).toBe(67);
+    // WP-80, TD-012's M5 amendment, backlog 259), plus `run_commands` — a human command for a live
+    // run on its way to the process holding the run's lease, which no table could carry because the
+    // register it lands in is per process (migration 0060, WP-85, TD-028 decision 9, backlog 134).
+    expect(tables.length).toBe(68);
   });
 
   it('names every table and column in snake_case, matching the wire format', () => {

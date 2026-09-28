@@ -7,8 +7,8 @@
  * take-over's — and nothing said so, which is the shape standing rule **44** is about: a scope claim
  * is a statement about every *other* file, so it cannot be kept true from inside the file that makes
  * it (rule 63). The message's own text is asserted where it is produced
- * (`human-commands.test.ts` › *"pauses the task, interrupts the run and asks its workspace for the
- * export"*, which expects `wip: hand-over to Ada Lovelace`); what that case cannot see is a
+ * (`human-commands.test.ts` › *"pauses the task, records the live run it stops, and the holder asks
+ * its workspace for the export"*, which expects `wip: hand-over to Ada Lovelace`); what that case cannot see is a
  * **second** writer somewhere else, and this is that half.
  *
  * ## Two censuses, because the rule has two ways to break
@@ -62,21 +62,25 @@ const EXPECTED_WIP_SITES: ReadonlyMap<string, number> = new Map([
 /**
  * The files that name a `commitMessage` **key**, and what each does with it.
  *
- * **Three declarations, one writer, three forwarders** — it was two, one and one until WP-53 put
+ * **Four declarations, one writer, five forwarders** — it was two, one and one until WP-53 put
  * TD-028's control plane between the process that decides the message and the process that holds
  * the workspace, which adds one hop and therefore one forwarder at each end plus the wire schema in
- * the middle.
+ * the middle; and WP-85 (TD-028 decision 9) put the database between the process that answers the
+ * take-over and the process holding the run, which adds the stored instruction and its two ends.
  *
  * *Declarations.* `ports/workspace.ts` is the boundary schema (`workspaceExportRequestSchema`),
  * `ports/runner.ts` the field on `RunTakeOverExport` that carries it to the process holding the
- * workspace, and `infrastructure/launcher/protocol.ts` the control plane's `endRunRequestSchema`.
+ * workspace, `infrastructure/launcher/protocol.ts` the control plane's `endRunRequestSchema`, and
+ * `pipeline/store.ts` the `take_over` arm of `RunCommandInstruction` — the recorded stop.
  *
  * *Writer.* `pipeline/commands.ts`, and only it: `takeOverTaskCommand` is the one thing that
  * decides a value.
  *
- * *Forwarders.* `infrastructure/launcher/provisioner.ts` puts the value it was handed on the end
- * request, `apps/launcher/src/control-plane.ts` reads it back off one, and
- * `apps/launcher/src/service.ts` passes it to `WorkspaceProvider.export`. None chooses one.
+ * *Forwarders.* `infrastructure/pipeline/postgres-run-commands.ts` reads the recorded value back off
+ * its row, `pipeline/run-commands.ts` (the holder) puts it on the `RunStop`,
+ * `infrastructure/launcher/provisioner.ts` puts it on the end request,
+ * `apps/launcher/src/control-plane.ts` reads it back off one, and `apps/launcher/src/service.ts`
+ * passes it to `WorkspaceProvider.export`. None chooses one.
  *
  * `workspace/provider.ts` is deliberately absent: it *reads* `request.commitMessage` into a
  * `COMMIT_MESSAGE` environment variable for the helper container's `git commit -m
@@ -86,7 +90,10 @@ const EXPECTED_COMMIT_MESSAGE_SITES: ReadonlyMap<string, number> = new Map([
   ['packages/application/src/ports/workspace.ts', 1],
   ['packages/application/src/ports/runner.ts', 1],
   ['packages/infrastructure/src/launcher/protocol.ts', 1],
+  ['packages/application/src/pipeline/store.ts', 1],
   ['packages/application/src/pipeline/commands.ts', 1],
+  ['packages/infrastructure/src/pipeline/postgres-run-commands.ts', 1],
+  ['packages/application/src/pipeline/run-commands.ts', 1],
   ['packages/infrastructure/src/launcher/provisioner.ts', 1],
   ['apps/launcher/src/control-plane.ts', 1],
   ['apps/launcher/src/service.ts', 1],
@@ -153,10 +160,10 @@ describe('product/19:84 — the take-over export is the only `wip:` commit (WP-2
 
   it('has one production site that decides a commit message, and it is the take-over', () => {
     expect(asObject(census(COMMIT_MESSAGE_KEY))).toEqual(asObject(EXPECTED_COMMIT_MESSAGE_SITES));
-    // Stated as the number the rule rests on, rather than left to be counted off the map: three
-    // declarations and three forwarders are not writers, so the writers are the total minus six.
+    // Stated as the number the rule rests on, rather than left to be counted off the map: four
+    // declarations and five forwarders are not writers, so the writers are the total minus nine.
     const sites = [...census(COMMIT_MESSAGE_KEY).values()].reduce((sum, count) => sum + count, 0);
-    expect(sites - 6).toBe(1);
+    expect(sites - 9).toBe(1);
   });
 
   it('reads a tree that includes untracked sources, so a planted writer is seen (rule 85)', () => {

@@ -1,12 +1,15 @@
 /**
- * Where an HTTP request finds the **live** run it wants to steer or take over (WP-27).
+ * The runs this process is executing, by run id and by task id (WP-27) — and, since WP-85, the one
+ * place a recorded steer or take-over stop is **applied** to a live session.
  *
  * technical/04 § "Streaming and steering": *"the run's input is an async queue; a `run.steered`
- * command pushes an `SDKUserMessage`"*. That queue belongs to a `RunHandle`, the handle belongs to
- * whoever called `ClaudeRunner.start`, and a `POST /api/runs/:id/steer` arrives somewhere else
- * entirely — in this build, on the same process's HTTP thread; in a deployment with a separate API
- * container, in a different process. This is the seam that closes the first gap and **states** the
- * second rather than pretending it is closed.
+ * command pushes an `SDKUserMessage`"*. That queue belongs to a `RunHandle`, and the handle belongs
+ * to whoever called `ClaudeRunner.start` — the process holding the run's lease. A
+ * `POST /api/runs/:id/steer` arrives somewhere else: on the shipped topology, always in another
+ * process. Until WP-85 the command looked the run up here, in the answering process, and so every
+ * steer on the shipped topology was refused (PROGRESS backlog 134). TD-028 decision 9 moved the
+ * crossing into the database: the command records a `run_commands` row and wakes the lease holder,
+ * and the holder's inbox (`./run-commands.ts`) finds the handle **here** and delivers.
  *
  * ## It wraps the runner; nothing calls `register`
  *
@@ -18,17 +21,17 @@
  * queue is closed).
  *
  * The stage executor therefore needs no new option and no new line: it is the runner it was given
- * that keeps the register. A process that composes no pipeline (the API-only role) wraps nothing,
- * and every steer it is asked for answers {@link RunNotReachableError} by name.
+ * that keeps the register. A process that runs no agent wraps nothing and composes no inbox, and
+ * nothing that serves the API reads this register at all.
  *
- * ## What "not here" means, and why it is a refusal rather than a wait
+ * ## What "not here" means
  *
- * `forRun` and `forTask` answer `null` for three different situations, and the caller may not tell them
- * apart: the run ended a moment ago, the run is live **in another process** (Q52's out-of-process
- * transport, deliberately unbuilt), or the cap below evicted it. All three mean *this process
- * cannot deliver a user turn into that session*, and the honest answer to a mutation it cannot
- * perform is to refuse it (standing rule 20) — never to accept the request and drop the message,
- * which is what an in-memory queue "for when the run comes back" would do.
+ * `forRun` and `forTask` answer `null` for three different situations, and the inbox may not tell
+ * them apart: the run's handle is not registered **yet** (the run row is leased from the
+ * transaction that created it, a moment before `runner.start`), the run ended a moment ago, or the
+ * cap below evicted it. The inbox's answer to each is in `./run-commands.ts` (decision 3): a miss on
+ * a wake-up waits, a miss on the heartbeat is refused `register_miss`, and a run that ended closes
+ * its commands `run_ended` — never a message accepted and dropped.
  *
  * ## What it costs
  *

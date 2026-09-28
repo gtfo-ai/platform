@@ -1,5 +1,5 @@
 /**
- * The four run reads of technical/08 § "Runs" (WP-15h).
+ * The run reads of technical/08 § "Runs" (WP-15h; `/commands` added by WP-85).
  *
  * `GET /api/runs/:id`, `/messages`, `/prompt` and `/context-pack` — the endpoints
  * `apps/web/src/api/endpoints.ts` has called since WP-20 and the server has answered 404 to ever
@@ -26,6 +26,7 @@
 import {
   apiErrorSchema,
   contextPackRecordSchema,
+  runCommandsResponseSchema,
   runMessagesQuerySchema,
   runMessagesResponseSchema,
   runPromptResponseSchema,
@@ -42,6 +43,7 @@ import {
   findRun,
   findRunContextPack,
   findRunPrompt,
+  listRunCommands,
   listRunMessages,
 } from '../queries/pipeline-queries.js';
 import { scopedProject, scopeToProject } from './scope.js';
@@ -164,6 +166,24 @@ export const registerRunRoutes = async (
         user_prompt: prompt.userPrompt,
       };
     },
+  );
+
+  typed.get(
+    '/api/runs/:run_id/commands',
+    {
+      preHandler: [scope, requirePermission(guard, 'transcript.read', { project: scopedProject })],
+      schema: {
+        summary: 'The steer and take-over commands sent to a run, and what became of each',
+        description:
+          'WP-85, TD-028 decision 9: a steer or a take-over’s stop is **accepted** by the process that answers it and **applied or refused** by the process holding the run. Each row says which: `pending` (recorded, not yet applied), `applied` (the holder delivered it to the live session), or `refused` with a reason — `run_ended` (the run ended first; it is never applied late), `register_miss` (the holder found no live session), `delivery_failed` (the holder took it and the closing session refused it; never retried) or `undecodable` (stored in a shape this build cannot read). Newest first, at most 100. A steer’s `message` is the text as stored, redacted (TD-012), and untrusted (BD-022). Gated at `transcript.read`, because a steer is a turn of the transcript.',
+        tags: ['runs'],
+        params: runParamsSchema,
+        response: { 200: runCommandsResponseSchema, 409: apiErrorSchema },
+      },
+    },
+    async (request) => ({
+      items: [...(await listRunCommands(options.database, request.params.run_id))],
+    }),
   );
 
   typed.get(

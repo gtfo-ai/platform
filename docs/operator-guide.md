@@ -122,10 +122,17 @@ never its role (above).
 - **The live run.** The runner writes the transcript and announces it with PostgreSQL `NOTIFY`; the
   process that serves your browser reads the rows back, so the run screen fills from `app` while the
   run executes in `runner`.
-- **Steer and take-over do not cross.** They reach only the process holding the run, and on this
-  topology the process that serves the API **never** holds one — so every steer answers `409
-  run_not_reachable` and a take-over pauses the task and exports nothing (PROGRESS backlog 134). The
-  steer limit (one message per 5 s per person) is counted per API process, so N API replicas allow N.
+- **Steer and take-over cross through the database** (WP-85, TD-028 decision 9). The process that
+  serves the API never holds a run, so it does not deliver the command: it records it (a
+  `run_commands` row) and wakes the process holding the run's lease with PostgreSQL `NOTIFY`. The
+  command is **accepted, then applied or refused** — a steer answers `202`, and the run screen shows,
+  per command, whether the runner applied it or refused it (`run_ended` when the run finished first;
+  it is never applied late). A take-over pauses the task, records which run it stopped, and the runner
+  stops that run and exports its workspace. The runner also polls on its lease heartbeat (every 100
+  s), so a command recorded while its `NOTIFY` connection was reconnecting is applied within one beat
+  — a steer that sits at *pending* for a couple of minutes means the runner's database connection is
+  struggling. Nothing new listens on a port. The steer limit (one message per 5 s per person) is
+  counted per API process, so N API replicas allow N.
 - **The chat connection.** Slack's Socket Mode is held by the process that serves `/webhooks/*`, and
   that process renews a liveness row for it every 20 s (fresh for 60 s). An approval is posted with
   buttons only while the row is fresh; with no such process running — a worker-only deployment, or
@@ -824,9 +831,9 @@ Stated here so an operator meets them in a document rather than in production:
   (WP-64, Q102; see the user guide). Its answers become knowledge proposals, never commits.
 - Every endpoint the browser application calls is served (the census in
   `apps/server/src/routes/client-census.test.ts` holds it, admitted gaps empty since WP-27, which added
-  steer, take-over and hand-back). A steer reaches only a run held by the process that serves the API,
-  and on the shipped topology that process never holds one: every steer answers `409
-  run_not_reachable` and a take-over exports nothing (§1, *The topology*; PROGRESS backlog 134).
+  steer, take-over and hand-back). Since WP-85 a steer and a take-over's stop reach the run in the
+  `runner` container through the database — accepted by `app`, then applied or refused by the runner
+  (§1, *The topology*; TD-028 decision 9).
 - **Chat notifications ship since WP-32**: a project bound to a Slack integration with a channel gets a
   thread per task and the org's quiet hours and daily digest apply; an organisation-level budget has
   no channel yet. **Since WP-43 the process that serves the API (`ROLE=all` or `ROLE=api`) holds the

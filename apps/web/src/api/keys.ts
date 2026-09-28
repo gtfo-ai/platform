@@ -71,4 +71,5 @@ export const queryKeys = {
   runMessages: (id: string) => ['run', id, 'messages'] as const,
   runPrompt: (id: string) => ['run', id, 'prompt'] as const,
   runContextPack: (id: string) => ['run', id, 'context-pack'] as const,
+  runCommandLog: (id: string) => ['run', id, 'commands'] as const,
 } as const;

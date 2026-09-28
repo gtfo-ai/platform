@@ -21,10 +21,11 @@
  *     worker that cannot compose a pipeline is 503 with `dispatch: down` (TD-023's amendment).
  *  4. **Each role refuses to start below its own pool floor**, and starts at it — every branch of
  *     `requiredPoolConnections` but `all`'s had never run in any tier.
- *  5. **The two crossings a user can see**: a steer sent to the process that serves the API is
- *     refused by name, because on the shipped topology that process never holds a run (backlog
- *     134); and an approval is posted with buttons only while some process holds the chat socket
- *     (backlog 200, migration 0054).
+ *  5. **The crossings a user can see**: a steer and a take-over sent to the process that serves the
+ *     API reach the run executing in the runner — recorded as a `run_commands` row, woken by
+ *     `pg_notify`, applied by the lease holder (TD-028 decision 9, WP-85; until then every steer was
+ *     refused `run_not_reachable`, backlog 134); and an approval is posted with buttons only while
+ *     some process holds the chat socket (backlog 200, migration 0054).
  *  6. **A run credential quoted in text a process that never minted it stores** is absent from the
  *     `inbox` row it writes and, since WP-73b, from the `mr.review.comment` event it appends
  *     (backlog 154, decision (a): the pattern rule is the defence there; backlog 260). A planted
@@ -86,6 +87,9 @@ const instances: Instance[] = [];
 let stream: SseStream | undefined;
 
 afterEach(async () => {
+  for (const open of gates.splice(0)) {
+    open();
+  }
   await stream?.disconnect();
   stream = undefined;
   // Instances started directly: the ones that share a database first, the owner last.
@@ -106,12 +110,20 @@ const signIn = async (baseUrl: string): Promise<Client> => {
   return client;
 };
 
+/**
+ * Every gate a case made, opened again by `afterEach` (WP-85 review round 1): a case that fails
+ * while a run is held at its workspace would otherwise leave that run waiting on a gate nobody
+ * opens, and the teardown then hung to the hook's 180 s timeout instead of failing at once.
+ */
+const gates: (() => void)[] = [];
+
 /** A promise the test resolves, for holding a run at its workspace. */
 const gate = () => {
   let open = (): void => undefined;
   const opened = new Promise<void>((resolve) => {
     open = () => resolve();
   });
+  gates.push(() => open());
   return { opened, open: () => open() };
 };
 
@@ -140,7 +152,7 @@ const outboundInFlight = async (pipeline: PipelineE2E): Promise<number> => {
 };
 
 describe('the shipped topology: app (ROLE=all, no launcher) beside runner (ROLE=runner)', () => {
-  it('runs the agent in the runner, streams it from app, refuses a steer to app by name, and redacts a run credential app never saw', async () => {
+  it('runs the agent in the runner, streams it from app, delivers a steer app accepted, and redacts a run credential app never saw', async () => {
     const held = gate();
     const started = gate();
     let firstRunId: string | null = null;
@@ -188,11 +200,18 @@ describe('the shipped topology: app (ROLE=all, no launcher) beside runner (ROLE=
     await started.opened;
     const runId = firstRunId as unknown as string;
 
-    // ── crossing 5a: a steer to the process that serves the API, while the run is live ─────────
+    // ── crossing 5a: a steer answered by app reaches the run executing in runner (WP-85) ──────
+    //
+    // TD-028 decision 9. `app` holds no run and composes no run-command inbox (it runs no agent),
+    // and nothing in its command surface names a live-run register any more — so the only path from
+    // its answer to the runner's session is the `run_commands` row it writes and the `pg_notify` it
+    // sends. Both halves are asserted on the database: the row as `app` recorded it, and the stamp
+    // and the transcript entry only the runner can write. The canaries that made this honest are in
+    // PROGRESS under WP-85: without the row, or without the notification, this case fails.
     const live = await app.json<RunRecord>(`/api/runs/${runId}`);
     expect(live.status, JSON.stringify(live.body)).toBe(200);
     expect(live.body.status).toBe('running');
-    const steer = await app.json<{ error: { code: string; message: string } }>(
+    const steer = await app.json<{ command_id: string; performed: boolean }>(
       `/api/runs/${runId}/steer`,
       {
         method: 'POST',
@@ -200,16 +219,51 @@ describe('the shipped topology: app (ROLE=all, no launcher) beside runner (ROLE=
         body: JSON.stringify({ message: 'also check the rounding' }),
       },
     );
-    // Named, and a 409 rather than a 200 that nobody heard (backlog 134: on this topology `app`
-    // is pinned never to hold a run, so this is every steer, not an unlucky one).
-    expect(steer.status, JSON.stringify(steer.body)).toBe(409);
-    expect(steer.body.error.code).toBe('run_not_reachable');
+    // Accepted, never "delivered": `app` cannot know that, and does not claim it.
+    expect(steer.status, JSON.stringify(steer.body)).toBe(202);
+    expect(steer.body.performed).toBe(true);
+    const commandId = steer.body.command_id;
+    expect(
+      await pipeline.query<{ run_id: string; kind: string }>(
+        'select run_id, kind from run_commands where id = $1',
+        [commandId],
+      ),
+    ).toEqual([{ run_id: runId, kind: 'steer' }]);
     expect(
       await pipeline.query(
         "select 1 from events where type = 'run.steered' and payload->>'run_id' = $1",
         [runId],
       ),
-    ).toEqual([]);
+    ).toHaveLength(1);
+    // The runner applies it while the run is still held at its workspace — before any heartbeat
+    // could have fired (the first beat is minutes away), so this is the notification's doing.
+    await pipeline.waitFor('the runner to apply the steer app recorded', async () => {
+      const [row] = await pipeline.query<{ applied: boolean; refused_reason: string | null }>(
+        'select applied_at is not null as applied, refused_reason from run_commands where id = $1',
+        [commandId],
+      );
+      return row?.applied === true || row?.refused_reason != null;
+    });
+    expect(
+      await pipeline.query<{ applied: boolean; refused_reason: string | null }>(
+        'select applied_at is not null as applied, refused_reason from run_commands where id = $1',
+        [commandId],
+      ),
+    ).toEqual([{ applied: true, refused_reason: null }]);
+    // Criterion 4: a replay under the key performs nothing and names the same command.
+    const replayed = await app.json<{ command_id: string; performed: boolean }>(
+      `/api/runs/${runId}/steer`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'idempotency-key': 'steer-topology-1' },
+        body: JSON.stringify({ message: 'also check the rounding' }),
+      },
+    );
+    expect(`${replayed.status} ${String(replayed.body.performed)}`).toBe('202 false');
+    expect(replayed.body.command_id).toBe(commandId);
+    expect(
+      await pipeline.query('select 1 from run_commands where run_id = $1', [runId]),
+    ).toHaveLength(1);
 
     // ── crossing 2: the runner produces the transcript, app streams it ───────────────────────────
     stream = await SseStream.open(`${pipeline.instance.baseUrl}/events?topics=run:${runId}`, {
@@ -230,6 +284,13 @@ describe('the shipped topology: app (ROLE=all, no launcher) beside runner (ROLE=
     expect(frame?.data).not.toContain(PLANTED_MODEL_KEY);
 
     await pipeline.settle('ready_for_merge', (task) => task.state === 'ready_for_merge');
+    // Criterion 1's artefact: the steer is a turn in **that run's** transcript, written by the
+    // runner's session once it opened — `app` never held a handle that could have written it.
+    const steerEntries = await pipeline.query<{ payload: { message?: string } }>(
+      "select payload from run_messages where run_id = $1 and kind = 'steer'",
+      [runId],
+    );
+    expect(steerEntries.map((entry) => entry.payload.message)).toEqual(['also check the rounding']);
 
     // ── backlog 181: one gate entry's diff reads, per process ───────────────────────────────────
     // Wait on exactly what is counted (rule 50): the reads are made by `pipeline.outbound` jobs,
@@ -365,6 +426,87 @@ describe('the shipped topology: app (ROLE=all, no launcher) beside runner (ROLE=
       "select payload from inbox where provider = 'fake-git' order by received_at desc limit 1",
     );
     expect(JSON.stringify(mintedInbox[0]?.payload)).not.toContain(mintedValue);
+  }, 300_000);
+
+  it('stops, from app, the run executing in runner, and records which run it stopped (WP-85)', async () => {
+    const held = gate();
+    const started = gate();
+    let firstRunId: string | null = null;
+    const pipeline = await startPipeline({
+      scenarios: featureScenarios,
+      label: 'topology-take-over',
+      tickets: TICKETS,
+      agent: 'none',
+      processName: 'app',
+      onAgentSpec: async (spec) => {
+        if (firstRunId !== null) {
+          return;
+        }
+        firstRunId = spec.runId;
+        started.open();
+        await held.opened;
+      },
+    });
+    harness = pipeline;
+    await pipeline.addProcess({
+      name: 'runner',
+      role: 'runner',
+      agent: 'real-over-fake-cli',
+      env: { APP_DB_POOL_MAX: String(floorOf('runner')) },
+    });
+    const app = await signIn(pipeline.instance.baseUrl);
+    await pipeline.publish([ticketMatched(pipeline, 'ACME-2')]);
+    await started.opened;
+    const runId = firstRunId as unknown as string;
+    const task = await pipeline.task();
+
+    const taken = await app.json<{ workspace_export: string; state: string }>(
+      `/api/tasks/${task.id}/take-over`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'idempotency-key': 'take-over-topology' },
+        body: JSON.stringify({ tarball: false }),
+      },
+    );
+    expect(taken.status, JSON.stringify(taken.body)).toBe(200);
+    expect(taken.body.state).toBe('paused');
+    // A run was in flight — in the runner — and `app` found it in the database (backlog 134: the
+    // per-process lookup always answered `no_live_run` here).
+    expect(taken.body.workspace_export).toBe('requested');
+    const [event] = await pipeline.query<{ run_id: string | null }>(
+      "select payload->>'run_id' as run_id from events where type = 'task.taken_over'",
+    );
+    expect(event?.run_id).toBe(runId);
+
+    // The runner applies the stop; the held workspace then comes up, is stopped and released.
+    await pipeline.waitFor('the runner to apply the stop app recorded', async () => {
+      const [row] = await pipeline.query<{ applied: boolean }>(
+        "select applied_at is not null as applied from run_commands where run_id = $1 and kind = 'take_over'",
+        [runId],
+      );
+      return row?.applied === true;
+    });
+    held.open();
+    await pipeline.waitFor('the stopped run to end', async () => {
+      const [row] = await pipeline.query<{ status: string }>(
+        'select status::text as status from runs where id = $1',
+        [runId],
+      );
+      return row !== undefined && row.status !== 'running';
+    });
+    const [ended] = await pipeline.query<{ status: string }>(
+      'select status::text as status from runs where id = $1',
+      [runId],
+    );
+    expect(ended?.status).toBe('cancelled');
+    await pipeline.waitFor('the stopped run’s workspace to be released', async () =>
+      pipeline.workspaceReleases.some((release) => release.takeOver !== null),
+    );
+    expect(
+      pipeline.workspaceReleases.find((release) => release.takeOver !== null)?.takeOver,
+    ).toMatchObject({ branch: 'agentic/ACME-2', tarball: false });
+    // The task stays where the human put it: nothing re-ran the stage behind them.
+    expect((await pipeline.task()).state).toBe('paused');
   }, 300_000);
 });
 

@@ -3,9 +3,8 @@
  * (WP-15i; steer, take-over and hand-back added by WP-27).
  *
  * The commands themselves are use cases in the application ring; what this file supplies is the
- * five collaborators they cannot build for themselves — the unit of work, the pipeline store, the
- * queue, the redactor and the register of live runs (WP-27) — and the **interface** the routes see.
- * That interface is fourteen methods
+ * four collaborators they cannot build for themselves — the unit of work, the pipeline store, the
+ * queue and the redactor — and the **interface** the routes see. That interface is fourteen methods
  * rather than the dependency bundle, for the reason `KnowledgeCommands` and `OnboardingCommands`
  * next door are shaped the same way: a route module that names a `UnitOfWork` cannot be driven
  * without one, and the decisions in `routes/commands.ts` (the key policy, the replay, the audit row,
@@ -17,24 +16,20 @@
  * A process that composed no eventing has no commands, and the routes answer `503` naming the
  * missing piece rather than 404 — the shape `routes/kb.ts` established. A process that serves the
  * API **without** workers composes — this is what `runtime.ts` actually builds — an **enqueue-only**
- * job client (WP-72; until then `jobs: null`) and a live-run register that is **empty** rather than
- * absent: `createLiveRuns()` is made once per process, outside the worker branch, because the
- * pipeline and the command surface must share one instance and only the pipeline fills it. Every
- * command works there, the five that start a stage included — the worker beside it takes the stage
- * job — except the two that must reach a live session: a **steer** refuses by name rather than
- * reporting a turn nobody heard, and a **take-over** performs — it pauses the task and says
- * `no_live_run`, which is what taking over work that is already on the branch looks like. On the
- * shipped topology that is **every** steer (PROGRESS backlog 134): the process that serves the API
- * is pinned never to hold a run, which `test/e2e/topology/two-processes.e2e.test.ts` asserts through
- * the two processes. A composition root with no job client at all (`jobs: null`) still refuses the
- * five by name rather than moving a task to a stage nothing will run.
+ * job client (WP-72; until then `jobs: null`), and every command works there, the five that start a
+ * stage included — the worker beside it takes the stage job. A composition root with no job client
+ * at all (`jobs: null`) still refuses the five by name rather than moving a task to a stage nothing
+ * will run.
  *
- * `liveRuns: null` and an empty register are the same answer to both, which is why the field keeps
- * its `null` arm for a composition root that has no pipeline at all. That is an equality rather
- * than a guess: `human-commands.test.ts` drives the steer's refusal and the take-over's success
- * over both compositions (standing rules 3 and 68). The sentence this paragraph replaced said the
- * API role composes `liveRuns: null`, which `runtime.ts` has never done, and said a take-over
- * refuses, which it has never done either.
+ * ## Steer and take-over reach a run through the database (WP-85)
+ *
+ * Until WP-85 this surface held the process's live-run register, and on the shipped topology the
+ * process that serves the API never holds a run, so every steer was refused `run_not_reachable` and
+ * every take-over recorded `run_id: null` (PROGRESS backlog 134). TD-028 decision 9 replaced the
+ * register lookup: the command records a `run_commands` row beside its event and wakes the run's
+ * lease holder with `pg_notify`, and the holder applies it (`pipeline/run-commands.ts`, composed in
+ * `pipeline.ts`). So this surface needs no register at all, and the two commands answer the same on
+ * every role: *accepted*, then applied or refused on the run screen.
  *
  * ## The redactor is the platform's pattern rules, and nothing else
  *
@@ -43,8 +38,8 @@
  * redact against (Q55) — `patternRedactor()` alone is the honest composition, and it is the same
  * one `createIntegrationProber` passes as its `platformRedactor`.
  */
-import { randomUUID } from 'node:crypto';
-import type { HumanCommandDependencies, Jobs, LiveRuns, Logger } from '@platform/application';
+import { createHash, randomUUID } from 'node:crypto';
+import type { HumanCommandDependencies, Jobs, Logger } from '@platform/application';
 import {
   answerTaskQuestion,
   cancelRunCommand,
@@ -135,24 +130,33 @@ export interface TaskCommands {
     readonly runId: string;
     readonly userId: string;
   }): Promise<{ readonly taskId: string }>;
+  /**
+   * **Records** the turn for the process holding the run and answers the `run_commands` id (WP-85,
+   * TD-028 decision 9) — never a claim that the session took it.
+   */
   steerRun(input: {
     readonly runId: string;
     readonly userId: string;
     readonly role: UserRole;
     readonly message: string;
     readonly authorName: string;
-  }): Promise<{ readonly taskId: string }>;
+    /** The request's `Idempotency-Key`: the command's id is derived from it ({@link runCommandIdFor}). */
+    readonly idempotencyKey: string | null;
+  }): Promise<{ readonly taskId: string; readonly commandId: string }>;
   takeOver(input: {
     readonly taskId: string;
     readonly userId: string;
     readonly authorName: string;
     readonly tarball: boolean;
     readonly reason?: string;
+    readonly idempotencyKey: string | null;
   }): Promise<{
     readonly taskId: string;
     readonly branch: string;
     readonly sessionId: string | null;
     readonly exported: boolean;
+    /** The run whose stop was recorded, or `null` when the task had no live run (WP-85). */
+    readonly runId: string | null;
     /** Redacted, for the audit row, like `pause`'s: it is not part of the response. */
     readonly reason: string | null;
   }>;
@@ -168,18 +172,25 @@ export interface TaskCommandOptions {
   readonly eventing: ReturnType<typeof eventingAdapters.createEventing>;
   /** `null` on a process that runs no workers; see the module note. */
   readonly jobs: Jobs | null;
-  /**
-   * The register of runs **this process** is executing (WP-27), or `null` when it executes none.
-   *
-   * The same instance the pipeline's runner was wrapped with, which is why the composition root
-   * builds it rather than this function: steering and taking over reach into a live session, and a
-   * second register would be a second, empty answer to "is that run here". `runtime.ts` passes a
-   * real register on every role and lets the API-only one stay **empty**; the `null` arm is for a
-   * root with no pipeline, and the module note has the measurement that the two are the same answer.
-   */
-  readonly liveRuns: LiveRuns | null;
   readonly logger: Logger;
 }
+
+/**
+ * A `run_commands` id derived from `(user, action, Idempotency-Key)` — migration 0060's *"id is
+ * derived from the key"*.
+ *
+ * The key's own record (`command_idempotency`, `routes/idempotency.ts`) is what refuses a replay;
+ * this is the second line, so a replay that somehow got past it collides on the primary key instead
+ * of recording a second turn the run would pay for. The scope is the key's own — `(user, action,
+ * key)` — so two people's identical keys, or one person's key on two commands, are two ids. A
+ * version-8 UUID (RFC 9562's "custom" layout) over the first 128 bits of a SHA-256: the column is a
+ * `uuid` and `idSchema` checks the version and variant nibbles.
+ */
+export const runCommandIdFor = (userId: string, action: string, key: string): Id => {
+  const hex = createHash('sha256').update(`${userId}\0${action}\0${key}`).digest('hex');
+  const variant = ((Number.parseInt(hex.slice(16, 17), 16) & 0x3) | 0x8).toString(16);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}` as Id;
+};
 
 /** The branded ids the application ring speaks, applied once (see the module note). */
 const id = (value: string): Id => value as Id;
@@ -204,7 +215,6 @@ export const createTaskCommands = (options: TaskCommandOptions): TaskCommands =>
       causeEventId: null,
     }),
     jobs: options.jobs,
-    liveRuns: options.liveRuns,
     eventStore: options.eventing.store,
     redactor: redactionAdapters.patternRedactor(),
     logger: options.logger,
@@ -284,6 +294,9 @@ export const createTaskCommands = (options: TaskCommandOptions): TaskCommands =>
         role: input.role,
         message: input.message,
         authorName: input.authorName,
+        ...(input.idempotencyKey === null
+          ? {}
+          : { commandId: runCommandIdFor(input.userId, 'run.steer', input.idempotencyKey) }),
       }),
     takeOver: async (input) =>
       takeOverTaskCommand(deps, {
@@ -292,6 +305,9 @@ export const createTaskCommands = (options: TaskCommandOptions): TaskCommands =>
         authorName: input.authorName,
         tarball: input.tarball,
         ...(input.reason === undefined ? {} : { reason: input.reason }),
+        ...(input.idempotencyKey === null
+          ? {}
+          : { commandId: runCommandIdFor(input.userId, 'task.take_over', input.idempotencyKey) }),
       }),
     handBack: async (input) =>
       handBackTaskCommand(deps, {

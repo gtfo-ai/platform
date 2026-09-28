@@ -1059,6 +1059,11 @@ export interface RunRepository {
    * returns `skipped` rather than completing a stage on a run a human cancelled, and the cancel
    * command answers 409 rather than reporting a cancellation that did not happen.
    *
+   * **The winner also closes the run's pending commands** (WP-85): every `run_commands` row still
+   * pending is stamped `run_ended` in the same transaction, after the row moved, so a command
+   * recorded against the live run is either closed here or refused at its own lock
+   * ({@link RunCommandRepository}). A loser closes nothing — the winner already did.
+   *
    * @throws when the run does not exist at all, which is a different fact from "already finished".
    */
   finish(
@@ -1156,6 +1161,124 @@ export interface RunRepository {
     readonly isEstimate: boolean;
     readonly wallMs: number;
   }>;
+}
+
+/**
+ * What a recorded run command asks the holder to do (WP-85, TD-028 decision 9) — a steer's turn, or
+ * a take-over's stop with the export its workspace owes. Stored redacted: the command redacted the
+ * text before it was recorded, and the holder delivers the stored bytes.
+ */
+export type RunCommandInstruction =
+  | {
+      readonly kind: 'steer';
+      readonly text: string;
+      /** In the instruction as well as `actor_user_id`, which a deleted user sets null. */
+      readonly authorUserId: Id;
+      readonly authorLabel: string;
+    }
+  | {
+      readonly kind: 'take_over';
+      readonly branch: string;
+      readonly commitMessage: string;
+      readonly tarball: boolean;
+      readonly keepUntil: IsoDateTime;
+    };
+
+/** Why the process that could have applied a command did not (migration 0060). */
+export type RunCommandRefusal = 'run_ended' | 'register_miss' | 'delivery_failed' | 'undecodable';
+
+export interface NewRunCommand {
+  /** Derived from the `Idempotency-Key` when the request carried one (migration 0060). */
+  readonly id: Id;
+  readonly runId: Id;
+  readonly taskId: Id;
+  readonly actorUserId: Id | null;
+  readonly instruction: RunCommandInstruction;
+}
+
+/** A command still waiting for the holder, as the holder reads it. */
+export interface PendingRunCommand {
+  readonly id: Id;
+  readonly runId: Id;
+  readonly taskId: Id;
+  readonly actorUserId: Id | null;
+  /**
+   * `null` when the stored payload is not a shape this build can deliver (WP-85 review round 1):
+   * the row is handed back rather than thrown on, so the holder refuses it `undecodable` by itself
+   * and the other rows of the drain still apply.
+   */
+  readonly instruction: RunCommandInstruction | null;
+  /** The stored `kind`, kept for a row whose instruction could not be read. */
+  readonly kind: string;
+}
+
+/** The run row a command is about to be recorded against, read under a `for share` lock. */
+export interface LockedRun {
+  readonly runId: Id;
+  readonly taskId: Id;
+  readonly status: RunStatus;
+  /** `runs.lease_owner`: the process the notification is addressed to, or `null` when none holds it. */
+  readonly leaseOwner: string | null;
+  /**
+   * The SDK session the run is in, as far as the **database** knows it — or `null`.
+   *
+   * `runs.session_id` is written only when a run ends, and the handle that knows it mid-run is in
+   * the holder's process. What the database does have is the run's own `system`/`init` transcript
+   * entry, which the runner writes the moment the CLI reports its session (`run_messages`); the SQL
+   * adapter reads it from there. So a take-over answered by a process that does not hold the run
+   * still carries `claude --resume <session>` (product/19 §19) once the session has started, and
+   * `null` — never a guess — before (WP-85).
+   */
+  readonly sessionId: string | null;
+}
+
+/**
+ * `run_commands` — a human command on its way to the process holding the run (WP-85, TD-028
+ * decision 9; the states and their writers are in migration 0060's header).
+ *
+ * **The lock is what makes "a command for a run that ended is never applied late" hold.** A command
+ * is recorded only after {@link lockRun} has read the run live under `for share`, in the same
+ * transaction; `RunRepository.finish` updates that row and then closes every pending command
+ * `run_ended`, in its transaction. So either the ending waits for the command to commit and then
+ * closes it, or the command waits for the ending and reads the run terminal — there is no order in
+ * which a pending row outlives its run. {@link markApplied} takes the same lock, so the holder's
+ * stamp and the ending are ordered the same way.
+ */
+export interface RunCommandRepository {
+  /** The run, locked `for share`, or `null` when there is no such run. */
+  lockRun(tx: Transaction, runId: Id): Promise<LockedRun | null>;
+  /** The task's live run (`ACTIVE_RUN_STATUSES`), locked `for share`, or `null` when it has none. */
+  lockLiveRunOf(tx: Transaction, taskId: Id): Promise<LockedRun | null>;
+  insert(tx: Transaction, command: NewRunCommand): Promise<void>;
+  /**
+   * Pending commands for the live runs **this holder** leases, oldest first — optionally for one run.
+   * Bounded by `limit`; a burst beyond it is taken by the next drain.
+   */
+  pending(
+    tx: Transaction,
+    query: { readonly owner: string; readonly runId?: Id; readonly limit: number },
+  ): Promise<readonly PendingRunCommand[]>;
+  /**
+   * Stamps `applied_at` — only while the row is pending **and** its run is live and leased to
+   * `owner`, under a `for share` lock on the run. `false` when anything else got there first: the
+   * other wake-up path, the run's ending, or a lease this process does not hold. The one arbiter
+   * between the notification and the poll (standing rule 9).
+   */
+  markApplied(
+    tx: Transaction,
+    input: { readonly id: Id; readonly owner: string },
+  ): Promise<boolean>;
+  /**
+   * Turns an `applied` stamp into the refusal `delivery_failed` — only while it still reads applied
+   * (WP-85 review round 1). Never back to pending: the stamp stays the exactly-once arbiter, so
+   * neither the notification nor the poll can deliver the command a second time.
+   */
+  markDeliveryFailed(tx: Transaction, input: { readonly id: Id }): Promise<boolean>;
+  /** Stamps a refusal, only while the row is pending; `false` when it was already settled. */
+  markRefused(
+    tx: Transaction,
+    input: { readonly id: Id; readonly reason: RunCommandRefusal },
+  ): Promise<boolean>;
 }
 
 export interface QuestionRepository {
@@ -1363,6 +1486,8 @@ export interface PipelineStore {
   readonly approvals: ApprovalRepository;
   /** WP-40's epic-split queue: one row per proposed child ticket. */
   readonly breakdown: BreakdownRepository;
+  /** WP-85's commands on their way to the process holding a live run. */
+  readonly runCommands: RunCommandRepository;
 }
 
 /** Everything the pipeline needs to name a ticket it has not created a task for yet. */

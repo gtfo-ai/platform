@@ -80,6 +80,10 @@ import { ACTIVE_RUN_STATUSES, resolveIterationLimits } from '@platform/domain';
 import * as z from 'zod';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
+import {
+  closePendingRunCommands,
+  createPostgresRunCommandRepository,
+} from './postgres-run-commands.js';
 import { takeOverLastActivitySql } from './take-over-activity.js';
 
 /** Raised when a write that had to change a row changed none. */
@@ -1220,6 +1224,9 @@ export const createPostgresPipelineStore = (
         ],
       );
       if (result.rowCount !== 0) {
+        // The winner closes the run's pending commands, after the row moved (WP-85): a command
+        // that held the run `for share` has committed by now and this later statement sees it.
+        await closePendingRunCommands(sqlOf(tx), outcome.runId);
         return true;
       }
       // Nothing was written: either the run is already terminal (somebody else ended it) or it
@@ -1584,7 +1591,15 @@ export const createPostgresPipelineStore = (
     },
   };
 
-  return { tasks, artifacts, runs, questions, approvals, breakdown };
+  return {
+    tasks,
+    artifacts,
+    runs,
+    questions,
+    approvals,
+    breakdown,
+    runCommands: createPostgresRunCommandRepository(),
+  };
 };
 
 /** One `ticket_breakdown_items` row as `pg` hands it back. */

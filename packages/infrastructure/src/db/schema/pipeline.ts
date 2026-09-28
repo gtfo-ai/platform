@@ -430,6 +430,27 @@ export const commandIdempotency = pgTable(
 );
 
 /**
+ * A human command for a live run, on its way to the process holding it (migration 0060, WP-85,
+ * TD-028 decision 9). Pending until the lease holder stamps `appliedAt` or a refusal; a row still
+ * pending when the run ends is closed `run_ended` by `RunRepository.finish`, in its transaction.
+ * The migration's header carries who writes which state.
+ */
+export const runCommands = pgTable('run_commands', {
+  id: uuid('id').primaryKey(),
+  runId: uuid('run_id').notNull(),
+  taskId: uuid('task_id').notNull(),
+  kind: text('kind').$type<'steer' | 'take_over'>().notNull(),
+  payload: jsonb('payload').$type<JsonObject>().notNull(),
+  actorUserId: uuid('actor_user_id'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  appliedAt: timestamp('applied_at', { withTimezone: true }),
+  refusedAt: timestamp('refused_at', { withTimezone: true }),
+  refusedReason: text('refused_reason').$type<
+    'run_ended' | 'register_miss' | 'delivery_failed' | 'undecodable'
+  >(),
+});
+
+/**
  * The notification outbox (WP-32, migration 0023).
  *
  * `digest_day` is a `date` rather than a timestamp on purpose: it is a *day in the organisation's
@@ -563,6 +584,7 @@ export type Approval = typeof approvals.$inferSelect;
 export type Workspace = typeof workspaces.$inferSelect;
 export type HumanAction = typeof humanActions.$inferSelect;
 export type CommandIdempotencyRow = typeof commandIdempotency.$inferSelect;
+export type RunCommandRow = typeof runCommands.$inferSelect;
 export type Notification = typeof notifications.$inferSelect;
 export type TaskAsk = typeof taskAsks.$inferSelect;
 export type TicketBreakdownItem = typeof ticketBreakdownItems.$inferSelect;

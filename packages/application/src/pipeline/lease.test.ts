@@ -27,7 +27,10 @@ interface Beat {
   readonly expiresAt: IsoDateTime;
 }
 
-const harness = (renew: (beat: Beat) => Promise<boolean>) => {
+const harness = (
+  renew: (beat: Beat) => Promise<boolean>,
+  onRenewed?: (runId: Id) => Promise<void>,
+) => {
   const beats: Beat[] = [];
   let tick: (() => void) | undefined;
   let cancelled = 0;
@@ -52,6 +55,7 @@ const harness = (renew: (beat: Beat) => Promise<boolean>) => {
             cancelled += 1;
           };
         },
+        ...(onRenewed === undefined ? {} : { onRenewed }),
       },
     },
     RUN,
@@ -97,6 +101,42 @@ describe('the run lease heartbeat', () => {
     // it does not hold, and the row would refuse it once a second for the life of the process.
     expect(heartbeat.beats).toHaveLength(1);
     expect(heartbeat.cancelled).toBe(1);
+  });
+
+  it('polls the run’s pending commands after a beat that renewed, and not after one that did not (WP-85)', async () => {
+    const renewed: Id[] = [];
+    const answers = [true, false];
+    const heartbeat = harness(
+      async () => answers.shift() ?? false,
+      async (runId) => {
+        renewed.push(runId);
+      },
+    );
+
+    await heartbeat.beat();
+    await heartbeat.beat();
+
+    // The first beat renewed and polled; the second found the lease gone, polled nothing and
+    // stopped — a command for a run this process no longer holds is closed by the run's ending.
+    expect(renewed).toEqual([RUN]);
+    expect(heartbeat.cancelled).toBe(1);
+  });
+
+  it('keeps beating when the poll throws, like a failed beat', async () => {
+    let polls = 0;
+    const heartbeat = harness(
+      async () => true,
+      async () => {
+        polls += 1;
+        throw new Error('the pool was empty');
+      },
+    );
+
+    await heartbeat.beat();
+    await heartbeat.beat();
+
+    expect(polls).toBe(2);
+    expect(heartbeat.cancelled).toBe(0);
   });
 
   it('keeps beating after a beat throws, and never lets the failure reach the run', async () => {

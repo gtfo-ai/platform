@@ -292,7 +292,7 @@ a host that is not the binding's allow-listed `base_url` host or a subdomain of 
 before any connect (`assertSocketHost`, the folded half of PROGRESS backlog 196). Shutdown closes every
 held socket, including one whose open was still in flight when the stop began.
 
-**Amendment (WP-72, 2026-09-27) — the crossings of the shipped topology, and the API role's queue client.** The two product processes share nothing but the database, and each crossing is asserted through two processes in `test/e2e/topology/two-processes.e2e.test.ts`: (1) a command's effect — answered by a process that runs no worker, performed by a worker through the job queue; since WP-72 `ROLE=api` holds an **enqueue-only** pg-boss client (supervision and cron off, every worker operation refused by name, `apps/server/src/enqueue-only-jobs.ts`), which it did not before, so on `ROLE=api` a knowledge approval waited for the nightly pass and every command that starts a stage was refused; (2) a run's transcript — written by the runner, streamed by the process that serves the API over `NOTIFY` and a read-back; (3) readiness — per process, `dispatch` only on worker roles; (4) the chat socket — held by the process that serves `/webhooks/*`, which renews `held_connection_liveness` (migration 0054) so an approval is posted with buttons only while some process holds it; (5) steer and take-over do **not** cross: on this topology the process that serves the API never holds a run, so every steer is refused `run_not_reachable` (PROGRESS backlog 134); (6) a run credential is redacted by exact value only in the runner, and elsewhere by the pattern rules alone, which cover GitLab's default `glpat-` prefix and not an administrator-chosen one (PROGRESS backlog 154, decision (a); (b) filed as 259) — **superseded at WP-80**: every process now redacts it by the shape recorded beside the mint's audit row (TD-012's M5 amendment). The Consequences bullet's *'the queue depth is a metric, `/readyz` reports the runner as absent'* remains unbuilt and unowned (PROGRESS backlog 135, declined by WP-72).
+**Amendment (WP-72, 2026-09-27) — the crossings of the shipped topology, and the API role's queue client.** The two product processes share nothing but the database, and each crossing is asserted through two processes in `test/e2e/topology/two-processes.e2e.test.ts`: (1) a command's effect — answered by a process that runs no worker, performed by a worker through the job queue; since WP-72 `ROLE=api` holds an **enqueue-only** pg-boss client (supervision and cron off, every worker operation refused by name, `apps/server/src/enqueue-only-jobs.ts`), which it did not before, so on `ROLE=api` a knowledge approval waited for the nightly pass and every command that starts a stage was refused; (2) a run's transcript — written by the runner, streamed by the process that serves the API over `NOTIFY` and a read-back; (3) readiness — per process, `dispatch` only on worker roles; (4) the chat socket — held by the process that serves `/webhooks/*`, which renews `held_connection_liveness` (migration 0054) so an approval is posted with buttons only while some process holds it; (5) steer and take-over did **not** cross: on this topology the process that serves the API never holds a run, so every steer was refused `run_not_reachable` (PROGRESS backlog 134) — **superseded at WP-85**: they cross through a `run_commands` row and `pg_notify` to the lease holder (decision 9), asserted through both processes; (6) a run credential is redacted by exact value only in the runner, and elsewhere by the pattern rules alone, which cover GitLab's default `glpat-` prefix and not an administrator-chosen one (PROGRESS backlog 154, decision (a); (b) filed as 259) — **superseded at WP-80**: every process now redacts it by the shape recorded beside the mint's audit row (TD-012's M5 amendment). The Consequences bullet's *'the queue depth is a metric, `/readyz` reports the runner as absent'* remains unbuilt and unowned (PROGRESS backlog 135, declined by WP-72).
 
 ## Amendment (M5 architect pass, session 8, 2026-09-27) — a command reaches a run through the database, and an unbound credential is revoked through the integration that minted it
 
@@ -314,9 +314,22 @@ take-over records `runId: null` (`:1409`). The shape:
   broadcast adapter (`packages/infrastructure/src/broadcast/postgres-broadcast.ts`) and **also polls its
   own leased runs' pending rows on the heartbeat**, because a notification is not delivered to a process
   that was reconnecting — the notify is latency, the poll is the guarantee;
+
+  *Amended at WP-85 (orchestrator, session 9):* the `human_actions` row is **not** in the command's
+  transaction. Every command writes it after `perform`, under the WP-67 idempotency claim
+  (`apps/server/src/routes/commands.ts`), and the run command follows that one rule rather than a second.
+  A crash between the two writes leaves the committed `run_commands` row and its event (which carry the
+  author), no audit row, and the key held, so a replay answers `idempotency_attempt_unknown` rather
+  than performing again. The `run_commands` row itself is written in the aggregate operation's
+  transaction, as above.
+
 - the holder applies the command to its in-process register, stamps `applied_at` or a typed
   `refused_reason` (run no longer live, register miss), and the task screen reads that stamp; a row
   still pending when the run ends is closed `run_ended` by the run's own ending, in its transaction;
+  *(WP-85: the stamp is taken before delivery as the exactly-once arbiter; a steer whose delivery then
+  throws is re-stamped `delivery_failed` — never back to pending — and a row the holder cannot decode is
+  refused `undecodable` on its own. A take-over's stop is not awaited, so a stop that fails after the
+  stamp leaves the row `applied` with the error logged — the stated residual.)*
 - the single-process mode (`ROLE=all`) takes the same path, so there is one mechanism to test.
 
 *Alternatives rejected:* HTTP from the API process to the runner (gives the runner an inbound

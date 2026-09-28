@@ -333,11 +333,12 @@ its end, with credentials redacted — beside the job names.
   interrupted (`GET /api/runs/<run>/transcript.jsonl`, rendered from the stored transcript each time,
   so it lasts as long as the transcript does) and **the workspace tarball** when you asked for one
   (`GET /api/runs/<run>/export.tar`, kept for **14 days from the take-over, whether or not you have
-  handed back** — the taken-over workspace's own retention). When no run was in flight in the
-  process that answered, nothing was exported and the panel offers neither download — and on a stock
-  instance that is every take-over, because the process serving this screen never holds a run, so a
-  run executing in the `runner` container keeps going (section 5; PROGRESS backlog 134); a take-over
-  recorded before WP-73 names the run it *infers* and says so
+  handed back** — the taken-over workspace's own retention). The run it stops is found wherever it
+  runs — on a stock instance in the `runner` container — and the stop is *accepted, then applied*
+  by that container (WP-85); the session line reads *not known yet* until the run has reported one,
+  and the run screen shows whether the stop was applied. When no run was in flight, nothing was
+  exported and the panel offers neither download; a take-over recorded before WP-73 names the run it
+  *infers* and says so
   — and **Hand back**, whose stage list is the task's own pipeline, so it offers nothing the platform
   would refuse. Handing back to **Ready for merge** does not skip the checks: when the branch is not
   the commit the platform's gates judged — you pushed, or the platform cannot read it — the task
@@ -385,12 +386,16 @@ Click a run. Header metrics, then three tabs:
 You can **cancel** the run (member), **retry** it with a different model or effort (member — this
 creates a *new* run rather than changing this one), and leave **feedback** scoped to the stage.
 
-**Steering a live run is served, and on a stock instance it is always refused.** It pushes a turn
-into a session that is already running, which only the process running that session can do — and on
-the shipped topology the process that serves this application never runs one (the `runner` container
-does). So the button answers `409 run_not_reachable`, by name, rather than accepting a message nobody
-would hear; asserted through the two processes at WP-72 (PROGRESS backlog 134 owns the transport).
-Cancelling has the same limit from the other side: it ends the run as a *record*, and does not
+**Steering a live run is accepted, then applied or refused** (WP-85). It pushes a turn into a
+session that is already running, which only the process running that session can do — on a stock
+instance the `runner` container, never the process serving this application. So the message is
+recorded and handed to the runner through the database: the screen says *Accepted* at once, and
+**Commands sent to this run**, under the transcript, then shows whether it was *applied* (it appears
+in the transcript as a turn attributed to you) or *refused* — *the run ended before it could be
+applied* (it is never applied late), *the live session did not take it* (it was closing; not
+retried) or *no live session was found*. A message usually applies within
+a second; one that stays *pending* for a couple of minutes means the runner's database connection is
+struggling. Cancelling still has the old limit: it ends the run as a *record*, and does not
 interrupt what is executing.
 
 One tab can answer "not available" rather than showing you a document, and that too is deliberate:
@@ -539,7 +544,7 @@ In one place, so it is not spread across thirteen sections:
 
 | Not built | Where you meet it |
 |---|---|
-| Steering a live run | run detail — served, and refused `409 run_not_reachable` on every stock instance, because the process that serves the application never holds a run |
+| Interrupting a live run from **Cancel** (it ends the record; steer and take-over do reach the run, since WP-85) | run detail |
 | The business interview as a *conversation* with the Product Manager role (the form is built; Q102) | onboarding step 3 |
 | Committing `.agentic/` configuration from the wizard itself (the project settings page does it) | onboarding step 5 |
 | Re-answering the nine run-dependent readiness criteria after a merge (five are re-checked) | onboarding step 2 |

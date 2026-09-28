@@ -210,9 +210,11 @@ describe('the take-over control on the task screen', () => {
     expect(takeOver?.body).toEqual({ tarball: true, reason: 'the agent is looping' });
     // The SPA's per-intent key (`app/idempotency.ts`), never a request without one.
     expect(takeOver?.key).toMatch(/.+/);
-    // The four fields: the branch, the session (none, said as such), the lines, the export's tense.
+    // The four fields: the branch, the session (not known yet, said as such — WP-85: the process
+    // holding the run reports it when the stopped run ends), the lines, the export's tense.
     expect(container.textContent).toContain('agentic/acme-1');
-    expect(container.textContent).toContain('the interrupted run had no session');
+    expect(container.textContent).toContain('its session appears here once it has ended');
+    expect(container.textContent).not.toContain('the interrupted run had no session');
     expect(container.textContent).toContain(workspaceExportText('requested'));
   });
 
@@ -306,11 +308,12 @@ describe('which run the take-over panel offers', () => {
     const container = await renderHeld({ ...TAKEN_OVER, run_id: null });
     expect(downloads(container)).toEqual([]);
     expect(container.textContent).toContain(
-      'No run was in flight in the process that answered the take-over',
+      'No run was in flight when the task was taken over, so nothing was exported',
     );
-    // Backlog 134: on the shipped topology a run may be live in another process, so the panel may
-    // not say none was.
-    expect(container.textContent).not.toContain('No run was live');
+    // WP-85 (TD-028 decision 9): the take-over finds the live run in the database, so a recorded
+    // null is true of the deployment — and the WP-73d qualifier about "the process that answered",
+    // which was true only while the lookup was per process, is gone (rule 83).
+    expect(container.textContent).not.toContain('in the process that answered');
   });
 
   it('offers the recorded run, not the newest one started by the take-over’s instant', async () => {

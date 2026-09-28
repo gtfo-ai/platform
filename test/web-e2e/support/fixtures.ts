@@ -38,6 +38,7 @@ import {
   orgUsersResponseSchema,
   projectAuditResponseSchema,
   projectSummarySchema,
+  runCommandsResponseSchema,
   runMessagesResponseSchema,
   runPromptResponseSchema,
   runRecordSchema,
@@ -703,6 +704,39 @@ export const runPrompt = runPromptResponseSchema.parse({
   prompt_version: 'developer@1.0.0',
   system_prompt: 'You are the developer agent.',
   user_prompt: `Implement DEMO-1. ${HOSTILE.script}`,
+});
+
+/**
+ * WP-85 (TD-028 decision 9): what became of the commands sent to the run — one steer the holder
+ * applied, one it could not because the run ended first. The steer text is somebody's own words.
+ */
+export const runCommandLog = runCommandsResponseSchema.parse({
+  items: [
+    {
+      id: id(45),
+      run_id: IDS.run,
+      kind: 'steer',
+      state: 'refused',
+      message: 'and check the rounding',
+      author_user_id: IDS.user,
+      created_at: '2026-06-01T09:06:00.000Z',
+      applied_at: null,
+      refused_at: '2026-06-01T09:06:30.000Z',
+      refused_reason: 'run_ended',
+    },
+    {
+      id: id(44),
+      run_id: IDS.run,
+      kind: 'steer',
+      state: 'applied',
+      message: `use the invoice total ${HOSTILE.script}`,
+      author_user_id: IDS.user,
+      created_at: '2026-06-01T09:05:00.000Z',
+      applied_at: '2026-06-01T09:05:01.000Z',
+      refused_at: null,
+      refused_reason: null,
+    },
+  ],
 });
 
 export const runContextPack = contextPackRecordSchema.parse({

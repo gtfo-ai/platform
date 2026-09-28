@@ -990,6 +990,63 @@ export const runCommandResponseSchema = z.strictObject({
   performed: z.boolean(),
 });
 
+/**
+ * `POST /api/runs/:id/steer` — **accepted**, not delivered (WP-85, TD-028 decision 9).
+ *
+ * The process that answers a steer is, on the shipped topology, never the process holding the run,
+ * so the answer is `202` and says only that the command was recorded: `command_id` names the
+ * `run_commands` row, and the run screen reads whether it was then **applied** or **refused**
+ * (`GET /api/runs/:id/commands`). Never a claim that the model heard it.
+ */
+export const steerRunResponseSchema = runCommandResponseSchema.extend({
+  command_id: idSchema,
+});
+
+/** The two commands that reach a live run through the database (WP-85). */
+export const runCommandKindSchema = z.enum(['steer', 'take_over']);
+
+/**
+ * Why a recorded run command was not applied (WP-85). `run_ended`: the run ended while the command
+ * was pending — closed by the run's own ending, so it is never applied late. `register_miss`: the
+ * process holding the run's lease found no live session for it. `delivery_failed`: the holder took
+ * the command and the live session refused it (the session was closing) — it is not retried.
+ * `undecodable`: the stored command is in a shape this build cannot deliver.
+ */
+export const runCommandRefusalSchema = z.enum([
+  'run_ended',
+  'register_miss',
+  'delivery_failed',
+  'undecodable',
+]);
+
+/**
+ * One `run_commands` row as the run screen reads it (WP-85).
+ *
+ * `state` is derived from the two stamps and is there so a client does not re-derive it. `message`
+ * is the steer's text **as the platform stored it** — redacted once by the command (TD-012) — and
+ * `null` for a take-over's stop; it is untrusted text (BD-022) and is rendered as such.
+ */
+export const runCommandRecordSchema = z.strictObject({
+  id: idSchema,
+  run_id: idSchema,
+  kind: runCommandKindSchema,
+  state: z.enum(['pending', 'applied', 'refused']),
+  message: z.string().nullable(),
+  author_user_id: idSchema.nullable(),
+  created_at: isoDateTimeSchema,
+  applied_at: isoDateTimeSchema.nullable(),
+  refused_at: isoDateTimeSchema.nullable(),
+  refused_reason: runCommandRefusalSchema.nullable(),
+});
+
+/** `GET /api/runs/:id/commands` — the run's commands, newest first, bounded (WP-85). */
+export const runCommandsResponseSchema = z.strictObject({
+  items: z.array(runCommandRecordSchema),
+});
+
+/** The most run commands one read returns. */
+export const MAX_RUN_COMMANDS = 100;
+
 /** `POST /api/tasks/:id/feedback` — the feedback the command recorded (WP-15i). */
 export const submitFeedbackResponseSchema = z.strictObject({
   feedback_id: idSchema,
@@ -1893,6 +1950,11 @@ export type CreateIdentityMappingRequest = z.infer<typeof createIdentityMappingR
 export type IdentityMapping = z.infer<typeof identityMappingSchema>;
 export type HandBackRequest = z.infer<typeof handBackRequestSchema>;
 export type RunCommandResponse = z.infer<typeof runCommandResponseSchema>;
+export type SteerRunResponse = z.infer<typeof steerRunResponseSchema>;
+export type RunCommandKind = z.infer<typeof runCommandKindSchema>;
+export type RunCommandRefusal = z.infer<typeof runCommandRefusalSchema>;
+export type RunCommandRecord = z.infer<typeof runCommandRecordSchema>;
+export type RunCommandsResponse = z.infer<typeof runCommandsResponseSchema>;
 export type SubmitFeedbackResponse = z.infer<typeof submitFeedbackResponseSchema>;
 export type TaskExportResponse = z.infer<typeof taskExportResponseSchema>;
 export type ArtifactBodyResponse = z.infer<typeof artifactBodyResponseSchema>;

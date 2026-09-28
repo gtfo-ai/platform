@@ -22,7 +22,6 @@ import {
   CommandsUnavailableError,
   IterationLimitReachedError,
   RunNotLiveError,
-  RunNotReachableError,
   StageNotCurrentError,
   StageNotInTemplateError,
   TaskConflictExhaustedError,
@@ -148,6 +147,9 @@ const build = async (
         branch: 'agentic/ACME-1',
         sessionId: 'session-abc',
         exported: true,
+        // WP-85: the take-over's recorded run and the steer's recorded command.
+        runId: RUN,
+        commandId: '00000000-0000-4000-8000-0000000000c1',
         // `null`, never absent: the real `pause` and `takeOver` answer `{reason: string | null}`,
         // and a stub that omitted the field would let a route read `undefined` where production
         // reads `null` — a fake kinder than the adapter (standing rule 1). A case that wants the
@@ -240,6 +242,11 @@ const COMMANDS: readonly {
   readonly key: 'required' | 'optional';
   /** The lowest role that may issue it (`PERMISSION_REQUIREMENTS`). */
   readonly role: UserRole;
+  /**
+   * The status an accepted request answers — `200`, except the steer's `202`: since WP-85 it is
+   * **accepted**, then applied or refused by the process holding the run (TD-028 decision 9).
+   */
+  readonly accepted?: 202;
 }[] = [
   {
     name: 'pause',
@@ -336,6 +343,7 @@ const COMMANDS: readonly {
     otherBody: { message: 'use the line sum' },
     key: 'required',
     role: 'member',
+    accepted: 202,
   },
   {
     name: 'take-over',
@@ -368,7 +376,9 @@ describe('every command, enumerated', () => {
   it('performs each one and writes exactly one `human_actions` row for it (standing rule 68)', async () => {
     for (const command of COMMANDS) {
       const reply = await post(world, command.path, command.body, `${command.name}-key`);
-      expect(reply.status, `${command.name}: ${JSON.stringify(reply.body)}`).toBe(200);
+      expect(reply.status, `${command.name}: ${JSON.stringify(reply.body)}`).toBe(
+        command.accepted ?? 200,
+      );
       expect(reply.body.performed).toBe(true);
     }
     expect(world.calls.map((call) => call.name)).toEqual(COMMANDS.map((command) => command.name));
@@ -439,7 +449,7 @@ describe('every command, enumerated', () => {
       expect(first.body.performed).toBe(true);
       const replay = await post(world, command.path, command.body, key);
       expect(`${command.name} ${replay.status} ${String(replay.body.performed)}`).toBe(
-        `${command.name} 200 false`,
+        `${command.name} ${command.accepted ?? 200} false`,
       );
       // The countable effect: one call and one audit row for two requests (standing rule 79).
       expect(world.calls.filter((call) => call.name === command.name)).toHaveLength(1);
@@ -467,12 +477,12 @@ describe('every command, enumerated', () => {
       world.userId = USER;
       const mine = await post(world, command.path, command.body, key);
       expect(`${command.name} ${mine.status} ${String(mine.body.performed)}`).toBe(
-        `${command.name} 200 true`,
+        `${command.name} ${command.accepted ?? 200} true`,
       );
       world.userId = other;
       const theirs = await post(world, command.path, command.body, key);
       expect(`${command.name} ${theirs.status} ${String(theirs.body.performed)}`).toBe(
-        `${command.name} 200 true`,
+        `${command.name} ${command.accepted ?? 200} true`,
       );
       // Both performed, and each audit row names its own actor.
       expect(world.calls.filter((call) => call.name === command.name)).toHaveLength(2);
@@ -484,7 +494,7 @@ describe('every command, enumerated', () => {
       // …and the second caller's own replay is still a replay (rule 42: the other side).
       const again = await post(world, command.path, command.body, key);
       expect(`${command.name} ${again.status} ${String(again.body.performed)}`).toBe(
-        `${command.name} 200 false`,
+        `${command.name} ${command.accepted ?? 200} false`,
       );
       expect(world.calls.filter((call) => call.name === command.name)).toHaveLength(2);
     }
@@ -505,36 +515,36 @@ describe('the steer window (technical/08: one message per five seconds per user)
   it('refuses a second message inside the window and takes the next one after it', async () => {
     const { world: gated, advance } = await windowed();
     const first = await post(gated, `/api/runs/${RUN}/steer`, { message: 'one' }, 'steer-1');
-    expect(first.status, JSON.stringify(first.body)).toBe(200);
+    expect(first.status, JSON.stringify(first.body)).toBe(202);
 
     advance(STEER_MIN_INTERVAL_MS - 1);
     const tooSoon = await post(gated, `/api/runs/${RUN}/steer`, { message: 'two' }, 'steer-2');
     expect(`${tooSoon.status} ${tooSoon.body.error?.code ?? ''}`).toBe('429 rate_limited');
-    // Refused means refused: nothing reached the session and nothing was audited.
+    // Refused means refused: nothing was recorded for the session and nothing was audited.
     expect(gated.calls.filter((call) => call.name === 'run-steer')).toHaveLength(1);
     expect(gated.actions).toHaveLength(1);
 
     // The boundary from the other side (standing rule 42): one millisecond later it is allowed.
     advance(1);
     const later = await post(gated, `/api/runs/${RUN}/steer`, { message: 'three' }, 'steer-3');
-    expect(later.status, JSON.stringify(later.body)).toBe(200);
+    expect(later.status, JSON.stringify(later.body)).toBe(202);
   });
 
   it('gives the slot back when the steer is refused, so the retry meets the refusal and not a 429 (backlog 263)', async () => {
     const { world: gated, advance } = await windowed();
-    gated.throws = new RunNotReachableError(RUN as never, 'steered');
+    gated.throws = new RunNotLiveError(RUN as never, 'completed', 'steered');
     const refused = await post(gated, `/api/runs/${RUN}/steer`, { message: 'one' }, 'steer-r1');
-    expect(`${refused.status} ${refused.body.error?.code ?? ''}`).toBe('409 run_not_reachable');
+    expect(`${refused.status} ${refused.body.error?.code ?? ''}`).toBe('409 run_not_live');
 
     advance(1);
-    gated.throws = new RunNotReachableError(RUN as never, 'steered');
+    gated.throws = new RunNotLiveError(RUN as never, 'completed', 'steered');
     const retry = await post(gated, `/api/runs/${RUN}/steer`, { message: 'one' }, 'steer-r2');
     // With the refund removed (md5-confirmed revert) this read `429 rate_limited`.
-    expect(`${retry.status} ${retry.body.error?.code ?? ''}`).toBe('409 run_not_reachable');
+    expect(`${retry.status} ${retry.body.error?.code ?? ''}`).toBe('409 run_not_live');
 
     // The other direction (standing rule 42): an accepted steer still spends the window.
     const accepted = await post(gated, `/api/runs/${RUN}/steer`, { message: 'two' }, 'steer-r3');
-    expect(accepted.status, JSON.stringify(accepted.body)).toBe(200);
+    expect(accepted.status, JSON.stringify(accepted.body)).toBe(202);
     advance(1);
     const tooSoon = await post(gated, `/api/runs/${RUN}/steer`, { message: 'three' }, 'steer-r4');
     expect(`${tooSoon.status} ${tooSoon.body.error?.code ?? ''}`).toBe('429 rate_limited');
@@ -557,7 +567,7 @@ describe('the steer window (technical/08: one message per five seconds per user)
     await post(gated, `/api/runs/${RUN}/steer`, { message: 'one' }, 'steer-a');
     gated.userId = '00000000-0000-4000-8000-0000000000ea';
     const other = await post(gated, `/api/runs/${RUN}/steer`, { message: 'two' }, 'steer-b');
-    expect(other.status, JSON.stringify(other.body)).toBe(200);
+    expect(other.status, JSON.stringify(other.body)).toBe(202);
   });
 
   it('does not spend the window on a replay, which delivered nothing', async () => {
@@ -569,11 +579,11 @@ describe('the steer window (technical/08: one message per five seconds per user)
     await post(gated, `/api/runs/${RUN}/steer`, { message: 'one' }, 'steer-once');
     advance(STEER_MIN_INTERVAL_MS);
     const replay = await post(gated, `/api/runs/${RUN}/steer`, { message: 'one' }, 'steer-once');
-    expect(replay.status).toBe(200);
+    expect(replay.status).toBe(202);
     expect(replay.body.performed).toBe(false);
 
     const real = await post(gated, `/api/runs/${RUN}/steer`, { message: 'two' }, 'steer-next');
-    expect(real.status, JSON.stringify(real.body)).toBe(200);
+    expect(real.status, JSON.stringify(real.body)).toBe(202);
     expect(gated.calls.filter((call) => call.name === 'run-steer')).toHaveLength(2);
   });
 });
@@ -608,13 +618,6 @@ describe('what each refusal maps to', () => {
       error: new RunNotLiveError(RUN as never, 'completed', 'cancelled'),
       status: 409,
       code: 'run_not_live',
-    },
-    {
-      // WP-27: a **different** code from `run_not_live`, because the remedies differ — one run has
-      // ended, the other is running somewhere this process cannot reach (Q52).
-      error: new RunNotReachableError(RUN as never, 'steered'),
-      status: 409,
-      code: 'run_not_reachable',
     },
     {
       error: new StageNotInTemplateError('deployment' as never, 'feature' as never, [
@@ -817,12 +820,21 @@ describe('the routes’ own answers', () => {
       tarball: true,
       branch: 'agentic/ACME-1',
       exported: true,
+      // WP-85: the run whose stop was recorded, found in the database rather than this process.
+      run_id: RUN,
     });
     expect(world.actions[0]?.params).not.toHaveProperty('reason');
   });
 
   it('answers a take-over of a task with no live run without inventing a resume command', async () => {
-    world.result = { taskId: TASK, branch: 'agentic/ACME-1', sessionId: null, exported: false };
+    world.result = {
+      taskId: TASK,
+      branch: 'agentic/ACME-1',
+      sessionId: null,
+      exported: false,
+      runId: null,
+      reason: null,
+    };
     const reply = await post(world, `/api/tasks/${TASK}/take-over`, {});
     expect(reply.body.session_id).toBeNull();
     expect(reply.body.resume_commands).toEqual(['git fetch && git checkout agentic/ACME-1']);
@@ -840,6 +852,33 @@ describe('the routes’ own answers', () => {
     expect(replay.body.branch).toBe('agentic/ACME-1');
     expect(replay.body.session_id).toBeNull();
     expect(replay.body.workspace_export).toBe('no_live_run');
+  });
+
+  it('answers a steer 202 with the recorded command, and a replay with the same one (WP-85)', async () => {
+    const first = await post(world, `/api/runs/${RUN}/steer`, { message: 'hello' }, 'steer-c1');
+    expect(first.status, JSON.stringify(first.body)).toBe(202);
+    expect(first.body).toMatchObject({
+      run_id: RUN,
+      command_id: '00000000-0000-4000-8000-0000000000c1',
+      performed: true,
+    });
+    // The key reaches the command: the recorded row's id is derived from it (migration 0060).
+    expect(world.calls[0]?.input).toMatchObject({ idempotencyKey: 'steer-c1' });
+    expect(world.actions[0]?.params).toMatchObject({
+      command_id: '00000000-0000-4000-8000-0000000000c1',
+    });
+
+    const replay = await post(world, `/api/runs/${RUN}/steer`, { message: 'hello' }, 'steer-c1');
+    expect(`${replay.status} ${String(replay.body.performed)}`).toBe('202 false');
+    // From the audit row the first attempt wrote, never a placeholder.
+    expect(replay.body.command_id).toBe('00000000-0000-4000-8000-0000000000c1');
+    expect(world.calls).toHaveLength(1);
+  });
+
+  it('passes a take-over’s key to the command, and none when the caller sent none', async () => {
+    await post(world, `/api/tasks/${TASK}/take-over`, {}, 'take-over-key');
+    await post(world, `/api/tasks/${TASK}/take-over`, {});
+    expect(world.calls.map((call) => call.input.idempotencyKey)).toEqual(['take-over-key', null]);
   });
 
   it('refuses a `budget_usd` override by name rather than ignoring it', async () => {

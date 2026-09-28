@@ -499,6 +499,19 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
         return;
       }
       commands.push({ path, body: parsed.data });
+      if (runCommand?.[1] === 'steer') {
+        // WP-85: a steer is **accepted** (202) and names the recorded command, which the client
+        // parses (`steerRunResponseSchema`); whether it was applied is the command log's to say.
+        json(response, 202, {
+          run_id: fixtures.IDS.run,
+          task_id: fixtures.IDS.taskFeature,
+          status: 'running',
+          task_state: 'active',
+          performed: true,
+          command_id: '00000000-0000-4000-8000-0000000000c9',
+        });
+        return;
+      }
       json(response, 200, commandAnswer(path, taskCommand?.[1]));
       return;
     }
@@ -571,6 +584,7 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
         [`/api/runs/${fixtures.IDS.run}/messages`]: fixtures.runMessages,
         [`/api/runs/${fixtures.IDS.run}/prompt`]: fixtures.runPrompt,
         [`/api/runs/${fixtures.IDS.run}/context-pack`]: fixtures.runContextPack,
+        [`/api/runs/${fixtures.IDS.run}/commands`]: fixtures.runCommandLog,
       };
       const body = routes[path];
       if (body !== undefined) {

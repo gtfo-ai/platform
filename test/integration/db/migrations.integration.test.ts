@@ -81,6 +81,9 @@ const EXPECTED_TABLES = [
   'questions',
   'readiness_evaluations',
   'redaction_log',
+  // WP-85, migration 0060: a human command for a live run on its way to the process holding the
+  // run's lease (TD-028 decision 9) — the live-run register it lands in is per process.
+  'run_commands',
   'run_context_pack',
   'run_messages',
   'run_model_usage',
@@ -257,6 +260,9 @@ describe('migrate on an empty PostgreSQL 18', () => {
       // of the repository's file — derived state, rebuilt by the next reading (BD-012).
       row('project_repository_config', 'read_write', null),
       row('redaction_log', 'append_only', 'created_at'),
+      // WP-85 (migration 0060): `read_write` because the holder stamps a row applied, or the run's
+      // ending or the holder's heartbeat stamps it refused — once, after it was written pending.
+      row('run_commands', 'read_write', null),
       row('run_messages', 'append_only', 'created_at', 'transcripts'),
       row('sessions', 'read_write', null),
       // WP-41 (migration 0034): the statistics projections. `read_write` for both — a counter is

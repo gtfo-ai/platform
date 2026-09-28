@@ -15,9 +15,11 @@
  * plan row names ("never against a seeded table"). What a seeded table buys *here* is the cases
  * that tier cannot reach — a `blob_id` nothing writes, a run linked to no stage, a page boundary.
  */
+
+import { createRequire } from 'node:module';
 import { RUN_TRANSCRIPT_TOPIC, runTopic, type Transaction } from '@platform/application';
 import type { ContextPackRecord, Id, IsoDateTime, TranscriptEvent } from '@platform/contracts';
-import { acceptanceVerdictDataSchema } from '@platform/contracts';
+import { acceptanceVerdictDataSchema, MAX_RUN_COMMANDS } from '@platform/contracts';
 import { SHIPPED_TEMPLATES } from '@platform/domain';
 import {
   broadcast as broadcastAdapter,
@@ -29,6 +31,7 @@ import { findShippedProvider } from '@platform/integrations';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { toApiError } from '../../../apps/server/src/errors.js';
 import {
   findIntegrationRow,
   listIntegrationRows,
@@ -43,6 +46,7 @@ import {
   findTaskDetail,
   listInbox,
   listProjectTasks,
+  listRunCommands,
   listRunMessages,
   listRunningAgents,
 } from '../../../apps/server/src/queries/pipeline-queries.js';
@@ -50,6 +54,7 @@ import {
   findProjectReadiness,
   listProjectSummaries,
 } from '../../../apps/server/src/queries/project-queries.js';
+import { registerRunRoutes } from '../../../apps/server/src/routes/runs.js';
 import { SseHub, type SseTransport } from '../../../apps/server/src/sse/hub.js';
 import { startTranscriptBridge } from '../../../apps/server/src/sse/transcript-bridge.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
@@ -1565,6 +1570,193 @@ describe('the Checks panel’s reads (WP-46)', () => {
         ['AC-1', 'met'],
         ['AC-2', 'not_met'],
       ]);
+    }
+  });
+});
+
+/**
+ * Fastify and its zod compilers, resolved **from `apps/server`**, which is the package that depends
+ * on them: the repository root does not, and adding them there resolves a second peer variant of
+ * `fastify-type-provider-zod` rather than the one the server runs (measured, WP-85 review round 1).
+ * Typed by the one shape this file uses.
+ */
+const fromServer = createRequire(new URL('../../../apps/server/package.json', import.meta.url));
+const fastify = fromServer('fastify') as () => Parameters<typeof registerRunRoutes>[0];
+const { serializerCompiler, validatorCompiler } = fromServer('fastify-type-provider-zod') as {
+  // biome-ignore lint/suspicious/noExplicitAny: the compilers' own types live in apps/server's graph.
+  readonly serializerCompiler: any;
+  // biome-ignore lint/suspicious/noExplicitAny: as above.
+  readonly validatorCompiler: any;
+};
+
+/**
+ * `GET /api/runs/:run_id/commands` on a real database (WP-85 review round 1): the projection the
+ * run screen reads to say whether a steer or a take-over's stop was applied, and the route's guard.
+ */
+describe('the run commands a run screen reads (WP-85)', () => {
+  const commandRow = async (input: {
+    readonly run: string;
+    readonly kind: string;
+    readonly payload: unknown;
+    readonly createdAt: string;
+    readonly applied?: boolean;
+    readonly refusedReason?: string;
+  }): Promise<string> => {
+    const { rows } = await pool.query<{ id: string }>(
+      `insert into run_commands (id, run_id, task_id, kind, payload, created_at, applied_at,
+                                 refused_at, refused_reason)
+       values (gen_random_uuid(), $1, $2, $3, $4::jsonb, $5::timestamptz,
+               case when $6 then $5::timestamptz end,
+               case when $7::text is not null then $5::timestamptz end, $7::text)
+       returning id`,
+      [
+        input.run,
+        taskId,
+        input.kind,
+        JSON.stringify(input.payload),
+        input.createdAt,
+        input.applied === true,
+        input.refusedReason ?? null,
+      ],
+    );
+    return rows[0]?.id as string;
+  };
+  const steerPayload = (text: string) => ({
+    text,
+    author_user_id: '00000000-0000-4000-8000-0000000000e1',
+    author_label: 'Operator',
+  });
+
+  it('publishes each command in its state, newest first, with a steer’s stored message', async () => {
+    const pending = await commandRow({
+      run: runId,
+      kind: 'steer',
+      payload: steerPayload('check the rounding <b>now</b>'),
+      createdAt: '2026-09-12T10:03:00.000Z',
+    });
+    const refused = await commandRow({
+      run: runId,
+      kind: 'take_over',
+      payload: {
+        branch: 'agentic/ACME-1',
+        commit_message: 'wip: hand-over to Operator',
+        tarball: false,
+        keep_until: '2026-09-26T10:00:00.000Z',
+      },
+      createdAt: '2026-09-12T10:02:00.000Z',
+      refusedReason: 'run_ended',
+    });
+    const applied = await commandRow({
+      run: runId,
+      kind: 'steer',
+      payload: steerPayload('use the invoice total'),
+      createdAt: '2026-09-12T10:01:00.000Z',
+      applied: true,
+    });
+    try {
+      const items = await listRunCommands(drizzled, runId);
+      expect(items.map((item) => [item.id, item.kind, item.state, item.refused_reason])).toEqual([
+        [pending, 'steer', 'pending', null],
+        [refused, 'take_over', 'refused', 'run_ended'],
+        [applied, 'steer', 'applied', null],
+      ]);
+      // The stored words, byte for byte (untrusted text is the screen's to render as text), and no
+      // message for a stop.
+      expect(items.map((item) => item.message)).toEqual([
+        'check the rounding <b>now</b>',
+        null,
+        'use the invoice total',
+      ]);
+      expect(items[2]?.applied_at).toBe('2026-09-12T10:01:00.000Z');
+      expect(items[1]?.refused_at).toBe('2026-09-12T10:02:00.000Z');
+      expect(await listRunCommands(drizzled, unlinkedRunId)).toEqual([]);
+    } finally {
+      await pool.query('delete from run_commands where run_id = $1', [runId]);
+    }
+  });
+
+  it('refuses a payload it cannot read by name rather than publishing an empty message', async () => {
+    await commandRow({
+      run: blobRunId,
+      kind: 'steer',
+      payload: { not: 'a steer' },
+      createdAt: '2026-09-12T10:00:00.000Z',
+    });
+    try {
+      await expect(listRunCommands(drizzled, blobRunId)).rejects.toMatchObject({
+        statusCode: 409,
+        code: 'row_not_projectable',
+      });
+    } finally {
+      await pool.query('delete from run_commands where run_id = $1', [blobRunId]);
+    }
+  });
+
+  it('returns at most a hundred, the newest', async () => {
+    const values: string[] = [];
+    for (let index = 0; index < MAX_RUN_COMMANDS + 1; index += 1) {
+      values.push(
+        `(gen_random_uuid(), '${localRunId}', '${taskId}', 'steer', '${JSON.stringify(steerPayload(`m${index}`))}'::jsonb, '2026-09-12T10:00:00Z'::timestamptz + interval '${index} seconds')`,
+      );
+    }
+    await pool.query(
+      `insert into run_commands (id, run_id, task_id, kind, payload, created_at) values ${values.join(', ')}`,
+    );
+    try {
+      const items = await listRunCommands(drizzled, localRunId);
+      expect(items).toHaveLength(MAX_RUN_COMMANDS);
+      expect(items[0]?.message).toBe(`m${MAX_RUN_COMMANDS}`);
+      expect(items.at(-1)?.message).toBe('m1');
+    } finally {
+      await pool.query('delete from run_commands where run_id = $1', [localRunId]);
+    }
+  });
+
+  it('answers a member of the run’s project, and refuses a member of another project', async () => {
+    const other = await pool.query<{ id: string }>(
+      `insert into projects (org_id, key, name, repo_url)
+       select org_id, 'other-commands', 'Other', 'https://git.example.test/acme/other.git'
+         from projects where id = $1 returning id`,
+      [projectId],
+    );
+    const users = await pool.query<{ id: string }>(
+      `insert into users (email, name) values ('member@example.test', 'Member'),
+                                             ('stranger@example.test', 'Stranger') returning id`,
+    );
+    const [member, stranger] = users.rows.map((row) => row.id);
+    await pool.query(
+      `insert into project_members (project_id, user_id, role) values ($1, $2, 'member'), ($3, $4, 'member')`,
+      [projectId, member, other.rows[0]?.id, stranger],
+    );
+    const app = fastify();
+    app.setValidatorCompiler(validatorCompiler);
+    app.setSerializerCompiler(serializerCompiler);
+    app.setErrorHandler(async (error: unknown, _request, reply) => {
+      const mapped = toApiError(error, 'read-api');
+      return reply.status(mapped.statusCode).send(mapped.body);
+    });
+    let caller = member as string;
+    app.addHook('onRequest', async (request) => {
+      request.actor = {
+        userId: caller,
+        email: 'someone@example.test',
+        name: 'Someone',
+        // An organisation viewer: `transcript.read` is member, so only a project membership lifts it.
+        role: 'viewer',
+        sessionId: 'session-1',
+      };
+    });
+    await registerRunRoutes(app, { database: drizzled });
+    await app.ready();
+    try {
+      const allowed = await app.inject({ method: 'GET', url: `/api/runs/${runId}/commands` });
+      expect(allowed.statusCode, allowed.body).toBe(200);
+      expect(allowed.json()).toEqual({ items: [] });
+      caller = stranger as string;
+      const refused = await app.inject({ method: 'GET', url: `/api/runs/${runId}/commands` });
+      expect(refused.statusCode, refused.body).toBe(403);
+    } finally {
+      await app.close();
     }
   });
 });

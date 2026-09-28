@@ -83,6 +83,7 @@ import {
   createLateCostRecorder,
   createMaintenanceReportSink,
   createPipelineRuntime,
+  createRunCommandInbox,
   createRunScopedSecrets,
   createRunStopReasons,
   createStageRunPlanner,
@@ -327,11 +328,10 @@ export interface ComposePipelineOptions {
   /**
    * The register of runs this process is executing (WP-27).
    *
-   * Built by the composition root and passed to **both** halves — the runner is wrapped with it
-   * here, and `createTaskCommands` is given the same instance — because a steer and a take-over
-   * reach into a session the executor is holding. A second register would be a second, empty
-   * answer to "is that run here", and every steer would be refused on a process that was running
-   * the run.
+   * The runner is wrapped with it here, and the run-command inbox composed below applies steer and
+   * take-over commands to the handles it holds (WP-85, TD-028 decision 9). A second register would
+   * be a second, empty answer to "is that run here", and every command would be refused
+   * `register_miss` on the process that was running the run.
    */
   readonly liveRuns: LiveRuns;
   /**
@@ -904,6 +904,45 @@ export const composePipeline = async (
     // A list read that skips a task with an unreadable `pipeline_dial` names it here (WP-62).
     logger: options.logger,
   });
+  /**
+   * TD-028 decision 5: this process takes `stage.execute` jobs **only if it can perform one**.
+   *
+   * The condition is exactly the one `composeAgentRunner` already answers — a workspace
+   * provisioner, and in `api` mode a model credential — so there is one definition of "runs
+   * agents" rather than two. `composition.runner` (the e2e tiers' `FakeClaudeRunner` seam) counts
+   * as a runner for the same reason it counts everywhere else in this file: it *is* one.
+   */
+  const runsAgents = composition.runner !== undefined || agent.runner !== null;
+  /**
+   * The holder's half of a human command for a live run (WP-85, TD-028 decision 9, PROGRESS
+   * backlog 134) — composed exactly where runs can be held, so a process that runs no agent neither
+   * listens nor polls.
+   *
+   * Three wake-ups reach it, and `pipeline/run-commands.ts` carries why each is needed: the
+   * `pg_notify` the command sends on this process's lease-owner topic (over the broadcast every
+   * process already holds — the outbox's and the transcript bridge's `LISTEN`), the lease heartbeat
+   * (`lease.onRenewed` below: the guarantee, for a notification sent while the `LISTEN` was down),
+   * and a run's start (the runner wrap below: a command recorded between the row's insert and the
+   * handle's registration). It applies a command to the same `liveRuns` register the runner is
+   * wrapped with — never to a register reachable any other way.
+   */
+  const runCommands = runsAgents
+    ? createRunCommandInbox({
+        unitOfWork: options.eventing.unitOfWork,
+        store,
+        liveRuns: options.liveRuns,
+        owner: RUN_LEASE_OWNER,
+        logger: options.logger,
+      })
+    : null;
+  if (runCommands !== null) {
+    await runCommands.listen(options.eventing.broadcast);
+  }
+  /** The runner as the executor and the ask see it: registered, then drained on start (WP-85). */
+  const observed = (runner: ClaudeRunner): ClaudeRunner => {
+    const registered = options.liveRuns.observe(runner);
+    return runCommands === null ? registered : runCommands.observe(registered);
+  };
   /** WP-77: one instance for the recovery pass that finds and the duty that re-validates. */
   const runCredentialStore = recoveryAdapters.createPostgresRunCredentialStore();
   const maintenanceStore = new maintenanceAdapters.PostgresMaintenanceStore();
@@ -981,15 +1020,8 @@ export const composePipeline = async (
     eventStore: options.eventing.store,
     logger: options.logger,
     stageConcurrency: options.stageConcurrency,
-    /**
-     * TD-028 decision 5: this process takes `stage.execute` jobs **only if it can perform one**.
-     *
-     * The condition is exactly the one `composeAgentRunner` already answers — a workspace
-     * provisioner, and in `api` mode a model credential — so there is one definition of "runs
-     * agents" rather than two. `composition.runner` (the e2e tiers' `FakeClaudeRunner` seam) counts
-     * as a runner for the same reason it counts everywhere else in this file: it *is* one.
-     */
-    runsAgents: composition.runner !== undefined || agent.runner !== null,
+    /** TD-028 decision 5 — see {@link runsAgents} above. */
+    runsAgents,
     baseUrl: options.baseUrl,
     /**
      * The registry client, composed **only** when an operator declared a host (WP-38, Q84).
@@ -1003,9 +1035,9 @@ export const composePipeline = async (
      * Ask-the-task (WP-31) — a run with a task and no stage, on the same runner, the same budget
      * guard and the same stop-reason register the stage executor is given.
      *
-     * The **runner is the same instance**, wrapped in `liveRuns` like every other run this process
-     * starts: an ask is a run, so `POST /api/runs/:id/steer` and a take-over reach it exactly as
-     * they reach a stage's. What is different is the planner — an ask has no stage and its prompt
+     * The **runner is the same instance**, wrapped in `liveRuns` and the run-command inbox like
+     * every other run this process starts: an ask is a run, so `POST /api/runs/:id/steer` and a
+     * take-over reach it exactly as they reach a stage's. What is different is the planner — an ask has no stage and its prompt
      * is built from the audit trail (`createAskRunPlanner`) — and the tools, which
      * `PLATFORM_TOOLS_BY_ROLE.ask` narrows to `get_task_context` and `kb_search`.
      */
@@ -1014,7 +1046,7 @@ export const composePipeline = async (
       // The same map the inbound normaliser decides `verified` from; the ask handler needs the
       // platform user id, which `ExternalIdentity` does not carry.
       identities: integrationAdapters.createPostgresIdentityDirectory({ sql: options.pool }),
-      runner: options.liveRuns.observe(
+      runner: observed(
         composition.runner?.(platformTools) ?? agent.runner ?? unavailableClaudeRunner(),
       ),
       planner: createAskRunPlanner({
@@ -1045,7 +1077,7 @@ export const composePipeline = async (
       // is outermost on purpose: it must see the handle the executor is given, whichever of the
       // three runners below produced it — including `unavailableClaudeRunner`, whose `start` throws
       // and therefore registers nothing.
-      runner: options.liveRuns.observe(
+      runner: observed(
         composition.runner?.(platformTools) ?? agent.runner ?? unavailableClaudeRunner(),
       ),
       planner: createStageRunPlanner({
@@ -1122,7 +1154,16 @@ export const composePipeline = async (
        * mid-run leaves a row `running` for ever, holding its stage's per-run budget against every
        * future window of its project and its organisation.
        */
-      lease: { owner: RUN_LEASE_OWNER },
+      lease: {
+        owner: RUN_LEASE_OWNER,
+        // WP-85: every beat that renewed a run's lease also applies that run's pending human
+        // commands — the guarantee behind the notification (TD-028 decision 9).
+        ...(runCommands === null
+          ? {}
+          : {
+              onRenewed: async (runId: Id) => runCommands.drain({ runId, onMiss: 'refuse' }),
+            }),
+      },
       /**
        * What a run's spend does when a human's cancel or the sweep ended the row first (Q70 (b),
        * backlog **50**). Until WP-47 it did nothing at all: the ender wrote zeros, the ledger took
@@ -1394,6 +1435,9 @@ export const composePipeline = async (
     platformTools,
     agentMissing: agent.runner === null ? agent.missing : [],
     stop: async () => {
+      // First: a drain holds a pooled connection and delivers into a live session, and everything
+      // below it ends the work it would deliver into.
+      await runCommands?.stop();
       if (reconciler !== null) {
         await reconciler.stop();
       }

@@ -98,6 +98,18 @@ export interface RunLeaseOptions {
   readonly renewEveryMs?: number;
   /** @default intervalHeartbeatSchedule */
   readonly schedule?: HeartbeatSchedule;
+  /**
+   * Called after every beat that **renewed** the lease, inside the beat — so a stop waits for it
+   * (WP-85, TD-028 decision 9).
+   *
+   * It is where the process holding a run polls that run's pending human commands
+   * (`./run-commands.ts`): a `pg_notify` is not delivered to a connection that was reconnecting, so
+   * the beat is the guarantee and the notification only the latency. A beat that did not renew
+   * calls nothing — the run has ended or the lease is not this process's, and a command for it is
+   * closed by the run's ending. A callback that throws is logged like a failed beat and never
+   * reaches the run.
+   */
+  readonly onRenewed?: (runId: Id) => Promise<void>;
 }
 
 /**
@@ -187,7 +199,11 @@ export const startRunHeartbeat = (deps: RunHeartbeatDependencies, runId: Id): St
       return;
     }
     inFlight = renewRunLease(deps, runId)
-      .then((renewed) => {
+      .then(async (renewed) => {
+        if (renewed && !stopped) {
+          await deps.lease.onRenewed?.(runId);
+          return;
+        }
         if (renewed || stopped) {
           return;
         }

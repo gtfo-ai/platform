@@ -310,16 +310,16 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
         : null;
 
     /**
-     * The runs this process is executing, for the two commands that reach into a live session
-     * (WP-27: steer and take-over).
+     * The runs this process is executing (WP-27), for the process's own run-command inbox.
      *
-     * One per process, built before either consumer: `composePipeline` wraps the agent runner with
-     * it and `createTaskCommands` looks runs up in it. It fills only on a process that **runs
-     * agents** — on the shipped topology `runner`, never `app` — so on every process that serves the
-     * API it stays empty: a steer refuses by name (`run_not_reachable`) and a take-over pauses the
-     * task and reports `no_live_run`, which is what a caller needs to be told, because the session is
-     * genuinely somewhere else (Q52, PROGRESS backlog 134; the steer asserted through two processes
-     * in `test/e2e/topology/two-processes.e2e.test.ts`).
+     * One per process: `composePipeline` wraps the agent runner with it and — on a process that runs
+     * agents — hands the same instance to the inbox that applies steer and take-over commands
+     * (WP-85, TD-028 decision 9). It fills only on a process that **runs agents** — on the shipped
+     * topology `runner`, never `app` — and nothing that serves the API reads it any more: a command
+     * reaches the holder as a `run_commands` row and a `pg_notify`, never through this register,
+     * which is what made every steer on the shipped topology `run_not_reachable` before WP-85
+     * (PROGRESS backlog 134; the crossing asserted through two processes in
+     * `test/e2e/topology/two-processes.e2e.test.ts`).
      */
     const liveRuns = createLiveRuns();
 
@@ -443,12 +443,6 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       // Before `worker.start()`, and that ordering is the point: the first sweep dispatches to
       // whatever is registered on the bus, so a pipeline registered afterwards would miss the
       // events the sweep had already marked handled.
-      //
-      // `liveRuns` is built **outside** this branch and before either half (WP-27): it is the one
-      // object the executor and the command surface share, and building it inside the pipeline
-      // would leave the API's steer and take-over asking an empty register on the process that is
-      // running the run. A process with no pipeline never fills it, and both commands then refuse
-      // by name — which is the true answer there.
       if (options.pipeline === null) {
         // The labelled seam on `StartRuntimeOptions.pipeline`. Nothing in production reaches here.
         logger.warn(
@@ -745,7 +739,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
      * by a composition root that builds none.
      */
     const taskCommands = capabilities.api
-      ? createTaskCommands({ eventing, jobs, liveRuns, logger: loggerPort })
+      ? createTaskCommands({ eventing, jobs, logger: loggerPort })
       : null;
 
     /**

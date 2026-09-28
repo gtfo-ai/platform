@@ -23,7 +23,6 @@ import {
   CommandsUnavailableError,
   IterationLimitReachedError,
   RunNotLiveError,
-  RunNotReachableError,
   StageNotCurrentError,
   StageNotInTemplateError,
   TaskConflictExhaustedError,
@@ -166,11 +165,6 @@ export const commandRefusal = (error: unknown): HttpError | null => {
   }
   if (error instanceof RunNotLiveError) {
     return new HttpError(409, 'run_not_live', error.message);
-  }
-  if (error instanceof RunNotReachableError) {
-    // A **different** code from `run_not_live`, because the two have different remedies: one says
-    // the run has ended, the other says the session is somewhere this process cannot reach (WP-27).
-    return new HttpError(409, 'run_not_reachable', error.message);
   }
   if (error instanceof StageNotInTemplateError) {
     return new HttpError(409, 'stage_not_in_template', error.message);

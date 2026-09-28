@@ -45,7 +45,6 @@ import {
   IterationLimitReachedError,
   pauseTaskCommand,
   RunNotLiveError,
-  RunNotReachableError,
   resumeTaskCommand,
   retryRunCommand,
   retryStageCommand,
@@ -59,7 +58,8 @@ import {
   takeOverTaskCommand,
   UnknownAggregateError,
 } from './commands.js';
-import { createLiveRuns, type LiveRun, type LiveRuns } from './live-runs.js';
+import type { LiveRun, LiveRuns } from './live-runs.js';
+import { createRunCommandInbox } from './run-commands.js';
 import type { StoredTask } from './store.js';
 import { TaskConcurrentModificationError } from './store.js';
 import { TaskConflictExhaustedError } from './task-conflict.js';
@@ -1286,7 +1286,10 @@ describe('a command that loses every race', () => {
   });
 });
 
-// ── Steer, take over, hand back (WP-27) ──────────────────────────────────────
+// ── Steer, take over, hand back (WP-27; recorded-then-applied since WP-85) ──────────────────────
+
+/** The lease owner of the process "holding" a seeded run in these cases. */
+const HOLDER = 'holder-process:0000beef';
 
 /** What a live handle was asked to do, so a case asserts the call and not its absence. */
 interface RecordingHandle {
@@ -1299,7 +1302,7 @@ interface RecordingHandle {
  * A register holding one live run, with a handle that records.
  *
  * Hand-written rather than `createLiveRuns().observe(...)`: what these cases are about is what the
- * **command** does with a handle it found, and `live-runs.test.ts` is where the register's own
+ * **holder** does with a handle it found, and `live-runs.test.ts` is where the register's own
  * behaviour — the wrapping, the two indexes, the forgetting — is driven. A stub here keeps the two
  * questions apart.
  */
@@ -1338,31 +1341,59 @@ const liveRunFor = (
   };
 };
 
+/** Claims the seeded run's lease for {@link HOLDER}, as the executor's first transaction does. */
+const leaseTo = async (harness: PipelineHarness, runId: Id, owner = HOLDER): Promise<void> => {
+  await harness.memory.transaction(async (scope) => {
+    await harness.store.runs.renewLease(scope.tx, {
+      runId,
+      owner,
+      expiresAt: '2099-01-01T00:00:00.000Z' as never,
+    });
+  });
+};
+
+/** The holder's half, over the harness's own store, unit of work and broadcast. */
+const holderFor = (harness: PipelineHarness, live: LiveRuns, owner = HOLDER) =>
+  createRunCommandInbox({
+    unitOfWork: harness.memory,
+    store: harness.store,
+    liveRuns: live,
+    owner,
+  });
+
 describe('steer a run', () => {
-  it('pushes the human’s turn into the live session and records it as an event', async () => {
+  it('records the turn and its event, and the holder woken by the notification delivers it once', async () => {
     const harness = await asking();
     const task = taskOf(harness).task.id;
     const runId = await seedLiveRun(harness, 'refinement' as Slug);
+    await leaseTo(harness, runId);
     const recorder = liveRunFor(runId, task);
+    const holder = holderFor(harness, recorder.live);
+    await holder.listen(harness.memory.broadcast);
 
-    const result = await steerRunCommand(
-      { ...harness.humanCommands, liveRuns: recorder.live },
-      {
-        runId,
-        userId: USER,
-        role: 'maintainer',
-        message: 'use the invoice total, not the line sum',
-        authorName: 'Ada Lovelace',
-      },
-    );
+    const result = await steerRunCommand(harness.humanCommands, {
+      runId,
+      userId: USER,
+      role: 'maintainer',
+      message: 'use the invoice total, not the line sum',
+      authorName: 'Ada Lovelace',
+    });
+    // The wake-up is delivered on commit and drains asynchronously; wait for the work, not a time.
+    await holder.drain();
 
     expect(result.taskId).toBe(task);
-    // The **session** got it, which is the whole point of the command (standing rule 82: assert the
-    // artefact the work package exists to produce).
-    expect(recorder.steers).toHaveLength(1);
-    expect(recorder.steers[0]?.text).toBe('use the invoice total, not the line sum');
-    expect(recorder.steers[0]?.authorUserId).toBe(USER);
-    expect(recorder.steers[0]?.authorLabel).toBe('Ada Lovelace');
+    // The **session** got it, through the holder (standing rule 82: assert the artefact the work
+    // package exists to produce), and the row says so.
+    expect(recorder.steers).toEqual([
+      {
+        text: 'use the invoice total, not the line sum',
+        authorUserId: USER,
+        authorLabel: 'Ada Lovelace',
+      },
+    ]);
+    expect(harness.store.runCommandRows()).toMatchObject([
+      { id: result.commandId, runId, applied: true, refusedReason: null },
+    ]);
     // …and the log has it, on the **task's** stream: a run's `stream_seq` belongs to the executor
     // for the length of the run, so a foreign writer on it corrupts rather than races
     // (`aggregates/run.ts` carries the measurement). The run is named in the payload.
@@ -1372,97 +1403,90 @@ describe('steer a run', () => {
     expect(steered[0]?.stream_id).toBe(task);
     expect(payloadOf<{ run_id: string }>(harness, 'run.steered').run_id).toBe(runId);
     expect(payloadOf<{ author_user_id: string }>(harness, 'run.steered').author_user_id).toBe(USER);
+    await holder.stop();
   });
 
-  it('redacts the message once, so the session and the event get the same bytes', async () => {
+  it('records rather than delivers: with no holder listening the row is pending and nothing reached a session', async () => {
     const harness = await asking();
     const task = taskOf(harness).task.id;
     const runId = await seedLiveRun(harness, 'refinement' as Slug);
+    await leaseTo(harness, runId);
     const recorder = liveRunFor(runId, task);
 
-    await steerRunCommand(
-      { ...harness.humanCommands, liveRuns: recorder.live },
-      {
-        runId,
-        userId: USER,
-        role: 'maintainer',
-        message: `deploy with ${PLANTED_SECRET}`,
-        authorName: 'Ada',
-      },
-    );
+    const { commandId } = await steerRunCommand(harness.humanCommands, {
+      runId,
+      userId: USER,
+      role: 'maintainer',
+      message: 'hello',
+      authorName: 'Ada',
+      commandId: '00000000-0000-4000-8000-00000000c0de' as Id,
+    });
+
+    // The id the caller supplied (the composition root derives it from the Idempotency-Key).
+    expect(commandId).toBe('00000000-0000-4000-8000-00000000c0de');
+    expect(recorder.steers).toEqual([]);
+    expect(harness.store.runCommandRows()).toMatchObject([
+      { id: commandId, applied: false, refusedReason: null },
+    ]);
+  });
+
+  it('redacts the message once, so the row, the event and the session get the same bytes', async () => {
+    const harness = await asking();
+    const task = taskOf(harness).task.id;
+    const runId = await seedLiveRun(harness, 'refinement' as Slug);
+    await leaseTo(harness, runId);
+    const recorder = liveRunFor(runId, task);
+
+    await steerRunCommand(harness.humanCommands, {
+      runId,
+      userId: USER,
+      role: 'maintainer',
+      message: `deploy with ${PLANTED_SECRET}`,
+      authorName: 'Ada',
+    });
+    await holderFor(harness, recorder.live).drain();
 
     // Both ways: the credential is gone and the sentence around it survived (standing rule 42).
     expect(recorder.steers[0]?.text).not.toContain(PLANTED_SECRET);
     expect(recorder.steers[0]?.text).toContain('deploy with');
     expect(JSON.stringify(harness.events())).not.toContain(PLANTED_SECRET);
+    expect(JSON.stringify(harness.store.runCommandRows())).not.toContain(PLANTED_SECRET);
   });
 
-  it('refuses a run that is not running, naming its status', async () => {
+  it('refuses a run that is not running, naming its status, and records nothing', async () => {
     const harness = await asking();
     const completed = harness.specs.at(-1)?.runId as Id;
-    const recorder = liveRunFor(completed, taskOf(harness).task.id);
 
     await expect(
-      steerRunCommand(
-        { ...harness.humanCommands, liveRuns: recorder.live },
-        { runId: completed, userId: USER, role: 'maintainer', message: 'hello', authorName: 'Ada' },
-      ),
+      steerRunCommand(harness.humanCommands, {
+        runId: completed,
+        userId: USER,
+        role: 'maintainer',
+        message: 'hello',
+        authorName: 'Ada',
+      }),
     ).rejects.toThrow(RunNotLiveError);
-    expect(recorder.steers).toEqual([]);
+    expect(harness.store.runCommandRows()).toEqual([]);
+    expect(countOf(harness, 'run.steered')).toBe(0);
   });
-
-  /**
-   * Both compositions, because only one of them exists in production (WP-27's fix round).
-   *
-   * `apps/server/src/commands.ts` said an API-only process composes `liveRuns: null`;
-   * `runtime.ts:218` builds `createLiveRuns()` on **every** role, outside the worker branch, and
-   * leaves the API's empty. The two are the same answer here — which is what made the wrong
-   * sentence harmless and unnoticed — so the equality is now asserted rather than assumed
-   * (standing rules 3 and 68), and the docblock states the composition that exists.
-   */
-  it.each([
-    ['a process that composed no pipeline', null],
-    ['an API-only process, whose register is empty', createLiveRuns()],
-  ] as const)(
-    'refuses a running run this process is not executing — %s',
-    async (_what, liveRuns) => {
-      const harness = await asking();
-      const runId = await seedLiveRun(harness, 'refinement' as Slug);
-
-      // The row says `running` and the register has nothing: the session is in another process, or
-      // it ended a moment ago (Q52). Refused rather than accepted and dropped.
-      await expect(
-        steerRunCommand(
-          { ...harness.humanCommands, liveRuns },
-          {
-            runId,
-            userId: USER,
-            role: 'maintainer',
-            message: 'hello',
-            authorName: 'Ada',
-          },
-        ),
-      ).rejects.toThrow(RunNotReachableError);
-      expect(countOf(harness, 'run.steered')).toBe(0);
-    },
-  );
 
   it('refuses a role that may not steer, and the aggregate is what refuses it', async () => {
     const harness = await asking();
-    const task = taskOf(harness).task.id;
     const runId = await seedLiveRun(harness, 'refinement' as Slug);
-    const recorder = liveRunFor(runId, task);
+    await leaseTo(harness, runId);
 
     await expect(
-      steerRunCommand(
-        { ...harness.humanCommands, liveRuns: recorder.live },
-        { runId, userId: USER, role: 'viewer', message: 'hello', authorName: 'Ada' },
-      ),
+      steerRunCommand(harness.humanCommands, {
+        runId,
+        userId: USER,
+        role: 'viewer',
+        message: 'hello',
+        authorName: 'Ada',
+      }),
     ).rejects.toThrow(/viewer/);
-    // **Nothing reached the model**, which is the half a reordering could silently lose: the
-    // aggregate refuses inside the transaction and the delivery is the line after it, so a refused
-    // steer is a request that did nothing at all (standing rule 42's other direction).
-    expect(recorder.steers).toEqual([]);
+    // **Nothing was recorded**, so nothing can reach the model: the aggregate refuses inside the
+    // transaction before the row is written (standing rule 42's other direction).
+    expect(harness.store.runCommandRows()).toEqual([]);
     expect(countOf(harness, 'run.steered')).toBe(0);
   });
 
@@ -1478,27 +1502,79 @@ describe('steer a run', () => {
       }),
     ).rejects.toThrow(UnknownAggregateError);
   });
+
+  it('closes a pending steer run_ended when the run ends, and the holder never applies it late (criterion 3)', async () => {
+    const harness = await asking();
+    const task = taskOf(harness).task.id;
+    const runId = await seedLiveRun(harness, 'refinement' as Slug);
+    await leaseTo(harness, runId);
+    const recorder = liveRunFor(runId, task);
+
+    await steerRunCommand(harness.humanCommands, {
+      runId,
+      userId: USER,
+      role: 'maintainer',
+      message: 'too late',
+      authorName: 'Ada',
+    });
+    // The run ends before any wake-up reached the holder — the cancel is one of `finish`'s callers.
+    await cancelRunCommand(harness.humanCommands, { runId, userId: USER });
+    expect(harness.store.runCommandRows()).toMatchObject([
+      { applied: false, refusedReason: 'run_ended' },
+    ]);
+    // A holder that still has the handle (its outcome has not settled) drains now: nothing.
+    await holderFor(harness, recorder.live).drain({ runId, onMiss: 'refuse' });
+    expect(recorder.steers).toEqual([]);
+    expect(harness.store.runCommandRows()).toMatchObject([
+      { applied: false, refusedReason: 'run_ended' },
+    ]);
+    // And a steer after the ending is the old 409.
+    await expect(
+      steerRunCommand(harness.humanCommands, {
+        runId,
+        userId: USER,
+        role: 'maintainer',
+        message: 'later still',
+        authorName: 'Ada',
+      }),
+    ).rejects.toThrow(RunNotLiveError);
+  });
 });
 
 describe('take a task over', () => {
-  it('pauses the task, interrupts the run and asks its workspace for the export', async () => {
+  it('pauses the task, records the live run it stops, and the holder asks its workspace for the export', async () => {
     const harness = await asking();
     const stored = taskOf(harness);
     const runId = await seedLiveRun(harness, 'refinement' as Slug);
+    await leaseTo(harness, runId);
     const recorder = liveRunFor(runId, stored.task.id);
+    const holder = holderFor(harness, recorder.live);
+    await holder.listen(harness.memory.broadcast);
 
-    const outcome = await takeOverTaskCommand(
-      { ...harness.humanCommands, liveRuns: recorder.live },
-      { taskId: stored.task.id, userId: USER, authorName: 'Ada Lovelace', tarball: true },
-    );
+    const outcome = await takeOverTaskCommand(harness.humanCommands, {
+      taskId: stored.task.id,
+      userId: USER,
+      authorName: 'Ada Lovelace',
+      tarball: true,
+    });
+    await holder.drain();
 
     expect(taskOf(harness).task.state).toBe('paused');
     expect(countOf(harness, 'task.taken_over')).toBe(1);
-    const payload = payloadOf<{ branch: string; session_id: string | null; stage: string }>(
-      harness,
-      'task.taken_over',
-    );
+    const payload = payloadOf<{
+      branch: string;
+      session_id: string | null;
+      stage: string;
+      run_id: string | null;
+    }>(harness, 'task.taken_over');
     expect(payload.stage).toBe('refinement');
+    // The run the take-over stops is **recorded** — found in the database, not in this process
+    // (backlog 134: on the shipped topology the old register lookup always answered null).
+    expect(payload.run_id).toBe(runId);
+    expect(outcome.runId).toBe(runId);
+    // The session the run reported, read from the database rather than from a handle this
+    // process does not hold (WP-85) — on the event, for the workpad and the task screen, too.
+    expect(outcome.sessionId).toBe('session-live');
     expect(payload.session_id).toBe('session-live');
     // No merge request yet, so the branch is the one BD-025 reserves for this ticket.
     expect(payload.branch).toBe('agentic/ACME-1');
@@ -1519,42 +1595,37 @@ describe('take a task over', () => {
       (Date.parse(stop.workspaceExport.keepUntil) - Date.parse(harness.clock.now())) /
       (24 * 60 * 60 * 1000);
     expect(days).toBeCloseTo(TAKEN_OVER_WORKSPACE_KEEP_DAYS, 5);
+    expect(harness.store.runCommandRows()).toMatchObject([
+      { runId, applied: true, instruction: { kind: 'take_over' } },
+    ]);
+    await holder.stop();
   });
 
   /**
-   * The other half of the steer's equality above, and it answers the **opposite** way.
-   *
-   * A steer with no live run is refused, because accepting a turn nobody will hear is a silent
-   * failure. A take-over with no live run is a take-over: the work is on the branch, the task
-   * pauses, and `exported: false` is what the operator is told. Both compositions an API-only
-   * process can have are driven, for the reason the steer's case states.
+   * The other half of the steer: a take-over with no live run is a take-over. The work is on the
+   * branch, the task pauses, `exported: false` is what the operator is told, and no stop is
+   * recorded because there is nothing to stop.
    */
-  it.each([
-    ['a process that composed no pipeline', null],
-    ['an API-only process, whose register is empty', createLiveRuns()],
-  ] as const)(
-    'takes over a task with no live run, and says so instead of inventing a session — %s',
-    async (_what, liveRuns) => {
-      const harness = await walked();
-      const stored = taskOf(harness);
+  it('takes over a task with no live run, records no stop, and says so instead of inventing a session', async () => {
+    const harness = await walked();
+    const stored = taskOf(harness);
 
-      const outcome = await takeOverTaskCommand(
-        { ...harness.humanCommands, liveRuns },
-        {
-          taskId: stored.task.id,
-          userId: USER,
-          authorName: 'Ada',
-          tarball: false,
-        },
-      );
+    const outcome = await takeOverTaskCommand(harness.humanCommands, {
+      taskId: stored.task.id,
+      userId: USER,
+      authorName: 'Ada',
+      tarball: false,
+    });
 
-      expect(taskOf(harness).task.state).toBe('paused');
-      expect(outcome.exported).toBe(false);
-      expect(outcome.sessionId).toBeNull();
-      // The branch the implementation stage actually pushed, not the fallback.
-      expect(outcome.branch).toBe('agentic/acme-1');
-    },
-  );
+    expect(taskOf(harness).task.state).toBe('paused');
+    expect(outcome.exported).toBe(false);
+    expect(outcome.runId).toBeNull();
+    expect(outcome.sessionId).toBeNull();
+    expect(payloadOf<{ run_id: string | null }>(harness, 'task.taken_over').run_id).toBeNull();
+    expect(harness.store.runCommandRows()).toEqual([]);
+    // The branch the implementation stage actually pushed, not the fallback.
+    expect(outcome.branch).toBe('agentic/acme-1');
+  });
 
   /** The take-over's half of the pause's audit-row reason (WP-27's fix round). */
   it('hands back the operator’s reason, redacted, for the audit row', async () => {

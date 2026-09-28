@@ -61,6 +61,7 @@ import type {
   ModelUsage,
   PipelineTemplate,
   QuestionRecord,
+  RunCommandRecord,
   RunRecord,
   RunStatus,
   TaskConflict,
@@ -74,6 +75,7 @@ import type {
 import {
   artifactBodyPath,
   contextPackRecordSchema,
+  MAX_RUN_COMMANDS,
   taskPipelineDialSchema,
   taskStageOutcomeSchema,
   taskStageStateSchema,
@@ -85,7 +87,7 @@ import {
   resumeCommands,
   SHIPPED_TEMPLATES,
 } from '@platform/domain';
-import { db as dbAdapters } from '@platform/infrastructure';
+import { db as dbAdapters, pipeline as pipelineAdapters } from '@platform/infrastructure';
 import { and, asc, desc, eq, gt, inArray, ne, notInArray, sql, sum } from 'drizzle-orm';
 import { HttpError } from '../errors.js';
 import { APPROVAL_TOUCHED, MACHINE_AUTHORED } from './human-time-predicates.js';
@@ -100,6 +102,7 @@ const {
   questions,
   runContextPack,
   runMessages,
+  runCommands,
   runModelUsage,
   runs,
   taskStages,
@@ -298,6 +301,51 @@ export const findRun = async (database: Database, runId: string): Promise<RunRec
   }
   const usage = await modelUsageFor(database, [row.id]);
   return toRunRecord(row, usage.get(row.id) ?? []);
+};
+
+/**
+ * `GET /api/runs/:run_id/commands` — the run's steer and take-over commands, newest first, bounded
+ * (WP-85, TD-028 decision 9).
+ *
+ * The state is derived from the two stamps the holder and the ending write (migration 0060) and is
+ * never guessed: a row with neither stamp is `pending`, which is exactly what it is. A payload this
+ * build cannot read is refused by name ({@link UnprojectableRowError}) rather than published with
+ * an empty message — the same reader the holder delivers from, so the screen and the session can
+ * never disagree about what a steer said.
+ */
+export const listRunCommands = async (
+  database: Database,
+  runId: string,
+): Promise<readonly RunCommandRecord[]> => {
+  const rows = await database
+    .select()
+    .from(runCommands)
+    .where(eq(runCommands.runId, runId))
+    .orderBy(desc(runCommands.createdAt), desc(runCommands.id))
+    .limit(MAX_RUN_COMMANDS);
+  return rows.map((row): RunCommandRecord => {
+    let instruction: ReturnType<typeof pipelineAdapters.decodeRunCommandPayload>;
+    try {
+      instruction = pipelineAdapters.decodeRunCommandPayload(row.id, row.kind, row.payload);
+    } catch {
+      throw new UnprojectableRowError(
+        `run command ${row.id}`,
+        `its ${row.kind} payload is not a shape this build can read`,
+      );
+    }
+    return {
+      id: row.id,
+      run_id: row.runId,
+      kind: instruction.kind,
+      state: row.appliedAt !== null ? 'applied' : row.refusedAt !== null ? 'refused' : 'pending',
+      message: instruction.kind === 'steer' ? instruction.text : null,
+      author_user_id: row.actorUserId,
+      created_at: row.createdAt.toISOString(),
+      applied_at: row.appliedAt?.toISOString() ?? null,
+      refused_at: row.refusedAt?.toISOString() ?? null,
+      refused_reason: row.refusedReason,
+    };
+  });
 };
 
 export interface RunMessagePage {
@@ -917,12 +965,38 @@ const stageOutcomeOf = (outcome: string | null): TaskStageOutcome | null => {
 };
 
 /**
+ * The session of the run a take-over stopped, once that run has ended (WP-85).
+ *
+ * Since TD-028 decision 9 the process that records a take-over is, on the shipped topology, never
+ * the one holding the run, so `task.taken_over` carries the run's id and no session — the session
+ * is in the holder's handle. `runs.session_id` is written when the stopped run ends, so it is read
+ * from there: `null` while the run is still winding down (or if it never had a session), which the
+ * screen says, and never a guess.
+ */
+const stoppedRunSession = async (
+  database: Database,
+  runId: string | null,
+): Promise<string | null> => {
+  if (runId === null) {
+    return null;
+  }
+  const rows = await database
+    .select({ sessionId: runs.sessionId })
+    .from(runs)
+    .where(eq(runs.id, runId))
+    .limit(1);
+  const sessionId = rows[0]?.sessionId ?? null;
+  return sessionId === null || sessionId === '' ? null : sessionId;
+};
+
+/**
  * The take-over in force on a task, or `null` — WP-27, and the one projection here that reads the
  * **event log** rather than a row.
  *
- * It has to: `tasks` records that a task is `paused` and not *why*, and the session id of the run a
- * take-over interrupted is on no row at all (`runs.session_id` is written when a run *ends*). The
- * log is the authority for both.
+ * It has to: `tasks` records that a task is `paused` and not *why*. The session id of the run a
+ * take-over interrupted was on the event while the process recording it held the run; since WP-85
+ * the event carries the run's id and the session is read off that run once it has ended
+ * ({@link stoppedRunSession}).
  *
  * **Which events decide is `TAKE_OVER_BOUNDARY_EVENTS`, imported rather than restated, and there is
  * no state guard** (WP-44, PROGRESS backlog 164). The workpad asks `TaskRepository.takenOver` the
@@ -971,11 +1045,14 @@ const findTakenOver = async (
   if (typeof branch !== 'string' || typeof stage !== 'string') {
     return null;
   }
-  const sessionId = typeof row.payload.session_id === 'string' ? row.payload.session_id : null;
   // Absent on an event written before WP-73 (backlog 203): published as not recorded, never as
   // "no run", because the two mean different things to the screen.
   const runRecorded = 'run_id' in row.payload;
   const runId = typeof row.payload.run_id === 'string' ? row.payload.run_id : null;
+  const sessionId =
+    typeof row.payload.session_id === 'string'
+      ? row.payload.session_id
+      : await stoppedRunSession(database, runId);
   return {
     at: isoRequired(row.occurredAt),
     branch,

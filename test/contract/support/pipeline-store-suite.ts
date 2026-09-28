@@ -2156,6 +2156,187 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           }),
         ).rejects.toThrow();
       });
+      describe('run commands (WP-85, TD-028 decision 9)', () => {
+        const OWNER = 'runner-host:0000beef';
+        const steerOf = (text: string) => ({
+          kind: 'steer' as const,
+          text,
+          authorUserId: userId,
+          authorLabel: 'Ada',
+        });
+        const leased = async (owner = OWNER): Promise<{ runId: Id; taskId: Id }> => {
+          const runId = await liveRun();
+          await store.runs.renewLease(tx, {
+            runId,
+            owner,
+            expiresAt: '2026-06-01T09:05:00.000Z' as IsoDateTime,
+          });
+          const run = await store.runs.load(tx, runId);
+          return { runId, taskId: run?.taskId as Id };
+        };
+        const recordOn = async (
+          target: { runId: Id; taskId: Id },
+          instruction: Parameters<
+            PipelineStore['runCommands']['insert']
+          >[1]['instruction'] = steerOf('check the rounding'),
+        ): Promise<Id> => {
+          const id = nextId();
+          await store.runCommands.insert(tx, {
+            id,
+            runId: target.runId,
+            taskId: target.taskId,
+            actorUserId: userId,
+            instruction,
+          });
+          return id;
+        };
+        const end = async (runId: Id): Promise<boolean> =>
+          store.runs.finish(tx, {
+            runId,
+            status: 'completed',
+            terminalReason: 'success',
+            sessionId: null,
+            numTurns: 1,
+            usage: MEASURED.usage,
+            cost: { usd: 1, is_estimate: false, price_list_id: null },
+            wallMs: 10,
+          });
+
+        it('locks a run and answers its status and lease holder, or null for no such run', async () => {
+          const target = await leased();
+          expect(await store.runCommands.lockRun(tx, target.runId)).toEqual({
+            runId: target.runId,
+            taskId: target.taskId,
+            status: 'running',
+            leaseOwner: OWNER,
+            // No session reported yet: no `init` entry, and `runs.session_id` waits for the end.
+            sessionId: null,
+          });
+          expect(await store.runCommands.lockRun(tx, nextId())).toBeNull();
+        });
+
+        it('finds a task’s live run, and none once it has ended', async () => {
+          const target = await leased();
+          expect((await store.runCommands.lockLiveRunOf(tx, target.taskId))?.runId).toBe(
+            target.runId,
+          );
+          await end(target.runId);
+          expect(await store.runCommands.lockLiveRunOf(tx, target.taskId)).toBeNull();
+        });
+
+        it('lists the pending commands of the live runs this owner leases, oldest first, bounded', async () => {
+          const mine = await leased();
+          const theirs = await leased('another-host:1');
+          const first = await recordOn(mine, steerOf('first'));
+          const second = await recordOn(mine, {
+            kind: 'take_over',
+            branch: 'agentic/ACME-1',
+            commitMessage: 'wip: hand-over to Ada',
+            tarball: true,
+            keepUntil: '2026-06-15T09:00:00.000Z' as IsoDateTime,
+          });
+          await recordOn(theirs, steerOf('not mine'));
+
+          const pending = await store.runCommands.pending(tx, { owner: OWNER, limit: 10 });
+          expect(pending.map((row) => row.id)).toEqual([first, second]);
+          // The instruction round-trips through the stored payload, both shapes.
+          expect(pending[0]?.instruction).toEqual(steerOf('first'));
+          expect(pending[1]?.instruction).toEqual({
+            kind: 'take_over',
+            branch: 'agentic/ACME-1',
+            commitMessage: 'wip: hand-over to Ada',
+            tarball: true,
+            keepUntil: '2026-06-15T09:00:00.000Z',
+          });
+          expect(pending[0]?.actorUserId).toBe(userId);
+          expect(pending.map((row) => row.kind)).toEqual(['steer', 'take_over']);
+          expect(
+            (await store.runCommands.pending(tx, { owner: OWNER, limit: 1 })).map((row) => row.id),
+          ).toEqual([first]);
+          expect(
+            await store.runCommands.pending(tx, { owner: OWNER, runId: theirs.runId, limit: 10 }),
+          ).toEqual([]);
+        });
+
+        it('stamps applied once, only for the owner of a live run, and never after a refusal', async () => {
+          const target = await leased();
+          const id = await recordOn(target);
+
+          expect(await store.runCommands.markApplied(tx, { id, owner: 'another-host:1' })).toBe(
+            false,
+          );
+          expect(await store.runCommands.markApplied(tx, { id, owner: OWNER })).toBe(true);
+          // The arbiter: the second path to reach the row writes nothing (standing rule 9).
+          expect(await store.runCommands.markApplied(tx, { id, owner: OWNER })).toBe(false);
+          expect(await store.runCommands.markRefused(tx, { id, reason: 'register_miss' })).toBe(
+            false,
+          );
+          expect(await store.runCommands.pending(tx, { owner: OWNER, limit: 10 })).toEqual([]);
+
+          const refused = await recordOn(target);
+          expect(
+            await store.runCommands.markRefused(tx, { id: refused, reason: 'register_miss' }),
+          ).toBe(true);
+          expect(await store.runCommands.markApplied(tx, { id: refused, owner: OWNER })).toBe(
+            false,
+          );
+        });
+
+        it('turns an applied stamp into delivery_failed once, and never a pending row (review round 1)', async () => {
+          const target = await leased();
+          const pendingId = await recordOn(target, steerOf('never taken'));
+          expect(await store.runCommands.markDeliveryFailed(tx, { id: pendingId })).toBe(false);
+          expect(
+            (await store.runCommands.pending(tx, { owner: OWNER, limit: 10 })).map((row) => row.id),
+          ).toEqual([pendingId]);
+
+          const taken = await recordOn(target, steerOf('taken, then refused by the session'));
+          expect(await store.runCommands.markApplied(tx, { id: pendingId, owner: OWNER })).toBe(
+            true,
+          );
+          expect(await store.runCommands.markApplied(tx, { id: taken, owner: OWNER })).toBe(true);
+          expect(await store.runCommands.markDeliveryFailed(tx, { id: taken })).toBe(true);
+          // Once: a second correction writes nothing, and the row is not pending again.
+          expect(await store.runCommands.markDeliveryFailed(tx, { id: taken })).toBe(false);
+          expect(await store.runCommands.pending(tx, { owner: OWNER, limit: 10 })).toEqual([]);
+          expect(await store.runCommands.markApplied(tx, { id: taken, owner: OWNER })).toBe(false);
+        });
+
+        it('closes a run’s pending commands run_ended when the run ends, and applies none late (criterion 3)', async () => {
+          const target = await leased();
+          const applied = await recordOn(target, steerOf('in time'));
+          await store.runCommands.markApplied(tx, { id: applied, owner: OWNER });
+          const pending = await recordOn(target, steerOf('too late'));
+
+          expect(await end(target.runId)).toBe(true);
+
+          // Nothing is pending any more, and the late one cannot be stamped applied.
+          expect(await store.runCommands.pending(tx, { owner: OWNER, limit: 10 })).toEqual([]);
+          expect(await store.runCommands.markApplied(tx, { id: pending, owner: OWNER })).toBe(
+            false,
+          );
+          // It was closed, not left: a refusal cannot be written over it either.
+          expect(
+            await store.runCommands.markRefused(tx, { id: pending, reason: 'register_miss' }),
+          ).toBe(false);
+          // A second ending (the loser of `finish`) closes nothing and changes nothing.
+          expect(await end(target.runId)).toBe(false);
+        });
+
+        it('refuses a second row under one id — the Idempotency-Key’s second line', async () => {
+          const target = await leased();
+          const id = await recordOn(target);
+          await expect(
+            store.runCommands.insert(tx, {
+              id,
+              runId: target.runId,
+              taskId: target.taskId,
+              actorUserId: userId,
+              instruction: steerOf('again'),
+            }),
+          ).rejects.toThrow();
+        });
+      });
     });
 
     describe('questions', () => {

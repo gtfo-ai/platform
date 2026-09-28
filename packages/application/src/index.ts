@@ -128,6 +128,7 @@ export * from './pipeline/lease.js';
 export * from './pipeline/live-runs.js';
 export * from './pipeline/outbound.js';
 export * from './pipeline/planner.js';
+export * from './pipeline/run-commands.js';
 export * from './pipeline/run-redaction.js';
 export * from './pipeline/runtime.js';
 export * from './pipeline/saga.js';

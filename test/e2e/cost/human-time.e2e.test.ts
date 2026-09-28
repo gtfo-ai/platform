@@ -115,7 +115,8 @@ describe('human time, from events this instance really produced', () => {
       headers: { 'content-type': 'application/json', 'idempotency-key': 'human-time-steer' },
       body: JSON.stringify({ message: 'sum the model, not the view' }),
     });
-    expect(steer.status, JSON.stringify(steer.body)).toBe(200);
+    // Accepted (WP-85): the steer is recorded and applied by the process holding the run.
+    expect(steer.status, JSON.stringify(steer.body)).toBe(202);
     const taskId = (steer.body as { task_id: string }).task_id;
 
     // The wait is on **the row the assertions read** — the projector is a handler at TD-005

@@ -147,10 +147,13 @@ describe('steering a run that is really running', () => {
       { message: `sum the model, not the view (${PLANTED_STEER_SECRET})` },
       'steer-1',
     );
-    expect(reply.status, JSON.stringify(reply.body)).toBe(200);
+    // WP-85 (TD-028 decision 9): **accepted**, then applied by the process holding the run — here
+    // the same process (`ROLE=all`), through the same row and notification the split takes.
+    expect(reply.status, JSON.stringify(reply.body)).toBe(202);
     expect(reply.body.run_id).toBe(runId);
     expect(reply.body.task_id).toBe(taskId);
     expect(reply.body.performed).toBe(true);
+    expect(reply.body.command_id).toEqual(expect.any(String));
 
     // ── the bytes the CLI received (standing rule 82) ──────────────────────
     //
@@ -221,11 +224,18 @@ describe('steering a run that is really running', () => {
       { message: `sum the model, not the view (${PLANTED_STEER_SECRET})` },
       'steer-1',
     );
-    expect(replay.status).toBe(200);
+    expect(replay.status).toBe(202);
     expect(replay.body.performed).toBe(false);
+    expect(replay.body.command_id).toBe(reply.body.command_id);
     expect((await pipeline.events()).filter((event) => event.type === 'run.steered')).toHaveLength(
       1,
     );
+    // Criterion 4: one row for the two requests, and the holder applied it.
+    const commandRows = await pipeline.query<{ id: string; applied: boolean }>(
+      'select id, applied_at is not null as applied from run_commands where run_id = $1',
+      [runId],
+    );
+    expect(commandRows).toEqual([{ id: reply.body.command_id, applied: true }]);
 
     // The run carries on and ends by itself: steering is a turn in a conversation, not a stop.
     await pipeline.waitFor('the steered run to finish', async () => {
@@ -301,6 +311,13 @@ describe('taking a task over and handing it back', () => {
       commitMessage: 'wip: hand-over to Administrator',
       tarball: true,
     });
+    // WP-85: the stop reached the run as a recorded command the holder applied.
+    expect(
+      await pipeline.query<{ kind: string; applied: boolean }>(
+        'select kind, applied_at is not null as applied from run_commands where run_id = $1',
+        [runId],
+      ),
+    ).toEqual([{ kind: 'take_over', applied: true }]);
     // Fourteen days, not three: technical/05 §5's second window, measured against the run's own
     // creation rather than against a constant this test repeats.
     const keptDays =

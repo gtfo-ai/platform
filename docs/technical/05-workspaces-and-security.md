@@ -58,6 +58,17 @@ One Unix socket per run on the `ctl` volume: runner ↔ shim frames for spawn/st
 - The run container still reaches **nothing but its egress sidecar**: it is on a per-run `internal: true` network and joins neither the control-plane network nor the daemon's.
 - **Which process may run an agent is configuration, never `ROLE`** (TD-028 decision 5): a worker subscribes `stage.execute` and `task.ask` only when it has a launcher URL and token. The consequence the decision's WP-53 amendment writes down is that gate evaluation is a branch of the same handler on the same queue, so a deployment with no configured runner also stops evaluating `ci_gate`, `rebase_gate` and `merged_gate`. Nothing is lost — the jobs are durable and are taken when a runner starts — and the queue depth is the visibility that trade rests on.
 
+### Amendment (WP-85, 2026-09-28) — a human command reaches a live run through the database, not a route
+
+TD-028 decision 9 (M5 amendment). A steer or a take-over's stop is issued to the process that serves the API, and the session it is for is held by another process — on the shipped topology, always: `app` never holds a run and `runner` serves no route. The command crosses through the **database**, and nothing here gains a listener or an address (the reason decision 2 exists):
+
+- The API process **records** it — a `run_commands` row (migration 0060) in the command's own transaction, after reading the run live under a `for share` lock — and answers that the command was **accepted**, never that the model heard it (`POST /api/runs/:id/steer` is `202`).
+- It wakes the lease holder with `pg_notify` on a broadcast topic keyed by `runs.lease_owner`. The holder applies the command to its own live-run register — a steer becomes a user turn and a `steer` transcript entry; a take-over's stop is `RunHandle.stop` with the export instruction, which then drives this page's step 5 and 6 — and stamps the row **applied**, or **refused** `register_miss`.
+- The notification is latency; the **lease heartbeat is the guarantee**: every beat that renews a run's lease also drains that run's pending commands, so a command recorded while the holder's `LISTEN` was reconnecting is applied within one beat.
+- A command still pending when the run ends is closed **`run_ended`** by the run's own ending, in its transaction, so it is never applied late. `ROLE=all` takes the same path, so there is one mechanism.
+
+The data plane above is unchanged: the command reaches the session through the holder's in-process handle, which already owns the run's Unix socket.
+
 ## Kubernetes later
 `WorkspaceProvider` implemented with Jobs or `agent-sandbox` claims, NetworkPolicy + Cilium FQDN policies, exec/attach WebSocket for the spawn hook, session store adapter for cross-node resume.
 

@@ -24,11 +24,10 @@
  * ## What it does not do
  *
  * It does not decide who may press the buttons: take-over and hand-back are `member` and the server
- * answers 403 to anybody less, which the error line says. And it does not know *which* run a
- * take-over interrupted — the event does not record one — so the downloads name the newest run
- * that had started by the take-over's instant, which is the run the take-over stopped whenever
- * there was one. A take-over with no live run exported nothing, and the tarball link then answers
- * 404 with a sentence saying so.
+ * answers 403 to anybody less, which the error line says. The downloads name the run
+ * `task.taken_over` recorded (WP-73) — found in the database since WP-85, so on the shipped
+ * topology too — and only an event written before WP-73 falls back to inferring it. A take-over with
+ * no live run exported nothing, and the panel then offers no download.
  *
  * Every string a provider or a person chose — the branch, the session, the ticket in a resume line —
  * is rendered as text (BD-022). The two downloads are same-origin paths composed here and rendered
@@ -77,17 +76,24 @@ export const interruptedRunOf = (
 /** `workspace_export`, said in the tense the route means it (standing rule 18). */
 export const workspaceExportText = (value: TakeOverResponse['workspace_export']): string =>
   value === 'requested'
-    ? 'A run was in flight: its workspace is being committed as a work-in-progress hand-over commit, pushed to the branch and — if you asked — archived, as the run winds down. It is requested, not finished.'
-    : 'No run was in flight in the process that answered, so nothing was exported: the branch holds whatever the last run pushed.';
+    ? 'A run was in flight: its stop was accepted, and the process running the agent applies it — its workspace is being committed as a work-in-progress hand-over commit, pushed to the branch and — if you asked — archived, as the run winds down. Whether the stop was applied is shown on the run screen. It is requested, not finished.'
+    : 'No run was in flight, so nothing was exported: the branch holds whatever the last run pushed.';
 
 /** The branch, the session and the resume lines — the same shape whichever surface answered. */
 const ResumeLines = ({
   branch,
   sessionId,
+  sessionPending,
   commands,
 }: {
   readonly branch: string;
   readonly sessionId: string | null;
+  /**
+   * A live run was asked to stop and has not reported its session yet (WP-85): the session is in
+   * the process holding the run and reaches the record when the run ends, so "none" would be a
+   * guess.
+   */
+  readonly sessionPending: boolean;
   readonly commands: readonly string[];
 }): ReactElement => (
   <div className="flex flex-col gap-1 text-xs">
@@ -96,7 +102,12 @@ const ResumeLines = ({
     </p>
     <p>
       Session:{' '}
-      {sessionId === null ? (
+      {sessionId === null && sessionPending ? (
+        <span className="text-fg-muted">
+          not known yet — the run was asked to stop, and its session appears here once it has ended
+          (if it had one)
+        </span>
+      ) : sessionId === null ? (
         <span className="text-fg-muted">
           none — the interrupted run had no session, so there is nothing for claude --resume to
           continue
@@ -135,10 +146,10 @@ export const TakeOverDownloads = ({
     <p className="text-xs text-fg-muted">
       {inferred
         ? 'No run had started when the task was taken over, so there is no transcript or workspace to download — the branch is where the work is.'
-        : // Not "no run was live" (PROGRESS backlog 134): on the shipped topology the process that
-          // answered never holds a run, so one may still be running elsewhere, and this take-over
-          // did not stop it. The user guide says the same.
-          'No run was in flight in the process that answered the take-over, so nothing was exported and there is no transcript or workspace to download — the branch is where the work is. A run executing in another process was not stopped by this take-over.'}
+        : // True of the whole deployment since WP-85 (TD-028 decision 9): the take-over looks for
+          // the task's live run in the database, not in the process that answered, so a recorded
+          // null means no run was in flight anywhere. The user guide says the same (rule 83).
+          'No run was in flight when the task was taken over, so nothing was exported and there is no transcript or workspace to download — the branch is where the work is.'}
     </p>
   ) : (
     <div className="flex flex-col gap-1 text-xs">
@@ -279,6 +290,7 @@ export const TakeOverPanel = ({
           <ResumeLines
             branch={takenOver.branch}
             sessionId={takenOver.session_id}
+            sessionPending={takenOver.run_id !== null}
             commands={takenOver.resume_commands}
           />
           {answered === undefined ? null : (
@@ -349,6 +361,7 @@ export const TakeOverPanel = ({
             <ResumeLines
               branch={answered.branch}
               sessionId={answered.session_id}
+              sessionPending={answered.workspace_export === 'requested'}
               commands={answered.resume_commands}
             />
             <p className="text-xs text-fg-muted">

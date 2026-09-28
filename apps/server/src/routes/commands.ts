@@ -73,14 +73,14 @@
  * protects is not the platform but the **run**: each steer is a turn the model pays for, and a
  * stuck key would spend a run's budget on repetition.
  *
- * **On the shipped topology the N is moot, and the window is spent on a refusal** (WP-72). The
- * process that serves the API is pinned never to hold a run (TD-028, PROGRESS backlog 134), so every
- * steer that reaches the gate is then refused `409 run_not_reachable` — asserted through two
- * processes in `test/e2e/topology/two-processes.e2e.test.ts`. The gate records the attempt before
- * the call and **refunds** it when the call refuses (WP-73, PROGRESS backlog 263), so a person who
- * retries is told the refusal again rather than `429` about a message that could never have been
- * delivered; the N-containers arithmetic becomes real the day a process that serves the API can
- * reach a run.
+ * **What the window admits is a record, not a delivery** (WP-85, TD-028 decision 9). The process
+ * that serves the API is pinned never to hold a run, so an admitted steer is recorded as a
+ * `run_commands` row and applied by the process holding the run; until WP-85 every steer that
+ * reached the gate was refused `409 run_not_reachable` (PROGRESS backlog 134). The gate records the
+ * attempt before the call and **refunds** it when the call refuses (WP-73, PROGRESS backlog 263) —
+ * a run that has ended, a role that may not steer — so a person who retries is told the refusal
+ * again rather than `429`. The N-containers arithmetic is now real: N API processes admit N
+ * records per window, and each is a turn the run pays for once applied.
  */
 
 import type { RunStatus, TaskState, UserRole } from '@platform/contracts';
@@ -100,6 +100,7 @@ import {
   reworkRequestSchema,
   runCommandResponseSchema,
   steerRunRequestSchema,
+  steerRunResponseSchema,
   submitFeedbackRequestSchema,
   submitFeedbackResponseSchema,
   takeOverRequestSchema,
@@ -387,7 +388,11 @@ export const registerCommandRoutes = async (
      * that cannot be found by the index every reader of the table will use.
      */
     readonly taskId?: string | ((result: T) => string);
-    readonly perform: () => Promise<T>;
+    /**
+     * Given the request's `Idempotency-Key`, which the two commands that record a `run_commands`
+     * row derive the row's id from (WP-85, migration 0060). Every other command ignores it.
+     */
+    readonly perform: (key: string | null) => Promise<T>;
     readonly answer: (outcome: {
       readonly performed: boolean;
       readonly result: T | null;
@@ -414,7 +419,7 @@ export const registerCommandRoutes = async (
     // Under the claim: a refusal from `perform` releases the key, the audit row completes it, and
     // a failure after `perform` returned leaves it held (`./idempotency.ts`, WP-67 round 1).
     const result = await replay.run(async (effectReturned) => {
-      const performed = await performing(input.perform);
+      const performed = await performing(async () => input.perform(key));
       effectReturned();
       const taskId = typeof input.taskId === 'function' ? input.taskId(performed) : input.taskId;
       await options.queries.recordAction({
@@ -456,6 +461,20 @@ export const registerCommandRoutes = async (
         409,
         'idempotency_key_reused',
         'this Idempotency-Key has already recorded feedback, and the attempt that did predates the id being audited; use a new key',
+      );
+    }
+    return recorded;
+  };
+
+  /** The command id a replayed steer recorded, or a refusal: it never answers a placeholder. */
+  const recordedCommandId = (previous: JsonObject | null): string => {
+    const recorded = previous?.command_id;
+    if (typeof recorded !== 'string') {
+      // A steer performed before WP-85 recorded no command, so there is no id to answer with.
+      throw new HttpError(
+        409,
+        'idempotency_key_reused',
+        'this Idempotency-Key has already steered this run, and the attempt that did predates the command being recorded; use a new key',
       );
     }
     return recorded;
@@ -789,7 +808,7 @@ export const registerCommandRoutes = async (
       schema: {
         summary: 'Take the task over: pause the pipeline and get the work',
         description:
-          'product/19 §19. The pipeline pauses, a run in flight is interrupted gracefully, and the response carries what a person needs to carry on: the branch, the `claude --resume` command when the interrupted run had a session, and whether its workspace was asked to export. The workspace’s `wip: hand-over to <user>` commit, its push and its tarball happen as the run winds down — `workspace_export: "requested"` is that tense, not a completed fact. A task with no run in flight answers `no_live_run` and the branch it already has.',
+          'product/19 §19. The pipeline pauses, and a run in flight is found in the database and its stop is **accepted, then applied or refused** by the process holding it (TD-028 decision 9, WP-85): the stop is recorded in the same transaction as the pause, the run’s id is recorded on `task.taken_over`, and the run screen reads whether the stop was applied (`GET /api/runs/:run_id/commands`). The response carries what a person needs to carry on: the branch, the resume lines, and whether a workspace export was requested. The workspace’s `wip: hand-over to <user>` commit, its push and its tarball happen as the run winds down — `workspace_export: "requested"` is that tense, not a completed fact. The session `claude --resume` continues is read off the run’s own `system`/`init` transcript entry — the first place the database learns it — so the response carries it once the run has reported one, and `null` (never a guess) before. A task with no run in flight answers `no_live_run` and the branch it already has.',
         tags: ['tasks'],
         params: taskParamsSchema,
         body: takeOverRequestSchema,
@@ -819,10 +838,13 @@ export const registerCommandRoutes = async (
         auditResult: (result) => ({
           branch: result.branch,
           exported: result.exported,
+          // The run whose stop was recorded (WP-85): the run screen's command list is where the
+          // stop is then read as applied or refused.
+          ...(result.runId === null ? {} : { run_id: result.runId }),
           ...(result.reason === null ? {} : { reason: result.reason }),
         }),
         taskId,
-        perform: async () => {
+        perform: async (idempotencyKey: string | null) => {
           const { userId, name } = actorOf(request);
           return commands().takeOver({
             taskId,
@@ -830,6 +852,7 @@ export const registerCommandRoutes = async (
             authorName: name,
             tarball: body.tarball ?? false,
             ...(body.reason === undefined ? {} : { reason: body.reason }),
+            idempotencyKey,
           });
         },
         answer: async ({ performed, result, previous }) => {
@@ -996,12 +1019,12 @@ export const registerCommandRoutes = async (
       schema: {
         summary: 'Send a message to the running agent',
         description:
-          'product/18’s steer: the text becomes a **user turn** in the live session and a `steer` entry in the run’s transcript, attributed to whoever sent it. Only while the run is running — a run that has ended answers 409 naming its status, and a run this process is not executing answers 409 saying so rather than accepting a message nobody will hear. Limited to one message per five seconds per user (technical/08); the text is untrusted and is redacted once, before it reaches the session, the transcript and the event.',
+          'product/18’s steer, **accepted, then applied or refused** (TD-028 decision 9, WP-85). The text is recorded for the process holding the run — on the shipped topology never the process answering — and the answer is `202` with the command’s id: it says the message was accepted, never that the model heard it. The holder then applies it as a **user turn** in the live session and a `steer` entry in the run’s transcript, attributed to whoever sent it, and stamps the command applied; a command still pending when the run ends is refused `run_ended` and never applied late. `GET /api/runs/:run_id/commands` is where the run screen reads which. Only while the run is running — a run that has ended answers 409 naming its status. Limited to one message per five seconds per user (technical/08); the text is untrusted and is redacted once, before it is recorded.',
         tags: ['runs'],
         params: runParamsSchema,
         body: steerRunRequestSchema,
         response: {
-          200: runCommandResponseSchema,
+          202: steerRunResponseSchema,
           400: apiErrorSchema,
           409: apiErrorSchema,
           429: apiErrorSchema,
@@ -1009,24 +1032,26 @@ export const registerCommandRoutes = async (
         },
       },
     },
-    async (request) => {
+    async (request, reply) => {
       const runId = request.params.run_id;
       const body = request.body;
-      return command({
+      const answer = await command({
         request,
         action: 'run.steer',
         // Required, and this is the one command where the reason is about the **model**: a repeat
         // under a used key would be a second user turn in the conversation, which the session
-        // cannot take back and which the run pays for.
+        // cannot take back and which the run pays for. The key is also what the recorded command's
+        // id is derived from (WP-85), so a replay answers the same `command_id`.
         key: 'required',
         subject: { run_id: runId, body },
         params: { run_id: runId },
+        auditResult: (result) => ({ command_id: result.commandId }),
         taskId: (result) => result.taskId,
-        perform: async () => {
+        perform: async (idempotencyKey: string | null) => {
           const { userId, name } = actorOf(request);
-          // After the replay check and before the command: a replayed request delivered nothing, so
+          // After the replay check and before the command: a replayed request records nothing, so
           // charging it against the window would refuse the *next* real steer. The gate is the
-          // last thing between the caller and the session.
+          // last thing between the caller and the record.
           const refund = steerGate.allow(userId);
           if (refund === null) {
             throw new HttpError(
@@ -1044,17 +1069,24 @@ export const registerCommandRoutes = async (
               role: request.effectiveRole ?? 'viewer',
               message: body.message,
               authorName: name,
+              idempotencyKey,
             });
           } catch (error) {
-            // A refused steer delivered nothing, so it gives its slot back (WP-73, backlog 263).
+            // A refused steer recorded nothing, so it gives its slot back (WP-73, backlog 263).
             // Recorded *before* the call and refunded on refusal — never recorded after it, which
             // would let two concurrent steers through the window.
             refund();
             throw error;
           }
         },
-        answer: async ({ performed }) => ({ ...(await runPositionOf(runId)), performed }),
+        answer: async ({ performed, result, previous }) => ({
+          ...(await runPositionOf(runId)),
+          performed,
+          // On a replay, the id the first attempt recorded — read from its audit row.
+          command_id: result?.commandId ?? recordedCommandId(previous),
+        }),
       });
+      return reply.code(202).send(answer);
     },
   );
 };

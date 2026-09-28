@@ -72,9 +72,15 @@ import {
   type PipelineOutboundData,
   type ReadyHeadCheckData,
 } from './jobs.js';
-import type { LiveRun, LiveRuns } from './live-runs.js';
+import { type RunCommandWakeUp, runCommandsTopic } from './run-commands.js';
 import type { StageExecutionJob } from './stage-executor.js';
-import type { PipelineStore, StoredRun, StoredTask } from './store.js';
+import type {
+  LockedRun,
+  PipelineStore,
+  RunCommandInstruction,
+  StoredRun,
+  StoredTask,
+} from './store.js';
 import { retryOnTaskConflict } from './task-conflict.js';
 import { applyDecision, CANCELLED_OUTCOME, closeCurrentStageRow } from './transitions.js';
 
@@ -331,24 +337,6 @@ export interface HumanCommandDependencies extends TaskCommandDependencies {
   /** `null` on a process that runs no workers; the commands that need a stage refuse by name. */
   readonly jobs: Jobs | null;
   /**
-   * The runs this **process** is executing (WP-27), or `null` when it executes none.
-   *
-   * `null` and an **empty** register are deliberately the same answer, and the answer is each
-   * command's own: "this process composed no pipeline" and "this process is running no such run"
-   * are both *the session is not reachable from here*, which is the only thing a caller can act on.
-   * A **steer** therefore refuses by name ({@link RunNotReachableError}) — never a silent success,
-   * which is what accepting a turn nobody will hear would be. A **take-over** does not refuse: a
-   * task with no live run is an ordinary take-over of work that is already on the branch, so it
-   * pauses the task and reports `exported: false`, and the caller is told `no_live_run` rather than
-   * a lie about an export. That the two differ is the point; both halves are driven over `null`
-   * *and* over an empty register in `human-commands.test.ts` (standing rule 68), because the
-   * composition an API-only process really has is the second one.
-   *
-   * It is `LiveRuns | null` rather than an optional field for standing rule 31's reason: an absent
-   * collaborator is stated, not defaulted.
-   */
-  readonly liveRuns: LiveRuns | null;
-  /**
    * Where a run's next `stream_seq` comes from when the run is ended from **another process**.
    *
    * The stage executor holds the `Run` aggregate it created and knows the sequence; a cancelling
@@ -394,29 +382,6 @@ export class IterationLimitReachedError extends Error {
     );
     this.loop = loop;
     this.limit = limit;
-  }
-}
-
-/**
- * The run is live somewhere, and not **here** (WP-27).
- *
- * Distinct from {@link RunNotLiveError}, which is a fact about the row: this one says the row is
- * `running` and this process holds no handle for it, so a user turn cannot be delivered. Three
- * situations produce it and a caller cannot tell them apart (`./live-runs.ts` enumerates them); all
- * three mean the same thing to whoever pressed the button, and the message says so rather than
- * guessing which one it was.
- */
-export class RunNotReachableError extends Error {
-  override readonly name = 'RunNotReachableError';
-  readonly runId: Id;
-
-  constructor(runId: Id, what: string) {
-    super(
-      `run ${runId} is not running in this process, so it cannot be ${what}: the session may have ` +
-        'just ended, or it belongs to another instance — reaching a live run across processes is ' +
-        'the transport Q52 leaves unbuilt. Read the run to see where it stands',
-    );
-    this.runId = runId;
   }
 }
 
@@ -1340,45 +1305,74 @@ export const actorLabel = (name: string): string => {
   return cleaned.length === 0 ? 'someone' : cleaned;
 };
 
-/** The live run of this task or this run id in **this** process, or a refusal naming why not. */
-const requireLiveRun = (
+/**
+ * Records a command for a live run and wakes the process holding its lease (WP-85, TD-028
+ * decision 9) — in the caller's transaction, after the caller has read the run under
+ * `lockRun`/`lockLiveRunOf`'s `for share` lock.
+ *
+ * The wake-up is `pg_notify` through the transactional broadcast, so it is delivered only if the
+ * command commits. A run with **no** lease holder gets no wake-up: nothing is driving it that could
+ * apply the row, and the run's ending closes it `run_ended` (`RunRepository.finish`).
+ */
+const recordRunCommand = async (
   deps: HumanCommandDependencies,
-  key: { readonly runId: Id } | { readonly taskId: Id },
-  what: string,
-): LiveRun => {
-  const live =
-    deps.liveRuns === null
-      ? null
-      : 'runId' in key
-        ? deps.liveRuns.forRun(key.runId)
-        : deps.liveRuns.forTask(key.taskId);
-  if (live === null) {
-    throw new RunNotReachableError('runId' in key ? key.runId : key.taskId, what);
+  scope: TransactionScope,
+  run: LockedRun,
+  command: {
+    readonly id: Id;
+    readonly actorUserId: Id;
+    readonly instruction: RunCommandInstruction;
+  },
+): Promise<void> => {
+  await deps.store.runCommands.insert(scope.tx, {
+    id: command.id,
+    runId: run.runId,
+    taskId: run.taskId,
+    actorUserId: command.actorUserId,
+    instruction: command.instruction,
+  });
+  if (run.leaseOwner === null) {
+    deps.logger?.info(
+      { run_id: run.runId, command_id: command.id, kind: command.instruction.kind },
+      'a run command was recorded for a run no process holds the lease of; it stays pending until a holder applies it or the run ends',
+    );
+    return;
   }
-  return live;
+  const wakeUp: RunCommandWakeUp = { lease_owner: run.leaseOwner, run_id: run.runId };
+  await scope.broadcast.publish({ topic: runCommandsTopic(run.leaseOwner), payload: wakeUp });
 };
 
 /**
- * `POST /api/runs/:run_id/steer` — a user turn injected into a live session (product/18, WP-27).
+ * `POST /api/runs/:run_id/steer` — a user turn for a live session (product/18, WP-27), **recorded,
+ * then applied or refused** by the process holding the run (WP-85, TD-028 decision 9).
  *
  * ## Three checks, in the order that makes each one mean something
  *
  * The **row** first: `runs.status` is the platform's record of the run, and a run that has ended is
  * refused with {@link RunNotLiveError} — a 409 naming the status — rather than with a 403 from the
- * aggregate's own state rule. Then the **register**: a `running` row this process holds no handle
- * for is {@link RunNotReachableError}, which is a different sentence and a different remedy. Then
- * the **role**, inside `steerRun`, which is where `can()` lives.
+ * aggregate's own state rule. It is asked twice: once before the transaction for the cheap answer,
+ * and again **under the `for share` lock** the command is recorded beside, which is the answer that
+ * counts — the run's ending takes the row exclusively and then closes every pending command, so a
+ * steer recorded here is either closed by that ending or refused here. Then the **role**, inside
+ * `steerRun`, which is where `can()` lives.
  *
- * ## The log is written before the session is, and the event is on the **task's** stream
+ * ## Recorded, not delivered
  *
- * Two decisions, both of them measured rather than chosen for symmetry, and both stated at the
- * lines that implement them: `steerRun` (`packages/domain/src/aggregates/task.ts`) says why a
- * `run.*` event is appended to a task's stream, and the call below says why the delivery comes
- * after the commit.
+ * Until WP-85 this pushed the turn into a handle found in **this** process's register, and on the
+ * shipped topology the process that serves the API never holds a run, so every steer was refused
+ * `run_not_reachable` (PROGRESS backlog 134). Now the command is a `run_commands` row written in the
+ * transaction that appends `run.steered`, and the holder applies it (`./run-commands.ts`): the
+ * caller is told the command was **accepted**, never that the model heard it, and the run screen
+ * reads whether it was applied or refused. The `steer` transcript row is still written by the
+ * holder's `handle.steer`, so the run screen shows the turn exactly when the session took it.
  *
- * The message is redacted once, here, and the same redacted bytes go to the session, to the
- * transcript and to the event — a run may be handed a credential by a well-meaning operator, and
- * TD-012 covers every place the platform stores one.
+ * The event is appended with the record rather than on application, and that is the old ordering
+ * argument unchanged: a log entry with no delivery is visible where a human looks (the transcript
+ * has no `steer` row, the command reads `refused`); a delivery with no log entry is a turn the
+ * audit does not have.
+ *
+ * The message is redacted once, here, and the same redacted bytes go to the row, the event and —
+ * through the row — the session and the transcript (TD-012).
  */
 export const steerRunCommand = async (
   deps: HumanCommandDependencies,
@@ -1388,8 +1382,14 @@ export const steerRunCommand = async (
     readonly role: UserRole;
     readonly message: string;
     readonly authorName: string;
+    /**
+     * The `run_commands` id — derived from the `Idempotency-Key` by the composition root, so a replay
+     * that got past the key's record collides rather than recording a second turn (migration 0060).
+     * A fresh id when absent.
+     */
+    readonly commandId?: Id;
   },
-): Promise<{ readonly taskId: Id }> => {
+): Promise<{ readonly taskId: Id; readonly commandId: Id }> => {
   const run = await deps.unitOfWork.transaction(async (scope) =>
     deps.store.runs.load(scope.tx, input.runId),
   );
@@ -1399,47 +1399,62 @@ export const steerRunCommand = async (
   if (run.status !== 'running') {
     throw new RunNotLiveError(run.id, run.status, 'steered');
   }
-  const live = requireLiveRun(deps, { runId: run.id }, 'steered');
   const message = deps.redactor.redactText(input.message).value;
   const label = actorLabel(input.authorName);
-  await deps.unitOfWork.transaction(async (scope) => {
+  const commandId = await deps.unitOfWork.transaction(async (scope) => {
+    const locked = await deps.store.runCommands.lockRun(scope.tx, run.id);
+    if (locked === null) {
+      throw new UnknownAggregateError(`run ${input.runId} does not exist`);
+    }
+    if (locked.status !== 'running') {
+      throw new RunNotLiveError(run.id, locked.status, 'steered');
+    }
     const stored = await loadTaskOrThrow(deps, scope.tx, run.taskId);
+    const context = humanContext(deps, stored.task.id, input.userId);
     const decision = steerRun(
       stored.task,
       {
-        run: { id: run.id, status: run.status },
+        run: { id: run.id, status: locked.status },
         message,
         authorUserId: input.userId,
         authorRole: input.role,
       },
-      humanContext(deps, stored.task.id, input.userId),
+      context,
     );
     // No `tasks.save`: steering moves nothing, so the row is untouched and its version is not
     // spent — the same shape `submitFeedbackCommand` has, and the reason neither needs
     // `retryOnTaskConflict`.
     await scope.events.append(decision.events);
+    const id = input.commandId ?? context.ids.next();
+    await recordRunCommand(deps, scope, locked, {
+      id,
+      actorUserId: input.userId,
+      instruction: {
+        kind: 'steer',
+        text: message,
+        authorUserId: input.userId,
+        authorLabel: label,
+      },
+    });
+    return id;
   });
-  // Outside every transaction, and **after** the log: this reaches a model over a socket, and the
-  // rule that keeps a provider call out of an open transaction is the same rule.
-  //
-  // The order was chosen against its alternative and the argument is short. Delivering first and
-  // logging second means a failed append leaves the model holding a turn the log does not have —
-  // and the caller, told 500, retries and delivers a **second** turn, which the run pays for and
-  // nobody can take back. This way round the failure is an event with no delivery, which is
-  // visible exactly where a human looks: `handle.steer` writes the `steer` transcript row, so the
-  // run screen shows the turn or it does not. The residual is stated rather than implied.
-  await live.handle.steer({ text: message, authorUserId: input.userId, authorLabel: label });
-  return { taskId: run.taskId };
+  return { taskId: run.taskId, commandId };
 };
 
 /** What a take-over produced, for the response technical/08 owes the operator. */
 export interface TakeOverOutcome extends AuditedReason {
   readonly taskId: Id;
   readonly branch: string;
-  /** The session `claude --resume` continues, or `null` when no live run had one. */
+  /**
+   * The session `claude --resume` continues, or `null` when no live run had reported one. Read off
+   * the run's `init` transcript entry since WP-85 ({@link LockedRun.sessionId}), because the process
+   * answering is not the one holding the handle. Never guessed (standing rule 18).
+   */
   readonly sessionId: string | null;
-  /** Whether a live run was interrupted and its workspace asked to export. */
+  /** Whether a live run's stop was recorded — its workspace asked, through the holder, to export. */
   readonly exported: boolean;
+  /** The run whose stop was recorded, or `null` when the task had no live run. */
+  readonly runId: Id | null;
   /**
    * Inherited from {@link AuditedReason}, and it is **not** part of the response: why a person took
    * a task over is theirs to state and the audit row's to keep, and the operator who just typed it
@@ -1453,20 +1468,28 @@ export interface TakeOverOutcome extends AuditedReason {
  *
  * ## The order, and what each ordering decision costs
  *
- * **The task is paused first, in its own transaction; the run is stopped afterwards and is not
- * waited for.** Both halves were chosen against their alternative.
+ * **The task is paused and the run's stop is recorded in one transaction; the stop is applied
+ * afterwards, by the process holding the run, and is not waited for.** Both halves were chosen
+ * against their alternative.
  *
- * Pausing first means a failure between the two leaves a paused task beside a run that is still
- * going — which is exactly what `POST /api/tasks/:task_id/pause` already does and what the stage
- * executor already handles: `isRunnableTaskState` is false, so the run is recorded when it ends and
- * its stage is not completed. Stopping first would mean a failure leaves a *killed* run on a task
- * the pipeline still owns, and the pipeline would start the stage again.
+ * Pausing with the record means a failure between the two cannot happen — the pause and the stop
+ * commit together — and a stop that is then applied late or refused leaves a paused task beside a
+ * run that is still going, which is exactly what `POST /api/tasks/:task_id/pause` already does and
+ * what the stage executor already handles: `isRunnableTaskState` is false, so the run is recorded
+ * when it ends and its stage is not completed. Stopping first would mean a failure leaves a
+ * *killed* run on a task the pipeline still owns, and the pipeline would start the stage again.
+ *
+ * **The run is found in the database, not in this process** (WP-85, TD-028 decision 9). The task's
+ * live run is read under a `for share` lock — before the task row is written, the order every
+ * writer of both rows takes (`runs` then `tasks`), so the two cannot deadlock — and its id is
+ * recorded on `task.taken_over`; the stop is a `run_commands` row the holder applies
+ * (`./run-commands.ts`). Until WP-85 the run was looked up in this process's register, and on the
+ * shipped topology that register is always empty, so every take-over recorded `run_id: null` and
+ * stopped nothing (PROGRESS backlog 134).
  *
  * Not awaiting the stop means the request answers with the branch and the resume command while the
- * session is still winding down. `RunHandle.stop` resolves only when the run's **outcome** does —
- * `interrupt()`, a grace period, container teardown — and an HTTP request that held a connection
- * open for all of it would time out on the one path where the operator most needs an answer. What
- * the caller is told is therefore `workspace_export: 'requested'`, which is the true tense.
+ * session is still winding down. What the caller is told is therefore `workspace_export:
+ * 'requested'`, which is the true tense — and since WP-85 truer still: requested of the holder.
  *
  * ## What the export is, and what it is not
  *
@@ -1491,15 +1514,18 @@ export const takeOverTaskCommand = async (
     readonly authorName: string;
     readonly tarball: boolean;
     readonly reason?: string;
+    /** The stop's `run_commands` id; see {@link steerRunCommand}'s. */
+    readonly commandId?: Id;
   },
 ): Promise<TakeOverOutcome> => {
   const audited = auditedReason(deps, input.reason);
-  const live = deps.liveRuns?.forTask(input.taskId) ?? null;
   const outcome = await writeTask(
     deps,
     { taskId: input.taskId, userId: input.userId, what: 'taking the task over' },
     async (scope, stored, context) => {
       const stage = currentStageOrThrow(stored, 'take over');
+      // Before the task row is written: `runs` then `tasks`, the order the run's ending takes.
+      const live = await deps.store.runCommands.lockLiveRunOf(scope.tx, stored.task.id);
       // The branch the work is on: what the merge request said, or the name BD-025 reserves for
       // this task. Never invented from the run — a task may have been taken over before any push.
       const branch = stored.branch ?? taskBranchName(stored.task.ticket.key);
@@ -1508,51 +1534,48 @@ export const takeOverTaskCommand = async (
         {
           branch,
           stage,
-          ...(live?.handle.sessionId == null ? {} : { sessionId: live.handle.sessionId }),
+          ...(live?.sessionId == null ? {} : { sessionId: live.sessionId }),
           // Recorded rather than inferred by the screen (WP-73, backlog 203): `null` exactly when
-          // nothing was exported below.
+          // no run was live, so no stop was recorded below.
           runId: live?.runId ?? null,
         },
         context,
       );
       await deps.store.tasks.save(scope.tx, { ...stored, task: decision.aggregate });
       await scope.events.append(decision.events);
+      if (live !== null) {
+        // The stop's {@link RunTakeOverExport}, recorded for the holder to hand to `RunHandle.stop`.
+        await recordRunCommand(deps, scope, live, {
+          id: input.commandId ?? context.ids.next(),
+          actorUserId: input.userId,
+          instruction: {
+            kind: 'take_over',
+            branch,
+            commitMessage: `wip: hand-over to ${actorLabel(input.authorName)}`,
+            tarball: input.tarball,
+            keepUntil: new Date(
+              Date.parse(context.clock.now()) + TAKEN_OVER_WORKSPACE_KEEP_DAYS * DAY_MS,
+            ).toISOString() as IsoDateTime,
+          },
+        });
+      }
       return {
         result: {
           taskId: stored.task.id,
           branch,
-          sessionId: live?.handle.sessionId ?? null,
-          exported: live !== null,
-          keepUntil: new Date(
-            Date.parse(context.clock.now()) + TAKEN_OVER_WORKSPACE_KEEP_DAYS * DAY_MS,
-          ).toISOString(),
+          runId: live?.runId ?? null,
+          sessionId: live?.sessionId ?? null,
         },
         work: null,
       };
     },
   );
-  if (live !== null) {
-    const workspaceExport: RunTakeOverExport = {
-      branch: outcome.branch,
-      commitMessage: `wip: hand-over to ${actorLabel(input.authorName)}`,
-      tarball: input.tarball,
-      keepUntil: outcome.keepUntil,
-    };
-    // Deliberately not awaited; see the module note. The rejection is swallowed here and reported
-    // by the runner's own logger — a stop that failed has already been recorded as a run that did
-    // not end cleanly, and re-throwing it would turn a completed take-over into a 500.
-    void live.handle.stop({ reason: 'taken_over', workspaceExport }).catch((error: unknown) => {
-      deps.logger?.error(
-        { err: error, run_id: live.runId, task_id: input.taskId },
-        'the taken-over run could not be stopped; its workspace may not have been exported',
-      );
-    });
-  }
   return {
     taskId: outcome.taskId,
     branch: outcome.branch,
     sessionId: outcome.sessionId,
-    exported: outcome.exported,
+    exported: outcome.runId !== null,
+    runId: outcome.runId,
     reason: audited.reason,
   };
 };

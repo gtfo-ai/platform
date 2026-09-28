@@ -17,6 +17,7 @@
  * | 4 | No transaction isolation: a `Transaction` handle is accepted and ignored, so a rolled-back "transaction" leaves its writes. | **kinder** | This is the one that matters, and the reason the same suite runs against PostgreSQL: rollback semantics cannot be faked in a Map. **Positive assertion**: `memory-pipeline.test.ts` asserts the divergence explicitly (`keeps writes a rolled-back scope made, which PostgreSQL does not`), so a reader meets it as a test rather than as a warning, and the e2e tier runs the pipeline on the real thing. |
  * | 7 | `task.sequence` was the number the stored aggregate carried; PostgreSQL derives it from the **event log** (`max(stream_seq) + 1`, `TASK_COLUMNS`). **Closed at WP-26** by {@link MemoryPipelineStoreOptions.streamSequence}: a harness that wires the event log in gets the derived number. | **same, when wired** | It was *kinder* and it hid a whole class: an event appended to a task's stream by anything other than the aggregate — `task.review.observed` (WP-24), `task.lint.posted` (WP-25), `task.rebase.checked` and `task.conflict.warned` (WP-26) — left the fake's aggregate one behind the log, so the **next** aggregate write would clash in production and not here. It only stayed invisible because the first three land on a task that has stopped. Unwired, the old behaviour remains, which is why the accessor takes the **maximum** of the two rather than replacing one with the other: a transaction's own staged appends are not committed yet, and the aggregate's number is the right answer for them. |
  * | 8 | `takenOver` reads the **committed** log through {@link MemoryPipelineStoreOptions.taskEvents}; PostgreSQL's query also sees the calling transaction's own staged appends (WP-56). Unwired, it answers `null`; its `lastActivityAt` reads {@link MemoryPipelineStoreOptions.humanActions} (WP-44), and unwired that is the take-over's own instant. | **same, when wired; kinder by one window** | Both readers of it — the workpad render and the take-over timer — run in a job's **own** transaction after the events they react to have committed, so the window this cannot see is one neither reader stands in. A caller that asked inside the transaction that appended the take-over would get `null` here and the record from PostgreSQL; nothing does, and the contract suite drives the committed case against both. |
+ * | 9 | `runCommands` (WP-85): `lockRun`/`lockLiveRunOf`/`markApplied` take no lock, and `LockedRun.sessionId` is the run row's `sessionId` where PostgreSQL reads the run's `system`/`init` transcript entry (this store keeps no transcript). | **kinder** on ordering, **same** on predicates | The `for share` ordering between a command and the run's ending is a property of two concurrent transactions, which a single-threaded store cannot interleave; it is asserted against PostgreSQL in `test/integration/pipeline/run-commands.integration.test.ts`, both orders. Every predicate — live run, this owner's lease, still pending, closed `run_ended` by the winning `finish` — is the SQL's, and the contract suite drives each against both stores. |
  */
 import type {
   ArtifactType,
@@ -51,6 +52,9 @@ import type {
   BreakdownRepository,
   PipelineStore,
   QuestionRepository,
+  RunCommandInstruction,
+  RunCommandRefusal,
+  RunCommandRepository,
   RunRepository,
   StoredApproval,
   StoredArtifact,
@@ -135,6 +139,20 @@ export interface MemoryPipelineStore extends PipelineStore {
   supersededRows(): readonly MemorySupersededRow[];
   /** The lease a run currently holds, for a test that asserts the heartbeat wrote one (WP-47). */
   leaseOf(runId: Id): { readonly owner: string; readonly expiresAt: IsoDateTime } | null;
+  /** Every `run_commands` row, for a test that asserts what the holder stamped (WP-85). */
+  runCommandRows(): readonly MemoryRunCommandRow[];
+}
+
+/** One `run_commands` row as this store keeps it (migration 0060). */
+export interface MemoryRunCommandRow {
+  readonly id: Id;
+  readonly runId: Id;
+  readonly taskId: Id;
+  readonly actorUserId: Id | null;
+  readonly instruction: RunCommandInstruction;
+  readonly sequence: number;
+  readonly applied: boolean;
+  readonly refusedReason: RunCommandRefusal | null;
 }
 
 export interface MemoryPipelineStoreOptions {
@@ -187,6 +205,9 @@ export const createMemoryPipelineStore = (
   const breakdown = new Map<Id, StoredBreakdownItem>();
   /** `runs.lease_owner` / `lease_expires_at`, which this store keeps beside the row (WP-47). */
   const leases = new Map<Id, { owner: string; expiresAt: IsoDateTime }>();
+  /** `run_commands` (WP-85), insertion-ordered like the SQL's `created_at, id`. */
+  const runCommandRows = new Map<Id, MemoryRunCommandRow>();
+  let runCommandSequence = 0;
   const chargedRuns = new Set<Id>();
   let sequence = 0;
 
@@ -789,6 +810,13 @@ export const createMemoryPipelineStore = (
         cost: outcome.cost,
         wallMs: outcome.wallMs,
       });
+      // The winner closes the run's pending commands, as the SQL adapter does in the same
+      // transaction (WP-85).
+      for (const row of runCommandRows.values()) {
+        if (row.runId === outcome.runId && !row.applied && row.refusedReason === null) {
+          runCommandRows.set(row.id, { ...row, refusedReason: 'run_ended' });
+        }
+      }
       return true;
     },
     /**
@@ -843,6 +871,109 @@ export const createMemoryPipelineStore = (
         isEstimate: owned.some((run) => run.cost?.is_estimate === true),
         wallMs: owned.reduce((total, run) => total + run.wallMs, 0),
       };
+    },
+  };
+
+  const lockedRunOf = (run: StoredRun) => ({
+    runId: run.id,
+    taskId: run.taskId,
+    status: run.status,
+    leaseOwner: leases.get(run.id)?.owner ?? null,
+    // This store has no transcript, so the row's own session stands in for the `init` entry the SQL
+    // adapter reads (WP-85): a fixture that seeds a live run with a session is the same statement.
+    sessionId: run.sessionId,
+  });
+
+  /**
+   * `run_commands` over this store's rows (WP-85). There is no lock to take in a single-threaded
+   * store: the SQL adapter's `for share` orders two transactions, and here nothing interleaves
+   * inside one call, so the predicates alone are the whole contract.
+   */
+  const runCommandRepository: RunCommandRepository = {
+    lockRun: async (_tx, runId) => {
+      const run = runs.get(runId);
+      return run === undefined ? null : lockedRunOf(run);
+    },
+    lockLiveRunOf: async (_tx, taskId) => {
+      const live = [...runs.values()].filter(
+        (run) => run.taskId === taskId && isActiveRunStatus(run.status),
+      );
+      const newest = live.at(-1);
+      return newest === undefined ? null : lockedRunOf(newest);
+    },
+    insert: async (_tx, command) => {
+      if (runCommandRows.has(command.id)) {
+        throw new PipelineStoreError(`run command ${command.id} already exists`);
+      }
+      if (!runs.has(command.runId)) {
+        throw new PipelineStoreError(`run ${command.runId} does not exist`);
+      }
+      runCommandSequence += 1;
+      runCommandRows.set(command.id, {
+        id: command.id,
+        runId: command.runId,
+        taskId: command.taskId,
+        actorUserId: command.actorUserId,
+        instruction: clone(command.instruction),
+        sequence: runCommandSequence,
+        applied: false,
+        refusedReason: null,
+      });
+    },
+    pending: async (_tx, query) =>
+      [...runCommandRows.values()]
+        .filter((row) => {
+          const run = runs.get(row.runId);
+          return (
+            !row.applied &&
+            row.refusedReason === null &&
+            (query.runId === undefined || row.runId === query.runId) &&
+            run !== undefined &&
+            isActiveRunStatus(run.status) &&
+            leases.get(row.runId)?.owner === query.owner
+          );
+        })
+        .sort((left, right) => left.sequence - right.sequence)
+        .slice(0, query.limit)
+        .map((row) => ({
+          id: row.id,
+          runId: row.runId,
+          taskId: row.taskId,
+          actorUserId: row.actorUserId,
+          instruction: clone(row.instruction),
+          kind: row.instruction.kind,
+        })),
+    markApplied: async (_tx, input) => {
+      const row = runCommandRows.get(input.id);
+      if (row === undefined || row.applied || row.refusedReason !== null) {
+        return false;
+      }
+      const run = runs.get(row.runId);
+      if (
+        run === undefined ||
+        !isActiveRunStatus(run.status) ||
+        leases.get(row.runId)?.owner !== input.owner
+      ) {
+        return false;
+      }
+      runCommandRows.set(row.id, { ...row, applied: true });
+      return true;
+    },
+    markDeliveryFailed: async (_tx, input) => {
+      const row = runCommandRows.get(input.id);
+      if (row === undefined || !row.applied) {
+        return false;
+      }
+      runCommandRows.set(row.id, { ...row, applied: false, refusedReason: 'delivery_failed' });
+      return true;
+    },
+    markRefused: async (_tx, input) => {
+      const row = runCommandRows.get(input.id);
+      if (row === undefined || row.applied || row.refusedReason !== null) {
+        return false;
+      }
+      runCommandRows.set(row.id, { ...row, refusedReason: input.reason });
+      return true;
     },
   };
 
@@ -1146,6 +1277,8 @@ export const createMemoryPipelineStore = (
     questions: questionRepository,
     approvals: approvalRepository,
     breakdown: breakdownRepository,
+    runCommands: runCommandRepository,
+    runCommandRows: () => [...runCommandRows.values()].map((row) => clone(row)),
     writeEstimate: (taskId, estimate) => {
       const current = tasks.get(taskId);
       if (current === undefined) {

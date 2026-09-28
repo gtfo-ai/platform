@@ -78,6 +78,7 @@ import {
   retryStageRequestSchema,
   returnToStageRequestSchema,
   reworkRequestSchema,
+  runCommandsResponseSchema,
   runMessagesResponseSchema,
   runPromptResponseSchema,
   runRecordSchema,
@@ -91,6 +92,7 @@ import {
   startShadowBatchRequestSchema,
   startShadowBatchResponseSchema,
   steerRunRequestSchema,
+  steerRunResponseSchema,
   submitFeedbackRequestSchema,
   takeOverRequestSchema,
   takeOverResponseSchema,
@@ -207,6 +209,8 @@ export interface Endpoints {
   ) => Promise<z.output<typeof runMessagesResponseSchema>>;
   readonly runPrompt: (runId: string) => Promise<z.output<typeof runPromptResponseSchema>>;
   readonly runContextPack: (runId: string) => Promise<z.output<typeof contextPackRecordSchema>>;
+  /** The run's steer and take-over commands and what became of each (WP-85). */
+  readonly runCommandLog: (runId: string) => Promise<z.output<typeof runCommandsResponseSchema>>;
   readonly kbTree: (projectId: string) => Promise<z.output<typeof kbTreeResponseSchema>>;
   readonly kbDoc: (
     projectId: string,
@@ -382,7 +386,14 @@ export interface Endpoints {
     body: z.input<typeof decideBreakdownRequestSchema>,
     idempotencyKey: string,
   ) => Promise<z.output<typeof decideBreakdownResponseSchema>>;
-  readonly steerRun: (runId: string, body: z.input<typeof steerRunRequestSchema>) => Promise<void>;
+  /**
+   * `POST /api/runs/:id/steer` — **accepted**, then applied or refused by the process holding the
+   * run (WP-85, TD-028 decision 9): the answer names the recorded command, never a delivery.
+   */
+  readonly steerRun: (
+    runId: string,
+    body: z.input<typeof steerRunRequestSchema>,
+  ) => Promise<z.output<typeof steerRunResponseSchema>>;
   readonly retryRun: (runId: string, body: z.input<typeof retryRunRequestSchema>) => Promise<void>;
   readonly cancelRun: (
     runId: string,
@@ -515,6 +526,8 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
       client.get(`/api/runs/${seg(runId)}/prompt`, { schema: runPromptResponseSchema }),
     runContextPack: (runId) =>
       client.get(`/api/runs/${seg(runId)}/context-pack`, { schema: contextPackRecordSchema }),
+    runCommandLog: (runId) =>
+      client.get(`/api/runs/${seg(runId)}/commands`, { schema: runCommandsResponseSchema }),
 
     kbTree: (projectId) =>
       client.get(`/api/projects/${seg(projectId)}/kb/tree`, { schema: kbTreeResponseSchema }),
@@ -684,7 +697,11 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
       }),
 
     steerRun: (runId, body) =>
-      command(`/api/runs/${seg(runId)}/steer`, steerRunRequestSchema, body, true),
+      client.command(`/api/runs/${seg(runId)}/steer`, {
+        schema: steerRunResponseSchema,
+        body: steerRunRequestSchema.parse(body),
+        idempotent: true,
+      }),
     retryRun: (runId, body) =>
       command(`/api/runs/${seg(runId)}/retry`, retryRunRequestSchema, body, true),
     cancelRun: (runId, body) =>

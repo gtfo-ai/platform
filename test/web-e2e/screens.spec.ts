@@ -344,6 +344,14 @@ test('the run screen retries with a model and an effort, and sends stage-scoped 
   await page.goto(`/runs/${IDS.run}`);
   await expect(page.getByRole('heading', { name: 'implementation · developer' })).toBeVisible();
 
+  // WP-85: what became of each steer, read from the command log and said in words.
+  const sent = page.getByRole('region', { name: 'Commands sent to this run' });
+  await expect(sent.getByText(/delivered to the live session/)).toBeVisible();
+  await expect(sent.getByText(/the run ended before this message could be applied/)).toBeVisible();
+  await page.getByLabel('Steer the agent').fill('also check the rounding');
+  await page.getByRole('button', { name: 'Steer' }).click();
+  await expect(page.getByText(/Accepted\. The agent runs in another process/)).toBeVisible();
+
   await page.getByLabel('Retry with model').fill('claude-sonnet-5');
   await page.getByLabel('Retry with effort').selectOption('low');
   await page.getByRole('button', { name: 'Retry run' }).click();
@@ -356,6 +364,9 @@ test('the run screen retries with a model and an effort, and sends stage-scoped 
   await expect.poll(async () => (await commandLog(request)).length).toBeGreaterThanOrEqual(2);
   const log = await commandLog(request);
 
+  expect(log.find((entry) => entry.path === `/api/runs/${IDS.run}/steer`)?.body).toEqual({
+    message: 'also check the rounding',
+  });
   expect(log.find((entry) => entry.path === `/api/runs/${IDS.run}/retry`)?.body).toEqual({
     model: 'claude-sonnet-5',
     effort: 'low',

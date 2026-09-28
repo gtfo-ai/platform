@@ -4,7 +4,9 @@
  * Header metrics, then three tabs: the live transcript, the exact prompt that produced it, and the
  * context pack that went into it.
  *
- * **The commands technical/09's screens table gives this screen are all here**: steer, cancel,
+ * **The commands technical/09's screens table gives this screen are all here**: steer (accepted,
+ * then applied or refused by the process holding the run — the list under the transcript says
+ * which, WP-85), cancel,
  * retry with model/effort (`POST /api/runs/:id/retry`, which creates a *new* run rather than
  * changing this one), feedback — and, since WP-44, **take over and hand back** for the run's task
  * (`features/take-over.tsx`, the same component the task screen renders) and the **transcript
@@ -21,6 +23,7 @@ import { type ReactElement, useState, useSyncExternalStore } from 'react';
 import { transcriptDownloadPath } from '../api/endpoints.js';
 import {
   useRun,
+  useRunCommandLog,
   useRunCommands,
   useRunContextPack,
   useRunMessages,
@@ -44,6 +47,7 @@ import {
 } from '../ui/kit.js';
 import { CodeText, DownloadLink, UntrustedText } from '../ui/untrusted.js';
 import { FeedbackForm } from './feedback.js';
+import { RunCommandLog } from './run-command-log.js';
 import { TakeOverPanel } from './take-over.js';
 
 type Tab = 'transcript' | 'prompt' | 'context';
@@ -107,6 +111,7 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
   const run = useRun(runId);
   const messages = useRunMessages(runId);
   const commands = useRunCommands(runId);
+  const commandLog = useRunCommandLog(runId);
   const [tab, setTab] = useState<Tab>('transcript');
   const [steer, setSteer] = useState('');
   const [retryModel, setRetryModel] = useState('');
@@ -317,8 +322,21 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
             </Button>
           </form>
           {commands.steer.isError ? (
-            <ErrorNotice title="That steer was refused (rate limit is one message per five seconds)." />
+            <ErrorNotice title="That steer was not accepted: the run may have ended, or you sent one within the last five seconds (the limit is one message per five seconds)." />
           ) : null}
+          {commands.steer.isSuccess ? (
+            <p className="text-xs text-fg-muted">
+              Accepted. The agent runs in another process, which applies the message — whether it
+              did is shown under “Commands sent to this run”.
+            </p>
+          ) : null}
+          {commandLog.isError ? (
+            <ErrorNotice
+              title="What became of the commands sent to this run could not be loaded."
+              detail={String(commandLog.error)}
+            />
+          ) : null}
+          <RunCommandLog commands={commandLog.data?.items ?? []} />
         </div>
       ) : null}
 

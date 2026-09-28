@@ -370,6 +370,32 @@ export const useRunContextPack = (runId: string, enabled: boolean) => {
   });
 };
 
+/** How often the run screen re-reads a command still waiting for the process holding the run. */
+export const PENDING_RUN_COMMAND_POLL_MS = 3_000;
+
+/**
+ * `GET /api/runs/:id/commands` — every steer and take-over sent to this run and what became of it
+ * (WP-85, TD-028 decision 9).
+ *
+ * A command is **accepted** by the process that answered and **applied or refused** by the process
+ * holding the run, so the screen has to read the outcome rather than assume it. A refusal by the
+ * run's ending arrives as the run's own domain event (which invalidates this key through the
+ * `['run', id]` prefix); an application writes a transcript row, which the query bridge does not
+ * route to Query — so while any command is still pending the read is repeated on a short interval,
+ * and stops as soon as none is.
+ */
+export const useRunCommandLog = (runId: string) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: queryKeys.runCommandLog(runId),
+    queryFn: () => endpoints.runCommandLog(runId),
+    refetchInterval: (query) =>
+      query.state.data?.items.some((item) => item.state === 'pending') === true
+        ? PENDING_RUN_COMMAND_POLL_MS
+        : false,
+  });
+};
+
 /**
  * `GET /api/org/stats` — the delivery statistics (WP-41, product/16).
  *
@@ -684,9 +710,13 @@ export const useRunCommands = (runId: string) => {
   const queryClient = useQueryClient();
   const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.run(runId) });
   return {
+    // Accepted, not delivered (WP-85): the command log is what says whether the holder applied it.
     steer: useMutation({
       mutationFn: (message: string) => endpoints.steerRun(runId, { message }),
-      onSuccess: invalidate,
+      onSuccess: async () => {
+        await invalidate();
+        await queryClient.invalidateQueries({ queryKey: queryKeys.runCommandLog(runId) });
+      },
     }),
     cancel: useMutation({
       mutationFn: (reason: string) => endpoints.cancelRun(runId, { reason }),
