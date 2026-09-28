@@ -34,6 +34,11 @@
  *     by the shape the runner recorded beside the mint's audit row (TD-012's M5 amendment).
  *  7. **The diff coalescer is per process**, so one gate entry costs one read *per process that ran
  *     one of its duties* (backlog 181) — counted here, and the figure is stated at the coalescer.
+ *  8. **A split install accepts commands before its worker starts** (WP-86, backlog 262): `migrate`
+ *     declares every job queue, so `ROLE=api` alone enqueues and the job waits for a worker.
+ *  9. **A deployment with no runner is visible** (WP-86, backlog 135): `app`'s `/readyz` reports
+ *     `agent_runs` degraded (still 200) with `details.agent_runs: unserved`, and `/metrics` the
+ *     `stage.execute` backlog and its age — then `ok` once a runner takes the job.
  *
  * ## The connection budget (criterion 3)
  *
@@ -598,8 +603,14 @@ describe('the scaling split: ROLE=api beside ROLE=worker', () => {
     const apiBody = (await apiReady.json()) as { status: string; checks: Record<string, string> };
     expect(apiReady.status, JSON.stringify(apiBody)).toBe(200);
     // The API runs no dispatcher, so it reports none — omitted, not `ok` — and since WP-72 it
-    // reports the queue client it enqueues through.
-    expect(apiBody.checks).toEqual({ database: 'ok', migrations: 'ok', queue: 'ok' });
+    // reports the queue client it enqueues through; since WP-86, whether the instance's agent
+    // stages are being taken (nothing is queued here, so they are).
+    expect(apiBody.checks).toEqual({
+      database: 'ok',
+      migrations: 'ok',
+      queue: 'ok',
+      agent_runs: 'ok',
+    });
 
     const workerReady = await fetch(`${worker.baseUrl}/readyz`);
     const workerBody = (await workerReady.json()) as {
@@ -612,8 +623,161 @@ describe('the scaling split: ROLE=api beside ROLE=worker', () => {
       migrations: 'ok',
       queue: 'ok',
       dispatch: 'down',
+      agent_runs: 'ok',
     });
   }, 180_000);
+});
+
+/**
+ * WP-86 (PROGRESS backlog 262, criterion 1): **`migrate` declares every job queue**, so a `ROLE=api`
+ * process on a database nothing but `migrate` has touched accepts a command that enqueues. Before
+ * WP-86 queues were declared only by the workers that serve them, and this command was a 500
+ * (`QueueNotDeclaredError`) until a worker had started once; the operator guide told you to start a
+ * worker first. The worker added afterwards is the other half: the job waited for it.
+ */
+describe('a split install before its worker has started (backlog 262)', () => {
+  it('accepts an enqueuing command on ROLE=api with no worker ever started, and the job waits for one', async () => {
+    const pipeline = await startPipeline({
+      scenarios: featureScenarios,
+      label: 'topology-first-boot',
+      tickets: TICKETS,
+      role: 'api',
+      agent: 'none',
+      processName: 'api',
+      env: { APP_DB_POOL_MAX: String(floorOf('api')) },
+    });
+    harness = pipeline;
+    // Nothing but `migrate` and this API process has touched the database: no worker has declared
+    // a queue, and the queue is there anyway.
+    const [declared] = await pipeline.query<{ present: boolean }>(
+      "select exists (select 1 from pgboss.queue where name = 'knowledge.apply') as present",
+    );
+    expect(declared?.present).toBe(true);
+    const client = await signIn(pipeline.instance.baseUrl);
+
+    const [proposal] = await pipeline.query<{ id: string }>(
+      `insert into kb_proposals (project_id, source, kind, type, target_path, delta, significance,
+                                 status)
+       values ($1, 'human', 'technical', 'lesson', $2, $3, 0.6, 'queued')
+       returning id`,
+      [
+        pipeline.projectId,
+        '.agentic/knowledge/lessons/L-2026-09-28-first-boot.md',
+        '---\ntitle: First boot\n---\nmigrate declares the queues.\n',
+      ],
+    );
+    const decided = await client.post(
+      `/api/projects/${pipeline.projectId}/kb/proposals/${proposal?.id}/approve`,
+      { decision: 'approve' },
+    );
+    expect(decided.status, JSON.stringify(decided.body)).toBe(200);
+    await pipeline.waitFor('the API to enqueue the apply job', async () => {
+      const [job] = await pipeline.query<{ state: string }>(
+        "select state::text as state from pgboss.job where name = 'knowledge.apply' order by created_on desc limit 1",
+      );
+      return job?.state === 'created';
+    });
+
+    // The job waited for a worker; one starts, and performs it.
+    await pipeline.addProcess({
+      name: 'worker',
+      role: 'worker',
+      agent: 'fake-runner',
+      env: { APP_DB_POOL_MAX: String(floorOf('worker')) },
+    });
+    await pipeline.waitFor('the approved proposal to be applied', async () => {
+      const [row] = await pipeline.query<{ status: string }>(
+        'select status::text as status from kb_proposals where id = $1',
+        [proposal?.id],
+      );
+      return row?.status === 'applied';
+    });
+  }, 240_000);
+});
+
+/**
+ * WP-86 (PROGRESS backlog 135, criterion 3): TD-028's *"the queue depth is a metric, `/readyz`
+ * reports the runner as absent"*, asserted through `app` with the runner absent and then present.
+ *
+ * `app` is the stock one — `ROLE=all`, no launcher — so the first stage's job is enqueued and
+ * nothing claims it. Its eligibility is moved back past the five-minute bound with one `update`
+ * rather than by waiting; the rest is the processes' own answers over HTTP.
+ */
+describe('a deployment with no runner is visible (backlog 135)', () => {
+  const metric = (text: string, name: string, queue: string): number | null => {
+    const line = text.split('\n').find((entry) => entry.startsWith(`${name}{queue="${queue}"} `));
+    return line === undefined ? null : Number(line.split(' ').at(-1));
+  };
+
+  it('reports agent_runs unserved (degraded, 200) and the stage.execute backlog on app, and ok once a runner takes it', async () => {
+    const pipeline = await startPipeline({
+      scenarios: featureScenarios,
+      label: 'topology-no-runner',
+      tickets: TICKETS,
+      agent: 'none',
+      processName: 'app',
+    });
+    harness = pipeline;
+    const base = pipeline.instance.baseUrl;
+
+    await pipeline.publish([ticketMatched(pipeline)]);
+    await pipeline.waitFor('the first stage to be enqueued and left unclaimed', async () => {
+      const [row] = await pipeline.query<{ queued: number }>(
+        "select count(*)::int as queued from pgboss.job where name = 'stage.execute' and state = 'created'",
+      );
+      return (row?.queued ?? 0) > 0;
+    });
+
+    // Inside the bound: queued, but not yet a finding.
+    let ready = await fetch(`${base}/readyz`);
+    let body = (await ready.json()) as {
+      status: string;
+      checks: Record<string, string>;
+      details?: Record<string, string>;
+    };
+    expect(ready.status, JSON.stringify(body)).toBe(200);
+    expect(body.checks.agent_runs).toBe('ok');
+
+    // Runner absent: the job has been eligible for ten minutes and nothing has claimed it.
+    await pipeline.query(
+      "update pgboss.job set start_after = now() - interval '10 minutes' where name = 'stage.execute' and state = 'created'",
+    );
+    ready = await fetch(`${base}/readyz`);
+    body = (await ready.json()) as typeof body;
+    expect(ready.status, JSON.stringify(body)).toBe(200);
+    expect(body).toMatchObject({
+      status: 'degraded',
+      checks: { database: 'ok', migrations: 'ok', queue: 'ok', agent_runs: 'degraded' },
+      details: { agent_runs: 'unserved' },
+    });
+    let text = await (await fetch(`${base}/metrics`)).text();
+    expect(metric(text, 'jobs_queued', 'stage.execute')).toBe(1);
+    expect(metric(text, 'jobs_queued_oldest_age_seconds', 'stage.execute')).toBeGreaterThan(300);
+    // Every declared queue has a count — zero is a measurement, not an absence.
+    expect(metric(text, 'jobs_queued', 'knowledge.apply')).toBe(0);
+
+    // Runner present: it subscribes `stage.execute` and takes the job.
+    await pipeline.addProcess({
+      name: 'runner',
+      role: 'runner',
+      agent: 'fake-runner',
+      env: { APP_DB_POOL_MAX: String(floorOf('runner')) },
+    });
+    await pipeline.waitFor('the runner to claim the waiting stage', async () => {
+      const [row] = await pipeline.query<{ claimed: number }>(
+        "select count(*)::int as claimed from pgboss.job where name = 'stage.execute' and started_on is not null",
+      );
+      return (row?.claimed ?? 0) > 0;
+    });
+    ready = await fetch(`${base}/readyz`);
+    body = (await ready.json()) as typeof body;
+    expect(ready.status, JSON.stringify(body)).toBe(200);
+    expect(body.checks.agent_runs).toBe('ok');
+    expect(body.details).toBeUndefined();
+    text = await (await fetch(`${base}/metrics`)).text();
+    const age = metric(text, 'jobs_queued_oldest_age_seconds', 'stage.execute');
+    expect(age === null || age < 300, `oldest age ${age}`).toBe(true);
+  }, 240_000);
 });
 
 describe('each role’s pool floor', () => {

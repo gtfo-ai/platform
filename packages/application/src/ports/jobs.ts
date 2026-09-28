@@ -470,6 +470,16 @@ export const JOB_QUEUES = {
   notifyDigest: 'notify.digest',
   /** Monthly partition creation and transcript retention (cron, technical/03). */
   partitionMaintenance: 'db.partitions.maintain',
+  /**
+   * The daily maintenance pass — TD-004's *"maintenance schedules"* family (`maintenance/scheduler.ts`).
+   * Named here since WP-86 so the one table of queue definitions (`./job-queues.ts`) can carry it.
+   */
+  maintenanceSchedule: 'maintenance.schedule',
+  /**
+   * The price table's own maintenance (WP-19, `packages/infrastructure/src/cost/price-list-maintenance.ts`).
+   * Named here since WP-86 for the same reason.
+   */
+  priceListMaintenance: 'price.list.maintain',
 } as const;
 
 /** The polling queue of one integration provider (`poll.jira_cloud`, `poll.gitlab`, …). */

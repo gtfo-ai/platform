@@ -158,6 +158,7 @@ export * from './ports/integrations/inbox.js';
 export * from './ports/integrations/observability-errors.js';
 export * from './ports/integrations/observability-logs.js';
 export * from './ports/integrations/task-management.js';
+export * from './ports/job-queues.js';
 export * from './ports/jobs.js';
 export * from './ports/logger.js';
 export * from './ports/runner.js';

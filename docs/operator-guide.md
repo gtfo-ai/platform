@@ -63,17 +63,23 @@ containers.
 platform gates*.** That is the honest consequence of the rule above
 ([TD-028](decisions/technical/TD-028-launcher-control-plane.md), amended 2026-09-23) and it is worth
 knowing before you meet it. The `stage.execute` jobs are still enqueued and simply **queue** rather
-than failing, so nothing is lost. **No metric exposes that depth yet** and `/readyz` does not report
-the runner (PROGRESS backlog 135, still open), so read it from the database:
+than failing, so nothing is lost. **Two places show it** (WP-86):
+
+- `/readyz` on `app` reports `agent_runs: degraded`, with `"details": {"agent_runs": "unserved"}`,
+  once a `stage.execute` job has waited five minutes and no process has claimed one in that time.
+  `degraded` still answers **200**, so it never takes the instance out of rotation.
+- `/metrics` exports `jobs_queued{queue="stage.execute"}` (jobs ready to run and not yet claimed)
+  and `jobs_queued_oldest_age_seconds{queue="stage.execute"}` (how long the oldest has waited), and
+  the same pair for every other queue.
 
 ```bash
-docker compose exec db psql -U app -d app -tAc \
-  "select count(*) from pgboss.job where name = 'stage.execute' and state in ('created', 'retry')"
+curl -fsS localhost:8080/readyz
+curl -fsS localhost:8080/metrics | grep '^jobs_queued'
 ```
 
-(Measured at WP-72 as far as it could be: the same `pgboss.job` query, on another queue name, runs
-in the two-process e2e tier against pg-boss's real schema; this `docker compose exec` wrapper around
-it was not run.)
+Both are asserted through `app` with the runner absent and then present in
+`test/e2e/topology/two-processes.e2e.test.ts`; these two `curl` lines against a compose instance
+were not run.
 
 Gate evaluation — `ci_gate`, `rebase_gate`, `merged_gate` — is a *branch of the same handler on the
 same queue*, so it stops with them. It is not given a queue of its own because `stage.execute` is
@@ -112,13 +118,9 @@ never its role (above).
 - **A command's effect.** A command answered by a process that runs no worker (`ROLE=api`) is handed
   to a worker through the job queue in the database: that role holds an enqueue-only queue client
   and never takes a job itself (WP-72; before it, such a process held none, so a knowledge approval
-  waited for the nightly pass and every command that starts a stage was refused). **On a new
-  database, start a worker (`ROLE=worker`, `runner`, `indexer` or `all`) before a `ROLE=api`
-  process**, because queues are declared by the workers that serve them: until one has started
-  against the database once — and a worker refused at its own pool floor has not — every command that
-  enqueues is refused. The browser sees a `500` carrying a request id; the API's log line for that
-  id is `QueueNotDeclaredError`, naming the queue and telling you to start a worker (PROGRESS backlog
-  262).
+  waited for the nightly pass and every command that starts a stage was refused). The processes
+  may start in any order: `migrate` declares every job queue, so a `ROLE=api` process accepts a
+  command before any worker has started, and the job waits in the queue until one does (WP-86).
 - **The live run.** The runner writes the transcript and announces it with PostgreSQL `NOTIFY`; the
   process that serves your browser reads the rows back, so the run screen fills from `app` while the
   run executes in `runner`.
@@ -304,6 +306,12 @@ That is a real answer, not a glitch, and the body says which check failed:
 | `queue` | pg-boss did not start | the logs name the failure |
 | `dispatch` | this process cannot handle every event the build declares consumed, so it refuses to sweep the outbox | see below |
 
+One check is never `down`: **`agent_runs`** is `degraded` (and `/readyz` still answers 200) when
+agent stages are not being taken — `details.agent_runs` says `unserved` (a `stage.execute` job has
+waited five minutes with nothing claiming it: no runner, or a runner with no launcher URL and token)
+or `unknown` (the read failed; the `database` check says why). It is about the instance, not the
+process you asked, so `app` reports it too. See *The runner, and why it is a container of its own*, above.
+
 **`dispatch` is the one to know about.** `/readyz` is 503 on every worker role — `all`, `worker`,
 `runner` and `indexer` — for as long as the process cannot compose a pipeline — it is honest rather
 than broken, and it is the same condition under which the outbox sweep deliberately does not start
@@ -377,6 +385,8 @@ process cannot answer*, never zero:
 | `platform_storage_bytes{component="knowledge_mirrors"}` | the bare git mirrors under `APP_KNOWLEDGE_MIRROR_ROOT` (processes that have it) | the 50 GB mark, as for the database |
 | `platform_storage_total_bytes{components="database+knowledge_mirrors"}` | the two lines above summed — exported only when both were measured | the disk you gave the instance |
 | `knowledge_mirror_bytes{project_id="…"}` | one project's mirror — the axis you can act on | a project that outweighs the rest |
+| `jobs_queued{queue="…"}` | pg-boss jobs ready to run and not yet claimed, per declared queue, `0` included; a timer not yet due is not counted (every role that holds a job client, WP-86) | `queue="stage.execute"` above 0 for longer than a stage takes: no runner is taking agent stages |
+| `jobs_queued_oldest_age_seconds{queue="…"}` | how long the oldest of those has waited; no series for a queue with nothing waiting | `queue="stage.execute"` above 300 — the same condition `/readyz` reports as `agent_runs: degraded` |
 | `command_idempotency_claims_unknown{action="…"}` | commands whose process died between claiming their `Idempotency-Key` and recording the outcome, past the in-flight window (`CLAIM_IN_FLIGHT_MS`, `apps/server/src/routes/idempotency.ts`); the key answers `409 idempotency_attempt_unknown` for good (API roles, WP-73) | anything above 0 asks a **human check** of the resource the action names — never a delete of the row, which would let a retry perform the command a second time |
 
 `APP_TRUST_PROXY=true` is what makes the app believe `X-Forwarded-For` and `X-Forwarded-Proto`. Set

@@ -19,6 +19,7 @@
 
 import type { Id } from '@platform/contracts';
 import type { EventHandler } from '../events/handler.js';
+import { jobQueueDefinition } from '../ports/job-queues.js';
 import type { JobHandler, Jobs, JobWorker } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
@@ -116,14 +117,5 @@ export const createHistoryBootstrapRuntime = (
 
 /** Declares the queue this module's job runs on. Idempotent. */
 export const declareHistoryBootstrapQueue = async (jobs: Jobs): Promise<void> => {
-  await jobs.defineQueue({
-    name: JOB_QUEUES.historyBootstrap,
-    // `standard`: every wake-up carries a different batch or a different artifact.
-    policy: 'standard',
-    retryLimit: 2,
-    // Longer than the knowledge jobs' 30 s: a retry of `collect` re-reads the provider, and a
-    // failure there is usually a rate limit or an outage that a few seconds will not have cleared.
-    retryDelaySeconds: 60,
-    retryBackoff: true,
-  });
+  await jobs.defineQueue(jobQueueDefinition(JOB_QUEUES.historyBootstrap));
 };

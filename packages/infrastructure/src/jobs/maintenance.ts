@@ -10,7 +10,7 @@
  * EXECUTE granted to exactly that role, and the retention window is read from
  * `platform_table_policy` rather than passed in, so the job cannot widen it.
  */
-import type { Jobs, JobWorker } from '@platform/application';
+import { JOB_QUEUES, type Jobs, type JobWorker, jobQueueDefinition } from '@platform/application';
 import {
   maintainPartitions,
   PARTITION_MAINTENANCE_CRON,
@@ -41,15 +41,7 @@ export const registerPartitionMaintenance = async (
   jobs: Jobs,
   registration: PartitionMaintenanceRegistration,
 ): Promise<JobWorker> => {
-  await jobs.defineQueue({
-    name: PARTITION_MAINTENANCE_JOB,
-    policy: 'exclusive',
-    retryLimit: 2,
-    retryDelaySeconds: 300,
-    // Creating a year of partitions on a large instance is slow; the default 15 minutes is plenty
-    // but the retention drop is the part that must never be interrupted half-way.
-    expireInSeconds: 900,
-  });
+  await jobs.defineQueue(jobQueueDefinition(JOB_QUEUES.partitionMaintenance));
 
   await jobs.scheduleCron({
     queue: PARTITION_MAINTENANCE_JOB,

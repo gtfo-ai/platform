@@ -128,6 +128,27 @@ describe('ops endpoints', () => {
     expect(down.json().checks).toEqual({ database: 'down', migrations: 'ok' });
   });
 
+  /**
+   * WP-86 (backlog 135): `degraded` is still ready. Its one producer is `agent_runs: unserved` — no
+   * runner takes agent stages — and a 503 for that would take the API and the SPA out of a load
+   * balancer for a runner's absence.
+   */
+  it('answers 200 for a degraded report and publishes why', async () => {
+    const harness = await build();
+    harness.readiness = {
+      status: 'degraded',
+      checks: { database: 'ok', agent_runs: 'degraded' },
+      details: { agent_runs: 'unserved' },
+    };
+    const degraded = await harness.app.inject({ url: '/readyz' });
+    expect(degraded.statusCode).toBe(200);
+    expect(degraded.json()).toEqual({
+      status: 'degraded',
+      checks: { database: 'ok', agent_runs: 'degraded' },
+      details: { agent_runs: 'unserved' },
+    });
+  });
+
   it('fails readiness the moment shutdown starts, before anything is closed', async () => {
     // This ordering is what takes the instance out of a load balancer before its connections go.
     const harness = await build();

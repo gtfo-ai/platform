@@ -49,6 +49,7 @@ import {
 } from '../pipeline/integrations.js';
 import type { EventStore } from '../ports/event-store.js';
 import type { CommitAction } from '../ports/integrations/git-provider.js';
+import { jobQueueDefinition } from '../ports/job-queues.js';
 import type { EnqueueResult, JobHandler, Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
@@ -409,16 +410,7 @@ export const enqueueKnowledgeApply = async (
   });
 
 export const declareKnowledgeApplyQueue = async (jobs: Jobs): Promise<void> => {
-  await jobs.defineQueue({
-    name: JOB_QUEUES.knowledgeApply,
-    policy: 'stately',
-    retryLimit: 2,
-    retryDelaySeconds: 60,
-    retryBackoff: true,
-    // Two provider round trips against somebody else's instance; the 15-minute default is enough,
-    // and this states it rather than inheriting it silently.
-    expireInSeconds: 15 * 60,
-  });
+  await jobs.defineQueue(jobQueueDefinition(JOB_QUEUES.knowledgeApply));
 };
 
 export const knowledgeApplyHandler =

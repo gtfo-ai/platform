@@ -33,6 +33,7 @@ import {
   isRunnableTaskState,
   stageOf,
 } from '@platform/domain';
+import { jobQueueDefinition } from '../ports/job-queues.js';
 import type { JobHandler, Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
@@ -407,43 +408,12 @@ export const enqueueOrganisationOutbound = async (
   await jobs.enqueue<OutboundJobData>({ queue: JOB_QUEUES.pipelineOutbound, data });
 };
 
+/** Declares the pipeline's three queues from the one table (WP-86, `ports/job-queues.ts`). */
 export const declarePipelineQueues = async (jobs: Jobs): Promise<void> => {
-  await jobs.defineQueue({
-    name: JOB_QUEUES.stageExecute,
-    // TD-004: `stately` per task — at most one queued and one active, so a task never runs two
-    // stages at once and a burst of wake-ups collapses.
-    policy: 'stately',
-    retryLimit: 2,
-    retryDelaySeconds: 30,
-    retryBackoff: true,
-    // A stage is a whole agent run: minutes, not the 15-minute default.
-    expireInSeconds: 2 * 60 * 60,
-  });
-  await jobs.defineQueue({
-    name: JOB_QUEUES.mrCommentDebounce,
-    policy: 'stately',
-    retryLimit: 2,
-    retryDelaySeconds: 30,
-  });
-  await jobs.defineQueue({
-    name: JOB_QUEUES.pipelineOutbound,
-    // `standard`, not `stately`: see `JOB_QUEUES.pipelineOutbound`. A dropped wake-up would take
-    // the event's blocker brief with it, and that is the one thing a render cannot re-derive.
-    policy: 'standard',
-    ...PIPELINE_OUTBOUND_RETRY,
-  });
+  await jobs.defineQueue(jobQueueDefinition(JOB_QUEUES.stageExecute));
+  await jobs.defineQueue(jobQueueDefinition(JOB_QUEUES.mrCommentDebounce));
+  await jobs.defineQueue(jobQueueDefinition(JOB_QUEUES.pipelineOutbound));
 };
-
-/**
- * `pipeline.outbound`'s retry policy, named so that the one number derived from it cannot drift
- * from it (WP-65): {@link retryWindowMs} is what the `notifications_undelivered` gauge waits before
- * it counts an immediate notification nobody was told about.
- */
-export const PIPELINE_OUTBOUND_RETRY = {
-  retryLimit: 2,
-  retryDelaySeconds: 30,
-  retryBackoff: true,
-} as const;
 
 /** The `Jobs` port's default `expireInSeconds`, which `pipeline.outbound` does not override. */
 export const DEFAULT_JOB_EXPIRE_SECONDS = 15 * 60;

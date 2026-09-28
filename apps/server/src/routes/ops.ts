@@ -15,6 +15,10 @@
  *   moment shutdown begins, which is what takes the instance out of a load balancer *before*
  *   connections are closed (TD-002's shutdown order).
  *
+ *   Since WP-86 a `degraded` report answers **200**: its one producer is `agent_runs`, which is
+ *   about the instance (no process is taking agent stages), not about whether this process can
+ *   serve, and it names the reason in `details`.
+ *
  *   The fourth check is TD-023's amendment at WP-15a, and it has a consequence worth knowing here:
  *   `ROLE=all` and `ROLE=worker` are **503 for ever** until something composes a pipeline, which is
  *   the state `main.ts` is in today. That is intended — a process that would never advance a ticket
@@ -34,6 +38,12 @@ export type CheckStatus = 'ok' | 'degraded' | 'down';
 export interface ReadinessReport {
   readonly status: CheckStatus;
   readonly checks: Record<string, CheckStatus>;
+  /**
+   * Why a check that is not `ok` is not — present only when one says (WP-86): `agent_runs:
+   * 'unserved'` when `stage.execute` holds a job nothing has claimed past the bound, `'unknown'`
+   * when that could not be read.
+   */
+  readonly details?: Record<string, 'unserved' | 'unknown'>;
 }
 
 export interface OpsRoutesOptions {
@@ -117,7 +127,7 @@ export const registerOpsRoutes = async (
       schema: {
         summary: 'Readiness probe',
         description:
-          'Whether this process can serve traffic: database reachable, schema known to this build, job runtime started, and an event handler registered to dispatch to. 503 as soon as shutdown begins.',
+          'Whether this process can serve traffic: database reachable, schema known to this build, job runtime started, and an event handler registered to dispatch to — 503 when any is down, and as soon as shutdown begins. `agent_runs` is about the instance: degraded (still 200, `details.agent_runs: unserved`) when stage.execute holds a job nothing has claimed for five minutes — no runner is taking agent stages.',
         tags: ['ops'],
         response: { 200: healthResponseSchema, 503: healthResponseSchema },
       },
@@ -129,7 +139,10 @@ export const registerOpsRoutes = async (
           .send({ status: 'down' as const, checks: { shutdown: 'down' as const } });
       }
       const report = await options.readiness();
-      return reply.status(report.status === 'ok' ? 200 : 503).send(report);
+      // `degraded` is still ready (WP-86): the one degraded check, `agent_runs`, means agent stages
+      // are not being taken, and taking the API out of a load balancer for that would stop the
+      // product serving everything else too.
+      return reply.status(report.status === 'down' ? 503 : 200).send(report);
     },
   );
 

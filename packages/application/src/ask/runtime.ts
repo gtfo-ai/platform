@@ -20,6 +20,7 @@ import type { ProjectSettingsPort } from '../pipeline/settings.js';
 import type { RunStopReasons } from '../pipeline/stop-reasons.js';
 import type { PipelineStore } from '../pipeline/store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
+import { jobQueueDefinition } from '../ports/job-queues.js';
 import { JOB_QUEUES, type Jobs, type JobWorker } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import type { ClaudeRunner } from '../ports/runner.js';
@@ -104,18 +105,7 @@ export const composeAsk = (options: AskCompositionOptions): AskComposition => {
     }),
     executor,
     declareQueue: async () => {
-      await options.jobs.defineQueue({
-        name: JOB_QUEUES.taskAsk,
-        // `stately` per `ask:<id>` — see the queue's own docblock for why the key is the ask and
-        // not the task.
-        policy: 'stately',
-        retryLimit: 2,
-        retryDelaySeconds: 30,
-        retryBackoff: true,
-        // An ask is a run: minutes, not the 15-minute default. Shorter than `stage.execute`'s two
-        // hours because its turn limit is 12 and its cap is half a dollar.
-        expireInSeconds: 30 * 60,
-      });
+      await options.jobs.defineQueue(jobQueueDefinition(JOB_QUEUES.taskAsk));
     },
     startWorker: async () =>
       options.jobs.work<AskExecuteData>({

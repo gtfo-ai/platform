@@ -32,7 +32,18 @@
 > while the process cannot compose a complete consumer (TD-023's amendment). So a split deployment
 > can legitimately show the API process **ready** beside a worker that is **503 for `dispatch`**, and
 > `test/e2e/topology/two-processes.e2e.test.ts` asserts exactly that through two processes on one
-> database. Neither answer reports the runner or the launcher (PROGRESS backlog 135).
+> database.
+>
+> **`agent_runs` is about the instance, and `degraded` is still ready (WP-86, PROGRESS backlog
+> 135).** Every role that holds a job client also reports `agent_runs`, read from pg-boss's tables
+> rather than from the process: it is `degraded` — with `details: {"agent_runs": "unserved"}` — when
+> `stage.execute` holds a job that has been eligible for more than five minutes and no process has
+> claimed a `stage.execute` job in that time (none active, none started), which is what a deployment
+> with no runner looks like; `unknown` when the read failed. A `degraded` report answers **200**, a
+> `down` one 503: a missing runner stops agent stages and the platform gates and nothing else, so it
+> must not take the API out of a load balancer. The launcher itself is still not reported. The
+> matching metrics are `jobs_queued{queue}` (ready, unclaimed jobs per declared queue, `0`
+> included) and `jobs_queued_oldest_age_seconds{queue}` (only for a queue with something waiting).
 
 > **Five of the Knowledge row's eight endpoints are served** — four since WP-18b and `kb/health`
 > since WP-15h part 2 — and the other three are not, which is worth stating because the row reads as

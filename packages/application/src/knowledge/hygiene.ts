@@ -37,6 +37,7 @@
 import type { Id } from '@platform/contracts';
 import type { Clock, IdSource } from '@platform/domain';
 import { computeKbHealth, MAX_HEALTH_DOCUMENT_TOKENS, MAX_HEALTH_FINDINGS } from '@platform/domain';
+import { jobQueueDefinition } from '../ports/job-queues.js';
 import type { CronScheduleDefinition, JobHandler, Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
@@ -152,13 +153,5 @@ export const knowledgeHygieneSchedule = (timezone: string): CronScheduleDefiniti
 });
 
 export const declareKnowledgeHygieneQueue = async (jobs: Jobs): Promise<void> => {
-  await jobs.defineQueue({
-    name: JOB_QUEUES.knowledgeHygiene,
-    // `stately`: one pass at a time for the whole deployment, and a second schedule tick while one
-    // is running folds onto a single trailing job rather than queueing N nightly passes.
-    policy: 'stately',
-    retryLimit: 1,
-    retryDelaySeconds: 300,
-    expireInSeconds: 30 * 60,
-  });
+  await jobs.defineQueue(jobQueueDefinition(JOB_QUEUES.knowledgeHygiene));
 };

@@ -27,12 +27,16 @@
  *    queue cache is refreshed on an interval even when no worker is running, and that query borrows
  *    from the same pool as the request queries. An enqueue itself is one statement on the request's
  *    own path.
- *  - **A queue no worker has ever declared cannot be sent to.** pg-boss 12 refuses `send` for an
- *    unknown queue (`Queue <name> does not exist`), and queues are declared by the workers that
- *    serve them. On an installation whose worker has **never** started against this database, a
- *    command that enqueues is therefore refused with {@link QueueNotDeclaredError} rather than
- *    silently queued. The window is the first boot of a split deployment before its first worker;
- *    once any worker has started, the declaration persists in `pgboss.queue`.
+ *  - **An undeclared queue cannot be sent to**, and since WP-86 that is a state `migrate` closes
+ *    rather than one the operator waits out. pg-boss 12 refuses `send` for an unknown queue
+ *    (`Queue <name> does not exist`). Until WP-86 queues were declared only by the workers that
+ *    serve them, so on a split deployment every enqueuing command was refused until the first
+ *    worker had started (PROGRESS backlog 262). `migrate` now declares every row of the one table,
+ *    `JOB_QUEUE_DEFINITIONS` (`packages/application/src/ports/job-queues.ts`), right after it
+ *    installs pg-boss, and it runs before every product process — asserted through a `ROLE=api`
+ *    process with no worker in `test/e2e/topology/two-processes.e2e.test.ts`.
+ *    {@link QueueNotDeclaredError} stays for what is left: a database migrated by a build older
+ *    than WP-86 whose worker has never started, or a queue name the table does not carry.
  */
 import type { EnqueueRequest, EnqueueResult, JobData, Jobs } from '@platform/application';
 
@@ -55,7 +59,7 @@ export class QueueNotDeclaredError extends Error {
 
   constructor(queue: string, cause: unknown) {
     super(
-      `the job queue "${queue}" has not been declared in this database: queues are declared by the worker that serves them, and no worker process has started against it yet. Start a worker (ROLE=worker, runner, indexer or all) and retry.`,
+      `the job queue "${queue}" has not been declared in this database: migrate declares every queue this build knows, so the database was migrated by an older build (run migrate again) or the queue is not in JOB_QUEUE_DEFINITIONS.`,
       { cause },
     );
     this.name = 'QueueNotDeclaredError';

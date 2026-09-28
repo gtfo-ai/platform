@@ -100,6 +100,11 @@ export const versionResponseSchema = z.strictObject({
 export const healthResponseSchema = z.strictObject({
   status: z.enum(['ok', 'degraded', 'down']),
   checks: z.record(z.string(), z.enum(['ok', 'degraded', 'down'])),
+  /**
+   * Why a check is not `ok`, where the check says (WP-86): `agent_runs: "unserved"` — `stage.execute`
+   * holds a job nothing has claimed past the bound — or `"unknown"`. Absent when nothing is said.
+   */
+  details: z.record(z.string(), z.enum(['unserved', 'unknown'])).optional(),
 });
 
 export const userSummarySchema = z.strictObject({

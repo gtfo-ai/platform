@@ -8,6 +8,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { JOB_QUEUE_DEFINITIONS } from '@platform/application';
 import { afterAll, describe, expect, it } from 'vitest';
 import { checksumOf, loadMigrations } from './migrations.js';
 import {
@@ -116,7 +117,10 @@ const fakeClient = (state: FakeState = {}) => {
 
 const dependencies = (
   client: MigrationClient,
-  installJobs: MigrateDependencies['installJobs'] = async () => 40,
+  installJobs: MigrateDependencies['installJobs'] = async (_url, _schema, queues) => ({
+    schemaVersion: 40,
+    queuesDeclared: queues.map((queue) => queue.name),
+  }),
 ): MigrateDependencies => ({
   connect: async () => client,
   installJobs,
@@ -319,13 +323,42 @@ describe('runMigrations', () => {
       },
       dependencies(fake.client, async (connectionString, schema) => {
         installs.push([connectionString, schema]);
-        return 41;
+        return { schemaVersion: 41, queuesDeclared: [] };
       }),
     );
 
     expect(installs).toEqual([['postgres://fake', 'jobs']]);
     expect(report.pgBossSchema).toBe('jobs');
     expect(report.pgBossSchemaVersion).toBe(41);
+  });
+
+  /**
+   * WP-86 (backlog 262): `migrate` hands the pg-boss install **every** row of the one queue table,
+   * so a `ROLE=api` process started before any worker can enqueue. The real declaration against
+   * pg-boss is asserted in `test/integration/db/migrator.integration.test.ts`.
+   */
+  it('declares every queue of JOB_QUEUE_DEFINITIONS after installing pg-boss, and reports them', async () => {
+    const fake = fakeClient();
+    const { events, log } = collect();
+    const handed: string[][] = [];
+
+    const report = await runMigrations(
+      {
+        connectionString: 'postgres://fake',
+        migrationsDirectory: migrationDir(TWO_MIGRATIONS),
+        log,
+      },
+      dependencies(fake.client, async (_url, _schema, queues) => {
+        handed.push(queues.map((queue) => queue.name));
+        return { schemaVersion: 40, queuesDeclared: queues.map((queue) => queue.name) };
+      }),
+    );
+
+    const table = JOB_QUEUE_DEFINITIONS.map((definition) => definition.name);
+    expect(handed).toEqual([table]);
+    expect(report.queuesDeclared).toEqual(table);
+    const kinds = events.map((event) => event.kind);
+    expect(kinds.indexOf('queues')).toBe(kinds.indexOf('pgboss') + 1);
   });
 
   it('still releases the lock when the very first statement fails', async () => {

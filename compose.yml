@@ -68,14 +68,16 @@
 # its own because `stage.execute` is `stately` with `singletonKey: task:<id>`, which is what enforces
 # *a task never runs two stages at once*; a second queue would let a gate and a stage for one task
 # run concurrently. Nothing is lost, only delayed — the jobs are durable and are taken when a runner
-# starts. **No metric shows that queue depth yet**, and `/readyz` does not report the runner
-# (PROGRESS backlog 135): `docs/operator-guide.md` §1 gives the query that reads it.
+# starts. **It is visible** (WP-86, PROGRESS backlog 135): `/metrics` on `app` exports
+# `jobs_queued{queue="stage.execute"}` and its oldest age, and `/readyz` on `app` reports
+# `agent_runs: degraded` (`details.agent_runs: unserved`, still 200) once a job has waited five
+# minutes with nothing claiming it — read from the database, so `app` answers for the instance.
 #
 # **The split is asserted, not assumed** (WP-72): `test/e2e/topology/two-processes.e2e.test.ts`
 # starts two processes on one database — `ROLE=api` beside `ROLE=worker`, the split this file's `app`
 # (`ROLE=all`) and `runner` generalise — and asserts each crossing between them
-# through the processes — the run executed in `runner` and streamed from `app`, a steer to `app`
-# refused by name, the approval buttons posted only while a process holds the chat socket, and a run
+# through the processes — the run executed in `runner` and streamed from `app`, a steer answered by
+# `app` applied in `runner` (WP-85), the approval buttons posted only while a process holds the chat socket, and a run
 # credential quoted in a webhook redacted by a process that never minted it.
 
 name: agentic
@@ -224,6 +226,16 @@ services:
   # It shares `knowledge` and `exports` with `app` because it is the same workload otherwise: a
   # worker, running the same job queues. `knowledge.index` is a singleton per project, so two
   # workers do not fetch into one mirror at once.
+  #
+  # **No `healthcheck:` key here, and that is not the absence it looks like** (WP-86, PROGRESS
+  # backlog 135). The image's own `HEALTHCHECK` (`docker/app.Dockerfile`, `curl /healthz`) applies
+  # to this service as to `app`, so `docker compose ps` already reports a wedged runner. A
+  # readiness check here would add nothing for the cases that matter: a runner that is **absent** —
+  # not started, or crashed out — runs no healthcheck at all, and one started with no launcher URL
+  # and token passes its `/healthz` while subscribing no `stage.execute`, so the signal has to come
+  # from a process that sees the queue. It does: `/readyz` on `app`
+  # reports `agent_runs: degraded` when nothing takes `stage.execute` jobs, and `/metrics` the
+  # backlog. `/readyz` is also never a container healthcheck (TD-023's amendment).
   runner:
     <<: *platform-image
     env_file:
@@ -372,10 +384,11 @@ services:
     # No healthcheck, still. Since WP-53 this process *does* have an HTTP surface, but only when
     # `APP_LAUNCHER_TOKEN` is set — and `GET /v1/health` is authenticated, so a check would have to
     # carry the token and would report "unhealthy" for the legitimate no-token deployment. The
-    # runner's own start-up log names the launcher it reached. `/readyz` reports neither the
-    # launcher nor the runner — this comment used to send the operator there, and that check cannot
-    # answer (PROGRESS backlog 135). A check that cannot fail, or that fails for a supported
-    # configuration, is worse than none (standing rule 3).
+    # runner's own start-up log names the launcher it reached. `/readyz` on `app` does not report
+    # the launcher; since WP-86 it reports whether anything takes agent stages (`agent_runs`), so a
+    # runner started with no launcher URL and token is visible there (PROGRESS backlog 135).
+    # A check that cannot fail, or that fails for a supported configuration, is worse than none
+    # (standing rule 3).
     restart: unless-stopped
 
   # technical/11 § Compose. Writes a compressed dump per schedule to its own volume; `pg_dump`

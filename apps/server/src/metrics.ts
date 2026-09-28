@@ -2,7 +2,8 @@
  * Prometheus metrics (TD-023): `@prometheus-io/client` on `/metrics`.
  *
  * Only metrics with a real source are registered. TD-023 also names `agent_runs_active`,
- * `agent_tokens_total`, `agent_cost_usd_total` and `queue_job_age_seconds`; nothing produces those
+ * `agent_tokens_total`, `agent_cost_usd_total` and `queue_job_age_seconds` (the last is
+ * `jobs_queued_oldest_age_seconds` since WP-86, per queue); nothing produces those
  * numbers until the runner (WP-12) and the cost ledger (WP-19) exist, and a gauge that is
  * permanently zero is worse than a missing one — it reads as "no runs are active" rather than "the
  * platform cannot answer". They are added by the work packages that can feed them.
@@ -41,6 +42,10 @@ export interface Metrics {
   readonly knowledgeMirrorBytes: Gauge<'project_id'>;
   /** Command claims nobody completed past their in-flight window, by action (WP-73). */
   readonly commandClaimsUnknown: Gauge<'action'>;
+  /** Ready, unclaimed pg-boss jobs per declared queue (WP-86, TD-028's Consequences). */
+  readonly jobsQueued: Gauge<'queue'>;
+  /** How long the oldest of them has been eligible, per queue that has one (WP-86). */
+  readonly jobsQueuedOldestAge: Gauge<'queue'>;
   /** Sets the gauges that have to be sampled rather than incremented. Called on scrape. */
   readonly collect: () => Promise<void>;
 }
@@ -82,12 +87,25 @@ export interface MetricsOptions {
     readonly { readonly action: string; readonly claims: number }[]
   >;
   /**
+   * The job queues' backlog (WP-86, PROGRESS backlog 135): per declared queue, the jobs that are
+   * ready and unclaimed, and the age of the oldest (`null` when none waits). Read from pg-boss's
+   * tables, so it is the **instance's** backlog and every process that samples it reads the same
+   * numbers. Absent in a process that holds no job client.
+   */
+  readonly jobQueues?: () => Promise<
+    readonly {
+      readonly queue: string;
+      readonly queued: number;
+      readonly oldestAgeSeconds: number | null;
+    }[]
+  >;
+  /**
    * Told when an isolated sampler throws (WP-65 review round 2): its series is then absent from the
    * scrape, and without a log line an operator could not tell a failing measurement from a gauge
    * this process never registers.
    */
   readonly onSamplerError?: (
-    sampler: 'undelivered_notifications' | 'storage' | 'stale_command_claims',
+    sampler: 'undelivered_notifications' | 'storage' | 'stale_command_claims' | 'job_queues',
     error: unknown,
   ) => void;
   /** Node process metrics (heap, event loop lag, handles). @default true */
@@ -223,6 +241,31 @@ export const createMetrics = (options: MetricsOptions = {}): Metrics => {
     registers: options.staleCommandClaims === undefined ? [] : [registry],
   });
 
+  /**
+   * **The job-queue backlog** TD-028's Consequences section promised (WP-86, PROGRESS backlog 135):
+   * *"the queue depth is a metric"*. A deployment with no runner leaves `stage.execute` jobs queued,
+   * and until this gauge nothing on `/metrics` could tell that queue from any other — the two
+   * `event_dispatch_*` gauges count TD-005's event queue, not pg-boss's jobs.
+   *
+   * Ready means **eligible now and unclaimed** (`created` or `retry`, `start_after` passed): a
+   * deferred timer is not backlog. Every declared queue has a `jobs_queued` series, `0` included,
+   * because a count of zero is a measurement; the age series exists only for a queue with something
+   * waiting, because there is no age of nothing (standing rule 16). Labelled, so a process that does
+   * not sample it exports no series at all.
+   */
+  const jobsQueued = new Gauge({
+    name: 'jobs_queued',
+    help: 'pg-boss jobs ready to run and not yet claimed (state created or retry, start_after passed), per declared queue (WP-86).',
+    labelNames: ['queue'] as const,
+    registers: options.jobQueues === undefined ? [] : [registry],
+  });
+  const jobsQueuedOldestAge = new Gauge({
+    name: 'jobs_queued_oldest_age_seconds',
+    help: 'Seconds the oldest ready, unclaimed job of the queue has been eligible; no series for a queue with none waiting (WP-86).',
+    labelNames: ['queue'] as const,
+    registers: options.jobQueues === undefined ? [] : [registry],
+  });
+
   /** The storage gauge's reading: every series rebuilt from this scrape (WP-65). */
   const sampleStorage = async (storage: NonNullable<MetricsOptions['storage']>): Promise<void> => {
     const database = await storage.database();
@@ -259,6 +302,8 @@ export const createMetrics = (options: MetricsOptions = {}): Metrics => {
     storageTotalBytes,
     knowledgeMirrorBytes,
     commandClaimsUnknown,
+    jobsQueued,
+    jobsQueuedOldestAge,
     collect: async () => {
       if (options.pendingDispatch !== undefined) {
         eventDispatchPending.set(await options.pendingDispatch());
@@ -293,6 +338,24 @@ export const createMetrics = (options: MetricsOptions = {}): Metrics => {
         } catch (error) {
           commandClaimsUnknown.reset();
           options.onSamplerError?.('stale_command_claims', error);
+        }
+      }
+      if (options.jobQueues !== undefined) {
+        // Rebuilt from this scrape: a queue that stopped waiting loses its age series rather than
+        // keeping its last value, and a failed read exports neither (absent, never stale).
+        jobsQueued.reset();
+        jobsQueuedOldestAge.reset();
+        try {
+          for (const entry of await options.jobQueues()) {
+            jobsQueued.set({ queue: entry.queue }, entry.queued);
+            if (entry.oldestAgeSeconds !== null) {
+              jobsQueuedOldestAge.set({ queue: entry.queue }, entry.oldestAgeSeconds);
+            }
+          }
+        } catch (error) {
+          jobsQueued.reset();
+          jobsQueuedOldestAge.reset();
+          options.onSamplerError?.('job_queues', error);
         }
       }
       if (options.storage !== undefined) {

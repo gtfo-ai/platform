@@ -26,8 +26,8 @@
  * producing more than fifty notifications a day is one an operator should hear about.
  */
 import type { IsoDateTime } from '@platform/contracts';
-import { PIPELINE_OUTBOUND_RETRY, retryWindowMs } from '../pipeline/jobs.js';
-import { DIGEST_RETRY } from './digest.js';
+import { retryWindowMs } from '../pipeline/jobs.js';
+import { DIGEST_RETRY, PIPELINE_OUTBOUND_RETRY } from '../ports/job-queues.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** `DIGEST_TICK_CRON` is every five minutes. */

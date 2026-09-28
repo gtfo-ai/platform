@@ -349,6 +349,17 @@ export class LauncherService {
         control_directories_unreclaimed: directories.filter(
           (entry) => entry.keptReason === 'remove_failed',
         ).length,
+        // WP-86 (PROGRESS backlog 138): the two outcomes that *keep* a directory on purpose, each
+        // its own count — a directory still held by a container carrying the run's label, and one
+        // whose name is not a run id this launcher could have made. Their sum was all a reader
+        // could derive before; the split is what tells a live run from an orphan nothing here made.
+        // A log field rather than a metric: the launcher has no metric surface of any kind.
+        control_directories_run_alive: directories.filter(
+          (entry) => entry.keptReason === 'run_alive',
+        ).length,
+        control_directories_not_a_run_id: directories.filter(
+          (entry) => entry.keptReason === 'not_a_run_id',
+        ).length,
       },
       'workspace retention sweep',
     );

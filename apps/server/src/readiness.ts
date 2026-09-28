@@ -37,7 +37,23 @@ export interface ReadinessOptions {
    * container platform, a load balancer and an operator all read instead.
    */
   readonly dispatchReady: (() => boolean) | null;
-  /** Longest the whole report may take. */
+  /**
+   * **Is anything taking agent stages?** (WP-86, PROGRESS backlog 135 — TD-028's Consequences:
+   * *"`/readyz` reports the runner as absent"*.) `null` in a process that holds no job client.
+   *
+   * It is a question about the **instance**, read from pg-boss's tables
+   * (`jobs.readAgentRunService`), because the process an operator reads `/readyz` on — `app` — is
+   * designed to run no agent: a process-local answer would be permanently "absent" there. An
+   * `unserved` answer is reported **`degraded`, never `down`**, and `degraded` answers 200: a
+   * missing runner stops agent stages and the platform gates and nothing else, so it must not take
+   * the API and the SPA out of a load balancer. A failed read is `degraded` with the detail
+   * `unknown` — the database check beside it says why — and never `ok` (standing rule 16).
+   */
+  readonly agentRuns?: (() => Promise<'served' | 'unserved'>) | null;
+  /**
+   * Longest **each** awaited check may take (the migrations read and, where composed, the
+   * `agent_runs` read each get their own deadline), so the whole report is bounded by twice this.
+   */
   readonly timeoutMs?: number;
 }
 
@@ -100,6 +116,7 @@ export const createReadinessCheck = (
 
   return async (): Promise<ReadinessReport> => {
     const checks: Record<string, CheckStatus> = {};
+    const details: Record<string, 'unserved' | 'unknown'> = {};
 
     const applied = await withDeadline(
       appliedMigrations(options.database).then(
@@ -127,11 +144,29 @@ export const createReadinessCheck = (
       checks.dispatch = options.dispatchReady() ? 'ok' : 'down';
     }
 
+    const agentRuns = options.agentRuns ?? null;
+    if (agentRuns !== null) {
+      const service = await withDeadline(
+        agentRuns().then(
+          (answer) => answer,
+          () => 'unknown' as const,
+        ),
+        timeoutMs,
+        'unknown' as const,
+      );
+      checks.agent_runs = service === 'served' ? 'ok' : 'degraded';
+      if (service !== 'served') {
+        details.agent_runs = service;
+      }
+    }
+
     const worst = Object.values(checks).includes('down')
       ? 'down'
       : Object.values(checks).includes('degraded')
         ? 'degraded'
         : 'ok';
-    return { status: worst, checks };
+    return Object.keys(details).length === 0
+      ? { status: worst, checks }
+      : { status: worst, checks, details };
   };
 };

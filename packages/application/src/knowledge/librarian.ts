@@ -60,6 +60,7 @@ import {
 import type { EventHandler } from '../events/handler.js';
 import type { EventStore } from '../ports/event-store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
+import { jobQueueDefinition } from '../ports/job-queues.js';
 import type { JobHandler, Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
@@ -425,15 +426,7 @@ export const librarianTriggerHandlers = (options: {
 ];
 
 export const declareLibrarianQueues = async (jobs: Jobs): Promise<void> => {
-  await jobs.defineQueue({
-    name: JOB_QUEUES.knowledgeProposals,
-    // `stately` per **artifact** since WP-48 — see {@link enqueueCuration} for why the key is what
-    // makes that safe, and `JOB_QUEUES.knowledgeProposals` for what it used to be.
-    policy: 'stately',
-    retryLimit: 2,
-    retryDelaySeconds: 30,
-    retryBackoff: true,
-  });
+  await jobs.defineQueue(jobQueueDefinition(JOB_QUEUES.knowledgeProposals));
 };
 
 /**

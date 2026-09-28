@@ -4,8 +4,8 @@
  */
 import type { IsoDateTime } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
-import { PIPELINE_OUTBOUND_RETRY, retryWindowMs } from '../pipeline/jobs.js';
-import { DIGEST_RETRY } from './digest.js';
+import { retryWindowMs } from '../pipeline/jobs.js';
+import { DIGEST_RETRY, PIPELINE_OUTBOUND_RETRY } from '../ports/job-queues.js';
 import {
   DIGEST_UNDELIVERED_AFTER_MS,
   IMMEDIATE_UNDELIVERED_AFTER_MS,

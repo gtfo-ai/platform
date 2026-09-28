@@ -49,6 +49,7 @@ import { escalateTask, isBefore } from '@platform/domain';
 import * as z from 'zod';
 import type { EventHandler } from '../events/handler.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
+import { jobQueueDefinition } from '../ports/job-queues.js';
 import type { JobHandler, Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
@@ -146,14 +147,7 @@ export const enqueueDeadline = async (
 };
 
 export const declareDeadlineQueue = async (jobs: Jobs): Promise<void> => {
-  await jobs.defineQueue({
-    name: JOB_QUEUES.deadlineSweep,
-    // `stately` per key: see `JOB_QUEUES.deadlineSweep`.
-    policy: 'stately',
-    retryLimit: 2,
-    retryDelaySeconds: 30,
-    retryBackoff: true,
-  });
+  await jobs.defineQueue(jobQueueDefinition(JOB_QUEUES.deadlineSweep));
 };
 
 export interface DeadlineArmingOptions {

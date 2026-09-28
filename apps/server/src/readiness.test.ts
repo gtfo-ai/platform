@@ -139,6 +139,63 @@ describe('createReadinessCheck', () => {
     await expect(check()).resolves.toMatchObject({ status: 'down' });
   });
 
+  /**
+   * WP-86 (backlog 135, TD-028's Consequences): `agent_runs` is about the instance — is anything
+   * taking `stage.execute` jobs — and an `unserved` answer is **degraded, never down**.
+   */
+  describe('agent_runs (WP-86)', () => {
+    const withAgentRuns = (agentRuns: () => Promise<'served' | 'unserved'>) =>
+      createReadinessCheck({
+        database: fakeDatabase({ names: shipped() }),
+        jobsStarted: () => true,
+        dispatchReady: null,
+        agentRuns,
+      });
+
+    it('is ok, with no details, when something takes the agent stages', async () => {
+      await expect(withAgentRuns(async () => 'served')()).resolves.toEqual({
+        status: 'ok',
+        checks: { database: 'ok', migrations: 'ok', queue: 'ok', agent_runs: 'ok' },
+      });
+    });
+
+    it('is degraded — never down — and says unserved when nothing has claimed one', async () => {
+      await expect(withAgentRuns(async () => 'unserved')()).resolves.toEqual({
+        status: 'degraded',
+        checks: { database: 'ok', migrations: 'ok', queue: 'ok', agent_runs: 'degraded' },
+        details: { agent_runs: 'unserved' },
+      });
+    });
+
+    it('is degraded and unknown, never ok, when the read fails', async () => {
+      const report = await withAgentRuns(async () => {
+        throw new Error('relation "pgboss.job" does not exist');
+      })();
+      expect(report.checks.agent_runs).toBe('degraded');
+      expect(report.details).toEqual({ agent_runs: 'unknown' });
+    });
+
+    it('does not hide a down check behind its degraded one', async () => {
+      const check = createReadinessCheck({
+        database: fakeDatabase({ names: shipped() }),
+        jobsStarted: () => false,
+        dispatchReady: null,
+        agentRuns: async () => 'unserved',
+      });
+      expect((await check()).status).toBe('down');
+    });
+
+    it('is omitted where no job client is held', async () => {
+      const check = createReadinessCheck({
+        database: fakeDatabase({ names: shipped() }),
+        jobsStarted: null,
+        dispatchReady: null,
+        agentRuns: null,
+      });
+      expect(Object.keys((await check()).checks)).toEqual(['database', 'migrations']);
+    });
+  });
+
   it('reports migrations down when the database is behind this build', async () => {
     const behind = shipped().slice(0, -1);
     const check = createReadinessCheck({

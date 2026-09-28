@@ -61,6 +61,7 @@
  */
 import type { Id } from '@platform/contracts';
 import type { EventHandler } from '../events/handler.js';
+import { jobQueueDefinition } from '../ports/job-queues.js';
 import type { EnqueueResult, JobHandler, Jobs, JobWorker } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
@@ -129,18 +130,7 @@ export interface KnowledgeIndexJobOptions {
 export const knowledgeIndexKey = (projectId: string): string => `project:${projectId}`;
 
 export const declareKnowledgeQueues = async (jobs: Jobs): Promise<void> => {
-  await jobs.defineQueue({
-    name: JOB_QUEUES.knowledgeIndex,
-    // See the header: `stately` is the only policy that both collapses a burst and keeps the
-    // trailing wake-up a re-read needs.
-    policy: 'stately',
-    retryLimit: 2,
-    retryDelaySeconds: 60,
-    retryBackoff: true,
-    // A first index clones the repository, which is a network operation against a monorepo in the
-    // worst case; the 15-minute default would declare that job lost while git was still working.
-    expireInSeconds: 60 * 60,
-  });
+  await jobs.defineQueue(jobQueueDefinition(JOB_QUEUES.knowledgeIndex));
 };
 
 /**

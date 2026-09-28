@@ -83,6 +83,7 @@ import type {
 } from '../knowledge/ports.js';
 import type { EventStore } from '../ports/event-store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
+import { jobQueueDefinition } from '../ports/job-queues.js';
 import type { JobHandler, Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
@@ -547,12 +548,5 @@ export const discoveryTriggerHandlers = (options: {
 
 /** Declares the queue this module's job runs on. Idempotent. */
 export const declareDiscoveryRecordQueue = async (jobs: Jobs): Promise<void> => {
-  await jobs.defineQueue({
-    name: JOB_QUEUES.discoveryRecord,
-    // `standard`: every wake-up carries a different artifact (see `JOB_QUEUES.discoveryRecord`).
-    policy: 'standard',
-    retryLimit: 2,
-    retryDelaySeconds: 30,
-    retryBackoff: true,
-  });
+  await jobs.defineQueue(jobQueueDefinition(JOB_QUEUES.discoveryRecord));
 };

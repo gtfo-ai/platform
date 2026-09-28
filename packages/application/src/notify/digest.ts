@@ -48,6 +48,7 @@ import {
   noRunScopedSecrets,
 } from '../pipeline/integrations.js';
 import type { DigestItem } from '../ports/integrations/communication.js';
+import { jobQueueDefinition } from '../ports/job-queues.js';
 import type { JobHandler, JobWorker } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
@@ -96,16 +97,6 @@ export const DIGEST_ITEM_LIMIT = 50;
  * is that the duplicate is one digest line rather than a second message.
  */
 export const DIGEST_IMMEDIATE_GRACE_MS = 120_000;
-
-/**
- * `notify.digest`'s retry policy, named for the reason `PIPELINE_OUTBOUND_RETRY` is: the
- * undelivered gauge derives how long a digest row may legitimately wait from it (WP-65).
- */
-export const DIGEST_RETRY = {
-  retryLimit: 2,
-  retryDelaySeconds: 60,
-  retryBackoff: true,
-} as const;
 
 /** `at` minus `ms`, in the platform's wire format. The clock is the caller's. */
 const instantBefore = (at: IsoDateTime, ms: number): IsoDateTime =>
@@ -273,11 +264,7 @@ export const digestTickHandler =
  * the idempotency key are the second and third lines of defence, not the first.
  */
 export const startDigestRuntime = async (options: NotifyOptions): Promise<JobWorker> => {
-  await options.jobs.defineQueue({
-    name: JOB_QUEUES.notifyDigest,
-    policy: 'exclusive',
-    ...DIGEST_RETRY,
-  });
+  await options.jobs.defineQueue(jobQueueDefinition(JOB_QUEUES.notifyDigest));
   await options.jobs.scheduleCron({
     queue: JOB_QUEUES.notifyDigest,
     cron: DIGEST_TICK_CRON,

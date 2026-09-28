@@ -86,7 +86,9 @@ import {
 } from '../pipeline/ticket-snapshot.js';
 import { applyDecision } from '../pipeline/transitions.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
+import { jobQueueDefinition } from '../ports/job-queues.js';
 import type { CronScheduleDefinition, JobHandler, Jobs, JobWorker } from '../ports/jobs.js';
+import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
@@ -94,7 +96,7 @@ import { isoDateOf, zonedParts } from '../scheduling/zoned-time.js';
 import type { MaintenanceStore } from './ports.js';
 
 /** The queue TD-004's *"maintenance schedules"* family gets for this feature. */
-export const MAINTENANCE_SCHEDULE_QUEUE = 'maintenance.schedule';
+export const MAINTENANCE_SCHEDULE_QUEUE = JOB_QUEUES.maintenanceSchedule;
 
 /**
  * 04:35, in the organisation's configured zone.
@@ -696,13 +698,7 @@ export const maintenancePassHandler =
 export const registerMaintenanceSchedule = async (
   options: MaintenanceOptions,
 ): Promise<JobWorker> => {
-  await options.jobs.defineQueue({
-    name: MAINTENANCE_SCHEDULE_QUEUE,
-    policy: 'exclusive',
-    retryLimit: 1,
-    retryDelaySeconds: 300,
-    expireInSeconds: 15 * 60,
-  });
+  await options.jobs.defineQueue(jobQueueDefinition(JOB_QUEUES.maintenanceSchedule));
   await options.jobs.scheduleCron(maintenanceSchedule(options.timezone));
   return options.jobs.work({
     queue: MAINTENANCE_SCHEDULE_QUEUE,

@@ -48,6 +48,7 @@
 import type { Actor, DomainEvent, Id, IsoDateTime } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import type { EventStore } from '../ports/event-store.js';
+import { jobQueueDefinition } from '../ports/job-queues.js';
 import type { JobHandler, Jobs, JobWorker } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
@@ -176,12 +177,7 @@ export const runIntakeReconciliation = async (
  * replicas onto the single pending job.
  */
 export const declareIntakeReconcileQueue = async (jobs: Jobs): Promise<void> => {
-  await jobs.defineQueue({
-    name: JOB_QUEUES.intakeReconcile,
-    policy: 'stately',
-    retryLimit: 2,
-    retryDelaySeconds: 30,
-  });
+  await jobs.defineQueue(jobQueueDefinition(JOB_QUEUES.intakeReconcile));
 };
 
 /** The singleton key the whole deployment shares: there is one backlog, not one per process. */

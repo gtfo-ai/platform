@@ -11,8 +11,20 @@
  *
  * pg-boss owns its own schema (TD-004), so it is installed through its own API rather than copied
  * into a migration file; grants are re-applied afterwards so the application role can use it.
+ *
+ * **Every job queue is declared here too** (WP-86, PROGRESS backlog 262), from the one table
+ * `JOB_QUEUE_DEFINITIONS`, right after the schema is installed. Before that a queue existed only
+ * once a worker serving it had started, so a `ROLE=api` process on a fresh database refused every
+ * command that enqueues. Declaring is create-if-absent and runs under the migration advisory lock,
+ * so a re-run or a second concurrent `migrate` declares nothing new.
  */
+import {
+  declareJobQueues,
+  JOB_QUEUE_DEFINITIONS,
+  type JobQueueDefinition,
+} from '@platform/application';
 import { PgBoss } from 'pg-boss';
+import { pgBossQueueOptions } from '../jobs/pg-boss-jobs.js';
 import { createDatabaseClient } from './client.js';
 import { loadMigrations, type Migration, migrationsDirectory } from './migrations.js';
 import { TRANSCRIPT_RETENTION_SCOPE } from './partitions.js';
@@ -40,6 +52,8 @@ export interface MigrateOptions {
    */
   readonly transcriptRetentionDays?: number | null;
   readonly pgBossSchema?: string;
+  /** The queues `migrate` declares after installing pg-boss. @default JOB_QUEUE_DEFINITIONS */
+  readonly queues?: readonly JobQueueDefinition[];
   readonly migrationsDirectory?: string;
   /** Structured progress sink. Defaults to silence; the CLI passes a writer. */
   readonly log?: (event: MigrateEvent) => void;
@@ -51,6 +65,7 @@ export type MigrateEvent =
   | { readonly kind: 'migration_applied'; readonly name: string; readonly durationMs: number }
   | { readonly kind: 'migration_skipped'; readonly name: string }
   | { readonly kind: 'pgboss'; readonly schema: string; readonly version: number | null }
+  | { readonly kind: 'queues'; readonly declared: readonly string[] }
   | { readonly kind: 'grants'; readonly role: string }
   | { readonly kind: 'retention'; readonly scope: string; readonly days: number | null }
   | { readonly kind: 'partitions'; readonly created: readonly string[] }
@@ -62,6 +77,8 @@ export interface MigrateReport {
   readonly skipped: readonly string[];
   readonly pgBossSchema: string;
   readonly pgBossSchemaVersion: number | null;
+  /** Every queue name `migrate` declared (create-if-absent: an existing queue is left as it is). */
+  readonly queuesDeclared: readonly string[];
   readonly grantsAppliedTo: string | null;
   readonly transcriptRetentionDays: number | null;
   readonly partitionsCreated: readonly string[];
@@ -140,7 +157,17 @@ const isConnectionLoss = (error: unknown): boolean => {
 /** Injected so the unit tier can drive every branch without a database. */
 export interface MigrateDependencies {
   readonly connect: (connectionString: string) => Promise<MigrationClient>;
-  readonly installJobs: (connectionString: string, schema: string) => Promise<number | null>;
+  readonly installJobs: (
+    connectionString: string,
+    schema: string,
+    queues: readonly JobQueueDefinition[],
+  ) => Promise<InstalledJobs>;
+}
+
+/** What installing pg-boss did: its schema version, and the queues declared from the table. */
+export interface InstalledJobs {
+  readonly schemaVersion: number | null;
+  readonly queuesDeclared: readonly string[];
 }
 
 /** The log table is created outside the migration files: it has to exist to record the first one. */
@@ -167,7 +194,11 @@ const connectWithPg = async (connectionString: string): Promise<MigrationClient>
   });
 };
 
-const installPgBoss = async (connectionString: string, schema: string): Promise<number | null> => {
+const installPgBoss = async (
+  connectionString: string,
+  schema: string,
+  queues: readonly JobQueueDefinition[],
+): Promise<InstalledJobs> => {
   // `migrate: true` installs or upgrades the schema; supervision and scheduling are the running
   // application's job (WP-05), not the one-shot migrate container's.
   const boss = new PgBoss({
@@ -182,7 +213,19 @@ const installPgBoss = async (connectionString: string, schema: string): Promise<
   boss.on('error', () => {});
   try {
     await boss.start();
-    return await boss.schemaVersion();
+    const schemaVersion = await boss.schemaVersion();
+    // In table order, so a dead-letter queue exists before the queue that names it. `createQueue`
+    // is `insert … on conflict do nothing` under pg-boss's own advisory lock: an existing queue
+    // keeps its stored options, exactly as when a worker declares it.
+    const queuesDeclared = await declareJobQueues(
+      {
+        defineQueue: async (definition) => {
+          await boss.createQueue(definition.name, pgBossQueueOptions(definition));
+        },
+      },
+      queues,
+    );
+    return { schemaVersion, queuesDeclared };
   } finally {
     // `close` returns the connections; nothing is in flight, so there is nothing to drain.
     await boss.stop({ close: true, graceful: false });
@@ -349,11 +392,14 @@ export const runMigrations = async (
       log({ kind: 'migration_applied', name: migration.name, durationMs });
     }
 
-    const pgBossSchemaVersion = await dependencies.installJobs(
+    const installed = await dependencies.installJobs(
       options.connectionString,
       pgBossSchema,
+      options.queues ?? JOB_QUEUE_DEFINITIONS,
     );
+    const pgBossSchemaVersion = installed.schemaVersion;
     log({ kind: 'pgboss', schema: pgBossSchema, version: pgBossSchemaVersion });
+    log({ kind: 'queues', declared: installed.queuesDeclared });
 
     // The retention window is stored, not passed at call time, so the application role can only
     // ever trigger the retention the operator configured here. Note this is a rewrite on every
@@ -393,6 +439,7 @@ export const runMigrations = async (
       skipped,
       pgBossSchema,
       pgBossSchemaVersion,
+      queuesDeclared: installed.queuesDeclared,
       grantsAppliedTo,
       transcriptRetentionDays: retentionDays,
       partitionsCreated,

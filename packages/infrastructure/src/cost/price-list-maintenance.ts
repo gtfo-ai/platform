@@ -26,11 +26,11 @@
  * Both are idempotent, which is what lets it run on a cron from every replica: the close is a
  * no-op once applied, and the report is a read.
  */
-import type { Jobs, JobWorker } from '@platform/application';
+import { JOB_QUEUES, type Jobs, type JobWorker, jobQueueDefinition } from '@platform/application';
 import type { SqlExecutor } from '../events/sql.js';
 
 /** TD-004's cron family; the name is this work package's, in the same dotted grammar. */
-export const PRICE_LIST_MAINTENANCE_JOB = 'price.list.maintain';
+export const PRICE_LIST_MAINTENANCE_JOB = JOB_QUEUES.priceListMaintenance;
 
 /**
  * Daily at 04:10 in the organisation's zone — after the partition maintenance at 03:20, so two
@@ -114,12 +114,7 @@ export const registerPriceListMaintenance = async (
   jobs: Jobs,
   registration: PriceListMaintenanceRegistration,
 ): Promise<JobWorker> => {
-  await jobs.defineQueue({
-    name: PRICE_LIST_MAINTENANCE_JOB,
-    policy: 'exclusive',
-    retryLimit: 2,
-    retryDelaySeconds: 300,
-  });
+  await jobs.defineQueue(jobQueueDefinition(JOB_QUEUES.priceListMaintenance));
 
   await jobs.scheduleCron({
     queue: PRICE_LIST_MAINTENANCE_JOB,

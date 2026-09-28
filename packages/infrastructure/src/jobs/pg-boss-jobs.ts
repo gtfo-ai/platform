@@ -218,6 +218,27 @@ const buildPgBoss = (options: PgBossJobsOptions): PgBossLike => {
 const defined = (record: Record<string, unknown>): Record<string, unknown> =>
   Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined));
 
+/**
+ * One queue definition, validated and in pg-boss's `createQueue` vocabulary. Shared by the adapter's
+ * `defineQueue` and by `migrate`, which declares every row of `JOB_QUEUE_DEFINITIONS` (WP-86), so
+ * the two can never map one definition to two different queues.
+ */
+export const pgBossQueueOptions = (definition: JobQueueDefinition): Record<string, unknown> => {
+  assertJobName(definition.name);
+  if (definition.deadLetterQueue !== undefined) {
+    assertJobName(definition.deadLetterQueue, 'dead letter queue name');
+  }
+  return defined({
+    policy: definition.policy,
+    retryLimit: definition.retryLimit,
+    retryDelay: definition.retryDelaySeconds,
+    retryBackoff: definition.retryBackoff,
+    expireInSeconds: definition.expireInSeconds,
+    deleteAfterSeconds: definition.deleteAfterSeconds,
+    deadLetter: definition.deadLetterQueue,
+  });
+};
+
 export const createPgBossJobs = (options: PgBossJobsOptions = {}): JobsRuntime => {
   const boss = buildPgBoss(options);
   const onError = options.onError ?? ((error: unknown) => process.emitWarning(String(error)));
@@ -253,22 +274,7 @@ export const createPgBossJobs = (options: PgBossJobsOptions = {}): JobsRuntime =
 
   const jobs: Jobs = {
     defineQueue: async (definition: JobQueueDefinition) => {
-      assertJobName(definition.name);
-      if (definition.deadLetterQueue !== undefined) {
-        assertJobName(definition.deadLetterQueue, 'dead letter queue name');
-      }
-      await boss.createQueue(
-        definition.name,
-        defined({
-          policy: definition.policy,
-          retryLimit: definition.retryLimit,
-          retryDelay: definition.retryDelaySeconds,
-          retryBackoff: definition.retryBackoff,
-          expireInSeconds: definition.expireInSeconds,
-          deleteAfterSeconds: definition.deleteAfterSeconds,
-          deadLetter: definition.deadLetterQueue,
-        }),
-      );
+      await boss.createQueue(definition.name, pgBossQueueOptions(definition));
     },
 
     enqueue,

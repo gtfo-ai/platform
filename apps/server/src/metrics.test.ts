@@ -110,6 +110,46 @@ describe('createMetrics', () => {
   });
 
   /**
+   * WP-86 (backlog 135): the job-queue backlog TD-028 promised. Every declared queue has a count,
+   * zero included; the age only where something waits; a queue that stopped waiting drops its age.
+   */
+  it('publishes the job backlog per queue, zero included, the age only where one waits (WP-86)', async () => {
+    let backlog: { queue: string; queued: number; oldestAgeSeconds: number | null }[] = [
+      { queue: 'stage.execute', queued: 2, oldestAgeSeconds: 420.5 },
+      { queue: 'knowledge.apply', queued: 0, oldestAgeSeconds: null },
+    ];
+    const metrics = createMetrics({ defaultMetrics: false, jobQueues: async () => backlog });
+    await metrics.collect();
+    let text = await metrics.registry.metrics();
+    expect(text).toContain('jobs_queued{queue="stage.execute"} 2');
+    expect(text).toContain('jobs_queued{queue="knowledge.apply"} 0');
+    expect(text).toContain('jobs_queued_oldest_age_seconds{queue="stage.execute"} 420.5');
+    expect(text).not.toContain('jobs_queued_oldest_age_seconds{queue="knowledge.apply"}');
+
+    backlog = [{ queue: 'stage.execute', queued: 0, oldestAgeSeconds: null }];
+    await metrics.collect();
+    text = await metrics.registry.metrics();
+    expect(text).toContain('jobs_queued{queue="stage.execute"} 0');
+    expect(text).not.toContain('jobs_queued_oldest_age_seconds{queue="stage.execute"}');
+
+    const failures: string[] = [];
+    const failing = createMetrics({
+      defaultMetrics: false,
+      jobQueues: async () => {
+        throw new Error('pgboss unreachable');
+      },
+      onSamplerError: (sampler) => failures.push(sampler),
+    });
+    await failing.collect();
+    expect(await failing.registry.metrics()).not.toContain('jobs_queued{');
+    expect(failures).toEqual(['job_queues']);
+
+    const silent = createMetrics({ defaultMetrics: false });
+    await silent.collect();
+    expect(await silent.registry.metrics()).not.toContain('jobs_queued');
+  });
+
+  /**
    * WP-65 (Q63): the storage gauge — database and mirrors as two lines under one total, the
    * mirrors per project, and **no** total where the mirrors cannot be measured.
    */

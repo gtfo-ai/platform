@@ -41,7 +41,7 @@ describe('the enqueue-only job client of ROLE=api (WP-72)', () => {
     }
   });
 
-  it('names the queue no worker has declared yet, in pg-boss’s own spelling of it', async () => {
+  it('names the undeclared queue, in pg-boss’s own spelling of it, and points at migrate (WP-86)', async () => {
     const pgBossLike: Jobs = {
       ...jobsAdapters.createInMemoryJobs().jobs,
       enqueue: async () => {
@@ -56,7 +56,7 @@ describe('the enqueue-only job client of ROLE=api (WP-72)', () => {
       );
     expect(error).toBeInstanceOf(QueueNotDeclaredError);
     expect((error as QueueNotDeclaredError).queue).toBe('knowledge.apply');
-    expect((error as Error).message).toContain('no worker process has started');
+    expect((error as Error).message).toContain('migrate declares every queue');
   });
 
   it('passes any other failure through unchanged', async () => {

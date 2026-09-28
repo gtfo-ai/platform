@@ -9,7 +9,12 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { type LogFields, silentLogger, type WorkspaceProvider } from '@platform/application';
+import {
+  type LogFields,
+  type PurgeReport,
+  silentLogger,
+  type WorkspaceProvider,
+} from '@platform/application';
 import { runner, workspace } from '@platform/infrastructure';
 import { PLATFORM_SKILLS } from '@platform/prompts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -661,5 +666,73 @@ describe('retention sweep', () => {
     // And the volume half is still its own pair of numbers, so a reader counting workspaces cannot
     // count a control directory as one.
     expect(summary?.fields).toMatchObject({ examined: 0, removed: 0 });
+  });
+
+  /**
+   * WP-86 (backlog 138): the two kept outcomes are counted separately, each driven on its own so
+   * neither can be satisfied by the other.
+   */
+  const summaryFor = async (
+    controlDirectories: PurgeReport['controlDirectories'],
+  ): Promise<LogFields | undefined> => {
+    const lines: { fields: LogFields; message: string }[] = [];
+    const unused = (name: string) => (): never => {
+      throw new Error(`this case drives sweep only; ${name} was not expected`);
+    };
+    const reporting: WorkspaceProvider = {
+      updateMirror: unused('updateMirror'),
+      create: unused('create'),
+      attach: unused('attach'),
+      listExistingProtectedPaths: unused('listExistingProtectedPaths'),
+      kill: unused('kill'),
+      export: unused('export'),
+      destroy: unused('destroy'),
+      extendRetention: unused('extendRetention'),
+      purgeExpired: async () => ({ examined: 0, removed: 0, volumes: [], controlDirectories }),
+    };
+    const sweeper = new LauncherService({
+      provider: reporting,
+      broker,
+      clock,
+      logger: {
+        ...silentLogger,
+        info: (fields, message) => {
+          lines.push({ fields, message });
+        },
+      },
+      exportDir: path.join(dir, 'exports'),
+      retentionSweepMs: 60_000,
+    });
+    await sweeper.sweep(new Date(0));
+    return lines.find((line) => line.message === 'workspace retention sweep')?.fields;
+  };
+
+  it('counts the directories a live run still holds (run_alive), apart from every other outcome', async () => {
+    const fields = await summaryFor([
+      { runId: randomUUID(), removed: false, keptReason: 'run_alive' },
+      { runId: randomUUID(), removed: false, keptReason: 'run_alive' },
+      { runId: randomUUID(), removed: true, keptReason: null },
+    ]);
+    expect(fields).toMatchObject({
+      control_directories: 3,
+      control_directories_run_alive: 2,
+      control_directories_not_a_run_id: 0,
+      control_directories_reclaimed: 1,
+      control_directories_unreclaimed: 0,
+    });
+  });
+
+  it('counts the directories whose name no run of this launcher made (not_a_run_id), apart from every other outcome', async () => {
+    const fields = await summaryFor([
+      { runId: 'lost+found', removed: false, keptReason: 'not_a_run_id' },
+      { runId: randomUUID(), removed: false, keptReason: 'remove_failed' },
+    ]);
+    expect(fields).toMatchObject({
+      control_directories: 2,
+      control_directories_run_alive: 0,
+      control_directories_not_a_run_id: 1,
+      control_directories_reclaimed: 0,
+      control_directories_unreclaimed: 1,
+    });
   });
 });

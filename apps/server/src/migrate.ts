@@ -53,6 +53,7 @@ export const main = async (): Promise<number> => {
       applied: report.applied,
       already_applied: report.skipped.length,
       pgboss_schema_version: report.pgBossSchemaVersion,
+      queues_declared: report.queuesDeclared.length,
       partitions_created: report.partitionsCreated,
       grants_applied_to: report.grantsAppliedTo,
       transcript_retention_days: report.transcriptRetentionDays,

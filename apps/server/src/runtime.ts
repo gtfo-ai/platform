@@ -270,6 +270,13 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
               countStaleCommandClaims(database.db, new Date(Date.now() - CLAIM_IN_FLIGHT_MS)),
           }
         : {}),
+      // WP-86 (backlog 135): the job queues' backlog — TD-028's *"the queue depth is a metric"*.
+      // Instance-wide (pg-boss's tables), sampled wherever a job client is held.
+      ...(capabilities.worker || capabilities.api
+        ? {
+            jobQueues: async () => jobsAdapters.readQueueBacklog(database.pool, config.jobs.schema),
+          }
+        : {}),
       // WP-65 (Q63): the storage gauge. The database line in every process that has a database;
       // the mirror line and the total only where `APP_KNOWLEDGE_MIRROR_ROOT` is set.
       storage: createStorageSamplers({
@@ -1031,6 +1038,13 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
         dispatchReady: capabilities.worker
           ? () => sweepReadiness(eventing.bus.registry).ready
           : null,
+        // WP-86 (backlog 135, TD-028's Consequences): whether anything in the **instance** takes
+        // agent stages. Every role that holds a job client asks, because the answer is in the
+        // database and the process an operator reads — `app` — runs no agent by design.
+        agentRuns:
+          capabilities.worker || capabilities.api
+            ? async () => jobsAdapters.readAgentRunService(database.pool, config.jobs.schema)
+            : null,
       }),
       isShuttingDown: () => shuttingDown,
     });

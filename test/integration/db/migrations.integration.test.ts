@@ -5,6 +5,7 @@
  * it is idempotent, it refuses to run when an applied file has been edited, and two of them
  * starting at once serialise on the advisory lock instead of racing.
  */
+import { JOB_QUEUE_DEFINITIONS } from '@platform/application';
 import { db } from '@platform/infrastructure';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
@@ -322,6 +323,41 @@ describe('migrate on an empty PostgreSQL 18', () => {
     expect(jobTables).toBeGreaterThan(0);
   });
 
+  /**
+   * WP-86 (backlog 262): every queue of the one table exists after `migrate`, with the table's own
+   * options — so a `ROLE=api` process can enqueue before any worker has started, and the options do
+   * not depend on which process booted first.
+   */
+  it('declares every queue of JOB_QUEUE_DEFINITIONS with its own options (WP-86)', async () => {
+    expect(database.report.queuesDeclared).toEqual(
+      JOB_QUEUE_DEFINITIONS.map((definition) => definition.name),
+    );
+    const rows = await withClient(database.connectionString, async (client) => {
+      const { rows: queues } = await client.query<{
+        name: string;
+        policy: string;
+        retry_limit: number;
+        retry_delay: number;
+        retry_backoff: boolean;
+        expire_seconds: number;
+      }>(
+        'select name, policy, retry_limit, retry_delay, retry_backoff, expire_seconds from pgboss.queue',
+      );
+      return new Map(queues.map((queue) => [queue.name, queue]));
+    });
+    for (const definition of JOB_QUEUE_DEFINITIONS) {
+      const row = rows.get(definition.name);
+      expect(row, definition.name).toBeDefined();
+      expect(row, definition.name).toMatchObject({
+        policy: definition.policy ?? 'standard',
+        retry_limit: definition.retryLimit ?? 2,
+        retry_delay: definition.retryDelaySeconds ?? 0,
+        retry_backoff: definition.retryBackoff ?? false,
+        expire_seconds: definition.expireInSeconds ?? 900,
+      });
+    }
+  });
+
   it('seeds the price list from the verified table (BD-011)', async () => {
     const prices = await withClient(database.connectionString, async (client) => {
       const { rows } = await client.query<{
@@ -504,6 +540,19 @@ describe('concurrent migrate containers', () => {
         return Number(counted[0]?.count ?? '0');
       });
       expect(rows).toBe(names.length);
+      // WP-86: both declared the whole queue table and neither failed; each queue exists once.
+      expect(first.queuesDeclared).toEqual(second.queuesDeclared);
+      const queues = await withClient(database.connectionString, async (client) => {
+        const { rows: counted } = await client.query<{ name: string; count: string }>(
+          'select name, count(*)::text as count from pgboss.queue group by name',
+        );
+        return counted;
+      });
+      for (const definition of JOB_QUEUE_DEFINITIONS) {
+        expect(queues.find((row) => row.name === definition.name)?.count, definition.name).toBe(
+          '1',
+        );
+      }
     } finally {
       await database.drop();
     }
