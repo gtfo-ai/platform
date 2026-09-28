@@ -83,3 +83,9 @@ a label and pointing the URL at a domain that does not exist changed no test at 
    and by nothing else, so reading a marker back would cost a second request per ticket read. The
    marker is visible text in the comment body instead; `adf.ts` says why, and `upsertWorkpad`
    compensates by requiring the comment's author to be this binding's own account.
+5. **`GET issue/{key}/comment`'s `orderBy` is documented as a three-value enum** — `created`,
+   `-created`, `+created` — in the OpenAPI description
+   (https://developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json, retrieved 2026-09-28),
+   while the rendered page's prose says only *"Accepts `created`"*. `readTicket` asks for
+   `-created` with `maxResults=50` since WP-83 (the newest page, cut to its size), and the replay
+   honours both parameters; no fixture changed, because the envelope is the same document.

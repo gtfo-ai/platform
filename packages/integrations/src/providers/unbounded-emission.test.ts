@@ -10,10 +10,11 @@
  * which bounds nothing being measured. That exclusion was recorded in Q54 with two measurements
  * quoted in prose — and standing rule 39 exists because a quoted measurement drifts: WP-11a's
  * headline figure was taken at doubled caps, and this question's own `readTicket` figure was
- * attached to the claim that `MAX_COMMENTS = 100` was "the shipped cap". **It is not a cap.** It is
- * `maxResults`, a *request* parameter; nothing in the adapter refuses a page that comes back
- * larger, which is what the first assertion below demonstrates by returning two hundred comments
- * to a request that asked for a hundred.
+ * attached to the claim that `MAX_COMMENTS = 100` was "the shipped cap". **It was not a cap.** It
+ * was `maxResults`, a *request* parameter, and nothing in the adapter refused a page that came back
+ * larger. Since WP-83 the page is decided and enforced (`READ_TICKET_COMMENT_PAGE`, the newest
+ * fifty), which the first assertion below demonstrates by returning two hundred comments and
+ * receiving fifty — a bound on how **many**, while every comment's text stays unbounded here.
  *
  * So the numbers live here, produced by the shipped code from the shipped defaults, and Q54 cites
  * this file rather than restating them. When a cap lands (WP-16 owns the recommendation), these
@@ -38,6 +39,7 @@ import {
 import { fixedClock } from '@platform/domain';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { gitlabProviderRegistration } from './gitlab/index.js';
+import { READ_TICKET_COMMENT_PAGE } from './jira-cloud/index.js';
 import { createJiraCloudRegistration } from './jira-cloud/registration.js';
 
 const NOW = '2026-06-01T10:30:00.000Z' as const;
@@ -99,7 +101,7 @@ afterAll(() => {
 const SITE = 'https://acme-example.atlassian.net';
 const KEY = 'ACME-1';
 
-/** Twice what the adapter asks for, which is the point: `maxResults` is a request, not a cap. */
+/** Four times what the adapter asks for since WP-83, which is the point: the page is cut to size. */
 const COMMENTS_RETURNED = 200;
 
 const adf = (text: string) => ({
@@ -180,17 +182,30 @@ describe('one readTicket, with the provider hostile in every string it controls'
   });
 
   /**
-   * The correction Q54 needed. `MAX_COMMENTS` is spelled `maxResults` on the wire — Atlassian's
-   * word for "how many I would like" — and the adapter maps whatever comes back. A provider (or a
-   * proxy, or a future default) that answers with more is not refused, not truncated and not
-   * marked.
+   * The correction Q54 needed, and since WP-83 the answer to it. Until then `maxResults=100` was a
+   * request the adapter did not enforce: this case scripted two hundred comments and all two
+   * hundred were emitted. Now the page is decided — the newest `READ_TICKET_COMMENT_PAGE` (50),
+   * asked for with `orderBy=-created` — and a larger answer is cut to it.
    */
-  it('asks for a hundred comments and emits every one of the two hundred it is given', () => {
+  it('asks for the newest fifty comments and emits fifty of the two hundred it is given', () => {
+    expect(READ_TICKET_COMMENT_PAGE).toBe(50);
     expect(
-      seen.some((call) => call.includes('maxResults=100')),
-      'the request does carry the number, so this is a cap that is asked for and not enforced',
+      seen.some(
+        (call) =>
+          call.includes('/comment?') &&
+          call.includes('maxResults=50') &&
+          call.includes('orderBy=-created'),
+      ),
+      'the request asks for the newest page of the decided size',
     ).toBe(true);
-    expect((ticket as { comments: readonly unknown[] }).comments).toHaveLength(COMMENTS_RETURNED);
+    const emitted = (ticket as { comments: readonly { id: string }[] }).comments;
+    expect(emitted).toHaveLength(READ_TICKET_COMMENT_PAGE);
+    // The provider answered newest first (ids 20000, 20001, … stand for newest → older here); the
+    // first fifty are kept and emitted oldest first.
+    expect(emitted[0]?.id).toBe(String(20_000 + READ_TICKET_COMMENT_PAGE - 1));
+    expect(emitted.at(-1)?.id).toBe('20000');
+    // …and says the page was not the thread (backlog 290): Jira's `total`, not the page's length.
+    expect((ticket as { comment_total: number }).comment_total).toBe(COMMENTS_RETURNED);
   });
 
   it('emits eight unbounded paths, and this is the size of one ticket', () => {
@@ -207,7 +222,99 @@ describe('one readTicket, with the provider hostile in every string it controls'
     // Produced, not quoted (standing rule 39): Q54 cites this assertion rather than carrying a
     // number of its own. It is the size of *this* document — two hundred comments of 128 KiB —
     // and it moves when the fixture moves, which is the property a quoted figure lacked.
-    expect(bytesOf(JSON.stringify(ticket) ?? '')).toBe(53_284_565);
+    //
+    // **It moved at WP-83, from 53 284 565, and the cause is re-derived rather than assumed** (rule
+    // 81): the comment page is cut from 200 to `READ_TICKET_COMMENT_PAGE` (50), and the 150 comments
+    // dropped account for exactly 39 373 350 bytes — 262 489 each, which is the two 128 KiB strings
+    // a comment carries here (body and display name, 262 144) plus 345 bytes of its own frame. The
+    // paths above did not move: each comment's text is still the consumer's to bound. Review round
+    // 1 then added `comment_total` (backlog 290): `,"comment_total":200` is exactly 20 bytes, which
+    // is the whole move from 13 911 215.
+    expect(bytesOf(JSON.stringify(ticket) ?? '')).toBe(13_911_235);
+  });
+});
+
+/**
+ * WP-83 review round 2: the comment page's `total` is provider data, and one hostile number must not
+ * fail the whole read (standing rule 20). A `total` past `Number.MAX_SAFE_INTEGER` — which the port's
+ * `z.int()` refuses — degrades to "no usable total": a full page then answers `null` ("possibly
+ * more", which the snapshot declares as a cut) and a short page answers its own length.
+ */
+describe('a comment page whose total is hostile or missing', () => {
+  const readWith = async (returned: number, total: unknown) => {
+    stubFetch(
+      {
+        [`GET /issue/${KEY}`]: {
+          status: 200,
+          body: {
+            id: '10001',
+            key: KEY,
+            fields: {
+              summary: 'a ticket',
+              description: adf('text'),
+              issuetype: { name: 'Bug' },
+              status: { name: 'To Do' },
+              priority: { name: 'High' },
+              labels: [],
+              updated: '2026-06-01T09:00:00.000+0000',
+              issuelinks: [],
+            },
+          },
+        },
+        [`GET /issue/${KEY}/comment`]: {
+          status: 200,
+          body: {
+            comments: Array.from({ length: returned }, (_unused, index) => ({
+              id: String(30_000 + index),
+              author: {
+                accountId: '557058:00000000-0000-4000-8000-00000000d0c2',
+                displayName: 'Dana',
+              },
+              body: adf(`comment ${index}`),
+              created: '2026-06-01T09:10:00.000+0000',
+            })),
+            ...(total === undefined ? {} : { total }),
+          },
+        },
+        [`GET /issue/${KEY}/remotelink`]: { status: 200, body: [] },
+      },
+      [],
+    );
+    const clock = fixedClock(NOW, 0);
+    const port = createJiraCloudRegistration({
+      executor: createIntegrationActionExecutor({
+        egress: allowAnyIntegrationHost(),
+        auditLog: createMemoryAuditLog(),
+        redactor: noSecretsRedactor(),
+        timer: createVirtualTimer({ autoAdvance: true }),
+        clock,
+        rateLimits: () => ({ capacity: 100, refillPerSecond: 100, maxConcurrent: 8 }),
+      }),
+      clock,
+      actionContext: () => ({ mode: 'normal', projectId: null, taskId: null }),
+    }).create({
+      integrationId: '00000000-0000-4000-8000-0000000000a8',
+      config: { site_url: SITE, user_email: 'agentic-bot@example.test', project_keys: ['ACME'] },
+      secrets: { api_token: 'FAKE-jira-api-token-0123456789' },
+      redactor: noSecretsRedactor(),
+    });
+    return port.readTicket({ provider: 'jira-cloud', key: KEY, url: `${SITE}/browse/${KEY}` });
+  };
+
+  it('reads the ticket and answers "possibly more" for a full page with a total past 2^53', async () => {
+    const ticket = await readWith(READ_TICKET_COMMENT_PAGE, 2 ** 60);
+    expect(ticket.comments).toHaveLength(READ_TICKET_COMMENT_PAGE);
+    expect(ticket.comment_total).toBeNull();
+  });
+
+  it('answers null for a full page with no total, and the length for a short one', async () => {
+    expect((await readWith(READ_TICKET_COMMENT_PAGE, undefined)).comment_total).toBeNull();
+    expect((await readWith(7, undefined)).comment_total).toBe(7);
+    expect((await readWith(7, -3)).comment_total).toBe(7);
+    expect((await readWith(READ_TICKET_COMMENT_PAGE, 'many')).comment_total).toBeNull();
+    // A usable total is the answer, floored at what was mapped.
+    expect((await readWith(7, 2)).comment_total).toBe(7);
+    expect((await readWith(7, 90)).comment_total).toBe(90);
   });
 });
 

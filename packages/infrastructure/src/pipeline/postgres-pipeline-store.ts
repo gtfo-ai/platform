@@ -64,6 +64,7 @@ import type {
 } from '@platform/contracts';
 import {
   acceptanceCriterionSchema,
+  artifactTypeSchema,
   taskCoverageSchema,
   taskDependenciesSchema,
   taskPipelineDialSchema,
@@ -967,6 +968,8 @@ export const createPostgresPipelineStore = (
       const { rows } = await sqlOf(tx).query<{
         return_reason: string;
         return_reason_original_chars: number | null;
+        cause_type: string | null;
+        cause_version: number | null;
       }>(
         `with previous as (
            select max(case when returned_to = $2 then entered_at
@@ -978,8 +981,24 @@ export const createPostgresPipelineStore = (
              from task_stages
             where task_id = $1 and stage = $2 and attempt = $3
          )
-         select r.return_reason, r.return_reason_original_chars
-           from task_stages r, previous, current
+         select r.return_reason, r.return_reason_original_chars,
+                c.cause_type, c.cause_version
+           from task_stages r
+          cross join previous
+          cross join current
+           -- WP-83: the artifact a run of the returning attempt produced — the verdict that
+           -- caused the return, or nothing for a return no artifact caused.
+           left join lateral (
+             select a.type::text as cause_type, a.version as cause_version
+               from artifacts a
+               join runs ru on ru.id = a.produced_by_run_id
+              where ru.task_stage_id = r.id and a.task_id = r.task_id
+                -- Only a verdict returns a task (stageVerdict); another artifact the same
+                -- attempt produced is not a cause, whatever its version.
+                and a.type in ('ReviewVerdict', 'AcceptanceVerdict')
+              order by a.version desc
+              limit 1
+           ) c on true
           where r.task_id = $1 and r.returned_to = $2
             and r.return_reason is not null and r.exited_at is not null
             and (previous.at is null or r.exited_at > previous.at)
@@ -989,9 +1008,21 @@ export const createPostgresPipelineStore = (
         [taskId, stage, attempt],
       );
       const row = rows[0];
-      return row === undefined
-        ? null
-        : { reason: row.return_reason, originalChars: row.return_reason_original_chars ?? null };
+      if (row === undefined) {
+        return null;
+      }
+      return {
+        reason: row.return_reason,
+        originalChars: row.return_reason_original_chars ?? null,
+        ...(row.cause_type === null || row.cause_version === null
+          ? {}
+          : {
+              cause: {
+                type: artifactTypeSchema.parse(row.cause_type),
+                version: row.cause_version,
+              },
+            }),
+      };
     },
     takenOver: async (tx, taskId) => {
       // One indexed read of the task's own stream (WP-56): the newest boundary event decides, the

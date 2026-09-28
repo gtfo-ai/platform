@@ -15,7 +15,7 @@
           "$ref": "#/$defs/PathPattern"
         },
         "context_budget_tokens": {
-          "maximum": 200000,
+          "maximum": 57500,
           "$ref": "#/$defs/TokenCount"
         },
         "communication_language": {

@@ -1929,6 +1929,67 @@ describe('code-review convergence (product/04 S5)', () => {
     expect(harness.events().filter((entry) => entry.type === 'task.escalated')).toHaveLength(0);
     expect(taskOf(harness).task.iterationCounters.code_review).toBe(2);
   });
+
+  /**
+   * WP-83 (the ruling on backlog 159's stale-artifact half), through the stage executor and the
+   * real store rule rather than a request built by hand: the run a review returned is shown that
+   * review's verdict, and the run a CI failure returned next is shown **no** verdict — although the
+   * review's `request_changes` is still the task's latest `ReviewVerdict`, because the feature
+   * template runs `ci_gate` before `code_review`.
+   */
+  it('shows the run a CI failure returned no verdict, after the run a review returned was shown one', async () => {
+    const harness = harnessWith({
+      runs: {
+        ...happyRuns(),
+        code_review: completedRun(REVIEW('request_changes', [FINDING('f1')])),
+      },
+      git: {
+        getPipelineStatus: async () => ({
+          id: 'pipeline-1',
+          head_sha: 'b'.repeat(40),
+          status: 'running',
+          url: null,
+          jobs: [],
+          coverage_pct: null,
+          finished_at: null,
+        }),
+        getMergeRequest: async () => mergeRequest(false),
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    const task = taskOf(harness);
+    const ciFinished = (status: 'success' | 'failed') =>
+      event('ci.pipeline.finished', {
+        project_id: PROJECT,
+        task_id: task.task.id,
+        mr: mergeRequest(false).ref,
+        head_sha: 'b'.repeat(40),
+        status,
+        failed_jobs: status === 'failed' ? [{ name: 'test:unit', log_ref: 'log:1' }] : [],
+        coverage_pct: null,
+      });
+    await harness.publish([ciFinished('success')]);
+    await harness.publish([ciFinished('failed')]);
+
+    const [, afterReview, afterCi] = harness.specs.filter(
+      (spec) => spec.stage === 'implementation',
+    );
+    const blocksOf = (prompt: string | undefined) => readDataBlocks(prompt ?? '').blocks;
+    const verdictsIn = (prompt: string | undefined) =>
+      blocksOf(prompt)
+        .filter((block) => block.kind === 'artifact')
+        .map((block) => block.attributes.artifact_type)
+        .filter((type) => type === 'ReviewVerdict' || type === 'AcceptanceVerdict');
+
+    expect(verdictsIn(afterReview?.userPrompt)).toEqual(['ReviewVerdict']);
+    expect(afterCi).toBeDefined();
+    expect(verdictsIn(afterCi?.userPrompt)).toEqual([]);
+    const feedback = blocksOf(afterCi?.userPrompt).find(
+      (block) => block.kind === 'return_feedback',
+    );
+    expect(feedback?.body).toContain('test:unit');
+    expect(afterCi?.userPrompt).not.toContain('the footer sums the visible rows');
+  });
 });
 
 /**

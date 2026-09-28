@@ -114,7 +114,9 @@ export const jiraCommentPageSchema = z.object({
   comments: z.array(jiraCommentSchema).default([]),
   startAt: z.number().optional(),
   maxResults: z.number().optional(),
-  total: z.number().optional(),
+  // `unknown`, not `number`: a `total` of the wrong type must degrade to "no usable total"
+  // (`commentTotalOf`), never fail the page and with it the whole `readTicket` (WP-83, rule 20).
+  total: z.unknown().optional(),
 });
 
 // ── Issues (`getIssue`, `searchAndReconsileIssuesUsingJql`) ──────────────────
@@ -293,6 +295,8 @@ export interface TicketMappingInput {
   readonly issue: JiraIssueWithUpdated;
   readonly siteUrl: string;
   readonly comments: readonly JiraComment[];
+  /** The comment page's `total` — the thread's size, not the page's (WP-83, backlog 290). */
+  readonly commentTotal: number | null;
   readonly remoteLinks: readonly z.infer<typeof jiraRemoteLinkSchema>[];
   readonly epic: {
     readonly key: string;
@@ -315,6 +319,9 @@ export const toTicket = (input: TicketMappingInput): Ticket => {
     comments: input.comments.map((comment) =>
       toTicketComment(comment, { siteUrl, issueKey: issue.key }),
     ),
+    // Already decided by `commentTotalOf` in `index.ts` (a usable total, a short page's length, or
+    // `null` for "possibly more"); mapped as it stands so the rule has one home (rule 41).
+    comment_total: input.commentTotal,
     links: [
       ...toTicketLinks(issue, siteUrl),
       ...input.remoteLinks.map(

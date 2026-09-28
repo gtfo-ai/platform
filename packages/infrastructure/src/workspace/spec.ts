@@ -170,10 +170,15 @@ export const TOOLS_THAT_OPEN_THE_CHECKOUT: readonly string[] = [
 ];
 
 /**
- * SDK tools a run may hold that never read the tree. Empty on this build: no role holds one.
- * Declared so the classification in `spec.test.ts` has two sides rather than one.
+ * SDK tools a run may hold that never read the tree.
+ *
+ * `Skill` since WP-83 (PROGRESS backlog 149): it loads a `SKILL.md` from the platform's plugin
+ * directory — measured, the CLI announces *"Base directory for this skill:
+ * …/.agentic-run/plugins/agentic/skills/kb"* — and a run with no checkout still has that directory,
+ * which `#prepare` makes and the `skills-<run-id>` helper fills (WP-74). So the ask and the history
+ * miner hold `Skill` and still get `repo: null`.
  */
-export const TOOLS_THAT_NEED_NO_CHECKOUT: readonly string[] = [];
+export const TOOLS_THAT_NEED_NO_CHECKOUT: readonly string[] = ['Skill'];
 
 /**
  * Does this run get a checkout? — WP-74, PROGRESS backlog **82**.

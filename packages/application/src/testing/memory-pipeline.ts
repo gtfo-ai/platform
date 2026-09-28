@@ -691,9 +691,32 @@ export const createMemoryPipelineStore = (
         )
         .sort((a, b) => (a.exitedAt ?? 0) - (b.exitedAt ?? 0))
         .at(-1);
-      return found === undefined || found.returnReason === null
-        ? null
-        : { reason: found.returnReason, originalChars: found.returnReasonOriginalChars };
+      if (found === undefined || found.returnReason === null) {
+        return null;
+      }
+      // WP-83: the artifact a run of the returning attempt produced, linked as the SQL store links
+      // it (`runs.task_stage_id`, here the run's own stage and attempt).
+      const producers = [...runs.values()]
+        .filter(
+          (run) =>
+            run.taskId === taskId && run.stage === found.stage && run.attempt === found.attempt,
+        )
+        .map((run) => run.id);
+      const cause = artifacts
+        .filter(
+          (artifact) =>
+            artifact.taskId === taskId &&
+            // The SQL store's filter: only a verdict returns a task.
+            (artifact.type === 'ReviewVerdict' || artifact.type === 'AcceptanceVerdict') &&
+            artifact.producedByRunId !== null &&
+            producers.includes(artifact.producedByRunId),
+        )
+        .sort((a, b) => b.version - a.version)[0];
+      return {
+        reason: found.returnReason,
+        originalChars: found.returnReasonOriginalChars,
+        ...(cause === undefined ? {} : { cause: { type: cause.type, version: cause.version } }),
+      };
     },
   };
 

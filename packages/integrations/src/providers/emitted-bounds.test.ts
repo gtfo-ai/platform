@@ -77,8 +77,9 @@
  *     filed as **Q54** with a recommendation (bound at the consumer, WP-16), because inventing a
  *     cap on a ticket description silently changes what the agent reads. The two figures this
  *     docblock used to carry were both wrong (standing rule 39): the `readTicket` one was quoted
- *     "at the shipped `MAX_COMMENTS = 100`", which is `maxResults` and enforces nothing, and the
- *     `getMergeRequest` one did not reproduce.
+ *     "at the shipped `MAX_COMMENTS = 100`", which was `maxResults` and enforced nothing (since
+ *     WP-83 the page is `READ_TICKET_COMMENT_PAGE`, fifty, asked for and enforced — a bound on how
+ *     many comments, not on their text), and the `getMergeRequest` one did not reproduce.
  */
 import {
   exactSecretRedactor,

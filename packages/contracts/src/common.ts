@@ -715,9 +715,12 @@ export const ticketSnapshotCommentSchema = z.strictObject({
  * Three fields carry the ticket and the rest carry what happened to it, because a snapshot that
  * cannot say what it dropped is a snapshot a reader has to trust:
  *
- *  - `truncated` is true when **anything** was cut — a field, a comment, or a comment that did not
- *    make the newest-N window — and `comment_count` is what the provider returned before the
- *    window, so `comments.length < comment_count` says how many;
+ *  - `truncated` is true when **anything** was cut — a field, a comment, a comment that did not
+ *    make the newest-N window, or (WP-83, backlog 290) a thread the provider answered only a page
+ *    of — and `comment_count` is the number of **human comments the platform read** before the
+ *    window, so `comments.length < comment_count` says how many the window dropped. It is **not**
+ *    the ticket's comment count: on a paged provider it counts the page, and `truncated` is what
+ *    says the page was not the whole thread;
  *  - `redaction_count` is what the binding's redactor replaced, counted over the text as it was
  *    **read** rather than as it is stored (the cut happens after), which is the `inbox`
  *    precedent: a redactor that stopped working must be visible rather than silent;

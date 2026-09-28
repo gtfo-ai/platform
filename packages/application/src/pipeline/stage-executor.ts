@@ -103,9 +103,9 @@ import {
   startRunHeartbeat,
 } from './lease.js';
 import { injectedSecretRedactorFor } from './run-redaction.js';
-import { type ProjectSettings, repositoryConfigRefusal } from './settings.js';
+import { contextBudgetRefusal, type ProjectSettings, repositoryConfigRefusal } from './settings.js';
 import type { RunStopReasons } from './stop-reasons.js';
-import type { PipelineStore, StoredArtifact, StoredTask } from './store.js';
+import type { PipelineStore, ReturnCause, StoredArtifact, StoredTask } from './store.js';
 import {
   escalateTaskAfterConflict,
   retryOnTaskConflict,
@@ -128,6 +128,12 @@ export interface StageRunRequest {
    * excerpt), or `null`/absent — the prompt's `return_feedback` marker announces the cut.
    */
   readonly returnFeedbackOriginalChars?: number | null;
+  /**
+   * The artifact that caused this attempt's return, when one did (WP-83: the returning attempt's
+   * own verdict, `ReturnFeedback.cause`) — absent for a first entry, a forward entry, and a return
+   * no artifact caused. The planner shows a returned stage this verdict and no other.
+   */
+  readonly returnCause?: ReturnCause | null;
   /**
    * The commit a **shadow** run's workspace is checked out at — Q82 (a), PROGRESS backlog 71.
    *
@@ -526,6 +532,7 @@ type Admitted = {
   readonly artifacts: readonly StoredArtifact[];
   readonly returnFeedback: string | null;
   readonly returnFeedbackOriginalChars: number | null;
+  readonly returnCause: ReturnCause | null;
   /** WP-34 / backlog 71: a shadow task's comparison base, `null` for every other task. */
   readonly checkoutBase: string | null;
 };
@@ -627,12 +634,24 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
        * because no answer to those makes this run's rules knowable. No `runs` row is created — the
        * run never existed — and the task is parked where a human is asked to act, naming the key
        * paths, which is the escalation every other unrunnable stage already ends in.
+       *
+       * WP-83 (backlog 173): a context budget above this release's ceiling refuses the run the
+       * same way and for the same reason — no pack this run could be given is one the project
+       * chose (`contextBudgetRefusal` has the argument). One escalation (and one `save`) for both,
+       * with its own outcome word, because the file on the default branch may be valid while the
+       * stored settings are not.
        */
-      const refusal = repositoryConfigRefusal(settings);
+      const repositoryRefusal = repositoryConfigRefusal(settings);
+      const refusal = repositoryRefusal ?? contextBudgetRefusal(settings);
       if (refusal !== null) {
         const escalated = escalate(stored, options.context(task.id), job.stage, refusal);
         await store.tasks.save(scope.tx, { ...stored, task: escalated.aggregate });
-        await closeParkedStageRow(store, scope.tx, escalated, 'repository_config_invalid');
+        await closeParkedStageRow(
+          store,
+          scope.tx,
+          escalated,
+          repositoryRefusal !== null ? 'repository_config_invalid' : 'context_budget_above_ceiling',
+        );
         await scope.events.append(escalated.events);
         return { kind: 'escalated', reason: refusal };
       }
@@ -798,6 +817,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         artifacts: await store.artifacts.listFor(scope.tx, job.taskId),
         returnFeedback: feedback?.reason ?? null,
         returnFeedbackOriginalChars: feedback?.originalChars ?? null,
+        returnCause: feedback?.cause ?? null,
         /**
          * Q82 (a) / PROGRESS backlog **71**: the commit this run's workspace starts from.
          *
@@ -956,6 +976,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       settings,
       returnFeedback: admission.returnFeedback,
       returnFeedbackOriginalChars: admission.returnFeedbackOriginalChars,
+      returnCause: admission.returnCause,
       checkoutBase: admission.checkoutBase,
       ...(job.overrides === undefined ? {} : { overrides: job.overrides }),
       ...(job.mergeRequestPaths === undefined ? {} : { mergeRequestPaths: job.mergeRequestPaths }),

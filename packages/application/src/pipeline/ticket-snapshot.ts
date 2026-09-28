@@ -118,8 +118,11 @@ import type { PipelineStore, StoredTask } from './store.js';
 /**
  * ## The byte budget, and where the numbers came from
  *
- * Q54 measured one unbounded `readTicket` at **53 284 565 bytes** across 8 unbounded paths, and its
- * answer was *bound at the consumer, not in the adapter*. Here the consumer is the **store**, so
+ * Q54 measured one unbounded `readTicket` at **53 284 565 bytes** across 8 unbounded paths (two
+ * hundred comments handed to a request for a hundred), and its answer was *bound at the consumer,
+ * not in the adapter*. Since WP-83 the Jira adapter bounds the one thing only it can — **how many**
+ * comments: the newest `READ_TICKET_COMMENT_PAGE` (50), cut to size — and the same fixture now
+ * measures 13 911 235 bytes; every field's *text* is still bounded here. Here the consumer is the **store**, so
  * the cut happens at the write and is declared on the row (`truncated`, `comment_count`).
  *
  * Q61 proposed 1 KiB / 64 KiB / 20 × 4 KiB and said explicitly that the numbers were a proposal.
@@ -263,6 +266,20 @@ export const boundTicketSnapshot = (ticket: Ticket, redactor: SecretRedactor): T
   const title = clean(ticket.title, MAX_TICKET_TITLE_CHARS, redactor, tally);
   const description = clean(ticket.description, MAX_TICKET_DESCRIPTION_CHARS, redactor, tally);
   const { comments, total } = commentsOf(ticket, redactor, tally);
+  /**
+   * **Was the thread read whole?** — WP-83 review round 1, PROGRESS backlog 290. A port may answer
+   * a *page* (Jira's newest fifty), so the human comments counted here are the ones on the page,
+   * not on the ticket. When the provider says the thread is longer than what it returned, older
+   * comments were never read, and the snapshot says so with `truncated` — before this, a busy
+   * ticket whose page held twelve human comments stored `comment_count: 12` with no `truncated`, a
+   * positive claim that nothing was dropped. **A provider that does not say** (`comment_total`
+   * absent or `null`) is read as "possibly more" and declared as a cut too (review round 2; rule 16
+   * — unknown is not zero). The port's contract is what makes that safe rather than noisy: an
+   * adapter that knows it returned the whole thread (it got fewer than the page it asked for)
+   * answers the length, so `null` is only ever a full page with no usable count.
+   */
+  const pageCut =
+    typeof ticket.comment_total !== 'number' || ticket.comment_total > ticket.comments.length;
   return ticketSnapshotSchema.parse({
     title: title.text,
     description: description.text,
@@ -271,6 +288,7 @@ export const boundTicketSnapshot = (ticket: Ticket, redactor: SecretRedactor): T
       title.truncated ||
       description.truncated ||
       total > comments.length ||
+      pageCut ||
       comments.some((comment) => comment.truncated),
     comment_count: total,
     redaction_count: tally.count,

@@ -369,6 +369,8 @@ export const createFakeTaskManagement = (
       priority: stored.priority,
       labels: [...stored.labels],
       comments: stored.comments.map((comment) => snapshot(comment)),
+      // WP-83 (backlog 290): the fake returns the whole thread, so its total is its length.
+      comment_total: stored.comments.length,
       links: snapshot(stored.links),
       epic: stored.epic === null ? null : snapshot(stored.epic),
       siblings: snapshot(stored.siblings),

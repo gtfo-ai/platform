@@ -148,13 +148,68 @@ const FIELDS_FOR_TICKET =
   'summary,description,issuetype,status,priority,labels,updated,created,assignee,reporter,parent,issuelinks';
 const FIELDS_FOR_MATCH = 'issuetype,status,priority,labels,updated,parent,issuelinks';
 /**
- * How many comments one `readTicket` **asks** for — `maxResults`, Atlassian's word for a page size
- * request, and **not a cap this adapter enforces**. Nothing below refuses, truncates or marks a
- * larger page: `unbounded-emission.test.ts` scripts two hundred comments against this hundred and
- * shows all two hundred emitted. The name has misled a docblock and an open question already, so
- * it says what it is here (Q54, whose recommendation is that the *consumer* bounds this).
+ * How many comments the **marker search** asks for, oldest first — `maxResults`, a page-size
+ * *request*. The search emits nothing (it looks for this binding's own marked comment and returns
+ * a reference), so a larger page than asked is iterated rather than cut: cutting it could hide the
+ * workpad and make `upsertWorkpad` post a second one. The workpad is written early in a ticket's
+ * life, which is why this page is the oldest one.
  */
-const MAX_COMMENTS = 100;
+const MARKER_SEARCH_PAGE = 100;
+
+/**
+ * **The comment page one `readTicket` emits: the newest fifty, and never more** — WP-83, Q54's third
+ * sub-decision (*"whether the comment page should be paginated to a decided number rather than
+ * asked for one and handed another"*).
+ *
+ * Until WP-83 `readTicket` asked for `maxResults=100` in `orderBy=created` order — the **oldest**
+ * hundred — and mapped whatever came back: `unbounded-emission.test.ts` scripted two hundred and
+ * all two hundred were emitted. Two defects, and both are closed here:
+ *
+ *  - **the page is decided and enforced**: the request asks for this many and the answer is cut to
+ *    it, so a provider, a proxy or a future default that answers with more hands over no more;
+ *  - **it is the newest page** (`orderBy=-created`, documented in Atlassian's OpenAPI description of
+ *    `GET /rest/api/3/issue/{issueIdOrKey}/comment` — `enum: ["created", "-created", "+created"]`,
+ *    https://developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json, retrieved 2026-09-28),
+ *    re-ordered oldest first before it is mapped, because a thread reads forwards. The one consumer,
+ *    the task's ticket snapshot, keeps the newest `MAX_TICKET_COMMENTS` (20) comments **a human
+ *    wrote** — and on a ticket with more than a hundred comments the old order handed it the newest
+ *    twenty of the *oldest* hundred.
+ *
+ * **Why fifty**: twenty human comments, plus room for thirty of the platform's own among the newest
+ * (the workpad, lint and notification comments carry a marker and the snapshot skips them) before
+ * a human comment falls off the page. A ticket busier than that loses its older human comments from
+ * the snapshot — and says so: the page's `total` rides out as `Ticket.comment_total`, and the
+ * snapshot sets `truncated` when the page was not the whole thread (backlog 290, closed at WP-83
+ * review round 1). The text of each comment is
+ * the consumer's to bound (the snapshot's 1 000 characters, Q54's *"bound at the consumer"*); this
+ * bounds how **many** there are, which only the adapter can.
+ */
+export const READ_TICKET_COMMENT_PAGE = 50;
+
+/**
+ * The thread's size for `Ticket.comment_total`, from the page's `total` — WP-83 review round 2.
+ *
+ * - **A usable `total`** (a non-negative safe integer) is the answer, floored at what was mapped:
+ *   a provider that under-counts must not make a page look whole.
+ * - **No usable `total`, and the page came back short of what was asked** — the provider returned
+ *   fewer than `READ_TICKET_COMMENT_PAGE` — means the page *is* the thread, so its length is known
+ *   and is the answer.
+ * - **No usable `total` and a full page** is `null`: the platform does not know whether there were
+ *   more, and `null` is the port's "possibly more", which the snapshot declares as `truncated`.
+ *
+ * A hostile `total` — negative, fractional, or past `Number.MAX_SAFE_INTEGER`, which would fail the
+ * port's `z.int()` and with it the **whole** `readTicket` — degrades to "no usable total" instead of
+ * failing the read (standing rule 20: this is a read of somebody else's data, and one bad count is
+ * not a reason to withhold the ticket's title, description and comments from the task). Nothing is
+ * lost by degrading, because the full-page rule still declares the cut.
+ */
+export const commentTotalOf = (total: unknown, returned: number): number | null => {
+  const shown = Math.min(returned, READ_TICKET_COMMENT_PAGE);
+  if (typeof total === 'number' && Number.isSafeInteger(total) && total >= 0) {
+    return Math.max(total, shown);
+  }
+  return returned < READ_TICKET_COMMENT_PAGE ? shown : null;
+};
 
 /** On whose behalf a call is made. `mode` is `tasks.mode` (technical/03) and is never defaulted. */
 export interface JiraActionContext {
@@ -336,17 +391,34 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
       action,
     );
 
-  const fetchComments = async (key: string, action: string): Promise<readonly JiraComment[]> =>
+  const fetchCommentPage = async (
+    key: string,
+    action: string,
+    page: { readonly size: number; readonly orderBy: 'created' | '-created' },
+  ) =>
     parse(
       jiraCommentPageSchema,
       await client.send({
         method: 'GET',
         path: `issue/${encodeURIComponent(key)}/comment`,
-        query: { maxResults: MAX_COMMENTS, orderBy: 'created' },
+        query: { maxResults: page.size, orderBy: page.orderBy },
         action,
       }),
       action,
-    ).comments;
+    );
+
+  /**
+   * {@link READ_TICKET_COMMENT_PAGE}: the newest page, cut to its size, oldest first — and the
+   * thread's `total`, so the port can say the page was not the whole thread (WP-83, backlog 290).
+   */
+  const fetchNewestComments = async (key: string, action: string) => {
+    const page = await fetchCommentPage(key, action, {
+      size: READ_TICKET_COMMENT_PAGE,
+      orderBy: '-created',
+    });
+    const comments = [...page.comments].slice(0, READ_TICKET_COMMENT_PAGE).reverse();
+    return { comments, total: commentTotalOf(page.total, page.comments.length) };
+  };
 
   const fetchRemoteLinks = async (key: string, action: string) =>
     parse(
@@ -401,7 +473,9 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     action: string,
   ): Promise<JiraComment | null> => {
     const [comments, accountId] = await Promise.all([
-      fetchComments(key, action),
+      fetchCommentPage(key, action, { size: MARKER_SEARCH_PAGE, orderBy: 'created' }).then(
+        (page) => page.comments,
+      ),
       requireSelfAccountId(action),
     ]);
     for (const comment of comments) {
@@ -432,8 +506,8 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     return read('read_ticket', jsonPayload({ ticket_key: key }), async () => {
       const action = 'read_ticket';
       const issue = await fetchIssue(key, FIELDS_FOR_TICKET, action);
-      const [comments, remoteLinks] = await Promise.all([
-        fetchComments(key, action),
+      const [commentPage, remoteLinks] = await Promise.all([
+        fetchNewestComments(key, action),
         fetchRemoteLinks(key, action),
       ]);
       const parentKey = issue.fields.parent?.key ?? null;
@@ -449,7 +523,15 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
               };
             })();
       const siblings = parentKey === null ? [] : await fetchSiblings(parentKey, key, action);
-      const mapped = toTicket({ issue, siteUrl, comments, remoteLinks, epic, siblings });
+      const mapped = toTicket({
+        issue,
+        siteUrl,
+        comments: commentPage.comments,
+        commentTotal: commentPage.total,
+        remoteLinks,
+        epic,
+        siblings,
+      });
       // The mapping is ours, but every value in it came from Jira: a timestamp Jira invented or a
       // field it dropped fails here, at the ring boundary, rather than three layers up (BD-022).
       return parse(ticketSchema, mapped, action);

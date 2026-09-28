@@ -670,6 +670,8 @@ export const stageOutcomeWordSentence = (word: TaskStageOutcomeWord): string => 
       return 'Escalated: an event about this task could not be processed.';
     case 'repository_config_invalid':
       return 'Escalated: the repository’s .agentic/config.yml does not parse.';
+    case 'context_budget_above_ceiling':
+      return 'Escalated: the project’s context budget is above this release’s ceiling.';
     case 'protected_paths_changed':
       return 'Sent the task back: the change touches protected paths the plan did not declare or the code review did not confirm (BD-024).';
     case 'protected_paths_awaiting_review':

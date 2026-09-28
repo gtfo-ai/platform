@@ -155,6 +155,21 @@ write that carries one is answered `200` and changes nothing; the readers are un
   project's `.agentic/pipeline.yml` and its `prompts/` directory are not read either (next section); the repository
   reader reads exactly this file and `CLAUDE.md`.
 
+**Migration note — `project.context_budget_tokens` above 57 500 (WP-83, PROGRESS backlog 173).** The ceiling
+on a run's context-pack budget fell from **200 000** to **57 500** estimated tokens: half the smallest
+current context window (200 000) at the worst estimate/real ratio measured on this build's estimator
+(0.575, Czech prose against a proxy tokeniser), so a pack at the ceiling cannot pass half the window on
+a Czech vault. The arithmetic is at `MAX_CONTEXT_BUDGET_TOKENS` in `packages/contracts/src/config.ts`.
+A value above it that an earlier release accepted is **refused by name, never clamped**, wherever it is
+stored: in the **settings** layer, `GET /api/projects/:project_id/config` answers `409
+invalid_stored_config` naming `project.context_budget_tokens` and the value, and a run (or an ask) of
+the project is refused at admission with the same key, the value and the ceiling — the stage escalated
+to `needs_human` with the outcome `context_budget_above_ceiling`; in a stored **repository** reading,
+the read re-validates it into `invalid` and the repository refusal above names the key. **To migrate**:
+write a value at or under 57 500 with `PUT /api/projects/:project_id/config` (or in
+`.agentic/config.yml` on the default branch and refresh the reading). The shipped default, 12 000, is
+unaffected.
+
 The example above is transcribed key for key into a fixture and parsed by
 `packages/contracts/src/config.test.ts` › "parses the example from technical/12 unchanged", so a key
 this page documents and the schema refuses fails the build rather than an operator's file.

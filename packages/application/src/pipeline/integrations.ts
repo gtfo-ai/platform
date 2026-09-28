@@ -901,8 +901,9 @@ export const ticketWrites = (integrations: PipelineIntegrations) => ({
    * redactor is the **task-management** binding's — TD-012 step 1 over that binding's own
    * credentials, then step 2's patterns — and the residual is the one Q55 leaves everywhere outside
    * a run: this job holds no run-scoped secret set of its own. Since WP-76 a lint run **is** minted
-   * a credential — a `read` one, because `TOOLS_BY_ROLE.product_manager` is `['Read','Glob','Grep']`
-   * and `runIsReadOnly` is true — and it is revoked when the run ends; the composition root's
+   * a credential — a `read` one, because `TOOLS_BY_ROLE.product_manager` is
+   * `['Read','Glob','Grep','Skill']` (no `Edit`, no `Write`) and `runIsReadOnly` is true — and it
+   * is revoked when the run ends; the composition root's
    * platform redactor carries the run-scoped secrets **its own process** minted by exact value, and
    * since WP-80 every process's step-2 rules carry each minted credential's recorded shape, so an
    * outbound job in a process that did not mint replaces it too (PROGRESS backlog 259).

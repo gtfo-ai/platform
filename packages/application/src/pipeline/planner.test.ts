@@ -36,6 +36,7 @@ import {
   type SkillDefinition,
 } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
+import { exactSecretRedactor } from '../integrations/redaction.js';
 import { createContextPackAssembler } from '../knowledge/context-pack.js';
 import { silentLogger } from '../ports/logger.js';
 import { FIXTURE_HOSTILE_PATH, FIXTURE_ZERO_WIDTH } from '../testing/fixture-vault.js';
@@ -60,7 +61,12 @@ import {
   touchedPathsOf,
 } from './planner.js';
 import { CONFLICT_RESOLUTION_STAGE } from './rebase.js';
-import { REVIEW_ONLY_TEMPLATE_ID } from './review-only.js';
+import {
+  boundMergeRequestSnapshot,
+  MAX_MR_DESCRIPTION_CHARS,
+  MAX_MR_TITLE_CHARS,
+  REVIEW_ONLY_TEMPLATE_ID,
+} from './review-only.js';
 import type { StageRunRequest } from './stage-executor.js';
 import { TICKET_LINT_STAGE } from './ticket-lint.js';
 
@@ -458,7 +464,7 @@ describe('the ticket’s own words in the prompt (WP-15f)', () => {
     const cut = await planWith('ACME-1', { ...SNAPSHOT, truncated: true, comment_count: 9 });
     const block = ticketBlockOf(cut.spec.userPrompt).block;
     expect(block.attributes.truncated).toBe('true');
-    expect(block.attributes.comment_count).toBe('9');
+    expect(block.attributes.human_comments_read).toBe('9');
   });
 
   /**
@@ -741,6 +747,19 @@ describe('the platform skills a stage is planned with', () => {
       expect(at(CONFLICT_RESOLUTION_STAGE, command), command).toBe('ask');
     }
   });
+
+  /**
+   * WP-83, PROGRESS backlog 149: the SDK's `tools` base set removes `Skill` when it does not name it
+   * (measured with the pinned CLI's `system`/`init` message), so a role that holds a skill must hold
+   * the tool that invokes it — and a role that holds none must not, since the tool is the door to
+   * whatever `skills` list the runner sends.
+   */
+  it.each([...agentRoleSchema.options])(
+    '%s: holds `Skill` exactly when it holds a platform skill',
+    (role) => {
+      expect(TOOLS_BY_ROLE[role].includes('Skill'), role).toBe(SKILLS_BY_ROLE[role].length > 0);
+    },
+  );
 
   it('names exactly the roles that may run a command and the roles that may write', () => {
     const withTool = (tool: string) =>
@@ -1484,5 +1503,214 @@ describe('the plan’s protected-path declarations in the run spec (WP-99)', () 
       reason: /not been provisioned/,
     });
     expect(plan.spec.protectedPaths.length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * WP-83, the ruling on PROGRESS backlog 159's stale-artifact half: **a returned stage is shown only
+ * the verdict that caused the return.** Asserted on the assembled prompt, read back with
+ * `readDataBlocks` (standing rule 82), rather than on the artifact list the planner was handed.
+ */
+describe('the verdicts a returned stage is shown (WP-83)', () => {
+  const artifact = (type: string, version: number, data: unknown) => ({
+    id: `00000000-0000-4000-8000-0000000${String(type.length).padStart(2, '0')}${version}a1`,
+    taskId: TASK,
+    type,
+    version,
+    markdown: null,
+    data,
+    schemaVersion: '1',
+    producedByRunId: null,
+  });
+  const REVIEW_V1 = artifact('ReviewVerdict', 1, {
+    verdict: 'request_changes',
+    summary: 'totals are wrong',
+    findings: [
+      {
+        severity: 'blocker',
+        file: 'src/footer.ts',
+        line: 12,
+        explanation: 'the footer rounds twice',
+        suggestion: 'round once, in the formatter',
+      },
+    ],
+  });
+  const ACCEPTANCE_V1 = artifact('AcceptanceVerdict', 1, {
+    verdict: 'request_changes',
+    criteria: [{ id: 'AC-1', status: 'not_met', evidence: 'the export has no header row' }],
+    missing: [],
+    scope_creep: [],
+  });
+
+  const implementationAfter = (
+    returnFeedback: string | null,
+    returnCause: { type: string; version: number } | null,
+  ): StageRunRequest =>
+    ({
+      ...requestWith('footer totals'),
+      stage: {
+        id: 'implementation',
+        kind: 'agent',
+        role: 'developer',
+        produces: 'ImplementationNotes',
+      },
+      attempt: 3,
+      artifacts: [
+        artifact('RefinedSpec', 1, { goal: 'totals in the footer' }),
+        ACCEPTANCE_V1,
+        REVIEW_V1,
+      ],
+      returnFeedback,
+      returnCause,
+    }) as unknown as StageRunRequest;
+
+  const promptOf = async (request: StageRunRequest) => {
+    const { store } = await indexedFixtureVault();
+    const planner = createStageRunPlanner({
+      workspacePath: (taskId) => `/workspaces/${taskId}`,
+      prompts: prompts as never,
+      skills: testSkills,
+      boundSkills: async () => [],
+      nonce: { next: () => NONCE },
+      contextPacks: createContextPackAssembler({ store, logger: silentLogger }),
+      headPaths: (projectId) => store.readPathWitnesses(projectId),
+      clock: { now: () => NOW },
+    });
+    const plan = await planner.plan(request);
+    const reading = readDataBlocks(plan.spec.userPrompt);
+    expect(reading.unterminated).toBe(0);
+    return { userPrompt: plan.spec.userPrompt, blocks: reading.blocks };
+  };
+  const shownTypes = (blocks: readonly { kind: string; attributes: Record<string, string> }[]) =>
+    blocks
+      .filter((block) => block.kind === 'artifact')
+      .map((block) => `${block.attributes.artifact_type}@${block.attributes.version}`);
+
+  it('after a review return then a CI return, carries the CI cause and not the old request_changes', async () => {
+    const ci = 'pipeline p-2 failed: test:unit';
+    const { userPrompt, blocks } = await promptOf(implementationAfter(ci, null));
+    expect(shownTypes(blocks)).toEqual(['RefinedSpec@1']);
+    expect(blocks.find((block) => block.kind === 'return_feedback')?.body).toBe(ci);
+    // Not in any block, and not anywhere else in the prompt either.
+    expect(userPrompt).not.toContain('request_changes');
+    expect(userPrompt).not.toContain('the footer rounds twice');
+    expect(userPrompt).not.toContain('the export has no header row');
+  });
+
+  it('keeps the verdict that caused a review return, and no other verdict', async () => {
+    const reason =
+      '[summary] totals are wrong\n[blocker] src/footer.ts:12 — the footer rounds twice';
+    const { blocks } = await promptOf(
+      implementationAfter(reason, { type: 'ReviewVerdict', version: 1 }),
+    );
+    expect(shownTypes(blocks)).toEqual(['RefinedSpec@1', 'ReviewVerdict@1']);
+    const review = blocks.find((block) => block.attributes.artifact_type === 'ReviewVerdict');
+    // What the feedback block does not carry, and the reason the artifact stays.
+    expect(review?.body).toContain('round once, in the formatter');
+  });
+
+  it('keeps a verdict only at the version that caused the return', async () => {
+    const { blocks } = await promptOf(
+      implementationAfter('[summary] older', { type: 'ReviewVerdict', version: 7 }),
+    );
+    expect(shownTypes(blocks)).toEqual(['RefinedSpec@1']);
+  });
+
+  it('leaves a first or forward entry as it was: every latest artifact, verdicts included', async () => {
+    const { blocks } = await promptOf(implementationAfter(null, null));
+    expect(shownTypes(blocks)).toEqual(['RefinedSpec@1', 'AcceptanceVerdict@1', 'ReviewVerdict@1']);
+  });
+});
+
+/**
+ * WP-83 criterion 3, the merge-request half of Q54: the text a merge request carries reaches a
+ * prompt only through `boundMergeRequestSnapshot` (review-only mode and the shadow review, its two
+ * callers), which redacts **then** cuts each field and declares the cut; the assembler announces it
+ * as `truncated="true"` in the marker. Planted end to end through the planner and read back with
+ * `readDataBlocks` (standing rule 82), with a credential straddling the cut (rule 13).
+ */
+describe('an oversize merge request in a review run’s prompt (WP-83, Q54)', () => {
+  const SECRET = 'glpat-FAKE-planted-secret-0123456789';
+
+  /** The merge-request block of a review run's assembled prompt, for a merge request of this text. */
+  const blockFor = async (title: string, description: string) => {
+    const snapshot = boundMergeRequestSnapshot(
+      {
+        ref: {
+          provider: 'gitlab',
+          project_path: 'acme/api',
+          iid: 7,
+          url: 'https://git.example.test/acme/api/-/merge_requests/7',
+          branch: 'fix/footer',
+          head_sha: 'a'.repeat(40),
+        },
+        state: 'opened',
+        draft: false,
+        title,
+        description,
+        source_branch: 'fix/footer',
+        target_branch: 'main',
+        head_sha: 'a'.repeat(40),
+        mergeable: true,
+        has_conflicts: false,
+        labels: [],
+        reviewers: [],
+        web_url: 'https://git.example.test/acme/api/-/merge_requests/7',
+      } as never,
+      [],
+      exactSecretRedactor([{ name: 'gitlab', value: SECRET }]),
+    );
+    const { store } = await indexedFixtureVault();
+    const planner = createStageRunPlanner({
+      workspacePath: (taskId) => `/workspaces/${taskId}`,
+      prompts: prompts as never,
+      skills: testSkills,
+      boundSkills: async () => [],
+      nonce: { next: () => NONCE },
+      contextPacks: createContextPackAssembler({ store, logger: silentLogger }),
+      headPaths: (projectId) => store.readPathWitnesses(projectId),
+      clock: { now: () => NOW },
+    });
+    const base = requestWith('footer totals');
+    const plan = await planner.plan({
+      ...base,
+      stage: { id: 'code_review', kind: 'agent', role: 'reviewer', produces: 'ReviewVerdict' },
+      task: { ...base.task, reviewSubject: snapshot },
+    } as unknown as StageRunRequest);
+    const block = readDataBlocks(plan.spec.userPrompt).blocks.find(
+      (entry) => entry.kind === 'merge_request',
+    );
+    const [, afterHeader = ''] = (block?.body ?? '').split('\ndescription:\n');
+    const [shownDescription = ''] = afterHeader.split('\n\ndiff:');
+    return { block, shownDescription, userPrompt: plan.spec.userPrompt };
+  };
+  const OVERSIZE_DESCRIPTION = `${'d'.repeat(MAX_MR_DESCRIPTION_CHARS - 10)}${SECRET}${'d'.repeat(128 * 1_024)}`;
+
+  it('is cut to the stated bound, announced in the marker, and carries no planted secret', async () => {
+    const { block, shownDescription, userPrompt } = await blockFor(
+      't'.repeat(128 * 1_024),
+      OVERSIZE_DESCRIPTION,
+    );
+    expect(block?.attributes.truncated).toBe('true');
+    expect(shownDescription.length).toBe(MAX_MR_DESCRIPTION_CHARS);
+    expect(block?.body).toContain(`title: ${'t'.repeat(MAX_MR_TITLE_CHARS)}\n`);
+    expect(userPrompt).not.toContain(SECRET);
+    expect(userPrompt).not.toContain('glpat-FAKE');
+  });
+
+  /**
+   * Review round 1: the case above could not prove the description's own cut is announced — its
+   * 128 KiB title sets `truncated` by itself. Here only the description is over its cap, and the
+   * other side of the boundary (rule 42) is a description exactly at it, which announces nothing.
+   */
+  it('announces a cut description when the title fits, and nothing at exactly the cap', async () => {
+    const cut = await blockFor('Sum the invoice footer', OVERSIZE_DESCRIPTION);
+    expect(cut.block?.attributes.truncated).toBe('true');
+    expect(cut.shownDescription.length).toBe(MAX_MR_DESCRIPTION_CHARS);
+    expect(cut.userPrompt).not.toContain(SECRET);
+
+    const at = await blockFor('Sum the invoice footer', 'd'.repeat(MAX_MR_DESCRIPTION_CHARS));
+    expect(at.block?.attributes.truncated).toBeUndefined();
+    expect(at.shownDescription.length).toBe(MAX_MR_DESCRIPTION_CHARS);
   });
 });

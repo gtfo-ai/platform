@@ -73,6 +73,13 @@ export const buildQueryOptions = (spec: RunSpec, parts: QueryOptionParts): Optio
     // before the callback is consulted"), which is how this was found. That would delete BD-025's
     // ask-list. So the role's policy becomes the **base set** and nothing is pre-approved; the
     // `PreToolUse` hook and `canUseTool` decide every Bash and every write. technical/04 amended.
+    //
+    // **The base set removes every tool it does not name, `Skill` included** (WP-83, PROGRESS
+    // backlog 149; measured on 2026-09-28 with `claude` 2.1.267): the CLI's `system`/`init` message
+    // lists `tools: []` for `tools: []` and `["Read"]` for `['Read']` while `skills` still lists
+    // `agentic:kb`, and the model's request carries no `Skill` tool definition either — so a skill
+    // is listed to a run that cannot invoke it unless the role's row names `Skill`. Every role that
+    // holds a skill now does (`TOOLS_BY_ROLE`, held to `SKILLS_BY_ROLE` by `planner.test.ts`).
     tools: [...spec.tools],
     disallowedTools: [...spec.disallowedTools],
     hooks: parts.hooks,
@@ -169,16 +176,30 @@ export const buildQueryOptions = (spec: RunSpec, parts: QueryOptionParts): Optio
         skipMcpDiscovery: true,
       },
     ];
-    // "A context filter, not a sandbox: unlisted skills are hidden from the model's listing and
-    // rejected by the Skill tool, but their files remain on disk" (`sdk.d.ts:2089-2098`). So this
-    // is the second lane; the first is that the workspace was only given this role's skills.
-    //
-    // Omitted when the list is empty, and **omitting is not "skills off"**: the same docblock says
-    // an absent option leaves the CLI's own defaults in place. A role with no skills is therefore
-    // protected by provisioning alone — nothing was copied, and no plugin is passed — which is the
-    // stronger of the two lanes anyway.
-    options.skills = [...spec.skills];
   }
+  /**
+   * `skills` is **always** sent, the empty list included (WP-83, PROGRESS backlog 149).
+   *
+   * "A context filter, not a sandbox: unlisted skills are hidden from the model's listing and
+   * rejected by the Skill tool, but their files remain on disk" (`sdk.d.ts:2089-2098`). So this is
+   * the second lane; the first is that the workspace was only given this role's skills.
+   *
+   * **Omitting it is not "skills off", and that stopped being academic when `Skill` joined the
+   * roles' tools.** Measured on 2026-09-28 against the pinned CLI (`claude` 2.1.267, SDK 0.3.267)
+   * with a local stand-in for the Messages API scripted to call the `Skill` tool — no credential,
+   * no network, the scripts are in the WP-83 notes in `PROGRESS.md`:
+   *
+   *  - `tools: ['Skill']`, `skills: ['agentic:kb']`: `agentic:kb` loads (its `SKILL.md` body is the
+   *    next user turn) **without reaching `canUseTool`**, and the CLI's bundled `update-config` is
+   *    refused — *"Skill update-config is not in this session's skills allowlist"*;
+   *  - `tools: ['Skill']`, `skills: []`: both are refused with the same sentence;
+   *  - `tools: ['Skill']`, `skills` **omitted**: `update-config` — a bundled skill that edits
+   *    `settings.json` — loads after one `canUseTool` call.
+   *
+   * So an absent list hands a run with the `Skill` tool every skill the CLI ships, and the empty
+   * list hands it none. The plugin is still passed only when there is something in it.
+   */
+  options.skills = [...spec.skills];
   if (spec.artifactType !== null) {
     options.outputFormat = { type: 'json_schema', schema: artifactJsonSchema(spec.artifactType) };
   }

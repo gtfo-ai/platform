@@ -334,6 +334,18 @@ export const skillsFor = (role: AgentRole, boundSkills: readonly string[]): read
  * only the developer and the librarian have `Edit`/`Write`, and a run with neither mints no git
  * credential (`runIsReadOnly`).
  *
+ * **`Skill` is in every row whose {@link SKILLS_BY_ROLE} row is not empty, and in no other** (WP-83,
+ * PROGRESS backlog 149). The SDK's `tools` option is the run's *base set*, and it removes every
+ * built-in it does not name — measured against the pinned CLI (`claude` 2.1.267): the `system`/
+ * `init` message lists `tools: []` for an empty row while `skills` still lists `agentic:kb`, so
+ * until this change every platform skill was listed to runs that could not invoke one, and the ask
+ * and the history miner, which hold no file tool, could not even read theirs. `Skill` reads only
+ * the plugin directory the provisioning wrote, so it does not give the ask or the miner a checkout
+ * (`TOOLS_THAT_NEED_NO_CHECKOUT` in `@platform/infrastructure`). It is not an escalation: the CLI
+ * refuses a skill the run's `skills` list does not name, and the runner always sends that list,
+ * empty included (`options.ts` has the three measured cases). The triager holds no skill and so no
+ * `Skill`; `planner.test.ts` holds the two tables together.
+ *
  * **`discovery` has `Bash` on the `verification` baseline** (WP-21, widened at WP-54): the read
  * verbs — `ls`, `cat`, `grep`, `rg`, `find`, `git log|diff|show|blame|status` — plus the project's
  * declared commands and the lockfile installs, so product/17's R1, R2 and R6 are detected by running
@@ -346,20 +358,21 @@ export const skillsFor = (role: AgentRole, boundSkills: readonly string[]): read
  */
 export const TOOLS_BY_ROLE: Readonly<Record<AgentRole, readonly string[]>> = {
   triager: [],
-  product_manager: ['Read', 'Glob', 'Grep'],
-  investigator: ['Read', 'Glob', 'Grep', 'Bash'],
-  architect: ['Read', 'Glob', 'Grep', 'Bash'],
-  developer: ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash'],
-  reviewer: ['Read', 'Glob', 'Grep', 'Bash'],
-  acceptance_tester: ['Read', 'Glob', 'Grep', 'Bash'],
-  facilitator: ['Read', 'Glob', 'Grep'],
-  librarian: ['Read', 'Glob', 'Grep', 'Edit', 'Write'],
+  product_manager: ['Read', 'Glob', 'Grep', 'Skill'],
+  investigator: ['Read', 'Glob', 'Grep', 'Bash', 'Skill'],
+  architect: ['Read', 'Glob', 'Grep', 'Bash', 'Skill'],
+  developer: ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash', 'Skill'],
+  reviewer: ['Read', 'Glob', 'Grep', 'Bash', 'Skill'],
+  acceptance_tester: ['Read', 'Glob', 'Grep', 'Bash', 'Skill'],
+  facilitator: ['Read', 'Glob', 'Grep', 'Skill'],
+  librarian: ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Skill'],
   // `Bash` under BD-025's command policy — see the docblock. It keeps nothing: no `Edit`, no
   // `Write`, and `PLATFORM_TOOLS_BY_ROLE.discovery` carries no mutating platform tool.
-  discovery: ['Read', 'Glob', 'Grep', 'Bash'],
+  discovery: ['Read', 'Glob', 'Grep', 'Bash', 'Skill'],
   /**
-   * **Empty, and that is the point** (WP-31, Q72 (b)). An ask explains the platform's own record;
-   * it never inspects the code. Everything it may do is in `PLATFORM_TOOLS_BY_ROLE.ask`.
+   * **No file tool and no shell, and that is the point** (WP-31, Q72 (b)). An ask explains the
+   * platform's own record; it never inspects the code. Everything it may do is in
+   * `PLATFORM_TOOLS_BY_ROLE.ask`, plus `Skill` for its one skill (`kb`, WP-83 — see above).
    *
    * **An ask run is given a container and no checkout** (WP-74, PROGRESS backlog **82**). Because
    * this row holds no file tool and no shell, `buildWorkspaceSpec` gives the run `repo: null`
@@ -377,9 +390,10 @@ export const TOOLS_BY_ROLE: Readonly<Record<AgentRole, readonly string[]>> = {
    * measured. This docblock said *"an ask run is given no workspace"* until WP-53, which was false;
    * WP-53's correction said the opposite, which WP-74 made conditional.
    */
-  ask: [],
+  ask: ['Skill'],
   /**
-   * **Empty, like the ask's, and for a sharper reason** (WP-35). Everything a mining run reads is
+   * **No file tool, like the ask's, and for a sharper reason** (WP-35); `Skill` only, for `kb`
+   * (WP-83). Everything a mining run reads is
    * already in its prompt — `tasks.history_sample` is the batch the platform collected, bounded and
    * redacted at the write — so a `Read` would only let it wander into a checkout whose contents
    * have nothing to do with merge requests merged six months ago. What it must not do is *widen its
@@ -387,7 +401,7 @@ export const TOOLS_BY_ROLE: Readonly<Record<AgentRole, readonly string[]>> = {
    * (`curateHistoryFindings`), so a tool that could find a fourth source would produce citations the
    * platform then refuses.
    */
-  historian: [],
+  historian: ['Skill'],
 };
 
 /**
@@ -667,7 +681,8 @@ const limitsFor = (settings: ProjectSettings, stage: string, role: AgentRole): R
 };
 
 /**
- * The latest version of each artifact type, oldest type first — what a stage is shown.
+ * The latest version of each artifact type, oldest type first — what a stage is shown, before
+ * {@link artifactsShownTo} takes out the verdicts a returned stage was not sent back for (WP-83).
  *
  * `AskAnswer` is filtered out here (WP-31): the reason is a property of the artifact type and is
  * written at `PROMPT_EXCLUDED_ARTIFACT_TYPES` in `@platform/domain`, beside the type itself, so this
@@ -683,6 +698,49 @@ const latestArtifacts = (artifacts: readonly StoredArtifact[]): readonly StoredA
       latest.set(artifact.type, artifact);
   }
   return [...latest.values()];
+};
+
+/**
+ * The artifact types a stage **returns** a task by: `stageVerdict` maps `request_changes` only for
+ * these two (`verdicts.ts`), so they are the only artifacts that can be the cause of a return.
+ */
+const VERDICT_ARTIFACT_TYPES: readonly ArtifactType[] = ['ReviewVerdict', 'AcceptanceVerdict'];
+
+/**
+ * **What a stage is shown of the task's artifacts** — {@link latestArtifacts}, except that a stage
+ * the task was **returned** to is shown only the verdict that caused the return (WP-83, the ruling
+ * on PROGRESS backlog 159's stale-artifact half).
+ *
+ * `latestArtifacts` picks by type and version, not by the return that caused this attempt, so
+ * before this a review return followed by a CI return served the third implementation run the
+ * review's `request_changes` findings — which the second run was sent to fix — beside a feedback
+ * block about a failing pipeline, with nothing to say which of the two it was there for. Now:
+ *
+ *  - **a return some verdict caused** (`returnCause`: the returning attempt's own
+ *    `ReviewVerdict`/`AcceptanceVerdict`, read by link in `lastReturnReason`) keeps exactly that
+ *    version, whose findings the `return_feedback` block already carries (WP-55) — the artifact
+ *    block adds what the block does not: each finding's `suggestion`;
+ *  - **a return no verdict caused** — a gate's, a human's, the review window's threads — keeps no
+ *    verdict at all: the `return_feedback` block is the cause, and an earlier verdict was answered
+ *    by an earlier attempt;
+ *  - **a first or forward entry** (no `returnFeedback`) is unchanged: a re-review still sees the
+ *    verdict it wrote last time, which is not a return and not this ruling's question.
+ *
+ * Every other artifact type (the spec, the plan, the notes) is untouched: they describe the work,
+ * not a complaint about it. It filters **before** anything reads the list, so the prompt, the
+ * retrieval query and the touched paths all see the same set.
+ */
+export const artifactsShownTo = (request: StageRunRequest): readonly StoredArtifact[] => {
+  const latest = latestArtifacts(request.artifacts);
+  if (request.returnFeedback === null) {
+    return latest;
+  }
+  const cause = request.returnCause ?? null;
+  return latest.filter(
+    (artifact) =>
+      !VERDICT_ARTIFACT_TYPES.includes(artifact.type) ||
+      (cause !== null && artifact.type === cause.type && artifact.version === cause.version),
+  );
 };
 
 /**
@@ -718,7 +776,7 @@ export const taskTextOf = (request: StageRunRequest): string =>
     request.task.ticketSnapshot?.title ?? '',
     request.task.ticketSnapshot?.description ?? '',
     request.task.task.ticket.key,
-    ...latestArtifacts(request.artifacts).map((artifact) => JSON.stringify(artifact.data)),
+    ...artifactsShownTo(request).map((artifact) => JSON.stringify(artifact.data)),
     request.returnFeedback ?? '',
   ]
     .join('\n')
@@ -739,7 +797,9 @@ export const MAX_TOUCHED_PATHS = 200;
  * The paths a run is known to touch — technical/07 step 1's *"touched paths (from plan/diff when
  * available)"* (WP-58, PROGRESS backlog 170).
  *
- * Two producers, both artifacts the task already carries, read from the latest version of each:
+ * Two producers, both artifacts the task already carries, read from what the stage is shown
+ * ({@link artifactsShownTo} — the latest version of each, and on a return only the verdict that
+ * caused it, WP-83):
  *
  *  - **`ImplementationPlan`** — `files_to_change[].path` and `protected_path_changes[].path`: what
  *    the Architect said the change touches. Every stage from `implementation` on has one.
@@ -773,7 +833,7 @@ export const touchedPathsOf = (
       source: fromSubject.length > 0 ? 'review_subject' : 'none',
     };
   }
-  const latest = latestArtifacts(request.artifacts);
+  const latest = artifactsShownTo(request);
   const fromPlan: string[] = [];
   const fromReview: string[] = [];
   for (const artifact of latest) {
@@ -1177,7 +1237,7 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
           // off the row for the same reason as the two above — the collection happened in a job,
           // outside every transaction, before this task existed.
           historySample: task.historySample ?? null,
-          artifacts: latestArtifacts(request.artifacts).map((artifact) => ({
+          artifacts: artifactsShownTo(request).map((artifact) => ({
             type: artifact.type,
             version: artifact.version,
             json: JSON.stringify(artifact.data),

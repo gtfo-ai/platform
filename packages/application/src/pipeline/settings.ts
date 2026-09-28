@@ -17,6 +17,7 @@ import type {
   PipelineTemplate,
   TaskPipelineDial,
 } from '@platform/contracts';
+import { MAX_CONTEXT_BUDGET_TOKENS } from '@platform/contracts';
 import type {
   AutonomyPreset,
   ConfigValues,
@@ -130,6 +131,36 @@ export const repositoryConfigRefusal = (settings: ProjectSettings): string | nul
     `the repository's .agentic/config.yml on the default branch${repository.commitSha === null ? '' : ` (commit ${repository.commitSha})`} ` +
     `does not parse: ${repository.detail ?? 'no detail was recorded'}. No run starts on this project until it is fixed — ` +
     'correct the file on the default branch, or export the settings over it (POST /api/projects/:project_id/config/export), then re-read it'
+  );
+};
+
+/**
+ * Why a run of this project may not start because its **context budget is above the ceiling**, or
+ * `null` — WP-83, PROGRESS backlog 173.
+ *
+ * `MAX_CONTEXT_BUDGET_TOKENS` fell from 200 000 to 57 500 at WP-83 (the arithmetic is at the
+ * constant). The schema refuses a larger value on every write and on `GET …/config`. The
+ * repository layer is re-validated on every read (`revalidateRepositorySnapshot`), so a stored
+ * reading that carries one arrives `invalid` and {@link repositoryConfigRefusal} names it; but the
+ * pipeline's settings read **casts** the settings layer (`projects.config`) rather than parsing it
+ * (`createProjectSettingsPort` in `apps/server`), so a budget stored there before the change would
+ * otherwise reach the planner and be packed to. It is refused here instead, **by name**: the key,
+ * the value, the ceiling and where to write the correction — never clamped, because a silently
+ * smaller pack is a configuration nobody chose (standing rule 20: this is the side that acts).
+ *
+ * The one reader of the key on the run path: both planners read `context_budget_tokens` only after
+ * both executors have asked this at admission, so the ceiling is enforced once (rule 41).
+ */
+export const contextBudgetRefusal = (settings: ProjectSettings): string | null => {
+  const budget: unknown = settings.config.project?.context_budget_tokens;
+  if (typeof budget !== 'number' || budget <= MAX_CONTEXT_BUDGET_TOKENS) {
+    return null;
+  }
+  return (
+    `project.context_budget_tokens is ${String(budget)}, above this release's ceiling of ` +
+    `${String(MAX_CONTEXT_BUDGET_TOKENS)} estimated tokens (lowered from 200000 at WP-83: a larger ` +
+    'pack can exceed the smallest model context window). No run starts on this project until it is ' +
+    'lowered — PUT /api/projects/:project_id/config, or the key in .agentic/config.yml on the default branch'
   );
 };
 

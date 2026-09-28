@@ -84,6 +84,8 @@ Full default prompt texts are written in Round 2 as files; here is the intent an
 ## Skills
 
 ### Skills mounted into agent runs (shipped by the platform, project-overridable)
+*Every role that holds a skill also holds the `Skill` tool, which is how the model invokes one — the pinned CLI removes `Skill` when `tools` does not list it (measured on CLI 2.1.267 at WP-83, PROGRESS backlog 149).*
+
 - `gitlab-mr` — open/update draft MR, reply to discussions, read CI logs with `glab` (recipes, not the whole CLI).
 - `jira-ticket` — read ticket and comments with `acli`/`jira`; comment via platform tool.
 - `loki-logs` — LogQL recipes with time/limit hygiene.

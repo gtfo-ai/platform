@@ -194,9 +194,10 @@ describe('the checkout a run gets', () => {
       platformEgressHosts: ['api.anthropic.com'],
     });
 
-  it('is none for an ask and for a history miner, whose tool rows are empty', () => {
-    expect(TOOLS_BY_ROLE.ask).toEqual([]);
-    expect(TOOLS_BY_ROLE.historian).toEqual([]);
+  it('is none for an ask and for a history miner, whose tool rows hold only `Skill`', () => {
+    // `Skill` since WP-83 (backlog 149): it reads the plugin directory, never the tree.
+    expect(TOOLS_BY_ROLE.ask).toEqual(['Skill']);
+    expect(TOOLS_BY_ROLE.historian).toEqual(['Skill']);
     expect(specOf('ask').repo).toBeNull();
     expect(specOf('historian').repo).toBeNull();
   });
@@ -278,7 +279,8 @@ describe('the credential a run gets', () => {
     // Positively, not "does not contain Write": a list that grew an `Edit` is the thing to catch.
     // `Bash` since WP-54 (product/13's "tests only", PROGRESS backlog 39): a shell changes what the
     // run may *execute*, never the scope it is minted — that is `Write`/`Edit`.
-    expect(tools).toEqual(['Read', 'Glob', 'Grep', 'Bash']);
+    // `Skill` since WP-83 (backlog 149): it loads a platform skill and writes nothing.
+    expect(tools).toEqual(['Read', 'Glob', 'Grep', 'Bash', 'Skill']);
 
     const spec = runSpecFixture({
       stage: 'code_review',

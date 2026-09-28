@@ -6,7 +6,7 @@
  * could not read, a run that produced no artifact, and a job that arrives after the task has moved.
  */
 import type { DomainEvent, Id } from '@platform/contracts';
-import { domainEventSchemasByType } from '@platform/contracts';
+import { domainEventSchemasByType, MAX_CONTEXT_BUDGET_TOKENS } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { RunStartError } from '../ports/runner.js';
 import { askingRefinedSpec, PROCEEDING_REFINED_SPEC } from '../testing/artifact-fixtures.js';
@@ -419,6 +419,45 @@ describe('an invalid repository configuration', () => {
       await harness.publish([ticketMatched()]);
       expect(harness.specs.length, status).toBeGreaterThan(0);
     }
+  });
+});
+
+/**
+ * WP-83 criterion 1, the run half (backlog 173): a stored `context_budget_tokens` above the ceiling
+ * — a value the schema accepted before the ceiling fell to 57 500 — refuses the run by name rather
+ * than being packed to or clamped. Both sides of the boundary (rule 42).
+ */
+describe('a context budget above the ceiling', () => {
+  const withBudget = (budget: number) =>
+    harnessWith({
+      settings: { config: { project: { context_budget_tokens: budget } } },
+      runs: {
+        refinement: {
+          status: 'completed',
+          terminalReason: 'success',
+          structuredOutput: askingRefinedSpec(),
+        },
+      },
+    });
+
+  it('refuses the run before it exists and escalates, naming the key and the value', async () => {
+    const harness = withBudget(MAX_CONTEXT_BUDGET_TOKENS + 1);
+    await harness.publish([ticketMatched()]);
+    expect(harness.specs).toHaveLength(0);
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    const reason = escalationOf(harness)?.payload.reason ?? '';
+    expect(reason).toContain(`project.context_budget_tokens is ${MAX_CONTEXT_BUDGET_TOKENS + 1}`);
+    expect(reason).toContain(String(MAX_CONTEXT_BUDGET_TOKENS));
+    // Its own word on the parked row, not the repository refusal's.
+    expect(harness.store.stageRows.find((row) => row.stage === 'refinement')?.outcome).toBe(
+      'context_budget_above_ceiling',
+    );
+  });
+
+  it('runs at exactly the ceiling', async () => {
+    const harness = withBudget(MAX_CONTEXT_BUDGET_TOKENS);
+    await harness.publish([ticketMatched()]);
+    expect(harness.specs.length).toBeGreaterThan(0);
   });
 });
 

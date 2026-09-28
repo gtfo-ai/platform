@@ -88,7 +88,8 @@
  * and may quote back a credential the platform injected (TD-012, BD-002). Four things carry it out
  * of this file, and each is redacted — except the one that cannot be, which is refused instead:
  *
- *  - the audit row (`buildEntry`), where payload, result and error are redacted and counted;
+ *  - the audit row (`buildEntry`), where payload, result and error are redacted and counted, and
+ *    then cut to a ceiling (`audit-ceiling.ts`, WP-83);
  *  - the **idempotency record**, whose two halves get *different* answers because only one of them
  *    is an identity: the stored **value** is redacted and counted onto the row that reports the
  *    action (`redactStoredJson`, because `encode` is often the identity over provider text), while
@@ -186,6 +187,7 @@ import {
   type IntegrationRef,
 } from '../ports/integrations/common.js';
 import { type LogFields, type Logger, silentLogger } from '../ports/logger.js';
+import { boundAuditError, boundAuditJson } from './audit-ceiling.js';
 import {
   type MintedCredentialShapeRecord,
   mintedCredentialShapeRecordSchema,
@@ -728,9 +730,11 @@ export const createIntegrationActionExecutor = (
       action: request.action,
       mutating: request.mutating,
       status: fields.status,
-      payload: payload.value,
-      result: result === null ? null : result.value,
-      error: error === null ? null : error.value,
+      // WP-83 (Q54): the three fields that carry text the platform did not bound are cut to a
+      // ceiling **after** redaction, so the count above still counts what a cut removed.
+      payload: boundAuditJson(payload.value),
+      result: result === null ? null : boundAuditJson(result.value),
+      error: error === null ? null : boundAuditError(error.value),
       durationMs: fields.durationMs,
       occurredAt: options.clock.now(),
       redactionCount:

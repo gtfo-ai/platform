@@ -34,6 +34,7 @@ import {
   redactErrorInPlace,
   SHADOW_RUN_CREDENTIAL_CARVE_OUT,
 } from './action-executor.js';
+import { boundAuditJson, MAX_AUDIT_ERROR_CHARS, MAX_AUDIT_JSON_BYTES } from './audit-ceiling.js';
 import {
   allowAnyIntegrationHost,
   createIntegrationEgressPolicy,
@@ -164,6 +165,76 @@ describe('IntegrationActionExecutor', () => {
       return { status: 'In Progress' };
     },
     ...overrides,
+  });
+
+  /**
+   * WP-83 (Q54): the audit row's three unbounded fields are cut to a ceiling, **after** redaction.
+   * Planted through the executor rather than the helper, so a `buildEntry` that stopped calling it
+   * fails here by name; the helper's own boundaries are `audit-ceiling.test.ts`.
+   */
+  describe('the audit row ceiling (WP-83, Q54)', () => {
+    it('cuts an oversize payload, result and error, and counts a secret the cut removed', async () => {
+      const huge = `${SECRET} ${'p'.repeat(MAX_AUDIT_JSON_BYTES * 2)}`;
+      await executor.execute(
+        addComment({
+          payload: { ticket_key: 'FAKE-1', body: huge },
+          describeResult: () => ({ echoed: huge }),
+        }),
+      );
+      const [entry] = auditLog.entries;
+      expect(entry?.payload).toMatchObject({ truncated: true });
+      expect(Buffer.byteLength(JSON.stringify(entry?.payload))).toBeLessThanOrEqual(
+        MAX_AUDIT_JSON_BYTES,
+      );
+      expect(entry?.result).toMatchObject({ truncated: true });
+      expect(JSON.stringify(entry)).not.toContain(SECRET);
+      // Redacted first: the secret sat at the head, inside the kept part, as a placeholder.
+      expect(entry?.redactionCount).toBe(2);
+
+      await outcomeOf(
+        executor.execute(
+          readTicket({
+            perform: async () => {
+              throw new Error('e'.repeat(MAX_AUDIT_ERROR_CHARS * 3));
+            },
+          }),
+        ),
+      );
+      const failed = auditLog.entries.at(-1);
+      expect(failed?.error?.length).toBeLessThanOrEqual(MAX_AUDIT_ERROR_CHARS);
+      expect(failed?.error).toMatch(/\[truncated: \d+ chars\]$/);
+    });
+
+    /**
+     * Review round 1: redaction must come **before** the cut. The secret is placed so that a cut of
+     * the unredacted payload would land in its middle — found by cutting a same-length filler body
+     * and reading where the head ends — so a cut made first would store the secret's front half,
+     * which the exact-match redactor can no longer recognise.
+     */
+    it('redacts before it cuts, so a secret straddling the ceiling leaves no fragment', async () => {
+      const length = MAX_AUDIT_JSON_BYTES * 2;
+      const frame = JSON.stringify({ ticket_key: 'FAKE-1', body: '' }).length - 2; // up to the body
+      const filler = boundAuditJson({ ticket_key: 'FAKE-1', body: 'p'.repeat(length) }) as {
+        head: string;
+      };
+      const at = filler.head.length - frame - Math.floor(SECRET.length / 2);
+      const body = `${'p'.repeat(at)}${SECRET}${'p'.repeat(length - at - SECRET.length)}`;
+      // Calibration: cutting the *unredacted* payload does leave the front half behind.
+      const cutFirst = JSON.stringify(boundAuditJson({ ticket_key: 'FAKE-1', body }));
+      const front = SECRET.slice(0, Math.floor(SECRET.length / 2));
+      expect(cutFirst).toContain(front);
+      expect(cutFirst).not.toContain(SECRET);
+
+      await executor.execute(addComment({ payload: { ticket_key: 'FAKE-1', body } }));
+      const stored = JSON.stringify(auditLog.entries[0]?.payload);
+      expect(stored).not.toContain(front);
+      expect(auditLog.entries[0]?.redactionCount).toBe(1);
+    });
+
+    it('leaves a row that fits exactly as it came', async () => {
+      await executor.execute(addComment());
+      expect(auditLog.entries[0]?.payload).toEqual({ ticket_key: 'FAKE-1', body: 'hello' });
+    });
   });
 
   describe('shadow mode (technical/02 invariant)', () => {

@@ -97,6 +97,19 @@ Product-definition items were decided on 2026-08-28 and moved into `product/19-o
       (`@anthropic-ai/tokenizer@0.0.4`): est/real 0.575 on Czech (1.74× under), 0.76 Japanese, 1.25
       English padding. **Still open**: the model's own counts (the token-counting endpoint, needs a
       credential) for the four texts `tokens.test.ts` pins. PROGRESS backlog **173**.
+      **WP-83 (session 9) closed the ceiling half**: `MAX_CONTEXT_BUDGET_TOKENS` is **57 500** (was
+      200 000) — half the smallest 200 000-token window at the worst measured ratio, 100 000 × 260 / 452
+      rounded down — derived at the constant and re-run against the pinned counts in `tokens.test.ts`; a
+      stored value above it is refused by name (technical/12's migration note). **What is still owed**,
+      and it all needs a model credential (WP-33's): **(i)** the four pinned texts counted by the model's
+      own token-counting endpoint, so the 0.575 stops being a proxy's — the ceiling is derived from it and
+      moves with it; **(ii)** then a **script-aware divisor** (bytes per token by Unicode script class) or
+      counting at plan time, stated as a decision, so a Czech pack is counted honestly and an English one
+      keeps its budget; **(iii)** a property that fails when the Czech estimate falls **below** its real
+      count — the direction that overflows — which the ½–2× band does not (0.575 passes it); **(iv)**
+      whether half the window is the right share for the pack, which needs a real run's peak context
+      (system prompt + task block + turns) rather than the judgement the constant states. Until (i), the
+      run record's `total_tokens` still understates a Czech pack by ~1.74×.
 - [ ] **The platform never reads the ticket's text, so the first agent stage is given a key and a URL.**
       `tasks` stores `ticket_provider`/`ticket_key`/`ticket_url` (`0004`:6-8) and nothing else;
       `ticketRefSchema` is `{provider, key, url}`; `ticket.matched` carries no title; and

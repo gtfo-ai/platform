@@ -136,10 +136,12 @@ describe('buildQueryOptions', () => {
     expect(withMirror.sessionStoreFlush).toBe('eager');
   });
 
-  it('omits `agents` and `skills` rather than sending empty ones', () => {
-    const empty = buildQueryOptions(runSpecFixture(), parts());
+  it('omits empty `agents`, and sends `skills` even when it is empty', () => {
+    const empty = buildQueryOptions(runSpecFixture({ skills: [] }), parts());
     expect(empty.agents).toBeUndefined();
-    expect(empty.skills).toBeUndefined();
+    // WP-83 (backlog 149): an omitted list is the CLI's defaults — measured, a bundled skill then
+    // loads through the `Skill` tool — and the empty list is none.
+    expect(empty.skills).toEqual([]);
 
     const populated = buildQueryOptions(
       runSpecFixture({

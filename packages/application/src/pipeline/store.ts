@@ -880,6 +880,31 @@ export interface TakeOverRecord {
 export interface ReturnFeedback {
   readonly reason: string;
   readonly originalChars: number | null;
+  /**
+   * The artifact **the returning attempt produced**, when it produced one — which is the verdict
+   * that caused the return (WP-83, PROGRESS backlog 159's stale-artifact half).
+   *
+   * Read by link: the `ReviewVerdict` or `AcceptanceVerdict` (the only types a verdict returns a
+   * task by) whose `produced_by_run_id` is a run of the returning `task_stages` row
+   * (`runs.task_stage_id`), the highest version if an attempt had several runs; another artifact
+   * type the attempt produced is never the cause. So a review
+   * or acceptance return names its own `ReviewVerdict`/`AcceptanceVerdict` version, and a return
+   * that no artifact caused — a gate's (CI, the rebase, a protected path), a human's return or
+   * rework, the review window's threads — has **none**, because a gate produces nothing and a human
+   * return leaves the stage while its attempt has produced nothing (an attempt that produced its
+   * verdict has already left the stage). **Absent** rather than `null` when there is none, so a
+   * caller that reads only the reason is unchanged.
+   *
+   * The planner shows a returned stage this verdict and no other (`planner.ts`,
+   * `artifactsShownTo`).
+   */
+  readonly cause?: ReturnCause;
+}
+
+/** Which artifact caused a return: its type and version, which identify it on the task. */
+export interface ReturnCause {
+  readonly type: ArtifactType;
+  readonly version: number;
 }
 
 export interface StoredArtifact {

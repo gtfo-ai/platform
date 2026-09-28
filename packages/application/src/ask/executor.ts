@@ -67,7 +67,11 @@ import {
   startRunHeartbeat,
 } from '../pipeline/lease.js';
 import { injectedSecretRedactorFor } from '../pipeline/run-redaction.js';
-import { type ProjectSettings, repositoryConfigRefusal } from '../pipeline/settings.js';
+import {
+  contextBudgetRefusal,
+  type ProjectSettings,
+  repositoryConfigRefusal,
+} from '../pipeline/settings.js';
 import type { RunStopReasons } from '../pipeline/stop-reasons.js';
 import type { PipelineStore, StoredTask } from '../pipeline/store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
@@ -333,6 +337,11 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
     const repository = repositoryConfigRefusal(settings);
     if (repository !== null) {
       return { kind: 'refused', reason: repository };
+    }
+    // WP-83 (backlog 173): a budget above the ceiling refuses an ask as it refuses a stage.
+    const overBudget = contextBudgetRefusal(settings);
+    if (overBudget !== null) {
+      return { kind: 'refused', reason: overBudget };
     }
     if (askBudgetExhausted(task, settings, feature.budgetUsd)) {
       return {

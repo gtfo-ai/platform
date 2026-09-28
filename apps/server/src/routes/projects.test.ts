@@ -10,7 +10,11 @@
  * `created_at` is `now()`, so two tasks created in one transaction share the timestamp exactly, and
  * a cursor of the timestamp alone would silently skip whichever fell after a page boundary.
  */
-import { agenticConfigSchema, effectiveConfigResponseSchema } from '@platform/contracts';
+import {
+  agenticConfigSchema,
+  effectiveConfigResponseSchema,
+  MAX_CONTEXT_BUDGET_TOKENS,
+} from '@platform/contracts';
 import { redaction as redactionAdapters } from '@platform/infrastructure';
 import { describe, expect, it } from 'vitest';
 import { HttpError } from '../errors.js';
@@ -369,6 +373,53 @@ describe('the effective configuration’s layers (WP-63)', () => {
     expect((thrown as HttpError).code).toBe('invalid_repository_config');
     expect((thrown as Error).message).toContain('stages.refinement.max_turns');
     expect((thrown as Error).message).toContain(SHA);
+  });
+
+  /**
+   * WP-83 criterion 1 (backlog 173): the ceiling fell from 200 000 to 57 500, so a document a
+   * previous release stored can now be above it. The read refuses it **by name** — key and value —
+   * as backlog 58 made it refuse every other key a release stopped accepting; nothing is clamped.
+   */
+  it('refuses a stored context budget above the ceiling, naming the key and the value', () => {
+    let thrown: unknown;
+    try {
+      effectiveConfigResponseOf({
+        projectId: ID,
+        row: row({ version: 1, project: { context_budget_tokens: 200_000 } }),
+        layers: null,
+        redactText,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(HttpError);
+    expect((thrown as HttpError).statusCode).toBe(409);
+    expect((thrown as HttpError).code).toBe('invalid_stored_config');
+    expect((thrown as Error).message).toContain('project.context_budget_tokens');
+    expect((thrown as Error).message).toContain('200000');
+    // …and the other side of the boundary answers (rule 42).
+    const at = effectiveConfigResponseSchema.parse(
+      effectiveConfigResponseOf({
+        projectId: ID,
+        row: row({ version: 1, project: { context_budget_tokens: MAX_CONTEXT_BUDGET_TOKENS } }),
+        layers: null,
+        redactText,
+      }),
+    );
+    expect(at.effective.project?.context_budget_tokens).toBe(MAX_CONTEXT_BUDGET_TOKENS);
+  });
+
+  it('refuses a stored repository reading whose context budget is above the ceiling, by name', () => {
+    // A reading an older release stored as `valid` is re-validated on the read, so it answers the
+    // repository refusal with the key path rather than merging a value this release refuses.
+    expect(() =>
+      effectiveConfigResponseOf({
+        projectId: ID,
+        row: row(SETTINGS),
+        layers: repo('valid', { project: { context_budget_tokens: 200_000 } }),
+        redactText,
+      }),
+    ).toThrow(/project\.context_budget_tokens/);
   });
 
   it('refuses an organisation command maximum it cannot parse rather than reading none', () => {

@@ -84,6 +84,19 @@ export const ticketSchema = z.strictObject({
   priority: nonEmptyStringSchema.nullish(),
   labels: z.array(nonEmptyStringSchema),
   comments: z.array(ticketCommentSchema),
+  /**
+   * How many comments the ticket has **in all**, as the provider counts them, when it says — WP-83,
+   * PROGRESS backlog 290. `comments` may be a page (Jira's is the newest fifty,
+   * `READ_TICKET_COMMENT_PAGE`), so `comments.length` is not the thread's size, and a consumer that
+   * treated it as one would present a partial thread as a whole one. Never less than
+   * `comments.length`. **Absent or `null` means the provider did not say — which a consumer reads
+   * as "possibly more", never "no more"** (standing rule 16; `boundTicketSnapshot` sets
+   * `truncated`). An adapter that *knows* it returned the whole thread — it asked for a page and got
+   * fewer than it asked for — answers `comments.length` rather than `null` (WP-83 review round 2).
+   * Both shipped task-management adapters answer a number whenever they can (the fake with its whole
+   * thread, Jira with the page's `total`), which the shared contract suite asserts.
+   */
+  comment_total: z.int().nonnegative().nullish(),
   links: z.array(ticketLinkSchema),
   epic: ticketEpicSchema.nullish(),
   siblings: z.array(ticketSiblingSchema),

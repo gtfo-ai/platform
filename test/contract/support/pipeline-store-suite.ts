@@ -1431,6 +1431,105 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(await store.tasks.lastReturnReason(tx, id, 'implementation', 3)).toBeNull();
       });
 
+      /**
+       * WP-83 (backlog 159's stale-artifact half): the return names the artifact **the returning
+       * attempt produced**, by link — which is the verdict that caused it — and nothing for a return
+       * no artifact caused, however many verdicts the task carries.
+       */
+      it('names the artifact the returning attempt produced, and none for a return nothing produced', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const id = stored.task.id;
+        const runOf = async (stage: string, attempt: number, role: 'reviewer' | 'developer') => {
+          const runId = nextId();
+          await store.runs.insert(tx, {
+            id: runId,
+            taskId: id,
+            projectId,
+            stage,
+            role,
+            mode: 'normal',
+            attempt,
+            model: 'claude-opus-5',
+            effort: 'medium',
+            promptVersion: `basic@1+${role}`,
+            systemPrompt: null,
+            userPrompt: null,
+            redactionCount: 0,
+            contextPack: null,
+            status: 'running',
+            terminalReason: null,
+            sessionId: null,
+            numTurns: 0,
+            usage: null,
+            cost: null,
+            wallMs: 0,
+            createdAt: '2026-06-01T09:00:00.000Z',
+            startedAt: '2026-06-01T09:00:01.000Z',
+          });
+          return runId;
+        };
+        const verdict = async (
+          version: number,
+          runId: Id,
+          type: 'ReviewVerdict' | 'ImplementationNotes' = 'ReviewVerdict',
+        ) =>
+          store.artifacts.insert(tx, {
+            id: nextId(),
+            taskId: id,
+            type,
+            version,
+            markdown: null,
+            data: { verdict: 'request_changes', summary: `round ${version}`, findings: [] },
+            schemaVersion: '1',
+            producedByRunId: runId,
+            redactionCount: 0,
+            createdAt: '2026-06-01T09:00:02.000Z',
+          });
+
+        await enter(id, 'implementation', 1);
+        await complete(id, 'implementation', 1);
+        await enter(id, 'code_review', 1);
+        const reviewRun = await runOf('code_review', 1, 'reviewer');
+        await verdict(1, reviewRun);
+        // Review round 1: the same attempt also produced another type at a higher version, which
+        // is not a cause — the read is of verdicts only.
+        await verdict(5, reviewRun, 'ImplementationNotes');
+        await returnFrom(id, 'code_review', 1, 'implementation', '[summary] round 1');
+        await enter(id, 'implementation', 2);
+        expect(await store.tasks.lastReturnReason(tx, id, 'implementation', 2)).toEqual({
+          reason: '[summary] round 1',
+          originalChars: null,
+          cause: { type: 'ReviewVerdict', version: 1 },
+        });
+
+        // A CI return: the gate produced nothing, so the return names nothing — the review's
+        // verdict is still the task's latest `ReviewVerdict`, and it is not this return's cause.
+        await complete(id, 'implementation', 2);
+        await enter(id, 'ci_gate', 1);
+        await returnFrom(id, 'ci_gate', 1, 'implementation', 'pipeline p-2 failed: test:unit');
+        await enter(id, 'implementation', 3);
+        const ci = await store.tasks.lastReturnReason(tx, id, 'implementation', 3);
+        expect(ci).toEqual({ reason: 'pipeline p-2 failed: test:unit', originalChars: null });
+        expect(ci?.cause).toBeUndefined();
+
+        // A human's return from a review attempt that has produced nothing yet names nothing
+        // either, although an earlier attempt of the same stage did produce a verdict.
+        await complete(id, 'implementation', 3);
+        await enter(id, 'code_review', 2);
+        await runOf('code_review', 2, 'reviewer');
+        await returnFrom(id, 'code_review', 2, 'implementation', 'a human: split the PR');
+        await enter(id, 'implementation', 4);
+        expect(
+          (await store.tasks.lastReturnReason(tx, id, 'implementation', 4))?.cause,
+        ).toBeUndefined();
+        // …and the second attempt's question is still answered the way it was when it ran.
+        expect((await store.tasks.lastReturnReason(tx, id, 'implementation', 2))?.cause).toEqual({
+          type: 'ReviewVerdict',
+          version: 1,
+        });
+      });
+
       it('is never the reason an attempt failed with — that is an escalation, not feedback', async () => {
         const stored = task();
         await store.tasks.insert(tx, stored);

@@ -828,7 +828,7 @@ describe('the ticket block', () => {
     expect(block.attributes).toMatchObject({
       text: 'read',
       comments: '1',
-      comment_count: '42',
+      human_comments_read: '42',
       truncated: 'true',
     });
   });

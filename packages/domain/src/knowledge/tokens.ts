@@ -33,7 +33,9 @@
  * under-estimating, which is the direction that overflows a context window, and closing that needs
  * a real tokeniser rather than another constant. The honest reading of a budget today is *"about
  * this much, ±2×"*, and `MAX_CONTEXT_BUDGET_TOKENS` in `@platform/contracts` is what keeps the
- * consequence bounded.
+ * consequence bounded — since WP-83 it is **derived from the worst ratio measured below** (57 500:
+ * half the smallest 200 000-token window at 0.575 est/real), and `tokens.test.ts` re-runs that
+ * derivation against the pinned counts.
  *
  * **The measured worst case** (WP-58, PROGRESS backlog 14 — the interim the row names). Counted on
  * 2026-09-26 with `@anthropic-ai/tokenizer@0.0.4`, a tokeniser Anthropic published and **not**

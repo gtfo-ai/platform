@@ -317,11 +317,18 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
         return new Response(null, { status: 204 });
       }
       if (method === 'GET' && tail === 'comment') {
+        // Jira's documented page (`swagger-v3.v3.json`, retrieved 2026-09-28): `orderBy` is
+        // `created`, `+created` or `-created`, and `maxResults` (default 100) is the page size.
+        // Honoured, not ignored (standing rule 1): `readTicket` asks for the newest page since
+        // WP-83, and a replay that answered the oldest one in ascending order would hand the
+        // adapter's re-ordering the opposite of what Jira sends. Stored in creation order.
         const stored = comments.get(key) ?? [];
+        const maxResults = Number(query.maxResults ?? '100');
+        const ordered = query.orderBy === '-created' ? [...stored].reverse() : stored;
         return jsonResponse(200, {
-          comments: stored.map(clone),
+          comments: ordered.slice(0, maxResults).map(clone),
           startAt: 0,
-          maxResults: Number(query.maxResults ?? '100'),
+          maxResults,
           total: stored.length,
         });
       }

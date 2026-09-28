@@ -436,7 +436,10 @@ describe('context_budget_tokens', () => {
   const withBudget = (value: number) =>
     agenticConfigSchema.safeParse({ ...DOC_EXAMPLE, project: { context_budget_tokens: value } });
 
-  it('accepts a budget up to the smallest model context window', () => {
+  it('accepts a budget up to the ceiling', () => {
+    // 57 500 since WP-83 (backlog 173): the arithmetic is at the constant, and `tokens.test.ts` in
+    // `@platform/domain` re-runs it against the pinned counts.
+    expect(MAX_CONTEXT_BUDGET_TOKENS).toBe(57_500);
     expect(withBudget(MAX_CONTEXT_BUDGET_TOKENS).success).toBe(true);
     expect(withBudget(12_000).success).toBe(true);
     expect(withBudget(0).success).toBe(true);
@@ -447,6 +450,8 @@ describe('context_budget_tokens', () => {
     // this case and fail the one above.
     expect(withBudget(MAX_CONTEXT_BUDGET_TOKENS + 1).success).toBe(false);
     expect(withBudget(10_000_000).success).toBe(false);
+    // The value the ceiling was until WP-83: a document that carried it is now refused by name.
+    expect(withBudget(200_000).success).toBe(false);
     expect(withBudget(-1).success).toBe(false);
   });
 });

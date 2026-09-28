@@ -20,6 +20,7 @@ import {
   domainEventSchemasByType,
   type Id,
   MAX_ASK_CITATION_DETAIL_CHARS,
+  MAX_CONTEXT_BUDGET_TOKENS,
 } from '@platform/contracts';
 import {
   ASK_ROLE,
@@ -270,11 +271,12 @@ describe('an ask is a run with a task and no stage (criterion 1)', () => {
     await seedTask(harness);
     await askThroughHttp(harness);
     const askSpec = harness.specs.find((spec) => spec.role === ASK_ROLE);
-    expect(askSpec?.tools).toEqual([]);
+    // `Skill` alone since WP-83 (backlog 149): it loads `agentic:kb`, never a file of the tree.
+    expect(askSpec?.tools).toEqual(['Skill']);
     expect(askSpec?.platformTools).toEqual(['get_task_context', 'kb_search']);
     // Both directions: the stage run beside it *does* get file tools, so an empty list here is a
     // statement about the ask rather than about the harness.
-    expect(harness.specs.find((spec) => spec.stage === 'refinement')?.tools).not.toEqual([]);
+    expect(harness.specs.find((spec) => spec.stage === 'refinement')?.tools).toContain('Read');
   });
 
   it('writes an `AskAnswer` artifact the citation of an answer can resolve through', async () => {
@@ -917,6 +919,23 @@ describe('an ask that never runs', () => {
     expect(ask?.refusalReason).toContain('features.ask.budget_usd');
     expect(ask?.runId).toBeNull();
     expect(harness.store.snapshot()[0]?.task.state).toBe(state);
+  });
+
+  /** WP-83 (backlog 173): a stored budget above the ceiling refuses an ask by name, as it does a stage. */
+  it('is refused, naming the key and the value, while the context budget is above the ceiling', async () => {
+    const harness = harnessWith({
+      settings: { project: { context_budget_tokens: MAX_CONTEXT_BUDGET_TOKENS + 1 } },
+    });
+    await seedTask(harness);
+    const before = harness.specs.length;
+    await askThroughHttp(harness);
+    expect(harness.specs.slice(before).some((spec) => spec.role === ASK_ROLE)).toBe(false);
+    const [ask] = harness.asks.all();
+    expect(ask?.status).toBe('refused');
+    expect(ask?.refusalReason).toContain(
+      `project.context_budget_tokens is ${MAX_CONTEXT_BUDGET_TOKENS + 1}`,
+    );
+    expect(ask?.runId).toBeNull();
   });
 
   it('is skipped rather than run twice when the wake-up is delivered again', async () => {

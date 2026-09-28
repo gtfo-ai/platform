@@ -145,6 +145,7 @@ export const taskStageOutcomeWordSchema = z.enum([
   'write_conflict',
   'dead_lettered',
   'repository_config_invalid',
+  'context_budget_above_ceiling',
   'protected_paths_changed',
   'protected_paths_awaiting_review',
   'unknown',

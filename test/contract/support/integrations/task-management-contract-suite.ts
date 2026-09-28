@@ -145,6 +145,21 @@ export const runTaskManagementContract = (harness: TaskManagementContractHarness
         expect(parsed.labels).toContain(context.pickupLabel);
       });
 
+      /**
+       * WP-83, PROGRESS backlog 290 (rule 23: a port obligation lands in the shared suite). A port
+       * may answer a page of comments, so it reports the thread's size — never below what it
+       * returned — and every shipped adapter says it, so a consumer can tell a page from a thread.
+       * The count moves with a comment written through the port, which a constant would not.
+       */
+      it('reports the thread’s comment total, never below the comments it returned', async () => {
+        const before = await port.readTicket(context.ticket);
+        expect(typeof before.comment_total).toBe('number');
+        expect(before.comment_total ?? -1).toBeGreaterThanOrEqual(before.comments.length);
+        await port.addComment(context.ticket, 'a comment the total must count');
+        const after = await port.readTicket(context.ticket);
+        expect(after.comment_total).toBe((before.comment_total ?? 0) + 1);
+      });
+
       it('fails with not_found for a ticket that does not exist', async () => {
         await expectIntegrationError(
           () =>

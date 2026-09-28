@@ -136,7 +136,7 @@ describe('the ask run plan', () => {
     expect(spec.mode).toBe('ask');
     expect(spec.attempt).toBe(1);
     expect(spec.artifactType).toBe('AskAnswer');
-    expect(spec.tools).toEqual([]);
+    expect(spec.tools).toEqual(['Skill']);
     expect(spec.platformTools).toEqual(['get_task_context', 'kb_search']);
     expect(spec.skills).toEqual(['agentic:kb']);
   });

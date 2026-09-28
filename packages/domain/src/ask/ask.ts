@@ -53,8 +53,9 @@ export const DEFAULT_ASK_BUDGET_USD = 0.5;
  * or two sentences — product/10's example is *"why did you choose X?"* — and the longest useful
  * one is a paragraph, so 4 000 characters is roughly ten paragraphs. Above: the question is
  * rendered into a prompt beside a context pack whose own budget is
- * `DEFAULT_CONTEXT_BUDGET_TOKENS` (30 000 tokens ≈ 120 000 characters); at 4 000 it is about 3 %
- * of the pack, so a question can never crowd out the record it is asking about. It is also the
+ * `DEFAULT_CONTEXT_BUDGET_TOKENS` (12 000 estimated tokens ≈ 48 000 bytes of ASCII — this docblock
+ * said 30 000 until WP-83's review corrected it); at 4 000 it is about 8 % of the pack, so a
+ * question can never crowd out the record it is asking about. It is also the
  * fourth place the platform stores untrusted external text, after `inbox`, `kb_chunks` and
  * `tasks.ticket_snapshot`, and the smallest of the four — which is right for the one a stranger
  * can post into a ticket thread.

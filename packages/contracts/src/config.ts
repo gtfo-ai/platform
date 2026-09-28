@@ -43,25 +43,55 @@ import { customStageSchema } from './pipeline.js';
 // ── project ──────────────────────────────────────────────────────────────────
 
 /**
- * The ceiling on one run's context-pack budget.
+ * The ceiling on one run's context-pack budget — **57 500 estimated tokens since WP-83** (it was
+ * 200 000 from WP-17 until then).
  *
  * PROGRESS backlog 13: `tokenCountSchema` is `z.int().nonnegative()`, so a project could configure
  * a budget of any size and pay for the pack that filled it on **every stage run**. The bound is at
  * the boundary rather than in the assembler because a configuration that cannot be satisfied should
  * be refused where it is written, not silently clamped where it is spent.
  *
- * 200 000 is the smallest context window in the current Claude line-up — Haiku 4.5; Opus 5, Sonnet 5
- * and Fable 5.1 are 1 M ([models overview](https://platform.claude.com/docs/en/models/overview),
- * retrieved 2026-09-12). A pack larger than the **whole** window cannot fit whatever model a stage
- * is routed to, and the pack is only layers 4–5 of six. So this refuses the configurations that are
- * impossible rather than the ones that are merely expensive; the budget that a *sensible* operator
- * sets is a different question and product/05's 12 000 default is the platform's answer to it.
+ * ## The arithmetic (WP-83, PROGRESS backlog 173)
+ *
+ * A budget is denominated in `estimateTokens` (`@platform/domain`, `ceil(utf8Bytes / 4)`), and that
+ * estimator is **not an upper bound**: on the Czech text `tokens.test.ts` pins it reads 260 where a
+ * real byte-level tokeniser counted 452 — an estimate/real ratio of **0.575**, the worst of the four
+ * texts measured (WP-58; the tokeniser is `@anthropic-ai/tokenizer@0.0.4`, a proxy, **not** claimed
+ * to be the current models'). The old ceiling was therefore 200 000 / 0.575 ≈ **347 826** real
+ * tokens on a Czech vault, past the whole window it was meant to fit.
+ *
+ *  1. **The window**: 200 000 tokens, the smallest in the current Claude line-up — Haiku 4.5; Opus 5,
+ *     Sonnet 5 and Fable 5.1 are 1 M ([models overview](https://platform.claude.com/docs/en/models/overview),
+ *     retrieved 2026-09-12). A stage can be routed to any of them.
+ *  2. **The pack's share: half of it, 100 000 real tokens.** The pack is layers 4–5 of six; the
+ *     same window holds the CLI's system prompt, the role prompt, the ticket snapshot (up to 45 632
+ *     characters), each prior artifact (up to 20 000 characters), the return feedback (8 000), and
+ *     every turn the run then takes — each tool result stays in context until compaction. The half
+ *     is a judgement, not a measurement, and it is stated as one.
+ *  3. **In estimated tokens**: 100 000 × 0.575 = **57 500** — the exact figure is 100 000 × 260 / 452
+ *     = 57 522, rounded down to the hundred. `tokens.test.ts` recomputes it from the pinned counts
+ *     and fails if this constant's worst-case real size passes 100 000.
+ *
+ * What this does **not** settle: the ratio is a proxy's. The model's own counts (the token-counting
+ * API, with a credential) and a script-aware divisor are still owed — `docs/TODO.md`, backlog 173.
+ * A pack that fits this ceiling on English prose (≈ 1.25 est/real) is ~46 000 real tokens, so the
+ * cost of the lower ceiling falls on English budgets above 57 500, which the shipped default of
+ * 12 000 (product/05) is nowhere near.
+ *
+ * **A stored configuration above it is refused by name, never clamped**: `GET …/config` answers
+ * `409 invalid_stored_config` with the key and the value (PROGRESS backlog 58's shape), and a run of
+ * such a project is refused at admission (`contextBudgetRefusal` in `@platform/application`) —
+ * technical/12 has the migration note.
  *
  * `tokenCountSchema` itself is deliberately left unbounded: it also types `runs.input_tokens` and
  * the transcript's compaction counts, which are *reports* of what happened rather than *requests*,
  * and a reported number that exceeds a bound is a number to record, not to reject (rule 20).
  */
-export const MAX_CONTEXT_BUDGET_TOKENS = 200_000;
+const SMALLEST_CONTEXT_WINDOW_TOKENS = 200_000;
+/** 260 / 452 = 0.5752 on the pinned Czech text, in thousandths and rounded down. */
+const WORST_MEASURED_ESTIMATE_PER_REAL_MILLI = 575;
+export const MAX_CONTEXT_BUDGET_TOKENS =
+  ((SMALLEST_CONTEXT_WINDOW_TOKENS / 2) * WORST_MEASURED_ESTIMATE_PER_REAL_MILLI) / 1_000;
 
 export const contextBudgetTokensSchema = tokenCountSchema.max(MAX_CONTEXT_BUDGET_TOKENS);
 

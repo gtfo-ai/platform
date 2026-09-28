@@ -1,3 +1,4 @@
+import { MAX_CONTEXT_BUDGET_TOKENS } from '@platform/contracts';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { MODEL_RUNS, PROPERTY_TEST_TIMEOUT_MS } from '../testing/property.js';
@@ -168,5 +169,27 @@ describe('estimateTokens against a real tokeniser (WP-58, backlog 14)', () => {
     const czech = MEASURED['czech'] as (typeof MEASURED)[string];
     expect(estimateTokens(czech.text)).toBe(260);
     expect(czech.tokens).toBe(452);
+  });
+
+  /**
+   * WP-83, PROGRESS backlog 173: the context-budget ceiling in `@platform/contracts` is derived from
+   * the worst ratio this table measured, and this is where the derivation is re-run against the
+   * pinned counts rather than trusted — half of the smallest 200 000-token window, in real tokens,
+   * at the worst measured sample's estimate/real ratio. A ceiling raised past that, or a sample
+   * re-counted worse, fails here by name.
+   */
+  it('holds the context-budget ceiling to half the smallest window at the worst measured ratio', () => {
+    const worst = Object.values(MEASURED)
+      .map((sample) => ({ estimate: estimateTokens(sample.text), real: sample.tokens }))
+      .sort((a, b) => a.estimate / a.real - b.estimate / b.real)[0] as {
+      estimate: number;
+      real: number;
+    };
+    expect(worst).toEqual({ estimate: 260, real: 452 });
+    const realAtCeiling = (MAX_CONTEXT_BUDGET_TOKENS * worst.real) / worst.estimate;
+    expect(realAtCeiling).toBeLessThanOrEqual(200_000 / 2);
+    // …and not so far under it that the ceiling was lowered for no stated reason: within the
+    // rounding the constant's docblock admits (57 522 → 57 500).
+    expect(realAtCeiling).toBeGreaterThan(200_000 / 2 - 100);
   });
 });

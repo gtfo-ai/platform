@@ -75,6 +75,10 @@ const ticket = (overrides: Partial<Ticket> = {}): Ticket => ({
   reporter: null,
   updated_at: '2026-06-02T09:00:00.000Z',
   ...overrides,
+  // The whole thread, unless a case says otherwise — an absent total is "possibly more" since
+  // WP-83 review round 2, so a case about something else must not inherit a cut.
+  comment_total:
+    'comment_total' in overrides ? overrides.comment_total : (overrides.comments ?? []).length,
 });
 
 describe('the snapshot a ticket is bounded into', () => {
@@ -154,6 +158,44 @@ describe('the snapshot a ticket is bounded into', () => {
     // a human wrote, so `truncated` stays false.
     expect(snapshot.comment_count).toBe(1);
     expect(snapshot.truncated).toBe(false);
+  });
+
+  /**
+   * WP-83 review round 1, PROGRESS backlog 290: a port may answer a page. On a 300-comment ticket
+   * whose newest fifty hold twelve human comments, the snapshot used to store `comment_count: 12`
+   * with no `truncated` — a positive claim that nothing was dropped while 250 were never read.
+   * Both sides of the boundary (rule 42): a page that *is* the whole thread is not a cut.
+   */
+  it('declares a thread the provider answered only a page of, or did not size, and counts only what it read', () => {
+    const page = Array.from({ length: 50 }, (_unused, index) =>
+      comment({
+        id: `c${index}`,
+        created_at: new Date(Date.UTC(2026, 5, 1, 9, index)).toISOString(),
+        ...(index < 12 ? {} : { marker_id: `agentic:task:${index}` }),
+      }),
+    );
+    const cut = boundTicketSnapshot(
+      ticket({ comments: page, comment_total: 300 }),
+      noSecretsRedactor(),
+    );
+    expect(cut.comments).toHaveLength(12);
+    expect(cut.comment_count).toBe(12);
+    expect(cut.truncated).toBe(true);
+
+    const whole = boundTicketSnapshot(
+      ticket({ comments: page, comment_total: 50 }),
+      noSecretsRedactor(),
+    );
+    expect(whole.truncated).toBe(false);
+    // A provider that does not say is "possibly more", never "no more" (review round 2, rule 16):
+    // absent and `null` are both declared as a cut.
+    for (const unsaid of [undefined, null]) {
+      const snapshot = boundTicketSnapshot(
+        ticket({ comments: page, comment_total: unsaid }),
+        noSecretsRedactor(),
+      );
+      expect(snapshot.truncated, String(unsaid)).toBe(true);
+    }
   });
 
   it('answers null for a timestamp it cannot read, rather than inventing one', () => {

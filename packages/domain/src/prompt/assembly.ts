@@ -643,7 +643,7 @@ const derivedNameAttribute = (name: string, value: string): Record<string, strin
  *
  * | attribute | kind | on refusal |
  * |---|---|---|
- * | `tier`, `tokens`, `version`, `original_chars`, `comments`, `comment_count`, `files`, `file_count`, `items`, `item_count` | platform integers | cannot refuse |
+ * | `tier`, `tokens`, `version`, `original_chars`, `comments`, `human_comments_read`, `files`, `file_count`, `items`, `item_count` | platform integers | cannot refuse |
  * | `reason`, `artifact_type`, `truncated`, `text`, `kind` | platform vocabulary (a closed enum or a literal) | **throws** — a platform bug |
  * | `file` | derived from an untrusted vault path by a total fold | degrades |
  * | `path` | an untrusted vault path | degrades |
@@ -715,7 +715,11 @@ const ticketBlock = (task: PromptTask): DataBlock => {
     attributes: {
       text: 'read',
       comments: snapshot.comments.length,
-      comment_count: snapshot.comment_count,
+      // WP-83 review round 2: named for what it is — the human comments the platform read, which
+      // on a paged provider is not the ticket's count (`truncated` says the thread was longer). The
+      // snapshot field keeps its stored name, `comment_count`; only the platform's marker words
+      // changed, and no role prompt names the attribute.
+      human_comments_read: snapshot.comment_count,
       ...(snapshot.truncated ? { truncated: 'true' } : {}),
     },
     body: [

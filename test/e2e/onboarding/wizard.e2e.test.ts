@@ -477,7 +477,8 @@ describe('the onboarding wizard', () => {
      * **not** there is any way to keep what the shell produced: no `Write`, no `Edit`, and no
      * mutating platform tool.
      */
-    expect(run?.spec.tools).toEqual(['Read', 'Glob', 'Grep', 'Bash']);
+    // `Skill` since WP-83 (PROGRESS backlog 149): it loads `agentic:kb` and keeps nothing.
+    expect(run?.spec.tools).toEqual(['Read', 'Glob', 'Grep', 'Bash', 'Skill']);
     expect(run?.spec.tools).not.toContain('Write');
     expect(run?.spec.platformTools).not.toContain('open_mr');
     // The policy that bounds the shell, as the platform ships it since WP-54 (Q69 (ii)): the read
