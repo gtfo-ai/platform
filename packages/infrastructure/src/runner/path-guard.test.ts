@@ -1,17 +1,29 @@
+import type { ExistingProtectedPaths } from '@platform/application';
+import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import { parseTrackedListing, trackedListingLine } from '../workspace/tracked.js';
 import {
   FLAGGED_CONFIG_PATHS,
   guardWriteContent,
   guardWritePath,
   matchesPathPattern,
+  protectedPathExistence,
   writeContentsOf,
   writeTargetOf,
 } from './path-guard.js';
+
+/**
+ * The cases written before WP-99 run against an **unlisted** checkout — which counts every protected
+ * path as existing, the guard's behaviour before the listing existed — so each of them still says
+ * what it said (the fail-closed direction is the old behaviour, by design).
+ */
+const UNLISTED: ExistingProtectedPaths = { state: 'unlisted', reason: 'a unit fixture' };
 
 const config = {
   workspacePath: '/workspace/task-1',
   protectedPaths: ['infra/**', 'db/migrations/**', 'Dockerfile'],
   plannedProtectedPaths: [] as string[],
+  existingProtectedPaths: UNLISTED,
 };
 
 describe('the path glob', () => {
@@ -197,7 +209,9 @@ describe('guardWritePath', () => {
   it('denies a protected path spelled in a different case (BD-024 has no container backstop)', () => {
     const verdict = guardWritePath('INFRA/main.tf', config);
     expect(verdict.decision).toBe('deny');
-    expect(verdict.reason).toContain('the approved plan does not list it');
+    expect(verdict.reason).toContain(
+      "this task's Implementation Plan declares no protected_path_changes",
+    );
   });
 
   it('denies `.ENV` when `.env` is protected', () => {
@@ -227,7 +241,9 @@ describe('guardWritePath', () => {
   it('denies a protected path the plan does not list (BD-024)', () => {
     const verdict = guardWritePath('infra/modules/vpc/main.tf', config);
     expect(verdict.decision).toBe('deny');
-    expect(verdict.reason).toContain('the approved plan does not list it');
+    expect(verdict.reason).toContain(
+      "this task's Implementation Plan declares no protected_path_changes",
+    );
   });
 
   /**
@@ -267,6 +283,165 @@ describe('guardWritePath', () => {
     expect(verdict.decision).toBe('deny');
     expect(verdict.reason).toContain('outside the task workspace');
     expect(verdict.reason).not.toContain('protected path');
+  });
+});
+
+/**
+ * WP-99 (PROGRESS backlog 279): the guard holds a write to BD-024 §2 as amended at WP-81 — the CI
+ * gate's `changedExistingPaths` policy. A new protected file is allowed; an existing one needs the
+ * plan's entry; anything the listing cannot vouch for counts as existing.
+ */
+describe('guardWritePath — new and existing protected files (WP-99)', () => {
+  const listed = (
+    paths: readonly string[],
+    opaque: readonly string[] = [],
+  ): ExistingProtectedPaths => ({ state: 'listed', paths: [...paths], opaque: [...opaque] });
+  const tests = {
+    workspacePath: '/work/repo',
+    protectedPaths: ['**/*.test.*', '.claude/**', '.gitlab-ci.yml'],
+    plannedProtectedPaths: [] as string[],
+    existingProtectedPaths: listed(['src/totals.test.ts', '.gitlab-ci.yml']),
+  };
+
+  it('allows a new file under a protected pattern, which the checkout does not track', () => {
+    const verdict = guardWritePath('/work/repo/src/discount.test.ts', tests);
+    expect(verdict).toEqual({
+      decision: 'allow',
+      reason: '',
+      relativePath: 'src/discount.test.ts',
+    });
+  });
+
+  it('denies an existing protected file the plan does not declare, with the BD-024 reason', () => {
+    const verdict = guardWritePath('/work/repo/src/totals.test.ts', tests);
+    expect(verdict.decision).toBe('deny');
+    expect(verdict.reason).toContain('matches the protected path "**/*.test.*"');
+    expect(verdict.reason).toContain('it exists at the merge base with the default branch');
+    expect(verdict.reason).toContain(
+      "this task's Implementation Plan declares no protected_path_changes",
+    );
+    expect(verdict.reason).toContain('(BD-024)');
+    expect(verdict.reason).toContain('a new file under a protected path needs none');
+    // Rule 83: no plan was approved by anybody, and the reason no longer says one was.
+    expect(verdict.reason).not.toContain('approved');
+  });
+
+  it('allows an existing protected file a planned pattern matches', () => {
+    const verdict = guardWritePath('/work/repo/src/totals.test.ts', {
+      ...tests,
+      plannedProtectedPaths: ['src/totals.test.ts'],
+    });
+    expect(verdict.decision).toBe('allow');
+  });
+
+  it('names the plan’s entries when it has some and none matches', () => {
+    const verdict = guardWritePath('/work/repo/.gitlab-ci.yml', {
+      ...tests,
+      plannedProtectedPaths: ['src/totals.test.ts'],
+    });
+    expect(verdict.decision).toBe('deny');
+    expect(verdict.reason).toContain(
+      "none of the latest Implementation Plan's protected_path_changes matches it",
+    );
+  });
+
+  it('denies the new file when the listing was truncated, because nothing it lacks is known to be new', () => {
+    // A listing whose trailer counts more entries than arrived — a log cut short — is unlisted.
+    const truncated = parseTrackedListing(
+      `${trackedListingLine({ path: 'src/totals.test.ts', mode: '100644' })}\n@@agentic-tracked head\n@@agentic-tracked end 2 0\n`,
+      tests.protectedPaths,
+    );
+    expect(truncated.state).toBe('unlisted');
+    const verdict = guardWritePath('/work/repo/src/discount.test.ts', {
+      ...tests,
+      existingProtectedPaths: truncated,
+    });
+    expect(verdict.decision).toBe('deny');
+    expect(verdict.reason).toContain(
+      'could not list which files exist at the merge base with the default branch',
+    );
+    expect(verdict.reason).toContain('has 1 entries where git counted 2');
+  });
+
+  it('counts a case or normalisation variant of an existing file as existing (the fold)', () => {
+    expect(guardWritePath('SRC/Totals.TEST.ts', tests).decision).toBe('deny');
+    // `ﬁ` (U+FB01) folds to `fi` on APFS and here: the tracked name, spelled another way.
+    expect(
+      guardWritePath('src/total\uFB01le.test.ts', {
+        ...tests,
+        existingProtectedPaths: listed(['src/totalfile.test.ts']),
+      }).decision,
+    ).toBe('deny');
+  });
+
+  /**
+   * Review round 1: the **listing** side is folded too. Git lists the repository's own spelling,
+   * which need not be the one the model writes; on a folding volume `src/totals.test.ts` is the
+   * tracked `Src/Totals.test.ts`. Every other listed fixture here is already in folded form, which
+   * is why a listing set built without the fold survived the round-1 canary.
+   */
+  it('folds the listing as well as the target, so a tracked spelling in another case exists', () => {
+    const cased = {
+      ...tests,
+      existingProtectedPaths: listed(['Src/Totals.test.ts'], ['Lib']),
+    };
+    const verdict = guardWritePath('src/totals.test.ts', cased);
+    expect(verdict.decision).toBe('deny');
+    expect(verdict.reason).toContain('it exists at the merge base with the default branch');
+    const through = guardWritePath('lib/new.test.ts', cased);
+    expect(through.decision).toBe('deny');
+    expect(through.reason).toContain('at or under "Lib"');
+  });
+
+  it('counts a target at or under a tracked symlink or submodule as existing', () => {
+    const linked = { ...tests, existingProtectedPaths: listed([], ['lib', 'vendor/sub']) };
+    const through = guardWritePath('lib/new.test.ts', linked);
+    expect(through.decision).toBe('deny');
+    expect(through.reason).toContain(
+      'at or under "lib", a symlink or submodule at the merge base with the default branch',
+    );
+    expect(guardWritePath('vendor/sub/x.test.ts', linked).decision).toBe('deny');
+    expect(guardWritePath('LIB/new.test.ts', linked).decision).toBe('deny');
+    // Only a path segment is a prefix: `library/` is not under `lib`.
+    expect(guardWritePath('library/new.test.ts', linked).decision).toBe('allow');
+  });
+
+  it('still flags a new agent-configuration file under a protected path, and allows it', () => {
+    const verdict = guardWritePath('.claude/commands/new.md', tests);
+    expect(verdict.decision).toBe('flag');
+  });
+
+  it('leaves a path no protected pattern matches alone, whatever the listing says', () => {
+    expect(
+      guardWritePath('src/totals.ts', { ...tests, existingProtectedPaths: UNLISTED }).decision,
+    ).toBe('allow');
+  });
+
+  it('never allows an undeclared write to a listed path, in any spelling the fold unifies', () => {
+    fc.assert(
+      fc.property(
+        fc.array(fc.stringMatching(/^[a-z]{1,6}$/), { minLength: 1, maxLength: 3 }),
+        fc.boolean(),
+        (segments, upper) => {
+          const tracked = `${segments.join('/')}.test.ts`;
+          const target = upper ? tracked.toUpperCase() : tracked;
+          const verdict = guardWritePath(target, {
+            ...tests,
+            existingProtectedPaths: listed([tracked]),
+          });
+          return verdict.decision === 'deny';
+        },
+      ),
+    );
+  });
+
+  it('answers "exists" for every path when the listing is unlisted', () => {
+    fc.assert(
+      fc.property(
+        fc.stringMatching(/^[a-z]{1,8}(\/[a-z]{1,8}){0,3}$/),
+        (path) => protectedPathExistence(path, UNLISTED).exists,
+      ),
+    );
   });
 });
 

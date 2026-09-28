@@ -1404,3 +1404,85 @@ describe('the review checklists a run is given (WP-45)', () => {
     expect(withList.spec.promptVersion).toBe(without.spec.promptVersion);
   });
 });
+
+/**
+ * WP-99 criterion (3): the latest ImplementationPlan's `protected_path_changes[].path` reaches the
+ * run spec, through the CI gate's own reader; no plan, or an unparsable latest one, reaches `[]`;
+ * and the listing of what exists is `unlisted` until a workspace answers it.
+ */
+describe('the plan’s protected-path declarations in the run spec (WP-99)', () => {
+  const planArtifact = (sequence: number, data: unknown) => ({
+    id: `00000000-0000-4000-8000-0000000009${String(sequence).padStart(2, '0')}`,
+    taskId: TASK,
+    type: 'ImplementationPlan',
+    version: sequence,
+    markdown: null,
+    data,
+    schemaVersion: '1',
+    producedByRunId: null,
+  });
+  const validPlan = (declared: readonly string[]) => ({
+    approach: 'a',
+    alternatives_considered: [],
+    affected_modules: [],
+    files_to_change: [],
+    data_changes: [],
+    api_changes: [],
+    validation_contract: [],
+    test_plan: [],
+    rollout_notes: '',
+    risks: [],
+    estimated_size: 'S',
+    decisions_to_record: [],
+    protected_path_changes: declared.map((path) => ({
+      path,
+      reason: 'the test pins old behaviour',
+    })),
+  });
+  const planFor = async (artifacts: readonly unknown[]) => {
+    const { store } = await indexedFixtureVault();
+    const planner = createStageRunPlanner({
+      workspacePath: (taskId) => `/workspaces/${taskId}`,
+      prompts: prompts as never,
+      skills: testSkills,
+      boundSkills: async () => [],
+      nonce: { next: () => NONCE },
+      contextPacks: createContextPackAssembler({ store, logger: silentLogger }),
+      headPaths: (projectId) => store.readPathWitnesses(projectId),
+      clock: { now: () => NOW },
+    });
+    return planner.plan({
+      ...implementationRequestNaming([]),
+      artifacts,
+    } as unknown as StageRunRequest);
+  };
+
+  it('carries the latest plan’s declared paths, not an older plan’s', async () => {
+    const plan = await planFor([
+      planArtifact(1, validPlan(['tests/old.test.ts'])),
+      planArtifact(2, validPlan(['src/totals.test.ts', '.gitlab-ci.yml'])),
+    ]);
+    expect(plan.spec.plannedProtectedPaths).toEqual(['src/totals.test.ts', '.gitlab-ci.yml']);
+  });
+
+  it('carries nothing for a task with no plan', async () => {
+    expect((await planFor([])).spec.plannedProtectedPaths).toEqual([]);
+  });
+
+  it('carries nothing when the latest plan does not parse, rather than falling back to an older one', async () => {
+    const plan = await planFor([
+      planArtifact(1, validPlan(['tests/old.test.ts'])),
+      planArtifact(2, { approach: 'a plan from an older schema' }),
+    ]);
+    expect(plan.spec.plannedProtectedPaths).toEqual([]);
+  });
+
+  it('plans the listing of existing paths as unlisted, which counts every protected path as existing', async () => {
+    const plan = await planFor([]);
+    expect(plan.spec.existingProtectedPaths).toMatchObject({
+      state: 'unlisted',
+      reason: /not been provisioned/,
+    });
+    expect(plan.spec.protectedPaths.length).toBeGreaterThan(0);
+  });
+});

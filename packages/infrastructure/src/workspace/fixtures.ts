@@ -98,6 +98,8 @@ export const workspaceSpecFixture = (
   // wrong about. `ask-human` and `kb` are the pair every non-triager role gets.
   skills: overrides.skills ?? ['ask-human', 'kb'],
   readOnly: overrides.readOnly ?? false,
+  // WP-99: a test file and a CI file, so a listing case has one pattern of each shape.
+  protectedPaths: overrides.protectedPaths ?? ['**/*.test.*', '.gitlab-ci.yml'],
   env: (overrides.env as Record<string, string> | undefined) ?? { CI: 'true' },
   keepUntil: overrides.keepUntil ?? '2026-09-13T00:00:00.000Z',
 });
@@ -114,6 +116,7 @@ export const repoLessWorkspaceSpecFixture = (
     egress: { hosts: ['api.anthropic.com'], connectPorts: [443] },
     skills: ['kb'],
     readOnly: true,
+    protectedPaths: [],
     ...overrides,
   }),
   repo: null,

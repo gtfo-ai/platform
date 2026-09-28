@@ -4,8 +4,11 @@
  * > path guard (workspace only; `.agentic/`, `.claude/`, `CLAUDE.md` writes flagged; secrets
  * > patterns in content denied).
  *
- * plus BD-024's protected paths, which technical/04 puts on the `Bash` hook in the same words:
- * "blocks writes outside the workspace and protected paths … unless the plan lists them".
+ * plus BD-024's protected paths, held to the policy the CI gate holds the branch to (technical/04's
+ * WP-99 amendment): a write that **creates** a protected path is allowed, and a write to one that
+ * **exists** at the merge base of the checkout and the default branch is allowed only when a pattern of the latest ImplementationPlan's
+ * `protected_path_changes` matches it. "Exists" is the launcher's listing
+ * ({@link protectedPathExistence}), because this process cannot look.
  *
  * **This is the second line, not the first.** The container is: TD-021 mounts the workspace as the
  * only writable tree, so a write outside it fails on the filesystem whether or not this hook runs.
@@ -19,13 +22,17 @@
  * therefore passes this guard and is stopped by the mount. Written down rather than implied.
  *
  * **Protected paths have no such backstop.** The workspace *is* writable, so for BD-024's
- * `protected_paths` this guard is the whole enforcement rather than a second line, and everything
- * below is written for that: a path is compared in a folded form (see {@link matchesPathPattern})
- * because the filesystem underneath decides which names are the same file, and it is not the one
- * asking.
+ * `protected_paths` this guard is the whole enforcement **at write time** rather than a second line
+ * — the CI gate's tamper check (WP-81) judges what reached the branch, after the fact — and
+ * everything below is written for that: a path is compared in a folded form (see
+ * {@link matchesPathPattern}) because the filesystem underneath decides which names are the same
+ * file, and it is not the one asking. A symlink or submodule **tracked** at that merge base is known
+ * from the listing and makes a target at or under it count as existing; a symlink the run makes
+ * itself is not, and the verbs that can make one without an `ask` are in the WP-99 notes.
  */
 
 import path from 'node:path';
+import type { ExistingProtectedPaths } from '@platform/application';
 import { pathPatternToRegExp } from '@platform/domain';
 import { detectSecrets } from '../redaction/pattern-redaction.js';
 
@@ -175,8 +182,76 @@ const firstMatch = (patterns: readonly string[], relativePath: string): string |
 export interface PathGuardConfig {
   readonly workspacePath: string;
   readonly protectedPaths: readonly string[];
+  /** The latest ImplementationPlan's `protected_path_changes[].path` (WP-99). */
   readonly plannedProtectedPaths: readonly string[];
+  /** Which protected paths exist at the merge base with the default branch; `unlisted` counts every one as existing. */
+  readonly existingProtectedPaths: ExistingProtectedPaths;
 }
+
+/** Whether a protected write target exists at the merge base, and the words that say why. */
+export type ProtectedPathExistence =
+  | { readonly exists: false }
+  | { readonly exists: true; readonly why: string };
+
+/** A listing's folded sets, built once per listing object rather than once per tool call. */
+const foldedListings = new WeakMap<
+  object,
+  { readonly paths: ReadonlySet<string>; readonly opaque: ReadonlyMap<string, string> }
+>();
+
+const foldedListingOf = (
+  listing: Extract<ExistingProtectedPaths, { state: 'listed' }>,
+): { readonly paths: ReadonlySet<string>; readonly opaque: ReadonlyMap<string, string> } => {
+  const cached = foldedListings.get(listing);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const folded = {
+    paths: new Set(listing.paths.map(foldForMatch)),
+    opaque: new Map(listing.opaque.map((entry) => [foldForMatch(entry), entry] as const)),
+  };
+  foldedListings.set(listing, folded);
+  return folded;
+};
+
+/**
+ * Does `relativePath` exist at the merge base with the default branch? technical/04's WP-99 amendment, read fail closed:
+ *
+ *  - an `unlisted` listing — nothing listed yet, a listing that failed or passed a bound — says
+ *    **yes** for every path, which is the guard's behaviour before WP-99;
+ *  - a path that **is, or lies under**, a tracked symlink or submodule says yes: the write lands
+ *    where the link points, which this process cannot resolve (the module docblock's `realpath`);
+ *  - otherwise, yes exactly when the listing tracks the path.
+ *
+ * Every comparison is in the **folded** form, so a case or normalisation variant of an existing
+ * file exists — on a folding volume a write to `SRC/A.TEST.TS` overwrites `src/a.test.ts`, and a
+ * narrower answer would call that overwrite a new file (the fail-open direction).
+ */
+export const protectedPathExistence = (
+  relativePath: string,
+  listing: ExistingProtectedPaths,
+): ProtectedPathExistence => {
+  if (listing.state === 'unlisted') {
+    return {
+      exists: true,
+      why: `the platform could not list which files exist at the merge base with the default branch (${listing.reason}), so it is treated as existing`,
+    };
+  }
+  const folded = foldedListingOf(listing);
+  const segments = foldForMatch(relativePath).split('/');
+  for (let depth = 1; depth <= segments.length; depth += 1) {
+    const through = folded.opaque.get(segments.slice(0, depth).join('/'));
+    if (through !== undefined) {
+      return {
+        exists: true,
+        why: `it is at or under "${through}", a symlink or submodule at the merge base with the default branch, so it is treated as existing`,
+      };
+    }
+  }
+  return folded.paths.has(foldForMatch(relativePath))
+    ? { exists: true, why: 'it exists at the merge base with the default branch' }
+    : { exists: false };
+};
 
 /**
  * Judges one write target.
@@ -216,15 +291,23 @@ export const guardWritePath = (target: string, config: PathGuardConfig): PathVer
   }
   const relativePath = relative.split(path.sep).join('/');
 
+  // BD-024 §2 as amended at WP-81, the CI gate's `changedExistingPaths` (WP-99): a write that
+  // creates a protected path is allowed; one that changes an existing file needs the plan's entry.
   const protectedPattern = firstMatch(config.protectedPaths, relativePath);
   if (protectedPattern !== undefined) {
-    const planned = firstMatch(config.plannedProtectedPaths, relativePath);
-    if (planned === undefined) {
+    const existence = protectedPathExistence(relativePath, config.existingProtectedPaths);
+    if (existence.exists && firstMatch(config.plannedProtectedPaths, relativePath) === undefined) {
+      const declared =
+        config.plannedProtectedPaths.length === 0
+          ? "this task's Implementation Plan declares no protected_path_changes"
+          : "none of the latest Implementation Plan's protected_path_changes matches it";
       return {
         decision: 'deny',
         reason:
-          `"${relativePath}" matches the protected path "${protectedPattern}" and the approved ` +
-          'plan does not list it (BD-024). Propose the change in the plan and have it approved first.',
+          `"${relativePath}" matches the protected path "${protectedPattern}", ${existence.why}, ` +
+          `and ${declared} (BD-024). Changing or deleting an existing protected file needs a ` +
+          'declared entry, which the Code review confirms; a new file under a protected path ' +
+          'needs none. Add a new file instead, or ask a human through ask_human if this one must change.',
         relativePath,
       };
     }

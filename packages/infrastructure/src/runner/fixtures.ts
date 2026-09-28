@@ -63,6 +63,7 @@ export const runSpecFixture = (overrides: Partial<RunSpec> = {}): RunSpec =>
     },
     protectedPaths: ['infra/**', 'db/migrations/**'],
     plannedProtectedPaths: [],
+    existingProtectedPaths: { state: 'unlisted', reason: 'a unit fixture: nothing was listed' },
     agents: {},
     mcpServers: {},
     skills: [],

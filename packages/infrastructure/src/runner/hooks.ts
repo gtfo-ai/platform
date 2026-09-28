@@ -164,6 +164,7 @@ const writeHook =
       workspacePath: runtime.spec.workspacePath,
       protectedPaths: runtime.spec.protectedPaths,
       plannedProtectedPaths: runtime.spec.plannedProtectedPaths,
+      existingProtectedPaths: runtime.spec.existingProtectedPaths,
     });
     if (pathVerdict.decision === 'deny') {
       await record('deny', pathVerdict.reason);

@@ -12,6 +12,7 @@
 import type { SpawnedProcess, SpawnOptions } from '@anthropic-ai/claude-agent-sdk';
 import type {
   ClaudeRunner,
+  ExistingProtectedPaths,
   RunHandle,
   RunOutcome,
   RunSpec,
@@ -216,6 +217,32 @@ describe('the run is executed in the workspace’s own working directory', () =>
     // And everything else is the spec the planner built, unchanged.
     expect(world.startedWith[0]?.userPrompt).toBe(spec.userPrompt);
     expect(world.provisioned[0]?.workspacePath).toBe('/workspaces/task-22222222');
+  });
+
+  /** WP-99: the launcher's listing reaches the spec the runner starts, beside `workspacePath`. */
+  it('substitutes the workspace’s listing of existing protected paths, and keeps the planned one when it has none', async () => {
+    const listing: ExistingProtectedPaths = {
+      state: 'listed',
+      paths: ['src/totals.test.ts'],
+      opaque: [],
+    };
+    const spawn = (_options: SpawnOptions): SpawnedProcess => ({}) as SpawnedProcess;
+    const listed = harness({
+      provision: async () => ({
+        workdir: WORKDIR,
+        existingProtectedPaths: listing,
+        spawn,
+        release: async () => {},
+      }),
+    });
+    const spec = runSpecFixture();
+    await listed.runner.start(spec).outcome;
+    expect(listed.startedWith[0]?.existingProtectedPaths).toEqual(listing);
+    expect(listed.provisioned[0]?.existingProtectedPaths.state).toBe('unlisted');
+
+    const silent = harness({});
+    await silent.runner.start(spec).outcome;
+    expect(silent.startedWith[0]?.existingProtectedPaths).toEqual(spec.existingProtectedPaths);
   });
 });
 

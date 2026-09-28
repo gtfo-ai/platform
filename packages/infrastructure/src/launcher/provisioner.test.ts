@@ -90,6 +90,11 @@ const clientWith = (
           },
           claudeCodePath: overrides.claudeCodePath ?? '/usr/local/bin/claude',
           credentialScope: payload.credential?.scope ?? null,
+          existingProtectedPaths: {
+            state: 'listed',
+            paths: ['src/totals.test.ts'],
+            opaque: [],
+          },
           replayed: false,
         };
       },

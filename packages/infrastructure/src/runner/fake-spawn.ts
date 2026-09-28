@@ -27,7 +27,7 @@
  * | 1 | A stdin frame before `initialize` throws. The real CLI accepts frames in any order. | **stricter** | The adapter always initialises first; a change that stopped doing so would silently lose the hook registration. Asserted by `rejects a stdin frame that arrives before initialize`. |
  * | 2 | A `hook` step naming an event with no registered callback throws. The real CLI would simply never call it. | **stricter** | Turns "the adapter stopped registering `PostToolUse`" from a silently passing fixture into a failure. Asserted by `throws when the script fires a hook the runner did not register`. |
  * | 3 | A script that ends without `exit` or `stall` throws. A real process can just die. | **stricter** | A fixture that runs off the end is a malformed fixture, and the failure it would otherwise produce (`crash`) looks exactly like a legitimate scenario. |
- * | 4 | A `hook` step does not *act* on its verdict: a `deny` from `PreToolUse` is recorded, not enforced, and the script continues as written. **The `bash` step does** (WP-54): it runs the command only when the platform allowed it — directly, or through `canUseTool` after an `ask` — exactly as the CLI does, and a denied command is never executed. | **different** (the `hook` step) | For the `hook` step the subject under test is the platform's verdict, and the recorded verdicts are asserted positively (`records the deny the command policy returned`). The `bash` step exists because a fake that runs nothing is how PROGRESS backlog 49 survived every tier: its effect is something the *command* produced (a file, an exit status), never the verdict string. |
+ * | 4 | A `hook` step does not *act* on its verdict: a `deny` from `PreToolUse` is recorded, not enforced, and the script continues as written. **The `bash` step does** (WP-54): it runs the command only when the platform allowed it — directly, or through `canUseTool` after an `ask` — exactly as the CLI does, and a denied command is never executed. **So does the `write` step** (WP-99): a `Write` or `Edit` changes the host file only when the write hook allowed it (`fake-spawn.test.ts` › "writes an allowed file under the workdir and leaves a denied one unwritten"). | **different** (the `hook` step) | For the `hook` step the subject under test is the platform's verdict, and the recorded verdicts are asserted positively (`records the deny the command policy returned`). The `bash` step exists because a fake that runs nothing is how PROGRESS backlog 49 survived every tier: its effect is something the *command* produced (a file, an exit status), never the verdict string. |
  * | 7 | The `bash` step runs the command with `/bin/sh -c` in a **host** directory standing in for the container's `/work/repo`, with the test process's `PATH`. The CLI runs it in the run container. | **different** | What this seam can prove is that the platform's policy lets a declared command through and stops an undeclared one, and that the command's own output reaches the transcript. The container, its user and its egress are `test/e2e/workspace/docker-workspace.e2e.test.ts`'s. A script with a `bash` step and no `workdir` throws (**stricter**) rather than running in the test's own directory. |
  * | 5 | `kill(signal)` records the signal and resolves `exit` with it; it does not terminate anything. | **different** | There is no process. `killed`, `exitCode` and the `exit` event follow the `SpawnedProcess` contract, which is what the SDK reads. |
  * | 6 | No stdout backpressure: every scripted line is written immediately. | **kinder** | A real CLI writing 100 MB of tool output would block on the pipe. Nothing in the adapter reads `stdout` directly — the SDK owns that stream — so there is no platform behaviour behind this. The size limit that *is* the platform's (`toolOutputMaxChars`) is tested through the `PostToolUse` hook, in `truncates tool output past the cap`, which does not need backpressure to be reached. |
@@ -40,6 +40,8 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { SpawnedProcess, SpawnOptions } from '@anthropic-ai/claude-agent-sdk';
 import * as z from 'zod';
@@ -76,6 +78,22 @@ export const fakeCliStepSchema = z.discriminatedUnion('step', [
    * only when — the platform allowed it, `PostToolUse`, and the `tool_result` the model reads.
    */
   z.strictObject({ step: z.literal('bash'), command: z.string(), tool_use_id: z.string() }),
+  /**
+   * One `Write` or `Edit` call, played the way the CLI plays it (WP-99): the assistant's `tool_use`,
+   * the `PreToolUse` write hook, **the write itself** when — and only when — the platform allowed
+   * it, `PostToolUse`, and the `tool_result`. `Write` puts `content` in the file; `Edit` replaces
+   * `old_string` with `new_string` in a file that must exist, as the CLI's tool does.
+   */
+  z.strictObject({
+    step: z.literal('write'),
+    tool_name: z.enum(['Write', 'Edit']),
+    /** The path the tool call names, as the model would — under the container's workdir. */
+    file_path: z.string(),
+    content: z.string().optional(),
+    old_string: z.string().optional(),
+    new_string: z.string().optional(),
+    tool_use_id: z.string(),
+  }),
   z.strictObject({ step: z.literal('stderr'), text: z.string() }),
   /** Stop producing output and never exit — what a hung CLI looks like from outside. */
   z.strictObject({ step: z.literal('stall') }),
@@ -99,13 +117,29 @@ export interface FakeCliExecution {
   readonly output: string;
 }
 
+/** A `write` step as it happened: what the platform decided, and whether the bytes landed. */
+export interface FakeCliWrite {
+  readonly toolUseId: string;
+  readonly toolName: 'Write' | 'Edit';
+  readonly filePath: string;
+  /** The `PreToolUse` write hook's verdict; anything but `allow` is a deny (stricter). */
+  readonly decision: 'allow' | 'deny';
+  /** `true` only when the platform allowed it and the file was written. */
+  readonly landed: boolean;
+}
+
 export interface FakeCliOptions {
   /**
-   * The host directory a `bash` step runs in, standing in for the container's `/work/repo`.
-   * Required by a script with a `bash` step: running in the test process's own directory would be
-   * a command nobody chose the directory for.
+   * The host directory a `bash` or `write` step acts in, standing in for the container's
+   * `/work/repo`. Required by a script with either step: acting in the test process's own
+   * directory would be a directory nobody chose.
    */
   readonly workdir?: string;
+  /**
+   * The container path `workdir` stands in for — what a `write` step's `file_path` is under.
+   * Defaults to TD-021's `/work/repo`.
+   */
+  readonly containerWorkdir?: string;
   /** Bound on one command's wall clock. */
   readonly commandTimeoutMs?: number;
 }
@@ -130,6 +164,8 @@ export interface FakeCli {
   readonly signals: readonly string[];
   /** Every `bash` step, in order: the decision and, when it ran, the command's own result. */
   readonly executions: readonly FakeCliExecution[];
+  /** Every `write` step, in order: the decision and whether the file was written. */
+  readonly writes: readonly FakeCliWrite[];
   /** Resolves when the script has finished (or thrown). */
   readonly finished: Promise<void>;
 }
@@ -166,7 +202,11 @@ export const fakeSpawnClaudeCodeProcess = (
   if (script.some((step) => step.step === 'bash') && options.workdir === undefined) {
     throw new FakeCliError('a script with a `bash` step needs a workdir to run the command in');
   }
+  if (script.some((step) => step.step === 'write') && options.workdir === undefined) {
+    throw new FakeCliError('a script with a `write` step needs a workdir to write in');
+  }
   const executions: FakeCliExecution[] = [];
+  const writes: FakeCliWrite[] = [];
   const stdinFrames: Record<string, unknown>[] = [];
   const callbacks: RecordedCallback[] = [];
   const signals: string[] = [];
@@ -374,6 +414,117 @@ export const fakeSpawnClaudeCodeProcess = (
     };
   };
 
+  /** The host file a `write` step's container path stands for; refuses one outside the workdir. */
+  const hostPathOf = (filePath: string): string => {
+    const container = options.containerWorkdir ?? '/work/repo';
+    const relative = path.posix.relative(container, path.posix.resolve(container, filePath));
+    if (relative.length === 0 || relative.startsWith('..') || path.posix.isAbsolute(relative)) {
+      throw new FakeCliError(`a write step names ${filePath}, which is outside ${container}`);
+    }
+    return path.join(options.workdir as string, ...relative.split('/'));
+  };
+
+  /** Applies an allowed write to the host file; an error is the tool's error, as in the CLI. */
+  const applyWrite = async (
+    step: Extract<FakeCliStep, { step: 'write' }>,
+  ): Promise<{ readonly landed: boolean; readonly text: string }> => {
+    const target = hostPathOf(step.file_path);
+    if (step.tool_name === 'Write') {
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, step.content ?? '');
+      return { landed: true, text: `File created successfully at: ${step.file_path}` };
+    }
+    const before = await readFile(target, 'utf8').catch(() => null);
+    if (before === null || !before.includes(step.old_string ?? '')) {
+      return { landed: false, text: `String to replace not found in file ${step.file_path}` };
+    }
+    await writeFile(target, before.replace(step.old_string ?? '', step.new_string ?? ''));
+    return { landed: true, text: `The file ${step.file_path} has been updated.` };
+  };
+
+  const playWrite = async (
+    step: Extract<FakeCliStep, { step: 'write' }>,
+  ): Promise<FakeCliWrite> => {
+    const input: Record<string, unknown> =
+      step.tool_name === 'Write'
+        ? { file_path: step.file_path, content: step.content ?? '' }
+        : {
+            file_path: step.file_path,
+            old_string: step.old_string ?? '',
+            new_string: step.new_string ?? '',
+          };
+    write({
+      type: 'assistant',
+      message: {
+        id: `msg_${step.tool_use_id}`,
+        type: 'message',
+        role: 'assistant',
+        model,
+        content: [{ type: 'tool_use', id: step.tool_use_id, name: step.tool_name, input }],
+        stop_reason: 'tool_use',
+        stop_sequence: null,
+        usage: { input_tokens: 10, output_tokens: 10 },
+      },
+      parent_tool_use_id: null,
+      uuid: randomUUID(),
+      session_id: sessionId,
+    });
+    const response = (await fireHook(
+      'PreToolUse',
+      step.tool_name,
+      { tool_name: step.tool_name, tool_input: input, tool_use_id: step.tool_use_id },
+      step.tool_use_id,
+    )) as {
+      hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string };
+    };
+    const decision =
+      response?.hookSpecificOutput?.permissionDecision === 'allow' ? 'allow' : 'deny';
+    const applied =
+      decision === 'allow'
+        ? await applyWrite(step)
+        : {
+            landed: false,
+            text: response?.hookSpecificOutput?.permissionDecisionReason ?? 'denied by a hook',
+          };
+    if (decision === 'allow') {
+      await fireHook(
+        'PostToolUse',
+        step.tool_name,
+        {
+          tool_name: step.tool_name,
+          tool_input: input,
+          tool_response: applied.text,
+          tool_use_id: step.tool_use_id,
+        },
+        step.tool_use_id,
+      );
+    }
+    write({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: step.tool_use_id,
+            is_error: !applied.landed,
+            content: applied.text,
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+      uuid: randomUUID(),
+      session_id: sessionId,
+    });
+    return {
+      toolUseId: step.tool_use_id,
+      toolName: step.tool_name,
+      filePath: step.file_path,
+      decision,
+      landed: applied.landed,
+    };
+  };
+
   const play = async (): Promise<void> => {
     for (const step of script) {
       switch (step.step) {
@@ -382,6 +533,9 @@ export const fakeSpawnClaudeCodeProcess = (
           break;
         case 'bash':
           executions.push(await playBash(step.command, step.tool_use_id));
+          break;
+        case 'write':
+          writes.push(await playWrite(step));
           break;
         case 'stderr':
           // The SDK reads stderr from the process it spawned; a custom SpawnedProcess has no
@@ -577,6 +731,9 @@ export const fakeSpawnClaudeCodeProcess = (
     },
     get executions() {
       return executions;
+    },
+    get writes() {
+      return writes;
     },
     spawn: (options: SpawnOptions): SpawnedProcess => {
       if (spawnOptions !== null) {

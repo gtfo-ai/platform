@@ -41,6 +41,7 @@ import {
   usdSchema,
 } from '@platform/contracts';
 import * as z from 'zod';
+import { existingProtectedPathsSchema } from './workspace.js';
 
 // ── Time ─────────────────────────────────────────────────────────────────────
 
@@ -201,12 +202,22 @@ export const runSpecSchema = z.strictObject({
   platformTools: z.array(platformToolNameSchema),
   commandPolicy: runCommandPolicySchema,
   /**
-   * Paths a task may not write to unless its plan lists them (BD-024). The plan's exceptions
-   * arrive in `plannedProtectedPaths`, so the guard can say "not in the plan" rather than
-   * "forbidden".
+   * BD-024's protected paths (technical/04's WP-99 amendment). A write that **creates** one is
+   * allowed; a write to one that **exists** at the merge base with the default branch (`existingProtectedPaths`) is
+   * allowed only when a pattern of `plannedProtectedPaths` matches it.
    */
   protectedPaths: z.array(pathPatternSchema),
+  /**
+   * The latest ImplementationPlan's `protected_path_changes[].path` — the planner reads them through
+   * the CI gate's own `exceptionsOf`, and an absent or unparsable plan gives `[]`.
+   */
   plannedProtectedPaths: z.array(pathPatternSchema),
+  /**
+   * Which protected paths exist at the merge base of the checkout and the default branch. The planner writes `unlisted` (nothing is
+   * listed before there is a workspace, and `unlisted` fails closed); the workspace runner
+   * substitutes the launcher's listing beside `workspacePath`.
+   */
+  existingProtectedPaths: existingProtectedPathsSchema,
   agents: z.record(nonEmptyStringSchema, runSubagentSchema),
   /** Opaque per-provider MCP configuration (technical/06); passed to the SDK unread. */
   mcpServers: z.record(nonEmptyStringSchema, jsonObjectSchema),

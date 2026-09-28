@@ -54,6 +54,7 @@ const specFixture = (overrides: Partial<RunSpec> = {}): RunSpec =>
     },
     protectedPaths: [],
     plannedProtectedPaths: [],
+    existingProtectedPaths: { state: 'unlisted', reason: 'a unit fixture' },
     agents: {},
     mcpServers: {},
     skills: [],

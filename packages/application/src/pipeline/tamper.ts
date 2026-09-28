@@ -22,10 +22,10 @@
  *    modified, and a file whose two names differ without a rename flag counts under both. Read
  *    through the one coalesced diff read every other duty at that revision shares
  *    (`diff-coalescer.ts`, WP-59), so the gate costs no second download within the window.
- *    **A divergence, stated:** the workspace's path guard (`path-guard.ts`) refuses a **new** file
- *    under a protected path unless the plan lists it, so at write time an addition is held to more
- *    than this gate holds the branch to. The two policies disagree; this row did not change the
- *    guard's (PROGRESS, WP-81 round 1, discovered work).
+ *    **The same policy at write time** (WP-99): the workspace's path guard (`path-guard.ts`) allows
+ *    a write that creates a protected path and holds a write to an existing one to the plan's
+ *    declaration, read through {@link exceptionsOf} below — so the guard and this gate cannot read
+ *    two different plans. Until WP-99 the guard refused a new file too (PROGRESS backlog 279).
  *  - **The effective protected paths** (`effectiveProtectedPaths`, the planner's own list).
  *  - **The declared and confirmed exceptions**: the latest Implementation Plan's
  *    `protected_path_changes[].path`, of which a path is excused only when the latest Review

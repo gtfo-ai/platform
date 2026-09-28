@@ -19,7 +19,13 @@
  * the model. Those meet each other once, against a daemon, in
  * `node scripts/runlet-launcher-check.mjs`, which is not a `verify` target because it needs Docker.
  */
-import { RUN_CREDENTIAL_TTL_SECONDS, type RunSpec } from '@platform/application';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import {
+  type ExistingProtectedPaths,
+  RUN_CREDENTIAL_TTL_SECONDS,
+  type RunSpec,
+} from '@platform/application';
 import {
   type launcher as launcherAdapters,
   runner as runnerAdapters,
@@ -115,6 +121,43 @@ export interface ScenarioBash {
   readonly workdir: string;
 }
 
+/**
+ * `Write`/`Edit` calls a scripted run makes, and the fixture repository they land in (WP-99).
+ *
+ * The repository is a **git** repository the test committed, because the harness stands in for the
+ * launcher here as well: it lists what exists at the merge base with the launcher's own script and parser
+ * (`workspace.trackedListingScript`, `workspace.parseTrackedListing`) and hands the result to the
+ * runner on the provisioned workspace, exactly where the launcher's create response puts it. Each
+ * call goes through the production `PreToolUse` write hook and lands only if the platform allowed
+ * it (`fake-spawn.ts`, divergence 4), so a test asserts what is on disk.
+ */
+export interface ScenarioWrites {
+  readonly steps: readonly {
+    readonly tool_name: 'Write' | 'Edit';
+    /** Under the container's `/work/repo`, as the model would name it. */
+    readonly file_path: string;
+    readonly content?: string;
+    readonly old_string?: string;
+    readonly new_string?: string;
+  }[];
+  readonly workdir: string;
+}
+
+/** The launcher's listing, taken off a host checkout with the launcher's own script and parser. */
+const listCheckout = async (
+  workdir: string,
+  patterns: readonly string[],
+): Promise<ExistingProtectedPaths> => {
+  // The fixture is checked out at its default branch, as a first run is, so the merge base the
+  // launcher computes against `origin/<default>` is its own `HEAD`.
+  const { stdout } = await promisify(execFile)(
+    '/bin/sh',
+    ['-c', workspaceAdapters.trackedListingScript(workdir)],
+    { env: { ...process.env, BASE_REF: 'HEAD' } },
+  );
+  return workspaceAdapters.parseTrackedListing(stdout, patterns);
+};
+
 /** The model a sub-agent uses in the scripted result; cheap and different from the run's own. */
 export const SUBAGENT_MODEL = 'claude-haiku-4-5';
 
@@ -137,6 +180,8 @@ export const fakeCliScriptFor = (
     readonly awaitSteers?: number;
     /** Bash tool calls this run makes after reading its prompt (WP-54) — see {@link ScenarioBash}. */
     readonly bash?: ScenarioBash;
+    /** Write/Edit calls this run makes after its Bash calls (WP-99) — see {@link ScenarioWrites}. */
+    readonly writes?: ScenarioWrites;
   },
 ): runnerAdapters.FakeCliScript => {
   const stage = spec.stage ?? 'stage';
@@ -170,6 +215,12 @@ export const fakeCliScriptFor = (
       step: 'bash' as const,
       command,
       tool_use_id: `toolu_${stage}_${String(index + 1)}`,
+    })),
+    // WP-99: the Write/Edit calls, each through the real write hook and — when allowed — written.
+    ...(scenario.writes?.steps ?? []).map((write, index) => ({
+      step: 'write' as const,
+      ...write,
+      tool_use_id: `toolu_${stage}_w${String(index + 1)}`,
     })),
     {
       step: 'emit',
@@ -275,6 +326,7 @@ export const scriptedWorkspaces = (
     readonly costUsd?: number;
     readonly awaitSteers?: number;
     readonly bash?: ScenarioBash;
+    readonly writes?: ScenarioWrites;
   },
   /**
    * Called — and **awaited** — inside `provision`, before the CLI exists.
@@ -295,12 +347,20 @@ export const scriptedWorkspaces = (
         const stage = spec.stage ?? '';
         await onSpec?.(spec);
         const scenario = scenarioFor(stage, spec);
+        const workdir = scenario.writes?.workdir ?? scenario.bash?.workdir;
         const cli = runnerAdapters.fakeSpawnClaudeCodeProcess(
           fakeCliScriptFor(spec, scenario),
-          scenario.bash === undefined ? {} : { workdir: scenario.bash.workdir },
+          workdir === undefined ? {} : { workdir },
         );
         runs.push({ stage, spec, cli });
+        // WP-99: what the launcher answers on create — the checkout's listing — for a scenario that
+        // has a checkout on disk; every other run keeps the planner's fail-closed `unlisted`.
+        const existingProtectedPaths =
+          scenario.writes === undefined
+            ? undefined
+            : await listCheckout(scenario.writes.workdir, spec.protectedPaths);
         return {
+          ...(existingProtectedPaths === undefined ? {} : { existingProtectedPaths }),
           workdir: workspaceAdapters.WORKSPACE_WORKDIR,
           spawn: cli.spawn,
           release: async (ending) => {

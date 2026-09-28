@@ -174,6 +174,56 @@ export const runWorkspaceProviderContractSuite = (
       }
     });
 
+    /**
+     * WP-99: which protected paths the checkout tracks, asked of both implementations. Both fixture
+     * clones track `README.md` and no test file, so a pattern for each is one hit and one miss —
+     * with only a hit, a listing that returned every path it was asked about would pass.
+     */
+    it('lists the tracked files a protected pattern matches, and no file it does not', async () => {
+      await withRun(async ({ provider, handle }) => {
+        const listing = await provider.listExistingProtectedPaths(handle, {
+          patterns: ['README.md', '**/*.test.*'],
+          defaultBranch: 'main',
+        });
+        expect(listing.state).toBe('listed');
+        if (listing.state === 'listed') {
+          expect(listing.paths).toEqual(['README.md']);
+          expect(listing.opaque).toEqual([]);
+        }
+      });
+    });
+
+    it('answers unlisted, never a guess, for no protected paths, no default branch or no checkout', async () => {
+      await withRun(async ({ provider, handle }) => {
+        expect(
+          (
+            await provider.listExistingProtectedPaths(handle, {
+              patterns: [],
+              defaultBranch: 'main',
+            })
+          ).state,
+        ).toBe('unlisted');
+        expect(
+          await provider.listExistingProtectedPaths(handle, {
+            patterns: ['README.md'],
+            defaultBranch: null,
+          }),
+        ).toMatchObject({ state: 'unlisted', reason: /no default branch/ });
+      });
+      const harness = await context.provider();
+      try {
+        const handle = await harness.provider.create({ ...harness.spec, repo: null, skills: [] });
+        const listing = await harness.provider.listExistingProtectedPaths(handle, {
+          patterns: ['README.md'],
+          defaultBranch: 'main',
+        });
+        expect(listing).toMatchObject({ state: 'unlisted', reason: /no checkout/ });
+        await harness.provider.destroy(handle);
+      } finally {
+        await harness.cleanup();
+      }
+    });
+
     /** WP-74 criterion (6): the path that reads the repository refuses by name, before any helper. */
     it('refuses to export a workspace that has no checkout, by name', async () => {
       const harness = await context.provider();

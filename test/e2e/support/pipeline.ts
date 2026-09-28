@@ -96,6 +96,7 @@ import {
   mintingProvisioner,
   PLANTED_MODEL_KEY,
   type ScenarioBash,
+  type ScenarioWrites,
   scriptedWorkspaces,
   type WorkspaceRelease,
 } from './agent-workspace.js';
@@ -143,6 +144,11 @@ export interface ScenarioSpec {
    * backlog 49 survived every tier.
    */
   readonly bash?: ScenarioBash;
+  /**
+   * Write/Edit calls the scripted CLI makes, and the git fixture repository they land in (WP-99).
+   * Only meaningful in `real-over-fake-cli` mode, for the same reason as `bash`.
+   */
+  readonly writes?: ScenarioWrites;
 }
 
 const transcriptFor = (runId: Id, at: string, text: string): TranscriptEvent[] => [

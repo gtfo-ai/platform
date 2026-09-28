@@ -206,6 +206,15 @@ describe('the credential a run gets', () => {
 });
 
 describe('the rest of the spec', () => {
+  /** WP-99: the launcher lists existence against the run's own protected patterns. */
+  it('carries the run’s protected patterns for a checkout, and none for a run with no checkout', () => {
+    expect(build().protectedPaths).toEqual(['infra/**', 'db/migrations/**']);
+    expect(
+      build({ spec: runSpecFixture({ role: 'ask', tools: [...TOOLS_BY_ROLE.ask] }) })
+        .protectedPaths,
+    ).toEqual([]);
+  });
+
   it('carries TD-021’s limits and `runc`, and a project cannot change either', () => {
     // There is no key in `.agentic/config.yml` for any of these (Q62), so BD-025's
     // narrow-never-widen rule holds by construction rather than by a merge.

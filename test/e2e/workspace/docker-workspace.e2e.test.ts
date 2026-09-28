@@ -180,6 +180,39 @@ describe('the workspace lifecycle against a real daemon', () => {
     }
   }, 180_000);
 
+  /**
+   * WP-99 review round 1, against the real helper: a **re-entry** checks out the task branch, which
+   * carries a file `main` does not ({@link FIXTURE_TASK_BRANCH_FILE}). "Existing" is the tree at the
+   * merge base with the default branch — what the merge request's diff is computed against — so the
+   * file the task added is **not** listed, while `README.md`, on `main`, is. With the checkout's own
+   * index both would be listed and the rule would differ from the CI gate's.
+   */
+  it('lists what exists at the merge base, so a file the task branch added reads as new (WP-99)', async () => {
+    const spec = specFor({ repo: { checkoutBranch: FIXTURE_TASK_BRANCH } });
+    await fixture.provider.updateMirror({
+      projectId: spec.projectId,
+      repo: spec.repo,
+      credential: null,
+    });
+    const handle = await fixture.provider.create(spec);
+    try {
+      const listing = await fixture.provider.listExistingProtectedPaths(handle, {
+        patterns: [FIXTURE_TASK_BRANCH_FILE, 'README.md'],
+        defaultBranch: 'main',
+      });
+      expect(listing).toEqual({ state: 'listed', paths: ['README.md'], opaque: [] });
+      // A default branch the clone has no ref for: no merge base, so the answer fails closed.
+      expect(
+        await fixture.provider.listExistingProtectedPaths(handle, {
+          patterns: ['README.md'],
+          defaultBranch: 'no-such-branch',
+        }),
+      ).toMatchObject({ state: 'unlisted', reason: /merge base/ });
+    } finally {
+      await fixture.provider.destroy(handle);
+    }
+  }, 180_000);
+
   it('creates a task branch that is not on the remote, at the default branch’s head', async () => {
     // The `||`'s second half, which is what a task's **first** run takes: the branch does not exist
     // yet, so the clone creates it rather than failing — the behaviour backlog 71 asks the change to
@@ -2346,6 +2379,8 @@ runWorkspaceProviderContractSuite('DockerWorkspaceProvider', {
           return handle;
         },
         attach: (handle) => fixture.provider.attach(handle),
+        listExistingProtectedPaths: (handle, request) =>
+          fixture.provider.listExistingProtectedPaths(handle, request),
         kill: (handle) => fixture.provider.kill(handle),
         destroy: (handle) => fixture.provider.destroy(handle),
         export: (handle, request, credential) =>

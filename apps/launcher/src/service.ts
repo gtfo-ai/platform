@@ -44,6 +44,7 @@
  */
 import path from 'node:path';
 import type {
+  ExistingProtectedPaths,
   Logger,
   PurgeReport,
   RunnerClock,
@@ -55,7 +56,7 @@ import type {
   WorkspaceProvider,
   WorkspaceSpec,
 } from '@platform/application';
-import { WorkspaceError } from '@platform/application';
+import { unlistedProtectedPaths, WorkspaceError } from '@platform/application';
 import type { workspace } from '@platform/infrastructure';
 import { sweepExportDirectory } from './export-retention.js';
 
@@ -76,6 +77,11 @@ export interface StartedRun {
    */
   readonly credential: WorkspaceGitCredential | null;
   readonly credentialScope: workspace.RunCredentialScope | null;
+  /**
+   * Which of the spec's protected paths exist at the merge base with the default branch (WP-99) — `unlisted`, never a thrown
+   * start, when it could not be listed: the path guard then counts every protected path as existing.
+   */
+  readonly existingProtectedPaths: ExistingProtectedPaths;
 }
 
 export interface EndRunRequest {
@@ -173,6 +179,8 @@ export class LauncherService {
       }
       handle = await provider.create(spec);
       const attachment = await provider.attach(handle);
+      // After `create`, before the runner starts the CLI: the index nothing has touched (WP-99).
+      const existingProtectedPaths = await this.#listProtected(handle, spec);
       logger.info(
         {
           run_id: spec.runId,
@@ -181,7 +189,13 @@ export class LauncherService {
         },
         'workspace started',
       );
-      return { handle, attachment, credential: held, credentialScope: credential?.scope ?? null };
+      return {
+        handle,
+        attachment,
+        credential: held,
+        credentialScope: credential?.scope ?? null,
+        existingProtectedPaths,
+      };
     } catch (error) {
       // Forgotten here; **revoked by the runner**, which sees this create fail and owns the
       // credential it minted (decision 5). The launcher can no longer hand it to anything.
@@ -190,6 +204,31 @@ export class LauncherService {
         await this.#destroyQuietly(handle);
       }
       throw error;
+    }
+  }
+
+  /**
+   * The provider's listing, with its contract enforced here as well: a provider that throws anyway
+   * is an `unlisted` answer, never a failed start. Failing closed at the guard is the whole cost.
+   */
+  async #listProtected(
+    handle: WorkspaceHandle,
+    spec: WorkspaceSpec,
+  ): Promise<ExistingProtectedPaths> {
+    try {
+      return await this.#options.provider.listExistingProtectedPaths(handle, {
+        patterns: spec.protectedPaths,
+        // WP-99 round 1: "existing" is tracked at the merge base with the default branch.
+        defaultBranch: spec.repo?.defaultBranch ?? null,
+      });
+    } catch (error) {
+      this.#options.logger.warn(
+        { run_id: handle.runId, error: describe(error) },
+        'the tracked-path listing threw; every protected path counts as existing for this run (WP-99)',
+      );
+      return unlistedProtectedPaths(
+        `the tracked-path listing threw: ${describe(error)}`.slice(0, 500),
+      );
     }
   }
 

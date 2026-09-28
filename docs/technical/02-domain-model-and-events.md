@@ -123,8 +123,8 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > one coalesced diff read WP-59 made (`diff-coalescer.ts`). An **added** file is not flagged
 > (BD-024 §2: *"modifications or deletions of existing tests and of CI/lint configuration"*; §3
 > requires a bug fix to add a test — the orchestrator's WP-81 ruling), and a missing status reads as
-> modified (fail closed). This diverges from the workspace's path guard, which refuses a new file
-> under a protected path unless the plan lists it; the project's **effective protected paths**
+> modified (fail closed). The workspace's path guard holds a write to the same policy since WP-99
+> (technical/04's WP-99 amendment; until then it refused a new file too); the project's **effective protected paths**
 > (`policies.protected_paths`, tests and CI/lint configuration by default); and the latest
 > Implementation Plan's declared **`protected_path_changes`**, of which a path is excused only when
 > the Code review also **confirmed** it (`ReviewVerdict.protected_path_changes_confirmed`). The

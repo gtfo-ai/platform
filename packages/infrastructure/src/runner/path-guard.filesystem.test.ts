@@ -341,10 +341,13 @@ describe('the fold against the volume it is folding for', () => {
       // And what the guard answers — the same on every volume. Where the volume merged the two
       // names this is the safety property; where it kept them apart it is the false deny that buys
       // it, and the agent gets a reason string it can act on.
+      // WP-99: the canonical file is *listed* as existing, so what this asserts is that existence
+      // composes with the fold — a variant the volume merges with a tracked file is that file.
       const decision = guardWritePath(variant, {
         workspacePath: workspace,
         protectedPaths: [pattern],
         plannedProtectedPaths: [],
+        existingProtectedPaths: { state: 'listed', paths: [canonical], opaque: [] },
       });
       expect(decision.decision).toBe(verdict);
       if (verdict === 'deny') {
@@ -380,7 +383,11 @@ describe('the fold against the volume it is folding for', () => {
     expect(entriesOf(workspace)).toEqual([name]);
     expect(fs.existsSync(path.join(workspace, split))).toBe(false);
 
-    const config = { workspacePath: workspace, plannedProtectedPaths: [] as string[] };
+    const config = {
+      workspacePath: workspace,
+      plannedProtectedPaths: [] as string[],
+      existingProtectedPaths: { state: 'unlisted', reason: 'a unit fixture' } as const,
+    };
     // It is a `.ts` file directly in the protected directory, so `*.ts` covers it.
     expect(guardWritePath(name, { ...config, protectedPaths: ['*.ts'] }).decision).toBe('deny');
     // And it is not the same file as the split spelling, which the guard does not pretend either.
@@ -398,7 +405,11 @@ describe('the fold against the volume it is folding for', () => {
     expect([...entriesOf(workspace)].sort()).toEqual(['a\uFF0Fb.ts', 'ab.ts'].sort());
     expect(fs.readFileSync(path.join(workspace, 'ab.ts'), 'utf8')).toBe('canonical');
 
-    const config = { workspacePath: workspace, plannedProtectedPaths: [] as string[] };
+    const config = {
+      workspacePath: workspace,
+      plannedProtectedPaths: [] as string[],
+      existingProtectedPaths: { state: 'unlisted', reason: 'a unit fixture' } as const,
+    };
     expect(guardWritePath('a\uFF0Fb.ts', { ...config, protectedPaths: ['ab.ts'] }).decision).toBe(
       'allow',
     );

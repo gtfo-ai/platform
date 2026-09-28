@@ -280,6 +280,10 @@ export const buildWorkspaceSpec = (input: BuildWorkspaceSpecInput): WorkspaceSpe
     runtime: input.runtime ?? 'runc',
     readOnly: runIsReadOnly(input.spec),
     skills: platformSkillsOf(input.spec),
+    // WP-99: the launcher lists which of these exist at the merge base with the default branch; for
+    // a run with no checkout
+    // there is nothing to list, and the empty list says so.
+    protectedPaths: checkout ? [...input.spec.protectedPaths] : [],
     env: { ...(input.containerEnv ?? {}) },
     keepUntil: keepUntil.toISOString(),
   });

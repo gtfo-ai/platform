@@ -19,6 +19,7 @@ import {
 } from './provider.js';
 import { parseTar, writeTar } from './tar.js';
 import { FakeDockerDaemon } from './testing.js';
+import { TRACKED_LISTING_LOG_TAIL, trackedListingOutput } from './tracked.js';
 
 const TOKEN = 'a'.repeat(32);
 const SECRET = 'glpat-FAKE-000000000000000000';
@@ -1142,5 +1143,89 @@ describe('one mirror, not the volume (WP-75)', () => {
     await startDaemon(undefined, { seedMirror: false });
     await provider.updateMirror({ projectId: spec.projectId, repo: spec.repo, credential: null });
     expect(noMirrorYet()).toBe(false);
+  });
+});
+
+/**
+ * WP-99: the tracked-path listing is one helper — no network, the workspace volume read-only, the
+ * run's uid — and every failure is an `unlisted` answer rather than a thrown one.
+ */
+describe('listExistingProtectedPaths (WP-99)', () => {
+  const trackedName = `tracked-${FIXTURE_RUN_ID}`;
+  const REQUEST = { patterns: ['**/*.test.*'], defaultBranch: 'main' };
+
+  it('lists through a no-network, read-only helper and parses what it printed', async () => {
+    await daemon.stop();
+    await startDaemon((container) =>
+      container.name === trackedName
+        ? {
+            exitCode: 0,
+            logs: trackedListingOutput([
+              { path: 'README.md', mode: '100644' },
+              { path: 'src/totals.test.ts', mode: '100644' },
+              { path: 'lib', mode: '120000' },
+            ]),
+          }
+        : { exitCode: 0, logs: '' },
+    );
+    const handle = await created();
+    const listing = await provider.listExistingProtectedPaths(handle, REQUEST);
+    expect(listing).toEqual({ state: 'listed', paths: ['src/totals.test.ts'], opaque: ['lib'] });
+
+    const helper = daemon.history.find((container) => container.name === trackedName);
+    expect(helper?.body.HostConfig?.NetworkMode).toBe('none');
+    expect(helper?.body.User).toBe('1000:1000');
+    // The workspace and the project's own mirror, both read-only (review round 1: the merge base
+    // and its tree are objects, which a `--shared` clone keeps in the mirror).
+    expect(helper?.body.HostConfig?.Mounts).toEqual([
+      expect.objectContaining({ Source: handle.volumeName, Target: '/work', ReadOnly: true }),
+      expect.objectContaining({
+        Source: 'repo-cache',
+        ReadOnly: true,
+        VolumeOptions: { Subpath: 'acme.git' },
+      }),
+    ]);
+    expect(helper?.body.Cmd?.[0]).toContain('merge-base');
+    expect(helper?.body.Cmd?.[0]).toContain('ls-tree -r');
+    expect(helper?.body.Env).toContain('BASE_REF=refs/remotes/origin/main');
+    const logs = daemon.requests.find((request) =>
+      request.path.endsWith(`/containers/${helper?.id ?? ''}/logs`),
+    );
+    expect(new URLSearchParams(logs?.query ?? '').get('tail')).toBe(
+      String(TRACKED_LISTING_LOG_TAIL),
+    );
+  });
+
+  it('answers unlisted, not a throw, when the helper fails', async () => {
+    await daemon.stop();
+    await startDaemon((container) =>
+      container.name === trackedName
+        ? { exitCode: 128, logs: 'fatal: not a git repository\n' }
+        : { exitCode: 0, logs: '' },
+    );
+    const handle = await created();
+    const listing = await provider.listExistingProtectedPaths(handle, REQUEST);
+    expect(listing).toMatchObject({ state: 'unlisted', reason: /listing failed/ });
+  });
+
+  it('starts no helper for a workspace with no checkout or a run with no protected paths', async () => {
+    const handle = await created();
+    const before = daemon.history.length;
+    expect(
+      await provider.listExistingProtectedPaths({ ...handle, cacheKey: null }, REQUEST),
+    ).toMatchObject({ state: 'unlisted', reason: /no checkout/ });
+    expect(
+      await provider.listExistingProtectedPaths(handle, { ...REQUEST, patterns: [] }),
+    ).toMatchObject({ state: 'unlisted' });
+    expect(
+      await provider.listExistingProtectedPaths(handle, { ...REQUEST, defaultBranch: null }),
+    ).toMatchObject({ state: 'unlisted', reason: /no default branch/ });
+    expect(
+      await provider.listExistingProtectedPaths(handle, {
+        ...REQUEST,
+        defaultBranch: '--upload-pack=x',
+      }),
+    ).toMatchObject({ state: 'unlisted', reason: /not one/ });
+    expect(daemon.history.length).toBe(before);
   });
 });

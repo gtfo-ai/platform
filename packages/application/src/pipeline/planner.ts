@@ -74,13 +74,14 @@ import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { PlatformToolName, RunContextDocument, RunLimits, RunSpec } from '../ports/runner.js';
 import { runLimitsDefaults } from '../ports/runner.js';
-import { qualifiedPlatformSkill } from '../ports/workspace.js';
+import { qualifiedPlatformSkill, unlistedProtectedPaths } from '../ports/workspace.js';
 import { CONFLICT_RESOLUTION_STAGE } from './rebase.js';
 import { REVIEW_ONLY_TEMPLATE_ID } from './review-only.js';
 import type { ProjectSettings } from './settings.js';
 import { effectiveProtectedPaths } from './settings.js';
 import type { StageRunPlan, StageRunPlanner, StageRunRequest } from './stage-executor.js';
 import type { StoredArtifact, StoredTask } from './store.js';
+import { exceptionsOf } from './tamper.js';
 import { TICKET_LINT_STAGE, TICKET_LINT_TEMPLATE_ID } from './ticket-lint.js';
 
 /**
@@ -1242,10 +1243,15 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
           block: [...policy.policy.block],
         },
         protectedPaths: [...protectedPaths],
-        // BD-024: the plan's exceptions. The ImplementationPlan's `protected_path_changes` fills
-        // these once the plan carries them; until then a protected path is never planned, which is
-        // the fail-closed direction.
-        plannedProtectedPaths: [],
+        // BD-024 §2 (WP-99): the latest ImplementationPlan's `protected_path_changes[].path`, read
+        // by the CI gate's own reader so the guard and the gate cannot read two plans. No plan, or a
+        // latest plan that does not parse, declares nothing — the stricter direction.
+        plannedProtectedPaths: [...exceptionsOf(request.artifacts).declared],
+        // Nothing is listed before there is a workspace; the workspace runner substitutes the
+        // launcher's listing, and until it does every protected path counts as existing.
+        existingProtectedPaths: unlistedProtectedPaths(
+          'the workspace has not been provisioned yet, so nothing is listed',
+        ),
         agents: {},
         mcpServers: {},
         // `agentic:<name>`: the plugin-qualified spelling the SDK's filter takes, and the one the

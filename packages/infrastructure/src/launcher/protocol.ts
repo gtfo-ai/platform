@@ -43,7 +43,7 @@ import type {
   WorkspaceExport,
   WorkspaceHandle,
 } from '@platform/application';
-import { workspaceSpecSchema } from '@platform/application';
+import { existingProtectedPathsSchema, workspaceSpecSchema } from '@platform/application';
 import { isoDateTimeSchema, nonEmptyStringSchema } from '@platform/contracts';
 import * as z from 'zod';
 
@@ -258,6 +258,13 @@ export const createRunResponseSchema = z.strictObject({
    * runner did, and sent it (WP-76). Never the credential.
    */
   credentialScope: z.enum(['read', 'push']).nullable(),
+  /**
+   * Which of the spec's protected paths exist at the merge base with the default branch, and every tracked symlink and
+   * submodule — WP-99, what the path guard reads to tell a new protected file from an existing one.
+   * The launcher is the one process with the checkout, so it answers; the runner puts it on the spec
+   * beside `workspacePath`. Bounded by its own schema (10 000 + 1 000 paths).
+   */
+  existingProtectedPaths: existingProtectedPathsSchema,
   /** `true` when this create answered a handle it had already made (TD-028 decision 4). */
   replayed: z.boolean(),
 });

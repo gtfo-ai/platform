@@ -40,7 +40,12 @@
  * (`<ctl>/<run-id>/`) and the name of a Docker object; `runIdSchema` is a uuid for exactly that
  * reason, and the adapter refuses anything else before it reaches the daemon.
  */
-import { idSchema, isoDateTimeSchema, nonEmptyStringSchema } from '@platform/contracts';
+import {
+  idSchema,
+  isoDateTimeSchema,
+  nonEmptyStringSchema,
+  pathPatternSchema,
+} from '@platform/contracts';
 import * as z from 'zod';
 
 // ── Identity ─────────────────────────────────────────────────────────────────
@@ -62,6 +67,9 @@ export const egressHostSchema = z
   );
 
 // ── The spec ─────────────────────────────────────────────────────────────────
+
+/** How many protected patterns a spec may carry; the shipped default list has fourteen. */
+export const MAX_WORKSPACE_PROTECTED_PATTERNS = 256;
 
 /**
  * Resource limits per run container (TD-021: project defaults 2 CPU / 4 GiB / 512 pids).
@@ -230,6 +238,12 @@ export const workspaceSpecSchema = z.strictObject({
    */
   skills: z.array(platformSkillNameSchema).max(32),
   /**
+   * The run's effective BD-024 protected patterns (`RunSpec.protectedPaths`), so the launcher can
+   * list which of them **exist** at the merge base with the default branch (WP-99, {@link existingProtectedPathsSchema}).
+   * The launcher reads them and nothing else: it decides nothing about a write.
+   */
+  protectedPaths: z.array(pathPatternSchema).max(MAX_WORKSPACE_PROTECTED_PATTERNS),
+  /**
    * Non-secret project variables placed in the container's environment. Integration credentials
    * never appear here (BD-025 §3); the git token arrives through the shim's credential socket.
    */
@@ -241,6 +255,56 @@ export const workspaceSpecSchema = z.strictObject({
   keepUntil: isoDateTimeSchema,
 });
 export type WorkspaceSpec = z.infer<typeof workspaceSpecSchema>;
+
+// ── What exists at the merge base with the default branch (WP-99) ────────────
+
+/** How many tracked entries the launcher reads out of a checkout before it gives up (fail closed). */
+export const MAX_TRACKED_ENTRIES = 100_000;
+/** How many tracked files matching a protected pattern a listing may carry. */
+export const MAX_EXISTING_PROTECTED_PATHS = 10_000;
+/** How many tracked symlinks and submodules a listing may carry. */
+export const MAX_OPAQUE_TRACKED_PATHS = 1_000;
+
+/** A repository-relative path as git lists it: `/`-separated, no NUL, bounded. */
+const trackedPathSchema = z
+  .string()
+  .min(1)
+  .max(4_096)
+  .refine((value) => !value.includes('\0'), 'a tracked path carries no NUL byte');
+
+/**
+ * Which protected paths **exist** at the merge base of the run's checkout and the default branch (WP-99 review round 1: the base the merge request diff is computed against) — what the path guard needs to tell a
+ * write that creates a protected path (allowed) from one that changes an existing one (allowed only
+ * when the plan declares it). BD-024 §2 as amended at WP-81; technical/04's WP-99 amendment.
+ *
+ * `listed` is the launcher's answer from the fresh checkout: `paths` are the regular files at the
+ * merge base matching one of the spec's protected patterns, and `opaque` is **every** tracked symlink and
+ * submodule, because a write at or under one of those lands somewhere the path does not name.
+ *
+ * `unlisted` is every other case, and it **fails closed**: the guard then treats every protected
+ * path as existing, which is its behaviour before WP-99. The planner writes it (nothing is listed
+ * before there is a workspace), and the launcher answers it for a run with no checkout, no known
+ * default branch or no computable merge base, a listing that failed, one past a bound, and one with
+ * a line it could not read. `reason` is platform text.
+ */
+export const existingProtectedPathsSchema = z.discriminatedUnion('state', [
+  z.strictObject({
+    state: z.literal('listed'),
+    paths: z.array(trackedPathSchema).max(MAX_EXISTING_PROTECTED_PATHS),
+    opaque: z.array(trackedPathSchema).max(MAX_OPAQUE_TRACKED_PATHS),
+  }),
+  z.strictObject({
+    state: z.literal('unlisted'),
+    reason: nonEmptyStringSchema.max(500),
+  }),
+]);
+export type ExistingProtectedPaths = z.infer<typeof existingProtectedPathsSchema>;
+
+/** The fail-closed answer, with the platform's reason. */
+export const unlistedProtectedPaths = (reason: string): ExistingProtectedPaths => ({
+  state: 'unlisted',
+  reason,
+});
 
 // ── Handles ──────────────────────────────────────────────────────────────────
 
@@ -450,6 +514,23 @@ export interface WorkspaceProvider {
 
   /** The control-socket coordinates for a created workspace. */
   readonly attach: (handle: WorkspaceHandle) => Promise<WorkspaceAttachment>;
+
+  /**
+   * Which of `patterns` exist at the **merge base of the checkout and the default branch** — the
+   * base a merge request's diff is computed against, so a file an earlier run of the same task
+   * added reads as new, as the CI gate's `changedExistingPaths` reads it — and every tracked symlink
+   * and submodule at that commit (WP-99, amended at its review round 1;
+   * {@link existingProtectedPathsSchema}). A `null` default branch is `unlisted`.
+   *
+   * Called after {@link create} and before the runner starts the CLI, so nothing the agent does is
+   * in the tree yet. **Never throws for a listing it could not make**: it answers `unlisted` with
+   * the reason, which fails closed at the guard — a run is not refused for a listing, it is guarded
+   * as strictly as before the listing existed. A workspace with no checkout answers `unlisted`.
+   */
+  readonly listExistingProtectedPaths: (
+    handle: WorkspaceHandle,
+    request: { readonly patterns: readonly string[]; readonly defaultBranch: string | null },
+  ) => Promise<ExistingProtectedPaths>;
 
   /**
    * Stops the run container: SIGTERM, then SIGKILL after `stopGraceSeconds`.

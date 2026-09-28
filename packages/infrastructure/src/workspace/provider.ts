@@ -64,6 +64,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type {
+  ExistingProtectedPaths,
   Logger,
   PurgedControlDirectory,
   PurgedWorkspace,
@@ -82,6 +83,7 @@ import {
   MIN_SECRET_LENGTH,
   PLATFORM_SKILLS_PLUGIN_DIRECTORY,
   silentLogger,
+  unlistedProtectedPaths,
   WORKSPACE_LABELS,
   WorkspaceError,
   workspaceSpecSchema,
@@ -118,6 +120,12 @@ import {
   workspaceSkillFiles,
 } from './skills.js';
 import { filterTar, parseTar } from './tar.js';
+import {
+  listingRefusal,
+  parseTrackedListing,
+  TRACKED_LISTING_LOG_TAIL,
+  trackedListingScript,
+} from './tracked.js';
 
 /**
  * Environment names a project may not set on its own run container.
@@ -1217,6 +1225,69 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     const socketPath = controlSocketPath(this.#controlRoot, handle.runId);
     await this.#waitForControlSocket(handle.runId, socketPath);
     return { socketPath, token, workdir: WORKSPACE_WORKDIR };
+  }
+
+  /**
+   * Which protected paths exist at the merge base of the checkout and the default branch, plus every
+   * symlink and submodule there and in the checkout itself — technical/04's WP-99 amendment; the
+   * script and the parser are `tracked.ts`, whose docblock has the fail-closed reading.
+   *
+   * One helper, as the run's uid, with **no network**, the workspace volume mounted **read-only**
+   * and the project's own mirror mounted **read-only** at the path the clone's alternates name: it
+   * runs `git merge-base` and `git ls-tree` in a clone nothing has touched (the runner has not
+   * started the CLI yet), and both read objects a `--shared` clone keeps in the mirror. Every failure —
+   * the helper's exit, a daemon error, a listing the parser will not vouch for — is an `unlisted`
+   * answer with the reason, logged, never a thrown error: a run is guarded as strictly as before
+   * WP-99 rather than refused.
+   */
+  async listExistingProtectedPaths(
+    handle: WorkspaceHandle,
+    request: { readonly patterns: readonly string[]; readonly defaultBranch: string | null },
+  ): Promise<ExistingProtectedPaths> {
+    assertRunId(handle.runId);
+    const refused = listingRefusal(handle.cacheKey, request);
+    if (refused !== null || handle.cacheKey === null || request.defaultBranch === null) {
+      return refused ?? unlistedProtectedPaths('the workspace has no checkout');
+    }
+    const { patterns } = request;
+    try {
+      const { output } = await this.#helper({
+        name: `tracked-${handle.runId}`,
+        image: this.#images.git,
+        script: trackedListingScript(WORKSPACE_WORKDIR),
+        // The base ref travels as environment and is quoted in the script, never interpolated; it
+        // is the clone's remote-tracking ref of the default branch, which `#clone` left behind.
+        env: { HOME: '/tmp', BASE_REF: `refs/remotes/origin/${request.defaultBranch}` },
+        // The workspace read-only, and the project's **own** mirror read-only at the path the
+        // clone's alternates name (WP-75's sub-path mount, as the export helper has it): the
+        // merge base and the tree at it are objects, and a `--shared` clone keeps its objects there.
+        mounts: [
+          this.#volumeMount(handle.volumeName, '/work', true),
+          projectMirrorMount(this.#cacheVolume, this.#cacheMount, handle.cacheKey),
+        ],
+        user: `${WORKSPACE_UID}:${WORKSPACE_GID}`,
+        // Paths of the project's own tree; nothing here was given a secret.
+        secrets: [],
+        network: 'none',
+        labels: this.#labels(handle, 'tracked', handle.keepUntil),
+        logTail: TRACKED_LISTING_LOG_TAIL,
+      });
+      const listing = parseTrackedListing(output, patterns);
+      if (listing.state === 'unlisted') {
+        this.#logger.warn(
+          { run_id: handle.runId, reason: listing.reason },
+          'the tracked-path listing could not be read; every protected path counts as existing for this run (WP-99)',
+        );
+      }
+      return listing;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      this.#logger.warn(
+        { run_id: handle.runId, err: error },
+        'the tracked-path listing failed; every protected path counts as existing for this run (WP-99)',
+      );
+      return unlistedProtectedPaths(`the tracked-path listing failed: ${reason}`.slice(0, 500));
+    }
   }
 
   /**

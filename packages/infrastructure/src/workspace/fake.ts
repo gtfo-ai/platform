@@ -44,6 +44,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { connect } from 'node:net';
 import path from 'node:path';
 import type {
+  ExistingProtectedPaths,
   PurgedWorkspace,
   PurgeReport,
   WorkspaceAttachment,
@@ -73,6 +74,7 @@ import {
   workspaceSkillFiles,
 } from './skills.js';
 import { filterTar, type TarInput, writeTar } from './tar.js';
+import { listingRefusal, parseTrackedListing, trackedListingOutput } from './tracked.js';
 
 interface FakeRun {
   readonly spec: WorkspaceSpec;
@@ -106,7 +108,26 @@ export interface FakeWorkspaceProviderOptions {
   readonly controlRoot?: string;
   readonly now?: () => Date;
   readonly mintToken?: () => string;
+  /**
+   * What the tree at the merge base holds, as the helper's `git ls-tree -r` would list it (WP-99).
+   * Defaults to the two files the fake's clone stand-in holds. The listing goes through the
+   * **same** parser the Docker provider's helper output does (`tracked.ts`), so the two cannot
+   * disagree about what a given tree lists. The fake has no task branch, so it lists no checkout
+   * links of its own.
+   */
+  readonly tracked?: readonly FakeTrackedEntry[];
 }
+
+/** One index entry of the fake's clone: a path and its git mode (`100644`, `120000`, `160000`). */
+export interface FakeTrackedEntry {
+  readonly path: string;
+  readonly mode: string;
+}
+
+const DEFAULT_FAKE_TRACKED: readonly FakeTrackedEntry[] = [
+  { path: 'README.md', mode: '100644' },
+  { path: 'node_modules/left-pad/index.js', mode: '100644' },
+];
 
 /** What the fake recorded happening, for tests that need to assert which branch ran. */
 export interface FakeWorkspaceEvent {
@@ -122,6 +143,7 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
   readonly #runs = new Map<string, FakeRun>();
   readonly #mirrors = new Set<string>();
   readonly #seen = new Set<string>();
+  readonly #tracked: readonly FakeTrackedEntry[];
   readonly events: FakeWorkspaceEvent[] = [];
 
   constructor(options: FakeWorkspaceProviderOptions) {
@@ -129,6 +151,7 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
     this.#skills = options.skills;
     this.#now = options.now ?? (() => new Date());
     this.#mintToken = options.mintToken ?? mintRunToken;
+    this.#tracked = options.tracked ?? DEFAULT_FAKE_TRACKED;
   }
 
   #record(kind: FakeWorkspaceEvent['kind'], runId: string): void {
@@ -292,6 +315,25 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
       token: run.token,
       workdir: WORKSPACE_WORKDIR,
     };
+  }
+
+  /**
+   * The Docker provider's answers, without a helper: the same refusals (`listingRefusal`), then the
+   * configured entries through `parseTrackedListing`. The fake's clone has no history, so its
+   * entries stand for the tree at the merge base — a divergence of shape, not of direction: the
+   * base-versus-branch distinction is measured against real git in `tracked.test.ts` and the docker
+   * e2e.
+   */
+  async listExistingProtectedPaths(
+    handle: WorkspaceHandle,
+    request: { readonly patterns: readonly string[]; readonly defaultBranch: string | null },
+  ): Promise<ExistingProtectedPaths> {
+    const run = this.#run(handle.runId);
+    const refused = listingRefusal(run.handle.cacheKey, request);
+    if (refused !== null) {
+      return refused;
+    }
+    return parseTrackedListing(trackedListingOutput(this.#tracked), request.patterns);
   }
 
   async kill(handle: WorkspaceHandle): Promise<void> {

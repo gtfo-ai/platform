@@ -326,3 +326,135 @@ describe('the bash step', () => {
     ).toThrow(/needs a workdir/);
   });
 });
+
+/**
+ * The `write` step (WP-99, divergence row 4): like `bash`, it **acts** on the platform's verdict —
+ * an allowed `Write`/`Edit` changes the file, a denied one leaves it as it was — so a test of the
+ * path guard can assert what is on disk rather than the verdict string.
+ */
+describe('the write step', () => {
+  const playWrites = async (
+    steps: readonly {
+      readonly tool_name: 'Write' | 'Edit';
+      readonly file_path: string;
+      readonly content?: string;
+      readonly old_string?: string;
+      readonly new_string?: string;
+    }[],
+    verdictFor: (filePath: string) => 'allow' | 'deny',
+    seed: (workdir: string) => Promise<void> = async () => undefined,
+  ) => {
+    const workdir = await mkdtemp(join(tmpdir(), 'fake-cli-write-'));
+    await seed(workdir);
+    const cli = fakeSpawnClaudeCodeProcess(
+      [
+        INIT,
+        { step: 'await_user' },
+        ...steps.map((step, index) => ({
+          step: 'write' as const,
+          ...step,
+          tool_use_id: `toolu_w${String(index)}`,
+        })),
+        { step: 'exit', code: 0, signal: null },
+      ],
+      { workdir },
+    );
+    async function* prompt(): AsyncGenerator<SDKUserMessage> {
+      yield {
+        type: 'user',
+        message: { role: 'user', content: 'go' },
+        parent_tool_use_id: null,
+        session_id: '',
+      } as SDKUserMessage;
+      await new Promise<never>(() => {});
+    }
+    const session = query({
+      prompt: prompt(),
+      options: {
+        spawnClaudeCodeProcess: cli.spawn,
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: 'Edit|Write',
+              hooks: [
+                async (input) => ({
+                  hookSpecificOutput: {
+                    hookEventName: 'PreToolUse' as const,
+                    permissionDecision: verdictFor(
+                      String((input as { tool_input: { file_path: string } }).tool_input.file_path),
+                    ),
+                    permissionDecisionReason: 'test',
+                  },
+                }),
+              ],
+            },
+          ],
+          PostToolUse: [{ hooks: [async () => ({})] }],
+        },
+      },
+    });
+    const iterator = session[Symbol.asyncIterator]();
+    void (async () => {
+      for (;;) {
+        const next = await iterator.next().catch(() => ({ done: true }));
+        if (next.done === true) {
+          return;
+        }
+      }
+    })();
+    await cli.finished;
+    return { cli, workdir };
+  };
+
+  it('writes an allowed file under the workdir and leaves a denied one unwritten', async () => {
+    const { cli, workdir } = await playWrites(
+      [
+        { tool_name: 'Write', file_path: '/work/repo/src/new.test.ts', content: 'new\n' },
+        { tool_name: 'Write', file_path: '/work/repo/src/denied.test.ts', content: 'x\n' },
+      ],
+      (filePath) => (filePath.includes('denied') ? 'deny' : 'allow'),
+    );
+    expect(await readFile(join(workdir, 'src', 'new.test.ts'), 'utf8')).toBe('new\n');
+    expect(existsSync(join(workdir, 'src', 'denied.test.ts'))).toBe(false);
+    expect(cli.writes.map((entry) => [entry.toolName, entry.decision, entry.landed])).toEqual([
+      ['Write', 'allow', true],
+      ['Write', 'deny', false],
+    ]);
+    await rm(workdir, { recursive: true, force: true });
+  });
+
+  it('edits an existing file only when allowed, as the CLI’s Edit does', async () => {
+    const { writeFile } = await import('node:fs/promises');
+    const { cli, workdir } = await playWrites(
+      [
+        { tool_name: 'Edit', file_path: '/work/repo/a.ts', old_string: 'one', new_string: 'two' },
+        { tool_name: 'Edit', file_path: '/work/repo/b.ts', old_string: 'one', new_string: 'two' },
+        { tool_name: 'Edit', file_path: '/work/repo/a.ts', old_string: 'absent', new_string: 'x' },
+      ],
+      (filePath) => (filePath.endsWith('b.ts') ? 'deny' : 'allow'),
+      async (dir) => {
+        await writeFile(join(dir, 'a.ts'), 'one\n');
+        await writeFile(join(dir, 'b.ts'), 'one\n');
+      },
+    );
+    expect(await readFile(join(workdir, 'a.ts'), 'utf8')).toBe('two\n');
+    expect(await readFile(join(workdir, 'b.ts'), 'utf8')).toBe('one\n');
+    // The third is allowed and fails as the tool would: nothing to replace.
+    expect(cli.writes.map((entry) => [entry.decision, entry.landed])).toEqual([
+      ['allow', true],
+      ['deny', false],
+      ['allow', false],
+    ]);
+    await rm(workdir, { recursive: true, force: true });
+  });
+
+  it('refuses a script with a write step and no workdir', () => {
+    expect(() =>
+      fakeSpawnClaudeCodeProcess([
+        INIT,
+        { step: 'write', tool_name: 'Write', file_path: '/work/repo/a', tool_use_id: 'toolu_x' },
+        { step: 'exit', code: 0, signal: null },
+      ]),
+    ).toThrow(/needs a workdir/);
+  });
+});

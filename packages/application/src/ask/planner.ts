@@ -49,7 +49,7 @@ import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { RunContextDocument, RunSpec } from '../ports/runner.js';
 import { runLimitsDefaults } from '../ports/runner.js';
-import { qualifiedPlatformSkill } from '../ports/workspace.js';
+import { qualifiedPlatformSkill, unlistedProtectedPaths } from '../ports/workspace.js';
 import { askFeature } from './settings.js';
 import type { AskAuditLine, AskRunLine, StoredAsk } from './store.js';
 
@@ -313,6 +313,8 @@ export const createAskRunPlanner = (options: AskRunPlannerOptions): AskRunPlanne
         },
         protectedPaths: [],
         plannedProtectedPaths: [],
+        // An ask holds no write tool; nothing is listed, which fails closed (WP-99).
+        existingProtectedPaths: unlistedProtectedPaths('an ask is not provisioned a listing'),
         agents: {},
         mcpServers: {},
         skills: skills.map((skill) => qualifiedPlatformSkill(skill.name)),

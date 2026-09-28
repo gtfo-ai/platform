@@ -176,7 +176,46 @@ describe('PreToolUse(Edit|Write) — the path guard', () => {
       tool_input: { file_path: 'infra/main.tf', new_string: 'resource {}' },
     });
     expect(decisionOf(output)).toBe('deny');
-    expect(test.records[0]?.reason).toContain('the approved plan does not list it');
+    // The fixture's listing is `unlisted`, so the target counts as existing (WP-99, fail closed).
+    expect(test.records[0]?.reason).toContain(
+      "this task's Implementation Plan declares no protected_path_changes",
+    );
+    expect(test.records[0]?.reason).toContain(
+      'could not list which files exist at the merge base with the default branch',
+    );
+  });
+
+  /**
+   * WP-99: the hook hands the guard the spec's listing and the plan's patterns, so a new protected
+   * file is allowed, an existing one is denied, and a declared one is allowed — through the hook.
+   */
+  it('reads the spec’s listing and plan: a new protected file lands, an existing one needs the plan', async () => {
+    const spec = runSpecFixture({
+      existingProtectedPaths: { state: 'listed', paths: ['infra/main.tf'], opaque: [] },
+    });
+    const fresh = harness({}, spec);
+    const created = await fresh.fire('PreToolUse', {
+      tool_name: 'Write',
+      tool_input: { file_path: 'infra/new.tf', content: 'resource {}' },
+    });
+    expect(decisionOf(created)).toBe('allow');
+    // A plain allow records nothing (the hook's rule), which is what makes the next row the deny's.
+    expect(fresh.records).toEqual([]);
+    const existing = await fresh.fire('PreToolUse', {
+      tool_name: 'Edit',
+      tool_input: { file_path: 'infra/main.tf', new_string: 'resource {}' },
+    });
+    expect(decisionOf(existing)).toBe('deny');
+    expect(fresh.records[0]?.reason).toContain(
+      'it exists at the merge base with the default branch',
+    );
+
+    const declared = harness({}, { ...spec, plannedProtectedPaths: ['infra/main.tf'] });
+    const planned = await declared.fire('PreToolUse', {
+      tool_name: 'Edit',
+      tool_input: { file_path: 'infra/main.tf', new_string: 'resource {}' },
+    });
+    expect(decisionOf(planned)).toBe('allow');
   });
 
   it('denies secret-shaped content even at an allowed path', async () => {

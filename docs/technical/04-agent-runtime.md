@@ -181,9 +181,10 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 > names the paths of a failed **tamper check** (BD-024 §2), which the gate computes as part of its
 > read (technical/02 has its inputs and endings); the workspace's path guard below enforces protected
 > paths at write time, and the gate is the deterministic check of what actually reached the branch —
-> a `Bash` redirect never meets the guard. The two differ on **additions**: the guard refuses a new
-> file under a protected path unless the plan lists it, the gate flags only modified, deleted and
-> renamed-away existing files (WP-81 round 1).
+> a `Bash` redirect never meets the guard. Since WP-99 the two hold the **same policy**: an addition
+> needs no declaration, and a modification or deletion of an existing protected file needs the plan's
+> (the guard's half is the WP-99 amendment under *Hooks and policies*; until then the guard refused a
+> new file too, which is where WP-81 round 1 left the divergence).
 >
 > **The Architect declares and the Reviewer confirms** (WP-81 round 1). The Architect's role prompt
 > asks for every existing test or CI/lint configuration file the work will modify or delete in
@@ -201,8 +202,8 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 
 | Hook | Purpose |
 |---|---|
-| `PreToolUse(Bash)` | three-list command policy: block → deny with reason; ask → open a Question (blocking, 1-day default timeout; the hook returns `ask` so `canUseTool` decides) ; allow → allow. Also blocks writes outside the workspace and protected paths (BD-024) unless the plan lists them. |
-| `PreToolUse(Edit|Write)` | path guard (workspace only; `.agentic/`, `.claude/`, `CLAUDE.md` writes flagged; secrets patterns in content denied). |
+| `PreToolUse(Bash)` | three-list command policy: block → deny with reason; ask → open a Question (blocking, 1-day default timeout; the hook returns `ask` so `canUseTool` decides) ; allow → allow. A redirection that writes a path floors an otherwise allowed line at `ask`, whatever the path; the protected-path rule below is the write tools' (**WP-99**: this row used to say the hook blocks protected paths *"unless the plan lists them"*, which no `Bash` hook has ever read). |
+| `PreToolUse(Edit|Write)` | path guard (workspace only; BD-024 protected paths as amended by WP-99 below; `.agentic/`, `.claude/`, `CLAUDE.md` writes flagged; secrets patterns in content denied). |
 | `PostToolUse(*)` | truncate outputs head/tail (default 10 k chars), redact secret-shaped strings, append `additionalContext` for CI logs (error block extraction). |
 | `SubagentStart/Stop` | nest in the transcript; enforce `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`. |
 | `PreCompact/PostCompact` | emit `compaction` markers to the transcript store. **`pre_tokens` does not come from the hook (WP-12):** `PreCompactHookInput` carries only `trigger` and `custom_instructions`, and `PostCompactHookInput` only `trigger` and `compact_summary`. The counts arrive on the `system`/`compact_boundary` **message** (`compact_metadata.pre_tokens` / `post_tokens`). So `PreCompact` writes `compaction{phase:'pre'}`, the boundary message writes `compaction{phase:'post'}` with the numbers, and `PostCompact` writes a `hook` entry — one marker per phase, no duplicate row. |
@@ -210,6 +211,55 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 | `UserPromptSubmit` | inject the steer message provenance (who steered) as context. |
 
 `canUseTool` answers only for the ask-list: creates a Question with the exact command, waits (bounded by the run's wall clock and the question timeout), returns allow/deny; unattended default deny.
+
+> **Amended by WP-99 — what the path guard refuses under a protected path** (BD-024 §2 as amended at
+> WP-81; PROGRESS backlog 279). The guard holds a write to the same policy the CI gate holds the
+> branch to (`changedExistingPaths`):
+>
+> - A write that **creates** a protected path is allowed. A write to an **existing** one is allowed
+>   only when a pattern of the latest ImplementationPlan's `protected_path_changes[].path` matches
+>   it. The planner feeds those patterns into `RunSpec.plannedProtectedPaths` through the CI gate's
+>   own reader (`exceptionsOf`), so the guard and the gate cannot read two different plans. The
+>   confirmation half stays the gate's: a declared change the Code review does not confirm is still
+>   returned there.
+> - **"Existing" means tracked at the merge base of the run's checkout and the default branch** —
+>   the base the merge request's diff is computed against. *(The orchestrator amended the row's
+>   "tracked at the run's checkout ref" at WP-99's review round 1: a re-entry checks out the task
+>   branch, whose own earlier tests the diff calls additions, and listing the checkout would have
+>   refused a `ci_fix` Developer the failing test it wrote itself.)* On a first run the checkout is
+>   the default branch and the merge base is its head. The **launcher** computes it at
+>   provisioning, not the planner. The hook runs on the platform side, outside the run's container,
+>   and cannot `stat` it. The checkout is created by the launcher from the mirror, so the listing
+>   costs one helper there: `git merge-base HEAD refs/remotes/origin/<default>`, then
+>   `git ls-tree -r` at that commit, with `NetworkMode: none`, the workspace read-only and the
+>   project's own mirror read-only (a `--shared` clone keeps its objects there). The default
+>   branch is `WorkspaceSpec.repo.defaultBranch`, already on the spec, and the launcher refuses a
+>   name outside a plain ref alphabet. No provider call is involved, so nothing crosses
+>   `IntegrationActionExecutor` and no transaction is open. The launcher keeps the regular files
+>   that match the run's protected patterns (`WorkspaceSpec.protectedPaths`) plus every symlink
+>   and submodule at that commit, and returns them on the create response. The runner substitutes
+>   them into `RunSpec.existingProtectedPaths` beside `workspacePath`.
+> - **Bounded.** At most 100 000 tracked entries are read, 10 000 protected paths and 1 000
+>   symlinks or submodules are carried. A repository past a bound is listed as unknown.
+> - **Fail closed.** Any of these reads as *existing and undeclared*, which is the guard's
+>   behaviour before WP-99:
+>   - the spec until a workspace answers;
+>   - a listing that could not be read, that passed a bound, or that holds a line the parser cannot
+>     read (including a path that is not UTF-8);
+>   - a run with no checkout, no known default branch, or no computable merge base (no such ref,
+>     unrelated or shallow history);
+>   - a target that is, or lies under, a symlink or submodule at the merge base.
+>
+>   An absent plan, or a latest plan that does not parse, contributes no pattern.
+> - **Case folding composes with existence.** The target and the listing are compared in the
+>   guard's folded form, so a case or normalisation variant of an existing file reads as existing.
+> - **What it does not see, stated.** A file this task's runs created is new for every run of the
+>   task until it reaches the default branch, exactly as it is an addition in the diff. A symlink or submodule **committed** on the task
+>   branch — by this run before the listing or by an earlier run of the task — is listed from the
+>   checkout's own tree and counts as opaque (review round 2); one the run creates **during** the
+>   run is invisible to the guard. Some verbs on the `implementation` baseline write a protected path without an `ask`
+>   (the measurement is in the WP-99 notes). So the guard steers at write time, and the CI gate's
+>   tamper check is what enforces the branch.
 
 > **Amended by TD-027 (ruling on Q77) — where the policy a run is given comes from, and the per-stage
 > layer BD-025 always had.** The run's `ResolvedCommandPolicy` is built in the planner, at one call

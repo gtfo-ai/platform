@@ -218,6 +218,7 @@ export const startControlPlane = async (options: ControlPlaneOptions): Promise<C
         attachment: started.attachment,
         claudeCodePath: options.claudeCodePath,
         credentialScope: started.credentialScope,
+        existingProtectedPaths: started.existingProtectedPaths,
         replayed: false,
       };
     })();

@@ -82,6 +82,54 @@ describe('startRun', () => {
     expect(started.handle.runId).toBe(spec.runId);
   });
 
+  /**
+   * WP-99: the create answers which of the spec's protected paths exist at the merge base with the default branch — and a
+   * listing that throws is an `unlisted` answer, never a failed start: the guard then fails closed.
+   */
+  it('answers the checkout’s listing of existing protected paths, from the spec’s patterns', async () => {
+    const spec = workspace.workspaceSpecFixture({
+      runId: randomUUID(),
+      protectedPaths: ['README.md', '**/*.test.*'],
+    });
+    const started = await service.startRun(spec, carried());
+    expect(started.existingProtectedPaths).toEqual({
+      state: 'listed',
+      paths: ['README.md'],
+      opaque: [],
+    });
+  });
+
+  it('starts the run with an unlisted answer when the listing throws', async () => {
+    const throwing: WorkspaceProvider = {
+      updateMirror: (input) => provider.updateMirror(input),
+      create: (spec) => provider.create(spec),
+      attach: (handle) => provider.attach(handle),
+      listExistingProtectedPaths: async () => {
+        throw new Error('the daemon went away mid-listing');
+      },
+      kill: (handle) => provider.kill(handle),
+      destroy: (handle) => provider.destroy(handle),
+      export: (handle, request, credential) => provider.export(handle, request, credential),
+      extendRetention: (handle, keepUntil) => provider.extendRetention(handle, keepUntil),
+      purgeExpired: (now) => provider.purgeExpired(now),
+    };
+    const listing = new LauncherService({
+      provider: throwing,
+      broker,
+      clock,
+      logger: silentLogger,
+      exportDir: path.join(dir, 'exports'),
+      retentionSweepMs: 60_000,
+    });
+    const spec = workspace.workspaceSpecFixture({ runId: randomUUID() });
+    const started = await listing.startRun(spec, carried());
+    expect(started.existingProtectedPaths).toMatchObject({
+      state: 'unlisted',
+      reason: /the daemon went away mid-listing/,
+    });
+    expect(provider.isRunning(spec.runId)).toBe(true);
+  });
+
   it('holds a read credential for a read-only stage, and refuses a push one (BD-021)', async () => {
     const { started } = await start({ readOnly: true });
     expect(started.credentialScope).toBe('read');
@@ -193,6 +241,10 @@ describe('startRun leaves no container behind on any failure path', () => {
         updateMirror: (input) => step('updateMirror', () => target.updateMirror(input)),
         create: (spec) => step('create', () => target.create(spec)),
         attach: (handle) => step('attach', () => target.attach(handle)),
+        // Not a step: a listing that fails is an `unlisted` answer, never a failed start (WP-99),
+        // so it is no point at which this harness's injected failure could stop the create.
+        listExistingProtectedPaths: (handle, request) =>
+          target.listExistingProtectedPaths(handle, request),
         export: (handle, exportRequest, credential) =>
           step('export', () => target.export(handle, exportRequest, credential)),
         extendRetention: (handle, keepUntil) =>
@@ -317,6 +369,8 @@ describe('endRun — the container stop happens on every path (WP-13 obligation 
       updateMirror: (input) => provider.updateMirror(input),
       create: (spec) => provider.create(spec),
       attach: (handle) => provider.attach(handle),
+      listExistingProtectedPaths: (handle, request) =>
+        provider.listExistingProtectedPaths(handle, request),
       kill: (handle) => provider.kill(handle),
       destroy: (handle) => provider.destroy(handle),
       extendRetention: (handle, keepUntil) => provider.extendRetention(handle, keepUntil),
@@ -390,6 +444,8 @@ describe('endRun — the container stop happens on every path (WP-13 obligation 
       updateMirror: (input) => provider.updateMirror(input),
       create: (spec) => provider.create(spec),
       attach: (handle) => provider.attach(handle),
+      listExistingProtectedPaths: (handle, request) =>
+        provider.listExistingProtectedPaths(handle, request),
       kill: (handle) => provider.kill(handle),
       destroy: (handle) => provider.destroy(handle),
       extendRetention: (handle, keepUntil) => provider.extendRetention(handle, keepUntil),
@@ -425,6 +481,8 @@ describe('endRun — the container stop happens on every path (WP-13 obligation 
       updateMirror: (input) => provider.updateMirror(input),
       create: (spec) => provider.create(spec),
       attach: (handle) => provider.attach(handle),
+      listExistingProtectedPaths: (handle, request) =>
+        provider.listExistingProtectedPaths(handle, request),
       kill: (handle) => provider.kill(handle),
       destroy: (handle) => provider.destroy(handle),
       export: (handle, request, credential) => provider.export(handle, request, credential),
@@ -560,6 +618,7 @@ describe('retention sweep', () => {
       updateMirror: unused('updateMirror'),
       create: unused('create'),
       attach: unused('attach'),
+      listExistingProtectedPaths: unused('listExistingProtectedPaths'),
       kill: unused('kill'),
       export: unused('export'),
       destroy: unused('destroy'),

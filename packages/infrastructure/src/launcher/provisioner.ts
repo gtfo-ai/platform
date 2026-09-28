@@ -299,6 +299,8 @@ export const createLauncherRunWorkspaceProvisioner = (
       return {
         workdir: ready.attachment.workdir,
         claudeCodePath: ready.claudeCodePath,
+        // WP-99: the launcher's listing of the checkout, for the path guard.
+        existingProtectedPaths: ready.existingProtectedPaths,
         spawn: createRunletSpawn({
           socketPath: ready.attachment.socketPath,
           token: ready.attachment.token,
