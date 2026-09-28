@@ -855,10 +855,24 @@ export const createMemoryPipelineStore = (
       return question === undefined ? null : clone(question);
     },
     save: async (_tx, question) => {
-      if (!questions.has(question.id)) {
+      const current = questions.get(question.id);
+      if (current === undefined) {
         throw new PipelineStoreError(`question ${question.id} does not exist`);
       }
-      questions.set(question.id, clone(question));
+      // `reminders_sent` is not `save`'s column (WP-84): the adapter's statement does not name it.
+      questions.set(question.id, clone({ ...question, remindersSent: current.remindersSent }));
+    },
+    recordReminder: async (_tx, input) => {
+      const current = questions.get(input.id);
+      if (
+        current === undefined ||
+        current.status !== 'open' ||
+        current.remindersSent !== input.sent
+      ) {
+        return false;
+      }
+      questions.set(input.id, { ...current, remindersSent: current.remindersSent + 1 });
+      return true;
     },
     open: async (_tx, taskId) =>
       [...questions.values()]
@@ -875,10 +889,33 @@ export const createMemoryPipelineStore = (
       return stored === undefined ? null : clone(stored);
     },
     save: async (_tx, stored) => {
-      if (!approvals.has(stored.approval.id)) {
+      const current = approvals.get(stored.approval.id);
+      if (current === undefined) {
         throw new PipelineStoreError(`approval ${stored.approval.id} does not exist`);
       }
-      approvals.set(stored.approval.id, clone(stored));
+      // `reminders_sent` is not `save`'s column (WP-84), as for a question.
+      approvals.set(
+        stored.approval.id,
+        clone({
+          ...stored,
+          approval: { ...stored.approval, remindersSent: current.approval.remindersSent },
+        }),
+      );
+    },
+    recordReminder: async (_tx, input) => {
+      const current = approvals.get(input.id);
+      if (
+        current === undefined ||
+        current.approval.status !== 'pending' ||
+        current.approval.remindersSent !== input.sent
+      ) {
+        return false;
+      }
+      approvals.set(input.id, {
+        ...current,
+        approval: { ...current.approval, remindersSent: current.approval.remindersSent + 1 },
+      });
+      return true;
     },
     forStageAttempt: async (_tx, query) => {
       const found = [...approvals.values()].find(

@@ -422,11 +422,15 @@ reply *typed* in a Slack thread is not yet matched to its task on this build, so
 here or on the task page. So the inbox links to the task rather than pretending to be the only way in. A
 question is due after the project's question timeout — **1 working day** by default, counted on the
 organisation's working calendar, so one asked late on a Friday is due on Monday — and an expired
-question is not silently dropped; it moves the task to needing a human.
+question is not silently dropped; it moves the task to needing a human. **Before that, one
+reminder**: halfway through the working time to the deadline, the project's chat channel gets a
+message saying the question is still unanswered, which names the task page (it has no buttons). A
+question answered before then is not reminded about.
 
 Approvals work the same way: the plan-approval gate is what the **Supervised** autonomy level turns
 on above a certain task size, and any maintainer can decide it. An approval nobody decides expires on
-the same calendar and at the same timeout as a question, and moves the task to needing a human too.
+the same calendar and at the same timeout as a question, and moves the task to needing a human too
+— with the same one reminder halfway there.
 
 Once an approval is decided — here, on the task page, or with a button — or expires, its Slack
 message is **edited**: the buttons are removed and the message says how it was settled (approved,

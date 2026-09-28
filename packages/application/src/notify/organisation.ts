@@ -22,7 +22,9 @@
  *     is no organisation configuration document to hang one on (technical/08: `PATCH /api/org` is
  *     unbuilt). The only two classes that reach here are budget classes, delivered immediately. A
  *     failed delivery is therefore never carried by a digest: it stays undelivered and is counted
- *     by the `notifications_undelivered` gauge past the job's own retry window (backlog 81).
+ *     by the `notifications_undelivered` gauge past the job's own retry window (backlog 81), and
+ *     since WP-84 the recovery pass re-posts it once past that window (backlog 236 (2)). A
+ *     configuration the loader refuses records the undelivered row too (Q103, below).
  *  2. **The row has no project and no task** (migration 0051, `nulls not distinct`), so a
  *     duplicated wake-up still stops at the unique key.
  *  3. **The audit row names the account and no project.** The call goes through
@@ -31,13 +33,14 @@
  *     scope. Attributing it to a project the account happens to be bound to would state something
  *     false about what was in scope (WP-51's rule; technical/06 § "Outbound: actions").
  */
-import type { Id, IsoDateTime } from '@platform/contracts';
+import type { Id, IsoDateTime, NotificationClass } from '@platform/contracts';
 import { notificationClassSchema } from '@platform/contracts';
 import { isUrgentNotification } from '@platform/domain';
 import {
   communicationWrites,
   integrationsForOrganisation,
   noRunScopedSecrets,
+  type PipelineIntegrations,
 } from '../pipeline/integrations.js';
 import type { OrganisationOutboundData } from '../pipeline/jobs.js';
 import type { Logger } from '../ports/logger.js';
@@ -66,10 +69,18 @@ export const runOrganisationNotification = async (
   const causeEventId = data.cause_event_id as Id;
 
   // Outside every transaction: the account's row, its secret and an envelope decryption.
-  const integrations = await integrationsForOrganisation(
-    options.organisation,
-    noRunScopedSecrets(),
-  );
+  let integrations: PipelineIntegrations;
+  try {
+    integrations = await integrationsForOrganisation(options.organisation, noRunScopedSecrets());
+  } catch (error) {
+    await recordRefusedConfiguration(options, {
+      notificationClass,
+      causeEventId,
+      subject: String(data.notification_subject ?? 'The organisation'),
+      detail: data.notification_detail === undefined ? null : String(data.notification_detail),
+    });
+    throw error;
+  }
   const chat = integrations.communication;
   if (chat === null) {
     /**
@@ -125,6 +136,7 @@ export const runOrganisationNotification = async (
    * earlier attempt, and it posts again under the same idempotency key.
    */
   let id = fresh;
+  let posted = draft;
   if (!recorded) {
     const existing = await options.unitOfWork.transaction(async (scope) =>
       options.notifications.findByCause(scope.tx, {
@@ -141,11 +153,18 @@ export const runOrganisationNotification = async (
       return;
     }
     id = existing.id;
+    // The row's own words (WP-84): a re-post rebuilt from the row carries no detail to re-render.
+    posted = {
+      notificationClass,
+      title: existing.title,
+      detail: existing.detail,
+      url: existing.url,
+    };
   }
 
   await communicationWrites(integrations).channelMessage(
     {
-      body: notificationBody(draft),
+      body: notificationBody(posted),
       // The platform's identities only — an event id and a closed class — so the executor never
       // has to refuse the key (`idempotencyScopeFor`). Scoped by the executor to this account.
       idempotencyKey: `notify:${causeEventId}:${notificationClass}`,
@@ -158,6 +177,56 @@ export const runOrganisationNotification = async (
       id,
       at: options.clock.now() as IsoDateTime,
       via: 'immediate',
+    }),
+  );
+};
+
+/**
+ * A refused organisation configuration **leaves a row** (WP-84, PROGRESS backlog 236 half (2), Q103).
+ *
+ * The loader throws for a configuration it will not guess about — two communication accounts that
+ * each name a channel (Q103's refusal), an account it cannot build — and before WP-84 it threw
+ * before `record`, so the organisation's loudest alarm left **no** `notifications` row: the
+ * `notifications_undelivered` gauge could not count what did not exist, and the only traces were a
+ * log line and a failed job. So the refusal records the row it would have delivered — undelivered,
+ * planned `immediate` — and the job still fails with the loader's error. The gauge counts it past
+ * the job's retry window; the re-post row re-enqueues it once, which meets the same refusal until an
+ * operator fixes the configuration, and then delivers it.
+ *
+ * **Unredacted, and why that is sound here**: there is no account to take a redactor from — that is
+ * what was refused — and the two strings are platform text (the handler's `The organisation` and a
+ * budget line of two numbers and a window name, `notify/handlers.ts`), so `redaction_count` is 0 by
+ * construction rather than by omission. A duplicate from a retry stops at the unique key.
+ */
+const recordRefusedConfiguration = async (
+  options: NotifyOptions,
+  input: {
+    readonly notificationClass: NotificationClass;
+    readonly causeEventId: Id;
+    readonly subject: string;
+    readonly detail: string | null;
+  },
+): Promise<void> => {
+  const draft = notificationDraft({
+    notificationClass: input.notificationClass,
+    subject: { name: input.subject, url: null },
+    detail: input.detail,
+  });
+  await options.unitOfWork.transaction(async (scope) =>
+    options.notifications.record(scope.tx, {
+      id: options.ids.next(),
+      projectId: null,
+      taskId: null,
+      notificationClass: input.notificationClass,
+      causeEventId: input.causeEventId,
+      title: draft.title,
+      detail: draft.detail,
+      url: null,
+      urgent: isUrgentNotification(input.notificationClass, undefined),
+      plannedDelivery: 'immediate',
+      mode: 'normal',
+      createdAt: options.clock.now() as IsoDateTime,
+      redactionCount: 0,
     }),
   );
 };

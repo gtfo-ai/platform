@@ -2203,6 +2203,53 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect((await store.questions.load(tx, questionId))?.answer).toBe('EUR');
       });
 
+      it('counts one reminder only while open, and never lets `save` put the count back (WP-84)', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const questionId = nextId();
+        const question = {
+          id: questionId,
+          taskId: stored.task.id,
+          projectId,
+          stage: 'refinement' as const,
+          runId: null,
+          text: 'Which currency?',
+          options: null,
+          blocking: true,
+          status: 'open' as const,
+          askedAt: '2026-06-05T16:00:00.000Z' as const,
+          deadlineAt: '2026-06-08T16:00:00.000Z' as const,
+          remindersSent: 0,
+          answer: null,
+          answeredByUserId: null,
+          answeredVia: null,
+          answeredAt: null,
+          sequence: 1,
+        };
+        await store.questions.insert(tx, question);
+
+        // A count read at 0 moves it to 1, once; a stale count moves nothing.
+        expect(await store.questions.recordReminder(tx, { id: questionId, sent: 0 })).toBe(true);
+        expect(await store.questions.recordReminder(tx, { id: questionId, sent: 0 })).toBe(false);
+        expect((await store.questions.load(tx, questionId))?.remindersSent).toBe(1);
+
+        // An answer saved over the snapshot read before the reminder keeps the reminder's count.
+        await store.questions.save(tx, {
+          ...question,
+          status: 'answered',
+          answer: 'EUR',
+          answeredByUserId: userId,
+          answeredVia: 'ticket',
+          answeredAt: '2026-06-08T12:30:00.000Z',
+        });
+        const answered = await store.questions.load(tx, questionId);
+        expect(answered?.status).toBe('answered');
+        expect(answered?.remindersSent).toBe(1);
+        // …and an answered question is not reminded about.
+        expect(await store.questions.recordReminder(tx, { id: questionId, sent: 1 })).toBe(false);
+        expect((await store.questions.load(tx, questionId))?.remindersSent).toBe(1);
+      });
+
       it('stores the deadline it was created with and reads it back (WP-56)', async () => {
         const stored = task();
         await store.tasks.insert(tx, stored);
@@ -2367,6 +2414,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           decidedByUserId: null,
           decidedAt: null,
           reason: null,
+          remindersSent: 0,
           sequence: 1,
         };
         await store.approvals.insert(tx, { approval, stage: 'architecture', attempt: 1 });
@@ -2407,6 +2455,47 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect((await store.approvals.load(tx, approvalId))?.approval.status).toBe('approved');
       });
 
+      it('counts one reminder only while pending, and never lets `save` put the count back (WP-84)', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const approvalId = nextId();
+        const approval = {
+          id: approvalId,
+          taskId: stored.task.id,
+          projectId,
+          kind: 'plan' as const,
+          status: 'pending' as const,
+          requestedAt: '2026-06-05T16:00:00.000Z' as const,
+          deadlineAt: '2026-06-08T16:00:00.000Z' as const,
+          decidedByUserId: null,
+          decidedAt: null,
+          reason: null,
+          remindersSent: 0,
+          sequence: 1,
+        };
+        await store.approvals.insert(tx, { approval, stage: 'architecture', attempt: 1 });
+        expect((await store.approvals.load(tx, approvalId))?.approval.remindersSent).toBe(0);
+
+        expect(await store.approvals.recordReminder(tx, { id: approvalId, sent: 0 })).toBe(true);
+        expect(await store.approvals.recordReminder(tx, { id: approvalId, sent: 0 })).toBe(false);
+        expect((await store.approvals.load(tx, approvalId))?.approval.remindersSent).toBe(1);
+
+        await store.approvals.save(tx, {
+          approval: {
+            ...approval,
+            status: 'approved',
+            decidedByUserId: userId,
+            decidedAt: '2026-06-08T12:30:00.000Z',
+          },
+          stage: 'architecture',
+          attempt: 1,
+        });
+        const decided = await store.approvals.load(tx, approvalId);
+        expect(decided?.approval.status).toBe('approved');
+        expect(decided?.approval.remindersSent).toBe(1);
+        expect(await store.approvals.recordReminder(tx, { id: approvalId, sent: 1 })).toBe(false);
+      });
+
       /**
        * `latestOfKind` — the **budget** gate's lookup (WP-28).
        *
@@ -2431,6 +2520,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           decidedByUserId: null,
           decidedAt: null,
           reason: null,
+          remindersSent: 0,
           sequence: 1,
         });
 

@@ -31,6 +31,7 @@
 import type {
   MessageRef,
   NotificationEntry,
+  NotificationOutcome,
   NotificationStore,
   StoredNotification,
   Transaction,
@@ -63,6 +64,7 @@ interface NotificationRow extends Record<string, unknown> {
   digest_day: Date | string | null;
   redaction_count: number;
   approval_id: string | null;
+  question_id: string | null;
   message_ref: unknown;
 }
 
@@ -99,10 +101,11 @@ const toStored = (row: NotificationRow): StoredNotification => ({
   mode: row.mode as TaskMode,
   createdAt: iso(row.created_at) as IsoDateTime,
   deliveredAt: iso(row.delivered_at),
-  deliveredAs: row.delivered_as === null ? null : (row.delivered_as as NotificationDelivery),
+  deliveredAs: row.delivered_as === null ? null : (row.delivered_as as NotificationOutcome),
   digestDay: day(row.digest_day),
   redactionCount: row.redaction_count,
   approvalId: row.approval_id === null ? null : (row.approval_id as Id),
+  questionId: row.question_id === null ? null : (row.question_id as Id),
   // Written only by `markDelivered` from a `MessageRef` the duty already holds; a cast rather than a
   // parse for the reason `replayable` gives in `pipeline/integrations.ts` — the stored value is
   // redacted, and a parse that refused a redacted id would turn a stale button into a failing job.
@@ -117,8 +120,8 @@ export const createPostgresNotificationStore = (): NotificationStore => ({
     const { rows } = await sqlOf(tx).query<{ id: string }>(
       `insert into notifications (
          id, project_id, task_id, class, cause_event_id, title, detail, url,
-         urgent, planned_delivery, mode, created_at, redaction_count, approval_id
-       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+         urgent, planned_delivery, mode, created_at, redaction_count, approval_id, question_id
+       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
        on conflict (project_id, cause_event_id, class) do nothing
        returning id`,
       [
@@ -136,6 +139,7 @@ export const createPostgresNotificationStore = (): NotificationStore => ({
         entry.createdAt,
         entry.redactionCount,
         entry.approvalId ?? null,
+        entry.questionId ?? null,
       ],
     );
     return rows.length === 1;
@@ -242,6 +246,17 @@ export const createPostgresNotificationStore = (): NotificationStore => ({
           set delivered_at = $2, delivered_as = 'digest'
         where id = any($1::uuid[])`,
       [[...input.ids], input.at],
+    );
+  },
+
+  markWithheld: async (tx, input) => {
+    if (input.ids.length === 0) {
+      return;
+    }
+    await sqlOf(tx).query(
+      `update notifications set delivered_at = $2, delivered_as = 'withheld'
+        where id = any($1::uuid[]) and delivered_at is null`,
+      [input.ids, input.at],
     );
   },
 

@@ -54,6 +54,12 @@ export interface NotificationEntry {
    * found again once the approval is decided or expires. Absent for every other class.
    */
   readonly approvalId?: Id | null;
+  /**
+   * The question a `question` row asks, or a `reminder` row reminds about (WP-84 review round 1,
+   * migration 0059) — what a retry or a re-post re-checks before it sends. An approval's
+   * `reminder` row names its approval in {@link approvalId} instead. Absent for every other class.
+   */
+  readonly questionId?: Id | null;
   readonly notificationClass: NotificationClass;
   /** The event that caused it. Half of the unique key, and the identity a replay is keyed by. */
   readonly causeEventId: Id;
@@ -82,13 +88,22 @@ export interface NotificationEntry {
   readonly redactionCount: number;
 }
 
+/**
+ * What became of a row: posted on its own, carried by a digest, or **withheld** — the platform
+ * decided not to send it because its question or approval was settled first (WP-84 review round 2,
+ * migration 0059). All three are terminal and set `deliveredAt`, so nothing counts, re-posts or
+ * carries a withheld row.
+ */
+export type NotificationOutcome = NotificationDelivery | 'withheld';
+
 /** A recorded notification, as the digest reads it back. */
 export interface StoredNotification extends NotificationEntry {
   readonly approvalId: Id | null;
+  readonly questionId: Id | null;
   /** Where the provider put the message, when an immediate delivery recorded it (WP-65). */
   readonly messageRef: MessageRef | null;
   readonly deliveredAt: IsoDateTime | null;
-  readonly deliveredAs: NotificationDelivery | null;
+  readonly deliveredAs: NotificationOutcome | null;
   /** `YYYY-MM-DD` in the organisation's zone, set when a digest claims the row. */
   readonly digestDay: string | null;
 }
@@ -192,6 +207,16 @@ export interface NotificationStore {
       readonly limit: number;
     },
   ): Promise<readonly StoredNotification[]>;
+
+  /**
+   * Closes rows as **withheld** (WP-84 review round 2): their question or approval was settled
+   * before a retry, a re-post or the digest reached them, so they are not sent and must not be
+   * counted as lost. Only a row still undelivered is touched.
+   */
+  markWithheld(
+    tx: Transaction,
+    input: { readonly ids: readonly Id[]; readonly at: IsoDateTime },
+  ): Promise<void>;
 
   /** Marks a claimed set delivered by digest. */
   markDigested(

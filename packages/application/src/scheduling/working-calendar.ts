@@ -295,19 +295,64 @@ export const questionTimeoutAt = (
 ): Date => resolveDeadline(calendar, askedAt, timeout);
 
 /**
- * Reminder instants for a question, one per offset, each measured from `askedAt` on the same
- * calendar (technical/02: "reminders at configurable offsets"). Offsets at or after the deadline
- * are dropped: a reminder that would arrive after the escalation is noise.
+ * Minutes of **working** time in `[from, to)` on the calendar — `0` when `to` is not after `from`.
+ *
+ * The inverse of {@link advanceWorkingTime}: for any `minutes`, the working time between `from` and
+ * `advanceWorkingTime(calendar, from, minutes)` is `minutes` (up to a millisecond's rounding).
  */
-export const questionReminderTimes = (
+export const workingMinutesBetween = (calendar: WorkingCalendar, from: Date, to: Date): number => {
+  const fromMs = from.getTime();
+  const toMs = to.getTime();
+  if (toMs <= fromMs) {
+    return 0;
+  }
+  let totalMs = 0;
+  let date = localDateOf(calendar, from);
+  for (let scanned = 0; scanned <= MAX_CALENDAR_DAYS_SCANNED; scanned += 1) {
+    const window = workingWindow(calendar, date);
+    if (window !== null) {
+      if (window.start.getTime() >= toMs) {
+        break;
+      }
+      const start = Math.max(fromMs, window.start.getTime());
+      const end = Math.min(toMs, window.end.getTime());
+      if (end > start) {
+        totalMs += end - start;
+      }
+    }
+    date = nextIsoDate(date);
+  }
+  return totalMs / MS_PER_MINUTE;
+};
+
+/**
+ * When a question or an approval that has waited since `askedAt` and expires at `deadlineAt` is
+ * reminded about — BD-006's *"with a reminder before escalation"* (WP-84, PROGRESS backlog 165).
+ *
+ * **Halfway through the working time between the two**, on the same calendar the deadline was
+ * computed on. A pure function of the two instants the row already stores, so it needs neither the
+ * project's `question_timeout` nor a setting of its own: a project that lengthens its timeout moves
+ * its reminder with it, and the arming handler, the job that fires and a test all compute the same
+ * instant. When the two enclose **no** working time at all (a timeout in plain minutes, asked at
+ * night) it is halfway in wall-clock time instead, so a reminder is never later than its deadline.
+ *
+ * `null` when there is nothing between them to be halfway through — a deadline at or before the
+ * question — because a reminder that would arrive with the escalation is noise.
+ *
+ * technical/02 once said *"reminders at configurable offsets"*; the offsets are not configurable in
+ * this build (one reminder, at this instant), and that page says so since WP-84.
+ */
+export const reminderTimeOf = (
   calendar: WorkingCalendar,
   askedAt: Date,
-  offsets: readonly string[],
-  timeout: string = DEFAULT_QUESTION_TIMEOUT,
-): readonly Date[] => {
-  const deadline = questionTimeoutAt(calendar, askedAt, timeout).getTime();
-  return offsets
-    .map((offset) => resolveDeadline(calendar, askedAt, offset))
-    .filter((at) => at.getTime() > askedAt.getTime() && at.getTime() < deadline)
-    .sort((left, right) => left.getTime() - right.getTime());
+  deadlineAt: Date,
+): Date | null => {
+  if (deadlineAt.getTime() <= askedAt.getTime()) {
+    return null;
+  }
+  const working = workingMinutesBetween(calendar, askedAt, deadlineAt);
+  if (working > 0) {
+    return advanceWorkingTime(calendar, askedAt, working / 2);
+  }
+  return new Date(askedAt.getTime() + (deadlineAt.getTime() - askedAt.getTime()) / 2);
 };

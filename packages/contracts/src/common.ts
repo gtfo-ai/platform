@@ -191,6 +191,14 @@ export const notificationClassSchema = z.enum([
    * not a class an operator may list as urgent — see {@link urgentNotificationClassSchema}.
    */
   'maintenance_report',
+  /**
+   * A blocking question or an approval is still waiting halfway to its deadline — BD-006's
+   * *"reminder before escalation"*, which Q95 extends to approvals (WP-84, PROGRESS backlog 165).
+   * Raised once per question or approval by the `deadline.sweep` job's reminder kinds, never by an
+   * event: a reminder changes no state worth replaying (technical/02). Posted as text naming the
+   * task page, never with buttons, so a reminder is never a second control to go stale.
+   */
+  'reminder',
 ]);
 
 export type NotificationClass = z.infer<typeof notificationClassSchema>;

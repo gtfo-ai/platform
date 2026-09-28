@@ -18,7 +18,7 @@ import { IllegalTransitionError, materialiseAutonomy } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { exactSecretRedactor } from '../integrations/redaction.js';
 import type { CommentRef, TicketRefInput } from '../ports/integrations/task-management.js';
-import { JOB_QUEUES } from '../ports/jobs.js';
+import { JOB_QUEUES, type JobData, type JobHandler } from '../ports/jobs.js';
 import { recoverDeadlines } from '../recovery/deadline.js';
 import { runStrandedRecovery } from '../recovery/stranded.js';
 import { createWorkingCalendar, questionTimeoutAt } from '../scheduling/working-calendar.js';
@@ -44,6 +44,7 @@ import {
   deadlineKey,
   deadlineSweepHandler,
 } from './deadlines.js';
+import { reminderCauseId } from './reminders.js';
 import { staticProjectSettings } from './settings.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b1' as Id;
@@ -55,6 +56,11 @@ const FRIDAY_1600 = '2026-06-05T16:00:00.000Z';
 const SATURDAY_1600 = '2026-06-06T16:00:00.000Z';
 const MONDAY_1559 = '2026-06-08T15:59:59.999Z';
 const MONDAY_1600 = '2026-06-08T16:00:00.000Z';
+/**
+ * Halfway through the eight working hours between Friday 16:00 and Monday 16:00 — Friday 16–17 and
+ * Monday 09–12 — which is when BD-006's reminder fires (WP-84, `reminderTimeOf`).
+ */
+const MONDAY_1200 = '2026-06-08T12:00:00.000Z';
 
 const TICKET = {
   provider: 'fake-jira',
@@ -299,9 +305,10 @@ describe('a question’s deadline (BD-006, PROGRESS backlog 74)', () => {
       ).toISOString(),
     );
 
-    // …and exactly one timer is armed for it, at the deadline, keyed on the question.
+    // …and exactly one expiry timer is armed for it, at the deadline, keyed on the question — plus,
+    // since WP-84, exactly one reminder timer, halfway there on the same calendar.
     const armed = deadlineJobs(harness);
-    expect(armed).toHaveLength(1);
+    expect(armed).toHaveLength(2);
     expect(armed[0]?.data).toEqual({
       aggregate: 'question',
       id: question.id,
@@ -309,6 +316,13 @@ describe('a question’s deadline (BD-006, PROGRESS backlog 74)', () => {
     });
     expect(armed[0]?.startAfter?.toISOString()).toBe(MONDAY_1600);
     expect(armed[0]?.singletonKey).toBe(`question:${question.id}:question_timeout`);
+    expect(armed[1]?.data).toEqual({
+      aggregate: 'question',
+      id: question.id,
+      kind: 'question_reminder',
+    });
+    expect(armed[1]?.startAfter?.toISOString()).toBe(MONDAY_1200);
+    expect(armed[1]?.singletonKey).toBe(`question:${question.id}:question_reminder`);
   });
 
   it('never enqueues from inside the handler: the timer is armed only by afterCommit', async () => {
@@ -518,6 +532,10 @@ describe('an approval’s deadline (BD-006’s Q95 amendment, PROGRESS backlog 7
         data: { aggregate: 'approval', id: approval.id, kind: 'approval_timeout' },
         at: MONDAY_1600,
       },
+      {
+        data: { aggregate: 'approval', id: approval.id, kind: 'approval_reminder' },
+        at: MONDAY_1200,
+      },
     ]);
 
     moveTo(harness, SATURDAY_1600);
@@ -593,6 +611,443 @@ describe('an approval’s deadline (BD-006’s Q95 amendment, PROGRESS backlog 7
       'expired',
     );
     expect(taskOf(harness).task.state).toBe('needs_human');
+  });
+});
+
+describe('BD-006’s reminder before escalation (WP-84, PROGRESS backlog 165)', () => {
+  const MONDAY_1159 = '2026-06-08T11:59:59.999Z';
+  const WITH_CHAT: HarnessOptions = { communication: {} };
+
+  const reminders = (harness: PipelineHarness) =>
+    harness.notifications.rows.filter((row) => row.notificationClass === 'reminder');
+  const reminderMessages = (harness: PipelineHarness) =>
+    (harness.communication?.messages ?? []).filter((message) =>
+      message.markdown.includes('is still waiting for a person'),
+    );
+
+  const planApprovalOnFriday = async () => {
+    const built = harnessWith({
+      ...WITH_CHAT,
+      runs: { ...happyRuns(), architecture: completedRun(PLAN('XL')) },
+    });
+    moveTo(built.harness, FRIDAY_1600);
+    await built.harness.publish([ticketMatched()]);
+    const [requested] = eventsOf(built.harness, 'task.approval.requested');
+    return { ...built, approval: (requested as NonNullable<typeof requested>).payload.approval };
+  };
+
+  it('reminds about a question once, halfway to its deadline on the calendar, and counts it', async () => {
+    const { harness, question } = await askedOnFriday(WITH_CHAT);
+
+    moveTo(harness, MONDAY_1159);
+    await harness.drain();
+    expect(reminderMessages(harness)).toHaveLength(0);
+    expect((await harness.store.questions.load({} as never, question.id))?.remindersSent).toBe(0);
+
+    moveTo(harness, MONDAY_1200);
+    await harness.drain();
+    const posted = reminderMessages(harness);
+    expect(posted).toHaveLength(1);
+    expect(posted[0]?.markdown).toContain('Still unanswered: Which currency?');
+    // Text, never buttons: a reminder is never a second control to go stale.
+    expect(posted[0]?.approval).toBeUndefined();
+    expect((await harness.store.questions.load({} as never, question.id))?.remindersSent).toBe(1);
+    expect(reminders(harness)).toHaveLength(1);
+    expect(reminders(harness)[0]?.causeEventId).toBe(reminderCauseId('question', question.id));
+    // Still open, still waiting: a reminder moves no state and appends no event.
+    expect(taskOf(harness).task.state).toBe('waiting_answers');
+
+    // A second fire — a redelivered timer — finds the reminder sent and does nothing.
+    await fireNow(harness, { aggregate: 'question', id: question.id, kind: 'question_reminder' });
+    expect(reminderMessages(harness)).toHaveLength(1);
+    expect((await harness.store.questions.load({} as never, question.id))?.remindersSent).toBe(1);
+
+    // …and the escalation still comes at the deadline, after its reminder.
+    moveTo(harness, MONDAY_1600);
+    await harness.drain();
+    expect(eventsOf(harness, 'task.question.expired')).toHaveLength(1);
+    expect(reminderMessages(harness)).toHaveLength(1);
+  });
+
+  it('reminds nobody about a question answered before its reminder was due', async () => {
+    const { harness, question } = await askedOnFriday(WITH_CHAT);
+    harness.script('refinement', completedRun(REFINED_SPEC));
+    moveTo(harness, '2026-06-08T10:00:00.000Z');
+    await answerTaskQuestion(harness.commands, {
+      questionId: question.id,
+      answer: 'EUR',
+      userId: USER,
+      role: 'member',
+      channel: 'ticket',
+    });
+    await harness.drain();
+
+    moveTo(harness, MONDAY_1200);
+    await harness.drain();
+    await fireNow(harness, { aggregate: 'question', id: question.id, kind: 'question_reminder' });
+    expect(reminderMessages(harness)).toHaveLength(0);
+    expect(reminders(harness)).toHaveLength(0);
+    expect((await harness.store.questions.load({} as never, question.id))?.remindersSent).toBe(0);
+  });
+
+  it('reminds nobody about a question answered after the timer fired and before the post', async () => {
+    const { harness, question } = await askedOnFriday(WITH_CHAT);
+    harness.script('refinement', completedRun(REFINED_SPEC));
+    moveTo(harness, MONDAY_1200);
+    // The timer fires and enqueues the notification; the answer lands before the duty runs.
+    const handler = harness.jobs.handlers.get(JOB_QUEUES.deadlineSweep);
+    await handler?.({
+      id: 'reminder-fired',
+      queue: JOB_QUEUES.deadlineSweep,
+      data: { aggregate: 'question', id: question.id, kind: 'question_reminder' },
+      signal: AbortSignal.abort(),
+    });
+    await answerTaskQuestion(harness.commands, {
+      questionId: question.id,
+      answer: 'EUR',
+      userId: USER,
+      role: 'member',
+      channel: 'ticket',
+    });
+    await harness.drain();
+    // The timer counted what it raised; the duty re-checked the question and posted nothing.
+    expect((await harness.store.questions.load({} as never, question.id))?.remindersSent).toBe(1);
+    expect(reminderMessages(harness)).toHaveLength(0);
+    expect(reminders(harness)).toHaveLength(0);
+  });
+
+  it('reminds about an approval once, on the question’s calendar (Q95), and counts it', async () => {
+    const { harness, approval } = await planApprovalOnFriday();
+
+    moveTo(harness, MONDAY_1159);
+    await harness.drain();
+    expect(reminderMessages(harness)).toHaveLength(0);
+
+    moveTo(harness, MONDAY_1200);
+    await harness.drain();
+    const posted = reminderMessages(harness);
+    expect(posted).toHaveLength(1);
+    expect(posted[0]?.markdown).toContain('Still waiting for a decision');
+    expect(posted[0]?.approval).toBeUndefined();
+    const stored = await harness.store.approvals.load({} as never, approval.id);
+    expect(stored?.approval.remindersSent).toBe(1);
+    expect(stored?.approval.status).toBe('pending');
+    expect(reminders(harness)[0]?.causeEventId).toBe(reminderCauseId('approval', approval.id));
+    // The reminder row names its approval (what a re-post re-checks) and carries no message
+    // address, so the settled-approval edit — which reads only rows with one — never picks it.
+    expect(reminders(harness)[0]?.approvalId).toBe(approval.id);
+    expect(reminders(harness)[0]?.messageRef).toBeNull();
+
+    await fireNow(harness, { aggregate: 'approval', id: approval.id, kind: 'approval_reminder' });
+    expect(reminderMessages(harness)).toHaveLength(1);
+    expect(
+      (await harness.store.approvals.load({} as never, approval.id))?.approval.remindersSent,
+    ).toBe(1);
+  });
+
+  it('reminds nobody about an approval a maintainer decided first', async () => {
+    const { harness, approval } = await planApprovalOnFriday();
+    moveTo(harness, '2026-06-08T09:30:00.000Z');
+    await decideTaskApproval(harness.commands, {
+      approvalId: approval.id,
+      decision: 'approved',
+      userId: USER,
+      role: 'maintainer',
+    });
+    await harness.drain();
+
+    moveTo(harness, MONDAY_1200);
+    await harness.drain();
+    await fireNow(harness, { aggregate: 'approval', id: approval.id, kind: 'approval_reminder' });
+    expect(reminderMessages(harness)).toHaveLength(0);
+    expect(
+      (await harness.store.approvals.load({} as never, approval.id))?.approval.remindersSent,
+    ).toBe(0);
+  });
+
+  /**
+   * **A re-post re-checks the question** (WP-84 review round 1, backlog 292). A row an earlier
+   * attempt recorded and never delivered — planted here as that attempt left it — is re-posted by
+   * the recovery pass through the wake-up it rebuilds from the row; for an answered question the
+   * duty posts nothing and closes the row withheld (review round 2).
+   */
+  const repostPass = async (harness: PipelineHarness) => {
+    const none = async () => [];
+    const marked = new Set<string>();
+    await runStrandedRecovery({
+      store: {
+        strandedBootstraps: none,
+        markBootstrapAttempt: async () => {},
+        endBootstrap: async () => {},
+        strandedAsks: none,
+        markAskAttempt: async () => {},
+        endAsk: async () => {},
+        strandedHistoryRecords: none,
+        markHistoryRecordAttempt: async () => {},
+        endHistoryRecord: async () => {},
+        strandedCurations: none,
+        markCurationAttempt: async () => {},
+        endCuration: async () => {},
+        asksWithEndedRun: none,
+      },
+      unitOfWork: harness.memory,
+      jobs: harness.jobs,
+      clock: harness.clock,
+      graceMs: 60_000,
+      notifications: {
+        store: {
+          // The memory twin of the SQL predicate (`postgres-notification-repost-store.ts`).
+          undeliveredImmediate: async (_tx, query) =>
+            harness.notifications.rows.filter(
+              (row) =>
+                row.deliveredAt === null &&
+                row.plannedDelivery === 'immediate' &&
+                row.digestDay === null &&
+                !marked.has(row.id) &&
+                row.createdAt < query.before,
+            ),
+          markRepostAttempt: async (_tx, mark) => {
+            marked.add(mark.id);
+          },
+          withholdRepost: async (tx, input) =>
+            harness.notifications.markWithheld(tx, { ids: [input.id], at: input.at }),
+        },
+      },
+    });
+    await harness.drain();
+    return marked;
+  };
+
+  const plantUndelivered = async (
+    harness: PipelineHarness,
+    input: {
+      readonly cause: string;
+      readonly notificationClass: 'question' | 'reminder';
+      readonly questionId: Id;
+    },
+  ) => {
+    await harness.memory.transaction(async (scope) =>
+      harness.notifications.record(scope.tx, {
+        id: input.cause as Id,
+        projectId: PROJECT,
+        taskId: taskOf(harness).task.id,
+        questionId: input.questionId,
+        notificationClass: input.notificationClass,
+        causeEventId: input.cause as Id,
+        title: 'ACME-1 is waiting for an answer',
+        detail: 'Which currency?',
+        url: null,
+        urgent: false,
+        plannedDelivery: 'immediate',
+        mode: 'normal',
+        createdAt: harness.clock.now() as IsoDateTime,
+        redactionCount: 0,
+      }),
+    );
+  };
+  const QUESTION_CAUSE = '00000000-0000-4000-9000-0000000084a1';
+  const REMINDER_CAUSE = '00000000-0000-4000-9000-0000000084a2';
+  const plantedMessages = (harness: PipelineHarness) =>
+    (harness.communication?.messages ?? []).filter((message) =>
+      message.markdown.includes('Which currency?'),
+    );
+
+  it('re-posts an undelivered question row while the question is open (the control)', async () => {
+    const { harness, question } = await askedOnFriday(WITH_CHAT);
+    await plantUndelivered(harness, {
+      cause: QUESTION_CAUSE,
+      notificationClass: 'question',
+      questionId: question.id,
+    });
+    const before = plantedMessages(harness).length;
+    moveTo(harness, '2026-06-05T16:50:00.000Z');
+    const marked = await repostPass(harness);
+    expect(marked.has(QUESTION_CAUSE)).toBe(true);
+    expect(plantedMessages(harness).length).toBe(before + 1);
+    expect(harness.notifications.rows.find((row) => row.id === QUESTION_CAUSE)?.deliveredAs).toBe(
+      'immediate',
+    );
+  });
+
+  it('sends nothing when the question was answered before the re-post, and closes the row withheld', async () => {
+    const { harness, question } = await askedOnFriday(WITH_CHAT);
+    await plantUndelivered(harness, {
+      cause: QUESTION_CAUSE,
+      notificationClass: 'question',
+      questionId: question.id,
+    });
+    harness.script('refinement', completedRun(REFINED_SPEC));
+    await answerTaskQuestion(harness.commands, {
+      questionId: question.id,
+      answer: 'EUR',
+      userId: USER,
+      role: 'member',
+      channel: 'ticket',
+    });
+    await harness.drain();
+    const before = plantedMessages(harness).length;
+    moveTo(harness, '2026-06-05T16:50:00.000Z');
+    const marked = await repostPass(harness);
+    // The pass tried once (the mark); the duty re-checked the question and posted nothing.
+    expect(marked.has(QUESTION_CAUSE)).toBe(true);
+    expect(plantedMessages(harness).length).toBe(before);
+    // Round 2: closed as withheld — not sent, and not counted as lost by the gauge.
+    expect(harness.notifications.rows.find((row) => row.id === QUESTION_CAUSE)?.deliveredAs).toBe(
+      'withheld',
+    );
+  });
+
+  it('sends nothing when a reminder is re-posted after its question was answered', async () => {
+    const { harness, question } = await askedOnFriday(WITH_CHAT);
+    await plantUndelivered(harness, {
+      cause: REMINDER_CAUSE,
+      notificationClass: 'reminder',
+      questionId: question.id,
+    });
+    harness.script('refinement', completedRun(REFINED_SPEC));
+    await answerTaskQuestion(harness.commands, {
+      questionId: question.id,
+      answer: 'EUR',
+      userId: USER,
+      role: 'member',
+      channel: 'ticket',
+    });
+    await harness.drain();
+    const before = plantedMessages(harness).length;
+    moveTo(harness, '2026-06-05T16:50:00.000Z');
+    const marked = await repostPass(harness);
+    expect(marked.has(REMINDER_CAUSE)).toBe(true);
+    expect(plantedMessages(harness).length).toBe(before);
+    // Round 2: closed as withheld — not sent, and not counted as lost by the gauge.
+    expect(harness.notifications.rows.find((row) => row.id === REMINDER_CAUSE)?.deliveredAs).toBe(
+      'withheld',
+    );
+  });
+
+  /**
+   * **The production link, end to end** (WP-84 review round 2): the `task.question.asked` handler
+   * puts `question_id` on the wake-up, the duty records it on the row, and a later attempt of the
+   * same wake-up re-checks the question by it. The first post fails (the chat is down), the question
+   * is answered, and the job's retry — the handler's own payload, replayed — posts nothing and
+   * closes the row withheld.
+   */
+  it('records the question on the row from the handler’s wake-up, and a retry after the answer posts nothing', async () => {
+    let chatDown = true;
+    const questionPosts: string[] = [];
+    const { harness } = harnessWith({
+      communication: {
+        postMessage: async (
+          thread: { channel: string; thread_id: string },
+          body: { markdown?: string },
+        ) => {
+          if ((body.markdown ?? '').includes('Which currency?')) {
+            if (chatDown) {
+              throw new Error('chat provider unavailable');
+            }
+            questionPosts.push(body.markdown ?? '');
+          }
+          return {
+            provider: 'fake-chat',
+            channel: thread.channel,
+            message_id: `m-${questionPosts.length}`,
+            thread_id: thread.thread_id,
+            url: null,
+          };
+        },
+      },
+      runs: { ...happyRuns(), refinement: completedRun(ASKING_SPEC) },
+    });
+    // Start the workers, then watch what the outbound worker is handed: the wake-up exactly as the
+    // handler built it (the recording queue forgets a job once a worker takes it).
+    await harness.drain();
+    const outbound = harness.jobs.handlers.get(JOB_QUEUES.pipelineOutbound) as JobHandler;
+    const handed: JobData[] = [];
+    // The recording queue's map is mutable underneath its read-only type; this test replaces one
+    // worker with a wrapper that records what it is handed and then does exactly the same.
+    (harness.jobs.handlers as Map<string, JobHandler>).set(
+      JOB_QUEUES.pipelineOutbound,
+      async (job) => {
+        handed.push(job.data as JobData);
+        return outbound(job);
+      },
+    );
+    moveTo(harness, FRIDAY_1600);
+    await expect(harness.publish([ticketMatched()])).rejects.toThrow(/chat provider unavailable/);
+    await harness.drain();
+    const [asked] = eventsOf(harness, 'task.question.asked');
+    const questionId = (asked as NonNullable<typeof asked>).payload.question.id;
+
+    // The handler's payload carries the question, and the duty recorded it on the row.
+    const wakeUp = handed.find(
+      (data) => (data as { notification_class?: string }).notification_class === 'question',
+    );
+    expect((wakeUp as { question_id?: string } | undefined)?.question_id).toBe(questionId);
+    const row = harness.notifications.rows.find((entry) => entry.notificationClass === 'question');
+    expect(row?.questionId).toBe(questionId);
+    expect(row?.deliveredAt).toBeNull();
+
+    harness.script('refinement', completedRun(REFINED_SPEC));
+    await answerTaskQuestion(harness.commands, {
+      questionId,
+      answer: 'EUR',
+      userId: USER,
+      role: 'member',
+      channel: 'ticket',
+    });
+    await harness.drain();
+
+    chatDown = false;
+    await outbound({
+      id: 'notify-retry',
+      queue: JOB_QUEUES.pipelineOutbound,
+      data: wakeUp as never,
+      signal: AbortSignal.abort(),
+    });
+    // The human sees nothing; the row is closed withheld, not left for the gauge.
+    expect(questionPosts).toEqual([]);
+    const after = harness.notifications.rows.find((entry) => entry.id === row?.id);
+    expect(after?.deliveredAs).toBe('withheld');
+  });
+
+  it('never re-posts a withheld row on a later pass', async () => {
+    const { harness, question } = await askedOnFriday(WITH_CHAT);
+    await plantUndelivered(harness, {
+      cause: QUESTION_CAUSE,
+      notificationClass: 'question',
+      questionId: question.id,
+    });
+    harness.script('refinement', completedRun(REFINED_SPEC));
+    await answerTaskQuestion(harness.commands, {
+      questionId: question.id,
+      answer: 'EUR',
+      userId: USER,
+      role: 'member',
+      channel: 'ticket',
+    });
+    await harness.drain();
+    moveTo(harness, '2026-06-05T16:50:00.000Z');
+    expect((await repostPass(harness)).has(QUESTION_CAUSE)).toBe(true);
+    moveTo(harness, '2026-06-05T17:50:00.000Z');
+    // A fresh pass — a new mark set — finds nothing: the withheld row is terminal.
+    expect((await repostPass(harness)).size).toBe(0);
+  });
+
+  it('keeps an answer an answer when a reminder is counted over a stale read', async () => {
+    // The lost update the narrow write exists for: a reminder appends no event, so nothing but the
+    // statement's own predicate orders it against an answer.
+    const { harness, question } = await askedOnFriday();
+    const before = await harness.store.questions.load({} as never, question.id);
+    await harness.memory.transaction(async (scope) => {
+      const answered = { ...(before as NonNullable<typeof before>), status: 'answered' as const };
+      await harness.store.questions.save(scope.tx, answered);
+    });
+    const counted = await harness.memory.transaction(async (scope) =>
+      harness.store.questions.recordReminder(scope.tx, { id: question.id, sent: 0 }),
+    );
+    expect(counted).toBe(false);
+    const after = await harness.store.questions.load({} as never, question.id);
+    expect(after?.status).toBe('answered');
+    expect(after?.remindersSent).toBe(0);
   });
 });
 
@@ -1072,7 +1527,8 @@ describe('the recovery row: a lost arm, and a row older than deadlines (backlog 
 
   it('expires a question whose arming was dropped, once the grace has passed and not before', async () => {
     const { harness, question } = await askedOnFriday();
-    expect(dropTimers(harness)).toHaveLength(1);
+    // The expiry and (since WP-84) the reminder: both arms lost with the process.
+    expect(dropTimers(harness)).toHaveLength(2);
 
     moveTo(harness, MONDAY_1600);
     await harness.drain();

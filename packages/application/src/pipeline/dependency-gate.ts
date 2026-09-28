@@ -223,6 +223,11 @@ const dependencyGateHandler = (options: PipelineSagaOptions): EventHandler => ({
  * Q91's answer rather than a gap: a task that passed review never becomes `active` again and is
  * not interrupted with a question. A task *paused* at `ready_for_merge` is a stop, and its resume
  * performs a deferred `block` (WP-73, backlog 244).
+ *
+ * **The enqueue below is at-most-once** (TD-004): a process that dies between the resume's commit
+ * and it leaves an `active` task carrying the deferral. Since WP-84 that is a row of
+ * `recovery/stranded.ts`'s table (`recovery/deferred-dependency.ts`, backlog 240), which finds the
+ * task by its newest `task.resumed` and re-enqueues the same duty once per resume.
  */
 const dependencyGateResumeHandler = (options: PipelineSagaOptions): EventHandler => ({
   name: 'pipeline.dependency.gate.resume',

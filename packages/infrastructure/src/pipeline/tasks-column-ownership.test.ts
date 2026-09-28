@@ -96,6 +96,12 @@ const EXPECTED_OWNERSHIP: Readonly<Record<string, readonly string[]>> = {
     'estimate_basis',
     'estimate_samples',
   ],
+  'packages/infrastructure/src/recovery/postgres-deferred-dependency-store.ts': [
+    // `markDeferredDependencyAttempt` — the recovery pass's one attempt per resume for a deferred
+    // dependency-gate ending whose wake-up was lost (WP-84, migration 0059, backlog 240). A column
+    // of the recovery's own on the task's row, the shape migration 0032 gave the other marks.
+    'dependency_recovery_attempted_at',
+  ],
   'packages/infrastructure/src/pipeline/postgres-pipeline-store.ts': [
     // `saveTicketSnapshot`
     'ticket_snapshot',

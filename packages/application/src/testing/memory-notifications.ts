@@ -53,6 +53,7 @@ export const createMemoryNotificationStore = (
       rows.set(entry.id, {
         ...entry,
         approvalId: entry.approvalId ?? null,
+        questionId: entry.questionId ?? null,
         messageRef: null,
         deliveredAt: null,
         deliveredAs: null,
@@ -125,6 +126,15 @@ export const createMemoryNotificationStore = (
         claimed.push(clone(updated));
       }
       return claimed;
+    },
+
+    markWithheld: async (_tx, input) => {
+      for (const id of input.ids) {
+        const row = rows.get(id);
+        if (row !== undefined && row.deliveredAt === null) {
+          rows.set(id, { ...row, deliveredAt: input.at, deliveredAs: 'withheld' });
+        }
+      }
     },
 
     markDigested: async (_tx, input) => {

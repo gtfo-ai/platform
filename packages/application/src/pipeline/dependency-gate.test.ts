@@ -320,13 +320,16 @@ describe('the dependency gate (product/04:58, WP-38)', () => {
     expect(question?.deadlineAt).toBe(
       questionTimeoutAt(harness.calendar, new Date(question?.askedAt as string)).toISOString(),
     );
+    // One expiry timer — and, since WP-84, one reminder timer (BD-006's reminder before escalation).
     expect(
-      harness.jobs.enqueued.filter(
-        (request) =>
-          request.queue === JOB_QUEUES.deadlineSweep &&
-          (request.data as { id?: string }).id === question?.id,
-      ),
-    ).toHaveLength(1);
+      harness.jobs.enqueued
+        .filter(
+          (request) =>
+            request.queue === JOB_QUEUES.deadlineSweep &&
+            (request.data as { id?: string }).id === question?.id,
+        )
+        .map((request) => (request.data as { kind?: string }).kind),
+    ).toEqual(['question_timeout', 'question_reminder']);
   });
 
   it('asks nothing when the same walk produces a diff that touches no manifest', async () => {

@@ -55,6 +55,7 @@ import { silentLogger } from '../ports/logger.js';
 import type { NotifyOptions } from './options.js';
 import { digestSettingsOf, localDayOf, localMinutesOf } from './policy.js';
 import type { StoredNotification } from './ports.js';
+import { isStillWaiting, waitingAggregateOfRow } from './waiting.js';
 
 /**
  * How often the tick fires, and the two bounds it is between.
@@ -192,6 +193,34 @@ export const runProjectDigest = async (
   if (claimed.length === 0) {
     return 'empty';
   }
+  /**
+   * **The digest re-checks what it carries** (WP-84 review round 2, PROGRESS backlog 292): a
+   * `question`, `reminder` or `approval` row planned for the digest during quiet hours is carried
+   * the next morning, by which time its question may be answered or its approval decided. Such a
+   * row is closed **withheld** — with the day's delivery, or at once when nothing else is carried —
+   * and not posted. A row that names no aggregate (written before WP-84) is carried as before.
+   */
+  const withheld = await options.unitOfWork.transaction(async (scope) => {
+    const settled: Id[] = [];
+    for (const row of claimed) {
+      const waitingOn = waitingAggregateOfRow(row);
+      if (waitingOn === null || waitingOn === 'unknown') {
+        continue;
+      }
+      if (!(await isStillWaiting(options.store, scope.tx, waitingOn))) {
+        settled.push(row.id);
+      }
+    }
+    return new Set(settled);
+  });
+  const carried = claimed.filter((row) => !withheld.has(row.id));
+  const withholdAt = options.clock.now() as IsoDateTime;
+  if (carried.length === 0) {
+    await options.unitOfWork.transaction(async (scope) =>
+      options.notifications.markWithheld(scope.tx, { ids: [...withheld], at: withholdAt }),
+    );
+    return 'empty';
+  }
   if (claimed.length === DIGEST_ITEM_LIMIT) {
     /**
      * The day had at least as many rows as one message carries. The rest keep `digest_day` null and
@@ -206,17 +235,16 @@ export const runProjectDigest = async (
   }
 
   const chats = communicationWrites(integrations);
-  for (const [mode, rows] of byMode(claimed)) {
+  for (const [mode, rows] of byMode(carried)) {
     await chats.digest({ items: rows.map(digestItemOf), day }, { projectId, taskId: null, mode });
   }
-  await options.unitOfWork.transaction(async (scope) =>
-    options.notifications.markDigested(scope.tx, {
-      ids: claimed.map((row) => row.id),
-      at: options.clock.now() as IsoDateTime,
-    }),
-  );
+  await options.unitOfWork.transaction(async (scope) => {
+    const at = options.clock.now() as IsoDateTime;
+    await options.notifications.markDigested(scope.tx, { ids: carried.map((row) => row.id), at });
+    await options.notifications.markWithheld(scope.tx, { ids: [...withheld], at });
+  });
   logger.info(
-    { project_id: projectId, day, items: claimed.length },
+    { project_id: projectId, day, items: carried.length, withheld: withheld.size },
     'digest: posted the day’s notifications',
   );
   return 'posted';

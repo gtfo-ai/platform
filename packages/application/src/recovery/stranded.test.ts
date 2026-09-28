@@ -16,10 +16,13 @@
  */
 import type { Id, IsoDateTime } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
+import { IMMEDIATE_UNDELIVERED_AFTER_MS } from '../notify/undelivered.js';
 import type { EnqueueRequest, JobData } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import { MemoryEventing } from '../testing/memory-eventing.js';
 import { recordingJobs } from '../testing/pipeline-harness.js';
+import type { StrandedDeferredDependency } from './deferred-dependency.js';
+import type { UndeliveredNotification } from './notification-repost.js';
 import { createUnreachableRunCredentialReports } from './run-credential.js';
 import type {
   StrandedAsk,
@@ -716,5 +719,261 @@ describe('the run-credential site', () => {
   it('is absent from a pass whose composition did not opt in', async () => {
     const { report } = await passOver({});
     expect(report.map((site) => site.site)).not.toContain('run_credential');
+  });
+});
+
+/**
+ * The two WP-84 rows: a deferred dependency-gate ending whose `task.resumed` wake-up was lost
+ * (PROGRESS backlog 240) and a notification whose job spent every attempt (236 (2)). Each is
+ * asserted on its enqueue — the queue and the rebuilt payload — and on the mark written **before**
+ * it, which is the whole of its bound; the case each way is the one where the store finds nothing.
+ */
+describe('the WP-84 rows', () => {
+  const RESUMED = '00000000-0000-4000-8000-0000000000f7' as Id;
+  const NOTIFICATION = '00000000-0000-4000-8000-0000000000f8' as Id;
+  const CAUSE = '00000000-0000-4000-8000-0000000000f9' as Id;
+  const APPROVAL = '00000000-0000-4000-8000-0000000000fa' as Id;
+  const emptyStore = {
+    strandedBootstraps: async () => [],
+    markBootstrapAttempt: async () => {},
+    endBootstrap: async () => {},
+    strandedAsks: async () => [],
+    markAskAttempt: async () => {},
+    endAsk: async () => {},
+    strandedHistoryRecords: async () => [],
+    markHistoryRecordAttempt: async () => {},
+    endHistoryRecord: async () => {},
+    strandedCurations: async () => [],
+    markCurationAttempt: async () => {},
+    endCuration: async () => {},
+    asksWithEndedRun: async () => [],
+  };
+
+  const pass = async (rows: {
+    readonly deferred?: readonly StrandedDeferredDependency[];
+    readonly undelivered?: readonly UndeliveredNotification[];
+  }) => {
+    const calls: string[] = [];
+    const asked: unknown[] = [];
+    const jobs = recordingJobs();
+    const report = await runStrandedRecovery({
+      store: emptyStore,
+      unitOfWork: new MemoryEventing(),
+      jobs: {
+        ...jobs,
+        enqueue: async <TData extends JobData = JobData>(request: EnqueueRequest<TData>) => {
+          calls.push(`enqueue:${String((request.data as { duty?: string }).duty)}`);
+          return jobs.enqueue(request);
+        },
+      },
+      clock: { now: () => NOW },
+      graceMs: 60_000,
+      deferredDependencies: {
+        store: {
+          strandedDeferredDependencies: async (_tx, query) => {
+            asked.push({ site: 'deferred', olderThan: query.olderThan });
+            return rows.deferred ?? [];
+          },
+          markDeferredDependencyAttempt: async (_tx, mark) => {
+            calls.push(`mark:${mark.taskId}:${mark.at}`);
+          },
+        },
+      },
+      notifications: {
+        store: {
+          undeliveredImmediate: async (_tx, query) => {
+            asked.push({ site: 'repost', before: query.before });
+            return rows.undelivered ?? [];
+          },
+          markRepostAttempt: async (_tx, mark) => {
+            calls.push(`mark:${mark.id}:${mark.at}`);
+          },
+          withholdRepost: async (_tx, input) => {
+            calls.push(`withhold:${input.id}`);
+          },
+        },
+      },
+    });
+    return { jobs, report, calls, asked };
+  };
+
+  it('re-enqueues the resume duty of an active task whose deferred ending nobody performed, marked first', async () => {
+    const { jobs, report, calls, asked } = await pass({
+      deferred: [
+        {
+          taskId: TASK,
+          projectId: PROJECT,
+          resumedEventId: RESUMED,
+          resumedAt: '2026-09-15T09:00:00.000Z' as IsoDateTime,
+        },
+      ],
+    });
+    // The grace is the pass interval, as for every query-shaped row.
+    expect(asked).toContainEqual({ site: 'deferred', olderThan: '2026-09-15T09:59:00.000Z' });
+    // The payload the `task.resumed` handler builds, caused by the resume the wake-up was owed from.
+    expect(jobs.enqueued.map((job) => [job.queue, job.data])).toEqual([
+      [
+        JOB_QUEUES.pipelineOutbound,
+        {
+          duty: 'dependency_gate_resume',
+          project_id: PROJECT,
+          task_id: TASK,
+          cause_event_id: RESUMED,
+        },
+      ],
+    ]);
+    expect(calls).toEqual([`mark:${TASK}:${NOW}`, 'enqueue:dependency_gate_resume']);
+    expect(report.find((site) => site.site === 'deferred_dependency')).toEqual({
+      site: 'deferred_dependency',
+      found: 1,
+      reEnqueued: 1,
+      ended: 0,
+    });
+  });
+
+  it('re-posts an undelivered organisation row and a task row through their own duties, once each, marked first', async () => {
+    const row = (overrides: Partial<UndeliveredNotification>): UndeliveredNotification => ({
+      id: NOTIFICATION,
+      projectId: null,
+      taskId: null,
+      approvalId: null,
+      questionId: null,
+      notificationClass: 'budget_exhausted',
+      causeEventId: CAUSE,
+      createdAt: '2026-09-15T08:00:00.000Z' as IsoDateTime,
+      ...overrides,
+    });
+    const taskRow = row({
+      id: ASK,
+      projectId: PROJECT,
+      taskId: TASK,
+      approvalId: APPROVAL,
+      notificationClass: 'approval',
+    });
+    const QUESTION = '00000000-0000-4000-8000-0000000000fb' as Id;
+    const questionRow = row({
+      id: RUN,
+      projectId: PROJECT,
+      taskId: TASK,
+      notificationClass: 'question',
+      questionId: QUESTION,
+    });
+    const reminderRow = row({
+      id: CHUNK,
+      projectId: PROJECT,
+      taskId: TASK,
+      notificationClass: 'reminder',
+      questionId: QUESTION,
+    });
+    const approvalReminderRow = row({
+      id: ARTIFACT,
+      projectId: PROJECT,
+      taskId: TASK,
+      notificationClass: 'reminder',
+      approvalId: APPROVAL,
+    });
+    const { jobs, report, calls, asked } = await pass({
+      undelivered: [row({}), taskRow, questionRow, reminderRow, approvalReminderRow],
+    });
+
+    // Past the gauge's own window, not the grace: a row younger than the job's retry schedule
+    // still has an attempt of its own left.
+    const before = asked.find((entry) => (entry as { site: string }).site === 'repost') as {
+      before: string;
+    };
+    expect(Date.parse(NOW) - Date.parse(before.before)).toBe(IMMEDIATE_UNDELIVERED_AFTER_MS);
+    // The original duty rebuilt from the row — the cause and class are the executor key's halves,
+    // `notify:<cause>:<class>`, so the re-post goes under the key the first attempt used.
+    expect(jobs.enqueued.map((job) => job.data)).toEqual([
+      {
+        duty: 'notify_organisation',
+        cause_event_id: CAUSE,
+        notification_class: 'budget_exhausted',
+      },
+      {
+        duty: 'notify',
+        project_id: PROJECT,
+        task_id: TASK,
+        cause_event_id: CAUSE,
+        notification_class: 'approval',
+        approval_id: APPROVAL,
+      },
+      // Review round 1: the ids the duty re-checks the aggregate by ride the rebuilt wake-up.
+      {
+        duty: 'notify',
+        project_id: PROJECT,
+        task_id: TASK,
+        cause_event_id: CAUSE,
+        notification_class: 'question',
+        question_id: QUESTION,
+      },
+      {
+        duty: 'notify',
+        project_id: PROJECT,
+        task_id: TASK,
+        cause_event_id: CAUSE,
+        notification_class: 'reminder',
+        reminder_of: QUESTION,
+        reminder_aggregate: 'question',
+      },
+      {
+        duty: 'notify',
+        project_id: PROJECT,
+        task_id: TASK,
+        cause_event_id: CAUSE,
+        notification_class: 'reminder',
+        reminder_of: APPROVAL,
+        reminder_aggregate: 'approval',
+      },
+    ]);
+    expect(calls.slice(0, 4)).toEqual([
+      `mark:${NOTIFICATION}:${NOW}`,
+      'enqueue:notify_organisation',
+      `mark:${ASK}:${NOW}`,
+      'enqueue:notify',
+    ]);
+    expect(report.find((site) => site.site === 'notification_repost')).toEqual({
+      site: 'notification_repost',
+      found: 5,
+      reEnqueued: 5,
+      ended: 0,
+    });
+  });
+
+  it('withholds, and never re-posts, a question or reminder row that names no aggregate (review round 2)', async () => {
+    const orphan = (id: Id, notificationClass: 'question' | 'reminder' | 'approval') => ({
+      id,
+      projectId: PROJECT,
+      taskId: TASK,
+      approvalId: null,
+      questionId: null,
+      notificationClass,
+      causeEventId: CAUSE,
+      createdAt: '2026-09-15T08:00:00.000Z' as IsoDateTime,
+    });
+    const { jobs, report, calls } = await pass({
+      undelivered: [
+        orphan(RUN, 'question'),
+        orphan(CHUNK, 'reminder'),
+        orphan(ARTIFACT, 'approval'),
+      ],
+    });
+    // Fail closed: a message asking somebody for something is not sent unchecked.
+    expect(jobs.enqueued).toEqual([]);
+    expect(calls).toEqual([`withhold:${RUN}`, `withhold:${CHUNK}`, `withhold:${ARTIFACT}`]);
+    expect(report.find((site) => site.site === 'notification_repost')).toEqual({
+      site: 'notification_repost',
+      found: 3,
+      reEnqueued: 0,
+      ended: 3,
+    });
+  });
+
+  it('enqueues nothing and marks nothing when neither store finds a row', async () => {
+    const { jobs, report, calls } = await pass({});
+    expect(jobs.enqueued).toEqual([]);
+    expect(calls).toEqual([]);
+    expect(report.find((site) => site.site === 'deferred_dependency')?.found).toBe(0);
+    expect(report.find((site) => site.site === 'notification_repost')?.found).toBe(0);
   });
 });

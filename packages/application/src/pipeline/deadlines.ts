@@ -7,6 +7,10 @@
  * | a plan or budget approval nobody decided | BD-006's Q95 amendment: the same limit and calendar | `approvals.requested_at` | `task.approval.decided` (`expired`) → the saga escalates |
  * | a take-over nobody touched | product/19 §19: `5 working days` | the `task.taken_over` event | `task.escalated`, from here |
  *
+ * …and, since WP-84, a **reminder** before each of the first two (BD-006's *"with a reminder before
+ * escalation"*, PROGRESS backlog 165): two more kinds on the same queue, armed beside the expiry,
+ * firing halfway through the working time to the deadline — `reminders.ts`.
+ *
  * Until this module every piece of the first two existed except the one that starts them: no site
  * wrote a deadline, nothing armed a timer, `expireTaskQuestion` had only test callers and
  * `expireTaskApproval` had none. The third was not built at all.
@@ -50,7 +54,7 @@ import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
-import type { WorkingCalendar } from '../scheduling/working-calendar.js';
+import { reminderTimeOf, type WorkingCalendar } from '../scheduling/working-calendar.js';
 import {
   type DeadlineOutcome,
   expireTaskApproval,
@@ -58,6 +62,7 @@ import {
   type TaskCommandDependencies,
 } from './commands.js';
 import { TAKE_OVER_INACTIVITY_TIMEOUT, takeOverDeadline } from './deadline-rules.js';
+import { remindWaitingAggregate } from './reminders.js';
 import type { PipelineStore } from './store.js';
 import { PIPELINE_ACTOR } from './store.js';
 import {
@@ -105,6 +110,18 @@ export const deadlineSweepDataSchema = z.discriminatedUnion('kind', [
     aggregate: z.literal('task'),
     id: idSchema,
     kind: z.literal('take_over_inactivity'),
+  }),
+  // WP-84 (PROGRESS backlog 165): BD-006's reminder before escalation — one more kind on the same
+  // queue, the architect's ruling, for both aggregates Q95 put on the question's calendar.
+  z.strictObject({
+    aggregate: z.literal('question'),
+    id: idSchema,
+    kind: z.literal('question_reminder'),
+  }),
+  z.strictObject({
+    aggregate: z.literal('approval'),
+    id: idSchema,
+    kind: z.literal('approval_reminder'),
   }),
 ]);
 
@@ -176,6 +193,13 @@ export const deadlineArmingHandler = (options: DeadlineArmingOptions): EventHand
         await enqueueDeadline(options.jobs, data, dueAt);
       });
     };
+    /** The reminder's timer, at `reminderTimeOf` over the row's own two instants (WP-84). */
+    const armReminder = (data: DeadlineSweepData, since: IsoDateTime, deadlineAt: IsoDateTime) => {
+      const at = reminderTimeOf(options.calendar, new Date(since), new Date(deadlineAt));
+      if (at !== null) {
+        arm(data, at.toISOString() as IsoDateTime);
+      }
+    };
     switch (event.type) {
       case 'task.question.asked': {
         const { question } = event.payload;
@@ -188,6 +212,11 @@ export const deadlineArmingHandler = (options: DeadlineArmingOptions): EventHand
         }
         arm(
           { aggregate: 'question', id: question.id, kind: 'question_timeout' },
+          question.deadline_at,
+        );
+        armReminder(
+          { aggregate: 'question', id: question.id, kind: 'question_reminder' },
+          question.asked_at,
           question.deadline_at,
         );
         return;
@@ -203,6 +232,11 @@ export const deadlineArmingHandler = (options: DeadlineArmingOptions): EventHand
         }
         arm(
           { aggregate: 'approval', id: approval.id, kind: 'approval_timeout' },
+          approval.deadline_at,
+        );
+        armReminder(
+          { aggregate: 'approval', id: approval.id, kind: 'approval_reminder' },
+          approval.requested_at,
           approval.deadline_at,
         );
         return;
@@ -372,7 +406,9 @@ export const settleDeadline = async (
       ? await expireTaskQuestion(commands, data.id)
       : data.kind === 'approval_timeout'
         ? await expireTaskApproval(commands, data.id)
-        : await expireTakeOver(options, data.id);
+        : data.kind === 'question_reminder' || data.kind === 'approval_reminder'
+          ? await remindWaitingAggregate(options, data.aggregate, data.id)
+          : await expireTakeOver(options, data.id);
   if (outcome.kind === 'not_due') {
     const floor = new Date(Date.parse(options.clock.now()) + DEADLINE_REARM_FLOOR_MS);
     const dueAt = isBefore(outcome.dueAt, floor.toISOString())
@@ -382,6 +418,8 @@ export const settleDeadline = async (
     await enqueueDeadline(options.jobs, data, dueAt);
   } else if (outcome.kind === 'expired') {
     logger.info({ ...data }, 'deadline.sweep: a deadline passed and the waiting aggregate expired');
+  } else if (outcome.kind === 'reminded') {
+    logger.info({ ...data }, 'deadline.sweep: a waiting question or approval was reminded about');
   }
   return outcome;
 };

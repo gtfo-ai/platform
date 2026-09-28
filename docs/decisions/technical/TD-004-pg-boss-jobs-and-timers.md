@@ -50,7 +50,7 @@ working-day calendar, the job is armed after commit by a handler (`pipeline.dead
 priority 15), and it re-validates on fire against the aggregate, re-arming itself at least 60 s later
 if it fires early. This is a deliberate deviation from the two named queues: a queue is a worker is a
 pooled connection, so four timers on four queues would raise the pool floor by four with nothing
-gained; one queue raises it by one (`POOL_RESERVATIONS.pipeline`, floor 21 → 22). Reminders, when
-built, are another `kind` on the same queue. Policy `stately`, keyed per `(aggregate, id, kind)`. The
+gained; one queue raises it by one (`POOL_RESERVATIONS.pipeline`, floor 21 → 22). Reminders are two
+more `kind`s on the same queue since WP-84 (`question_reminder`, `approval_reminder`). Policy `stately`, keyed per `(aggregate, id, kind)`. The
 arming enqueue can be lost the way every after-commit enqueue can (PROGRESS backlog 161), and rows
 written before this change carry no deadline (backlog 162).

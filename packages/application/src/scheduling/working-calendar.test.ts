@@ -8,10 +8,11 @@ import {
   isWorkingDate,
   localDateOf,
   parseDuration,
-  questionReminderTimes,
   questionTimeoutAt,
+  reminderTimeOf,
   resolveDeadline,
   type WorkingCalendar,
+  workingMinutesBetween,
   workingWindow,
 } from './working-calendar.js';
 import { zonedParts } from './zoned-time.js';
@@ -248,7 +249,7 @@ describe('resolveDeadline', () => {
   });
 });
 
-describe('questionTimeoutAt and questionReminderTimes', () => {
+describe('questionTimeoutAt and reminderTimeOf', () => {
   it('defaults to the 1 working day BD-006 specifies', () => {
     expect(DEFAULT_QUESTION_TIMEOUT).toBe('1 working day');
     expect(iso(questionTimeoutAt(utcCalendar, at('2026-06-01T14:00:00Z')))).toBe(
@@ -262,21 +263,43 @@ describe('questionTimeoutAt and questionReminderTimes', () => {
     );
   });
 
-  it('orders reminders and drops any that would arrive after the deadline', () => {
-    const asked = at('2026-06-01T10:00:00Z');
-    const reminders = questionReminderTimes(utcCalendar, asked, [
-      '4 working hours',
-      '1 working hour',
-      '1 working day',
-      '3 working days',
-    ]);
-    expect(reminders.map(iso)).toEqual(['2026-06-01T11:00:00.000Z', '2026-06-01T14:00:00.000Z']);
+  it('reminds halfway through the working time between the question and its deadline', () => {
+    // Asked Monday 14:00 with the 1-working-day default: the deadline is Tuesday 14:00, and the
+    // eight working hours between them are Monday 14–17 and Tuesday 09–14 — halfway is four in,
+    // Tuesday 10:00, not the wall-clock midpoint at 02:00 in the night.
+    const asked = at('2026-06-01T14:00:00Z');
+    const deadline = questionTimeoutAt(utcCalendar, asked);
+    expect(iso(deadline)).toBe('2026-06-02T14:00:00.000Z');
+    expect(workingMinutesBetween(utcCalendar, asked, deadline)).toBe(8 * 60);
+    expect(iso(reminderTimeOf(utcCalendar, asked, deadline) as Date)).toBe(
+      '2026-06-02T10:00:00.000Z',
+    );
   });
 
-  it('drops a zero offset, which would fire the moment the question is asked', () => {
-    expect(questionReminderTimes(utcCalendar, at('2026-06-01T10:00:00Z'), ['0 minutes'])).toEqual(
-      [],
+  it('skips a weekend and a holiday between the question and its deadline', () => {
+    // Asked Friday 16:00; Monday 2026-06-08 is a holiday, so the deadline is Tuesday 16:00 and
+    // halfway (four working hours) is Tuesday 12:00.
+    const target = calendar({ holidays: ['2026-06-08'] });
+    const asked = at('2026-06-05T16:00:00Z');
+    const deadline = questionTimeoutAt(target, asked);
+    expect(iso(deadline)).toBe('2026-06-09T16:00:00.000Z');
+    expect(iso(reminderTimeOf(target, asked, deadline) as Date)).toBe('2026-06-09T12:00:00.000Z');
+  });
+
+  it('falls back to wall-clock halfway when no working time lies between them', () => {
+    // A plain-minutes timeout asked on a Saturday: no working time before the deadline at all.
+    const asked = at('2026-06-06T10:00:00Z');
+    const deadline = questionTimeoutAt(utcCalendar, asked, '30 minutes');
+    expect(workingMinutesBetween(utcCalendar, asked, deadline)).toBe(0);
+    expect(iso(reminderTimeOf(utcCalendar, asked, deadline) as Date)).toBe(
+      '2026-06-06T10:15:00.000Z',
     );
+  });
+
+  it('has no reminder for a deadline at or before the question', () => {
+    const asked = at('2026-06-01T10:00:00Z');
+    expect(reminderTimeOf(utcCalendar, asked, asked)).toBeNull();
+    expect(reminderTimeOf(utcCalendar, asked, at('2026-06-01T09:00:00Z'))).toBeNull();
   });
 });
 
@@ -285,6 +308,32 @@ describe('properties', () => {
     .integer({ min: Date.UTC(2026, 0, 1), max: Date.UTC(2027, 0, 1) })
     .map((ms) => new Date(ms));
   const zones = fc.constantFrom('UTC', 'Europe/Prague', 'America/New_York', 'Asia/Kolkata');
+
+  it('counts back exactly the working time it advanced by', () => {
+    fc.assert(
+      fc.property(anchor, zones, fc.integer({ min: 0, max: 5000 }), (from, timezone, minutes) => {
+        const target = calendar({ timezone });
+        const to = advanceWorkingTime(target, from, minutes);
+        expect(Math.abs(workingMinutesBetween(target, from, to) - minutes)).toBeLessThan(0.001);
+      }),
+    );
+  });
+
+  it('puts every reminder strictly between the question and its deadline', () => {
+    fc.assert(
+      fc.property(anchor, zones, fc.integer({ min: 1, max: 5000 }), (from, timezone, minutes) => {
+        const target = calendar({ timezone });
+        const deadline = advanceWorkingTime(target, from, minutes);
+        const reminder = reminderTimeOf(target, from, deadline);
+        if (deadline.getTime() <= from.getTime()) {
+          expect(reminder).toBeNull();
+          return;
+        }
+        expect(reminder?.getTime()).toBeGreaterThan(from.getTime());
+        expect(reminder?.getTime()).toBeLessThan(deadline.getTime());
+      }),
+    );
+  });
 
   it('never returns an instant before the anchor', () => {
     fc.assert(

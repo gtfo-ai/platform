@@ -325,8 +325,9 @@ export const JOB_QUEUES = {
    * shape — `startAfter` from the working-day calendar, and a re-validation on fire that asks the
    * aggregate whether it is still waiting — and a queue is a worker is a pooled connection: four
    * workers for four timers would move `POOL_RESERVATIONS.pipeline` by four with nothing gained.
-   * TD-004 carries the amendment. A reminder, when one is built, is a fifth `kind` here and moves
-   * the pool floor by nothing.
+   * TD-004 carries the amendment. BD-006's reminder is two more kinds here since WP-84
+   * (`question_reminder`, `approval_reminder`, `pipeline/reminders.ts`), and it moved the pool floor
+   * by nothing.
    *
    * Policy `stately`, keyed per `(aggregate, id, kind)` by `enqueueDeadline`, so a redelivered arm
    * collapses onto the timer already queued, and the running timer can re-arm itself (one queued

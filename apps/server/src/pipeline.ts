@@ -1308,6 +1308,22 @@ export const composePipeline = async (
       supersededMergeRequests: {
         store: recoveryAdapters.createPostgresSupersededMergeRequestStore(),
       },
+      /**
+       * WP-84, backlog **240**: an `active` task whose deferred dependency-gate ending was never
+       * performed because the `task.resumed` wake-up was lost — the resume duty re-enqueued once
+       * per resume; `packages/application/src/recovery/deferred-dependency.ts`.
+       */
+      deferredDependencies: {
+        store: recoveryAdapters.createPostgresDeferredDependencyStore(),
+      },
+      /**
+       * WP-84, backlog **236** (2): a planned-`immediate` notification whose job spent every
+       * attempt, re-posted once through its original duty under the same idempotency key;
+       * `packages/application/src/recovery/notification-repost.ts`.
+       */
+      notifications: {
+        store: recoveryAdapters.createPostgresNotificationRepostStore(),
+      },
       deadlines: {
         store: recoveryAdapters.createPostgresDeadlineRecoveryStore(),
         settings,
@@ -1328,7 +1344,7 @@ export const composePipeline = async (
   if (reconciler === null) {
     options.logger.warn(
       { setting: 'APP_INTAKE_RECONCILE_INTERVAL_MS=0' },
-      'the recovery pass is switched off: a matched ticket whose intake enqueue is lost is never started (PROGRESS backlog 20), a stranded history bootstrap (101) or pending ask (84) is never recovered, a run whose process died stays "running" for ever, holding its stage budget against every future window (109), a run credential whose revoke never happened stays live to its expiry (155), a question, approval or take-over whose timer was lost — or that predates deadlines — waits for ever (161, 162), and a merge request a rework superseded whose close was lost stays open (178)',
+      'the recovery pass is switched off: a matched ticket whose intake enqueue is lost is never started (PROGRESS backlog 20), a stranded history bootstrap (101) or pending ask (84) is never recovered, a run whose process died stays "running" for ever, holding its stage budget against every future window (109), a run credential whose revoke never happened stays live to its expiry (155), a question, approval or take-over whose timer was lost — or that predates deadlines — waits for ever (161, 162), a merge request a rework superseded whose close was lost stays open (178), a deferred dependency-gate decision whose resume wake-up was lost waits for the next resume (240), and a notification whose job spent every attempt is never re-posted (236)',
     );
   }
 

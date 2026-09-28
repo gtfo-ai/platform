@@ -1372,9 +1372,11 @@ export const createPostgresPipelineStore = (
         `update questions
             set status = $2::question_status, answer = $3, answered_by_user_id = $4,
                 answered_via = $5,
-                answered_at = $6, reminders_sent = $7,
+                answered_at = $6,
                 escalated_at = case when $2::text = 'escalated' then now() else escalated_at end
           where id = $1`,
+        // `reminders_sent` is not named (WP-84): its one writer is `recordReminder` below, so an
+        // answer saved over a snapshot read before a reminder cannot put the counter back to 0.
         [
           question.id,
           question.status,
@@ -1382,12 +1384,19 @@ export const createPostgresPipelineStore = (
           question.answeredByUserId,
           question.answeredVia,
           question.answeredAt,
-          question.remindersSent,
         ],
       );
       if (result.rowCount === 0) {
         throw new PipelineRowMissingError(`question ${question.id} does not exist`);
       }
+    },
+    recordReminder: async (tx, input) => {
+      const result = await sqlOf(tx).query(
+        `update questions set reminders_sent = reminders_sent + 1
+          where id = $1 and status = 'open' and reminders_sent = $2`,
+        [input.id, input.sent],
+      );
+      return (result.rowCount ?? 0) === 1;
     },
     open: async (tx, taskId) => {
       const { rows } = await sqlOf(tx).query<QuestionRow>(
@@ -1437,6 +1446,14 @@ export const createPostgresPipelineStore = (
       if (result.rowCount === 0) {
         throw new PipelineRowMissingError(`approval ${stored.approval.id} does not exist`);
       }
+    },
+    recordReminder: async (tx, input) => {
+      const result = await sqlOf(tx).query(
+        `update approvals set reminders_sent = reminders_sent + 1
+          where id = $1 and status = 'pending' and reminders_sent = $2`,
+        [input.id, input.sent],
+      );
+      return (result.rowCount ?? 0) === 1;
     },
     forStageAttempt: async (tx, query) => {
       const { rows } = await sqlOf(tx).query<ApprovalRow>(
@@ -1870,7 +1887,7 @@ const toQuestion = (row: QuestionRow): Question => ({
 });
 
 const APPROVAL_SELECT = `select a.id, a.task_id, a.kind, a.status, a.requested_at, a.deadline_at,
-    a.decided_by_user_id, a.decided_at, a.reason, a.stage, a.attempt, t.project_id
+    a.decided_by_user_id, a.decided_at, a.reason, a.stage, a.attempt, a.reminders_sent, t.project_id
   from approvals a join tasks t on t.id = a.task_id`;
 
 interface ApprovalRow extends Record<string, unknown> {
@@ -1886,6 +1903,7 @@ interface ApprovalRow extends Record<string, unknown> {
   reason: string | null;
   stage: string | null;
   attempt: number | null;
+  reminders_sent: number;
 }
 
 const toStoredApproval = (row: ApprovalRow): StoredApproval => ({
@@ -1900,6 +1918,7 @@ const toStoredApproval = (row: ApprovalRow): StoredApproval => ({
     decidedByUserId: row.decided_by_user_id,
     decidedAt: iso(row.decided_at),
     reason: row.reason,
+    remindersSent: row.reminders_sent,
     sequence: 1,
   },
   stage: row.stage,

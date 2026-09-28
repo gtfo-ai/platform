@@ -156,6 +156,8 @@ export const answerTaskQuestion = async (
  */
 export type DeadlineOutcome =
   | { readonly kind: 'expired' }
+  /** A reminder kind counted its one reminder (WP-84, `reminders.ts`). */
+  | { readonly kind: 'reminded' }
   | { readonly kind: 'not_due'; readonly dueAt: IsoDateTime }
   | { readonly kind: 'settled' };
 

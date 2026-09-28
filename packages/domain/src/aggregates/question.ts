@@ -146,7 +146,14 @@ export const toQuestionRecord = (question: Question): QuestionRecord => ({
   answered_at: question.answeredAt,
 });
 
-/** A reminder went out. The catalogue has no reminder event; the counter is on the record. */
+/**
+ * A reminder went out. The catalogue has no reminder event; the counter is on the record.
+ *
+ * Called by the `deadline.sweep` job's `question_reminder` kind (WP-84), which persists the result
+ * through `QuestionRepository.recordReminder` — a narrow increment guarded by the status — rather
+ * than `save`, because a reminder appends no event and so is not serialised against an answer by
+ * the question's stream.
+ */
 export const recordReminder = (question: Question): Question => {
   if (question.status !== 'open') {
     throw new InvariantViolationError(

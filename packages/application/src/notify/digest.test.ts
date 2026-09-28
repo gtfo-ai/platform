@@ -406,6 +406,7 @@ describe('the digest', () => {
         createdAt: '2026-06-01T23:00:00.000Z',
         redactionCount: 0,
         approvalId: null,
+        questionId: null,
         messageRef: null,
         deliveredAt: null,
         deliveredAs: null,
@@ -442,5 +443,130 @@ describe('the digest', () => {
       timezone: 'Europe/Prague',
       key: 'tick',
     });
+  });
+});
+
+/**
+ * **The digest re-checks a question's reminder** (WP-84 review round 2, PROGRESS backlog 292). A
+ * reminder raised during quiet hours is planned for the morning digest; a question answered
+ * overnight must not be carried as "still waiting", and its row is closed **withheld** — not left
+ * undelivered for the gauge to count, the re-post to retry or tomorrow's digest to carry.
+ */
+describe('the digest re-checks what it carries (WP-84 review round 2)', () => {
+  const QUESTION = '00000000-0000-4000-8000-0000000084b1' as Id;
+  const REMINDER_CAUSE = '00000000-0000-4000-9000-0000000084b2';
+
+  const withOpenQuestion = async (harness: PipelineHarness): Promise<Id> => {
+    const task = (
+      harness.store.snapshot()[0] as NonNullable<
+        ReturnType<PipelineHarness['store']['snapshot']>[number]
+      >
+    ).task;
+    await harness.memory.transaction(async (scope) =>
+      harness.store.questions.insert(scope.tx, {
+        id: QUESTION,
+        taskId: task.id,
+        projectId: PROJECT,
+        stage: 'refinement' as never,
+        runId: null,
+        text: 'Which currency should totals use?',
+        options: null,
+        blocking: true,
+        status: 'open',
+        askedAt: '2026-06-01T15:00:00.000Z' as never,
+        deadlineAt: '2026-06-02T15:00:00.000Z' as never,
+        remindersSent: 0,
+        answer: null,
+        answeredByUserId: null,
+        answeredVia: null,
+        answeredAt: null,
+        sequence: 1,
+      }),
+    );
+    return task.id;
+  };
+
+  /** The reminder the timer raises at 23:00, deferred by quiet hours into the digest. */
+  const remindAtNight = async (harness: PipelineHarness, taskId: Id): Promise<void> => {
+    await runNotification(optionsOf(harness, '2026-06-01T23:00:00.000Z'), {
+      duty: 'notify',
+      project_id: PROJECT,
+      task_id: taskId,
+      cause_event_id: REMINDER_CAUSE,
+      notification_class: 'reminder',
+      notification_detail: 'Still unanswered: Which currency should totals use?',
+      reminder_of: QUESTION,
+      reminder_aggregate: 'question',
+    });
+  };
+
+  const answer = async (harness: PipelineHarness): Promise<void> => {
+    const question = await harness.store.questions.load({} as never, QUESTION);
+    await harness.memory.transaction(async (scope) =>
+      harness.store.questions.save(scope.tx, {
+        ...(question as NonNullable<typeof question>),
+        status: 'answered',
+        answer: 'EUR',
+        answeredAt: '2026-06-02T07:00:00.000Z' as never,
+      }),
+    );
+  };
+
+  const morning = (harness: PipelineHarness, at = '2026-06-02T09:00:00.000Z') =>
+    runProjectDigest(optionsOf(harness, at), { projectId: PROJECT, at: at as never });
+
+  const reminderRow = (harness: PipelineHarness) =>
+    harness.notifications.rows.find((row) => row.causeEventId === REMINDER_CAUSE);
+
+  it('carries a reminder whose question is still open (the control)', async () => {
+    const harness = harnessWith();
+    await harness.publish([matched()]);
+    const taskId = await withOpenQuestion(harness);
+    await remindAtNight(harness, taskId);
+    expect(reminderRow(harness)).toMatchObject({ plannedDelivery: 'digest', questionId: QUESTION });
+    harness.communication?.messages.splice(0);
+
+    expect(await morning(harness)).toBe('posted');
+    expect(harness.communication?.messages[0]?.markdown).toContain('still waiting');
+    expect(reminderRow(harness)?.deliveredAs).toBe('digest');
+  });
+
+  it('does not carry a reminder answered overnight, closes it withheld, and never carries it later', async () => {
+    const harness = harnessWith();
+    await harness.publish([matched()]);
+    const taskId = await withOpenQuestion(harness);
+    await remindAtNight(harness, taskId);
+    await answer(harness);
+    harness.communication?.messages.splice(0);
+
+    expect(await morning(harness)).toBe('empty');
+    expect(harness.communication?.messages).toEqual([]);
+    expect(digestCalls(harness)).toHaveLength(0);
+    expect(reminderRow(harness)?.deliveredAs).toBe('withheld');
+    expect(reminderRow(harness)?.deliveredAt).not.toBeNull();
+
+    // A withheld row is terminal: the next day's digest has nothing to claim.
+    expect(await morning(harness, '2026-06-03T09:00:00.000Z')).toBe('empty');
+    expect(harness.communication?.messages).toEqual([]);
+  });
+
+  it('carries the rest of the day and withholds only the settled reminder', async () => {
+    const harness = harnessWith();
+    await harness.publish([matched()]);
+    const taskId = await withOpenQuestion(harness);
+    await remindAtNight(harness, taskId);
+    await deferred(harness, {
+      cause: '00000000-0000-4000-9000-0000000084b3',
+      at: '2026-06-01T23:05:00.000Z',
+      notificationClass: 'stage_returned',
+    });
+    await answer(harness);
+    harness.communication?.messages.splice(0);
+
+    expect(await morning(harness)).toBe('posted');
+    const posted = harness.communication?.messages[0]?.markdown ?? '';
+    expect(posted).toContain('went back a stage');
+    expect(posted).not.toContain('still waiting');
+    expect(reminderRow(harness)?.deliveredAs).toBe('withheld');
   });
 });

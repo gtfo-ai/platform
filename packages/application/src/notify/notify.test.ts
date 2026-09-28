@@ -483,6 +483,98 @@ describe('what the duty refuses', () => {
     expect(okPosts() - before, 'one successful post for the escalation').toBe(1);
   });
 
+  it('re-posts a task’s undelivered row from the row alone, with the row’s own words (WP-84)', async () => {
+    let failing = false;
+    const bodies: string[] = [];
+    const harness = harnessWith({
+      settings: { config: { features: { digest: { enabled: false } } } },
+      communication: {
+        postMessage: async (
+          thread: { channel: string; thread_id: string },
+          body: { markdown?: string },
+        ) => {
+          if (failing) {
+            throw new Error('chat provider unavailable');
+          }
+          bodies.push(body.markdown ?? '');
+          return {
+            provider: 'fake-chat',
+            channel: thread.channel,
+            message_id: `m-${bodies.length}`,
+            thread_id: thread.thread_id,
+            url: null,
+          };
+        },
+      },
+    });
+    const taskId = await taskOf(harness);
+    failing = true;
+    await expect(
+      notify(harness, {
+        task_id: taskId,
+        notification_class: 'escalation',
+        notification_detail: 'Look at the merge request',
+      }),
+    ).rejects.toThrow();
+    failing = false;
+    bodies.splice(0);
+    // The payload the recovery pass rebuilds from the row: no detail rides it.
+    await notify(harness, { task_id: taskId, notification_class: 'escalation' });
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toContain('needs a human');
+    expect(bodies[0]).toContain('Look at the merge request');
+    const rows = harness.notifications.rows.filter((row) => row.causeEventId === CAUSE);
+    expect(rows[0]?.deliveredAs).toBe('immediate');
+  });
+
+  it('replays rather than re-sends a task row whose post succeeded before the row was marked (WP-84)', async () => {
+    const harness = harnessWith({
+      settings: { config: { features: { digest: { enabled: false } } } },
+    });
+    const taskId = await taskOf(harness);
+    let marks = 0;
+    const flaky: NotifyOptions = {
+      ...optionsOf(harness),
+      notifications: {
+        ...harness.notifications,
+        markDelivered: async (tx, input) => {
+          marks += 1;
+          if (marks === 1) {
+            throw new Error('the database went away after the post');
+          }
+          await harness.notifications.markDelivered(tx, input);
+        },
+      },
+    };
+    const escalations = () =>
+      (harness.communication?.messages ?? []).filter((message) =>
+        message.markdown.includes('Look at the merge request'),
+      );
+    await expect(
+      runNotification(flaky, {
+        duty: 'notify',
+        project_id: PROJECT,
+        task_id: taskId,
+        cause_event_id: CAUSE,
+        notification_class: 'escalation',
+        notification_detail: 'Look at the merge request',
+      }),
+    ).rejects.toThrow(/went away/);
+    expect(escalations()).toHaveLength(1);
+
+    // The recovery pass's rebuilt wake-up: the same cause and class, so the same idempotency key.
+    await runNotification(flaky, {
+      duty: 'notify',
+      project_id: PROJECT,
+      task_id: taskId,
+      cause_event_id: CAUSE,
+      notification_class: 'escalation',
+    });
+    expect(escalations(), 'replayed by the executor, never posted twice').toHaveLength(1);
+    const row = harness.notifications.rows.find((entry) => entry.causeEventId === CAUSE);
+    expect(row?.deliveredAs).toBe('immediate');
+  });
+
   it('stays quiet about a platform-issued ticket’s lifecycle, but not about its escalation', async () => {
     const harness = harnessWith();
     const taskId = await taskOf(harness);
@@ -660,6 +752,7 @@ describe('an approval notification', () => {
           decidedByUserId: null,
           decidedAt: null,
           reason: null,
+          remindersSent: 0,
           sequence: 1,
         },
         stage: 'architecture' as never,
@@ -1108,6 +1201,148 @@ describe('an organisation-scoped notification', () => {
     expect(harness.notifications.rows[0]?.deliveredAs).toBe('immediate');
   });
 
+  /**
+   * **The re-post rebuilt from the row posts the row's own words** (WP-84, backlog 236 (2)). The
+   * recovery pass re-enqueues this duty with the cause and the class only — no subject, no detail —
+   * so a retry that re-rendered its payload would post a message with no budget line in it.
+   */
+  it('re-posts the recorded row’s text when woken from the row alone, once', async () => {
+    let failing = true;
+    const bodies: string[] = [];
+    const harness = harnessWith({
+      organisationCommunication: {
+        postChannelMessage: async (channel: string, body: { markdown?: string }) => {
+          if (failing) {
+            throw new Error('chat provider unavailable');
+          }
+          bodies.push(body.markdown ?? '');
+          return {
+            provider: 'fake-chat',
+            channel,
+            message_id: 'org-2',
+            thread_id: null,
+            url: null,
+          };
+        },
+      },
+    });
+    const cause = '00000000-0000-4000-9000-00000000ca84';
+    await expect(
+      runOrganisationNotification(optionsOf(harness), {
+        duty: 'notify_organisation',
+        cause_event_id: cause,
+        notification_class: 'budget_exhausted',
+        notification_subject: 'The organisation',
+        notification_detail: '$100.25 of $100.00 spent in the month window.',
+      }),
+    ).rejects.toThrow();
+    expect(harness.notifications.rows[0]?.deliveredAt).toBeNull();
+
+    failing = false;
+    // Exactly the payload `recovery/stranded.ts` rebuilds from the row.
+    const rebuilt = {
+      duty: 'notify_organisation' as const,
+      cause_event_id: cause,
+      notification_class: 'budget_exhausted',
+    };
+    await runOrganisationNotification(optionsOf(harness), rebuilt);
+    await runOrganisationNotification(optionsOf(harness), rebuilt);
+
+    const sent = harness.audit.entries.filter(
+      (entry) => entry.action === 'post_channel_message' && entry.status === 'ok',
+    );
+    expect(sent).toHaveLength(1);
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toContain('The organisation has spent its budget');
+    expect(bodies[0]).toContain('$100.25 of $100.00 spent in the month window.');
+    expect(harness.notifications.rows).toHaveLength(1);
+    expect(harness.notifications.rows[0]?.deliveredAs).toBe('immediate');
+  });
+
+  /**
+   * **The same idempotency key**: a first post that succeeded but whose `markDelivered` failed is
+   * **replayed** by the executor on the re-post, not sent again (WP-84, backlog 236 (2)).
+   */
+  it('replays rather than re-sends a post that had succeeded before its row was marked', async () => {
+    let marks = 0;
+    const harness = harnessWith({ organisationCommunication: {} });
+    const options = optionsOf(harness);
+    const flaky: NotifyOptions = {
+      ...options,
+      notifications: {
+        ...harness.notifications,
+        markDelivered: async (tx, input) => {
+          marks += 1;
+          if (marks === 1) {
+            throw new Error('the database went away after the post');
+          }
+          await harness.notifications.markDelivered(tx, input);
+        },
+      },
+    };
+    const cause = '00000000-0000-4000-9000-00000000ca85';
+    await expect(
+      runOrganisationNotification(flaky, {
+        duty: 'notify_organisation',
+        cause_event_id: cause,
+        notification_class: 'budget_exhausted',
+        notification_detail: '$101.00 of $100.00 spent in the month window.',
+      }),
+    ).rejects.toThrow(/went away/);
+    expect(harness.organisationCommunication?.messages).toHaveLength(1);
+
+    await runOrganisationNotification(flaky, {
+      duty: 'notify_organisation',
+      cause_event_id: cause,
+      notification_class: 'budget_exhausted',
+    });
+    // One message on the provider, and the row delivered by the replay.
+    expect(harness.organisationCommunication?.messages).toHaveLength(1);
+    expect(harness.notifications.rows[0]?.deliveredAs).toBe('immediate');
+  });
+
+  /**
+   * **A refused configuration leaves a row the gauge counts** (WP-84, backlog 236 (2), Q103). The
+   * loader's refusal — two accounts each naming a channel — used to throw before `record`, so the
+   * alarm left no row at all and `notifications_undelivered` could not count it.
+   */
+  it('records the undelivered row when the organisation’s configuration is refused, and still fails the job', async () => {
+    const harness = harnessWith();
+    const refusing: NotifyOptions = {
+      ...optionsOf(harness),
+      organisation: {
+        forOrganisation: async () => {
+          throw new Error(
+            'the organisation has 2 communication accounts that name a channel of their own',
+          );
+        },
+      },
+    };
+    const data = {
+      duty: 'notify_organisation' as const,
+      cause_event_id: '00000000-0000-4000-9000-00000000ca86',
+      notification_class: 'budget_exhausted',
+      notification_subject: 'The organisation',
+      notification_detail: '$100.25 of $100.00 spent in the month window.',
+    };
+    await expect(runOrganisationNotification(refusing, data)).rejects.toThrow(/2 communication/);
+    await expect(runOrganisationNotification(refusing, data)).rejects.toThrow(/2 communication/);
+
+    // One row — the retry stops at the unique key — undelivered and planned immediate, which is
+    // exactly what the gauge counts past the job's retry window and the re-post row picks up.
+    expect(harness.notifications.rows).toHaveLength(1);
+    expect(harness.notifications.rows[0]).toMatchObject({
+      projectId: null,
+      taskId: null,
+      notificationClass: 'budget_exhausted',
+      plannedDelivery: 'immediate',
+      deliveredAt: null,
+      digestDay: null,
+      redactionCount: 0,
+    });
+    expect(harness.notifications.rows[0]?.detail).toContain('$100.25 of $100.00');
+  });
+
   it('tells nobody — and writes no row — when the organisation has no chat account', async () => {
     const harness = harnessWith();
     await harness.publish([orgExhausted()]);
@@ -1165,6 +1400,7 @@ describe('which recorded row a retried wake-up still delivers', () => {
     projectId: null,
     taskId: null,
     approvalId: null,
+    questionId: null,
     notificationClass: 'budget_exhausted',
     causeEventId: '00000000-0000-4000-8000-000000000002' as Id,
     title: 'Budget exhausted',

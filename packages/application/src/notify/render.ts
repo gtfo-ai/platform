@@ -139,6 +139,7 @@ const TITLE_OF: Readonly<Record<NotificationClass, (name: string) => string>> = 
   budget_exhausted: (name) => `${name} has spent its budget`,
   approval: (name) => `${name} is waiting for an approval`,
   maintenance_report: (name) => `Maintenance pass for ${name}`,
+  reminder: (name) => `${name} is still waiting for a person`,
 };
 
 /** A markdown inline link, `[label](target)` — the same shape the Slack converter turns into one. */

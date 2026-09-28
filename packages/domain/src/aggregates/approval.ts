@@ -17,7 +17,7 @@ import type {
   UserRole,
 } from '@platform/contracts';
 import { isBefore } from '../clock.js';
-import { IllegalTransitionError } from '../errors.js';
+import { IllegalTransitionError, InvariantViolationError } from '../errors.js';
 import { type CommandContext, type Decision, eventRecorder, FIRST_STREAM_SEQ } from '../events.js';
 import { APPROVAL_ACTIONS, assertCan } from '../permissions.js';
 import type { DeadlineRule } from './question.js';
@@ -49,6 +49,11 @@ export interface Approval {
   readonly decidedByUserId: Id | null;
   readonly decidedAt: IsoDateTime | null;
   readonly reason: string | null;
+  /**
+   * BD-006's reminder before escalation, which Q95 extends to approvals (WP-84, migration 0059).
+   * Not on {@link ApprovalRecord}: no event and no DTO carries it, and the row is its only reader.
+   */
+  readonly remindersSent: number;
   readonly sequence: number;
 }
 
@@ -88,8 +93,23 @@ export const createApproval = (input: RequestApprovalInput, context: CommandCont
     decidedByUserId: null,
     decidedAt: null,
     reason: null,
+    remindersSent: 0,
     sequence: FIRST_STREAM_SEQ,
   };
+};
+
+/**
+ * A reminder went out (WP-84). Like the question's, it changes no state worth replaying and emits
+ * no event (technical/02); the counter is on the row. Only a pending approval is reminded about.
+ */
+export const recordApprovalReminder = (approval: Approval): Approval => {
+  if (approval.status !== 'pending') {
+    throw new InvariantViolationError(
+      'approval.reminder',
+      `only a pending approval is reminded about, this one is "${approval.status}"`,
+    );
+  }
+  return { ...approval, remindersSent: approval.remindersSent + 1 };
 };
 
 export const toApprovalRecord = (approval: Approval): ApprovalRecord => ({

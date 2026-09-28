@@ -65,10 +65,12 @@ interface Decided {
   readonly detail: string | null;
   /** The approval an `approval` notification is about; its buttons carry the id. */
   readonly approvalId?: string;
+  /** The question a `question` notification asks, so a retry or a re-post can re-check it (WP-84). */
+  readonly questionId?: string;
 }
 
 /** Platform text for each approval kind — the only words the `approval` class carries. */
-const APPROVAL_DETAIL: Readonly<Record<ApprovalKind, string>> = {
+export const APPROVAL_DETAIL: Readonly<Record<ApprovalKind, string>> = {
   plan: 'The implementation plan needs a maintainer’s approval before the task goes on.',
   budget:
     'The estimated cost is over this project’s threshold; a maintainer decides whether to spend it.',
@@ -130,6 +132,7 @@ export const decideNotification = (event: DomainEvent): Decided | null => {
         taskId: event.payload.task_id,
         subject: null,
         detail: event.payload.question.text,
+        questionId: event.payload.question.id,
       };
     case 'task.escalated':
       return {
@@ -238,6 +241,7 @@ export const notifyHandler = (options: PipelineSagaOptions): EventHandler => ({
       notification_class: decided.notificationClass,
       ...(decided.subject === null ? {} : { notification_subject: decided.subject }),
       ...(decided.approvalId === undefined ? {} : { approval_id: decided.approvalId }),
+      ...(decided.questionId === undefined ? {} : { question_id: decided.questionId }),
       ...(detail === null ? {} : { notification_detail: detail }),
     };
     context.afterCommit(async () => {

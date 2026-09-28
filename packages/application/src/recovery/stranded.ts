@@ -11,7 +11,7 @@
  * a `task_asks` row `pending` for ever. Nothing re-emits it, nothing retries it, and nothing logs
  * it — `EventBus` logs only the case where a callback *threw*.
  *
- * ## Eight sites, seven of them here, and the eighth named rather than silently absent
+ * ## Nine sites, eight of them here, and the ninth named rather than silently absent
  *
  * | site | entry | what is lost | where the recovery is |
  * |---|---|---|---|
@@ -23,14 +23,18 @@
  * | intake, a matched ticket | **20** | one task never starts | `pipeline/intake-reconcile.ts`, and it stays there |
  * | a deadline's timer (WP-56) | **161** | a question, approval or take-over waits for ever | **here** — `deadline`, in `./deadline.ts`, which also backfills the rows **162** names |
  * | a rework's close (WP-59) | **178** | a rejected merge request stays open, detached from every task | **here** — `superseded_mr`, in `./superseded-mr.ts` |
+ * | a deferred dependency-gate ending (WP-67) | **240** | a question nobody asks, or a block nobody applies, on an `active` task | **here** — `deferred_dependency`, in `./deferred-dependency.ts` (WP-84) |
  *
- * …plus two rows that are **not** lost wake-ups at all and ride the same pass because each is the
+ * …plus three rows that are **not** lost wake-ups at all and ride the same pass because each is the
  * other half of one of them: `task_ask_run` (**121**), a question still `pending` whose run is
  * already terminal, and `run_credential` (**155**, WP-77), a terminal run whose git credential
  * nothing confirmed revoked — the runner died between mint and revoke, which is the `run_lease`
  * row's other consequence, or its teardown revoke failed. It enqueues a `pipeline.outbound` duty
  * per address after the pass's reads commit, bounded by the audit row that duty writes;
- * `./run-credential.ts` carries the predicate, the bound and what it does not reach.
+ * `./run-credential.ts` carries the predicate, the bound and what it does not reach. The third is
+ * `notification_repost` (**236** (2), WP-84): a planned-`immediate` notification whose job spent
+ * every attempt, re-posted once through its original duty under the same idempotency key —
+ * `./notification-repost.ts`.
  *
  * **The run row is a different shape from the re-enqueuing ones, and that is why its body is its
  * own module** (WP-47). Their contract is *"find the row, enqueue the wake-up"*, bounded by an
@@ -121,7 +125,13 @@
 import type { Id, IsoDateTime } from '@platform/contracts';
 import { enqueueAsk } from '../ask/commands.js';
 import { enqueueCuration } from '../knowledge/librarian.js';
-import { enqueueOutbound } from '../pipeline/jobs.js';
+import { IMMEDIATE_UNDELIVERED_AFTER_MS } from '../notify/undelivered.js';
+import { waitingAggregateOfRow } from '../notify/waiting.js';
+import {
+  enqueueOrganisationOutbound,
+  enqueueOutbound,
+  type PipelineOutboundData,
+} from '../pipeline/jobs.js';
 import type { Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
@@ -129,6 +139,11 @@ import { silentLogger } from '../ports/logger.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import { type DeadlineRecoverySite, recoverDeadlines } from './deadline.js';
+import type {
+  DeferredDependencyRecoverySite,
+  StrandedDeferredDependency,
+} from './deferred-dependency.js';
+import type { NotificationRepostSite, UndeliveredNotification } from './notification-repost.js';
 import {
   enqueueRunCredentialRevocation,
   type RunCredentialRecoverySite,
@@ -344,6 +359,22 @@ export interface StrandedRecoveryOptions {
    * composition with no pipeline has no worker to take it.
    */
   readonly supersededMergeRequests?: SupersededMergeRequestRecoverySite;
+  /**
+   * The deferred-dependency site (WP-84, PROGRESS backlog **240**, `./deferred-dependency.ts`): an
+   * `active` task whose deferred gate ending's wake-up was lost on `task.resumed`.
+   *
+   * **Absent is "a lost resume wake-up waits for the next resume"** — every build before WP-84.
+   * Optional for the reason `credentials` is: its wake-up is a `pipeline.outbound` duty.
+   */
+  readonly deferredDependencies?: DeferredDependencyRecoverySite;
+  /**
+   * The re-post site (WP-84, PROGRESS backlog **236** (2), `./notification-repost.ts`): a
+   * planned-`immediate` notification whose job spent every attempt.
+   *
+   * **Absent is "nothing re-posts it"** — every build before WP-84, where the gauge counted it and
+   * nothing else happened. Optional for the reason `credentials` is.
+   */
+  readonly notifications?: NotificationRepostSite;
   readonly logger?: Logger;
 }
 
@@ -486,7 +517,20 @@ export const runStrandedRecovery = async (
   // connection, and five reads in five transactions would be five borrows for the same answer.
   const credentialSite = options.credentials;
   const supersededSite = options.supersededMergeRequests;
+  const deferredSite = options.deferredDependencies;
+  const repostSite = options.notifications;
+  // The re-post bound is the gauge's own, not the grace: a row younger than the job's retry window
+  // still has an attempt of its own left (`./notification-repost.ts`).
+  const repostBefore = new Date(at - IMMEDIATE_UNDELIVERED_AFTER_MS).toISOString() as IsoDateTime;
   const found = await options.unitOfWork.transaction(async (scope) => ({
+    deferred:
+      deferredSite === undefined
+        ? []
+        : await deferredSite.store.strandedDeferredDependencies(scope.tx, query),
+    undelivered:
+      repostSite === undefined
+        ? []
+        : await repostSite.store.undeliveredImmediate(scope.tx, { before: repostBefore, limit }),
     superseded:
       supersededSite === undefined
         ? []
@@ -756,6 +800,55 @@ export const runStrandedRecovery = async (
     );
   }
 
+  if (deferredSite !== undefined) {
+    sites.push(await recoverDeferredDependencies(options, deferredSite, found.deferred, now));
+  }
+  if (repostSite !== undefined) {
+    let reposted = 0;
+    let withheld = 0;
+    for (const row of found.undelivered) {
+      if (waitingAggregateOfRow(row) === 'unknown') {
+        // Fail closed (review round 2): a message asking somebody for something, whose question or
+        // approval the row no longer names, cannot be re-checked — so it is not sent.
+        await write(async (tx) => repostSite.store.withholdRepost(tx, { id: row.id, at: now }));
+        withheld += 1;
+        logger.warn(
+          { notification_id: row.id, notification_class: row.notificationClass },
+          'an undelivered notification names no question or approval to re-check, so it is withheld rather than re-posted unchecked (PROGRESS backlog 236, 292)',
+        );
+        continue;
+      }
+      // The mark first, in its own transaction — `runAttemptOrEndSite`'s ordering and its reason.
+      await write(async (tx) => repostSite.store.markRepostAttempt(tx, { id: row.id, at: now }));
+      if (row.projectId === null) {
+        await enqueueOrganisationOutbound(options.jobs, {
+          duty: 'notify_organisation',
+          cause_event_id: row.causeEventId,
+          notification_class: row.notificationClass,
+        });
+      } else {
+        await enqueueOutbound(options.jobs, repostWakeUp(row, row.projectId));
+      }
+      reposted += 1;
+      logger.warn(
+        {
+          notification_id: row.id,
+          project_id: row.projectId,
+          task_id: row.taskId,
+          notification_class: row.notificationClass,
+          created_at: row.createdAt,
+        },
+        'a notification planned for immediate delivery was still undelivered after every attempt its job had, so it is re-posted once under the same idempotency key; if that fails too it stays counted by notifications_undelivered (PROGRESS backlog 236)',
+      );
+    }
+    sites.push({
+      site: 'notification_repost',
+      found: found.undelivered.length,
+      reEnqueued: reposted,
+      ended: withheld,
+    });
+  }
+
   /**
    * The fifth site **ends** rather than re-enqueues, so it has no mark and no attempt (backlog 121).
    *
@@ -877,4 +970,64 @@ export const runStrandedRecovery = async (
   }
 
   return sites;
+};
+
+/**
+ * The deferred-dependency row (`./deferred-dependency.ts`): mark, then wake, once per resume — no
+ * ending, because a deferral holds nothing and the next `task.resumed` performs it anyway.
+ */
+const recoverDeferredDependencies = async (
+  options: StrandedRecoveryOptions,
+  site: DeferredDependencyRecoverySite,
+  rows: readonly StrandedDeferredDependency[],
+  now: IsoDateTime,
+): Promise<StrandedSiteReport> => {
+  const logger = options.logger ?? silentLogger;
+  for (const row of rows) {
+    await options.unitOfWork.transaction(async (scope) =>
+      site.store.markDeferredDependencyAttempt(scope.tx, { taskId: row.taskId, at: now }),
+    );
+    // The duty's own payload, as the `task.resumed` handler builds it; it re-validates on fire.
+    await enqueueOutbound(options.jobs, {
+      duty: 'dependency_gate_resume',
+      project_id: row.projectId,
+      task_id: row.taskId,
+      cause_event_id: row.resumedEventId,
+    });
+    logger.warn(
+      { project_id: row.projectId, task_id: row.taskId, resumed_at: row.resumedAt },
+      'a task resumed with a deferred dependency-gate decision and nothing performed it, so the resume duty was enqueued again — once for this resume; the deferral stays on the record for the next one if this does not take (PROGRESS backlog 240)',
+    );
+  }
+  return { site: 'deferred_dependency', found: rows.length, reEnqueued: rows.length, ended: 0 };
+};
+
+/**
+ * The `notify` wake-up a re-post rebuilds from its row — with the ids the duty re-checks the
+ * aggregate by (`notify/duty.ts`, WP-84 review round 1): an approval row's `approval_id`, a question
+ * row's `question_id`, and a reminder's aggregate as `reminder_of`.
+ */
+const repostWakeUp = (row: UndeliveredNotification, projectId: Id): PipelineOutboundData => {
+  const reminded =
+    row.notificationClass !== 'reminder'
+      ? {}
+      : row.questionId !== null
+        ? { reminder_of: row.questionId, reminder_aggregate: 'question' as const }
+        : row.approvalId !== null
+          ? { reminder_of: row.approvalId, reminder_aggregate: 'approval' as const }
+          : {};
+  return {
+    duty: 'notify',
+    project_id: projectId,
+    ...(row.taskId === null ? {} : { task_id: row.taskId }),
+    cause_event_id: row.causeEventId,
+    notification_class: row.notificationClass,
+    ...(row.notificationClass === 'approval' && row.approvalId !== null
+      ? { approval_id: row.approvalId }
+      : {}),
+    ...(row.notificationClass === 'question' && row.questionId !== null
+      ? { question_id: row.questionId }
+      : {}),
+    ...reminded,
+  };
 };

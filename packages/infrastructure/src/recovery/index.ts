@@ -2,8 +2,12 @@
 
 /** The deadline recovery's reads and backfill — PROGRESS backlog 161, 162 (WP-56). */
 export * from './postgres-deadline-recovery-store.js';
+/** The deferred-dependency recovery's read and mark — PROGRESS backlog 240 (WP-84). */
+export * from './postgres-deferred-dependency-store.js';
 /** The run-lease sweep's two reads — PROGRESS backlog 109 (WP-47). */
 export * from './postgres-expired-run-store.js';
+/** The re-post row's read and mark — PROGRESS backlog 236 (WP-84). */
+export * from './postgres-notification-repost-store.js';
 /** The run-credential recovery's two reads — PROGRESS backlog 155 (WP-77). */
 export * from './postgres-run-credential-store.js';
 export * from './postgres-stranded-store.js';

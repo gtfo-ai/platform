@@ -32,6 +32,8 @@ export interface NotificationStoreHarness {
     readonly taskId: Id | null;
     /** An approval on that task, for the message-address cases (WP-65). */
     readonly approvalId: Id;
+    /** A question on that task, for the re-check id a `question` row carries (WP-84). */
+    readonly questionId: Id;
     /** A platform user the store knows, for the decider's name (WP-73, backlog 234). */
     readonly user: { readonly id: Id; readonly name: string };
     cleanup(): Promise<void>;
@@ -92,6 +94,72 @@ export const runNotificationStoreContract = (harness: NotificationStoreHarness):
           notificationClass: 'escalation',
         }),
       ).toBe(true);
+    });
+
+    it('reads back the question and the approval a row is about, and none for a row about neither (WP-84)', async () => {
+      const question = entry({ questionId: context.questionId, taskId: context.taskId });
+      const reminder = entry({
+        notificationClass: 'reminder',
+        approvalId: context.approvalId,
+        taskId: context.taskId,
+      });
+      const plain = entry({ notificationClass: 'escalation' });
+      for (const row of [question, reminder, plain]) {
+        expect(await store.record(tx, row)).toBe(true);
+      }
+      const read = async (row: NotificationEntry) =>
+        store.findByCause(tx, {
+          projectId: context.projectId,
+          causeEventId: row.causeEventId,
+          notificationClass: row.notificationClass,
+        });
+      expect(await read(question)).toMatchObject({
+        questionId: context.questionId,
+        approvalId: null,
+      });
+      expect(await read(reminder)).toMatchObject({
+        questionId: null,
+        approvalId: context.approvalId,
+      });
+      expect(await read(plain)).toMatchObject({ questionId: null, approvalId: null });
+    });
+
+    it('closes an undelivered row withheld — terminal, never claimed — and leaves a delivered one alone (WP-84)', async () => {
+      const waiting = entry({ notificationClass: 'reminder' });
+      const delivered = entry({ notificationClass: 'escalation' });
+      await store.record(tx, waiting);
+      await store.record(tx, delivered);
+      const at = '2026-06-02T07:00:00.000Z' as IsoDateTime;
+      await store.markDelivered(tx, { id: delivered.id, at, via: 'immediate' });
+      await store.markWithheld(tx, { ids: [waiting.id, delivered.id], at });
+      const read = async (row: NotificationEntry) =>
+        store.findByCause(tx, {
+          projectId: context.projectId,
+          causeEventId: row.causeEventId,
+          notificationClass: row.notificationClass,
+        });
+      expect(await read(waiting)).toMatchObject({ deliveredAs: 'withheld', deliveredAt: at });
+      expect((await read(delivered))?.deliveredAs).toBe('immediate');
+      // Neither the digest's fan-out nor its claim sees a withheld row.
+      expect(
+        await store.projectsAwaitingDigest(tx, {
+          before: '2026-06-03T00:00:00.000Z' as IsoDateTime,
+          limit: 10,
+        }),
+      ).not.toContain(context.projectId);
+      expect(
+        await store.claimForDigest(tx, {
+          projectId: context.projectId,
+          day: '2026-06-02',
+          before: '2026-06-03T00:00:00.000Z' as IsoDateTime,
+          immediateBefore: '2026-06-03T00:00:00.000Z' as IsoDateTime,
+          limit: 10,
+        }),
+      ).toEqual([]);
+      // …and a digest counted as delivered is only a digest, never a withheld row.
+      expect(
+        await store.digestDelivered(tx, { projectId: context.projectId, day: '2026-06-02' }),
+      ).toBe(false);
     });
 
     it('lists a project with something waiting, and stops listing it once delivered', async () => {

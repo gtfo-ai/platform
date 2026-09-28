@@ -306,6 +306,17 @@ export interface PipelineOutboundData {
    */
   readonly approval_id?: string;
   /**
+   * `notify` with class `reminder` (WP-84, `reminders.ts`): which question or approval the reminder
+   * is about, so the duty posts nothing for one answered or decided since the timer fired.
+   */
+  readonly reminder_of?: string;
+  /**
+   * `notify` with class `question` (WP-84 review round 1): which question, so the duty posts
+   * nothing for one answered or expired since — on a retry, and on the recovery pass's re-post.
+   */
+  readonly question_id?: string;
+  readonly reminder_aggregate?: 'question' | 'approval';
+  /**
    * `revoke_run_credential` (WP-77): the run whose credential it is, and the address the mint's
    * audit row recorded — `<project>#<token_id>` on GitLab, not a secret. The duty re-reads the rest.
    */

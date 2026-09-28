@@ -92,6 +92,13 @@ export const tasks = pgTable('tasks', {
   readyHeadSha: text('ready_head_sha'),
   /** WP-79 round 2, migration 0056: the head the CI gate last passed; only `saveCiHead` writes it. */
   ciHeadSha: text('ci_head_sha'),
+  /**
+   * WP-84, migration 0059 (backlog 240): the deferred-dependency recovery's one attempt per resume;
+   * only the recovery store writes it.
+   */
+  dependencyRecoveryAttemptedAt: timestamp('dependency_recovery_attempted_at', {
+    withTimezone: true,
+  }),
   /** WP-24, migration 0020: the human merge request a review-only task reviews. */
   reviewSubject: jsonb('review_subject').$type<MergeRequestSnapshot>(),
   /** WP-35, migration 0030: the mined history one bootstrap run reads, bounded and redacted. */
@@ -368,6 +375,8 @@ export const approvals = pgTable('approvals', {
   status: approvalStatusEnum('status').notNull().default('pending'),
   requestedAt: timestamp('requested_at', { withTimezone: true }).notNull().defaultNow(),
   deadlineAt: timestamp('deadline_at', { withTimezone: true }),
+  /** WP-84, migration 0059: BD-006's reminder, counted as the question's is. */
+  remindersSent: integer('reminders_sent').notNull().default(0),
   decidedByUserId: uuid('decided_by_user_id'),
   decidedAt: timestamp('decided_at', { withTimezone: true }),
   reason: text('reason'),
@@ -449,6 +458,10 @@ export const notifications = pgTable('notifications', {
   // Migration 0051 (WP-65, backlog 202): which approval a posted message asked about, and where it is.
   approvalId: uuid('approval_id'),
   messageRef: jsonb('message_ref').$type<JsonObject | null>(),
+  // Migration 0059 (WP-84, backlog 236): the re-post sweep's one attempt.
+  repostAttemptedAt: timestamp('repost_attempted_at', { withTimezone: true }),
+  // Migration 0059 (WP-84 review round 1): the question a `question` or `reminder` row is about.
+  questionId: uuid('question_id'),
 });
 
 /**

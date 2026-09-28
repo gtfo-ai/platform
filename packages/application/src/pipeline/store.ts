@@ -1161,7 +1161,18 @@ export interface RunRepository {
 export interface QuestionRepository {
   insert(tx: Transaction, question: Question): Promise<void>;
   load(tx: Transaction, questionId: Id): Promise<Question | null>;
+  /** The aggregate's own columns — never `reminders_sent`, which only {@link recordReminder} writes. */
   save(tx: Transaction, question: Question): Promise<void>;
+  /**
+   * One reminder went out (WP-84, BD-006): `reminders_sent + 1`, **only** while the question is
+   * still `open` and the counter still reads `sent` — `false` when an answer, an expiry or another
+   * reminder got there first. Narrow rather than `save` because a reminder appends no event, so
+   * nothing else would serialise it against an answer saved in a concurrent transaction.
+   */
+  recordReminder(
+    tx: Transaction,
+    input: { readonly id: Id; readonly sent: number },
+  ): Promise<boolean>;
   /** Every question of the task still `open`; a blocking one keeps the task waiting. */
   open(tx: Transaction, taskId: Id): Promise<readonly Question[]>;
 }
@@ -1176,7 +1187,17 @@ export interface StoredApproval {
 export interface ApprovalRepository {
   insert(tx: Transaction, stored: StoredApproval): Promise<void>;
   load(tx: Transaction, approvalId: Id): Promise<StoredApproval | null>;
+  /** The decision's columns — never `reminders_sent`, which only {@link recordReminder} writes. */
   save(tx: Transaction, stored: StoredApproval): Promise<void>;
+  /**
+   * One reminder went out (WP-84, BD-006's Q95 amendment): `reminders_sent + 1`, only while the
+   * approval is still `pending` and the counter still reads `sent`. The question's narrow write,
+   * for the question's reason.
+   */
+  recordReminder(
+    tx: Transaction,
+    input: { readonly id: Id; readonly sent: number },
+  ): Promise<boolean>;
   /**
    * The approval already recorded for this exact stage attempt, if any.
    *

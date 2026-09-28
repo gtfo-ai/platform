@@ -46,6 +46,7 @@ import type { NotifyOptions } from './options.js';
 import { digestSettingsOf, localMinutesOf } from './policy.js';
 import { awaitsImmediateRetry } from './ports.js';
 import { notificationBody, notificationDraft } from './render.js';
+import { isStillWaiting } from './waiting.js';
 
 /** The classes a task with no human-visible ticket is not worth announcing. */
 const PLATFORM_TASK_SILENT_CLASSES: readonly NotificationClass[] = [
@@ -113,7 +114,37 @@ export const runNotification = async (
       { task_id: data.task_id, approval_id: data.approval_id },
       'notify: the approval is no longer pending, so there is nothing to ask',
     );
+    // A row an earlier attempt recorded is closed withheld, not left counted (review round 2).
+    await withholdRecorded(options, { projectId, causeEventId, notificationClass });
     return;
+  }
+
+  /**
+   * **A question, or a reminder, is sent only while its aggregate still waits** (WP-84 and its
+   * review round 1). The event was minutes ago on a first attempt, and up to the recovery pass's
+   * re-post window (~48 min, `recovery/notification-repost.ts`) later on a re-post — which rebuilds
+   * this wake-up from the row's `question_id` / `approval_id`. A question answered or expired, or an
+   * approval decided or expired, meanwhile: **nothing is posted**; no row is written by a first
+   * attempt, and a row an earlier attempt recorded is closed **withheld** (review round 2) — a
+   * message correctly not sent, which the gauge, the re-post and the digest all skip. A first
+   * `question` wake-up with no `question_id` — one enqueued by a build before WP-84 — is not
+   * re-checked; the re-post never rebuilds one (`recovery/stranded.ts` withholds such a row).
+   */
+  const waitingOn = waitingAggregateOf(notificationClass, data);
+  if (waitingOn !== null) {
+    const waiting = await options.unitOfWork.transaction(async (scope) =>
+      isStillWaiting(options.store, scope.tx, waitingOn),
+    );
+    if (!waiting) {
+      // `info`, not `debug`: this line is the only trace an operator has of why nobody was told
+      // (no screen reads `notifications`); the digest logs its withheld count at the same level.
+      logger.info(
+        { task_id: data.task_id, notification_class: notificationClass, ...waitingOn },
+        'notify: the question or approval was settled since this notification was raised, so nobody is told',
+      );
+      await withholdRecorded(options, { projectId, causeEventId, notificationClass });
+      return;
+    }
   }
 
   const mode: TaskMode = stored?.task.mode ?? 'normal';
@@ -166,7 +197,7 @@ export const runNotification = async (
     ticketUrl === null
       ? { value: null as string | null, count: 0 }
       : chat.redactor.redactText(ticketUrl);
-  const draft = notificationDraft({
+  let draft = notificationDraft({
     notificationClass,
     subject: { name: redactedSubject.value, url: redactedUrl.value },
     detail: redactedDetail.value,
@@ -190,6 +221,12 @@ export const runNotification = async (
       redactionCount: redactedDetail.count + redactedSubject.count + redactedUrl.count,
       // WP-65 (backlog 202): which approval the message asks about, so a later decision can find it.
       ...(approval === null ? {} : { approvalId: approval.approval.id }),
+      // WP-84 review round 1: what a retry or a re-post re-checks. A reminder's row names its
+      // aggregate; it has no `message_ref` (text, no buttons), so `approvalMessage` never picks it.
+      ...(waitingOn?.aggregate === 'question' ? { questionId: waitingOn.id } : {}),
+      ...(notificationClass === 'reminder' && waitingOn?.aggregate === 'approval'
+        ? { approvalId: waitingOn.id }
+        : {}),
     }),
   );
   /**
@@ -221,6 +258,18 @@ export const runNotification = async (
     }
     id = existing.id;
     plan = existing.plannedDelivery;
+    /**
+     * **The row's own words, not a re-render** (WP-84, PROGRESS backlog 236). A retry of this job
+     * would render the same text from the same payload — but the re-post row of the recovery pass
+     * (`recovery/notification-repost.ts`) rebuilds this wake-up from the row and carries no detail,
+     * so the text that was recorded (bounded and redacted at the first attempt) is what is posted.
+     */
+    draft = {
+      notificationClass,
+      title: existing.title,
+      detail: existing.detail,
+      url: existing.url,
+    };
   }
   if (plan === 'digest') {
     logger.debug(
@@ -343,4 +392,47 @@ export const runNotification = async (
      */
     await settleApprovalMessage(options, { projectId, approvalId: approval.approval.id });
   }
+};
+
+/**
+ * Closes the row an earlier attempt of this notification recorded as **withheld**, if there is one
+ * and it is still undelivered (WP-84 review round 2). A first attempt has recorded nothing.
+ */
+const withholdRecorded = async (
+  options: NotifyOptions,
+  key: {
+    readonly projectId: Id;
+    readonly causeEventId: Id;
+    readonly notificationClass: NotificationClass;
+  },
+): Promise<void> => {
+  await options.unitOfWork.transaction(async (scope) => {
+    const row = await options.notifications.findByCause(scope.tx, key);
+    if (row !== null && row.deliveredAt === null) {
+      await options.notifications.markWithheld(scope.tx, {
+        ids: [row.id],
+        at: options.clock.now() as IsoDateTime,
+      });
+    }
+  });
+};
+
+/**
+ * Which aggregate a notification waits on, off its wake-up: the question a `question` asks, or the
+ * question or approval a `reminder` is about. `approval` itself is re-checked by its own branch.
+ */
+const waitingAggregateOf = (
+  notificationClass: NotificationClass,
+  data: PipelineOutboundData,
+): { readonly aggregate: 'question' | 'approval'; readonly id: Id } | null => {
+  if (notificationClass === 'question' && data.question_id !== undefined) {
+    return { aggregate: 'question', id: data.question_id as Id };
+  }
+  if (notificationClass === 'reminder' && data.reminder_of !== undefined) {
+    return {
+      aggregate: data.reminder_aggregate === 'approval' ? 'approval' : 'question',
+      id: data.reminder_of as Id,
+    };
+  }
+  return null;
 };

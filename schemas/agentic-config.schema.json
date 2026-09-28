@@ -359,7 +359,8 @@
                   "task_cancelled",
                   "budget_threshold",
                   "budget_exhausted",
-                  "approval"
+                  "approval",
+                  "reminder"
                 ]
               }
             }

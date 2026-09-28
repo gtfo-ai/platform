@@ -14,7 +14,9 @@
  *    and failed and none is left; the row is either carried by the
  *    project's next digest (and then it *was* late, and the gauge falls when it is carried) or —
  *    for a project with the digest off, and for every organisation-scoped row — by nothing at all,
- *    which is the case backlog 81 found silent;
+ *    which is the case backlog 81 found silent. Since WP-84 the recovery pass re-posts such a row
+ *    **once** past this same bound (`recovery/notification-repost.ts`, backlog 236 (2)); one that
+ *    fails that too stays counted;
  *  - **planned `digest`**: a whole day (the next digest is at most a day away), plus one digest
  *    tick, plus `notify.digest`'s own retry window.
  *
