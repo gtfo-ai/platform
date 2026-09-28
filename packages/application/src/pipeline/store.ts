@@ -720,6 +720,13 @@ export interface TaskRepository {
       readonly outcome: TaskStageOutcome;
       readonly returnReason: string | null;
       readonly returnedTo: Slug | null;
+      /**
+       * The length `returnReason` would have had had its writer not cut it, or `null`/absent when
+       * nothing was cut (WP-81, migration 0058). Written by one caller: a failed CI gate bounds the
+       * failing job's log to its head and tail, and the next run's `return_feedback` marker
+       * announces that cut as `truncated="true"` (technical/04). A positive integer when present.
+       */
+      readonly returnReasonOriginalChars?: number | null;
     },
   ): Promise<void>;
   /**
@@ -798,7 +805,7 @@ export interface TaskRepository {
     taskId: Id,
     stage: Slug,
     attempt: number,
-  ): Promise<string | null>;
+  ): Promise<ReturnFeedback | null>;
   /**
    * The take-over a human still holds on this task, or `null` — WP-56, PROGRESS backlog 69.
    *
@@ -862,6 +869,17 @@ export interface TakeOverRecord {
    * (`recovery/deadline.ts`), so the two cannot disagree about when a take-over went quiet.
    */
   readonly lastActivityAt: IsoDateTime;
+}
+
+/**
+ * The finding a return carried, as {@link TaskRepository.lastReturnReason} reads it back (WP-81):
+ * the stored reason and, when its writer cut it, the length it would have had uncut — which the
+ * prompt's `return_feedback` marker announces as `truncated="true"` rather than as a line in the
+ * body. `originalChars` is `null` for every reason nothing cut.
+ */
+export interface ReturnFeedback {
+  readonly reason: string;
+  readonly originalChars: number | null;
 }
 
 export interface StoredArtifact {

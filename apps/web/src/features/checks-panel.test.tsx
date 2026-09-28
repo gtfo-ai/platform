@@ -7,20 +7,20 @@
  * > rebase status, review threads open/resolved, business verdict, tamper check, coverage delta,
  * > dependency status, risk classes and required reviewers, budget vs estimate, questions pending"*
  *
- * Ten of the eleven are rendered and one is not — the tamper check, BD-024's gate, which WP-46
- * deliberately does not build — and the list of which is which lives **here**
- * rather than in a comment on the screen — the shape `apps/server/src/routes/client-census.test.ts`
- * uses, and for the same reason: a prose caveat is a claim nobody re-checks, and this one had
- * already gone stale once (it named WP-15 and WP-38 as *"the pipeline that produces them"* after
- * both had shipped).
+ * All eleven are rendered since WP-81, which gave the last one — the tamper check, BD-024's gate —
+ * its producer; until then ten were, and the one that was not was named on the screen in a *"Not on
+ * this panel"* sentence. The list of which is which lives **here** rather than in a comment on the
+ * screen — the shape `apps/server/src/routes/client-census.test.ts` uses, and for the same reason:
+ * a prose caveat is a claim nobody re-checks, and this one had already gone stale once (it named
+ * WP-15 and WP-38 as *"the pipeline that produces them"* after both had shipped).
  *
- * **Both directions** (standing rule 42): a shown item must appear on the panel *and not* in the
- * "not on this panel" sentence, and the sentence's list of absent items is **compared** with the
- * census rather than searched for each entry (standing rule 3: a list is compared, not pinned) —
- * so an item that starts working and stays listed absent fails, and so does one that stops
- * rendering without being listed. A one-sided test would pass a panel that both rendered an item
- * and apologised for it, and — much worse — one that quietly stopped rendering an item while the
- * sentence still called it present.
+ * **Both directions** (standing rule 42): a shown item must appear on the panel, and the panel's list
+ * of absent items is **compared** with the census's rather than searched for each entry (standing
+ * rule 3: a list is compared, not pinned). With nothing absent that list is empty, so the panel must
+ * carry **no** *"Not on this panel"* sentence at all — an item that starts being apologised for
+ * again fails, and so does one that stops rendering without being listed absent. A one-sided test
+ * would pass a panel that both rendered an item and apologised for it, and — much worse — one that
+ * quietly stopped rendering an item while nothing said so.
  *
  * The fixture is **typed** rather than an untyped literal (PROGRESS backlog 93): a required field
  * added to `taskRecordSchema` fails at this line rather than three layers away as a missing heading.
@@ -147,10 +147,8 @@ const CHECKS: readonly {
   { item: 'review threads open/resolved', shown: 'Review threads' },
   // WP-46: the same Acceptance Verdict's `verdict`.
   { item: 'business verdict', shown: 'Business verdict' },
-  // Absent with no producer at all: BD-024's gate compares the change's paths with the plan's
-  // declared exceptions and stores a result, and nothing in this build does. **Not WP-46's** — a
-  // work package of its own — and named on the screen with that reason.
-  { item: 'tamper check', absent: 'tamper check' },
+  // WP-81: BD-024's gate, made by the CI gate as part of its read — the word its row is closed with.
+  { item: 'tamper check', shown: 'Tamper check' },
   { item: 'coverage delta', shown: 'Coverage delta' },
   { item: 'dependency status', shown: 'Dependencies' },
   { item: 'risk classes', shown: 'Risk classes' },
@@ -186,7 +184,7 @@ const renderPanel = async (): Promise<HTMLElement> => {
   const { container } = render(createApp({ fetchImpl, realtime: false }).element);
   await screen.findByText('Checks');
   await waitFor(() => {
-    expect(container.textContent).toContain('Not on this panel');
+    expect(container.textContent).toContain('Tamper check');
   });
   return container;
 };
@@ -195,7 +193,9 @@ describe('the Checks panel against product/10:38', () => {
   it('renders every item it claims to, and names every one it does not — both ways', async () => {
     const container = await renderPanel();
     const text = container.textContent ?? '';
-    const absentSentence = text.slice(text.indexOf('Not on this panel'));
+    // Empty when the panel names nothing absent — which is the case since WP-81.
+    const absentAt = text.indexOf('Not on this panel');
+    const absentSentence = absentAt < 0 ? '' : text.slice(absentAt);
 
     // The census is complete: product/10:38 lists eleven checks and every one of them is decided
     // here. `risk classes and required reviewers` is one phrase in the document and two items on
@@ -214,11 +214,14 @@ describe('the Checks panel against product/10:38', () => {
       .split(',')
       .map((entry) => entry.trim())
       .filter((entry) => entry.length > 0);
-    expect(listed.sort()).toEqual(
-      CHECKS.flatMap((check) => (check.absent === undefined ? [] : [check.absent])).sort(),
-    );
-    // Criterion 4: the one absence says why, and names the decision it is waiting on.
-    expect(absentSentence).toContain('BD-024');
+    const absent = CHECKS.flatMap((check) => (check.absent === undefined ? [] : [check.absent]));
+    expect(listed.sort()).toEqual([...absent].sort());
+    // WP-81: nothing is absent, so the panel carries no apology at all — the sentence returns only
+    // with an entry in the census, which is then compared above.
+    expect(absent).toEqual([]);
+    expect(text).not.toContain('Not on this panel');
+    // Eleven items answered (twelve rows: one phrase of the document is two items on the panel).
+    expect(CHECKS.filter((check) => check.shown !== undefined)).toHaveLength(12);
   });
 
   it('shows what the dependency gate found, as text and with its licence', async () => {
@@ -380,6 +383,59 @@ describe('the Checks panel’s gate, thread and verdict items (WP-46)', () => {
     expect(view.text()).toContain('This task has not entered ci_gate.');
     expect(view.text()).toContain('This task has not entered rebase_gate.');
     expect(view.text()).not.toContain('green');
+  });
+
+  /**
+   * **The tamper check** (WP-81): the CI gate's row, read for the word the check closed it with —
+   * each answer one the row supports, and never a tick for a gate that has not decided.
+   */
+  it('reads the tamper check off the CI gate’s latest row, each word its own answer', async () => {
+    const cases: readonly [TaskDetailResponse['stages'], string][] = [
+      [
+        [stage('ci_gate', 1, 'returned', 'protected_paths_changed')],
+        'protected paths changed, sent back',
+      ],
+      [
+        [stage('ci_gate', 1, 'completed', 'protected_paths_awaiting_review')],
+        'declared changes await the code review',
+      ],
+      [
+        [
+          stage('ci_gate', 1, 'returned', 'protected_paths_changed'),
+          stage('ci_gate', 2, 'completed', 'pass'),
+        ],
+        'clean',
+      ],
+      [[stage('ci_gate', 1, 'running', null)], 'checking'],
+      [[], 'not reached'],
+    ];
+    for (const [stages, expected] of cases) {
+      const view = await render$(detailWith({ stages, artifacts: [] }));
+      await waitFor(() => expect(view.text()).toContain('Tamper check'));
+      expect(view.text(), expected).toContain(`Tamper check${expected}`);
+      cleanup();
+    }
+  });
+
+  it('does not call a tamper return red CI, nor a provisional pass anything but green', async () => {
+    const returned = await render$(
+      detailWith({
+        stages: [stage('ci_gate', 1, 'returned', 'protected_paths_changed')],
+        artifacts: [],
+      }),
+    );
+    await waitFor(() => expect(returned.text()).toContain('CI status'));
+    expect(returned.text()).toContain('CI statussent back by the tamper check');
+    expect(returned.text()).not.toContain('red, sent back');
+    cleanup();
+    const provisional = await render$(
+      detailWith({
+        stages: [stage('ci_gate', 1, 'completed', 'protected_paths_awaiting_review')],
+        artifacts: [],
+      }),
+    );
+    await waitFor(() => expect(provisional.text()).toContain('CI status'));
+    expect(provisional.text()).toContain('CI statusgreen');
   });
 
   it('shows the review window’s counts, and "not read" when it has read nothing', async () => {

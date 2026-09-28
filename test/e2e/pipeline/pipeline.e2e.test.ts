@@ -17,8 +17,16 @@
  * Every stage of the templates is scripted, so what is exercised is the interpreter's transitions
  * and the saga's handlers, not the model.
  */
+import { readDataBlocks } from '@platform/domain';
 import { afterEach, describe, expect, it } from 'vitest';
-import { GIT_PROJECT, inboundEvent, type PipelineE2E, startPipeline } from '../support/pipeline.js';
+import { createTestClient } from '../../integration/support/postgres.js';
+import {
+  GIT_BINDING_TOKEN,
+  GIT_PROJECT,
+  inboundEvent,
+  type PipelineE2E,
+  startPipeline,
+} from '../support/pipeline.js';
 import { bugScenarios, featureScenarios, TICKETS } from '../support/scenarios.js';
 
 let harness: PipelineE2E | undefined;
@@ -234,11 +242,19 @@ describe('when the merge request’s pipeline is red', () => {
     // the provider whatever the template's `on` says. A failure branch that fell open here would
     // advance a task to code review on red CI — which is why this drives the fake provider's
     // *failed* pipeline rather than asserting the evaluator's return value again.
+    // WP-81: the failing job's log, with the git binding's own credential planted past the head
+    // bound (the straddle across the cut is the unit tier's case) and again in the error block — what a job that echoes its command prints.
     const pipeline = await startPipeline({
       scenarios: featureScenarios,
       label: 'feature-ci-red',
       tickets: TICKETS,
       ciStatus: 'failed',
+      ciJobLog: [
+        `${'$ setup '.repeat(184)}git clone https://oauth2:${GIT_BINDING_TOKEN}@git.example.test/acme/api.git`,
+        'progress '.repeat(3_000),
+        'FAIL src/totals.test.ts',
+        `  expected 3, received 2 (token ${GIT_BINDING_TOKEN})`,
+      ].join('\n'),
     });
     harness = pipeline;
 
@@ -256,10 +272,53 @@ describe('when the merge request’s pipeline is red', () => {
     const escalated = events.find((event) => event.type === 'task.escalated');
     const reason = (escalated?.payload as { reason?: string } | undefined)?.reason ?? '';
     expect(reason).toContain('ci_fix iteration limit of 3 reached');
-    // The gate's `detail` is what the human is given, and the Q55 cut is what it contains: the
-    // failing job's name, carried all the way from the provider to the escalation.
+    // The gate's `detail` is what the human is given: the failing job's name, carried all the way
+    // from the provider to the escalation — and since WP-81 (Q55 closed) its log excerpt too.
     expect(reason).toContain('test:unit');
     expect(events.map((event) => event.type)).not.toContain('task.completed');
+
+    /*
+     * **WP-81 criterion 4, on the real path**: the next implementation run's assembled prompt — the
+     * bytes the planner built (standing rule 82) — carries the error block inside its
+     * `return_feedback` data block, the cut announced in the marker, and no trace of the planted
+     * credential; nor does any `run_messages` row, `runs.user_prompt` or `events.payload`.
+     */
+    const [, second] = pipeline.specs.filter((spec) => spec.stage === 'implementation');
+    const prompt = second?.userPrompt ?? '';
+    const [feedback] = readDataBlocks(prompt).blocks.filter(
+      (block) => block.kind === 'return_feedback',
+    );
+    expect(feedback?.body).toContain('FAIL src/totals.test.ts');
+    expect(feedback?.attributes.truncated).toBe('true');
+    expect(Number(feedback?.attributes.original_chars)).toBeGreaterThan(feedback?.body.length ?? 0);
+    expect(feedback?.body).not.toMatch(/truncat/i);
+    const client = createTestClient(pipeline.database.connectionString);
+    await client.connect();
+    try {
+      const messages = await client.query<{ payload: unknown }>(
+        'select m.payload from run_messages m join runs r on r.id = m.run_id where r.task_id = $1',
+        [parked.id],
+      );
+      const prompts = await client.query<{ user_prompt: string | null }>(
+        'select user_prompt from runs where task_id = $1',
+        [parked.id],
+      );
+      const payloads = await client.query<{ payload: unknown }>('select payload from events');
+      for (const [where, text] of [
+        ['prompt', prompt],
+        ['run_messages', JSON.stringify(messages.rows)],
+        ['runs.user_prompt', JSON.stringify(prompts.rows)],
+        ['events.payload', JSON.stringify(payloads.rows)],
+      ] as const) {
+        expect(text, where).not.toContain(GIT_BINDING_TOKEN);
+        expect(text, where).not.toContain(GIT_BINDING_TOKEN.slice(0, 16));
+      }
+      // The excerpt is in the stored prompt too, so "absent" above is about the credential, not
+      // about a prompt that never carried the log.
+      expect(JSON.stringify(prompts.rows)).toContain('FAIL src/totals.test.ts');
+    } finally {
+      await client.end();
+    }
   });
 });
 

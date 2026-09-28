@@ -119,7 +119,8 @@ describe('the return channel, on the next run’s prompt (WP-55, backlog 67)', (
      *  1. code review asks for changes → the second implementation run is sent back with the
      *     **review's own words** (`[summary] The footer rounds twice.`), not the interpreter's literal
      *     `requested changes` (WP-55 review round 1: the agent half of backlog 159);
-     *  2. that run's push is red → `ci_gate` returns with *"pipeline p-N failed: test:unit"*, and
+     *  2. that run's push is red → `ci_gate` returns with *"pipeline p-N failed: test:unit"* and
+     *     the failing job's log (WP-81), and
      *     the third implementation run must be handed **that**, not loop 1's review finding.
      * The third run turns CI green, code review approves its second round, and the task reaches
      * the human merge.
@@ -182,7 +183,10 @@ describe('the return channel, on the next run’s prompt (WP-55, backlog 67)', (
     expect(feedbackIn(second)).toEqual(['[summary] The footer rounds twice.']);
     // (2) The second loop's sentence — the CI gate's — and not the first loop's resurrected.
     expect(feedbackIn(third)).toHaveLength(1);
-    expect(feedbackIn(third)[0]).toMatch(/^pipeline p-\d+ failed: test:unit$/);
+    // Since WP-81 (Q55 closed) the gate's sentence carries the failing job's log after it.
+    expect(feedbackIn(third)[0]).toMatch(
+      /^pipeline p-\d+ failed: test:unit\nLog of the failing job test:unit, redacted:\nFAIL src\/totals\.test\.ts$/,
+    );
     expect(feedbackIn(third).join('\n')).not.toContain('footer');
 
     // The rows say where each return went, on the attempt that produced it.

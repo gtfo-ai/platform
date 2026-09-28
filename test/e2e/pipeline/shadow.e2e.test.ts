@@ -146,6 +146,10 @@ const start = async (options: { readonly budgetUsd?: number } = {}): Promise<Pip
           ...(options.budgetUsd === undefined ? {} : { budget_usd: options.budgetUsd }),
         },
       },
+      // The shadow runs' diff edits `src/totals.test.ts`, which the default protected paths would
+      // send back at the CI gate's tamper check (WP-81); this file is about the comparison, and the
+      // check is asserted in `pipeline.e2e.test.ts`' neighbours and the unit tiers.
+      policies: { protected_paths: ['.github/**'] },
     },
     scenarios: featureScenarios,
     /**

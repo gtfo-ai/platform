@@ -1931,6 +1931,253 @@ describe('code-review convergence (product/04 S5)', () => {
   });
 });
 
+/**
+ * **BD-024's tamper check, through the whole loop** (WP-81, criterion 2). The feature template runs
+ * `ci_gate` before `code_review`, so a declared protected path has no confirmation on the first pass:
+ * the gate passes it provisionally, records no CI head, and the rebase gate re-enters `ci_gate`
+ * before Ready — where the review's confirmation decides it (technical/02, `tamper.ts`).
+ */
+describe('the tamper check in the CI gate (WP-81)', () => {
+  const TEST_FILE = 'src/totals.test.ts';
+  const diffWith = (paths: readonly string[]) => async () =>
+    paths.map((path) => ({
+      new_path: path,
+      old_path: path,
+      diff: '@@ -1 +1 @@\n-a\n+b',
+      new_file: false,
+      renamed_file: false,
+      deleted_file: false,
+      omitted: false,
+    }));
+  const planDeclaring = (paths: readonly string[]) =>
+    completedRun({
+      ...PLAN,
+      protected_path_changes: paths.map((path) => ({
+        path,
+        reason: 'the old assertion was wrong',
+      })),
+    });
+  const reviewConfirming = (paths: readonly string[]) =>
+    completedRun({ ...REVIEW('approve'), protected_path_changes_confirmed: [...paths] });
+  /** `harnessWith` replaces its whole `git` when a case passes one, so the defaults are restated. */
+  const gitWith = (paths: readonly string[]) => ({
+    getPipelineStatus: async () => ({
+      id: 'pipeline-1',
+      head_sha: 'b'.repeat(40),
+      status: 'success' as const,
+      url: null,
+      jobs: [],
+      coverage_pct: null,
+      finished_at: '2026-06-01T09:30:00.000Z',
+    }),
+    getMergeRequest: async () => mergeRequest(false),
+    getMergeRequestDiff: diffWith(paths),
+  });
+  const ciRows = (harness: PipelineHarness) =>
+    harness.store.stageRows
+      .filter((row) => row.stage === 'ci_gate')
+      .map((row) => ({ attempt: row.attempt, state: row.state, outcome: row.outcome }));
+
+  it('returns a change to an undeclared protected path to the developer, naming it', async () => {
+    const harness = harnessWith({
+      git: gitWith(['src/totals.ts', TEST_FILE]),
+    });
+    await harness.publish([ticketMatched()]);
+
+    const [first, second] = harness.specs.filter((spec) => spec.stage === 'implementation');
+    expect(first).toBeDefined();
+    // The ci_fix loop, as a red pipeline spends it (`RETURN_LOOPS.ci_gate`).
+    expect(ciRows(harness)[0]).toEqual({
+      attempt: 1,
+      state: 'returned',
+      outcome: 'protected_paths_changed',
+    });
+    const row = harness.store.stageRows.find(
+      (candidate) => candidate.stage === 'ci_gate' && candidate.attempt === 1,
+    );
+    expect(row?.returnedTo).toBe('implementation');
+    expect(row?.returnReason).toContain(`does not declare in protected_path_changes: ${TEST_FILE}`);
+    // The next implementation run is told, inside its feedback block.
+    const [feedback] = readDataBlocks(second?.userPrompt ?? '').blocks.filter(
+      (block) => block.kind === 'return_feedback',
+    );
+    expect(feedback?.body).toContain(TEST_FILE);
+    // The same undeclared change every round: BD-008's bound, then a human.
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    expect(taskOf(harness).task.iterationCounters.ci_fix).toBe(3);
+  });
+
+  /**
+   * The subtraction's own case: this is the test a canary that drops "minus declared-and-confirmed"
+   * fails (PROGRESS, WP-81).
+   */
+  it('passes a declared protected path once the code review confirmed it, re-checking before Ready', async () => {
+    const harness = harnessWith({
+      runs: {
+        ...happyRuns(),
+        architecture: planDeclaring([TEST_FILE]),
+        code_review: reviewConfirming([TEST_FILE]),
+      },
+      git: gitWith(['src/totals.ts', TEST_FILE]),
+    });
+    await harness.publish([ticketMatched()]);
+
+    const task = taskOf(harness);
+    expect(task.task.currentStage).toBe('ready_for_merge');
+    expect(task.task.iterationCounters.ci_fix ?? 0).toBe(0);
+    // First pass: no review of this change yet — excused provisionally, no CI head recorded. The
+    // rebase gate then re-entered CI (a forward move on `rebase_rechecks`), and the second pass,
+    // with the review's confirmation in hand, is the gate's pass.
+    expect(ciRows(harness)).toEqual([
+      { attempt: 1, state: 'completed', outcome: 'protected_paths_awaiting_review' },
+      { attempt: 2, state: 'completed', outcome: 'pass' },
+    ]);
+    expect(task.task.iterationCounters.rebase_rechecks).toBe(1);
+    expect(task.ciHeadSha).toBe('b'.repeat(40));
+    expect(harness.specs.filter((spec) => spec.stage === 'implementation')).toHaveLength(1);
+  });
+
+  /**
+   * The pipeline's **event** settles the gate through `ci_settle`, a second path — and until WP-81
+   * it settled from the payload alone. It shares `judgeCiSettlement` with the poll now, so a green
+   * pipeline's event is not a side door past the check.
+   */
+  it('returns the change when a green pipeline’s event settles the gate, not only the poll', async () => {
+    let finished = false;
+    const git = gitWith(['src/totals.ts', TEST_FILE]);
+    const harness = harnessWith({
+      git: {
+        ...git,
+        // The poll sees a running pipeline, so only the event can settle the gate here.
+        getPipelineStatus: async () => ({
+          ...(await git.getPipelineStatus()),
+          status: finished ? ('success' as const) : ('running' as const),
+        }),
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).task.currentStage).toBe('ci_gate');
+    await harness.publish([
+      event('ci.pipeline.finished', {
+        project_id: PROJECT,
+        task_id: taskOf(harness).task.id,
+        mr: mergeRequest(false).ref,
+        head_sha: 'b'.repeat(40),
+        status: 'success',
+        failed_jobs: [],
+        coverage_pct: null,
+      }),
+    ]);
+    finished = true;
+    expect(ciRows(harness)[0]).toEqual({
+      attempt: 1,
+      state: 'returned',
+      outcome: 'protected_paths_changed',
+    });
+  });
+
+  it('returns a declared protected path the code review did not confirm', async () => {
+    const harness = harnessWith({
+      runs: {
+        ...happyRuns(),
+        architecture: planDeclaring([TEST_FILE]),
+        code_review: reviewConfirming([]),
+      },
+      git: gitWith(['src/totals.ts', TEST_FILE]),
+    });
+    await harness.publish([ticketMatched()]);
+
+    const returned = harness.store.stageRows.find(
+      (row) => row.stage === 'ci_gate' && row.outcome === 'protected_paths_changed',
+    );
+    expect(returned).toMatchObject({ state: 'returned', returnedTo: 'implementation' });
+    expect(returned?.returnReason).toContain(
+      `the Code review did not confirm in protected_path_changes_confirmed: ${TEST_FILE}`,
+    );
+    // It never reached Ready on the unconfirmed change.
+    expect(harness.store.stageRows.some((row) => row.stage === 'ready_for_merge')).toBe(false);
+    expect(harness.specs.filter((spec) => spec.stage === 'implementation').length).toBeGreaterThan(
+      1,
+    );
+  });
+});
+
+/**
+ * **The failing job's log, from the gate to the next prompt** (WP-81 criterion 4, BD-024 §5). The
+ * binding's own credential is planted in the log, once where the head bound cuts and once in the
+ * error block; the run it is handed to must see the error block, a marker that says it was cut, and
+ * no trace of the credential — nor may any event or stage row hold it (standing rule 82: the
+ * assertion is on the assembled prompt, not only on the stored reason).
+ */
+describe('the CI gate’s log excerpt (WP-81)', () => {
+  const PLANTED_LOG_TOKEN = 'fake-git-binding-secret-0000000000000000000081';
+
+  it('hands the next run the redacted head and tail of the failing job’s log, announcing the cut in the marker', async () => {
+    const log = [
+      `$ npm test --token=${PLANTED_LOG_TOKEN}`,
+      'progress '.repeat(3_000),
+      'FAIL src/totals.test.ts',
+      `  expected 3, received 2 (auth ${PLANTED_LOG_TOKEN})`,
+    ].join('\n');
+    const reads: string[] = [];
+    const harness = harnessWith({
+      gitRedactor: exactSecretRedactor([{ name: 'fake_git_token', value: PLANTED_LOG_TOKEN }]),
+      git: {
+        getPipelineStatus: async () => ({
+          id: 'pipeline-1',
+          head_sha: 'b'.repeat(40),
+          status: 'running',
+          url: null,
+          jobs: [],
+          coverage_pct: null,
+          finished_at: null,
+        }),
+        getMergeRequest: async () => mergeRequest(false),
+        getJobLog: async (_project: string, logRef: string) => {
+          reads.push(logRef);
+          return log;
+        },
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    await harness.publish([
+      event('ci.pipeline.finished', {
+        project_id: PROJECT,
+        task_id: taskOf(harness).task.id,
+        mr: mergeRequest(false).ref,
+        head_sha: 'b'.repeat(40),
+        status: 'failed',
+        failed_jobs: [{ name: 'test:unit', log_ref: 'log:1' }],
+        coverage_pct: null,
+      }),
+    ]);
+
+    expect(reads).toEqual(['log:1']);
+    const [, second] = harness.specs.filter((spec) => spec.stage === 'implementation');
+    const prompt = second?.userPrompt ?? '';
+    const [feedback] = readDataBlocks(prompt).blocks.filter(
+      (block) => block.kind === 'return_feedback',
+    );
+    expect(feedback?.body).toContain('test:unit');
+    expect(feedback?.body).toContain('FAIL src/totals.test.ts');
+    expect(feedback?.body).toContain('expected 3, received 2');
+    // The cut is the marker's, and the body says nothing about it.
+    expect(feedback?.attributes.truncated).toBe('true');
+    expect(Number(feedback?.attributes.original_chars)).toBeGreaterThan(feedback?.body.length ?? 0);
+    expect(feedback?.body).not.toMatch(/truncat/i);
+    // No trace of the credential, whole or as its leading bytes, anywhere it could have gone.
+    for (const [where, text] of [
+      ['prompt', prompt],
+      ['events.payload', JSON.stringify(harness.events().map((entry) => entry.payload))],
+      ['task_stages.return_reason', JSON.stringify(harness.store.stageRows)],
+    ] as const) {
+      expect(text, where).not.toContain(PLANTED_LOG_TOKEN);
+      expect(text, where).not.toContain(PLANTED_LOG_TOKEN.slice(0, 16));
+    }
+    expect(feedback?.body).toContain('[REDACTED:integration:fake_git_token]');
+  });
+});
+
 describe('the rebase gate', () => {
   it('resolves the conflict in a short run and stops at the loop’s limit (product/04 S6b)', async () => {
     const harness = harnessWith({ git: { getMergeRequest: async () => mergeRequest(true) } });

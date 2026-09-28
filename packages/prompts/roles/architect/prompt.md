@@ -19,6 +19,10 @@ An **ImplementationPlan**:
 - `rollout_notes`, `risks[]`, `estimated_size`.
 - `split_proposal` when the work is too big for one task.
 - `decisions_to_record[]`: the choices a future reader would ask "why?" about.
+- `protected_path_changes[]`: every **existing** test, and every CI or lint configuration file,
+  the work will modify or delete, each with the `reason` it must change (BD-024). The CI gate sends
+  back any such change you did not declare, and the Code review must confirm each reason. Adding a
+  new test needs no entry. An empty list means the work changes none.
 
 ## Must
 
@@ -27,8 +31,8 @@ An **ImplementationPlan**:
 - Prefer an existing pattern to a new one. If you introduce a new one, it goes in
   `decisions_to_record`.
 - Propose the **smallest** change that satisfies the specification.
-- Say which protected paths the work must touch, if any, so the platform can grant them
-  (BD-024). A path you did not plan is a path the Developer cannot write.
+- Say which protected paths the work must touch, if any, in `protected_path_changes` (BD-024). A
+  path you did not plan is a path the Developer cannot write.
 
 ## Must not
 

@@ -1,4 +1,8 @@
-import { pipelineFileSchema, pipelineGraphIssues } from '@platform/contracts';
+import {
+  pipelineFileSchema,
+  pipelineGraphIssues,
+  type TaskPipelineDial,
+} from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { PolicyViolationError } from '../errors.js';
 import { DEFAULT_STAGE_RUN_BUDGET_USD, DEFAULT_TASK_BUDGET_USD } from '../policies/budgets.js';
@@ -426,5 +430,35 @@ describe('assertValidTemplate', () => {
     }
     expect((thrown as PolicyViolationError).message).toContain('nowhere');
     expect((thrown as PolicyViolationError).message).toContain('elsewhere');
+  });
+});
+
+/** The one dial that disables a shipped stage (`business_review`); the other fields do not compile in. */
+const BUSINESS_REVIEW_OFF: TaskPipelineDial = {
+  level: 'autonomous',
+  preset_version: 1,
+  business_review: false,
+  stop_after_stage: null,
+};
+
+describe('the rebase gate behind every CI gate (WP-81, Q109)', () => {
+  // WP-81's provisional tamper pass records no `ci_head_sha`, and WP-79's rebase gate is what sends
+  // such a task back to `ci_gate` before Ready. That holds only while every template that runs
+  // `ci_gate` also runs `rebase_gate` after it — under every dial, since the dial is the one thing
+  // that disables a shipped stage — so a template that drops the rebase gate fails here, by name.
+  it.each(
+    Object.entries(SHIPPED_TEMPLATES).flatMap(([id, template]) =>
+      [null, BUSINESS_REVIEW_OFF].map(
+        (dial) => [id, JSON.stringify(dial), template, dial] as const,
+      ),
+    ),
+  )('%s (dial %s) runs rebase_gate after an enabled ci_gate', (id, _label, template, dial) => {
+    const { stages } = compilePipeline(id, template, dial);
+    const ci = stages.findIndex((stage) => stage.id === 'ci_gate' && stage.enabled);
+    if (ci === -1) {
+      return;
+    }
+    const rebase = stages.findIndex((stage) => stage.id === 'rebase_gate' && stage.enabled);
+    expect(rebase).toBeGreaterThan(ci);
   });
 });

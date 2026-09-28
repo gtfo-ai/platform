@@ -59,14 +59,15 @@
  *
  * That is Q55's recommendation (a): *make the run the scope*. The redactor cannot be built once at
  * binding time, because the token that matters most is minted per run and did not exist then; so
- * the adapters are built per call and the scope is an argument. What WP-15a does **not** do is
- * change what the CI gate returns — it still returns the failing job's *names* rather than
- * `getJobLog`'s body. Since WP-76 a run's credential **is** minted — by the runner, through this
+ * the adapters are built per call and the scope is an argument. What WP-15a did **not** do is
+ * change what the CI gate returns — it returned the failing job's *names* rather than `getJobLog`'s
+ * body until WP-81. Since WP-76 a run's credential **is** minted — by the runner, through this
  * loader — and the one call made with a run's scope is its revocation; the gate runs after the
  * run, with the process-wide registry of minted credentials in its platform redactor rather than a
  * run scope (`apps/server/src/pipeline.ts`); a process that did not mint redacts it by its recorded
- * shape since WP-80 (TD-012's M5 amendment, PROGRESS backlog 259).
- * The mechanism is closed here; the gate's cut stays where WP-15 put it, pinned by `gates.test.ts`.
+ * shape since WP-80 (TD-012's M5 amendment, PROGRESS backlog 259). **WP-81 closed the gate's
+ * half** on that redactor: the failing job's log is read, redacted by the binding's redactor on the
+ * whole text, bounded, and handed back (`packages/application/src/pipeline/ci-log.ts`).
  *
  * ## Cost, stated rather than optimised away
  *

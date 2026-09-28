@@ -527,6 +527,11 @@ export interface StartPipelineOptions {
   readonly label?: string;
   /** CI status for the merge request's head commit. `null` seeds none (a project with no CI). */
   readonly ciStatus?: 'success' | 'failed' | null;
+  /**
+   * The failing job's log when `ciStatus` is `failed` (WP-81: the CI gate hands it back). Defaults
+   * to one line of test output.
+   */
+  readonly ciJobLog?: string;
   /** Tickets the fake task-management provider knows; the workpad is written on one of them. */
   readonly tickets?: readonly {
     readonly key: string;
@@ -861,6 +866,17 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
     reviewers: [],
     remove_source_branch: true,
   });
+  /*
+   * The merge request's changed files (WP-81). The CI gate's tamper check reads them whenever the
+   * pipeline is terminal, and the fake opens a merge request with **no** files — which is *not yet
+   * computed* to the gate, so it would wait and then escalate. One ordinary file that no default
+   * protected path, manifest or risk class covers; a case that is about the diff seeds its own.
+   */
+  git.setDiff({
+    project: GIT_PROJECT,
+    iid: seededMr.ref.iid,
+    files: [{ path: 'src/totals.ts', diff: '@@ -1 +1 @@\n-a\n+b' }],
+  });
   if (options.ciStatus !== null) {
     git.setPipeline({
       project: GIT_PROJECT,
@@ -868,7 +884,13 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
       status: options.ciStatus ?? 'success',
       jobs:
         options.ciStatus === 'failed'
-          ? [{ name: 'test:unit', status: 'failed', log: 'FAIL src/totals.test.ts' }]
+          ? [
+              {
+                name: 'test:unit',
+                status: 'failed',
+                log: options.ciJobLog ?? 'FAIL src/totals.test.ts',
+              },
+            ]
           : [{ name: 'test:unit', status: 'success' }],
     });
   }

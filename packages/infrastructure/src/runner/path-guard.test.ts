@@ -19,6 +19,12 @@ describe('the path glob', () => {
     ['infra/**', 'infra/main.tf', true],
     ['infra/**', 'infra/modules/vpc/main.tf', true],
     ['infra/**', 'infrastructure/main.tf', false],
+    // WP-81 round 1: a leading or inner double-star-slash matches zero directories too.
+    ['**/*.test.*', 'totals.test.ts', true],
+    ['**/*.test.*', 'src/a/totals.test.ts', true],
+    ['**/migrations/**', 'migrations/0001.sql', true],
+    ['src/**/*.ts', 'src/index.ts', true],
+    ['**/*.test.*', 'totals.ts', false],
     ['infra', 'infra/main.tf', true],
     ['infra/', 'infra/main.tf', true],
     ['Dockerfile', 'Dockerfile', true],
@@ -222,6 +228,19 @@ describe('guardWritePath', () => {
     const verdict = guardWritePath('infra/modules/vpc/main.tf', config);
     expect(verdict.decision).toBe('deny');
     expect(verdict.reason).toContain('the approved plan does not list it');
+  });
+
+  /**
+   * WP-81 round 1: a leading double-star-slash matches **zero** directories, so the default
+   * protected rules reach a root-level file. Before, `**` + `/*.test.*` let `totals.test.ts` at the
+   * workspace root through this guard — the fail-open direction; the fix only ever denies more.
+   */
+  it('denies a root-level file a leading double-star protected pattern names', () => {
+    const rooted = { ...config, protectedPaths: ['**/*.test.*', '**/migrations/**'] };
+    expect(guardWritePath('totals.test.ts', rooted).decision).toBe('deny');
+    expect(guardWritePath('migrations/0001.sql', rooted).decision).toBe('deny');
+    expect(guardWritePath('src/totals.test.ts', rooted).decision).toBe('deny');
+    expect(guardWritePath('src/totals.ts', rooted).decision).toBe('allow');
   });
 
   it('allows a protected path the plan does list', () => {

@@ -33,6 +33,7 @@ import {
   EPIC_SPLIT_TEMPLATE_ID,
   effectiveAutonomyPreset,
   epicSplitClaims,
+  PLATFORM_DEFAULT_CONFIG,
   pipelineDialOf,
   resolveIterationLimits,
   SHIPPED_TEMPLATES,
@@ -185,6 +186,19 @@ export const iterationLimitsFor = (settings: ProjectSettings): IterationLimits =
  * transaction from inside one, so a dispatch that `POOL_RESERVATIONS` counts as holding two
  * connections briefly borrowed a third; that borrow now fails a test instead of being a sentence.
  */
+/**
+ * **The project's effective protected paths** (BD-024 §2, technical/12 `policies.protected_paths`)
+ * — the merged configuration's list, or the platform default when nothing set one.
+ *
+ * One expression for its two readers (standing rule 41): the planner hands it to the workspace's
+ * path guard (write time), and the CI gate's tamper check compares a merge request's changed paths
+ * with it (WP-81, `tamper.ts`). Two copies of the fallback would agree until somebody changed one.
+ */
+export const effectiveProtectedPaths = (settings: ProjectSettings): readonly string[] =>
+  settings.config.policies?.protected_paths ??
+  PLATFORM_DEFAULT_CONFIG.policies?.protected_paths ??
+  [];
+
 export interface ProjectSettingsPort {
   forProject(projectId: Id, tx?: Transaction): Promise<ProjectSettings>;
 }

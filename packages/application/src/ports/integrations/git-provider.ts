@@ -629,16 +629,17 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
    * redactor can never find them again. GitLab does it at the transport (`gitlab/http.ts`,
    * property 4) and `emitted-secrets.test.ts` plants the binding token in a trace to prove it.
    *
-   * **Still open, and not dischargeable as this sentence used to promise it (Q55).** It read: a
+   * **The run-scoped half, and how it was discharged (Q55).** This sentence once read: a
    * *run-scoped* credential is not known to the adapter, "so the caller passes it in
-   * `ProviderCreateInput.redactor`". The ordering forbids it for the credential that matters most
-   * — `create()` runs once when the binding is instantiated, `mintCredential()` runs later per
-   * run, and a redactor built at binding time is a closure over a fixed secret set, so a token
-   * minted afterwards is not in it. The adapter cannot hold it either, deliberately: `cloneUrl`
-   * and `mintCredential` must hand that value back **intact**. WP-15 therefore needs a run-scoped
-   * redactor and either a per-run adapter instance or a redactor resolved at call time; Q55 states
-   * both options and what each costs. Also still open: the count of what was removed is reported
-   * through the adapter's `onRedaction`, which nothing yet persists.
+   * `ProviderCreateInput.redactor`" — which the ordering forbade, because `create()` ran once per
+   * binding and `mintCredential()` later, per run. WP-15a made the adapters **per call**, so the
+   * loader composes the call's scope into `ProviderCreateInput.redactor`; WP-76 added every credential
+   * the process minted, WP-80 every recorded minted-credential **shape** (so a process that did not
+   * mint still redacts it). The adapter still cannot hold minted values itself, deliberately:
+   * `cloneUrl` and `mintCredential` must hand them back **intact**. The first caller of this method,
+   * the CI gate (WP-81, `packages/application/src/pipeline/ci-log.ts`), redacts the returned text
+   * once more with the binding's redactor before it cuts anything. Still open: the count of what was
+   * removed is reported through the adapter's `onRedaction`, which nothing yet persists.
    */
   readonly getJobLog: (
     project: string,

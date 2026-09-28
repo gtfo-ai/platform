@@ -54,7 +54,8 @@ export const FLAGGED_CONFIG_PATHS: readonly string[] = ['.agentic/**', '.claude/
  * **What matters is that it is a literal, not which literal it is.** Three values break it, each
  * differently: `/` is the fail-open the stand-in exists to prevent; `''` erases the character, so
  * `a\uFF0Fb.ts` and `ab.ts` become one path; and anything {@link globToRegExp} reads as syntax —
- * U+E000, which it uses for `**`, or `*`, or `?` — turns a *pattern* holding one of the folded
+ * U+E000 or U+E002, which it uses for a double star (and one before a separator, WP-81), or `*`,
+ * or `?` — turns a *pattern* holding one of the folded
  * characters into a wildcard. Every other value only widens equality, which fails closed, and that
  * is why the review's `'*'` mutation survived all 77 tests. The three properties are pinned by
  * "pins the stand-in for a fold-produced solidus to a literal character" in `path-guard.test.ts`

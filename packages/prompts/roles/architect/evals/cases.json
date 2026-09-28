@@ -133,6 +133,44 @@
           "value": "JSON.parse(output).findings.every((f) => f.evidence.length >= 1)"
         }
       ]
+    },
+    {
+      "id": "arch-declares-existing-test-change",
+      "description": "a plan that must change an existing test declares it in protected_path_changes with a reason; a new test needs no entry",
+      "vars": {
+        "spec": "goal: round invoice totals half-up instead of half-even; the existing test src/billing/invoice.test.ts asserts half-even",
+        "repo": "src/billing/invoice.ts\nsrc/billing/invoice.test.ts"
+      },
+      "expect_fields": ["protected_path_changes"],
+      "assert": [
+        {
+          "type": "is-json",
+          "value": "file://../../../../schemas/artifacts/implementation-plan.schema.json"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).protected_path_changes.some((c) => c.path.includes('invoice.test.ts') && c.reason.length > 0)"
+        }
+      ]
+    },
+    {
+      "id": "arch-no-protected-change-is-empty",
+      "description": "a change that only adds a new test declares no protected path change",
+      "vars": {
+        "spec": "goal: add a currency field to the invoice footer, with a new test src/billing/footer-currency.test.ts",
+        "repo": "src/billing/invoice.ts\n.gitlab-ci.yml"
+      },
+      "expect_fields": ["protected_path_changes"],
+      "assert": [
+        {
+          "type": "is-json",
+          "value": "file://../../../../schemas/artifacts/implementation-plan.schema.json"
+        },
+        {
+          "type": "javascript",
+          "value": "JSON.parse(output).protected_path_changes.length === 0"
+        }
+      ]
     }
   ]
 }

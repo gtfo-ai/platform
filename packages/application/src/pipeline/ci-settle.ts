@@ -33,7 +33,8 @@ import { compilePipeline, stageOf } from '@platform/domain';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
-import { ciFailureSignature } from './gates.js';
+import { failingJobWithLog } from './ci-log.js';
+import { judgeCiSettlement } from './gates.js';
 import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
 import { type PipelineOutboundData, settleGate } from './jobs.js';
 import type { PipelineSagaOptions } from './saga.js';
@@ -101,19 +102,78 @@ export const runCiSettle = async (
 
   const failing = [...(data.failed_jobs ?? [])].sort();
   const passed = status === 'success';
+  /**
+   * **The same settlement as the poll** (WP-81): `judgeCiSettlement` makes the tamper check and, on
+   * a failure, reads the first failing job's log — so a pipeline's event is not a side door past
+   * BD-024 §2. The log reference is the event's own (`failed_job_logs`); a payload an older build
+   * wrote carries none, and the reason then says so rather than reading a log.
+   */
+  const logs = data.failed_job_logs;
+  const result = await judgeCiSettlement(
+    options,
+    integrations,
+    stored,
+    headSha,
+    passed
+      ? { kind: 'passed', detail: `pipeline for ${headSha} succeeded` }
+      : {
+          kind: 'failed',
+          status,
+          failingJobs: failing,
+          logJob:
+            logs === undefined
+              ? failing[0] === undefined
+                ? null
+                : { name: failing[0], logRef: null }
+              : failingJobWithLog(
+                  logs.map((job) => ({
+                    name: job.name,
+                    status: 'failed' as const,
+                    allow_failure: false,
+                    log_ref: job.log_ref,
+                  })),
+                ),
+          detail: `pipeline for ${headSha} ${status}${failing.length === 0 ? '' : `: ${failing.join(', ')}`}`,
+        },
+  );
+  if (result.kind === 'pending') {
+    // The tamper check cannot be made yet (no changed file listed); the gate's own poll asks again,
+    // bounded by `MAX_GATE_CHECKS` — this wake-up settles nothing rather than guessing.
+    logger.info(
+      { task_id: taskId, head_sha: headSha, detail: result.detail },
+      'a finished pipeline could not settle the CI gate yet; the gate’s poll decides it',
+    );
+    return;
+  }
+  if (result.kind === 'unsupported') {
+    await settleGate(
+      options,
+      { taskId, stage },
+      {
+        kind: 'escalate',
+        outcome: 'unsupported',
+        reason: result.detail,
+        blockerBrief: `The platform cannot evaluate the "${stage}" gate: ${result.detail}. Decide it yourself and hand the task back at the stage that should run next.`,
+      },
+    );
+    return;
+  }
   await settleGate(
     options,
     { taskId, stage },
     {
       kind: 'gate_settled',
       stage,
-      passed,
-      detail: passed
-        ? `pipeline for ${headSha} succeeded`
-        : `pipeline for ${headSha} ${status}${failing.length === 0 ? '' : `: ${failing.join(', ')}`}`,
-      ...(passed ? {} : { ciSignature: ciFailureSignature(status, failing, headSha) }),
-      // WP-79: the live head this pipeline ran on — checked equal just above.
-      headSha,
+      passed: result.passed,
+      detail: result.detail,
+      ...(result.ciSignature === undefined ? {} : { ciSignature: result.ciSignature }),
+      // WP-79: the live head this pipeline ran on — checked equal just above; absent on a
+      // provisional pass (WP-81), so `ci_head_sha` stays null until the review has confirmed.
+      ...(result.headSha === undefined ? {} : { headSha: result.headSha }),
+      ...(result.outcome === undefined ? {} : { outcome: result.outcome }),
+      ...(result.detailOriginalChars === undefined
+        ? {}
+        : { detailOriginalChars: result.detailOriginalChars }),
     },
   );
 };

@@ -7,18 +7,18 @@
  * **What the Checks panel shows, and what it cannot.** product/10:38 lists **eleven**
  * merge-readiness checks — acceptance criteria met, CI green, rebase status, review threads
  * open/resolved, business verdict, tamper check, coverage delta, dependency status, risk classes and
- * required reviewers, budget vs estimate, questions pending. This panel renders **ten**: the
+ * required reviewers, budget vs estimate, questions pending. This panel renders **all eleven**: the
  * coverage delta (WP-39), the dependency status (WP-38), risk classes **and required reviewers**
  * (WP-37's routing, WP-38's record of it), cost against the estimate — product/10's *"budget vs
- * estimate"* (WP-28) — questions pending with approvals beside it, and since WP-46 the five that
- * were named absent before it: CI and rebase status off the gates' own `task_stages` rows (WP-55
- * closes them with the verdict), review threads off the review window's `tasks.review_threads`, and
- * the business verdict and acceptance criteria off the latest Acceptance Verdict's body (WP-52's
- * route). The **tamper check** is the one left, named on the screen with its reason — it is
- * BD-024's gate, a work package of its own — and the whole list is held to product/10:38 by
- * `apps/web/src/features/checks-panel.test.tsx` › "the Checks panel against product/10:38" **in
- * both directions**, so neither this paragraph nor that sentence can go stale on its own (WP-38,
- * criterion 5; WP-46).
+ * estimate"* (WP-28) — questions pending with approvals beside it, since WP-46 the five that were
+ * named absent before it: CI and rebase status off the gates' own `task_stages` rows (WP-55 closes
+ * them with the verdict), review threads off the review window's `tasks.review_threads`, and the
+ * business verdict and acceptance criteria off the latest Acceptance Verdict's body (WP-52's route)
+ * — and since WP-81 the **tamper check**, BD-024's gate, off the CI gate's row too, because the
+ * check is part of that gate's read and its verdict is the word the row is closed with. The whole
+ * list is held to product/10:38 by `apps/web/src/features/checks-panel.test.tsx` › "the Checks
+ * panel against product/10:38" **in both directions**, so neither this paragraph nor the panel can
+ * go stale on its own (WP-38, criterion 5; WP-46; WP-81).
  *
  * **Which commands are here.** technical/09's screens table gives this screen `answer, approve,
  * retry, take over, feedback`; product/10 adds return-to-stage and rework. All of them are present:
@@ -415,13 +415,56 @@ export const gateValueText = (
     case 'running':
       return 'checking';
     case 'completed':
-      return row.outcome === 'pass' ? words.pass : row.outcome === 'fail' ? words.fail : 'passed';
+      // A provisional pass of the CI gate (WP-81) is still the pipeline's pass.
+      return row.outcome === 'pass' || row.outcome === 'protected_paths_awaiting_review'
+        ? words.pass
+        : row.outcome === 'fail'
+          ? words.fail
+          : 'passed';
     case 'returned':
-      return `${words.fail}, sent back`;
+      // WP-81: the CI gate's tamper check sent the task back, whatever the pipeline said — so the
+      // CI item does not call it red.
+      return row.outcome === 'protected_paths_changed'
+        ? 'sent back by the tamper check'
+        : `${words.fail}, sent back`;
     case 'failed':
       return `escalated${row.outcome === null ? '' : ` (${row.outcome})`}`;
     default:
       return row.state;
+  }
+};
+
+/**
+ * **The tamper check** (WP-81, BD-024 §2) — the Checks panel's eleventh item, read off the same row
+ * as *CI status*, because the check is part of the CI gate's read and its verdict is the word that
+ * row is closed with. Every answer is one the row supports, and none is a tick for a gate that never
+ * decided:
+ *
+ *  - `protected_paths_changed` — the gate sent the task back naming the paths;
+ *  - `protected_paths_awaiting_review` — the plan declared the protected paths the change touches,
+ *    and the Code review had not judged it yet, so CI checks again before Ready;
+ *  - `pass`, or a return for the pipeline's own failure — the check was made and found nothing the
+ *    change may not touch (both are settlements the check runs in, WP-81);
+ *  - an escalation — the gate could not decide, which is what it says.
+ */
+export const tamperValueText = (row: StageRow | null): string => {
+  if (row === null) {
+    return 'not reached';
+  }
+  if (row.state === 'running') {
+    return 'checking';
+  }
+  switch (row.outcome) {
+    case 'protected_paths_changed':
+      return 'protected paths changed, sent back';
+    case 'protected_paths_awaiting_review':
+      return 'declared changes await the code review';
+    case 'pass':
+      return 'clean';
+    default:
+      return row.state === 'returned'
+        ? 'clean'
+        : `not decided${row.outcome === null ? '' : ` (${row.outcome})`}`;
   }
 };
 
@@ -627,6 +670,10 @@ export const stageOutcomeWordSentence = (word: TaskStageOutcomeWord): string => 
       return 'Escalated: an event about this task could not be processed.';
     case 'repository_config_invalid':
       return 'Escalated: the repository’s .agentic/config.yml does not parse.';
+    case 'protected_paths_changed':
+      return 'Sent the task back: the change touches protected paths the plan did not declare or the code review did not confirm (BD-024).';
+    case 'protected_paths_awaiting_review':
+      return 'Passed; the protected paths the plan declared await the code review, so CI checks again before Ready.';
     case 'unknown':
       return 'Finished without a verdict.';
     case 'unrecognised':
@@ -1449,6 +1496,15 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
             definition="The CI gate's verdict on the merge request's head, from the provider's own pipeline (product/04 S4); an escalation names the reason the gate could not decide."
           />
           <p className="-mt-2 text-[11px] text-fg-muted">{gateBasisText(ciGate, 'ci_gate')}</p>
+          {/*
+            **The tamper check** (WP-81, BD-024 §2): part of the CI gate's read, so its verdict is
+            the word the same row is closed with — never a tick for a gate that has not decided.
+          */}
+          <Metric
+            label="Tamper check"
+            value={tamperValueText(ciGate)}
+            definition="BD-024's check, made by the CI gate: the existing files this change modifies, deletes or renames away, against the project's protected paths (tests and CI/lint configuration by default), minus the changes the plan declared and the code review confirmed. Anything left sends the task back to the developer, naming the paths; adding a new file is never flagged."
+          />
           <Metric
             label="Rebase status"
             value={gateValueText(rebaseGate, { pass: 'up to date', fail: 'conflicts' })}
@@ -1553,25 +1609,11 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
           </div>
           <ReviewChecklists taskId={taskId} artifacts={artifacts} />
           {/*
-            **The census of what this panel does not answer** (WP-38, criterion 5; WP-46).
-
-            product/10:38 lists eleven merge-readiness checks and this panel renders ten of them.
-            The one it does not is named here **with its reason** rather than drawn as an empty tick
-            that reads as passed (standing rule 16), and the list is held to product/10:38 **in a
-            test** rather than in this comment, compared both ways — an item that starts working and
-            stays listed here fails it: `apps/web/src/features/checks-panel.test.tsx`.
-
-            The tamper check is **not** a projection somebody forgot: it is BD-024's gate — a
-            comparison of the change's paths against the plan's declared exceptions, with a stored
-            result — and nothing in this build produces that result. It is a work package of its
-            own, and WP-46, which brought the other five items onto this panel, deliberately does
-            not build it.
+            **Every item of product/10:38 is on this panel** (WP-81). The census that named what it
+            did not answer — the tamper check, until BD-024's gate had a producer — is held in a
+            test in both directions, so an item that stops rendering fails it:
+            `apps/web/src/features/checks-panel.test.tsx`.
           */}
-          <p className="text-[11px] text-fg-muted">
-            Not on this panel: tamper check. It is BD-024’s gate — comparing the paths this change
-            touches with the exceptions its plan declared, and storing the result — and nothing in
-            this build produces that result yet, so it is absent rather than shown as passing.
-          </p>
         </Card>
 
         <Card className="flex flex-col gap-2 text-sm">

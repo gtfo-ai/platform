@@ -55,7 +55,6 @@ import {
   DISCOVERY_TEMPLATE_ID,
   HISTORY_BOOTSTRAP_TEMPLATE_ID,
   isPromptExcludedArtifact,
-  PLATFORM_DEFAULT_CONFIG,
   type PromptContextPack,
   type PromptNonceSource,
   type ResolvedCommandPolicy,
@@ -79,6 +78,7 @@ import { qualifiedPlatformSkill } from '../ports/workspace.js';
 import { CONFLICT_RESOLUTION_STAGE } from './rebase.js';
 import { REVIEW_ONLY_TEMPLATE_ID } from './review-only.js';
 import type { ProjectSettings } from './settings.js';
+import { effectiveProtectedPaths } from './settings.js';
 import type { StageRunPlan, StageRunPlanner, StageRunRequest } from './stage-executor.js';
 import type { StoredArtifact, StoredTask } from './store.js';
 import { TICKET_LINT_STAGE, TICKET_LINT_TEMPLATE_ID } from './ticket-lint.js';
@@ -1114,10 +1114,7 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
           "the project's commands.allow names entries this run's role baseline does not grant; they were dropped, never widened (BD-025)",
         );
       }
-      const protectedPaths =
-        settings.config.policies?.protected_paths ??
-        PLATFORM_DEFAULT_CONFIG.policies?.protected_paths ??
-        [];
+      const protectedPaths = effectiveProtectedPaths(settings);
       const budgetTokens =
         settings.config.project?.context_budget_tokens ?? DEFAULT_CONTEXT_BUDGET_TOKENS;
 
@@ -1185,6 +1182,8 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
             json: JSON.stringify(artifact.data),
           })),
           returnFeedback: request.returnFeedback,
+          // WP-81: a cut the CI gate made to a failing job's log, announced in the marker.
+          returnFeedbackOriginalChars: request.returnFeedbackOriginalChars ?? null,
           // A stage is not shown the audit trail (WP-31): the record blocks are the ask's, and a
           // stage that carried them would be paying context for the platform talking to itself.
           record: [],

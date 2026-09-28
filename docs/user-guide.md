@@ -286,9 +286,9 @@ second click stays pending for a moment and then shows the first one's result, n
 server stopped while performing a command, nobody can say whether it was done; the screen says so and
 asks you to check the task first, and pressing the button again is then a new request.
 
-### The checks panel, and what it cannot show
+### The checks panel
 
-The product defines eleven merge-readiness checks, and the panel shows **ten** of them:
+The product defines eleven merge-readiness checks, and the panel shows **all eleven**:
 
 - **Acceptance criteria** and **Business verdict** — read from the latest Acceptance Verdict the
   business review wrote: how many criteria were met, not met or untestable (each with the
@@ -303,9 +303,20 @@ The product defines eleven merge-readiness checks, and the panel shows **ten** o
 - **Coverage delta**, **Dependencies**, **Risk classes**, **Required reviewers**, the **Estimate**
   against what the task has spent, and **Questions pending**.
 
-The eleventh, the **tamper check**, is named as absent with its reason: it needs the platform to
-compare the paths a change touches with the exceptions its plan declared and to store the result,
-and this build does not do that yet. It is never drawn as an empty tick that reads as "passed".
+- **Tamper check** — BD-024's check, made by the CI gate: the existing files the change modifies,
+  deletes or renames away, against the project's protected paths (tests and CI/lint configuration
+  by default), minus the changes the plan declared and the code review confirmed. Adding a new test
+  is never flagged. *protected paths changed, sent back* when anything
+  is left (the developer is told which paths, and CI status then says *sent back by the tamper
+  check* rather than red); *declared changes await the code review* when the plan declared them and
+  the review has not judged the change yet — CI checks again before Ready; *clean*; *checking*; or
+  *not reached*. It is never drawn as an empty tick for a gate that has not decided.
+  A merge request that changes **100 files or more** is more than the check reads, so the CI gate
+  cannot tell whether a protected path changed and hands the task to a human (`needs_human`) even
+  on green CI — split a large refactor, or take the merge from there yourself.
+
+When CI fails, the developer's next run is also handed the failing job's log — its beginning and
+its end, with credentials redacted — beside the job names.
 
 ### Taking over, the epic breakdown, and asking the task
 
@@ -528,7 +539,6 @@ In one place, so it is not spread across thirteen sections:
 | Editing a knowledge document or the pipeline in the browser | knowledge, pipeline |
 | Organisation settings for autonomy defaults, the provider mode and instance-wide feature flags | settings |
 | The statistics the screen lists under *Not measured, and why* | statistics |
-| The tamper check — the one merge-readiness check the panel names as absent (section 4) | task detail |
 
 And one that is about the deployment rather than a screen: an agent stage runs only on an instance
 whose operator set `APP_LAUNCHER_URL` and `APP_LAUNCHER_TOKEN`, because those switch on the `runner`

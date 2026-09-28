@@ -460,6 +460,14 @@ describe('the readiness loop', () => {
       reviewers: [],
       remove_source_branch: true,
     });
+    // WP-81: the CI gate's tamper check reads the merge request's changed files, and the fake
+    // opens one with none — *not yet computed* to the gate. One ordinary file, as `startPipeline`
+    // seeds for the first merge request.
+    pipeline.git.setDiff({
+      project: repoPath,
+      iid: opened.ref.iid,
+      files: [{ path: 'src/totals.ts', diff: '@@ -1 +1 @@\n-a\n+b' }],
+    });
     pipeline.git.setPipeline({
       project: repoPath,
       headSha: opened.head_sha,

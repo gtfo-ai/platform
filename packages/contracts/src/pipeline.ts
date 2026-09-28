@@ -116,6 +116,12 @@ export type TaskStageState = z.infer<typeof taskStageStateSchema>;
  *    the budget decision that park a task;
  *  - `write_conflict`, `dead_lettered`, `repository_config_invalid` — a write that lost every race,
  *    an event that spent its dispatch bound, a repository file that does not parse;
+ *  - `protected_paths_changed` — the CI gate's tamper check found a protected path the change
+ *    touched that the plan did not declare, or the Code review did not confirm, and sent the task
+ *    back (a `returned` attempt, WP-81, BD-024 §2);
+ *  - `protected_paths_awaiting_review` — the CI gate passed while a declared protected path still
+ *    awaited the Code review's confirmation, so the rebase gate re-enters it before Ready (a
+ *    `completed` attempt, WP-81);
  *  - `unknown` — an agent stage that finished with no verdict at all;
  *  - `unrecognised` — a word outside this vocabulary: a model's verdict the interpreter does not
  *    know (stored as this word rather than as the model's own text), or a row written before
@@ -139,6 +145,8 @@ export const taskStageOutcomeWordSchema = z.enum([
   'write_conflict',
   'dead_lettered',
   'repository_config_invalid',
+  'protected_paths_changed',
+  'protected_paths_awaiting_review',
   'unknown',
   'unrecognised',
 ]);

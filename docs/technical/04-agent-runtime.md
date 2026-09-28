@@ -169,6 +169,28 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 > model's compliance is what the eval cases are for, and that half is blocked on a credential
 > (`PROGRESS.md`, WP-17).
 >
+> **A cut made before the assembler is announced by it too (WP-81).** The `return_feedback` block
+> carries a return reason the platform stored earlier, and since WP-81 a failed CI gate's reason
+> includes an excerpt of the failing job's log (BD-024 §5) that the **gate** cut — its head and its
+> tail — before the reason was stored. That cut is recorded beside the reason
+> (`task_stages.return_reason_original_chars`, the length the reason would have had uncut) and the
+> assembler renders it exactly as its own cap: `truncated="true"` and `original_chars` in the block's
+> marker, nothing in the body. The excerpt is redacted by the git binding's redactor — TD-012's two
+> steps plus every minted-credential shape (WP-80) — on the **whole** log before the cut, because a
+> cut first leaves a token's leading bytes that no exact-match rule can find again. The reason also
+> names the paths of a failed **tamper check** (BD-024 §2), which the gate computes as part of its
+> read (technical/02 has its inputs and endings); the workspace's path guard below enforces protected
+> paths at write time, and the gate is the deterministic check of what actually reached the branch —
+> a `Bash` redirect never meets the guard. The two differ on **additions**: the guard refuses a new
+> file under a protected path unless the plan lists it, the gate flags only modified, deleted and
+> renamed-away existing files (WP-81 round 1).
+>
+> **The Architect declares and the Reviewer confirms** (WP-81 round 1). The Architect's role prompt
+> asks for every existing test or CI/lint configuration file the work will modify or delete in
+> `protected_path_changes`, each with a reason; the Reviewer's asks it to list in
+> `protected_path_changes_confirmed` only declared paths whose reason holds, and never a path the
+> plan did not declare. Without both, a legitimate change to an existing test could never pass.
+>
 > **Layer 3 is not concatenated into the system prompt.** `.agentic/rules/*.md` come out of the
 > project's repository — the channel the vault comes from — so they arrive as tier-0 context-pack
 > documents framed with `kind="project_rules"`. BD-025 makes them configuration the platform trusts

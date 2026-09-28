@@ -13,15 +13,18 @@
  *    `pipelineStatus` whatever the template's `on` says; a bug that made a `failed` pipeline settle
  *    as `passed: true` would advance the task to code review on red CI, and until this file existed
  *    the whole unit+contract tier stayed green with `CI_TERMINAL_FAIL` settling as passed.
- *  - **`detail` is the CI-gate cut** (Q55): this gate reports the failing job *names*, not
- *    product/04 S4's error block, because fetching the log needs `getJobLog` and a redactor for a
- *    run-scoped credential that does not exist yet. A cut that is only written down drifts; pinning
- *    the string is what makes closing Q55 a deliberate change rather than an accident.
+ *  - **`detail` is what the next Implementation run is told** (Q55, closed at WP-81): the failing
+ *    job names **and** the first failing job's log, redacted before it is bounded to its head and
+ *    tail. Until WP-81 this file pinned the opposite — names only, no log read — so that closing Q55
+ *    would change a failing test rather than nothing; that case is **inverted by name** below, not
+ *    deleted.
+ *  - **The tamper check is part of the gate's read** (WP-81, BD-024 §2): its branches are asserted
+ *    here, and the three saga cases in `saga.test.ts` drive it through the loop.
  *
  * The refusal branches (`unsupported`) are asserted here for the same reason: each one is the
  * fail-closed half of a pair whose fail-open half is silent.
  */
-import type { IsoDateTime, Slug } from '@platform/contracts';
+import type { Id, IsoDateTime, Slug } from '@platform/contracts';
 import { BUILTIN_GATE_STAGE_IDS } from '@platform/contracts';
 import type { PipelineStage } from '@platform/domain';
 import { compilePipeline, FEATURE_TEMPLATE, stageOf } from '@platform/domain';
@@ -29,16 +32,46 @@ import { describe, expect, it } from 'vitest';
 import { createIntegrationActionExecutor } from '../integrations/action-executor.js';
 import { allowAnyIntegrationHost } from '../integrations/egress.js';
 import { exactSecretRedactor } from '../integrations/redaction.js';
-import type { GitProviderPort, PipelineStatus } from '../ports/integrations/git-provider.js';
+import { IntegrationError } from '../ports/integrations/common.js';
+import type {
+  FileDiff,
+  GitProviderPort,
+  PipelineStatus,
+} from '../ports/integrations/git-provider.js';
+import type { UnitOfWork } from '../ports/unit-of-work.js';
 import { createMemoryAuditLog, createVirtualTimer } from '../testing/memory-integrations.js';
+import { CI_LOG_HEAD_CHARS, CI_LOG_TAIL_CHARS } from './ci-log.js';
+import { MAX_CONFLICT_FILES } from './diff-coalescer.js';
 import { createGateEvaluator, rebaseAgainstCi } from './gates.js';
 import type { PipelineIntegrations } from './integrations.js';
 import { staticPipelineIntegrations } from './integrations.js';
-import type { StoredTask } from './store.js';
+import { defaultProjectSettings, staticProjectSettings } from './settings.js';
+import type { StoredArtifact, StoredTask } from './store.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b1';
 const TASK = '00000000-0000-4000-8000-0000000000c1';
 const HEAD_SHA = 'b'.repeat(40);
+
+/** A file the default protected paths do not cover, so a case that is not about tampering passes it. */
+const ORDINARY_FILE: FileDiff = {
+  new_path: 'src/totals.ts',
+  old_path: 'src/totals.ts',
+  diff: '@@ -1 +1 @@\n-a\n+b',
+  new_file: false,
+  renamed_file: false,
+  deleted_file: false,
+  omitted: false,
+};
+
+const changed = (path: string, overrides: Partial<FileDiff> = {}): FileDiff => ({
+  ...ORDINARY_FILE,
+  new_path: path,
+  old_path: path,
+  ...overrides,
+});
+
+/** A token of the binding's own, planted where a CI job would print it (TD-012). */
+const BINDING_TOKEN = 'fake-binding-token-000000000000000000000001';
 
 const integrationsWith = (git: Partial<GitProviderPort> | null): PipelineIntegrations => {
   const port = {
@@ -55,6 +88,15 @@ const integrationsWith = (git: Partial<GitProviderPort> | null): PipelineIntegra
     // otherwise, the branch is where the task recorded it. Mergeability is not computed, so a rebase
     // gate case that forgot to script it waits rather than passing.
     getMergeRequest: async () => liveMergeRequest(HEAD_SHA),
+    // WP-81: the tamper check reads the diff whenever the pipeline is terminal. One ordinary file
+    // unless a case says otherwise — an empty list is "not computed yet" and keeps the gate pending.
+    getMergeRequestDiff: async () => [ORDINARY_FILE],
+    // No log unless a case scripts one: the failure detail then says so (standing rule 20).
+    getJobLog: async () => {
+      throw new IntegrationError('not_found', 'fake-git', 'no log for this job', {
+        action: 'get_job_log',
+      });
+    },
     ...git,
   } as unknown as GitProviderPort;
   return {
@@ -71,7 +113,13 @@ const integrationsWith = (git: Partial<GitProviderPort> | null): PipelineIntegra
     git:
       git === null
         ? null
-        : { port, ref: port.ref, project: 'acme/api', redactor: exactSecretRedactor([]) },
+        : {
+            port,
+            ref: port.ref,
+            project: 'acme/api',
+            // The binding's redactor holds its own credential, as the loader's does (TD-012 step 1).
+            redactor: exactSecretRedactor([{ name: 'fake_git_token', value: BINDING_TOKEN }]),
+          },
     taskManagement: null,
     communication: null,
   };
@@ -202,8 +250,84 @@ const customGate = (overrides: Partial<PipelineStage> = {}): PipelineStage => ({
   ...overrides,
 });
 
-const evaluate = (stage: PipelineStage, stored: StoredTask, git: Partial<GitProviderPort> | null) =>
-  createGateEvaluator(staticPipelineIntegrations(integrationsWith(git))).evaluate(stage, stored);
+/** A unit of work that runs the body with no transaction: the gate only reads artifacts in it. */
+const noTransaction: UnitOfWork = {
+  transaction: async (fn) => fn({ tx: {} as never, events: {} as never } as never),
+} as UnitOfWork;
+
+const evaluate = (
+  stage: PipelineStage,
+  stored: StoredTask,
+  git: Partial<GitProviderPort> | null,
+  world: {
+    readonly artifacts?: readonly StoredArtifact[];
+    readonly protectedPaths?: readonly string[];
+  } = {},
+) =>
+  createGateEvaluator({
+    integrations: staticPipelineIntegrations(integrationsWith(git)),
+    settings: staticProjectSettings((projectId) =>
+      defaultProjectSettings(
+        projectId,
+        world.protectedPaths === undefined
+          ? {}
+          : { config: { policies: { protected_paths: [...world.protectedPaths] } } },
+      ),
+    ),
+    unitOfWork: noTransaction,
+    store: { artifacts: { listFor: async () => [...(world.artifacts ?? [])] } as never },
+    clock: { now: () => '2026-06-01T09:00:00.000Z' },
+  }).evaluate(stage, stored);
+
+let artifactSeq = 0;
+const artifact = (type: StoredArtifact['type'], data: unknown): StoredArtifact => {
+  artifactSeq += 1;
+  return {
+    id: `00000000-0000-4000-8000-${artifactSeq.toString(16).padStart(12, '0')}` as Id,
+    taskId: TASK,
+    type,
+    version: 1,
+    markdown: null,
+    data: data as never,
+    schemaVersion: '1',
+    producedByRunId: null,
+    redactionCount: 0,
+    createdAt: '2026-06-01T09:00:00.000Z' as IsoDateTime,
+  };
+};
+
+const PLAN = (declared: readonly string[]) => ({
+  approach: 'Sum the lines.',
+  alternatives_considered: [],
+  affected_modules: ['invoices'],
+  files_to_change: [{ path: 'src/totals.ts', change: 'sum' }],
+  data_changes: [],
+  api_changes: [],
+  validation_contract: [],
+  test_plan: [],
+  rollout_notes: '',
+  risks: [],
+  estimated_size: 'S',
+  decisions_to_record: [],
+  protected_path_changes: declared.map((path) => ({ path, reason: 'the assertion was wrong' })),
+});
+
+const NOTES = {
+  summary: 'Done.',
+  deviations_from_plan: [],
+  tests_added: [],
+  commands_run: [],
+  known_gaps: [],
+  followup_tickets: [],
+  mr: { url: 'https://git.example.test/acme/api/-/merge_requests/7', iid: 7 },
+};
+
+const REVIEW = (confirmed: readonly string[]) => ({
+  verdict: 'approve',
+  findings: [],
+  summary: 'Reviewed.',
+  protected_path_changes_confirmed: [...confirmed],
+});
 
 describe('the CI gate', () => {
   it('settles a failed pipeline as not passed, naming the jobs that failed', async () => {
@@ -223,7 +347,10 @@ describe('the CI gate', () => {
       passed: false,
       // The failure's stable identity, for product/04 S4's convergence on this path too (WP-60).
       ciSignature: `ci:failed:test:e2e,test:unit@${HEAD_SHA}`,
-      detail: 'pipeline pipeline-1 failed: test:unit, test:e2e',
+      // WP-81: the first failing job's log was asked for; this provider has none, and says so.
+      detail:
+        'pipeline pipeline-1 failed: test:unit, test:e2e\n' +
+        'No job log is included: the provider refused the log (not_found) (job test:unit).',
     });
   });
 
@@ -231,14 +358,16 @@ describe('the CI gate', () => {
     const result = await evaluate(templateStage('ci_gate'), storedTask(MR), {
       getPipelineStatus: async () => pipelineStatus('canceled', [job('test:unit', 'canceled')]),
     });
-    // No job reports `failed`, so there are no names to give: the status is the whole account.
+    // No job reports `failed`, so there are no names to give and no log to read: said, not blank.
     expect(result).toEqual({
       kind: 'settled',
       headSha: HEAD_SHA,
       passed: false,
       // The failure's stable identity, for product/04 S4's convergence on this path too (WP-60).
       ciSignature: `ci:canceled:@${HEAD_SHA}`,
-      detail: 'pipeline pipeline-1 canceled',
+      detail:
+        'pipeline pipeline-1 canceled\n' +
+        'No job log is included: no failing job was named, so no log was read.',
     });
   });
 
@@ -248,13 +377,13 @@ describe('the CI gate', () => {
     });
     // A skipped pipeline is not evidence: "the project has no CI" is `null`, and that is the only
     // shape product/04 S4 lets pass without a run.
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       kind: 'settled',
       headSha: HEAD_SHA,
       passed: false,
       // The failure's stable identity, for product/04 S4's convergence on this path too (WP-60).
       ciSignature: `ci:skipped:@${HEAD_SHA}`,
-      detail: 'pipeline pipeline-1 skipped',
+      detail: expect.stringMatching(/^pipeline pipeline-1 skipped\n/),
     });
   });
 
@@ -266,36 +395,74 @@ describe('the CI gate', () => {
           job('test:unit', 'failed'),
         ]),
     });
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       kind: 'settled',
       headSha: HEAD_SHA,
       passed: false,
       // The failure's stable identity, for product/04 S4's convergence on this path too (WP-60).
       ciSignature: `ci:failed:test:unit@${HEAD_SHA}`,
-      detail: 'pipeline pipeline-1 failed: test:unit',
+      detail: expect.stringMatching(
+        /^pipeline pipeline-1 failed: test:unit\n.*\(job test:unit\)\.$/,
+      ),
     });
   });
 
-  it('reports the failing job names, not the error block (the Q55 cut)', async () => {
+  /**
+   * **The Q55 cut, inverted by name at WP-81.** Until then this case was *"reports the failing job
+   * names, not the error block (the Q55 cut)"* and asserted that no log was read at all, because a
+   * minted run credential had no redactor on the pipeline's path. WP-76 and WP-80 gave it one, so the
+   * gate now reads the first failing job's log — and the case asserts the three halves of doing it
+   * right: the body arrives, the binding's own token does not (redacted **before** the cut, so no
+   * leading bytes survive either), and the cut is reported for the marker rather than written in.
+   */
+  it('hands back the failing job’s log, redacted and bounded, beside the job names (the Q55 cut, inverted)', async () => {
     const logReads: string[] = [];
+    // The token straddles the head bound: a cut made before the redaction would keep its first
+    // half, which no exact-match rule could find again.
+    const noise = 'x'.repeat(CI_LOG_HEAD_CHARS - 10);
+    const middle = 'progress '.repeat(2_000);
+    const log = `${noise}${BINDING_TOKEN}\n${middle}\nFAIL src/totals.test.ts\n  expected 3, received 2 ${BINDING_TOKEN}\n`;
     const result = await evaluate(templateStage('ci_gate'), storedTask(MR), {
       getPipelineStatus: async () => pipelineStatus('failed', [job('test:unit', 'failed')]),
-      // A log **is** available, so an implementation that closed Q55 by appending it would have a
-      // body to append (WP-69, backlog 4): the assertion below is then about the body, not only
-      // about the opaque handle, which no implementation would ever print.
       getJobLog: async (_project, logRef) => {
         logReads.push(logRef);
-        return 'FAIL src/totals.test.ts\n  expected 3, received 2';
+        return log;
       },
     });
-    // product/04 S4 asks for "the failing job's error block"; this gate reads no log, because
-    // `getJobLog`'s redaction obligation for a run-scoped credential is open (Q55). The cut is
-    // pinned so that closing Q55 changes a failing test rather than nothing at all.
-    const detail = result.kind === 'settled' ? result.detail : '';
-    expect(detail).toContain('test:unit');
-    expect(detail).not.toContain('FAIL src/totals.test.ts');
-    expect(detail).not.toContain('log:test:unit');
-    expect(logReads).toEqual([]);
+    if (result.kind !== 'settled') {
+      throw new Error(`expected a settlement, got ${result.kind}`);
+    }
+    expect(logReads).toEqual(['log:test:unit']);
+    expect(result.detail).toContain('test:unit');
+    // The error block is the tail, and it is there.
+    expect(result.detail).toContain('FAIL src/totals.test.ts');
+    expect(result.detail).toContain('expected 3, received 2');
+    // Nothing of the token survives, whole or cut.
+    expect(result.detail).not.toContain(BINDING_TOKEN);
+    expect(result.detail).not.toContain(BINDING_TOKEN.slice(0, 10));
+    expect(result.detail).toContain('[REDACTED:integration:fake_git_token]');
+    // The progress noise in the middle is gone, and the cut is reported for the marker: the detail
+    // is shorter than the length it states, and it carries no line saying it was cut.
+    expect(result.detail.length).toBeLessThan(CI_LOG_HEAD_CHARS + CI_LOG_TAIL_CHARS + 200);
+    expect(result.detailOriginalChars).toBeGreaterThan(result.detail.length);
+    expect(result.detail).not.toMatch(/truncat|\bcut\b|…/i);
+    // The opaque handle is never printed.
+    expect(result.detail).not.toContain('log:test:unit');
+  });
+
+  it('keeps a short log whole and reports no cut', async () => {
+    const result = await evaluate(templateStage('ci_gate'), storedTask(MR), {
+      getPipelineStatus: async () => pipelineStatus('failed', [job('test:unit', 'failed')]),
+      getJobLog: async () => 'FAIL src/totals.test.ts\n  expected 3, received 2',
+    });
+    expect(result).toMatchObject({
+      kind: 'settled',
+      passed: false,
+      detail:
+        'pipeline pipeline-1 failed: test:unit\nLog of the failing job test:unit, redacted:\n' +
+        'FAIL src/totals.test.ts\n  expected 3, received 2',
+    });
+    expect(result).not.toHaveProperty('detailOriginalChars');
   });
 
   it('settles a failed pipeline whose only failing job may fail as not passed, with no names', async () => {
@@ -306,12 +473,12 @@ describe('the CI gate', () => {
       getPipelineStatus: async () =>
         pipelineStatus('failed', [job('flaky:browser', 'failed', true), job('lint', 'success')]),
     });
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       kind: 'settled',
       headSha: HEAD_SHA,
       passed: false,
       ciSignature: `ci:failed:@${HEAD_SHA}`,
-      detail: 'pipeline pipeline-1 failed',
+      detail: expect.stringMatching(/^pipeline pipeline-1 failed\n/),
     });
   });
 
@@ -371,6 +538,216 @@ describe('the CI gate', () => {
     });
     expect(asked).toEqual(['c'.repeat(40)]);
     expect(result).toEqual({ kind: 'pending', detail: 'pipeline pipeline-1 is running' });
+  });
+});
+
+/**
+ * **BD-024's tamper check, as part of the CI gate's read** (WP-81). Every branch of `tamper.ts`'s
+ * judgement reached through the evaluator, on a green pipeline unless the case says otherwise — so
+ * what fails the gate is the check and nothing else.
+ */
+describe('the tamper check in the CI gate (WP-81)', () => {
+  const green = { getPipelineStatus: async () => pipelineStatus('success') };
+  const withDiff = (files: readonly FileDiff[], extra: Partial<GitProviderPort> = {}) => ({
+    ...green,
+    getMergeRequestDiff: async () => [...files],
+    ...extra,
+  });
+
+  it('fails the gate on a protected path the plan did not declare, naming it', async () => {
+    const result = await evaluate(
+      templateStage('ci_gate'),
+      storedTask(MR),
+      withDiff([ORDINARY_FILE, changed('src/totals.test.ts')]),
+      {
+        artifacts: [
+          artifact('ImplementationPlan', PLAN([])),
+          artifact('ImplementationNotes', NOTES),
+        ],
+      },
+    );
+    expect(result).toMatchObject({
+      kind: 'settled',
+      passed: false,
+      headSha: HEAD_SHA,
+      outcome: 'protected_paths_changed',
+    });
+    // Not a CI failure: the convergence rule does not count it.
+    expect(result).not.toHaveProperty('ciSignature');
+    const detail = result.kind === 'settled' ? result.detail : '';
+    expect(detail).toContain('does not declare in protected_path_changes: src/totals.test.ts');
+    expect(detail).not.toContain('src/totals.ts,');
+    // The pipeline's own verdict is still said.
+    expect(detail).toContain('pipeline pipeline-1 succeeded');
+  });
+
+  it('passes a protected path the plan declared and the code review confirmed', async () => {
+    const result = await evaluate(
+      templateStage('ci_gate'),
+      storedTask(MR),
+      withDiff([changed('src/totals.test.ts')]),
+      {
+        artifacts: [
+          artifact('ImplementationPlan', PLAN(['src/totals.test.ts'])),
+          artifact('ImplementationNotes', NOTES),
+          artifact('ReviewVerdict', REVIEW(['src/*.test.ts'])),
+        ],
+      },
+    );
+    expect(result).toEqual({
+      kind: 'settled',
+      passed: true,
+      headSha: HEAD_SHA,
+      detail: 'pipeline pipeline-1 succeeded',
+    });
+  });
+
+  it('fails a declared path the code review judged and did not confirm', async () => {
+    const result = await evaluate(
+      templateStage('ci_gate'),
+      storedTask(MR),
+      withDiff([changed('src/totals.test.ts')]),
+      {
+        artifacts: [
+          artifact('ImplementationPlan', PLAN(['src/totals.test.ts'])),
+          artifact('ImplementationNotes', NOTES),
+          artifact('ReviewVerdict', REVIEW([])),
+        ],
+      },
+    );
+    expect(result).toMatchObject({
+      kind: 'settled',
+      passed: false,
+      outcome: 'protected_paths_changed',
+    });
+    expect(result.kind === 'settled' ? result.detail : '').toContain(
+      'the Code review did not confirm in protected_path_changes_confirmed: src/totals.test.ts',
+    );
+  });
+
+  it('excuses a declared path provisionally while no review has judged the change, recording no CI head', async () => {
+    // The review is **older** than the Developer's latest notes, so it judged an earlier push.
+    const result = await evaluate(
+      templateStage('ci_gate'),
+      storedTask(MR),
+      withDiff([changed('src/totals.test.ts')]),
+      {
+        artifacts: [
+          artifact('ImplementationPlan', PLAN(['src/totals.test.ts'])),
+          artifact('ReviewVerdict', REVIEW(['src/totals.test.ts'])),
+          artifact('ImplementationNotes', NOTES),
+        ],
+      },
+    );
+    expect(result).toMatchObject({
+      kind: 'settled',
+      passed: true,
+      outcome: 'protected_paths_awaiting_review',
+    });
+    // No head: `tasks.ci_head_sha` stays null, so the rebase gate re-enters CI before Ready.
+    expect(result).not.toHaveProperty('headSha');
+    expect(result.kind === 'settled' ? result.detail : '').toContain('src/totals.test.ts');
+  });
+
+  it('flags a deletion and a rename’s old name, and not an added file (WP-81 round 1 ruling)', async () => {
+    const result = await evaluate(
+      templateStage('ci_gate'),
+      storedTask(MR),
+      withDiff([
+        changed('tests/renamed.test.ts', { old_path: 'tests/totals.test.ts', renamed_file: true }),
+        changed('.github/workflows/release.yml', { new_file: true }),
+        changed('e2e/checkout.spec.ts', { deleted_file: true }),
+      ]),
+    );
+    const detail = result.kind === 'settled' ? result.detail : '';
+    expect(result).toMatchObject({ passed: false, outcome: 'protected_paths_changed' });
+    expect(detail).toContain('e2e/checkout.spec.ts');
+    expect(detail).toContain('tests/totals.test.ts');
+    // The rename's new name and the new workflow are additions: BD-024 §2 flags existing files.
+    expect(detail).not.toContain('tests/renamed.test.ts');
+    expect(detail).not.toContain('.github/workflows/release.yml');
+  });
+
+  it('passes a change that only adds a test file', async () => {
+    const result = await evaluate(
+      templateStage('ci_gate'),
+      storedTask(MR),
+      withDiff([ORDINARY_FILE, changed('src/totals.test.ts', { new_file: true })]),
+    );
+    expect(result).toEqual({
+      kind: 'settled',
+      passed: true,
+      headSha: HEAD_SHA,
+      detail: 'pipeline pipeline-1 succeeded',
+    });
+  });
+
+  it('reads the project’s own protected paths, not only the default', async () => {
+    const result = await evaluate(
+      templateStage('ci_gate'),
+      storedTask(MR),
+      withDiff([changed('src/totals.test.ts'), changed('infra/main.tf')]),
+      { protectedPaths: ['infra/**'] },
+    );
+    const detail = result.kind === 'settled' ? result.detail : '';
+    expect(detail).toContain('infra/main.tf');
+    // The project's list **replaces** the default (technical/12: arrays replace).
+    expect(detail).not.toContain('src/totals.test.ts');
+  });
+
+  it('runs on a project with no pipeline for the commit: the CI half is skipped, the check is not', async () => {
+    const result = await evaluate(templateStage('ci_gate'), storedTask(MR), {
+      getPipelineStatus: async () => null,
+      getMergeRequestDiff: async () => [changed('CLAUDE.md')],
+    });
+    expect(result).toMatchObject({ passed: false, outcome: 'protected_paths_changed' });
+    expect(result.kind === 'settled' ? result.detail : '').toContain(
+      'the project has no pipeline for this commit',
+    );
+  });
+
+  it('names the pipeline’s failure and its log beside the paths when both failed', async () => {
+    const result = await evaluate(
+      templateStage('ci_gate'),
+      storedTask(MR),
+      withDiff([changed('.gitlab-ci.yml')], {
+        getPipelineStatus: async () => pipelineStatus('failed', [job('test:unit', 'failed')]),
+        getJobLog: async () => 'FAIL src/totals.test.ts',
+      }),
+    );
+    expect(result).toMatchObject({ passed: false, outcome: 'protected_paths_changed' });
+    const detail = result.kind === 'settled' ? result.detail : '';
+    expect(detail).toContain('.gitlab-ci.yml');
+    expect(detail).toContain('pipeline pipeline-1 failed: test:unit');
+    expect(detail).toContain('FAIL src/totals.test.ts');
+  });
+
+  it('waits — never reads "no tamper" — while the provider lists no changed file', async () => {
+    const result = await evaluate(templateStage('ci_gate'), storedTask(MR), withDiff([]));
+    expect(result).toMatchObject({ kind: 'pending' });
+    expect(result.detail).toContain('tamper check');
+  });
+
+  it('refuses a diff at the read’s bound, whose remaining files it cannot see', async () => {
+    const many = Array.from({ length: MAX_CONFLICT_FILES }, (_, index) =>
+      changed(`src/file-${index}.ts`),
+    );
+    const result = await evaluate(templateStage('ci_gate'), storedTask(MR), withDiff(many));
+    expect(result).toMatchObject({ kind: 'unsupported' });
+    expect(result.detail).toContain(String(MAX_CONFLICT_FILES));
+  });
+
+  it('does not read the diff while the pipeline is still running', async () => {
+    const reads: string[] = [];
+    const result = await evaluate(templateStage('ci_gate'), storedTask(MR), {
+      getPipelineStatus: async () => pipelineStatus('running'),
+      getMergeRequestDiff: async () => {
+        reads.push('diff');
+        return [ORDINARY_FILE];
+      },
+    });
+    expect(result.kind).toBe('pending');
+    expect(reads).toEqual([]);
   });
 });
 

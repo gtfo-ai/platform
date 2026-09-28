@@ -33,6 +33,19 @@
  */
 const DOUBLE_STAR = '\uE000';
 
+/**
+ * The stand-in for a double star followed by a separator, which matches **zero** or more
+ * directories (technical/12's WP-81 amendment): the default `*.test.*` rule under any directory
+ * names `totals.test.ts` at the root as well as `src/totals.test.ts`, and `a`, double star, `b`
+ * names `a/b`. Until WP-81 it compiled to "any text, then a slash", which demands at least one
+ * directory, so four of the default protected paths (the test, spec, `__tests__` and `migrations`
+ * rules) missed a root-level file — measured, and a fail-open in both the workspace guard and the CI
+ * gate's tamper check. (Spelled out in words because the glob itself would close this comment.)
+ * U+E002, not U+E001: `path-guard.ts` folds a filesystem-produced solidus to U+E001 before it
+ * calls this compiler, and that stand-in must stay a literal here.
+ */
+const DOUBLE_STAR_DIRECTORY = '\uE002';
+
 export const pathPatternToRegExp = (pattern: string): RegExp => {
   // `infra/`, `infra/**` and `infra` are the same instruction. Trimming a trailing `/**` — not only
   // the trailing slashes — is what makes `infra/**` cover `infra` itself, which the sentence above
@@ -40,9 +53,11 @@ export const pathPatternToRegExp = (pattern: string): RegExp => {
   const trimmed = pattern.replace(/\/+$/, '').replace(/^(.+)\/\*\*$/, '$1');
   const escaped = trimmed.replace(/[.+^${}()|[\]\\]/g, '\\$&');
   const body = escaped
+    .replace(/\*\*\//g, DOUBLE_STAR_DIRECTORY)
     .replace(/\*\*/g, DOUBLE_STAR)
     .replace(/\*/g, '[^/]*')
     .replace(/\?/g, '[^/]')
+    .replaceAll(DOUBLE_STAR_DIRECTORY, '(?:.*/)?')
     .replaceAll(DOUBLE_STAR, '.*');
   // `infra` also matches `infra/anything`; `infra/**` already does on its own.
   return new RegExp(`^${body}(?:/.*)?$`);

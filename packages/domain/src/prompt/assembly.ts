@@ -221,6 +221,13 @@ export interface PromptTask {
   /** `task.stage.returned.reason` — why this stage is running again. Untrusted. */
   readonly returnFeedback: string | null;
   /**
+   * The length {@link returnFeedback} would have had had its producer not cut it — the CI gate's
+   * head-and-tail bound on a failing job's log (WP-81) — or `null`/absent when nothing cut it. A cut
+   * made before this module is announced exactly like its own: `truncated="true"` and
+   * `original_chars` in the block's marker, nothing in the body (technical/07).
+   */
+  readonly returnFeedbackOriginalChars?: number | null;
+  /**
    * The platform's own record of what has happened to this task — WP-31's ask-the-task.
    *
    * Empty for every pipeline stage, which is why it is a required array rather than an optional
@@ -954,9 +961,23 @@ const checklistBlock = (checklist: BoundedReviewChecklist): DataBlock => ({
   body: [checklistHeader(checklist), ...checklist.items.map((item) => `- ${item}`)].join('\n'),
 });
 
-const feedbackBlock = (feedback: string): DataBlock => {
+/**
+ * The return feedback, capped at {@link MAX_FEEDBACK_CHARS}. A cut its producer already made
+ * (`storedOriginalChars`, WP-81) is announced the same way as this cap: the marker says
+ * `truncated="true"` with the length the text had before **any** cut — the producer's figure when it
+ * cut first, since that is the larger — and the body carries no line about it.
+ */
+const feedbackBlock = (feedback: string, storedOriginalChars: number | null): DataBlock => {
   const capped = cap(feedback, MAX_FEEDBACK_CHARS);
-  return { kind: 'return_feedback', attributes: cappedAttributes(capped), body: capped.text };
+  const originalChars =
+    storedOriginalChars !== null && storedOriginalChars > feedback.length
+      ? storedOriginalChars
+      : capped.originalChars;
+  return {
+    kind: 'return_feedback',
+    attributes: cappedAttributes({ text: capped.text, originalChars }),
+    body: capped.text,
+  };
 };
 
 /** The field names of the artifact's schema — one source, so the prompt cannot drift from it. */
@@ -1046,7 +1067,9 @@ export const assemblePrompt = (input: AssemblePromptInput): AssembledPrompt => {
     // WP-45: `?? []` for the reason `ticketBlock` uses `?? null` — a caller that lost the field
     // through a cast emits no block rather than throwing.
     ...boundReviewChecklists(input.task.reviewChecklists ?? []).map(checklistBlock),
-    ...(input.task.returnFeedback === null ? [] : [feedbackBlock(input.task.returnFeedback)]),
+    ...(input.task.returnFeedback === null
+      ? []
+      : [feedbackBlock(input.task.returnFeedback, input.task.returnFeedbackOriginalChars ?? null)]),
     ...input.task.record.map(recordBlock),
     // Last, so it is the nearest thing to the output contract the model reads next.
     ...(input.ask === null ? [] : [askBlock(input.ask)]),

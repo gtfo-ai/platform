@@ -79,6 +79,8 @@ interface StageRow {
   /** The stage a return targeted (WP-55); null on every row that is not a return. */
   returnedTo: Slug | null;
   returnReason: string | null;
+  /** The uncut length of `returnReason`, when its writer cut it (WP-81, migration 0058). */
+  returnReasonOriginalChars: number | null;
   signature: string | null;
   enteredAt: number;
   exitedAt: number | null;
@@ -539,6 +541,7 @@ export const createMemoryPipelineStore = (
         outcome: null,
         returnedTo: null,
         returnReason: null,
+        returnReasonOriginalChars: null,
         signature: null,
         enteredAt: sequence,
         exitedAt: null,
@@ -562,12 +565,24 @@ export const createMemoryPipelineStore = (
             candidate.stage === entry.stage &&
             candidate.attempt === entry.attempt,
         );
+      const originalChars = entry.returnReasonOriginalChars ?? null;
+      // The SQL check `task_stages_return_reason_original_chars_positive`, and a cut only means
+      // anything beside a reason (migration 0058).
+      if (
+        originalChars !== null &&
+        (!Number.isInteger(originalChars) || originalChars <= 0 || entry.returnReason === null)
+      ) {
+        throw new PipelineStoreError(
+          `task_stages ${entry.taskId}/${entry.stage}#${String(entry.attempt)}: return_reason_original_chars ${String(originalChars)} is not a positive length beside a reason`,
+        );
+      }
       if (row === undefined) {
         return;
       }
       row.state = state;
       row.outcome = outcome;
       row.returnReason = entry.returnReason;
+      row.returnReasonOriginalChars = originalChars;
       row.returnedTo = entry.returnedTo;
       row.exitedAt = sequence;
     },
@@ -589,6 +604,7 @@ export const createMemoryPipelineStore = (
       row.state = taskStageExitStateSchema.parse('failed');
       row.outcome = outcome;
       row.returnReason = entry.reason;
+      row.returnReasonOriginalChars = null;
       row.returnedTo = null;
       row.exitedAt = sequence;
     },
@@ -611,6 +627,7 @@ export const createMemoryPipelineStore = (
           outcome: null,
           returnedTo: null,
           returnReason: null,
+          returnReasonOriginalChars: null,
           signature: entry.signature,
           enteredAt: sequence,
           exitedAt: null,
@@ -662,20 +679,21 @@ export const createMemoryPipelineStore = (
       const current = stages.find(
         (row) => row.taskId === taskId && row.stage === stage && row.attempt === attempt,
       )?.enteredAt;
-      return (
-        stages
-          .filter(
-            (row) =>
-              row.taskId === taskId &&
-              row.returnedTo === stage &&
-              row.returnReason !== null &&
-              row.exitedAt !== null &&
-              (previous === null || row.exitedAt > previous) &&
-              (current === undefined || row.exitedAt <= current),
-          )
-          .sort((a, b) => (a.exitedAt ?? 0) - (b.exitedAt ?? 0))
-          .at(-1)?.returnReason ?? null
-      );
+      const found = stages
+        .filter(
+          (row) =>
+            row.taskId === taskId &&
+            row.returnedTo === stage &&
+            row.returnReason !== null &&
+            row.exitedAt !== null &&
+            (previous === null || row.exitedAt > previous) &&
+            (current === undefined || row.exitedAt <= current),
+        )
+        .sort((a, b) => (a.exitedAt ?? 0) - (b.exitedAt ?? 0))
+        .at(-1);
+      return found === undefined || found.returnReason === null
+        ? null
+        : { reason: found.returnReason, originalChars: found.returnReasonOriginalChars };
     },
   };
 

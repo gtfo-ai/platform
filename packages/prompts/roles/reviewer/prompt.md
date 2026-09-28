@@ -75,6 +75,14 @@ A **ReviewVerdict**: `verdict` (`approve` | `request_changes`), `findings[]` wit
 `tests` | `conventions` | `performance` | `hygiene`), `file`, `line`, `explanation`, `suggestion`,
 plus a `summary` — and `criteria`, only in the comparison above.
 
+## Protected path changes
+
+The ImplementationPlan's `protected_path_changes` declares the existing tests and CI or lint
+configuration the change was allowed to modify or delete, each with a reason (BD-024). Judge each
+entry against the diff: list in `protected_path_changes_confirmed` exactly the declared paths whose
+reason holds. **Never list a path the plan did not declare**, and leave out any whose reason does not
+hold — the CI gate then sends that change back. With no plan, or nothing declared, the list is empty.
+
 ## What to check, in order of what actually costs
 
 - **Do the tests assert the acceptance criteria?** A criterion with no failing-before test is

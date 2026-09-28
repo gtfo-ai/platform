@@ -1364,6 +1364,10 @@ const ciHandler = (options: PipelineSagaOptions): EventHandler => ({
       head_sha: event.payload.head_sha,
       ci_status: event.payload.status,
       failed_jobs: event.payload.failed_jobs.map((job) => job.name),
+      failed_job_logs: event.payload.failed_jobs.map((job) => ({
+        name: job.name,
+        log_ref: job.log_ref ?? null,
+      })),
     };
     context.afterCommit(async () => {
       await enqueueOutbound(options.jobs, data);

@@ -32,13 +32,29 @@
  * The settlement's *measurement* is not here either: `task.rebase.checked` is appended by the job
  * that settled the gate (`rebase.ts`), because this module returns a value and writes nothing.
  *
- * ## What a failed CI gate says, and what it deliberately does not (Q55)
+ * ## What a failed CI gate says (Q55 closed, WP-81)
  *
- * The failure branch settles `passed: false` and names the **failing jobs** — not product/04 S4's
- * "failing job's error block", which needs `getJobLog`, whose redaction obligation for a
- * *run-scoped* credential is open (Q55). The `detail` is stored on the task as the return reason
- * and handed to the next Implementation run, so reading a log before that question is answered
- * would put a token in it. The cut is pinned by `gates.test.ts` rather than only written here.
+ * The failure branch settles `passed: false`, names every failing job, and hands back the **first
+ * failing job's log** — product/04 S4's *"failing job's error block"*, BD-024 §5 — read through
+ * `getJobLog`, redacted by the git binding's redactor (TD-012's two steps plus every minted shape,
+ * WP-80) on the whole text and only then bounded to its head and tail (`ci-log.ts`). The `detail`
+ * is stored on the task as the return reason and handed to the next Implementation run inside its
+ * `return_feedback` data block; the bound's cut travels as `detailOriginalChars` and is announced in
+ * that block's marker, never in the body. A log the platform could not read is **said** in the
+ * detail. Until WP-81 this gate returned the job names only, because a minted run credential had no
+ * redactor on the pipeline's path (Q55); WP-76 and WP-80 gave it one, and the pin in `gates.test.ts`
+ * is inverted by name rather than deleted.
+ *
+ * ## The tamper check is part of this gate's read (WP-81, BD-024 §2)
+ *
+ * When the pipeline is terminal — or the project has none for the head — the gate also compares
+ * the merge request's changed paths with the protected paths and the plan's declared, review-
+ * confirmed exceptions (`tamper.ts` has the rule and its reasoning). A change that touches a
+ * protected path it may not fails the gate whatever the pipeline said: a **return to the
+ * Developer**, spending the `ci_fix` loop like a red pipeline (`RETURN_LOOPS.ci_gate`), closed with
+ * the outcome word `protected_paths_changed`. One settlement function, {@link judgeCiSettlement},
+ * serves both paths that settle this gate — the poll below and the pipeline's event
+ * (`ci-settle.ts`) — so neither is a side door past the check.
  *
  * That file also executes every branch of this module, including each `unsupported` refusal, and
  * the e2e drives the CI failure end to end (`test/e2e/pipeline`, "when the merge request's
@@ -46,12 +62,19 @@
  * `CI_TERMINAL_FAIL` as `passed: true` left the whole unit+contract tier green, and a task
  * advanced to code review on red CI. This is a guard, and an untested guard fails open in silence.
  */
+import type { Id, TaskStageOutcome } from '@platform/contracts';
 import { isBuiltinGateStageId } from '@platform/contracts';
 import type { CompiledPipeline, PipelineStage } from '@platform/domain';
 import { stageOf } from '@platform/domain';
-import type { PipelineIntegrationsPort } from './integrations.js';
+import type { UnitOfWork } from '../ports/unit-of-work.js';
+import { failingJobWithLog, readFailingJobLog } from './ci-log.js';
+import { coalescedMergeRequestDiff, MAX_CONFLICT_FILES } from './diff-coalescer.js';
+import type { PipelineIntegrations, PipelineIntegrationsPort } from './integrations.js';
 import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
-import type { StoredTask } from './store.js';
+import type { ProjectSettingsPort } from './settings.js';
+import { effectiveProtectedPaths } from './settings.js';
+import type { PipelineStore, StoredTask } from './store.js';
+import { changedExistingPaths, exceptionsOf, judgeTamper, tamperFailureDetail } from './tamper.js';
 
 export type GateResult =
   | {
@@ -74,6 +97,17 @@ export type GateResult =
        * later resume or hand-back into Ready is compared with. Absent when the gate read no head.
        */
       readonly headSha?: string;
+      /**
+       * The word the gate's row is closed with instead of `pass`/`fail`/`returned` (WP-81): the
+       * tamper check's `protected_paths_changed` on its return, `protected_paths_awaiting_review` on
+       * a provisional pass. Absent for every other settlement.
+       */
+      readonly outcome?: TaskStageOutcome;
+      /**
+       * The length `detail` would have had uncut, when the gate cut the failing job's log to its head
+       * and tail (WP-81). Stored beside the return reason so the prompt's marker announces the cut.
+       */
+      readonly detailOriginalChars?: number;
     }
   /** The answer is not available yet; ask again after `retryInMs`. */
   | { readonly kind: 'pending'; readonly detail: string }
@@ -154,10 +188,176 @@ export interface GateEvaluator {
   evaluate(stage: PipelineStage, stored: StoredTask): Promise<GateResult>;
 }
 
+/**
+ * What the CI gate needs besides the provider (WP-81): the project's settings for its protected
+ * paths, and the task's artifacts for the declared and confirmed exceptions — read in a transaction
+ * of its own, after every provider call, never around one.
+ */
+export interface CiGateOptions {
+  readonly integrations: PipelineIntegrationsPort;
+  readonly settings: ProjectSettingsPort;
+  readonly unitOfWork: UnitOfWork;
+  readonly store: Pick<PipelineStore, 'artifacts'>;
+  readonly clock: { now(): string };
+}
+
+/** The pipeline's own answer for the live head, before the tamper check is made. */
+export type CiReading =
+  /** product/04 S4: *"If the project has no CI, the gate is skipped"* — the tamper check is not. */
+  | { readonly kind: 'no_pipeline' }
+  | { readonly kind: 'passed'; readonly detail: string }
+  | {
+      readonly kind: 'failed';
+      readonly status: string;
+      /** Every failing job that is not allowed to fail, by name. */
+      readonly failingJobs: readonly string[];
+      /** The job whose log is read (`failingJobWithLog`), or `null` when none was named. */
+      readonly logJob: { readonly name: string; readonly logRef: string | null } | null;
+      readonly detail: string;
+    };
+
+const NO_PIPELINE_DETAIL =
+  'the project has no pipeline for this commit; the local test run is the evidence';
+
+/**
+ * **The CI gate's settlement, for both paths that settle it** (WP-81): the poll below and the
+ * pipeline's event (`ci-settle.ts`). The pipeline's verdict comes in as `reading`; this makes the
+ * tamper check (`tamper.ts`), reads the failing job's log when there is a failure to explain
+ * (`ci-log.ts`), and answers the one {@link GateResult}.
+ *
+ * Every provider call here is a read through the executor, outside every transaction; the
+ * artifacts are read in a transaction of their own after them. The endings, in order:
+ *
+ *  - the diff lists **no** file → `pending` (not yet computed, never *nothing changed*); a list at
+ *    the read's bound → `unsupported` (the rest is unseen) — neither is read as *no tamper*;
+ *  - a protected path changed that may not → `settled`, **failed**, `protected_paths_changed`, the
+ *    reason naming the paths (and the pipeline's own failure and log, when it failed too) — no
+ *    `ciSignature`, because it is not a CI failure the convergence rule should count;
+ *  - the pipeline failed → `settled`, failed, the job names and the log excerpt, `ciSignature`;
+ *  - a declared protected path the review has not judged yet → `settled`, **passed**,
+ *    `protected_paths_awaiting_review`, and **no `headSha`**, so `tasks.ci_head_sha` stays `null`
+ *    and the rebase gate re-enters this gate before Ready (`rebaseAgainstCi`);
+ *  - otherwise → `settled`, passed, with the head CI judged.
+ */
+export const judgeCiSettlement = async (
+  options: CiGateOptions,
+  bindings: PipelineIntegrations,
+  stored: StoredTask,
+  headSha: string,
+  reading: CiReading,
+): Promise<GateResult> => {
+  const git = bindings.git;
+  if (git === null || stored.mr === null) {
+    return {
+      kind: 'unsupported',
+      detail:
+        'the CI gate needs a git provider and a merge request, and the task has one without the other',
+    };
+  }
+  const context: { readonly projectId: Id; readonly taskId: Id } = {
+    projectId: stored.task.projectId,
+    taskId: stored.task.id,
+  };
+  const files = await coalescedMergeRequestDiff(
+    { port: options.integrations, integrations: bindings, now: options.clock.now() },
+    { ...stored.mr, head_sha: headSha },
+    MAX_CONFLICT_FILES,
+    context,
+  );
+  if (files === null) {
+    // Unreachable: the binding was checked above, and the read answers `null` only without one.
+    return {
+      kind: 'unsupported',
+      detail: 'the CI gate needs a git provider and the project has no git binding',
+    };
+  }
+  if (files.length === 0) {
+    return {
+      kind: 'pending',
+      detail:
+        'the provider lists no changed file for the merge request yet, so the tamper check (BD-024) cannot be made',
+    };
+  }
+  if (files.length >= MAX_CONFLICT_FILES) {
+    return {
+      kind: 'unsupported',
+      detail: `the merge request changes at least ${MAX_CONFLICT_FILES} files, more than the tamper check (BD-024) reads, so the platform cannot tell whether a protected path changed`,
+    };
+  }
+  const settings = await options.settings.forProject(stored.task.projectId);
+  const artifacts = await options.unitOfWork.transaction(async (scope) =>
+    options.store.artifacts.listFor(scope.tx, stored.task.id),
+  );
+  const verdict = judgeTamper({
+    changedPaths: changedExistingPaths(files),
+    protectedPaths: effectiveProtectedPaths(settings),
+    ...exceptionsOf(artifacts),
+  });
+  const redact = (text: string): string => git.redactor.redactText(text).value;
+  const ciDetail = reading.kind === 'no_pipeline' ? NO_PIPELINE_DETAIL : reading.detail;
+
+  if (verdict.kind === 'changed' || reading.kind === 'failed') {
+    const head = [
+      ...(verdict.kind === 'changed' ? [tamperFailureDetail(verdict, redact)] : []),
+      ciDetail,
+    ].join('\n');
+    const log =
+      reading.kind === 'failed' ? await readFailingJobLog(bindings, reading.logJob, context) : null;
+    const composed = composeFailureDetail(head, log);
+    return {
+      kind: 'settled',
+      passed: false,
+      headSha,
+      detail: composed.detail,
+      ...(composed.originalChars === null ? {} : { detailOriginalChars: composed.originalChars }),
+      ...(verdict.kind === 'changed'
+        ? { outcome: 'protected_paths_changed' as const }
+        : reading.kind === 'failed'
+          ? { ciSignature: ciFailureSignature(reading.status, reading.failingJobs, headSha) }
+          : {}),
+    };
+  }
+  if (verdict.kind === 'awaiting_review') {
+    return {
+      kind: 'settled',
+      passed: true,
+      outcome: 'protected_paths_awaiting_review',
+      detail: `${ciDetail}; the tamper check (BD-024) excused declared protected paths until the Code review confirms them, and CI judges the branch again before Ready: ${verdict.paths.map(redact).join(', ')}`,
+    };
+  }
+  return { kind: 'settled', passed: true, headSha, detail: ciDetail };
+};
+
+/**
+ * The failure's detail: the platform's sentences, then the log excerpt or the reason there is none.
+ * `originalChars` is the length the detail would have had with the whole redacted log in it, when
+ * `ci-log.ts` cut the log — what the prompt's marker announces (technical/04).
+ */
+const composeFailureDetail = (
+  head: string,
+  log: Awaited<ReturnType<typeof readFailingJobLog>> | null,
+): { readonly detail: string; readonly originalChars: number | null } => {
+  if (log === null) {
+    return { detail: head, originalChars: null };
+  }
+  if (log.kind === 'unreadable') {
+    return {
+      detail: `${head}\nNo job log is included: ${log.why}${log.job === null ? '' : ` (job ${log.job})`}.`,
+      originalChars: null,
+    };
+  }
+  const prefix = `${head}\nLog of the failing job ${log.job}, redacted:\n`;
+  return {
+    detail: `${prefix}${log.text}`,
+    originalChars: log.originalChars === null ? null : prefix.length + log.originalChars,
+  };
+};
+
 const CI_TERMINAL_PASS = new Set(['success']);
 const CI_TERMINAL_FAIL = new Set(['failed', 'canceled', 'skipped']);
 
-export const createGateEvaluator = (integrations: PipelineIntegrationsPort): GateEvaluator => {
+export const createGateEvaluator = (options: CiGateOptions): GateEvaluator => {
+  const { integrations } = options;
   return {
     evaluate: async (stage, stored) => {
       if (stage.command !== null) {
@@ -243,37 +443,29 @@ export const createGateEvaluator = (integrations: PipelineIntegrationsPort): Gat
         const status = await git.pipelineStatus(headSha, context);
         if (status === null) {
           // "If the project has no CI, the gate is skipped and the local test run is the
-          // evidence" (product/04 S4).
-          return {
-            kind: 'settled',
-            passed: true,
-            headSha,
-            detail:
-              'the project has no pipeline for this commit; the local test run is the evidence',
-          };
+          // evidence" (product/04 S4) — the pipeline's half is; the tamper check is not.
+          return judgeCiSettlement(options, bindings, stored, headSha, { kind: 'no_pipeline' });
         }
         if (CI_TERMINAL_PASS.has(status.status)) {
-          return {
-            kind: 'settled',
-            passed: true,
-            headSha,
+          return judgeCiSettlement(options, bindings, stored, headSha, {
+            kind: 'passed',
             detail: `pipeline ${status.id} succeeded`,
-          };
+          });
         }
         if (CI_TERMINAL_FAIL.has(status.status)) {
           const failed = status.jobs
             .filter((job) => job.status === 'failed' && !job.allow_failure)
             .map((job) => job.name);
-          return {
-            kind: 'settled',
-            passed: false,
-            headSha,
-            ciSignature: ciFailureSignature(status.status, failed, headSha),
+          return judgeCiSettlement(options, bindings, stored, headSha, {
+            kind: 'failed',
+            status: status.status,
+            failingJobs: failed,
+            logJob: failingJobWithLog(status.jobs),
             detail:
               failed.length === 0
                 ? `pipeline ${status.id} ${status.status}`
                 : `pipeline ${status.id} ${status.status}: ${failed.join(', ')}`,
-          };
+          });
         }
         return { kind: 'pending', detail: `pipeline ${status.id} is ${status.status}` };
       }

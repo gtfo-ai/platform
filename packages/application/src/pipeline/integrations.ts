@@ -595,6 +595,32 @@ export const gitReads = (integrations: PipelineIntegrations) => ({
     );
   },
 
+  /**
+   * A CI job's log — WP-81, BD-024 §5's *"the failing job's error block"*, and the port method's
+   * first caller since WP-09 built it. A **read**, so it happens in every mode; `null` for a project
+   * with no git binding, like every other member here.
+   *
+   * The adapter redacts what it returns (`getJobLog`'s port docblock: TD-012's redactor composed with
+   * one over its own credentials, applied before its own tail cut), and the caller redacts again
+   * with the binding's redactor before it cuts anything (`ci-log.ts`) — the second pass is the one
+   * that carries every minted-credential shape this process knows (WP-80) whichever adapter answered.
+   * The text is untrusted (BD-022) and goes nowhere but a data block.
+   */
+  jobLog: async (logRef: string, context: CallContext): Promise<string | null> => {
+    const git = integrations.git;
+    if (git === null) {
+      return null;
+    }
+    return read(
+      integrations,
+      git.ref,
+      'get_job_log',
+      { project: git.project, log_ref: logRef },
+      context,
+      async () => git.port.getJobLog(git.project, logRef),
+    );
+  },
+
   discussions: async (
     ref: MergeRequestRefInput,
     context: CallContext,

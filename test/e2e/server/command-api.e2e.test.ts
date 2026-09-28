@@ -297,6 +297,14 @@ describe('the task command surface, on a task the pipeline drove', () => {
       reviewers: [],
       remove_source_branch: true,
     });
+    // WP-81: the CI gate's tamper check reads the merge request's changed files, and the fake
+    // opens one with none — *not yet computed* to the gate. One ordinary file, as `startPipeline`
+    // seeds for the first merge request.
+    pipeline.git.setDiff({
+      project: PROJECT_PATH,
+      iid: opened.ref.iid,
+      files: [{ path: 'src/totals.ts', diff: '@@ -1 +1 @@\n-a\n+b' }],
+    });
     reworked = { iid: opened.ref.iid, url: opened.web_url, headSha: opened.head_sha };
     pipeline.git.setPipeline({
       project: PROJECT_PATH,

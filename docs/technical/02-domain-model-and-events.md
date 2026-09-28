@@ -115,6 +115,54 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > judges no head either. The duty re-validates on fire: it acts only while the task is still in the
 > state and at the stage the command saw, and drops the wake-up (with a log line) otherwise.
 >
+> **The CI gate runs BD-024's tamper check, and it is part of the gate's read** (WP-81, PROGRESS
+> backlog 95, BD-024 §2) — not a stage of its own and not a reviewer's opinion. When the pipeline
+> for the live head is terminal (or the project has no pipeline for it), the gate computes, from
+> three inputs: the **changed paths of existing files** in the merge request at that head — every
+> file the provider lists as **modified or deleted**, and the **old** name of a rename, through the
+> one coalesced diff read WP-59 made (`diff-coalescer.ts`). An **added** file is not flagged
+> (BD-024 §2: *"modifications or deletions of existing tests and of CI/lint configuration"*; §3
+> requires a bug fix to add a test — the orchestrator's WP-81 ruling), and a missing status reads as
+> modified (fail closed). This diverges from the workspace's path guard, which refuses a new file
+> under a protected path unless the plan lists it; the project's **effective protected paths**
+> (`policies.protected_paths`, tests and CI/lint configuration by default); and the latest
+> Implementation Plan's declared **`protected_path_changes`**, of which a path is excused only when
+> the Code review also **confirmed** it (`ReviewVerdict.protected_path_changes_confirmed`). The
+> remainder — changed ∩ protected, minus declared-and-confirmed — decides it:
+>
+> - **non-empty** → the gate **fails** and the task **returns to the Developer**, the return reason
+>   naming the paths and whether each was undeclared or declared but not confirmed. It spends the
+>   **`ci_fix`** loop (the stage's own, `RETURN_LOOPS.ci_gate`) exactly as a red pipeline does, and it
+>   is a failing CI settlement: `tasks.ci_head_sha` is written `null`. The gate's row is closed
+>   `returned` with the outcome word **`protected_paths_changed`**, which is the Checks panel's
+>   *tamper check* item;
+> - **empty** → the tamper check passes and the pipeline's own verdict decides the gate;
+> - **a declared path the Code review has not judged yet** — the shipped templates run `ci_gate`
+>   *before* `code_review`, so on the first pass no Review Verdict of the current change exists — is
+>   excused **provisionally**: the gate passes with the outcome word
+>   **`protected_paths_awaiting_review`** and records **no** `ci_head_sha`, so the rebase gate's
+>   settlement (`rebaseAgainstCi`, WP-79) re-enters `ci_gate` before Ready and the check is made
+>   again with the review's confirmation in hand. That round is the WP-79 re-entry — a forward move
+>   bounded by `rebase_rechecks`, re-running the review stages — and it is paid only by a change that
+>   touches a declared protected path. "Judged" is ordinal: the latest Review Verdict is newer than
+>   the latest Implementation Notes (the Developer's report after its push). The alternative that
+>   avoids the second review round is Q109 (`docs/OPEN-QUESTIONS.md`);
+> - **cannot be decided** — the provider lists **no** changed file (a merge request's diff is
+>   computed asynchronously, so `[]` is *not yet*, never *nothing*), or lists as many files as the
+>   read's bound so the rest are unseen — is never read as *no tamper* (fail closed on a mutation):
+>   an empty list keeps the gate `pending` until `MAX_GATE_CHECKS` and then escalates `undecided`;
+>   a list at the bound escalates `unsupported` at once.
+>
+> **What a failed CI gate hands back** (BD-024 §5, Q55's remaining half): the failing job's names
+> **and** the first failing job's log, read through `getJobLog`, redacted by the git binding's
+> redactor (TD-012's two steps plus every minted-credential shape, WP-80) **before** it is cut, and
+> bounded to its head and its tail. It is part of the return reason, which reaches the next
+> Implementation run inside the `return_feedback` data block (technical/04); a cut the gate applied
+> is announced as `truncated="true"` in that block's marker — carried by
+> `task_stages.return_reason_original_chars` (technical/03) — and never as a line in the body. A log
+> the platform could not read is stated as unreadable in the reason, never replaced by an empty
+> excerpt.
+>
 > **`retro → retro` was added at WP-18b**, when the librarian stage went back into the shipped
 > templates (technical/12's example has always carried it). The retrospective phase now has **two**
 > stages — the facilitator's report and the Librarian's curation of the proposals it produced — and

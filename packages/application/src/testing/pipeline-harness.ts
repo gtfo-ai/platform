@@ -57,6 +57,7 @@ import { defaultProjectSettings, staticProjectSettings } from '../pipeline/setti
 import { createRunStopReasons } from '../pipeline/stop-reasons.js';
 import type { DependencyMetadataPort } from '../ports/dependency-metadata.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
+import { IntegrationError } from '../ports/integrations/common.js';
 import type { CommunicationPort } from '../ports/integrations/communication.js';
 import type { GitProviderPort } from '../ports/integrations/git-provider.js';
 import type { HeldConnectionLiveness } from '../ports/integrations/inbound-connection.js';
@@ -592,22 +593,50 @@ const stubGit = (overrides: Partial<GitProviderPort> | null | undefined): GitPro
         },
         listDiscussions: async () => [],
         /**
-         * WP-37's three reads, defaulted to *"this project has none"* rather than left missing.
+         * WP-37's three reads, defaulted rather than left missing.
          *
          * The rebase gate now enqueues a `risk_route` duty on every entry, so every test that
          * reaches the gate makes these calls whether it cares about them or not. The defaults are
-         * the honest empty answers — a merge request whose diff this double does not hold (the same
-         * answer `FakeGitProvider`'s divergence 10 gives), a repository with no `CODEOWNERS`, and a
-         * handle that names nobody — so the duty classifies nothing and assigns nobody unless a test
-         * scripts otherwise. A test that wants the feature exercised for real drives the e2e tier
+         * the honest empty answers — a repository with no `CODEOWNERS` and a handle that names
+         * nobody — and, for the diff, the one ordinary file below (WP-81), so the duty classifies
+         * nothing and assigns nobody unless a test scripts otherwise. A test that wants the feature exercised for real drives the e2e tier
          * against the real fake (standing rule 82).
          */
-        getMergeRequestDiff: async () => [],
+        /**
+         * **One ordinary file per merge request, not an empty list** (WP-81). The CI gate's tamper
+         * check reads the diff whenever the pipeline is terminal, and an empty list is *not yet
+         * computed* there — it keeps the gate pending and then escalates it, which is the honest
+         * answer and not what a test about anything else wants. The path is per iid so two tasks'
+         * merge requests never overlap (the conflict warning compares them), and it matches no
+         * default protected path, no manifest and no risk class — so the other duties still
+         * classify, detect and warn about nothing unless a test scripts otherwise.
+         */
+        getMergeRequestDiff: async (ref: { readonly iid: number }) => [
+          {
+            new_path: `src/change-${ref.iid}.ts`,
+            old_path: `src/change-${ref.iid}.ts`,
+            diff: '@@ -1 +1 @@\n-a\n+b',
+            new_file: false,
+            renamed_file: false,
+            deleted_file: false,
+            omitted: false,
+          },
+        ],
         /**
          * WP-59's diff-stats read, defaulted to *"not computed"* — the honest empty answer, which
          * leaves a mined merge request sizeless rather than inventing one.
          */
         getMergeRequestDiffStats: async () => null,
+        /**
+         * No job log (WP-81): `not_found`, the answer a provider gives for a job whose trace it does
+         * not keep — never an empty string. A failed CI gate then says in its reason that no log is
+         * included; a test that wants the excerpt scripts one.
+         */
+        getJobLog: async () => {
+          throw new IntegrationError('not_found', 'fake-git', 'this double holds no job log', {
+            action: 'get_job_log',
+          });
+        },
         readCodeowners: async () => null,
         resolveUserId: async () => null,
         /**

@@ -382,6 +382,53 @@ describe('untrusted text in the assembled prompt', () => {
   });
 });
 
+/**
+ * **A cut made before the assembler is announced by it** (WP-81): the CI gate bounds a failing job's
+ * log to its head and tail before the return reason is stored, and records the uncut length beside
+ * it. The block renders that cut exactly like its own — in the marker, never in the body.
+ */
+describe('a return feedback its producer already cut (WP-81)', () => {
+  const taskWith = (returnFeedback: string, returnFeedbackOriginalChars: number | null) => ({
+    stage: 'implementation',
+    attempt: 2,
+    ticket: { provider: 'jira', key: 'ACME-1', url: 'https://jira.example.test/x' },
+    ticketSnapshot: null,
+    reviewSubject: null,
+    historySample: null,
+    artifacts: [],
+    returnFeedback,
+    returnFeedbackOriginalChars,
+    record: [],
+    reviewChecklists: [],
+  });
+  const feedbackOf = (returnFeedback: string, originalChars: number | null) =>
+    readDataBlocks(
+      assemblePrompt(inputWith(BENIGN_TEXT, { task: taskWith(returnFeedback, originalChars) }))
+        .userPrompt,
+    ).blocks.find((block) => block.kind === 'return_feedback');
+
+  it('marks a stored cut truncated with the uncut length, and leaves the body byte-identical', () => {
+    const body = 'pipeline 1 failed: test:unit\nhead of the log\ntail of the log';
+    const block = feedbackOf(body, 12_345);
+    expect(block?.attributes.truncated).toBe('true');
+    expect(block?.attributes.original_chars).toBe('12345');
+    expect(block?.body).toBe(body);
+  });
+
+  it('marks nothing when nothing was cut', () => {
+    const block = feedbackOf('pipeline 1 failed: test:unit', null);
+    expect(block?.attributes.truncated).toBeUndefined();
+    expect(block?.attributes.original_chars).toBeUndefined();
+  });
+
+  it('keeps the larger figure when the assembler cuts a text its producer had already cut', () => {
+    const body = 'z'.repeat(MAX_FEEDBACK_CHARS + 10);
+    const block = feedbackOf(body, MAX_FEEDBACK_CHARS * 3);
+    expect(block?.attributes.original_chars).toBe(String(MAX_FEEDBACK_CHARS * 3));
+    expect(block?.body).toHaveLength(MAX_FEEDBACK_CHARS);
+  });
+});
+
 describe('the guards', () => {
   it('gives up after four nonces rather than rendering a block the text can close', () => {
     const planted = `a leaked token: ${NONCE}`;

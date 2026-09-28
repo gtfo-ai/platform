@@ -15,5 +15,5 @@ Evidence: agents misreport completion (22.6% of misalignment episodes; 75.8% of 
 5. Bounded observations: tool output is truncated head/tail; CI logs are reduced to the failing job's error block before being fed back.
 
 ## Consequences
-- The CI gate needs job-log extraction and diff classification (Round 2).
+- The CI gate extracts the failing job's log (head and tail, redacted — WP-81) and flags modified, deleted or renamed-away existing tests and CI/lint configuration not declared in the plan and confirmed by the code review (additions are not flagged; WP-81); on the shipped templates the confirmation is read on a second CI pass before Ready (Q109).
 - Projects without CI get weaker guarantees; the readiness score (product/06) makes that visible.

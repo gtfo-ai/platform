@@ -86,10 +86,11 @@ test('the task detail shows the stage timeline, the runs and the checks panel', 
   await expect(page.getByText('This task has not entered ci_gate.')).toBeVisible();
   await expect(page.getByText('Business verdict', { exact: true })).toBeVisible();
   await expect(page.getByText('no verdict', { exact: true })).toBeVisible();
-  // …and the one product/10:38 item this panel does **not** answer is named on the screen with its
-  // reason rather than drawn as an empty tick (WP-38 criterion 5, WP-46 criterion 4;
-  // `checks-panel.test.tsx` holds the whole census).
-  await expect(page.getByText(/Not on this panel: tamper check\. It is BD-024/)).toBeVisible();
+  // …and since WP-81 the eleventh, the tamper check, is answered too — off the CI gate's row, so on
+  // this fixture it says *not reached* like CI status — and the panel carries no apology for an
+  // absent item (`checks-panel.test.tsx` holds the whole census both ways).
+  await expect(page.getByText('Tamper check', { exact: true })).toBeVisible();
+  await expect(page.getByText(/Not on this panel/)).toHaveCount(0);
 });
 
 test('a task whose gate has not run says so, rather than saying nothing was added', async ({

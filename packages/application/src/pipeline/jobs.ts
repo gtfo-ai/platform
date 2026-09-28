@@ -256,6 +256,12 @@ export interface PipelineOutboundData {
   readonly ci_status?: string;
   readonly failed_jobs?: readonly string[];
   /**
+   * `ci_settle` only (WP-81): each failing job's name with the log reference the event carried, so a
+   * failed gate can read the first one's log (BD-024 §5). Absent on a payload an older build wrote;
+   * the gate then states that no log was named rather than reading one.
+   */
+  readonly failed_job_logs?: readonly { readonly name: string; readonly log_ref: string | null }[];
+  /**
    * `dependency_gate` (WP-38): the stage whose completion caused the check; `ci_settle` (WP-60): the
    * gate the pipeline's event found the task at.
    *
@@ -598,7 +604,7 @@ export const inTaskTransaction = async <T>(
  */
 export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<StageExecuteData> => {
   const logger: Logger = options.logger ?? silentLogger;
-  const gates = createGateEvaluator(options.integrations);
+  const gates = createGateEvaluator(options);
 
   return async (job) => {
     // The payload is a boundary, so the one field with a closed set of values is parsed rather
@@ -751,6 +757,10 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
       detail: result.detail,
       ...(result.ciSignature === undefined ? {} : { ciSignature: result.ciSignature }),
       ...(result.headSha === undefined ? {} : { headSha: result.headSha }),
+      ...(result.outcome === undefined ? {} : { outcome: result.outcome }),
+      ...(result.detailOriginalChars === undefined
+        ? {}
+        : { detailOriginalChars: result.detailOriginalChars }),
     });
 
     /**
@@ -802,6 +812,17 @@ export type GateSettlement =
        * by every other move.
        */
       readonly headSha?: string;
+      /**
+       * The word the gate's row is closed with instead of the default (WP-81): the CI gate's tamper
+       * check — `protected_paths_changed` on its return, `protected_paths_awaiting_review` on a
+       * provisional pass. Handed to `applyDecision` as `stageOutcome`.
+       */
+      readonly outcome?: TaskStageOutcome;
+      /**
+       * The uncut length of `detail` when the gate cut the failing job's log (WP-81), recorded beside
+       * the return reason so the next run's `return_feedback` marker announces the cut.
+       */
+      readonly detailOriginalChars?: number;
     }
   | {
       readonly kind: 'escalate';
@@ -909,7 +930,15 @@ const settle = async (
         stored,
         decision,
         ...(signal.kind === 'gate_settled' && converged === null && againstCi.kind === 'agree'
-          ? { signal }
+          ? {
+              signal,
+              // WP-81: the tamper check's word for the gate's row, and the log cut the return's
+              // reason carries — both read only by the settlement they came with.
+              ...(signal.outcome === undefined ? {} : { stageOutcome: signal.outcome }),
+              ...(signal.detailOriginalChars === undefined
+                ? {}
+                : { returnReasonOriginalChars: signal.detailOriginalChars }),
+            }
           : {}),
         ...(againstCi.kind === 'reenter_ci'
           ? {

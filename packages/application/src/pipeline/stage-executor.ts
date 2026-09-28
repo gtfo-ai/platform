@@ -124,6 +124,11 @@ export interface StageRunRequest {
   /** Why the task came back to this stage, when it did (`task.stage.returned.reason`). */
   readonly returnFeedback: string | null;
   /**
+   * The length {@link returnFeedback} had before its producer cut it (WP-81: the CI gate's log
+   * excerpt), or `null`/absent — the prompt's `return_feedback` marker announces the cut.
+   */
+  readonly returnFeedbackOriginalChars?: number | null;
+  /**
    * The commit a **shadow** run's workspace is checked out at — Q82 (a), PROGRESS backlog 71.
    *
    * `null` means *"this run has no comparison base"*, which is every ordinary task and a shadow
@@ -520,6 +525,7 @@ type Admitted = {
   readonly stage: PipelineStage;
   readonly artifacts: readonly StoredArtifact[];
   readonly returnFeedback: string | null;
+  readonly returnFeedbackOriginalChars: number | null;
   /** WP-34 / backlog 71: a shadow task's comparison base, `null` for every other task. */
   readonly checkoutBase: string | null;
 };
@@ -779,17 +785,19 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         }
       }
 
+      const feedback = await store.tasks.lastReturnReason(
+        scope.tx,
+        job.taskId,
+        job.stage,
+        job.attempt,
+      );
       return {
         kind: 'admitted',
         stored,
         stage: valid.stage,
         artifacts: await store.artifacts.listFor(scope.tx, job.taskId),
-        returnFeedback: await store.tasks.lastReturnReason(
-          scope.tx,
-          job.taskId,
-          job.stage,
-          job.attempt,
-        ),
+        returnFeedback: feedback?.reason ?? null,
+        returnFeedbackOriginalChars: feedback?.originalChars ?? null,
         /**
          * Q82 (a) / PROGRESS backlog **71**: the commit this run's workspace starts from.
          *
@@ -947,6 +955,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       artifacts: admission.artifacts,
       settings,
       returnFeedback: admission.returnFeedback,
+      returnFeedbackOriginalChars: admission.returnFeedbackOriginalChars,
       checkoutBase: admission.checkoutBase,
       ...(job.overrides === undefined ? {} : { overrides: job.overrides }),
       ...(job.mergeRequestPaths === undefined ? {} : { mergeRequestPaths: job.mergeRequestPaths }),

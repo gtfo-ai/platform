@@ -25,9 +25,9 @@
  *  - **`docs`** — refused. Drift detection does not exist: `policies.drift_without_direction` is a
  *    configuration key with no reader anywhere in the tree, and nothing else compares a repository's
  *    documentation with its code.
- *  - **`flaky`** — refused. product/04:65 says it in the platform's own words: *"The tamper check,
- *    the reproduction gate and flaky detection are not implemented"*, so no signal exists to brief a
- *    run on.
+ *  - **`flaky`** — refused. product/04 S4's flaky detection (*"if the same job passes on plain
+ *    retry, mark `flaky`"*) is not implemented — WP-81 built S4's tamper check and the failing job's
+ *    log excerpt, not this — so no signal exists to brief a run on.
  *  - **`lint`** — refused, and since WP-65 (PROGRESS backlog 141) the refusal names what is
  *    actually missing. It was first refused for backlog **49** — no run of any role could execute a
  *    project command — and **WP-54 closed that** (Q69 (ii)), so the old code `no_project_command`
@@ -96,7 +96,7 @@ export const MAINTENANCE_CHORES = {
     does: 'hunt flaky tests',
     refusal: 'no_flaky_detection',
     detail:
-      'this build detects no flaky test: product/04 says the CI gate is pass/fail on the pipeline’s status and that flaky detection is not implemented, so a flaky-test chore would be a run with no findings to work from',
+      'this build detects no flaky test: product/04 says flaky detection is not implemented, so a flaky-test chore would be a run with no findings to work from',
   },
   docs: {
     does: 'fix documentation that has drifted from the code',

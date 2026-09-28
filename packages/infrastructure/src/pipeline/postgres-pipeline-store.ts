@@ -882,7 +882,7 @@ export const createPostgresPipelineStore = (
       await sqlOf(tx).query(
         `update task_stages
             set state = $6, exited_at = clock_timestamp(), outcome = $4, return_reason = $5,
-                returned_to = $7
+                returned_to = $7, return_reason_original_chars = $8
           where task_id = $1 and stage = $2 and attempt = $3`,
         [
           entry.taskId,
@@ -893,6 +893,9 @@ export const createPostgresPipelineStore = (
           entry.returnReason,
           state,
           entry.returnedTo,
+          // WP-81: the uncut length when the writer cut the reason; the check (migration 0058)
+          // refuses anything but a positive length beside a reason.
+          entry.returnReasonOriginalChars ?? null,
         ],
       );
     },
@@ -905,7 +908,7 @@ export const createPostgresPipelineStore = (
       await sqlOf(tx).query(
         `update task_stages
             set state = $4, exited_at = clock_timestamp(), outcome = $5, return_reason = $6,
-                returned_to = null
+                returned_to = null, return_reason_original_chars = null
           where task_id = $1 and stage = $2 and attempt = $3 and state = $7`,
         [
           entry.taskId,
@@ -961,7 +964,10 @@ export const createPostgresPipelineStore = (
      * wall clock's: a step backwards between two transactions of the same task could misorder them.
      */
     lastReturnReason: async (tx, taskId, stage, attempt) => {
-      const { rows } = await sqlOf(tx).query<{ return_reason: string }>(
+      const { rows } = await sqlOf(tx).query<{
+        return_reason: string;
+        return_reason_original_chars: number | null;
+      }>(
         `with previous as (
            select max(case when returned_to = $2 then entered_at
                            else coalesce(exited_at, entered_at) end) as at
@@ -972,7 +978,7 @@ export const createPostgresPipelineStore = (
              from task_stages
             where task_id = $1 and stage = $2 and attempt = $3
          )
-         select r.return_reason
+         select r.return_reason, r.return_reason_original_chars
            from task_stages r, previous, current
           where r.task_id = $1 and r.returned_to = $2
             and r.return_reason is not null and r.exited_at is not null
@@ -982,7 +988,10 @@ export const createPostgresPipelineStore = (
           limit 1`,
         [taskId, stage, attempt],
       );
-      return rows[0]?.return_reason ?? null;
+      const row = rows[0];
+      return row === undefined
+        ? null
+        : { reason: row.return_reason, originalChars: row.return_reason_original_chars ?? null };
     },
     takenOver: async (tx, taskId) => {
       // One indexed read of the task's own stream (WP-56): the newest boundary event decides, the

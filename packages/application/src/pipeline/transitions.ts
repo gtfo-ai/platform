@@ -143,6 +143,21 @@ export interface ApplyOptions {
    */
   readonly escalationOutcome?: TaskStageOutcome;
   /**
+   * The `outcome` word the settled stage's row is closed with **instead of** the default one — the
+   * gate verdict (`pass`/`fail`) on a forward move, `returned` on a return (WP-81). The CI gate's
+   * tamper check is the one caller: `protected_paths_changed` on the return it causes and
+   * `protected_paths_awaiting_review` on a pass whose declared protected paths the Code review has
+   * not judged yet (technical/02). Absent is the default word, as before; an escalation's word is
+   * {@link escalationOutcome}'s.
+   */
+  readonly stageOutcome?: TaskStageOutcome;
+  /**
+   * The length the decision's return reason would have had uncut, when its producer cut it (WP-81):
+   * recorded beside the reason (`task_stages.return_reason_original_chars`) so the next run's
+   * `return_feedback` marker announces the cut. Read only by a return.
+   */
+  readonly returnReasonOriginalChars?: number | null;
+  /**
    * The branch head a gate judged, recorded as `tasks.ready_head_sha` **if** this decision enters
    * `ready_for_merge` (WP-79, PROGRESS backlog 267) — the gate settlement's head, or the
    * `ready_head_check` duty's when it found the branch unmoved. Every entry into Ready writes the
@@ -274,9 +289,10 @@ const apply = async (options: ApplyOptions): Promise<AppliedDecision> => {
         stage: decision.from,
         attempt: stored.task.stageAttempts[decision.from] ?? 1,
         state: 'returned',
-        outcome: 'returned',
+        outcome: options.stageOutcome ?? 'returned',
         returnReason: decision.reason,
         returnedTo: decision.to,
+        returnReasonOriginalChars: options.returnReasonOriginalChars ?? null,
       });
       if (returned.aggregate.state !== 'returned') {
         // `returnToStage` escalated instead: the loop is spent (BD-008). The counter stays where
@@ -360,10 +376,14 @@ const closeLeftStage = async (options: ApplyOptions, next: Slug | null): Promise
     state: 'completed',
     // A gate's outcome is `stageVerdictSchema`'s gate word, the one the interpreter decided on (a
     // gate whose `fail_to` points *forward* closes `completed` with `fail`, which is what
-    // happened). A human stage's is the event that moved it — `mr.merged` on every shipped
+    // happened) — unless the settlement names a more specific word: the CI gate's provisional pass,
+    // `protected_paths_awaiting_review` (WP-81, `stageOutcome`). A human stage's is the event that moved it — `mr.merged` on every shipped
     // template — because a human stage has no verdict, and the event is what the reader of the row
     // needs to know (WP-46, backlog 158).
-    outcome: signal.kind === 'gate_settled' ? (signal.passed ? 'pass' : 'fail') : signal.event,
+    outcome:
+      signal.kind === 'gate_settled'
+        ? (options.stageOutcome ?? (signal.passed ? 'pass' : 'fail'))
+        : signal.event,
     returnReason: null,
     returnedTo: null,
   });

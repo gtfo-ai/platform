@@ -7,8 +7,44 @@
  * `path-guard.ts` applies is deliberately absent here: these are byte comparisons, which is what the
  * review-only filter does.
  */
+import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import '../testing/property.js';
 import { pathMatchesPattern } from './path-patterns.js';
+
+/**
+ * **A double star followed by a separator matches zero or more directories** (WP-81 round 1,
+ * technical/12). Until then it demanded at least one, so the default protected rules for tests,
+ * specs, `__tests__` and migrations missed every root-level path — measured on all four.
+ */
+describe('a double star before a separator (WP-81)', () => {
+  it('reaches a root-level path for each default protected rule that starts with one', () => {
+    expect(pathMatchesPattern('**/*.test.*', 'totals.test.ts')).toBe(true);
+    expect(pathMatchesPattern('**/*.spec.*', 'a.spec.ts')).toBe(true);
+    expect(pathMatchesPattern('**/__tests__/**', '__tests__/x.ts')).toBe(true);
+    expect(pathMatchesPattern('**/migrations/**', 'migrations/0001.sql')).toBe(true);
+  });
+
+  it('matches zero directories in the middle too, and still not a partial name', () => {
+    expect(pathMatchesPattern('src/**/*.test.ts', 'src/totals.test.ts')).toBe(true);
+    expect(pathMatchesPattern('src/**/*.test.ts', 'src/a/b/totals.test.ts')).toBe(true);
+    expect(pathMatchesPattern('src/**/*.test.ts', 'srcx/totals.test.ts')).toBe(false);
+    expect(pathMatchesPattern('**/migrations/**', 'db/nomigrations/1.sql')).toBe(false);
+  });
+
+  it('matches a path exactly when it matches the same path under any directory prefix', () => {
+    const segment = fc.stringMatching(/^[a-z]{1,6}$/);
+    fc.assert(
+      fc.property(fc.array(segment, { maxLength: 3 }), segment, (prefix, name) => {
+        const rooted = `${name}.test.ts`;
+        const nested = [...prefix, rooted].join('/');
+        expect(pathMatchesPattern('**/*.test.*', rooted)).toBe(true);
+        expect(pathMatchesPattern('**/*.test.*', nested)).toBe(true);
+        expect(pathMatchesPattern('**/*.test.*', [...prefix, `${name}.ts`].join('/'))).toBe(false);
+      }),
+    );
+  });
+});
 
 describe('a repository path pattern', () => {
   it('crosses separators with `**` and not with `*`', () => {

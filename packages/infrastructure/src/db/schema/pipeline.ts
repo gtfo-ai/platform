@@ -196,6 +196,13 @@ export const taskStages = pgTable('task_stages', {
    * back to fix rather than the complaint it last made itself.
    */
   returnedTo: text('returned_to'),
+  /**
+   * The length `return_reason` would have had uncut, or null when nothing cut it (WP-81, migration
+   * 0058): the CI gate's log excerpt is bounded before it is stored, and the next run's
+   * `return_feedback` marker announces that cut. Positive and only beside a reason
+   * (`task_stages_return_reason_original_chars_positive`).
+   */
+  returnReasonOriginalChars: integer('return_reason_original_chars'),
   /** Convergence detection's stable key; nothing else writes it (WP-15, migration 0012). */
   signature: text('signature'),
   causedByEventId: uuid('caused_by_event_id'),

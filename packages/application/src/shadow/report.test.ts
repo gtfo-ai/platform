@@ -489,7 +489,13 @@ const walkedHarness = (
     projectId: PROJECT,
     ...(options.gitRedactor === undefined ? {} : { gitRedactor: options.gitRedactor }),
     settings: {
-      config: { features: { shadow_mode: { enabled: true } } },
+      config: {
+        features: { shadow_mode: { enabled: true } },
+        // The agent's diff edits `src/totals.test.ts`, which the default protected paths would send
+        // back at the CI gate's tamper check (WP-81) — this walk is about the report, and the check
+        // has its own cases in `gates.test.ts` and `saga.test.ts`, so it protects nothing here.
+        policies: { protected_paths: ['.github/**'] },
+      },
       autonomy: materialiseAutonomy({ level: 'observe', at: AT, appliedBy: null }),
     },
     runs: {

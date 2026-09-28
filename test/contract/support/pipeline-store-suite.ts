@@ -1156,9 +1156,76 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         // WP-55: this line used to expect `'pipeline for sha-3 failed'` — the gate's own complaint,
         // served back to the gate. The reason is for the stage the return targeted.
         expect(await store.tasks.lastReturnReason(tx, stored.task.id, 'ci_gate', 4)).toBeNull();
-        expect(await store.tasks.lastReturnReason(tx, stored.task.id, 'implementation', 2)).toBe(
-          'pipeline for sha-3 failed',
+        expect(await store.tasks.lastReturnReason(tx, stored.task.id, 'implementation', 2)).toEqual(
+          {
+            reason: 'pipeline for sha-3 failed',
+            originalChars: null,
+          },
         );
+      });
+
+      /**
+       * WP-81 (migration 0058): a return reason its writer cut carries the uncut length, and the
+       * next run's feedback read hands both back — which is what lets the prompt's marker announce
+       * a cut the assembler did not make. `null` for every reason nothing cut.
+       */
+      it('hands back the uncut length of a return reason its writer cut', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        for (const [attempt, originalChars] of [
+          [1, 9_000],
+          [2, null],
+        ] as const) {
+          await store.tasks.recordStageEntered(tx, {
+            taskId: stored.task.id,
+            stage: 'ci_gate',
+            attempt,
+            causedByEventId: null,
+          });
+          await store.tasks.recordStageExited(tx, {
+            taskId: stored.task.id,
+            stage: 'ci_gate',
+            attempt,
+            state: 'returned',
+            outcome: attempt === 1 ? 'protected_paths_changed' : 'returned',
+            returnReason: `round ${attempt}`,
+            returnedTo: 'implementation',
+            returnReasonOriginalChars: originalChars,
+          });
+          await store.tasks.recordStageEntered(tx, {
+            taskId: stored.task.id,
+            stage: 'implementation',
+            attempt: attempt + 1,
+            causedByEventId: null,
+          });
+          expect(
+            await store.tasks.lastReturnReason(tx, stored.task.id, 'implementation', attempt + 1),
+          ).toEqual({ reason: `round ${attempt}`, originalChars });
+        }
+      });
+
+      it('refuses a cut length that is not a positive length beside a reason', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        await store.tasks.recordStageEntered(tx, {
+          taskId: stored.task.id,
+          stage: 'ci_gate',
+          attempt: 1,
+          causedByEventId: null,
+        });
+        // The last statement of the case: a refused write aborts a PostgreSQL transaction.
+        await expect(
+          store.tasks.recordStageExited(tx, {
+            taskId: stored.task.id,
+            stage: 'ci_gate',
+            attempt: 1,
+            state: 'returned',
+            outcome: 'returned',
+            returnReason: 'round 1',
+            returnedTo: 'implementation',
+            returnReasonOriginalChars: 0,
+          }),
+        ).rejects.toThrow();
       });
 
       /**
@@ -1199,8 +1266,11 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           attempt: 2,
           causedByEventId: null,
         });
-        expect(await store.tasks.lastReturnReason(tx, stored.task.id, 'implementation', 2)).toBe(
-          'the footer rounds twice',
+        expect(await store.tasks.lastReturnReason(tx, stored.task.id, 'implementation', 2)).toEqual(
+          {
+            reason: 'the footer rounds twice',
+            originalChars: null,
+          },
         );
 
         // Open: closed `failed` with the escalation's reason — which is not a return.
@@ -1277,9 +1347,10 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         // Implementation complains about the plan: its own sentence, on its own row.
         await returnFrom(id, 'implementation', 1, 'architecture', 'the plan names no migration');
         await enter(id, 'architecture', 2);
-        expect(await store.tasks.lastReturnReason(tx, id, 'architecture', 2)).toBe(
-          'the plan names no migration',
-        );
+        expect(await store.tasks.lastReturnReason(tx, id, 'architecture', 2)).toEqual({
+          reason: 'the plan names no migration',
+          originalChars: null,
+        });
         await complete(id, 'architecture', 2);
         await enter(id, 'implementation', 2);
         await complete(id, 'implementation', 2);
@@ -1288,9 +1359,10 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         await enter(id, 'implementation', 3);
 
         // Before WP-55 this answered `'the plan names no migration'`: implementation's own words.
-        expect(await store.tasks.lastReturnReason(tx, id, 'implementation', 3)).toBe(
-          'the footer rounds twice',
-        );
+        expect(await store.tasks.lastReturnReason(tx, id, 'implementation', 3)).toEqual({
+          reason: 'the footer rounds twice',
+          originalChars: null,
+        });
         expect(await store.tasks.lastReturnReason(tx, id, 'code_review', 2)).toBeNull();
       });
 
@@ -1303,9 +1375,10 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         await enter(id, 'ci_gate', 1);
         await returnFrom(id, 'ci_gate', 1, 'implementation', 'pipeline p-1 failed: test:unit');
         await enter(id, 'implementation', 2);
-        expect(await store.tasks.lastReturnReason(tx, id, 'implementation', 2)).toBe(
-          'pipeline p-1 failed: test:unit',
-        );
+        expect(await store.tasks.lastReturnReason(tx, id, 'implementation', 2)).toEqual({
+          reason: 'pipeline p-1 failed: test:unit',
+          originalChars: null,
+        });
         // Implementation now sends the task back to architecture, and architecture advances: the
         // third implementation attempt is entered **forward**, and the CI finding was answered.
         await returnFrom(id, 'implementation', 2, 'architecture', 'the plan names no migration');
@@ -1328,13 +1401,15 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         await enter(id, 'code_review', 1);
         await returnFrom(id, 'code_review', 1, 'implementation', 'the footer rounds twice');
         await enter(id, 'implementation', 3);
-        expect(await store.tasks.lastReturnReason(tx, id, 'implementation', 3)).toBe(
-          'the footer rounds twice',
-        );
+        expect(await store.tasks.lastReturnReason(tx, id, 'implementation', 3)).toEqual({
+          reason: 'the footer rounds twice',
+          originalChars: null,
+        });
         // And the second attempt's question is still answered the way it was when it ran.
-        expect(await store.tasks.lastReturnReason(tx, id, 'implementation', 2)).toBe(
-          'pipeline p-1 failed: test:unit',
-        );
+        expect(await store.tasks.lastReturnReason(tx, id, 'implementation', 2)).toEqual({
+          reason: 'pipeline p-1 failed: test:unit',
+          originalChars: null,
+        });
       });
 
       it('is the human’s note when the task is returned to the stage it is at', async () => {
@@ -1346,9 +1421,10 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         await enter(id, 'implementation', 1);
         await returnFrom(id, 'implementation', 1, 'implementation', 'use the existing helper');
         await enter(id, 'implementation', 2);
-        expect(await store.tasks.lastReturnReason(tx, id, 'implementation', 2)).toBe(
-          'use the existing helper',
-        );
+        expect(await store.tasks.lastReturnReason(tx, id, 'implementation', 2)).toEqual({
+          reason: 'use the existing helper',
+          originalChars: null,
+        });
         // And it is not resurrected by a later forward entry.
         await complete(id, 'implementation', 2);
         await enter(id, 'implementation', 3);

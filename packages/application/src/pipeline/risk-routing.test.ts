@@ -334,11 +334,13 @@ const optionsOf = (harness: PipelineHarness): RiskRoutingOptions => ({
 
 describe('risk classes from the merge request’s own diff (product/19 §14, WP-37)', () => {
   it('classes a task whose diff touches a declared path', async () => {
-    // The **diff** carries a migration and the **plan** does not, so this class can only have come
+    // The **diff** carries a SQL file and the **plan** does not, so this class can only have come
     // from the read this work package added (standing rule 10: the assertion says which branch ran).
+    // Not under `migrations/` since WP-81: that is a default protected path, so an undeclared
+    // migration is sent back by the CI gate's tamper check before the rebase gate classes anything.
     const started = startHarness({
       classes: CLASSES,
-      paths: ['src/totals.ts', 'db/migrations/0007_add_totals.sql'],
+      paths: ['src/totals.ts', 'db/schema/0007_add_totals.sql'],
     });
     await started.harness.publish([ticketMatched()]);
 
@@ -355,10 +357,13 @@ describe('risk classes from the merge request’s own diff (product/19 §14, WP-
   });
 
   it('leaves the list empty for a project that declares no classes at all', async () => {
-    const started = startHarness({ paths: ['db/migrations/0007_add_totals.sql'] });
+    // A SQL file outside `migrations/` (a default protected path, WP-81), so the task reaches the
+    // rebase gate and the empty list is the classifier's answer, not a gate it never got to.
+    const started = startHarness({ paths: ['db/schema/0007_add_totals.sql'] });
     await started.harness.publish([ticketMatched()]);
 
     expect(await riskClasses(started.harness)).toEqual([]);
+    expect(actions(started.harness, 'get_merge_request_diff').length).toBeGreaterThan(0);
   });
 
   it('keeps a credential somebody committed in a path out of the stored class match', async () => {

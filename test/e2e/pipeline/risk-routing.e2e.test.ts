@@ -12,8 +12,10 @@
  *
  * **The plan and the diff disagree on purpose** (standing rule 82, and rule 10's shape). The fake
  * runner's Implementation Plan names `src/totals.ts`, which falls into no class; the merge request's
- * diff carries `db/migrations/…`, which falls into `data`. So a build that classified from the plan
- * — which is what WP-30's gate does, correctly, at a different moment — produces an **empty** row
+ * diff carries `db/schema/….sql`, which falls into `data` (not `db/migrations/`, since WP-81: that
+ * is a default protected path, and the CI gate's tamper check would send an undeclared one back
+ * first). So a build that classified from the plan — which is what WP-30's gate does, correctly, at
+ * a different moment — produces an **empty** row
  * here, and the assertion below fails by name. That is the whole point of this work package:
  * product/19 §14 names the diff as the authoritative source, and until now nothing read it.
  *
@@ -115,7 +117,7 @@ describe('risk classes and reviewer routing at the rebase gate', () => {
     pipeline.git.setDiff({
       project: GIT_PROJECT,
       iid: pipeline.world.mr.iid,
-      files: [{ path: 'src/totals.ts' }, { path: 'db/migrations/0007_add_totals.sql' }],
+      files: [{ path: 'src/totals.ts' }, { path: 'db/schema/0007_add_totals.sql' }],
     });
 
     await pipeline.publish([ticketMatched(pipeline, 'ACME-1')]);
@@ -177,7 +179,7 @@ describe('risk classes and reviewer routing at the rebase gate', () => {
     pipeline.git.setDiff({
       project: GIT_PROJECT,
       iid: pipeline.world.mr.iid,
-      files: [{ path: 'db/migrations/0007_add_totals.sql' }],
+      files: [{ path: 'db/schema/0007_add_totals.sql' }],
     });
 
     await pipeline.publish([ticketMatched(pipeline, 'ACME-1')]);
