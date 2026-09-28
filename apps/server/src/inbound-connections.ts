@@ -28,7 +28,7 @@ import {
   redaction as redactionAdapters,
   secrets as secretAdapters,
 } from '@platform/infrastructure';
-import { createHeldConnectionDirectory } from '@platform/integrations';
+import { accountOnlyFieldsOf, createHeldConnectionDirectory } from '@platform/integrations';
 import type pg from 'pg';
 import type { IntegrationStack } from './pipeline.js';
 
@@ -65,7 +65,7 @@ export const composeInboundConnections = async (
 ): Promise<InboundConnectionsHandle> =>
   startInboundConnections({
     directory: createHeldConnectionDirectory({
-      repository: secretAdapters.createPostgresBindingRepository(options.pool),
+      repository: secretAdapters.createPostgresBindingRepository(options.pool, accountOnlyFieldsOf),
       secrets: secretAdapters.createPostgresSecretStore({
         sql: options.pool,
         key: secretAdapters.deriveSecretKey(options.secretKey),

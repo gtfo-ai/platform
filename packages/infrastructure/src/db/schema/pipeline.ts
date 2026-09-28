@@ -85,6 +85,13 @@ export const tasks = pgTable('tasks', {
   ticketSignalAt: timestamp('ticket_signal_at', { withTimezone: true }),
   /** WP-60 review round 1, migration 0044: the provider's instant of the recorded `mr_ref.head_sha`. */
   mrHeadAt: timestamp('mr_head_at', { withTimezone: true }),
+  /**
+   * WP-79, migration 0056: the head the gates judged on the way into `ready_for_merge`, written
+   * only by `saveReadyHead` from the Ready entry; `null` when no gate judged one.
+   */
+  readyHeadSha: text('ready_head_sha'),
+  /** WP-79 round 2, migration 0056: the head the CI gate last passed; only `saveCiHead` writes it. */
+  ciHeadSha: text('ci_head_sha'),
   /** WP-24, migration 0020: the human merge request a review-only task reviews. */
   reviewSubject: jsonb('review_subject').$type<MergeRequestSnapshot>(),
   /** WP-35, migration 0030: the mined history one bootstrap run reads, bounded and redacted. */

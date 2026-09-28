@@ -22,6 +22,7 @@ import {
 import type { Id, IsoDateTime } from '@platform/contracts';
 import { secrets as secretAdapters } from '@platform/infrastructure';
 import {
+  accountOnlyFieldsOf,
   createPipelineIntegrationsLoader,
   createPipelineProviderRegistry,
 } from '@platform/integrations';
@@ -139,7 +140,7 @@ describe('the binding repository on a real database', () => {
       [],
     );
 
-    const repository = secretAdapters.createPostgresBindingRepository(pool);
+    const repository = secretAdapters.createPostgresBindingRepository(pool, accountOnlyFieldsOf);
     const bindings = await repository.forProject(projectId as never);
 
     // `order by i.type, i.provider, i.name`. `type` is an **enum**, and PostgreSQL orders an enum
@@ -191,13 +192,47 @@ describe('the binding repository on a real database', () => {
     expect(accounts.some((account) => account.provider === 'gitlab')).toBe(false);
   });
 
+  /**
+   * WP-79 (PROGRESS backlog 268): a `bindings.config` written **before** WP-73b's write refusal can
+   * still carry `socket_mode`. The row is planted with SQL — the API refuses it now, which is the
+   * point — and the account's value must be the one the project reads.
+   */
+  it('drops a pre-WP-73b binding’s socket_mode on read, so the account’s value is the one read', async () => {
+    // A project of its own, so this second Slack binding is nobody else's case's business.
+    const legacy = await pool.query<{ id: string }>(
+      `insert into projects (org_id, key, name, repo_url)
+       values ($1, 'legacy', 'Legacy', 'https://git.example.test/acme/legacy.git') returning id`,
+      [orgId],
+    );
+    const legacyProject = legacy.rows[0]?.id as string;
+    const account = await pool.query<{ id: string }>(
+      `insert into integrations (org_id, type, provider, name, config, secret_ids)
+       values ($1, 'communication'::integration_type, 'slack', 'legacy slack', $2::jsonb, '{}')
+       returning id`,
+      [orgId, JSON.stringify({ channel: '#org-alerts', socket_mode: false })],
+    );
+    await pool.query(
+      'insert into bindings (project_id, integration_id, config) values ($1, $2, $3::jsonb)',
+      [
+        legacyProject,
+        account.rows[0]?.id,
+        JSON.stringify({ channel: '#api-only', socket_mode: true }),
+      ],
+    );
+    const repository = secretAdapters.createPostgresBindingRepository(pool, accountOnlyFieldsOf);
+    const [slack] = await repository.forProject(legacyProject as never);
+    expect(slack?.config).toEqual({ channel: '#api-only', socket_mode: false });
+    const read = await repository.forIntegration(account.rows[0]?.id as never);
+    expect(read?.bindings[0]?.config).toEqual({ channel: '#api-only', socket_mode: false });
+  });
+
   it('answers nothing for a project with no bindings, rather than every binding', async () => {
     const other = await pool.query<{ id: string }>(
       `insert into projects (org_id, key, name, repo_url)
        values ($1, 'web', 'Web', 'https://git.example.test/acme/web.git') returning id`,
       [orgId],
     );
-    const repository = secretAdapters.createPostgresBindingRepository(pool);
+    const repository = secretAdapters.createPostgresBindingRepository(pool, accountOnlyFieldsOf);
     await expect(repository.forProject(other.rows[0]?.id as never)).resolves.toEqual([]);
   });
 });
@@ -272,7 +307,7 @@ describe('the shipped provider registrations, loaded from real rows', () => {
       clock: { now: () => '2026-06-01T09:00:00.000Z' as IsoDateTime },
     });
     const loader = createPipelineIntegrationsLoader({
-      repository: secretAdapters.createPostgresBindingRepository(pool),
+      repository: secretAdapters.createPostgresBindingRepository(pool, accountOnlyFieldsOf),
       secrets: secretAdapters.createPostgresSecretStore({ sql: pool, key: KEY }),
       registry: createPipelineProviderRegistry({
         executor,
@@ -333,7 +368,7 @@ describe('the shipped provider registrations, loaded from real rows', () => {
       clock: { now: () => '2026-06-01T09:00:00.000Z' as IsoDateTime },
     });
     const loader = createPipelineIntegrationsLoader({
-      repository: secretAdapters.createPostgresBindingRepository(pool),
+      repository: secretAdapters.createPostgresBindingRepository(pool, accountOnlyFieldsOf),
       secrets: secretAdapters.createPostgresSecretStore({ sql: pool, key: KEY }),
       registry: createPipelineProviderRegistry({
         executor,

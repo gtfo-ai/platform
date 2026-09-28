@@ -1,0 +1,27 @@
+-- 0056 — the branch head a task's gates judged on the way into `ready_for_merge` (WP-79, PROGRESS
+-- backlog 267).
+--
+-- A take-over at Ready is a pause at Ready, and since WP-73a `paused → ready_for_merge` is an
+-- edge: a human who took over, pushed and handed back (or resumed) put commits at Ready that
+-- neither `ci_gate` nor `rebase_gate` had read. The fix compares the merge request's live head with
+-- the head the gates judged, and re-enters `ci_gate` when the two differ — which needs the second
+-- of those written down somewhere. This is where.
+--
+-- **Nullable, no default.** `null` is "no gate judged a head on the way into Ready": a row written
+-- before this migration, or a Ready entered by a template whose gates are disabled. The reader
+-- treats it exactly like a moved head (fail closed on a mutation, standing rule 20), so a task that
+-- was already waiting at Ready when this migration ran is sent back through CI by its next resume
+-- or hand-back rather than waved through on a head nobody recorded.
+--
+-- **One writer**, `TaskRepository.saveReadyHead`, called from the one place a task enters Ready
+-- (`applyDecision`), in that entry's transaction; `save` does not name the column and it bumps no
+-- `version` (the partition `tasks-column-ownership.test.ts` holds). A git object id is the
+-- provider's text, but it is only ever compared for equality, never rendered or interpolated.
+--
+-- **`ci_head_sha`** (added to this migration at WP-79 review round 2, before it was applied anywhere):
+-- the head the CI gate judged when it last settled, `null` when it failed or has not run. The rebase
+-- gate compares its own head with it before it lets a task into Ready (PROGRESS backlog 275), so a
+-- head CI never saw — a push between the two gates, or a human's hand-back past CI — is sent back to
+-- `ci_gate`. One writer, `TaskRepository.saveCiHead`, called from the gate settlement.
+alter table tasks add column ready_head_sha text;
+alter table tasks add column ci_head_sha text;

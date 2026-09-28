@@ -150,6 +150,15 @@ export const findShippedProvider = (id: string): ProviderCatalogueEntry | undefi
   SHIPPED_PROVIDERS.find((entry) => entry.id === id);
 
 /**
+ * The config keys a **binding** may not set for this provider — its registration's
+ * `accountOnlyFields`, `[]` for one that declares none or that this build does not ship. The
+ * lookup the binding repository drops a stored binding's copy by on read (WP-79, PROGRESS backlog
+ * 268), beside the write refusal (`assertNoAccountOnlyFields`) that reads the same list.
+ */
+export const accountOnlyFieldsOf = (provider: string): readonly string[] =>
+  findShippedProvider(provider)?.accountOnlyFields ?? [];
+
+/**
  * The repository root, derived from this module rather than from `process.cwd()`.
  *
  * `setupGuidePath` is repository-relative because that is how a registration reads (the string is

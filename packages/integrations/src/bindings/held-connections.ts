@@ -8,7 +8,9 @@
  * app's, not a project's, and every delivery it produces is addressed to
  * `/webhooks/<provider>/<integrationId>` exactly as an HTTP one is. So the selection is read off
  * `integrations.config` alone and a binding's overlay is not consulted — a project cannot switch its
- * account's transport, and since WP-73b (backlog 201) a binding write refuses `socket_mode`.
+ * account's transport, and since WP-73b (backlog 201) a binding write refuses `socket_mode` — and
+ * since WP-79 (backlog 268) a binding stored before that refusal has its copy dropped on read, so
+ * the project's own merged config (its buttons) agrees with the transport this module holds.
  *
  * ## Every outbound call goes through the executor
  *

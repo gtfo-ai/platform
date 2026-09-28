@@ -107,6 +107,9 @@ const DOOR_SITES: Readonly<Record<string, number>> = {
   'epic-split.ts': 2,
   'gates.ts': 1,
   'jobs.ts': 1,
+  // WP-79's `ready_head_check` duty: one resolution for the merge request's live head, read outside
+  // every transaction and outside any run, so no minted credential.
+  'ready-head.ts': 1,
   // WP-24's three duties each resolve the project's bindings once: the check before it creates the
   // task, the post before it writes the threads, the observation before it reads them back.
   'review-only.ts': 3,

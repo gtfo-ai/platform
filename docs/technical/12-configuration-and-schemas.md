@@ -85,7 +85,7 @@ pipeline:
     ci_fix_iterations: 3
     human_rounds: 3
     rebase_attempts: 2           # conflict-resolution runs per MR (product/04 S6b)
-    rebase_rechecks: 10          # gate re-checks driven by the default branch moving (WP-26)
+    rebase_rechecks: 10          # gate re-checks: the default branch moving (WP-26), and the rebase gate re-entering ci_gate for a head CI never passed (WP-79)
     question_timeout: 1 working day
 stages:                          # per-stage agent settings
   refinement: { model: claude-opus-5, effort: medium, max_turns: 30, budget_usd: 2 }

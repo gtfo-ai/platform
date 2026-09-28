@@ -55,9 +55,10 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > Q104). `ready_for_merge` has always had an edge **into** `paused` — the header's **Pause**, and
 > product/04:84's `@agentic hold` is the same act — and nothing led back, so a task paused while it
 > waited for a merge could only be cancelled. *A task paused while waiting for a merge resumes
-> waiting for it*: `resume` re-enters `ready_for_merge`, and the entry emits `task.resumed` like
-> every other way out of a pause, so an ending deferred to the resume (the dependency policy's
-> `block`) is performed. **A merge made on the provider ends the pause** (Q104, answer (a)): a
+> waiting for it* — **if its branch head is still the one the gates judged; since WP-79 a moved or
+> unreadable head re-enters `ci_gate` instead** (the paragraph below): the resume leads back into
+> `ready_for_merge` or the gate, and either entry emits `task.resumed` like every other way out of
+> a pause, so an ending deferred to the resume (the dependency policy's `block`) is performed. **A merge made on the provider ends the pause** (Q104, answer (a)): a
 > human merging is BD-007's decision, made in the one place the platform cannot refuse it, so
 > `mr.merged` for a task paused **at `ready_for_merge`** records `task.resumed` and the merge and
 > the retrospective runs as for any merge. A task paused at any **other** stage whose merge
@@ -73,6 +74,46 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > provider's `mr.merged` may say a merge happened. `paused →
 > returned` is still not an edge: `return-to-stage` from a pause is the same question for every
 > paused stage, and nobody has asked for it.
+>
+> **A human's way into Ready is judged by the head, not by the edge** (WP-79, PROGRESS backlog
+> 267). A take-over at Ready is a pause at Ready, so a human who takes over, pushes, and hands back
+> to `ready_for_merge` — or simply resumes — used to put commits at Ready that neither `ci_gate` nor
+> `rebase_gate` had read; and a hand-back into `ready_for_merge` from an `active` task (`active →
+> ready_for_merge` is an edge) skipped both gates outright; and `retry-stage` at a task paused at
+> Ready (and, on a template that ran something at Ready, `retry-run`) entered it the same way
+> (WP-79 review round 1). Since WP-79 **no human command moves a task into Ready itself**: every
+> command's stage entry is one function (`humanEnter` in `packages/application/src/pipeline/commands.ts`),
+> the command-side apply refuses a Ready entry that bypassed it, and a `return-to-stage` or
+> `rework` aimed at Ready is refused by this table (`returned → ready_for_merge` and `paused →
+> returned` are not edges). The only ways into Ready are then the pipeline's — a passing rebase-gate
+> settlement, or a fall-through from an agent or system stage on a template whose gates are
+> disabled, which records no head — and the `ready_head_check` duty. **The rebase gate lets a task
+> into Ready only for the head CI passed** (WP-79 review round 2, PROGRESS backlog 275): the CI
+> gate's settlement records the head it passed (`tasks.ci_head_sha`, technical/03), and a passing
+> rebase gate on a template that runs `ci_gate` compares its own head with it — equal, Ready, and
+> that head is `ready_head_sha`; different or absent (a push between the two gates, the review
+> stages run in between; or a human's hand-back at `code_review` or `rebase_gate` after a push) —
+> **re-enter `ci_gate` as a forward move**. It is not a return and spends none of BD-008's failure
+> loops, but it is **bounded** by the existing `rebase_rechecks` (default 10), which it shares with
+> the default-branch re-check because both are *the branch moved under a gate that had passed*: a
+> branch pushed after every CI pass is escalated to `needs_human` when the bound is spent, rather
+> than looping CI ↔ rebase. One round re-runs the review stages too (the template's fall-through),
+> which is the cost of judging the new commits.
+> The task records the head its gates judged on the way into Ready
+> (`tasks.ready_head_sha`, technical/03); the command validates the move against the aggregate,
+> appends only what it always appended (`task.handed_back` for a hand-back, nothing for a resume
+> or a retry), and enqueues the `ready_head_check` duty, which reads the merge request's live head **outside
+> every transaction** (WP-15d) and then decides: the recorded head → `ready_for_merge`, with
+> `task.resumed` when the task was paused, and no gate; anything else — a different head, no
+> recorded head, or a head the platform could not read (fail closed on a mutation: *unreadable* is
+> not *unmoved*) — **re-enters `ci_gate`**, the first enabled of `ci_gate` and `rebase_gate`, from
+> which the template's own fall-through runs review and the rebase gate again before Ready. That
+> entry is a **forward move and spends no loop**: the interpreter would call it a return, because
+> `ci_gate` sits earlier than `ready_for_merge`, but a human's push is not a failure of any loop
+> BD-008 bounds, so the duty applies an `enter` decision rather than interpreting a signal, and no
+> counter moves. A task whose template enables neither gate enters Ready, because its front door
+> judges no head either. The duty re-validates on fire: it acts only while the task is still in the
+> state and at the stage the command saw, and drops the wake-up (with a log line) otherwise.
 >
 > **`retro → retro` was added at WP-18b**, when the librarian stage went back into the shipped
 > templates (technical/12's example has always carried it). The retrospective phase now has **two**

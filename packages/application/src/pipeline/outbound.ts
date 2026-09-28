@@ -62,6 +62,7 @@ import {
 } from './dependency-gate.js';
 import { runBreakdownCreate, runSpikeReport } from './epic-split.js';
 import type { OutboundJobData } from './jobs.js';
+import { runReadyHeadCheck } from './ready-head.js';
 import { runReviewOnlyCheck, runReviewOnlyObservation, runReviewOnlyPost } from './review-only.js';
 import { type RiskRoutingOptions, runRiskRouting } from './risk-routing.js';
 import { type PipelineSagaOptions, runIntakeCheck } from './saga.js';
@@ -101,6 +102,12 @@ export const pipelineOutboundHandler = (
     if (data.duty === 'notify_organisation') {
       // The one duty with no project (WP-65): narrowed here, before anything reads `project_id`.
       await runOrganisationNotification(options, data);
+      return;
+    }
+    if (data.duty === 'ready_head_check') {
+      // WP-79: a human's way into Ready, judged by the branch head — a payload of its own, narrowed
+      // here like the organisation's.
+      await runReadyHeadCheck(options, data);
       return;
     }
     switch (data.duty) {

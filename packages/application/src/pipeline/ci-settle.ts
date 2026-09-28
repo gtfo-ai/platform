@@ -112,6 +112,8 @@ export const runCiSettle = async (
         ? `pipeline for ${headSha} succeeded`
         : `pipeline for ${headSha} ${status}${failing.length === 0 ? '' : `: ${failing.join(', ')}`}`,
       ...(passed ? {} : { ciSignature: ciFailureSignature(status, failing, headSha) }),
+      // WP-79: the live head this pipeline ran on — checked equal just above.
+      headSha,
     },
   );
 };

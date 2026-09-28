@@ -86,7 +86,7 @@ import {
   secrets as secretAdapters,
 } from '@platform/infrastructure';
 import type { IntegrationRegistry } from '@platform/integrations';
-import { createGitMirrorCredentials } from '@platform/integrations';
+import { accountOnlyFieldsOf, createGitMirrorCredentials } from '@platform/integrations';
 import type pg from 'pg';
 import { injectedSecretRedactorForEnvironment } from './agent.js';
 import {
@@ -291,7 +291,7 @@ export const composeKnowledgeMirror = async (
     };
   }
   const credentials = createGitMirrorCredentials({
-    repository: secretAdapters.createPostgresBindingRepository(options.pool),
+    repository: secretAdapters.createPostgresBindingRepository(options.pool, accountOnlyFieldsOf),
     secrets: secretAdapters.createPostgresSecretStore({
       sql: options.pool,
       key: secretAdapters.deriveSecretKey(options.secretKey),

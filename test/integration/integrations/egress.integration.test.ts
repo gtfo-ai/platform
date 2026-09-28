@@ -37,6 +37,7 @@ import {
   secrets as secretAdapters,
 } from '@platform/infrastructure';
 import {
+  accountOnlyFieldsOf,
   createGitLabProvider,
   createIntegrationProber,
   createIntegrationRegistry,
@@ -113,7 +114,7 @@ const insertIntegration = async (baseUrl: string): Promise<Id> => {
  */
 const proberFor = (hosts: readonly string[]) =>
   createIntegrationProber({
-    repository: secretAdapters.createPostgresBindingRepository(pool),
+    repository: secretAdapters.createPostgresBindingRepository(pool, accountOnlyFieldsOf),
     secrets: secretAdapters.createPostgresSecretStore({ sql: pool, key: KEY }),
     registry: createIntegrationRegistry([
       {

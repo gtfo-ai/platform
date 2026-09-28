@@ -169,7 +169,8 @@ describe('risk classes and reviewer routing at the rebase gate', () => {
     const pipeline = await startPipeline({
       scenarios: featureScenarios,
       label: 'risk-routing-none',
-      tickets: TICKETS,
+      // A reporter nobody mapped (WP-79): the requester stays null, so step three finds nobody.
+      tickets: reportedBy('acct-nobody-mapped'),
     });
     harness = pipeline;
 
@@ -193,5 +194,63 @@ describe('risk classes and reviewer routing at the rebase gate', () => {
     );
     expect(await riskClassesOf(pipeline)).toEqual([]);
     expect(await reviewerActions(pipeline)).toEqual([]);
+    expect(await requesterOf(pipeline)).toBeNull();
+  }, 180_000);
+
+  /**
+   * WP-79, PROGRESS backlog 243 (92's half (b)) — **the other way** of the case above: the ticket's
+   * reporter is mapped through `user_identities`, so intake writes the requester on the row, and the
+   * routing's third step assigns that user's git account on a project with no `CODEOWNERS` and no
+   * configured reviewers. Through the production composition: the real identity directory, the real
+   * `PostgresPipelineStore` insert (which did not name the column until WP-79) and the production
+   * executor's audit row. Two mappings, one per provider, because a person has one account on each.
+   */
+  it('names the mapped ticket reporter as the requester, and routes the review to them', async () => {
+    const pipeline = await startPipeline({
+      scenarios: featureScenarios,
+      label: 'risk-routing-requester',
+      tickets: reportedBy('acct-dana'),
+    });
+    harness = pipeline;
+    await pipeline.query(
+      `insert into user_identities (provider, external_id, user_id, display_name)
+       values ('fake-task-management', 'acct-dana', $1, 'Dana'), ('fake-git', '4242', $1, 'Dana')`,
+      [pipeline.userId],
+    );
+    pipeline.git.setDiff({
+      project: GIT_PROJECT,
+      iid: pipeline.world.mr.iid,
+      files: [{ path: 'src/totals.ts' }],
+    });
+
+    await pipeline.publish([ticketMatched(pipeline, 'ACME-1')]);
+    await pipeline.settle('ready_for_merge', (task) => task.state === 'ready_for_merge');
+    expect(await requesterOf(pipeline)).toBe(pipeline.userId);
+
+    // The assignment's last write is the audit row recorded after the call (standing rule 87).
+    await pipeline.waitFor(
+      'the requester’s reviewer assignment to be recorded',
+      async () => (await reviewerActions(pipeline)).length >= 1,
+    );
+    expect((await reviewerActions(pipeline))[0]?.payload).toMatchObject({
+      iid: pipeline.world.mr.iid,
+      reviewers: ['4242'],
+    });
   }, 180_000);
 });
+
+/** The shipped tickets, with `ACME-1` filed by `reporter` (WP-79). */
+const reportedBy = (reporter: string) =>
+  TICKETS.map((ticket) => (ticket.key === 'ACME-1' ? { ...ticket, reporter } : ticket));
+
+const requesterOf = async (pipeline: PipelineE2E): Promise<string | null> => {
+  const rows = await pipeline.query<{ requested_by_user_id: string | null }>(
+    'select requested_by_user_id from tasks where project_id = $1',
+    [pipeline.projectId],
+  );
+  const [row] = rows;
+  if (rows.length !== 1 || row === undefined) {
+    throw new Error(`expected one task on the project, found ${rows.length}`);
+  }
+  return row.requested_by_user_id;
+};

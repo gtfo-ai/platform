@@ -416,6 +416,10 @@ describe('resume', () => {
     const runsBefore = harness.specs.length;
 
     await resumeTaskCommand(harness.humanCommands, { taskId: task, userId: USER });
+    // WP-79: the command moves nothing at Ready — the `ready_head_check` duty decides, after the
+    // commit — so the task reads `paused` until the worker runs it.
+    expect(taskOf(harness).task.state).toBe('paused');
+    await harness.drain();
     expect(taskOf(harness).task.state).toBe('ready_for_merge');
     expect(taskOf(harness).task.currentStage).toBe('ready_for_merge');
     // With `task.resumed` removed from the tail-stage entry (md5-confirmed revert) this read 0.
@@ -424,7 +428,6 @@ describe('resume', () => {
     expect(
       harness.jobs.enqueued.filter((request) => request.queue === JOB_QUEUES.stageExecute).length,
     ).toBe(stageJobsBefore);
-    await harness.drain();
     expect(harness.specs.length).toBe(runsBefore);
   });
 
@@ -1752,6 +1755,464 @@ describe('hand a task back', () => {
       ),
     ).rejects.toThrow(CommandsUnavailableError);
     expect(countOf(harness, 'task.handed_back')).toBe(0);
+  });
+});
+
+/**
+ * WP-79, PROGRESS backlog 267 — **a human's way into Ready is judged by the branch head**.
+ *
+ * A take-over at Ready is a pause at Ready, and `paused → ready_for_merge` has been an edge since
+ * WP-73a; so a human who took over, pushed and handed back (or resumed) put commits at Ready that
+ * neither `ci_gate` nor `rebase_gate` had read. The branch's live head is what the harness's git
+ * double answers from `getMergeRequest`, moved here by the test the way a human's push moves it.
+ *
+ * Every case asserts the countable effect — which stage was entered, which counters moved, which
+ * jobs were enqueued — and the two answers are asserted both ways (standing rule 42). The canary
+ * that removes the comparison (`readyHeadVerdict` answering `ready` for any head) fails
+ * *"re-enters ci_gate when the human pushed …"* by name.
+ */
+describe('a human’s way into Ready (WP-79)', () => {
+  const BEFORE = 'b'.repeat(40);
+  const PUSHED = 'c'.repeat(40);
+
+  /** A task walked to Ready over a git double whose head the test can move, like a push. */
+  /**
+   * A task walked over a git double whose head the test can move, like a push. `pushesAfterCi`
+   * moves the head right after the CI gate reads a pipeline status, that many times — a push that
+   * lands between the CI settlement and the rebase gate (backlog 275).
+   */
+  const walkWithBranch = async (
+    options: {
+      readonly pushesAfterCi?: number;
+      readonly rebaseRechecks?: number;
+      /** The CI verdict of each pipeline read in turn; `success` once the list runs out. */
+      readonly ciVerdicts?: readonly ('success' | 'failed')[];
+    } = {},
+  ) => {
+    const ciVerdicts = [...(options.ciVerdicts ?? [])];
+    const branch = {
+      head: BEFORE as string,
+      unreadable: 0,
+      pushesAfterCi: options.pushesAfterCi ?? 0,
+      pushes: 0,
+    };
+    const liveMergeRequest = () => ({
+      ref: {
+        provider: 'fake-git',
+        project_path: 'acme/api',
+        iid: 7,
+        url: 'https://git.example.test/acme/api/-/merge_requests/7',
+        branch: 'agentic/acme-1',
+        head_sha: branch.head,
+      },
+      state: 'opened' as const,
+      draft: true,
+      title: 'Draft: totals',
+      description: '',
+      source_branch: 'agentic/acme-1',
+      target_branch: 'main',
+      head_sha: branch.head,
+      mergeable: true,
+      has_conflicts: false,
+      labels: [],
+      reviewers: [],
+      web_url: 'https://git.example.test/acme/api/-/merge_requests/7',
+    });
+    const harness = harnessWith({
+      git: {
+        getMergeRequest: async () => {
+          if (branch.unreadable > 0) {
+            branch.unreadable -= 1;
+            throw new IntegrationError('forbidden', 'fake-git', 'the token may not read it');
+          }
+          return liveMergeRequest();
+        },
+        getPipelineStatus: async () => {
+          const status = {
+            id: 'pipeline-1',
+            head_sha: branch.head,
+            status: ciVerdicts.shift() ?? ('success' as const),
+            url: null,
+            jobs: [],
+            coverage_pct: null,
+            finished_at: '2026-06-01T09:30:00.000Z',
+          };
+          if (branch.pushesAfterCi > 0) {
+            branch.pushesAfterCi -= 1;
+            branch.pushes += 1;
+            branch.head = branch.pushes.toString(16).padStart(40, 'd');
+          }
+          return status;
+        },
+      },
+      ...(options.rebaseRechecks === undefined
+        ? {}
+        : {
+            settings: {
+              config: { pipeline: { limits: { rebase_rechecks: options.rebaseRechecks } } },
+            },
+          }),
+    });
+    await harness.publish([ticketMatched()]);
+    return { harness, branch };
+  };
+
+  const atReady = async () => {
+    const { harness, branch } = await walkWithBranch();
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+    // The rebase gate's read recorded the head the gates judged on the way in — the one CI passed.
+    expect(taskOf(harness).readyHeadSha).toBe(BEFORE);
+    expect(taskOf(harness).ciHeadSha).toBe(BEFORE);
+    return { harness, branch };
+  };
+
+  const takeOver = async (harness: PipelineHarness) =>
+    takeOverTaskCommand(harness.humanCommands, {
+      taskId: taskOf(harness).task.id,
+      userId: USER,
+      authorName: 'Ada',
+      tarball: false,
+    });
+
+  const handBackToReady = async (harness: PipelineHarness) =>
+    handBackTaskCommand(harness.humanCommands, {
+      taskId: taskOf(harness).task.id,
+      userId: USER,
+      stage: 'ready_for_merge' as Slug,
+      summary: 'pushed the fix myself',
+    });
+
+  const enteredStages = (harness: PipelineHarness, since: number): string[] =>
+    harness
+      .events()
+      .slice(since)
+      .filter((event) => event.type === 'task.stage.entered')
+      .map((event) => (event.payload as { stage: string }).stage);
+
+  it('re-enters ci_gate when the human pushed and handed back to ready_for_merge, spending no loop', async () => {
+    const { harness, branch } = await atReady();
+    await takeOver(harness);
+    branch.head = PUSHED;
+    const counters = taskOf(harness).task.iterationCounters;
+    const ciAttempts = taskOf(harness).task.stageAttempts.ci_gate ?? 0;
+    const since = harness.events().length;
+
+    await handBackToReady(harness);
+    // The command wrote the hand-back and moved nothing: the duty decides after the commit.
+    expect(countOf(harness, 'task.handed_back')).toBe(1);
+    expect(taskOf(harness).task.state).toBe('paused');
+    expect(
+      harness.jobs.enqueued.filter(
+        (request) =>
+          request.queue === JOB_QUEUES.pipelineOutbound &&
+          (request.data as { duty?: string }).duty === 'ready_head_check',
+      ),
+    ).toHaveLength(1);
+
+    await harness.drain();
+    // The first stage entered after the hand-back is the CI gate — never Ready.
+    expect(enteredStages(harness, since)[0]).toBe('ci_gate');
+    expect(taskOf(harness).task.stageAttempts.ci_gate).toBe(ciAttempts + 1);
+    // A forward move: no iteration loop was charged for the human's push (rule 81).
+    expect(taskOf(harness).task.iterationCounters).toEqual(counters);
+    expect(countOf(harness, 'task.stage.returned')).toBe(0);
+    // …and the template's own fall-through judged the new head all the way back to Ready.
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+    expect(taskOf(harness).readyHeadSha).toBe(PUSHED);
+    const resumed = harness.events().find((event) => event.type === 'task.resumed');
+    expect((resumed?.payload as { reason: string | null } | undefined)?.reason).toContain('moved');
+    expect(resumed?.actor).toEqual({ kind: 'user', user_id: USER });
+  });
+
+  it('re-enters ci_gate when the human pushed and resumed', async () => {
+    const { harness, branch } = await atReady();
+    await takeOver(harness);
+    branch.head = PUSHED;
+    const since = harness.events().length;
+
+    await resumeTaskCommand(harness.humanCommands, {
+      taskId: taskOf(harness).task.id,
+      userId: USER,
+    });
+    expect(taskOf(harness).task.state).toBe('paused');
+    await harness.drain();
+
+    expect(enteredStages(harness, since)[0]).toBe('ci_gate');
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+    expect(taskOf(harness).readyHeadSha).toBe(PUSHED);
+  });
+
+  it('enters Ready with no gate when the head did not move — for a hand-back and for a resume', async () => {
+    for (const command of ['hand_back', 'resume'] as const) {
+      const { harness } = await atReady();
+      await takeOver(harness);
+      const since = harness.events().length;
+      const runsBefore = harness.specs.length;
+      const stageJobsBefore = harness.jobs.enqueued.filter(
+        (request) => request.queue === JOB_QUEUES.stageExecute,
+      ).length;
+
+      if (command === 'hand_back') {
+        await handBackToReady(harness);
+      } else {
+        await resumeTaskCommand(harness.humanCommands, {
+          taskId: taskOf(harness).task.id,
+          userId: USER,
+        });
+      }
+      await harness.drain();
+
+      expect(enteredStages(harness, since), command).toEqual(['ready_for_merge']);
+      expect(taskOf(harness).task.state, command).toBe('ready_for_merge');
+      expect(
+        harness.jobs.enqueued.filter((request) => request.queue === JOB_QUEUES.stageExecute).length,
+        command,
+      ).toBe(stageJobsBefore);
+      expect(harness.specs.length, command).toBe(runsBefore);
+      // The judgement survives the pause: the same head is recorded for the new entry.
+      expect(taskOf(harness).readyHeadSha, command).toBe(BEFORE);
+    }
+  });
+
+  it('fails closed to ci_gate when the head cannot be read — an unreadable head is not an unmoved one', async () => {
+    const { harness, branch } = await atReady();
+    await takeOver(harness);
+    // Exactly one refusal — the duty's read. The gate it re-enters then reads the branch as usual
+    // (a gate whose read keeps failing has its own bounded ending, `MAX_GATE_CHECKS`).
+    branch.unreadable = 1;
+    const since = harness.events().length;
+
+    await handBackToReady(harness);
+    await harness.drain();
+
+    // Ready is reached again only through the gates the template runs after `ci_gate`.
+    expect(enteredStages(harness, since)[0]).toBe('ci_gate');
+    const resumed = harness.events().find((event) => event.type === 'task.resumed');
+    expect((resumed?.payload as { reason: string | null } | undefined)?.reason).toContain(
+      'could not be read',
+    );
+  });
+
+  it('fails closed to ci_gate for a task that recorded no head on its way into Ready', async () => {
+    const { harness } = await atReady();
+    // A row older than migration 0056 — or a Ready entered with the gates disabled.
+    const stored = taskOf(harness);
+    await harness.memory.transaction(async (scope) =>
+      harness.store.tasks.saveReadyHead(scope.tx, stored.task.id, null),
+    );
+    await takeOver(harness);
+    const since = harness.events().length;
+
+    await resumeTaskCommand(harness.humanCommands, { taskId: stored.task.id, userId: USER });
+    await harness.drain();
+
+    expect(enteredStages(harness, since)[0]).toBe('ci_gate');
+  });
+
+  it('does nothing when the task moved before the duty ran', async () => {
+    const { harness, branch } = await atReady();
+    await takeOver(harness);
+    branch.head = PUSHED;
+    const task = taskOf(harness).task.id;
+    await resumeTaskCommand(harness.humanCommands, { taskId: task, userId: USER });
+    // Cancelled in the window between the command's commit and the duty.
+    await cancelTaskCommand(harness.humanCommands, { taskId: task, userId: USER });
+    const since = harness.events().length;
+
+    await harness.drain();
+    expect(taskOf(harness).task.state).toBe('cancelled');
+    expect(enteredStages(harness, since)).toEqual([]);
+  });
+
+  /**
+   * WP-79 review round 1: `retry-stage` was a third way into Ready — a take-over is a pause at
+   * Ready, and retrying the stage the task is paused at entered it directly, past both gates
+   * (reproduced by the reviewer: stages entered `["ready_for_merge"]`, `readyHeadSha` null).
+   */
+  it('re-enters ci_gate when the human pushed and retried the ready_for_merge stage', async () => {
+    const { harness, branch } = await atReady();
+    await takeOver(harness);
+    branch.head = PUSHED;
+    const since = harness.events().length;
+
+    await retryStageCommand(harness.humanCommands, {
+      taskId: taskOf(harness).task.id,
+      userId: USER,
+      stage: 'ready_for_merge' as Slug,
+    });
+    expect(taskOf(harness).task.state).toBe('paused');
+    await harness.drain();
+
+    expect(enteredStages(harness, since)[0]).toBe('ci_gate');
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+    expect(taskOf(harness).readyHeadSha).toBe(PUSHED);
+  });
+
+  /**
+   * The census, as source: every stage entry a human command makes is one call inside
+   * `humanEnter`, and `applyHumanDecisionRecorded` refuses a Ready entry that did not come through
+   * it — so a new command that enters a stage directly is a failure here, and one that enters Ready
+   * is a 500 at its first test. Returns are not entries: a return to Ready is refused by the state
+   * machine (`returned → ready_for_merge` and `paused → returned` are not edges), asserted below.
+   */
+  it('has exactly one stage entry in the command module, the one that routes Ready to the duty', async () => {
+    const { readFileSync } = await import('node:fs');
+    const raw = readFileSync(new URL('./commands.ts', import.meta.url), 'utf8');
+    // Comment lines out, so a docblock that names a function is not a call (the census trade
+    // `task-save-sites.test.ts` states).
+    const source = raw
+      .split('\n')
+      .filter((line) => !/^\s*(?:\*|\/\/|\/\*)/.test(line))
+      .join('\n');
+    const count = (pattern: RegExp): number => source.match(pattern)?.length ?? 0;
+    // Round 2 (the reviewer's canary: a direct `markReadyForMerge(` + `tasks.save` survived a census
+    // that counted only `kind: 'enter'`): every way this module can move a task's state, counted.
+    expect(count(/kind: 'enter'/g), 'stage entries').toBe(1);
+    expect(count(/\bapplyDecision\(/g), 'applyDecision calls').toBe(1);
+    expect(count(/\bmarkReadyForMerge\(/g), 'markReadyForMerge calls').toBe(1);
+    expect(count(/\btasks\s*\.\s*save\(/g), 'whole-row saves').toBe(4);
+    // The domain commands it imports are the complete list of state changes it can make; each task
+    // command's target state is named, and none is `ready_for_merge` except through `humanEnter`.
+    // A new import (`enterStage`, `recordMerge`, `startRetrospective`, …) fails here first.
+    const imported = /import \{([^}]*)\} from '@platform\/domain';/.exec(raw)?.[1] ?? '';
+    expect(
+      imported
+        .split(',')
+        .map((name) => name.trim())
+        .filter((name) => name.length > 0)
+        .sort(),
+    ).toEqual(
+      [
+        'answerQuestion', // Question aggregate
+        'assertRunTransition', // a check
+        'cancelTask', // → cancelled
+        'canTransitionTask', // a check
+        'compilePipeline', // pure
+        'decideApproval', // Approval aggregate
+        'evaluateIteration', // a check
+        'expireApproval', // Approval aggregate
+        'expireQuestion', // Question aggregate
+        'finishRun', // Run aggregate
+        'handBackTask', // no state change; its entry is `humanEnter`
+        'IllegalTransitionError',
+        'InvariantViolationError',
+        'isActiveRunStatus',
+        'isBefore',
+        'isTaskFinished',
+        'MERGED_GATE_STAGE',
+        'markReadyForMerge', // the dry run inside `humanEnter`, discarded
+        'pauseTask', // → paused
+        'READY_FOR_MERGE_STAGE',
+        'recordFeedback', // no state change
+        'resetAgentIterations', // pure
+        'stageOf', // pure
+        'steerRun', // no state change
+        'takeOverTask', // → paused
+        'taskBranchName', // pure
+      ].sort(),
+    );
+    const body = source.slice(source.indexOf('const humanEnter = async'));
+    expect(body.indexOf("kind: 'enter'")).toBeGreaterThan(body.indexOf('READY_FOR_MERGE_STAGE'));
+
+    const { harness } = await atReady();
+    await expect(
+      returnToStageCommand(harness.humanCommands, {
+        taskId: taskOf(harness).task.id,
+        userId: USER,
+        stage: 'ready_for_merge' as Slug,
+        reason: 'back to Ready',
+      }),
+    ).rejects.toThrow(IllegalTransitionError);
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+  });
+
+  /**
+   * WP-79 review round 2 (backlog 275 folded in): the rebase gate lets a task into Ready only for
+   * the head CI passed (`rebaseAgainstCi`, `tasks.ci_head_sha`). The reviewer's reproduction: take
+   * over at Ready, push, hand back at `rebase_gate` — before this, `["rebase_gate","ready_for_merge"]`
+   * with the pushed head recorded as judged.
+   */
+  it('re-enters ci_gate when the human pushed and handed back at rebase_gate, past CI', async () => {
+    const { harness, branch } = await atReady();
+    await takeOver(harness);
+    branch.head = PUSHED;
+    const counters = taskOf(harness).task.iterationCounters;
+    const since = harness.events().length;
+
+    await handBackTaskCommand(harness.humanCommands, {
+      taskId: taskOf(harness).task.id,
+      userId: USER,
+      stage: 'rebase_gate' as Slug,
+      summary: 'rebased it myself',
+    });
+    await harness.drain();
+
+    expect(enteredStages(harness, since).slice(0, 2)).toEqual(['rebase_gate', 'ci_gate']);
+    expect(taskOf(harness).task.state).toBe('ready_for_merge');
+    expect(taskOf(harness).ciHeadSha).toBe(PUSHED);
+    expect(taskOf(harness).readyHeadSha).toBe(PUSHED);
+    // Not a return; the one re-check it cost is the bound it shares with the default-branch move.
+    expect(countOf(harness, 'task.stage.returned')).toBe(0);
+    expect(taskOf(harness).task.iterationCounters).toEqual({
+      ...counters,
+      rebase_rechecks: (counters.rebase_rechecks ?? 0) + 1,
+    });
+  });
+
+  it('re-enters ci_gate when the head moved between the CI settlement and the rebase gate (backlog 275)', async () => {
+    const { harness, branch } = await walkWithBranch({ pushesAfterCi: 1 });
+    const stages = enteredStages(harness, 0);
+    // CI → review → rebase, then back to CI for the new head, and through again to Ready.
+    expect(stages.filter((stage) => stage === 'ci_gate')).toHaveLength(2);
+    expect(stages.at(-1)).toBe('ready_for_merge');
+    expect(stages.indexOf('rebase_gate')).toBeLessThan(stages.lastIndexOf('ci_gate'));
+    expect(taskOf(harness).readyHeadSha).toBe(branch.head);
+    expect(taskOf(harness).ciHeadSha).toBe(branch.head);
+    expect(taskOf(harness).task.iterationCounters.rebase_rechecks).toBe(1);
+  });
+
+  it('forgets the head CI passed once a later CI run fails, so a hand-back past CI cannot reach Ready on it', async () => {
+    // CI passes BEFORE, a push lands before the rebase gate, and CI then fails every run: the
+    // column must not keep BEFORE (the one real case the clear exists for — WP-79 round 3).
+    const { harness } = await walkWithBranch({
+      pushesAfterCi: 1,
+      ciVerdicts: ['success', ...Array.from({ length: 20 }, () => 'failed' as const)],
+    });
+    expect(enteredStages(harness, 0).filter((stage) => stage === 'ci_gate').length).toBeGreaterThan(
+      1,
+    );
+    expect(taskOf(harness).task.state).not.toBe('ready_for_merge');
+    expect(taskOf(harness).ciHeadSha).toBeNull();
+  });
+
+  it('goes straight to Ready when the rebase head is the one CI passed', async () => {
+    const { harness } = await atReady();
+    const stages = enteredStages(harness, 0);
+    expect(stages.filter((stage) => stage === 'ci_gate')).toHaveLength(1);
+    expect(taskOf(harness).task.iterationCounters.rebase_rechecks ?? 0).toBe(0);
+  });
+
+  it('stops a branch that moves after every CI pass at the rebase_rechecks bound, for a human', async () => {
+    const { harness } = await walkWithBranch({ pushesAfterCi: 100, rebaseRechecks: 2 });
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    expect(taskOf(harness).task.iterationCounters.rebase_rechecks).toBe(2);
+    expect(enteredStages(harness, 0).filter((stage) => stage === 'ci_gate')).toHaveLength(3);
+    const escalated = harness.events().find((event) => event.type === 'task.escalated');
+    expect((escalated?.payload as { reason?: string } | undefined)?.reason).toContain(
+      'rebase_rechecks iteration limit of 2 reached',
+    );
+  });
+
+  it('still refuses what the aggregate refuses, as the command’s own 409', async () => {
+    const { harness } = await atReady();
+    // Ready itself is not a state a hand-back can re-enter: `ready_for_merge → ready_for_merge`.
+    await expect(handBackToReady(harness)).rejects.toThrow(IllegalTransitionError);
+    expect(countOf(harness, 'task.handed_back')).toBe(0);
+    expect(
+      harness.jobs.enqueued.filter(
+        (request) => (request.data as { duty?: string }).duty === 'ready_head_check',
+      ),
+    ).toHaveLength(0);
   });
 });
 

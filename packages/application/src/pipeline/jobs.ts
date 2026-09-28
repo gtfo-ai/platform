@@ -24,7 +24,7 @@
  * `coalesced` is a success, not an error: it means the window this comment belongs to is already
  * scheduled.
  */
-import type { Id, Slug, TaskStageOutcome } from '@platform/contracts';
+import type { Id, Slug, TaskStageOutcome, TaskState } from '@platform/contracts';
 import { effortSchema } from '@platform/contracts';
 import {
   compilePipeline,
@@ -38,7 +38,7 @@ import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
-import { createGateEvaluator, MAX_GATE_CHECKS } from './gates.js';
+import { CI_GATE_STAGE, createGateEvaluator, MAX_GATE_CHECKS, rebaseAgainstCi } from './gates.js';
 import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
 import { REBASE_GATE_STAGE, recordRebaseCheck } from './rebase.js';
 import { reviewedMergeRequestPaths } from './review-paths.js';
@@ -55,7 +55,7 @@ import {
   retryOnTaskConflict,
   TaskConflictExhaustedError,
 } from './task-conflict.js';
-import { ensureTicketSnapshot } from './ticket-snapshot.js';
+import { ensureTicketSnapshot, type RequesterOptions } from './ticket-snapshot.js';
 import { applyDecision } from './transitions.js';
 
 /** `stage.execute` payload — snake_case, like every other payload on the wire. */
@@ -343,8 +343,44 @@ export interface OrganisationOutboundData {
   readonly [key: string]: unknown;
 }
 
-/** Everything `pipeline.outbound` carries: a project's duty, or the organisation's one. */
-export type OutboundJobData = PipelineOutboundData | OrganisationOutboundData;
+/**
+ * One wake-up of `ready_head_check` (WP-79, `ready-head.ts`) — its own payload type rather than a member of `PipelineOutboundData`'s
+ * duty list, because two of its fields are required and one of the list's is not: a **resume**
+ * appends no event, so there is no `cause_event_id` to give it (`OrganisationOutboundData` is the
+ * precedent for a duty with a shape of its own).
+ */
+export interface ReadyHeadCheckData {
+  readonly duty: 'ready_head_check';
+  readonly project_id: string;
+  readonly task_id: string;
+  /** Which command asked — for the log line and the `task.resumed` reason. */
+  readonly via: 'resume' | 'hand_back' | 'retry_stage' | 'retry_run';
+  /** The state and stage the command saw; the duty acts only while the task is still there. */
+  readonly expected_state: TaskState;
+  readonly expected_stage: string;
+  /** The person, so the decision's events name them as their actor, as the command's would have. */
+  readonly user_id: string;
+  /** A hand-back's `task.handed_back`; `null` for a resume, which appends nothing. */
+  readonly cause_event_id: string | null;
+  readonly [key: string]: unknown;
+}
+
+/**
+ * Everything `pipeline.outbound` carries: a project's duty, the organisation's one, or a human's way
+ * into Ready waiting to be judged (WP-79).
+ */
+export type OutboundJobData = PipelineOutboundData | OrganisationOutboundData | ReadyHeadCheckData;
+
+/**
+ * {@link enqueueOutbound} for `ready_head_check` — the same queue, and called after the command's
+ * commit for the reason every outbound enqueue is.
+ */
+export const enqueueReadyHeadCheck = async (
+  jobs: Jobs,
+  data: ReadyHeadCheckData,
+): Promise<void> => {
+  await jobs.enqueue<OutboundJobData>({ queue: JOB_QUEUES.pipelineOutbound, data });
+};
 
 /** {@link enqueueOutbound} for the organisation's duty; the same queue and the same `afterCommit` rule. */
 export const enqueueOrganisationOutbound = async (
@@ -492,7 +528,7 @@ export const enqueueReviewCommentWindow = async (
   });
 };
 
-export interface PipelineJobOptions extends PipelineSagaOptions {
+export interface PipelineJobOptions extends PipelineSagaOptions, RequesterOptions {
   readonly unitOfWork: UnitOfWork;
   readonly executor: StageExecutor;
 }
@@ -516,7 +552,7 @@ export interface PipelineJobOptions extends PipelineSagaOptions {
 /** What a job's own task transaction needs — no executor, so an outbound duty can settle too. */
 export type TaskTransactionOptions = PipelineSagaOptions & { readonly unitOfWork: UnitOfWork };
 
-const inTaskTransaction = async <T>(
+export const inTaskTransaction = async <T>(
   options: TaskTransactionOptions,
   taskId: Id,
   what: string,
@@ -714,6 +750,7 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
       passed: result.passed,
       detail: result.detail,
       ...(result.ciSignature === undefined ? {} : { ciSignature: result.ciSignature }),
+      ...(result.headSha === undefined ? {} : { headSha: result.headSha }),
     });
 
     /**
@@ -759,6 +796,12 @@ export type GateSettlement =
        * review round 2) share one convergence rule.
        */
       readonly ciSignature?: string;
+      /**
+       * The head the gate judged (WP-79). Recorded as `tasks.ready_head_sha` when this settlement
+       * enters `ready_for_merge` — through `applyDecision`, the column's one writer — and ignored
+       * by every other move.
+       */
+      readonly headSha?: string;
     }
   | {
       readonly kind: 'escalate';
@@ -818,21 +861,71 @@ const settle = async (
         signal.kind === 'gate_settled' && !signal.passed && signal.ciSignature !== undefined
           ? await ciConvergence(options, scope, stored, signal.stage, signal.ciSignature)
           : null;
+      /**
+       * **The head CI judged** (WP-79 review round 2, PROGRESS backlog 275): the one write of
+       * `tasks.ci_head_sha` — the head a passing CI settlement read, `null` for a failing one —
+       * which the rebase gate's settlement below compares with before it lets the task into Ready.
+       */
+      if (signal.kind === 'gate_settled' && signal.stage === CI_GATE_STAGE) {
+        await options.store.tasks.saveCiHead(
+          scope.tx,
+          stored.task.id,
+          signal.passed ? (signal.headSha ?? null) : null,
+        );
+      }
+      /**
+       * **Ready only for a head CI passed** (WP-79 review round 2, backlog 275). A passing rebase
+       * gate whose head is not the one CI passed re-enters `ci_gate` instead of Ready — a push
+       * between the two gates, or a human's hand-back past CI. A **forward** move, like the
+       * ready-head duty's: a new head is not a failure, so it is not a return and spends none of
+       * BD-008's failure loops. It is **bounded** by the existing `rebase_rechecks` (default 10,
+       * `pipeline.limits.rebase_rechecks`), which it shares with the default-branch re-check because
+       * both are *the branch moved under a gate that had passed, look again* — so a branch that is
+       * pushed after every CI pass cannot loop CI ↔ rebase for ever: the eleventh re-entry escalates
+       * the task to `needs_human` with a brief (`spendLoop` in `transitions.ts` checks and spends it
+       * together). No new counter.
+       */
+      const againstCi =
+        signal.kind === 'gate_settled' &&
+        signal.stage === REBASE_GATE_STAGE &&
+        signal.passed &&
+        converged === null
+          ? rebaseAgainstCi(pipeline, stored.ciHeadSha, signal.headSha)
+          : ({ kind: 'agree' } as const);
       const decision =
-        signal.kind === 'escalate'
-          ? ({
-              kind: 'escalate',
-              reason: signal.reason,
-              blockerBrief: signal.blockerBrief,
-            } as const)
-          : (converged ?? interpret(pipeline, signal));
+        againstCi.kind === 'reenter_ci'
+          ? ({ kind: 'enter', stage: CI_GATE_STAGE } as const)
+          : signal.kind === 'escalate'
+            ? ({
+                kind: 'escalate',
+                reason: signal.reason,
+                blockerBrief: signal.blockerBrief,
+              } as const)
+            : (converged ?? interpret(pipeline, signal));
       const applied = await applyDecision({
         store: options.store,
         pipeline,
         tx: scope.tx,
         stored,
         decision,
-        ...(signal.kind === 'gate_settled' && converged === null ? { signal } : {}),
+        ...(signal.kind === 'gate_settled' && converged === null && againstCi.kind === 'agree'
+          ? { signal }
+          : {}),
+        ...(againstCi.kind === 'reenter_ci'
+          ? {
+              spendLoop: {
+                loop: 'rebase_rechecks' as const,
+                reason: againstCi.reason,
+                spentBrief: `The branch of ${stored.task.ticket.key} moved under a passed gate as many times as rebase_rechecks allows — the last time because ${againstCi.reason} — so the rebase gate stopped sending it back to CI. Find what moves the branch after CI (a push, or the default branch), then hand the task back at ci_gate.`,
+              },
+            }
+          : {}),
+        // WP-79: what a later human way into Ready is compared with, if this settlement enters it.
+        ...(signal.kind === 'gate_settled' &&
+        signal.headSha !== undefined &&
+        againstCi.kind === 'agree'
+          ? { readyHeadSha: signal.headSha }
+          : {}),
         // What the gate's row is closed with when this settlement parks the task instead of moving
         // it (WP-46, backlog 160) — all three of the gate's escalations come through here.
         ...(signal.kind === 'escalate'

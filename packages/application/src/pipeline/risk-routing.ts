@@ -143,11 +143,13 @@ export const riskRoutingHandlers = (options: PipelineSagaOptions): readonly Even
  * The provider account of the human who asked for this task, or `null`.
  *
  * Step three of product/19:138, and it needs **two** things, which is why both are named here
- * rather than in one sentence. `tasks.requested_by_user_id` must name somebody — since WP-67 the
- * three commands that hold an actor write it (discovery, a shadow batch, a history bootstrap;
- * `StoredTask.requestedByUserId` lists the sites that write `null` and why) — and `user_identities`
- * must map that user to an account on this provider, which it does only once an operator fills it
- * through `POST /api/org/identities` (PROGRESS backlog 79). The caller logs which of the two it
+ * rather than in one sentence. `tasks.requested_by_user_id` must name somebody — the three commands
+ * that hold an actor write it (discovery, a shadow batch, a history bootstrap; WP-67, and in
+ * PostgreSQL only since WP-79, whose insert was the first to name the column), and since WP-79 so
+ * does intake, from the ticket's reporter when an operator mapped that account
+ * (`StoredTask.requestedByUserId` lists the sites that write `null` and why) — and
+ * `user_identities` must map that user to an account on **this** provider, which it does only once
+ * an operator fills it through `POST /api/org/identities` (PROGRESS backlog 79). The caller logs which of the two it
  * hit, because *"the fallback found nobody"* and *"there is no fallback"* are different things to
  * an operator deciding whether to map an identity.
  */

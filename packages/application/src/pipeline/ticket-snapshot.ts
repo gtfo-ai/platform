@@ -60,6 +60,16 @@
  * commit. (The count in this sentence used to be "twenty"; it was already twenty-one when WP-15e
  * read it, which is why it is now produced by a test instead of quoted here — standing rule 63.)
  *
+ * ## The requester — PROGRESS backlog 243, built at WP-79
+ *
+ * The same read carries the ticket's **reporter**, and it is the only source of a ticket-started
+ * task's requester (product/19:138's third reviewer step). Backlog 243 said the reporter was *"not
+ * in hand at the task insert"*; it is — intake reads the ticket before its insert, which is the
+ * ordering argument above — so intake resolves the reporter through `user_identities`
+ * ({@link resolveRequester}) and writes the user id **in the insert**, and the stage-start re-read
+ * fills a `null` through the narrow `saveRequester` (never overwriting). The provider account is
+ * never stored on the row; an unmapped reporter leaves `null`, which fails closed as before.
+ *
  * ## Freshness — Q61 (b), built at WP-60
  *
  * Q61 (b) asks for a re-read *"when the snapshot predates the task's last provider signal"*. Until
@@ -82,9 +92,16 @@
  * pre-edit words for the rest of the task. The residual that remains is the provider's: a delivery
  * Jira never sends, or sends after the next stage has started, is an edit the prompt does not see.
  */
-import type { Id, IsoDateTime, TicketSnapshot, TicketSnapshotComment } from '@platform/contracts';
+import type {
+  ExternalIdentity,
+  Id,
+  IsoDateTime,
+  TicketSnapshot,
+  TicketSnapshotComment,
+} from '@platform/contracts';
 import { ticketSnapshotSchema } from '@platform/contracts';
 import { TransactionOpenError } from '../events/open-transaction.js';
+import type { InboundIdentityDirectory } from '../integrations/inbound.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type {
   Ticket,
@@ -276,6 +293,20 @@ export interface TicketSnapshotRequest {
 }
 
 /**
+ * One read of a ticket, as the task needs it: the bounded snapshot the row stores, and the
+ * **reporter** the row never stores (WP-79, PROGRESS backlog 243).
+ *
+ * The reporter is untrusted provider text (BD-022) and travels no further than
+ * {@link resolveRequester}, which turns it into a platform user id through `user_identities` or into
+ * nothing. It is not redacted, bounded or persisted because nothing here keeps it: the one thing that
+ * survives the read is a platform user id an operator mapped.
+ */
+export interface TicketRead {
+  readonly snapshot: TicketSnapshot;
+  readonly reporter: ExternalIdentity | null;
+}
+
+/**
  * Reads the ticket through the executor and bounds it, or answers `null`.
  *
  * `null` for every reason a ticket's text can be unavailable — no task-management binding, a
@@ -293,11 +324,11 @@ export interface TicketSnapshotRequest {
  * thread (standing rule 20). The absent snapshot is spelled `null` on the row and the next stage
  * tries again, so the failure is recoverable rather than permanent (standing rule 18).
  */
-export const readTicketSnapshot = async (
+export const readTicketForTask = async (
   options: TicketSnapshotOptions,
   request: TicketSnapshotRequest,
   integrations?: PipelineIntegrations,
-): Promise<TicketSnapshot | null> => {
+): Promise<TicketRead | null> => {
   const logger = options.logger ?? silentLogger;
   try {
     // Outside a run: nothing on this path holds a minted credential (Q55).
@@ -314,7 +345,10 @@ export const readTicketSnapshot = async (
     if (ticket === null) {
       return null;
     }
-    return boundTicketSnapshot(ticket, resolved.taskManagement.redactor);
+    return {
+      snapshot: boundTicketSnapshot(ticket, resolved.taskManagement.redactor),
+      reporter: ticket.reporter ?? null,
+    };
   } catch (error) {
     /**
      * **`TransactionOpenError` is not a provider failure and is rethrown** (review round 1).
@@ -346,7 +380,75 @@ export const readTicketSnapshot = async (
   }
 };
 
-export interface EnsureTicketSnapshotOptions extends TicketSnapshotOptions {
+/** {@link readTicketForTask}'s snapshot alone, for a caller with no use for the reporter. */
+export const readTicketSnapshot = async (
+  options: TicketSnapshotOptions,
+  request: TicketSnapshotRequest,
+  integrations?: PipelineIntegrations,
+): Promise<TicketSnapshot | null> =>
+  (await readTicketForTask(options, request, integrations))?.snapshot ?? null;
+
+/** What {@link resolveRequester} reads: the mapping an operator wrote, and a logger. */
+export interface RequesterOptions {
+  /**
+   * `user_identities`, read provider-account → platform user — the same collaborator the inbound
+   * normaliser and the reviewer routing are given (`InboundIdentityDirectory`). Required, because
+   * an absent directory is a resolver that always answers nobody (standing rule 31).
+   */
+  readonly identities: InboundIdentityDirectory;
+  readonly logger?: Logger;
+}
+
+/**
+ * The platform user a ticket's reporter is, or `null` — the only way a ticket names its requester
+ * (WP-79, PROGRESS backlog 243, the recommendation of backlog 92 (b)).
+ *
+ * **Only through `user_identities`**, keyed by the ticket's own provider and the reporter's
+ * provider-issued account id. Never by email, and never by display name: BD-022 and Q10 refuse a
+ * guessed identity for answering questions and approving plans, and being made a required
+ * reviewer is the same class of authority. So:
+ *
+ *  - no reporter, or a reporter whose `provider` is not the ticket's (an adapter inconsistency,
+ *    logged) → `null`;
+ *  - an account nobody mapped, or one an operator declared a **machine** (no `user_id`, WP-61) →
+ *    `null`, because the directory skips those rows;
+ *  - a directory that cannot be read → `null` with a warning. That is the fail-closed direction for
+ *    this column — `null` is what every task had before WP-79, and the routing says so by name —
+ *    and it keeps a database hiccup from failing an intake whose other half already succeeded
+ *    (standing rule 20: a requester is a better reviewer fallback, not a precondition of the task).
+ */
+export const resolveRequester = async (
+  options: RequesterOptions,
+  ticketProvider: string,
+  reporter: ExternalIdentity | null,
+): Promise<Id | null> => {
+  if (reporter === null) {
+    return null;
+  }
+  const logger = options.logger ?? silentLogger;
+  if (reporter.provider !== ticketProvider) {
+    logger.warn(
+      { ticket_provider: ticketProvider, reporter_provider: reporter.provider },
+      'the ticket reporter names a different provider from the ticket; no requester is resolved from it',
+    );
+    return null;
+  }
+  try {
+    const mapped = await options.identities.forProvider(ticketProvider);
+    return mapped.get(reporter.external_id) ?? null;
+  } catch (error) {
+    if (error instanceof TransactionOpenError) {
+      throw error;
+    }
+    logger.warn(
+      { ticket_provider: ticketProvider, err: error },
+      'the identity map could not be read; the task keeps no requester until a later read resolves one',
+    );
+    return null;
+  }
+};
+
+export interface EnsureTicketSnapshotOptions extends TicketSnapshotOptions, RequesterOptions {
   readonly store: PipelineStore;
   readonly unitOfWork: UnitOfWork;
 }
@@ -402,6 +504,10 @@ export const isTicketSnapshotStale = (stored: StoredTask): boolean => {
  *  - a re-read that fails **keeps** the stale snapshot rather than clearing it (standing rule 20:
  *    the words the ticket had are a better prompt than none), and the next stage tries again,
  *    because the signal is still newer than the snapshot.
+ *  - a re-read also fills a **missing requester** (WP-79, backlog 243): the reporter resolved
+ *    through {@link resolveRequester}, written by `saveRequester`, which never overwrites — so a
+ *    task whose intake read failed, or whose reporter was mapped after intake, gains the reviewer
+ *    fallback at its next re-read, and a task that already names somebody keeps them.
  */
 export const ensureTicketSnapshot = async (
   options: EnsureTicketSnapshotOptions,
@@ -413,18 +519,28 @@ export const ensureTicketSnapshot = async (
   }
   // The read's **start**, which is what the snapshot is as fresh as (see the module docblock).
   const readAt = options.clock.now() as IsoDateTime;
-  const snapshot = await readTicketSnapshot(options, {
+  const read = await readTicketForTask(options, {
     projectId: stored.task.projectId,
     taskId: stored.task.id,
     ticket: stored.task.ticket,
   });
-  if (snapshot === null) {
+  if (read === null) {
     return;
   }
+  // Outside the transaction, like the read: the directory is a pool query of its own. Only for a
+  // row that has no requester — `saveRequester` never overwrites, so asking for one it would
+  // refuse to write is a query for nothing (WP-79).
+  const requester =
+    stored.requestedByUserId === null
+      ? await resolveRequester(options, stored.task.ticket.provider, read.reporter)
+      : null;
   await options.unitOfWork.transaction(async (scope) => {
     const current = await options.store.tasks.load(scope.tx, taskId);
     if (current === null) {
       return;
+    }
+    if (requester !== null && current.requestedByUserId === null) {
+      await options.store.tasks.saveRequester(scope.tx, taskId, requester);
     }
     if (
       current.ticketSnapshotAt !== null &&
@@ -433,6 +549,6 @@ export const ensureTicketSnapshot = async (
       // Somebody else's read started no earlier than this one: theirs is at least as fresh.
       return;
     }
-    await options.store.tasks.saveTicketSnapshot(scope.tx, taskId, snapshot, readAt);
+    await options.store.tasks.saveTicketSnapshot(scope.tx, taskId, read.snapshot, readAt);
   });
 };

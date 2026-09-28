@@ -130,6 +130,20 @@ const EXPECTED_OWNERSHIP: Readonly<Record<string, readonly string[]>> = {
     // review window counted them (WP-46, migration 0048). The eighth narrow writer, same reason
     // again: the window is the `mr.comment.debounce` job, which runs beside the stage executor.
     'review_threads',
+    // `saveReadyHead` — the head the gates judged on the way into `ready_for_merge` (WP-79,
+    // migration 0056, backlog 267). Its **one** caller is `applyDecision`'s Ready entry
+    // (`packages/application/src/pipeline/transitions.ts`), inside the entry's own transaction;
+    // the `ready_head_check` duty reads it and never writes it.
+    'ready_head_sha',
+    // `saveCiHead` — the head the CI gate last passed (WP-79 review round 2, backlog 275). One
+    // caller: the gate settlement in `packages/application/src/pipeline/jobs.ts`; the rebase gate's
+    // settlement reads it before it lets a task into Ready.
+    'ci_head_sha',
+    // `saveRequester` — the column's first `update` (WP-79, backlog 243): the reporter a stage's
+    // ticket re-read resolved through `user_identities`, filled only while the row holds `null`.
+    // The other writer is the **insert** (discovery, a shadow batch, a bootstrap's chunk tasks and,
+    // since WP-79, intake), which this census does not read — see "What it reads" above.
+    'requested_by_user_id',
     // `addSpend` — the one column two *processes* write, and therefore the one whose statement is
     // an increment rather than an assignment (WP-31). It left `save`'s list with this row: the ask
     // executor adds a run's spend from a process that runs beside the stage executor, and the

@@ -230,6 +230,8 @@ export const startProjectDiscovery = async (
       dependencies: null,
       requiredReviewers: null,
       reviewThreads: null,
+      readyHeadSha: null,
+      ciHeadSha: null,
       // The person who started discovery — the requester product/19:138's third reviewer step
       // falls back to (WP-67, PROGRESS backlog 92). The route also records them in `human_actions`;
       // this is the column the routing reads.

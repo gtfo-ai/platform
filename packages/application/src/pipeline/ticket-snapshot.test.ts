@@ -27,7 +27,9 @@ import {
   MAX_TICKET_COMMENTS,
   MAX_TICKET_DESCRIPTION_CHARS,
   MAX_TICKET_TITLE_CHARS,
+  readTicketForTask,
   readTicketSnapshot,
+  resolveRequester,
   TICKET_SNAPSHOT_MAX_TEXT_CHARS,
 } from './ticket-snapshot.js';
 
@@ -295,6 +297,9 @@ const integrationsWith = (
 });
 
 /** Just enough `StoredTask` for {@link ensureTicketSnapshot}, which reads three fields. */
+/** `user_identities` with nobody in it — the shipped default on every instance. */
+const NO_IDENTITIES = { forProvider: async () => new Map<string, Id>() };
+
 const storedWith = (ticketSnapshot: TicketSnapshot | null): StoredTask =>
   ({
     task: { id: TASK, projectId: PROJECT, ticket: REF },
@@ -308,6 +313,7 @@ describe('reading the ticket', () => {
     integrations: staticPipelineIntegrations(integrations),
     clock: { now: () => '2026-06-01T09:00:00.000Z' },
     logger: silentLogger,
+    identities: NO_IDENTITIES,
   });
 
   it('returns the bounded snapshot when the provider answers', async () => {
@@ -478,6 +484,7 @@ describe('freshness (WP-60, Q61 (b))', () => {
         integrations: staticPipelineIntegrations(integrationsWith(readTicket)),
         clock: { now: () => READ_AT },
         logger: silentLogger,
+        identities: NO_IDENTITIES,
         unitOfWork: {
           transaction: async (work: (scope: { tx: unknown }) => Promise<unknown>) =>
             work({ tx: null }),
@@ -555,5 +562,147 @@ describe('freshness (WP-60, Q61 (b))', () => {
       stale,
     );
     expect(store.writes).toEqual([]);
+  });
+});
+
+/**
+ * WP-79, PROGRESS backlog 243 (backlog 92's half (b)): the ticket's reporter is the requester of a
+ * ticket-started task **only** through `user_identities`, never by email, and the provider account
+ * is never stored. Every case asserts the countable effect — the id, or the write — both ways
+ * (standing rule 42).
+ */
+describe('the requester, from the reporter (WP-79)', () => {
+  const USER = '00000000-0000-4000-8000-0000000000e9' as Id;
+  const REPORTER = {
+    provider: 'fake-jira',
+    external_id: 'acct-dana',
+    // An email is carried and **ignored**: a directory keyed by the same address must not match.
+    email: 'dana@example.test',
+    display_name: 'Dana',
+    verified: false,
+  };
+  const directory = (entries: Record<string, Record<string, Id>>) => ({
+    forProvider: async (provider: string) => new Map(Object.entries(entries[provider] ?? {})),
+  });
+
+  it('resolves a mapped reporter to the platform user, and an unmapped one to nobody', async () => {
+    const mapped = directory({ 'fake-jira': { 'acct-dana': USER } });
+    expect(await resolveRequester({ identities: mapped }, 'fake-jira', REPORTER)).toBe(USER);
+    expect(
+      await resolveRequester({ identities: mapped }, 'fake-jira', {
+        ...REPORTER,
+        external_id: 'acct-somebody-else',
+      }),
+    ).toBeNull();
+    expect(await resolveRequester({ identities: mapped }, 'fake-jira', null)).toBeNull();
+  });
+
+  it('never matches by email or display name', async () => {
+    // The directory maps the *email* and the *name* as if they were account ids; neither is the
+    // reporter's account, so nobody is resolved.
+    const byEmail = directory({
+      'fake-jira': { 'dana@example.test': USER, Dana: USER },
+    });
+    expect(await resolveRequester({ identities: byEmail }, 'fake-jira', REPORTER)).toBeNull();
+  });
+
+  it('refuses a reporter that names another provider than the ticket', async () => {
+    const mapped = directory({ 'fake-git': { 'acct-dana': USER }, 'fake-jira': {} });
+    expect(
+      await resolveRequester({ identities: mapped }, 'fake-jira', {
+        ...REPORTER,
+        provider: 'fake-git',
+      }),
+    ).toBeNull();
+  });
+
+  it('answers nobody, and does not throw, when the directory cannot be read', async () => {
+    const broken = {
+      forProvider: async () => {
+        throw new Error('connection terminated');
+      },
+    };
+    expect(await resolveRequester({ identities: broken }, 'fake-jira', REPORTER)).toBeNull();
+  });
+
+  it('carries the reporter out of the read beside the snapshot, and stores neither on the snapshot', async () => {
+    const read = await readTicketForTask(
+      {
+        integrations: staticPipelineIntegrations(
+          integrationsWith(async () => ticket({ reporter: REPORTER })),
+        ),
+        clock: { now: () => '2026-06-01T09:00:00.000Z' },
+        logger: silentLogger,
+      },
+      { projectId: PROJECT, taskId: TASK, ticket: REF },
+    );
+    expect(read?.reporter?.external_id).toBe('acct-dana');
+    expect(JSON.stringify(read?.snapshot)).not.toContain('acct-dana');
+  });
+
+  /** A row with no snapshot, so `ensureTicketSnapshot` reads, and a recorder of both writes. */
+  const rowWith = (requestedByUserId: Id | null) => {
+    let current = {
+      task: { id: TASK, projectId: PROJECT, ticket: REF },
+      ticketSnapshot: null,
+      ticketSnapshotAt: null,
+      ticketSignalAt: null,
+      requestedByUserId,
+    } as unknown as StoredTask;
+    const requesters: Id[] = [];
+    let lookups = 0;
+    const options = (entries: Record<string, Record<string, Id>>): EnsureTicketSnapshotOptions => ({
+      integrations: staticPipelineIntegrations(
+        integrationsWith(async () => ticket({ reporter: REPORTER })),
+      ),
+      clock: { now: () => '2026-06-01T09:00:00.000Z' },
+      logger: silentLogger,
+      identities: {
+        forProvider: async (provider: string) => {
+          lookups += 1;
+          return directory(entries).forProvider(provider);
+        },
+      },
+      unitOfWork: {
+        transaction: async (work: (scope: { tx: unknown }) => Promise<unknown>) =>
+          work({ tx: null }),
+      } as unknown as UnitOfWork,
+      store: {
+        tasks: {
+          load: async () => current,
+          saveTicketSnapshot: async () => undefined,
+          saveRequester: async (_tx: unknown, _id: Id, userId: Id) => {
+            requesters.push(userId);
+            current = { ...current, requestedByUserId: userId } as StoredTask;
+            return true;
+          },
+        },
+      } as unknown as EnsureTicketSnapshotOptions['store'],
+    });
+    return { current: () => current, requesters, lookups: () => lookups, options };
+  };
+
+  it('fills a missing requester when a stage re-reads the ticket and the reporter maps', async () => {
+    const row = rowWith(null);
+    await ensureTicketSnapshot(row.options({ 'fake-jira': { 'acct-dana': USER } }), row.current());
+    expect(row.requesters).toEqual([USER]);
+    expect(row.current().requestedByUserId).toBe(USER);
+  });
+
+  it('writes nothing when the reporter is unmapped, and asks nobody when the row already names somebody', async () => {
+    const unmapped = rowWith(null);
+    await ensureTicketSnapshot(unmapped.options({}), unmapped.current());
+    expect(unmapped.requesters).toEqual([]);
+    expect(unmapped.current().requestedByUserId).toBeNull();
+
+    const OTHER = '00000000-0000-4000-8000-0000000000ea' as Id;
+    const named = rowWith(OTHER);
+    await ensureTicketSnapshot(
+      named.options({ 'fake-jira': { 'acct-dana': USER } }),
+      named.current(),
+    );
+    expect(named.requesters).toEqual([]);
+    expect(named.lookups()).toBe(0);
+    expect(named.current().requestedByUserId).toBe(OTHER);
   });
 });

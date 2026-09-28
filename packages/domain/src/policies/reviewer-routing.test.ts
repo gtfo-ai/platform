@@ -5,7 +5,10 @@
  * exercise them in order: the document fixes an order, and a test that only ever supplies one input
  * cannot tell "CODEOWNERS won" from "there was nothing else".
  */
+import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+// The package's fixed fast-check seed (PROGRESS backlog 253) is set by importing this module.
+import { PROPERTY_TEST_TIMEOUT_MS } from '../testing/property.js';
 import { codeownersFor, resolveReviewerRouting } from './reviewer-routing.js';
 
 const rules = (lines: readonly [string, string[]][]) => ({
@@ -106,7 +109,8 @@ describe('resolveReviewerRouting', () => {
     expect(routing.source).toBe('codeowners');
     expect(routing.base).toEqual(['@platform']);
     expect(routing.required).toEqual(['@security']);
-    expect(routing.handles).toEqual(['@platform', '@security']);
+    // Required first since WP-79 (backlog 273), so the cap can never reach them.
+    expect(routing.handles).toEqual(['@security', '@platform']);
   });
 
   it('adds a class’s reviewers even when nothing else routed at all', () => {
@@ -123,6 +127,67 @@ describe('resolveReviewerRouting', () => {
     });
     expect(routing.handles).toEqual(['@security']);
   });
+
+  /**
+   * WP-79, PROGRESS backlog 273 — the defect as filed: a repository file (or `CODEOWNERS`) naming
+   * as many reviewers as the cap allows pushed a risk class's required reviewer off the list,
+   * because class reviewers were appended after the base list and the list was cut at the limit.
+   * Both directions (standing rule 42): the class reviewer is assigned, and the cut still happens —
+   * it drops a base handle, which is what `truncated` now reports.
+   */
+  it('assigns a class reviewer that a full base list used to truncate away', () => {
+    const eight = ['@r1', '@r2', '@r3', '@r4', '@r5', '@r6', '@r7', '@r8'];
+    for (const precedence of ['codeowners', 'configured'] as const) {
+      const routing = resolveReviewerRouting({
+        ...base,
+        [precedence]: eight,
+        classReviewers: ['@security'],
+        limit: 8,
+      });
+      expect(routing.handles, precedence).toContain('@security');
+      expect(routing.handles, precedence).toHaveLength(8);
+      expect(routing.truncated, precedence).toBe(true);
+      expect(routing.handles, precedence).not.toContain('@r8');
+    }
+  });
+
+  /**
+   * The rule itself, for **every** base list: `required ⊆ handles` whenever the classes' own
+   * reviewers fit under the cap, and the cap always holds. Seeded (`../testing/property.js`).
+   */
+  it(
+    'keeps every required reviewer for any base list, and never exceeds the limit',
+    () => {
+      const handle = fc.stringMatching(/^@[a-z]{1,6}$/);
+      fc.assert(
+        fc.property(
+          fc.array(handle, { maxLength: 20 }),
+          fc.array(handle, { maxLength: 20 }),
+          fc.option(handle, { nil: null }),
+          fc.array(handle, { maxLength: 8 }),
+          fc.integer({ min: 0, max: 12 }),
+          (codeowners, configured, requester, classReviewers, extra) => {
+            const required = [...new Set(classReviewers)];
+            const limit = required.length + extra;
+            const routing = resolveReviewerRouting({
+              codeowners,
+              configured,
+              requester,
+              classReviewers,
+              limit,
+            });
+            expect(routing.handles.length).toBeLessThanOrEqual(limit);
+            for (const reviewer of required) {
+              expect(routing.handles).toContain(reviewer);
+            }
+            expect(new Set(routing.handles).size).toBe(routing.handles.length);
+          },
+        ),
+        { numRuns: 300 },
+      );
+    },
+    PROPERTY_TEST_TIMEOUT_MS,
+  );
 
   it('cuts at the limit and says it cut, in both directions (standing rule 42)', () => {
     const three = ['@a', '@b', '@c'];

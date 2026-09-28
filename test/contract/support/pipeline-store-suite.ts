@@ -140,6 +140,8 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       dependencies: null,
       requiredReviewers: null,
       reviewThreads: null,
+      readyHeadSha: null,
+      ciHeadSha: null,
       requestedByUserId: null,
       version: INITIAL_TASK_VERSION,
       ...overrides,
@@ -214,6 +216,58 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         const none = task({}, 'ACME-NO-DIAL');
         await store.tasks.insert(tx, none);
         expect((await store.tasks.load(tx, none.task.id))?.pipelineDial).toBeNull();
+      });
+
+      /**
+       * WP-79: the insert names `requested_by_user_id`. Until then the PostgreSQL statement did not,
+       * so WP-67's three writers (discovery, a shadow batch, a bootstrap's chunk tasks) wrote the
+       * requester only in the in-memory store — a fake kinder than the database (standing rule 1),
+       * and nothing here asked.
+       */
+      it('round-trips the requester the creating site named, and null when it named nobody', async () => {
+        const asked = task({ requestedByUserId: userId }, 'ACME-REQUESTED');
+        await store.tasks.insert(tx, asked);
+        expect((await store.tasks.load(tx, asked.task.id))?.requestedByUserId).toBe(userId);
+        const nobody = task({}, 'ACME-NOBODY');
+        await store.tasks.insert(tx, nobody);
+        expect((await store.tasks.load(tx, nobody.task.id))?.requestedByUserId).toBeNull();
+      });
+
+      it('fills a missing requester and never overwrites one (WP-79, saveRequester)', async () => {
+        const unnamed = task({}, 'ACME-FILL');
+        await store.tasks.insert(tx, unnamed);
+        await expect(store.tasks.saveRequester(tx, unnamed.task.id, userId)).resolves.toBe(true);
+        expect((await store.tasks.load(tx, unnamed.task.id))?.requestedByUserId).toBe(userId);
+        // A second fill, by somebody else, moves nothing.
+        await expect(store.tasks.saveRequester(tx, unnamed.task.id, otherUserId)).resolves.toBe(
+          false,
+        );
+        expect((await store.tasks.load(tx, unnamed.task.id))?.requestedByUserId).toBe(userId);
+        // …and a requester the insert wrote is kept the same way.
+        const named = task({ requestedByUserId: otherUserId }, 'ACME-KEEP');
+        await store.tasks.insert(tx, named);
+        await expect(store.tasks.saveRequester(tx, named.task.id, userId)).resolves.toBe(false);
+        expect((await store.tasks.load(tx, named.task.id))?.requestedByUserId).toBe(otherUserId);
+        await expect(store.tasks.saveRequester(tx, nextId(), userId)).rejects.toThrow();
+      });
+
+      it('writes the ready head narrowly: never by the insert, never by save (WP-79)', async () => {
+        const HEAD = 'b'.repeat(40);
+        const stored = task({ readyHeadSha: 'f'.repeat(40) }, 'ACME-READY-HEAD');
+        await store.tasks.insert(tx, stored);
+        // A row is born with none, whatever the caller's snapshot carried.
+        expect((await store.tasks.load(tx, stored.task.id))?.readyHeadSha).toBeNull();
+        await store.tasks.saveReadyHead(tx, stored.task.id, HEAD);
+        const loaded = await store.tasks.load(tx, stored.task.id);
+        expect(loaded?.readyHeadSha).toBe(HEAD);
+        // No version bump: `save` does not name the column, so a snapshot read before it still saves.
+        expect(loaded?.version).toBe(stored.version);
+        // …and a whole-row save carrying another value does not move it.
+        await store.tasks.save(tx, { ...stored, readyHeadSha: 'e'.repeat(40) });
+        expect((await store.tasks.load(tx, stored.task.id))?.readyHeadSha).toBe(HEAD);
+        await store.tasks.saveReadyHead(tx, stored.task.id, null);
+        expect((await store.tasks.load(tx, stored.task.id))?.readyHeadSha).toBeNull();
+        await expect(store.tasks.saveReadyHead(tx, nextId(), HEAD)).rejects.toThrow();
       });
 
       it('saves the state, the stage, the attempts and the counters', async () => {

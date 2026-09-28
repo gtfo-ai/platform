@@ -195,8 +195,10 @@ export interface ProviderRegistration<TType extends IntegrationType> {
   /**
    * Config keys only the **account** (`integrations.config`) may set — a binding write that names
    * one is refused (WP-73b, PROGRESS backlog 201). Slack's `socket_mode` is the one: the held
-   * connection reads the account's value, so a binding's copy could only disagree with it. Must
-   * exist in `configSchema`, checked at registration like `secretFields`. Absent is none.
+   * connection reads the account's value, so a binding's copy could only disagree with it. A row
+   * stored before that refusal keeps its key, so since WP-79 (backlog 268) the binding repository
+   * also **drops** a stored binding's copy on read (`accountOnlyFieldsOf`, `overlayBindingConfig`).
+   * Must exist in `configSchema`, checked at registration like `secretFields`. Absent is none.
    */
   readonly accountOnlyFields?: readonly string[];
   create(input: ProviderCreateInput): IntegrationPortByType[TType];

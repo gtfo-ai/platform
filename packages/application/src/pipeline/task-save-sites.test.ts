@@ -91,6 +91,13 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
  * exhausted bound to `escalateTaskAfterConflict` — whose ending is the same state this one wanted.
  * The question and approval expiries write **no** task row: they expire their own aggregate and the
  * saga escalates on the event, inside the handler transaction `EventBus` owns.
+ *
+ * **WP-79 adds no site, and says why.** The `ready_head_check` duty (`ready-head.ts`) moves the task
+ * through `applyDecision` inside `jobs.ts`'s exported `inTaskTransaction`, so it has the job's retry
+ * and ending and no `save` of its own; the two columns WP-79 writes (`ready_head_sha`,
+ * `requested_by_user_id`'s fill) are narrow statements `save` does not name, held by
+ * `tasks-column-ownership.test.ts` instead of here. The resume and hand-back into Ready now write
+ * nothing but the hand-back's event, so `commands.ts` keeps its four.
  */
 const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
   ['packages/application/src/pipeline/commands.ts', 4],

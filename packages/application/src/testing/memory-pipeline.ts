@@ -264,8 +264,18 @@ export const createMemoryPipelineStore = (
       // `ticketSignalAt` is not the insert's (WP-60): the SQL insert does not name the column, so a
       // row is born with none whatever the caller's snapshot carried — and a fake that kept it would
       // answer a question PostgreSQL cannot be asked (standing rule 1). `reviewThreads` is the same
-      // case (WP-46): only `saveReviewThreads` writes the column.
-      tasks.set(stored.task.id, clone({ ...stored, ticketSignalAt: null, reviewThreads: null }));
+      // case (WP-46): only `saveReviewThreads` writes the column, and so is `readyHeadSha` (WP-79):
+      // only `saveReadyHead` writes it, so a row is born with none.
+      tasks.set(
+        stored.task.id,
+        clone({
+          ...stored,
+          ticketSignalAt: null,
+          reviewThreads: null,
+          readyHeadSha: null,
+          ciHeadSha: null,
+        }),
+      );
     },
     /**
      * The same columns the SQL `update tasks set …` names, and the same optimistic check (WP-15e).
@@ -273,7 +283,7 @@ export const createMemoryPipelineStore = (
      * Written as a projection of `current` rather than as `clone(stored)` on purpose: the fields it
      * does **not** list (`workpad`, `ticketSnapshot`, `ticketSnapshotAt`, `reviewSubject`,
      * `riskClasses` (WP-37), `coverage` (WP-39), `dependencies` and `requiredReviewers` (WP-38),
-     * `reviewThreads` (WP-46),
+     * `reviewThreads` (WP-46), `readyHeadSha` and `ciHeadSha` (WP-79),
      * `costActualUsd` (WP-31: `addSpend` owns it),
      * `estimateUsd`, `estimateBasis`, `estimateSamples`, `priorityRank`, `createdAt`, `template`,
      * `pipelineDial` (WP-62)) belong to the narrow writers — or, for `reviewSubject` and
@@ -410,6 +420,33 @@ export const createMemoryPipelineStore = (
       // (WP-37): the rebase gate is re-entered on every default-branch move, and a class the merge
       // request no longer touches has to leave the row.
       tasks.set(taskId, clone({ ...current, riskClasses: [...classes] }));
+    },
+    saveReadyHead: async (_tx, taskId, headSha) => {
+      const current = tasks.get(taskId);
+      if (current === undefined) {
+        throw new PipelineStoreError(`task ${taskId} does not exist`);
+      }
+      // Only this field, and `null` as readily as a head — the SQL adapter's statement (WP-79).
+      tasks.set(taskId, clone({ ...current, readyHeadSha: headSha }));
+    },
+    saveCiHead: async (_tx, taskId, headSha) => {
+      const current = tasks.get(taskId);
+      if (current === undefined) {
+        throw new PipelineStoreError(`task ${taskId} does not exist`);
+      }
+      tasks.set(taskId, clone({ ...current, ciHeadSha: headSha }));
+    },
+    saveRequester: async (_tx, taskId, userId) => {
+      const current = tasks.get(taskId);
+      if (current === undefined) {
+        throw new PipelineStoreError(`task ${taskId} does not exist`);
+      }
+      // Fill, never overwrite — the SQL's `where requested_by_user_id is null` (WP-79).
+      if (current.requestedByUserId !== null) {
+        return false;
+      }
+      tasks.set(taskId, clone({ ...current, requestedByUserId: userId }));
+      return true;
     },
     saveCoverage: async (_tx, taskId, coverage) => {
       const current = tasks.get(taskId);

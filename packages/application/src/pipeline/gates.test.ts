@@ -31,7 +31,7 @@ import { allowAnyIntegrationHost } from '../integrations/egress.js';
 import { exactSecretRedactor } from '../integrations/redaction.js';
 import type { GitProviderPort, PipelineStatus } from '../ports/integrations/git-provider.js';
 import { createMemoryAuditLog, createVirtualTimer } from '../testing/memory-integrations.js';
-import { createGateEvaluator } from './gates.js';
+import { createGateEvaluator, rebaseAgainstCi } from './gates.js';
 import type { PipelineIntegrations } from './integrations.js';
 import { staticPipelineIntegrations } from './integrations.js';
 import type { StoredTask } from './store.js';
@@ -167,6 +167,8 @@ const storedTask = (mr: StoredTask['mr']): StoredTask => ({
   dependencies: null,
   requiredReviewers: null,
   reviewThreads: null,
+  readyHeadSha: null,
+  ciHeadSha: null,
   requestedByUserId: null,
   pipelineDial: null,
   ticketSnapshotAt: null,
@@ -217,6 +219,7 @@ describe('the CI gate', () => {
     // because a gate that says "not passed" with an empty account is a task nobody can triage.
     expect(result).toEqual({
       kind: 'settled',
+      headSha: HEAD_SHA,
       passed: false,
       // The failure's stable identity, for product/04 S4's convergence on this path too (WP-60).
       ciSignature: `ci:failed:test:e2e,test:unit@${HEAD_SHA}`,
@@ -231,6 +234,7 @@ describe('the CI gate', () => {
     // No job reports `failed`, so there are no names to give: the status is the whole account.
     expect(result).toEqual({
       kind: 'settled',
+      headSha: HEAD_SHA,
       passed: false,
       // The failure's stable identity, for product/04 S4's convergence on this path too (WP-60).
       ciSignature: `ci:canceled:@${HEAD_SHA}`,
@@ -246,6 +250,7 @@ describe('the CI gate', () => {
     // shape product/04 S4 lets pass without a run.
     expect(result).toEqual({
       kind: 'settled',
+      headSha: HEAD_SHA,
       passed: false,
       // The failure's stable identity, for product/04 S4's convergence on this path too (WP-60).
       ciSignature: `ci:skipped:@${HEAD_SHA}`,
@@ -263,6 +268,7 @@ describe('the CI gate', () => {
     });
     expect(result).toEqual({
       kind: 'settled',
+      headSha: HEAD_SHA,
       passed: false,
       // The failure's stable identity, for product/04 S4's convergence on this path too (WP-60).
       ciSignature: `ci:failed:test:unit@${HEAD_SHA}`,
@@ -302,6 +308,7 @@ describe('the CI gate', () => {
     });
     expect(result).toEqual({
       kind: 'settled',
+      headSha: HEAD_SHA,
       passed: false,
       ciSignature: `ci:failed:@${HEAD_SHA}`,
       detail: 'pipeline pipeline-1 failed',
@@ -314,6 +321,7 @@ describe('the CI gate', () => {
     });
     expect(result).toEqual({
       kind: 'settled',
+      headSha: HEAD_SHA,
       passed: true,
       detail: 'pipeline pipeline-1 succeeded',
     });
@@ -363,6 +371,59 @@ describe('the CI gate', () => {
     });
     expect(asked).toEqual(['c'.repeat(40)]);
     expect(result).toEqual({ kind: 'pending', detail: 'pipeline pipeline-1 is running' });
+  });
+});
+
+/**
+ * WP-79 (backlog 267): the rebase gate names the head its merge-request read carried, because a
+ * settlement that enters `ready_for_merge` records it as `tasks.ready_head_sha` — the head a later
+ * resume or hand-back into Ready is compared with. Both verdicts carry it: a conflict is a judgement
+ * of that head too.
+ */
+describe('the head the rebase gate judged (WP-79)', () => {
+  it('carries the live head on a clean and on a conflicted merge request', async () => {
+    const moved = 'c'.repeat(40);
+    const clean = await evaluate(templateStage('rebase_gate'), storedTask(MR), {
+      getMergeRequest: async () => liveMergeRequest(moved, false),
+    });
+    expect(clean).toMatchObject({ kind: 'settled', passed: true, headSha: moved });
+    const conflicted = await evaluate(templateStage('rebase_gate'), storedTask(MR), {
+      getMergeRequest: async () => liveMergeRequest(moved, true),
+    });
+    expect(conflicted).toMatchObject({ kind: 'settled', passed: false, headSha: moved });
+  });
+});
+
+/** WP-79 review round 2 (backlog 275): Ready only for the head CI passed. */
+describe('rebaseAgainstCi', () => {
+  const feature = compilePipeline('feature', FEATURE_TEMPLATE, null);
+  const pushed = 'c'.repeat(40);
+
+  it('agrees for exactly the head CI passed', () => {
+    expect(rebaseAgainstCi(feature, HEAD_SHA, HEAD_SHA)).toEqual({ kind: 'agree' });
+  });
+
+  it('sends a different head, no CI-passed head, or no rebase head back to CI', () => {
+    expect(rebaseAgainstCi(feature, HEAD_SHA, pushed)).toMatchObject({
+      kind: 'reenter_ci',
+      reason: expect.stringContaining('moved since CI passed'),
+    });
+    expect(rebaseAgainstCi(feature, null, HEAD_SHA)).toMatchObject({ kind: 'reenter_ci' });
+    expect(rebaseAgainstCi(feature, HEAD_SHA, undefined)).toMatchObject({ kind: 'reenter_ci' });
+  });
+
+  it('agrees on a template that does not run the CI gate, which has nothing to agree with', () => {
+    const noCi = compilePipeline(
+      'feature',
+      {
+        ...FEATURE_TEMPLATE,
+        stages: FEATURE_TEMPLATE.stages.map((stage) =>
+          stage.id === 'ci_gate' ? { ...stage, enabled: false } : stage,
+        ),
+      },
+      null,
+    );
+    expect(rebaseAgainstCi(noCi, null, pushed)).toEqual({ kind: 'agree' });
   });
 });
 

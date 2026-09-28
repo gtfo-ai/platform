@@ -31,6 +31,7 @@ import {
   secrets as secretAdapters,
 } from '@platform/infrastructure';
 import {
+  accountOnlyFieldsOf,
   createInboundIntegrationLoader,
   createIntegrationRegistry,
   gitlabProviderRegistration,
@@ -82,7 +83,7 @@ const legacyDelivery = (iid: number, token = WEBHOOK_SECRET_TOKEN) => ({
 const ingressFor = () =>
   createWebhookIngress({
     loader: createInboundIntegrationLoader({
-      repository: secretAdapters.createPostgresBindingRepository(pool),
+      repository: secretAdapters.createPostgresBindingRepository(pool, accountOnlyFieldsOf),
       secrets: secretAdapters.createPostgresSecretStore({
         sql: pool,
         key: secretAdapters.deriveSecretKey(SECRET_KEY),

@@ -126,6 +126,7 @@ import {
 } from '@platform/infrastructure';
 import type { IntegrationRegistry } from '@platform/integrations';
 import {
+  accountOnlyFieldsOf,
   createBoundSkillsReader,
   createInboundIntegrationLoader,
   createOrganisationIntegrationsLoader,
@@ -530,7 +531,7 @@ export interface ComposeWebhookIngressOptions {
 export const composeWebhookIngress = (options: ComposeWebhookIngressOptions): WebhookIngress =>
   createWebhookIngress({
     loader: createInboundIntegrationLoader({
-      repository: secretAdapters.createPostgresBindingRepository(options.pool),
+      repository: secretAdapters.createPostgresBindingRepository(options.pool, accountOnlyFieldsOf),
       secrets: secretAdapters.createPostgresSecretStore({
         sql: options.pool,
         key: secretAdapters.deriveSecretKey(options.secretKey),
@@ -746,7 +747,7 @@ export const createProjectIntegrationsPort = (options: {
   readonly stack: IntegrationStack;
 }): PipelineIntegrationsPort =>
   createPipelineIntegrationsLoader({
-    repository: secretAdapters.createPostgresBindingRepository(options.pool),
+    repository: secretAdapters.createPostgresBindingRepository(options.pool, accountOnlyFieldsOf),
     secrets: secretAdapters.createPostgresSecretStore({
       sql: options.pool,
       key: secretAdapters.deriveSecretKey(options.secretKey),
@@ -1060,7 +1061,10 @@ export const composePipeline = async (
          * command patterns it brings.
          */
         boundSkills: createBoundSkillsReader({
-          repository: secretAdapters.createPostgresBindingRepository(options.pool),
+          repository: secretAdapters.createPostgresBindingRepository(
+            options.pool,
+            accountOnlyFieldsOf,
+          ),
           logger: options.logger,
         }),
         /**

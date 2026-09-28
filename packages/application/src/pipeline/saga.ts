@@ -94,7 +94,7 @@ import {
 } from './settings.js';
 import type { PipelineStore, StoredTask } from './store.js';
 import { INITIAL_TASK_VERSION, PIPELINE_ACTOR } from './store.js';
-import { readTicketSnapshot } from './ticket-snapshot.js';
+import { type RequesterOptions, readTicketForTask, resolveRequester } from './ticket-snapshot.js';
 import { applyDecision, closeParkedStageRow, ESCALATED_OUTCOME } from './transitions.js';
 import { reviewFindingSignature, verdictReturnReason } from './verdicts.js';
 import { statusMappingHandler, workpadHandler } from './workpad.js';
@@ -303,7 +303,7 @@ const intakeHandler = (options: PipelineSagaOptions): EventHandler => ({
 });
 
 /** What {@link runIntakeCheck} needs beyond the saga's own collaborators. */
-export interface IntakeCheckOptions extends PipelineSagaOptions {
+export interface IntakeCheckOptions extends PipelineSagaOptions, RequesterOptions {
   readonly unitOfWork: UnitOfWork;
 }
 
@@ -398,10 +398,23 @@ export const runIntakeCheck = async (
   // provider answers is then dated after the snapshot, and the next agent stage re-reads it
   // (`isTicketSnapshotStale`), where the read's end would have hidden it for the rest of the task.
   const ticketSnapshotReadAt = options.clock.now() as IsoDateTime;
-  const ticketSnapshot = await readTicketSnapshot(
+  const ticketRead = await readTicketForTask(
     options,
     { projectId, taskId: null, ticket },
     integrations,
+  );
+  const ticketSnapshot = ticketRead?.snapshot ?? null;
+  /**
+   * **Who asked for this task** — the ticket's reporter, when an operator has mapped their account
+   * (WP-79, PROGRESS backlog 243). Resolved here, outside the transaction, for the reason the read
+   * above is: the directory is a pool query of its own. Only through `user_identities`; an
+   * unmapped reporter, a machine account or a failed read leaves `null`, which is the routing's
+   * named *"there is no fallback"* (`resolveRequester` has the rules).
+   */
+  const requestedByUserId = await resolveRequester(
+    options,
+    ticket.provider,
+    ticketRead?.reporter ?? null,
   );
 
   /**
@@ -489,11 +502,11 @@ export const runIntakeCheck = async (
       dependencies: null,
       requiredReviewers: null,
       reviewThreads: null,
-      // Not written at intake: a ticket the pick-up rule matched was not requested by anybody the
-      // platform can name yet. Its reporter is the candidate, resolved only through
-      // `user_identities` and never by an email match — PROGRESS backlog 92's half (b), which
-      // WP-67 did not build (`StoredTask.requestedByUserId` says what that costs the fallback).
-      requestedByUserId: null,
+      readyHeadSha: null,
+      ciHeadSha: null,
+      // The reporter's platform user, resolved above through `user_identities` and never by an
+      // email match (WP-79, backlog 92's half (b)); `null` when nobody mapped the account.
+      requestedByUserId,
     };
     await options.store.tasks.insert(scope.tx, stored);
 

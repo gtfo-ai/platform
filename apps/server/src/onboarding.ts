@@ -64,7 +64,7 @@ import {
   secrets as secretAdapters,
 } from '@platform/infrastructure';
 import type { IntegrationProber, IntegrationRegistry } from '@platform/integrations';
-import { createIntegrationProber } from '@platform/integrations';
+import { accountOnlyFieldsOf, createIntegrationProber } from '@platform/integrations';
 import type pg from 'pg';
 import { injectedSecretRedactorForEnvironment } from './agent.js';
 import { createProjectSettingsPort } from './pipeline.js';
@@ -151,7 +151,7 @@ export class OnboardingUnavailableError extends Error {
 export const createOnboardingCommands = (options: OnboardingCommandOptions): OnboardingCommands => {
   const ids = { next: (): Id => randomUUID() as Id };
   const prober: IntegrationProber = createIntegrationProber({
-    repository: secretAdapters.createPostgresBindingRepository(options.pool),
+    repository: secretAdapters.createPostgresBindingRepository(options.pool, accountOnlyFieldsOf),
     secrets: secretAdapters.createPostgresSecretStore({
       sql: options.pool,
       key: secretAdapters.deriveSecretKey(options.secretKey),

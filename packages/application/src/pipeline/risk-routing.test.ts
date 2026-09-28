@@ -440,8 +440,9 @@ describe('reviewer routing (product/19:138, WP-37)', () => {
 
     expect(await riskClasses(started.harness)).toEqual(['auth']);
     // product/19:138: classes **add** required reviewers rather than replace them. The two disagree
-    // here on purpose.
-    expect(started.assigned).toEqual([['4242', '7']]);
+    // here on purpose. The class's reviewer comes first since WP-79 (backlog 273), so no base list
+    // can push it past the cap.
+    expect(started.assigned).toEqual([['7', '4242']]);
   });
 
   it('never removes a reviewer a human added to the merge request', async () => {
@@ -466,9 +467,9 @@ describe('reviewer routing (product/19:138, WP-37)', () => {
   });
 
   it('assigns nobody on a project with no CODEOWNERS, no reviewers and no mapped requester', async () => {
-    // The shipped default, and the one an operator meets first: a ticket intake picked up names no
-    // requester (`tasks.requested_by_user_id` is written only by the three commands that hold an
-    // actor, WP-67) and `user_identities` is empty (PROGRESS backlog 79), so step three finds nobody.
+    // The shipped default, and the one an operator meets first: `user_identities` is empty
+    // (PROGRESS backlog 79), so the ticket's reporter maps to nobody and intake names no requester
+    // (WP-79 resolves it only through that map), and step three finds nobody.
     const started = startHarness({});
     await started.harness.publish([ticketMatched()]);
 

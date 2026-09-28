@@ -3063,8 +3063,11 @@ describe('the endings no stage decides (WP-46 review round 1, backlog 212)', () 
       summary: 'CI is green on my machine',
     });
     await harness.drain();
-    expect(gateRows(harness)).toEqual([[1, 'failed', 'left']]);
-    expect(openRows(harness)).not.toContain('ci_gate');
+    // Attempt 1 is closed `left` by the hand-back's entry, which is this case's point. Since WP-79
+    // review round 2 there is an attempt 2: CI never passed a head of this branch (the human skipped
+    // it), so the rebase gate sent the task back to `ci_gate` before Ready (backlog 275).
+    expect(gateRows(harness)[0]).toEqual([1, 'failed', 'left']);
+    expect(gateRows(harness).map(([attempt]) => attempt)).toEqual([1, 2]);
   });
 
   it('closes the paused attempt when the task is resumed', async () => {
@@ -3270,5 +3273,77 @@ describe('the review window’s threads (WP-46, backlogs 159 and 95)', () => {
     await harness.publish([ticketMatched()]);
     expect(taskOf(harness).task.state).toBe('ready_for_merge');
     expect(taskOf(harness).reviewThreads).toBeNull();
+  });
+});
+
+/**
+ * WP-79, PROGRESS backlog 243 — intake names the requester from the ticket's reporter, **only**
+ * through `user_identities`, and leaves `null` for an unmapped one (backlog 92's half (b)). The
+ * countable effect is `tasks.requested_by_user_id`, both ways (standing rule 42), and the third case
+ * is the self-healing half: an intake whose read failed is filled by the stage's re-read through the
+ * narrow `saveRequester`.
+ */
+describe('the requester, from the ticket reporter (WP-79)', () => {
+  const REQUESTER = '00000000-0000-4000-8000-0000000000e9';
+  const reporting = (calls: { count: number } = { count: 0 }, failFirst = 0) => ({
+    readTicket: async (ref: { provider: string; key: string; url: string }) => {
+      calls.count += 1;
+      if (calls.count <= failFirst) {
+        throw new Error('the ticket system is unreachable');
+      }
+      return {
+        ref,
+        issue_type: 'Story',
+        title: 'Show the totals in the invoice footer',
+        description: 'The footer sums the visible rows.',
+        status: 'To Do',
+        priority: null,
+        labels: [],
+        comments: [],
+        links: [],
+        epic: null,
+        siblings: [],
+        attachments_text: [],
+        assignee: null,
+        reporter: {
+          provider: TICKET.provider,
+          external_id: 'acct-dana',
+          email: 'dana@example.test',
+          display_name: 'Dana',
+          verified: false,
+        },
+        updated_at: '2026-06-01T09:00:00.000Z',
+      };
+    },
+  });
+
+  it('writes the reporter’s platform user when an operator mapped the account', async () => {
+    const harness = harnessWith({
+      taskManagement: reporting(),
+      askIdentities: { [TICKET.provider]: { 'acct-dana': REQUESTER } },
+    });
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).requestedByUserId).toBe(REQUESTER);
+  });
+
+  it('leaves the requester null when nobody mapped the reporter — and never matches the email', async () => {
+    const harness = harnessWith({
+      taskManagement: reporting(),
+      // The reporter's email and display name as "account ids": neither is the reporter's account.
+      askIdentities: { [TICKET.provider]: { 'dana@example.test': REQUESTER, Dana: REQUESTER } },
+    });
+    await harness.publish([ticketMatched()]);
+    expect(taskOf(harness).requestedByUserId).toBeNull();
+  });
+
+  it('fills the requester at the first stage when intake could not read the ticket', async () => {
+    const calls = { count: 0 };
+    const harness = harnessWith({
+      taskManagement: reporting(calls, 1),
+      askIdentities: { [TICKET.provider]: { 'acct-dana': REQUESTER } },
+    });
+    await harness.publish([ticketMatched()]);
+    expect(calls.count).toBeGreaterThan(1);
+    expect(taskOf(harness).requestedByUserId).toBe(REQUESTER);
   });
 });

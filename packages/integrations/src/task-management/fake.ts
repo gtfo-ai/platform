@@ -121,6 +121,12 @@ export interface FakeTicketSeed {
   readonly siblings?: readonly { key: string; title: string; state: string }[];
   readonly links?: readonly TicketLink[];
   readonly attachmentsText?: readonly string[];
+  /**
+   * The provider account that filed the ticket (WP-79) — answered as `Ticket.reporter`, with the
+   * email and display name of a seeded identity of the same id, and **`verified: false`** as the
+   * Jira adapter answers it (only the platform's mapping can verify an account). Absent is `null`.
+   */
+  readonly reporter?: string;
 }
 
 export interface FakeIdentitySeed {
@@ -163,6 +169,7 @@ interface StoredTicket {
   epic: { key: string; title: string; description: string } | null;
   siblings: { key: string; title: string; state: string }[];
   attachments_text: string[];
+  reporter: string | null;
   updated_at: string;
 }
 
@@ -324,6 +331,7 @@ export const createFakeTaskManagement = (
       epic: seed.epic ? { ...seed.epic } : null,
       siblings: [...(seed.siblings ?? [])].map((sibling) => ({ ...sibling })),
       attachments_text: [...(seed.attachmentsText ?? [])],
+      reporter: seed.reporter ?? null,
       updated_at: core.clock.now(),
     });
     return { provider: PROVIDER, key: seed.key, url: ticketUrl(seed.key) };
@@ -366,7 +374,8 @@ export const createFakeTaskManagement = (
       siblings: snapshot(stored.siblings),
       attachments_text: [...stored.attachments_text],
       assignee: null,
-      reporter: null,
+      reporter:
+        stored.reporter === null ? null : { ...identityOf(stored.reporter), verified: false },
       updated_at: stored.updated_at,
     });
 

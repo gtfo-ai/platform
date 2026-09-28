@@ -574,6 +574,8 @@ export const runTicketLintCheck = async (
       dependencies: null,
       requiredReviewers: null,
       reviewThreads: null,
+      readyHeadSha: null,
+      ciHeadSha: null,
       requestedByUserId: null,
     };
     await options.store.tasks.insert(scope.tx, stored);

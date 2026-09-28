@@ -186,15 +186,36 @@ export interface StoredTask {
    *
    * **Written by the three commands that hold the actor** (WP-67, PROGRESS backlog 92): discovery
    * (`onboarding/discovery.ts`), a shadow batch (`shadow/batch.ts`) and a history bootstrap's chunk
-   * tasks (`bootstrap/collect.ts`, from the batch's `requested_by`). Every other creation site
-   * writes `null`, and each says why: intake's task comes from a ticket a rule matched (its reporter
-   * is backlog 92's half (b), unbuilt), review-only and the ticket linter are started by a provider
-   * delivery rather than a person, and the maintenance scheduler is the platform's own. `null`
-   * makes the fallback resolve to nobody, and the routing says so by name instead of assigning
-   * silently; a user id still needs a `user_identities` row for the provider to reach an account
-   * (backlog 79).
+   * tasks (`bootstrap/collect.ts`, from the batch's `requested_by`) — **and, since WP-79 (backlog
+   * 243), for a ticket-started task, from the ticket's reporter**: intake's insert writes the
+   * reporter's platform user, resolved only through `user_identities` and never by an email match
+   * (`resolveRequester` in `ticket-snapshot.ts`), and {@link TaskRepository.saveRequester} fills a
+   * `null` when a later stage re-reads the ticket. An unmapped reporter stays `null`, and the
+   * provider account itself is never stored here. The other creation sites write `null` and each
+   * says why: review-only and the ticket linter are started by a provider delivery rather than a
+   * person, and the maintenance scheduler is the platform's own. `null` makes the fallback resolve
+   * to nobody, and the routing says so by name instead of assigning silently; a user id still
+   * needs a `user_identities` row on the **git** provider for the routing to reach an account.
    */
   readonly requestedByUserId: Id | null;
+  /**
+   * The branch head the platform's gates judged on the way into `ready_for_merge` (WP-79,
+   * migration 0056, PROGRESS backlog 267).
+   *
+   * Written only by {@link TaskRepository.saveReadyHead}, from `applyDecision`'s entry into Ready:
+   * the gate settlement's head, the ready-head check's head when it found the branch unmoved, and
+   * `null` for every other entry — so the value always describes the **latest** Ready entry. `null`
+   * is *"no gate judged a head"* (a template with its gates disabled, a row older than the column),
+   * which the `ready_head_check` duty reads exactly like a moved head.
+   */
+  readonly readyHeadSha: string | null;
+  /**
+   * The head the CI gate judged when it last settled — `null` when it failed, has not run, or the
+   * row predates the column (WP-79 review round 2, migration 0056, PROGRESS backlog 275). Written
+   * only by {@link TaskRepository.saveCiHead} from the gate settlement; read by the rebase gate's
+   * settlement, which lets a task into Ready only for the head CI passed.
+   */
+  readonly ciHeadSha: string | null;
   /**
    * The ticket's own words as the platform read them once (WP-15f, migration 0015).
    *
@@ -441,6 +462,41 @@ export interface TaskRepository {
    * @throws when the task does not exist, like `save` and the other narrow writes.
    */
   saveRiskClasses(tx: Transaction, taskId: Id, classes: readonly string[]): Promise<void>;
+  /**
+   * Writes **only** `ready_head_sha` — the head the gates judged on the way into Ready (WP-79,
+   * migration 0056).
+   *
+   * One caller: `applyDecision`'s entry into `ready_for_merge`, inside the entry's own transaction,
+   * right after the aggregate's `save`. Narrow rather than a column of `save` because the ruling
+   * that created it asked for one writer, and a `save` column has thirty-odd. No version bump:
+   * `save` does not name the column. `null` is written as readily as a head, so an entry that
+   * judged nothing never inherits an earlier entry's head.
+   *
+   * @throws when the task does not exist, like `save` and the other narrow writes.
+   */
+  saveReadyHead(tx: Transaction, taskId: Id, headSha: string | null): Promise<void>;
+  /**
+   * Writes **only** `ci_head_sha` — the head a CI gate settlement passed, or `null` for a failed
+   * one (WP-79 review round 2). One caller: the gate settlement in `jobs.ts`, inside its own
+   * transaction. No version bump: `save` does not name the column.
+   *
+   * @throws when the task does not exist.
+   */
+  saveCiHead(tx: Transaction, taskId: Id, headSha: string | null): Promise<void>;
+  /**
+   * Fills `requested_by_user_id` when it is still `null` — the column's first `update` writer
+   * (WP-79, PROGRESS backlog 243).
+   *
+   * Called by `ensureTicketSnapshot` when a stage re-reads a ticket whose reporter maps to a
+   * platform user. **Fill, never overwrite**: the statement is `… where requested_by_user_id is
+   * null`, so a requester a command wrote at the insert (discovery, a shadow batch) or intake
+   * resolved is never replaced by a later read. Narrow because it runs in the `stage.execute` job
+   * beside the stage executor (standing rule 79); no version bump, because `save` does not name the
+   * column. Answers whether the row moved.
+   *
+   * @throws when the task does not exist.
+   */
+  saveRequester(tx: Transaction, taskId: Id, userId: Id): Promise<boolean>;
   /**
    * Moves `ticket_signal_at` forward on every **live** task of one ticket — the ninth narrow writer
    * (WP-60, Q61 (b)).

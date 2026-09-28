@@ -128,7 +128,8 @@ export const createSlackRegistration = (deps: SlackRegistrationDeps): SlackProvi
     // which key holds it. `digest_channel` falls back to `channel` in the loader, not here.
     communicationChannels: { channel: 'channel', digestChannel: 'digest_channel' },
     // WP-73b, backlog 201: the transport is the account's (`inboundConnection.selected` reads the
-    // account's config), so a binding may not carry its own `socket_mode`.
+    // account's config), so a binding may not carry its own `socket_mode` — refused at the write,
+    // and dropped from a row stored before that refusal on read (WP-79, backlog 268).
     accountOnlyFields: ['socket_mode'],
     /**
      * Socket Mode as a held inbound connection (WP-43): selected by `socket_mode`, which defaults to

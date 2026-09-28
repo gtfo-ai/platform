@@ -5,7 +5,7 @@
  * WP-28 declined backlog 72 (b) with a measurement: a compile step that reads the dial changes
  * `compilePipeline`'s signature at every call site, *"which several of them are in no position to
  * do (the interpreter is pure, and two of those sites are inside a transaction the settings port
- * must not be asked from)"*. That was fifteen sites on the day; it is **twenty-four** on this one,
+ * must not be asked from)"*. That was fifteen sites on the day; it is **twenty-five** on this one,
  * which is why the number lives here, produced by the test, rather than in a sentence (standing
  * rule 63).
  *
@@ -60,6 +60,10 @@ const EXPECTED_SITES: Readonly<Record<string, { readonly sites: number; readonly
   'packages/application/src/pipeline/stage-executor.ts': {
     sites: 1,
     how: "the `stage.execute` job's revalidation: the loaded row's `stored.pipelineDial`",
+  },
+  'packages/application/src/pipeline/ready-head.ts': {
+    sites: 1,
+    how: "inside the `ready_head_check` duty's own transaction (WP-79): the re-loaded row's `current.pipelineDial` — so the gate a human's new commits re-enter is one the dial left enabled",
   },
   'packages/application/src/pipeline/ci-settle.ts': {
     sites: 1,
@@ -199,9 +203,9 @@ describe('the `compilePipeline` call-site census (WP-62, criterion 4)', () => {
     expect(counts).toEqual(expected);
   });
 
-  it('counts twenty-four — fifteen when WP-28 measured it — and states how each resolves the dial', () => {
+  it('counts twenty-five — fifteen when WP-28 measured it, twenty-four before WP-79 — and states how each resolves the dial', () => {
     const total = [...census().values()].reduce((sum, calls) => sum + calls.length, 0);
-    expect(total).toBe(24);
+    expect(total).toBe(25);
     for (const [file, entry] of Object.entries(EXPECTED_SITES)) {
       expect(entry.how.length, file).toBeGreaterThan(20);
     }

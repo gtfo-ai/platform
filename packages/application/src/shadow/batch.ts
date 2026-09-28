@@ -351,6 +351,8 @@ export const startShadowBatch = async (
         dependencies: null,
         requiredReviewers: null,
         reviewThreads: null,
+        readyHeadSha: null,
+        ciHeadSha: null,
         // The maintainer who started the batch (WP-67, PROGRESS backlog 92). A shadow task assigns
         // nobody on the provider whatever this says — its writes are `would_have` — but the row
         // records who asked, like every task a person starts.

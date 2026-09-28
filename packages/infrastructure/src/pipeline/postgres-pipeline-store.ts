@@ -136,6 +136,8 @@ interface TaskRow extends Record<string, unknown> {
   required_reviewers: TaskReviewers | null;
   review_threads: TaskReviewThreads | null;
   requested_by_user_id: string | null;
+  ready_head_sha: string | null;
+  ci_head_sha: string | null;
   version: number;
   created_at: Date;
   sequence: string | number | null;
@@ -149,7 +151,7 @@ const TASK_COLUMNS = `t.id, t.project_id, t.ticket_provider, t.ticket_key, t.tic
     t.ticket_snapshot, t.ticket_snapshot_at, t.ticket_signal_at, t.review_subject, t.history_sample,
     t.risk_classes, t.coverage,
     t.dependencies, t.required_reviewers, t.review_threads,
-    t.requested_by_user_id, t.version,
+    t.requested_by_user_id, t.ready_head_sha, t.ci_head_sha, t.version,
     t.created_at,
     (select max(e.stream_seq) from events e where e.stream_type = 'task' and e.stream_id = t.id)
       as sequence`;
@@ -201,6 +203,8 @@ const toStoredTask = (row: TaskRow, template: PipelineTemplate): StoredTask => (
   requiredReviewers: row.required_reviewers,
   reviewThreads: row.review_threads,
   requestedByUserId: (row.requested_by_user_id ?? null) as Id | null,
+  readyHeadSha: row.ready_head_sha ?? null,
+  ciHeadSha: row.ci_head_sha ?? null,
   version: Number(row.version),
 });
 
@@ -389,10 +393,10 @@ export const createPostgresPipelineStore = (
                             workpad_ref, stage_attempts, iteration_limits, iteration_counters,
                             cost_actual, estimate_usd, estimate_basis, estimate_samples,
                             ticket_snapshot, ticket_snapshot_at, review_subject, history_sample,
-                            version, pipeline_dial)
+                            version, pipeline_dial, requested_by_user_id)
          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13::jsonb, $14::jsonb,
                  $15::jsonb, $16::jsonb, $17::jsonb, $18, $19, $20, $21, $22::jsonb, $23, $24::jsonb,
-                 $25::jsonb, $26, $27::jsonb)`,
+                 $25::jsonb, $26, $27::jsonb, $28)`,
         [
           task.id,
           task.projectId,
@@ -435,6 +439,12 @@ export const createPostgresPipelineStore = (
           // WP-62: written here and nowhere else — the dial the task starts under, frozen for
           // `template_snapshot`'s reason (migration 0049 has the argument).
           stored.pipelineDial === null ? null : JSON.stringify(stored.pipelineDial),
+          // WP-79: the requester the creating site named — a command's actor (discovery, a shadow
+          // batch, a bootstrap's chunk tasks) or the reporter intake resolved. Until WP-79 this
+          // column was **not in this statement**, so WP-67's three writers wrote it only in the
+          // in-memory store and every PostgreSQL row read `null` (the contract suite now asserts
+          // the round trip). `saveRequester` is its only other writer.
+          stored.requestedByUserId,
         ],
       );
     },
@@ -596,6 +606,59 @@ export const createPostgresPipelineStore = (
       if (result.rowCount === 0) {
         throw new PipelineRowMissingError(`task ${taskId} does not exist`);
       }
+    },
+
+    /**
+     * `ready_head_sha` — the head the gates judged on the way into Ready (WP-79, migration 0056).
+     * One column, one statement, `null` as readily as a head, and no version bump: `save` does not
+     * name the column (the partition `tasks-column-ownership.test.ts` holds).
+     */
+    saveReadyHead: async (tx, taskId, headSha) => {
+      const result = await sqlOf(tx).query(
+        'update tasks set ready_head_sha = $2, updated_at = now() where id = $1',
+        [taskId, headSha],
+      );
+      if (result.rowCount === 0) {
+        throw new PipelineRowMissingError(`task ${taskId} does not exist`);
+      }
+    },
+
+    /**
+     * `ci_head_sha` — the head the CI gate last passed (WP-79 review round 2, migration 0056). One
+     * column, one statement, no version bump.
+     */
+    saveCiHead: async (tx, taskId, headSha) => {
+      const result = await sqlOf(tx).query(
+        'update tasks set ci_head_sha = $2, updated_at = now() where id = $1',
+        [taskId, headSha],
+      );
+      if (result.rowCount === 0) {
+        throw new PipelineRowMissingError(`task ${taskId} does not exist`);
+      }
+    },
+
+    /**
+     * `requested_by_user_id` — **fill, never overwrite** (WP-79, PROGRESS backlog 243).
+     *
+     * The predicate is the rule: a requester the insert wrote (a command's actor, or the reporter
+     * intake resolved) is never replaced by a later read. A row that is already filled answers
+     * `false` rather than throwing, so the distinction between "filled" and "missing" is made by a
+     * second query only when nothing moved.
+     */
+    saveRequester: async (tx, taskId, userId) => {
+      const result = await sqlOf(tx).query(
+        `update tasks set requested_by_user_id = $2, updated_at = now()
+          where id = $1 and requested_by_user_id is null`,
+        [taskId, userId],
+      );
+      if ((result.rowCount ?? 0) > 0) {
+        return true;
+      }
+      const exists = await sqlOf(tx).query('select 1 from tasks where id = $1', [taskId]);
+      if (exists.rowCount === 0) {
+        throw new PipelineRowMissingError(`task ${taskId} does not exist`);
+      }
+      return false;
     },
 
     /**

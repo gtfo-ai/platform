@@ -263,7 +263,7 @@ error naming the transition, not as a silent no-op — and each accepted one lea
 | Command | Who | What it does |
 |---|---|---|
 | **Pause** | member | stops the task from entering another stage |
-| **Resume** | member | lets it continue. A task paused while it waited for its merge goes back to waiting for it; merging the merge request on the git provider while it is paused ends the pause, and the retrospective runs as for any merge |
+| **Resume** | member | lets it continue. A task paused while it waited for its merge goes back to waiting for it — if its branch still has the commit the platform's gates judged; if somebody pushed while it was paused, it goes back through the CI gate first, and it reads *paused* for the moment the platform takes to check (WP-79); merging the merge request on the git provider while it is paused ends the pause, and the retrospective runs as for any merge |
 | **Cancel** | maintainer | ends the task; it enters no further stage |
 | **Retry stage** | member | runs the current stage again, optionally with a reason. Costs a run |
 | **Return to stage** | maintainer | sends the task back to an earlier stage; a reason is required. Costs an iteration of the loop |
@@ -325,7 +325,14 @@ and this build does not do that yet. It is never drawn as an empty tick that rea
   run executing in the `runner` container keeps going (section 5; PROGRESS backlog 134); a take-over
   recorded before WP-73 names the run it *infers* and says so
   — and **Hand back**, whose stage list is the task's own pipeline, so it offers nothing the platform
-  would refuse. A task you took over and have not handed back moves to needing a human after
+  would refuse. Handing back to **Ready for merge** does not skip the checks: when the branch is not
+  the commit the platform's gates judged — you pushed, or the platform cannot read it — the task
+  re-enters the CI gate and walks through review and the rebase gate to Ready again, spending none of
+  its iteration limits; only an unchanged branch goes straight back to waiting (WP-79). Handing back
+  at a review stage or the rebase gate after a push does not skip CI either: the rebase gate lets a
+  task into Ready only for the commit CI passed, and otherwise sends it back through the CI gate — a
+  re-check that counts against the task's `rebase_rechecks` limit, so a branch that keeps moving
+  after CI ends up with a human rather than looping. A task you took over and have not handed back moves to needing a human after
   **5 working days without a command from you** — any command you issue on the task (a pause, an
   answer, feedback, a question) restarts the count; somebody else's does not, and neither does a push
   to the branch, because this build does not yet record who pushed. It stays yours when it escalates: the

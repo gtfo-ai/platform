@@ -47,7 +47,8 @@
  * advanced to code review on red CI. This is a guard, and an untested guard fails open in silence.
  */
 import { isBuiltinGateStageId } from '@platform/contracts';
-import type { PipelineStage } from '@platform/domain';
+import type { CompiledPipeline, PipelineStage } from '@platform/domain';
+import { stageOf } from '@platform/domain';
 import type { PipelineIntegrationsPort } from './integrations.js';
 import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
 import type { StoredTask } from './store.js';
@@ -64,6 +65,15 @@ export type GateResult =
        * round.
        */
       readonly ciSignature?: string;
+      /**
+       * The branch head the gate read — the live head the CI gate asked the pipeline status of, or
+       * the one the rebase gate's merge-request read carried (WP-79). The settlement records the CI
+       * gate's as `tasks.ci_head_sha`, and a rebase head as `tasks.ready_head_sha` when it moves
+       * the task into `ready_for_merge` — only if it is the head CI passed (`rebaseAgainstCi`,
+       * review round 2), because a rebase read judges mergeability, not the commits. That is what a
+       * later resume or hand-back into Ready is compared with. Absent when the gate read no head.
+       */
+      readonly headSha?: string;
     }
   /** The answer is not available yet; ask again after `retryInMs`. */
   | { readonly kind: 'pending'; readonly detail: string }
@@ -85,6 +95,57 @@ export const ciFailureSignature = (
   failingJobs: readonly string[],
   headSha: string,
 ): string => `ci:${status}:${[...failingJobs].sort().join(',')}@${headSha}`;
+
+/** The CI gate's stage id on every shipped ticket template. */
+export const CI_GATE_STAGE = 'ci_gate' as const;
+
+/**
+ * **Does the rebase gate's head agree with the head CI passed?** (WP-79 review round 2, PROGRESS
+ * backlog 275.)
+ *
+ * The rebase gate is the last thing a task passes before Ready, and the head it read is what Ready
+ * records as judged (`tasks.ready_head_sha`). Before this it recorded that head whether or not CI
+ * had ever run on it: a push between the CI settlement and the rebase evaluation (the review stages
+ * run in between — backlog 275's race), or a human handing a task back at `code_review` or
+ * `rebase_gate` after pushing, reached Ready with a head CI never judged — and every later resume
+ * trusted it. So the settlement asks this first, and on a template that runs `ci_gate`:
+ *
+ *  - the rebase head equals `tasks.ci_head_sha` (written by the CI settlement) → agree;
+ *  - otherwise — a different head, no CI-passed head, or a rebase read that named no head → CI
+ *    must judge again (`reenter_ci`).
+ *
+ * A template that does not run `ci_gate` has nothing to agree with, and passes as before. Pure, so
+ * each branch is unit-tested (`gates.test.ts`); `jobs.ts`'s settlement acts on it.
+ */
+export const rebaseAgainstCi = (
+  pipeline: CompiledPipeline,
+  ciHeadSha: string | null,
+  rebaseHead: string | undefined,
+): { readonly kind: 'agree' } | { readonly kind: 'reenter_ci'; readonly reason: string } => {
+  const ci = stageOf(pipeline, CI_GATE_STAGE);
+  if (ci === null || !ci.enabled || ci.kind !== 'gate') {
+    return { kind: 'agree' };
+  }
+  if (rebaseHead === undefined) {
+    return {
+      kind: 'reenter_ci',
+      reason: 'the rebase gate read no head commit, so CI judges the branch again',
+    };
+  }
+  if (ciHeadSha === null) {
+    return {
+      kind: 'reenter_ci',
+      reason: 'CI has not passed a head of this branch, so it judges the branch before Ready',
+    };
+  }
+  if (ciHeadSha !== rebaseHead) {
+    return {
+      kind: 'reenter_ci',
+      reason: 'the branch head moved since CI passed it, so CI judges the new commits before Ready',
+    };
+  }
+  return { kind: 'agree' };
+};
 
 /** How many times a gate may answer `pending` before the task is parked for a human. */
 export const MAX_GATE_CHECKS = 5;
@@ -186,12 +247,18 @@ export const createGateEvaluator = (integrations: PipelineIntegrationsPort): Gat
           return {
             kind: 'settled',
             passed: true,
+            headSha,
             detail:
               'the project has no pipeline for this commit; the local test run is the evidence',
           };
         }
         if (CI_TERMINAL_PASS.has(status.status)) {
-          return { kind: 'settled', passed: true, detail: `pipeline ${status.id} succeeded` };
+          return {
+            kind: 'settled',
+            passed: true,
+            headSha,
+            detail: `pipeline ${status.id} succeeded`,
+          };
         }
         if (CI_TERMINAL_FAIL.has(status.status)) {
           const failed = status.jobs
@@ -200,6 +267,7 @@ export const createGateEvaluator = (integrations: PipelineIntegrationsPort): Gat
           return {
             kind: 'settled',
             passed: false,
+            headSha,
             ciSignature: ciFailureSignature(status.status, failed, headSha),
             detail:
               failed.length === 0
@@ -230,15 +298,20 @@ export const createGateEvaluator = (integrations: PipelineIntegrationsPort): Gat
       if (mr.has_conflicts === null || mr.has_conflicts === undefined) {
         return { kind: 'pending', detail: 'the provider has not computed mergeability yet' };
       }
+      // The head this read carried, when the provider named one (WP-79): what Ready is entered with.
+      const rebaseHead = mr.ref.head_sha ?? null;
+      const judged = rebaseHead === null ? {} : { headSha: rebaseHead };
       return mr.has_conflicts
         ? {
             kind: 'settled',
             passed: false,
+            ...judged,
             detail: `merge request !${mr.ref.iid} conflicts with ${mr.target_branch}`,
           }
         : {
             kind: 'settled',
             passed: true,
+            ...judged,
             detail: `merge request !${mr.ref.iid} applies cleanly to ${mr.target_branch}`,
           };
     },

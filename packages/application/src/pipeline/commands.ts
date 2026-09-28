@@ -48,7 +48,9 @@ import {
   isBefore,
   isTaskFinished,
   MERGED_GATE_STAGE,
+  markReadyForMerge,
   pauseTask,
+  READY_FOR_MERGE_STAGE,
   recordFeedback,
   resetAgentIterations,
   stageOf,
@@ -63,7 +65,13 @@ import type { Logger } from '../ports/logger.js';
 import type { RunTakeOverExport } from '../ports/runner.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
-import { enqueueOutbound, enqueueStage, type PipelineOutboundData } from './jobs.js';
+import {
+  enqueueOutbound,
+  enqueueReadyHeadCheck,
+  enqueueStage,
+  type PipelineOutboundData,
+  type ReadyHeadCheckData,
+} from './jobs.js';
 import type { LiveRun, LiveRuns } from './live-runs.js';
 import type { StageExecutionJob } from './stage-executor.js';
 import type { PipelineStore, StoredRun, StoredTask } from './store.js';
@@ -484,11 +492,16 @@ const requireJobs = (deps: HumanCommandDependencies): Jobs => {
   return deps.jobs;
 };
 
-/** The work a command left for after the commit, with the overrides that belong to this attempt. */
-interface ScheduledWork {
-  readonly job: StageExecutionJob;
-  readonly overrides?: { readonly model?: string; readonly effort?: Effort };
-}
+/**
+ * The work a command left for after the commit: a stage job (with the overrides that belong to this
+ * attempt), or — for a human's way into `ready_for_merge` (WP-79) — the `ready_head_check` wake-up.
+ */
+type ScheduledWork =
+  | {
+      readonly job: StageExecutionJob;
+      readonly overrides?: { readonly model?: string; readonly effort?: Effort };
+    }
+  | { readonly readyCheck: ReadyHeadCheckData };
 
 /**
  * One transaction, on {@link retryOnTaskConflict}'s bound, with the follow-up enqueued after it.
@@ -518,13 +531,52 @@ const writeTask = async <T>(
         return unit(scope, stored, humanContext(deps, stored.task.id, input.userId));
       }),
   );
-  if (outcome.work !== null) {
+  const work = outcome.work;
+  if (work !== null && 'readyCheck' in work) {
+    await enqueueReadyHeadCheck(requireJobs(deps), work.readyCheck);
+  } else if (work !== null) {
     await enqueueStage(requireJobs(deps), {
-      ...outcome.work.job,
-      ...(outcome.work.overrides === undefined ? {} : { overrides: outcome.work.overrides }),
+      ...work.job,
+      ...(work.overrides === undefined ? {} : { overrides: work.overrides }),
     });
   }
   return outcome.result;
+};
+
+/**
+ * **The one way a human command enters a stage** (WP-79 review round 1) — and for
+ * `ready_for_merge` it does not enter it at all.
+ *
+ * Every other stage is entered through {@link applyHumanDecision} as before. Ready is judged by the
+ * branch head (PROGRESS backlog 267): the aggregate is asked whether the move is legal — a dry run
+ * of `markReadyForMerge`, discarded, so a refused edge is still the command's 409 — nothing is
+ * written, and the `ready_head_check` duty is left for after the commit (`ready-head.ts`), which
+ * enters Ready for the head the gates judged and re-enters `ci_gate` otherwise. Resume, retry-stage,
+ * retry-run and hand-back all come through here; {@link applyHumanDecisionRecorded} refuses a Ready
+ * entry that did not, so a new command that forgets is a 500 in its first test rather than a side
+ * door.
+ */
+const humanEnter = async (
+  deps: HumanCommandDependencies,
+  scope: TransactionScope,
+  stored: StoredTask,
+  context: CommandContext,
+  entry: {
+    readonly stage: Slug;
+    readonly via: ReadyHeadCheckData['via'];
+    readonly userId: Id;
+    readonly cause: string | null;
+  },
+): Promise<ScheduledWork | null> => {
+  if (entry.stage === READY_FOR_MERGE_STAGE) {
+    markReadyForMerge(stored.task, context);
+    return { readyCheck: readyHeadCheckFor(stored, entry) };
+  }
+  const job = await applyHumanDecision(deps, scope, stored, context, {
+    kind: 'enter',
+    stage: entry.stage,
+  });
+  return job === null ? null : { job };
 };
 
 /**
@@ -559,6 +611,14 @@ const applyHumanDecisionRecorded = async (
   readonly work: StageExecutionJob | null;
   readonly events: readonly { readonly id: string }[];
 }> => {
+  if (decision.kind === 'enter' && decision.stage === READY_FOR_MERGE_STAGE) {
+    // WP-79 review round 1: the census of human ways into Ready, enforced here rather than listed.
+    // A human command enters Ready only through `humanEnter`, which never gets this far with it.
+    throw new InvariantViolationError(
+      'human entry into ready_for_merge',
+      `a human command tried to enter ready_for_merge for task ${stored.task.id} directly; it must go through the ready_head_check duty (humanEnter)`,
+    );
+  }
   const applied = await applyDecision({
     store: deps.store,
     pipeline: compilePipeline(stored.task.template, stored.template, stored.pipelineDial),
@@ -659,10 +719,16 @@ export const pauseTaskCommand = async (
  * re-entered by `return-to-stage`.
  *
  * The state machine is what refuses the rest: `paused → active` exists, and so, since WP-73
- * (PROGRESS backlog 244), does `paused → ready_for_merge` — a task paused while waiting for a merge
- * resumes waiting for it, with a `task.resumed` and no stage job, since nothing runs at Ready. A
- * move the table does not have is a `409` naming the transition rather than a silent no-op.
- * (`paused → returned` is **not** an edge, so `return-to-stage` is no way out of a pause.)
+ * (PROGRESS backlog 244), does `paused → ready_for_merge`. A move the table does not have is a
+ * `409` naming the transition rather than a silent no-op. (`paused → returned` is **not** an edge,
+ * so `return-to-stage` is no way out of a pause.)
+ *
+ * **A task paused at `ready_for_merge` is not moved here** (WP-79, PROGRESS backlog 267). A pause
+ * at Ready may be a take-over, and the human may have pushed: so the command asks the aggregate
+ * whether the move is legal (a dry run of `markReadyForMerge`, discarded — the same 409 as before),
+ * writes nothing, and hands the decision to the `ready_head_check` duty after the commit, which
+ * compares the branch's live head with the head the gates judged and either enters Ready or
+ * re-enters `ci_gate` (`ready-head.ts`). The task therefore reads `paused` until the duty runs.
  */
 export const resumeTaskCommand = async (
   deps: HumanCommandDependencies,
@@ -674,11 +740,38 @@ export const resumeTaskCommand = async (
     { ...input, what: 'resuming the task' },
     async (scope, stored, context) => {
       const stage = currentStageOrThrow(stored, 'resume');
-      const work = await applyHumanDecision(deps, scope, stored, context, { kind: 'enter', stage });
-      return { result: undefined, work: work === null ? null : { job: work } };
+      const work = await humanEnter(deps, scope, stored, context, {
+        stage,
+        via: 'resume',
+        userId: input.userId,
+        cause: null,
+      });
+      return { result: undefined, work };
     },
   );
 };
+
+/**
+ * The wake-up a human's way into `ready_for_merge` leaves for the `ready_head_check` duty (WP-79):
+ * the state and stage the command saw, which the duty re-validates against, and the person.
+ */
+const readyHeadCheckFor = (
+  stored: StoredTask,
+  input: {
+    readonly via: ReadyHeadCheckData['via'];
+    readonly userId: Id;
+    readonly cause: string | null;
+  },
+): ReadyHeadCheckData => ({
+  duty: 'ready_head_check',
+  project_id: stored.task.projectId,
+  task_id: stored.task.id,
+  via: input.via,
+  expected_state: stored.task.state,
+  expected_stage: stored.task.currentStage ?? READY_FOR_MERGE_STAGE,
+  user_id: input.userId,
+  cause_event_id: input.cause,
+});
 
 /**
  * `POST /api/tasks/:task_id/cancel` — the human ends the task (product/04: cancellable at any point).
@@ -735,11 +828,14 @@ export const retryStageCommand = async (
     if (stored.task.currentStage !== input.stage) {
       throw new StageNotCurrentError(input.stage, stored.task.currentStage);
     }
-    const work = await applyHumanDecision(deps, scope, stored, context, {
-      kind: 'enter',
+    // At `ready_for_merge` this is the ready-head check, not an entry (WP-79 review round 1).
+    const work = await humanEnter(deps, scope, stored, context, {
       stage: input.stage,
+      via: 'retry_stage',
+      userId: input.userId,
+      cause: null,
     });
-    return { result: undefined, work: work === null ? null : { job: work } };
+    return { result: undefined, work };
   });
 };
 
@@ -1187,13 +1283,20 @@ export const retryRunCommand = async (
       if (stored.task.currentStage !== stage) {
         throw new StageNotCurrentError(stage, stored.task.currentStage);
       }
-      const work = await applyHumanDecision(deps, scope, stored, context, { kind: 'enter', stage });
+      // A run's stage is never `ready_for_merge` on a shipped template (nothing runs at Ready), but
+      // the entry goes through `humanEnter` all the same, so a custom template cannot make it one.
+      const work = await humanEnter(deps, scope, stored, context, {
+        stage,
+        via: 'retry_run',
+        userId: input.userId,
+        cause: null,
+      });
       return {
         result: undefined,
         work:
-          work === null
-            ? null
-            : { job: work, ...(Object.keys(overrides).length === 0 ? {} : { overrides }) },
+          work === null || 'readyCheck' in work
+            ? work
+            : { ...work, ...(Object.keys(overrides).length === 0 ? {} : { overrides }) },
       };
     },
   );
@@ -1472,6 +1575,12 @@ export const takeOverTaskCommand = async (
  * **Nothing is reset and nothing is exported.** The iteration counters stand (`handBackTask`'s own
  * note has the argument), and the workspace export the take-over produced is left where it is: a
  * hand-back re-provisions from the **branch**, which is where the human's work now is.
+ *
+ * **Except into `ready_for_merge`** (WP-79, PROGRESS backlog 267): that target is not entered
+ * here at all. The hand-back is recorded and the `ready_head_check` duty enters Ready only for the
+ * head the gates judged, re-entering `ci_gate` otherwise — see `ready-head.ts`. That covers the
+ * take-over at Ready this entry was filed for and the wider door beside it: a hand-back into Ready
+ * from an `active` task, which `active → ready_for_merge` let skip both gates.
  */
 export const handBackTaskCommand = async (
   deps: HumanCommandDependencies,
@@ -1528,15 +1637,17 @@ export const handBackTaskCommand = async (
       );
       // Appended before the entry's own events, because that is the order they happened in and
       // `stream_seq` is chained through `decision.aggregate`: the hand-back, then the stage.
+      // Into `ready_for_merge` this appends the hand-back and leaves the ready-head check for after
+      // the commit (WP-79, backlog 267: the human pushed, so Ready is entered only for the head the
+      // gates judged — `humanEnter`); the check re-validates against the state the command saw.
       await scope.events.append(decision.events);
-      const work = await applyHumanDecision(
-        deps,
-        scope,
-        { ...stored, task: decision.aggregate },
-        context,
-        { kind: 'enter', stage: input.stage },
-      );
-      return { result: undefined, work: work === null ? null : { job: work } };
+      const work = await humanEnter(deps, scope, { ...stored, task: decision.aggregate }, context, {
+        stage: input.stage,
+        via: 'hand_back',
+        userId: input.userId,
+        cause: decision.events[0]?.id ?? null,
+      });
+      return { result: undefined, work };
     },
   );
 };

@@ -31,6 +31,7 @@ import type { DomainEvent, Id, Slug, TaskStageOutcome } from '@platform/contract
 import type {
   CommandContext,
   CompiledPipeline,
+  IterationLoop,
   PipelineDecision,
   PipelineSignal,
   Task,
@@ -40,7 +41,9 @@ import {
   completeTask,
   enterStage,
   escalateTask,
+  evaluateIteration,
   IllegalTransitionError,
+  incrementIteration,
   LIBRARIAN_STAGE,
   MERGED_GATE_STAGE,
   markReadyForMerge,
@@ -139,6 +142,31 @@ export interface ApplyOptions {
    * caller does not say. Read only when the decision escalates; see {@link closeParkedStageRow}.
    */
   readonly escalationOutcome?: TaskStageOutcome;
+  /**
+   * The branch head a gate judged, recorded as `tasks.ready_head_sha` **if** this decision enters
+   * `ready_for_merge` (WP-79, PROGRESS backlog 267) — the gate settlement's head, or the
+   * `ready_head_check` duty's when it found the branch unmoved. Every entry into Ready writes the
+   * column, `null` when this is absent, so the value always describes the latest entry; every other
+   * move ignores it. `enter` below is the column's one writer.
+   */
+  readonly readyHeadSha?: string | null;
+  /**
+   * The `task.resumed` reason when this decision takes a stopped task into an **agent or gate**
+   * stage (`enterStage`'s `resumeReason`) — the `ready_head_check` duty's sentence for re-entering
+   * `ci_gate` from a pause at Ready (WP-79). Absent is `null` on the event, as before.
+   */
+  readonly resumeReason?: string;
+  /**
+   * A bounded loop an **entry** spends without being a return (WP-79 review round 2): the rebase
+   * gate's re-entry of `ci_gate` for a head CI never passed spends `rebase_rechecks`. Checked and
+   * spent together in {@link enter}, so a counter never passes its limit: a spent loop escalates the
+   * task with `spentBrief` instead of entering. Absent is no loop, as before.
+   */
+  readonly spendLoop?: {
+    readonly loop: IterationLoop;
+    readonly reason: string;
+    readonly spentBrief: string;
+  };
 }
 
 /**
@@ -435,6 +463,21 @@ const enter = async (options: ApplyOptions, stage: Slug): Promise<AppliedDecisio
     return { stored: await store.tasks.save(tx, next), events: finished.events, work: null };
   }
 
+  const spend = options.spendLoop;
+  if (spend !== undefined) {
+    const iteration = evaluateIteration(
+      stored.task.iterationCounters,
+      spend.loop,
+      stored.task.limits,
+    );
+    if (!iteration.allowed) {
+      return applyEscalation(
+        options,
+        `${spend.loop} iteration limit of ${iteration.limit} reached: ${spend.reason}`,
+        spend.spentBrief,
+      );
+    }
+  }
   const command = enterCommand(stage);
   const decision =
     command === null
@@ -443,6 +486,7 @@ const enter = async (options: ApplyOptions, stage: Slug): Promise<AppliedDecisio
           {
             stage,
             ...(stored.task.state === 'queued' ? { dequeueReason: 'wip' as const } : {}),
+            ...(options.resumeReason === undefined ? {} : { resumeReason: options.resumeReason }),
           },
           context,
         )
@@ -467,7 +511,13 @@ const enter = async (options: ApplyOptions, stage: Slug): Promise<AppliedDecisio
 
   const entered = stageOf(options.pipeline, stage);
   const events = [...decision.events];
-  let task = decision.aggregate;
+  let task =
+    spend === undefined
+      ? decision.aggregate
+      : {
+          ...decision.aggregate,
+          iterationCounters: incrementIteration(decision.aggregate.iterationCounters, spend.loop),
+        };
 
   if (entered?.kind === 'system') {
     // A system stage is bookkeeping: it completes the moment it is entered, in the same
@@ -488,8 +538,20 @@ const enter = async (options: ApplyOptions, stage: Slug): Promise<AppliedDecisio
   }
 
   const next = { ...stored, task };
+  let saved = await store.tasks.save(tx, next);
+  if (stage === READY_FOR_MERGE_STAGE) {
+    /**
+     * **The head the task entered Ready with** (WP-79, PROGRESS backlog 267) — the one write of
+     * `tasks.ready_head_sha`, in the entry's own transaction and after the aggregate's `save`
+     * (narrow, no version bump). `null` when the caller judged no head, so an entry that judged
+     * nothing never inherits an earlier entry's head; `ready-head.ts` is the reader.
+     */
+    const readyHeadSha = options.readyHeadSha ?? null;
+    await store.tasks.saveReadyHead(tx, stored.task.id, readyHeadSha);
+    saved = { ...saved, readyHeadSha };
+  }
   return {
-    stored: await store.tasks.save(tx, next),
+    stored: saved,
     events,
     work:
       entered?.kind === 'agent' || entered?.kind === 'gate'

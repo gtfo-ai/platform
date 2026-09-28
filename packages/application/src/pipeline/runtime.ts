@@ -252,7 +252,14 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
     ...(logger === undefined ? {} : { logger }),
   });
 
-  const jobOptions: PipelineJobOptions = { ...options, unitOfWork, executor };
+  const jobOptions: PipelineJobOptions = {
+    ...options,
+    unitOfWork,
+    executor,
+    // WP-79: the stage-start ticket re-read fills a missing requester from the reporter, through
+    // the same identity map the ask handler and the reviewer routing read.
+    identities: options.ask.identities,
+  };
   const ask = composeAsk({
     ...options.ask,
     unitOfWork,

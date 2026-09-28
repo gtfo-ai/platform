@@ -61,7 +61,13 @@ export interface ReviewerRouting {
   readonly base: readonly string[];
   /** What the matched risk classes require on top (`reviewer:@handle`). */
   readonly required: readonly string[];
-  /** `base` then `required`, de-duplicated in that order and capped at `limit`. */
+  /**
+   * `required` then `base`, de-duplicated in that order and capped at `limit` — **required first**
+   * (WP-79, PROGRESS backlog 273), so the cap can only ever drop a base handle while the classes'
+   * own reviewers fit: `required ⊆ handles` for every base list whenever `required` has at most
+   * `limit` distinct handles. Past that the cap still holds and `truncated` says a required
+   * reviewer was dropped, because the cap is also the bound on the provider lookups it causes.
+   */
   readonly handles: readonly string[];
   /** True when the cap dropped a handle, so "nobody else" is never mistaken for "nobody more". */
   readonly truncated: boolean;
@@ -106,10 +112,11 @@ export const codeownersFor = (
  * product/19:138's three steps, in the document's order, plus the class requirements.
  *
  * `requester` is the *provider account* of the human who asked for the task, already resolved
- * through the identity mapping — `null` when there is none, which on this build is every task
- * (`tasks.requested_by_user_id` has no writer, and `user_identities` is empty until an operator
- * fills it: PROGRESS backlog 79). The caller says so by name rather than assigning silently, which
- * is why this returns `source: 'none'` instead of an empty list with no explanation.
+ * through the identity mapping — `null` when there is none: a task whose creating site named nobody
+ * (`StoredTask.requestedByUserId` lists who writes it — the three commands that hold an actor and,
+ * since WP-79, intake from a mapped ticket reporter), or a requester with no `user_identities` row
+ * on this provider. The caller says so by name rather than assigning silently, which is why this
+ * returns `source: 'none'` instead of an empty list with no explanation.
  */
 export const resolveReviewerRouting = (input: {
   readonly codeowners: readonly string[];
@@ -127,10 +134,12 @@ export const resolveReviewerRouting = (input: {
           ? { source: 'requester' as const, handles: [input.requester] }
           : { source: 'none' as const, handles: [] as readonly string[] };
 
-  // Risk classes **add**: they are appended to whatever the precedence chose and never replace it,
-  // so a class and a CODEOWNERS entry that disagree produce both.
+  // Risk classes **add**: they join whatever the precedence chose and never replace it, so a class
+  // and a CODEOWNERS entry that disagree produce both. They are placed **first** (WP-79, backlog
+  // 273): appended after the base list, a repository file naming `limit` reviewers pushed a class's
+  // `@security` past the cap — Q101's *tighten, never loosen* broken by the file it constrains.
   const all: string[] = [];
-  for (const handle of [...base.handles, ...input.classReviewers]) {
+  for (const handle of [...input.classReviewers, ...base.handles]) {
     if (!all.includes(handle)) {
       all.push(handle);
     }

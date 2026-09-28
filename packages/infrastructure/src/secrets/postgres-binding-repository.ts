@@ -16,6 +16,15 @@
  * `bindings.config` is merged **over** `integrations.config` here rather than in the loader,
  * because the strictness of a provider's schema means the merged document is the only one that can
  * be validated at all (see the port's docblock).
+ *
+ * **A binding's copy of an account-only key is dropped on read** (WP-79, PROGRESS backlog 268).
+ * WP-73b refused `socket_mode` in a binding **write** (`assertNoAccountOnlyFields`), but a row
+ * stored before that refusal kept its key, and the merge above let it win — flipping Slack's
+ * `clickCanArrive` for that project while the held transport stayed the account's. So the overlay
+ * drops the provider's `accountOnlyFields` from `binding_config` first
+ * ({@link overlayBindingConfig}): the account's value is the only one read, whoever wrote the row
+ * and whenever. The list is the provider catalogue's, handed in by the composition root, because
+ * this ring may not import `@platform/integrations`.
  */
 import type {
   BindingRepository,
@@ -51,7 +60,39 @@ interface AccountRow extends Record<string, unknown> {
 const asObject = (value: unknown): JsonObject =>
   value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as JsonObject) : {};
 
-export const createPostgresBindingRepository = (sql: SqlExecutor): BindingRepository => ({
+/**
+ * The config keys only a provider's **account** may set — `accountOnlyFieldsOf` in
+ * `@platform/integrations`' catalogue, `[]` for a provider that declares none (or that this build
+ * does not ship, whose binding the loader refuses anyway).
+ */
+export type AccountOnlyFieldsLookup = (provider: string) => readonly string[];
+
+/**
+ * `binding` over `account`, **minus** the binding's copy of any account-only key (WP-79, backlog
+ * 268). Pure, so the pre-WP-73b row is a unit case rather than a database fixture.
+ */
+export const overlayBindingConfig = (
+  account: JsonObject,
+  binding: JsonObject,
+  accountOnly: readonly string[],
+): JsonObject => {
+  const overlay: JsonObject = {};
+  for (const [key, value] of Object.entries(binding)) {
+    if (!accountOnly.includes(key)) {
+      overlay[key] = value;
+    }
+  }
+  return { ...account, ...overlay };
+};
+
+/**
+ * `accountOnlyFields` is required rather than defaulted (standing rule 31): an absent list is the
+ * pre-WP-79 merge, which is the defect.
+ */
+export const createPostgresBindingRepository = (
+  sql: SqlExecutor,
+  accountOnlyFields: AccountOnlyFieldsLookup,
+): BindingRepository => ({
   forProject: async (projectId: Id): Promise<readonly ProjectBinding[]> => {
     const { rows } = await sql.query<BindingRow>(
       `select b.id            as binding_id,
@@ -75,7 +116,11 @@ export const createPostgresBindingRepository = (sql: SqlExecutor): BindingReposi
       type: row.type as IntegrationType,
       provider: row.provider,
       name: row.name,
-      config: { ...asObject(row.integration_config), ...asObject(row.binding_config) },
+      config: overlayBindingConfig(
+        asObject(row.integration_config),
+        asObject(row.binding_config),
+        accountOnlyFields(row.provider),
+      ),
       secretIds: (row.secret_ids ?? []) as Id[],
     }));
   },
@@ -112,12 +157,13 @@ export const createPostgresBindingRepository = (sql: SqlExecutor): BindingReposi
       return null;
     }
     const account = asObject(first.integration_config);
+    const accountOnly = accountOnlyFields(first.provider);
     const bindings: IntegrationBinding[] = rows
       .filter((row) => row.binding_id !== null && row.project_id !== null)
       .map((row) => ({
         bindingId: row.binding_id as Id,
         projectId: row.project_id as Id,
-        config: { ...account, ...asObject(row.binding_config) },
+        config: overlayBindingConfig(account, asObject(row.binding_config), accountOnly),
       }));
 
     return {

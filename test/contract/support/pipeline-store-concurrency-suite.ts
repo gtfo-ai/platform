@@ -114,6 +114,8 @@ export const runPipelineStoreConcurrencyContract = (
       dependencies: null,
       requiredReviewers: null,
       reviewThreads: null,
+      readyHeadSha: null,
+      ciHeadSha: null,
       requestedByUserId: null,
       pipelineDial: null,
       version: INITIAL_TASK_VERSION,

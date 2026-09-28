@@ -27,6 +27,14 @@
  * be worse in the other direction: one default-branch move would eat one of the two resolution
  * attempts product/04 promises. So there are two counters, and the edge that spends this one is
  * named in `RETURN_LOOPS_BY_EDGE` (`../pipeline/interpreter.js`).
+ *
+ * **Since WP-79 review round 2 it bounds a second re-check of the same kind** (PROGRESS backlog
+ * 275): a passing rebase gate whose head is not the one CI passed sends the task **forward** into
+ * `ci_gate` again — not a return, no reason on a stage — and spends one `rebase_rechecks`, because
+ * both are *the branch moved under a gate that had passed, look again*, neither is a failure, and a
+ * branch pushed after every CI pass must not loop CI ↔ rebase for ever. That re-entry costs more
+ * than a read: the template's fall-through runs review again before the rebase gate, so on the
+ * feature template one round is a CI read plus the Reviewer's and the Acceptance Tester's runs.
  */
 import type { PipelineLimits } from '@platform/contracts';
 
@@ -78,7 +86,8 @@ export const DEFAULT_ITERATION_LIMITS = {
    * for something the outside world drives. It is an order of magnitude above BD-008's largest
    * agent loop because a round costs one `get_merge_request` read rather than a run, and a merge
    * request that has outlived ten merges to the default branch is one a human should be looking at
-   * anyway. A project that merges to `main` more often than that raises it with
+   * anyway. (The rebase gate's re-entry of CI for a head CI never passed spends it too since WP-79,
+   * and that round is not one read — see the module docblock.) A project that merges to `main` more often than that raises it with
    * `pipeline.limits.rebase_rechecks`.
    */
   rebase_rechecks: 10,
