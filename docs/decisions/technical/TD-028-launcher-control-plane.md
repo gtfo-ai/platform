@@ -114,11 +114,11 @@ needs a database connection this decision's own topology denies the launcher con
 argument that rejected pg-boss as the transport). So the guarantee is real **within one launcher
 process** and is **not preserved across a launcher restart**.
 
-**What that costs is not settled here, and an earlier draft of this amendment wrongly settled it.**
-A `create` replayed after a restart does not find the stored handle. What happens next is **PROGRESS
-backlog 136's open question**, and this record must not close it — the three candidates are a name
-collision that leaves the first run's container orphaned, a rollback, or a second container, and
-which one occurs is **unmeasured**.
+**What that costs was not settled here until WP-82, and an earlier draft of this amendment wrongly settled it.**
+A `create` replayed after a restart does not find the stored handle. What happened next was **PROGRESS
+backlog 136's open question** — the three candidates were a name collision that leaves the first run's
+container orphaned, a rollback, or a second container — and it is now **measured**: the first (the
+paragraph *Measured at WP-82* below).
 
 The draft this replaces asserted that no second container starts *"because the container name is
 derived from the run id, so the daemon refuses the duplicate"*. That mechanism is **wrong on this
@@ -130,8 +130,15 @@ at all is version-dependent and unmeasured. So the collision, if it happens, rea
 or the sidecar**, and the realistic bad case is **not** fail-closed: a replayed create can overwrite
 the live run's shim token and *then* fail, orphaning the container it did not know about.
 
-The residual therefore stays **`needs measurement`**, owned by backlog **136**, which is cited two
-lines below and which exists precisely to leave this open.
+The residual therefore stayed **`needs measurement`**, owned by backlog **136**, until WP-82 measured it.
+
+**Measured at WP-82** (PROGRESS backlog 136, `scripts/launcher-control-plane-check.mjs`, Docker Engine
+29.7.2 / API 1.55): a create replayed after a restart, the first create having completed, is refused at
+the run's network (`409 … already exists`, `workspace_failed` to the runner) before `#prepare`. The live
+run's shim token is untouched, nothing is rolled back, and no second container starts. The first run's
+container keeps running with no launcher holding a handle for it, and nothing in the platform bounds that
+container. The check asserts the refusal, so a daemon that stops refusing duplicate network names fails
+it. A restart *during* a create is not measured.
 
 The scope is written here because this is the document a reader goes to first. It was already stated
 at `apps/launcher/src/control-plane.ts`, in `PROGRESS.md` and in `CLAUDE.md` — three places that are

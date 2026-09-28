@@ -161,6 +161,11 @@ export interface LauncherProvisionerOptions {
    * succeeding, which is the direction technical/05 asks for.
    */
   readonly modelEgressHosts: readonly string[];
+  /**
+   * `APP_RUN_REGISTRY_HOSTS` — the package registries an operator declared (WP-82). Only a run that
+   * may install from a lockfile gets them (`runMayInstallFromLockfile`); empty is closed.
+   */
+  readonly runRegistryHosts: readonly string[];
   /** TD-021's "expires next day" for the run-scoped git credential. */
   readonly credentialTtlSeconds: number;
   readonly clock: RunnerClock;
@@ -177,6 +182,7 @@ export const runWorkspaceSpecFor = (input: {
   readonly spec: RunSpec;
   readonly project: RunWorkspaceProject;
   readonly modelEgressHosts: readonly string[];
+  readonly runRegistryHosts: readonly string[];
   readonly now: Date;
 }): WorkspaceSpec =>
   buildWorkspaceSpec({
@@ -187,6 +193,7 @@ export const runWorkspaceSpecFor = (input: {
     // remote yet and `#clone` creates it.
     checkoutBranch: input.spec.checkoutRef,
     platformEgressHosts: input.modelEgressHosts,
+    runRegistryHosts: input.runRegistryHosts,
     containerEnv: input.project.containerEnv,
     now: input.now,
   });
@@ -233,6 +240,7 @@ export const createLauncherRunWorkspaceProvisioner = (
         spec,
         project,
         modelEgressHosts: options.modelEgressHosts,
+        runRegistryHosts: options.runRegistryHosts,
         now: new Date(options.clock.now()),
       });
       // WP-74: a run with no checkout gets no credential — there is no mirror to fetch and nothing

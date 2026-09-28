@@ -148,9 +148,10 @@ never its role (above).
 - Docker Engine with the `docker compose` plugin. Measured here on Docker **29.7.2**
   (`linux/arm64`, Docker Desktop on macOS) with Compose **v5.5.1**; CI builds the same images on
   `ubuntu-latest` and `ubuntu-24.04-arm`.
-- Room in the Docker VM for the images. Measured unpacked at WP-22: base 547 MB, runtime 1.32 GB,
-  egress 13.2 MB, product 1.1 GB, launcher 966 MB — about **4 GB** once the shared base layer is
-  counted once, plus whatever the database grows to.
+- Room in the Docker VM for the images. Measured unpacked at WP-22, the product and launcher again
+  at WP-82: base 547 MB, runtime 1.32 GB, egress 13.2 MB, product 801 MB, launcher 661 MB. Those
+  sum to about **3.3 GB**, which counts the base inside each of the three images built on it, so it
+  is an upper bound; plus whatever the database grows to.
 - Outbound network access at build time (the images fetch Node, the CLIs and the npm packages).
 - Nothing else: no Node, no pnpm, no PostgreSQL on the host.
 
@@ -703,7 +704,11 @@ egress sidecar gets uid 1000 and `cap_drop: ALL`.
 
 **A run has no route to the network except through its own proxy.** The run container sits on a
 per-run `internal: true` network; the egress sidecar is the only container bridging that to anything,
-and it allows only the hosts the project's configuration lists.
+and it allows only the model host (`APP_MODEL_EGRESS_HOSTS`), the project's git host and — for a run
+that may install from a lockfile (developer, reviewer, acceptance tester, discovery) — the package
+registries you declare in `APP_RUN_REGISTRY_HOSTS`, which is empty and therefore closed by default.
+A project's own configuration cannot add a host. *(Until WP-82 this said "the hosts the project's
+configuration lists"; `.agentic/config.yml` has never had a key for one.)*
 
 **No integration credential is inside a run container.** The SDK runs on the platform side and spawns
 the CLI in the container over a per-run control socket; git gets a run-scoped token from a credential

@@ -162,6 +162,7 @@ const provisionerWith = (
     projects: { forRun: async () => project },
     controlRoot,
     modelEgressHosts: ['api.anthropic.com'],
+    runRegistryHosts: [],
     credentialTtlSeconds: 86_400,
     clock: manualClock(Date.parse('2026-01-01T00:00:00.000Z')),
   });
@@ -172,6 +173,7 @@ describe('backlog 71 — `checkoutRef` reaches the workspace', () => {
       spec: runSpecFixture({ checkoutRef: 'agentic/task-7' }),
       project,
       modelEgressHosts: [],
+      runRegistryHosts: [],
       now: new Date('2026-01-01T00:00:00.000Z'),
     });
     expect(spec.repo?.checkoutBranch).toBe('agentic/task-7');
@@ -185,6 +187,7 @@ describe('backlog 71 — `checkoutRef` reaches the workspace', () => {
       spec: runSpecFixture({ checkoutRef: null }),
       project,
       modelEgressHosts: [],
+      runRegistryHosts: [],
       now: new Date('2026-01-01T00:00:00.000Z'),
     });
     expect(spec.repo?.checkoutBranch).toBeNull();
@@ -205,9 +208,45 @@ describe('the workspace spec a run gets', () => {
       spec: runSpecFixture(),
       project,
       modelEgressHosts: ['api.anthropic.com'],
+      runRegistryHosts: [],
       now: new Date('2026-01-01T00:00:00.000Z'),
     });
     expect(spec.egress.hosts).toEqual(['api.anthropic.com', 'git.example.com']);
+  });
+
+  it('sends a declared registry host for a run that may install, and not for a read-only one (WP-82)', async () => {
+    // Rule 82: asserted on the create request the launcher receives, not on the builder alone.
+    const { client, recorded } = clientWith();
+    const provisioner = createLauncherRunWorkspaceProvisioner({
+      client,
+      credentials: minterWith().minter,
+      projects: { forRun: async () => project },
+      controlRoot: CONTROL_ROOT,
+      modelEgressHosts: ['api.anthropic.com'],
+      runRegistryHosts: ['registry.npmjs.org'],
+      credentialTtlSeconds: 86_400,
+      clock: manualClock(Date.parse('2026-01-01T00:00:00.000Z')),
+    });
+    await provisioner.provision(
+      runSpecFixture({
+        runId: '00000000-0000-4000-8000-0000000082a1',
+        role: 'developer',
+        tools: ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash'],
+        commandPolicy: { allow: ['npm ci', 'npm test'], ask: [], block: [] },
+      }),
+    );
+    await provisioner.provision(
+      runSpecFixture({
+        runId: '00000000-0000-4000-8000-0000000082a2',
+        role: 'architect',
+        tools: ['Read', 'Grep', 'Glob', 'Bash'],
+        commandPolicy: { allow: ['git log', 'ls *'], ask: [], block: [] },
+      }),
+    );
+    expect(recorded.creates.map((create) => create.spec.egress.hosts)).toEqual([
+      ['api.anthropic.com', 'git.example.com', 'registry.npmjs.org'],
+      ['api.anthropic.com', 'git.example.com'],
+    ]);
   });
 
   it('fails closed when no model host is declared', () => {
@@ -217,6 +256,7 @@ describe('the workspace spec a run gets', () => {
       spec: runSpecFixture(),
       project,
       modelEgressHosts: [],
+      runRegistryHosts: [],
       now: new Date('2026-01-01T00:00:00.000Z'),
     });
     expect(spec.egress.hosts).toEqual(['git.example.com']);
@@ -350,6 +390,7 @@ describe('the workspace spec a run gets', () => {
       spec: runSpecFixture(tools === undefined ? {} : { tools: [...tools] }),
       project,
       modelEgressHosts: [],
+      runRegistryHosts: [],
       now: new Date('2026-01-01T00:00:00.000Z'),
     });
     expect(createRunRequestSchema.safeParse({ spec, credential: CARRIED }).success).toBe(
@@ -365,6 +406,7 @@ describe('the workspace spec a run gets', () => {
       spec: runSpecFixture(),
       project: { ...project, containerEnv: { LEAK: `x${CARRIED.password}y` } },
       modelEgressHosts: [],
+      runRegistryHosts: [],
       now: new Date('2026-01-01T00:00:00.000Z'),
     });
     expect(createRunRequestSchema.safeParse({ spec, credential: CARRIED }).success).toBe(false);
@@ -381,6 +423,7 @@ describe('the workspace spec a run gets', () => {
       spec: runSpecFixture(),
       project,
       modelEgressHosts: [],
+      runRegistryHosts: [],
       now: new Date('2026-01-01T00:00:00.000Z'),
     });
     expect(createRunRequestSchema.safeParse({ spec: repoFul, credential: null }).success).toBe(
@@ -495,6 +538,7 @@ describe('revocation: exactly once, after the end request (TD-028 WP-76 decision
       projects: { forRun: async () => project },
       controlRoot: CONTROL_ROOT,
       modelEgressHosts: [],
+      runRegistryHosts: [],
       credentialTtlSeconds: 86_400,
       clock: manualClock(),
       logger,
@@ -712,6 +756,7 @@ describe('the control root this process was configured with', () => {
         projects: { forRun: async () => project },
         controlRoot: 'run/agentic/ctl',
         modelEgressHosts: [],
+        runRegistryHosts: [],
         credentialTtlSeconds: 86_400,
         clock: manualClock(),
       }),

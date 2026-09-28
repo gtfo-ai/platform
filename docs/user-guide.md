@@ -82,7 +82,10 @@ Three of the criteria are the platform's own answer and are never taken from wha
 and the "what this unlocks" text is the platform's, never the agent's. The discovery agent's shell
 reads the repository and runs the project's own declared commands — its test, lint and setup
 commands (including an executable `.agentic/workspace/setup`, run as `./.agentic/workspace/setup`),
-and the lockfile install they need — so R1, R2 and R6 are answered by running them. It cannot
+and the lockfile install they need — so R1, R2 and R6 are answered by running them. The install
+can fetch only from a package registry your operator declared (`APP_RUN_REGISTRY_HOSTS`, empty by
+default). On an instance that declared none, the egress proxy refuses the install's requests, so a
+repository whose tests need dependencies cannot run them. It cannot
 commit, push or add a dependency, and nothing it writes is kept. It drafts **technical** pages only;
 the business pages are step 3's.
 

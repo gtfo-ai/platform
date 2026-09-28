@@ -488,6 +488,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
             launcherToken: config.launcherToken,
             controlRoot: config.workspaceControlRoot,
             modelEgressHosts: config.modelEgressHosts,
+            runRegistryHosts: config.runRegistryHosts,
             // WP-76: the run's git credential is minted against the project's git binding, through
             // this process's one executor. `stack` is non-null here for the reason given below.
             // The stack whole: the minter uses its executor, its loader and its own registry —

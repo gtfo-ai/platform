@@ -440,6 +440,24 @@ describe('compose.yml gives the app service the environment the server reads (WP
     }
   });
 
+  it('names WP-82’s run registry list on both sides, and delivers a declared one to `runner`', () => {
+    // WP-82 criterion (2), by name rather than only through the derived set: the server reads it,
+    // the stock file declares it (empty, the closed answer), and the process that builds a run's
+    // workspace spec — `runner` — receives the value an operator writes.
+    expect([...namesServerReads()]).toContain('APP_RUN_REGISTRY_HOSTS');
+    expect(STOCK_ENV).toMatch(/^APP_RUN_REGISTRY_HOSTS=$/m);
+    const declared = serviceEnvironment(
+      'runner',
+      projectWith(
+        STOCK_ENV.replace(
+          /^APP_RUN_REGISTRY_HOSTS=$/m,
+          'APP_RUN_REGISTRY_HOSTS=registry.npmjs.org',
+        ),
+      ),
+    );
+    expect(declared['APP_RUN_REGISTRY_HOSTS']).toBe('registry.npmjs.org');
+  });
+
   it.each(PRODUCT_SERVICES)('delivers every variable the server reads to `%s`', (service) => {
     const delivered = new Set(Object.keys(serviceEnvironment(service, projectWith(STOCK_ENV))));
     const missing = [...namesServerReads()].filter((name) => !delivered.has(name)).sort();

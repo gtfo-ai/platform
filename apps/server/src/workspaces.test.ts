@@ -43,6 +43,7 @@ const compose = (launcherUrl: string | null, launcherToken: string | null) =>
     launcherToken,
     controlRoot: '/run/agentic/ctl',
     modelEgressHosts: ['api.anthropic.com'],
+    runRegistryHosts: [],
     stack: {
       executor: {} as never,
       registry: {} as never,

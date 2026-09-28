@@ -100,10 +100,12 @@ budgets hold.
 **The size check is per image, and 1 GB is not one number.** `scripts/build-images.mjs --size-check`
 holds each image to its own ceiling, roughly a third above what it measures — budget (measured):
 base **750 MB** (547 MB), runtime **1.8 GB** (1.32 GB), egress **64 MB** (13.2 MB), product
-**1.4 GB** (1.1 GB), launcher **1.4 GB** (966 MB). The run image cannot meet 1 GB and should not
+**1.0 GB** (801 MB), launcher **900 MB** (661 MB). The run image cannot meet 1 GB and should not
 try: TD-021 puts the `claude` binary in it (217 MB) beside the six agent CLIs (260 MB), which is
-half a gigabyte before anything of ours; the product image carries the same `claude` binary because
-the SDK's optional platform package comes with it (207 MB of its 1.1 GB).
+half a gigabyte before anything of ours. *(Amended by WP-82, PROGRESS backlog 34: the product and
+launcher images no longer carry the SDK's optional platform package — 207 MiB — because the SDK
+resolves it only when `pathToClaudeCodeExecutable` is unset, and a containerised run always sets it.
+They measured 1.1 GB and 966 MB with it, against budgets of 1.4 GB each. The new figures and budgets are **`linux/arm64` only** — margins of 25 % (801 MB against 1.0 GB) and 36 % (661 MB against 900 MB); `amd64` is **unmeasured**, and CI's `image.yml` amd64 leg is its first measurement.)*
 
 **And they bound the *unpacked* size, which is not the number two obvious commands return.** On a
 containerd image store `docker image inspect --format '{{.Size}}'` and `docker save … | wc -c` both

@@ -181,9 +181,10 @@ the pinned CLI reading it was measured, not assumed).
   decision 5, because pg-boss hands a job to any subscribed worker), so a process that runs no agent leaves
   those jobs **queued** — which also queues the platform **gates**, a consequence TD-028's wording does not
   state and WP-53 measured. Every create is **idempotent on the run id** in the launcher's own memory; a
-  create replayed across a launcher restart would start a second container, and what bounds that is one
-  level up. `node scripts/launcher-control-plane-check.mjs` is the Docker verification — three containers,
-  18/18 — and it is not a `verify` target for the reason none of the Docker checks are. **Two processes, asserted** (WP-72): `test/e2e/topology/` starts `app` and `runner` — and `ROLE=api` beside `ROLE=worker` — as separate `apps/server` instances on one database — in **one** Node process, so module-level state is shared between them (WP-80 states it at its assertion) — and asserts each crossing through them; `ROLE=api` holds an **enqueue-only** job client (`apps/server/src/enqueue-only-jobs.ts`) so a command it answers is performed by a worker, and the chat socket's holder renews `held_connection_liveness` (migration 0054), which the notify duty reads before posting buttons.
+  create replayed across a launcher restart is refused at the run's network (409) and starts no second
+  container, but the first run's container is left running with nothing holding a handle for it (backlog
+  136, measured at WP-82). `node scripts/launcher-control-plane-check.mjs` is the Docker verification —
+  26/26 since WP-82 — and it is not a `verify` target for the reason none of the Docker checks are. **Two processes, asserted** (WP-72): `test/e2e/topology/` starts `app` and `runner` — and `ROLE=api` beside `ROLE=worker` — as separate `apps/server` instances on one database — in **one** Node process, so module-level state is shared between them (WP-80 states it at its assertion) — and asserts each crossing through them; `ROLE=api` holds an **enqueue-only** job client (`apps/server/src/enqueue-only-jobs.ts`) so a command it answers is performed by a worker, and the chat socket's holder renews `held_connection_liveness` (migration 0054), which the notify duty reads before posting buttons.
 - **Production starts a ticket** (WP-15c): `POST /webhooks/:provider/:integrationId`
   (`apps/server/src/routes/webhooks.ts`) is the door, and it is the platform's only **unauthenticated**
   endpoint — the credential is the signature over the body, so the body reaches the handler *unparsed*

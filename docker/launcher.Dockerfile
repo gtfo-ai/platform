@@ -50,8 +50,12 @@ COPY apps/runlet/package.json apps/runlet/
 # exits 127 here) and `@b12k/gitleaks`'s binary download — both developer tooling, neither
 # a runtime dependency. `@node-rs/argon2` and the Agent SDK ship prebuilt per-platform
 # binaries and run no script at all.
+# The Agent SDK's per-platform `claude` package is removed after the install (WP-82, PROGRESS
+# backlog 34): the launcher never runs the SDK — it verifies the run image's own binary with
+# `test -x` inside that image — and `app.Dockerfile` has the measurement for the process that does.
 RUN pnpm install --frozen-lockfile --prod --ignore-scripts --filter @platform/launcher... \
- && pnpm store prune
+ && pnpm store prune \
+ && rm -rf node_modules/.pnpm/@anthropic-ai+claude-agent-sdk-linux-*
 
 # ── The image ────────────────────────────────────────────────────────────────────────────────────
 FROM ${BASE_IMAGE} AS launcher

@@ -48,7 +48,7 @@
  *
  * The same reason `scripts/web-compose-check.mjs` is a script: a `verify` target is run by CI's
  * lint and unit jobs, which have no daemon, and the e2e job has a daemon but **not these images** —
- * it builds `platform-runtime` and `platform-egress` only, and building `platform` (1.1 GB) plus
+ * it builds `platform-runtime` and `platform-egress` only, and building `platform` (801 MB since WP-82) plus
  * `platform-launcher` there would duplicate work `image.yml` already does on two architectures.
  * So this runs where the images exist: `.github/workflows/image.yml`, against the artefact that
  * workflow is about to publish. **A skip counts as a failure** (WP-22's precedent): with no daemon
@@ -119,6 +119,8 @@ const PROVIDER_HOST = 'sentry.example.test';
  * floor both halves of the instance refuse below.
  */
 const LAUNCHER_TOKEN = 'wp53-compose-stock-check-not-a-real-launcher-token';
+/** `APP_RUN_REGISTRY_HOSTS` for this instance (WP-82): declared so the runner can be asked for it. */
+const RUN_REGISTRY_HOST = 'registry.example.test';
 const TIMEOUT_MS = 15 * 60 * 1000;
 
 const failures = [];
@@ -287,6 +289,8 @@ const main = async () => {
        * negative case a few lines further down still has something to be refused by.
        */
       ['APP_INTEGRATION_HOSTS', PROVIDER_HOST],
+      // WP-82: the run registry list, which the **runner** reads to build a run's egress list.
+      ['APP_RUN_REGISTRY_HOSTS', RUN_REGISTRY_HOST],
       // §7's optional basic auth on /metrics.
       ['APP_METRICS_USERNAME', METRICS_USER],
       ['APP_METRICS_PASSWORD', METRICS_PASSWORD],
@@ -384,6 +388,21 @@ const main = async () => {
         printed[1] === METRICS_USER &&
         printed[6] === PROVIDER_HOST,
       printed.length === 7 ? `${printed.length} of 7 present` : printenv.stdout.trim(),
+    );
+
+    // 2a. WP-82: the run registry list reaches the process that builds a run's workspace spec —
+    // `runner` — rather than only the compose arrangement `compose-config.e2e.test.ts` reads.
+    const registry = await compose([
+      'exec',
+      '-T',
+      'runner',
+      'printenv',
+      'APP_RUN_REGISTRY_HOSTS',
+    ]).catch((error) => ({ stdout: String(error) }));
+    check(
+      'the runner container has the run registry list `.env` sets (WP-82)',
+      registry.stdout.trim() === RUN_REGISTRY_HOST,
+      registry.stdout.trim(),
     );
 
     // 2b. The working calendar reaches the process (WP-56). `APP_WORKING_DAYS`/`APP_WORKING_HOURS`

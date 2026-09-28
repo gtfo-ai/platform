@@ -34,22 +34,24 @@
  * (`compose.yml`'s launcher joins neither the default network nor `db`, which is the argument that
  * rejected pg-boss as the transport).
  *
- * **What that residual costs is open, and this comment must not close it.** A create replayed after a
- * restart does not find the stored handle; what happens next is PROGRESS backlog **136**'s question,
- * and its three candidates are a **name collision** that leaves the first run's container orphaned,
- * a **rollback**, or a **second container**. Which one occurs is **unmeasured**.
+ * **What that residual costs was measured at WP-82** (PROGRESS backlog **136**,
+ * `node scripts/launcher-control-plane-check.mjs`, Docker Engine 29.7.2 / API 1.55): a create
+ * replayed after a restart — the first create having completed — is **refused at the network**.
+ * The first name-derived object `create` makes is the run's network, and the daemon answers
+ * `409 network with name run-<id> already exists` although `DockerEngine.createNetwork` sends no
+ * `CheckDuplicate`; the runner is told `workspace_failed`. Because the refusal comes before
+ * `#prepare`, the live run's `/ctl/<run-id>/token` is **not** rewritten, the rollback removes
+ * nothing (this attempt made nothing), and **no second container** starts. Two earlier readings are
+ * therefore both wrong on this daemon: the cheerful one (*"the container name is derived from the
+ * run id, so the daemon refuses the duplicate"* — it is the network, not the container) and the
+ * alarming one (*"a replayed create can overwrite the live run's shim token and then fail"*).
  *
- * An earlier draft of this paragraph asserted the cheerful one — no second container, "because every
- * object's name is derived from the run id, so the daemon refuses the duplicate" — and that
- * mechanism is **wrong on this tree**. The first name-derived object `create` makes is the
- * **network**, `createVolume` is idempotent, and `#prepare`, which **rewrites `/ctl/<run-id>/token`**,
- * runs *before* any container name is used; `DockerEngine.createNetwork` sends no `CheckDuplicate`,
- * so whether the daemon refuses at all is version-dependent. So the collision, if it happens, is the
- * network or the sidecar — and the realistic bad case is **not** fail-closed: a replayed create can
- * overwrite the live run's shim token and *then* fail, orphaning the container it never knew about.
- *
- * TD-028's second WP-53 amendment states the same three candidates, and backlog **136** owns the
- * measurement. Nothing here should be read as having taken it.
+ * What the measurement does **not** make better is the first run's container: it keeps running,
+ * and no launcher holds a handle for it. **Nothing bounds that container** — the lease sweep ends
+ * the *row* and WP-77's recovery revokes the run's git credential, neither stops a container, and
+ * `purgeExpired` removes volumes. A daemon that did not refuse the duplicate network would reach
+ * `#prepare`, so the check asserts the refusal rather than assuming it survives a daemon upgrade.
+ * A restart *during* a create leaves a different partial state and was not measured.
  *
  * ## What is never logged
  *

@@ -5,7 +5,8 @@
  * it gets a git write credential, and how long its volume outlives it. Everything else the schema
  * already refuses.
  */
-import { TOOLS_BY_ROLE } from '@platform/application';
+import { COMMAND_BASELINE_BY_ROLE, commandBaselineFor, TOOLS_BY_ROLE } from '@platform/application';
+import type { AgentRole } from '@platform/contracts';
 import { REVIEW_ONLY_TEMPLATE } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { runSpecFixture } from '../runner/fixtures.js';
@@ -17,6 +18,7 @@ import {
   mirrorCacheKeyFor,
   PLATFORM_WORKSPACE_LIMITS,
   runIsReadOnly,
+  runMayInstallFromLockfile,
   runNeedsCheckout,
   TOOLS_THAT_NEED_NO_CHECKOUT,
   TOOLS_THAT_OPEN_THE_CHECKOUT,
@@ -24,12 +26,19 @@ import {
 
 const NOW = new Date('2026-09-12T10:00:00.000Z');
 
+/** A role's shipped command baseline, in the mutable shape `RunSpec.commandPolicy` has. */
+const policyOf = (role: AgentRole, stage = 'implementation') => {
+  const policy = commandBaselineFor(role, stage, []);
+  return { allow: [...policy.allow], ask: [...policy.ask], block: [...policy.block] };
+};
+
 const build = (overrides: Partial<Parameters<typeof buildWorkspaceSpec>[0]> = {}) =>
   buildWorkspaceSpec({
     spec: runSpecFixture(),
     repoUrl: 'https://git.example.com/acme/api.git',
     defaultBranch: 'main',
     platformEgressHosts: ['api.anthropic.com'],
+    runRegistryHosts: [],
     now: NOW,
     ...overrides,
   });
@@ -44,12 +53,18 @@ describe('the egress allow-list', () => {
     });
   });
 
-  it('has no registry host, because discovery does not exist — so a run cannot install a package', () => {
-    // technical/05 names "package registries for the project's ecosystems (from discovery)" as a
-    // source of this list. Discovery has not been written, so the entry cannot be derived and the
-    // list is deliberately short. Asserted rather than left to a reader of the docblock, because the
-    // day discovery lands this case is the one that says what to change.
-    expect(build().egress.hosts).not.toContain('registry.npmjs.org');
+  it('has no registry host when the operator declared none — a stock run cannot install a package', () => {
+    // WP-82: registries are `APP_RUN_REGISTRY_HOSTS`, empty by default. Even a developer run, whose
+    // baseline carries the lockfile installs, gets no registry from an empty list: closed.
+    const developer = runSpecFixture({
+      role: 'developer',
+      tools: [...TOOLS_BY_ROLE.developer],
+      commandPolicy: policyOf('developer'),
+    });
+    expect(build({ spec: developer }).egress.hosts).toEqual([
+      'api.anthropic.com',
+      'git.example.com',
+    ]);
   });
 
   it('is only the git host when the platform names no egress hosts of its own', () => {
@@ -77,6 +92,93 @@ describe('the egress allow-list', () => {
     expect(
       build({ platformEgressHosts: ['git.example.com', 'api.anthropic.com'] }).egress.hosts,
     ).toEqual(['git.example.com', 'api.anthropic.com']);
+  });
+});
+
+/**
+ * WP-82, PROGRESS backlog **140**: a declared registry joins the egress list of a run that may
+ * install from a lockfile — the `verification` and `implementation` baselines — and **never** a
+ * `read_only` one. Every role is enumerated off the planner's own tables, so a role that moves
+ * between baselines moves between the two answers without this file changing.
+ */
+describe('the registry hosts a run gets', () => {
+  const REGISTRY = 'registry.npmjs.org';
+  const specOf = (role: AgentRole) =>
+    runSpecFixture({
+      role,
+      tools: [...TOOLS_BY_ROLE[role]],
+      commandPolicy: policyOf(role),
+    });
+  const roles = Object.keys(COMMAND_BASELINE_BY_ROLE) as AgentRole[];
+
+  it.each(roles)('follows the command baseline for %s', (role) => {
+    const baseline = COMMAND_BASELINE_BY_ROLE[role];
+    const hosts = build({ spec: specOf(role), runRegistryHosts: [REGISTRY] }).egress.hosts;
+    if (baseline === 'read_only') {
+      expect(hosts).not.toContain(REGISTRY);
+    } else {
+      expect(hosts).toContain(REGISTRY);
+    }
+  });
+
+  it('is exercised in both directions by the shipped tables (rule 42)', () => {
+    // A table in which every role were `read_only` would pass the case above vacuously.
+    const answers = roles.map((role) => runMayInstallFromLockfile(specOf(role)));
+    expect(answers).toContain(true);
+    expect(answers).toContain(false);
+    expect(runMayInstallFromLockfile(specOf('developer'))).toBe(true);
+    expect(runMayInstallFromLockfile(specOf('reviewer'))).toBe(true);
+    expect(runMayInstallFromLockfile(specOf('discovery'))).toBe(true);
+    expect(runMayInstallFromLockfile(specOf('architect'))).toBe(false);
+  });
+
+  it('is the whole list, positively, for a verification run and a read-only one', () => {
+    expect(
+      build({ spec: specOf('reviewer'), runRegistryHosts: [REGISTRY, 'pypi.org'] }).egress.hosts,
+    ).toEqual(['api.anthropic.com', 'git.example.com', REGISTRY, 'pypi.org']);
+    expect(
+      build({ spec: specOf('investigator'), runRegistryHosts: [REGISTRY] }).egress.hosts,
+    ).toEqual(['api.anthropic.com', 'git.example.com']);
+  });
+
+  it('is withheld when the project took every lockfile install out of `allow`', () => {
+    // `narrowCommandPolicy` removes an entry a project moves to `ask` or `block`; nothing the run
+    // may do unattended would then use a registry, so it gets none.
+    const base = policyOf('developer');
+    const spec = runSpecFixture({
+      role: 'developer',
+      tools: [...TOOLS_BY_ROLE.developer],
+      commandPolicy: {
+        ...base,
+        allow: base.allow.filter(
+          (entry) =>
+            !['npm ci', 'pnpm install --frozen-lockfile', 'pip install -r *'].includes(entry),
+        ),
+      },
+    });
+    expect(runMayInstallFromLockfile(spec)).toBe(false);
+    expect(build({ spec, runRegistryHosts: [REGISTRY] }).egress.hosts).not.toContain(REGISTRY);
+  });
+
+  it('is withheld from a run with no shell, whatever its policy lists', () => {
+    const spec = runSpecFixture({
+      tools: ['Read', 'Grep', 'Glob'],
+      commandPolicy: { allow: ['npm ci'], ask: [], block: [] },
+    });
+    expect(runMayInstallFromLockfile(spec)).toBe(false);
+  });
+
+  it('is withheld from a run with no checkout', () => {
+    // The ask: no tool, no shell, so no registry — and its list stays the model hosts alone.
+    expect(build({ spec: specOf('ask'), runRegistryHosts: [REGISTRY] }).egress.hosts).toEqual([
+      'api.anthropic.com',
+    ]);
+  });
+
+  it('refuses a declared registry that is not a host name, at the platform', () => {
+    expect(() =>
+      build({ spec: specOf('developer'), runRegistryHosts: ['https://registry.npmjs.org/'] }),
+    ).toThrow();
   });
 });
 

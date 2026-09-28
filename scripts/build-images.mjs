@@ -75,26 +75,29 @@ const IMAGES = [
   // Alpine + tinyproxy. Measured 13.2 MB; the ceiling is deliberately tight, because anything that
   // grows this image is something running beside the only route out of a run.
   { name: 'platform-egress', dockerfile: 'egress.Dockerfile', dependsOn: null, maxBytes: 64e6 },
-  // base + a production `node_modules` + the built SPA. Measured 1.1 GB, of which **207 MB is the
-  // Agent SDK's `claude` binary** — its per-platform `optionalDependency`, which pnpm installs
-  // beside the SDK. technical/11's single 1 GB cannot be met while that is in it, and removing it
-  // is a measurement nobody has taken: the SDK only checks the executable exists on the branch
-  // where it spawns the process *itself* (`if (spawnClaudeCodeProcess) … else spawnLocalProcess`),
-  // and this platform always overrides that — so it is probably removable and is not removed on a
-  // "probably". PROGRESS carries it as discovered work.
+  // base + a production `node_modules` + the built SPA. Measured **801 MB** since WP-82 removed the
+  // Agent SDK's per-platform `claude` package (207 MiB by `du`) from it: the SDK resolves that
+  // package only when `pathToClaudeCodeExecutable` is unset, and a containerised run always sets it
+  // (`docker/app.Dockerfile` has the reasoning, `launcher-control-plane-check.mjs --runner-image
+  // platform:dev` the measurement). It measured 1.1 GB before, and now fits technical/11's 1 GB.
+  // **Measured on `linux/arm64` only** (Docker Desktop): the 1.0 GB budget is a 25 % margin over
+  // 801 MB there. `amd64` is **unmeasured** — CI's `image.yml` amd64 leg is the first measurement,
+  // and a red size check there means the margin is wrong, not the image.
   {
     name: 'platform',
     dockerfile: 'app.Dockerfile',
     dependsOn: 'platform-base',
-    maxBytes: 1.4e9,
+    maxBytes: 1.0e9,
     versioned: true,
   },
-  // The same production tree for `@platform/launcher`, on the same base.
+  // The same production tree for `@platform/launcher`, on the same base, without the SDK's `claude`
+  // package either (WP-82). Measured 661 MB on `linux/arm64` (966 MB before); the 900 MB budget is a
+  // 36 % margin there. `amd64` is **unmeasured** until CI's `image.yml` amd64 leg runs it.
   {
     name: 'platform-launcher',
     dockerfile: 'launcher.Dockerfile',
     dependsOn: 'platform-base',
-    maxBytes: 1.4e9,
+    maxBytes: 0.9e9,
     versioned: true,
   },
 ];

@@ -59,6 +59,35 @@ describe('loadServerConfig', () => {
     ).toEqual(['gitlab.com']);
   });
 
+  it('reads the run registry list as exact hosts, closed by default (WP-82)', () => {
+    // Empty is the closed answer: a run's egress gains no registry until an operator names one.
+    expect(load().runRegistryHosts).toEqual([]);
+    expect(
+      load({ APP_RUN_REGISTRY_HOSTS: ' Registry.NPMJS.org , pypi.org,registry.npmjs.org,' })
+        .runRegistryHosts,
+    ).toEqual(['registry.npmjs.org', 'pypi.org']);
+    // And it is a list of its own: declaring the dependency gate's registries opens no run egress.
+    expect(load({ APP_DEPENDENCY_REGISTRY_HOSTS: 'registry.npmjs.org' }).runRegistryHosts).toEqual(
+      [],
+    );
+  });
+
+  it('refuses a run registry entry that is not a host name at start-up, naming it (WP-82 round 1)', () => {
+    // Dropping it would leave the list closed and fail every developer run at its install after it
+    // spent its budget, with nothing saying why — so the natural URL spelling is a named refusal.
+    expect(() => load({ APP_RUN_REGISTRY_HOSTS: 'https://registry.npmjs.org/' })).toThrow(
+      /APP_RUN_REGISTRY_HOSTS .*refused: "https:\/\/registry\.npmjs\.org\/"/,
+    );
+    // `*` is refused the same way: an open registry list would be an open run egress.
+    expect(() => load({ APP_RUN_REGISTRY_HOSTS: 'pypi.org,*' })).toThrow(
+      /APP_RUN_REGISTRY_HOSTS .*refused: "\*"/,
+    );
+    // Every bad entry is named, and a good one beside them does not rescue the configuration.
+    expect(() =>
+      load({ APP_RUN_REGISTRY_HOSTS: 'registry.npmjs.org:443,files.pythonhosted.org,not a host' }),
+    ).toThrow(/refused: "registry\.npmjs\.org:443", "not a host"/);
+  });
+
   it('reads the integration credential allow-list as a list, and drops what cannot be a name', () => {
     expect(
       load({ APP_INTEGRATION_SECRET_ENV: ' GITLAB_TOKEN , JIRA_API_TOKEN ,GITLAB_TOKEN' })

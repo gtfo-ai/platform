@@ -64,6 +64,7 @@ const SOURCE_VARIABLE: Record<string, string> = {
   integrationSecretEnv: 'APP_INTEGRATION_SECRET_ENV',
   integrationHosts: 'APP_INTEGRATION_HOSTS',
   dependencyRegistryHosts: 'APP_DEPENDENCY_REGISTRY_HOSTS',
+  runRegistryHosts: 'APP_RUN_REGISTRY_HOSTS',
   modelApiKey: 'ANTHROPIC_API_KEY',
   modelOauthToken: 'CLAUDE_CODE_OAUTH_TOKEN',
   claudeBinary: 'APP_CLAUDE_BINARY',
@@ -270,9 +271,10 @@ const serverConfigFields = z.strictObject({
   /**
    * `APP_MODEL_EGRESS_HOSTS` — the hosts a run container may reach besides its git host.
    *
-   * technical/05 § "Network policy" lists four sources for the allow-list and two of them do not
-   * exist in this build (no discovery-derived registries, no per-stage observability hosts). This
-   * is the first: the model provider, or a proxy in front of it. It is configuration rather than a
+   * technical/05 § "Network policy" lists four sources for the allow-list. This is the first: the
+   * model provider, or a proxy in front of it. The git host is the second, the package registries
+   * are {@link runRegistryHosts} since WP-82 (operator-declared rather than discovery-derived), and
+   * no stage carries observability hosts yet. It is configuration rather than a
    * constant because an instance behind an egress proxy names a different host, and because
    * `local` mode needs it **too** — WP-53 measured that the pinned CLI authenticates against the
    * same API with `CLAUDE_CODE_OAUTH_TOKEN`, which is not what `buildWorkspaceSpec`'s docblock
@@ -431,6 +433,25 @@ const serverConfigFields = z.strictObject({
    * to start-up for a feature that is off by default, and the composition logs the set it was given.
    */
   dependencyRegistryHosts: z.array(z.string().min(1)).readonly(),
+
+  /**
+   * `APP_RUN_REGISTRY_HOSTS` — the package registries a **run container** may reach (WP-82, PROGRESS
+   * backlog 140).
+   *
+   * **Operator-declared, empty by default, exact**, and never settable through the API — the shape
+   * of {@link integrationHosts}, without its `*`, and **refused at start-up** when an entry is not a
+   * host name rather than dropped (`runRegistryHostsFromEnv`): an open registry list would be an open run egress,
+   * which technical/05 does not permit. It is a different list from {@link dependencyRegistryHosts}
+   * on purpose: that one is what *this process* may ask for a licence, this one is what a run
+   * container's egress sidecar forwards to, and an operator may want either without the other.
+   *
+   * It joins a run's allow-list only when the run may install from a lockfile — the `verification`
+   * and `implementation` baselines, which carry `LOCKFILE_INSTALL_ALLOW` — and **never** a
+   * `read_only` run (`runMayInstallFromLockfile`, `packages/infrastructure/src/workspace/spec.ts`).
+   * Empty keeps WP-54's fail-closed consequence: `npm ci` in a run is refused by the sidecar.
+   * Read here because the runner builds the workspace spec; the launcher renders whatever it is sent.
+   */
+  runRegistryHosts: z.array(z.string().min(1)).readonly(),
 
   argon2: argon2ConfigSchema,
   database: db.databaseConfigSchema,
@@ -846,6 +867,32 @@ const hostListFromEnv = (
   ),
 ];
 
+/**
+ * `APP_RUN_REGISTRY_HOSTS`, read **strictly** (WP-82 review round 1).
+ *
+ * {@link hostListFromEnv} drops an entry that is not a host name, and for this list that is the
+ * wrong direction: the natural spelling `https://registry.npmjs.org/` would leave the list empty,
+ * so every developer run would fail at its install after spending its budget — PROGRESS backlog
+ * 140's own defect — with nothing at start-up saying why. So a malformed entry is a **named
+ * refusal** that names the variable and the entry (rules 20 and 31), and so is `*`: an open
+ * registry list would be an open run egress. Blank entries (a trailing comma) are not entries.
+ */
+const runRegistryHostsFromEnv = (raw: string | undefined): readonly string[] => {
+  const entries = (raw ?? '')
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter((entry) => entry.length > 0);
+  const refused = entries.filter(
+    (entry) => !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(entry),
+  );
+  if (refused.length > 0) {
+    throw new Error(
+      `APP_RUN_REGISTRY_HOSTS must be comma-separated host names with no scheme, port, path or wildcard; refused: ${refused.map((entry) => JSON.stringify(entry)).join(', ')} (for example registry.npmjs.org rather than https://registry.npmjs.org/)`,
+    );
+  }
+  return [...new Set(entries)];
+};
+
 export const loadServerConfig = (env: EnvLike = process.env): ServerConfig => {
   const problems: string[] = [];
   const collect = <T>(load: () => T): T | undefined => {
@@ -939,6 +986,7 @@ export const loadServerConfig = (env: EnvLike = process.env): ServerConfig => {
     integrationSecretEnv: nameListFromEnv(env.APP_INTEGRATION_SECRET_ENV),
     integrationHosts: hostListFromEnv(env.APP_INTEGRATION_HOSTS, { allowWildcard: true }),
     dependencyRegistryHosts: hostListFromEnv(env.APP_DEPENDENCY_REGISTRY_HOSTS),
+    runRegistryHosts: collect(() => runRegistryHostsFromEnv(env.APP_RUN_REGISTRY_HOSTS)) ?? [],
     intakeReconcileIntervalMs: numberFromEnv(
       env.APP_INTAKE_RECONCILE_INTERVAL_MS,
       SERVER_CONFIG_DEFAULTS.intakeReconcileIntervalMs,

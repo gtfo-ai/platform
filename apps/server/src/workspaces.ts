@@ -215,6 +215,8 @@ export interface ComposeRunWorkspacesOptions {
   readonly controlRoot: string;
   /** `APP_MODEL_EGRESS_HOSTS`. */
   readonly modelEgressHosts: readonly string[];
+  /** `APP_RUN_REGISTRY_HOSTS` (WP-82): empty is closed. */
+  readonly runRegistryHosts: readonly string[];
   /**
    * The process's one integration stack (WP-76). The run's git credential is minted through its
    * executor against the project's git binding, and registered with **its** `runSecrets` — the
@@ -254,6 +256,7 @@ export const composeRunWorkspaces = (
       launcher_url: url,
       control_root: options.controlRoot,
       model_egress_hosts: options.modelEgressHosts,
+      run_registry_hosts: options.runRegistryHosts,
     },
     'this process runs agent stages: it provisions run workspaces through the launcher control plane',
   );
@@ -275,6 +278,7 @@ export const composeRunWorkspaces = (
     }),
     controlRoot: options.controlRoot,
     modelEgressHosts: options.modelEgressHosts,
+    runRegistryHosts: options.runRegistryHosts,
     credentialTtlSeconds: RUN_CREDENTIAL_TTL_SECONDS,
     clock: runnerAdapters.systemClock,
     logger: options.logger,

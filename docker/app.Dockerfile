@@ -57,12 +57,16 @@ RUN pnpm --filter @platform/web run build
 # ── Production dependencies ──────────────────────────────────────────────────────────────────────
 # `--prod` and the server's sub-graph only: no vitest, no biome, no playwright, no vite.
 #
-# The Agent SDK's per-platform binary (`@anthropic-ai/claude-agent-sdk-linux-*`, 217 MB) **stays**.
-# technical/11 says to "remove the unused musl/glibc SDK platform package", and on this Debian base
-# pnpm resolves the glibc one only, so there is no second copy to remove — and the remaining one is
-# not removable: the SDK checks the executable exists on *this* side before it hands the command to
-# `spawnClaudeCodeProcess` ("Claude Code executable not found at …"), so a platform process without
-# it cannot start a run even though the binary that actually executes is the run container's.
+# The Agent SDK's per-platform binary (`@anthropic-ai/claude-agent-sdk-linux-*`) is **removed**
+# after the install (WP-82, PROGRESS backlog 34). The SDK resolves its own bundled binary only when
+# `pathToClaudeCodeExecutable` is unset, and a containerised run always sets it to the path the
+# launcher verified inside the run image (`options.ts`), so this process never executes, stats or
+# resolves that package. This comment used to say the opposite — that the SDK checks the executable
+# exists on this side before `spawnClaudeCodeProcess` — which is false for 0.3.267: the only
+# `existsSync` is in the message it builds *after* a local spawn failed. Measured rather than read:
+# `node scripts/launcher-control-plane-check.mjs --runner-image platform:dev` runs a run end to end
+# with this image's own tree as the runner, with no such package in it. The `claude` a run executes
+# is `platform-runtime`'s, which installs the package in its own build (`runtime.Dockerfile`).
 FROM ${BASE_IMAGE} AS deps
 # A build stage (see `web` above).
 # hadolint ignore=DL3002
@@ -88,7 +92,8 @@ COPY apps/runlet/package.json apps/runlet/
 # a runtime dependency. `@node-rs/argon2` and the Agent SDK ship prebuilt per-platform
 # binaries and run no script at all.
 RUN pnpm install --frozen-lockfile --prod --ignore-scripts --filter @platform/server... \
- && pnpm store prune
+ && pnpm store prune \
+ && rm -rf node_modules/.pnpm/@anthropic-ai+claude-agent-sdk-linux-*
 
 # ── The image ────────────────────────────────────────────────────────────────────────────────────
 FROM ${BASE_IMAGE} AS app

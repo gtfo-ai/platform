@@ -38,20 +38,28 @@
  *
  * ## The egress allow-list is the part to read carefully
  *
- * technical/05 § "Network policy" lists four sources: the model provider host, the git host, "package
- * registries for the project's ecosystems (from discovery)" and read-only observability hosts for
- * stages that may use them. **Two of those four do not exist in this build.** Discovery has not been
- * written, so no registry host can be derived, and no stage carries observability hosts yet. So the
- * allow-list this produces is *the model host plus the git host* — the model host **alone** for a run
- * with no checkout (WP-74, {@link runNeedsCheckout}) — in **both** provider modes, which
- * is a correction: this paragraph read "(or none, in `local` provider mode) … the binary is on the
- * host and talks to nothing" until WP-53, and that has not been true since WP-22 put the CLI in the
- * run container in every mode. WP-53 measured the pinned binary authenticating against the same API
- * with `CLAUDE_CODE_OAUTH_TOKEN`. The hosts are `APP_MODEL_EGRESS_HOSTS`, read in both modes;
- * and the consequence is stated rather than discovered: **a run cannot install a package.** A stage
- * whose work needs `npm install` fails inside the container rather than reaching a registry, which is
- * the fail-closed direction and is visibly wrong rather than silently permissive. Widening it is
- * discovery's job (WP-21's row) and an operator's, not this function's.
+ * technical/05 § "Network policy" lists four sources: the model provider host, the git host,
+ * package registries, and read-only observability hosts for stages that may use them. What this
+ * builds from each (WP-82, which corrected this paragraph):
+ *
+ *  - **The model host**, `APP_MODEL_EGRESS_HOSTS`, in **both** provider modes. This paragraph read
+ *    "(or none, in `local` provider mode) … the binary is on the host and talks to nothing" until
+ *    WP-53, and that has not been true since WP-22 put the CLI in the run container in every mode;
+ *    WP-53 measured the pinned binary authenticating against the same API with
+ *    `CLAUDE_CODE_OAUTH_TOKEN`.
+ *  - **The git host**, read off `repo_url` — for a run with a checkout only (WP-74,
+ *    {@link runNeedsCheckout}).
+ *  - **The package registries**, `APP_RUN_REGISTRY_HOSTS` — **operator-declared**, empty by default
+ *    and therefore closed, exact host names — and only for a run that may install from a lockfile
+ *    ({@link runMayInstallFromLockfile}): the `verification` and `implementation` baselines carry
+ *    `LOCKFILE_INSTALL_ALLOW` (WP-54), and the `read_only` baseline never gets a registry. technical/05
+ *    once said these come "from discovery"; discovery exists since WP-21 and derives no host, and
+ *    WP-82's ruling replaced that source with the operator's list rather than giving discovery a way
+ *    to widen a run's egress from what it read in a repository. So on a stock instance a run still
+ *    **cannot install a package**: a request to a host that is not on the list is refused by the
+ *    egress sidecar (403, `docker-workspace.e2e.test.ts`), which is the fail-closed direction, until
+ *    an operator declares a registry (or a mirror) by name.
+ *  - **No observability hosts**: no stage carries one yet (PROGRESS backlog 143).
  */
 import type {
   RunSpec,
@@ -60,6 +68,7 @@ import type {
   WorkspaceSpec,
 } from '@platform/application';
 import { platformSkillOfQualified, workspaceSpecSchema } from '@platform/application';
+import { LOCKFILE_INSTALL_ALLOW } from '@platform/domain';
 
 /**
  * TD-021's per-run defaults: "project defaults 2 CPU / 4 GiB / 512 pids", `stop_grace_period: 20s`
@@ -198,6 +207,28 @@ export const runNeedsCheckout = (spec: RunSpec): boolean =>
   spec.tools.some((tool) => TOOLS_THAT_OPEN_THE_CHECKOUT.includes(tool));
 
 /**
+ * May this run install dependencies from a lockfile? — WP-82, PROGRESS backlog **140**.
+ *
+ * Read off the run's **own command policy**, like {@link runIsReadOnly} reads its tools: true when
+ * the run holds `Bash` and its effective `allow` still carries one of `LOCKFILE_INSTALL_ALLOW`'s
+ * entries. The `verification` and `implementation` baselines carry them (WP-54) and the
+ * `read_only` baseline never does, so this is WP-82's ruling — *"only for baselines that carry
+ * `LOCKFILE_INSTALL_ALLOW`, never `read_only`"* — asked of the policy the run was actually given
+ * rather than of a table of roles. It is narrower than the baseline in one direction and never
+ * wider: a project that moves `npm ci` into `commands.ask` or `commands.block` takes it out of
+ * `allow` (`narrowCommandPolicy`), and its runs then get no registry either, because nothing they
+ * may run unattended would use one.
+ *
+ * What it does not bound, said where the predicate is: once a registry is on the list, **every**
+ * process in the container can reach it, not only `npm ci` — a `npm run *` script, `make *` and the
+ * model's own `curl` included. The egress list is per host, never per command (technical/05); the
+ * operator declaring the host is the one who decides that trade.
+ */
+export const runMayInstallFromLockfile = (spec: RunSpec): boolean =>
+  spec.tools.includes('Bash') &&
+  spec.commandPolicy.allow.some((entry) => LOCKFILE_INSTALL_ALLOW.includes(entry));
+
+/**
  * The platform skills to provision, read off the run's own `skills` list.
  *
  * `RunSpec.skills` is plugin-qualified (`agentic:kb`) because that is what the SDK's filter takes;
@@ -228,6 +259,12 @@ export interface BuildWorkspaceSpecInput {
    * module docblock has the correction). For a run with no checkout it is the **whole** list.
    */
   readonly platformEgressHosts: readonly string[];
+  /**
+   * `APP_RUN_REGISTRY_HOSTS` — the package registries an operator declared (WP-82). Joined to the
+   * list only when {@link runMayInstallFromLockfile} holds. Required rather than defaulted, so a
+   * caller decides; `[]` is the closed answer.
+   */
+  readonly runRegistryHosts: readonly string[];
   /** Non-secret project variables for the *container's* environment (BD-025 §3 keeps secrets out). */
   readonly containerEnv?: Readonly<Record<string, string>>;
   readonly limits?: WorkspaceLimits;
@@ -257,8 +294,14 @@ export const buildWorkspaceSpec = (input: BuildWorkspaceSpecInput): WorkspaceSpe
   // hosts alone. Leaving the git host on would hand a run that cannot open a tree a route to the one
   // host that serves the tree.
   const gitHosts = checkout ? [egressHostOfRepoUrl(input.repoUrl)] : [];
+  // WP-82: a registry joins only a run that may install from a lockfile — never a `read_only` one.
+  const registryHosts = runMayInstallFromLockfile(input.spec) ? input.runRegistryHosts : [];
   const hosts = [
-    ...new Set([...input.platformEgressHosts.map((host) => host.toLowerCase()), ...gitHosts]),
+    ...new Set(
+      [...input.platformEgressHosts, ...gitHosts, ...registryHosts].map((host) =>
+        host.toLowerCase(),
+      ),
+    ),
   ];
   const keepUntil = new Date(
     input.now.getTime() + (input.keepDays ?? DEFAULT_WORKSPACE_KEEP_DAYS) * 24 * 60 * 60 * 1_000,

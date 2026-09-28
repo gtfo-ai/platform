@@ -49,9 +49,23 @@
  * with `test -x` inside the image), and the substitution reaches `SpawnOptions.command`, which is
  * the string the shim execs. It also does not prove the egress *filter*, or the compose file.
  *
+ * ## What WP-82 added
+ *
+ *  - **Backlog 136, measured**: a create replayed across a launcher restart
+ *    ({@link measureReplayAcrossRestart}). On Docker Engine 29.7.2 / API 1.55 (Docker Desktop,
+ *    `linux/arm64`) the replay is refused at the **network** — `409 network with name run-<id>
+ *    already exists`, surfaced to the runner as `workspace_failed` — before `#prepare` runs, so the
+ *    live run's shim token is untouched, the rollback removes nothing (it made nothing), and no
+ *    second container starts. The first run's container keeps running with no launcher holding a
+ *    handle for it: the orphan is real, and nothing in the platform reaps it.
+ *  - **Backlog 34's residual**: `--runner-image platform:dev` runs the runner half from the product
+ *    image's own tree, which since WP-82 carries no `@anthropic-ai/claude-agent-sdk-linux-*`
+ *    package, and the run still completes — the measurement `docker/app.Dockerfile` cites.
+ *
  * ## Environment
  *
  *     DOCKER_HOST=unix:///var/run/docker.sock node scripts/launcher-control-plane-check.mjs
+ *     DOCKER_HOST=unix:///var/run/docker.sock node scripts/launcher-control-plane-check.mjs --runner-image platform:dev
  */
 import process from 'node:process';
 import './ts-source-resolver.mjs';
@@ -62,10 +76,32 @@ const { startDockerFixture, RUNTIME_IMAGE, EGRESS_IMAGE, GIT_IMAGE, REPO_ROOT, d
 const RUN_ID = '9f3a1c2e-0000-4000-8000-0000000053a1';
 const IDEMPOTENCY_RUN_ID = '9f3a1c2e-0000-4000-8000-0000000053a2';
 const BAD_RUN_ID = '9f3a1c2e-0000-4000-8000-0000000053a3';
+/** Backlog 136's run (WP-82): created, the launcher restarted, then created again. */
+const REPLAY_RUN_ID = '9f3a1c2e-0000-4000-8000-00000000136a';
 const TOKEN = 'FAKE-wp53-launcher-token-000000000000';
 const PORT = '7780';
 const LAUNCHER_NAME = 'agentic-wp53-launcher';
 const BAD_LAUNCHER_NAME = 'agentic-wp53-launcher-badcli';
+
+/**
+ * `--runner-image <ref>` (WP-82, backlog 34's residual): run the runner half inside that image,
+ * from the image's **own** `/app` tree and `node_modules`, instead of the run image with the
+ * checkout mounted. `platform:dev` is what `compose.yml`'s `runner` service is, so this is the form
+ * that says whether the product image needs the Agent SDK's per-platform binary package.
+ */
+const cliArgs = process.argv.slice(2);
+const runnerImageIndex = cliArgs.indexOf('--runner-image');
+const RUNNER_IMAGE = runnerImageIndex === -1 ? null : (cliArgs[runnerImageIndex + 1] ?? null);
+const unknownArgs = cliArgs.filter(
+  (arg, index) =>
+    !(arg === '--runner-image' || (index > 0 && cliArgs[index - 1] === '--runner-image')),
+);
+if (unknownArgs.length > 0 || (runnerImageIndex !== -1 && RUNNER_IMAGE === null)) {
+  process.stderr.write(
+    `usage: launcher-control-plane-check.mjs [--runner-image <ref>] (got ${cliArgs.join(' ')})\n`,
+  );
+  process.exit(2);
+}
 
 const DOCKER_HOST = process.env['DOCKER_HOST'];
 if (!DOCKER_HOST) {
@@ -173,7 +209,136 @@ const assertDaemon = async () => {
   }
 };
 
+/**
+ * The runner container. **No docker socket**: the property the whole split exists for is that the
+ * process that runs the agent reaches the daemon through nothing at all.
+ *
+ * By default it borrows the run image for its Node runtime and runs this checkout's sources; with
+ * `--runner-image` it runs the product image's own tree, with only this script mounted beside it.
+ */
+const runRunner = async (extraEnv) => {
+  const env = {
+    CHECK_RUN_ID: RUN_ID,
+    CHECK_IDEMPOTENCY_RUN_ID: IDEMPOTENCY_RUN_ID,
+    CHECK_BAD_RUN_ID: BAD_RUN_ID,
+    CHECK_LAUNCHER_URL: `http://${LAUNCHER_NAME}:${PORT}`,
+    CHECK_BAD_LAUNCHER_URL: `http://${BAD_LAUNCHER_NAME}:${PORT}`,
+    CHECK_LAUNCHER_TOKEN: TOKEN,
+    CHECK_REPO_URL: fixture.repoUrl,
+    CHECK_REPO_HOST: fixture.repoContainer,
+    HOME: '/tmp',
+    ...extraEnv,
+  };
+  const source =
+    RUNNER_IMAGE === null
+      ? ['-v', `${REPO_ROOT}:${REPO_ROOT}:ro`, '-w', REPO_ROOT]
+      : [
+          '-v',
+          `${REPO_ROOT}/scripts/launcher-control-plane-runner.mjs:/app/scripts/launcher-control-plane-runner.mjs:ro`,
+          '-w',
+          '/app',
+        ];
+  const script =
+    RUNNER_IMAGE === null
+      ? `${REPO_ROOT}/scripts/launcher-control-plane-runner.mjs`
+      : '/app/scripts/launcher-control-plane-runner.mjs';
+  return docker(
+    [
+      'run',
+      '--rm',
+      '--name',
+      `agentic-wp53-runner-${RUN_ID.slice(0, 8)}`,
+      '--user',
+      '0:0',
+      '--network',
+      fixture.network,
+      ...Object.entries(env).flatMap(([name, value]) => ['-e', `${name}=${value}`]),
+      ...source,
+      // TD-025 §2's static mount, on the runner side. This is the data plane.
+      '-v',
+      `${fixture.controlVolume}:/run/agentic/ctl`,
+      '--entrypoint',
+      'node',
+      RUNNER_IMAGE ?? RUNTIME_IMAGE,
+      script,
+    ],
+    { allowFailure: true },
+  );
+};
+
+const lastJsonLine = (result) => {
+  try {
+    const lines = result.stdout.split('\n').filter((line) => line.trim().length > 0);
+    return JSON.parse(lines.at(-1) ?? 'null');
+  } catch {
+    return null;
+  }
+};
+
+/** What the daemon holds for one run id, asked by the host. */
+const runObjects = async (runId) => {
+  const containers = await docker(
+    [
+      'ps',
+      '-a',
+      '--filter',
+      `label=com.agentic.run=${runId}`,
+      '--format',
+      '{{.Names}} {{.ID}} {{.State}}',
+    ],
+    { allowFailure: true },
+  );
+  const networks = await docker(
+    [
+      'network',
+      'ls',
+      '--filter',
+      `label=com.agentic.run=${runId}`,
+      '--format',
+      '{{.Name}} {{.ID}}',
+    ],
+    { allowFailure: true },
+  );
+  const lines = (text) =>
+    text
+      .split('\n')
+      .filter((line) => line.trim().length > 0)
+      .sort();
+  return { containers: lines(containers.stdout), networks: lines(networks.stdout) };
+};
+
+/**
+ * PROGRESS backlog **136** (WP-82), measured: a create replayed across a launcher restart.
+ *
+ * The runner creates a run and never releases it; the launcher container is stopped the way compose
+ * stops it (`docker stop`, SIGTERM) and started again with the same configuration, so its
+ * idempotency map is empty; the runner then creates the **same run id** again. What is recorded is
+ * the object that collides first, what the runner is told, whether `/ctl/<run-id>/token` was
+ * rewritten, and what is still running afterwards. It is the case where the first create had
+ * **completed** before the restart (the response lost, or the runner retrying); a restart *during*
+ * a create leaves a different partial state and is not what this measures.
+ *
+ * Everything the replay leaves is removed by `fixture.cleanup()` — the existing sweep, which removes
+ * every container and network labelled `com.agentic.run` — and the host asserts afterwards that the
+ * run's objects are gone.
+ */
+const measureReplayAcrossRestart = async () => {
+  const phaseEnv = { CHECK_REPLAY_RUN_ID: REPLAY_RUN_ID };
+  const first = lastJsonLine(await runRunner({ ...phaseEnv, CHECK_PHASE: 'replay-create' }));
+  const beforeRestart = await runObjects(REPLAY_RUN_ID);
+  await docker(['stop', LAUNCHER_NAME], { allowFailure: true });
+  await docker(['rm', '-f', LAUNCHER_NAME], { allowFailure: true });
+  await docker(launcherArgs(LAUNCHER_NAME, fixture, []));
+  const restarted = await waitForListening(LAUNCHER_NAME);
+  const afterRestart = await runObjects(REPLAY_RUN_ID);
+  const retry = lastJsonLine(await runRunner({ ...phaseEnv, CHECK_PHASE: 'replay-retry' }));
+  const afterRetry = await runObjects(REPLAY_RUN_ID);
+  const launcherLog = await docker(['logs', LAUNCHER_NAME], { allowFailure: true });
+  return { first, beforeRestart, restarted, afterRestart, retry, afterRetry, launcherLog };
+};
+
 let fixture;
+let replay = null;
 let report = null;
 let driven = null;
 await assertDaemon();
@@ -200,50 +365,7 @@ try {
     `${BAD_LAUNCHER_NAME}:${PORT}`,
   );
 
-  driven = await docker(
-    [
-      'run',
-      '--rm',
-      '--name',
-      `agentic-wp53-runner-${RUN_ID.slice(0, 8)}`,
-      // **No docker socket.** This is the property the whole split exists for: the process that
-      // runs the agent reaches the daemon through nothing at all.
-      '--user',
-      '0:0',
-      '--network',
-      fixture.network,
-      '-e',
-      `CHECK_RUN_ID=${RUN_ID}`,
-      '-e',
-      `CHECK_IDEMPOTENCY_RUN_ID=${IDEMPOTENCY_RUN_ID}`,
-      '-e',
-      `CHECK_BAD_RUN_ID=${BAD_RUN_ID}`,
-      '-e',
-      `CHECK_LAUNCHER_URL=http://${LAUNCHER_NAME}:${PORT}`,
-      '-e',
-      `CHECK_BAD_LAUNCHER_URL=http://${BAD_LAUNCHER_NAME}:${PORT}`,
-      '-e',
-      `CHECK_LAUNCHER_TOKEN=${TOKEN}`,
-      '-e',
-      `CHECK_REPO_URL=${fixture.repoUrl}`,
-      '-e',
-      `CHECK_REPO_HOST=${fixture.repoContainer}`,
-      '-e',
-      'HOME=/tmp',
-      '-v',
-      `${REPO_ROOT}:${REPO_ROOT}:ro`,
-      // TD-025 §2's static mount, on the runner side. This is the data plane.
-      '-v',
-      `${fixture.controlVolume}:/run/agentic/ctl`,
-      '-w',
-      REPO_ROOT,
-      '--entrypoint',
-      'node',
-      RUNTIME_IMAGE,
-      `${REPO_ROOT}/scripts/launcher-control-plane-runner.mjs`,
-    ],
-    { allowFailure: true },
-  );
+  driven = await runRunner({});
 
   try {
     const lines = driven.stdout.split('\n').filter((line) => line.trim().length > 0);
@@ -334,6 +456,71 @@ try {
     );
   }
 
+  if (report !== null) {
+    record(
+      'the runner found no Agent SDK platform binary package for its own platform (backlog 34)',
+      RUNNER_IMAGE === null ||
+        !(report.sdkPlatformPackages ?? ['?']).some((entry) =>
+          entry.startsWith('@anthropic-ai+claude-agent-sdk-linux-'),
+        ),
+      `${RUNNER_IMAGE ?? RUNTIME_IMAGE + ' + checkout'}: ${JSON.stringify(report.sdkPlatformPackages ?? null)}`,
+    );
+  }
+
+  // Backlog 136, measured (WP-82). What is asserted is what was measured on Docker Engine 29.7.2 /
+  // API 1.55 — the replay is refused at the network (409), rolls nothing back, leaves the live
+  // token alone and starts no second container — so a daemon that behaves differently fails this
+  // check instead of silently falsifying the sentences that quote it. That the first container
+  // outlives the replay is recorded as an observation: it is the orphan, and nothing reaps it.
+  replay = await measureReplayAcrossRestart();
+  const firstContainer = replay.first?.containerId ?? null;
+  record(
+    'backlog 136: the first create succeeded and its run container was running before the restart',
+    replay.first?.ok === true &&
+      replay.beforeRestart.containers.some((line) => line.startsWith(`ws-${REPLAY_RUN_ID} `)),
+    JSON.stringify({ first: replay.first, objects: replay.beforeRestart }),
+  );
+  record(
+    'backlog 136: the launcher restarted with an empty idempotency map',
+    replay.restarted,
+    JSON.stringify({ objects: replay.afterRestart }),
+  );
+  record(
+    'backlog 136: the replayed create was refused, not performed a second time',
+    replay.retry !== null && replay.retry.ok === false,
+    JSON.stringify({
+      ok: replay.retry?.ok,
+      replayed: replay.retry?.replayed,
+      errorCode: replay.retry?.errorCode,
+      errorMessage: replay.retry?.errorMessage,
+    }),
+  );
+  record(
+    'backlog 136: the refused replay left the live run’s shim token as it was',
+    replay.retry !== null &&
+      replay.retry.tokenBefore === replay.retry.tokenAfter &&
+      replay.retry.tokenAfter === replay.first?.tokenAfter,
+    `before the replay ${replay.retry?.tokenBefore}, after ${replay.retry?.tokenAfter}, at first create ${replay.first?.tokenAfter} — ${
+      replay.retry?.tokenBefore === replay.retry?.tokenAfter ? 'unchanged' : 'REWRITTEN OR REMOVED'
+    }`,
+  );
+  const runContainers = replay.afterRetry.containers.filter((line) =>
+    line.startsWith(`ws-${REPLAY_RUN_ID} `),
+  );
+  record(
+    'backlog 136: the replay left no second run container',
+    runContainers.length <= 1,
+    JSON.stringify(replay.afterRetry),
+  );
+  record(
+    'backlog 136: whether the first run container outlived the replay (observation)',
+    true,
+    `first ${firstContainer?.slice(0, 12)}; now ${JSON.stringify(runContainers)}`,
+  );
+  process.stdout.write(
+    `--- backlog 136 launcher log after the restart ---\n${replay.launcherLog.stdout}\n${replay.launcherLog.stderr}\n`,
+  );
+
   if (report?.ok !== true) {
     const shimLog = await docker(['logs', `ws-${RUN_ID}`], { allowFailure: true });
     const launcherLog = await docker(['logs', LAUNCHER_NAME], { allowFailure: true });
@@ -372,9 +559,18 @@ try {
   await docker(['rm', '-f', LAUNCHER_NAME, BAD_LAUNCHER_NAME], { allowFailure: true });
   await fixture?.cleanup();
   // The two run volumes retention deliberately keeps; this is a check, not an instance.
-  for (const runId of [RUN_ID, IDEMPOTENCY_RUN_ID, BAD_RUN_ID]) {
+  for (const runId of [RUN_ID, IDEMPOTENCY_RUN_ID, BAD_RUN_ID, REPLAY_RUN_ID]) {
     await docker(['volume', 'rm', '-f', `ws-${runId}`], { allowFailure: true });
   }
+}
+if (replay !== null) {
+  // WP-82 criterion (4): whatever the replay left, the existing sweep removed.
+  const left = await runObjects(REPLAY_RUN_ID);
+  record(
+    'backlog 136: the existing sweep removed everything the replay left',
+    left.containers.length === 0 && left.networks.length === 0,
+    JSON.stringify(left),
+  );
 }
 
 const failed = results.filter((result) => !result.ok);

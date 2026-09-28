@@ -9,8 +9,12 @@
  * `createWorkspaceClaudeRunner`, the real `createClaudeRunner`, the real Agent SDK `query()`, the
  * real `createRunletSpawn` — and the only thing that is not the model is the CLI executable.
  *
- * It prints one JSON line and exits; `launcher-control-plane-check.mjs` reads it.
+ * It prints one JSON line and exits; `launcher-control-plane-check.mjs` reads it. With
+ * `CHECK_PHASE` set (WP-82) it runs one half of backlog 136's measurement instead — see
+ * {@link PHASE}.
  */
+import { createHash } from 'node:crypto';
+import { readdirSync, readFileSync } from 'node:fs';
 import process from 'node:process';
 import './ts-source-resolver.mjs';
 
@@ -91,6 +95,7 @@ const provisioner = launcherAdapters.createLauncherRunWorkspaceProvisioner({
   // No model host: the CLI is a local executable in the run container, so the allow-list is exactly
   // the git host the fixture serves from.
   modelEgressHosts: [],
+  runRegistryHosts: [],
   credentialTtlSeconds: 3_600,
   clock: runnerAdapters.systemClock,
   logger,
@@ -120,7 +125,68 @@ const specFor = (runId) =>
     secretEnvNames: [],
   });
 
+/**
+ * Which of the SDK's per-platform `claude` packages this process could resolve — PROGRESS backlog
+ * **34**'s residual, WP-82. The SDK resolves its **own** binary only when
+ * `pathToClaudeCodeExecutable` is unset, and a containerised run always sets it (the launcher's
+ * answer), so a runner with **no** package for its own platform that still completes a run is the
+ * measurement `docker/app.Dockerfile` needed before it dropped the package (207 MiB). Read off the
+ * pnpm store directory beside this tree, so it answers for whichever tree this script runs from —
+ * the checkout mount or, under `--runner-image`, the product image's own `/app`.
+ */
+const sdkPlatformPackages = () => {
+  try {
+    return readdirSync(new URL('../node_modules/.pnpm/', import.meta.url)).filter((entry) =>
+      entry.startsWith('@anthropic-ai+claude-agent-sdk-'),
+    );
+  } catch (error) {
+    return [`unreadable: ${error?.code ?? String(error)}`];
+  }
+};
+
+/**
+ * PROGRESS backlog **136**, WP-82: the two halves of *a create replayed across a launcher restart*.
+ *
+ * `launcher-control-plane-check.mjs` runs this script twice with `CHECK_PHASE` set, and restarts the
+ * launcher container in between: `replay-create` provisions a run and leaves it running (it never
+ * releases it, which is what a runner whose response was lost looks like), `replay-retry` asks the
+ * **restarted** launcher — which has forgotten the handle — to create the same run id again. Each
+ * phase prints what the runner saw and a digest of `/ctl/<run-id>/token` (never the token), so the
+ * host can say whether the retry rewrote the live run's shim token.
+ */
+const tokenDigest = (runId) => {
+  try {
+    return createHash('sha256')
+      .update(readFileSync(`${CONTROL_ROOT}/${runId}/token`))
+      .digest('hex')
+      .slice(0, 16);
+  } catch (error) {
+    return `absent: ${error?.code ?? String(error)}`;
+  }
+};
+
+const PHASE = process.env['CHECK_PHASE'] ?? 'main';
+if (PHASE === 'replay-create' || PHASE === 'replay-retry') {
+  const runId = required('CHECK_REPLAY_RUN_ID');
+  const phase = { phase: PHASE, ok: false, tokenBefore: tokenDigest(runId), notes };
+  try {
+    await provisioner.provision(specFor(runId));
+    const created = creates.filter((entry) => entry.spec.runId === runId).at(-1);
+    phase.ok = true;
+    phase.replayed = created?.response.replayed ?? null;
+    phase.containerId = created?.response.handle.containerId ?? null;
+    phase.networkId = created?.response.handle.networkId ?? null;
+  } catch (error) {
+    phase.errorCode = error?.code ?? null;
+    phase.errorMessage = String(error?.message ?? error).slice(0, 600);
+  }
+  phase.tokenAfter = tokenDigest(runId);
+  process.stdout.write(`${JSON.stringify(phase)}\n`);
+  process.exit(0);
+}
+
 const report = {
+  sdkPlatformPackages: sdkPlatformPackages(),
   ok: false,
   health: null,
   wrongTokenCode: null,
@@ -252,6 +318,7 @@ try {
       projects: projectSource,
       controlRoot: CONTROL_ROOT,
       modelEgressHosts: [],
+      runRegistryHosts: [],
       credentialTtlSeconds: 3_600,
       clock: runnerAdapters.systemClock,
       logger,

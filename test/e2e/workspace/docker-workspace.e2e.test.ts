@@ -35,6 +35,7 @@ import path from 'node:path';
 import {
   allowAnyIntegrationHost,
   type CredentialRevocationAddress,
+  commandBaselineFor,
   createIntegrationActionExecutor,
   createMemoryAuditLog,
   createVirtualTimer,
@@ -44,10 +45,11 @@ import {
   runCredentialHandle,
   runCredentialRevocations,
   runCredentialWrites,
+  TOOLS_BY_ROLE,
 } from '@platform/application';
 import type { Id } from '@platform/contracts';
 import { fixedClock } from '@platform/domain';
-import { workspace } from '@platform/infrastructure';
+import { runner, workspace } from '@platform/infrastructure';
 import { createFakeGitProvider } from '@platform/integrations';
 import { PLATFORM_SKILL_NAMES, PLATFORM_SKILLS } from '@platform/prompts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -2312,6 +2314,76 @@ describe('egress policy', () => {
       await target.stop();
     }
   }, 240_000);
+});
+
+/**
+ * WP-82 criterion (1), through the real sidecar: the **production derivation** of the egress list
+ * (`buildWorkspaceSpec`, with `APP_RUN_REGISTRY_HOSTS` naming one registry) is what tinyproxy
+ * enforces. A reviewer run — the `verification` baseline, which carries `LOCKFILE_INSTALL_ALLOW` —
+ * reaches the registry; an architect run — `read_only` — is refused the **same host on the same
+ * address**, with the same operator list. The positive is what makes the refusal mean something
+ * (rule 42), and the two aliases of one container make the refusal the filter's (rule 43).
+ *
+ * The fixture spec supplies everything but the egress list (its repository and cache key are the
+ * fixture's mirror); the list is taken whole from the builder, so the assertion is about the
+ * derivation and not about a list this file wrote.
+ */
+describe('registry egress follows the command baseline (WP-82)', () => {
+  it('lets a verification run reach a declared registry, and refuses it to a read-only run', async () => {
+    const suffix = Math.random().toString(36).slice(2, 8);
+    const registry = `registry-${suffix}.test`;
+    const unlisted = `unlisted-${suffix}.test`;
+    const target = await startEgressTarget(fixture, registry, unlisted);
+    const egressOf = (role: 'reviewer' | 'architect', stage: string) =>
+      workspace.buildWorkspaceSpec({
+        spec: runner.runSpecFixture({
+          role,
+          tools: [...TOOLS_BY_ROLE[role]],
+          commandPolicy: (({ allow, ask, block }) => ({
+            allow: [...allow],
+            ask: [...ask],
+            block: [...block],
+          }))(commandBaselineFor(role, stage, [])),
+        }),
+        repoUrl: fixture.repoUrl,
+        defaultBranch: 'main',
+        platformEgressHosts: [],
+        runRegistryHosts: [registry],
+        now: new Date(),
+      }).egress;
+    const verification = egressOf('reviewer', 'code_review');
+    const readOnly = egressOf('architect', 'architecture');
+    expect(verification.hosts).toContain(registry);
+    expect(readOnly.hosts).not.toContain(registry);
+
+    const probe = async (egress: typeof verification) => {
+      const { handle } = await startRun({ egress });
+      try {
+        const proxy = `http://egress-${handle.runId}:8888`;
+        return (
+          await probeUnderRunContainerConfig(
+            fixture.engine,
+            handle.containerId,
+            `curl -s -o /dev/null -w "registry=%{http_code}\\n" --max-time 20 -x ${proxy} http://${registry}:${target.port}/; ` +
+              `curl -s -o /dev/null -w "unlisted=%{http_code}\\n" --max-time 20 -x ${proxy} http://${unlisted}:${target.port}/`,
+            { image: RUNTIME_IMAGE },
+          )
+        ).output;
+      } finally {
+        await fixture.provider.destroy(handle);
+      }
+    };
+    try {
+      const allowed = await probe(verification);
+      expect(allowed).toContain('registry=200');
+      expect(allowed).toContain('unlisted=403');
+      const refused = await probe(readOnly);
+      expect(refused).toContain('registry=403');
+      expect(refused).toContain('unlisted=403');
+    } finally {
+      await target.stop();
+    }
+  }, 300_000);
 });
 
 describe('create is atomic', () => {

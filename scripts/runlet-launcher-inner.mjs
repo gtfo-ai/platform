@@ -116,6 +116,7 @@ const workspaceSpec = workspaceAdapters.buildWorkspaceSpec({
   defaultBranch: 'main',
   // No model host: the CLI is a local executable, and this is what makes the allow-list one host.
   platformEgressHosts: [],
+  runRegistryHosts: [],
   now: new Date(),
 });
 
