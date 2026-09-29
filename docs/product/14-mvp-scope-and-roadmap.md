@@ -17,7 +17,7 @@ Startup rule applied: the MVP must deliver the **whole loop** (ticket → merged
 - Knowledge base phase 1: `.agentic/` layout, index, rules, lessons schema, full-text search, context packs with audit, onboarding wizard steps 1–5 with Discovery agent and business interview.
 - Cost: per run/stage/task/project/day; budgets org/project/task/run with pause-not-kill; price table.
 - Audit: full run records with transcripts; task timeline; config audit.
-- UI: dashboard, board, task detail, run detail with live transcript, agents view, questions inbox, knowledge browser + proposals queue, pipeline settings (enable/disable, model/effort/prompt override, limits), integrations setup with test connection, budgets, statistics (tasks delivered, cost, LOC per day), audit log.
+- UI: dashboard, board, task detail, run detail with live transcript, agents view, questions inbox, knowledge browser + proposals queue, pipeline settings (enable/disable, model/effort/prompt additions, limits), integrations setup with test connection, budgets, statistics (tasks delivered, cost, LOC per day), audit log.
 - Skills mounted into runs (product/13) and project skill reuse.
 - Adoption features and operating modes (product/18): autonomy dial, shadow mode, review-only, ticket linter, history bootstrap, steer/take-over, maintenance pipeline, cost estimate + budget approval, human time accounting, digest/quiet hours, ask-the-task, epic split; pipeline gates: rebase, dependency/epic awareness, reviewer routing + risk classes, dependency policy, coverage delta (BD-027…030).
 - GitHub Actions CI for the platform: unit + contract tests, secret scanning, image build.

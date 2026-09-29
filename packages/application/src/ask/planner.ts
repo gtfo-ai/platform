@@ -256,6 +256,8 @@ export const createAskRunPlanner = (options: AskRunPlannerOptions): AskRunPlanne
         focus: null,
         language: 'auto',
         ask: { question: ask.question, askedBy: request.askedByLabel },
+        // WP-92: a project prompt file is written for a **stage**, and an ask belongs to none.
+        projectPrompts: [],
       });
 
       // The stage planner's order (backlog 146): baseline, organisation maximum, project.

@@ -12,8 +12,9 @@
  *
  * Through the platform's own bare mirror (TD-026), with the same fetch, the same credential and the
  * same default-branch rule the knowledge index uses: {@link RepositoryFileSource} is the widening of
- * that read to **two named paths outside the four indexed ones** — this file and `CLAUDE.md` (the
- * export's pointer, WP-63 criterion 1) — and nothing else. Configuration is trusted from the default
+ * that read to **named paths outside the four indexed ones** — this file, `CLAUDE.md` (the export's
+ * pointer, WP-63 criterion 1), `AGENTS.md` (WP-64) and the direct children of one named directory,
+ * `.agentic/prompts/` (WP-92, `project-prompts.ts`) — and nothing else. Configuration is trusted from the default
  * branch only (BD-025 §1): a task branch or a merge request must not be able to change the rules that
  * govern its own run, so no reader here accepts a ref, and a pinned commit must be an ancestor of the
  * default branch (the adapter's rule, inherited).
@@ -57,6 +58,11 @@ import { assertOutsideTransaction } from '../events/open-transaction.js';
 import type { RepositoryConfigState } from '../pipeline/settings.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
+import {
+  isProjectPromptPath,
+  MAX_PROJECT_PROMPT_FILES,
+  type ProjectPromptReading,
+} from './project-prompts.js';
 import { tightenRepositoryLayer, withoutNotAppliedKeys } from './repository-grades.js';
 
 /** The repository's configuration file (technical/12). */
@@ -71,8 +77,10 @@ export const CLAUDE_MD_PATH = 'CLAUDE.md';
  * (`isIndexedVaultPath`), and a project's other files are none of the platform's business. These
  * three are the exceptions and they are exact paths, never a glob: `CLAUDE.md` (WP-63) and
  * `AGENTS.md` (WP-64, the readiness re-check's R8) are already read by the indexer, so their entries
- * add no exposure, and `.agentic/config.yml` is the one genuinely new path. A project's `.agentic/pipeline.yml` and `prompts/<stage>.md` are **still unread** — the
- * WP-18a bullet that names them is a different consumer and is not closed here.
+ * add no exposure, and `.agentic/config.yml` is the one genuinely new path. The prompt files are
+ * read too since WP-92, but through a **directory** request of their own (`promptDirectory`, one
+ * named directory, never a glob), so they are not in this list. A project's `.agentic/pipeline.yml`
+ * is **still unread** (M5 declines `custom_stages` for 0.1).
  */
 /**
  * `AGENTS.md` — the second of product/17 R8's two files, read by the readiness re-check (WP-64).
@@ -113,6 +121,11 @@ export type RepositoryFilesResult =
       readonly commitSha: string;
       /** An entry for every path the request asked for, and none for a path it did not. */
       readonly files: Readonly<Partial<Record<RepositoryFilePath, RepositoryFileEntry>>>;
+      /**
+       * `.agentic/prompts/` at the same commit (WP-92) — present exactly when the request asked
+       * for it (`promptDirectory`). The texts are **as read**: the caller redacts.
+       */
+      readonly prompts?: ProjectPromptReading;
       /** `true` only when `recordedCommit` was asked and the commit read is strictly older. */
       readonly behindRecorded?: boolean;
     }
@@ -122,6 +135,11 @@ export type RepositoryFilesResult =
 export interface RepositoryFileRequest {
   readonly projectId: Id;
   readonly paths: readonly RepositoryFilePath[];
+  /**
+   * Also list and read `.agentic/prompts/`'s direct `<name>.md` children at the same commit
+   * (WP-92), bounded at `MAX_PROJECT_PROMPT_FILES` files of `MAX_PROJECT_PROMPT_FILE_BYTES` each.
+   */
+  readonly promptDirectory?: boolean;
   /** Pin the read; it must be an ancestor of the default branch. Omitted: the branch's head. */
   readonly commitSha?: string;
   /**
@@ -154,7 +172,18 @@ export interface RepositoryConfigNotApplied {
   readonly reason: string;
 }
 
-export type RepositoryConfigSnapshot =
+/**
+ * One reading of the default branch: the configuration file's state and — since WP-92 — the prompt
+ * directory at the same commit, **redacted** (TD-012 step 2). `prompts` absent is *"this reading did
+ * not read the prompt directory"* — a row recorded before WP-92, or a stored shape this release does
+ * not know — and is read like no reading at all: a prompt file a configuration names is `unread`,
+ * never assumed absent (`projectPromptsForStage`).
+ */
+export type RepositoryConfigSnapshot = RepositoryConfigSnapshotState & {
+  readonly prompts?: ProjectPromptReading;
+};
+
+type RepositoryConfigSnapshotState =
   | { readonly status: 'absent'; readonly commitSha: string; readonly readAt: IsoDateTime }
   | {
       readonly status: 'valid';
@@ -324,6 +353,27 @@ export const revalidateRepositorySnapshot = (
   snapshot: RepositoryConfigSnapshot | null,
   redactText: (value: string) => string,
 ): RepositoryConfigSnapshot | null => {
+  const graded = revalidateConfigState(snapshot, redactText);
+  if (graded === null || snapshot?.prompts === undefined) return graded;
+  // WP-92: the prompt directory under this release's rules — a path the reader would no longer
+  // list is dropped, so a stored row cannot hand a stage a file the reader refuses today.
+  return { ...graded, prompts: revalidatePromptReading(snapshot.prompts) };
+};
+
+const revalidatePromptReading = (reading: ProjectPromptReading): ProjectPromptReading => {
+  const kept = Object.entries(reading.files)
+    .filter(([path]) => isProjectPromptPath(path))
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+  return {
+    files: Object.fromEntries(kept.slice(0, MAX_PROJECT_PROMPT_FILES)),
+    truncated: reading.truncated || kept.length > MAX_PROJECT_PROMPT_FILES,
+  };
+};
+
+const revalidateConfigState = (
+  snapshot: RepositoryConfigSnapshot | null,
+  redactText: (value: string) => string,
+): RepositoryConfigSnapshot | null => {
   if (snapshot?.status !== 'valid') return snapshot;
   const prototypeKey = prototypeKeyIn(snapshot.values, []);
   const checked = agenticConfigSchema.safeParse({ version: 1, ...snapshot.values });
@@ -400,6 +450,9 @@ export const refreshRepositoryConfig = async (
   const read = await options.source.read({
     projectId: request.projectId,
     paths: [REPOSITORY_CONFIG_PATH],
+    // WP-92: the prompt directory in the same pass, so the configuration and the prompt files it
+    // names describe one commit and the mirror is prepared once.
+    promptDirectory: true,
     ...(request.commitSha === undefined ? {} : { commitSha: request.commitSha }),
     ...(recorded === null ? {} : { recordedCommit: recorded.commitSha }),
   });
@@ -423,13 +476,17 @@ export const refreshRepositoryConfig = async (
     );
     return { status: 'stale', snapshot: recorded };
   }
-  const snapshot = interpretRepositoryConfig({
+  const interpreted = interpretRepositoryConfig({
     entry: read.files[REPOSITORY_CONFIG_PATH],
     commitSha: read.commitSha,
     readAt: options.clock.now(),
     codec: options.codec,
     redactText: options.redactText,
   });
+  const snapshot: RepositoryConfigSnapshot =
+    read.prompts === undefined
+      ? interpreted
+      : { ...interpreted, prompts: redactedPromptReading(read.prompts, options.redactText) };
   await options.store.record(request.projectId, snapshot);
   const fields = {
     project_id: request.projectId,
@@ -439,6 +496,12 @@ export const refreshRepositoryConfig = async (
     ...(snapshot.status === 'valid' && snapshot.notApplied.length > 0
       ? { not_applied: snapshot.notApplied.map((item) => item.key) }
       : {}),
+    ...(snapshot.prompts === undefined
+      ? {}
+      : {
+          prompt_files: Object.keys(snapshot.prompts.files).length,
+          prompt_files_truncated: snapshot.prompts.truncated,
+        }),
   };
   if (snapshot.status === 'invalid') {
     logger.warn(
@@ -450,6 +513,24 @@ export const refreshRepositoryConfig = async (
   }
   return { status: 'recorded', snapshot };
 };
+
+/**
+ * The prompt directory as it is stored: every text through the redactor (TD-012 step 2), and the
+ * rest untouched. The cut is the consumer's (`MAX_PROJECT_PROMPT_CHARS`), so redaction happens on
+ * the whole text first — an exact-match redactor cannot find a secret a cap has halved.
+ */
+export const redactedPromptReading = (
+  reading: ProjectPromptReading,
+  redactText: (value: string) => string,
+): ProjectPromptReading => ({
+  files: Object.fromEntries(
+    Object.entries(reading.files).map(([path, entry]) => [
+      path,
+      entry.kind === 'file' ? { ...entry, text: redactText(entry.text) } : entry,
+    ]),
+  ),
+  truncated: reading.truncated,
+});
 
 /** What a run's settings see of a reading: the state, and the layer when there is one to merge. */
 export const repositoryConfigStateOf = (

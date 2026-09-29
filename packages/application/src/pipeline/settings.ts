@@ -41,6 +41,7 @@ import {
   SHIPPED_TEMPLATES,
   SPIKE_TEMPLATE_ID,
 } from '@platform/domain';
+import type { ProjectPromptReading } from '../config/project-prompts.js';
 import { assertOutsideTransaction } from '../events/open-transaction.js';
 import type { Transaction } from '../ports/transaction.js';
 
@@ -94,6 +95,13 @@ export interface ProjectSettings {
    * harness, and a process whose settings port has no repository layer.
    */
   readonly repository?: RepositoryConfigState;
+  /**
+   * The repository's `.agentic/prompts/` directory as the last reading recorded it (WP-92),
+   * redacted — what a stage's `project_prompt` blocks are built from (`projectPromptsForStage`).
+   * `null` or absent is *"no reading has read the directory"*: a prompt file the configuration
+   * names is then rendered `unread`, never assumed absent, and a convention file is not rendered.
+   */
+  readonly repositoryPrompts?: ProjectPromptReading | null;
 }
 
 /**

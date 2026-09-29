@@ -660,9 +660,9 @@ export const repositoryPathOf = (repoUrl: string): string => {
  * The templates are the shipped three: a project's own `.agentic/pipeline.yml` is read from the
  * default branch, and a template a project declared but this process could not read would park
  * every task one stage short of `done` — so it is absent rather than guessed. The repository file
- * reader WP-63 added (`createGitRepositoryFileSource`) is widened to exactly two named paths, and
- * `pipeline.yml` is not one of them: settling a project's pipeline from it is still a work package
- * of its own.
+ * reader WP-63 added (`createGitRepositoryFileSource`) is widened to three named paths and, since
+ * WP-92, one named directory (`.agentic/prompts/`, whose files arrive here as `repositoryPrompts`);
+ * `pipeline.yml` is not among them, and M5 declines it for 0.1.
  */
 export const createProjectSettingsPort = (
   pool: pg.Pool,
@@ -710,6 +710,9 @@ export const createProjectSettingsPort = (
         ? {}
         : { repositoryCommands: layered.repositoryCommands }),
       repository: repositoryConfigStateOf(snapshot),
+      // WP-92: the prompt directory the same reading recorded (redacted, bounded), or `null` when
+      // no reading has read it — a stage's `project_prompt` blocks are built from this.
+      repositoryPrompts: snapshot?.prompts ?? null,
       // Parsed, not cast — this column decides whether a plan waits for a human, and a document
       // that does not match the current schema must not be read as one that does. A row that fails
       // is `null`, which is the *stated* "never materialised" branch the gate names, and it is
@@ -1119,9 +1122,9 @@ export const composePipeline = async (
         claudeCodePath: options.agent.claudeBinary,
         env: runEnvironment.env,
         secretEnvNames: runEnvironment.secretEnvNames,
-        // The shipped defaults. A project's own `prompts/<stage>.md` override is still absent
-        // rather than half-read (product/13): WP-18a's default-branch read exists, but it returns
-        // the indexed vault paths, and a prompt override is not one of them.
+        // The shipped defaults, never replaced: a project's own prompt files reach the run as
+        // `project_prompt` data blocks beside them (WP-92), through the settings port's
+        // `repositoryPrompts`.
         prompts: ROLE_PROMPTS,
         // The ten platform skills (WP-14a). The planner reads them for their **digest** — the run's
         // `prompt_version` carries one, so a `SKILL.md` edited without a version bump is visible in

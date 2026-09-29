@@ -97,7 +97,7 @@ stages:                          # per-stage agent settings
   refinement: { model: claude-opus-5, effort: medium, max_turns: 30, budget_usd: 2 }
   architecture: { model: claude-opus-5, effort: high, budget_usd: 5 }
   implementation: { model: claude-opus-5, effort: high, max_turns: 200, budget_usd: 15,
-                    prompt: prompts/implementation.md, prompt_append: prompts/implementation.append.md }  # prompt keys: not read (below)
+                    prompt: prompts/implementation.md, prompt_append: prompts/implementation.append.md }  # data blocks that add to the role prompt, never replace it (below)
   code_review: { model: claude-opus-5, effort: high }
 policies:
   autonomy: supervised           # observe | assist | supervised | autonomous — overridden only by
@@ -139,13 +139,13 @@ status_mapping:                  # task state -> ticket status name (provider-sp
 
 Secrets are never accepted from the repo. Unknown keys are errors (fail loudly, BD: product/12 validation). The UI shows the effective value per key with its source.
 
-**How the platform reads this file** (WP-63, Q94; before it, nothing did — PROGRESS backlog 44). The file is read from the project's **default branch** only (BD-025 §1), through the platform's own bare mirror (TD-026; `createGitRepositoryFileSource`, which reads exactly two paths outside the indexed vault — this file and `CLAUDE.md` — and refuses any other), pinned to the commit of every knowledge index run and on demand by `POST /api/projects/:project_id/config/refresh`. It is untrusted input: bounded at 64 KiB before it is read, parsed as YAML 1.2 (core schema, alias ceiling, duplicate keys refused, no `<<` merge keys) and held to the strict schema above. The last reading is `project_repository_config` (migration 0050) — `absent`, `valid` or `invalid` — and a reading that cannot reach the repository changes nothing. A **`valid`** file is the `repo` layer below. An **`invalid`** one is a named refusal carrying the key paths it failed on: `GET /api/projects/:project_id/config` answers `409 invalid_repository_config`, and **no run of the project starts** (the stage is escalated to `needs_human`, an ask is refused) until a later reading parses — the platform does not run on the settings alone or on an older reading, because the file on the default branch *is* the project's statement of its rules. **The file may tighten, never loosen, what an agent or a reviewer is held to** (WP-63 review round 1, the orchestrator's interim ruling pending a founder question): the settings need `project.settings.write` (admin) while the file needs only merge rights, so every key it can state is graded (`REPOSITORY_KEY_GRADES`, `packages/application/src/config/repository-grades.ts`, held to the schema by a test) and anything it did not get is listed in the reading's `not_applied`, never dropped in silence:
+**How the platform reads this file** (WP-63, Q94; before it, nothing did — PROGRESS backlog 44). The file is read from the project's **default branch** only (BD-025 §1), through the platform's own bare mirror (TD-026; `createGitRepositoryFileSource`, which reads three named paths outside the indexed vault — this file, `CLAUDE.md` and `AGENTS.md` — plus, since WP-92, the direct `<name>.md` children of `.agentic/prompts/`, and refuses any other), pinned to the commit of every knowledge index run and on demand by `POST /api/projects/:project_id/config/refresh`. It is untrusted input: bounded at 64 KiB before it is read, parsed as YAML 1.2 (core schema, alias ceiling, duplicate keys refused, no `<<` merge keys) and held to the strict schema above. The last reading is `project_repository_config` (migration 0050) — `absent`, `valid` or `invalid` — and a reading that cannot reach the repository changes nothing. A **`valid`** file is the `repo` layer below. An **`invalid`** one is a named refusal carrying the key paths it failed on: `GET /api/projects/:project_id/config` answers `409 invalid_repository_config`, and **no run of the project starts** (the stage is escalated to `needs_human`, an ask is refused) until a later reading parses — the platform does not run on the settings alone or on an older reading, because the file on the default branch *is* the project's statement of its rules. **The file may tighten, never loosen, what an agent or a reviewer is held to** (WP-63 review round 1, the orchestrator's interim ruling pending a founder question): the settings need `project.settings.write` (admin) while the file needs only merge rights, so every key it can state is graded (`REPOSITORY_KEY_GRADES`, `packages/application/src/config/repository-grades.ts`, held to the schema by a test) and anything it did not get is listed in the reading's `not_applied`, never dropped in silence:
 
 | Grade | Keys | Why |
 |---|---|---|
 | **tighten-only** | `policies.protected_paths`, `policies.reviewers` (unions with the settings, or the platform default when the settings are silent); `policies.risk_classes` (adds classes; adds paths and requirements to a class the settings define, never removes one); `policies.review_checklists` (adds items); `commands` (narrow again after the settings: `ask`/`block` grow, `allow` shrinks); `pipeline.wip` (may lower a limit below the settings' — or BD-010's default — never raise it, WP-91) | the result is never weaker than the settings; a higher WIP limit buys concurrency — spend and review load — that merge rights did not grant |
-| **not applied** | `policies.autonomy` and every key `AUTONOMY_POLICY_OVERRIDE_KEYS` names (`policies.probation_tasks`, `policies.knowledge_apply`, `pipeline.limits.human_rounds`, `pipeline.limits.question_timeout`); `policies.dependency_policy`, `policies.coverage_source`, `policies.drift_without_direction`; `pipeline.template_overrides`, `pipeline.custom_stages`; `stages.*.prompt`, `stages.*.prompt_append`; all of `features`; `project.default_branch` | each can switch a check off, move the dial (BD-027:14), turn on agent work, set a spending cap or a per-person read — settings decisions; the prompt files and custom stages have no reader; the trusted branch is `projects.default_branch`, never a key in a file on it (BD-025 §1) |
-| **operational** | `stages.*.model`, `effort`, `max_turns`, `budget_usd`; `pipeline.limits.code_review_iterations`, `business_review_iterations`, `ci_fix_iterations`, `rebase_attempts`, `rebase_rechecks`; `project.knowledge_dir`, `context_budget_tokens`, `communication_language`, `commit_convention`; `status_mapping` | none widens what an agent may *do*: every run is admitted against the task cap (`taskBudgetExhausted` — a stage budget above it parks the task rather than spending; the cap is not a file key) and the organisation and project budgets (`BudgetGuard`); an extra iteration is still a return a reviewer made and still budgeted; a prompt carries knowledge as data blocks whichever directory it comes from (and the directory is held to the API's rule — relative, no `.`/`..` — or the file is refused); `status_mapping` can map an early stage to a tracker's "Done", which misleads the people reading the ticket and changes no authority — no gate, check or permission reads a ticket status |
+| **not applied** | `policies.autonomy` and every key `AUTONOMY_POLICY_OVERRIDE_KEYS` names (`policies.probation_tasks`, `policies.knowledge_apply`, `pipeline.limits.human_rounds`, `pipeline.limits.question_timeout`); `policies.dependency_policy`, `policies.coverage_source`, `policies.drift_without_direction`; `pipeline.template_overrides`, `pipeline.custom_stages`; all of `features`; `project.default_branch`; a `stages.*.prompt`/`prompt_append` whose value names a file outside `.agentic/prompts/` | each can switch a check off, move the dial (BD-027:14), turn on agent work, set a spending cap or a per-person read — settings decisions; custom stages have no reader, and a prompt path outside the directory names nothing the platform reads (it is dropped, so it cannot shadow a settings value); the trusted branch is `projects.default_branch`, never a key in a file on it (BD-025 §1) |
+| **operational** | `stages.*.model`, `effort`, `max_turns`, `budget_usd`; `pipeline.limits.code_review_iterations`, `business_review_iterations`, `ci_fix_iterations`, `rebase_attempts`, `rebase_rechecks`; `project.knowledge_dir`, `context_budget_tokens`, `communication_language`, `commit_convention`; `status_mapping`; `stages.*.prompt`, `stages.*.prompt_append` naming a file under `.agentic/prompts/` (WP-92) | none widens what an agent may *do*: every run is admitted against the task cap (`taskBudgetExhausted` — a stage budget above it parks the task rather than spending; the cap is not a file key) and the organisation and project budgets (`BudgetGuard`); an extra iteration is still a return a reviewer made and still budgeted; a prompt carries knowledge as data blocks whichever directory it comes from (and the directory is held to the API's rule — relative, no `.`/`..` — or the file is refused); `status_mapping` can map an early stage to a tracker's "Done", which misleads the people reading the ticket and changes no authority — no gate, check or permission reads a ticket status; a project prompt is a data block that adds to the role prompt and grants no tool, command or path, and merge rights could already write the file it names |
 
 A stored reading is re-validated against the current schema and grades when it is read, not only when the file is re-read; a pinned re-read whose commit is **older** than the recorded one is not recorded (a late `default_branch.moved` cannot undo a newer reading); a `__proto__` key and any explicit YAML tag are refused by path. The file is written by the platform only as a **merge request** (`POST /api/projects/:project_id/config/export`, an `agentic/config/*` branch — never a direct commit, Q94 (b)).
 
@@ -161,9 +161,27 @@ read; `settingsNotApplied`, `packages/application/src/config/settings-grades.ts`
   per the grading table below). **`enabled`** — on a stage or on a template — switches nothing and is reported
   `not_applied`: a stage a project turns off still runs, and a template-level `enabled` has no specified meaning
   yet. Its reader waits on **Q99**.
-- **`pipeline.custom_stages`**, **`stages.<id>.prompt`** and **`stages.<id>.prompt_append`**: no reader. A
-  project's `.agentic/pipeline.yml` and its `prompts/` directory are not read either (next section); the repository
-  reader reads exactly this file and `CLAUDE.md`.
+- **`pipeline.custom_stages`**: no reader, and declined for 0.1 (M5: a custom stage has no loop counter, Q56). A
+  project's `.agentic/pipeline.yml` is not read either (next section).
+- **`stages.<id>.prompt`** and **`stages.<id>.prompt_append`** **are read since WP-92** (next paragraph); what
+  is still reported is a value naming a file outside `.agentic/prompts/`.
+
+**Per-stage prompt files: a project prompt is a data block, never platform text (WP-92, PROGRESS backlog 226's
+prompt half).** A stage's own instructions come from `stages.<id>.prompt` and `stages.<id>.prompt_append` —
+each `prompts/<name>.md` (relative to `.agentic/`) or `.agentic/prompts/<name>.md` — and, where a key is
+silent, from the convention files `.agentic/prompts/<stage>.md` and `.agentic/prompts/<stage>.append.md`
+(product/13). Either key may come from the settings or from this file (both are *operational*, above). The file
+each names reaches the run **inside a `project_prompt` data block labelled as the project's**, in the user
+prompt, and **adds to the role prompt and never replaces it** — `prompt` included, whatever its product/13 name
+suggests (technical/04 § "Prompt assembly" has the assembly rule and the `prompt_version` lane). The files are
+read from the **default branch** with this file, in the same pass and at the same commit: the repository
+reader lists one named directory, `.agentic/prompts/`, and reads its direct `<name>.md` children — at most 64,
+each at most 16 KiB (a larger one is recorded `oversized` and never read) — redacted with TD-012 step 2's
+pattern rules and stored beside the reading (`project_repository_config.prompts`, migration 0063). A settings
+edit that names another file in the directory applies at the next run; a new or changed **file** applies at
+the next reading, like this file itself. A file a key names that the platform cannot read — absent, a
+symlink, oversized, outside the directory, or no reading yet — does **not** refuse the run: the run proceeds
+without it, its block carries the reason as `status` with an empty body, and the planner logs it.
 
 **Migration note — `project.context_budget_tokens` above 57 500 (WP-83, PROGRESS backlog 173).** The ceiling
 on a run's context-pack budget fell from **200 000** to **57 500** estimated tokens: half the smallest
@@ -241,8 +259,10 @@ Verdict fields drive transitions; the platform never parses markdown to decide.
 
 `prompts/<role>.md` shipped with the platform, hashed; a project override or append is hashed with it; `Run.prompt_version = sha256(platform_prompt + override + append)` plus a human-readable label (`refinement@1.3+project`).
 
-> **As built:** a project override or append is **not read** (PROGRESS backlog 226), so `prompt_version` is always
-> the shipped role prompt's declared version plus the digests `promptVersionOf` appends (the assembled system prompt's, and the skill set's).
+> **As built (WP-92):** a project's prompt files **never replace** the role prompt and are not hashed with it: they
+> are `project_prompt` data blocks in the user prompt (technical/04 § "Prompt assembly"), so `prompt_version` is
+> `p2+<role>@<version>+<digest of the assembled system prompt>+project@<digest of the delivered project prompt
+> blocks, or none>+skills@<digest, or none>` — a changed project file moves the `project@` lane and nothing else.
 
 
 ## Effective configuration

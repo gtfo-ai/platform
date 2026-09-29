@@ -301,8 +301,84 @@ describe('refreshRepositoryConfig', () => {
     expect(recorded).toEqual([
       { status: 'valid', commitSha: SHA, readAt: AT, values: {}, notApplied: [] },
     ]);
-    // Only the configuration path is asked for: the pointer file is the export's business.
-    expect(seen).toEqual([{ projectId: PROJECT, paths: [REPOSITORY_CONFIG_PATH], commitSha: SHA }]);
+    // Only the configuration path is asked for: the pointer file is the export's business. The
+    // prompt directory is asked for in the same pass (WP-92), so both describe one commit.
+    expect(seen).toEqual([
+      {
+        projectId: PROJECT,
+        paths: [REPOSITORY_CONFIG_PATH],
+        promptDirectory: true,
+        commitSha: SHA,
+      },
+    ]);
+  });
+
+  it('records the prompt directory beside the configuration, every text redacted and none cut (WP-92)', async () => {
+    const { recorded, store } = recordingStore();
+    const long = `${'x'.repeat(12_000)} ${PLANTED}`;
+    const outcome = await refreshRepositoryConfig(
+      {
+        source: sourceOf({
+          status: 'ok',
+          commitSha: SHA,
+          files: { [REPOSITORY_CONFIG_PATH]: { kind: 'absent' } },
+          prompts: {
+            files: {
+              '.agentic/prompts/implementation.md': file(`Use pnpm. ${PLANTED}`),
+              '.agentic/prompts/refinement.md': file(long),
+              '.agentic/prompts/huge.md': { kind: 'oversized', bytes: 20_000 },
+              '.agentic/prompts/link.md': { kind: 'not_a_file', mode: '120000' },
+            },
+            truncated: false,
+          },
+        }),
+        codec: jsonCodec,
+        store,
+        redactText,
+        clock: { now: () => AT },
+      },
+      { projectId: PROJECT },
+    );
+    expect(outcome.status).toBe('recorded');
+    const stored = recorded[0];
+    // An absent configuration file still records the prompt directory: the convention files need
+    // no configuration to be read.
+    expect(stored?.status).toBe('absent');
+    expect(stored?.prompts).toEqual({
+      files: {
+        '.agentic/prompts/implementation.md': file('Use pnpm. [REDACTED:pattern]'),
+        '.agentic/prompts/refinement.md': file(`${'x'.repeat(12_000)} [REDACTED:pattern]`),
+        '.agentic/prompts/huge.md': { kind: 'oversized', bytes: 20_000 },
+        '.agentic/prompts/link.md': { kind: 'not_a_file', mode: '120000' },
+      },
+      truncated: false,
+    });
+    expect(JSON.stringify(stored)).not.toContain(PLANTED);
+  });
+
+  it('keeps a stored prompt directory through re-validation, dropping a path the reader would not list', () => {
+    const snapshot: RepositoryConfigSnapshot = {
+      status: 'valid',
+      commitSha: SHA,
+      readAt: AT,
+      values: {},
+      notApplied: [],
+      prompts: {
+        files: {
+          '.agentic/prompts/implementation.md': file('ok'),
+          '.agentic/prompts/sub/nested.md': file('never listed'),
+          'src/elsewhere.md': file('never listed'),
+        },
+        truncated: false,
+      },
+    };
+    expect(revalidateRepositorySnapshot(snapshot, redactText)?.prompts).toEqual({
+      files: { '.agentic/prompts/implementation.md': file('ok') },
+      truncated: false,
+    });
+    // A reading that did not read the directory stays one that did not.
+    const { prompts: _dropped, ...unread } = snapshot;
+    expect(revalidateRepositorySnapshot(unread, redactText)?.prompts).toBeUndefined();
   });
 
   it('records nothing when the repository cannot be read — the previous reading stands', async () => {

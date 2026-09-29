@@ -111,6 +111,8 @@ export interface RepositoryConfigColumns {
   readonly repo_not_applied: unknown;
   readonly repo_detail: string | null;
   readonly repo_read_at: Date | string | null;
+  /** Migration 0063 (WP-92): the prompt directory the reading recorded, or `null`. */
+  readonly repo_prompts: unknown;
 }
 
 /**
@@ -146,9 +148,10 @@ const storedSnapshotFrom = (
         not_applied: row.repo_not_applied ?? [],
         detail: row.repo_detail ?? null,
         read_at: row.repo_read_at,
+        prompts: row.repo_prompts ?? null,
       });
 
 /** The select list both readers join in, so the two cannot name different columns. */
 export const REPOSITORY_CONFIG_COLUMNS = `r.status as repo_status, r.commit_sha as repo_commit_sha,
   r.config as repo_config, r.not_applied as repo_not_applied, r.detail as repo_detail,
-  r.read_at as repo_read_at`;
+  r.read_at as repo_read_at, r.prompts as repo_prompts`;

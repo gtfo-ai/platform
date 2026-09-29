@@ -3,11 +3,14 @@
  * the integration tier (`test/integration/config/repository-config-store.integration.test.ts`);
  * here: what a stored row *means*, including a row this release did not write.
  */
+
+import { MAX_PROJECT_PROMPT_FILES } from '@platform/application';
 import type { Id, IsoDateTime } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import type { SqlExecutor } from '../events/sql.js';
 import {
   createPostgresRepositoryConfigStore,
+  promptReadingOfColumn,
   snapshotOfRow,
 } from './postgres-repository-config-store.js';
 
@@ -67,6 +70,69 @@ describe('snapshotOfRow', () => {
   });
 });
 
+describe('the prompt directory a row carries (WP-92)', () => {
+  const row = (prompts: unknown) => ({
+    status: 'absent',
+    commit_sha: SHA,
+    config: null,
+    not_applied: [],
+    detail: null,
+    read_at: AT,
+    prompts,
+  });
+  const stored = {
+    files: {
+      '.agentic/prompts/implementation.md': { kind: 'file', text: 'Use pnpm.', blobSha: 'a1' },
+      '.agentic/prompts/huge.md': { kind: 'oversized', bytes: 20_000 },
+      '.agentic/prompts/link.md': { kind: 'not_a_file', mode: '120000' },
+    },
+    truncated: false,
+  };
+
+  it('reads the shape the reader writes', () => {
+    expect(snapshotOfRow(row(stored)).prompts).toEqual(stored);
+  });
+
+  it('reads null, and a row with no column, as "not read"', () => {
+    expect(snapshotOfRow(row(null)).prompts).toBeUndefined();
+    const { prompts: _none, ...older } = row(null);
+    expect(snapshotOfRow(older).prompts).toBeUndefined();
+  });
+
+  it.each([
+    ['not an object', 'x'],
+    ['files not an object', { files: [], truncated: false }],
+    ['no truncated flag', { files: {} }],
+    [
+      'an unknown entry kind',
+      { files: { '.agentic/prompts/a.md': { kind: 'glob' } }, truncated: false },
+    ],
+    [
+      'a file entry with no text',
+      { files: { '.agentic/prompts/a.md': { kind: 'file', blobSha: 'x' } }, truncated: false },
+    ],
+    [
+      'a path the reader would not list',
+      { files: { 'src/secrets.md': { kind: 'file', text: 't', blobSha: 'x' } }, truncated: false },
+    ],
+    [
+      'more entries than the reader lists',
+      {
+        files: Object.fromEntries(
+          Array.from({ length: MAX_PROJECT_PROMPT_FILES + 1 }, (_, index) => [
+            `.agentic/prompts/p${index}.md`,
+            { kind: 'oversized', bytes: 1 },
+          ]),
+        ),
+        truncated: true,
+      },
+    ],
+  ])('reads a column with %s as "not read", never as a prompt', (_name, prompts) => {
+    expect(promptReadingOfColumn(prompts)).toBeUndefined();
+    expect(snapshotOfRow(row(prompts)).prompts).toBeUndefined();
+  });
+});
+
 describe('createPostgresRepositoryConfigStore', () => {
   it('replaces the project’s row, writing values only for a valid reading', async () => {
     const calls: { text: string; values: unknown[] }[] = [];
@@ -91,6 +157,8 @@ describe('createPostgresRepositoryConfigStore', () => {
       '[]',
       'version (expected 1)',
     ]);
+    // WP-92: a reading that did not read the prompt directory stores `null`, never `{}`.
+    expect(calls[0]?.values[7]).toBeNull();
     expect(await store.read('00000000-0000-4000-8000-0000000000aa' as Id)).toBeNull();
   });
 });

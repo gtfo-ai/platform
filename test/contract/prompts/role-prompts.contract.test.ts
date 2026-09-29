@@ -64,6 +64,8 @@ const assembleFor = (role: (typeof agentRoleSchema.options)[number], text: strin
     language: 'auto',
     // Not an ask: this suite is about what a *role* puts in the system prompt (WP-31).
     ask: null,
+    // No project prompt files: those are data blocks in the user prompt (WP-92), not a role's text.
+    projectPrompts: [],
   });
 
 describe.each(agentRoleSchema.options.map((role) => [role] as const))(

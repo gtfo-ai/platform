@@ -14,8 +14,8 @@
  *     a collaborator a composition root may omit is one production omits (standing rule 31), and
  *     "nothing composes it" is the defect this work package exists to close.
  *  3. **The shipped role prompts**, handed in by the composition root. `@platform/prompts` is
- *     outside this ring's import allowance, which is what lets a project override a prompt without
- *     the planner knowing.
+ *     outside this ring's import allowance. A project's own prompt files never replace them: since
+ *     WP-92 they arrive through the settings port and ride beside them as data blocks.
  *
  * What was already real stays real and is not re-derived here: the tool set, the command policy,
  * the protected paths, the budget and the turn limit are security and spend decisions the pipeline
@@ -68,6 +68,7 @@ import {
   skillSetVersionOf,
   stageAgentDefaults,
 } from '@platform/domain';
+import { projectPromptsForStage } from '../config/project-prompts.js';
 import type { ContextPackAssembler, ContextPackDocument } from '../knowledge/context-pack.js';
 import { NOT_SEARCHED } from '../knowledge/text-search-record.js';
 import type { Logger } from '../ports/logger.js';
@@ -501,12 +502,9 @@ export interface StageRunPlannerOptions {
    * The shipped role prompts (`@platform/prompts`). Required: a planner with no prompts is the
    * placeholder this work package replaced.
    *
-   * A project's own `prompts/<stage>.md` override is **still not read**, and the reason is no
-   * longer "there is no default-branch read": WP-18a built one and WP-18b commits to it. What is
-   * missing is that the vault source answers the four *indexed* path classes and a prompt override
-   * is not one of them, so serving it means widening what the adapter returns or reading twice —
-   * both decisions with consequences (a template a project declared and the platform could not read
-   * parks every task one stage short of `done`). It is in the ledger's discovered work, unowned.
+   * A project's own prompt files (`stages.<id>.prompt`, `prompt_append`, `.agentic/prompts/<stage>.md`)
+   * **never replace** these (WP-92): they arrive through `ProjectSettings.repositoryPrompts` and reach
+   * the model as `project_prompt` data blocks beside the role prompt (`projectPromptsForStage`).
    */
   readonly prompts: Readonly<Record<AgentRole, RolePromptDefinition>>;
   /**
@@ -1213,6 +1211,31 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
           );
         }
       }
+      // WP-92: the project's own prompt files for this stage, as data blocks. A file the
+      // configuration names and the platform could not read is still a block (with its status and
+      // no body) and a warning here: the run proceeds without it (`project-prompts.ts` has why).
+      const projectPrompts = projectPromptsForStage(
+        stage.id,
+        settings.config,
+        settings.repositoryPrompts ?? null,
+      );
+      const unreadPrompts = projectPrompts.filter((entry) => entry.status !== 'read');
+      if (unreadPrompts.length > 0) {
+        logger.warn(
+          {
+            project_id: task.task.projectId,
+            task_id: task.task.id,
+            run_id: request.runId,
+            stage: stage.id,
+            project_prompts: unreadPrompts.map((entry) => ({
+              key: entry.key,
+              status: entry.status,
+              path: entry.path,
+            })),
+          },
+          "a project prompt file this stage's configuration names could not be read; the run proceeds without it and its prompt says so",
+        );
+      }
       const checklistsInPrompt = (review?.applied ?? []).map((entry) => ({
         name: entry.name,
         items: entry.items,
@@ -1272,6 +1295,7 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
         // A stage run is never an ask (WP-31). Required-and-nullable in the assembler, so this line
         // is the planner saying so rather than a key it forgot.
         ask: null,
+        projectPrompts,
       });
 
       const spec: RunSpec = {

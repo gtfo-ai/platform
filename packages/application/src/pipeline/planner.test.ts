@@ -1765,3 +1765,115 @@ describe('the observability excerpts a run is given (WP-89)', () => {
     expect(excerptKinds((await planWithExcerpts(undefined)).spec.userPrompt)).toEqual([]);
   });
 });
+
+/**
+ * WP-92: a project's own prompt files reach the run the planner plans — read off the settings
+ * port's `repositoryPrompts`, rendered as `project_prompt` data blocks, and digested into
+ * `prompt_version` so the audit shows a changed file.
+ */
+describe('the project prompt files a stage is given (WP-92)', () => {
+  const warnings: { fields: Record<string, unknown>; message: string }[] = [];
+  const logger = {
+    ...silentLogger,
+    warn: (fields: Record<string, unknown>, message: string) => {
+      warnings.push({ fields, message });
+    },
+  };
+  const promptFile = (text: string) => ({ kind: 'file' as const, text, blobSha: 'd'.repeat(40) });
+
+  const planWithPrompts = async (settings: Record<string, unknown>) => {
+    const { store } = await indexedFixtureVault();
+    const planner = createStageRunPlanner({
+      workspacePath: (taskId) => `/workspaces/${taskId}`,
+      prompts: prompts as never,
+      skills: testSkills,
+      boundSkills: async () => [],
+      nonce: { next: () => NONCE },
+      contextPacks: createContextPackAssembler({ store, logger: silentLogger }),
+      headPaths: (projectId) => store.readPathWitnesses(projectId),
+      clock: { now: () => NOW },
+      logger,
+    });
+    const base = requestWith('a ticket about refunds');
+    return planner.plan({
+      ...base,
+      settings: { ...base.settings, ...settings },
+    } as unknown as StageRunRequest);
+  };
+
+  it('renders the stage’s convention files as project_prompt blocks, first in the user prompt', async () => {
+    const { spec } = await planWithPrompts({
+      repositoryPrompts: {
+        files: {
+          '.agentic/prompts/refinement.md': promptFile('Write acceptance criteria as Gherkin.'),
+          '.agentic/prompts/refinement.append.md': promptFile('Name the owning team.'),
+          '.agentic/prompts/implementation.md': promptFile('Not this stage.'),
+        },
+        truncated: false,
+      },
+    });
+    const reading = readDataBlocks(spec.userPrompt);
+    const project = reading.blocks.filter((block) => block.kind === 'project_prompt');
+    expect(project.map((block) => [block.attributes.key, block.body])).toEqual([
+      ['prompt', 'Write acceptance criteria as Gherkin.'],
+      ['prompt_append', 'Name the owning team.'],
+    ]);
+    expect(reading.blocks[0]?.kind).toBe('project_prompt');
+    // Never the platform's voice, and never instead of the role's brief.
+    expect(spec.systemPromptAppend).not.toContain('Gherkin');
+    expect(spec.systemPromptAppend).toContain('You are the product_manager.');
+    expect(spec.userPrompt).not.toContain('Not this stage.');
+  });
+
+  it('moves prompt_version when a project prompt file changes (criterion 2)', async () => {
+    const version = async (text: string | null) =>
+      (
+        await planWithPrompts({
+          repositoryPrompts: {
+            files:
+              text === null ? {} : { '.agentic/prompts/refinement.append.md': promptFile(text) },
+            truncated: false,
+          },
+        })
+      ).spec.promptVersion;
+    const none = await version(null);
+    const first = await version('Name the owning team.');
+    const same = await version('Name the owning team.');
+    const edited = await version('Name the owning team and its channel.');
+    expect(none).toContain('+project@none+skills@');
+    expect(first).not.toBe(none);
+    expect(same).toBe(first);
+    expect(edited).not.toBe(first);
+  });
+
+  it('proceeds without a named file it could not read, says so in the prompt and warns (rule 20)', async () => {
+    warnings.length = 0;
+    const { spec } = await planWithPrompts({
+      config: { stages: { refinement: { prompt: 'prompts/pm.md' } } },
+      repositoryPrompts: { files: {}, truncated: false },
+    });
+    const block = readDataBlocks(spec.userPrompt).blocks.find(
+      (entry) => entry.kind === 'project_prompt',
+    );
+    expect(block?.attributes).toMatchObject({
+      key: 'prompt',
+      status: 'absent',
+      path: '.agentic/prompts/pm.md',
+    });
+    expect(block?.body).toBe('');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.fields).toMatchObject({
+      stage: 'refinement',
+      project_prompts: [{ key: 'prompt', status: 'absent', path: '.agentic/prompts/pm.md' }],
+    });
+  });
+
+  it('plans exactly the prompt it planned before WP-92 for a project with no prompt files', async () => {
+    warnings.length = 0;
+    const without = await planWithPrompts({});
+    const empty = await planWithPrompts({ repositoryPrompts: { files: {}, truncated: false } });
+    expect(empty.spec.userPrompt).toBe(without.spec.userPrompt);
+    expect(without.spec.userPrompt).not.toContain('project_prompt');
+    expect(warnings).toEqual([]);
+  });
+});

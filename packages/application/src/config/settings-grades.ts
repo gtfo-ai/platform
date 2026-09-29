@@ -21,12 +21,17 @@
  *  - `pipeline.template_overrides.<t>.enabled` — no specified meaning at all (refuse a ticket of
  *    that template? fall back to another?), which is Q99's question too.
  *  - `pipeline.custom_stages` — declined for 0.1 (M5: Q56 has no loop counter for a custom stage).
- *  - `stages.<s>.prompt` / `prompt_append` — WP-92's reader; until then, not read.
+ *
+ * `stages.<s>.prompt` / `prompt_append` **are** read since WP-92 (`project-prompts.ts`) and left
+ * this table; what is still reported of them is a **value** naming a file outside
+ * `.agentic/prompts/`, which no reader reads (`projectPromptValueNotApplied`, the same function the
+ * repository reading uses).
  *
  * `plan_approval` and `size_threshold` under `template_overrides` **are** read (the plan-approval
  * gate) and are not listed.
  */
 import type { ConfigValues } from '@platform/domain';
+import { projectPromptValueNotApplied } from './project-prompts.js';
 import type { RepositoryConfigNotApplied } from './repository-config.js';
 
 const STAGE_ENABLED_REASON =
@@ -40,8 +45,6 @@ export const SETTINGS_UNREAD_KEYS: Readonly<Record<string, string>> = {
   'pipeline.template_overrides.*.stages.*.enabled': STAGE_ENABLED_REASON,
   'pipeline.custom_stages':
     'custom stages are not read on this build (a custom stage has no loop counter, Q56)',
-  'stages.*.prompt': 'per-stage prompt files are not read on this build',
-  'stages.*.prompt_append': 'per-stage prompt files are not read on this build',
 };
 
 type Json = Record<string, unknown>;
@@ -70,7 +73,9 @@ const pathsPresent = (target: unknown, segments: readonly string[], prefix: stri
  * What a settings document states that this build does not read, in the table's order and then
  * the document's. Empty for a document that carries none — which is every shipped default.
  */
-export const settingsNotApplied = (values: ConfigValues): readonly RepositoryConfigNotApplied[] =>
-  Object.entries(SETTINGS_UNREAD_KEYS).flatMap(([pattern, reason]) =>
+export const settingsNotApplied = (values: ConfigValues): readonly RepositoryConfigNotApplied[] => [
+  ...Object.entries(SETTINGS_UNREAD_KEYS).flatMap(([pattern, reason]) =>
     pathsPresent(values, pattern.split('.'), '').map((key) => ({ key, reason })),
-  );
+  ),
+  ...projectPromptValueNotApplied(values),
+];

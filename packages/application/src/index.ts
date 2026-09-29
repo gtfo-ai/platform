@@ -44,6 +44,7 @@ export * from './bootstrap/runtime.js';
 export * from './bootstrap/sample.js';
 // The repository layer of the effective configuration and the configuration export (WP-63)
 export * from './config/export.js';
+export * from './config/project-prompts.js';
 export * from './config/repository-config.js';
 export * from './config/repository-grades.js';
 export * from './config/settings-grades.js';

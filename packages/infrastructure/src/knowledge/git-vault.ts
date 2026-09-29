@@ -69,8 +69,13 @@ import path from 'node:path';
 import process from 'node:process';
 import {
   isIndexedVaultPath,
+  isProjectPromptPath,
   type Logger,
+  MAX_PROJECT_PROMPT_FILE_BYTES,
+  MAX_PROJECT_PROMPT_FILES,
   MAX_REPOSITORY_FILE_BYTES,
+  PROJECT_PROMPTS_DIR,
+  type ProjectPromptReading,
   REPOSITORY_FILE_PATHS,
   type RepositoryFileEntry,
   type RepositoryFilePath,
@@ -825,7 +830,11 @@ export const unavailableVaultSource = (reason: string): VaultSource => ({
  * The vault read above answers the four indexed kinds of path and nothing else; this answers the
  * paths `REPOSITORY_FILE_PATHS` names — `.agentic/config.yml`, `CLAUDE.md` and (WP-64) `AGENTS.md` — and **refuses any
  * other path it is handed**, so the allow-list is enforced where the bytes are read and not only in
- * the type. Everything that decides *which commit* is shared with the vault read
+ * the type. **WP-92 widens it by one named directory**: with `promptDirectory`, it also lists
+ * `.agentic/prompts/` in the same `ls-tree` and reads the direct children `isProjectPromptPath`
+ * accepts (`<name>.md`, marker alphabet, no subdirectory) — the first `MAX_PROJECT_PROMPT_FILES` by
+ * path, each under `MAX_PROJECT_PROMPT_FILE_BYTES` — through the same `cat-file --batch`. A symlink or
+ * a submodule there is `not_a_file` and never followed, exactly as at the named paths. Everything that decides *which commit* is shared with the vault read
  * ({@link prepareMirrorRead}): the same fetch with the same credential, the default branch only
  * (BD-025 §1), and a pinned commit only when it is an ancestor of it.
  *
@@ -833,6 +842,11 @@ export const unavailableVaultSource = (reason: string): VaultSource => ({
  * read: a symlink, a submodule or a directory at the path is `not_a_file` and is never followed
  * (TD-026 decision 9), and a blob over `MAX_REPOSITORY_FILE_BYTES` is `oversized` and never
  * buffered. The bodies travel through one `cat-file --batch`, requested on stdin, as the vault's do.
+ *
+ * **One listing, one cap** (WP-92 review): the prompt directory is listed in the same `ls-tree` as
+ * `.agentic/config.yml`, under the same output cap, so a prompt directory with enough entries to
+ * overflow it makes the **whole** reading `unavailable` — the configuration file is then not read
+ * either. Only someone with merge rights can cause it; the reading fails closed, stated here.
  */
 export const createGitRepositoryFileSource = (options: GitVaultOptions): RepositoryFileSource => {
   const git = options.git ?? nodeGitProcessRunner;
@@ -854,7 +868,17 @@ export const createGitRepositoryFileSource = (options: GitVaultOptions): Reposit
         }
         const { commit, inMirror } = prepared;
         const listing = await inMirror(
-          ['ls-tree', '-r', '-l', '-z', '--full-tree', commit, '--', ...request.paths],
+          [
+            'ls-tree',
+            '-r',
+            '-l',
+            '-z',
+            '--full-tree',
+            commit,
+            '--',
+            ...request.paths,
+            ...(request.promptDirectory === true ? [PROJECT_PROMPTS_DIR] : []),
+          ],
           { maxStdoutBytes: 1_024 * 1_024 },
         );
         if (listing.code !== 0 || listing.truncated) {
@@ -885,10 +909,15 @@ export const createGitRepositoryFileSource = (options: GitVaultOptions): Reposit
           }
           wanted.push({ path: wantedPath, entry: exact });
         }
-        if (wanted.length > 0) {
+        const prompts =
+          request.promptDirectory === true ? promptDirectoryListing(entries) : undefined;
+        const promptBlobs = prompts?.wanted ?? [];
+        if (wanted.length > 0 || promptBlobs.length > 0) {
           const batch = await inMirror(['cat-file', '--batch'], {
-            input: `${wanted.map(({ entry }) => entry.objectId).join('\n')}\n`,
-            maxStdoutBytes: wanted.length * (MAX_REPOSITORY_FILE_BYTES + 256),
+            input: `${[...wanted, ...promptBlobs].map(({ entry }) => entry.objectId).join('\n')}\n`,
+            maxStdoutBytes:
+              wanted.length * (MAX_REPOSITORY_FILE_BYTES + 256) +
+              promptBlobs.length * (MAX_PROJECT_PROMPT_FILE_BYTES + 256),
           });
           if (batch.code !== 0 || batch.truncated) {
             return unavailable(
@@ -909,6 +938,19 @@ export const createGitRepositoryFileSource = (options: GitVaultOptions): Reposit
               blobSha: entry.objectId,
             };
           }
+          for (const [offset, { path: promptPath, entry }] of promptBlobs.entries()) {
+            const object = objects[wanted.length + offset];
+            if (object === undefined || object.objectId !== entry.objectId) {
+              return unavailable(
+                `git answered for ${String(object?.objectId)} where ${promptPath} was asked for; the mirror changed under the read`,
+              );
+            }
+            prompts?.files.set(promptPath, {
+              kind: 'file',
+              text: object.content.toString('utf8'),
+              blobSha: entry.objectId,
+            });
+          }
         }
         logger.debug(
           { project_id: request.projectId, commit_sha: commit, paths: request.paths },
@@ -928,6 +970,7 @@ export const createGitRepositoryFileSource = (options: GitVaultOptions): Reposit
           commitSha: commit,
           files,
           behindRecorded,
+          ...(prompts === undefined ? {} : { prompts: promptReadingOf(prompts) }),
         };
       } catch (cause) {
         return unavailable(`the repository files could not be read: ${(cause as Error).message}`);
@@ -935,6 +978,46 @@ export const createGitRepositoryFileSource = (options: GitVaultOptions): Reposit
     },
   };
 };
+
+/** The prompt directory's listing, before its bodies are read. */
+interface PromptDirectoryListing {
+  /** Path → entry, in path order; a readable file is filled in after the batch. */
+  readonly files: Map<string, RepositoryFileEntry>;
+  readonly wanted: readonly { readonly path: string; readonly entry: TreeEntry }[];
+  readonly truncated: boolean;
+}
+
+/**
+ * Which of a recursive listing's entries are prompt files (WP-92): direct children of
+ * `.agentic/prompts/` with an accepted name, the first `MAX_PROJECT_PROMPT_FILES` by path. A symlink,
+ * a submodule or anything but a regular blob is `not_a_file`; a blob over the bound is `oversized`
+ * and is never buffered — the same three answers the named paths get.
+ */
+const promptDirectoryListing = (entries: readonly TreeEntry[]): PromptDirectoryListing => {
+  const candidates = entries
+    .filter((entry) => isProjectPromptPath(entry.path))
+    .sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
+  const files = new Map<string, RepositoryFileEntry>();
+  const wanted: { path: string; entry: TreeEntry }[] = [];
+  for (const entry of candidates.slice(0, MAX_PROJECT_PROMPT_FILES)) {
+    if (entry.type !== 'blob' || !READABLE_MODES.includes(entry.mode)) {
+      files.set(entry.path, { kind: 'not_a_file', mode: entry.mode });
+    } else if (entry.size > MAX_PROJECT_PROMPT_FILE_BYTES) {
+      files.set(entry.path, { kind: 'oversized', bytes: entry.size });
+    } else {
+      // A placeholder the batch replaces; a read that fails returns `unavailable` before this
+      // listing is ever published, so no placeholder survives.
+      files.set(entry.path, { kind: 'absent' });
+      wanted.push({ path: entry.path, entry });
+    }
+  }
+  return { files, wanted, truncated: candidates.length > MAX_PROJECT_PROMPT_FILES };
+};
+
+const promptReadingOf = (listing: PromptDirectoryListing): ProjectPromptReading => ({
+  files: Object.fromEntries(listing.files),
+  truncated: listing.truncated,
+});
 
 /** The file reader's refusal for a process that composed no mirror — named, like the vault's. */
 export const unavailableRepositoryFileSource = (reason: string): RepositoryFileSource => ({

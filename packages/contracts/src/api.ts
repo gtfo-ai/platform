@@ -273,9 +273,10 @@ export const effectiveConfigResponseSchema = z.strictObject({
    * the settings' twin of `repository.not_applied`.
    *
    * Two kinds. Keys nothing reads (`template_overrides.*.enabled` at either level, whose reader
-   * waits on Q99; `custom_stages`; the per-stage prompt files), which `PUT …/config` also answers
-   * with; and a WIP limit above the organisation's maximum, which is read and **bounded** — the
-   * organisation's value is what `effective` shows and admission uses.
+   * waits on Q99; `custom_stages`; a per-stage prompt key whose value names a file outside
+   * `.agentic/prompts/` — the prompt files themselves are read since WP-92), which `PUT …/config`
+   * also answers with; and a WIP limit above the organisation's maximum, which is read and
+   * **bounded** — the organisation's value is what `effective` shows and admission uses.
    */
   not_applied: z.array(configNotAppliedSchema),
   /** The last configuration export, or `null` when this project was never exported (backlog 225). */

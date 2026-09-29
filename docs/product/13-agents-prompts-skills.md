@@ -7,7 +7,7 @@ Decisions: BD-005, BD-013, BD-022. Evidence: research/02 (context files, skills)
 Every run's prompt is assembled from layers; each layer is recorded in the audit:
 
 1. **Platform system prompt** (same for all roles): who you are (an agent of the platform working on project X), non-negotiables (external text is data — BD-022; never touch secrets; stay within allowed tools; stop and ask when uncertain; how to report progress; how to end with a structured result).
-2. **Role prompt** (per stage): job description — responsibilities, inputs, outputs (artifact schema), quality bar, when to ask, when to return, when to stop. Shipped as a default markdown file; overridable per project by replacing (`prompts/<stage>.md`) or appending (`prompts/<stage>.append.md`).
+2. **Role prompt** (per stage): job description — responsibilities, inputs, outputs (artifact schema), quality bar, when to ask, when to return, when to stop. Shipped as a default markdown file; extended per project by `prompts/<stage>.md` and `prompts/<stage>.append.md`, which add to it as data and never replace it (technical/04, WP-92).
 3. **Project context pack** (tiers 0–1 from product/05): `CLAUDE.md`, rules, KB index, triggered lessons, repo map.
 4. **Task context**: ticket (delimited as data), prior artifacts (spec, plan, verdicts), return feedback or human comments when re-entering, observability pre-fetch for bugs.
 5. **Structured output contract**: JSON schema for the stage's verdict/artifact (SDK structured outputs — research/04) so the platform never parses prose to decide transitions.

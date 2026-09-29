@@ -8,8 +8,8 @@ Every project is a git repository. The repository carries everything the platfor
 .agentic/
 ├── config.yml            # project-level overrides (non-secret): pipeline template, models, effort, limits, policies, status mapping
 ├── pipeline.yml          # optional full pipeline definition (stages, transitions, custom stages)
-├── prompts/              # optional prompt overrides or appendices per stage/role
-│   ├── refinement.md     # replaces the default prompt body
+├── prompts/              # optional per-stage prompt additions (data, never a replacement — WP-92)
+│   ├── refinement.md     # extra instructions for the stage (data, added to the role prompt)
 │   └── implementation.append.md   # appended to the default prompt
 ├── rules/                # always-on rules injected into every agent (short, imperative, one topic per file)
 │   ├── 001-architecture-boundaries.md

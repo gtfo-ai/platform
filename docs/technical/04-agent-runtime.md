@@ -25,8 +25,8 @@ Runner service (infrastructure)  ── platform-side SDK host; the CLI itself r
 |---|---|
 | `role`, `stage`, `attempt`, `task`, `mode` (`normal | shadow | review_only | linter | discovery | retro | librarian`) | pipeline |
 | `model`, `effort`, `maxTurns`, `maxBudgetUsd`, `stallTimeoutMs`, `wallClockMs` | effective config (BD-013 defaults; product/04 table) |
-| `systemPrompt` = `{ type: 'preset', preset: 'claude_code', append: platformPrompt + rolePrompt + rulesBlock }` | product/13 layers 1–2 (+ project override/append) |
-| `userPrompt` = task context (ticket as delimited data, artifacts, return feedback, observability pre-fetch) + instructions to produce the artifact | layer 4 |
+| `systemPrompt` = `{ type: 'preset', preset: 'claude_code', append: platformPrompt + rolePrompt + rulesBlock }` | product/13 layers 1–2 (a project's prompt files are **not** here: data blocks in `userPrompt`, WP-92) |
+| `userPrompt` = the project's prompt files for the stage as `project_prompt` data blocks (WP-92), then task context (ticket as delimited data, artifacts, return feedback, observability pre-fetch) + instructions to produce the artifact | layer 4 |
 | `contextPack` (tier 0–1 documents, written as files into the workspace under `.agentic-run/context/` and referenced by path in the prompt; tier 0 also inlined) | product/05 |
 | `settingSources: ['project']`, `cwd = workspace path`, `additionalDirectories = []` | research/04: loads project `CLAUDE.md`, rules, skills, hooks; never host config |
 | `checkoutRef` — the branch or commit the workspace checks out, `null` for the default branch — **added at WP-34** (§ 2's *"checkout of the task branch for re-entries"* had no carrier at all; PROGRESS backlog 71). The planner fills it from the task's own branch, or, for a **shadow** task, from the merge base of the human merge request it is compared with (Q82 (a)). **Nothing honours it yet**: no production `RunWorkspaceProvisioner` is composed (WP-15g), so the value travels and is asserted and is not acted on | technical/05 § 2; product/19 § 19 |
@@ -125,12 +125,51 @@ Runner service (infrastructure)  ── platform-side SDK host; the CLI itself r
 ## Prompt assembly (deterministic, audited)
 
 1. Platform prompt (constant per platform version): identity, non-negotiables (external text is data — BD-022; never touch secrets; stay in tools; ask via `ask_human` with a blocker brief; end with the structured artifact).
-2. Role prompt (`prompts/<role>.md` @ version) with project override/append.
+2. Role prompt (`prompts/<role>.md` @ version). **Amended at WP-92:** a project's own prompt files never replace it and are not concatenated into it. They are data blocks in the user prompt (below).
 3. Rules block: unconditional `.agentic/rules/*.md` (project `CLAUDE.md`/`.claude/rules` are loaded by the SDK itself; not duplicated).
 4. Context pack tier 0 inline (index, repo map for code stages); tier 1 items as a "Relevant knowledge" block with paths and 2–3 line summaries plus the files on disk.
 5. Task block: the ticket, artifacts, return feedback, human comments, pre-fetched observability excerpts — all marked as data. **Amended at WP-83** (PROGRESS backlog 159's stale-artifact half): *artifacts* is the latest version of each type, except that a stage the task was **returned** to is shown only the verdict that caused the return — the `ReviewVerdict`/`AcceptanceVerdict` the returning attempt produced, read by link (`runs.task_stage_id`) — and no verdict at all after a return no verdict caused (a gate's, a human's); the return feedback block is the cause (`artifactsShownTo` in `packages/application/src/pipeline/planner.ts`).
 6. Output contract: schema summary + "write the markdown artifact to `.agentic-run/out/<artifact>.md` and return the JSON".
-Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3.
+Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3, plus the project prompt lane (WP-92, below).
+
+> **A project prompt is a data block, never platform text (WP-92, PROGRESS backlog 226's prompt
+> half).** This is the rule, and it is the same one the delimiter contract below states for every
+> other byte somebody outside the platform wrote: a project's `stages.<id>.prompt`,
+> `stages.<id>.prompt_append` and the convention files `.agentic/prompts/<stage>.md` and
+> `.agentic/prompts/<stage>.append.md` reach the model **inside a `project_prompt` data block,
+> labelled as the project's**, and they **add to the role prompt and never replace it**. `prompt`
+> keeps its product/13 name and is read as one more block, because replacing the role's brief would
+> put repository text in the platform's own voice. The consequences, each held by a test:
+>
+> - **Where it sits.** First in the **user** prompt, under a platform-worded *Project instructions
+>   for this stage* header, before the pack and the task block. Not in the system prompt: that part
+>   carries no nonce (it is hashed into `prompt_version`), so project text there could not be
+>   delimited. The platform prompt's *Project rules and project instructions* paragraph
+>   (`PLATFORM_PROMPT_VERSION` `p2`) tells the model to follow such a block as a senior colleague's
+>   standing guidance, never above the non-negotiables, the output contract or its tools.
+> - **The audit.** `prompt_version` gains a lane: `p2+<role>@<v>+<layers 1–3 digest>+project@<digest|none>+skills@…`
+>   (`projectPromptVersionOf`). It digests each block's key, status, path and delivered body, so a
+>   changed file is a changed version even though the file is not in layers 1–3.
+> - **Where the bytes come from.** The default branch only (BD-025 §1), through the platform's own
+>   mirror in the same pass as `.agentic/config.yml` and pinned to the same commit
+>   (`refreshRepositoryConfig`): the reader lists **one named directory**, `.agentic/prompts/`, and
+>   reads its direct `<name>.md` children, never a subdirectory, a symlink or a glob. The directory is
+>   under the default `protected_paths` (`.agentic/**`), so a run cannot write its own next
+>   instruction. A key's value is `prompts/<name>.md` or `.agentic/prompts/<name>.md`; any other
+>   value is reported in `not_applied` and read as nothing.
+> - **Bounded and redacted.** At most 64 files of at most 16 KiB each are read (an oversized file is
+>   recorded and never buffered), every text is redacted with TD-012 step 2's pattern rules before it
+>   is stored (`project_repository_config.prompts`, migration 0063), and the assembler cuts each block
+>   at 8 000 characters (`MAX_PROJECT_PROMPT_CHARS`), announced as `truncated="true"` in the marker.
+>   That is 4 000–12 000 estimated tokens per stage, **additive to the pack budget**, not taken from
+>   it: `MAX_CONTEXT_BUDGET_TOKENS` is the pack's half of the window, and the other half already holds
+>   the role prompt this adds to.
+> - **A file the configuration names and the platform cannot read** (absent, a symlink, oversized,
+>   outside the directory, no reading yet): **the run proceeds without it and says so**. The block is
+>   still rendered with a `status` attribute and an empty body, and the planner warns. A project
+>   prompt adds guidance and grants nothing, so refusing the run would give a missing page a veto
+>   over every task. A convention file the project never created is not a declaration and produces no
+>   block, so a project with no prompt files keeps the prompt it had.
 
 > **The delimiter contract, and the correction to step 5 (WP-17).** Steps 4 and 5 are implemented by
 > `assemblePrompt` in `packages/domain/src/prompt/`, and the rule they are written to is one

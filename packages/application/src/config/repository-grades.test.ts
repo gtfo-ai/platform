@@ -81,10 +81,11 @@ describe('the keys a file may not apply', () => {
       features: { maintenance: { enabled: true } },
       stages: { implementation: { model: 'claude-sonnet-5', prompt: 'prompts/x.md' } },
     });
+    // WP-92, criterion 3: `prompts/x.md` resolves into `.agentic/prompts/`, so it is applied.
     expect(values).toEqual({
       policies: { protected_paths: ['secrets/**'] },
       pipeline: { limits: { ci_fix_iterations: 4 } },
-      stages: { implementation: { model: 'claude-sonnet-5' } },
+      stages: { implementation: { model: 'claude-sonnet-5', prompt: 'prompts/x.md' } },
     });
     expect(notApplied.map((item) => item.key).sort()).toEqual([
       'features',
@@ -92,7 +93,35 @@ describe('the keys a file may not apply', () => {
       'policies.autonomy',
       'policies.knowledge_apply',
       'policies.probation_tasks',
+    ]);
+  });
+
+  it('applies both prompt keys when they name a prompt file, and drops one that names another path (WP-92)', () => {
+    expect(REPOSITORY_KEY_GRADES['stages.*.prompt']).toBe('operational');
+    expect(REPOSITORY_KEY_GRADES['stages.*.prompt_append']).toBe('operational');
+    const read = {
+      stages: {
+        implementation: {
+          prompt: 'prompts/implementation.md',
+          prompt_append: '.agentic/prompts/implementation.append.md',
+        },
+      },
+    };
+    expect(withoutNotAppliedKeys(read)).toEqual({ values: read, notApplied: [] });
+
+    const outside = withoutNotAppliedKeys({
+      stages: {
+        implementation: { prompt: '../secrets.md', prompt_append: 'prompts/ok.md' },
+        refinement: { prompt: 'prompts/sub/dir.md' },
+      },
+    });
+    // Dropped, so a settings value that resolves is not shadowed by the file's.
+    expect(outside.values).toEqual({
+      stages: { implementation: { prompt_append: 'prompts/ok.md' } },
+    });
+    expect(outside.notApplied.map((item) => item.key)).toEqual([
       'stages.implementation.prompt',
+      'stages.refinement.prompt',
     ]);
   });
 

@@ -271,4 +271,6 @@ export const projectRepositoryConfig = pgTable('project_repository_config', {
     .default([]),
   detail: text('detail'),
   readAt: timestamp('read_at', { withTimezone: true }).notNull(),
+  /** Migration 0063 (WP-92): `.agentic/prompts/` at the same commit, redacted; `null` = not read. */
+  prompts: jsonb('prompts').$type<JsonObject>(),
 });

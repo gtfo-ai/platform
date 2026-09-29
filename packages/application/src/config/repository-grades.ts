@@ -18,7 +18,7 @@
  *    key that overrides one of its policies (`AUTONOMY_POLICY_OVERRIDE_KEYS`, Q78 — a test holds the
  *    two lists together), the other policies whose loosening turns a check off (the dependency
  *    policy, the coverage source, drift handling), per-template stage and plan-approval overrides,
- *    the per-stage prompt files (no reader on this build), every `features` switch (each turns on
+ *    custom stages (no reader on this build), every `features` switch (each turns on
  *    agent work, sets a spending cap or publishes a per-person read — all `project.settings.write`
  *    decisions), and `project.default_branch` (the branch configuration is trusted from is
  *    `projects.default_branch`, never a key in a file on it — BD-025 §1).
@@ -28,8 +28,13 @@
  *    rather than spends — and the organisation and project budgets, `BudgetGuard`; neither is a
  *    file key), the iteration limits other than the dial's two (a return is still a return a
  *    reviewer made, and every round is budgeted), the knowledge directory and the context budget
- *    (what a prompt carries is data blocks either way), the language and commit convention, and
- *    `status_mapping` (ticket status names).
+ *    (what a prompt carries is data blocks either way), the language and commit convention,
+ *    `status_mapping` (ticket status names), and the per-stage prompt files `stages.*.prompt` and
+ *    `prompt_append` (WP-92): a project prompt reaches the model inside a data block, adds to the
+ *    role prompt and never replaces it, and grants no tool, command or path — and the file it names
+ *    is repository content that merge rights could already write under `.agentic/prompts/` anyway.
+ *    A value that names a file outside that directory is dropped and reported
+ *    (`projectPromptValueNotApplied`), so it cannot shadow a settings value that resolves.
  */
 
 import {
@@ -39,6 +44,7 @@ import {
 } from '@platform/contracts';
 import type { ConfigValues } from '@platform/domain';
 import { AUTONOMY_POLICY_OVERRIDE_KEYS, PLATFORM_DEFAULT_CONFIG } from '@platform/domain';
+import { projectPromptValueNotApplied } from './project-prompts.js';
 import type { RepositoryConfigNotApplied } from './repository-config.js';
 
 export type RepositoryKeyGrade = 'tighten_only' | 'not_applied' | 'operational';
@@ -68,8 +74,8 @@ export const REPOSITORY_KEY_GRADES: Readonly<Record<string, RepositoryKeyGrade>>
   'stages.*.effort': 'operational',
   'stages.*.max_turns': 'operational',
   'stages.*.budget_usd': 'operational',
-  'stages.*.prompt': 'not_applied',
-  'stages.*.prompt_append': 'not_applied',
+  'stages.*.prompt': 'operational',
+  'stages.*.prompt_append': 'operational',
   'policies.autonomy': 'not_applied',
   'policies.probation_tasks': 'not_applied',
   'policies.knowledge_apply': 'not_applied',
@@ -96,8 +102,6 @@ const NOT_APPLIED_REASONS: Readonly<Record<string, string>> = {
   'pipeline.template_overrides':
     'per-template stage and plan-approval overrides can take a check away; they are a settings decision',
   'pipeline.custom_stages': 'custom stages are not read on this build',
-  'stages.*.prompt': 'per-stage prompt files are not read on this build',
-  'stages.*.prompt_append': 'per-stage prompt files are not read on this build',
 };
 
 /** Why `policies.autonomy` in a repository file is not applied. */
@@ -165,6 +169,12 @@ export const withoutNotAppliedKeys = (
     for (const removed of removePath(copy, path.split('.'), '')) {
       notApplied.push({ key: removed, reason: reasonFor(path) });
     }
+  }
+  // WP-92: a prompt key whose value names no file the platform reads is dropped, not merged — so
+  // it cannot shadow a settings value that does — and reported with the reason.
+  for (const item of projectPromptValueNotApplied(copy as ConfigValues)) {
+    removePath(copy, item.key.split('.'), '');
+    notApplied.push(item);
   }
   return { values: copy as ConfigValues, notApplied };
 };

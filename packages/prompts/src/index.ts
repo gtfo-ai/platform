@@ -5,8 +5,9 @@
  * outputs (artifact schema), quality bar, when to ask, when to return, when to stop. Shipped as a
  * default markdown file"*. They are markdown files under `roles/<role>/prompt.md` rather than
  * template literals in TypeScript for two reasons that are both about other tools reading them:
- * promptfoo's provider takes a prompt file (TD-016), and product/13's project override is
- * *"replacing (`prompts/<stage>.md`) or appending"* — a file, diffable against ours in the UI.
+ * promptfoo's provider takes a prompt file (TD-016), and product/13 describes a project's own
+ * `prompts/<stage>.md` as a file too — diffable against ours in the UI. Since WP-92 such a file
+ * **adds to** the role prompt as a data block and never replaces it (technical/04).
  *
  * ## Layer 1 is not here
  *
@@ -51,8 +52,9 @@ export interface RolePrompt {
 /**
  * The shipped version per role.
  *
- * A table rather than a field in each file's frontmatter: a prompt file is what a project replaces,
- * and a replaced file carrying the platform's version number would claim to be a platform prompt.
+ * A table rather than a field in each file's frontmatter: a prompt file is what a project writes
+ * its own of, and a project's file carrying the platform's version number would claim to be a
+ * platform prompt.
  */
 export const ROLE_PROMPT_VERSIONS = {
   // WP-73 (backlog 142): the type mapping is a `type_mapping` data block when given, not a
