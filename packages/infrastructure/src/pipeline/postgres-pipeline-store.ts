@@ -24,6 +24,7 @@ import type {
   ApprovalRepository,
   ArtifactRepository,
   BreakdownRepository,
+  BugTraceRepository,
   Logger,
   PipelineStore,
   QuestionRepository,
@@ -1599,7 +1600,49 @@ export const createPostgresPipelineStore = (
     approvals,
     breakdown,
     runCommands: createPostgresRunCommandRepository(),
+    bugTraces: postgresBugTraces,
   };
+};
+
+/**
+ * WP-90's read of a ticket's defect trace (PROGRESS backlog 192): the ordering is the statistics
+ * read's (`apps/server/src/queries/stats-queries.ts` § `bugTraces`) — a `linked` trace first, then
+ * the newest — so the handler that decides whether to re-trace and the figure it re-traces for
+ * cannot disagree about which trace is the ticket's.
+ *
+ * **Its cost, stated:** every trace is on its project's stream, so the read is bounded by that
+ * stream's `ticket.bug.traced` rows; `events` has no index on a payload field, so which of the
+ * `(type, occurred_at)` and stream indexes the planner takes decides whether the rows scanned are
+ * the organisation's traces or the project's events — measured neither way here. It is asked once
+ * per `ticket.updated`. It is **not** a bounded indexed read: no index covers the payload
+ * predicate and nothing bounds `occurred_at`, so it probes every monthly partition — unmeasured,
+ * PROGRESS backlog 307.
+ */
+const postgresBugTraces: BugTraceRepository = {
+  latest: async (tx, ticket) => {
+    const { rows } = await sqlOf(tx).query<{ outcome: string; filed_at: string }>(
+      `select e.payload ->> 'outcome' as outcome, e.payload ->> 'filed_at' as filed_at
+         from events e
+        where e.type = 'ticket.bug.traced'
+          and e.stream_type = 'project' and e.stream_id = $1::uuid
+          and e.payload -> 'ticket' ->> 'provider' = $2
+          and e.payload -> 'ticket' ->> 'key' = $3
+        order by (e.payload ->> 'outcome' = 'linked') desc, e.occurred_at desc, e.position desc
+        limit 1`,
+      [ticket.projectId, ticket.provider, ticket.key],
+    );
+    const row = rows[0];
+    if (row === undefined) {
+      return null;
+    }
+    const outcome = row.outcome;
+    if (outcome !== 'linked' && outcome !== 'no_link' && outcome !== 'unreadable') {
+      // The payload was validated by its schema when it was appended; a value outside the enum is
+      // a row this build did not write, and it is refused rather than read as one of the three.
+      throw new PipelineStoredStateError(`ticket.bug.traced carries an unknown outcome ${outcome}`);
+    }
+    return { outcome, filedAt: row.filed_at as IsoDateTime };
+  },
 };
 
 /** One `ticket_breakdown_items` row as `pg` hands it back. */

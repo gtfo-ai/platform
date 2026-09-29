@@ -62,6 +62,20 @@ export const mergeRequestHookSchema = z.object({
     url: z.string().nullish(),
     last_commit: z.object({ id: z.string() }).nullish(),
   }),
+  /**
+   * The attributes this update changed, each as `{ previous, current }` — the page's `changes`
+   * object. Only `blocking_discussions_resolved` is read (WP-90, PROGRESS backlog 210): the page
+   * lists it among the attributes `changes` carries and says the hook fires with `action: "update"`
+   * when *"all threads are resolved"*. Non-strict and nullish like everything here; a `current`
+   * that is not a boolean is read as no change rather than a refusal (standing rule 20).
+   */
+  changes: z
+    .object({
+      blocking_discussions_resolved: z
+        .object({ previous: z.unknown().optional(), current: z.unknown().optional() })
+        .nullish(),
+    })
+    .nullish(),
 });
 
 export const noteHookSchema = z.object({

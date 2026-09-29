@@ -246,3 +246,24 @@ reader repeating the search.
   `unapproved`, `approval`, `unapproval` and `merge`; the note hook fires on a note. Neither
   announces a resolution, which is why `packages/application/src/pipeline/review-only.ts` polls
   `listDiscussions` at the merge request's terminal event instead of consuming a webhook.
+  **Corrected at WP-90** (the same page, re-read below): one resolution *is* announced — the last.
+
+## Pages read for WP-90 that produced no fixture
+
+- `https://docs.gitlab.com/user/project/integrations/webhook_events/` § "Merge request events"
+  (retrieved **2026-09-29**; first read for this at WP-73a, 2026-09-27) — the merge-request hook
+  fires with `action: "update"` when *"All threads are resolved on the merge request"*, and
+  `blocking_discussions_resolved` (*"Whether blocking discussions are resolved"*) is among the
+  attributes the `changes` object carries. The page says nothing about a note event for a
+  resolution, and nothing about a single thread of several being resolved. This is what
+  `gitlab/inbound.ts` reads into `mr.updated.blocking_threads_resolved` (PROGRESS backlog 210);
+  the deliveries are built in `inbound.test.ts`, not recorded, so there is no fixture file.
+- `https://gitlab.com/gitlab-org/gitlab/-/raw/master/lib/gitlab/hook_data/merge_request_builder.rb`
+  (retrieved **2026-09-29**, GitLab's own source, not its documentation) — the hook's value is
+  `blocking_discussions_resolved: merge_request.mergeable_discussions_state?`; and
+  `https://gitlab.com/gitlab-org/gitlab/-/raw/master/app/models/merge_request.rb` — that method is
+  `return true unless only_allow_merge_if_all_discussions_are_resolved?` followed by
+  `unresolved_notes.none?(&:to_be_resolved?)`. So on a project that does **not** require resolved
+  threads before merging the value is always `true`, never changes, and never appears in
+  `changes`: the refresh this signal drives exists only on projects with that setting. Read off
+  `master` on that date; a GitLab release may change it, and no real instance was measured.

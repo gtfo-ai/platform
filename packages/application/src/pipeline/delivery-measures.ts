@@ -18,8 +18,13 @@
  * and a bug ticket usually has no task at all. Neither event decides anything about a task, so
  * neither needs the task row's `version` token (the dance `conflict-warning.ts` does for a live
  * stream); the sequence is read with `nextStreamSequence` just before the append, exactly as the
- * knowledge ring's project-stream writers do, and a racing append on the same stream fails the
- * transaction with `StreamConflictError`, which fails the job, which pg-boss retries.
+ * knowledge ring's project-stream writers do. A racing append on the same stream fails that
+ * transaction with `StreamConflictError`, and **the append retries it here** — the sequence re-read,
+ * the event rebuilt from the provider answer already held — up to
+ * {@link DELIVERY_MEASURE_APPEND_ATTEMPTS} times (WP-90, PROGRESS backlog 193). Until WP-90 the
+ * conflict failed the job and pg-boss re-ran it, provider read included, and a third loss dropped the
+ * measurement with no event at all. The held answer is at most one sequence read old; what that can
+ * make stale is said at {@link appendOnProject}.
  *
  * ## `task.mr.measured` — one read per merge the platform made
  *
@@ -50,10 +55,21 @@
  * a merge followed by a bug within thirty days — is not a trace at all (criterion 6). Every bug
  * gets an event, found or not, because Q87's answer publishes the rate **only with its coverage**:
  * how many bug tickets carried a link the platform could resolve.
+ *
+ * ## A link added later — the re-trace (WP-90, PROGRESS backlog 192)
+ *
+ * A reporter who files a bug and links the merge request an hour later used to leave the bug
+ * `no_link` forever. A `ticket.updated` for a ticket whose trace is `no_link` or `unreadable`
+ * enqueues the same duty again — one ticket read per such edit — and a `linked` trace is final: it
+ * is never re-traced, and the statistics read prefers it over any later trace of the same ticket.
+ * A re-trace whose answer has not changed appends nothing, so an edit burst on a bug with no link
+ * does not grow the log. What it cannot see: a binding with no `ticket.updated` at all — a Jira
+ * binding with no webhook and polling off (backlog 187) — never re-traces.
  */
 import type { DomainEvent, Id, MergeRequestRef } from '@platform/contracts';
 import { ticketRefSchema } from '@platform/contracts';
 import { buildEvent } from '@platform/domain';
+import { StreamConflictError } from '../errors.js';
 import type { EventHandler, HandlerContext } from '../events/handler.js';
 import type { EventStore } from '../ports/event-store.js';
 import type { TicketRefInput } from '../ports/integrations/task-management.js';
@@ -177,24 +193,102 @@ const bugTraceHandler = (options: PipelineSagaOptions): EventHandler => ({
   },
 });
 
+/**
+ * `ticket.updated` → re-trace a bug whose trace is not yet `linked` (WP-90, PROGRESS backlog 192).
+ *
+ * Priority **120**, beside the first trace. It asks one question in the dispatcher's transaction —
+ * the ticket's trace, by the statistics read's ordering ({@link PipelineStore.bugTraces}) — and
+ * enqueues only for `no_link` or `unreadable`: a ticket never traced is not known to be a bug, and a
+ * `linked` one is final. The filing instant rides from the trace, never from this event, so the
+ * bug keeps its day.
+ */
+const bugRetraceHandler = (options: PipelineSagaOptions): EventHandler => ({
+  name: 'pipeline.bug.retrace',
+  priority: 120,
+  eventTypes: ['ticket.updated'],
+  handle: async (context: HandlerContext) => {
+    const event = context.event.event;
+    if (event.type !== 'ticket.updated') {
+      return;
+    }
+    const { payload } = event;
+    const trace = await options.store.bugTraces.latest(context.scope.tx, {
+      projectId: payload.project_id,
+      provider: payload.ticket.provider,
+      key: payload.ticket.key,
+    });
+    if (trace === null || trace.outcome === 'linked') {
+      return;
+    }
+    const data: PipelineOutboundData = {
+      duty: 'bug_trace',
+      project_id: payload.project_id,
+      cause_event_id: event.id,
+      ticket: payload.ticket,
+      // The ticket's own type decides again, as for a delivery that named none: the job reads the
+      // ticket anyway, and a ticket re-typed away from `bug` since is no longer one to trace.
+      issue_type: null,
+      filed_at: trace.filedAt,
+      retrace_of: trace.outcome,
+    };
+    context.afterCommit(async () => {
+      await enqueueOutbound(options.jobs, data);
+    });
+  },
+});
+
 /** Every handler this module registers, for the runtime to spread. */
 export const deliveryMeasureHandlers = (options: PipelineSagaOptions): readonly EventHandler[] => [
   mergeMeasureHandler(options),
   bugTraceHandler(options),
+  bugRetraceHandler(options),
 ];
 
 // ── The duties ───────────────────────────────────────────────────────────────
 
-/** Appends one event on the project's stream, in a transaction of its own. */
+/**
+ * How many times an append on the project stream is tried before its `StreamConflictError` fails
+ * the job — the inbound audit log's bound (`DEFAULT_INBOUND_SEQUENCE_ATTEMPTS`), for the same reason:
+ * the race is another writer taking the sequence in the milliseconds between the read and the
+ * append, and four consecutive losses on one stream is contention nothing here should retry through.
+ */
+export const DELIVERY_MEASURE_APPEND_ATTEMPTS = 4;
+
+/**
+ * Appends one event on the project's stream, in a transaction of its own, retrying a lost sequence
+ * race (WP-90, PROGRESS backlog 193).
+ *
+ * `build` is called once per attempt with the freshly read sequence and closes over the provider's
+ * answer, which was read **once**, before this function, and is never read again here — so a lost
+ * race costs one sequence read and one transaction, not a second provider call. **What the held
+ * answer can make stale**, stated: nothing the retry adds. A merge's diff stats are the merged
+ * revision's and do not change; a ticket's links could gain a link in the milliseconds between the
+ * read and the append, which is exactly the edit the re-trace above exists for — that edit's own
+ * `ticket.updated` re-traces it. After the last attempt the conflict fails the job, and pg-boss's
+ * retry re-reads the provider as before.
+ */
 const appendOnProject = async (
   options: DeliveryMeasuresOptions,
   projectId: Id,
   build: (streamSeq: number) => DomainEvent,
 ): Promise<void> => {
-  const streamSeq = await options.eventStore.nextStreamSequence('project', projectId);
-  await options.unitOfWork.transaction(async (scope) => {
-    await scope.events.append([build(streamSeq)]);
-  });
+  for (let attempt = 1; ; attempt += 1) {
+    const streamSeq = await options.eventStore.nextStreamSequence('project', projectId);
+    try {
+      await options.unitOfWork.transaction(async (scope) => {
+        await scope.events.append([build(streamSeq)]);
+      });
+      return;
+    } catch (error) {
+      if (!(error instanceof StreamConflictError) || attempt >= DELIVERY_MEASURE_APPEND_ATTEMPTS) {
+        throw error;
+      }
+      options.logger?.debug(
+        { project_id: projectId, attempt, stream_seq: streamSeq },
+        'delivery measure: another writer took the project stream’s sequence; appending again with the answer already read',
+      );
+    }
+  }
 };
 
 const commandContext = (options: DeliveryMeasuresOptions, correlationId: Id, causeEventId: Id) => ({
@@ -282,8 +376,30 @@ export const runMergeMeasure = async (
  * Every refusal before the bug decision records nothing — the ticket is not a bug, so it is in
  * neither side of the rate. Every outcome after it records one `ticket.bug.traced`, because the
  * coverage is a count of them: a bug the platform could not read is `unreadable` and counts against
- * the coverage rather than vanishing from it.
+ * the coverage rather than vanishing from it. The one exception is a **re-trace** (WP-90) whose
+ * outcome equals the trace it was enqueued for: the ticket already has that trace, and a second copy
+ * would change no figure.
  */
+/**
+ * Re-validation on fire of a re-trace (TD-004): the ticket's trace is still not `linked`. A burst
+ * of edits enqueues one re-trace each; the first to find the link settles it and the rest stop here
+ * without reading the ticket.
+ */
+const stillToRetrace = async (
+  options: DeliveryMeasuresOptions,
+  projectId: Id,
+  ticket: TicketRefInput,
+): Promise<boolean> => {
+  const trace = await options.unitOfWork.transaction(async (scope) =>
+    options.store.bugTraces.latest(scope.tx, {
+      projectId,
+      provider: ticket.provider,
+      key: ticket.key,
+    }),
+  );
+  return trace !== null && trace.outcome !== 'linked';
+};
+
 export const runBugTrace = async (
   options: DeliveryMeasuresOptions,
   data: PipelineOutboundData,
@@ -297,6 +413,14 @@ export const runBugTrace = async (
   }
   // The job payload is a wire boundary and the ticket in it is provider text — parsed, never cast.
   const source: TicketRefInput = ticketRefSchema.parse(data.ticket);
+  const retraceOf = data.retrace_of ?? null;
+  if (retraceOf !== null && !(await stillToRetrace(options, projectId, source))) {
+    logger.debug(
+      { project_id: projectId, ticket_key: source.key },
+      'bug trace: the ticket was traced `linked` since this re-trace was enqueued; nothing is read',
+    );
+    return;
+  }
   const settings = await options.settings.forProject(projectId);
   const eventType = typeof data.issue_type === 'string' ? data.issue_type : null;
   if (eventType !== null && !isBugIssueType(settings, eventType)) {
@@ -323,6 +447,15 @@ export const runBugTrace = async (
     readonly mr: MergeRequestRef | null;
     readonly taskId: Id | null;
   }): Promise<void> => {
+    if (trace.outcome === retraceOf) {
+      // A re-trace that learned nothing new appends nothing: the trace the read takes already says
+      // this, and an edit burst on a bug with no link would otherwise grow the log per edit.
+      logger.debug(
+        { project_id: projectId, ticket_key: source.key, outcome: trace.outcome },
+        'bug trace: the re-trace found what the last trace recorded; nothing is appended',
+      );
+      return;
+    }
     await appendOnProject(
       options,
       projectId,

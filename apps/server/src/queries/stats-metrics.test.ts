@@ -67,7 +67,7 @@ const delivered = (overrides: Partial<StatsSources['deliveredTasks'][number]> = 
   cycleHours: 10,
   agentHours: 1,
   returns: 0,
-  humanReviewEntries: 0,
+  humanCommentWindows: 0,
   questions: 0,
   costUsd: 4,
   estimateUsd: null,
@@ -203,13 +203,29 @@ describe('the catalogue', () => {
     expect(metric(fold(), 'human_minutes').caveats.join(' ')).not.toContain('Withheld in');
   });
 
+  it('states what WP-90 left true about the three delivery metrics (criterion 4)', () => {
+    // Backlog 192: a later link is read on an edit, so the caveat names the edit and the binding
+    // that sends none — and that a past day can move.
+    const defect = metric(fold(), 'defect_escape').caveats.join(' ');
+    expect(defect).toContain('traces it again');
+    expect(defect).toContain('PROGRESS backlog 187');
+    expect(defect).toContain('can change a past day’s figure');
+    // Backlog 193: a lost race is retried without a second read; a provider that keeps refusing
+    // still leaves a merge in neither count.
+    const loc = metric(fold(), 'loc_changed').caveats.join(' ');
+    expect(loc).toContain('never with a second provider read');
+    expect(loc).toContain('in neither the measured nor the unmeasured count');
+  });
+
   it('no longer claims approving is invisible to first-pass acceptance', () => {
     // Rule 83: the caveat said "approving produces no event on this build" from WP-41 until WP-61;
     // `mr.approved` exists since WP-60 and opens a review window, so the sentence was false.
+    // WP-90 (backlog 191): the read counts only windows with a human comment, so the WP-61 caveat
+    // — an approve-only reviewer makes a task *not* first-pass — is false in its turn.
     const caveats = metric(fold(), 'first_pass_acceptance').caveats.join(' ');
     expect(caveats).not.toContain('produces no event');
-    expect(caveats).toContain('approved without commenting');
-    expect(caveats).toContain('not** first-pass');
+    expect(caveats).toContain('approved without commenting leaves the task first-pass');
+    expect(caveats).not.toContain('not** first-pass');
   });
 });
 
@@ -255,7 +271,7 @@ describe('the arithmetic', () => {
       deliveredTasks: [
         delivered(),
         delivered({ returns: 1 }),
-        delivered({ humanReviewEntries: 2 }),
+        delivered({ humanCommentWindows: 2 }),
         delivered({ questions: 3 }),
       ],
     });

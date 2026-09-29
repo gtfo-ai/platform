@@ -1478,6 +1478,29 @@ export interface BreakdownRepository {
   ): Promise<void>;
 }
 
+/** What {@link BugTraceRepository.latest} answers about one ticket's defect trace (WP-90). */
+export interface LatestBugTrace {
+  readonly outcome: 'linked' | 'no_link' | 'unreadable';
+  /** The ticket's own `ticket.created` instant, as the trace recorded it. */
+  readonly filedAt: IsoDateTime;
+}
+
+/**
+ * The one read of the defect trace the pipeline makes — WP-90, PROGRESS backlog 192.
+ *
+ * A `ticket.updated` re-traces a bug only when the trace the statistics read would take is not
+ * `linked`, and this is that question, asked with the **same ordering** as the read
+ * (`apps/server/src/queries/stats-queries.ts` § `bugTraces`): a `linked` trace first, then the
+ * newest. `null` for a ticket that was never traced — not a bug, or a bug whose first trace never
+ * landed — which is never re-traced, because nothing says it is a bug.
+ */
+export interface BugTraceRepository {
+  latest(
+    tx: Transaction,
+    ticket: { readonly projectId: Id; readonly provider: string; readonly key: string },
+  ): Promise<LatestBugTrace | null>;
+}
+
 export interface PipelineStore {
   readonly tasks: TaskRepository;
   readonly artifacts: ArtifactRepository;
@@ -1488,6 +1511,8 @@ export interface PipelineStore {
   readonly breakdown: BreakdownRepository;
   /** WP-85's commands on their way to the process holding a live run. */
   readonly runCommands: RunCommandRepository;
+  /** WP-90's read of a ticket's defect trace, off the project's event stream. */
+  readonly bugTraces: BugTraceRepository;
 }
 
 /** Everything the pipeline needs to name a ticket it has not created a task for yet. */

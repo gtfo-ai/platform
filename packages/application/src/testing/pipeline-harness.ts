@@ -930,6 +930,11 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
       memory.log
         .map((row) => row.event)
         .filter((event) => event.stream_type === 'task' && event.stream_id === taskId),
+    // WP-90: `bugTraces.latest` reads the project's own stream, as the SQL store does.
+    projectEvents: (projectId) =>
+      memory.log
+        .map((row) => row.event)
+        .filter((event) => event.stream_type === 'project' && event.stream_id === projectId),
   });
   const jobs = recordingJobs();
   const audit = createMemoryAuditLog();

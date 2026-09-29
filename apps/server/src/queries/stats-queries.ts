@@ -14,12 +14,13 @@
  * because a rollup that copied those would be a second number to keep in step with the first
  * (standing rule 41).
  *
- * **Five read `events` directly** (WP-61), and each is a question a counter folded from one event
- * at a time cannot answer, because it compares two events: distinct conflict overlaps (the same
- * pair warned at two gate entries is one overlap, PROGRESS backlog 180), a lint followed by an edit
- * within 48 h (backlog 186), a bug traced to a merge that was delivered within the thirty days
- * before it (backlog 114), the first measurement of each merge (backlog 179), and the approvals
- * that touched a review window (backlog 188).
+ * **Six read `events` directly** (WP-61, the sixth WP-90's), and each is a question a counter
+ * folded from one event at a time cannot answer, because it compares two events: distinct conflict
+ * overlaps (the same pair warned at two gate entries is one overlap, PROGRESS backlog 180), a lint
+ * followed by an edit within 48 h (backlog 186), a bug traced to a merge that was delivered within
+ * the thirty days before it — by the ticket's latest trace, `linked` final (backlog 114, 192) — the
+ * first measurement of each merge (backlog 179), the approvals that touched a review window
+ * (backlog 188), and the human comments inside a delivered task's review windows (backlog 191).
  *
  * **What bounds each, read per statement rather than claimed for all** (review round 1, backlog
  * 194). Every one is limited to one event type by `events_type_occurred_at_idx`. Beyond that: the
@@ -28,8 +29,8 @@
  * every partition with `type` as the only index condition to one partition with `occurred_at` in
  * the index condition (PROGRESS, WP-61 round 2); the defect trace has a lower bound only (a trace
  * may land after the range ends); **the overlaps read has an upper bound only and scans the type's
- * history before it**, because "first warned" needs every earlier warning; and the approval and
- * edit sub-reads are correlated on the outer row's instants, which bound the index. None has a
+ * history before it**, because "first warned" needs every earlier warning; and the approval,
+ * comment and edit sub-reads are correlated on the outer row's instants, which bound the index. None has a
  * projection's constant cost; a type with millions of rows would want one.
  *
  * ## The day is cut in the database, in the organisation's zone
@@ -50,7 +51,7 @@
 import { resolveBudgetTimezone } from '@platform/application';
 import { db as dbAdapters } from '@platform/infrastructure';
 import { sql } from 'drizzle-orm';
-import { APPROVAL_TOUCHED, MACHINE_AUTHORED } from './human-time-predicates.js';
+import { APPROVAL_TOUCHED, HUMAN_COMMENTED, MACHINE_AUTHORED } from './human-time-predicates.js';
 import type {
   BugTraceRow,
   CostDayRow,
@@ -223,7 +224,7 @@ const deliveredTasks = async (
     cycle_hours: string | number;
     agent_hours: string | number | null;
     returns: string | number;
-    human_review_entries: string | number;
+    human_comment_windows: string | number;
     questions: string | number;
     cost_usd: string | number | null;
     estimate_usd: string | null;
@@ -239,7 +240,8 @@ const deliveredTasks = async (
              as returns,
            (select count(*) from human_time_entries h
              where h.task_id = t.id and h.kind = 'review'
-               and not ${MACHINE_AUTHORED}) as human_review_entries,
+               and not ${MACHINE_AUTHORED}
+               and ${HUMAN_COMMENTED}) as human_comment_windows,
            (select count(*) from questions q where q.task_id = t.id) as questions,
            (select coalesce(sum(c.usd), 0) from cost_entries c where c.task_id = t.id) as cost_usd,
            t.estimate_usd,
@@ -255,7 +257,7 @@ const deliveredTasks = async (
     cycleHours: number(row.cycle_hours),
     agentHours: number(row.agent_hours),
     returns: number(row.returns),
-    humanReviewEntries: number(row.human_review_entries),
+    humanCommentWindows: number(row.human_comment_windows),
     questions: number(row.questions),
     costUsd: number(row.cost_usd),
     estimateUsd: row.estimate_usd === null ? null : Number(row.estimate_usd),
@@ -622,7 +624,14 @@ const lintEdits = async (
  * days before the bug was filed — a delivery being a `stats_task_delivery` row, the same instant
  * every delivery metric counts by, on a `mode = 'normal'` task.
  *
- * A ticket traced twice (a duplicate wake-up) is one bug: its **first** trace is the one read. The
+ * A ticket traced more than once is one bug, and the trace read is its **latest** — with `linked`
+ * final (WP-90, PROGRESS backlog 192). Since WP-90 a `ticket.updated` re-traces a bug whose latest
+ * trace is `no_link` or `unreadable`, so a link added after filing is recorded by a *later* trace,
+ * and the first trace was the one that could not see it. A `linked` trace is never re-traced, so a
+ * later non-`linked` trace of the same ticket can only be a duplicate wake-up of an earlier job — a
+ * redelivery after its append committed — and it does not take the link back: the read orders
+ * `linked` first, then the newest. `filed_at` is every trace's copy of the ticket's own
+ * `ticket.created` instant, so which trace is read never moves the bug's day. The
  * thirty days are measured back from the trace's `filed_at` (the `ticket.created` instant) and
  * never forward, so the merge request that *fixes* a bug — merged after it was filed, and the one
  * a ticket most often links to — is never counted as the one it escaped from.
@@ -648,11 +657,12 @@ const bugTraces = async (
        where e.type = 'ticket.bug.traced'
          -- A **lower** bound only: a trace is appended after the ticket.created it follows, so a
          -- bug filed in the range has its trace at or after the range's start. It may be appended
-         -- after the range's end (a retried job, a range ending today), so no upper bound. The
-         -- first-trace rule is unaffected: every duplicate of a bug in range is after its filing.
+         -- after the range's end (a retried job, a re-trace, a range ending today), so no upper
+         -- bound — which is also what lets a re-trace appended today decide a bug filed in range.
          and e.occurred_at >= ((${bounds.from}::date - 1)::timestamp at time zone 'UTC')
        order by e.payload ->> 'project_id', e.payload -> 'ticket' ->> 'provider',
-                e.payload -> 'ticket' ->> 'key', e.occurred_at, e.position
+                e.payload -> 'ticket' ->> 'key',
+                (e.payload ->> 'outcome' = 'linked') desc, e.occurred_at desc, e.position desc
     )
     select ${civilDay('tr.filed_at', bounds)} as day,
            count(*) as bugs,

@@ -241,6 +241,41 @@ describe('merge request hooks', () => {
     expect(unreadable.updated_at).toBeNull();
   });
 
+  /**
+   * WP-90, PROGRESS backlog 210: the page says the hook fires with `action: "update"` when all
+   * threads are resolved and lists `blocking_discussions_resolved` among the `changes` attributes.
+   * The flag is carried only when this update changed it — both directions — and never invented.
+   */
+  it('carries a change of blocking_discussions_resolved on mr.updated, and nothing when there is none', async () => {
+    const withChanges = (changes: unknown) => ({
+      ...(mergeRequestHook({ action: 'update' }) as Record<string, unknown>),
+      changes,
+    });
+    const resolved = catalogued(
+      await normalise(
+        withChanges({ blocking_discussions_resolved: { previous: false, current: true } }),
+      ),
+      'mr.updated',
+    );
+    expect(resolved.blocking_threads_resolved).toBe(true);
+    const reopened = catalogued(
+      await normalise(
+        withChanges({ blocking_discussions_resolved: { previous: true, current: false } }),
+      ),
+      'mr.updated',
+    );
+    expect(reopened.blocking_threads_resolved).toBe(false);
+    for (const changes of [
+      undefined,
+      {},
+      { title: { previous: 'a', current: 'b' } },
+      { blocking_discussions_resolved: { previous: false, current: 'yes' } },
+    ]) {
+      const payload = catalogued(await normalise(withChanges(changes)), 'mr.updated');
+      expect(payload, JSON.stringify(changes)).not.toHaveProperty('blocking_threads_resolved');
+    }
+  });
+
   it('carries the draft flag from the documented `draft` attribute', async () => {
     const payload = catalogued(await normalise(mergeRequestHook({ draft: true })), 'mr.opened');
     expect(payload.draft).toBe(true);

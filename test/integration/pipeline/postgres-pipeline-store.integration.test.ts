@@ -83,7 +83,7 @@ runPipelineStoreContract({
         await client.query(
           `insert into events (id, stream_type, stream_id, stream_seq, type, payload, actor,
                                occurred_at)
-           values ($1, 'task', $2, $3, $4, $5::jsonb, $7::jsonb, $6)`,
+           values ($1, $8, $2, $3, $4, $5::jsonb, $7::jsonb, $6)`,
           [
             event.id,
             event.taskId,
@@ -96,6 +96,7 @@ runPipelineStoreContract({
                 ? { kind: 'system', component: 'pipeline' }
                 : { kind: 'user', user_id: event.actorUserId },
             ),
+            event.streamType ?? 'task',
           ],
         );
       },

@@ -492,17 +492,19 @@ export const reviewThreadsValueText = (threads: TaskReviewThreads | null): strin
       : `${threads.open} open · ${threads.resolved} resolved`;
 
 /**
- * The sentence under the count. It says **when** the number was read and that a resolution does
- * not refresh it (WP-73, PROGRESS backlog 210): only a comment re-opens BD-007's window, and GitLab
- * sends no comment event for a thread resolved without a note — its merge-request event fires only
- * when *all* threads are resolved, which nothing on this build consumes.
+ * The sentence under the count. It says **when** the number was read and which resolutions re-read
+ * it (WP-73, revised at WP-90 — PROGRESS backlog 210). A comment opens BD-007's window, and since
+ * WP-90 two resolution signals re-count without it: GitLab's merge-request event when *all* threads
+ * are resolved (sent only by a project that requires resolved threads before merging), and a note
+ * written into a resolved thread. One thread of several resolved without a note sends nothing, so
+ * the number can still be older than the merge request.
  */
 export const reviewThreadsBasisText = (threads: TaskReviewThreads | null): string =>
   threads === null
     ? 'The review window reads the merge request’s threads when a human comments on it while the task waits for merge; nobody has yet.'
     : threads.counts === 'platform_findings'
       ? `The platform’s own review findings on this merge request, as it read them back at ${formatDateTime(threads.checked_at)}; a human’s own threads are not counted here, and a finding resolved since then is not reflected.`
-      : `Read by the review window at ${formatDateTime(threads.checked_at)}; a thread is open while it is resolvable, unresolved and has a human note. A thread resolved without a new comment is not counted until the next comment — the number is as of that time.`;
+      : `Read at ${formatDateTime(threads.checked_at)}; a thread is open while it is resolvable, unresolved and has a human note. It is read again when a human comments, and when the merge request reports every thread resolved — which GitLab sends only for a project that requires resolved threads before merging. A thread resolved without a comment while others stay open is not counted until one of those happens — the number is as of that time.`;
 
 /** The latest `AcceptanceVerdict` among the task's artifacts — the newest version wins. */
 export const latestAcceptanceVerdict = (

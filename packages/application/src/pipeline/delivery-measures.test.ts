@@ -14,12 +14,14 @@
 import type { DiffStats, DomainEvent, Id, MergeRequestRef } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
+import { StreamConflictError } from '../errors.js';
 import { markTransactions } from '../events/open-transaction.js';
 import { exactSecretRedactor } from '../integrations/redaction.js';
 import type { MergeRequest } from '../ports/integrations/git-provider.js';
 import type { Ticket, TicketLink } from '../ports/integrations/task-management.js';
 import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
 import {
+  DELIVERY_MEASURE_APPEND_ATTEMPTS,
   type DeliveryMeasuresOptions,
   isBugIssueType,
   runBugTrace,
@@ -449,5 +451,235 @@ describe('the defect trace of a bug ticket (backlog 114, Q87)', () => {
     expect(
       eventsOf(world.harness, 'ticket.bug.traced').map((event) => event.payload.outcome),
     ).toEqual(['unreadable', 'unreadable']);
+  });
+});
+
+/**
+ * An edit of the bug ticket — `ticket.updated`, as the webhook or the poller appends it.
+ */
+const ticketEdited = (key: string): DomainEvent =>
+  providerEvent('ticket.updated', {
+    project_id: PROJECT,
+    ticket: { provider: 'fake-jira', key, url: `https://jira.example.test/browse/${key}` },
+    updated_at: '2026-06-03T09:00:00.000Z',
+    changed_fields: ['issuelinks'],
+    truncated: false,
+  });
+
+describe('a link added after filing — the re-trace (WP-90, backlog 192)', () => {
+  it('re-traces a `no_link` bug on an edit, and records the link with the ticket’s own filing instant', async () => {
+    const tickets: Record<string, Ticket> = { 'BUG-8': ticketWith('BUG-8', []) };
+    const world = startWorld({ tickets });
+    await world.harness.publish([ticketMatched()]);
+    await world.harness.publish([bugFiled('BUG-8', 'Bug')]);
+    // The reporter links the merge request an hour later.
+    tickets['BUG-8'] = ticketWith('BUG-8', [link(MR_REF.url)]);
+    await world.harness.publish([ticketEdited('BUG-8')]);
+
+    const traced = eventsOf(world.harness, 'ticket.bug.traced');
+    expect(traced.map((event) => event.payload.outcome)).toEqual(['no_link', 'linked']);
+    // The bug keeps its day: the re-trace copies the first trace's `filed_at`, not the edit's.
+    expect(traced[1]?.payload.filed_at).toBe(traced[0]?.payload.filed_at);
+    expect(traced[1]?.payload.task_id).toBe(taskIdOf(world.harness));
+    // The pipeline's own reads of the feature ticket (ACME-1) are not the trace's.
+    expect(world.readTickets.filter((key) => key.startsWith('BUG-'))).toEqual(['BUG-8', 'BUG-8']);
+  });
+
+  it('re-traces an `unreadable` bug too, and never a `linked` one or a ticket never traced', async () => {
+    const tickets: Record<string, Ticket> = {
+      'BUG-9': ticketWith('BUG-9', [link(MR_REF.url)]),
+      'STORY-3': ticketWith('STORY-3', [], 'Story'),
+    };
+    const world = startWorld({ tickets });
+    await world.harness.publish([ticketMatched()]);
+    await world.harness.publish([bugFiled('BUG-9', 'Bug'), bugFiled('STORY-3', 'Story')]);
+    // A trace recorded `unreadable` when the tracker binding was missing, appended as the duty would.
+    await runBugTrace(
+      {
+        ...optionsOf(world.harness),
+        integrations: staticPipelineIntegrations({
+          ...world.harness.integrations,
+          taskManagement: null,
+        }),
+      },
+      {
+        duty: 'bug_trace',
+        project_id: PROJECT,
+        cause_event_id: nextEventId(),
+        ticket: {
+          provider: 'fake-jira',
+          key: 'BUG-10',
+          url: 'https://jira.example.test/browse/BUG-10',
+        },
+        issue_type: 'Bug',
+        filed_at: '2026-06-01T09:00:00.000Z',
+      },
+    );
+    tickets['BUG-10'] = ticketWith('BUG-10', [link(MR_REF.url)]);
+    world.readTickets.length = 0;
+
+    // BUG-9 is `linked` (final), STORY-3 was never traced, BUG-10 is `unreadable`.
+    await world.harness.publish([
+      ticketEdited('BUG-9'),
+      ticketEdited('STORY-3'),
+      ticketEdited('BUG-10'),
+    ]);
+    expect(world.readTickets).toEqual(['BUG-10']);
+    expect(
+      eventsOf(world.harness, 'ticket.bug.traced').map((event) => [
+        event.payload.ticket.key,
+        event.payload.outcome,
+      ]),
+    ).toEqual([
+      ['BUG-9', 'linked'],
+      ['BUG-10', 'unreadable'],
+      ['BUG-10', 'linked'],
+    ]);
+  });
+
+  it('appends nothing when the re-trace learns nothing new', async () => {
+    const world = startWorld({ tickets: { 'BUG-11': ticketWith('BUG-11', []) } });
+    await world.harness.publish([bugFiled('BUG-11', 'Bug')]);
+    await world.harness.publish([ticketEdited('BUG-11'), ticketEdited('BUG-11')]);
+    // One read per edit, as the Done says — and still one trace, because none of them found a link.
+    expect(world.readTickets).toEqual(['BUG-11', 'BUG-11', 'BUG-11']);
+    expect(eventsOf(world.harness, 'ticket.bug.traced')).toHaveLength(1);
+  });
+
+  it('re-validates on fire: a re-trace for a ticket traced `linked` since reads nothing', async () => {
+    const tickets: Record<string, Ticket> = { 'BUG-12': ticketWith('BUG-12', [link(MR_REF.url)]) };
+    const world = startWorld({ tickets });
+    await world.harness.publish([ticketMatched()]);
+    await world.harness.publish([bugFiled('BUG-12', 'Bug')]);
+    world.readTickets.length = 0;
+    await runBugTrace(optionsOf(world.harness), {
+      duty: 'bug_trace',
+      project_id: PROJECT,
+      cause_event_id: nextEventId(),
+      ticket: {
+        provider: 'fake-jira',
+        key: 'BUG-12',
+        url: 'https://jira.example.test/browse/BUG-12',
+      },
+      issue_type: null,
+      filed_at: '2026-06-01T09:00:00.000Z',
+      retrace_of: 'no_link',
+    });
+    expect(world.readTickets).toEqual([]);
+    expect(eventsOf(world.harness, 'ticket.bug.traced')).toHaveLength(1);
+  });
+});
+
+/**
+ * WP-90 criterion 2 (backlog 193): the append retries a lost sequence race with the provider's
+ * answer **held** — so a conflict costs a sequence read, never a second provider read.
+ *
+ * The race is staged the way it happens: between the duty's sequence read and its append, another
+ * writer appends on the same project stream with that sequence, so the append is refused by the
+ * log itself (`MemoryEventing`, as migration 0005's trigger refuses it).
+ */
+describe('a lost race on the project stream (WP-90, backlog 193)', () => {
+  const racingOptions = (world: World, losses: number): DeliveryMeasuresOptions => {
+    const base = optionsOf(world.harness);
+    let lost = 0;
+    return {
+      ...base,
+      eventStore: {
+        nextStreamSequence: async (streamType, streamId) => {
+          const seq = await base.eventStore.nextStreamSequence(streamType, streamId);
+          if (lost < losses) {
+            lost += 1;
+            // Another writer takes `seq` first.
+            await world.harness.memory.transaction(async (scope) => {
+              await scope.events.append([
+                domainEventSchemasByType['task.mr.measured'].parse({
+                  id: nextEventId(),
+                  stream_type: 'project',
+                  stream_id: streamId,
+                  stream_seq: seq,
+                  correlation_id: null,
+                  cause_event_id: null,
+                  actor: { kind: 'system', component: 'test' },
+                  occurred_at: '2026-06-01T09:00:00.000Z',
+                  type: 'task.mr.measured',
+                  payload: { project_id: PROJECT, task_id: PROJECT, mr: MR_REF, diff_stats: null },
+                }) as DomainEvent,
+              ]);
+            });
+          }
+          return seq;
+        },
+      },
+    };
+  };
+
+  const measureData = (world: World): PipelineOutboundData => ({
+    duty: 'merge_measure',
+    project_id: PROJECT,
+    task_id: taskIdOf(world.harness),
+    cause_event_id: nextEventId(),
+    iid: IID,
+    mr_url: MR_REF.url,
+  });
+
+  const ownMeasurements = (world: World) =>
+    eventsOf(world.harness, 'task.mr.measured').filter(
+      (event) => event.payload.diff_stats !== null,
+    );
+
+  it('measures a merge with one provider read although the first append lost the race', async () => {
+    const world = startWorld({ diffStats: { files_changed: 3, insertions: 40, deletions: 12 } });
+    await world.harness.publish([ticketMatched()]);
+    await runMergeMeasure(racingOptions(world, 1), measureData(world));
+
+    expect(ownMeasurements(world)).toHaveLength(1);
+    expect(world.diffStatsCalls).toEqual([IID]);
+    expect(
+      world.harness.audit.entries.filter(
+        (entry) => entry.action === 'get_merge_request_diff_stats',
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('traces a bug with one ticket read although the first append lost the race', async () => {
+    const world = startWorld({ tickets: { 'BUG-13': ticketWith('BUG-13', [link(MR_REF.url)]) } });
+    await world.harness.publish([ticketMatched()]);
+    await runBugTrace(racingOptions(world, 1), {
+      duty: 'bug_trace',
+      project_id: PROJECT,
+      cause_event_id: nextEventId(),
+      ticket: {
+        provider: 'fake-jira',
+        key: 'BUG-13',
+        url: 'https://jira.example.test/browse/BUG-13',
+      },
+      issue_type: 'Bug',
+      filed_at: '2026-06-01T09:00:00.000Z',
+    });
+    expect(eventsOf(world.harness, 'ticket.bug.traced').map((e) => e.payload.outcome)).toEqual([
+      'linked',
+    ]);
+    expect(world.readTickets.filter((key) => key.startsWith('BUG-'))).toEqual(['BUG-13']);
+  });
+
+  it('gives up after the last attempt, one loss short and one loss past the bound, still with one read', async () => {
+    // Rule 42: the boundary from both sides. One loss fewer than the bound lands the event…
+    const inside = startWorld({ diffStats: { files_changed: 1, insertions: 1, deletions: 1 } });
+    await inside.harness.publish([ticketMatched()]);
+    await runMergeMeasure(
+      racingOptions(inside, DELIVERY_MEASURE_APPEND_ATTEMPTS - 1),
+      measureData(inside),
+    );
+    expect(ownMeasurements(inside)).toHaveLength(1);
+    expect(inside.diffStatsCalls).toEqual([IID]);
+
+    // …and a loss on every attempt fails the job with the conflict, for pg-boss to retry.
+    const past = startWorld({ diffStats: { files_changed: 1, insertions: 1, deletions: 1 } });
+    await past.harness.publish([ticketMatched()]);
+    await expect(
+      runMergeMeasure(racingOptions(past, DELIVERY_MEASURE_APPEND_ATTEMPTS), measureData(past)),
+    ).rejects.toBeInstanceOf(StreamConflictError);
+    expect(ownMeasurements(past)).toEqual([]);
+    expect(past.diffStatsCalls).toEqual([IID]);
   });
 });

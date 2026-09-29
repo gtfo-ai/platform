@@ -39,7 +39,7 @@ const SOURCES: StatsSources = {
       cycleHours: 26,
       agentHours: 1.5,
       returns: 0,
-      humanReviewEntries: 0,
+      humanCommentWindows: 0,
       questions: 0,
       costUsd: 4.2,
       estimateUsd: 5,

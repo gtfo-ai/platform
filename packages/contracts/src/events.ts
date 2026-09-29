@@ -661,6 +661,17 @@ export const mrOpenedEvent = defineEvent('mr.opened', mrPayload);
 export const mrUpdatedEvent = defineEvent('mr.updated', {
   ...mrPayload,
   updated_at: isoDateTimeSchema.nullish(),
+  /**
+   * WP-90, PROGRESS backlog 210: **this update changed** the provider's statement that every thread
+   * blocking the merge is resolved — `true` when it became so, `false` when it stopped being so —
+   * and absent when the update did not change it. GitLab's `changes.blocking_discussions_resolved`
+   * (the merge-request hook fires with `action: "update"` when *"all threads are resolved"*); it
+   * is the only signal GitLab sends for a thread resolved without a note, and it is sent **only**
+   * for a project that requires resolved threads before merging — on any other the value is always
+   * `true` and never changes (`test/fixtures/http/gitlab/SOURCES.md` has the citation). Read as a
+   * reason to re-count the review threads, never as the count.
+   */
+  blocking_threads_resolved: z.boolean().nullish(),
 });
 export const mrMergedEvent = defineEvent('mr.merged', {
   ...mrPayload,

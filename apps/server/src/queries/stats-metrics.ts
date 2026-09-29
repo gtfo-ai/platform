@@ -236,8 +236,13 @@ export interface DeliveredTaskRow {
   readonly agentHours: number;
   /** `task_stages` rows that ended `returned`. */
   readonly returns: number;
-  /** Human review entries on the task (`human_time_entries.kind = 'review'`). */
-  readonly humanReviewEntries: number;
+  /**
+   * Human review windows on the task that contain a human **comment**: a `human_time_entries` row of
+   * kind `review` with a non-marker `mr.review.comment` by the window's account inside its span
+   * (WP-90, PROGRESS backlog 191). A window an approval opened and no comment joined is not one —
+   * since WP-60 an approval opens a window too, and zero human comments is not zero review windows.
+   */
+  readonly humanCommentWindows: number;
   /** Questions the task asked, of any status. */
   readonly questions: number;
   /** The task's ledger spend. */
@@ -440,11 +445,16 @@ export const DEFECT_ESCAPE_WINDOW_DAYS = 30;
  *
  *  - **a bug whose trace job exhausts its retries emits no `ticket.bug.traced`**, so it leaves the
  *    denominator silently instead of counting as `unreadable` — the coverage is then overstated by
- *    exactly those bugs. Recording the exhaustion would need a dead-letter hook on the outbound
- *    queue that this build does not have for any duty; not done here;
+ *    exactly those bugs. Since WP-90 a lost race for the project stream is retried inside the duty
+ *    (backlog 193), so what exhausts the retries is a provider that keeps failing, not the log.
+ *    Recording the exhaustion would need a dead-letter hook on the outbound queue that this build
+ *    does not have for any duty; not done here;
  *  - **a bug that links only its later fix counts as `linked`** — it raises the coverage — while its
  *    origin is unknown: the thirty-day look-back keeps the fix out of the numerator, not out of the
- *    coverage. So the coverage is an upper bound on "bugs whose origin the platform could see".
+ *    coverage. So the coverage is an upper bound on "bugs whose origin the platform could see";
+ *  - **`linked` is final** (WP-90): a bug once traced `linked` is never traced again, so a link
+ *    later removed from the ticket still counts in the coverage and, if its merge request escaped,
+ *    in the numerator — an over-count in both, by exactly those bugs.
  */
 export const DEFECT_COVERAGE_FLOOR = 0.5;
 
@@ -483,7 +493,8 @@ export const STATS_CATALOGUE: Readonly<Record<StatMetricId, MetricDefinition>> =
     unit: 'ratio',
     aggregation: 'ratio',
     caveats: [
-      'Under-counts: since WP-60 an approval opens a review window as a comment does (`mr.approved`, PROGRESS backlog 90), so a reviewer who approved without commenting makes the task **not** first-pass here, although nobody commented. A window of a declared machine account does not count (PROGRESS backlog 88); an undeclared bot’s does.',
+      'An approval is not a comment: a reviewer who approved without commenting leaves the task first-pass (PROGRESS backlog 191). A comment is matched to the task through its author’s review window, not through the merge request, so a reviewer who approved this task and, inside that window, commented on another merge request of the same project makes the task not first-pass — an under-count.',
+      'A declared machine account’s comment does not count (PROGRESS backlog 88); an undeclared bot’s does, and makes the task not first-pass — an under-count. A human who pastes the platform’s comment marker into a comment is not counted — an over-count.',
     ],
   },
   clean_first_mr_rate: {
@@ -699,6 +710,7 @@ export const STATS_CATALOGUE: Readonly<Record<StatMetricId, MetricDefinition>> =
     caveats: [
       'A merge request a human merged without a platform task is not measured: product/16’s table is about the platform’s own work, and each measurement is one provider read.',
       'Counted on the day the measurement was recorded, which follows the merge by one provider read. One measurement per merge — a repeated measurement of the same merge is not counted again — but a merge request reopened and merged twice is two merges.',
+      'A merge whose measurement fails on every retry — a provider that keeps refusing the read — has no measurement and is in neither the measured nor the unmeasured count. Losing a race for the event log is not such a failure: it is retried with the answer already read, never with a second provider read (PROGRESS backlog 193).',
     ],
   },
   defect_escape: {
@@ -707,6 +719,9 @@ export const STATS_CATALOGUE: Readonly<Record<StatMetricId, MetricDefinition>> =
       'product/16’s “bugs filed against agent-merged MRs within 30 days ÷ merged MRs”, tracked with no target: bug tickets filed in the period whose own link names a merge request the platform delivered in the 30 days before the bug was filed ÷ tasks delivered in the period (PROGRESS backlog 114, Q87). A bug ticket is one whose issue type the project routes to the `bug` template. The merge request is found **only** through a link on the bug ticket — never by its title, never by timing: a merge followed by a bug has no join key. The two sides are counted at different instants, the filing and the merge, as the merge rate’s are.',
     unit: 'ratio',
     aggregation: 'ratio',
+    caveats: [
+      'A link added to a bug ticket after it was filed is seen when an edit of that ticket reaches the platform, which traces it again (PROGRESS backlog 192); a tracker binding that reports no edits — no webhook and no polling (PROGRESS backlog 187) — keeps the bug as it was first traced. A bug is counted on the day it was filed, so a link added later can change a past day’s figure.',
+    ],
   },
   queue_wait_minutes: {
     label: 'Queue wait',
@@ -957,7 +972,7 @@ export const foldStats = (input: StatsFoldInput): OrgStatsResponse => {
     fold.add('tasks_delivered', day, { numerator: 1 });
     fold.add('merge_rate', day, { numerator: 1, denominator: 0, samples: 0 });
     fold.add('first_pass_acceptance', day, {
-      numerator: task.returns === 0 && task.humanReviewEntries === 0 ? 1 : 0,
+      numerator: task.returns === 0 && task.humanCommentWindows === 0 ? 1 : 0,
       denominator: 1,
     });
     fold.add('clean_first_mr_rate', day, {

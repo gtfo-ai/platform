@@ -207,9 +207,16 @@ export interface PipelineOutboundData {
     | 'merge_measure'
     /**
      * WP-61, PROGRESS backlog 114 (Q87): for a ticket the project calls a bug, run the link half of
-     * WP-34's resolver over its links and record `ticket.bug.traced` — found or not.
+     * WP-34's resolver over its links and record `ticket.bug.traced` — found or not. Since WP-90
+     * (backlog 192) also enqueued by a `ticket.updated` for a bug not yet `linked` (`retrace_of`).
      */
-    | 'bug_trace';
+    | 'bug_trace'
+    /**
+     * WP-90, PROGRESS backlog 210: re-read a `ready_for_merge` task's review threads and write
+     * **only** the count — enqueued by a signal that a thread was resolved (or re-opened) without a
+     * comment that would open BD-007's window. Never the return decision (`review-threads-refresh.ts`).
+     */
+    | 'review_threads_refresh';
   readonly project_id: string;
   /** Absent for `intake_check`, which runs before there is a task. */
   readonly task_id?: string;
@@ -228,6 +235,12 @@ export interface PipelineOutboundData {
   readonly issue_type?: string | null;
   /** `bug_trace` only (WP-61): the `ticket.created` instant the thirty days are measured back from. */
   readonly filed_at?: string;
+  /**
+   * `bug_trace` only, and only on a **re-trace** (WP-90, PROGRESS backlog 192): the outcome of the
+   * trace a `ticket.updated` found — `no_link` or `unreadable`. Absent on the first trace. The duty
+   * re-validates it on fire and records nothing when the answer has not changed.
+   */
+  readonly retrace_of?: 'no_link' | 'unreadable';
   readonly priority?: string | null;
   /** `workpad` only: the brief lives on the event, not on the task row. */
   readonly blocker_brief?: string;

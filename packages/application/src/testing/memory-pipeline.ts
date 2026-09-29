@@ -18,6 +18,7 @@
  * | 7 | `task.sequence` was the number the stored aggregate carried; PostgreSQL derives it from the **event log** (`max(stream_seq) + 1`, `TASK_COLUMNS`). **Closed at WP-26** by {@link MemoryPipelineStoreOptions.streamSequence}: a harness that wires the event log in gets the derived number. | **same, when wired** | It was *kinder* and it hid a whole class: an event appended to a task's stream by anything other than the aggregate — `task.review.observed` (WP-24), `task.lint.posted` (WP-25), `task.rebase.checked` and `task.conflict.warned` (WP-26) — left the fake's aggregate one behind the log, so the **next** aggregate write would clash in production and not here. It only stayed invisible because the first three land on a task that has stopped. Unwired, the old behaviour remains, which is why the accessor takes the **maximum** of the two rather than replacing one with the other: a transaction's own staged appends are not committed yet, and the aggregate's number is the right answer for them. |
  * | 8 | `takenOver` reads the **committed** log through {@link MemoryPipelineStoreOptions.taskEvents}; PostgreSQL's query also sees the calling transaction's own staged appends (WP-56). Unwired, it answers `null`; its `lastActivityAt` reads {@link MemoryPipelineStoreOptions.humanActions} (WP-44), and unwired that is the take-over's own instant. | **same, when wired; kinder by one window** | Both readers of it — the workpad render and the take-over timer — run in a job's **own** transaction after the events they react to have committed, so the window this cannot see is one neither reader stands in. A caller that asked inside the transaction that appended the take-over would get `null` here and the record from PostgreSQL; nothing does, and the contract suite drives the committed case against both. |
  * | 9 | `runCommands` (WP-85): `lockRun`/`lockLiveRunOf`/`markApplied` take no lock, and `LockedRun.sessionId` is the run row's `sessionId` where PostgreSQL reads the run's `system`/`init` transcript entry (this store keeps no transcript). | **kinder** on ordering, **same** on predicates | The `for share` ordering between a command and the run's ending is a property of two concurrent transactions, which a single-threaded store cannot interleave; it is asserted against PostgreSQL in `test/integration/pipeline/run-commands.integration.test.ts`, both orders. Every predicate — live run, this owner's lease, still pending, closed `run_ended` by the winning `finish` — is the SQL's, and the contract suite drives each against both stores. |
+ * | 10 | `bugTraces.latest` (WP-90) reads the **committed** project log through {@link MemoryPipelineStoreOptions.projectEvents}, in stream order; PostgreSQL orders by `occurred_at` then `position` and also sees the calling transaction's own staged appends. Unwired, it answers `null`. | **same, when wired** | Its one caller, the `ticket.updated` handler, asks in the dispatcher's transaction about traces an earlier job committed; a trace appended in the asking transaction does not exist, because no handler appends one. Stream order and `occurred_at` order agree for every trace the duty writes, which appends with the platform clock in sequence. The contract suite drives both. |
  */
 import type {
   ArtifactType,
@@ -50,6 +51,7 @@ import type {
   ApprovalRepository,
   ArtifactRepository,
   BreakdownRepository,
+  BugTraceRepository,
   PipelineStore,
   QuestionRepository,
   RunCommandInstruction,
@@ -180,6 +182,14 @@ export interface MemoryPipelineStoreOptions {
   readonly humanActions?: (
     taskId: Id,
   ) => readonly { readonly userId: Id; readonly at: IsoDateTime }[];
+  /**
+   * A project's committed events in stream order — what `bugTraces.latest` reads (WP-90).
+   *
+   * Optional for {@link streamSequence}'s reason. **Unwired, `latest` answers `null`** — divergence
+   * 10: a store built without the log has seen no trace, and says so rather than inventing one.
+   * `createPipelineHarness` wires it.
+   */
+  readonly projectEvents?: (projectId: Id) => readonly DomainEvent[];
 }
 
 /** One `superseded_merge_requests` row, as the memory store keeps it. */
@@ -1267,6 +1277,24 @@ export const createMemoryPipelineStore = (
     },
   };
 
+  /** WP-90: the SQL store's ordering — a `linked` trace first, then the newest. */
+  const bugTraceRepository: BugTraceRepository = {
+    latest: async (_tx, ticket) => {
+      const traces = (options.projectEvents?.(ticket.projectId) ?? []).flatMap((event) =>
+        event.type === 'ticket.bug.traced' &&
+        event.payload.ticket.provider === ticket.provider &&
+        event.payload.ticket.key === ticket.key
+          ? [event]
+          : [],
+      );
+      const pick =
+        traces.findLast((event) => event.payload.outcome === 'linked') ?? traces.at(-1) ?? null;
+      return pick === null
+        ? null
+        : { outcome: pick.payload.outcome, filedAt: pick.payload.filed_at as IsoDateTime };
+    },
+  };
+
   return {
     deadlineRecovery,
     supersededRecovery,
@@ -1278,6 +1306,7 @@ export const createMemoryPipelineStore = (
     approvals: approvalRepository,
     breakdown: breakdownRepository,
     runCommands: runCommandRepository,
+    bugTraces: bugTraceRepository,
     runCommandRows: () => [...runCommandRows.values()].map((row) => clone(row)),
     writeEstimate: (taskId, estimate) => {
       const current = tasks.get(taskId);

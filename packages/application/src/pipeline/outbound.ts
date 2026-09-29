@@ -65,6 +65,7 @@ import { runBreakdownCreate, runSpikeReport } from './epic-split.js';
 import type { OutboundJobData } from './jobs.js';
 import { runReadyHeadCheck } from './ready-head.js';
 import { runReviewOnlyCheck, runReviewOnlyObservation, runReviewOnlyPost } from './review-only.js';
+import { runReviewThreadsRefresh } from './review-threads-refresh.js';
 import { type RiskRoutingOptions, runRiskRouting } from './risk-routing.js';
 import { type PipelineSagaOptions, runIntakeCheck } from './saga.js';
 import { runSupersededMergeRequestClose } from './superseded-mr.js';
@@ -186,6 +187,9 @@ export const pipelineOutboundHandler = (
         return;
       case 'bug_trace':
         await runBugTrace(options, data);
+        return;
+      case 'review_threads_refresh':
+        await runReviewThreadsRefresh(options, data);
         return;
       default:
         logger.warn(

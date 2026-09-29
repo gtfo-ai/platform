@@ -266,9 +266,17 @@ const normaliseMergeRequest = (
   if (type === 'mr.updated') {
     // The provider's instant of the change, so the recorded head can only move forward (WP-60
     // review round 1): an unreadable one is `null`, which moves nothing, never a throw (rule 20).
+    // WP-90 (backlog 210): the one signal GitLab sends for a thread resolved without a note. Absent
+    // unless this update changed it, and only ever changed on a project that requires resolved
+    // threads (`mergeable_discussions_state?`, cited in `test/fixtures/http/gitlab/SOURCES.md`).
+    const resolution = hook.changes?.blocking_discussions_resolved?.current;
     const event: NormalisedEvent<'mr.updated'> = {
       type,
-      payload: { ...payload, updated_at: instantOrNull(attributes.updated_at) },
+      payload: {
+        ...payload,
+        updated_at: instantOrNull(attributes.updated_at),
+        ...(typeof resolution === 'boolean' ? { blocking_threads_resolved: resolution } : {}),
+      },
       actor,
     };
     return { events: [event], ignored: [] };

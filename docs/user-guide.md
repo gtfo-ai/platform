@@ -300,9 +300,11 @@ The product defines eleven merge-readiness checks, and the panel shows **all ele
 - **CI status** and **Rebase status** — the latest attempt of each gate: green or red, up to date
   or conflicts, *checking* while it decides, *not reached* before the task gets there, and
   *escalated (…)* with the reason when the gate stopped for a person.
-- **Review threads** — open and resolved human threads on the merge request, as the review window
-  last counted them. It counts when somebody comments while the task waits for merge; until then
-  it says *not read*, never zero.
+- **Review threads** — open and resolved human threads on the merge request, as the platform last
+  counted them. It counts when somebody comments while the task waits for merge, and again when the
+  merge request reports every thread resolved — which GitLab sends only for a project that requires
+  resolved threads before merging. A thread resolved without a comment while others stay open is
+  not counted until one of those happens; until the first count it says *not read*, never zero.
 - **Coverage delta**, **Dependencies**, **Risk classes**, **Required reviewers**, the **Estimate**
   against what the task has spent, and **Questions pending**.
 

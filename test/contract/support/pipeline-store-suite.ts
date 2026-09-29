@@ -54,10 +54,15 @@ export interface PipelineStoreHarness {
   }>;
 }
 
-/** One event on a task's stream, as the contract's take-over cases write it. */
+/**
+ * One event on a task's stream, as the contract's take-over cases write it — or, with
+ * `streamType: 'project'`, on the **project** stream named by `taskId` (WP-90's defect-trace cases).
+ */
 export interface TaskStreamEvent {
   readonly id: Id;
   readonly taskId: Id;
+  /** Absent is `task`, the take-over cases' stream. */
+  readonly streamType?: 'task' | 'project';
   readonly seq: number;
   readonly type: string;
   readonly payload: Readonly<Record<string, unknown>>;
@@ -2917,6 +2922,58 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
             reasonRedactions: 0,
           }),
         ).toEqual([]);
+      });
+    });
+
+    /**
+     * WP-90, PROGRESS backlog 192: the trace a `ticket.updated` asks about before re-tracing, by the
+     * statistics read's ordering — a `linked` trace first, then the newest — off the project stream.
+     */
+    describe('bugTraces', () => {
+      // Per case: PostgreSQL's stream guard wants `last + 1`, and each case's transaction rolls back.
+      let seq = 0;
+      beforeEach(() => {
+        seq = 0;
+      });
+      const trace = async (key: string, outcome: string, occurredAt: string) => {
+        seq += 1;
+        await appendTaskEvent({
+          id: nextId(),
+          taskId: projectId,
+          streamType: 'project',
+          seq,
+          type: 'ticket.bug.traced',
+          occurredAt: occurredAt as IsoDateTime,
+          payload: {
+            project_id: projectId,
+            ticket: TICKET(key),
+            filed_at: '2026-06-01T09:00:00.000Z',
+            outcome,
+            found_by: outcome === 'linked' ? 'ticket_link' : null,
+            mr: null,
+            task_id: null,
+          },
+        });
+      };
+      const latest = (key: string) =>
+        store.bugTraces.latest(tx, { projectId, provider: 'fake-jira', key });
+
+      it('answers the newest trace, and null for a ticket never traced', async () => {
+        await trace('BT-1', 'unreadable', '2026-06-01T09:01:00.000Z');
+        await trace('BT-1', 'no_link', '2026-06-01T09:02:00.000Z');
+        await trace('BT-2', 'no_link', '2026-06-01T09:03:00.000Z');
+        expect(await latest('BT-1')).toEqual({
+          outcome: 'no_link',
+          filedAt: '2026-06-01T09:00:00.000Z',
+        });
+        expect(await latest('BT-3')).toBeNull();
+      });
+
+      it('keeps `linked` final: a later non-linked trace does not take the link back', async () => {
+        await trace('BT-4', 'no_link', '2026-06-01T09:01:00.000Z');
+        await trace('BT-4', 'linked', '2026-06-01T09:02:00.000Z');
+        await trace('BT-4', 'no_link', '2026-06-01T09:03:00.000Z');
+        expect((await latest('BT-4'))?.outcome).toBe('linked');
       });
     });
   });

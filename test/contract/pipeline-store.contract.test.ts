@@ -19,7 +19,11 @@ runPipelineStoreContract({
     const actions: { taskId: string; userId: string; at: string }[] = [];
     return {
       store: createMemoryPipelineStore({
-        taskEvents: (taskId) => log.filter((event) => event.stream_id === taskId),
+        taskEvents: (taskId) =>
+          log.filter((event) => event.stream_type === 'task' && event.stream_id === taskId),
+        // WP-90: the defect-trace cases write the project's stream.
+        projectEvents: (project) =>
+          log.filter((event) => event.stream_type === 'project' && event.stream_id === project),
         humanActions: (taskId) =>
           actions
             .filter((row) => row.taskId === taskId)
@@ -31,7 +35,7 @@ runPipelineStoreContract({
       appendTaskEvent: async (event) => {
         log.push({
           id: event.id,
-          stream_type: 'task',
+          stream_type: event.streamType ?? 'task',
           stream_id: event.taskId,
           stream_seq: event.seq,
           actor:

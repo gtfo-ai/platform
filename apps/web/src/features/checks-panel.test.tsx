@@ -450,10 +450,14 @@ describe('the Checks panel’s gate, thread and verdict items (WP-46)', () => {
     expect(unread.text()).not.toContain('0 open');
   });
 
-  it('says the count is as of its reading and that a resolution does not refresh it (backlog 210)', async () => {
+  it('says the count is as of its reading and which resolutions re-read it (backlog 210, WP-90)', async () => {
     const view = await render$(detailWith({ artifacts: [] }));
     await waitFor(() => expect(view.text()).toContain('2 open · 1 resolved'));
-    expect(view.text()).toContain('A thread resolved without a new comment is not counted');
+    expect(view.text()).toContain('when the merge request reports every thread resolved');
+    expect(view.text()).toContain('requires resolved threads before merging');
+    expect(view.text()).toContain('A thread resolved without a comment while others stay open');
+    // The WP-73a sentence said no resolution refreshed it — false since WP-90.
+    expect(view.text()).not.toContain('is not counted until the next comment');
   });
 
   it('labels a review-only task’s count as the platform’s own findings (backlog 209)', async () => {
@@ -469,7 +473,7 @@ describe('the Checks panel’s gate, thread and verdict items (WP-46)', () => {
     await waitFor(() => expect(view.text()).toContain('1 findings open · 3 resolved'));
     expect(view.text()).toContain('The platform’s own review findings on this merge request');
     // Not the human-review wording: this is not what BD-007's window counts.
-    expect(view.text()).not.toContain('Read by the review window');
+    expect(view.text()).not.toContain('a thread is open while it is resolvable');
   });
 
   it('reads the business verdict and the criteria from the latest Acceptance Verdict, as text', async () => {

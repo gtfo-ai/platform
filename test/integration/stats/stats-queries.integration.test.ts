@@ -499,6 +499,87 @@ describe('the statistics reads (PostgreSQL)', () => {
     expect(totals).toEqual({ linted: 4, improved: 1 });
   });
 
+  it('counts a review window against first-pass acceptance only when a human commented in it', async () => {
+    // WP-90, PROGRESS backlog 191. Each task is delivered and has one review window; what differs is
+    // what happened inside it. Only a window with a non-marker comment by its own account counts.
+    const project = await seedProject('first-pass');
+    const human = (id: string) => ({
+      provider: 'gitlab',
+      external_id: id,
+      email: null,
+      display_name: id,
+      verified: false,
+    });
+    const mrOf = { iid: 7, url: 'https://git.example.test/acme/api/-/merge_requests/7' };
+    const window = async (reviewer: string, spec: { approve?: boolean; comments?: unknown[] }) => {
+      const taskId = await seedTask({ project, createdAt: at(-8700) });
+      await pool.query(
+        `insert into human_time_entries (task_id, kind, user_id, external_author, started_at,
+                                         ended_at, minutes)
+         values ($1, 'review', null, $2, $3, $4, 20)`,
+        [taskId, `gitlab:${reviewer}`, at(-8640), at(-8620)],
+      );
+      if (spec.approve === true) {
+        await append(project, {
+          type: 'mr.approved',
+          occurred_at: at(-8630),
+          payload: {
+            project_id: project,
+            task_id: null,
+            mr: mrOf,
+            approver: human(reviewer),
+            approved_at: null,
+          },
+        });
+      }
+      for (const comment of spec.comments ?? []) {
+        const { author, text, minute } = comment as {
+          author: string;
+          text: string;
+          minute: number;
+        };
+        await append(project, {
+          type: 'mr.review.comment',
+          occurred_at: at(minute),
+          payload: {
+            project_id: project,
+            task_id: null,
+            mr: mrOf,
+            thread_id: `thread-${Math.random().toString(16).slice(2)}`,
+            author: human(author),
+            text,
+            resolved: false,
+          },
+        });
+      }
+      await merge(project, taskId, at(-8600));
+    };
+    // Approved and nobody wrote a word: first-pass (the pre-WP-90 read counted this window).
+    await window('ada', { approve: true });
+    // A real comment by the window's own reviewer, inside the window: not first-pass.
+    await window('bob', { comments: [{ author: 'bob', text: 'rename this', minute: -8625 }] });
+    // Approved, and the only comment carries the platform's marker: first-pass.
+    await window('cy', {
+      approve: true,
+      comments: [{ author: 'cy', text: 'x <!-- agentic:task:1 --> quoted', minute: -8625 }],
+    });
+    // Approved; a comment by somebody else, and one by this reviewer outside the window's span.
+    await window('dee', {
+      approve: true,
+      comments: [
+        { author: 'eve', text: 'looks fine', minute: -8625 },
+        { author: 'dee', text: 'later thought', minute: -8500 },
+      ],
+    });
+
+    const sources = await read(project);
+    const windows = sources.deliveredTasks
+      .filter((row) => row.mergedDay === dayOf(at(-8600)))
+      .map((row) => row.humanCommentWindows)
+      .sort();
+    expect(windows).toEqual([0, 0, 0, 1]);
+  });
+
   it('traces a bug to a merge delivered before it was filed, never to the fix merged after', async () => {
     // Backlog 114, Q87. Deliveries come from real `mr.merged` events through the real projector.
     const project = await seedProject('defects');
@@ -506,10 +587,16 @@ describe('the statistics reads (PostgreSQL)', () => {
     const fixedBy = await seedTask({ project, createdAt: at(-3000) });
     await merge(project, escapedFrom, at(-2900));
     await merge(project, fixedBy, at(-1500));
-    const bug = async (key: string, outcome: string, taskId: string | null, minute = -2000) =>
+    const bug = async (
+      key: string,
+      outcome: string,
+      taskId: string | null,
+      minute = -2000,
+      tracedAfter = 1,
+    ) =>
       append(project, {
         type: 'ticket.bug.traced',
-        occurred_at: at(minute + 1),
+        occurred_at: at(minute + tracedAfter),
         payload: {
           project_id: project,
           ticket: { provider: 'jira', key, url: `https://tickets.example.test/browse/${key}` },
@@ -524,12 +611,17 @@ describe('the statistics reads (PostgreSQL)', () => {
         },
       });
     await bug('BUG-1', 'linked', escapedFrom);
-    // A duplicate wake-up traced it again: the first trace is the one read.
-    await bug('BUG-1', 'no_link', null);
+    // A duplicate wake-up traced it again and found no link: `linked` is final (WP-90, backlog
+    // 192), because a linked bug is never re-traced — a later non-linked trace is a redelivery.
+    await bug('BUG-1', 'no_link', null, -2000, 2);
     await bug('BUG-2', 'no_link', null);
     // Its link names the merge request that fixed it, merged after it was filed.
     await bug('BUG-3', 'linked', fixedBy);
     await bug('BUG-4', 'unreadable', null);
+    // Backlog 192: filed with no link, the link added a day later and re-traced on the edit. The
+    // **latest** trace is read, and the bug keeps its filing day — `filed_at` is the ticket's.
+    await bug('BUG-5', 'no_link', null);
+    await bug('BUG-5', 'linked', escapedFrom, -2000, 24 * 60);
 
     const sources = await read(project);
     const totals = sources.bugTraces.reduce(
@@ -540,7 +632,10 @@ describe('the statistics reads (PostgreSQL)', () => {
       }),
       { bugs: 0, linked: 0, escaped: 0 },
     );
-    expect(totals).toEqual({ bugs: 4, linked: 2, escaped: 1 });
+    // BUG-5 is one bug, linked, escaped from the same merge as BUG-1: the first-trace read counted
+    // it `no_link` here (linked 2, escaped 1), which is the canary this case was measured against.
+    expect(totals).toEqual({ bugs: 5, linked: 3, escaped: 2 });
+    expect(sources.bugTraces.map((row) => row.day)).toEqual([dayOf(at(-2000))]);
   });
 
   it('keeps one project’s numbers out of another’s', async () => {
