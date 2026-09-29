@@ -33,8 +33,10 @@
  *    so a retry of the same job posts the same set rather than a growing one;
  *  - `digestDelivered`: a day that has already been delivered is skipped, so a later tick does not
  *    start a second digest out of rows that arrived after the first;
- *  - the executor's **idempotency key**, `<provider>:digest:<channel>:<day>`, which is the last
- *    line rather than the first — it makes a replay free, and a replay is not a plan.
+ *  - the executor's **idempotency key**, `<provider>:digest:<channel>:<day>:<project id | org>`,
+ *    which is the last line rather than the first — it makes a replay free, and a replay is not a
+ *    plan. The project is in it because the executor scopes a key by account alone, and two
+ *    projects on one account and one channel are two digests (WP-93, PROGRESS backlog 317).
  *
  * A *fourth* kind of duplicate is not this list's: a row whose **immediate** delivery is still in
  * flight is undelivered and would otherwise be claimable. {@link DIGEST_IMMEDIATE_GRACE_MS} is the
@@ -44,8 +46,10 @@ import type { Id, IsoDateTime, TaskMode } from '@platform/contracts';
 import { minutesOfTimeOfDay } from '@platform/domain';
 import {
   communicationWrites,
+  integrationsForOrganisation,
   integrationsForProject,
   noRunScopedSecrets,
+  type PipelineIntegrations,
 } from '../pipeline/integrations.js';
 import type { DigestItem } from '../ports/integrations/communication.js';
 import { jobQueueDefinition } from '../ports/job-queues.js';
@@ -54,7 +58,12 @@ import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { NotifyOptions } from './options.js';
-import { digestSettingsOf, localDayOf, localMinutesOf } from './policy.js';
+import {
+  digestSettingsOf,
+  localDayOf,
+  localMinutesOf,
+  organisationDigestSettingsOf,
+} from './policy.js';
 import type { StoredNotification } from './ports.js';
 import { isStillWaiting, waitingAggregateOfRow } from './waiting.js';
 
@@ -172,6 +181,29 @@ export const runProjectDigest = async (
     return 'no_binding';
   }
 
+  return deliverDigest(options, { projectId, day, at, integrations });
+};
+
+/**
+ * Claim, re-check, post, mark — the half of a digest that does not care whose it is (WP-93).
+ *
+ * `projectId: null` is the **organisation's** digest: its rows have no project, its channel is the
+ * organisation account's own digest channel, and its call is audited against that account and no
+ * project (`CallContext.projectId`). Everything else — the claim that makes a retry post the same
+ * set, WP-84's re-check that withholds a settled question or approval, the item limit — is one
+ * code path for both.
+ */
+const deliverDigest = async (
+  options: NotifyOptions,
+  input: {
+    readonly projectId: Id | null;
+    readonly day: string;
+    readonly at: IsoDateTime;
+    readonly integrations: PipelineIntegrations;
+  },
+): Promise<DigestOutcome> => {
+  const logger: Logger = options.logger ?? silentLogger;
+  const { projectId, day, at, integrations } = input;
   const claimed = await options.unitOfWork.transaction(async (scope) =>
     options.notifications.claimForDigest(scope.tx, {
       projectId,
@@ -189,7 +221,8 @@ export const runProjectDigest = async (
    * `question`, `reminder` or `approval` row planned for the digest during quiet hours is carried
    * the next morning, by which time its question may be answered or its approval decided. Such a
    * row is closed **withheld** — with the day's delivery, or at once when nothing else is carried —
-   * and not posted. A row that names no aggregate (written before WP-84) is carried as before.
+   * and not posted. A row that names no aggregate (written before WP-84, or an organisation budget,
+   * which waits on nothing) is carried as before.
    */
   const withheld = await options.unitOfWork.transaction(async (scope) => {
     const settled: Id[] = [];
@@ -241,6 +274,56 @@ export const runProjectDigest = async (
   return 'posted';
 };
 
+/**
+ * The **organisation's** digest, for the instant `at` (WP-93, PROGRESS backlog 235).
+ *
+ * An organisation-scoped notification — an organisation budget crossing its threshold — is held
+ * for this digest when it is raised inside the organisation's `notifications.quiet_hours`
+ * (`organisation.ts`), and this is the carrier that makes holding it a deferral rather than a
+ * drop. It runs in the same tick as the projects' digests, at the organisation's `digest_at`
+ * (default `09:00`, product/18:33's "09:00 org time") in the organisation's zone.
+ *
+ * **Switched on by quiet hours**, not by a flag of its own: with no window nothing is ever held
+ * for it, so an organisation that states none gets no daily message — and a row whose immediate
+ * delivery failed is left to the recovery pass that re-posts it (WP-84), exactly as before WP-93.
+ * A document that does not parse throws (the port's contract): the digest job fails by name and
+ * retries rather than posting on a guess.
+ */
+export const runOrganisationDigest = async (
+  options: NotifyOptions,
+  input: { readonly at: IsoDateTime },
+): Promise<DigestOutcome> => {
+  const logger: Logger = options.logger ?? silentLogger;
+  const { at } = input;
+  const settings = organisationDigestSettingsOf(await options.organisationSettings.read());
+  if (settings.quietHours === null) {
+    logger.debug({}, 'digest: the organisation states no quiet hours, so it has no digest');
+    return 'disabled';
+  }
+  if (localMinutesOf(at, options.timezone) < minutesOfTimeOfDay(settings.at)) {
+    return 'not_due';
+  }
+  const day = localDayOf(at, options.timezone);
+  const alreadySent = await options.unitOfWork.transaction(async (scope) =>
+    options.notifications.digestDelivered(scope.tx, { projectId: null, day }),
+  );
+  if (alreadySent) {
+    return 'sent';
+  }
+  const integrations = await integrationsForOrganisation(
+    options.organisation,
+    noRunScopedSecrets(),
+  );
+  if (integrations.communication === null) {
+    logger.warn(
+      { day },
+      'digest: the organisation has held notifications and no communication account names a channel, so nobody was told',
+    );
+    return 'no_binding';
+  }
+  return deliverDigest(options, { projectId: null, day, at, integrations });
+};
+
 /** The tick: every project with something waiting, served in the tick that is due for it. */
 export const digestTickHandler =
   (options: NotifyOptions): JobHandler =>
@@ -254,6 +337,14 @@ export const digestTickHandler =
     );
     for (const projectId of projects) {
       await runProjectDigest(options, { projectId, at });
+    }
+    // WP-93: the organisation's own rows (no project), in the same tick — asked only when one is
+    // waiting, so an organisation that holds nothing costs one indexed query per tick.
+    const organisationWaiting = await options.unitOfWork.transaction(async (scope) =>
+      options.notifications.organisationAwaitsDigest(scope.tx, { before: at }),
+    );
+    if (organisationWaiting) {
+      await runOrganisationDigest(options, { at });
     }
   };
 

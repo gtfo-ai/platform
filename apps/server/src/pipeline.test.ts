@@ -9,11 +9,13 @@
 import type { RunSpec } from '@platform/application';
 import {
   autonomyPresetFor,
+  commandBaselineFor,
+  pipelineDialFor,
   silentLogger,
   TransactionOpenError,
   withOpenTransaction,
 } from '@platform/application';
-import { materialiseAutonomy } from '@platform/domain';
+import { materialiseAutonomy, runCommandPolicy } from '@platform/domain';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createProjectSettingsPort,
@@ -161,7 +163,82 @@ describe('the project settings port', () => {
       ),
     ).toMatchObject({ maxParallelTasks: 3 });
     await expect(read({}, { pipeline: { wip: { max_parallel_tasks: 0 } } })).rejects.toThrow(
-      /organizations\.settings\.pipeline\.wip does not parse/,
+      /organizations\.settings does not parse \(pipeline\.wip\.max_parallel_tasks: 0\)/,
+    );
+  });
+
+  /**
+   * WP-93 criterion 2's read half: the organisation's `autonomy.maximum` caps the dial **at this
+   * read** — the live policies and the dial a task freezes at start (`pipelineDialFor`) — and never
+   * rewrites the project's choice; a document that does not parse refuses the read.
+   */
+  /**
+   * WP-93 review round 1: the organisation's command maximum reaches the run policy through this
+   * port. The port hands `organisationCommands` over, and the planner's composition
+   * (`runCommandPolicy` over the role baseline) intersects every verb with it before the project
+   * narrows — so a project's `allow` cannot re-grant what the organisation left out.
+   */
+  it('hands the organisation’s command maximum to the run policy, which intersects the baseline with it', async () => {
+    const project = '00000000-0000-4000-8000-0000000000b1' as never;
+    const read = async (org_settings: unknown) =>
+      createProjectSettingsPort(
+        poolOf([{ config: { commands: { allow: ['git push *', 'git status'] } }, org_settings }]),
+      ).forProject(project);
+    const policyOf = (settings: Awaited<ReturnType<typeof read>>) =>
+      runCommandPolicy(
+        commandBaselineFor('developer', 'implementation' as never, []),
+        settings.organisationCommands,
+        settings.config.commands,
+        settings.repositoryCommands,
+      );
+
+    const unbounded = await read({});
+    expect(unbounded.organisationCommands).toBeUndefined();
+    expect(policyOf(unbounded).policy.allow).toContain('git status');
+    expect(policyOf(unbounded).policy.allow.length).toBeGreaterThan(1);
+
+    const bounded = await read({ commands: { allow: ['git status'], block: ['curl *'] } });
+    expect(bounded.organisationCommands).toEqual({ allow: ['git status'], block: ['curl *'] });
+    const run = policyOf(bounded);
+    expect(run.policy.allow).toEqual(['git status']);
+    expect(run.policy.block).toContain('curl *');
+    expect(run.removedByOrganisation.length).toBeGreaterThan(0);
+  });
+
+  it('caps the materialised dial at the organisation’s autonomy maximum, at the read', async () => {
+    const project = '00000000-0000-4000-8000-0000000000b1' as never;
+    const stored = materialiseAutonomy({
+      level: 'supervised',
+      at: '2026-09-14T10:00:00.000Z' as never,
+      appliedBy: null,
+    });
+    const read = async (org_settings: unknown) =>
+      createProjectSettingsPort(
+        poolOf([{ config: {}, autonomy_policies: stored, org_settings }]),
+      ).forProject(project);
+
+    const uncapped = await read({});
+    expect(uncapped.autonomy).toEqual(stored);
+    expect(uncapped.organisationAutonomyMaximum).toBeUndefined();
+    expect(pipelineDialFor(uncapped)).toMatchObject({ level: 'supervised', business_review: true });
+
+    const capped = await read({ autonomy: { maximum: 'assist' } });
+    expect(capped.autonomy?.level).toBe('assist');
+    expect(capped.organisationAutonomyMaximum).toBe('assist');
+    // The dial a task started now would freeze: Assist's scoping-only halt, no business review.
+    expect(pipelineDialFor(capped)).toMatchObject({
+      level: 'assist',
+      business_review: false,
+      stop_after_stage: 'architecture',
+    });
+    expect(autonomyPresetFor(capped)?.planApproval).toBe('always');
+
+    // At or above the chosen level, nothing moves.
+    expect((await read({ autonomy: { maximum: 'autonomous' } })).autonomy).toEqual(stored);
+
+    // A document that does not parse — an unknown key — refuses the read, naming it.
+    await expect(read({ autonomy: { maximum: 'assist' }, quiet: true })).rejects.toThrow(
+      /organizations\.settings does not parse \(\(root\) \(Unrecognized key: "quiet"\)\)/,
     );
   });
 

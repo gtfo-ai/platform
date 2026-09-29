@@ -24,8 +24,8 @@ baseline — only the project-command verbs, since Q97 (PROGRESS backlog 139); t
 read-only and lockfile verbs are removed with `ask` or `block`, never by omission. **An organisation layer is composed since WP-63** (it was not when this amendment was written):
 `organizations.settings.commands` is read, and a run's baseline is intersected with it for every verb
 **before** a project narrows (`intersectWithOrganisationMaximum`), so a verb the organisation removed stays
-removed whatever the project's `commands.allow` says — the case this sentence once warned of. No surface
-writes that layer yet (PROGRESS backlog 146 (2) / 223). A repository's own `.agentic/config.yml`
+removed whatever the project's `commands.allow` says — the case this sentence once warned of. Since WP-93 an
+administrator writes that layer through `PATCH /api/org` (the organisation settings document, technical/12). A repository's own `.agentic/config.yml`
 (the `repo` layer, Q94) is narrowed the same way: it can undo a UI list but never widen past baseline ∩
 organisation maximum. A project, likewise, can never reach a verb the
 role's baseline does not grant, and an entry it declares that the platform discards is reported (a

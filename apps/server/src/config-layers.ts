@@ -8,100 +8,116 @@
  * (`routes/projects.ts`) — and they must read them the same way, so the reading is here, once
  * (standing rule 41).
  *
- *  - **org** — `organizations.settings.commands`, the organisation's command maximum (BD-025 §2).
- *    It is the only organisation key this build composes: no surface sets an organisation autonomy
- *    maximum (the WP-63 notes' discovered work), and the dial is the platform's record of the
- *    position a human chose. **Nothing writes the key yet** — the admin surface is backlog 146's
- *    half (2), left open by WP-63; what WP-63 closes is half (1), the intersection that makes
- *    composing it safe. A value that does not parse is a **refusal**, not an absent layer — an
- *    organisation maximum read as "none" is the permissive reading of a restriction somebody wrote
- *    (standing rule 20).
+ *  - **org** — `organizations.settings`, the organisation settings document (WP-93,
+ *    `organisationSettingsSchema`): the command maximum (BD-025 §2), the autonomy maximum, the WIP
+ *    maximum (WP-91) and the organisation's notification settings. `GET/PATCH /api/org`
+ *    (`routes/settings.ts`) read and write it; every reader here **parses the whole document**
+ *    through the one strict schema — never a cast, never one key picked out of an unparsed object
+ *    (PROGRESS backlog 311's organisation half). A document that does not parse is a **refusal**,
+ *    not an absent layer — an organisation maximum read as "none" is the permissive reading of a
+ *    restriction somebody wrote (standing rule 20).
  *  - **project** — `projects.config`, the settings layer the screens and `PUT …/config` write.
  *  - **repo** — `project_repository_config`, the last reading of the default branch's
  *    `.agentic/config.yml` (`refreshRepositoryConfig`).
  */
 import { type RepositoryConfigSnapshot, revalidateRepositorySnapshot } from '@platform/application';
 import {
-  type CommandPolicy,
-  commandPolicySchema,
-  type WipLimitsConfig,
-  wipLimitsConfigSchema,
+  type AutonomyLevel,
+  type MaterialisedAutonomy,
+  type OrganisationSettings,
+  organisationSettingsSchema,
 } from '@platform/contracts';
+import { capMaterialisedAutonomy } from '@platform/domain';
 import { config as configAdapters, redaction as redactionAdapters } from '@platform/infrastructure';
+import { HttpError } from './errors.js';
 
-/** `organizations.settings` names a `commands` value this release cannot read. */
+/** Longest rendering of one refused clause: stored state came from outside (BD-022). */
+const MAX_REFUSED_CLAUSE_CHARS = 120;
+
+/**
+ * `organizations.settings` is a document this release cannot read — WP-93.
+ *
+ * `clauses` are `key.path: <value>` (or `key.path (<why>)` when there is no value), **redacted**
+ * through the platform's patterns and bounded, because the column is text an administrator typed —
+ * a command list is free text, and a credential pasted into one would otherwise be quoted back by
+ * every refusal (the WP-30 / WP-83 shape, `describeConfigIssues`).
+ */
 export class OrganisationSettingsInvalidError extends Error {
-  readonly keyPaths: readonly string[];
+  readonly clauses: readonly string[];
 
-  constructor(
-    keyPaths: readonly string[],
-    subject: { readonly key: string; readonly what: string } = {
-      key: 'commands',
-      what: 'command maximum',
-    },
-  ) {
+  constructor(clauses: readonly string[]) {
     super(
-      `organizations.settings.${subject.key} does not parse (${keyPaths.join(', ')}); the organisation's ${subject.what} is refused rather than read as absent, so no run is planned against a maximum nobody can name`,
+      `organizations.settings does not parse (${clauses.join(', ')}); the organisation settings document is refused rather than read as absent, so nothing is planned or sent against a maximum nobody can name — correct it with PATCH /api/org`,
     );
     this.name = 'OrganisationSettingsInvalidError';
-    this.keyPaths = keyPaths;
+    this.clauses = clauses;
   }
 }
 
-/** The organisation's command maximum, or `undefined` when it states none. */
-export const organisationCommandsFrom = (settings: unknown): CommandPolicy | undefined => {
-  if (typeof settings !== 'object' || settings === null || Array.isArray(settings)) {
-    return undefined;
+const valueAt = (document: unknown, path: readonly PropertyKey[]): unknown => {
+  let current: unknown = document;
+  for (const segment of path) {
+    if (typeof current !== 'object' || current === null) {
+      return undefined;
+    }
+    current = (current as Record<PropertyKey, unknown>)[segment];
   }
-  const declared = (settings as Record<string, unknown>).commands;
-  if (declared === undefined) {
-    return undefined;
-  }
-  const parsed = commandPolicySchema.safeParse(declared);
-  if (!parsed.success) {
-    throw new OrganisationSettingsInvalidError(
-      parsed.error.issues.map((issue) =>
-        ['commands', ...issue.path.map(String)].join('.').slice(0, 120),
-      ),
-    );
-  }
-  return parsed.data;
+  return current;
 };
 
 /**
- * The organisation's WIP maximum — `organizations.settings.pipeline.wip`, the project key's shape
- * (WP-91, backlog 224) — or `undefined` when it states none, which bounds a project by nothing
- * but the schema. Like the command maximum it has **no writer but SQL** on this build (the
- * organisation settings document is WP-93's), and like it a value that does not parse is a
- * refusal, never an absent bound: a maximum read as "none" is the permissive reading of a
- * restriction somebody wrote (standing rule 20).
+ * The organisation settings document, **parsed** — `{}` for an organisation that states nothing
+ * (`organizations.settings` defaults to `'{}'`) and for a caller with no row at all.
+ *
+ * @throws {OrganisationSettingsInvalidError} when the stored document fails the strict schema.
  */
-export const organisationWipFrom = (settings: unknown): WipLimitsConfig | undefined => {
-  if (typeof settings !== 'object' || settings === null || Array.isArray(settings)) {
-    return undefined;
+export const organisationSettingsFrom = (settings: unknown): OrganisationSettings => {
+  if (settings === null || settings === undefined) {
+    return {};
   }
-  const pipeline = (settings as Record<string, unknown>).pipeline;
-  if (pipeline === undefined) {
-    return undefined;
+  const parsed = organisationSettingsSchema.safeParse(settings);
+  if (parsed.success) {
+    return parsed.data;
   }
-  const declared =
-    typeof pipeline === 'object' && pipeline !== null && !Array.isArray(pipeline)
-      ? (pipeline as Record<string, unknown>).wip
-      : pipeline;
-  if (declared === undefined) {
-    return undefined;
-  }
-  const parsed = wipLimitsConfigSchema.safeParse(declared);
-  if (!parsed.success) {
-    throw new OrganisationSettingsInvalidError(
-      parsed.error.issues.map((issue) =>
-        ['pipeline', 'wip', ...issue.path.map(String)].join('.').slice(0, 120),
-      ),
-      { key: 'pipeline.wip', what: 'WIP maximum' },
-    );
-  }
-  return parsed.data;
+  throw new OrganisationSettingsInvalidError(
+    parsed.error.issues.map((issue) => {
+      const path = issue.path.map(String).join('.');
+      const value = valueAt(settings, issue.path);
+      const clause =
+        value === undefined || path === ''
+          ? `${path === '' ? '(root)' : path} (${issue.message})`
+          : `${path}: ${JSON.stringify(value)}`;
+      return PATTERN_REDACTOR.redactText(clause).value.slice(0, MAX_REFUSED_CLAUSE_CHARS);
+    }),
+  );
 };
+
+/**
+ * {@link organisationSettingsFrom} for an HTTP read or write: the refusal as the **409
+ * `invalid_organisation_config`** every route answers it with (`GET …/config` since WP-63), naming
+ * the key paths and values — an operator can act on it with `PATCH /api/org`.
+ */
+export const organisationSettingsForRequest = (settings: unknown): OrganisationSettings => {
+  try {
+    return organisationSettingsFrom(settings);
+  } catch (error) {
+    if (error instanceof OrganisationSettingsInvalidError) {
+      throw new HttpError(409, 'invalid_organisation_config', error.message);
+    }
+    throw error;
+  }
+};
+
+/**
+ * The dial under the organisation's maximum (WP-93) — `capMaterialisedAutonomy` for a project whose
+ * dial may never have been materialised; `null` stays `null`. One expression for the pipeline's
+ * settings port and the Librarian's read (standing rule 41).
+ */
+export const cappedAutonomy = (
+  materialised: MaterialisedAutonomy | null,
+  maximum: AutonomyLevel | undefined,
+): MaterialisedAutonomy | null =>
+  materialised === null ? null : capMaterialisedAutonomy(materialised, maximum);
 
 /** The columns of one `project_repository_config` row, as a raw query returns them. */
 export interface RepositoryConfigColumns {

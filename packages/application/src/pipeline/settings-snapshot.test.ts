@@ -106,6 +106,17 @@ describe('runSettingsSnapshot', () => {
     expect(read.hash).not.toBe(before.hash);
   });
 
+  it('records the organisation’s autonomy maximum beside the capped dial, and nothing when there is none (WP-93)', () => {
+    const none = runSettingsSnapshot(settingsWith({}), nothing);
+    expect(Object.hasOwn(none.snapshot, 'autonomy_maximum')).toBe(false);
+    const capped = runSettingsSnapshot(
+      settingsWith({ organisationAutonomyMaximum: 'assist' }),
+      nothing,
+    );
+    expect(capped.snapshot).toMatchObject({ autonomy_maximum: 'assist' });
+    expect(capped.hash).not.toBe(none.hash);
+  });
+
   it('redacts a credential an operator pasted into free text, and hashes what it stores', () => {
     const secret = 'glpat-FAKEFAKEFAKEFAKE0001';
     const { snapshot, hash } = runSettingsSnapshot(

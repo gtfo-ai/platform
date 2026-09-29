@@ -28,6 +28,7 @@ import type {
   DomainEvent,
   Id,
   IsoDateTime,
+  OrganisationSettings,
   PipelineTemplate,
 } from '@platform/contracts';
 import { agentRoleSchema, artifactDataSchemas, refinedSpecDataSchema } from '@platform/contracts';
@@ -65,6 +66,10 @@ import type { TaskManagementPort, TicketRefInput } from '../ports/integrations/t
 import type { CronScheduleDefinition, EnqueueRequest, JobHandler, Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import { silentLogger } from '../ports/logger.js';
+import {
+  type OrganisationSettingsPort,
+  staticOrganisationSettings,
+} from '../ports/organisation-settings.js';
 import type { ClaudeRunner, RunOutcome, RunSpec, RunTranscriptSink } from '../ports/runner.js';
 import { createWorkingCalendar, type WorkingCalendar } from '../scheduling/working-calendar.js';
 import { createMemoryAskStore, type MemoryAskStore } from './memory-ask.js';
@@ -432,6 +437,11 @@ export interface HarnessOptions {
    * with no process serving `/webhooks/*`.
    */
   readonly chatConnectionHeld?: boolean;
+  /**
+   * The organisation settings document (WP-93) the notify band reads its quiet hours from. `{}` by
+   * default — an organisation that states nothing, as every instance was before WP-93.
+   */
+  readonly organisationSettings?: OrganisationSettings;
   /** The organisation's zone, which the digest and quiet hours are read in (Q38). */
   readonly timezone?: string;
   /**
@@ -501,6 +511,8 @@ export interface PipelineHarness {
   readonly organisation: OrganisationIntegrationsPort;
   /** The liveness the notify band asks, answering {@link HarnessOptions.chatConnectionHeld}. */
   readonly heldConnections: Pick<HeldConnectionLiveness, 'isHeld'>;
+  /** The organisation settings the band reads, answering {@link HarnessOptions.organisationSettings}. */
+  readonly organisationSettings: OrganisationSettingsPort;
   /** The store the planner's context-pack assembler reads; seed it to get a non-empty pack. */
   readonly knowledge: MemoryKnowledgeStore;
   /** The ledger's store when `cost: true` was asked for, and `null` otherwise. */
@@ -1105,6 +1117,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
   const heldConnections: Pick<HeldConnectionLiveness, 'isHeld'> = {
     isHeld: async () => options.chatConnectionHeld ?? true,
   };
+  const organisationSettings = staticOrganisationSettings(options.organisationSettings ?? {});
 
   // WP-65: the organisation's own account, through the same executor as the project's, so its
   // audit rows land in the same log a case reads.
@@ -1188,6 +1201,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     timezone: options.timezone ?? 'UTC',
     organisation,
     heldConnections,
+    organisationSettings,
     calendar,
     // One composed set for the harness's one project. Production reads the `bindings` table
     // through `createPipelineIntegrationsLoader` (WP-15a).
@@ -1459,6 +1473,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     organisationCommunication,
     organisation,
     heldConnections,
+    organisationSettings,
     knowledge,
     cost,
     shadow,

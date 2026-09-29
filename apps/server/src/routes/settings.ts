@@ -7,6 +7,8 @@
  *   GET  /api/org/budgets                     the organisation's caps
  *   PUT  /api/org/budgets                     BD-010's organisation cap, per window
  *   GET  /api/projects/:project_id/audit      who changed this project's settings
+ *   GET  /api/org                             the organisation settings document (WP-93)
+ *   PATCH /api/org                            replace or remove sections of it (WP-93)
  *
  * product/18:55 is unconditional — *"Settings pages mirror the wizard one-to-one, so nothing is only
  * reachable during onboarding"* — so every control the wizard has must have an endpoint a settings
@@ -50,6 +52,8 @@ import type {
   BudgetRecord,
   JsonObject,
   MaterialisedAutonomy,
+  OrganisationSettings,
+  PatchOrgSettingsRequest,
   ProjectAuditResponse,
   UserRole,
 } from '@platform/contracts';
@@ -57,14 +61,19 @@ import {
   apiErrorSchema,
   autonomyResponseSchema,
   budgetsResponseSchema,
+  orgSettingsResponseSchema,
+  patchOrgSettingsRequestSchema,
+  patchOrgSettingsResponseSchema,
   projectAuditResponseSchema,
   putBudgetsRequestSchema,
   setAutonomyRequestSchema,
 } from '@platform/contracts';
+import { autonomyRank } from '@platform/domain';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
+import { organisationSettingsForRequest } from '../config-layers.js';
 import { HttpError, NotFoundError } from '../errors.js';
 import type { WriteBudgetResult } from '../queries/cost-queries.js';
 import type { HumanActionInput } from '../queries/onboarding-queries.js';
@@ -108,7 +117,70 @@ export interface SettingsQueries {
   claimAttempt: IdempotencyRecords['claimAttempt'];
   releaseAttempt: IdempotencyRecords['releaseAttempt'];
   recordAction(input: HumanActionInput): Promise<void>;
+  /**
+   * `organizations.settings` as stored, **unparsed**, and when it changed — `null` before the
+   * instance has an organisation (WP-93). The route parses it.
+   */
+  organisationSettings(): Promise<{
+    readonly settings: unknown;
+    readonly updatedAt: Date;
+  } | null>;
+  /** Replace the document with `next(stored)` under the row's lock; a throw writes nothing. */
+  replaceOrganisationSettings(
+    next: (stored: unknown) => Promise<OrganisationSettings> | OrganisationSettings,
+  ): Promise<{ readonly before: unknown; readonly after: OrganisationSettings }>;
+  /** Whether an integration id names a communication account (Q103 (c)'s pointer). */
+  isCommunicationAccount(id: string): Promise<boolean>;
 }
+
+/** The document's four sections, in the order `PATCH /api/org` reports them. */
+export const ORGANISATION_SETTINGS_SECTIONS = [
+  'commands',
+  'autonomy',
+  'pipeline',
+  'notifications',
+] as const;
+
+type OrganisationSettingsSection = (typeof ORGANISATION_SETTINGS_SECTIONS)[number];
+
+/**
+ * `PATCH /api/org`'s merge, pure (WP-93): each section the request names **replaces** the stored
+ * one, `null` **removes** it, and an absent section is kept as stored.
+ *
+ * The result is parsed by `organisationSettingsForRequest` — the same strict schema every reader
+ * uses — so a document the readers would refuse is refused **here**, before anything is written.
+ * That includes a stored section this request does not touch: a document that does not parse is
+ * named (`409 invalid_organisation_config`, key paths and values) rather than silently kept, and
+ * the administrator fixes it by replacing or removing the named section in the same request. A
+ * stored value that is not a JSON object at all has no section to keep and is read as `{}`, which
+ * is the only way such a column can be repaired through the API.
+ */
+export const mergeOrganisationSettings = (
+  stored: unknown,
+  patch: PatchOrgSettingsRequest,
+): {
+  readonly next: OrganisationSettings;
+  readonly changed: readonly OrganisationSettingsSection[];
+} => {
+  const base: Record<string, unknown> =
+    typeof stored === 'object' && stored !== null && !Array.isArray(stored)
+      ? { ...(stored as Record<string, unknown>) }
+      : {};
+  const changed: OrganisationSettingsSection[] = [];
+  for (const section of ORGANISATION_SETTINGS_SECTIONS) {
+    const value = patch[section];
+    if (value === undefined) {
+      continue;
+    }
+    changed.push(section);
+    if (value === null) {
+      delete base[section];
+    } else {
+      base[section] = value;
+    }
+  }
+  return { next: organisationSettingsForRequest(base), changed };
+};
 
 export interface SettingsRoutesOptions {
   readonly queries: SettingsQueries;
@@ -143,6 +215,20 @@ const autonomyWriteResponseSchema = z.strictObject({
   preset_version: z.int().positive(),
   performed: z.boolean(),
 });
+
+/** The named sections of a document, for the audit row; a missing section is `null`. */
+const sectionsOf = (
+  document: unknown,
+  sections: readonly OrganisationSettingsSection[],
+): JsonObject => {
+  const source =
+    typeof document === 'object' && document !== null && !Array.isArray(document)
+      ? (document as Record<string, unknown>)
+      : {};
+  return Object.fromEntries(
+    sections.map((section) => [section, (source[section] ?? null) as JsonObject[string]]),
+  ) as JsonObject;
+};
 
 export const registerSettingsRoutes = async (
   app: FastifyInstance,
@@ -285,6 +371,19 @@ export const registerSettingsRoutes = async (
       const before = await options.queries.projectAutonomy(projectId);
       if (before === null) {
         throw new NotFoundError(`project ${projectId}`);
+      }
+      // WP-93: the organisation's autonomy maximum is a **ceiling**, unlike readiness's suggestion
+      // (BD-025 §2, technical/12). Refused before the claim, so a refusal leaves no audit row and
+      // no key. Re-applying a level a later maximum put out of reach is refused too: the project
+      // already runs at the maximum (`level_in_force`), and re-applying would write a choice the
+      // organisation has ruled out.
+      const maximum = before.organisation_maximum;
+      if (maximum !== null && autonomyRank(request.body.autonomy) > autonomyRank(maximum)) {
+        throw new HttpError(
+          409,
+          'autonomy_above_organisation',
+          `the organisation's autonomy maximum is ${maximum}, so ${request.body.autonomy} cannot be selected for project ${projectId}; an administrator raises the maximum with PATCH /api/org`,
+        );
       }
       return (await settingsWrite({
         request,
@@ -447,6 +546,120 @@ export const registerSettingsRoutes = async (
           performed,
         }),
       })) as z.output<typeof budgetWriteResponseSchema>,
+  );
+
+  /** The stored document, parsed — `{}` before the organisation row exists. */
+  const organisationDocument = async (): Promise<{
+    readonly settings: OrganisationSettings;
+    readonly updatedAt: Date | null;
+  }> => {
+    const stored = await options.queries.organisationSettings();
+    return stored === null
+      ? { settings: {}, updatedAt: null }
+      : { settings: organisationSettingsForRequest(stored.settings), updatedAt: stored.updatedAt };
+  };
+
+  typed.get(
+    '/api/org',
+    {
+      preHandler: requirePermission(guard, 'org.read'),
+      schema: {
+        summary: 'The organisation settings document',
+        description:
+          'The organisation’s command maximum, autonomy maximum, WIP maximum and notification settings (WP-93, technical/12 § "Effective configuration"). Parsed through the published schema at every read: a stored document it refuses answers `409 invalid_organisation_config` naming the key paths and values, never an empty document. `{}` with `updated_at: null` before the instance has an organisation (it is created with the first project, or by the first `PATCH`). The command list is text an administrator typed: render it as text (BD-022).',
+        tags: ['org'],
+        response: { 200: orgSettingsResponseSchema, 409: apiErrorSchema },
+      },
+    },
+    async () => {
+      const document = await organisationDocument();
+      return {
+        settings: document.settings,
+        updated_at: document.updatedAt === null ? null : document.updatedAt.toISOString(),
+      };
+    },
+  );
+
+  /**
+   * `PATCH /api/org` — the writer the organisation layer never had (WP-93, backlogs 146 (2), 223).
+   *
+   * Admin only (`org.settings.write`), one `human_actions` row per accepted request and none for a
+   * refusal, and `Idempotency-Key` optional and honoured through the server's one mechanism — the
+   * route pattern of `PUT /api/org/budgets` beside it, and for its reason: replacing a section with
+   * the same value is the same document, so a retry cannot create a second anything, and what the
+   * key buys is the audit row.
+   *
+   * **A lowered maximum applies at the next read, and nothing is rewritten** (the WP-93 ruling):
+   * the next run's command policy is intersected with the new list, the next settings read caps a
+   * project's dial at the new autonomy maximum, the next admission counts against the new WIP
+   * bound — and a task's frozen dial (`tasks.pipeline_dial`, migration 0049) is not moved, nor is
+   * any project's stored choice, so raising the maximum again restores it. Stated, not decided per
+   * case.
+   */
+  typed.patch(
+    '/api/org',
+    {
+      preValidation: requirePermission(guard, 'org.settings.write'),
+      schema: {
+        summary: 'Replace or remove sections of the organisation settings document',
+        description:
+          'Each top-level section present **replaces** the stored one; `null` removes it; an absent section is kept. The merged document is validated by the same strict schema every reader parses with, so a value a reader would refuse is refused here. `notifications.organisation_default` must name a communication account (`409 organisation_default_not_communication`): with two or more accounts that each name a channel, that one speaks for the organisation (Q103 (c)). A lowered maximum applies **at the next read** — the next run, the next settings read, the next admission — and never moves a task’s frozen dial or a project’s stored choice. Admin only; audited; `Idempotency-Key` optional and honoured.',
+        tags: ['org'],
+        body: patchOrgSettingsRequestSchema,
+        response: {
+          200: patchOrgSettingsResponseSchema,
+          400: apiErrorSchema,
+          409: apiErrorSchema,
+        },
+      },
+    },
+    async (request) => {
+      const patch = request.body;
+      const pointer = patch.notifications?.organisation_default;
+      if (
+        pointer !== undefined &&
+        pointer !== null &&
+        !(await options.queries.isCommunicationAccount(pointer))
+      ) {
+        throw new HttpError(
+          409,
+          'organisation_default_not_communication',
+          `notifications.organisation_default names ${pointer}, which is not a communication account of this organisation`,
+        );
+      }
+      return (await settingsWrite({
+        request,
+        action: 'org.settings.write',
+        subject: { scope: 'org', body: patch },
+        params: { scope: 'org' },
+        auditResult: (result: {
+          readonly before: unknown;
+          readonly after: OrganisationSettings;
+          readonly changed: readonly OrganisationSettingsSection[];
+        }) => ({
+          changed: [...result.changed],
+          // product/18:5 — what changed, before and after, section by section. Redacted: a command
+          // list is free text an administrator typed (TD-012, BD-022).
+          before: options.redactor.redactJson(sectionsOf(result.before, result.changed)).value,
+          after: options.redactor.redactJson(sectionsOf(result.after, result.changed)).value,
+        }),
+        perform: async () => {
+          let changed: readonly OrganisationSettingsSection[] = [];
+          const written = await options.queries.replaceOrganisationSettings((stored) => {
+            const merged = mergeOrganisationSettings(stored, patch);
+            changed = merged.changed;
+            return merged.next;
+          });
+          return { ...written, changed };
+        },
+        answer: async ({ performed, result }) => ({
+          // A replay performed nothing now: it answers the document as it stands.
+          settings: result?.after ?? (await organisationDocument()).settings,
+          changed: [...(result?.changed ?? [])],
+          performed,
+        }),
+      })) as z.output<typeof patchOrgSettingsResponseSchema>;
+    },
   );
 
   typed.get(

@@ -818,8 +818,9 @@ export const createIntegrationActionExecutor = (
    * slot — bounded by `(integration, action)` as `IdempotencyScope` describes.
    *
    * **Reachability, measured before the decision.** The repository ships exactly one
-   * `IdempotencyPlan`: `slack/digest.ts`'s `slack:digest:<channel>:<day>`, whose parts are binding
-   * configuration and the clock in the schedule's zone. Neither half of the finding was reachable
+   * `IdempotencyPlan`: `slack/digest.ts`'s `slack:digest:<channel>:<day>` (since WP-93
+   * `communicationWrites.digest`'s, with the project id appended), whose parts are binding
+   * configuration, a platform id and the clock in the schedule's zone. Neither half of the finding was reachable
    * through it, or through anything else on disk. The guard is here for the plan technical/06
    * actually describes — "marker ids for comments", text the platform reads back out of a
    * provider's comment body — which is the first key an outsider gets to influence, and which a

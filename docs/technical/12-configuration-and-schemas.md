@@ -64,6 +64,57 @@ lives instead:
 `test/e2e/compose/compose-config.e2e.test.ts` holds the file to the server's reads in both
 directions, so a name added back without a reader fails there.
 
+## The organisation settings document (`organizations.settings`, `GET/PATCH /api/org`)
+
+Listed first because every other layer is held to it: it is the `org` layer of the effective configuration below, and
+each of its keys is a **maximum** a project and a repository may state less than, or an organisation-scoped default
+(WP-93, PROGRESS backlogs 146 (2), 223, 235 and Q103 (c)). It is **not** part of `.agentic/config.yml`, and no
+repository can state any of it. `GET /api/org` reads it (`org.read`); `PATCH /api/org` writes it — admin only
+(`org.settings.write`), one `human_actions` row per accepted request (`org.settings.write`, with the sections changed
+and each one before and after, redacted), `Idempotency-Key` optional and honoured. The JSON Schema is
+`schemas/organisation-settings.schema.json`, generated from `organisationSettingsSchema`.
+
+```yaml
+commands:                     # the command maximum (BD-025 §2) — same shape as a project's list
+  allow: ["git status", "pnpm test"]
+  block: ["curl *"]
+autonomy:
+  maximum: supervised         # observe | assist | supervised | autonomous — the highest dial position
+pipeline:
+  wip:                        # the WIP maximum (WP-91) — a project's pipeline.wip may state less
+    max_parallel_tasks: 2
+    max_tasks_in_pipeline: 5
+notifications:
+  quiet_hours: { from: "22:00", to: "07:00" }   # the organisation's zone (TZ); may wrap midnight
+  digest_at: "09:00"                           # when the organisation's digest posts (default 09:00)
+  organisation_default: <integration id>        # the chat account that speaks for the organisation (Q103 (c))
+```
+
+- **Strict, and parsed at every read.** An unknown key is an error, and a stored document the schema refuses is a
+  named refusal carrying the key paths and the values (redacted, bounded): `409 invalid_organisation_config` on every
+  route that reads it, and a refusal of every run and settings read that needs it — never an empty document, never a
+  cast (standing rule 20). `PATCH` validates the merged document with the same schema, so a value the readers would
+  refuse is refused at the write; a write that leaves a broken section in place is refused too, and replacing or
+  removing that section repairs it.
+- **`PATCH` replaces sections.** Each top-level key present replaces the stored section, `null` removes it, an absent
+  one is kept; the write is a read-modify-write under the row's lock, so two administrators replacing different
+  sections both land.
+- **A lowered maximum applies at the next read, and moves nothing that is frozen** (the WP-93 ruling, stated rather
+  than decided per case). The next run's command policy is intersected with the new list; the next settings read caps
+  a project's dial at the new autonomy maximum (`capMaterialisedAutonomy`: the capped position's preset from this
+  release's table, because the project never chose it); the next admission counts against the new WIP bound. A task's
+  frozen dial (`tasks.pipeline_dial`, migration 0049) is not moved, and no project's stored choice is rewritten, so
+  raising the maximum again restores it. `PUT …/autonomy` above the maximum is `409 autonomy_above_organisation`;
+  `GET …/autonomy` publishes `organisation_maximum` and `level_in_force` beside the chosen `level`.
+- **Quiet hours** defer a non-urgent organisation notification (`budget_threshold`) into the organisation's digest at
+  `digest_at`; `budget_exhausted` is urgent (product/18:33) and posts at once. The organisation digest exists only
+  while quiet hours are stated. With no window, everything posts at once, as before WP-93.
+- **`organisation_default`** must name a communication account (`409 organisation_default_not_communication`). With
+  two or more accounts that each name a channel of their own, the flagged one speaks for the organisation and the others
+  are not built; Q103's refusal applies only when none is flagged. A flag that points at an account which no longer
+  exists, or at one whose own config names no channel, refuses the notification by name. It is a pointer in this
+  document rather than a boolean on each account, so "exactly one is flagged" is a property of the shape.
+
 ## `.agentic/config.yml` (repository, non-secret, highest precedence for non-secret keys)
 
 ```yaml
@@ -267,8 +318,8 @@ Verdict fields drive transitions; the platform never parses markdown to decide.
 
 ## Effective configuration
 
-`effective = merge(defaults, org, project, repo)` with per-key provenance, **read per stage** rather than per task: the settings port reads the stored settings and the last valid repository reading each time a stage is planned, and the reading is refreshed after each knowledge index run and on `POST …/config/refresh` — so a task that starts before the first index run after a merge runs on the previous reading, and a later stage of the same task can see a newer one. **What each run planned with is frozen into `Run.settings_snapshot`** (WP-91, PROGRESS backlog 227): at run creation, in the run row's own transaction, both run-creation paths (a stage and an ask) write the effective configuration the run was planned from — defaults under the settings with the repository file merged in, the command lists narrowed layer by layer, the WIP limits admission uses, and beside the document the materialised autonomy dial, the task budget cap, the template ids and which repository reading (`status`, `commit_sha`) was merged — redacted through the run's own TD-012 redactor and bounded at 256 KiB (a larger document is stored as a stated `truncated` marker, never cut), with `runs.settings_hash` the `sha256` hex of its canonical JSON (keys sorted, `undefined` dropped, no whitespace) over the stored, redacted document. Two runs planned with one configuration carry one hash; a stage-to-stage change within a task shows as two (`packages/application/src/pipeline/settings-snapshot.ts`). The snapshot records the lag rather than removing it: the reading is still refreshed per index run, not per stage. A run created before WP-91 reads `settings_hash is null` beside the column's `'{}'` default. The organisation's command list caps what project and repo may grant (BD-025's WP-54 and WP-63 amendments — a baseline intersected with it before either narrows). **No organisation autonomy maximum is composed on this build** (PROGRESS backlog 223; the published view caps at `autonomous`), and the repo layer may **tighten, never loosen** what an agent or reviewer is held to: protected paths are a union, the autonomy-override keys and `policies.autonomy` are not applied from it (WP-63, Q101).
+`effective = merge(defaults, org, project, repo)` with per-key provenance, **read per stage** rather than per task: the settings port reads the stored settings and the last valid repository reading each time a stage is planned, and the reading is refreshed after each knowledge index run and on `POST …/config/refresh` — so a task that starts before the first index run after a merge runs on the previous reading, and a later stage of the same task can see a newer one. **What each run planned with is frozen into `Run.settings_snapshot`** (WP-91, PROGRESS backlog 227): at run creation, in the run row's own transaction, both run-creation paths (a stage and an ask) write the effective configuration the run was planned from — defaults under the settings with the repository file merged in, the command lists narrowed layer by layer, the WIP limits admission uses, and beside the document the materialised autonomy dial, the task budget cap, the template ids and which repository reading (`status`, `commit_sha`) was merged — redacted through the run's own TD-012 redactor and bounded at 256 KiB (a larger document is stored as a stated `truncated` marker, never cut), with `runs.settings_hash` the `sha256` hex of its canonical JSON (keys sorted, `undefined` dropped, no whitespace) over the stored, redacted document. Two runs planned with one configuration carry one hash; a stage-to-stage change within a task shows as two (`packages/application/src/pipeline/settings-snapshot.ts`). The snapshot records the lag rather than removing it: the reading is still refreshed per index run, not per stage. A run created before WP-91 reads `settings_hash is null` beside the column's `'{}'` default. The organisation's command list caps what project and repo may grant (BD-025's WP-54 and WP-63 amendments — a baseline intersected with it before either narrows). **The organisation's autonomy maximum caps the dial at the next read** (WP-93; the settings port caps the materialised dial, and a task keeps the dial it froze at start — the snapshot records `autonomy_maximum` beside the capped dial), and the repo layer may **tighten, never loosen** what an agent or reviewer is held to: protected paths are a union, the autonomy-override keys and `policies.autonomy` are not applied from it (WP-63, Q101).
 
-**What production composes (WP-63).** `org` is `organizations.settings.commands` — the organisation's command maximum — and, since WP-91, `organizations.settings.pipeline.wip`, the organisation's WIP maximum, which bounds a project's `pipeline.wip` (a `PUT …/config` above it is `409 wip_above_organisation`; a maximum lowered after the write applies at the next read, where `effective` shows the organisation's value with source `org` and `not_applied` names the key). No surface writes either yet (PROGRESS backlog 146 (2), WP-93); a value that does not parse is refused, not read as absent. `project` is `projects.config`, what the settings screens and `PUT …/config` write. `repo` is the last `valid` reading of the file above. **The repository wins** wherever it states an operational key (Q94 (a), bounded by the grading above); the settings answer where it is silent; defaults answer the rest; and `GET …/config` publishes the merge as `effective` with the layer of every leaf in `sources` — so a key can answer `repo` — beside `config`, which stays the settings layer the screens round-trip. The pipeline's settings port merges `project` and `repo` **without** the defaults, because several readers treat a key's presence as an override of the materialised autonomy dial (Q78).
+**What production composes (WP-63).** `org` is `organizations.settings.commands` — the organisation's command maximum — and, since WP-91, `organizations.settings.pipeline.wip`, the organisation's WIP maximum, which bounds a project's `pipeline.wip` (a `PUT …/config` above it is `409 wip_above_organisation`; a maximum lowered after the write applies at the next read, where `effective` shows the organisation's value with source `org` and `not_applied` names the key). Since WP-93 both — and the autonomy maximum — are written through `PATCH /api/org` (the organisation settings document, above); the whole document is parsed at every read, and one that does not parse is refused, not read as absent. `project` is `projects.config`, what the settings screens and `PUT …/config` write. `repo` is the last `valid` reading of the file above. **The repository wins** wherever it states an operational key (Q94 (a), bounded by the grading above); the settings answer where it is silent; defaults answer the rest; and `GET …/config` publishes the merge as `effective` with the layer of every leaf in `sources` — so a key can answer `repo` — beside `config`, which stays the settings layer the screens round-trip. The pipeline's settings port merges `project` and `repo` **without** the defaults, because several readers treat a key's presence as an override of the materialised autonomy dial (Q78).
 
 **Commands narrow layer by layer.** A run's policy is its role baseline (plus its stage's and skills' additions, TD-027), **intersected with the organisation maximum for every verb** (`intersectWithOrganisationMaximum`, PROGRESS backlog 146 — an organisation that leaves `git push …` out of its `allow` removes it from every run, and no later layer brings it back), then narrowed by the settings' lists and then again by the file's under Q97's rule (`runCommandPolicy`'s layers). The file can therefore tighten what the settings allow and never re-grant what they removed; an entry it tries to re-grant is listed in `ignored_allow_commands`.

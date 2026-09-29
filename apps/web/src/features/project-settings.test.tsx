@@ -85,6 +85,8 @@ const autonomy = (overrides: Partial<AutonomyResponse> = {}): AutonomyResponse =
   readiness_level: 1,
   suggested_cap: 'supervised',
   above_suggested_cap: false,
+  organisation_maximum: null,
+  level_in_force: 'supervised',
   ...overrides,
 });
 

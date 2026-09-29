@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { patchOrgSettingsRequestSchema } from './api.js';
 import {
   agenticConfigSchema,
   commandPolicySchema,
   MAX_CONTEXT_BUDGET_TOKENS,
   MAX_WIP_PARALLEL_TASKS,
   MAX_WIP_TASKS_IN_PIPELINE,
+  organisationSettingsSchema,
   pipelineLimitsSchema,
   policiesConfigSchema,
   riskClassSchema,
@@ -484,5 +486,51 @@ describe('pipeline.wip', () => {
     expect(below.error?.issues[0]?.path).toEqual(['pipeline', 'wip', 'max_tasks_in_pipeline']);
     expect(withWip({ max_parallel_tasks: 3, max_tasks_in_pipeline: 3 }).success).toBe(true);
     expect(withWip({ max_parallel_runs: 4 }).success).toBe(false);
+  });
+});
+
+describe('the organisation settings document (WP-93)', () => {
+  it('accepts every section and the empty document', () => {
+    expect(organisationSettingsSchema.safeParse({}).success).toBe(true);
+    expect(
+      organisationSettingsSchema.safeParse({
+        commands: { allow: ['git status'], block: ['curl *'] },
+        autonomy: { maximum: 'supervised' },
+        pipeline: { wip: { max_parallel_tasks: 2, max_tasks_in_pipeline: 4 } },
+        notifications: {
+          quiet_hours: { from: '22:00', to: '07:00' },
+          digest_at: '08:30',
+          organisation_default: '00000000-0000-4000-8000-0000000000c1',
+        },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('is strict at every depth, and refuses out-of-range values rather than dropping them', () => {
+    for (const refused of [
+      { unknown: true },
+      { autonomy: { maximum: 'supervised', extra: 1 } },
+      { autonomy: { maximum: 'reckless' } },
+      { pipeline: { wip: { max_parallel_tasks: 0 } } },
+      { pipeline: { wip: { max_parallel_tasks: 3, max_tasks_in_pipeline: 2 } } },
+      { pipeline: { limits: {} } },
+      { notifications: { quiet_hours: { from: '22:00' } } },
+      { notifications: { digest_at: '9am' } },
+      { notifications: { organisation_default: 'not-a-uuid' } },
+      { commands: { allow: 'git status' } },
+    ]) {
+      expect(organisationSettingsSchema.safeParse(refused).success, JSON.stringify(refused)).toBe(
+        false,
+      );
+    }
+  });
+
+  it('takes a PATCH that replaces or removes named sections, and refuses one that names none', () => {
+    expect(patchOrgSettingsRequestSchema.safeParse({ commands: null }).success).toBe(true);
+    expect(
+      patchOrgSettingsRequestSchema.safeParse({ autonomy: { maximum: 'assist' } }).success,
+    ).toBe(true);
+    expect(patchOrgSettingsRequestSchema.safeParse({}).success).toBe(false);
+    expect(patchOrgSettingsRequestSchema.safeParse({ timezone: 'UTC' }).success).toBe(false);
   });
 });

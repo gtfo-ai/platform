@@ -38,3 +38,12 @@ cannot take an unapproved plan into implementation. **What is frozen and what is
 the budget threshold, the question timeout and knowledge auto-apply are read when they apply, so moving the
 dial changes them for running tasks too.
 
+## Amendment (WP-93, 2026-09-29) — a dial capped by the organisation's maximum
+
+The "materialised at selection time" rule has one stated exception. When an organisation's autonomy maximum
+(the organisation settings document, `PATCH /api/org`) is below a project's chosen level, the project's policies
+are read **capped**: the maximum's position is materialised from **this release's** preset table, because the
+project never selected that position and so holds no copy of it. The project's own choice
+(`autonomy_policies`) is never rewritten, so raising the maximum restores it; a task's frozen dial
+(`tasks.pipeline_dial`, migration 0049) is never moved; and a lowered maximum applies at the next read. A
+`PUT …/autonomy` above the maximum answers `409 autonomy_above_organisation`.

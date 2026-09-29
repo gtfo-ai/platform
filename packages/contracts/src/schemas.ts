@@ -59,7 +59,7 @@ import {
   usdSchema,
   workspaceStatusSchema,
 } from './common.js';
-import { agenticConfigSchema } from './config.js';
+import { agenticConfigSchema, organisationSettingsSchema } from './config.js';
 import { domainEventSchema, domainEventTypeSchema, streamTypeSchema } from './events.js';
 import { stabiliseDefs } from './json-schema-defs.js';
 import { customStageSchema, pipelineFileSchema, stageSchema } from './pipeline.js';
@@ -203,6 +203,13 @@ export const publishedSchemas: readonly PublishedSchema[] = [
     title: '.agentic/pipeline.yml',
     description: 'Optional full pipeline template definition (technical/12).',
     schema: pipelineFileSchema,
+  },
+  {
+    file: 'organisation-settings.schema.json',
+    title: 'Organisation settings',
+    description:
+      'The organisation settings document (organizations.settings), read and written by GET/PATCH /api/org; unknown keys are errors (technical/12, WP-93).',
+    schema: organisationSettingsSchema,
   },
   {
     file: 'transcript-event.schema.json',

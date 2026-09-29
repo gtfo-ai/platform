@@ -18,13 +18,17 @@
  * The shape is `duty.ts`'s — transaction / no transaction / transaction — with three differences,
  * each a consequence of having no project:
  *
- *  1. **No digest and no quiet hours.** Both are `features.digest`, a *project* setting, and there
- *     is no organisation configuration document to hang one on (technical/08: `PATCH /api/org` is
- *     unbuilt). The only two classes that reach here are budget classes, delivered immediately. A
- *     failed delivery is therefore never carried by a digest: it stays undelivered and is counted
- *     by the `notifications_undelivered` gauge past the job's own retry window (backlog 81), and
- *     since WP-84 the recovery pass re-posts it once past that window (backlog 236 (2)). A
- *     configuration the loader refuses records the undelivered row too (Q103, below).
+ *  1. **The organisation's quiet hours, not a project's** (WP-93, backlog 235). They are the
+ *     organisation settings document's `notifications.quiet_hours` (`PATCH /api/org`), asked
+ *     through `notificationDelivery` as the project duty asks `features.digest`: inside the window
+ *     `budget_threshold` is recorded planned `digest` and carried by the organisation's digest at
+ *     `digest_at` (`runOrganisationDigest`); `budget_exhausted` is urgent (product/18:33) and posts
+ *     now, whatever the window says. With no window — every organisation that states none —
+ *     everything posts at once, as before WP-93. A failed immediate delivery stays undelivered and
+ *     is counted by the `notifications_undelivered` gauge past the job's own retry window
+ *     (backlog 81), and the recovery pass re-posts it once past that window (backlog 236 (2)). A
+ *     configuration the loader refuses — or an organisation settings document that does not
+ *     parse — records the undelivered row too (Q103, below).
  *  2. **The row has no project and no task** (migration 0051, `nulls not distinct`), so a
  *     duplicated wake-up still stops at the unique key.
  *  3. **The audit row names the account and no project.** The call goes through
@@ -33,9 +37,9 @@
  *     scope. Attributing it to a project the account happens to be bound to would state something
  *     false about what was in scope (WP-51's rule; technical/06 § "Outbound: actions").
  */
-import type { Id, IsoDateTime, NotificationClass } from '@platform/contracts';
+import type { Id, IsoDateTime, NotificationClass, OrganisationSettings } from '@platform/contracts';
 import { notificationClassSchema } from '@platform/contracts';
-import { isUrgentNotification } from '@platform/domain';
+import { isUrgentNotification, notificationDelivery } from '@platform/domain';
 import {
   communicationWrites,
   integrationsForOrganisation,
@@ -46,6 +50,7 @@ import type { OrganisationOutboundData } from '../pipeline/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { NotifyOptions } from './options.js';
+import { localMinutesOf, organisationDigestSettingsOf } from './policy.js';
 import { awaitsImmediateRetry } from './ports.js';
 import { notificationBody, notificationDraft } from './render.js';
 
@@ -68,9 +73,13 @@ export const runOrganisationNotification = async (
   const notificationClass = parsed.data;
   const causeEventId = data.cause_event_id as Id;
 
-  // Outside every transaction: the account's row, its secret and an envelope decryption.
+  // Outside every transaction: the organisation settings document, the account's row, its secret
+  // and an envelope decryption. A document that does not parse is a refused configuration like an
+  // account the loader will not build: the row is recorded and the job fails by name.
   let integrations: PipelineIntegrations;
+  let organisationSettings: OrganisationSettings;
   try {
+    organisationSettings = await options.organisationSettings.read();
     integrations = await integrationsForOrganisation(options.organisation, noRunScopedSecrets());
   } catch (error) {
     await recordRefusedConfiguration(options, {
@@ -96,6 +105,16 @@ export const runOrganisationNotification = async (
   }
 
   const at = options.clock.now() as IsoDateTime;
+  // WP-93: the organisation's window. No `urgent` override exists for the organisation, so the
+  // platform default answers — which lists `budget_exhausted` (product/18:33's "budget 100 %").
+  const digest = organisationDigestSettingsOf(organisationSettings);
+  const delivery = notificationDelivery({
+    notificationClass,
+    digestEnabled: digest.quietHours !== null,
+    quietHours: digest.quietHours,
+    urgentClasses: undefined,
+    localMinutes: localMinutesOf(at, options.timezone),
+  });
   const subject = chat.redactor.redactText(String(data.notification_subject ?? 'The organisation'));
   const detail =
     data.notification_detail === undefined
@@ -121,7 +140,7 @@ export const runOrganisationNotification = async (
       // The organisation has no `features.digest.urgent` to consult, so the platform default is
       // the answer — which lists `budget_exhausted` (product/18:33's "budget 100 %").
       urgent: isUrgentNotification(notificationClass, undefined),
-      plannedDelivery: 'immediate',
+      plannedDelivery: delivery,
       mode: 'normal',
       createdAt: at,
       redactionCount: subject.count + detail.count,
@@ -160,6 +179,14 @@ export const runOrganisationNotification = async (
       detail: existing.detail,
       url: existing.url,
     };
+  }
+
+  if (recorded && delivery === 'digest') {
+    logger.debug(
+      { notification_class: notificationClass, cause_event_id: causeEventId },
+      'notify: an organisation notification is held for the organisation digest (quiet hours)',
+    );
+    return;
   }
 
   await communicationWrites(integrations).channelMessage(

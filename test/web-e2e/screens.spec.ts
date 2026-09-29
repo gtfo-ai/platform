@@ -177,6 +177,26 @@ test('org settings lists the provider identities and offers the mapping form (WP
   await expect(page.getByRole('button', { name: 'Save mapping' })).toBeVisible();
 });
 
+test('org settings shows the organisation document and saves a section through PATCH /api/org (WP-93)', async ({
+  page,
+  request,
+}) => {
+  // PROGRESS backlogs 146 (2) and 223: the organisation layer had no writer but SQL.
+  await page.goto('/settings');
+  await expect(page.getByText('Organisation settings', { exact: true })).toBeVisible();
+  // The stored list is administrator text: held as a value, never parsed into an element.
+  await expect(page.getByLabel('Organisation command block list')).toHaveValue(
+    '<img src=x onerror=alert(1)>',
+  );
+  await expect(page.getByLabel('Organisation autonomy maximum')).toHaveValue('supervised');
+
+  await page.getByLabel('Organisation autonomy maximum').selectOption('assist');
+  await page.getByRole('button', { name: 'Save autonomy maximum' }).click();
+  await expect
+    .poll(async () => (await commandLog(request)).filter((entry) => entry.path === '/api/org'))
+    .toEqual([{ path: '/api/org', body: { autonomy: { maximum: 'assist' } } }]);
+});
+
 test('the project settings page mirrors every wizard step', async ({ page }) => {
   // product/18:55 — *"nothing is only reachable during onboarding"*. Driven against the built
   // bundle, so this is the one tier that shows the route exists and the page renders in a browser.

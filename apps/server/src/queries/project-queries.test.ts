@@ -31,6 +31,32 @@ const row = (overrides: Partial<AutonomyRow> = {}): AutonomyRow => ({
   ...overrides,
 });
 
+describe('the organisation autonomy maximum on the published dial (WP-93)', () => {
+  it('publishes the chosen level, the maximum and the level in force — and the in-force policies', () => {
+    const chosen = row({
+      level: 'autonomous',
+      policies: materialiseAutonomy({ level: 'autonomous', at: AT, appliedBy: null }),
+      organisationMaximum: 'supervised',
+    });
+    const published = autonomyResponseFrom(chosen);
+    expect(published.level).toBe('autonomous');
+    expect(published.organisation_maximum).toBe('supervised');
+    expect(published.level_in_force).toBe('supervised');
+    // Supervised's plan approval, not Autonomous's `never`: what the pipeline reads now.
+    expect(published.policies.plan_approval).toBe('above_size');
+    expect(published.is_custom).toBe(false);
+  });
+
+  it('publishes no maximum, and the chosen level in force, when the organisation states none', () => {
+    const published = autonomyResponseFrom(
+      row({ policies: materialiseAutonomy({ level: 'autonomous', at: AT, appliedBy: null }) }),
+    );
+    expect(published.organisation_maximum).toBeNull();
+    expect(published.level_in_force).toBe('autonomous');
+    expect(published.policies.plan_approval).toBe('never');
+  });
+});
+
 describe('the materialised dial', () => {
   it('publishes the stored policies and says when they were applied', () => {
     const published = autonomyResponseFrom(row());

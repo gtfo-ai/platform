@@ -61,8 +61,11 @@ import {
   kbProposalsResponseSchema,
   kbTreeResponseSchema,
   orgAuditResponseSchema,
+  orgSettingsResponseSchema,
   orgStatsResponseSchema,
   orgUsersResponseSchema,
+  patchOrgSettingsRequestSchema,
+  patchOrgSettingsResponseSchema,
   pauseTaskRequestSchema,
   projectAuditResponseSchema,
   projectBindingsResponseSchema,
@@ -168,6 +171,8 @@ export interface Endpoints {
   ) => Promise<z.output<typeof readinessResponseSchema>>;
   readonly projectBudgets: (projectId: string) => Promise<z.output<typeof budgetsResponseSchema>>;
   readonly orgBudgets: () => Promise<z.output<typeof budgetsResponseSchema>>;
+  /** `GET /api/org` — the organisation settings document (WP-93). */
+  readonly orgSettings: () => Promise<z.output<typeof orgSettingsResponseSchema>>;
   readonly projectAutonomy: (projectId: string) => Promise<z.output<typeof autonomyResponseSchema>>;
   readonly projectAudit: (
     projectId: string,
@@ -295,6 +300,15 @@ export interface Endpoints {
     body: z.input<typeof putBudgetsRequestSchema>,
     idempotencyKey: string,
   ) => Promise<void>;
+  /**
+   * `PATCH /api/org` — replace (or, `null`, remove) sections of the organisation settings document
+   * (WP-93). Admin only; `Idempotency-Key` optional on the server and sent here, like every
+   * settings write.
+   */
+  readonly patchOrgSettings: (
+    body: z.input<typeof patchOrgSettingsRequestSchema>,
+    idempotencyKey: string,
+  ) => Promise<z.output<typeof patchOrgSettingsResponseSchema>>;
   /**
    * `POST /api/org/identities` — an admin states that a provider account is a person, or a
    * machine. An upsert on `(provider, external_id)` with **no** `Idempotency-Key`: the route says
@@ -474,6 +488,7 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
     projectBudgets: (projectId) =>
       client.get(`/api/projects/${seg(projectId)}/budgets`, { schema: budgetsResponseSchema }),
     orgBudgets: () => client.get('/api/org/budgets', { schema: budgetsResponseSchema }),
+    orgSettings: () => client.get('/api/org', { schema: orgSettingsResponseSchema }),
     projectAutonomy: (projectId) =>
       client.get(`/api/projects/${seg(projectId)}/autonomy`, { schema: autonomyResponseSchema }),
     projectAudit: (projectId) =>
@@ -628,6 +643,13 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
         idempotencyKey,
       });
     },
+    patchOrgSettings: (body, idempotencyKey) =>
+      client.command('/api/org', {
+        method: 'PATCH',
+        schema: patchOrgSettingsResponseSchema,
+        body: patchOrgSettingsRequestSchema.parse(body),
+        idempotencyKey,
+      }),
     mapIdentity: (body) =>
       client.command('/api/org/identities', {
         schema: identityMappingSchema,

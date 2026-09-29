@@ -385,6 +385,45 @@ export const runNotificationStoreContract = (harness: NotificationStoreHarness):
       expect(listed).not.toContain(null);
     });
 
+    /**
+     * **The organisation's digest claims the organisation's rows and nothing else** (WP-93, backlog
+     * 235): `projectId: null` is a key of its own — never a project's rows, and a project never
+     * claims an organisation row — and the organisation's delivered day is its own too.
+     */
+    it('claims, lists and answers the organisation’s digest apart from every project’s', async () => {
+      const org = entry({ projectId: null, notificationClass: 'budget_threshold' });
+      const project = entry();
+      await store.record(tx, org);
+      await store.record(tx, project);
+      const before = '2026-06-02T09:00:00.000Z' as IsoDateTime;
+      expect(await store.organisationAwaitsDigest(tx, { before })).toBe(true);
+      expect(
+        await store.organisationAwaitsDigest(tx, {
+          before: '2026-06-01T22:00:00.000Z' as IsoDateTime,
+        }),
+        'a row created after the bound is not waiting yet',
+      ).toBe(false);
+
+      const claim = {
+        day: '2026-06-02',
+        before,
+        immediateBefore: '2026-06-02T08:58:00.000Z' as IsoDateTime,
+        limit: 10,
+      };
+      const claimed = await store.claimForDigest(tx, { ...claim, projectId: null });
+      expect(claimed.map((row) => row.id)).toEqual([org.id]);
+      const projects = await store.claimForDigest(tx, { ...claim, projectId: context.projectId });
+      expect(projects.map((row) => row.id)).toEqual([project.id]);
+
+      await store.markDigested(tx, { ids: [org.id], at: before });
+      expect(await store.digestDelivered(tx, { projectId: null, day: claim.day })).toBe(true);
+      expect(
+        await store.digestDelivered(tx, { projectId: context.projectId, day: claim.day }),
+        'the organisation’s digest is not a project’s',
+      ).toBe(false);
+      expect(await store.organisationAwaitsDigest(tx, { before })).toBe(false);
+    });
+
     /** WP-65, backlog 202: the address of a posted approval, found again by the approval. */
     it('finds an approval’s message by the approval, once the delivery recorded its address', async () => {
       const posted = entry({

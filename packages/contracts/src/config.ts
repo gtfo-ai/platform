@@ -23,6 +23,7 @@ import {
   dependencyPolicyValueSchema,
   durationSchema,
   effortSchema,
+  idSchema,
   MAX_ROUTED_REVIEWERS,
   nonEmptyStringSchema,
   pathPatternSchema,
@@ -509,6 +510,13 @@ export const policiesConfigSchema = z
     }
   });
 
+/**
+ * A wall-clock window in the organisation's zone (`TZ`), `[from, to)`, which **may wrap midnight**
+ * (`22:00`–`08:00` is a night). One definition for its two homes: a project's
+ * `features.digest.quiet_hours` and, since WP-93, the organisation's `notifications.quiet_hours`.
+ */
+export const quietHoursSchema = z.strictObject({ from: timeOfDaySchema, to: timeOfDaySchema });
+
 // ── commands (BD-025) ────────────────────────────────────────────────────────
 
 /**
@@ -700,10 +708,7 @@ export const featuresConfigSchema = z.strictObject({
     .strictObject({
       enabled: z.boolean().optional(),
       at: timeOfDaySchema.optional(),
-      quiet_hours: z
-        .strictObject({ from: timeOfDaySchema, to: timeOfDaySchema })
-        .nullable()
-        .optional(),
+      quiet_hours: quietHoursSchema.nullable().optional(),
       urgent: z.array(urgentNotificationClassSchema).optional(),
     })
     .optional(),
@@ -902,3 +907,49 @@ export type RiskClass = z.infer<typeof riskClassSchema>;
 export type CommandPolicy = z.infer<typeof commandPolicySchema>;
 export type FeaturesConfig = z.infer<typeof featuresConfigSchema>;
 export type StatusMapping = z.infer<typeof statusMappingSchema>;
+
+// ── the organisation settings document (WP-93) ───────────────────────────────
+
+/**
+ * `organizations.settings` — the organisation's own settings document (WP-93, PROGRESS backlogs
+ * 146 (2), 223, 235 and Q103 (c)). `GET/PATCH /api/org` read and write it; it is **not** a layer of
+ * `.agentic/config.yml` and a repository can state none of it.
+ *
+ * Every key is a **maximum** or an organisation-scoped default, and each has one reader:
+ *
+ *  - `commands` — the command maximum every run's baseline is intersected with before a project
+ *    narrows it (BD-025 §2, `intersectWithOrganisationMaximum`). Same shape as a project's list.
+ *  - `autonomy.maximum` — the highest dial position a project may select (BD-025 §2, technical/12,
+ *    BD-027's WP-62 clarification: it caps the **level**, not the document keys). A project already
+ *    above a lowered maximum runs at the maximum from the **next read**; a task's frozen dial
+ *    (`tasks.pipeline_dial`) is never moved.
+ *  - `pipeline.wip` — the organisation's WIP maximum, the project key's own shape; a project's
+ *    `pipeline.wip` may state less, never more (WP-91).
+ *  - `notifications.quiet_hours` / `digest_at` — when an organisation-scoped notification (an
+ *    organisation budget) may interrupt somebody. Inside the window a non-urgent class
+ *    (`budget_threshold`) waits for the organisation's digest at `digest_at` (default `09:00`);
+ *    `budget_exhausted` is urgent and is never deferred (product/18:33).
+ *  - `notifications.organisation_default` — the id of the **one** communication account that
+ *    speaks for the organisation when more than one names a channel of its own (Q103 (c)). A
+ *    pointer rather than a boolean on each account, so "exactly one is flagged" is a property of
+ *    the shape rather than a rule to check.
+ *
+ * **Strict and parsed at every read**: a stored document this schema refuses is a named refusal
+ * (the key path and the value), never a silent default and never a cast (standing rule 20,
+ * PROGRESS backlog 311's organisation half).
+ */
+export const organisationSettingsSchema = z.strictObject({
+  commands: commandPolicySchema.optional(),
+  autonomy: z.strictObject({ maximum: autonomyLevelSchema }).optional(),
+  pipeline: z.strictObject({ wip: wipLimitsConfigSchema.optional() }).optional(),
+  notifications: z
+    .strictObject({
+      quiet_hours: quietHoursSchema.nullable().optional(),
+      digest_at: timeOfDaySchema.optional(),
+      organisation_default: idSchema.nullable().optional(),
+    })
+    .optional(),
+});
+
+export type OrganisationSettings = z.infer<typeof organisationSettingsSchema>;
+export type QuietHoursConfig = z.infer<typeof quietHoursSchema>;

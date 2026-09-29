@@ -857,8 +857,11 @@ Stated here so an operator meets them in a document rather than in production:
   `runner` container through the database — accepted by `app`, then applied or refused by the runner
   (§1, *The topology*; TD-028 decision 9).
 - **Chat notifications ship since WP-32**: a project bound to a Slack integration with a channel gets a
-  thread per task and the org's quiet hours and daily digest apply; an organisation-level budget has
-  no channel yet. **Since WP-43 the process that serves the API (`ROLE=all` or `ROLE=api`) holds the
+  thread per task and the project's quiet hours and daily digest apply; an organisation-level budget
+  posts to the organisation's own chat account's channel (WP-65), and since WP-93 the organisation's
+  quiet hours, digest time and — with two chat accounts — the account that speaks for it are set on
+  **Settings → Organisation settings** (`PATCH /api/org`, admin), beside the organisation's command,
+  autonomy and WIP maximums. **Since WP-43 the process that serves the API (`ROLE=all` or `ROLE=api`) holds the
   Slack Socket Mode connection** — a `ROLE=worker` process holds none and names the integration in
   its log — so an approval is posted with Approve / Request changes **while that process holds the
   connection** (since WP-72 it renews a liveness row the notification band reads; with no such

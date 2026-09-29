@@ -10,9 +10,12 @@
  * The budgets were in this file's "named as absent" list until that work package, and they were the
  * expensive absence: `insert into budgets` occurred in exactly two files and both were tests, so the
  * organisation cap that is supposed to stop every new run everywhere was a row no instance could
- * have. What is *still* absent is the rest of that list — autonomy **defaults**, the Claude provider
- * mode and feature flags — which need `GET/PATCH /api/org`; they stay named rather than drawn as
- * controls that silently do nothing.
+ * have. Since WP-93 the **organisation settings document** is here too (`features/org-settings.tsx`,
+ * `GET/PATCH /api/org`): the command, autonomy and WIP maximums, quiet hours and the default chat
+ * account. What is *still* absent is the rest of that list — the Claude provider mode (an
+ * environment setting, `APP_PROVIDER_MODE`) and feature flags (a project's `features.*`) — which
+ * the document does not carry; they stay named rather than drawn as controls that silently do
+ * nothing.
  *
  * A **project's** settings are `features/project-settings.tsx`, which mirrors the whole wizard.
  */
@@ -37,6 +40,7 @@ import { useTheme } from '../ui/theme.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { IdentityMappings } from './identities.js';
 import { Budgets } from './operating-mode.js';
+import { OrganisationSettingsPanel } from './org-settings.js';
 
 export const SettingsScreen = (): ReactElement => {
   const session = useSession();
@@ -118,6 +122,9 @@ export const SettingsScreen = (): ReactElement => {
           ticket resolves to a person instead of `unmapped_identity`. */}
       <IdentityMappings />
 
+      {/* WP-93: the organisation settings document — the writer the organisation layer never had. */}
+      <OrganisationSettingsPanel />
+
       <section>
         <SectionHeading>Instance</SectionHeading>
         <Card className="flex flex-col gap-1 text-sm">
@@ -142,9 +149,9 @@ export const SettingsScreen = (): ReactElement => {
             </>
           )}
           <p className="pt-2 text-xs text-fg-muted">
-            Autonomy <em>defaults</em>, the Claude provider mode and feature flags are org settings
-            that <code>GET/PATCH /api/org</code> will carry; no work package has built that endpoint
-            yet, so they are not editable here. Global budgets are — below.
+            The Claude provider mode is an environment setting and feature flags are a project’s, so
+            neither is editable here. The organisation’s maximums are — above — and so are its
+            budgets, below.
           </p>
         </Card>
       </section>

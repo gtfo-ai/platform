@@ -58,6 +58,7 @@ import type {
   LiveRuns,
   Logger,
   OrganisationIntegrationsPort,
+  OrganisationSettingsPort,
   PipelineIntegrationsPort,
   PipelineRuntime,
   PlatformToolPort,
@@ -145,8 +146,8 @@ import { PLATFORM_SKILLS, ROLE_PROMPTS } from '@platform/prompts';
 import type pg from 'pg';
 import { agentRunEnvironment, composeAgentRunner } from './agent.js';
 import {
-  organisationCommandsFrom,
-  organisationWipFrom,
+  cappedAutonomy,
+  organisationSettingsFrom,
   REPOSITORY_CONFIG_COLUMNS,
   type RepositoryConfigColumns,
   repositorySnapshotFrom,
@@ -696,15 +697,18 @@ export const createProjectSettingsPort = (
       throw new Error(`project ${projectId} has no row; the pipeline cannot settle its settings`);
     }
     const snapshot = repositorySnapshotFrom(row);
-    const organisationCommands = organisationCommandsFrom(row.org_settings);
+    // The organisation settings document, parsed once for every key this port reads (WP-93):
+    // one that does not parse refuses the read rather than dropping the maximums it states.
+    const organisation = organisationSettingsFrom(row.org_settings);
+    const organisationCommands = organisation.commands;
+    const autonomyMaximum = organisation.autonomy?.maximum;
     const layered = projectConfigWithRepository((row.config ?? {}) as ConfigValues, snapshot);
     return defaultProjectSettings(projectId, {
       templates: SHIPPED_TEMPLATES,
       config: layered.values,
       // WP-91 (backlog 224): `pipeline.wip` — the settings' value, a repository file's where it is
       // lower, BD-010's default where both are silent — never above the organisation's.
-      wip: resolveWipLimits(layered.values.pipeline?.wip, organisationWipFrom(row.org_settings))
-        .limits,
+      wip: resolveWipLimits(layered.values.pipeline?.wip, organisation.pipeline?.wip).limits,
       ...(organisationCommands === undefined ? {} : { organisationCommands }),
       ...(layered.repositoryCommands === undefined
         ? {}
@@ -718,7 +722,17 @@ export const createProjectSettingsPort = (
       // is `null`, which is the *stated* "never materialised" branch the gate names, and it is
       // logged rather than thrown: failing here would fail the `stage.execute` job into a retry
       // loop over a configuration problem no retry can fix.
-      autonomy: parseMaterialisedAutonomy(row.autonomy_policies, projectId, logger),
+      //
+      // WP-93: **capped at the organisation's autonomy maximum at this read**. A project chosen
+      // above a maximum lowered later runs at the maximum from here on — every live policy (plan
+      // approval, the budget threshold, the question timeout, knowledge auto-apply) — and a task
+      // started from here freezes the capped dial (`pipelineDialFor`). A task that already froze
+      // one keeps it (`tasks.pipeline_dial` is written by the insert and nothing else).
+      autonomy: cappedAutonomy(
+        parseMaterialisedAutonomy(row.autonomy_policies, projectId, logger),
+        autonomyMaximum,
+      ),
+      ...(autonomyMaximum === undefined ? {} : { organisationAutonomyMaximum: autonomyMaximum }),
     });
   },
 });
@@ -819,6 +833,21 @@ export const createProjectIntegrationsPort = (options: {
   });
 
 /**
+ * The organisation settings document (`organizations.settings`, WP-93) for the notification band —
+ * parsed through the one strict schema (`organisationSettingsFrom`), so a document that does not
+ * parse throws by name rather than reading as "no quiet hours". One organisation per instance
+ * (product/01, BD-009), read on the pool: the band asks it outside every transaction.
+ */
+export const createOrganisationSettingsPort = (pool: pg.Pool): OrganisationSettingsPort => ({
+  read: async () => {
+    const { rows } = await pool.query<{ settings: unknown }>(
+      'select settings from organizations order by created_at limit 1',
+    );
+    return organisationSettingsFrom(rows[0]?.settings);
+  },
+});
+
+/**
  * The organisation's own chat account, for the notification with no project (WP-65, PROGRESS
  * backlog 80): the same stack — registry, executor, `platformRedactor` — as every project's
  * adapters, so the organisation's calls share one idempotency store, one rate-limit budget per
@@ -830,6 +859,10 @@ export const createOrganisationIntegrationsPort = (options: {
   readonly stack: IntegrationStack;
 }): OrganisationIntegrationsPort =>
   createOrganisationIntegrationsLoader({
+    // Q103 (c), WP-93: the account the organisation settings document flags speaks for it.
+    organisationDefault: async () =>
+      (await createOrganisationSettingsPort(options.pool).read()).notifications
+        ?.organisation_default ?? null,
     communicationAccounts: async () => secretAdapters.listCommunicationAccounts(options.pool),
     secrets: secretAdapters.createPostgresSecretStore({
       sql: options.pool,
@@ -997,6 +1030,9 @@ export const composePipeline = async (
     // row `inbound-connections.ts` renews in whichever process serves the webhooks, read here in
     // whichever process runs the notify duty. On the shipped topology those can be two containers.
     heldConnections: integrationAdapters.createPostgresHeldConnectionLiveness(options.pool),
+    // WP-93 (backlog 235): the organisation's quiet hours and digest time, for an organisation
+    // budget — the same column, and the same parse, the settings port reads the maximums from.
+    organisationSettings: createOrganisationSettingsPort(options.pool),
     // WP-34: shadow mode's batches, tickets and reports. Required rather than optional for the
     // reason `notifications` is — `EVENT_CONSUMPTION` declares `shadow.report.created` handled, so
     // a process that composed the pipeline without it would sweep an event it promised a consumer

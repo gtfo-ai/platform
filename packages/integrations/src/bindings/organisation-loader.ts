@@ -21,9 +21,15 @@
  *    of backlog 80, which was rejected. The duty logs the absence at `warn` by name;
  *  - **an account that cannot be built** — unregistered provider, undecryptable credential, a
  *    config that fails the schema — throws {@link BindingLoadError}, the project loader's rule;
- *  - **two or more communication accounts that name a channel** throws too: the organisation's
- *    budget alarm going to whichever sorts first is a coin toss, and it is the same refusal a
- *    project with two chat bindings gets. Q103 records the question and the recommendation.
+ *  - **the account the organisation flagged** (`notifications.organisation_default` in the
+ *    organisation settings document, Q103 (c), WP-93) speaks for the organisation, whatever the
+ *    other accounts name. A flag that points at no communication account, or at one whose own
+ *    config names no channel, throws — a flag somebody set is never read as "no flag" (standing
+ *    rule 20);
+ *  - **two or more communication accounts that name a channel, and none flagged** throws too: the
+ *    organisation's budget alarm going to whichever sorts first is a coin toss, and it is the same
+ *    refusal a project with two chat bindings gets. Q103 records the question; the refusal names
+ *    the flag that resolves it.
  *
  * ## Attribution
  *
@@ -58,6 +64,13 @@ export interface OrganisationIntegrationsLoaderOptions {
   readonly executor: IntegrationActionExecutor;
   /** TD-012 step 2, composed after the account's own credentials — `loader.ts`'s option. */
   readonly platformRedactor?: SecretRedactor;
+  /**
+   * The integration id the organisation settings document flags as its default chat account
+   * (`notifications.organisation_default`, Q103 (c)), or `null` when none is flagged. Omitted is
+   * `null` — every composition before WP-93. It throws when the document does not parse, and the
+   * throw reaches the caller as it is.
+   */
+  readonly organisationDefault?: () => Promise<string | null>;
 }
 
 /** The value of the provider's declared channel key in the account's own config, if it names one. */
@@ -82,7 +95,20 @@ export const createOrganisationIntegrationsLoader = (
         communication: null,
       };
       const candidates: { account: IntegrationAccount; channel: string; digest: string }[] = [];
-      for (const account of await options.communicationAccounts()) {
+      const flagged = (await options.organisationDefault?.()) ?? null;
+      const accounts = await options.communicationAccounts();
+      if (flagged !== null && !accounts.some((account) => account.integrationId === flagged)) {
+        throw new BindingLoadError(
+          null,
+          null,
+          `the organisation settings flag ${flagged} as the organisation's chat account (notifications.organisation_default), and no communication account has that id; set it to an existing account or remove it (PATCH /api/org)`,
+        );
+      }
+      for (const account of accounts) {
+        if (flagged !== null && account.integrationId !== flagged) {
+          // Q103 (c): with an account flagged, the others are not candidates at all.
+          continue;
+        }
         let registration: ReturnType<IntegrationRegistry['get']>;
         try {
           registration = options.registry.get('communication', account.provider);
@@ -97,6 +123,13 @@ export const createOrganisationIntegrationsLoader = (
         const fields = registration.communicationChannels;
         const channel = accountChannel(account, fields?.channel);
         if (channel === null) {
+          if (flagged !== null) {
+            throw new BindingLoadError(
+              null,
+              null,
+              `the organisation's flagged chat account "${account.name}" (${account.provider}) names no channel of its own; an organisation-scoped notification has nowhere to go until it does, or until another account is flagged (PATCH /api/org)`,
+            );
+          }
           continue;
         }
         candidates.push({
@@ -117,7 +150,7 @@ export const createOrganisationIntegrationsLoader = (
             .map((candidate) => `${candidate.account.provider}/${candidate.account.name}`)
             .join(
               ', ',
-            )}); an organisation-scoped notification goes to exactly one, so all but one must leave the account-level channel empty`,
+            )}); an organisation-scoped notification goes to exactly one, so flag the one that speaks for the organisation (notifications.organisation_default, PATCH /api/org) or leave the account-level channel empty on all but one`,
         );
       }
 

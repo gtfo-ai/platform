@@ -97,6 +97,11 @@
       "description": "Optional full pipeline template definition (technical/12)."
     },
     {
+      "file": "organisation-settings.schema.json",
+      "title": "Organisation settings",
+      "description": "The organisation settings document (organizations.settings), read and written by GET/PATCH /api/org; unknown keys are errors (technical/12, WP-93)."
+    },
+    {
       "file": "transcript-event.schema.json",
       "title": "Transcript event",
       "description": "Normalised, redacted run output as stored in run_messages and streamed over SSE (technical/04, technical/03)."

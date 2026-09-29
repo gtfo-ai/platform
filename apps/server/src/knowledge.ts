@@ -90,6 +90,8 @@ import { accountOnlyFieldsOf, createGitMirrorCredentials } from '@platform/integ
 import type pg from 'pg';
 import { injectedSecretRedactorForEnvironment } from './agent.js';
 import {
+  cappedAutonomy,
+  organisationSettingsFrom,
   REPOSITORY_CONFIG_COLUMNS,
   type RepositoryConfigColumns,
   repositorySnapshotFrom,
@@ -475,10 +477,13 @@ export const composeKnowledgeIndexing = async (
         knowledge_dir: string;
         config: unknown;
         autonomy_policies: unknown;
+        org_settings: unknown;
       } & Partial<RepositoryConfigColumns>
     >(
-      `select p.knowledge_dir, p.config, p.autonomy_policies, ${REPOSITORY_CONFIG_COLUMNS}
+      `select p.knowledge_dir, p.config, p.autonomy_policies, o.settings as org_settings,
+              ${REPOSITORY_CONFIG_COLUMNS}
          from projects p
+         join organizations o on o.id = p.org_id
          left join project_repository_config r on r.project_id = p.id
         where p.id = $1`,
       [projectId],
@@ -505,7 +510,14 @@ export const composeKnowledgeIndexing = async (
       knowledgeDir: row.knowledge_dir,
       thresholds: thresholdsFromConfig(
         config as Parameters<typeof thresholdsFromConfig>[0],
-        autonomy.success ? autonomy.data : null,
+        // WP-93: capped at the organisation's autonomy maximum, as the pipeline's settings port
+        // caps it (`cappedAutonomy`) — the dial's auto-apply default must not outrank the
+        // organisation here while every other policy obeys it. A document that does not parse
+        // refuses the read (`organisationSettingsFrom`), the settings port's answer too.
+        cappedAutonomy(
+          autonomy.success ? autonomy.data : null,
+          organisationSettingsFrom(row.org_settings).autonomy?.maximum,
+        ),
       ),
     };
   };

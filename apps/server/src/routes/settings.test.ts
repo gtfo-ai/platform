@@ -31,6 +31,7 @@ import {
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b1';
 const USER = '00000000-0000-4000-8000-0000000000e9';
+const CHAT_ACCOUNT = '00000000-0000-4000-8000-0000000000c1';
 
 const AUTONOMY: AutonomyResponse = {
   level: 'supervised',
@@ -62,6 +63,8 @@ const AUTONOMY: AutonomyResponse = {
   readiness_level: 0,
   suggested_cap: 'assist',
   above_suggested_cap: true,
+  organisation_maximum: null,
+  level_in_force: 'supervised',
 };
 
 interface World {
@@ -73,6 +76,10 @@ interface World {
   userId: string;
   signedIn: boolean;
   projectFound: boolean;
+  /** `organizations.settings` as stored (WP-93); `undefined` is an instance with no organisation. */
+  orgStored: unknown;
+  /** The organisation's autonomy maximum the dial read publishes (WP-93). */
+  organisationMaximum: AutonomyResponse['organisation_maximum'];
 }
 
 const build = async (overrides: Partial<SettingsQueries> = {}): Promise<World> => {
@@ -87,6 +94,8 @@ const build = async (overrides: Partial<SettingsQueries> = {}): Promise<World> =
     userId: USER,
     signedIn: true,
     projectFound: true,
+    orgStored: undefined,
+    organisationMaximum: null,
   } as unknown as World;
 
   const app = fastify();
@@ -115,7 +124,9 @@ const build = async (overrides: Partial<SettingsQueries> = {}): Promise<World> =
     queries: {
       projectRole: async () => null,
       projectAutonomy: async (projectId) =>
-        projectId === PROJECT && world.projectFound ? AUTONOMY : null,
+        projectId === PROJECT && world.projectFound
+          ? { ...AUTONOMY, organisation_maximum: world.organisationMaximum }
+          : null,
       writeAutonomy: async (projectId, input) => {
         calls.push({ name: 'writeAutonomy', input: { projectId, ...input } });
         return {
@@ -143,6 +154,20 @@ const build = async (overrides: Partial<SettingsQueries> = {}): Promise<World> =
         };
       },
       projectAudit: async () => ({ items: [] }),
+      // WP-93: the organisation document, stored as written and handed back unparsed — what the
+      // real query does, so the route's parse is the one under test.
+      organisationSettings: async () =>
+        world.orgStored === undefined
+          ? null
+          : { settings: world.orgStored, updatedAt: new Date('2026-09-29T08:00:00.000Z') },
+      replaceOrganisationSettings: async (next) => {
+        const before = world.orgStored ?? {};
+        const after = await next(before);
+        calls.push({ name: 'replaceOrganisationSettings', input: after });
+        world.orgStored = after;
+        return { before, after };
+      },
+      isCommunicationAccount: async (id) => id === CHAT_ACCOUNT,
       ...memoryAttemptRecords(attempts),
       recordAction: async (input) => {
         actions.push({ userId: input.userId, action: input.action, params: input.params });
@@ -190,6 +215,8 @@ describe('every settings route refuses an anonymous caller', () => {
       ['GET', '/api/org/budgets'],
       ['PUT', '/api/org/budgets'],
       ['GET', `/api/projects/${PROJECT}/audit`],
+      ['GET', '/api/org'],
+      ['PATCH', '/api/org'],
     ];
     for (const [method, url] of probes) {
       const response = await world.app.inject({ method: method as 'GET', url });
@@ -501,5 +528,163 @@ describe('Idempotency-Key', () => {
     );
     expect(response.statusCode).toBe(400);
     expect(world.calls).toHaveLength(0);
+  });
+});
+
+describe('the organisation settings document (WP-93)', () => {
+  const patch = (body: unknown, headers: Record<string, string> = {}) =>
+    world.app.inject({ method: 'PATCH', url: '/api/org', payload: body as object, headers });
+  const read = () => world.app.inject({ method: 'GET', url: '/api/org' });
+
+  it('reads {} with no updated_at before the instance has an organisation', async () => {
+    const response = await read();
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ settings: {}, updated_at: null });
+  });
+
+  it('lets an admin set the command maximum, and refuses a maintainer and a member (criterion 1)', async () => {
+    const body = { commands: { allow: ['git status', 'pnpm test'], block: ['git push *'] } };
+    for (const role of ['member', 'maintainer', 'viewer'] as const) {
+      world.role = role;
+      const refused = await patch(body);
+      expect(`${role} -> ${refused.statusCode}`).toBe(`${role} -> 403`);
+    }
+    // A refused write leaves nothing behind (technical/08: one row per performed command).
+    expect(world.actions).toHaveLength(0);
+    expect(world.orgStored).toBeUndefined();
+
+    world.role = 'admin';
+    const accepted = await patch(body);
+    expect(accepted.statusCode).toBe(200);
+    expect(accepted.json()).toEqual({ settings: body, changed: ['commands'], performed: true });
+    expect(world.orgStored).toEqual(body);
+    expect(world.actions).toHaveLength(1);
+    expect(world.actions[0]).toMatchObject({
+      userId: USER,
+      action: 'org.settings.write',
+      params: { scope: 'org', changed: ['commands'], before: { commands: null }, after: body },
+    });
+    expect((await read()).json()).toEqual({
+      settings: body,
+      updated_at: '2026-09-29T08:00:00.000Z',
+    });
+  });
+
+  it('replaces the sections it names, removes a null one, and keeps the rest', async () => {
+    world.orgStored = {
+      commands: { block: ['rm -rf *'] },
+      pipeline: { wip: { max_parallel_tasks: 4 } },
+    };
+    const response = await patch({
+      pipeline: { wip: { max_parallel_tasks: 2, max_tasks_in_pipeline: 3 } },
+      commands: null,
+      autonomy: { maximum: 'supervised' },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(world.orgStored).toEqual({
+      pipeline: { wip: { max_parallel_tasks: 2, max_tasks_in_pipeline: 3 } },
+      autonomy: { maximum: 'supervised' },
+    });
+    expect((response.json() as { changed: string[] }).changed).toEqual([
+      'commands',
+      'autonomy',
+      'pipeline',
+    ]);
+  });
+
+  it('refuses a body naming no section, an unknown key and a value the schema refuses', async () => {
+    expect((await patch({})).statusCode).toBe(400);
+    expect((await patch({ commands: { allow: ['x'] }, surprise: true })).statusCode).toBe(400);
+    expect((await patch({ pipeline: { wip: { max_parallel_tasks: 0 } } })).statusCode).toBe(400);
+    expect((await patch({ autonomy: { maximum: 'reckless' } })).statusCode).toBe(400);
+    expect(
+      (await patch({ notifications: { quiet_hours: { from: '25:00', to: '08:00' } } })).statusCode,
+    ).toBe(400);
+    expect(world.orgStored).toBeUndefined();
+    expect(world.actions).toHaveLength(0);
+  });
+
+  it('refuses an organisation_default that names no communication account (Q103 (c))', async () => {
+    const other = '00000000-0000-4000-8000-0000000000c2';
+    const refused = await patch({ notifications: { organisation_default: other } });
+    expect(refused.statusCode).toBe(409);
+    expect(codeOf(refused)).toBe('organisation_default_not_communication');
+    expect(world.orgStored).toBeUndefined();
+
+    const accepted = await patch({
+      notifications: {
+        organisation_default: CHAT_ACCOUNT,
+        quiet_hours: { from: '22:00', to: '07:00' },
+      },
+    });
+    expect(accepted.statusCode).toBe(200);
+    expect(world.orgStored).toEqual({
+      notifications: {
+        organisation_default: CHAT_ACCOUNT,
+        quiet_hours: { from: '22:00', to: '07:00' },
+      },
+    });
+  });
+
+  it('names a stored document the schema refuses — key path and redacted value — on the read and on a write that keeps it', async () => {
+    const token = 'glpat-FAKE-fakeFAKEfake123456';
+    world.orgStored = { commands: { allow: token }, autonomy: { maximum: 'supervised' } };
+    const refused = await read();
+    expect(refused.statusCode).toBe(409);
+    expect(codeOf(refused)).toBe('invalid_organisation_config');
+    const message = (refused.json() as { error: { message: string } }).error.message;
+    expect(message).toContain('commands.allow');
+    expect(message).not.toContain(token);
+    expect(message).toContain('[REDACTED');
+
+    // A write that leaves the broken section in place is refused, and writes nothing…
+    const kept = await patch({ autonomy: { maximum: 'assist' } });
+    expect(kept.statusCode).toBe(409);
+    expect(codeOf(kept)).toBe('invalid_organisation_config');
+    expect(world.actions).toHaveLength(0);
+    // …and one that replaces it repairs the document.
+    const repaired = await patch({ commands: { allow: ['git status'] } });
+    expect(repaired.statusCode).toBe(200);
+    expect(world.orgStored).toEqual({
+      commands: { allow: ['git status'] },
+      autonomy: { maximum: 'supervised' },
+    });
+    // The audit row's "before" is the stored section, redacted like every audited free text.
+    expect(JSON.stringify(world.actions[0]?.params)).not.toContain(token);
+  });
+
+  it('honours Idempotency-Key: a replay performs nothing and writes no second audit row', async () => {
+    const body = { autonomy: { maximum: 'supervised' } };
+    const headers = { 'idempotency-key': 'org-settings-1' };
+    expect((await patch(body, headers)).json()).toMatchObject({ performed: true });
+    const replay = await patch(body, headers);
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toEqual({ settings: body, changed: [], performed: false });
+    expect(world.actions).toHaveLength(1);
+    expect(world.calls.filter((call) => call.name === 'replaceOrganisationSettings')).toHaveLength(
+      1,
+    );
+  });
+});
+
+describe('the organisation autonomy maximum on the dial (WP-93)', () => {
+  it('refuses a level above the maximum by name, writing nothing, and accepts one at it', async () => {
+    world.organisationMaximum = 'supervised';
+    const refused = await put(`/api/projects/${PROJECT}/autonomy`, { autonomy: 'autonomous' });
+    expect(refused.statusCode).toBe(409);
+    expect(codeOf(refused)).toBe('autonomy_above_organisation');
+    expect(world.calls).toHaveLength(0);
+    expect(world.actions).toHaveLength(0);
+
+    const accepted = await put(`/api/projects/${PROJECT}/autonomy`, { autonomy: 'supervised' });
+    expect(accepted.statusCode).toBe(200);
+    expect(world.calls).toHaveLength(1);
+  });
+
+  it('refuses nothing when the organisation states no maximum', async () => {
+    world.organisationMaximum = null;
+    expect(
+      (await put(`/api/projects/${PROJECT}/autonomy`, { autonomy: 'autonomous' })).statusCode,
+    ).toBe(200);
   });
 });

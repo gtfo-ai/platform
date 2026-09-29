@@ -532,9 +532,22 @@ The signed-in session, the theme, the instance version, the user list with roles
 identities** — which Slack, Jira or GitLab account is which person, without which a decision made in
 those tools is refused as unmapped.
 
-Autonomy defaults, the provider mode and instance-wide feature flags are **named as absent** rather
-than drawn as controls that would silently do nothing: the endpoints that would write them are not
-built. A project's features are switched on its own settings page.
+**Organisation settings** (since WP-93) are the maximums every project is held to, and an
+administrator saves each section on its own:
+
+- the **command maximum** — every agent run's commands are its role's list intersected with this one,
+  so a verb left out of *allow* is removed from every run of every project;
+- the **autonomy maximum** — the highest dial position a project may choose. A project above it runs
+  at the maximum from its next task (the project's own setting is kept, so raising the maximum
+  restores it), and a task that is already running keeps the dial it started with;
+- the **WIP maximum** — a project may allow fewer tasks at once, never more;
+- the organisation's **quiet hours** and **digest time** — an organisation budget crossing its
+  threshold at night waits for the morning digest, and a spent budget is still posted at once — and,
+  with two chat accounts, the **default chat account** that speaks for the organisation.
+
+A lowered maximum applies from the next run or task; nothing already running is moved. The provider
+mode (an environment setting) and feature flags (a project's own) are not organisation settings. A
+project's features are switched on its own settings page.
 
 ## 12. Statistics
 
@@ -556,7 +569,7 @@ In one place, so it is not spread across thirteen sections:
 | Committing `.agentic/` configuration from the wizard itself (the project settings page does it) | onboarding step 5 |
 | Re-answering the nine run-dependent readiness criteria after a merge (five are re-checked) | onboarding step 2 |
 | Editing a knowledge document or the pipeline in the browser | knowledge, pipeline |
-| Organisation settings for autonomy defaults, the provider mode and instance-wide feature flags | settings |
+| Instance-wide feature flags and the provider mode as organisation settings (the provider mode is an environment setting; a project's features are its own) | settings |
 | The statistics the screen lists under *Not measured, and why* | statistics |
 
 And one that is about the deployment rather than a screen: an agent stage runs only on an instance

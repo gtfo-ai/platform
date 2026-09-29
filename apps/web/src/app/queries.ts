@@ -237,6 +237,16 @@ export const useOrgBudgets = () => {
   });
 };
 
+/** `GET /api/org` — the organisation settings document (WP-93). */
+export const useOrgSettings = () => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: [...queryKeys.orgSettings],
+    queryFn: () => endpoints.orgSettings(),
+    ...FOREVER,
+  });
+};
+
 export const useKbTree = (projectId: string | null) => {
   const { endpoints } = useServices();
   return useQuery({
@@ -979,6 +989,21 @@ export const useSettingsCommands = (mint?: MintKey) => {
         endpoints.mapIdentity(input),
       onSuccess: async () => {
         await queryClient.invalidateQueries({ queryKey: [...queryKeys.orgIdentities] });
+      },
+    }),
+    /**
+     * `PATCH /api/org` (WP-93): one section at a time from the screen. A lowered maximum moves
+     * every project's effective configuration and dial at the next read, so both are invalidated.
+     */
+    patchOrgSettings: useMutation({
+      mutationFn: (input: Parameters<typeof endpoints.patchOrgSettings>[0]) =>
+        endpoints.patchOrgSettings(input, intents.keyFor(['org.settings.write', input])),
+      onSuccess: async (_result, input) => {
+        intents.release(['org.settings.write', input]);
+        await queryClient.invalidateQueries({ queryKey: [...queryKeys.orgSettings] });
+        await queryClient.invalidateQueries({ queryKey: [...queryKeys.projects] });
+        // Every project's reads (`['project', id, …]`): the dial and the effective configuration.
+        await queryClient.invalidateQueries({ queryKey: ['project'] });
       },
     }),
     setOrgBudget: useMutation({

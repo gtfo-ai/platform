@@ -1906,8 +1906,18 @@ export const communicationWrites = (integrations: PipelineIntegrations) => ({
       // shadow call reads no key and writes none, and on this build the suffix can therefore not be
       // observed through the store at all. It is here for the case that guard is ever moved or a
       // third mode appears, where two calls sharing a key would make the second replay the first.
+      //
+      // **Whose digest it is — the project id, or `org` — is part of the key** (WP-93, PROGRESS
+      // backlog 317). The executor scopes a key by account and action alone, and one account with
+      // one digest channel commonly serves several projects (every binding that leaves the channel
+      // to the account's), so a key without the project made the second project's digest of the
+      // day a replay of the first's: answered from the store, marked digested, logged "posted", and
+      // never sent. The organisation's digest (no project) is `org` for the same reason. One-time
+      // consequence of the change, stated: a project digest already posted today under the old
+      // key is posted once more if a tick reaches it after the deploy — it cannot, since
+      // `digestDelivered` stops a delivered day first, unless the first post's mark never landed.
       replayable<MessageRef>(
-        `${chat.ref.provider}:digest:${chat.digestChannel}:${input.day}` +
+        `${chat.ref.provider}:digest:${chat.digestChannel}:${input.day}:${context.projectId ?? 'org'}` +
           (context.mode === 'normal' ? '' : `:${context.mode}`),
       ),
     );

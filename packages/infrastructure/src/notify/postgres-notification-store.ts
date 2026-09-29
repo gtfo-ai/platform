@@ -227,7 +227,7 @@ export const createPostgresNotificationStore = (): NotificationStore => ({
       `select project_id
          from notifications
         where delivered_at is null and created_at < $1
-          -- An organisation-scoped row (WP-65) has no project digest to ride in.
+          -- An organisation-scoped row (WP-65) rides the organisation's digest (WP-93), never a project's.
           and project_id is not null
         group by project_id
         order by min(created_at)
@@ -237,6 +237,17 @@ export const createPostgresNotificationStore = (): NotificationStore => ({
     return rows.map((row) => row.project_id as Id);
   },
 
+  organisationAwaitsDigest: async (tx, input) => {
+    const { rows } = await sqlOf(tx).query<{ exists: boolean }>(
+      `select exists (
+         select 1 from notifications
+          where delivered_at is null and created_at < $1 and project_id is null
+       ) as exists`,
+      [input.before],
+    );
+    return rows[0]?.exists === true;
+  },
+
   claimForDigest: async (tx, input) => {
     const { rows } = await sqlOf(tx).query<NotificationRow>(
       `update notifications
@@ -244,7 +255,9 @@ export const createPostgresNotificationStore = (): NotificationStore => ({
         where id in (
           select id
             from notifications
-           where project_id = $1
+           -- is not distinct from: a null $1 claims the organisation's rows (WP-93) and
+           -- never a project's, and a project id never claims an organisation row.
+           where project_id is not distinct from $1::uuid
              and delivered_at is null
              and created_at < case
                    when planned_delivery = 'immediate' then $5::timestamptz
@@ -287,7 +300,7 @@ export const createPostgresNotificationStore = (): NotificationStore => ({
     const { rows } = await sqlOf(tx).query<{ exists: boolean }>(
       `select exists (
          select 1 from notifications
-          where project_id = $1 and digest_day = $2::date
+          where project_id is not distinct from $1::uuid and digest_day = $2::date
             and delivered_at is not null and delivered_as = 'digest'
        ) as exists`,
       [input.projectId, input.day],
@@ -306,8 +319,9 @@ export const createPostgresNotificationStore = (): NotificationStore => ({
  *    job's own retry window. Each retry of the notify duty re-delivers a recorded, undelivered
  *    row (`awaitsImmediateRetry`, WP-65 review round 1), so past the window every one of the
  *    job's attempts — three on the shipped policy — has **tried and failed**, not merely been
- *    skipped. After that, on a project with the digest **off** (and for every organisation-scoped
- *    row, which has no digest) nothing carries it, which is the case backlog 81 found silent;
+ *    skipped. After that, on a project with the digest **off** (and for an organisation-scoped
+ *    row when the organisation states no quiet hours, which is when it has no digest — WP-93)
+ *    nothing carries it, which is the case backlog 81 found silent;
  *  - a row planned **`digest`** is waiting on purpose until the next digest, so it is only counted
  *    once a whole day, the digest's tick and the digest job's own retries have passed.
  *

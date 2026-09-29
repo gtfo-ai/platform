@@ -11,7 +11,7 @@
 | Area | Endpoints |
 |---|---|
 | Auth | Better Auth routes under `/api/auth/*` (sign-in, sign-out, session, password reset, API keys, admin user management) |
-| Org | `GET/PATCH /api/org`, `GET /api/org/budgets`, `PUT /api/org/budgets/:id`, `GET /api/org/stats?range=…`, `GET /api/org/audit?…`, `GET /api/org/users`, `POST /api/org/users/invite`, `GET/POST /api/org/identities`, `GET /api/org/identities/candidates` (**WP-44**: refused accounts nobody has mapped — a proposal for the mapping form, never a write; `org.users.manage`) |
+| Org | `GET/PATCH /api/org` (**WP-93**: the organisation settings document — the command, autonomy and WIP maximums, quiet hours and the default chat account, technical/12 § "The organisation settings document"; `GET` is `org.read`, `PATCH` replaces the sections it names and is `org.settings.write`, admin, audited, `Idempotency-Key` optional; a stored document that does not parse is `409 invalid_organisation_config`; a lowered maximum applies at the next read and never moves a task's frozen dial), `GET /api/org/budgets`, `PUT /api/org/budgets/:id`, `GET /api/org/stats?range=…`, `GET /api/org/audit?…`, `GET /api/org/users`, `POST /api/org/users/invite`, `GET/POST /api/org/identities`, `GET /api/org/identities/candidates` (**WP-44**: refused accounts nobody has mapped — a proposal for the mapping form, never a write; `org.users.manage`) |
 | Integrations | `GET/POST /api/integrations`, `PATCH /api/integrations/:id`, `POST /api/integrations/:id/test`, `GET /api/integrations/:id/setup-guide`, `GET /api/integrations/:id/refused-deliveries` (**WP-44**: the newest inbound deliveries the platform **refused** — since WP-73b filtered on `inbox.error_reasons`, never an ordinary ignore — with the accounts refused as `unmapped_identity`; `integration.read`) |
 | Projects | `GET/POST /api/projects`, `GET/PATCH /api/projects/:id`, `GET /api/projects/:id/config` (effective, with sources), `PUT /api/projects/:id/config`, `POST /api/projects/:id/config/export` (to repo MR, **served since WP-63**), `POST /api/projects/:id/config/refresh` (**WP-63**: re-read the default branch's `.agentic/config.yml`), `GET /api/projects/:id/readiness`, `POST /api/projects/:id/discovery`, `POST /api/projects/:id/interview` (**WP-64**: the wizard's step 3 — one knowledge proposal per answered section, never a commit; `Idempotency-Key` required, `kb.write`), `GET/PUT /api/projects/:id/bindings`, `GET/PUT /api/projects/:id/budgets`, `GET /api/projects/:id/stats` |
 | Tasks | `GET /api/projects/:id/tasks?state=…`, `POST /api/projects/:id/tasks` (manual start from ticket key), `GET /api/tasks/:id` (with stages, artifacts, checks), `POST /api/tasks/:id/{pause,resume,cancel,retry-stage,return-to-stage,take-over,hand-back,rework}` (**take-over's stop of a live run is accepted, then applied or refused** — WP-85, TD-028 decision 9: the pause and the stop are recorded in one transaction, the run is found in the database and its id recorded on `task.taken_over`, and the process holding the run applies the stop; the response's `workspace_export: "requested"` is that tense), `GET /api/tasks/:id/events`, `GET /api/tasks/:id/export` (JSON), `POST /api/tasks/:id/questions/:qid/answer`, `POST /api/tasks/:id/approvals/:aid/decide`, `POST /api/tasks/:id/feedback`, `POST /api/tasks/:id/ask` (ask-the-task), `GET /api/artifacts/:id` (one artifact's body, gated at `artifact.read`; **added at WP-52**, and until then `GET /api/tasks/:id` published every artifact with a literal `null` `url` and no route served a body) |
@@ -77,8 +77,8 @@
 > for an evaluated project and keeps the 409, with the row count, for one whose discovery run has
 > not happened; what a projection over `projects.readiness_level` could answer is still refused,
 > because `evaluated_at` and `criteria` would be invented. What is still missing from this document's tables is **part of** the
-> command surface (the list two paragraphs down) and two more reads — `GET /api/org` and the
-> project-scoped `GET …/stats`. **WP-41 served the organisation's:** `GET /api/org/stats?range=…`
+> command surface (the list two paragraphs down) and two more reads — `GET /api/org` (**served
+> since WP-93**) and the project-scoped `GET …/stats`. **WP-41 served the organisation's:** `GET /api/org/stats?range=…`
 > answers a published DTO (`orgStatsResponseSchema`), and product/10:24's *"CSV export"* is a
 > **second path**, `GET /api/org/stats.csv`, which this table does not name — a route cannot
 > publish both a strict object schema and a `text/csv` body honestly, so the two representations
@@ -177,8 +177,12 @@
 > And **no HTTP request escalates a task**: a spent iteration loop and an exhausted write-conflict
 > bound are both answered to the caller rather than parking the task in `needs_human`.
 >
-> What is still unbuilt on those rows: `PATCH /api/org`,
-> `PATCH /api/integrations/:id` and `PATCH /api/projects/:id`. **WP-63 removed
+> What is still unbuilt on those rows: `PATCH /api/integrations/:id` and `PATCH /api/projects/:id`.
+> **WP-93 removed `PATCH /api/org`** and served `GET /api/org` beside it: the organisation layer
+> the pipeline had composed since WP-63 had no writer but SQL (PROGRESS backlogs 146 (2), 223). Both
+> read and write the whole document through one strict schema; `PUT …/autonomy` above its
+> `autonomy.maximum` is `409 autonomy_above_organisation`, and `GET …/autonomy` publishes
+> `organisation_maximum` and `level_in_force`. The screen is the organisation settings page. **WP-63 removed
 > `POST /api/projects/:id/config/export`**: the settings layer as `.agentic/config.yml` plus the
 > `CLAUDE.md` pointer, one commit on an `agentic/config/*` branch and a merge request through the
 > knowledge apply path's two writes — never a direct commit (Q94 (b)) — with a required

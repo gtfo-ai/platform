@@ -53,6 +53,8 @@ import {
   applyAutonomyPreset,
   autonomyOverridesFromConfig,
   autonomyRank,
+  capAutonomy,
+  capMaterialisedAutonomy,
   describePresetOverrides,
   effectiveAutonomyPreset,
   findReadinessCriterion,
@@ -64,6 +66,7 @@ import {
 import { db as dbAdapters } from '@platform/infrastructure';
 import { and, asc, desc, eq, gte, inArray, notInArray, sql } from 'drizzle-orm';
 import * as z from 'zod';
+import { organisationSettingsForRequest } from '../config-layers.js';
 import { CLOSED_TASK_STATES } from './pipeline-queries.js';
 
 const {
@@ -295,12 +298,23 @@ export const findProjectAutonomy = async (
       policies: projects.autonomyPolicies,
       readinessLevel: projects.readinessLevel,
       config: projects.config,
+      orgSettings: organizations.settings,
     })
     .from(projects)
+    .innerJoin(organizations, eq(organizations.id, projects.orgId))
     .where(eq(projects.id, projectId))
     .limit(1);
   const row = rows[0];
-  return row === undefined ? null : autonomyResponseFrom(row);
+  if (row === undefined) {
+    return null;
+  }
+  // WP-93: the organisation's maximum, parsed — a document that does not parse is the 409 every
+  // route answers it with, never a dial published as though no maximum existed.
+  const { orgSettings, ...columns } = row;
+  return autonomyResponseFrom({
+    ...columns,
+    organisationMaximum: organisationSettingsForRequest(orgSettings).autonomy?.maximum ?? null,
+  });
 };
 
 /** The four columns {@link autonomyResponseFrom} reads, as the row shape it is given. */
@@ -310,6 +324,8 @@ export interface AutonomyRow {
   readonly policies: unknown;
   readonly readinessLevel: number;
   readonly config: unknown;
+  /** The organisation's `autonomy.maximum` (WP-93), or `null` when it states none. */
+  readonly organisationMaximum?: AutonomyLevel | null;
 }
 
 /**
@@ -332,10 +348,18 @@ export const autonomyResponseFrom = (row: AutonomyRow): AutonomyResponse => {
   // Parsed, never cast: the column is stored state and a document that does not match the current
   // schema is read as "not materialised" rather than as whatever happens to be in it.
   const stored = materialisedAutonomySchema.safeParse(row.policies);
-  const materialised = stored.success ? stored.data : null;
+  const chosen = stored.success ? stored.data : null;
+  const organisationMaximum = row.organisationMaximum ?? null;
+  // WP-93: what is **in force** is the dial capped at the organisation's maximum — the settings
+  // port's `cappedAutonomy`, so the screen and the pipeline read one answer. `level` below stays
+  // the project's own choice, and `level_in_force` says what runs.
+  const materialised =
+    chosen === null ? null : capMaterialisedAutonomy(chosen, organisationMaximum ?? undefined);
+  const level = chosen?.level ?? row.level;
+  const levelInForce = capAutonomy(level, organisationMaximum ?? 'autonomous');
   const baseline =
     materialised === null
-      ? applyAutonomyPreset(row.level)
+      ? applyAutonomyPreset(levelInForce)
       : fromWireAutonomyPolicies(materialised.policies);
   // The whole document, not only `policies`: since WP-62 two of the four override keys live under
   // `pipeline.limits` (Q78, `AUTONOMY_POLICY_OVERRIDE_KEYS`).
@@ -345,23 +369,19 @@ export const autonomyResponseFrom = (row: AutonomyRow): AutonomyResponse => {
       ? { ...baseline, ...autonomyOverridesFromConfig(config) }
       : effectiveAutonomyPreset(materialised, config);
   const overrides = describePresetOverrides(baseline, effective);
-  const level = materialised?.level ?? row.level;
   const suggestedCap = suggestedAutonomyCap(row.readinessLevel);
 
   return autonomyResponseSchema.parse({
     level,
     materialised: materialised !== null,
-    preset_version: materialised?.preset_version ?? AUTONOMY_PRESET_VERSION,
+    preset_version: chosen?.preset_version ?? AUTONOMY_PRESET_VERSION,
     current_preset_version: AUTONOMY_PRESET_VERSION,
     preset_outdated:
-      materialised !== null &&
-      (materialised.preset_version !== AUTONOMY_PRESET_VERSION ||
-        !samePolicies(
-          materialised.policies,
-          toWireAutonomyPolicies(applyAutonomyPreset(materialised.level)),
-        )),
-    applied_at: materialised?.applied_at ?? null,
-    applied_by: materialised?.applied_by ?? null,
+      chosen !== null &&
+      (chosen.preset_version !== AUTONOMY_PRESET_VERSION ||
+        !samePolicies(chosen.policies, toWireAutonomyPolicies(applyAutonomyPreset(chosen.level)))),
+    applied_at: chosen?.applied_at ?? null,
+    applied_by: chosen?.applied_by ?? null,
     policies: toWireAutonomyPolicies(effective),
     is_custom: overrides.length > 0,
     overrides: overrides.map((override) => ({
@@ -374,6 +394,8 @@ export const autonomyResponseFrom = (row: AutonomyRow): AutonomyResponse => {
     // A *statement*, never a refusal: readiness caps the suggestion and the maintainer overrides it
     // visibly (product/18, Q21). The screen renders this as a note beside the chosen position.
     above_suggested_cap: autonomyRank(level) > autonomyRank(suggestedCap),
+    organisation_maximum: organisationMaximum,
+    level_in_force: levelInForce,
   });
 };
 

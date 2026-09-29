@@ -97,7 +97,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
-import { OrganisationSettingsInvalidError, organisationWipFrom } from '../config-layers.js';
+import { organisationSettingsForRequest } from '../config-layers.js';
 import { HttpError, NotFoundError } from '../errors.js';
 import type { OnboardingCommands } from '../onboarding.js';
 import { OnboardingUnavailableError } from '../onboarding.js';
@@ -192,15 +192,9 @@ const refuseWipAboveOrganisation = async (
   if (stated === undefined) {
     return;
   }
-  let organisation: ReturnType<typeof organisationWipFrom>;
-  try {
-    organisation = organisationWipFrom((await findConfigLayers(database, projectId))?.orgSettings);
-  } catch (error) {
-    if (error instanceof OrganisationSettingsInvalidError) {
-      throw new HttpError(409, 'invalid_organisation_config', error.message);
-    }
-    throw error;
-  }
+  const organisation = organisationSettingsForRequest(
+    (await findConfigLayers(database, projectId))?.orgSettings,
+  ).pipeline?.wip;
   for (const key of ['max_parallel_tasks', 'max_tasks_in_pipeline'] as const) {
     const value = stated[key];
     const bound = organisation?.[key];

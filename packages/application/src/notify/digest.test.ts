@@ -97,6 +97,7 @@ const optionsOf = (harness: PipelineHarness, now: string, timezone = 'UTC'): Not
     timezone,
     organisation: harness.organisation,
     heldConnections: harness.heldConnections,
+    organisationSettings: harness.organisationSettings,
   };
 };
 
@@ -258,9 +259,56 @@ describe('the digest', () => {
      * suffix cannot be observed through the store on this build — measured, and said at the line
      * that builds the key rather than claimed here.
      */
-    expect(digestKeys(harness)).toEqual(['fake-chat:digest:#agentic:2026-06-02']);
+    expect(digestKeys(harness)).toEqual([`fake-chat:digest:#agentic:2026-06-02:${PROJECT}`]);
     // Both rows are settled by this digest: the shadow one is recorded, not left for tomorrow.
     expect(harness.notifications.rows.filter((row) => row.deliveredAs === 'digest').length).toBe(2);
+  });
+
+  /**
+   * **Two projects on one account and one channel are two digests** (WP-93, PROGRESS backlog 317).
+   * The executor scopes a key by account and action alone; with no project in the key the second
+   * project's digest of the day was answered as a replay of the first's — marked digested, logged
+   * "posted", never sent.
+   */
+  it('posts one digest per project when two projects share an account and a channel on one day', async () => {
+    const harness = harnessWith();
+    await harness.publish([matched()]);
+    await deferred(harness);
+    const OTHER = '00000000-0000-4000-8000-0000000000b2' as Id;
+    // The second project's row, written as the duty would have written it; the harness's
+    // integrations answer the same account and channel for every project.
+    await harness.memory.transaction(async (scope) =>
+      harness.notifications.record(scope.tx, {
+        id: '00000000-0000-4000-8000-0000000000f2' as Id,
+        projectId: OTHER,
+        taskId: null,
+        notificationClass: 'question',
+        causeEventId: '00000000-0000-4000-9000-00000000ca02' as Id,
+        title: 'OTHER-1 is waiting for an answer',
+        detail: null,
+        url: null,
+        urgent: false,
+        plannedDelivery: 'digest',
+        mode: 'normal',
+        createdAt: '2026-06-01T23:30:00.000Z' as never,
+        redactionCount: 0,
+      }),
+    );
+    harness.communication?.messages.splice(0);
+    const at = '2026-06-02T09:00:00.000Z';
+    for (const projectId of [PROJECT, OTHER]) {
+      expect(await runProjectDigest(optionsOf(harness, at), { projectId, at: at as never })).toBe(
+        'posted',
+      );
+    }
+    expect(harness.communication?.messages, 'two digests reached the channel').toHaveLength(2);
+    expect(harness.communication?.messages[1]?.markdown).toContain('OTHER-1');
+    expect([...digestKeys(harness)].sort()).toEqual(
+      [
+        `fake-chat:digest:#agentic:2026-06-02:${PROJECT}`,
+        `fake-chat:digest:#agentic:2026-06-02:${OTHER}`,
+      ].sort(),
+    );
   });
 
   it('says so when a day fills the item limit, instead of shedding the remainder in silence', async () => {

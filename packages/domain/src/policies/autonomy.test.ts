@@ -17,6 +17,7 @@ import {
   autonomyOverridesFromConfig,
   autonomyRank,
   capAutonomy,
+  capMaterialisedAutonomy,
   describePresetOverrides,
   effectiveAutonomyPreset,
   fromWireAutonomyPolicies,
@@ -365,5 +366,40 @@ describe('materialising the dial (BD-027:14, WP-30)', () => {
     ).toBe(false);
     // Against the *level*, which is what a reader that re-derived would do: Custom, wrongly.
     expect(isCustomAutonomy('supervised', fromAnOlderRelease)).toBe(true);
+  });
+});
+
+describe('the organisation autonomy maximum (WP-93)', () => {
+  const at = '2026-09-29T08:00:00.000Z' as IsoDateTime;
+  const chosen = (level: (typeof AUTONOMY_ORDER)[number]) =>
+    materialiseAutonomy({ level, at, appliedBy: '00000000-0000-4000-8000-0000000000e9' as Id });
+
+  it('leaves a dial at or below the maximum — or with none — exactly as materialised', () => {
+    const supervised = chosen('supervised');
+    expect(capMaterialisedAutonomy(supervised, undefined)).toBe(supervised);
+    expect(capMaterialisedAutonomy(supervised, 'supervised')).toBe(supervised);
+    expect(capMaterialisedAutonomy(supervised, 'autonomous')).toBe(supervised);
+  });
+
+  it('caps the level, and the policies follow the capped position, keeping who applied the choice', () => {
+    const capped = capMaterialisedAutonomy(chosen('autonomous'), 'assist');
+    expect(capped.level).toBe('assist');
+    expect(capped.policies).toEqual(toWireAutonomyPolicies(AUTONOMY_PRESETS.assist));
+    expect(capped.applied_by).toBe('00000000-0000-4000-8000-0000000000e9');
+    expect(capped.applied_at).toBe(at);
+  });
+
+  it('never answers a position above the maximum, for every pair (property)', () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom(...AUTONOMY_ORDER),
+        fc.constantFrom(...AUTONOMY_ORDER),
+        (level, maximum) => {
+          const capped = capMaterialisedAutonomy(chosen(level), maximum);
+          expect(autonomyRank(capped.level)).toBeLessThanOrEqual(autonomyRank(maximum));
+          expect(capped.level).toBe(capAutonomy(level, maximum));
+        },
+      ),
+    );
   });
 });

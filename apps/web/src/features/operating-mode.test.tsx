@@ -242,6 +242,8 @@ describe('the policy list on the dial', () => {
           readiness_level: 2,
           suggested_cap: 'autonomous',
           above_suggested_cap: false,
+          organisation_maximum: null,
+          level_in_force: 'autonomous',
         }}
       />,
     );

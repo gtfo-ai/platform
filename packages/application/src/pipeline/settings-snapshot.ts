@@ -88,9 +88,13 @@ export const settingsSnapshotDocument = (settings: ProjectSettings): JsonObject 
       ? []
       : [{ source: 'repo' as const, values: { commands: settings.repositoryCommands } }]),
   ];
-  // `autonomous`: the dial is the materialised record below, not a key this merge may cap — the
-  // argument `GET …/config` makes for the same option (`PUBLISHED_AUTONOMY_MAXIMUM`).
-  const merged = mergeProjectConfig(layers, { autonomyMaximum: 'autonomous' }).values;
+  // The organisation's maximum when it states one, else `autonomous`: the dial is the
+  // materialised record below (already capped by the settings port, WP-93), not a key this merge
+  // invents a cap for — the argument `GET …/config` makes for the same option
+  // (`publishedAutonomyMaximum`).
+  const merged = mergeProjectConfig(layers, {
+    autonomyMaximum: settings.organisationAutonomyMaximum ?? 'autonomous',
+  }).values;
   const effective = {
     version: 1,
     ...merged,
@@ -108,6 +112,9 @@ export const settingsSnapshotDocument = (settings: ProjectSettings): JsonObject 
       format: SETTINGS_SNAPSHOT_FORMAT,
       effective,
       autonomy: settings.autonomy,
+      // WP-93: present only when the organisation states one, so a run planned without a maximum
+      // hashes exactly as it did before the key existed.
+      autonomy_maximum: settings.organisationAutonomyMaximum,
       task_budget_usd: settings.taskBudgetUsd,
       templates: Object.keys(settings.templates).sort(),
       repository:

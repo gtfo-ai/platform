@@ -399,7 +399,7 @@ describe('the effective configuration’s layers (WP-63)', () => {
     ]);
     // A maximum nobody can read is refused, never read as "no bound".
     expect(() => withWip({ pipeline: { wip: { max_parallel_tasks: 'many' } } })).toThrow(
-      /organizations\.settings\.pipeline\.wip does not parse/,
+      /organizations\.settings does not parse \(pipeline\.wip\.max_parallel_tasks: "many"\)/,
     );
   });
 
@@ -487,7 +487,7 @@ describe('the effective configuration’s layers (WP-63)', () => {
         layers: { ...repo('absent', null), orgSettings: { commands: { allow: 'git *' } } },
         redactText,
       }),
-    ).toThrow(/organizations\.settings\.commands/);
+    ).toThrow(/organizations\.settings does not parse \(commands\.allow: "git \*"\)/);
   });
 
   it('never lets the repository widen the commands past the organisation, and publishes what it drops', () => {

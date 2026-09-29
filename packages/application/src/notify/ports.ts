@@ -205,7 +205,19 @@ export interface NotificationStore {
   ): Promise<readonly Id[]>;
 
   /**
+   * Whether an **organisation-scoped** notification (no project, WP-65) is undelivered and older
+   * than `before` — the organisation digest's fan-out (WP-93, PROGRESS backlog 235), the one row
+   * {@link NotificationStore.projectsAwaitingDigest} leaves out.
+   */
+  organisationAwaitsDigest(
+    tx: Transaction,
+    input: { readonly before: IsoDateTime },
+  ): Promise<boolean>;
+
+  /**
    * Claims this project's undelivered notifications for `day` and returns them, oldest first.
+   * `projectId: null` claims the **organisation's** rows (WP-93) — a row with no project is never
+   * claimed for a project, nor a project's row for the organisation.
    *
    * Claiming is what makes a retry safe: a second run on the same day finds the same rows (they are
    * claimed *and* undelivered) and posts the same message under the same idempotency key, while a
@@ -228,7 +240,7 @@ export interface NotificationStore {
   claimForDigest(
     tx: Transaction,
     input: {
-      readonly projectId: Id;
+      readonly projectId: Id | null;
       readonly day: string;
       readonly before: IsoDateTime;
       /** The bound for `plannedDelivery: 'immediate'` rows — usually `before` minus a grace. */
@@ -253,10 +265,10 @@ export interface NotificationStore {
     input: { readonly ids: readonly Id[]; readonly at: IsoDateTime },
   ): Promise<void>;
 
-  /** Has a digest already been *delivered* for this project on this day? */
+  /** Has a digest already been *delivered* for this project — or, `null`, the organisation — on this day? */
   digestDelivered(
     tx: Transaction,
-    input: { readonly projectId: Id; readonly day: string },
+    input: { readonly projectId: Id | null; readonly day: string },
   ): Promise<boolean>;
 }
 

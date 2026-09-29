@@ -99,6 +99,11 @@ import {
   writeProjectAutonomy,
 } from './queries/onboarding-queries.js';
 import {
+  findOrganisationSettings,
+  isCommunicationAccount,
+  replaceOrganisationSettings,
+} from './queries/org-settings-queries.js';
+import {
   findArtifactBody,
   findArtifactProjectId,
   findRunPosition,
@@ -605,6 +610,11 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         claimAttempt: async (query) => claimCommandAttempt(options.database, query),
         releaseAttempt: async (query) => releaseCommandAttempt(options.database, query),
         recordAction: async (input) => recordHumanAction(options.database, input),
+        // WP-93: the organisation settings document's read, its one write and Q103 (c)'s check.
+        organisationSettings: async () => findOrganisationSettings(options.database),
+        replaceOrganisationSettings: async (next) =>
+          replaceOrganisationSettings(options.database, next),
+        isCommunicationAccount: async (id) => isCommunicationAccount(options.database, id),
       },
       // TD-012 step 2, the platform's patterns — the same composition `commands.ts` gives every
       // task command, and for the same reason: an HTTP request carries no run-scoped credential.

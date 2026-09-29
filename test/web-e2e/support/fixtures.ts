@@ -34,6 +34,7 @@ import {
   kbProposalsResponseSchema,
   kbTreeResponseSchema,
   orgAuditResponseSchema,
+  orgSettingsResponseSchema,
   orgStatsResponseSchema,
   orgUsersResponseSchema,
   projectAuditResponseSchema,
@@ -860,6 +861,18 @@ export const orgIdentities = identityMappingListSchema.parse({
   ],
 });
 
+/**
+ * The organisation settings document — `GET /api/org`, served since WP-93. The block list carries
+ * markup on purpose: it is text an administrator typed, and the screen holds it as a value.
+ */
+export const orgSettings = orgSettingsResponseSchema.parse({
+  settings: {
+    commands: { block: ['<img src=x onerror=alert(1)>'] },
+    autonomy: { maximum: 'supervised' },
+  },
+  updated_at: now,
+});
+
 /** The organisation's own caps — `GET /api/org/budgets`, served since WP-30. */
 export const orgBudgets = budgetsResponseSchema.parse({
   items: [
@@ -910,6 +923,8 @@ export const autonomy = autonomyResponseSchema.parse({
   readiness_level: 1,
   suggested_cap: 'supervised',
   above_suggested_cap: false,
+  organisation_maximum: null,
+  level_in_force: 'supervised',
 });
 
 /**

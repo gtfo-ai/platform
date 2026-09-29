@@ -36,6 +36,7 @@ import {
 } from '@platform/application';
 import {
   type AgenticConfig,
+  type AutonomyLevel,
   agenticConfigSchema,
   apiErrorSchema,
   budgetsResponseSchema,
@@ -46,6 +47,7 @@ import {
   type IsoDateTime,
   type LastConfigExport,
   listTasksQuerySchema,
+  type OrganisationSettings,
   projectsResponseSchema,
   type RepositoryConfigReading,
   type RiskClass,
@@ -65,12 +67,7 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
-import {
-  OrganisationSettingsInvalidError,
-  organisationCommandsFrom,
-  organisationWipFrom,
-  repositorySnapshotFrom,
-} from '../config-layers.js';
+import { organisationSettingsForRequest, repositorySnapshotFrom } from '../config-layers.js';
 import { HttpError, NotFoundError } from '../errors.js';
 import { findProjectTimezone, listProjectBudgets } from '../queries/cost-queries.js';
 import type { Database } from '../queries/identity-queries.js';
@@ -270,17 +267,19 @@ export const riskClassProposalOf = (
 };
 
 /**
- * The organisation autonomy maximum the published view is capped at: **none**, stated.
+ * The autonomy position the published view is capped at — the organisation's `autonomy.maximum`
+ * (WP-93), or `autonomous` when it states none.
  *
- * `mergeProjectConfig` caps `policies.autonomy` at the organisation's value, or at the shipped
- * default when the organisation is silent — the reading that keeps a repository from handing itself
- * `autonomous`. On this build the repository cannot state the dial at all (its `policies.autonomy`
- * is not applied, `REPOSITORY_AUTONOMY_NOT_APPLIED`), no surface sets an organisation autonomy
- * maximum (the WP-63 notes' discovered work), and the dial's four positions are all selectable
- * (WP-30) — so a cap here would publish `supervised` for a project that runs `autonomous`, which is
- * a lie about the running system.
+ * `mergeProjectConfig` caps `policies.autonomy` at this value, or at the shipped default when the
+ * caller passes nothing — the reading that keeps a repository from handing itself `autonomous`. On
+ * this build the repository cannot state the dial at all (its `policies.autonomy` is not applied,
+ * `REPOSITORY_AUTONOMY_NOT_APPLIED`), so the cap that matters is the organisation's, the one the
+ * settings port applies to the materialised dial (`cappedAutonomy` in `pipeline.ts`). With no
+ * maximum stated, all four positions are selectable (WP-30), and capping at the shipped default
+ * would publish `supervised` for a project that runs `autonomous` — a lie about the running system.
  */
-const PUBLISHED_AUTONOMY_MAXIMUM = 'autonomous' as const;
+export const publishedAutonomyMaximum = (organisation: OrganisationSettings): AutonomyLevel =>
+  organisation.autonomy?.maximum ?? 'autonomous';
 
 /**
  * `GET …/config`'s answer — pure, so every refusal and both directions of precedence are driven
@@ -333,17 +332,9 @@ export const effectiveConfigResponseOf = (input: {
     );
   }
 
-  let organisationCommands: ReturnType<typeof organisationCommandsFrom>;
-  let organisationWip: ReturnType<typeof organisationWipFrom>;
-  try {
-    organisationCommands = organisationCommandsFrom(input.layers?.orgSettings);
-    organisationWip = organisationWipFrom(input.layers?.orgSettings);
-  } catch (error) {
-    if (error instanceof OrganisationSettingsInvalidError) {
-      throw new HttpError(409, 'invalid_organisation_config', error.message);
-    }
-    throw error;
-  }
+  const organisation = organisationSettingsForRequest(input.layers?.orgSettings);
+  const organisationCommands = organisation.commands;
+  const organisationWip = organisation.pipeline?.wip;
 
   const snapshot = repositorySnapshotFrom(input.layers ?? {});
   if (snapshot?.status === 'invalid') {
@@ -370,7 +361,7 @@ export const effectiveConfigResponseOf = (input: {
       { source: 'project' as const, values: project },
       ...(repo === undefined ? [] : [{ source: 'repo' as const, values: repo }]),
     ],
-    { autonomyMaximum: PUBLISHED_AUTONOMY_MAXIMUM },
+    { autonomyMaximum: publishedAutonomyMaximum(organisation) },
   );
 
   // WP-91 (backlog 224): the organisation's WIP maximum bounds whatever the layers produced — the

@@ -28,7 +28,7 @@ const listCommitted = (dir: string, prefix = ''): string[] =>
 const rendered = renderAllJsonSchemas();
 
 describe('published JSON Schemas', () => {
-  it('publishes a document for every artifact type plus the five top-level contracts', () => {
+  it('publishes a document for every artifact type plus the six top-level contracts', () => {
     expect(publishedSchemas.map((document) => document.file)).toEqual([
       'domain-event.schema.json',
       'artifact.schema.json',
@@ -50,6 +50,8 @@ describe('published JSON Schemas', () => {
       'artifacts/ticket-breakdown.schema.json',
       'agentic-config.schema.json',
       'agentic-pipeline.schema.json',
+      // WP-93: the organisation settings document `GET/PATCH /api/org` read and write.
+      'organisation-settings.schema.json',
       'transcript-event.schema.json',
     ]);
   });

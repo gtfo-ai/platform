@@ -39,6 +39,7 @@ import {
   cancelTaskRequestSchema,
   decideBreakdownRequestSchema,
   handBackRequestSchema,
+  patchOrgSettingsRequestSchema,
   pauseTaskRequestSchema,
   resumeTaskRequestSchema,
   retryRunRequestSchema,
@@ -474,6 +475,21 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
     }
 
     // ── REST ─────────────────────────────────────────────────────────────────
+    // WP-93: `PATCH /api/org`, parsed with the published schema and logged like every command.
+    if (path === '/api/org' && method === 'PATCH') {
+      const parsed = patchOrgSettingsRequestSchema.safeParse(await readBody(request));
+      if (!parsed.success) {
+        problem(response, 400, 'invalid_request', parsed.error.issues[0]?.message ?? 'invalid');
+        return;
+      }
+      commands.push({ path, body: parsed.data });
+      json(response, 200, {
+        settings: fixtures.orgSettings.settings,
+        changed: Object.keys(parsed.data),
+        performed: true,
+      });
+      return;
+    }
     const answerMatch = /^\/api\/tasks\/([^/]+)\/questions\/([^/]+)\/answer$/.exec(path);
     if (answerMatch !== null && method === 'POST') {
       answeredQuestions.add(answerMatch[2] ?? '');
@@ -564,6 +580,7 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
         [`/api/projects/${fixtures.IDS.project}/config`]: fixtures.effectiveConfig,
         [`/api/projects/${fixtures.IDS.project}/budgets`]: fixtures.budgets,
         '/api/org/budgets': fixtures.orgBudgets,
+        '/api/org': fixtures.orgSettings,
         '/api/org/identities': fixtures.orgIdentities,
         // WP-41. The CSV twin is **not** served here: it is a download the browser tier does not
         // click, and the screen's link is asserted by its `href` (`apps/web/src/features/

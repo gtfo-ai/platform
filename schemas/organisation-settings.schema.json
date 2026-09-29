@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Organisation settings",
+  "description": "The organisation settings document (organizations.settings), read and written by GET/PATCH /api/org; unknown keys are errors (technical/12, WP-93).",
+  "type": "object",
+  "properties": {
+    "commands": {
+      "type": "object",
+      "properties": {
+        "allow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NonEmptyString"
+          }
+        },
+        "ask": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NonEmptyString"
+          }
+        },
+        "block": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NonEmptyString"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "autonomy": {
+      "type": "object",
+      "properties": {
+        "maximum": {
+          "$ref": "#/$defs/AutonomyLevel"
+        }
+      },
+      "required": [
+        "maximum"
+      ],
+      "additionalProperties": false
+    },
+    "pipeline": {
+      "type": "object",
+      "properties": {
+        "wip": {
+          "type": "object",
+          "properties": {
+            "max_parallel_tasks": {
+              "$ref": "#/$defs/anon_f4252dd9"
+            },
+            "max_tasks_in_pipeline": {
+              "$ref": "#/$defs/anon_7cdb89ae"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "notifications": {
+      "type": "object",
+      "properties": {
+        "quiet_hours": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "$ref": "#/$defs/TimeOfDay"
+                },
+                "to": {
+                  "$ref": "#/$defs/TimeOfDay"
+                }
+              },
+              "required": [
+                "from",
+                "to"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "digest_at": {
+          "$ref": "#/$defs/TimeOfDay"
+        },
+        "organisation_default": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "AutonomyLevel": {
+      "type": "string",
+      "enum": [
+        "observe",
+        "assist",
+        "supervised",
+        "autonomous"
+      ]
+    },
+    "Id": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+    },
+    "NonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "TimeOfDay": {
+      "type": "string",
+      "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+    },
+    "anon_7cdb89ae": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 200
+    },
+    "anon_f4252dd9": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 50
+    }
+  }
+}

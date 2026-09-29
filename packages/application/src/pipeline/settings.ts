@@ -12,6 +12,7 @@
  */
 
 import type {
+  AutonomyLevel,
   CommandPolicy,
   Id,
   MaterialisedAutonomy,
@@ -81,6 +82,13 @@ export interface ProjectSettings {
    * states no list"*, which leaves the baseline as shipped.
    */
   readonly organisationCommands?: CommandPolicy;
+  /**
+   * The organisation's `autonomy.maximum` (WP-93), when it states one. {@link
+   * ProjectSettings.autonomy} is **already capped** at it by the composition root
+   * (`capMaterialisedAutonomy`); this field is what the run's settings snapshot records beside the
+   * capped dial, so the record says why a project chosen at `autonomous` ran supervised.
+   */
+  readonly organisationAutonomyMaximum?: AutonomyLevel;
   /**
    * The repository file's `commands` (WP-63): not merged into {@link ProjectSettings.config}, but
    * applied as a **second** narrowing after the settings' — so the file may tighten the command

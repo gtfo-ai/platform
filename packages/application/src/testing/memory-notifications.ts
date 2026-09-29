@@ -196,7 +196,7 @@ export const createMemoryNotificationStore = (
     projectsAwaitingDigest: async (_tx, input) => {
       const projects: Id[] = [];
       for (const row of rows.values()) {
-        // An organisation-scoped row has no project digest to ride in (WP-65).
+        // An organisation-scoped row rides the organisation's digest (WP-93), never a project's.
         if (
           row.projectId !== null &&
           undelivered(row, input.before) &&
@@ -207,6 +207,9 @@ export const createMemoryNotificationStore = (
       }
       return projects.slice(0, input.limit);
     },
+
+    organisationAwaitsDigest: async (_tx, input) =>
+      [...rows.values()].some((row) => row.projectId === null && undelivered(row, input.before)),
 
     claimForDigest: async (_tx, input) => {
       const claimed: StoredNotification[] = [];

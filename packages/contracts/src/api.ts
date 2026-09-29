@@ -46,7 +46,12 @@ import {
   usdSchema,
   userRoleSchema,
 } from './common.js';
-import { agenticConfigSchema, MAX_BOOTSTRAP_MERGE_REQUESTS, riskClassSchema } from './config.js';
+import {
+  agenticConfigSchema,
+  MAX_BOOTSTRAP_MERGE_REQUESTS,
+  organisationSettingsSchema,
+  riskClassSchema,
+} from './config.js';
 import { domainEventSchema, domainEventTypeSchema } from './events.js';
 import { taskStageOutcomeSchema, taskStageStateSchema } from './pipeline.js';
 import {
@@ -1747,6 +1752,12 @@ export const autonomyOverrideSchema = z.strictObject({
  * - `suggested_cap` is readiness's **suggestion**, and `above_suggested_cap` says the chosen level
  *   is above it. Neither is a refusal: product/18 and Q21 are explicit that a maintainer overrides
  *   visibly.
+ * - `organisation_maximum` is the organisation's `autonomy.maximum` (WP-93), or `null` when it
+ *   states none, and **that one is a ceiling**: selecting above it is refused. `level_in_force` is
+ *   the lower of `level` and it — a project chosen above a maximum lowered later runs at the
+ *   maximum from the next read, and `policies` is then that position's preset in this release
+ *   (the project never chose it, so it has no materialised copy of it). `level` stays what the
+ *   project chose.
  */
 export const autonomyResponseSchema = z.strictObject({
   level: autonomyLevelSchema,
@@ -1762,6 +1773,8 @@ export const autonomyResponseSchema = z.strictObject({
   readiness_level: z.int().min(0).max(5),
   suggested_cap: autonomyLevelSchema,
   above_suggested_cap: z.boolean(),
+  organisation_maximum: autonomyLevelSchema.nullable(),
+  level_in_force: autonomyLevelSchema,
 });
 
 /**
@@ -1781,6 +1794,49 @@ export const putBudgetsRequestSchema = z.strictObject({
   window: z.enum(['day', 'week', 'month', 'total']),
   limit_usd: usdSchema.nullable(),
   notify_pct: z.array(z.int().min(1).max(100)).max(10).optional(),
+});
+
+/**
+ * `GET /api/org` — the organisation settings document (WP-93, technical/08 § Org).
+ *
+ * `settings` is `organizations.settings` **parsed** through `organisationSettingsSchema`: a stored
+ * document it refuses is a `409 invalid_organisation_config` naming the key paths and the values,
+ * never an empty document. `updated_at` is `null` on an instance whose organisation row does not
+ * exist yet (it is created with the first project); `settings` is then `{}`.
+ */
+export const orgSettingsResponseSchema = z.strictObject({
+  settings: organisationSettingsSchema,
+  updated_at: isoDateTimeSchema.nullable(),
+});
+
+/**
+ * `PATCH /api/org` — replace sections of the organisation settings document (WP-93).
+ *
+ * Each top-level key present **replaces** that section; `null` **removes** it; an absent key leaves
+ * it as stored. The merged document is validated by `organisationSettingsSchema` before it is
+ * written, so a value the readers would refuse is refused at the write. Admin only
+ * (`org.settings.write`) and audited in `human_actions`.
+ */
+/** One section of the document, as the request may name it: replaced, or `null` to remove. */
+const replacedSection = <T extends z.ZodType>(section: z.ZodOptional<T>) =>
+  section.unwrap().nullable().optional();
+
+export const patchOrgSettingsRequestSchema = z
+  .strictObject({
+    commands: replacedSection(organisationSettingsSchema.shape.commands),
+    autonomy: replacedSection(organisationSettingsSchema.shape.autonomy),
+    pipeline: replacedSection(organisationSettingsSchema.shape.pipeline),
+    notifications: replacedSection(organisationSettingsSchema.shape.notifications),
+  })
+  .refine((body) => Object.keys(body).length > 0, {
+    message: 'name at least one section to replace or remove',
+  });
+
+export const patchOrgSettingsResponseSchema = z.strictObject({
+  settings: organisationSettingsSchema,
+  /** The top-level sections this request replaced or removed. */
+  changed: z.array(z.enum(['commands', 'autonomy', 'pipeline', 'notifications'])),
+  performed: z.boolean(),
 });
 
 /**
@@ -2051,6 +2107,9 @@ export type HistoryBootstrapsResponse = z.infer<typeof historyBootstrapsResponse
 export type StartHistoryBootstrapRequest = z.infer<typeof startHistoryBootstrapRequestSchema>;
 export type StartHistoryBootstrapResponse = z.infer<typeof startHistoryBootstrapResponseSchema>;
 export type PutBudgetsRequest = z.infer<typeof putBudgetsRequestSchema>;
+export type OrgSettingsResponse = z.infer<typeof orgSettingsResponseSchema>;
+export type PatchOrgSettingsRequest = z.infer<typeof patchOrgSettingsRequestSchema>;
+export type PatchOrgSettingsResponse = z.infer<typeof patchOrgSettingsResponseSchema>;
 export type ProjectAuditEntry = z.infer<typeof projectAuditEntrySchema>;
 export type ProjectAuditResponse = z.infer<typeof projectAuditResponseSchema>;
 export type StartShadowBatchRequest = z.infer<typeof startShadowBatchRequestSchema>;

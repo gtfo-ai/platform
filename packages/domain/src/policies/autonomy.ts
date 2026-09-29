@@ -363,6 +363,34 @@ export const materialiseAutonomy = (input: {
 });
 
 /**
+ * The dial **in force** under the organisation's `autonomy.maximum` (WP-93, BD-025 §2, BD-027's
+ * WP-62 clarification: the maximum caps the **level**, never the document keys).
+ *
+ * At or below the maximum — or with no maximum — the project's own materialised copy, unchanged
+ * (the same object). Above it, the maximum's position materialised from **this release's** table,
+ * carrying the project's `applied_at`/`applied_by`: the project never chose that position, so it
+ * has no copy of it to read, and re-deriving it here is the one place BD-027:14's "materialised at
+ * selection time" cannot apply — the selection was the organisation's, at the next read (the WP-93
+ * ruling). The project's stored choice is not rewritten: raising the maximum again restores it.
+ *
+ * A task's frozen dial (`tasks.pipeline_dial`, WP-62) is copied from this at task start, so a task
+ * started before the maximum was lowered keeps what it started under.
+ */
+export const capMaterialisedAutonomy = (
+  materialised: MaterialisedAutonomy,
+  maximum: AutonomyLevel | undefined,
+): MaterialisedAutonomy =>
+  maximum === undefined || autonomyRank(materialised.level) <= autonomyRank(maximum)
+    ? materialised
+    : {
+        level: maximum,
+        preset_version: AUTONOMY_PRESET_VERSION,
+        applied_at: materialised.applied_at,
+        applied_by: materialised.applied_by,
+        policies: toWireAutonomyPolicies(applyAutonomyPreset(maximum)),
+      };
+
+/**
  * The parts of a project's configuration document an override can come from — `ConfigValues`
  * narrowed to the two blocks that carry one, so a caller holding the whole document passes it.
  */

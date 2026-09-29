@@ -23,7 +23,7 @@
  * from the other would mean an organisation that opens at 09:00 could not be notified before 09:00
  * without also moving every question deadline.
  */
-import type { IsoDateTime, NotificationClass } from '@platform/contracts';
+import type { IsoDateTime, NotificationClass, OrganisationSettings } from '@platform/contracts';
 import type { ConfigValues, QuietHours } from '@platform/domain';
 import { isoDateOf, zonedParts } from '../scheduling/zoned-time.js';
 
@@ -58,6 +58,25 @@ export const digestSettingsOf = (config: ConfigValues): DigestSettings => {
     urgent: digest?.urgent,
   };
 };
+
+/**
+ * The organisation's quiet hours and digest time (WP-93, PROGRESS backlog 235) — the organisation
+ * settings document's `notifications`, the organisation-scoped twin of a project's
+ * `features.digest`.
+ *
+ * Two keys where the project has four, and each absence is decided: there is no `enabled` because
+ * the organisation digest is switched on **by** stating quiet hours (with no window nothing is
+ * held for it, `runOrganisationDigest`); there is no `urgent` because the organisation raises two
+ * classes and product/18:33 names which is urgent — `budget_exhausted` is always immediate, and a
+ * switch that could make the organisation's loudest alarm wait for the morning is one nobody asked
+ * for.
+ */
+export const organisationDigestSettingsOf = (
+  settings: OrganisationSettings,
+): { readonly quietHours: QuietHours | null; readonly at: string } => ({
+  quietHours: settings.notifications?.quiet_hours ?? null,
+  at: settings.notifications?.digest_at ?? DEFAULT_DIGEST_AT,
+});
 
 /** Minutes since midnight in `timezone`, `0…1439`. */
 export const localMinutesOf = (at: IsoDateTime, timezone: string): number => {

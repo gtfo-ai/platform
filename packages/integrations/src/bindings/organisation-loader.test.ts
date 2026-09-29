@@ -43,7 +43,7 @@ const account = (overrides: Partial<IntegrationAccount> = {}): IntegrationAccoun
 
 const secrets: SecretStore = { resolve: async () => ({ token: TOKEN }) };
 
-const loaderOf = (accounts: readonly IntegrationAccount[]) => {
+const loaderOf = (accounts: readonly IntegrationAccount[], flagged: string | null = null) => {
   const executor = createIntegrationActionExecutor({
     egress: allowAnyIntegrationHost(),
     auditLog: createMemoryAuditLog(),
@@ -59,6 +59,7 @@ const loaderOf = (accounts: readonly IntegrationAccount[]) => {
       fakeCommunicationRegistration({ port: fake, token: TOKEN }),
     ]),
     executor,
+    organisationDefault: async () => flagged,
   });
 };
 
@@ -114,5 +115,45 @@ describe('the organisation’s own chat account', () => {
     expect(error).toBeInstanceOf(BindingLoadError);
     expect(error.message).toMatch(/fails its schema/);
     expect(error.message).not.toContain(TOKEN);
+  });
+});
+
+describe('the flagged account speaks for the organisation (Q103 (c), WP-93)', () => {
+  const two = [
+    account(),
+    account({ integrationId: SECOND, name: 'other chat', config: { channel: '#elsewhere' } }),
+  ];
+
+  it('with two accounts that each name a channel, the flagged one speaks — either one', async () => {
+    const second = await loaderOf(two, SECOND).forOrganisation(noRunScopedSecrets());
+    expect(second.communication?.channel).toBe('#elsewhere');
+    const first = await loaderOf(two, CHAT).forOrganisation(noRunScopedSecrets());
+    expect(first.communication?.channel).toBe('#org-alerts');
+  });
+
+  it('keeps the Q103 refusal only when none is flagged', async () => {
+    await expect(loaderOf(two, null).forOrganisation(noRunScopedSecrets())).rejects.toThrow(
+      /flag the one that speaks for the organisation \(notifications\.organisation_default/,
+    );
+  });
+
+  it('refuses a flag that points at no communication account, rather than reading it as no flag', async () => {
+    const missing = '00000000-0000-4000-8000-00000000a0c9';
+    await expect(loaderOf(two, missing).forOrganisation(noRunScopedSecrets())).rejects.toThrow(
+      new RegExp(`flag ${missing} as the organisation's chat account`),
+    );
+  });
+
+  it('refuses a flagged account whose own config names no channel', async () => {
+    const quiet = [account({ config: {} }), two[1] as IntegrationAccount];
+    await expect(loaderOf(quiet, CHAT).forOrganisation(noRunScopedSecrets())).rejects.toThrow(
+      /flagged chat account "acme chat" \(fake-communication\) names no channel of its own/,
+    );
+  });
+
+  it('lets a flag stand beside an account this build cannot build, because only the flagged one is built', async () => {
+    const mixed = [account(), account({ integrationId: SECOND, provider: 'carrier-pigeon' })];
+    const built = await loaderOf(mixed, CHAT).forOrganisation(noRunScopedSecrets());
+    expect(built.communication?.channel).toBe('#org-alerts');
   });
 });

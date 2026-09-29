@@ -27,6 +27,7 @@ import {
   testClock,
 } from '../testing/pipeline-harness.js';
 import { approvalSettledKey, runApprovalSettled } from './approval-settled.js';
+import { digestTickHandler, runOrganisationDigest } from './digest.js';
 import { runNotification } from './duty.js';
 import {
   approvalSettledHandler,
@@ -117,6 +118,7 @@ const optionsOf = (
     timezone: overrides.timezone ?? 'UTC',
     organisation: harness.organisation,
     heldConnections: harness.heldConnections,
+    organisationSettings: harness.organisationSettings,
   };
 };
 
@@ -1614,6 +1616,124 @@ describe('an organisation-scoped notification', () => {
     expect(harness.communication?.messages).toHaveLength(1);
     expect(harness.organisationCommunication?.messages).toEqual([]);
     expect(harness.notifications.rows[0]?.projectId).toBe(PROJECT);
+  });
+});
+
+/**
+ * **The organisation's own quiet hours** (WP-93, PROGRESS backlog 235, criterion 3). Before WP-93
+ * an organisation-scoped notification was always immediate — quiet hours were a project setting and
+ * the organisation had no settings document. Now `notifications.quiet_hours` defers the non-urgent
+ * class into the organisation's digest, and the urgent one still goes at once.
+ */
+describe('an organisation notification inside the organisation’s quiet hours', () => {
+  const QUIET = {
+    notifications: { quiet_hours: { from: '22:00', to: '07:00' }, digest_at: '08:30' },
+  };
+  const NIGHT = '2026-06-01T23:30:00.000Z';
+  const data = (notificationClass: string, id: string) => ({
+    duty: 'notify_organisation' as const,
+    cause_event_id: `00000000-0000-4000-9000-0000000093${id}`,
+    notification_class: notificationClass,
+    notification_subject: 'The organisation',
+    notification_detail: '$80.00 of $100.00 spent in the month window.',
+  });
+
+  it('holds budget_threshold for the organisation digest and posts budget_exhausted at once', async () => {
+    const harness = harnessWith({ organisationCommunication: {}, organisationSettings: QUIET });
+    const night = optionsOf(harness, { now: NIGHT });
+
+    await runOrganisationNotification(night, data('budget_threshold', '01'));
+    expect(harness.organisationCommunication?.messages).toEqual([]);
+    expect(harness.notifications.rows).toHaveLength(1);
+    expect(harness.notifications.rows[0]).toMatchObject({
+      projectId: null,
+      notificationClass: 'budget_threshold',
+      plannedDelivery: 'digest',
+      deliveredAt: null,
+      urgent: false,
+    });
+
+    await runOrganisationNotification(night, data('budget_exhausted', '02'));
+    expect(harness.organisationCommunication?.messages).toHaveLength(1);
+    expect(harness.notifications.rows[1]).toMatchObject({
+      notificationClass: 'budget_exhausted',
+      plannedDelivery: 'immediate',
+      deliveredAs: 'immediate',
+    });
+  });
+
+  it('posts budget_threshold at once outside the window, and with no window at all', async () => {
+    const outside = harnessWith({ organisationCommunication: {}, organisationSettings: QUIET });
+    await runOrganisationNotification(
+      optionsOf(outside, { now: '2026-06-01T12:00:00.000Z' }),
+      data('budget_threshold', '03'),
+    );
+    expect(outside.organisationCommunication?.messages).toHaveLength(1);
+
+    const none = harnessWith({ organisationCommunication: {} });
+    await runOrganisationNotification(
+      optionsOf(none, { now: NIGHT }),
+      data('budget_threshold', '04'),
+    );
+    expect(none.organisationCommunication?.messages).toHaveLength(1);
+    expect(none.notifications.rows[0]?.plannedDelivery).toBe('immediate');
+  });
+
+  it('is carried by the organisation digest at digest_at, once, on the organisation’s channel', async () => {
+    const harness = harnessWith({ organisationCommunication: {}, organisationSettings: QUIET });
+    await runOrganisationNotification(
+      optionsOf(harness, { now: NIGHT }),
+      data('budget_threshold', '05'),
+    );
+
+    // Before 08:30 in the organisation's zone the digest is not due.
+    expect(
+      await runOrganisationDigest(optionsOf(harness, { now: '2026-06-02T08:00:00.000Z' }), {
+        at: '2026-06-02T08:00:00.000Z' as never,
+      }),
+    ).toBe('not_due');
+    expect(harness.organisationCommunication?.messages).toEqual([]);
+
+    // The tick serves the organisation's row beside the projects' (none are waiting here).
+    const morning = optionsOf(harness, { now: '2026-06-02T08:35:00.000Z' });
+    await digestTickHandler(morning)([] as never);
+    expect(harness.organisationCommunication?.messages).toEqual([
+      expect.objectContaining({ channel: '#org-alerts', thread: null }),
+    ]);
+    expect(harness.notifications.rows[0]).toMatchObject({ deliveredAs: 'digest' });
+    // Audited against the organisation's account and no project, like the immediate post.
+    expect(harness.audit.entries.filter((entry) => entry.action === 'post_digest')).toEqual([
+      expect.objectContaining({ projectId: null, status: 'ok' }),
+    ]);
+    // A second tick the same day posts nothing.
+    await digestTickHandler(morning)([] as never);
+    expect(harness.organisationCommunication?.messages).toHaveLength(1);
+  });
+
+  it('has no digest when the organisation states no quiet hours', async () => {
+    const harness = harnessWith({ organisationCommunication: {} });
+    expect(
+      await runOrganisationDigest(optionsOf(harness), { at: '2026-06-02T09:00:00.000Z' as never }),
+    ).toBe('disabled');
+  });
+
+  it('records the undelivered row and fails the job when the organisation document does not parse', async () => {
+    const harness = harnessWith({ organisationCommunication: {} });
+    const refusing: NotifyOptions = {
+      ...optionsOf(harness),
+      organisationSettings: {
+        read: async () => {
+          throw new Error('organizations.settings does not parse (notifications.digest_at: "9am")');
+        },
+      },
+    };
+    await expect(
+      runOrganisationNotification(refusing, data('budget_threshold', '06')),
+    ).rejects.toThrow(/does not parse/);
+    expect(harness.organisationCommunication?.messages).toEqual([]);
+    expect(harness.notifications.rows).toEqual([
+      expect.objectContaining({ projectId: null, plannedDelivery: 'immediate', deliveredAt: null }),
+    ]);
   });
 });
 

@@ -11,6 +11,7 @@
 import type { OrganisationIntegrationsPort } from '../pipeline/integrations.js';
 import type { PipelineSagaOptions } from '../pipeline/saga.js';
 import type { HeldConnectionLiveness } from '../ports/integrations/inbound-connection.js';
+import type { OrganisationSettingsPort } from '../ports/organisation-settings.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import type { NotificationStore } from './ports.js';
 
@@ -33,4 +34,11 @@ export interface NotifyOptions extends PipelineSagaOptions {
    * which is the dead control backlog 200 is about.
    */
   readonly heldConnections: Pick<HeldConnectionLiveness, 'isHeld'>;
+  /**
+   * The organisation settings document (WP-93) — its `notifications.quiet_hours` and `digest_at`
+   * decide whether an organisation-scoped notification is posted now or held for the
+   * organisation's digest (PROGRESS backlog 235). Required for the reason the others are: a band
+   * composed without it would post an organisation budget at 03:00 whatever the organisation said.
+   */
+  readonly organisationSettings: OrganisationSettingsPort;
 }
