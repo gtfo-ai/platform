@@ -179,3 +179,29 @@ describe('the tighten-only keys', () => {
     ]);
   });
 });
+
+/** WP-91: `pipeline.wip` from the file may lower a limit and never raise it (Q101's shape). */
+describe('the WIP limits a file may state', () => {
+  it('applies a lower limit and keeps, and reports, a higher one', () => {
+    const lowered = tightenRepositoryLayer(
+      { pipeline: { wip: { max_parallel_tasks: 3 } } },
+      { pipeline: { wip: { max_parallel_tasks: 1 } } },
+    );
+    expect(lowered.values.pipeline?.wip?.max_parallel_tasks).toBe(1);
+    expect(lowered.notApplied).toEqual([]);
+
+    const raised = tightenRepositoryLayer(
+      { pipeline: { wip: { max_parallel_tasks: 3 } } },
+      { pipeline: { wip: { max_parallel_tasks: 9, max_tasks_in_pipeline: 20 } } },
+    );
+    // The settings' 3, and BD-010's default of 5 where the settings are silent.
+    expect(raised.values.pipeline?.wip).toEqual({
+      max_parallel_tasks: 3,
+      max_tasks_in_pipeline: 5,
+    });
+    expect(raised.notApplied.map((item) => item.key)).toEqual([
+      'pipeline.wip.max_parallel_tasks',
+      'pipeline.wip.max_tasks_in_pipeline',
+    ]);
+  });
+});

@@ -84,8 +84,9 @@ describe('repositoryPathOf', () => {
 });
 
 describe('the project settings port', () => {
-  const poolOf = (rows: { config: unknown; autonomy_policies?: unknown }[]) =>
-    ({ query: vi.fn(async () => ({ rows, rowCount: rows.length })) }) as never;
+  const poolOf = (
+    rows: { config: unknown; autonomy_policies?: unknown; org_settings?: unknown }[],
+  ) => ({ query: vi.fn(async () => ({ rows, rowCount: rows.length })) }) as never;
 
   it('reads the effective configuration off the project row', async () => {
     const settings = await createProjectSettingsPort(
@@ -133,6 +134,35 @@ describe('the project settings port', () => {
     // Outside every transaction the pool is the right connection, and it is used.
     await port.forProject(project);
     expect(pool.query).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * WP-91 criterion 4 (backlog 224): `pipeline.wip` is read by the settings port into the limits
+   * admission uses — the project's value, BD-010's where it states none, and never above the
+   * organisation's maximum; a maximum that does not parse is refused rather than read as none.
+   */
+  it('reads pipeline.wip into the admission limits, bounded by the organisation', async () => {
+    const project = '00000000-0000-4000-8000-0000000000b1' as never;
+    const read = async (config: unknown, org_settings: unknown = {}) =>
+      (await createProjectSettingsPort(poolOf([{ config, org_settings }])).forProject(project)).wip;
+    expect(await read({})).toEqual({
+      maxParallelTasks: 2,
+      maxTasksInPipeline: 5,
+      maxParallelRuns: 4,
+    });
+    expect(await read({ pipeline: { wip: { max_parallel_tasks: 1 } } })).toMatchObject({
+      maxParallelTasks: 1,
+      maxTasksInPipeline: 5,
+    });
+    expect(
+      await read(
+        { pipeline: { wip: { max_parallel_tasks: 4 } } },
+        { pipeline: { wip: { max_parallel_tasks: 3 } } },
+      ),
+    ).toMatchObject({ maxParallelTasks: 3 });
+    await expect(read({}, { pipeline: { wip: { max_parallel_tasks: 0 } } })).rejects.toThrow(
+      /organizations\.settings\.pipeline\.wip does not parse/,
+    );
   });
 
   it('refuses a project that has no row instead of settling defaults for a task it cannot place', async () => {

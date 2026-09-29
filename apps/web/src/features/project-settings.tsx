@@ -24,9 +24,11 @@
  * merge request, and a button that re-reads it.
  *
  * product/10:21 also lists **WIP limits** and **policies** on this page. They are read-only here and
- * say so: the WIP limits are BD-010's, fixed on this build with no configuration key at all, and the
- * policies are keys of `.agentic/config.yml` (`policies.*`) with no per-key editor, and the
- * pipeline screen already renders the merged document with the source of every key.
+ * say so: the WIP limits are `pipeline.wip` (WP-91, BD-010's defaults when nothing sets them),
+ * shown as the effective configuration answers them — with the layer that set each and the
+ * organisation's bound when it lowered one — and the policies are keys of `.agentic/config.yml`
+ * (`policies.*`) with no per-key editor, and the pipeline screen already renders the merged
+ * document with the source of every key.
  * A form that wrote one key by re-sending the whole document would be a second writer of a document
  * the repository also owns.
  */
@@ -57,14 +59,21 @@ import { HistoryBootstrap } from './history-bootstrap.js';
 import { bindingConfigOf, OperatingMode } from './operating-mode.js';
 
 /**
- * BD-010's WIP limits — `DEFAULT_WIP_LIMITS` in `@platform/domain`, restated rather than imported so
- * the page does not pull the domain ring into the bundle. Fixed on this build: the card used to read
- * `config.pipeline.wip`, a key the strict schema refuses — so following its advice to set the
- * limits in `.agentic/config.yml` would make the repository file invalid and stop every run
- * (WP-63 review round 1, backlog 224).
+ * What the export's answer — or the last recorded export — says, in one sentence.
+ *
+ * `open` is WP-91's (backlog 225): the previous export's merge request is still open, so pressing
+ * the button again answers it rather than opening a second one.
  */
-const DEFAULT_MAX_PARALLEL_TASKS = 2;
-const DEFAULT_MAX_TASKS_IN_PIPELINE = 5;
+/** A published limit, or a statement that the server published none — never a made-up zero. */
+const wipLimit = (value: number | undefined): string =>
+  value === undefined ? 'not published' : formatInteger(value);
+
+const exportSentence = (status: 'exported' | 'unchanged' | 'open'): string =>
+  status === 'unchanged'
+    ? 'The repository already carries these settings; nothing was proposed.'
+    : status === 'open'
+      ? 'A configuration merge request is already open — no second one was opened: '
+      : 'Merge request opened on ';
 
 export const ProjectSettingsScreen = ({
   projectKey,
@@ -243,12 +252,22 @@ export const ProjectSettingsScreen = ({
 
       <Card className="flex flex-col gap-1">
         <SectionHeading>WIP limits and policies</SectionHeading>
-        <p className="text-xs text-fg-muted">
-          Max parallel tasks {formatInteger(DEFAULT_MAX_PARALLEL_TASKS)} · max tasks in pipeline{' '}
-          {formatInteger(DEFAULT_MAX_TASKS_IN_PIPELINE)} — BD-010’s limits, fixed on this build:
-          neither the settings nor <code>.agentic/config.yml</code> has a key for them, and a file
-          that invents one is refused.
-        </p>
+        {config.data === undefined ? null : (
+          <p className="text-xs text-fg-muted">
+            Max parallel tasks {wipLimit(config.data.effective.pipeline?.wip?.max_parallel_tasks)} (
+            {config.data.sources['pipeline.wip.max_parallel_tasks'] ?? 'default'}) · max tasks in
+            pipeline {wipLimit(config.data.effective.pipeline?.wip?.max_tasks_in_pipeline)} (
+            {config.data.sources['pipeline.wip.max_tasks_in_pipeline'] ?? 'default'}) —{' '}
+            <code>pipeline.wip</code> in the settings or <code>.agentic/config.yml</code>. A
+            repository file may lower a limit and never raise it, and neither may go above the
+            organisation’s maximum.
+          </p>
+        )}
+        {(config.data?.not_applied ?? []).map((item) => (
+          <p key={item.key} className="text-xs text-fg-muted">
+            Not applied: <code>{item.key}</code> — <UntrustedText value={item.reason} />
+          </p>
+        ))}
         <p className="text-xs text-fg-muted">
           The policies are keys of the configuration; the{' '}
           <Link to="/projects/$key/pipeline" params={{ key: project.key }}>
@@ -309,11 +328,32 @@ export const ProjectSettingsScreen = ({
             Re-read the repository
           </Button>
         </div>
+        {!commands.exportConfig.isSuccess && config.data?.last_export != null ? (
+          <p className="text-xs text-fg-muted">
+            Last export {formatDateTime(config.data.last_export.exported_at)}:{' '}
+            {exportSentence(config.data.last_export.status)}
+            {config.data.last_export.branch === null ? null : (
+              <code>
+                <UntrustedText value={config.data.last_export.branch} />
+              </code>
+            )}
+            {config.data.last_export.merge_request_url === null ? null : (
+              <>
+                {' — '}
+                <ExternalLink
+                  url={config.data.last_export.merge_request_url}
+                  label="open the merge request"
+                  className="text-accent underline"
+                />
+              </>
+            )}{' '}
+            (as recorded then; pressing the button again checks whether it is still open, and
+            answers it rather than opening a second one)
+          </p>
+        ) : null}
         {commands.exportConfig.isSuccess ? (
           <p className="text-xs">
-            {commands.exportConfig.data.status === 'unchanged'
-              ? 'The repository already carries these settings; nothing was proposed.'
-              : 'Merge request opened on '}
+            {exportSentence(commands.exportConfig.data.status)}
             {commands.exportConfig.data.branch === null ? null : (
               <code>
                 <UntrustedText value={commands.exportConfig.data.branch} />
@@ -331,6 +371,13 @@ export const ProjectSettingsScreen = ({
             )}
           </p>
         ) : null}
+        {commands.exportConfig.isSuccess && commands.exportConfig.data.status === 'open'
+          ? commands.exportConfig.data.notes.map((note) => (
+              <p key={note} className="text-xs text-fg-muted">
+                <UntrustedText value={note} />
+              </p>
+            ))
+          : null}
         {commands.exportConfig.isError ? (
           <ErrorNotice
             title="The settings were not proposed."

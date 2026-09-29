@@ -144,6 +144,68 @@ describe('the configuration export and the repository layer', () => {
     const projectId = pipeline.projectId;
     const client = await signIn(pipeline.instance.baseUrl);
 
+    // ── 0. WP-91: unread keys are reported at the write, and `pipeline.wip` is read and bounded ──
+    const unreadKeys = await send<{ hash: string; not_applied: { key: string; reason: string }[] }>(
+      client,
+      `/api/projects/${projectId}/config`,
+      {
+        config: {
+          version: 1,
+          pipeline: {
+            template_overrides: {
+              feature: { enabled: false, stages: { business_review: { enabled: false } } },
+            },
+            wip: { max_parallel_tasks: 3 },
+          },
+        },
+      },
+      { method: 'PUT' },
+    );
+    expect(unreadKeys.status, JSON.stringify(unreadKeys.body)).toBe(200);
+    // Both levels the ruling names — the template-level `enabled` (backlog 220) and a stage's.
+    expect(unreadKeys.body.not_applied.map((item) => item.key).sort()).toEqual([
+      'pipeline.template_overrides.feature.enabled',
+      'pipeline.template_overrides.feature.stages.business_review.enabled',
+    ]);
+    const reported = await client.json<EffectiveConfigResponse>(
+      `/api/projects/${projectId}/config`,
+    );
+    expect(reported.body.not_applied.map((item) => item.key).sort()).toEqual([
+      'pipeline.template_overrides.feature.enabled',
+      'pipeline.template_overrides.feature.stages.business_review.enabled',
+    ]);
+    expect(reported.body.effective.pipeline?.wip).toEqual({
+      max_parallel_tasks: 3,
+      max_tasks_in_pipeline: 5,
+    });
+    expect(reported.body.sources['pipeline.wip.max_parallel_tasks']).toBe('project');
+    // The organisation's maximum, written by SQL on this build (WP-93 owns its surface): it
+    // bounds the stored value at the next read and refuses a write above it.
+    await pipeline.query(
+      `update organizations set settings = settings || '{"pipeline":{"wip":{"max_parallel_tasks":2}}}'::jsonb
+        where id = (select org_id from projects where id = $1)`,
+      [projectId],
+    );
+    const bounded = await client.json<EffectiveConfigResponse>(`/api/projects/${projectId}/config`);
+    expect(bounded.body.effective.pipeline?.wip?.max_parallel_tasks).toBe(2);
+    expect(bounded.body.sources['pipeline.wip.max_parallel_tasks']).toBe('org');
+    expect(bounded.body.not_applied.map((item) => item.key)).toContain(
+      'pipeline.wip.max_parallel_tasks',
+    );
+    const above = await send<{ error: { code: string; message: string } }>(
+      client,
+      `/api/projects/${projectId}/config`,
+      { config: { version: 1, pipeline: { wip: { max_parallel_tasks: 4 } } } },
+      { method: 'PUT' },
+    );
+    expect(above.status).toBe(409);
+    expect(above.body.error.code).toBe('wip_above_organisation');
+    await pipeline.query(
+      `update organizations set settings = settings - 'pipeline'
+        where id = (select org_id from projects where id = $1)`,
+      [projectId],
+    );
+
     // ── 1. the settings are the only layer until the repository is read ─────
     const written = await send<{ hash: string }>(
       client,
@@ -213,6 +275,58 @@ describe('the configuration export and the repository layer', () => {
         "select count(*)::int as count from human_actions where action = 'project.config.export'",
       ),
     ).toEqual([{ count: 1 }]);
+
+    // ── 2b. WP-91 (backlog 225): a second press — a new key — with the first still open ──
+    // It answers that merge request instead of opening a second one; the provider is asked (a
+    // read), nothing is committed or opened, and the settings page's read lists it after a reload.
+    const openMergeRequests = async (): Promise<number> =>
+      (
+        await pipeline.query<{ count: number }>(
+          "select count(*)::int as count from integration_actions where action = 'open_merge_request' and project_id = $1",
+          [projectId],
+        )
+      )[0]?.count ?? -1;
+    expect(await openMergeRequests()).toBe(1);
+    const again = await send<ExportProjectConfigResponse>(
+      client,
+      `/api/projects/${projectId}/config/export`,
+      { base_hash: written.body.hash },
+      { key: 'wp91-export-2' },
+    );
+    expect(again.status, JSON.stringify(again.body)).toBe(200);
+    expect(again.body).toMatchObject({
+      status: 'open',
+      performed: false,
+      branch: exported.body.branch,
+      merge_request_url: exported.body.merge_request_url,
+      commit_sha: null,
+    });
+    expect(again.body.notes[0]).toMatch(/already proposes this configuration/);
+    expect(await openMergeRequests()).toBe(1);
+    expect(pipeline.git.commits).toHaveLength(1);
+    const listed = await client.json<EffectiveConfigResponse>(`/api/projects/${projectId}/config`);
+    expect(listed.body.last_export).toMatchObject({
+      status: 'open',
+      merge_request_url: exported.body.merge_request_url,
+    });
+
+    // The other direction: once that merge request is closed, a third press opens a new one.
+    const iid = Number(exported.body.merge_request_url?.split('/').at(-1));
+    await pipeline.git.closeMergeRequest({
+      iid,
+      url: exported.body.merge_request_url ?? '',
+      project_path: repo.replace(/^\/+/, ''),
+    });
+    const third = await send<ExportProjectConfigResponse>(
+      client,
+      `/api/projects/${projectId}/config/export`,
+      { base_hash: written.body.hash },
+      { key: 'wp91-export-3' },
+    );
+    expect(third.status, JSON.stringify(third.body)).toBe(200);
+    expect(third.body.status).toBe('exported');
+    expect(third.body.merge_request_url).not.toBe(exported.body.merge_request_url);
+    expect(await openMergeRequests()).toBe(2);
 
     // ── 3. the reviewer merges it with an edit; the platform re-reads the default branch ──
     // The model changed in review, the budget removed (so the settings answer it again), a

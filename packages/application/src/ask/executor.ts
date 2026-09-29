@@ -72,6 +72,7 @@ import {
   type ProjectSettings,
   repositoryConfigRefusal,
 } from '../pipeline/settings.js';
+import { runSettingsSnapshot } from '../pipeline/settings-snapshot.js';
 import type { RunStopReasons } from '../pipeline/stop-reasons.js';
 import type { PipelineStore, StoredTask } from '../pipeline/store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
@@ -522,6 +523,8 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         redactionCount: systemPrompt.count + userPrompt.count,
         // WP-57: the second `runs.insert` call site stores its pack the same way (standing rule 49).
         contextPack,
+        // WP-91: and its settings snapshot, from the settings the ask was planned with.
+        settings: runSettingsSnapshot(settings, runRedactor),
       });
       /**
        * The lease, claimed in the **same transaction as the row** — the stage executor's rule and

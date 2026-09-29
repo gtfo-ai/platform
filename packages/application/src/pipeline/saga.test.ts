@@ -17,6 +17,7 @@ import {
   MAX_FEEDBACK_CHARS,
   materialiseAutonomy,
   readDataBlocks,
+  resolveWipLimits,
   SHIPPED_TEMPLATES,
 } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
@@ -51,6 +52,7 @@ import {
   UNMATERIALISED_PLAN_APPROVAL,
 } from './saga.js';
 import { staticProjectSettings } from './settings.js';
+import type { NewRun } from './store.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b1';
 
@@ -412,6 +414,84 @@ describe('intake', () => {
     const second = harness.store.snapshot().find((stored) => stored.task.ticket.key === 'ACME-2');
     expect(second?.task.state).toBe('queued');
     expect(harness.types()).toContain('task.queued');
+  });
+
+  /**
+   * WP-91 criterion 4 (backlog 224): `pipeline.wip.max_parallel_tasks` is admitted against, read
+   * back at 1 and at 2. `runsAgents: false` leaves the first task's stage job queued, so it holds
+   * its active slot while the second ticket is matched.
+   */
+  for (const limit of [1, 2] as const) {
+    it(`admits ${limit} active task(s) under max_parallel_tasks: ${limit}`, async () => {
+      const config = { pipeline: { wip: { max_parallel_tasks: limit } } };
+      const harness = harnessWith({
+        runsAgents: false,
+        settings: { config, wip: resolveWipLimits(config.pipeline.wip, undefined).limits },
+      });
+      await harness.publish([ticketMatched()]);
+      await harness.publish([ticketMatched('Story', 'ACME-2')]);
+      const states = harness.store
+        .snapshot()
+        .map((stored) => stored.task.state)
+        .sort();
+      expect(states).toEqual(limit === 1 ? ['active', 'queued'] : ['active', 'active']);
+    });
+  }
+
+  it('lets the organisation’s maximum bound a project that states more (WP-91)', async () => {
+    const config = { pipeline: { wip: { max_parallel_tasks: 2 } } };
+    const harness = harnessWith({
+      runsAgents: false,
+      settings: {
+        config,
+        wip: resolveWipLimits(config.pipeline.wip, { max_parallel_tasks: 1 }).limits,
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    await harness.publish([ticketMatched('Story', 'ACME-2')]);
+    expect(
+      harness.store
+        .snapshot()
+        .map((stored) => stored.task.state)
+        .sort(),
+    ).toEqual(['active', 'queued']);
+  });
+
+  /**
+   * WP-91 criterion 1 (backlog 227): every run row carries the snapshot and hash of the settings
+   * it was planned with, and a configuration change between two runs of one task yields two
+   * hashes — the change is made the moment the first run is inserted, so the second stage plans
+   * with it.
+   */
+  it('freezes the settings onto each run, and a change between two runs gives two hashes', async () => {
+    const config: { pipeline?: { limits?: { ci_fix_iterations?: number } } } = {};
+    const harness = harnessWith({ settings: { config } });
+    const inserted: NewRun[] = [];
+    const repository = harness.store.runs as { insert: typeof harness.store.runs.insert };
+    const original = repository.insert.bind(harness.store.runs);
+    repository.insert = async (tx, run) => {
+      inserted.push(run);
+      await original(tx, run);
+      if (inserted.length === 1) {
+        config.pipeline = { limits: { ci_fix_iterations: 5 } };
+      }
+    };
+    await harness.publish([ticketMatched()]);
+
+    expect(inserted.length).toBeGreaterThan(2);
+    const hashes = inserted.map((run) => run.settings?.hash);
+    for (const hash of hashes) expect(hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(hashes[1]).not.toBe(hashes[0]);
+    // Nothing changed after the second run, so every later run shares its hash.
+    expect(new Set(hashes.slice(1)).size).toBe(1);
+    const limitsOf = (run: NewRun | undefined) =>
+      (
+        run?.settings?.snapshot as
+          | { effective: { pipeline: { limits: Record<string, unknown> } } }
+          | undefined
+      )?.effective.pipeline.limits.ci_fix_iterations;
+    expect(limitsOf(inserted[0])).toBe(3);
+    expect(limitsOf(inserted[1])).toBe(5);
   });
 
   it('normalises provider priority names onto a rank the scheduler can sort', () => {

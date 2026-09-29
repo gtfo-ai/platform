@@ -58,6 +58,7 @@ const exported = (): ConfigExportReport => ({
   branch: 'agentic/config/0123456789ab-aaaaaaaaaaaa',
   commitSha: 'abc1234',
   mergeRequestUrl: 'https://git.example.test/acme/api/-/merge_requests/9',
+  mergeRequestIid: 9,
   paths: ['.agentic/config.yml', 'CLAUDE.md'],
   notes: [],
 });
@@ -116,6 +117,25 @@ beforeEach(async () => {
         }
       },
       readRepository: async () => world.stored,
+      // What `findLastConfigExport` does, over the rows this test's writer recorded (WP-91).
+      lastExport: async (projectId) => {
+        const row = [...actions]
+          .reverse()
+          .find(
+            (action) =>
+              action.action === 'project.config.export' && action.params.project_id === projectId,
+          );
+        if (row === undefined) return null;
+        const p = row.params;
+        return {
+          status: p.status as 'exported' | 'unchanged' | 'open',
+          configHash: String(p.config_hash),
+          branch: typeof p.branch === 'string' ? p.branch : null,
+          mergeRequestUrl: typeof p.merge_request_url === 'string' ? p.merge_request_url : null,
+          mergeRequestIid: typeof p.merge_request_iid === 'number' ? p.merge_request_iid : null,
+          exportedAt: '2026-09-29T10:00:00.000Z',
+        };
+      },
     },
     commands: {
       export: async (request) => {
@@ -217,6 +237,55 @@ describe('POST …/config/export', () => {
       notes: ['the default branch already carries it'],
     });
     expect(actions).toHaveLength(1);
+  });
+});
+
+/**
+ * WP-91 (backlog 225): the second press hands the command the first export's merge request, as
+ * its audit row recorded it, and an `open` answer is recorded and replayed as `open`.
+ */
+describe('POST …/config/export with a previous export on record', () => {
+  it('hands the command the recorded merge request, and records the iid for the next press', async () => {
+    await post('/config/export', {}, 'k1');
+    expect(exports[0]?.previous).toBeNull();
+    expect(actions[0]?.params.merge_request_iid).toBe(9);
+
+    world.report = {
+      status: 'open',
+      branch: 'agentic/config/0123456789ab-aaaaaaaaaaaa',
+      mergeRequestIid: 9,
+      mergeRequestUrl: 'https://git.example.test/acme/api/-/merge_requests/9',
+      configHash: HASH,
+      notes: ['merge request !9 already proposes this configuration and is still open'],
+    };
+    const second = await post('/config/export', {}, 'k2');
+    expect(second.statusCode).toBe(200);
+    expect(exports[1]?.previous).toEqual({
+      iid: 9,
+      url: 'https://git.example.test/acme/api/-/merge_requests/9',
+      branch: 'agentic/config/0123456789ab-aaaaaaaaaaaa',
+      configHash: HASH,
+    });
+    expect(second.json()).toMatchObject({
+      status: 'open',
+      performed: false,
+      commit_sha: null,
+      merge_request_url: 'https://git.example.test/acme/api/-/merge_requests/9',
+      notes: ['merge request !9 already proposes this configuration and is still open'],
+    });
+    expect(actions[1]).toMatchObject({ params: { status: 'open', merge_request_iid: 9 } });
+    // A replay of that press answers `open` too, from its row.
+    const replay = await post('/config/export', {}, 'k2');
+    expect(replay.json()).toMatchObject({ status: 'open', performed: false });
+    expect(exports).toHaveLength(2);
+  });
+
+  it('asks nothing about a previous export that opened no merge request', async () => {
+    world.report = { status: 'unchanged', reason: 'the default branch already carries it' };
+    await post('/config/export', {}, 'k1');
+    world.report = exported();
+    await post('/config/export', {}, 'k2');
+    expect(exports[1]?.previous).toBeNull();
   });
 });
 

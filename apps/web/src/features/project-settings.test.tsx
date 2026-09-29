@@ -130,6 +130,8 @@ const fetchFor = (
     readonly onPut?: (url: string, body: unknown) => void;
     /** WP-63: the export and the re-read, with the headers so the key can be asserted. */
     readonly onPost?: (url: string, body: unknown, headers: Headers) => Response | undefined;
+    /** WP-91: fields of `GET …/config` a test replaces (the WIP limits, a last export). */
+    readonly config?: Record<string, unknown>;
   } = {},
 ) =>
   (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -162,8 +164,6 @@ const fetchFor = (
     if (url.includes('/bindings')) return json({ items: options.bindings ?? [] });
     if (url.includes('/config')) {
       return json({
-        // `pipeline.wip` is not a key the strict schema accepts (the WP-63 notes' discovered
-        // work), so a fixture carrying it made every read of this document fail to parse.
         config: { version: 1 },
         // WP-63: the merged document and the repository reading that fed its `repo` layer.
         effective: { version: 1 },
@@ -178,9 +178,12 @@ const fetchFor = (
         sources: { '*': 'project' },
         hash: 'deadbeef',
         computed_at: '2026-09-13T04:00:00.000Z',
+        not_applied: [],
+        last_export: null,
         // WP-54: nothing the project declared is outside every role's command baseline.
         ignored_allow_commands: [],
         risk_class_proposal: { source: 'platform', classes: {}, checklists: [] },
+        ...options.config,
       });
     }
     if (url.endsWith('/api/projects')) return json({ items: [PROJECT_ROW] });
@@ -276,6 +279,118 @@ describe('the repository configuration card', () => {
       expect(document.body.textContent).toContain('stages.refinement.max_turns');
     });
     expect(document.body.textContent).toContain('no run starts until it does');
+  });
+});
+
+/**
+ * WP-91: the export's merge request survives a reload (backlog 225), a second press with one open
+ * says it opened none, and the WIP limits and the unread keys come from the server's answer.
+ */
+describe('the configuration the server reports (WP-91)', () => {
+  it('lists the last export after a reload, as recorded, with its merge request', async () => {
+    render(
+      createApp({
+        fetchImpl: fetchFor(
+          {},
+          {
+            config: {
+              last_export: {
+                status: 'exported',
+                config_hash: 'deadbeef',
+                branch: 'agentic/config/deadbeef0000-0123456789ab',
+                merge_request_url: 'https://git.example.test/acme/api/-/merge_requests/9',
+                exported_at: '2026-09-13T04:00:00.000Z',
+              },
+            },
+          },
+        ),
+        realtime: false,
+      }).element,
+    );
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Last export');
+    });
+    expect(document.body.textContent).toContain('agentic/config/deadbeef0000-0123456789ab');
+    expect(screen.getByText('open the merge request').getAttribute('href')).toBe(
+      'https://git.example.test/acme/api/-/merge_requests/9',
+    );
+  });
+
+  it('shows no last export when the project was never exported', async () => {
+    render(createApp({ fetchImpl: fetchFor({}), realtime: false }).element);
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('.agentic/config.yml: unread');
+    });
+    expect(document.body.textContent).not.toContain('Last export');
+  });
+
+  it('says a second press opened nothing when the previous merge request is still open', async () => {
+    render(
+      createApp({
+        fetchImpl: fetchFor(
+          {},
+          {
+            onPost: (url) =>
+              url.endsWith('/config/export')
+                ? json({
+                    status: 'open',
+                    performed: false,
+                    config_hash: 'deadbeef',
+                    branch: 'agentic/config/deadbeef0000-0123456789ab',
+                    commit_sha: null,
+                    merge_request_url: 'https://git.example.test/acme/api/-/merge_requests/9',
+                    paths: [],
+                    notes: [
+                      'merge request !9 already proposes this configuration and is still open',
+                    ],
+                  })
+                : undefined,
+          },
+        ),
+        realtime: false,
+      }).element,
+    );
+    await userEvent.click(await screen.findByText('Propose these settings to the repository'));
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('no second one was opened');
+    });
+    expect(document.body.textContent).toContain('!9 already proposes this configuration');
+  });
+
+  it('shows the WIP limits the server answers, their source, and the unread keys', async () => {
+    render(
+      createApp({
+        fetchImpl: fetchFor(
+          {},
+          {
+            config: {
+              effective: {
+                version: 1,
+                pipeline: { wip: { max_parallel_tasks: 1, max_tasks_in_pipeline: 5 } },
+              },
+              sources: {
+                'pipeline.wip.max_parallel_tasks': 'project',
+                'pipeline.wip.max_tasks_in_pipeline': 'default',
+              },
+              not_applied: [
+                {
+                  key: 'pipeline.template_overrides.feature.stages.business_review.enabled',
+                  reason: 'switching a stage off is not applied on this build',
+                },
+              ],
+            },
+          },
+        ),
+        realtime: false,
+      }).element,
+    );
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Max parallel tasks 1 (project)');
+    });
+    expect(document.body.textContent).toContain('max tasks in pipeline 5 (default)');
+    expect(document.body.textContent).toContain(
+      'pipeline.template_overrides.feature.stages.business_review.enabled',
+    );
   });
 });
 

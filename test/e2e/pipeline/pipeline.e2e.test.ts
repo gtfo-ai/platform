@@ -92,10 +92,42 @@ describe('a feature ticket, end to end', () => {
     );
     expect(waiting.current_stage).toBe('ready_for_merge');
 
+    // WP-91 criterion 1 (backlog 227): a configuration change while the task waits for the merge,
+    // so the two stages after it (retrospective, librarian) plan with a different configuration.
+    await pipeline.query(
+      `update projects set config = jsonb_set(config, '{pipeline}', '{"limits":{"ci_fix_iterations":5}}'::jsonb)
+        where id = $1`,
+      [pipeline.projectId],
+    );
+
     await pipeline.publish([merged(pipeline)]);
 
     const finished = await pipeline.settle('done', (task) => task.state === 'done');
     expect(finished.template).toBe('feature');
+
+    // Every run row carries the snapshot and hash of what it planned with: one hash for the five
+    // stages before the change, another for the two after it, and the snapshot says why.
+    const frozen = await pipeline.query<{
+      settings_hash: string | null;
+      settings_snapshot: {
+        effective: {
+          status_mapping?: Record<string, string>;
+          pipeline: { limits: { ci_fix_iterations: number } };
+        };
+      };
+    }>(
+      'select settings_hash, settings_snapshot from runs where project_id = $1 order by created_at',
+      [pipeline.projectId],
+    );
+    expect(frozen).toHaveLength(7);
+    for (const row of frozen) expect(row.settings_hash).toMatch(/^[0-9a-f]{64}$/);
+    const hashes = frozen.map((row) => row.settings_hash);
+    expect(new Set(hashes.slice(0, 5)).size).toBe(1);
+    expect(new Set(hashes.slice(5)).size).toBe(1);
+    expect(hashes[5]).not.toBe(hashes[0]);
+    expect(frozen[0]?.settings_snapshot.effective.status_mapping?.refinement).toBe('In Progress');
+    expect(frozen[0]?.settings_snapshot.effective.pipeline.limits.ci_fix_iterations).toBe(3);
+    expect(frozen[6]?.settings_snapshot.effective.pipeline.limits.ci_fix_iterations).toBe(5);
     // Six agent stages at 0.40 USD each, on the row a human would read: the feature five, the
     // retrospective, and the librarian WP-18b put back into the tail.
     expect(Number(finished.cost_actual)).toBeCloseTo(2.8, 6);

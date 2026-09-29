@@ -190,6 +190,8 @@ const fetchFor = (readiness: 'recorded' | 'absent') =>
         sources: { '*': 'project' },
         hash: 'deadbeef',
         computed_at: '2026-09-13T04:00:00.000Z',
+        not_applied: [],
+        last_export: null,
         // WP-54: nothing the project declared is outside every role's command baseline.
         ignored_allow_commands: [],
         // WP-37: what the server offers for `policies.risk_classes`. The project has **none** and

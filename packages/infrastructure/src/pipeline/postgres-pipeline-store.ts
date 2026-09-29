@@ -822,7 +822,20 @@ export const createPostgresPipelineStore = (
       return { ...stored, version: Number(written.version) };
     },
 
+    /**
+     * Serialised per project for the rest of the caller's transaction (WP-91, the port's
+     * obligation): a transaction-scoped advisory lock on the project is taken **before** the
+     * count, so a second admitter waits for the first to commit and then — READ COMMITTED takes a
+     * fresh snapshot per statement — counts the task the first admitted. Without it two intakes in
+     * one instant both counted `0` and both admitted under `max_parallel_tasks: 1` (the residual
+     * standing rule 89 named). The key is namespaced (`task_admission/`) so it cannot collide
+     * with another advisory lock the platform takes on a project id.
+     */
     counts: async (tx, projectId) => {
+      await sqlOf(tx).query(
+        `select pg_advisory_xact_lock(hashtextextended('task_admission/' || $1, 0))`,
+        [projectId],
+      );
       const { rows } = await sqlOf(tx).query<{ active: string; in_pipeline: string }>(
         `select count(*) filter (where state in ('active', 'returned')) as active,
                 count(*) filter (where state not in ('queued', 'done', 'cancelled')) as in_pipeline
@@ -1155,11 +1168,12 @@ export const createPostgresPipelineStore = (
                            effort, prompt_version, status, started_at,
                            system_prompt, user_prompt, redaction_count,
                            context_budget_tokens, context_total_tokens, context_kb_commit,
-                           context_text_search)
+                           context_text_search, settings_snapshot, settings_hash)
          values ($1, $2, $3,
                  (select id from task_stages
                    where task_id = $2 and stage = $11 and attempt = $6),
-                 $4, $5, $6, $7, $8, $9, $10, $12, $13, $14, $15, $16, $17, $18, $19::jsonb)`,
+                 $4, $5, $6, $7, $8, $9, $10, $12, $13, $14, $15, $16, $17, $18, $19::jsonb,
+                 coalesce($20::jsonb, '{}'::jsonb), $21)`,
         [
           run.id,
           run.taskId,
@@ -1188,6 +1202,10 @@ export const createPostgresPipelineStore = (
           run.contextPack?.kb_commit ?? null,
           // What the text step did (migration 0047, WP-44); null for a pack that recorded none.
           run.contextPack?.text_search == null ? null : JSON.stringify(run.contextPack.text_search),
+          // WP-91 (backlog 227): the column's first writer. No snapshot keeps 0004's `'{}'` default
+          // (the column is `not null`), and `settings_hash is null` is what says "none recorded".
+          run.settings === null ? null : JSON.stringify(run.settings.snapshot),
+          run.settings?.hash ?? null,
         ],
       );
       if (run.contextPack !== null) {

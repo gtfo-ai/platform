@@ -73,8 +73,9 @@
 
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { createIntegrationEgressPolicy } from '@platform/application';
+import { createIntegrationEgressPolicy, settingsNotApplied } from '@platform/application';
 import {
+  type AgenticConfig,
   apiErrorSchema,
   businessInterviewRequestSchema,
   businessInterviewResponseSchema,
@@ -87,6 +88,7 @@ import {
   startDiscoveryResponseSchema,
   testIntegrationResponseSchema,
   updateProjectConfigRequestSchema,
+  updateProjectConfigResponseSchema,
 } from '@platform/contracts';
 import { AUTONOMY_PRESET_VERSION, applyAutonomyPreset } from '@platform/domain';
 import { secrets as secretAdapters } from '@platform/infrastructure';
@@ -95,12 +97,13 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
+import { OrganisationSettingsInvalidError, organisationWipFrom } from '../config-layers.js';
 import { HttpError, NotFoundError } from '../errors.js';
 import type { OnboardingCommands } from '../onboarding.js';
 import { OnboardingUnavailableError } from '../onboarding.js';
 import { claimCommandAttempt, releaseCommandAttempt } from '../queries/idempotency-queries.js';
 import type { Database } from '../queries/identity-queries.js';
-import { findProjectRole } from '../queries/identity-queries.js';
+import { findConfigLayers, findProjectRole } from '../queries/identity-queries.js';
 import {
   createIntegration,
   createProject,
@@ -172,6 +175,44 @@ const integrationParamsSchema = z.strictObject({ integration_id: z.uuid() });
  * the provider call — the provider's own timeout is the adapter's.
  */
 export const PROBE_TIMEOUT_MS = 10_000;
+
+/**
+ * A written `pipeline.wip` limit above the organisation's maximum is **refused by name** (WP-91,
+ * backlog 224): the organisation's value bounds the project's, and a write that states more is a
+ * project trying to widen it. Refused rather than clamped, because the side that writes is the side
+ * that can correct it (standing rule 20). A maximum lowered **after** the write applies at the next
+ * read instead (`resolveWipLimits`), and `GET …/config` reports it.
+ */
+const refuseWipAboveOrganisation = async (
+  database: Database,
+  projectId: string,
+  config: AgenticConfig,
+): Promise<void> => {
+  const stated = config.pipeline?.wip;
+  if (stated === undefined) {
+    return;
+  }
+  let organisation: ReturnType<typeof organisationWipFrom>;
+  try {
+    organisation = organisationWipFrom((await findConfigLayers(database, projectId))?.orgSettings);
+  } catch (error) {
+    if (error instanceof OrganisationSettingsInvalidError) {
+      throw new HttpError(409, 'invalid_organisation_config', error.message);
+    }
+    throw error;
+  }
+  for (const key of ['max_parallel_tasks', 'max_tasks_in_pipeline'] as const) {
+    const value = stated[key];
+    const bound = organisation?.[key];
+    if (value !== undefined && bound !== undefined && value > bound) {
+      throw new HttpError(
+        409,
+        'wip_above_organisation',
+        `pipeline.wip.${key} is ${value}, above the organisation's maximum of ${bound}; a project may lower a WIP limit, never raise it past the organisation's`,
+      );
+    }
+  }
+};
 
 export const registerOnboardingRoutes = async (
   app: FastifyInstance,
@@ -552,12 +593,12 @@ export const registerOnboardingRoutes = async (
       schema: {
         summary: 'Write this project’s configuration and autonomy dial (the wizard’s step 4)',
         description:
-          'The **whole** `.agentic/config.yml` document through the strict schema — an unknown key is refused, never dropped (technical/12). `autonomy_level` is materialised through the domain preset (BD-027), and a document whose `policies.autonomy` disagrees with it is refused rather than silently resolved. `base_hash` is optimistic concurrency: send the `hash` the last read gave you, or omit it to overwrite.',
+          "The **whole** `.agentic/config.yml` document through the strict schema — an unknown key is refused, never dropped (technical/12). `autonomy_level` is materialised through the domain preset (BD-027), and a document whose `policies.autonomy` disagrees with it is refused rather than silently resolved. `base_hash` is optimistic concurrency: send the `hash` the last read gave you, or omit it to overwrite. The answer's `not_applied` names every key of the document this build parses and does not read (`template_overrides.*.enabled`, `custom_stages`, the per-stage prompt files), with the reason — the write is accepted, never silently inert. A `pipeline.wip` limit above the organisation's maximum is `409 wip_above_organisation`.",
         tags: ['projects'],
         params: projectParamsSchema,
         body: updateProjectConfigRequestSchema,
         response: {
-          200: z.strictObject({ hash: z.string(), autonomy_level: z.string() }),
+          200: updateProjectConfigResponseSchema,
           409: apiErrorSchema,
           404: apiErrorSchema,
         },
@@ -576,6 +617,7 @@ export const registerOnboardingRoutes = async (
         );
       }
       const level = requested ?? inDocument;
+      await refuseWipAboveOrganisation(options.database, projectId, config);
       // Materialised at selection time, never at read time (BD-027): the preset's own version is
       // stored beside the level so a release that changes a preset does not silently change a
       // project's effective policies.
@@ -626,7 +668,14 @@ export const registerOnboardingRoutes = async (
               }),
         },
       });
-      return { hash, autonomy_level: level ?? 'unchanged' };
+      // WP-91: accepted, and never silently inert — every key this build parses and does not read
+      // is named with the reason, as the repository read names the file's (the row's ruling).
+      const { version: _version, ...values } = config;
+      return {
+        hash,
+        autonomy_level: level ?? 'unchanged',
+        not_applied: [...settingsNotApplied(values)],
+      };
     },
   );
 

@@ -791,12 +791,14 @@ export const createMemoryPipelineStore = (
       // prompt no production caller of `load` can see. The reader that wants them is the API
       // projection, and it has its own integration coverage.
       // `contextPack` (WP-57) is dropped for the same reason: `load` answers no pack, and the
-      // reader that wants one is the API projection over `run_context_pack`.
+      // reader that wants one is the API projection over `run_context_pack`. `settings` (WP-91)
+      // likewise: `load` does not select `settings_snapshot`/`settings_hash`.
       const {
         systemPrompt: _s,
         userPrompt: _u,
         redactionCount: _r,
         contextPack: _c,
+        settings: _g,
         ...stored
       } = run;
       runs.set(run.id, clone({ ...stored, stage: linked ? run.stage : null }));

@@ -587,6 +587,7 @@ describe('the prompt and context-pack reads, and the rows that predate their wri
           userPrompt: null,
           redactionCount: 0,
           contextPack: record,
+          settings: null,
         });
       }
       await client.query('commit');

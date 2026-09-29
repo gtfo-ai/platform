@@ -198,6 +198,12 @@ export const testIntegrationResponseSchema = z.strictObject({
 
 // ── Projects and configuration ───────────────────────────────────────────────
 
+/** A key a configuration layer states that the platform does not apply, with the reason. */
+export const configNotAppliedSchema = z.strictObject({
+  key: nonEmptyStringSchema,
+  reason: nonEmptyStringSchema,
+});
+
 /**
  * The platform's last reading of a project's own `.agentic/config.yml` on its default branch — the
  * `repo` layer's producer (WP-63, Q94, BD-025 §1).
@@ -222,7 +228,25 @@ export const repositoryConfigReadingSchema = z.strictObject({
   read_at: isoDateTimeSchema.nullable(),
   /** The key paths an `invalid` file failed on — redacted, bounded, platform-worded. */
   detail: z.string().nullable(),
-  not_applied: z.array(z.strictObject({ key: nonEmptyStringSchema, reason: nonEmptyStringSchema })),
+  not_applied: z.array(configNotAppliedSchema),
+});
+
+/**
+ * The project's last configuration export as the platform recorded it (WP-91, PROGRESS backlog
+ * 225) — read from the export's own `human_actions` row, so a reload no longer loses the merge
+ * request the button opened.
+ *
+ * **As recorded at that press, not re-read**: whether the merge request is still open is the
+ * provider's answer, and this read makes no provider call (a `GET` that called out on every page
+ * load would spend the binding's rate limit on a card). The export itself re-validates it against
+ * the provider before deciding whether to open another (`status: 'open'`).
+ */
+export const lastConfigExportSchema = z.strictObject({
+  status: z.enum(['exported', 'unchanged', 'open']),
+  config_hash: nonEmptyStringSchema,
+  branch: nonEmptyStringSchema.nullable(),
+  merge_request_url: urlSchema.nullable(),
+  exported_at: isoDateTimeSchema,
 });
 
 /**
@@ -244,6 +268,18 @@ export const effectiveConfigResponseSchema = z.strictObject({
   repository: repositoryConfigReadingSchema,
   hash: nonEmptyStringSchema,
   computed_at: isoDateTimeSchema,
+  /**
+   * What the **settings layer** states that this build does not apply, with the reason (WP-91) —
+   * the settings' twin of `repository.not_applied`.
+   *
+   * Two kinds. Keys nothing reads (`template_overrides.*.enabled` at either level, whose reader
+   * waits on Q99; `custom_stages`; the per-stage prompt files), which `PUT …/config` also answers
+   * with; and a WIP limit above the organisation's maximum, which is read and **bounded** — the
+   * organisation's value is what `effective` shows and admission uses.
+   */
+  not_applied: z.array(configNotAppliedSchema),
+  /** The last configuration export, or `null` when this project was never exported (backlog 225). */
+  last_export: lastConfigExportSchema.nullable(),
   /**
    * `commands.allow` entries this project declares that **no run of any role** is granted — the
    * reader `ignoredAllow` did not have until WP-54 (PROGRESS backlog 49).
@@ -319,6 +355,17 @@ export const updateProjectConfigRequestSchema = z.strictObject({
 });
 
 /**
+ * `PUT /api/projects/:id/config`'s answer (WP-91). `not_applied` names every key of the written
+ * document this build parses and does not read — the write is accepted, never silently inert
+ * (the row's ruling: reported at the settings write as it already is at the repository read).
+ */
+export const updateProjectConfigResponseSchema = z.strictObject({
+  hash: nonEmptyStringSchema,
+  autonomy_level: nonEmptyStringSchema,
+  not_applied: z.array(configNotAppliedSchema),
+});
+
+/**
  * `POST /api/projects/:id/config/export` — propose the settings layer as `.agentic/config.yml` (and
  * the `CLAUDE.md` pointer) in a merge request on an `agentic/*` branch (WP-63, Q94 (b) and (c)).
  *
@@ -330,8 +377,13 @@ export const exportProjectConfigRequestSchema = z.strictObject({
 });
 
 export const exportProjectConfigResponseSchema = z.strictObject({
-  /** `exported` opened (or, on a replay, had opened) a merge request; `unchanged` needed none. */
-  status: z.enum(['exported', 'unchanged']),
+  /**
+   * `exported` opened (or, on a replay, had opened) a merge request; `unchanged` needed none;
+   * `open` found the previous export's merge request **still open** at the provider and answers it
+   * instead of opening a second (WP-91, backlog 225) — `notes` says whether it carries the
+   * configuration being exported now.
+   */
+  status: z.enum(['exported', 'unchanged', 'open']),
   /** `false` when this `Idempotency-Key` had already performed the export: nothing was sent again. */
   performed: z.boolean(),
   config_hash: nonEmptyStringSchema,
@@ -1915,6 +1967,9 @@ export type UpdateProjectConfigRequest = z.infer<typeof updateProjectConfigReque
 export type RepositoryConfigReading = z.infer<typeof repositoryConfigReadingSchema>;
 export type ExportProjectConfigRequest = z.infer<typeof exportProjectConfigRequestSchema>;
 export type ExportProjectConfigResponse = z.infer<typeof exportProjectConfigResponseSchema>;
+export type UpdateProjectConfigResponse = z.infer<typeof updateProjectConfigResponseSchema>;
+export type LastConfigExport = z.infer<typeof lastConfigExportSchema>;
+export type ConfigNotApplied = z.infer<typeof configNotAppliedSchema>;
 export type RefreshProjectConfigResponse = z.infer<typeof refreshProjectConfigResponseSchema>;
 export type ProjectSummary = z.infer<typeof projectSummarySchema>;
 export type ProjectsResponse = z.infer<typeof projectsResponseSchema>;

@@ -25,6 +25,7 @@
 import { createHash } from 'node:crypto';
 import type {
   ConfigExportReport,
+  PreviousConfigExport,
   RepositoryConfigRefresh,
   RepositoryConfigSnapshot,
 } from '@platform/application';
@@ -74,7 +75,40 @@ export interface ProjectConfigQueries {
   readonly releaseAttempt: IdempotencyRecords['releaseAttempt'];
   readonly recordAction: (input: HumanActionInput) => Promise<void>;
   readonly readRepository: (projectId: string) => Promise<RepositoryConfigSnapshot | null>;
+  /**
+   * The project's last recorded export (WP-91, backlog 225) — the newest `project.config.export`
+   * `human_actions` row for it — or `null`. Its merge request is re-validated by the export.
+   */
+  readonly lastExport: (projectId: string) => Promise<RecordedConfigExport | null>;
 }
+
+/** A `project.config.export` row's params, as `lastExport` reads them back. */
+export interface RecordedConfigExport {
+  readonly status: 'exported' | 'unchanged' | 'open';
+  readonly configHash: string;
+  readonly branch: string | null;
+  readonly mergeRequestUrl: string | null;
+  /** `null` for a row written before WP-91 recorded it: such an export cannot be re-validated. */
+  readonly mergeRequestIid: number | null;
+  readonly exportedAt: string;
+}
+
+/** The previous export the command re-validates, or `null` when there is nothing to ask about. */
+export const previousExportOf = (
+  recorded: RecordedConfigExport | null,
+): PreviousConfigExport | null =>
+  recorded === null ||
+  recorded.status === 'unchanged' ||
+  recorded.mergeRequestIid === null ||
+  recorded.mergeRequestUrl === null ||
+  recorded.branch === null
+    ? null
+    : {
+        iid: recorded.mergeRequestIid,
+        url: recorded.mergeRequestUrl,
+        branch: recorded.branch,
+        configHash: recorded.configHash,
+      };
 
 export interface ProjectConfigRoutesOptions {
   readonly queries: ProjectConfigQueries;
@@ -200,8 +234,14 @@ export const registerProjectConfigRoutes = async (
       });
       if (replay.replayed && replay.previous !== null) {
         const previous = replay.previous;
+        const recorded = previous.status;
         return {
-          status: previous.status === 'unchanged' ? ('unchanged' as const) : ('exported' as const),
+          status:
+            recorded === 'unchanged'
+              ? ('unchanged' as const)
+              : recorded === 'open'
+                ? ('open' as const)
+                : ('exported' as const),
           performed: false,
           config_hash: stringOr(previous.config_hash, 'unconfigured') as string,
           branch: stringOr(previous.branch, null),
@@ -248,6 +288,7 @@ export const registerProjectConfigRoutes = async (
           content: renderExport(parsed.data, configHash),
           exportId: configExportIdOf(actor.userId, key),
           requestedByUserId: actor.userId as Id,
+          previous: previousExportOf(await options.queries.lastExport(projectId)),
         });
         if (report.status === 'unavailable') {
           throw new HttpError(409, 'config_export_unavailable', options.redactText(report.reason));
@@ -256,14 +297,18 @@ export const registerProjectConfigRoutes = async (
 
         const answer = {
           status: report.status,
-          performed: true,
-          config_hash: configHash,
-          branch: report.status === 'exported' ? report.branch : null,
+          // `open` performed nothing at the provider: it read, and answered what it read.
+          performed: report.status !== 'open',
+          // An `open` answer names the configuration the open merge request carries, which the
+          // note compares with the one being exported now.
+          config_hash: report.status === 'open' ? report.configHash : configHash,
+          branch: report.status === 'unchanged' ? null : report.branch,
           commit_sha: report.status === 'exported' ? report.commitSha : null,
-          merge_request_url: report.status === 'exported' ? report.mergeRequestUrl : null,
+          merge_request_url: report.status === 'unchanged' ? null : report.mergeRequestUrl,
           paths: report.status === 'exported' ? [...report.paths] : [],
-          notes: report.status === 'exported' ? [...report.notes] : [report.reason],
+          notes: report.status === 'unchanged' ? [report.reason] : [...report.notes],
         };
+        const mergeRequestIid = report.status === 'unchanged' ? null : report.mergeRequestIid;
         await options.queries.recordAction({
           userId: actor.userId,
           action: CONFIG_EXPORT_ACTION,
@@ -274,6 +319,8 @@ export const registerProjectConfigRoutes = async (
             branch: answer.branch,
             commit_sha: answer.commit_sha,
             merge_request_url: answer.merge_request_url,
+            // WP-91: what the next press re-validates against the provider (backlog 225).
+            merge_request_iid: mergeRequestIid,
             paths: answer.paths,
             notes: answer.notes,
             idempotency_key: key,

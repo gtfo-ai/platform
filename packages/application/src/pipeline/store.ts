@@ -56,6 +56,7 @@ import type {
 import type { Approval, Question, QueuedTask, Task } from '@platform/domain';
 import type { ConcurrencyConflict } from '../events/concurrency.js';
 import type { Transaction } from '../ports/transaction.js';
+import type { RunSettingsSnapshot } from './settings-snapshot.js';
 
 /**
  * How a superseded merge request's `close_superseded_mr` duty ended (migration 0043, WP-59 review
@@ -684,7 +685,17 @@ export interface TaskRepository {
    * @throws when the task does not exist, like `save` and the two writes above.
    */
   addSpend(tx: Transaction, taskId: Id, usd: number): Promise<void>;
-  /** WIP counting (BD-010); `countsAsActive` / `countsInPipeline` decide which states count. */
+  /**
+   * WIP counting (BD-010); `countsAsActive` / `countsInPipeline` decide which states count.
+   *
+   * **It serialises admission per project for the rest of `tx`** (WP-91): an implementation makes
+   * a second caller for the same project wait until the first caller's transaction ends, and then
+   * counts what it committed — so two admissions in one instant cannot both pass a limit of one.
+   * The counted rows are the tasks themselves (committed state, not a projection written after the
+   * fact — standing rule 89). The SQL adapter takes a transaction-scoped advisory lock; the
+   * in-memory store is single-threaded and needs none. `pipeline-store-concurrency-suite.ts` holds
+   * both to it.
+   */
   counts(
     tx: Transaction,
     projectId: Id,
@@ -1040,6 +1051,17 @@ export type NewRun = StoredRun & {
    * projection selects it itself.
    */
   readonly contextPack: ContextPackRecord | null;
+  /**
+   * The effective configuration the run was planned with and its hash — `runs.settings_snapshot`
+   * and `runs.settings_hash`, whose first writer this is (WP-91, PROGRESS backlog 227;
+   * `settings-snapshot.ts` has what is in it and how the hash is taken).
+   *
+   * Written in the row's own insert. `null` is *"no snapshot was recorded"*, which no production
+   * path produces — both `runs.insert` call sites pass one — and which the row spells as
+   * `settings_hash is null` beside 0004's `'{}'` default; that pair is also what every run created
+   * before WP-91 reads as. Write-only, for the prompt columns' reason.
+   */
+  readonly settings: RunSettingsSnapshot | null;
 };
 
 export interface RunRepository {

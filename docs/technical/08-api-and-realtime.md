@@ -189,6 +189,13 @@
 > maximum, the settings and the repository's file, the repository winning — Q94 (a)) and
 > `repository` (the reading) beside `config`, which stays the settings layer; a repository file
 > that does not parse makes it **409 `invalid_repository_config`** naming the key paths.
+> **WP-91 added** to the export a `status: 'open'` answer — the previous export's merge request,
+> recorded on its `human_actions` row and re-read through the executor, is still open, so nothing is
+> committed or opened (a provider that cannot say refuses the export `409 config_export_unavailable`
+> rather than guessing) — and to `GET …/config` `last_export` (the newest export as recorded) and
+> `not_applied` (the settings' unread keys, and a WIP limit the organisation's maximum lowered),
+> which `PUT …/config` also answers with; a `pipeline.wip` above the organisation's maximum is
+> `409 wip_above_organisation`.
 > **WP-27 removed three
 > of them** — `POST /api/runs/:id/steer` and `POST /api/tasks/:id/{take-over,hand-back}` are served,
 > and `POST /api/runs/:id/steer` is the one endpoint this document gives a rate limit to (below).

@@ -35,11 +35,13 @@
  */
 import type { Id } from '@platform/contracts';
 import {
+  gitReads,
   integrationsForProject,
   knowledgeWrites,
   noRunScopedSecrets,
   type PipelineIntegrationsPort,
 } from '../pipeline/integrations.js';
+import { IntegrationError } from '../ports/integrations/common.js';
 import type { CommitAction } from '../ports/integrations/git-provider.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
@@ -73,6 +75,21 @@ export interface ConfigExportRequest {
   readonly exportId: string;
   /** BD-025 §4: the human the bot acts for, as the uuid the audit row names. */
   readonly requestedByUserId: Id;
+  /**
+   * The merge request the project's last export opened, as its `human_actions` row recorded it,
+   * or `null` when there is none (never exported, only `unchanged` answers, or a row written before
+   * WP-91 recorded the reference). Re-validated against the provider before it is believed.
+   */
+  readonly previous: PreviousConfigExport | null;
+}
+
+/** The last export's merge request, as recorded (WP-91, PROGRESS backlog 225). */
+export interface PreviousConfigExport {
+  readonly iid: number;
+  readonly url: string;
+  readonly branch: string;
+  /** The configuration that export carried. */
+  readonly configHash: string;
 }
 
 export type ConfigExportReport =
@@ -81,9 +98,24 @@ export type ConfigExportReport =
       readonly branch: string;
       readonly commitSha: string;
       readonly mergeRequestUrl: string | null;
+      /** The merge request's number, recorded so the next press can re-validate it (WP-91). */
+      readonly mergeRequestIid: number | null;
       /** The paths the commit carried, in order. */
       readonly paths: readonly string[];
       /** Platform text for what the export left out and why — the pointer, today. */
+      readonly notes: readonly string[];
+    }
+  /**
+   * The previous export's merge request is **still open** at the provider, so none was opened
+   * (WP-91). `configHash` is what that merge request carries; `notes` says whether it is the
+   * configuration being exported now.
+   */
+  | {
+      readonly status: 'open';
+      readonly branch: string;
+      readonly mergeRequestIid: number;
+      readonly mergeRequestUrl: string;
+      readonly configHash: string;
       readonly notes: readonly string[];
     }
   /** The default branch already says exactly this. Nothing was committed or opened. */
@@ -214,6 +246,71 @@ const descriptionFor = (
     `Requested by user ${request.requestedByUserId}.`,
   ].join('\n');
 
+/**
+ * The previous export's merge request when the provider says it is **still open**, as the report
+ * this export answers with; `null` when there is none to ask about or it has been merged or closed
+ * (WP-91, PROGRESS backlog 225).
+ *
+ * **A stored reference alone can be stale**, so it is re-read through the executor (a read: the
+ * audit row, the rate-limit budget), and the three answers are distinct:
+ *
+ *  - `opened` (or `locked`) — answered, and nothing is committed or opened: a second merge request
+ *    for the same file is what a reviewer would otherwise have to reconcile.
+ *  - `merged` / `closed`, or the provider's `not_found` (deleted) — it is not open, and the export
+ *    proceeds; the default branch then decides `unchanged` or a new branch.
+ *  - **anything else** (the provider unreachable, a response that fails its schema) — the export
+ *    is **refused** as `unavailable`, naming the merge request. Fail closed on a mutation
+ *    (standing rule 20): proceeding would open a possible duplicate on a guess.
+ *
+ * A merge request that carries a **different** configuration is still answered rather than
+ * superseded: two open merge requests writing the same file conflict with each other, and which
+ * one wins is the reviewer's decision. The note says so and names the way out (merge or close it,
+ * then export again).
+ */
+const stillOpenExport = async (
+  integrations: Awaited<ReturnType<typeof integrationsForProject>>,
+  request: ConfigExportRequest,
+): Promise<ConfigExportReport | null> => {
+  const previous = request.previous;
+  if (previous === null) {
+    return null;
+  }
+  let mergeRequest: Awaited<ReturnType<ReturnType<typeof gitReads>['mergeRequest']>>;
+  try {
+    mergeRequest = await gitReads(integrations).mergeRequest(
+      { iid: previous.iid, url: previous.url, branch: previous.branch },
+      { projectId: request.projectId, taskId: null },
+    );
+  } catch (error) {
+    if (error instanceof IntegrationError && error.code === 'not_found') {
+      return null;
+    }
+    return {
+      status: 'unavailable',
+      reason: `the previous export's merge request !${previous.iid} could not be read, so the export cannot tell whether it is still open; nothing was proposed, rather than a second merge request on a guess: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  if (
+    mergeRequest === null ||
+    (mergeRequest.state !== 'opened' && mergeRequest.state !== 'locked')
+  ) {
+    return null;
+  }
+  const same = previous.configHash === request.configHash;
+  return {
+    status: 'open',
+    branch: previous.branch,
+    mergeRequestIid: previous.iid,
+    mergeRequestUrl: mergeRequest.web_url,
+    configHash: previous.configHash,
+    notes: [
+      same
+        ? `merge request !${previous.iid} already proposes this configuration and is still open; no second one was opened`
+        : `merge request !${previous.iid} is still open and proposes an earlier configuration (${previous.configHash.slice(0, 12)}); no second one was opened — merge or close it, then export again`,
+    ],
+  };
+};
+
 /** One export. Outside any transaction; see the module note. */
 export const exportProjectConfig = async (
   options: ConfigExportOptions,
@@ -231,6 +328,11 @@ export const exportProjectConfig = async (
       status: 'unavailable',
       reason: 'the project has no git binding, so there is no repository to propose the file to',
     };
+  }
+
+  const open = await stillOpenExport(integrations, request);
+  if (open !== null) {
+    return open;
   }
 
   const read = await options.files.read({
@@ -309,6 +411,7 @@ export const exportProjectConfig = async (
     branch,
     commitSha: commit.sha,
     mergeRequestUrl: mergeRequest?.web_url ?? null,
+    mergeRequestIid: mergeRequest?.ref.iid ?? null,
     paths,
     notes,
   };

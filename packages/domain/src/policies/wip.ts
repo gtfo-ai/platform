@@ -6,7 +6,7 @@
  * limits). Tasks beyond limits wait in `Queued` ordered by ticket priority then age. Limits exist
  * to keep review load humane, not only to protect spend."
  */
-import type { Id, IsoDateTime, TaskState } from '@platform/contracts';
+import type { Id, IsoDateTime, TaskState, WipLimitsConfig } from '@platform/contracts';
 
 export interface WipLimits {
   /** Project: tasks actively moving through stages. */
@@ -22,6 +22,63 @@ export const DEFAULT_WIP_LIMITS = {
   maxTasksInPipeline: 5,
   maxParallelRuns: 4,
 } as const satisfies WipLimits;
+
+/** A project limit the organisation's value lowered — reported, never applied in silence. */
+export interface WipBound {
+  readonly key: 'pipeline.wip.max_parallel_tasks' | 'pipeline.wip.max_tasks_in_pipeline';
+  /** What the project (or, when it states nothing, BD-010's default) asked for. */
+  readonly stated: number;
+  /** The organisation's value, which is what admission uses. */
+  readonly bound: number;
+}
+
+/**
+ * The WIP limits a project is admitted against — `pipeline.wip` (WP-91, backlog 224).
+ *
+ * The project's value where it states one, BD-010's default where it does not, and in either case
+ * **never above the organisation's** (`organizations.settings.pipeline.wip`): the organisation's
+ * value is a maximum, so a project can only tighten it (Q101's shape, one layer up). A lowered
+ * organisation value therefore applies at the next read, and every limit it lowered is answered in
+ * `bounded` so the effective-configuration view can say so rather than show a number nobody wrote.
+ * `maxParallelRuns` is the organisation's own limit and stays BD-010's default (backlog 127).
+ */
+export const resolveWipLimits = (
+  project: WipLimitsConfig | undefined,
+  organisation: WipLimitsConfig | undefined,
+): { readonly limits: WipLimits; readonly bounded: readonly WipBound[] } => {
+  const bounded: WipBound[] = [];
+  const pick = (
+    key: WipBound['key'],
+    stated: number | undefined,
+    fallback: number,
+    bound: number | undefined,
+  ): number => {
+    const wanted = stated ?? fallback;
+    if (bound !== undefined && wanted > bound) {
+      bounded.push({ key, stated: wanted, bound });
+      return bound;
+    }
+    return wanted;
+  };
+  return {
+    limits: {
+      maxParallelTasks: pick(
+        'pipeline.wip.max_parallel_tasks',
+        project?.max_parallel_tasks,
+        DEFAULT_WIP_LIMITS.maxParallelTasks,
+        organisation?.max_parallel_tasks,
+      ),
+      maxTasksInPipeline: pick(
+        'pipeline.wip.max_tasks_in_pipeline',
+        project?.max_tasks_in_pipeline,
+        DEFAULT_WIP_LIMITS.maxTasksInPipeline,
+        organisation?.max_tasks_in_pipeline,
+      ),
+      maxParallelRuns: DEFAULT_WIP_LIMITS.maxParallelRuns,
+    },
+    bounded,
+  };
+};
 
 /** States in which a task occupies a `max_parallel_tasks` slot: it is moving right now. */
 const ACTIVE_TASK_STATES: ReadonlySet<TaskState> = new Set<TaskState>(['active', 'returned']);

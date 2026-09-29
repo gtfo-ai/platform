@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 import { exactSecretRedactor } from '../integrations/redaction.js';
 import type { PipelineIntegrations } from '../pipeline/integrations.js';
 import { knowledgeWrites, staticPipelineIntegrations } from '../pipeline/integrations.js';
+import { IntegrationError } from '../ports/integrations/common.js';
 import type { CommitFilesRequest, CommitRef } from '../ports/integrations/git-provider.js';
 import {
   type ConfigExportRequest,
@@ -36,8 +37,11 @@ const harness = (
     readonly git?: boolean;
     readonly files?: Partial<Record<string, RepositoryFileEntry>>;
     readonly read?: RepositoryFilesResult;
+    /** What `getMergeRequest` answers for the previous export (WP-91): a state, or a throw. */
+    readonly previousState?: 'opened' | 'merged' | 'closed' | Error;
   } = {},
 ) => {
+  const mergeRequestReads: number[] = [];
   const commits: CommitFilesRequest[] = [];
   const mergeRequests: { branch: string; target: string; labels: readonly string[] }[] = [];
   const port = {
@@ -50,6 +54,16 @@ const harness = (
       return {
         ref: { provider: 'fake-git', project_path: 'acme/api', iid: 9, url: 'https://mr.test/9' },
         web_url: 'https://mr.test/9',
+      };
+    },
+    getMergeRequest: async (ref: { iid: number }) => {
+      mergeRequestReads.push(ref.iid);
+      const state = options.previousState ?? 'opened';
+      if (state instanceof Error) throw state;
+      return {
+        ref: { iid: ref.iid, url: 'https://mr.test/7' },
+        state,
+        web_url: 'https://mr.test/7',
       };
     },
   };
@@ -91,7 +105,7 @@ const harness = (
       },
     },
   };
-  return { commits, mergeRequests, reads, exportOptions };
+  return { commits, mergeRequests, reads, exportOptions, mergeRequestReads };
 };
 
 const request: ConfigExportRequest = {
@@ -101,6 +115,7 @@ const request: ConfigExportRequest = {
   content: CONTENT,
   exportId: EXPORT_ID,
   requestedByUserId: USER,
+  previous: null,
 };
 
 const file = (text: string): RepositoryFileEntry => ({
@@ -248,5 +263,84 @@ describe('exportProjectConfig', () => {
     ).rejects.toThrow(/agentic\//);
     expect(h.commits).toEqual([]);
     expect(h.mergeRequests).toEqual([]);
+  });
+});
+
+/**
+ * WP-91 (PROGRESS backlog 225): a second press while the first export's merge request is open
+ * answers that merge request instead of opening a second — and the stored reference is believed
+ * only after the provider confirms it.
+ */
+describe('an export with a previous merge request on record', () => {
+  const previous = {
+    iid: 7,
+    url: 'https://mr.test/7',
+    branch: 'agentic/config/0123456789ab-aaaaaaaaaaaa',
+    configHash: HASH,
+  };
+
+  it('answers the open merge request and commits nothing, opens nothing', async () => {
+    const h = harness({ previousState: 'opened' });
+    const report = await exportProjectConfig(h.exportOptions, { ...request, previous });
+    expect(report).toMatchObject({
+      status: 'open',
+      mergeRequestIid: 7,
+      mergeRequestUrl: 'https://mr.test/7',
+      branch: previous.branch,
+    });
+    expect(h.mergeRequestReads).toEqual([7]);
+    expect(h.commits).toHaveLength(0);
+    expect(h.mergeRequests).toHaveLength(0);
+    expect(h.reads).toHaveLength(0);
+    expect(report.status === 'open' ? report.notes[0] : '').toMatch(/already proposes this/);
+  });
+
+  it('says so when the open merge request carries an earlier configuration, and still opens none', async () => {
+    const h = harness({ previousState: 'opened' });
+    const report = await exportProjectConfig(h.exportOptions, {
+      ...request,
+      previous: { ...previous, configHash: 'f'.repeat(32) },
+    });
+    expect(report.status).toBe('open');
+    expect(report.status === 'open' ? report.notes[0] : '').toMatch(/earlier configuration/);
+    expect(h.commits).toHaveLength(0);
+  });
+
+  for (const state of ['merged', 'closed'] as const) {
+    it(`opens a new one when the previous merge request was ${state}`, async () => {
+      const h = harness({ previousState: state });
+      const report = await exportProjectConfig(h.exportOptions, { ...request, previous });
+      expect(report.status).toBe('exported');
+      expect(h.commits).toHaveLength(1);
+      expect(h.mergeRequests).toHaveLength(1);
+    });
+  }
+
+  it('opens a new one when the provider no longer has it (not_found)', async () => {
+    const h = harness({
+      previousState: new IntegrationError('not_found', 'fake-git', 'no such merge request'),
+    });
+    const report = await exportProjectConfig(h.exportOptions, { ...request, previous });
+    expect(report.status).toBe('exported');
+    expect(h.mergeRequests).toHaveLength(1);
+  });
+
+  it('refuses, rather than guessing, when the provider cannot say', async () => {
+    const h = harness({
+      previousState: new IntegrationError('unavailable', 'fake-git', 'connection reset'),
+    });
+    const report = await exportProjectConfig(h.exportOptions, { ...request, previous });
+    expect(report.status).toBe('unavailable');
+    expect(report.status === 'unavailable' ? report.reason : '').toMatch(
+      /!7 could not be read.*connection reset/,
+    );
+    expect(h.commits).toHaveLength(0);
+    expect(h.mergeRequests).toHaveLength(0);
+  });
+
+  it('asks nothing when there is no previous merge request on record', async () => {
+    const h = harness();
+    await exportProjectConfig(h.exportOptions, request);
+    expect(h.mergeRequestReads).toEqual([]);
   });
 });

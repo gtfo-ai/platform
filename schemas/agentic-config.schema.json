@@ -130,6 +130,18 @@
             }
           },
           "additionalProperties": false
+        },
+        "wip": {
+          "type": "object",
+          "properties": {
+            "max_parallel_tasks": {
+              "$ref": "#/$defs/anon_f4252dd9"
+            },
+            "max_tasks_in_pipeline": {
+              "$ref": "#/$defs/anon_7cdb89ae"
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
@@ -707,6 +719,11 @@
         "gate"
       ]
     },
+    "anon_7cdb89ae": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 200
+    },
     "anon_88378b47": {
       "anyOf": [
         {
@@ -792,6 +809,11 @@
     },
     "anon_e6c200cc": {
       "$ref": "#/$defs/PathPattern"
+    },
+    "anon_f4252dd9": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 50
     },
     "anon_f5e4ca83": {
       "type": "string",

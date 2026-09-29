@@ -346,6 +346,63 @@ describe('the effective configuration’s layers (WP-63)', () => {
     expect(response.repository).toMatchObject({ status: 'valid', commit_sha: SHA });
   });
 
+  /** WP-91 criterion 3: the settings' unread keys are published, and a clean document has none. */
+  it('publishes the settings’ unread keys in `not_applied`, and nothing for a clean document', () => {
+    const enabled = effectiveConfigResponseSchema.parse(
+      effectiveConfigResponseOf({
+        projectId: ID,
+        row: row({
+          version: 1,
+          pipeline: {
+            template_overrides: { feature: { stages: { business_review: { enabled: false } } } },
+          },
+        }),
+        layers: null,
+        redactText,
+      }),
+    );
+    expect(enabled.not_applied.map((item) => item.key)).toEqual([
+      'pipeline.template_overrides.feature.stages.business_review.enabled',
+    ]);
+    expect(answer(null).not_applied).toEqual([]);
+    expect(answer(null).last_export).toBeNull();
+  });
+
+  /** WP-91 criterion 4's read half: `pipeline.wip`, the defaults, and the organisation's bound. */
+  it('answers the WIP limits admission uses, bounded by the organisation’s maximum', () => {
+    const withWip = (orgSettings: unknown) =>
+      effectiveConfigResponseSchema.parse(
+        effectiveConfigResponseOf({
+          projectId: ID,
+          row: row({ version: 1, pipeline: { wip: { max_parallel_tasks: 3 } } }),
+          layers: { ...repo('absent', null), orgSettings },
+          redactText,
+        }),
+      );
+    const open = withWip({});
+    expect(open.effective.pipeline?.wip).toEqual({
+      max_parallel_tasks: 3,
+      max_tasks_in_pipeline: 5,
+    });
+    expect(open.sources['pipeline.wip.max_parallel_tasks']).toBe('project');
+    expect(open.sources['pipeline.wip.max_tasks_in_pipeline']).toBe('default');
+    expect(open.not_applied).toEqual([]);
+
+    const bounded = withWip({ pipeline: { wip: { max_parallel_tasks: 2 } } });
+    expect(bounded.effective.pipeline?.wip?.max_parallel_tasks).toBe(2);
+    expect(bounded.sources['pipeline.wip.max_parallel_tasks']).toBe('org');
+    expect(bounded.not_applied).toEqual([
+      {
+        key: 'pipeline.wip.max_parallel_tasks',
+        reason: "the organisation's maximum is 2, so 2 applies rather than 3",
+      },
+    ]);
+    // A maximum nobody can read is refused, never read as "no bound".
+    expect(() => withWip({ pipeline: { wip: { max_parallel_tasks: 'many' } } })).toThrow(
+      /organizations\.settings\.pipeline\.wip does not parse/,
+    );
+  });
+
   it('gives the settings their keys back when the repository has no file or was never read', () => {
     for (const layers of [repo('absent', null), null]) {
       const response = answer(layers);

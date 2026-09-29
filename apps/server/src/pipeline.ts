@@ -107,7 +107,7 @@ import {
 import type { Id, IsoDateTime, MaterialisedAutonomy } from '@platform/contracts';
 import { materialisedAutonomySchema } from '@platform/contracts';
 import type { ConfigValues } from '@platform/domain';
-import { SHIPPED_TEMPLATES } from '@platform/domain';
+import { resolveWipLimits, SHIPPED_TEMPLATES } from '@platform/domain';
 import type {
   jobs as jobsAdapters,
   launcher as launcherAdapters,
@@ -146,6 +146,7 @@ import type pg from 'pg';
 import { agentRunEnvironment, composeAgentRunner } from './agent.js';
 import {
   organisationCommandsFrom,
+  organisationWipFrom,
   REPOSITORY_CONFIG_COLUMNS,
   type RepositoryConfigColumns,
   repositorySnapshotFrom,
@@ -700,6 +701,10 @@ export const createProjectSettingsPort = (
     return defaultProjectSettings(projectId, {
       templates: SHIPPED_TEMPLATES,
       config: layered.values,
+      // WP-91 (backlog 224): `pipeline.wip` — the settings' value, a repository file's where it is
+      // lower, BD-010's default where both are silent — never above the organisation's.
+      wip: resolveWipLimits(layered.values.pipeline?.wip, organisationWipFrom(row.org_settings))
+        .limits,
       ...(organisationCommands === undefined ? {} : { organisationCommands }),
       ...(layered.repositoryCommands === undefined
         ? {}

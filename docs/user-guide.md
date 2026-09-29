@@ -201,7 +201,10 @@ The *configuration* reaches the repository the same way, from the project's **Se
 rather than from the wizard: **Propose these settings to the repository** writes them as
 `.agentic/config.yml`, adds a one-line pointer to the knowledge index in `CLAUDE.md`, and opens a
 merge request on an `agentic/config/*` branch — never a direct commit onto the default branch. The
-button stays on the page, so a settings change made months later is reviewable the same way.
+button stays on the page, so a settings change made months later is reviewable the same way. The
+card shows the last export and its merge request after a reload (as recorded when it was made), and
+pressing the button again while that merge request is still open answers it — *no second one was
+opened* — instead of opening another; merge or close it first to propose a newer configuration.
 
 **Once that file is on the default branch, it wins — within limits.** The platform reads the
 repository's own `.agentic/config.yml` from the default branch (after every knowledge index run,

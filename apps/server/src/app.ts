@@ -106,7 +106,11 @@ import {
   findTaskPosition,
   listRunMessages,
 } from './queries/pipeline-queries.js';
-import { findProjectAutonomy, listProjectAudit } from './queries/project-queries.js';
+import {
+  findLastConfigExport,
+  findProjectAutonomy,
+  listProjectAudit,
+} from './queries/project-queries.js';
 import {
   findShadowBatch,
   findShadowBatchProjectId,
@@ -494,7 +498,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       // operator typed, which can carry a pasted credential (`describeConfigIssues`).
       redactor: redactionAdapters.patternRedactor(),
     });
-    // WP-63: the configuration export and the repository re-read (Q94). The five database reads
+    // WP-63: the configuration export and the repository re-read (Q94). The database reads and writes
     // are bound here so the route module names none of them (`ProjectConfigQueries`).
     await registerProjectConfigRoutes(app, {
       queries: {
@@ -506,6 +510,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         recordAction: async (input) => recordHumanAction(options.database, input),
         readRepository: async (projectId) =>
           repositorySnapshotFrom((await findConfigLayers(options.database, projectId)) ?? {}),
+        lastExport: async (projectId) => findLastConfigExport(options.database, projectId),
       },
       commands: options.projectConfig ?? null,
       redactText: (value) => redactionAdapters.patternRedactor().redactText(value).value,

@@ -109,6 +109,7 @@ import {
 } from './lease.js';
 import { injectedSecretRedactorFor } from './run-redaction.js';
 import { contextBudgetRefusal, type ProjectSettings, repositoryConfigRefusal } from './settings.js';
+import { runSettingsSnapshot } from './settings-snapshot.js';
 import type { RunStopReasons } from './stop-reasons.js';
 import type { PipelineStore, ReturnCause, StoredArtifact, StoredTask } from './store.js';
 import {
@@ -862,6 +863,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
     job: StageExecutionJob,
     plan: StageRunPlan,
     runId: Id,
+    settings: ProjectSettings,
   ): Promise<Prepared> =>
     unitOfWork.transaction(async (scope): Promise<Prepared> => {
       const valid = revalidate(await store.tasks.load(scope.tx, job.taskId), job);
@@ -943,6 +945,9 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         // transaction that commits the run — the pack was planned between the two transactions,
         // so this is the first moment the row it belongs to exists.
         contextPack,
+        // WP-91 (backlog 227): the settings this plan was made from — the ones `prepare` read and
+        // handed the planner — frozen with the run, through the run's own redactor.
+        settings: runSettingsSnapshot(settings, redactor),
       });
       /**
        * The lease, claimed in the **same transaction as the row** (WP-47).
@@ -1000,7 +1005,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       ...(job.mergeRequestPaths === undefined ? {} : { mergeRequestPaths: job.mergeRequestPaths }),
       ...(job.observability === undefined ? {} : { observability: job.observability }),
     });
-    return startTheRun(job, plan, runId);
+    return startTheRun(job, plan, runId, settings);
   };
 
   /**

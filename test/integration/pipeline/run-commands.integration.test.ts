@@ -198,6 +198,7 @@ const liveRun = async (): Promise<{ runId: Id; taskId: Id }> => {
     userPrompt: null,
     redactionCount: 0,
     contextPack: null,
+    settings: null,
     status: 'running',
     terminalReason: null,
     sessionId: null,

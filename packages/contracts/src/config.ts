@@ -155,10 +155,52 @@ export const pipelineLimitsSchema = z.strictObject({
   question_timeout: durationSchema.optional(),
 });
 
+/** The largest `max_parallel_tasks` a document may state. A bound, not a recommendation. */
+export const MAX_WIP_PARALLEL_TASKS = 50;
+/** The largest `max_tasks_in_pipeline` a document may state. */
+export const MAX_WIP_TASKS_IN_PIPELINE = 200;
+
+/**
+ * BD-010's two per-project WIP limits — `pipeline.wip` (WP-91, PROGRESS backlog 224).
+ *
+ * BD-010:8 *"Projects define `max_parallel_tasks` (default 2) and `max_tasks_in_pipeline` (default
+ * 5)"* had no key until WP-91. Both are at least **1**: a limit of 0 would queue every task for
+ * ever, which is a project switched off rather than a limit, and nothing in the product asks for
+ * that switch here. The upper bounds are the schema's, so a typo of `500` is refused rather than
+ * read.
+ *
+ * **Bounded by the organisation's value** (`organizations.settings.pipeline.wip`, same shape): a
+ * project may state less and never more — a write above it is refused by name, and an organisation
+ * value lowered after the write applies at the next read (`resolveWipLimits` in
+ * `@platform/application`). The organisation's `max_parallel_runs` is not here (backlog 127).
+ *
+ * When both are stated, the pipeline limit may not be below the parallel one: every active task is
+ * also in the pipeline, so such a document would state a parallel limit it can never reach.
+ */
+export const wipLimitsConfigSchema = z
+  .strictObject({
+    max_parallel_tasks: z.int().min(1).max(MAX_WIP_PARALLEL_TASKS).optional(),
+    max_tasks_in_pipeline: z.int().min(1).max(MAX_WIP_TASKS_IN_PIPELINE).optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (
+      value.max_parallel_tasks !== undefined &&
+      value.max_tasks_in_pipeline !== undefined &&
+      value.max_tasks_in_pipeline < value.max_parallel_tasks
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['max_tasks_in_pipeline'],
+        message: `max_tasks_in_pipeline (${value.max_tasks_in_pipeline}) is below max_parallel_tasks (${value.max_parallel_tasks}); every active task is also in the pipeline`,
+      });
+    }
+  });
+
 export const pipelineConfigSchema = z.strictObject({
   template_overrides: z.record(templateIdSchema, templateOverrideSchema).optional(),
   custom_stages: z.array(customStageSchema).optional(),
   limits: pipelineLimitsSchema.optional(),
+  wip: wipLimitsConfigSchema.optional(),
 });
 
 // ── stages (agent settings) ──────────────────────────────────────────────────
@@ -852,6 +894,7 @@ export type AgenticConfig = z.infer<typeof agenticConfigSchema>;
 export type ProjectConfig = z.infer<typeof projectConfigSchema>;
 export type PipelineConfig = z.infer<typeof pipelineConfigSchema>;
 export type PipelineLimits = z.infer<typeof pipelineLimitsSchema>;
+export type WipLimitsConfig = z.infer<typeof wipLimitsConfigSchema>;
 export type StageAgentSettings = z.infer<typeof stageAgentSettingsSchema>;
 export type PoliciesConfig = z.infer<typeof policiesConfigSchema>;
 export type KnowledgeApplyPolicy = z.infer<typeof knowledgeApplyPolicySchema>;

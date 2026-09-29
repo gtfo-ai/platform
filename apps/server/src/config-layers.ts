@@ -21,16 +21,27 @@
  *    `.agentic/config.yml` (`refreshRepositoryConfig`).
  */
 import { type RepositoryConfigSnapshot, revalidateRepositorySnapshot } from '@platform/application';
-import { type CommandPolicy, commandPolicySchema } from '@platform/contracts';
+import {
+  type CommandPolicy,
+  commandPolicySchema,
+  type WipLimitsConfig,
+  wipLimitsConfigSchema,
+} from '@platform/contracts';
 import { config as configAdapters, redaction as redactionAdapters } from '@platform/infrastructure';
 
 /** `organizations.settings` names a `commands` value this release cannot read. */
 export class OrganisationSettingsInvalidError extends Error {
   readonly keyPaths: readonly string[];
 
-  constructor(keyPaths: readonly string[]) {
+  constructor(
+    keyPaths: readonly string[],
+    subject: { readonly key: string; readonly what: string } = {
+      key: 'commands',
+      what: 'command maximum',
+    },
+  ) {
     super(
-      `organizations.settings.commands does not parse (${keyPaths.join(', ')}); the organisation's command maximum is refused rather than read as absent, so no run is planned against a maximum nobody can name`,
+      `organizations.settings.${subject.key} does not parse (${keyPaths.join(', ')}); the organisation's ${subject.what} is refused rather than read as absent, so no run is planned against a maximum nobody can name`,
     );
     this.name = 'OrganisationSettingsInvalidError';
     this.keyPaths = keyPaths;
@@ -52,6 +63,41 @@ export const organisationCommandsFrom = (settings: unknown): CommandPolicy | und
       parsed.error.issues.map((issue) =>
         ['commands', ...issue.path.map(String)].join('.').slice(0, 120),
       ),
+    );
+  }
+  return parsed.data;
+};
+
+/**
+ * The organisation's WIP maximum — `organizations.settings.pipeline.wip`, the project key's shape
+ * (WP-91, backlog 224) — or `undefined` when it states none, which bounds a project by nothing
+ * but the schema. Like the command maximum it has **no writer but SQL** on this build (the
+ * organisation settings document is WP-93's), and like it a value that does not parse is a
+ * refusal, never an absent bound: a maximum read as "none" is the permissive reading of a
+ * restriction somebody wrote (standing rule 20).
+ */
+export const organisationWipFrom = (settings: unknown): WipLimitsConfig | undefined => {
+  if (typeof settings !== 'object' || settings === null || Array.isArray(settings)) {
+    return undefined;
+  }
+  const pipeline = (settings as Record<string, unknown>).pipeline;
+  if (pipeline === undefined) {
+    return undefined;
+  }
+  const declared =
+    typeof pipeline === 'object' && pipeline !== null && !Array.isArray(pipeline)
+      ? (pipeline as Record<string, unknown>).wip
+      : pipeline;
+  if (declared === undefined) {
+    return undefined;
+  }
+  const parsed = wipLimitsConfigSchema.safeParse(declared);
+  if (!parsed.success) {
+    throw new OrganisationSettingsInvalidError(
+      parsed.error.issues.map((issue) =>
+        ['pipeline', 'wip', ...issue.path.map(String)].join('.').slice(0, 120),
+      ),
+      { key: 'pipeline.wip', what: 'WIP maximum' },
     );
   }
   return parsed.data;

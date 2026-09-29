@@ -242,6 +242,28 @@ describe('an ask is a run with a task and no stage (criterion 1)', () => {
     );
   });
 
+  it('hands runs.insert the settings it was planned with, and their hash (WP-91, rule 49)', async () => {
+    // The second `runs.insert` call site freezes the configuration the way a stage's does.
+    const harness = harnessWith({ settings: { project: { communication_language: 'cs' } } });
+    await seedTask(harness);
+    const inserted: NewRun[] = [];
+    const repository = harness.store.runs as { insert: typeof harness.store.runs.insert };
+    const original = repository.insert.bind(harness.store.runs);
+    repository.insert = async (tx, run) => {
+      inserted.push(run);
+      await original(tx, run);
+    };
+    await askThroughHttp(harness);
+
+    const [ask] = harness.asks.all();
+    const row = inserted.find((run) => run.id === ask?.runId);
+    expect(row?.settings?.hash).toMatch(/^[0-9a-f]{64}$/);
+    const snapshot = row?.settings?.snapshot as
+      | { effective: { project: Record<string, unknown> } }
+      | undefined;
+    expect(snapshot?.effective.project.communication_language).toBe('cs');
+  });
+
   it('claims this process’s run lease, so the sweep reaches it at the lease bound (backlog 120)', async () => {
     /**
      * WP-48. An ask's run is inserted by a different composition from the stage executor's, and

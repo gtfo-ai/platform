@@ -31,6 +31,7 @@ import type {
 import {
   ignoredProjectAllow,
   REPOSITORY_CONFIG_PATH,
+  settingsNotApplied,
   tightenRepositoryLayer,
 } from '@platform/application';
 import {
@@ -38,10 +39,12 @@ import {
   agenticConfigSchema,
   apiErrorSchema,
   budgetsResponseSchema,
+  type ConfigSource,
   checklistNameOf,
   type EffectiveConfigResponse,
   effectiveConfigResponseSchema,
   type IsoDateTime,
+  type LastConfigExport,
   listTasksQuerySchema,
   projectsResponseSchema,
   type RepositoryConfigReading,
@@ -52,9 +55,11 @@ import {
   tasksResponseSchema,
 } from '@platform/contracts';
 import {
+  type ConfigValues,
   mergeProjectConfig,
   PROPOSED_REVIEW_CHECKLISTS,
   PROPOSED_RISK_CLASSES,
+  resolveWipLimits,
 } from '@platform/domain';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -63,6 +68,7 @@ import { requirePermission } from '../auth/rbac.js';
 import {
   OrganisationSettingsInvalidError,
   organisationCommandsFrom,
+  organisationWipFrom,
   repositorySnapshotFrom,
 } from '../config-layers.js';
 import { HttpError, NotFoundError } from '../errors.js';
@@ -76,7 +82,11 @@ import {
   type ProjectConfigRow,
 } from '../queries/identity-queries.js';
 import { listProjectTasks, type TaskCursor } from '../queries/pipeline-queries.js';
-import { findProjectReadiness, listProjectSummaries } from '../queries/project-queries.js';
+import {
+  findLastConfigExport,
+  findProjectReadiness,
+  listProjectSummaries,
+} from '../queries/project-queries.js';
 
 export interface ProjectRoutesOptions {
   readonly database: Database;
@@ -287,6 +297,8 @@ export const effectiveConfigResponseOf = (input: {
   readonly row: ProjectConfigRow;
   readonly layers: ConfigLayerColumns | null;
   readonly redactText: (value: string) => string;
+  /** The project's last recorded export (WP-91, backlog 225); omitted reads as none. */
+  readonly lastExport?: LastConfigExport | null;
 }): EffectiveConfigResponse => {
   const { projectId, row } = input;
   // A project that has never been configured stores `{}`. The settings layer of "no
@@ -322,8 +334,10 @@ export const effectiveConfigResponseOf = (input: {
   }
 
   let organisationCommands: ReturnType<typeof organisationCommandsFrom>;
+  let organisationWip: ReturnType<typeof organisationWipFrom>;
   try {
     organisationCommands = organisationCommandsFrom(input.layers?.orgSettings);
+    organisationWip = organisationWipFrom(input.layers?.orgSettings);
   } catch (error) {
     if (error instanceof OrganisationSettingsInvalidError) {
       throw new HttpError(409, 'invalid_organisation_config', error.message);
@@ -359,13 +373,39 @@ export const effectiveConfigResponseOf = (input: {
     { autonomyMaximum: PUBLISHED_AUTONOMY_MAXIMUM },
   );
 
+  // WP-91 (backlog 224): the organisation's WIP maximum bounds whatever the layers produced — the
+  // settings port's `resolveWipLimits`, so the view and admission cannot disagree.
+  const wip = resolveWipLimits(effective.values.pipeline?.wip, organisationWip);
+  const sources: Record<string, ConfigSource> = { ...effective.sources };
+  for (const bound of wip.bounded) {
+    sources[bound.key] = 'org';
+  }
+  const effectiveValues: ConfigValues = {
+    ...effective.values,
+    pipeline: {
+      ...effective.values.pipeline,
+      wip: {
+        max_parallel_tasks: wip.limits.maxParallelTasks,
+        max_tasks_in_pipeline: wip.limits.maxTasksInPipeline,
+      },
+    },
+  };
+
   return {
     config: parsed.data,
-    effective: { version: 1, ...effective.values },
-    sources: { ...effective.sources },
+    effective: { version: 1, ...effectiveValues },
+    sources,
     repository: repositoryReadingOf(snapshot, tightened?.notApplied ?? []),
     hash: row.configHash ?? 'unconfigured',
     computed_at: row.updatedAt.toISOString(),
+    not_applied: [
+      ...settingsNotApplied(project),
+      ...wip.bounded.map((bound) => ({
+        key: bound.key,
+        reason: `the organisation's maximum is ${bound.bound}, so ${bound.bound} applies rather than ${bound.stated}`,
+      })),
+    ],
+    last_export: input.lastExport ?? null,
     // WP-54: what the project declared and no role's baseline grants — dropped, never widened
     // (BD-025), and published here rather than dropped in silence. Since WP-63 it is judged after
     // the organisation maximum, and the repository file's entries after the settings' — so a file
@@ -376,6 +416,20 @@ export const effectiveConfigResponseOf = (input: {
     risk_class_proposal: riskClassProposalOf(row.proposedRiskClasses, parsed.data),
   };
 };
+
+/** A recorded export as the DTO publishes it (`lastConfigExportSchema`). */
+export const lastExportOf = (
+  recorded: Awaited<ReturnType<typeof findLastConfigExport>>,
+): LastConfigExport | null =>
+  recorded === null
+    ? null
+    : {
+        status: recorded.status,
+        config_hash: recorded.configHash,
+        branch: recorded.branch,
+        merge_request_url: recorded.mergeRequestUrl,
+        exported_at: recorded.exportedAt,
+      };
 
 /** The reading as the DTO publishes it (`repositoryConfigReadingSchema`). */
 export const repositoryReadingOf = (
@@ -444,6 +498,7 @@ export const registerProjectRoutes = async (
         row,
         layers: await findConfigLayers(options.database, projectId),
         redactText: (value) => options.redactor.redactText(value).value,
+        lastExport: lastExportOf(await findLastConfigExport(options.database, projectId)),
       });
     },
   );

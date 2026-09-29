@@ -11,8 +11,9 @@
  *  - **tighten-only** — merged so the result is never weaker than the settings (or the platform
  *    default when the settings are silent): `policies.protected_paths` and `policies.reviewers` are
  *    **unions**, `policies.risk_classes` adds classes and adds paths and requirements to a class the
- *    settings define, `policies.review_checklists` adds items, and `commands` narrow again after the
- *    settings (`runCommandPolicy`'s layers). Whatever the file tried to remove is **reported**.
+ *    settings define, `policies.review_checklists` adds items, `commands` narrow again after the
+ *    settings (`runCommandPolicy`'s layers), and `pipeline.wip` may lower a WIP limit and never
+ *    raise it (WP-91). Whatever the file tried to remove or raise is **reported**.
  *  - **not applied** — dropped and **reported** in the reading's `not_applied`: the dial and every
  *    key that overrides one of its policies (`AUTONOMY_POLICY_OVERRIDE_KEYS`, Q78 — a test holds the
  *    two lists together), the other policies whose loosening turns a check off (the dependency
@@ -62,6 +63,7 @@ export const REPOSITORY_KEY_GRADES: Readonly<Record<string, RepositoryKeyGrade>>
   'pipeline.limits.rebase_attempts': 'operational',
   'pipeline.limits.rebase_rechecks': 'operational',
   'pipeline.limits.question_timeout': 'not_applied',
+  'pipeline.wip': 'tighten_only',
   'stages.*.model': 'operational',
   'stages.*.effort': 'operational',
   'stages.*.max_turns': 'operational',
@@ -190,9 +192,12 @@ export const tightenRepositoryLayer = (
   readonly notApplied: readonly RepositoryConfigNotApplied[];
 } => {
   const notApplied: RepositoryConfigNotApplied[] = [];
+  const wip = tightenWip(project, repo, notApplied);
+  const withWip: ConfigValues =
+    wip === undefined ? repo : { ...repo, pipeline: { ...repo.pipeline, wip } };
   const policies = repo.policies;
   if (policies === undefined) {
-    return { values: repo, notApplied };
+    return { values: withWip, notApplied };
   }
   const settings = project.policies ?? {};
   const next: NonNullable<ConfigValues['policies']> = { ...policies };
@@ -274,5 +279,40 @@ export const tightenRepositoryLayer = (
     next.review_checklists = lists;
   }
 
-  return { values: { ...repo, policies: next }, notApplied };
+  return { values: { ...withWip, policies: next }, notApplied };
+};
+
+type WipKey = 'max_parallel_tasks' | 'max_tasks_in_pipeline';
+
+/**
+ * `pipeline.wip` from the file, **never above** the settings' value or, where the settings are
+ * silent, BD-010's default (WP-91): a lower limit keeps review load humane and costs only
+ * throughput, so the file may lower it; raising it lets merge rights buy concurrency — spend and
+ * review load — that `project.settings.write` did not grant (Q101's tighten-only shape). A value the
+ * file raised is kept at the settings' and reported.
+ */
+const tightenWip = (
+  project: ConfigValues,
+  repo: ConfigValues,
+  notApplied: RepositoryConfigNotApplied[],
+): NonNullable<NonNullable<ConfigValues['pipeline']>['wip']> | undefined => {
+  const declared = repo.pipeline?.wip;
+  if (declared === undefined) return undefined;
+  const settings = project.pipeline?.wip ?? {};
+  const defaults = PLATFORM_DEFAULT_CONFIG.pipeline?.wip ?? {};
+  const next = { ...declared };
+  for (const key of [
+    'max_parallel_tasks',
+    'max_tasks_in_pipeline',
+  ] as const satisfies readonly WipKey[]) {
+    const stated = declared[key];
+    const base = settings[key] ?? defaults[key];
+    if (stated === undefined || base === undefined || stated <= base) continue;
+    next[key] = base;
+    notApplied.push({
+      key: `pipeline.wip.${key}`,
+      reason: `${LOOSENING_REASON}; a repository file may lower a WIP limit, never raise it — ${base} is still in force`,
+    });
+  }
+  return next;
 };

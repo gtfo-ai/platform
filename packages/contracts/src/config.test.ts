@@ -3,6 +3,8 @@ import {
   agenticConfigSchema,
   commandPolicySchema,
   MAX_CONTEXT_BUDGET_TOKENS,
+  MAX_WIP_PARALLEL_TASKS,
+  MAX_WIP_TASKS_IN_PIPELINE,
   pipelineLimitsSchema,
   policiesConfigSchema,
   riskClassSchema,
@@ -39,6 +41,7 @@ const DOC_EXAMPLE = {
       human_rounds: 3,
       question_timeout: '1 working day',
     },
+    wip: { max_parallel_tasks: 2, max_tasks_in_pipeline: 5 },
   },
   stages: {
     refinement: { model: 'claude-opus-5', effort: 'medium', max_turns: 30, budget_usd: 2 },
@@ -453,5 +456,33 @@ describe('context_budget_tokens', () => {
     // The value the ceiling was until WP-83: a document that carried it is now refused by name.
     expect(withBudget(200_000).success).toBe(false);
     expect(withBudget(-1).success).toBe(false);
+  });
+});
+
+/** WP-91 (backlog 224): `pipeline.wip`, both sides of each bound (standing rule 42). */
+describe('pipeline.wip', () => {
+  const withWip = (wip: unknown) =>
+    agenticConfigSchema.safeParse({ version: 1, pipeline: { wip } });
+
+  it('accepts the bounds and refuses one past each', () => {
+    expect(withWip({ max_parallel_tasks: 1, max_tasks_in_pipeline: 1 }).success).toBe(true);
+    expect(
+      withWip({
+        max_parallel_tasks: MAX_WIP_PARALLEL_TASKS,
+        max_tasks_in_pipeline: MAX_WIP_TASKS_IN_PIPELINE,
+      }).success,
+    ).toBe(true);
+    expect(withWip({ max_parallel_tasks: 0 }).success).toBe(false);
+    expect(withWip({ max_parallel_tasks: MAX_WIP_PARALLEL_TASKS + 1 }).success).toBe(false);
+    expect(withWip({ max_tasks_in_pipeline: 0 }).success).toBe(false);
+    expect(withWip({ max_tasks_in_pipeline: MAX_WIP_TASKS_IN_PIPELINE + 1 }).success).toBe(false);
+  });
+
+  it('refuses a pipeline limit below the parallel one, and an unknown key', () => {
+    const below = withWip({ max_parallel_tasks: 3, max_tasks_in_pipeline: 2 });
+    expect(below.success).toBe(false);
+    expect(below.error?.issues[0]?.path).toEqual(['pipeline', 'wip', 'max_tasks_in_pipeline']);
+    expect(withWip({ max_parallel_tasks: 3, max_tasks_in_pipeline: 3 }).success).toBe(true);
+    expect(withWip({ max_parallel_runs: 4 }).success).toBe(false);
   });
 });

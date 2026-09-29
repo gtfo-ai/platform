@@ -36,7 +36,7 @@ Per project: `max_parallel_tasks` (default 2), `max_tasks_in_pipeline` (default 
 
 Everything below is immutable, append-only, and exportable:
 
-- **Run record:** rendered system prompt and user prompt (exact text sent), model, effort, permission mode, allowed tools, MCP servers/skills loaded, settings snapshot (effective config hash + full copy), knowledge context pack (which KB documents were included and why), start/end, exit reason, cost, and the **full transcript** (every message/tool call/result as streamed).
+- **Run record:** rendered system prompt and user prompt (exact text sent), model, effort, permission mode, allowed tools, MCP servers/skills loaded, settings snapshot (effective config hash + full copy, with secrets redacted; a copy over 256 KiB is kept as its hash and size only), knowledge context pack (which KB documents were included and why), start/end, exit reason, cost, and the **full transcript** (every message/tool call/result as streamed).
 - **Task record:** every state transition with cause (event id), every artifact version, every question and answer (with author), every return with reason, every human action (pause, retry, approve, cancel, budget raise).
 - **Configuration audit:** every change to settings, integrations (secret values redacted, only "changed"), pipelines, prompts, budgets — who/when/diff.
 - **Knowledge audit:** every KB change with provenance (task/run/human) — the KB lives in git, so git history is part of the audit.

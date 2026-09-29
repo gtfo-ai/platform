@@ -137,6 +137,20 @@ describe('response DTOs', () => {
       },
       hash: 'sha256:abc',
       computed_at: AT,
+      // WP-91: what the settings layer states and this build does not read, and the last export.
+      not_applied: [
+        {
+          key: 'pipeline.template_overrides.feature.stages.business_review.enabled',
+          reason: 'not applied on this build',
+        },
+      ],
+      last_export: {
+        status: 'open' as const,
+        config_hash: '0123456789abcdef',
+        branch: 'agentic/config/0123456789ab-fedcba987654',
+        merge_request_url: 'https://git.example.test/acme/api/-/merge_requests/9',
+        exported_at: AT,
+      },
       // WP-54: a declared `allow` entry no role's baseline grants, published rather than dropped.
       ignored_allow_commands: ['curl https://example.test'],
       // WP-37: what the wizard is offered for `policies.risk_classes`, which is **not** what the

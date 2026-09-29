@@ -63,6 +63,7 @@ import {
 } from '@platform/domain';
 import { db as dbAdapters } from '@platform/infrastructure';
 import { and, asc, desc, eq, gte, inArray, notInArray, sql } from 'drizzle-orm';
+import * as z from 'zod';
 import { CLOSED_TASK_STATES } from './pipeline-queries.js';
 
 const {
@@ -420,4 +421,61 @@ export const listProjectAudit = async (
       created_at: row.createdAt.toISOString(),
     })),
   });
+};
+
+/** The `human_actions.action` a configuration export records (`routes/project-config.ts`). */
+const CONFIG_EXPORT_ACTION_NAME = 'project.config.export';
+
+/** A recorded export's params, parsed rather than cast: the row is stored state (rule 16). */
+const recordedExportParamsSchema = z.object({
+  status: z.enum(['exported', 'unchanged', 'open']),
+  config_hash: z.string().min(1),
+  branch: z.string().min(1).nullable().optional(),
+  merge_request_url: z.string().min(1).nullable().optional(),
+  merge_request_iid: z.int().positive().nullable().optional(),
+});
+
+/**
+ * The project's newest recorded configuration export (WP-91, PROGRESS backlog 225), or `null`.
+ *
+ * `human_actions` has no `project_id` column, so the predicate is `params->>'project_id'` —
+ * `listProjectAudit`'s, above, for the same reason. A row whose params do not parse is **skipped
+ * to the next** rather than read as "never exported": an older release's row that lacks a field is
+ * not evidence that no export happened, and the newest row that does parse is. The scan is bounded.
+ */
+export const findLastConfigExport = async (
+  database: Database,
+  projectId: string,
+): Promise<{
+  readonly status: 'exported' | 'unchanged' | 'open';
+  readonly configHash: string;
+  readonly branch: string | null;
+  readonly mergeRequestUrl: string | null;
+  readonly mergeRequestIid: number | null;
+  readonly exportedAt: string;
+} | null> => {
+  const rows = await database
+    .select({ params: humanActions.params, createdAt: humanActions.createdAt })
+    .from(humanActions)
+    .where(
+      and(
+        eq(humanActions.action, CONFIG_EXPORT_ACTION_NAME),
+        sql`${humanActions.params} ->> 'project_id' = ${projectId}`,
+      ),
+    )
+    .orderBy(desc(humanActions.createdAt))
+    .limit(10);
+  for (const row of rows) {
+    const parsed = recordedExportParamsSchema.safeParse(row.params);
+    if (!parsed.success) continue;
+    return {
+      status: parsed.data.status,
+      configHash: parsed.data.config_hash,
+      branch: parsed.data.branch ?? null,
+      mergeRequestUrl: parsed.data.merge_request_url ?? null,
+      mergeRequestIid: parsed.data.merge_request_iid ?? null,
+      exportedAt: row.createdAt.toISOString(),
+    };
+  }
+  return null;
 };

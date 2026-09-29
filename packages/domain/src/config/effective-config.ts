@@ -1,9 +1,10 @@
 /**
  * Project configuration merge — technical/12 § "Effective configuration".
  *
- * "`effective = merge(defaults, org, project, repo)` with per-key provenance; computed at task
- * start and frozen into `Run.settings_snapshot`. Org maximum for autonomy and command policy caps
- * what project/repo may set (BD-025, BD-027)."
+ * "`effective = merge(defaults, org, project, repo)` with per-key provenance … Org maximum for
+ * autonomy and command policy caps what project/repo may set (BD-025, BD-027)." It is read per
+ * stage, and each run freezes the document it was planned with into `Run.settings_snapshot`
+ * (WP-91, `packages/application/src/pipeline/settings-snapshot.ts`, which calls this merge).
  *
  * Three rules, in the order they apply:
  *
@@ -47,6 +48,7 @@ import {
 import { DEFAULT_URGENT_NOTIFICATION_CLASSES } from '../policies/notifications.js';
 import { DEFAULT_MAX_REVIEW_FINDINGS } from '../policies/review-only.js';
 import { DEFAULT_LINT_ISSUE_TYPES, DEFAULT_LINT_LABEL } from '../policies/ticket-lint.js';
+import { DEFAULT_WIP_LIMITS } from '../policies/wip.js';
 
 /** A configuration layer's values: `.agentic/config.yml` minus the file-format `version`. */
 export type ConfigValues = Omit<AgenticConfig, 'version'>;
@@ -93,6 +95,11 @@ export const PLATFORM_DEFAULT_CONFIG: ConfigValues = {
       ci_fix_iterations: 3,
       human_rounds: 3,
       question_timeout: '1 working day',
+    },
+    // BD-010:8's two per-project defaults, from the one table admission reads (WP-91).
+    wip: {
+      max_parallel_tasks: DEFAULT_WIP_LIMITS.maxParallelTasks,
+      max_tasks_in_pipeline: DEFAULT_WIP_LIMITS.maxTasksInPipeline,
     },
   },
   policies: {

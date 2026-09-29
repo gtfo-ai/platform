@@ -1,8 +1,9 @@
 /**
  * The per-project settings the pipeline reads, behind a port.
  *
- * technical/12: `effective = merge(defaults, org, project, repo)`, "computed at task start and
- * frozen into `Run.settings_snapshot`". Computing that merge needs the org row, the project row
+ * technical/12: `effective = merge(defaults, org, project, repo)`, read **per stage**; each run
+ * freezes the settings it was planned with into `Run.settings_snapshot` at creation (WP-91,
+ * `settings-snapshot.ts`). Computing that merge needs the org row, the project row
  * and `.agentic/config.yml` read from the default branch — three sources this ring must not reach
  * for. So it arrives as a port, and the composition root decides where each layer comes from.
  *

@@ -395,6 +395,7 @@ export const runPipelineStoreConcurrencyContract = (
         userPrompt: null,
         redactionCount: 0,
         contextPack: null,
+        settings: null,
         status: 'running',
         terminalReason: null,
         sessionId: null,
@@ -439,6 +440,34 @@ export const runPipelineStoreConcurrencyContract = (
       await after.rollback();
       expect(loaded?.status).toBe('cancelled');
       expect(loaded?.terminalReason).toBe('cancelled');
+    });
+
+    /**
+     * WP-91: `counts` serialises admission per project, so two admissions in one instant cannot
+     * both pass `max_parallel_tasks: 1`. The first admitter counts and inserts its active task;
+     * the second counts while the first is still open. Against PostgreSQL the second count waits
+     * on the first transaction and then sees its task; without the lock it answered `0` — the task
+     * was uncommitted — and both admitted. The in-memory store has no isolation, so the write is
+     * visible at once and the same assertion holds by ordering.
+     */
+    it('counts an admission another transaction made in the same instant, once it commits', async () => {
+      // Relative to what the project already holds: the harness's project outlives one case.
+      const first = await begin();
+      const before = await store.tasks.counts(first.tx, projectId);
+      await store.tasks.insert(first.tx, taskFixture());
+      const second = await begin();
+      const pending = store.tasks.counts(second.tx, projectId);
+      // Give the second count every chance to answer **before** the first commits. With the lock
+      // it cannot — it is waiting on the first transaction — so the wait changes nothing about a
+      // pass; without it the count answers the uncommitted state here and the assertion below
+      // fails by name (measured: removing the lock passed this case 3 of 3 before the wait was
+      // added, because the count's second statement was only sent after the commit).
+      await Promise.race([pending, new Promise((resolve) => setTimeout(resolve, 250))]);
+      await first.commit();
+      const counted = await pending;
+      await second.rollback();
+      expect(counted.activeTasks).toBe(before.activeTasks + 1);
+      expect(counted.tasksInPipeline).toBe(before.tasksInPipeline + 1);
     });
 
     it('still refuses a save for a task that does not exist, and not as a conflict', async () => {
