@@ -41,6 +41,7 @@ import { silentLogger } from '../ports/logger.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
 import { CI_GATE_STAGE, createGateEvaluator, MAX_GATE_CHECKS, rebaseAgainstCi } from './gates.js';
 import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
+import { prefetchObservability } from './observability-prefetch.js';
 import { REBASE_GATE_STAGE, recordRebaseCheck } from './rebase.js';
 import { reviewedMergeRequestPaths } from './review-paths.js';
 import {
@@ -656,13 +657,20 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
        * `TransactionOpenError` **does** come out, because that is a programming error rather than a
        * provider being down.
        */
-      await ensureTicketSnapshot(options, admitted.stored);
+      const snapshot = await ensureTicketSnapshot(options, admitted.stored);
       // WP-73, backlog 218: a Reviewer is matched on the merge request's files too, read here for
       // the same reason as the ticket — outside every transaction, before the plan.
       const mergeRequestPaths = await reviewedMergeRequestPaths(options, admitted.stored, stage);
-      const outcome = await options.executor.execute(
-        mergeRequestPaths === undefined ? request : { ...request, mergeRequestPaths },
-      );
+      // WP-89, backlog 143: the Investigator is shown the linked issue's latest event and the log
+      // lines around it — the same place and the same reason, after the ticket read because the
+      // link is found in the ticket's words. `undefined` for any other stage and for a project with
+      // neither binding; never a throw for a provider (`observability-prefetch.ts`).
+      const observability = await prefetchObservability(options, admitted.stored, stage, snapshot);
+      const outcome = await options.executor.execute({
+        ...request,
+        ...(mergeRequestPaths === undefined ? {} : { mergeRequestPaths }),
+        ...(observability === undefined ? {} : { observability }),
+      });
       /**
        * **A run that could not be *started* for a transport reason is re-enqueued here** (Q59(a)).
        *

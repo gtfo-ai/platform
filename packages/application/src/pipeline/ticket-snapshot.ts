@@ -522,6 +522,9 @@ export const isTicketSnapshotStale = (stored: StoredTask): boolean => {
  *  - a re-read that fails **keeps** the stale snapshot rather than clearing it (standing rule 20:
  *    the words the ticket had are a better prompt than none), and the next stage tries again,
  *    because the signal is still newer than the snapshot.
+ *  - it **answers** the words it holds — the fresh read, or the row's own when no read was needed
+ *    or the read failed — because the bug pre-fetch (WP-89) looks for the linked issue in them and
+ *    the job's loaded row predates this write;
  *  - a re-read also fills a **missing requester** (WP-79, backlog 243): the reporter resolved
  *    through {@link resolveRequester}, written by `saveRequester`, which never overwrites — so a
  *    task whose intake read failed, or whose reporter was mapped after intake, gains the reviewer
@@ -530,10 +533,10 @@ export const isTicketSnapshotStale = (stored: StoredTask): boolean => {
 export const ensureTicketSnapshot = async (
   options: EnsureTicketSnapshotOptions,
   stored: StoredTask,
-): Promise<void> => {
+): Promise<TicketSnapshot | null> => {
   const taskId = stored.task.id;
   if (!isTicketSnapshotStale(stored)) {
-    return;
+    return stored.ticketSnapshot;
   }
   // The read's **start**, which is what the snapshot is as fresh as (see the module docblock).
   const readAt = options.clock.now() as IsoDateTime;
@@ -543,7 +546,7 @@ export const ensureTicketSnapshot = async (
     ticket: stored.task.ticket,
   });
   if (read === null) {
-    return;
+    return stored.ticketSnapshot;
   }
   // Outside the transaction, like the read: the directory is a pool query of its own. Only for a
   // row that has no requester — `saveRequester` never overwrites, so asking for one it would
@@ -569,4 +572,5 @@ export const ensureTicketSnapshot = async (
     }
     await options.store.tasks.saveTicketSnapshot(scope.tx, taskId, read.snapshot, readAt);
   });
+  return read.snapshot;
 };

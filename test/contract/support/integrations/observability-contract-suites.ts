@@ -17,7 +17,12 @@ import type {
   ObservabilityErrorsPort,
   ObservabilityLogsPort,
 } from '@platform/application';
-import { errorEventSchema, issueSchema, logQueryResultSchema } from '@platform/application';
+import {
+  errorEventSchema,
+  issueSchema,
+  logQueryResultSchema,
+  MAX_LINKED_ISSUES,
+} from '@platform/application';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { expectAgentTooling, expectIntegrationError } from './shared.js';
 
@@ -146,6 +151,33 @@ export const runObservabilityErrorsContract = (
       }
     });
 
+    /**
+     * WP-89: the bug pre-fetch finds its issue in a ticket's words through `linkedIssues`, so what
+     * a link *is* is a port obligation, asserted on the fake and on every adapter (standing rule
+     * 23). The URL is the binding's own answer (`issue.ref.url`), so the suite needs no knowledge of
+     * any provider's URL shapes; the adapter's own tier (`sentry/links.test.ts`) holds the shapes.
+     */
+    it('finds the issues its own URLs name — each once, in order, bounded — and nothing on another host', async () => {
+      const url = (await port.getIssue({ id: context.issueId })).ref.url;
+      expect(port.linkedIssues(`see ${url} and again ${url}.`)).toEqual([{ id: context.issueId }]);
+      expect(port.linkedIssues('https://elsewhere.invalid/issues/1/')).toEqual([]);
+      expect(port.linkedIssues('no link at all')).toEqual([]);
+
+      // Another id in the same URL form: the id is the binding's, the digits keep a numeric id numeric.
+      const at = url.lastIndexOf(context.issueId);
+      const urlFor = (n: number): string =>
+        `${url.slice(0, at)}${context.issueId}0${n}${url.slice(at + context.issueId.length)}`;
+      const many = Array.from({ length: MAX_LINKED_ISSUES + 1 }, (_, n) => urlFor(n + 1));
+      const found = port.linkedIssues(many.join(' '));
+      // Both sides of the bound (standing rule 42): exactly the cap, and the first ones in order.
+      expect(found).toHaveLength(MAX_LINKED_ISSUES);
+      expect(found[0]).toEqual({ id: `${context.issueId}01` });
+      expect(port.linkedIssues(many.slice(0, 2).reverse().join(' '))).toEqual([
+        { id: `${context.issueId}02` },
+        { id: `${context.issueId}01` },
+      ]);
+    });
+
     it('declares agent tooling by name only', () => {
       expectAgentTooling(port.agentTooling());
     });
@@ -176,6 +208,11 @@ export interface ObservabilityLogsContractContext {
   readonly maxLabelNameBytes: number;
   /** A substring present in exactly one seeded line. */
   readonly lineFilter: string;
+  /**
+   * What this binding's configuration names as the bug pre-fetch's selector (WP-89) — `null` for a
+   * binding that names none. Read from the harness's own config, never restated.
+   */
+  readonly excerptSelector: string | null;
   cleanup(): Promise<void>;
 }
 
@@ -343,6 +380,21 @@ export const runObservabilityLogsContract = (harness: ObservabilityLogsContractH
       // Which branch ran (standing rule 10): a name the binding accepts is still answered, so the
       // refusal above is a bound rather than a method that refuses everything.
       expect((await port.labels(context.label.name)).name).toBe(context.label.name);
+    });
+
+    /**
+     * WP-89: the binding's excerpt selector reaches the port unchanged, and a selector the binding
+     * publishes is one its own `queryRange` answers — the pre-fetch trusts both halves, so both are
+     * the suite's to hold (standing rule 23).
+     */
+    it('publishes the excerpt selector its binding names, and answers a query with it', async () => {
+      expect(port.excerptSelector()).toBe(context.excerptSelector);
+      const selector = port.excerptSelector();
+      if (selector === null) {
+        return;
+      }
+      const result = await port.queryRange(query({ selector }));
+      expect(result.line_count).toBeGreaterThan(0);
     });
 
     it('declares agent tooling by name only', () => {

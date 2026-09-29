@@ -41,6 +41,7 @@ import {
   integrationsForProject,
   mintingIntegrationFor,
   noRunScopedSecrets,
+  observabilityForProject,
   PLATFORM_TICKET_PROVIDER,
   staticPipelineIntegrations,
   ticketReads,
@@ -335,5 +336,44 @@ describe('the minting integration’s door (WP-80)', () => {
       ),
     ).rejects.toBeInstanceOf(TransactionOpenError);
     expect(await mintingIntegrationFor(port, 'a' as Id, { runScopedSecrets: [] })).toBeNull();
+  });
+});
+
+/**
+ * WP-89: the observability bindings have a door of their own, `observabilityForProject`, guarded
+ * like `integrationsForProject` — resolving a binding is a credential decryption and the reads
+ * behind it are provider round trips. Nothing in the application ring calls the member directly.
+ */
+describe('the observability door (WP-89)', () => {
+  const APPLICATION = join(RING, '..');
+  const walk = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+      entry.isDirectory()
+        ? walk(join(dir, entry.name))
+        : entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts')
+          ? [join(dir, entry.name)]
+          : [],
+    );
+
+  it('is the only caller of forObservability outside the port’s own module', () => {
+    const callers = walk(APPLICATION)
+      .filter((file) => !file.endsWith(join('pipeline', 'integrations.ts')))
+      .filter((file) => /\.\s*forObservability\s*\(/.test(readFileSync(file, 'utf8')));
+    expect(callers).toEqual([]);
+  });
+
+  it('refuses inside an open transaction, and answers null for a type the project does not bind', async () => {
+    const port = staticPipelineIntegrations({
+      executor: {} as IntegrationActionExecutor,
+      git: null,
+      taskManagement: null,
+      communication: null,
+    });
+    await expect(
+      withOpenTransaction(async () =>
+        observabilityForProject(port, PROJECT, 'errors', noRunScopedSecrets()),
+      ),
+    ).rejects.toBeInstanceOf(TransactionOpenError);
+    expect(await observabilityForProject(port, PROJECT, 'logs', noRunScopedSecrets())).toBeNull();
   });
 });

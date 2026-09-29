@@ -84,6 +84,7 @@ import type { Clock } from '@platform/domain';
 import { createSentryClient, type SentryClient } from './client.js';
 import type { SentryConfig } from './config.js';
 import { createSentryHttp, isUsableToken, SENTRY_PROVIDER_ID, type SentryFetch } from './http.js';
+import { sentryLinkedIssues } from './links.js';
 import {
   boundedIdentifier,
   capText,
@@ -453,6 +454,10 @@ export const createSentryProvider = (options: SentryProviderOptions): SentryProv
   const port: ObservabilityErrorsPort = {
     ref,
     capabilities: () => ({ ...CAPABILITIES }),
+
+    // WP-89: no request — a link to this binding's own instance and organisation, or nothing.
+    linkedIssues: (text) =>
+      sentryLinkedIssues(text, { baseUrl: config.base_url, organization: config.organization }),
 
     testConnection: async (): Promise<HealthProbe> => {
       const checkedAt: IsoDateTime = options.clock.now();

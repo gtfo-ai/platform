@@ -117,6 +117,8 @@ export const lokiReplayContext = (overrides: LokiHarnessOverrides = {}): LokiRep
       auth_mode: overrides.authMode ?? 'bearer',
       tenant_id: overrides.tenantId === undefined ? LOKI_TENANT : overrides.tenantId,
       request_timeout_ms: 0,
+      // WP-89: the bug pre-fetch's selector, set as an operator sets it on a binding.
+      excerpt_selector: LOKI_SELECTOR,
       ...(overrides.maxLines === undefined ? {} : { max_lines: overrides.maxLines }),
       ...(overrides.maxRangeMs === undefined ? {} : { max_range_ms: overrides.maxRangeMs }),
       ...(overrides.maxLineBytes === undefined ? {} : { max_line_bytes: overrides.maxLineBytes }),
@@ -149,6 +151,7 @@ export const lokiReplayContext = (overrides: LokiHarnessOverrides = {}): LokiRep
     label: { name: 'app', value: 'api' },
     maxLabelNameBytes: overrides.maxLabelBytes ?? LOKI_DEFAULT_MAX_LABEL_BYTES,
     lineFilter: LOKI_LINE_FILTER,
+    excerptSelector: LOKI_SELECTOR,
     cleanup: async () => {},
   };
 };

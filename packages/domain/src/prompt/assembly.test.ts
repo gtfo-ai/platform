@@ -18,7 +18,9 @@ import {
   MAX_ARTIFACT_CHARS,
   MAX_CHECKLIST_BLOCK_CHARS,
   MAX_CHECKLIST_TOTAL_CHARS,
+  MAX_ERROR_EVENT_EXCERPT_CHARS,
   MAX_FEEDBACK_CHARS,
+  MAX_LOG_EXCERPT_CHARS,
   PLATFORM_PROMPT,
   PLATFORM_PROMPT_VERSION,
   type PromptKnowledgeDocument,
@@ -76,6 +78,7 @@ const inputWith = (
     returnFeedback: null,
     record: [],
     reviewChecklists: [],
+    observability: [],
   },
   artifactType: 'RefinedSpec',
   // Required-and-nullable on the input, so the default here is the explicit "this stage has no
@@ -227,6 +230,7 @@ describe('untrusted text in the assembled prompt', () => {
         returnFeedback: 'the acceptance criteria were not testable',
         record: [],
         reviewChecklists: [],
+        observability: [],
       },
     });
     const dirty = inputWith(BENIGN_TEXT, {
@@ -241,6 +245,7 @@ describe('untrusted text in the assembled prompt', () => {
         returnFeedback: HOSTILE_TEXT,
         record: [],
         reviewChecklists: [],
+        observability: [],
       },
     });
     const before = readDataBlocks(assemblePrompt(clean).userPrompt);
@@ -366,6 +371,7 @@ describe('untrusted text in the assembled prompt', () => {
           returnFeedback: 'y'.repeat(MAX_FEEDBACK_CHARS + 1),
           record: [],
           reviewChecklists: [],
+          observability: [],
         },
       }),
     );
@@ -400,6 +406,7 @@ describe('a return feedback its producer already cut (WP-81)', () => {
     returnFeedbackOriginalChars,
     record: [],
     reviewChecklists: [],
+    observability: [],
   });
   const feedbackOf = (returnFeedback: string, originalChars: number | null) =>
     readDataBlocks(
@@ -461,6 +468,7 @@ describe('the guards', () => {
             returnFeedback: null,
             record: [],
             reviewChecklists: [],
+            observability: [],
           },
         }),
       ),
@@ -551,6 +559,7 @@ const withSnapshot = (
       returnFeedback: null,
       record: [],
       reviewChecklists: [],
+      observability: [],
     },
   });
 
@@ -601,6 +610,7 @@ const withReviewSubject = (
       returnFeedback: null,
       record: [],
       reviewChecklists: [],
+      observability: [],
     },
     artifactType: 'ReviewVerdict',
   });
@@ -729,6 +739,7 @@ const withHistory = (
       returnFeedback: null,
       record: [],
       reviewChecklists: [],
+      observability: [],
     },
     artifactType: 'HistoryFindings',
   });
@@ -928,6 +939,7 @@ describe('an ask-the-task prompt', () => {
           { kind: 'human_actions' as const, count: 1, body: 'action A' },
         ],
         reviewChecklists: [],
+        observability: [],
       },
       artifactType: 'AskAnswer',
       ask: { question, askedBy },
@@ -1094,5 +1106,126 @@ describe('the review checklist block', () => {
     expect(boundReviewChecklists(lists).map((entry) => String(entry.items.length))).toEqual(
       blocks.map((block) => block.attributes.items),
     );
+  });
+});
+
+/**
+ * WP-89: the bug pre-fetch's excerpts reach the Investigator **inside data blocks** — the body
+ * byte-identical, the status, the counts and the cut in the marker — and a run given none carries
+ * no block and no byte of difference (criterion 1's *"runs unchanged"*, at the assembler).
+ */
+describe('the observability excerpt blocks', () => {
+  const EVENT = [
+    'issue: ACME-1AB',
+    'stack trace:',
+    'TypeError: cannot read totals of undefined',
+    '    at total (src/billing/totals.ts:42:11)',
+  ].join('\n');
+  const withExcerpts = (
+    observability: AssemblePromptInput['task']['observability'],
+  ): AssemblePromptInput => {
+    const base = inputWith(BENIGN_TEXT);
+    return {
+      ...base,
+      role: { role: 'investigator', version: '1', text: 'Find the root cause.' },
+      task: { ...base.task, stage: 'investigation', observability },
+      artifactType: 'RootCauseAnalysis',
+    };
+  };
+  const excerptBlocks = (userPrompt: string) =>
+    readDataBlocks(userPrompt).blocks.filter(
+      (entry) => entry.kind === 'error_event' || entry.kind === 'log_excerpt',
+    );
+
+  it('renders the event and the log lines byte-identical, with the platform’s claims in the marker', () => {
+    const [event, logs, ...rest] = excerptBlocks(
+      assemblePrompt(
+        withExcerpts([
+          { kind: 'error_event', status: 'read', body: EVENT, issueLinks: 2 },
+          {
+            kind: 'log_excerpt',
+            status: 'read',
+            body: '2026-06-01T09:11:00.000Z ERROR trace_id=trace-abc',
+            lines: 1,
+            limitReached: true,
+          },
+        ]),
+      ).userPrompt,
+    );
+    expect(rest).toEqual([]);
+    expect(event?.body).toBe(EVENT);
+    expect(event?.attributes).toEqual({ kind: 'error_event', status: 'read', issue_links: '2' });
+    expect(logs?.attributes).toEqual({
+      kind: 'log_excerpt',
+      status: 'read',
+      lines: '1',
+      limit_reached: 'true',
+    });
+  });
+
+  it('says what could not be read, in the marker, with an empty body', () => {
+    const [event, logs] = excerptBlocks(
+      assemblePrompt(
+        withExcerpts([
+          { kind: 'error_event', status: 'no_issue_link', body: '', issueLinks: 0 },
+          { kind: 'log_excerpt', status: 'unavailable', body: '' },
+        ]),
+      ).userPrompt,
+    );
+    expect(event).toMatchObject({ body: '', attributes: { status: 'no_issue_link' } });
+    expect(logs).toMatchObject({ body: '', attributes: { status: 'unavailable' } });
+  });
+
+  it('adds nothing at all to a prompt given no excerpt', () => {
+    const base = inputWith(BENIGN_TEXT);
+    const without = assemblePrompt(base);
+    expect(excerptBlocks(without.userPrompt)).toEqual([]);
+    // The field lost through a cast lands on the same prompt, not on a throw.
+    const lost = assemblePrompt({
+      ...base,
+      task: { ...base.task, observability: undefined as never },
+    });
+    expect(lost.userPrompt).toBe(without.userPrompt);
+  });
+
+  it.each([
+    ['error_event', MAX_ERROR_EVENT_EXCERPT_CHARS],
+    ['log_excerpt', MAX_LOG_EXCERPT_CHARS],
+  ] as const)(
+    'cuts a %s at its cap, on both sides of it, and announces the cut in the marker',
+    (kind, max) => {
+      const blockFor = (length: number) =>
+        excerptBlocks(
+          assemblePrompt(withExcerpts([{ kind, status: 'read', body: 'x'.repeat(length) }]))
+            .userPrompt,
+        )[0];
+      const exact = blockFor(max);
+      expect(exact?.body).toHaveLength(max);
+      expect(exact?.attributes.truncated).toBeUndefined();
+      const over = blockFor(max + 1);
+      expect(over?.body).toHaveLength(max);
+      expect(over?.attributes).toMatchObject({
+        truncated: 'true',
+        original_chars: String(max + 1),
+      });
+    },
+  );
+
+  it('holds the whole excerpt to one artifact’s worth — the derivation stated at the constants', () => {
+    expect(MAX_ERROR_EVENT_EXCERPT_CHARS + MAX_LOG_EXCERPT_CHARS).toBe(MAX_ARTIFACT_CHARS);
+  });
+
+  it('keeps a hostile stack trace inside its block and the platform voice byte-identical', () => {
+    const benign = assemblePrompt(
+      withExcerpts([{ kind: 'error_event', status: 'read', body: EVENT }]),
+    );
+    const nasty = assemblePrompt(
+      withExcerpts([{ kind: 'error_event', status: 'read', body: `${EVENT}\n${HOSTILE_TEXT}` }]),
+    );
+    const reading = readDataBlocks(nasty.userPrompt);
+    expect(reading.unterminated).toBe(0);
+    expect(excerptBlocks(nasty.userPrompt)[0]?.body).toBe(`${EVENT}\n${HOSTILE_TEXT}`);
+    expect(reading.platformVoice).toEqual(readDataBlocks(benign.userPrompt).platformVoice);
+    expect(nasty.systemPrompt).toBe(benign.systemPrompt);
   });
 });

@@ -3,8 +3,8 @@
  * "Observability — errors".
  *
  * Sentry is the first provider (WP-11). The platform uses it in two places: it pre-fetches the
- * linked issue's latest event into a bug task's Investigation context, and it comments on (or
- * resolves) the issue when the fix merges.
+ * linked issue's latest event into a bug task's Investigation context (WP-89), and its adapter can
+ * resolve the issue — which no pipeline step calls on merge yet (PROGRESS backlog 302).
  *
  * Everything an event carries — stack frames, breadcrumbs, tag values, the culprit — is attacker-
  * influenced text (BD-022). A crash report is one of the easiest places to plant an instruction,
@@ -99,7 +99,31 @@ export interface ObservabilityErrorsCapabilities {
 
 // ── The port ─────────────────────────────────────────────────────────────────
 
+/**
+ * How many linked issues {@link ObservabilityErrorsPort.linkedIssues} answers at most. A ticket that
+ * pastes a thousand links is one ticket, and the scan must not become a list the caller has to
+ * bound again (standing rule 41: bound once, where the list is made).
+ */
+export const MAX_LINKED_ISSUES = 20;
+
 export interface ObservabilityErrorsPort extends IntegrationPort<ObservabilityErrorsCapabilities> {
+  /**
+   * The issues **of this binding** a piece of text links to — WP-89, the bug pre-fetch's first
+   * question: *which issue is this ticket about?*
+   *
+   * Pure and synchronous: no request is made, so it is not an `IntegrationActionExecutor` call and
+   * needs no audit row. The text is untrusted (a ticket's words, BD-022), which is why the answer is
+   * an **id the provider issued** and never a URL the caller would dial: a link is recognised only
+   * when it points at this binding's own instance (its host and, where the URL names one, its
+   * organisation), so a ticket cannot make the platform read from anywhere the operator did not
+   * bind. What *is* left to the ticket is **which** issue of that organisation is read — a residual
+   * the pre-fetch states (`observability-prefetch.ts`).
+   *
+   * Ids are returned in order of first appearance, each once, and there are at most
+   * {@link MAX_LINKED_ISSUES} of them. A provider whose issues have no URL form answers `[]`.
+   */
+  readonly linkedIssues: (text: string) => readonly { readonly id: string }[];
+
   readonly getIssue: (ref: { readonly id: string }) => Promise<Issue>;
   /** The latest event of an issue, or `null` when the retention window has dropped them all. */
   readonly getLatestEvent: (ref: { readonly id: string }) => Promise<ErrorEvent | null>;

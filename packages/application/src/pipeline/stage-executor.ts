@@ -50,7 +50,12 @@ import type {
   Slug,
 } from '@platform/contracts';
 import { stageVerdictSchema } from '@platform/contracts';
-import type { CommandContext, PipelineStage, Run } from '@platform/domain';
+import type {
+  CommandContext,
+  PipelineStage,
+  PromptObservabilityExcerpt,
+  Run,
+} from '@platform/domain';
 import {
   askQuestion,
   compilePipeline,
@@ -155,6 +160,13 @@ export interface StageRunRequest {
    * them beside the Implementation Plan's paths.
    */
   readonly mergeRequestPaths?: readonly string[];
+  /**
+   * The bug pre-fetch's excerpts, read by the `stage.execute` job before an **Investigator** run
+   * (WP-89, `observability-prefetch.ts`), bounded and redacted. `undefined` when no read was made —
+   * any other role, or a project with neither observability binding — and the prompt then carries
+   * no observability block at all.
+   */
+  readonly observability?: readonly PromptObservabilityExcerpt[];
 }
 
 /** What a planner returns: the spec the runner is given, and the audit record of what went in. */
@@ -384,6 +396,12 @@ export interface StageExecutionJob {
    * transaction, and a re-enqueued attempt reads again.
    */
   readonly mergeRequestPaths?: readonly string[];
+  /**
+   * {@link StageRunRequest.observability}, read by the job that fires this attempt (WP-89). Never in
+   * the queue payload, for `mergeRequestPaths`' reason: read fresh on every fire, outside every
+   * transaction.
+   */
+  readonly observability?: readonly PromptObservabilityExcerpt[];
 }
 
 /**
@@ -980,6 +998,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       checkoutBase: admission.checkoutBase,
       ...(job.overrides === undefined ? {} : { overrides: job.overrides }),
       ...(job.mergeRequestPaths === undefined ? {} : { mergeRequestPaths: job.mergeRequestPaths }),
+      ...(job.observability === undefined ? {} : { observability: job.observability }),
     });
     return startTheRun(job, plan, runId);
   };

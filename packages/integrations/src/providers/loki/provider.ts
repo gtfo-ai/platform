@@ -547,6 +547,9 @@ export const createLokiProvider = (options: LokiProviderOptions): LokiProvider =
     ref,
     capabilities: () => ({ ...capabilities }),
 
+    // WP-89: the binding's own selector for a bug task's excerpt, validated at the config parse.
+    excerptSelector: () => config.excerpt_selector ?? null,
+
     testConnection: async (): Promise<HealthProbe> => {
       const checkedAt: IsoDateTime = options.clock.now();
       try {

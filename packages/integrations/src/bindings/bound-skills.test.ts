@@ -2,7 +2,9 @@
  * `createBoundSkillsReader` — which provider skills a project's bindings name (WP-54, PROGRESS
  * backlog 40), over the **shipped catalogue** so the answer is the providers' own
  * `AgentTooling.skill` and not a list written here. The first case failed against the pipeline's
- * registry, which is how the reader came to read the catalogue: Loki and Sentry are not in it.
+ * registry, which is how the reader came to read the catalogue: Loki and Sentry were not in it until
+ * WP-89 registered them for the bug pre-fetch, and the catalogue stays the source because this
+ * question constructs no adapter.
  */
 import type { BindingRepository, ProjectBinding } from '@platform/application';
 import type { Id, IntegrationType } from '@platform/contracts';

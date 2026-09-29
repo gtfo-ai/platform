@@ -27,6 +27,13 @@
  *     `test/contract/integrations/action-executor.contract.test.ts` ("errors — comment").
  *  5. **Different — issue ids are `issue-<n>` and event ids are `event-<n>`**, where Sentry's are
  *     opaque and its short ids encode the project.
+ *  6. **Different, and no kinder — `linkedIssues` recognises exactly the URL this fake renders**
+ *     (`<baseUrl>/issues/<id>`, WP-89), where Sentry's adapter recognises its three URL forms on
+ *     the binding's host and organisation. Both refuse every other host, both answer each id once
+ *     in order of first appearance and both stop at `MAX_LINKED_ISSUES`; the shared suite asserts
+ *     all three on each (standing rule 23), so the fake cannot find a link the adapter would not.
+ *     An id is taken only if an issue with it could exist here — the fake does not check that it
+ *     was *seeded*, because Sentry's adapter cannot either (the scan makes no request).
  */
 import {
   type AgentTooling,
@@ -37,6 +44,7 @@ import {
   IntegrationUnsupportedError,
   type Issue,
   issueSchema,
+  MAX_LINKED_ISSUES,
   type ObservabilityErrorsCapabilities,
   type ObservabilityErrorsPort,
 } from '@platform/application';
@@ -244,10 +252,26 @@ export const createFakeObservabilityErrors = (
     },
   });
 
+  /** Divergence 6: `<baseUrl>/issues/<id>` and nothing else, each id once, bounded. */
+  const linkedIssues = (text: string): readonly { readonly id: string }[] => {
+    const prefix = `${baseUrl}/issues/`;
+    const found: string[] = [];
+    let at = text.indexOf(prefix);
+    while (at >= 0 && found.length < MAX_LINKED_ISSUES) {
+      const id = /^[A-Za-z0-9-]{1,64}/.exec(text.slice(at + prefix.length))?.[0];
+      if (id !== undefined && !found.includes(id)) {
+        found.push(id);
+      }
+      at = text.indexOf(prefix, at + prefix.length);
+    }
+    return found.map((id) => ({ id }));
+  };
+
   return {
     core,
     ref,
     capabilities: () => ({ ...capabilities }),
+    linkedIssues,
     testConnection: async (): Promise<HealthProbe> => {
       core.enter('test_connection');
       return {

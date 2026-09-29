@@ -1250,6 +1250,10 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
           record: [],
           // WP-45: project text, so it rides in data blocks and bumps no role-prompt version.
           reviewChecklists: checklistsInPrompt,
+          // WP-89: the bug pre-fetch's excerpts, read by the `stage.execute` job outside every
+          // transaction before this plan — `[]` for every run it did not read for, so a project with
+          // neither observability binding plans the prompt it always did.
+          observability: request.observability ?? [],
         },
         artifactType: stage.produces,
         // The stage's narrower instruction, when it has one: platform text, typed as a closed set

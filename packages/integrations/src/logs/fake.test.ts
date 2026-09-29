@@ -140,3 +140,26 @@ describe('FakeObservabilityLogs seeding', () => {
     expect((await port.labels('app')).values).toEqual(['api', 'worker']);
   });
 });
+
+describe('FakeObservabilityLogs excerpt selector (WP-89, divergence 7)', () => {
+  it('answers the selector it was built with, or null', () => {
+    const configured = createFakeObservabilityLogs({
+      integrationId: '00000000-0000-4000-8000-0000000000a5',
+      excerptSelector: '{app="api"}',
+    });
+    expect(configured.excerptSelector()).toBe('{app="api"}');
+    const unconfigured = createFakeObservabilityLogs({
+      integrationId: '00000000-0000-4000-8000-0000000000a5',
+    });
+    expect(unconfigured.excerptSelector()).toBeNull();
+  });
+
+  it('refuses at construction a selector its own queryRange would refuse', () => {
+    expect(() =>
+      createFakeObservabilityLogs({
+        integrationId: '00000000-0000-4000-8000-0000000000a5',
+        excerptSelector: '{app=~"api.*"}',
+      }),
+    ).toThrow(/is not label="value"/);
+  });
+});

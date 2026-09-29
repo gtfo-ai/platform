@@ -5,20 +5,25 @@
  * the registry is where "this build knows about GitLab" is written down, and until a loader read
  * the `bindings` table there was nobody to say it to. This is that list.
  *
- * ## Why three and not five
+ * ## Why all five, and why it used to be three
  *
- * The pipeline holds a git provider, a task manager and — since WP-32 — the chat binding the
- * notification band posts through (`PipelineIntegrations`), and the loader builds exactly those
- * three. **Slack joined this list when it got a consumer**, which is the rule this paragraph has
- * always stated rather than an exception to it: it used to read *"Registering Slack, Sentry and
- * Loki here as well would be five entries of which three are constructed by nothing … They are
- * registered by the composition root that consumes them (the digest job, the bug-task pre-fetch),
- * in the work package that builds it"*, and WP-32 is that work package for Slack (standing rule
- * 83 — closing a gap falsifies the sentence that described it).
+ * The pipeline holds a git provider, a task manager, the chat binding the notification band posts
+ * through (`PipelineIntegrations`, WP-32) and — since WP-89 — the project's error tracker and log
+ * store, which the bug pre-fetch reads before the Investigator runs
+ * (`pipeline/observability-prefetch.ts`, through `PipelineIntegrationsPort.forObservability`). **A
+ * provider joins this list when it gets a consumer**, which is the rule this paragraph has always
+ * stated: it used to read *"Registering Slack, Sentry and Loki here as well would be five entries of
+ * which three are constructed by nothing … They are registered by the composition root that
+ * consumes them (the digest job, the bug-task pre-fetch), in the work package that builds it"*.
+ * WP-32 was that work package for Slack and WP-89 is it for Sentry and Loki (PROGRESS backlog 143 —
+ * standing rule 83, closing a gap falsifies the sentence that described it). The loader's tests are
+ * parameterised over the two new entries rather than trusting them (standing rule 68):
+ * `loader.test.ts` builds each through this very registry.
  *
- * Sentry and Loki are still absent for the original reason: nothing constructs them. The bug
- * task's observability pre-fetch has no owner, so registering them would be two entries the code
- * is parameterised over and the tests are not (standing rule 68's shape).
+ * Both are built with the **process's** clock and the runtime's `fetch`; neither takes the executor,
+ * because neither wraps its own calls (GitLab's shape, not Jira's — the duplication note below does
+ * not grow). Their `IntegrationRef.host` is the binding's `base_url` host, so the executor's egress
+ * check against `APP_INTEGRATION_HOSTS` applies to every pre-fetch read like any other call.
  *
  * **Registering Slack has one consequence beyond the notification band**, and it is deliberate:
  * the webhook ingress shares this registry, so `POST /webhooks/slack/<integrationId>` now resolves
@@ -42,6 +47,8 @@ import type { Clock } from '@platform/domain';
 import { gitlabProviderRegistration } from '../providers/gitlab/index.js';
 import { fixedActionContext } from '../providers/jira-cloud/index.js';
 import { createJiraCloudRegistration } from '../providers/jira-cloud/registration.js';
+import { createLokiRegistration } from '../providers/loki/index.js';
+import { createSentryRegistration } from '../providers/sentry/index.js';
 import { createSlackRegistration, type SocketConnect } from '../providers/slack/index.js';
 import { createIntegrationRegistry, type IntegrationRegistry } from '../registry.js';
 
@@ -101,4 +108,7 @@ export const createPipelineProviderRegistry = (
       timer: options.timer,
       ...(options.slackConnect === undefined ? {} : { connect: options.slackConnect }),
     }),
+    // WP-89: the bug pre-fetch's two providers, each read through `forObservability`.
+    createSentryRegistration({ clock: options.clock }),
+    createLokiRegistration({ clock: options.clock }),
   ]);

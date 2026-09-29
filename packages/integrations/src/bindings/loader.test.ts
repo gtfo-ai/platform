@@ -514,3 +514,112 @@ describe('the minting integration (WP-80, TD-028 decision 10)', () => {
     ).rejects.toBeInstanceOf(BindingLoadError);
   });
 });
+
+/**
+ * WP-89 (PROGRESS backlog 143): the bug pre-fetch's bindings, built through the **shipped**
+ * registry — which is the assertion that Sentry and Loki are registered where a consumer constructs
+ * them — one type at a time, with the loader's refusals unchanged.
+ */
+describe('an observability binding (WP-89)', () => {
+  const SENTRY_TOKEN = 'sntrys_FAKE-not-a-real-sentry-token-0003';
+  const LOKI_TOKEN = 'FAKE-not-a-real-loki-bearer-token-0004';
+  const sentryBinding = (overrides: Partial<ProjectBinding> = {}): ProjectBinding => ({
+    bindingId: '00000000-0000-4000-8000-00000000d0e1' as Id,
+    integrationId: '00000000-0000-4000-8000-00000000a0e1' as Id,
+    type: 'errors',
+    provider: 'sentry',
+    name: 'acme sentry',
+    config: { base_url: 'https://sentry.example.test', organization: 'acme' },
+    secretIds: ['00000000-0000-4000-8000-00000000e0e1' as Id],
+    ...overrides,
+  });
+  const lokiBinding = (config: Record<string, string> = {}): ProjectBinding => ({
+    bindingId: '00000000-0000-4000-8000-00000000d0f1' as Id,
+    integrationId: '00000000-0000-4000-8000-00000000a0f1' as Id,
+    type: 'logs',
+    provider: 'loki',
+    name: 'acme loki',
+    config: { base_url: 'https://loki.example.test', ...config },
+    secretIds: ['00000000-0000-4000-8000-00000000e0f1' as Id],
+  });
+
+  it('answers null for a project with none, and never touches the git binding', async () => {
+    const loader = loaderFor({ bindings: [gitBinding()] });
+    expect(await loader.forObservability(PROJECT, 'errors', outsideARun)).toBeNull();
+    expect(await loader.forObservability(PROJECT, 'logs', outsideARun)).toBeNull();
+  });
+
+  it('builds the Sentry adapter, with its host on the ref and a redactor over its credential', async () => {
+    const errors = await loaderFor({
+      bindings: [sentryBinding()],
+      secrets: { auth_token: SENTRY_TOKEN },
+    }).forObservability(PROJECT, 'errors', outsideARun);
+
+    expect(errors?.ref).toEqual({
+      integrationId: '00000000-0000-4000-8000-00000000a0e1',
+      provider: 'sentry',
+      type: 'errors',
+      host: 'sentry.example.test',
+    });
+    expect(
+      errors?.port.linkedIssues('https://sentry.example.test/organizations/acme/issues/42/'),
+    ).toEqual([{ id: '42' }]);
+    expect(errors?.redactor.redactText(`leaked ${SENTRY_TOKEN}`).value).not.toContain(SENTRY_TOKEN);
+  });
+
+  it('builds the Loki adapter and publishes the binding’s excerpt selector, or null', async () => {
+    const secrets = { bearer_token: LOKI_TOKEN };
+    const configured = await loaderFor({
+      bindings: [lokiBinding({ excerpt_selector: '{app="api"}' })],
+      secrets,
+    }).forObservability(PROJECT, 'logs', outsideARun);
+    expect(configured?.ref).toMatchObject({ provider: 'loki', host: 'loki.example.test' });
+    expect(configured?.port.excerptSelector()).toBe('{app="api"}');
+
+    const unconfigured = await loaderFor({ bindings: [lokiBinding()], secrets }).forObservability(
+      PROJECT,
+      'logs',
+      outsideARun,
+    );
+    expect(unconfigured?.port.excerptSelector()).toBeNull();
+  });
+
+  it('refuses a selector the adapter could not query, at the load rather than at every bug task', async () => {
+    await expect(
+      loaderFor({
+        bindings: [lokiBinding({ excerpt_selector: 'app = api' })],
+        secrets: { bearer_token: LOKI_TOKEN },
+      }).forObservability(PROJECT, 'logs', outsideARun),
+    ).rejects.toThrow(/fails its schema at: excerpt_selector/);
+  });
+
+  it('refuses a broken binding and two of one type — and forProject does not see either', async () => {
+    const broken = loaderFor({
+      bindings: [
+        gitBinding(),
+        sentryBinding({ config: { base_url: 'https://sentry.example.test' } }),
+      ],
+      secrets: { token: BINDING_TOKEN },
+    });
+    await expect(broken.forObservability(PROJECT, 'errors', outsideARun)).rejects.toBeInstanceOf(
+      BindingLoadError,
+    );
+    // The separation the member exists for: the pipeline's own answer still loads.
+    expect((await broken.forProject(PROJECT, outsideARun)).git).not.toBeNull();
+
+    const two = loaderFor({
+      bindings: [
+        sentryBinding(),
+        sentryBinding({
+          bindingId: '00000000-0000-4000-8000-00000000d0e2' as Id,
+          integrationId: '00000000-0000-4000-8000-00000000a0e2' as Id,
+          name: 'second sentry',
+        }),
+      ],
+      secrets: { auth_token: SENTRY_TOKEN },
+    });
+    await expect(two.forObservability(PROJECT, 'errors', outsideARun)).rejects.toThrow(
+      /has 2 "errors" bindings/,
+    );
+  });
+});

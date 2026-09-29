@@ -115,6 +115,9 @@ const harness = (
       const git = integrations.git as NonNullable<PipelineIntegrations['git']>;
       return { executor, port: git.port, ref: git.ref, redactor: git.redactor };
     },
+    forObservability: async () => {
+      throw new Error('the recovery duty read the project’s observability bindings');
+    },
   };
   const store: UnrevokedRunCredentialStore = {
     unrevokedRunCredentials: async () => [],

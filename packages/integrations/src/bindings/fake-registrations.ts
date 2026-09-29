@@ -26,6 +26,8 @@ import {
   type InboundNormaliser,
   MAX_TICKET_POLL_INTERVAL_SECONDS,
   MIN_TICKET_POLL_INTERVAL_SECONDS,
+  type ObservabilityErrorsPort,
+  type ObservabilityLogsPort,
   type SecretRedactor,
   type TaskManagementPort,
   TICKET_POLL_CONFIG_KEYS,
@@ -33,6 +35,7 @@ import {
   type WebhookDelivery,
 } from '@platform/application';
 import * as z from 'zod';
+import { isFakeLogSelector } from '../logs/fake.js';
 import type { AnyProviderRegistration } from '../registry.js';
 
 /**
@@ -208,3 +211,63 @@ export const fakeTaskManagementRegistration = (
     return withPollPlan(withInboundRedactor(options.port, redactor), fakePollPlanOf(config));
   },
 });
+
+export const FAKE_ERRORS_PROVIDER_ID = 'fake-errors';
+export const FAKE_LOGS_PROVIDER_ID = 'fake-logs';
+
+/**
+ * The error-tracker fake, as a registration (WP-89): the bug pre-fetch reads a project's errors
+ * binding through the loader like every other binding, so the e2e tier's Sentry double goes in the
+ * same door — the rows, the decryption, the strict config parse and the redactor composition are
+ * production code, and only the far side of the HTTP call is a double.
+ */
+export const fakeErrorsRegistration = (
+  options: FakeRegistrationOptions<ObservabilityErrorsPort>,
+): AnyProviderRegistration => ({
+  id: FAKE_ERRORS_PROVIDER_ID,
+  type: 'errors',
+  displayName: 'Fake error tracker (in-memory)',
+  configSchema: z.strictObject({ token: z.string().min(1) }),
+  secretFields: ['token'],
+  setupGuidePath: 'packages/integrations/src/errors/fake.ts',
+  agentTooling: null,
+  create: ({ secrets }) => {
+    refuseWrongToken(FAKE_ERRORS_PROVIDER_ID, options.token, secrets.token);
+    return options.port;
+  },
+});
+
+/**
+ * The log-store fake, as a registration (WP-89). `excerpt_selector` is **binding** configuration,
+ * as it is for Loki, so the port answers `excerptSelector()` from the binding's config rather than
+ * from the prebuilt fake — the shape `withPollPlan` gives the task manager — and a selector this
+ * fake's grammar cannot parse is refused at the config parse, as Loki refuses one.
+ */
+export const fakeLogsRegistration = (
+  options: FakeRegistrationOptions<ObservabilityLogsPort>,
+): AnyProviderRegistration => {
+  const configSchema = z.strictObject({
+    token: z.string().min(1),
+    excerpt_selector: z
+      .string()
+      .refine(isFakeLogSelector, { message: 'expected {label="value", …}' })
+      .nullish(),
+  });
+  return {
+    id: FAKE_LOGS_PROVIDER_ID,
+    type: 'logs',
+    displayName: 'Fake log store (in-memory)',
+    configSchema,
+    secretFields: ['token'],
+    setupGuidePath: 'packages/integrations/src/logs/fake.ts',
+    agentTooling: null,
+    create: ({ config, secrets }) => {
+      refuseWrongToken(FAKE_LOGS_PROVIDER_ID, options.token, secrets.token);
+      const selector = configSchema.parse(config).excerpt_selector ?? null;
+      return new Proxy(options.port, {
+        get: (target, key, receiver) =>
+          key === 'excerptSelector' ? () => selector : Reflect.get(target, key, receiver),
+      });
+    },
+  };
+};

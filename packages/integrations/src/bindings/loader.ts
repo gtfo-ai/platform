@@ -9,7 +9,9 @@
  * credentials, validates the merged config against the provider's own schema, builds the adapter
  * through the provider's registration, and wraps the three the pipeline knows about — the git
  * provider, the task manager and (since WP-32) the chat binding the notification band posts
- * through — in `IntegrationActionExecutor`.
+ * through — in `IntegrationActionExecutor`. Since WP-89 it also builds a project's Sentry and Loki
+ * bindings, one type at a time, through `forObservability`, whose docblock says why that answer is
+ * separate from `forProject`'s.
  *
  * ## Absent is not broken (standing rule 20)
  *
@@ -85,6 +87,9 @@ import type {
   IntegrationActionExecutor,
   IntegrationCallScope,
   MintingIntegration,
+  ObservabilityBinding,
+  ObservabilityPortByType,
+  ObservabilityType,
   PipelineIntegrations,
   PipelineIntegrationsPort,
   ProjectBinding,
@@ -409,8 +414,40 @@ export const createPipelineIntegrationsLoader = (
     };
   };
 
+  /**
+   * The project's Sentry or Loki binding (WP-89) — built by the same {@link build} as every other
+   * binding, so the redactor, the strict schema parse and the refusals are the ones the pipeline's
+   * three get, and a type with two bindings is refused by the same {@link only}.
+   *
+   * A separate member, per type, rather than two more fields on `forProject`'s answer, because the
+   * answers fail differently on purpose: a git or ticket binding that will not load stops the
+   * pipeline (rule 20's *broken is not absent*), and an observability binding that will not load
+   * must stop **nothing** — the one caller, the bug pre-fetch, catches this throw and runs the
+   * investigation without that excerpt. Folded into `forProject`, a Sentry token that no longer
+   * decrypted would have been a `BindingLoadError` on every pipeline call the project made.
+   */
+  const forObservability = async <TType extends ObservabilityType>(
+    projectId: Id,
+    type: TType,
+    scope: IntegrationCallScope,
+  ): Promise<ObservabilityBinding<ObservabilityPortByType[TType]> | null> => {
+    const candidates = [];
+    for (const binding of (await options.repository.forProject(projectId)).filter(
+      (row) => row.type === type,
+    )) {
+      candidates.push({ binding, built: await build(projectId, binding, type, scope) });
+    }
+    const chosen = only(projectId, type, candidates);
+    if (chosen === null) {
+      return null;
+    }
+    const port = chosen.built.port as ObservabilityPortByType[TType];
+    return { executor: options.executor, port, ref: port.ref, redactor: chosen.built.redactor };
+  };
+
   return {
     forMintingIntegration,
+    forObservability,
     forProject: async (
       projectId: Id,
       scope: IntegrationCallScope,

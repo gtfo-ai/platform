@@ -78,6 +78,7 @@ runObservabilityLogsContract({
   create: async (): Promise<ObservabilityLogsContractContext> => {
     const port = createFakeObservabilityLogs({
       integrationId: LOGS_INTEGRATION_ID,
+      excerptSelector: '{app="api", env="production"}',
       streams: [
         {
           labels: { app: 'api', env: 'production' },
@@ -107,6 +108,8 @@ runObservabilityLogsContract({
       // cap rather than at some absurd size every implementation refuses (standing rule 43).
       maxLabelNameBytes: FAKE_MAX_LABEL_BYTES,
       lineFilter: 'trace-abc',
+      // The fake's own answer is what the suite compares against the constructor argument above.
+      excerptSelector: '{app="api", env="production"}',
       cleanup: async () => {},
     };
   },

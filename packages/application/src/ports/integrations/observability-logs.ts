@@ -27,11 +27,12 @@ export const logLineSchema = z.strictObject({
    * Untrusted (BD-022) — and the most likely single place in this port for a credential to appear,
    * because an application that logs a request logs its headers.
    *
-   * **TODO (WP-11, and WP-16 when a pre-fetch reaches a context pack):** these lines are read to be
-   * *stored* — in an artifact, in a context pack, in `events.payload` — and TD-012 wants the
-   * redactor on every one of those writes. The read itself goes through
-   * `IntegrationActionExecutor`, which redacts the audit row; nothing redacts the lines on their
-   * way into a pack. Whoever writes that path adds the `SecretRedactor` and records its count.
+   * The read goes through `IntegrationActionExecutor`, which redacts the audit row, and the
+   * adapter redacts each line with the binding's redactor before it is emitted. The one path that
+   * puts these lines into a prompt — the bug task's pre-fetch (WP-89,
+   * `packages/application/src/pipeline/observability-prefetch.ts`) — redacts the rendered excerpt
+   * again with the redactor the loader composed for the binding (TD-012 steps 1 and 2) and counts
+   * it, because the executor hands back the result it audited unredacted (standing rule 13).
    */
   line: z.string(),
   labels: z.record(z.string(), z.string()),
@@ -103,6 +104,19 @@ export interface ObservabilityLogsPort extends IntegrationPort<ObservabilityLogs
 
   /** Label sets matching a selector since an instant — the "narrow the stream" recipe step. */
   readonly series: (selector: string, since: string) => Promise<readonly Record<string, string>[]>;
+
+  /**
+   * The stream selector this **binding's** configuration names for a bug task's log excerpt, or
+   * `null` when it names none — WP-89.
+   *
+   * product/08: *"optional pre-fetch of a small excerpt around the Sentry event timestamp filtered
+   * by request/trace id"*. Which streams hold this project's logs is not something the platform can
+   * guess and not something a ticket may choose, so it is the operator's, per binding (the way
+   * `TaskManagementPort.pollPlan()` answers from binding configuration). `null` is a decision — the
+   * pre-fetch then queries nothing and the prompt says so — never a default of "every stream".
+   * A value is one this binding's own `queryRange` accepts as a selector.
+   */
+  readonly excerptSelector: () => string | null;
 
   readonly agentTooling: () => AgentTooling;
 }

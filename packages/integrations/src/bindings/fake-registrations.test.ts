@@ -8,11 +8,17 @@
  * fake built directly still carries it — so the wrapper, not the fake, is what redacts.
  */
 
-import { exactSecretRedactor } from '@platform/application';
+import { exactSecretRedactor, noSecretsRedactor } from '@platform/application';
 import type { Id, IsoDateTime } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
+import { createFakeObservabilityErrors } from '../errors/fake.js';
 import { createFakeGitProvider } from '../git/fake.js';
-import { fakeGitRegistration } from './fake-registrations.js';
+import { createFakeObservabilityLogs } from '../logs/fake.js';
+import {
+  fakeErrorsRegistration,
+  fakeGitRegistration,
+  fakeLogsRegistration,
+} from './fake-registrations.js';
 
 const INTEGRATION_ID = '00000000-0000-4000-8000-0000000000f7' as Id;
 const PROJECT_ID = '00000000-0000-4000-8000-0000000000f8' as Id;
@@ -79,5 +85,40 @@ describe('the fake git registration (backlog 260)', () => {
   it('leaves the fake built directly as it was, so the redaction is the registration’s', async () => {
     const { fake, delivery } = await setUp();
     expect(textOf(await fake.inbound.normalise(delivery, context))).toContain(PLANTED);
+  });
+});
+
+/** WP-89: the bug pre-fetch's two fakes go in the loader's door like every other binding. */
+describe('the fake observability registrations (WP-89)', () => {
+  const input = (config: Record<string, unknown>, token = TOKEN) => ({
+    integrationId: INTEGRATION_ID,
+    config,
+    secrets: { token },
+    redactor: noSecretsRedactor(),
+  });
+
+  it('refuses a credential that is not the one the secret store holds', () => {
+    const errors = fakeErrorsRegistration({
+      port: createFakeObservabilityErrors({ integrationId: INTEGRATION_ID }),
+      token: TOKEN,
+    });
+    expect(() => errors.create(input({ token: 'wrong' }, 'wrong'))).toThrow(/not the one/);
+    expect(errors.create(input({ token: TOKEN }))).toBeDefined();
+  });
+
+  it('answers the excerpt selector from the binding’s config, and refuses one the fake cannot parse', () => {
+    const logs = fakeLogsRegistration({
+      port: createFakeObservabilityLogs({ integrationId: INTEGRATION_ID }),
+      token: TOKEN,
+    });
+    const configured = logs.create(input({ token: TOKEN, excerpt_selector: '{app="api"}' }));
+    expect((configured as { excerptSelector(): string | null }).excerptSelector()).toBe(
+      '{app="api"}',
+    );
+    const unconfigured = logs.create(input({ token: TOKEN }));
+    expect((unconfigured as { excerptSelector(): string | null }).excerptSelector()).toBeNull();
+    expect(logs.configSchema.safeParse({ token: TOKEN, excerpt_selector: 'app=api' }).success).toBe(
+      false,
+    );
   });
 });

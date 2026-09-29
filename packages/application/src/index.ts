@@ -127,6 +127,7 @@ export * from './pipeline/integrations.js';
 export * from './pipeline/jobs.js';
 export * from './pipeline/lease.js';
 export * from './pipeline/live-runs.js';
+export * from './pipeline/observability-prefetch.js';
 export * from './pipeline/outbound.js';
 export * from './pipeline/planner.js';
 export * from './pipeline/run-commands.js';

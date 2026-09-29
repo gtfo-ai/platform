@@ -75,17 +75,28 @@ import {
   runner as runnerAdapters,
   secrets as secretAdapters,
 } from '@platform/infrastructure';
-import type { IntegrationRegistry, PipelineProviderRegistryOptions } from '@platform/integrations';
+import type {
+  FakeIssueSeed,
+  FakeLogStreamSeed,
+  IntegrationRegistry,
+  PipelineProviderRegistryOptions,
+} from '@platform/integrations';
 import {
   createFakeCommunication,
   createFakeGitProvider,
+  createFakeObservabilityErrors,
+  createFakeObservabilityLogs,
   createFakeTaskManagement,
   createIntegrationRegistry,
   createSlackRegistration,
+  FAKE_ERRORS_PROVIDER_ID,
   FAKE_GIT_PROVIDER_ID,
+  FAKE_LOGS_PROVIDER_ID,
   FAKE_TASK_MANAGEMENT_PROVIDER_ID,
   fakeCommunicationRegistration,
+  fakeErrorsRegistration,
   fakeGitRegistration,
+  fakeLogsRegistration,
   fakeTaskManagementRegistration,
 } from '@platform/integrations';
 import type pg from 'pg';
@@ -113,6 +124,11 @@ export const TICKETS_INTEGRATION_ID = '00000000-0000-4000-8000-00000000a002' as 
 /** The chat account the notification band posts through (WP-32). */
 export const CHAT_INTEGRATION_ID = '00000000-0000-4000-8000-00000000a003' as Id;
 export const CHAT_CHANNEL = '#agentic';
+/** The bug pre-fetch's two accounts (WP-89), seeded only when a test asks for them. */
+export const ERRORS_INTEGRATION_ID = '00000000-0000-4000-8000-00000000a004' as Id;
+export const LOGS_INTEGRATION_ID = '00000000-0000-4000-8000-00000000a005' as Id;
+export const ERRORS_BINDING_TOKEN = 'FAKE-errors-binding-token-not-a-real-secret';
+export const LOGS_BINDING_TOKEN = 'FAKE-logs-binding-token-not-a-real-secret';
 export const GIT_PROJECT = 'acme/api';
 
 /** Obviously fake, and the value the redaction assertions look for. */
@@ -686,6 +702,21 @@ export interface StartPipelineOptions {
    * `APP_INTEGRATION_HOSTS` declares the fake's host so the executor lets the calls through.
    */
   readonly slack?: FakeSlack;
+  /**
+   * WP-89: bind the project to a fake error tracker and/or log store, seeded with these issues and
+   * streams, so the bug pre-fetch reads them through the loader like a real Sentry or Loki. Absent
+   * is a project with neither binding — every other test's world, unchanged.
+   */
+  readonly observability?: ObservabilitySeed;
+}
+
+/** The fake observability world a test asks for (WP-89). */
+export interface ObservabilitySeed {
+  readonly errors?: readonly FakeIssueSeed[];
+  readonly logs?: {
+    readonly streams: readonly FakeLogStreamSeed[];
+    readonly excerptSelector?: string;
+  };
 }
 
 /**
@@ -700,6 +731,7 @@ export const seedWorld = async (
   pool: pg.Pool,
   config: JsonObject,
   chat: 'fake' | 'slack' = 'fake',
+  observability: ObservabilitySeed | undefined = undefined,
 ): Promise<{ projectId: Id; userId: Id }> => {
   const seed = await pool.query<{ project_id: string; user_id: string }>(
     `with org as (insert into organizations (name) values ('e2e') returning id),
@@ -716,7 +748,7 @@ export const seedWorld = async (
   );
   const projectId = seed.rows[0]?.project_id as Id;
   const userId = seed.rows[0]?.user_id as Id;
-  await seedIntegrations(pool, projectId, false, chat);
+  await seedIntegrations(pool, projectId, false, chat, observability);
   return { projectId, userId };
 };
 
@@ -736,6 +768,8 @@ export const seedIntegrations = async (
   skipBindings = false,
   /** WP-43: seed the chat account as a real Slack binding rather than `fake-communication`. */
   chat: 'fake' | 'slack' = 'fake',
+  /** WP-89: the bug pre-fetch's accounts — none unless a test asks. */
+  observability: ObservabilitySeed | undefined = undefined,
 ): Promise<void> => {
   const key = secretAdapters.deriveSecretKey(APP_SECRET_KEY);
   const orgId = (
@@ -801,6 +835,29 @@ export const seedIntegrations = async (
    * registration declares. Seeding it at the account is what makes the notification e2e exercise
    * the merge rather than only the overlay.
    */
+  if (observability?.errors !== undefined) {
+    await bind(
+      ERRORS_INTEGRATION_ID,
+      'errors',
+      FAKE_ERRORS_PROVIDER_ID,
+      'acme fake errors',
+      {},
+      ERRORS_BINDING_TOKEN,
+    );
+  }
+  if (observability?.logs !== undefined) {
+    await bind(
+      LOGS_INTEGRATION_ID,
+      'logs',
+      FAKE_LOGS_PROVIDER_ID,
+      'acme fake logs',
+      // On the account here; a project's binding may override it, and the loader merges the two.
+      observability.logs.excerptSelector === undefined
+        ? {}
+        : { excerpt_selector: observability.logs.excerptSelector },
+      LOGS_BINDING_TOKEN,
+    );
+  }
   if (chat === 'slack') {
     // WP-43: the real Slack registration's account — Socket Mode on by default, three credentials.
     await bind(
@@ -855,6 +912,15 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
   const chat = createFakeCommunication({
     integrationId: CHAT_INTEGRATION_ID,
     channels: [CHAT_CHANNEL],
+  });
+  // WP-89: the bug pre-fetch's two doubles, empty unless the test seeds them.
+  const errorTracker = createFakeObservabilityErrors({
+    integrationId: ERRORS_INTEGRATION_ID,
+    issues: options.observability?.errors ?? [],
+  });
+  const logStore = createFakeObservabilityLogs({
+    integrationId: LOGS_INTEGRATION_ID,
+    streams: options.observability?.logs?.streams ?? [],
   });
 
   // The merge request the Implementation stage will report. In production the developer agent opens
@@ -1038,6 +1104,10 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
       createIntegrationRegistry([
         fakeGitRegistration({ port: recordingGit(processName), token: GIT_BINDING_TOKEN }),
         fakeTaskManagementRegistration({ port: tickets, token: TICKET_BINDING_TOKEN }),
+        // WP-89: registered always, bound only when a test seeds them — a registration is not a
+        // binding, and the pre-fetch reads the `bindings` table.
+        fakeErrorsRegistration({ port: errorTracker, token: ERRORS_BINDING_TOKEN }),
+        fakeLogsRegistration({ port: logStore, token: LOGS_BINDING_TOKEN }),
         options.slack === undefined
           ? fakeCommunicationRegistration({ port: chat, token: CHAT_BINDING_TOKEN })
           : // WP-43: the production registration, with the process's clock and timer, over the
@@ -1163,6 +1233,7 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
             pool,
             options.config ?? {},
             options.slack === undefined ? 'fake' : 'slack',
+            options.observability,
           )
         : { projectId: options.reuse.projectId, userId: options.reuse.projectId };
 

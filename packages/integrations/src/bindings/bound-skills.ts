@@ -14,8 +14,10 @@
  * provider's `agentTooling` out of the **catalogue** (`SHIPPED_PROVIDERS`) — metadata, true without
  * an adapter. It decrypts nothing and builds nothing: a skill is prompt material, and the question
  * is which provider a binding names, not whether its credential opens. **Not the pipeline's
- * registry**, measured: that registry builds only the three types the pipeline calls (GitLab, Jira,
- * Slack), so a Loki or Sentry binding is not in it and its skill would never have been provisioned.
+ * registry**: when this was written that registry built only the three types the pipeline then
+ * called (GitLab, Jira, Slack), so a Loki or Sentry binding's skill would never have been provisioned
+ * (measured at WP-54). WP-89 registered both there for the bug pre-fetch; the catalogue stays the
+ * source because a registry is where adapters are *constructed*, and this question needs none.
  *
  * A binding whose provider this build does not ship — or whose type disagrees with the provider's —
  * names no skill here; the loader is what refuses such a binding by name (`BindingLoadError`), and

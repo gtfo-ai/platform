@@ -120,6 +120,21 @@ agentTooling() -> {mcp?: McpServerSpec, cli?: CliSpec, skill: SkillRef, env: Env
 ```
 No inbound normaliser in v1: product/08 lists `error.issue.created` as optional and technical/02's catalogue has no such event, so a normaliser would have nothing legal to emit.
 
+> **Amended at WP-89 (PROGRESS backlog 143): `linkedIssues(text) -> {id}[]`, and the pre-fetch
+> exists.** The bug pre-fetch has to know which issue a ticket is about, and the ticket is the only
+> thing that says, so the port gained one pure, synchronous member: the issue ids a text links to,
+> recognised only on the binding's own instance and organisation, each once, at most
+> `MAX_LINKED_ISSUES` (20) — an id the provider issued, never a URL anybody dials. The shared contract
+> suite holds it on the fake and on Sentry. The pre-fetch itself is
+> `packages/application/src/pipeline/observability-prefetch.ts`: in the `stage.execute` job before an
+> Investigator run, outside every transaction, through `IntegrationActionExecutor`, the binding
+> resolved by `PipelineIntegrationsPort.forObservability` — per type and apart from `forProject`, so a
+> broken Sentry or Loki binding fails the excerpt open and never the pipeline — redacted with the
+> binding's redactor, and cut in the prompt at `MAX_ERROR_EVENT_EXCERPT_CHARS` /
+> `MAX_LOG_EXCERPT_CHARS` (12 000 + 8 000 characters, one artifact's worth, derived at the constants
+> in `packages/domain/src/prompt/assembly.ts`). Sentry and Loki are registered in the pipeline's
+> registry (`bindings/shipped-registry.ts`) from this row on.
+
 > **Every string an errors adapter emits is bounded by a named cap** (WP-11 review round 1). Sentry
 > capped the stack trace, the message and the breadcrumb trail, and capped the tag *count* while
 > leaving a tag *value* unbounded — so a 2 MB `server_name` reached the port intact. `max_field_bytes`
@@ -166,6 +181,13 @@ agentTooling() -> {cli: logcli spec, skill, env}
 capabilities() -> {labels, series, maxRangeMs, maxLines}
 ```
 The caps are enforced, not advisory: a range or a limit above `capabilities()` is `invalid_request`, and a result that hit the limit says `truncated: true`, because a truncated answer to "is this error still happening?" reads exactly like a complete one.
+
+> **Amended at WP-89: `excerptSelector() -> string | null`.** Which streams hold a project's logs is
+> the operator's to say and not the ticket's, so the bug pre-fetch's selector is **binding**
+> configuration (Loki's `excerpt_selector`, refused at the config parse unless `queryRange` would
+> accept it) and the port publishes it; `null` means the pre-fetch queries nothing and the prompt
+> says `not_configured`. The excerpt is at most 50 lines, ±5 minutes around the event, filtered by
+> the event's `trace_id` or `request_id`, and never outside `capabilities()`.
 
 > **Caps the port does not name, added by the adapter at WP-11.** `maxRangeMs` and `maxLines`
 > bound the *question*; neither bounds the *answer*. A single log line can be a 50 MB base64 blob,

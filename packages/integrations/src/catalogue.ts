@@ -10,12 +10,14 @@
  *
  * ## Why it is not the pipeline's registry
  *
- * `createPipelineProviderRegistry` registers **two** providers — git and task management — and its
- * docblock says why the other three are not there: entries nothing constructs are a set the code is
- * parameterised over and the tests are not. That argument is about `create`. A read surface calls
- * `create` never and must still be able to name every provider an operator can configure, or the
- * integrations screen refuses to describe rows the platform itself reads on every webhook. Two
- * questions, two lists.
+ * `createPipelineProviderRegistry` registers a provider when something in the pipeline constructs
+ * it — its docblock's rule, *entries nothing constructs are a set the code is parameterised over and
+ * the tests are not*. It held two providers when this was written (git and task management), three
+ * from WP-32 (Slack) and all five since WP-89 (Sentry and Loki, for the bug pre-fetch), so today the
+ * two lists name the same providers — and they stay two lists, because the question differs. The
+ * registry's is about `create`, which needs a binding's decrypted secrets, an executor and a clock.
+ * A read surface calls `create` never and must still be able to name every provider an operator can
+ * configure, whether or not a deployment composes it. Two questions, two lists.
  *
  * ## Nothing here is hand-copied
  *
@@ -72,8 +74,10 @@ export interface ProviderCatalogueEntry {
    * What an agent may be handed inside a run — the registration's own value, which is metadata and
    * true without an adapter (WP-54). Its `skill` is what provisions a provider skill for a project
    * that binds this provider (`createBoundSkillsReader`), and it is read **here** rather than off the
-   * pipeline's registry because that registry builds only the three types the pipeline calls: a
-   * Loki or Sentry binding is not in it, and its skill would never be provisioned.
+   * pipeline's registry. When WP-54 wrote that reader the registry built only the three types the
+   * pipeline then called, so a Loki or Sentry binding's skill would never have been provisioned;
+   * since WP-89 the registry holds both, and the catalogue stays the source because provisioning a
+   * skill is a metadata question that must not construct an adapter.
    */
   readonly agentTooling: AgentTooling | null;
   /**

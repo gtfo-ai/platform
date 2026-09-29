@@ -250,6 +250,7 @@ export const createAskRunPlanner = (options: AskRunPlannerOptions): AskRunPlanne
           ],
           // An ask is not a review (WP-45): no checklist reaches it.
           reviewChecklists: [],
+          observability: [],
         },
         artifactType: 'AskAnswer',
         focus: null,

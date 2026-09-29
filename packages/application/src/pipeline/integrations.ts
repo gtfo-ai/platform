@@ -72,6 +72,16 @@ import {
   mergeRequestDraftSchema,
 } from '../ports/integrations/git-provider.js';
 import type {
+  ErrorEvent,
+  Issue,
+  ObservabilityErrorsPort,
+} from '../ports/integrations/observability-errors.js';
+import type {
+  LogQueryResult,
+  LogRangeQuery,
+  ObservabilityLogsPort,
+} from '../ports/integrations/observability-logs.js';
+import type {
   CommentRef,
   TaskManagementPort,
   Ticket,
@@ -172,6 +182,27 @@ export interface PipelineIntegrations {
 }
 
 /**
+ * One observability binding as the bug pre-fetch holds it (WP-89): the executor its reads go
+ * through, the port, its ref and — for the reason {@link TaskManagementBinding.redactor} carries
+ * one — the redactor the loader composed for it, because the pre-fetch puts provider text into a
+ * prompt the platform stores (`runs.user_prompt`) and the executor hands back the result it
+ * audited unredacted.
+ */
+export interface ObservabilityBinding<TPort> {
+  readonly executor: IntegrationActionExecutor;
+  readonly port: TPort;
+  readonly ref: IntegrationRef;
+  readonly redactor: SecretRedactor;
+}
+
+/** The two observability types and their ports — Sentry and Loki on this build (WP-89). */
+export interface ObservabilityPortByType {
+  readonly errors: ObservabilityErrorsPort;
+  readonly logs: ObservabilityLogsPort;
+}
+export type ObservabilityType = keyof ObservabilityPortByType;
+
+/**
  * The credentials the **caller** knows about and a binding cannot — Q55, and the reason this is a
  * required argument rather than an option.
  *
@@ -241,6 +272,26 @@ export interface PipelineIntegrationsPort {
     integrationId: Id,
     scope: IntegrationCallScope,
   ): Promise<MintingIntegration | null>;
+  /**
+   * The project's binding of one **observability** type (WP-89, PROGRESS backlog 143), or `null`
+   * for a project with none.
+   *
+   * A separate member from {@link forProject}, and per type, and both are the decision: a broken
+   * git or ticket binding must stop the pipeline (the loader's *broken is not absent*, rule 20),
+   * while a broken observability binding must stop **nothing** — the pre-fetch is an advisory read
+   * and fails open, one binding at a time, so a Sentry token that no longer decrypts costs the
+   * event excerpt and not the log excerpt. Folded into `forProject`, it would have been a
+   * `BindingLoadError` on every pipeline call the project made.
+   *
+   * @throws when the binding exists and cannot be built, or when there are two of the type — the
+   * loader's rules unchanged. The one caller (`observability-prefetch.ts`) catches it and says so
+   * in the prompt; the refusal is still made here, so what "broken" means is decided once.
+   */
+  forObservability<TType extends ObservabilityType>(
+    projectId: Id,
+    type: TType,
+    scope: IntegrationCallScope,
+  ): Promise<ObservabilityBinding<ObservabilityPortByType[TType]> | null>;
 }
 
 /**
@@ -277,8 +328,22 @@ export const mintingIntegrationOf = (
  */
 export const staticPipelineIntegrations = (
   integrations: PipelineIntegrations,
+  observability: {
+    readonly [TType in ObservabilityType]?: Omit<
+      ObservabilityBinding<ObservabilityPortByType[TType]>,
+      'executor'
+    >;
+  } = {},
 ): PipelineIntegrationsPort => ({
   forProject: async () => integrations,
+  forObservability: async <TType extends ObservabilityType>(_projectId: Id, type: TType) => {
+    const binding = observability[type];
+    return binding === undefined
+      ? null
+      : ({ executor: integrations.executor, ...binding } as ObservabilityBinding<
+          ObservabilityPortByType[TType]
+        >);
+  },
   forMintingIntegration: async (integrationId) =>
     integrations.git?.ref.integrationId === integrationId
       ? mintingIntegrationOf(integrations)
@@ -316,6 +381,23 @@ export const integrationsForProject = async (
 ): Promise<PipelineIntegrations> => {
   assertOutsideTransaction('integrations.forProject');
   return port.forProject(projectId, scope);
+};
+
+/**
+ * The door to {@link PipelineIntegrationsPort.forObservability}, guarded like
+ * {@link integrationsForProject}: resolving a binding is a `bindings` read and a credential
+ * decryption, and the reads behind it are provider round trips (WP-89).
+ *
+ * @throws {TransactionOpenError} when a transaction is open on this call path.
+ */
+export const observabilityForProject = async <TType extends ObservabilityType>(
+  port: PipelineIntegrationsPort,
+  projectId: Id,
+  type: TType,
+  scope: IntegrationCallScope,
+): Promise<ObservabilityBinding<ObservabilityPortByType[TType]> | null> => {
+  assertOutsideTransaction('integrations.forObservability');
+  return port.forObservability(projectId, type, scope);
 };
 
 /**
@@ -377,7 +459,7 @@ interface CallContext {
 
 /** A read: performed in every mode, because a shadow task needs its context (technical/06). */
 const read = async <T>(
-  integrations: PipelineIntegrations,
+  integrations: { readonly executor: IntegrationActionExecutor },
   ref: IntegrationRef,
   action: string,
   payload: JsonObject,
@@ -738,6 +820,43 @@ export const gitReads = (integrations: PipelineIntegrations) => ({
  * whose Jira integration was removed runs its pipeline without the ticket's text rather than
  * failing every stage (standing rule 20).
  */
+/**
+ * The reads the bug pre-fetch makes of an errors binding (WP-89), each an
+ * `IntegrationActionExecutor` read like every other provider call the pipeline makes — audited
+ * against the binding's own `integrations.id`, rate-limited on its budget, refused inside a
+ * transaction. A read is performed in every task mode (technical/06: a shadow task needs its
+ * context too).
+ */
+export const errorReads = (binding: ObservabilityBinding<ObservabilityErrorsPort>) => ({
+  issue: async (id: string, context: CallContext): Promise<Issue> =>
+    read(binding, binding.ref, 'get_issue', { issue_id: id }, context, async () =>
+      binding.port.getIssue({ id }),
+    ),
+  latestEvent: async (id: string, context: CallContext): Promise<ErrorEvent | null> =>
+    read(binding, binding.ref, 'get_latest_event', { issue_id: id }, context, async () =>
+      binding.port.getLatestEvent({ id }),
+    ),
+});
+
+/** {@link errorReads}' sibling for a logs binding: one range query around the event (WP-89). */
+export const logReads = (binding: ObservabilityBinding<ObservabilityLogsPort>) => ({
+  range: async (query: LogRangeQuery, context: CallContext): Promise<LogQueryResult> =>
+    read(
+      binding,
+      binding.ref,
+      'query_range',
+      {
+        selector: query.selector,
+        from: query.from,
+        to: query.to,
+        limit: query.limit,
+        filter: query.filter ?? null,
+      },
+      context,
+      async () => binding.port.queryRange(query),
+    ),
+});
+
 export const ticketReads = (integrations: PipelineIntegrations) => ({
   /**
    * Tickets a rule matches, since an instant — two callers, one read.

@@ -1714,3 +1714,54 @@ describe('an oversize merge request in a review run’s prompt (WP-83, Q54)', ()
     expect(at.shownDescription.length).toBe(MAX_MR_DESCRIPTION_CHARS);
   });
 });
+
+/**
+ * WP-89: the bug pre-fetch's excerpts reach the assembled prompt **inside data blocks**, read back
+ * with `readDataBlocks` (standing rule 82) — and a request that carries none plans a prompt with no
+ * observability block at all, which is criterion 1's *"runs unchanged"* at the planner.
+ */
+describe('the observability excerpts a run is given (WP-89)', () => {
+  const planWithExcerpts = async (observability: StageRunRequest['observability']) => {
+    const { store } = await indexedFixtureVault();
+    const planner = createStageRunPlanner({
+      workspacePath: (taskId) => `/workspaces/${taskId}`,
+      prompts: prompts as never,
+      skills: testSkills,
+      boundSkills: async () => [],
+      nonce: { next: () => NONCE },
+      contextPacks: createContextPackAssembler({ store, logger: silentLogger }),
+      headPaths: (projectId) => store.readPathWitnesses(projectId),
+      clock: { now: () => NOW },
+    });
+    const base = requestWith('ACME-9');
+    return planner.plan({
+      ...base,
+      stage: {
+        id: 'investigation',
+        kind: 'agent',
+        role: 'investigator',
+        produces: 'RootCauseAnalysis',
+      } as never,
+      ...(observability === undefined ? {} : { observability }),
+    });
+  };
+  const excerptKinds = (userPrompt: string) =>
+    readDataBlocks(userPrompt)
+      .blocks.filter((block) => block.kind === 'error_event' || block.kind === 'log_excerpt')
+      .map((block) => [block.kind, block.attributes.status, block.body]);
+
+  it('puts the excerpts the job read into the prompt, byte-identical', async () => {
+    const plan = await planWithExcerpts([
+      { kind: 'error_event', status: 'read', body: 'stack trace:\nat total (totals.ts:42)' },
+      { kind: 'log_excerpt', status: 'not_configured', body: '' },
+    ]);
+    expect(excerptKinds(plan.spec.userPrompt)).toEqual([
+      ['error_event', 'read', 'stack trace:\nat total (totals.ts:42)'],
+      ['log_excerpt', 'not_configured', ''],
+    ]);
+  });
+
+  it('plans no observability block for a request that carries none', async () => {
+    expect(excerptKinds((await planWithExcerpts(undefined)).spec.userPrompt)).toEqual([]);
+  });
+});

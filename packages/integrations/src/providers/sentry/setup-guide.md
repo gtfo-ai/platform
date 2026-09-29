@@ -7,7 +7,7 @@ nothing, this guide says so rather than guessing.
 The platform uses Sentry in exactly two places (product/08, Q16):
 
 1. it **pre-fetches** the linked issue's latest event into a bug task's Investigation context, and
-2. it **resolves** the issue when the fix merges.
+2. it **can resolve** the issue — the adapter implements `resolve` — but **nothing in the pipeline calls it yet**: a merged fix does not resolve its Sentry issue on this build (PROGRESS backlog 302).
 
 Everything else Sentry can do is out of scope for this binding.
 
@@ -59,6 +59,26 @@ was dropped and which key dropped it, so a truncated trace is never mistaken for
 | `max_tags` | 50 | Tags kept. |
 | `max_message_bytes` | 8 192 | Bytes of the event message, the issue title and the culprit. |
 
+### How a bug task finds its issue (WP-89)
+
+The platform reads the issue the **ticket links**. Before a bug task's Investigator runs, it looks in
+the ticket's title, description and comments for a link to *this binding's* instance and
+organization — `https://<org>.sentry.io/issues/<id>/`, `https://<host>/organizations/<org>/issues/<id>/`,
+or the older `https://<host>/<org>/<project>/issues/<id>/` — and reads the **first** one: the issue
+and its latest event, two `integration_actions` rows (`get_issue`, `get_latest_event`) against this
+binding. Sentry's own *Create Jira issue* action puts such a link in the description; a human can
+paste one. A link to another host or another organization is ignored, and a short id (`ACME-1AB`)
+on its own is not followed. So a ticket author can choose which issue **of this organization** the
+agent is shown, never which host is called or whose credential is used — if you bind one
+organization to two projects, its issues are readable from both.
+
+What reaches the prompt is redacted, placed inside a data block and cut at 12 000 characters with
+the cut announced — the caps above bound what the adapter reads, the prompt has a bound of its own
+(`MAX_ERROR_EVENT_EXCERPT_CHARS`, derived in `packages/domain/src/prompt/assembly.ts`). A ticket
+with no link, an issue with no event left, a Sentry that is down or a binding that will not load
+never stops the task: the prompt's block says which (`no_issue_link`, `unavailable`, …), the
+platform logs why, and the investigation runs.
+
 ## 3. Webhooks — not used in v1
 
 There is **no inbound normaliser** for this type. product/08 lists `error.issue.created` as
@@ -73,13 +93,15 @@ them is a comment, a note or a code link (open question **Q43**).
 
 | Port method | Status | The supported route instead |
 |---|---|---|
-| `comment(issue, text)` | refuses | The fix is announced on the **ticket** and on the **merge request**; the Sentry issue is *resolved*, which is the state change that matters. |
+| `comment(issue, text)` | refuses | The fix is announced on the **ticket** and on the **merge request**; resolving the Sentry issue is the state change that matters, and it is **not yet wired to a merge** (backlog 302). |
 | `linkMergeRequest(issue, url)` | refuses | Sentry associates code with an issue through its **source-code integration**: install the GitHub/GitLab integration in Sentry, and put `Fixes <SHORT-ID>` (for example `Fixes API-7B`) in the merge commit message. Sentry then links — and can auto-resolve — the issue itself. |
 
 If you need the comment, say so on Q43: the alternative is an undocumented endpoint, and an adapter
 that calls one is an adapter that breaks without a changelog entry.
 
 ## 5. Resolving on merge
+
+*Not wired yet (PROGRESS backlog 302): the adapter below works, and no pipeline step calls it when a fix merges.*
 
 `resolve(issue)` sends `{"status": "resolved"}`. `resolve(issue, {inRelease})` sends
 `{"status": "resolved", "statusDetails": {"inRelease": "<version>"}}`, which asks Sentry to

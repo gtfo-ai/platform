@@ -54,6 +54,7 @@ const assembleFor = (role: (typeof agentRoleSchema.options)[number], text: strin
       returnFeedback: null,
       record: [],
       reviewChecklists: [],
+      observability: [],
     },
     artifactType: artifactTypeSchema.options[0] ?? null,
     // The role prompt is the whole brief here: this suite is about what a *role* puts in the

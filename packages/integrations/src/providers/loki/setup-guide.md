@@ -33,6 +33,19 @@ any request is sent.
 | `username` / `password` | with `basic` | `password` is secret. |
 | `tenant_id` | multi-tenant only | Sent as `X-Scope-OrgID`. Leave unset on a single-tenant instance. |
 | `request_timeout_ms` | no (30 000) | Per-request timeout. |
+| `excerpt_selector` | no | The stream selector a bug task's log excerpt reads — `{app="api", env="production"}`. Set it on the **project's binding** (one Loki account serves many projects). Unset, the platform queries nothing and the Investigator's prompt says the excerpt is `not_configured`. A value `queryRange` would refuse is refused when the binding loads. |
+
+### The bug task's log excerpt (WP-89)
+
+Before a bug task's Investigator runs, the platform reads the linked Sentry issue's latest event
+(see the Sentry guide) and, when this binding names an `excerpt_selector` and the event carries a
+`trace_id` or `request_id`, asks Loki for **at most 50 lines** (never more than `max_lines`) matching
+the selector and containing that id, from five minutes before the event to five minutes after
+(never wider than `max_range_ms`). The lines are redacted and go into the prompt inside a data
+block, cut at 8 000 characters with the cut announced. A Loki that is down, a credential that no
+longer works or a binding that will not load never stops the task: the prompt says the excerpt is
+`unavailable`, the platform logs why, and the investigation runs. The read is one
+`integration_actions` row (`query_range`) against this binding.
 
 ### Caps — and why they are refusals rather than clamps
 
@@ -61,8 +74,9 @@ with something rather than with nothing. A `series` answer is bounded the same w
 set in the middle term, and a `labels()` listing by `max_label_values × max_label_bytes`. Each
 marker is counted **inside** the cap that emitted it, so applying a cap twice changes nothing.
 
-Raise `max_range_ms` and `max_lines` only with the token budget in mind: a log excerpt goes into a
-context pack, and WP-16 pays for every line.
+Raise `max_range_ms` and `max_lines` only with the token budget in mind for the agent's own
+`logcli` use. The bug task's excerpt has a bound of its own in the prompt (8 000 characters,
+derived at `MAX_LOG_EXCERPT_CHARS` in `packages/domain/src/prompt/assembly.ts`), whatever these are.
 
 ## 3. What LogQL this binding will send
 

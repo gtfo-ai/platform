@@ -91,6 +91,7 @@ export {
   SENTRY_PROVIDER_ID,
   type SentryFetch,
 } from './http.js';
+export { type SentryLinkScope, sentryLinkedIssues } from './links.js';
 export {
   boundedIdentifier,
   CORRELATION_TAGS,

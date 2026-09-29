@@ -248,6 +248,71 @@ export interface PromptTask {
    * untrusted string, and a project's own list changes no `ROLE_PROMPT_VERSIONS`.
    */
   readonly reviewChecklists: readonly PromptReviewChecklist[];
+  /**
+   * The bug pre-fetch's excerpts — the linked Sentry issue's latest event and the log lines around
+   * it (WP-89, product/08, technical/04 § "Prompt assembly" step 5's *"pre-fetched observability
+   * excerpts"*).
+   *
+   * **Empty for every run the pre-fetch did not run for, and for a project with neither binding** —
+   * which is what keeps such a project's prompt byte-for-byte what it was before WP-89 (criterion
+   * 1). A required array for {@link reviewChecklists}'s reason: a caller that meant *"none"* has to
+   * say so. A project that **has** a binding always gets its block, with a `status` saying what the
+   * platform could and could not read, because an absent block would let the model conclude the
+   * project has no error tracker.
+   */
+  readonly observability: readonly PromptObservabilityExcerpt[];
+}
+
+/**
+ * What the pre-fetch could read, in the platform's words — a closed set, so it can sit in a marker.
+ *
+ * | status | meaning |
+ * |---|---|
+ * | `read` | the excerpt is the block's body |
+ * | `no_ticket_text` | the platform has not read the ticket, so it could not look for a link |
+ * | `no_issue_link` | the ticket links no issue of the bound error tracker |
+ * | `no_event` | no error event was read — none linked, none left (retention) or none readable — so there is no instant to read logs around |
+ * | `not_configured` | the logs binding names no excerpt selector |
+ * | `no_correlation_id` | the event carries no trace or request id to filter the logs by |
+ * | `unavailable` | the binding would not load or the provider refused; the run goes on without it |
+ */
+export const OBSERVABILITY_EXCERPT_STATUSES = [
+  'read',
+  'no_ticket_text',
+  'no_issue_link',
+  'no_event',
+  'not_configured',
+  'no_correlation_id',
+  'unavailable',
+] as const;
+export type ObservabilityExcerptStatus = (typeof OBSERVABILITY_EXCERPT_STATUSES)[number];
+
+/** One pre-fetched excerpt (WP-89). `body` is provider text, redacted by the caller. */
+export interface PromptObservabilityExcerpt {
+  /** Platform vocabulary, and the block's `kind`. */
+  readonly kind: 'error_event' | 'log_excerpt';
+  readonly status: ObservabilityExcerptStatus;
+  /**
+   * Untrusted (BD-022) — a stack trace is the single most injection-prone field the platform reads.
+   * Emitted byte-identical inside the block, **redacted by the caller** (the binding's redactor,
+   * TD-012 steps 1 and 2) and **cut here** at {@link MAX_ERROR_EVENT_EXCERPT_CHARS} or
+   * {@link MAX_LOG_EXCERPT_CHARS}, with the cut announced in the marker. Empty unless `read`.
+   */
+  readonly body: string;
+  /**
+   * How many distinct issues the ticket links (an `error_event` only): the platform reads the
+   * **first**, and a count above one tells the model there are others it was not shown. A platform
+   * integer, so it is a marker attribute.
+   */
+  readonly issueLinks?: number;
+  /** How many log lines the body holds (a `log_excerpt` only). A platform integer. */
+  readonly lines?: number;
+  /**
+   * The provider answered as many lines as the platform asked for, so more may have matched (a
+   * `log_excerpt` only) — the port's own `truncated`, stated in the marker because it is a claim
+   * about completeness a log line must not be able to forge.
+   */
+  readonly limitReached?: boolean;
 }
 
 /** One review checklist, as the Reviewer is given it (WP-45). */
@@ -451,6 +516,37 @@ export const MAX_NONCE_ATTEMPTS = 4;
 
 /** A prior artifact's JSON is capped; the notice goes in the marker, never in the body. */
 export const MAX_ARTIFACT_CHARS = 20_000;
+/**
+ * ## The observability excerpts' bound, and where the numbers come from (WP-89, criterion 2)
+ *
+ * One sentence, the one `ticket-snapshot.ts` uses for the ticket: **the pre-fetch is one more
+ * document in the task block, so it is bounded like one** — both excerpts together get exactly
+ * {@link MAX_ARTIFACT_CHARS} (20 000 characters), the cap this prompt already applies to one prior
+ * artifact. The split follows product/08, which names the event first and calls the log excerpt
+ * *"small"*: **12 000** for the event (its summary, message, stack trace, breadcrumbs and tags) and
+ * **8 000** for the log lines.
+ *
+ * Why not the adapters' own caps: Sentry's defaults bound one event at
+ * `65 536 + 8 192 + 26 × (1 024 + 2 × 1 024) + 51 × 2 × 1 024 + 8 × 1 024` = **266 240 bytes**
+ * (`sentry/config.ts`'s formula at its shipped defaults), and Loki's `max_total_bytes` is
+ * **1 048 576** — denial-of-service bounds for the database, thirteen and fifty-two times what a
+ * prompt should carry. They stay what they are; this is the consumer's bound (Q54: *bound at the
+ * consumer*).
+ *
+ * What it costs, worst case: 20 000 characters, at most 80 000 UTF-8 bytes; for ASCII the
+ * platform's `ceil(bytes / 4)` estimator reads **5 000 tokens**, additive to the 12 000-token pack
+ * budget and to the ticket's 11 408 — the excerpt can never outweigh the ticket it explains.
+ * Characters rather than bytes because every neighbouring cap in this prompt is in characters and a
+ * byte cut can split a surrogate pair.
+ *
+ * **Cut here, once, with no marker in the body** (standing rules 36 and 41): the caller redacts
+ * and does not cut (an exact-match redactor cannot find a secret a cap has halved), and the cut is
+ * announced as `truncated="true" original_chars="N"` in the block's marker, so cutting a cut text
+ * again changes nothing.
+ */
+export const MAX_ERROR_EVENT_EXCERPT_CHARS = 12_000;
+/** {@link MAX_ERROR_EVENT_EXCERPT_CHARS}' sibling for the log lines; the derivation is there. */
+export const MAX_LOG_EXCERPT_CHARS = 8_000;
 /** Return feedback comes from a verdict a model wrote; same cap, same reason. */
 export const MAX_FEEDBACK_CHARS = 8_000;
 
@@ -643,8 +739,8 @@ const derivedNameAttribute = (name: string, value: string): Record<string, strin
  *
  * | attribute | kind | on refusal |
  * |---|---|---|
- * | `tier`, `tokens`, `version`, `original_chars`, `comments`, `human_comments_read`, `files`, `file_count`, `items`, `item_count` | platform integers | cannot refuse |
- * | `reason`, `artifact_type`, `truncated`, `text`, `kind` | platform vocabulary (a closed enum or a literal) | **throws** — a platform bug |
+ * | `tier`, `tokens`, `version`, `original_chars`, `comments`, `human_comments_read`, `files`, `file_count`, `items`, `item_count`, `issue_links`, `lines` | platform integers | cannot refuse |
+ * | `reason`, `artifact_type`, `truncated`, `text`, `kind`, `status`, `limit_reached` | platform vocabulary (a closed enum or a literal) | **throws** — a platform bug |
  * | `file` | derived from an untrusted vault path by a total fold | degrades |
  * | `path` | an untrusted vault path | degrades |
  *
@@ -838,6 +934,33 @@ const historyBlock = (sample: HistorySample): DataBlock => {
       ...(tickets.length === 0 ? [] : ['', ...tickets]),
       ...(commits.length === 0 ? [] : ['', '--- commit messages ---', ...commits]),
     ].join('\n'),
+  };
+};
+
+/**
+ * A pre-fetched observability excerpt (WP-89) — the event, or the log lines around it.
+ *
+ * **Every attribute is platform text**: the kind and the status are closed vocabularies, the link
+ * count and the cut are the platform's integers. The issue's URL, its title, every frame, every
+ * breadcrumb, every tag and every log line stay in the body — a tag value or a log line is text an
+ * application chose, and an application that can choose a string can choose one shaped like an
+ * attribute (technical/07).
+ */
+const observabilityBlock = (excerpt: PromptObservabilityExcerpt): DataBlock => {
+  const capped = cap(
+    excerpt.body,
+    excerpt.kind === 'error_event' ? MAX_ERROR_EVENT_EXCERPT_CHARS : MAX_LOG_EXCERPT_CHARS,
+  );
+  return {
+    kind: excerpt.kind,
+    attributes: {
+      status: excerpt.status,
+      ...(excerpt.issueLinks === undefined ? {} : { issue_links: excerpt.issueLinks }),
+      ...(excerpt.lines === undefined ? {} : { lines: excerpt.lines }),
+      ...(excerpt.limitReached === true ? { limit_reached: 'true' } : {}),
+      ...cappedAttributes(capped),
+    },
+    body: capped.text,
   };
 };
 
@@ -1067,6 +1190,8 @@ export const assemblePrompt = (input: AssemblePromptInput): AssembledPrompt => {
       : [mergeRequestBlock(reviewSubjectOf(input.task) as MergeRequestSnapshot)]),
     // `?? null` for the same reason: a caller that lost the field through a cast emits no block.
     ...(input.task.historySample == null ? [] : [historyBlock(input.task.historySample)]),
+    // WP-89: `?? []` for the same reason — a caller that lost the field emits no block.
+    ...(input.task.observability ?? []).map(observabilityBlock),
     ...input.task.artifacts.map(artifactBlock),
     // WP-45: `?? []` for the reason `ticketBlock` uses `?? null` — a caller that lost the field
     // through a cast emits no block rather than throwing.

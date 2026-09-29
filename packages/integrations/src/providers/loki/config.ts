@@ -29,6 +29,17 @@
  */
 import { httpUrlSchema } from '@platform/contracts';
 import * as z from 'zod';
+import { parseStreamSelector } from './logql.js';
+
+/** Whether `value` is a selector `queryRange` would accept — the adapter's own parser, not a copy. */
+const isStreamSelector = (value: string): boolean => {
+  try {
+    parseStreamSelector(value, 'config');
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 export const lokiAuthModeSchema = z.enum(['none', 'bearer', 'basic']);
 
@@ -64,6 +75,24 @@ export const lokiConfigSchema = z.strictObject({
   tenant_id: z.string().nullish(),
   /** Per-request timeout in milliseconds; 0 disables it (the replay harness has no network). */
   request_timeout_ms: z.int().nonnegative().max(600_000).default(30_000),
+  /**
+   * The stream selector a bug task's log excerpt reads — `{app="api", env="production"}` (WP-89,
+   * product/08's *"default label selectors per project/environment"*).
+   *
+   * Set on the **binding** (`bindings.config`), because which streams hold a project's logs is the
+   * project's and one Loki account serves many; published as `excerptSelector()`. Absent is a
+   * decision rather than "every stream": the pre-fetch then queries nothing and the prompt says
+   * so. Refused at the parse unless it is a selector this adapter's own `queryRange` accepts, so a
+   * typo is a binding that fails to load (and is reported) rather than a query that fails every
+   * bug task. Bounded at 1 024 characters, the same order as `max_label_bytes`.
+   */
+  excerpt_selector: z
+    .string()
+    .max(1024)
+    .refine(isStreamSelector, {
+      message: 'expected a LogQL stream selector such as {app="api"}',
+    })
+    .nullish(),
 
   // ── Caps (product/08, BD-022) ──────────────────────────────────────────────
 

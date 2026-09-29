@@ -49,6 +49,11 @@
  *     at or below the port's own ceiling (Loki's `max_label_bytes` may be configured up to 65,536).
  *     The obligation now lives in `observability-contract-suites.ts`, so a future logs provider
  *     that echoes an unbounded name fails the shared suite rather than this file (standing rule 23).
+ *  7. **Stricter — `excerptSelector` is refused at construction unless this fake's own selector
+ *     grammar parses it** (WP-89). Loki refuses an unparseable one at the binding's config parse,
+ *     which is the same moment in the loader's life; a fake that stored any string would hand the
+ *     bug pre-fetch a selector its own `queryRange` then refuses, and the pre-fetch would read that
+ *     as the logs being *unavailable* rather than the binding being wrong.
  */
 import {
   type AgentTooling,
@@ -85,6 +90,8 @@ export interface FakeLogsOptions {
   readonly integrationId: Id;
   readonly streams?: readonly FakeLogStreamSeed[];
   readonly capabilities?: Partial<ObservabilityLogsCapabilities>;
+  /** What `excerptSelector()` answers; absent is `null` (divergence 7 for the refusal). */
+  readonly excerptSelector?: string | null;
 }
 
 interface StoredStream {
@@ -119,6 +126,16 @@ const parseSelector = (selector: string): Record<string, string> => {
   return matchers;
 };
 
+/** Whether this fake's selector grammar (divergence 1) parses `selector` — its registration's check. */
+export const isFakeLogSelector = (selector: string): boolean => {
+  try {
+    parseSelector(selector);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 export const createFakeObservabilityLogs = (options: FakeLogsOptions): FakeObservabilityLogs => {
   const ref: IntegrationRef = {
     integrationId: options.integrationId,
@@ -141,6 +158,10 @@ export const createFakeObservabilityLogs = (options: FakeLogsOptions): FakeObser
   };
 
   const streams: StoredStream[] = [];
+  const excerptSelector = options.excerptSelector ?? null;
+  if (excerptSelector !== null) {
+    parseSelector(excerptSelector); // divergence 7: refused here, as Loki refuses it at the config parse
+  }
 
   const seedStream = (seed: FakeLogStreamSeed): void => {
     streams.push({
@@ -161,6 +182,7 @@ export const createFakeObservabilityLogs = (options: FakeLogsOptions): FakeObser
     core,
     ref,
     capabilities: () => ({ ...capabilities }),
+    excerptSelector: () => excerptSelector,
     testConnection: async (): Promise<HealthProbe> => {
       core.enter('test_connection');
       return {
