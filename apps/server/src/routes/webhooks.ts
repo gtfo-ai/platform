@@ -26,14 +26,20 @@
  *    whose body is not JSON (400): the first is an attacker or a misconfiguration an operator must
  *    see, the second cannot be stored in a `jsonb` column or read by any normaliser.
  *
- * ## What is deliberately not here
+ * ## The rate limit (WP-87, Q60)
  *
- * technical/08 says "webhook endpoints limited per integration". There is no rate limit on this
- * route yet, and the bound that exists instead is stated rather than implied: a refused delivery
- * writes **one** `integration_actions` row and **no** event and **no** inbox row, so the cost an
- * unauthenticated caller who knows an integration's uuid can impose is one insert per request
- * against a partitioned append-only table. Filed as **Q60** with a recommendation rather than
- * half-built.
+ * technical/08 says "webhook endpoints limited per integration", and since WP-87 they are: a token
+ * bucket per `integrations.id` inside `WebhookIngress`, taken **after** the integration lookup (so
+ * the bucket is the account's, never global, and a caller cannot grow the map by inventing ids) and
+ * **before** the signature check, every audit row and every write. Past it the answer is **429**
+ * with `Retry-After` in whole seconds, rounded up; nothing is verified, no `inbox` row is written
+ * (the answer an unverified delivery gets) and no `integration_actions` row either — one row per
+ * refusal would be the amplification the limit exists to close — so what records it is the
+ * `webhook_deliveries_rate_limited_total` counter and one log line per integration per minute. What
+ * a limited request still costs is one read — the `integrations` row by primary key, left-joined to
+ * its `bindings` — and nothing else: the credentials are read and decrypted and the adapters built
+ * only past the bucket (`InboundIntegrationLoader.open`, WP-87 review round 1). The buckets are
+ * **per process**: N API replicas admit N times the policy.
  */
 
 import type { InboundDeliveryOutcome, WebhookIngress } from '@platform/application';
@@ -69,7 +75,11 @@ export const flattenHeaders = (
 };
 
 /** Every status this route can answer, so `reply.status()` stays typed against its own schema. */
-export type WebhookStatus = 202 | 400 | 401 | 404;
+export type WebhookStatus = 202 | 400 | 401 | 404 | 429;
+
+/** `Retry-After` for a limited delivery: whole seconds (RFC 9110 § 10.2.3), rounded up, at least 1. */
+export const retryAfterSeconds = (retryAfterMs: number): number =>
+  Math.max(1, Math.ceil(retryAfterMs / 1000));
 
 /** The HTTP answer for each outcome. See note 3 in the module docblock for the 202s. */
 export const statusFor = (outcome: InboundDeliveryOutcome): WebhookStatus => {
@@ -79,6 +89,8 @@ export const statusFor = (outcome: InboundDeliveryOutcome): WebhookStatus => {
       return 202;
     case 'unknown_integration':
       return 404;
+    case 'rate_limited':
+      return 429;
     default:
       break;
   }
@@ -125,7 +137,7 @@ export const registerWebhookRoutes = async (
         schema: {
           summary: 'Receive a provider webhook delivery',
           description:
-            'Unauthenticated by design: the credential is the signature over the body, checked against the binding’s own secret (TD-024). The response is 2xx as soon as the delivery has been recorded and normalised; an unverifiable signature is 401 and is audited.',
+            'Unauthenticated by design: the credential is the signature over the body, checked against the binding’s own secret (TD-024). The response is 2xx as soon as the delivery has been recorded and normalised; an unverifiable signature is 401 and is audited; a delivery over the integration’s rate limit is 429 with Retry-After, before its signature is checked.',
           tags: ['webhooks'],
           params: webhookParamsSchema,
           // Every status this route answers, because `reply.status()` is typed from this map and a
@@ -135,6 +147,7 @@ export const registerWebhookRoutes = async (
             400: webhookAcceptedResponseSchema,
             401: webhookAcceptedResponseSchema,
             404: webhookAcceptedResponseSchema,
+            429: webhookAcceptedResponseSchema,
           },
         },
       },
@@ -149,6 +162,8 @@ export const registerWebhookRoutes = async (
             // delivery, and every adapter's `verify` refuses `''`.
             body: typeof request.body === 'string' ? request.body : '',
           },
+          // The one unauthenticated door, and therefore the rate-limited one (WP-87, Q60).
+          transport: 'http',
         });
         request.log.info(
           {
@@ -161,6 +176,9 @@ export const registerWebhookRoutes = async (
           },
           'webhook delivery handled',
         );
+        if (outcome.kind === 'rate_limited') {
+          void reply.header('retry-after', String(retryAfterSeconds(outcome.retryAfterMs)));
+        }
         return reply.status(statusFor(outcome)).send(bodyFor(outcome));
       },
     );

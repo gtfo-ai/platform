@@ -183,6 +183,8 @@ export const bindings = pgTable('bindings', {
   config: jsonb('config').$type<JsonObject>().notNull().default({}),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  /** The ticket poller's cursor — the provider's newest `updated_at` recorded (migration 0061, WP-87). */
+  pollCursor: timestamp('poll_cursor', { withTimezone: true }),
 });
 
 /**

@@ -138,3 +138,29 @@ describe('createRateLimiter', () => {
     expect(limiter.snapshot().active).toBe(0);
   });
 });
+
+describe('tryAcquire — a token now or not at all (WP-87, the webhook door)', () => {
+  it('takes the burst, then answers how long until the next token, and never sleeps', async () => {
+    const timer = createVirtualTimer();
+    const limiter = createRateLimiter({ capacity: 2, refillPerSecond: 4, maxConcurrent: 1 }, timer);
+
+    expect(limiter.tryAcquire()).toEqual({ ok: true });
+    expect(limiter.tryAcquire()).toEqual({ ok: true });
+    expect(limiter.tryAcquire()).toEqual({ ok: false, retryAfterMs: 250 });
+    // A refusal spends nothing: asking again at once gets the same answer.
+    expect(limiter.tryAcquire()).toEqual({ ok: false, retryAfterMs: 250 });
+    expect(timer.sleeps).toEqual([]);
+
+    await timer.advance(250);
+    expect(limiter.tryAcquire()).toEqual({ ok: true });
+  });
+
+  it('counts a penalty in the wait it reports', async () => {
+    const timer = createVirtualTimer();
+    const limiter = createRateLimiter({ capacity: 5, refillPerSecond: 5, maxConcurrent: 1 }, timer);
+    limiter.penalise(3_000);
+    expect(limiter.tryAcquire()).toEqual({ ok: false, retryAfterMs: 3_000 });
+    await timer.advance(3_000);
+    expect(limiter.tryAcquire()).toEqual({ ok: true });
+  });
+});

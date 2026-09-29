@@ -67,6 +67,7 @@ import type {
   SecretRedactor,
   Transaction,
   WebhookIngress,
+  WebhookRateLimit,
   WorkingCalendar,
 } from '@platform/application';
 import {
@@ -100,6 +101,7 @@ import {
   runLimitsDefaults,
   silentLogger,
   startIntakeReconciliation,
+  startTicketPoller,
   statsHandlers,
 } from '@platform/application';
 import type { Id, IsoDateTime, MaterialisedAutonomy } from '@platform/contracts';
@@ -323,6 +325,12 @@ export interface ComposePipelineOptions {
    * re-emitted (`APP_INTAKE_RECONCILE_INTERVAL_MS`). `0` starts no pass at all.
    */
   readonly intakeReconcileIntervalMs: number;
+  /**
+   * How often the ticket poller's sweep re-arms a polling binding whose chain was lost
+   * (`APP_TICKET_POLL_SWEEP_INTERVAL_MS`, WP-87) — the bound on a lost poll, and how soon a binding
+   * switched on through the API is first polled.
+   */
+  readonly ticketPollSweepIntervalMs: number;
   /** Built once per process by {@link composeIntegrationStack}; the ingress shares it. */
   readonly stack: IntegrationStack;
   /**
@@ -546,6 +554,8 @@ export interface ComposeWebhookIngressOptions {
   readonly secretKey: string;
   readonly stack: IntegrationStack;
   readonly logger: Logger;
+  /** The HTTP door's bucket (WP-87, Q60); required, so `null` is a decision rather than an omission. */
+  readonly rateLimit: WebhookRateLimit | null;
 }
 
 export const composeWebhookIngress = (options: ComposeWebhookIngressOptions): WebhookIngress =>
@@ -588,6 +598,7 @@ export const composeWebhookIngress = (options: ComposeWebhookIngressOptions): We
     clock: { now: nowIso },
     timer: { now: () => Date.now() },
     logger: options.logger,
+    rateLimit: options.rateLimit,
   });
 
 const nowIso = (): IsoDateTime => new Date().toISOString() as IsoDateTime;
@@ -1429,6 +1440,32 @@ export const composePipeline = async (
     logger: options.logger,
   });
 
+  /**
+   * The ticket poller (WP-87, PROGRESS backlog 187): a task-management binding that switches
+   * polling on is asked for its pick-up rule's matches at its own interval, and each match is
+   * recorded through the webhook ingress's own recorder — the same `inbox` table, the same key
+   * shape, the same transaction with its events. Composed here beside the reconciler because it is
+   * a schedule the process owns; `packages/application/src/pipeline/ticket-poll.ts` carries what is
+   * deduplicated where and why a lost poll is bounded by one sweep.
+   *
+   * It is one more pooled connection, counted in `POOL_RESERVATIONS.pipeline`.
+   */
+  const ticketPoller = await startTicketPoller({
+    jobs,
+    store: pipelineAdapters.createPostgresTicketPollStore({ sql: options.pool }),
+    integrations,
+    recorder: {
+      inbox: integrationAdapters.createPostgresInboxStore({ sql: options.pool }),
+      unitOfWork: options.eventing.unitOfWork,
+      eventStore: options.eventing.store,
+      ids,
+      clock: { now: nowIso },
+    },
+    clock: { now: nowIso },
+    sweepIntervalMs: options.ticketPollSweepIntervalMs,
+    logger: options.logger,
+  });
+
   return {
     runtime,
     integrations,
@@ -1441,6 +1478,7 @@ export const composePipeline = async (
       if (reconciler !== null) {
         await reconciler.stop();
       }
+      await ticketPoller.stop();
       await maintenance.stop();
       await runtime.stop();
     },

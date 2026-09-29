@@ -258,14 +258,18 @@ const emitAndSchedule = async (
  * exists for the scheduler to start behind the check's back.
  *
  * **The cost, stated as it actually is.** A crash between this commit and the enqueue
- * (`afterCommit` is at-most-once, TD-004) leaves the ticket without a task, and **nothing re-emits
- * it**: there is no poller in this build, and WP-15c's ingress is specified to deduplicate a
- * re-delivery on `inbox(provider, delivery_id)`, so the same webhook arriving twice performs
- * nothing twice. It is also **unlogged**, and cannot be logged here — the process that would write
- * the line is the one that died; `EventBus` logs a callback that *threw*, which is a different
- * failure. What would find it is a query the platform does not run yet — a matched ticket with no
- * task row — and that belongs to the ingress (WP-15c), not to this handler. Until then the residual
- * is: one ticket, silently not started, recoverable by re-matching it by hand.
+ * (`afterCommit` is at-most-once, TD-004) leaves the ticket without a task, and neither inbound
+ * door re-emits it: WP-15c's ingress deduplicates a re-delivery on `inbox(provider, delivery_id)`,
+ * and the ticket poller (WP-87) deduplicates a re-poll of an unchanged ticket on the same table —
+ * it re-matches the ticket only once the ticket changes. It is also unlogged here, because the
+ * process that would write the line is the one that died. What finds it is
+ * `pipeline.intake.reconcile` (`intake-reconcile.ts`, PROGRESS backlog 20): a matched ticket with no
+ * task row, re-emitted once.
+ *
+ * **Both doors meet here.** A binding with a webhook and polling can announce one ticket twice — the
+ * two doors never share an `inbox` key, because a search result carries no delivery identifier —
+ * and this `findByTicket` is what makes the second announcement start nothing
+ * (`pipeline/ticket-poll.ts`).
  */
 const intakeHandler = (options: PipelineSagaOptions): EventHandler => ({
   name: 'pipeline.intake',

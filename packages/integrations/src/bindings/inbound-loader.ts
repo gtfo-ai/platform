@@ -43,6 +43,7 @@
  */
 import type {
   BindingRepository,
+  InboundAccountDoor,
   InboundBinding,
   InboundIntegrationLoader,
   InboundNormaliser,
@@ -101,13 +102,11 @@ export const createInboundIntegrationLoader = (
 ): InboundIntegrationLoader => {
   const platformRedactor = options.platformRedactor ?? noSecretsRedactor();
 
-  return {
-    forIntegration: async (integrationId: Id): Promise<ResolvedInboundIntegration | null> => {
-      const account = await options.repository.forIntegration(integrationId);
-      if (account === null) {
-        return null;
-      }
-
+  const resolve = async (
+    integrationId: Id,
+    account: IntegrationAccount,
+  ): Promise<ResolvedInboundIntegration> => {
+    {
       let registration: ReturnType<IntegrationRegistry['get']>;
       try {
         registration = options.registry.get(account.type as IntegrationType, account.provider);
@@ -215,6 +214,25 @@ export const createInboundIntegrationLoader = (
       }
 
       return { ref, inbound, bindings, redactor };
+    }
+  };
+
+  return {
+    forIntegration: async (integrationId: Id): Promise<ResolvedInboundIntegration | null> => {
+      const account = await options.repository.forIntegration(integrationId);
+      return account === null ? null : resolve(integrationId, account);
+    },
+    // The account row only; the credentials are read and the adapters built on `resolve()` (WP-87
+    // review round 1) — which is what lets the webhook door's rate limit refuse before them.
+    open: async (integrationId: Id): Promise<InboundAccountDoor | null> => {
+      const account = await options.repository.forIntegration(integrationId);
+      return account === null
+        ? null
+        : {
+            integrationId,
+            provider: account.provider,
+            resolve: () => resolve(integrationId, account),
+          };
     },
   };
 };

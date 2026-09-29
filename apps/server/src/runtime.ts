@@ -48,6 +48,7 @@ import type { InboundConnectionsHandle, Jobs, Logger, WebhookIngress } from '@pl
 import {
   createLiveRuns,
   createWorkingCalendar,
+  DEFAULT_WEBHOOK_RATE_LIMIT_POLICY,
   SHADOW_BATCH_BLOCKED_DETAIL,
   shadowBatchBlocker,
   sweepReadiness,
@@ -511,6 +512,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           liveRuns,
           stageConcurrency: 1,
           intakeReconcileIntervalMs: config.intakeReconcileIntervalMs,
+          ticketPollSweepIntervalMs: config.ticketPollSweepIntervalMs,
           // Non-null on this branch by construction: `capabilities.worker` is what got us here and
           // it is one of the two conditions the stack is built under.
           stack: stack as NonNullable<typeof stack>,
@@ -957,6 +959,13 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
             secretKey: config.secretKey,
             stack,
             logger: loggerPort,
+            // Q60 (WP-87): the HTTP door's per-integration bucket, counted on `/metrics`.
+            rateLimit: {
+              policy: DEFAULT_WEBHOOK_RATE_LIMIT_POLICY,
+              onLimited: ({ provider }) => {
+                metrics.webhookDeliveriesRateLimited.inc({ provider });
+              },
+            },
           })
         : null;
     if (capabilities.api && webhooks === null) {

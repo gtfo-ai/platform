@@ -240,3 +240,34 @@ describe('an integration whose adapter cannot be built', () => {
     ).rejects.toThrow(/could not be instantiated/);
   });
 });
+
+describe('opening an account before resolving it (WP-87 review round 1, Q60)', () => {
+  it('reads the account row and nothing else until resolve() is called', async () => {
+    let secretReads = 0;
+    const built: { config: JsonObject; redactor: SecretRedactor }[] = [];
+    const loader = loaderFor(accountOf(), {
+      built,
+      secrets: {
+        resolve: async () => {
+          secretReads += 1;
+          return { webhook_secret: WEBHOOK_SECRET };
+        },
+      },
+    });
+
+    const door = await loader.open(INTEGRATION);
+
+    expect(door).toMatchObject({ integrationId: INTEGRATION, provider: 'probe' });
+    // The rate limit sits here: no credential has been decrypted and no adapter built.
+    expect(secretReads).toBe(0);
+    expect(built).toHaveLength(0);
+
+    const resolved = await door?.resolve();
+    expect(secretReads).toBe(1);
+    expect(resolved?.bindings).toHaveLength(1);
+  });
+
+  it('opens nothing for an id nobody has', async () => {
+    expect(await loaderFor(null).open(INTEGRATION)).toBeNull();
+  });
+});

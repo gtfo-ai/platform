@@ -19,13 +19,18 @@
  * permissive one. The check is a plain equality against a value the caller supplies, so a test that
  * seeds one credential and expects another fails at the binding rather than four stages later.
  */
-import type {
-  CommunicationPort,
-  GitProviderPort,
-  InboundNormaliser,
-  SecretRedactor,
-  TaskManagementPort,
-  WebhookDelivery,
+import {
+  type CommunicationPort,
+  DEFAULT_TICKET_POLL_INTERVAL_SECONDS,
+  type GitProviderPort,
+  type InboundNormaliser,
+  MAX_TICKET_POLL_INTERVAL_SECONDS,
+  MIN_TICKET_POLL_INTERVAL_SECONDS,
+  type SecretRedactor,
+  type TaskManagementPort,
+  TICKET_POLL_CONFIG_KEYS,
+  type TicketPollPlan,
+  type WebhookDelivery,
 } from '@platform/application';
 import * as z from 'zod';
 import type { AnyProviderRegistration } from '../registry.js';
@@ -153,18 +158,53 @@ export const fakeCommunicationRegistration = (
   },
 });
 
+/**
+ * The fake task manager's binding config (WP-87): the credential, and the polling switch under the
+ * platform's own key names with Jira's pick-up label beside it, so a tier that polls through this
+ * registration switches it on the way an operator does — in `bindings.config` — and the sweep's
+ * query over that column is production code on the path.
+ */
+const fakeTaskManagementConfigSchema = z.strictObject({
+  token: z.string().min(1),
+  [TICKET_POLL_CONFIG_KEYS.enabled]: z.boolean().default(false),
+  [TICKET_POLL_CONFIG_KEYS.intervalSeconds]: z
+    .int()
+    .min(MIN_TICKET_POLL_INTERVAL_SECONDS)
+    .max(MAX_TICKET_POLL_INTERVAL_SECONDS)
+    .default(DEFAULT_TICKET_POLL_INTERVAL_SECONDS),
+  pickup_label: z.string().min(1).default('agentic'),
+});
+
+/** The plan the binding's config states — `null` unless it switched polling on. */
+const fakePollPlanOf = (config: unknown): TicketPollPlan | null => {
+  const parsed = fakeTaskManagementConfigSchema.parse(config);
+  return parsed.poll_enabled
+    ? {
+        rule: { kind: 'label', label: parsed.pickup_label },
+        interval_seconds: parsed.poll_interval_seconds,
+      }
+    : null;
+};
+
+/** The prebuilt port, answering `pollPlan()` from **this binding's** config rather than its own. */
+const withPollPlan = (port: TaskManagementPort, plan: TicketPollPlan | null): TaskManagementPort =>
+  new Proxy(port, {
+    get: (target, key, receiver) =>
+      key === 'pollPlan' ? () => plan : Reflect.get(target, key, receiver),
+  });
+
 export const fakeTaskManagementRegistration = (
   options: FakeRegistrationOptions<TaskManagementPort>,
 ): AnyProviderRegistration => ({
   id: FAKE_TASK_MANAGEMENT_PROVIDER_ID,
   type: 'task_management',
   displayName: 'Fake task management provider (in-memory)',
-  configSchema: z.strictObject({ token: z.string().min(1) }),
+  configSchema: fakeTaskManagementConfigSchema,
   secretFields: ['token'],
   setupGuidePath: 'packages/integrations/src/task-management/fake.ts',
   agentTooling: null,
-  create: ({ secrets, redactor }) => {
+  create: ({ config, secrets, redactor }) => {
     refuseWrongToken(FAKE_TASK_MANAGEMENT_PROVIDER_ID, options.token, secrets.token);
-    return withInboundRedactor(options.port, redactor);
+    return withPollPlan(withInboundRedactor(options.port, redactor), fakePollPlanOf(config));
   },
 });

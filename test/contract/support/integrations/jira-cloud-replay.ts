@@ -132,6 +132,13 @@ const clone = <T>(value: T): T => structuredClone(value);
  * The leading parenthesis is the `kind: 'query'` form, which the adapter wraps so that a raw JQL
  * fragment cannot merge with the window clause it appends.
  */
+/**
+ * The replay's page size for `search/jql` (WP-87 review round 2): smaller than anything the adapter
+ * asks for, so paging through `nextPageToken` is exercised on every search longer than it. Allowed by
+ * the swagger's own words (*"API may return fewer items per page"*); the real figure is not measured.
+ */
+export const REPLAY_SEARCH_PAGE_CAP = 20;
+
 const JQL_CLAUSE = /^\(?(labels|status|parent) = "((?:[^"\\]|\\.)*)"/;
 const JQL_KEY_EXCLUSION = /AND key != "([^"]+)"/;
 const JQL_WINDOW = /AND updated >= "-(\d+)m"/;
@@ -208,23 +215,28 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
     const windowMinutes = Number(JQL_WINDOW.exec(jql)?.[1] ?? '0');
     const cutoff = windowMinutes === 0 ? null : nowMs - windowMinutes * 60_000;
 
-    return [...issues.values()].filter((issue) => {
-      const key = issue.key as string;
-      const fields = issue.fields as Record<string, unknown>;
-      if (key === excluded) {
-        return false;
-      }
-      if (cutoff !== null && Date.parse(String(fields.updated ?? '')) < cutoff) {
-        return false;
-      }
-      if (field === 'labels') {
-        return ((fields.labels as string[] | undefined) ?? []).includes(value);
-      }
-      if (field === 'status') {
-        return (fields.status as { name?: string } | undefined)?.name === value;
-      }
-      return (fields.parent as { key?: string } | undefined)?.key === value;
-    });
+    // `ORDER BY updated ASC` — the only order the adapter asks for — honoured, stably by insertion.
+    const updatedOf = (issue: Record<string, unknown>): number =>
+      Date.parse(String((issue.fields as Record<string, unknown>).updated ?? ''));
+    return [...issues.values()]
+      .toSorted((left, right) => updatedOf(left) - updatedOf(right))
+      .filter((issue) => {
+        const key = issue.key as string;
+        const fields = issue.fields as Record<string, unknown>;
+        if (key === excluded) {
+          return false;
+        }
+        if (cutoff !== null && Date.parse(String(fields.updated ?? '')) < cutoff) {
+          return false;
+        }
+        if (field === 'labels') {
+          return ((fields.labels as string[] | undefined) ?? []).includes(value);
+        }
+        if (field === 'status') {
+          return (fields.status as { name?: string } | undefined)?.name === value;
+        }
+        return (fields.parent as { key?: string } | undefined)?.key === value;
+      });
   };
 
   /**
@@ -263,7 +275,19 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
       }
       const found = searchIssues(jql);
       const limit = Number(query.maxResults ?? '50');
-      return jsonResponse(200, { isLast: true, issues: found.slice(0, limit).map(clone) });
+      // `nextPageToken` (WP-87 review round 2): the documented token vocabulary, absent on the last
+      // page. The token is an opaque offset here; what Jira puts in it is not documented and the
+      // adapter treats it as opaque. A page is also capped at `REPLAY_SEARCH_PAGE_CAP`, below what
+      // the adapter asks for, because the swagger says a page may be shorter than `maxResults`.
+      const offset = query.nextPageToken === undefined ? 0 : Number(query.nextPageToken);
+      const size = Math.min(limit, REPLAY_SEARCH_PAGE_CAP);
+      const page = found.slice(offset, offset + size);
+      const more = offset + size < found.length;
+      return jsonResponse(200, {
+        isLast: !more,
+        issues: page.map(clone),
+        ...(more ? { nextPageToken: String(offset + size) } : {}),
+      });
     }
     if (method === 'POST' && path === 'issue') {
       const fields = (request.body as { fields: Record<string, unknown> }).fields;

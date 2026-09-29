@@ -177,6 +177,15 @@ const serverConfigFields = z.strictObject({
   intakeReconcileIntervalMs: z.union([z.literal(0), z.int().min(1_000).max(3_600_000)]),
 
   /**
+   * How often the ticket poller's sweep lists the polling bindings and re-arms any whose chain was
+   * lost (WP-87, `pipeline/ticket-poll.ts`) — the bound on a lost poll, and how soon a binding
+   * switched on through the API is first polled. **No `0`**: polling is switched per binding, in its
+   * configuration, and a process-wide off switch would be a second answer to the same question. The
+   * sweep is one query over `bindings`, so the floor is about queue churn, not cost.
+   */
+  ticketPollSweepIntervalMs: z.int().min(250).max(3_600_000),
+
+  /**
    * BD-004: `api` talks to Anthropic, `local` runs the operator's own `claude` binary.
    *
    * It reaches a run through `RunSpec.providerMode`, which decides one thing in the adapter
@@ -522,6 +531,7 @@ export const SERVER_CONFIG_DEFAULTS = {
   // The Anthropic API, which is what both provider modes authenticate against (measured, WP-53).
   modelEgressHosts: ['api.anthropic.com'],
   intakeReconcileIntervalMs: 60_000,
+  ticketPollSweepIntervalMs: 60_000,
   argon2: { memoryCostKib: 19_456, timeCost: 2, parallelism: 1 },
 } as const;
 
@@ -591,13 +601,16 @@ export const POOL_RESERVATIONS = {
    * **Eight since WP-56**, which added `deadline.sweep` — one worker for every deadline the
    * platform holds a human to (a question, an approval, a take-over), started by
    * `createPipelineRuntime` unconditionally because an expiry is never a run; the architect's ruling
-   * made it one queue rather than four, so this term moved by one. **Two** of the eight are composed
+   * made it one queue rather than four, so this term moved by one. **Two** of the eight were composed
    * by `apps/server/src/pipeline.ts`
    * rather than by `createPipelineRuntime`, because each is a schedule the *process* owns rather
    * than a step of a ticket's journey (`registerPartitionMaintenance`'s shape):
    * `pipeline.intake.reconcile`, the pass that re-emits a matched ticket whose intake enqueue was
    * lost (PROGRESS backlog 20), and `maintenance.schedule`, the daily pass that creates
-   * product/18:31's chore tasks (WP-36). Both are counted **unconditionally**, including when
+   * product/18:31's chore tasks (WP-36). **Nine since WP-87**, which added `ticket.poll` — the ticket
+   * poller, composed by `apps/server/src/pipeline.ts` for the same reason, one worker for every
+   * polling binding (each binding is a key on the one queue, not a worker of its own), and started
+   * whether or not any binding polls. All three are counted **unconditionally**, including when
    * `APP_INTAKE_RECONCILE_INTERVAL_MS=0` starts no reconciler at all: a reservation that shrank
    * with a setting would be a floor an operator could lower by accident.
    *
@@ -608,7 +621,7 @@ export const POOL_RESERVATIONS = {
    * started from any of them therefore *replaces* the worker's connection rather than nesting
    * inside it.
    */
-  pipeline: 8,
+  pipeline: 9,
   /**
    * The knowledge workers — **one connection each, four of them** (WP-18a, recounted at WP-18b).
    *
@@ -990,6 +1003,10 @@ export const loadServerConfig = (env: EnvLike = process.env): ServerConfig => {
     intakeReconcileIntervalMs: numberFromEnv(
       env.APP_INTAKE_RECONCILE_INTERVAL_MS,
       SERVER_CONFIG_DEFAULTS.intakeReconcileIntervalMs,
+    ),
+    ticketPollSweepIntervalMs: numberFromEnv(
+      env.APP_TICKET_POLL_SWEEP_INTERVAL_MS,
+      SERVER_CONFIG_DEFAULTS.ticketPollSweepIntervalMs,
     ),
 
     argon2: {

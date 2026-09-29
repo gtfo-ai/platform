@@ -250,6 +250,9 @@ export const startInboundConnections = async (
         provider: account.provider,
         integrationId: account.integrationId,
         delivery,
+        // Never the rate-limited door (WP-87): the socket is one the platform opened, to an
+        // allow-listed host, and limiting what it acknowledges would drop a notification (rule 20).
+        transport: 'held_connection',
       });
       logger.info(
         {

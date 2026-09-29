@@ -5,7 +5,8 @@
  * task), `question.timeout` / `question.reminder` (timers whose `startAfter` is computed on the
  * working-day calendar — **one** queue, `deadline.sweep`, since WP-56; TD-004's amendment),
  * `mr.comment.debounce` (coalesced, 2 minutes), `budget.window.reset` and
- * `poll.<provider>` (cron), index rebuilds and maintenance schedules. Dispatching a domain event
+ * `poll.<provider>` (cron — built at WP-87 as one `ticket.poll` queue keyed per binding instead),
+ * index rebuilds and maintenance schedules. Dispatching a domain event
  * is **not** one of them: TD-004 was amended at WP-04a, and TD-005's `event_dispatch` table with
  * its per-process sweep stays the only queue events travel on.
  * The decision also says pg-boss is replaceable — graphile-worker is the named alternative — which
@@ -301,8 +302,9 @@ export const coalescingSlotStart = (at: Date, windowSeconds: number): number =>
 
 /**
  * Queue names TD-004 enumerates. Later work packages own the handlers; the names live here so two
- * packages cannot spell the same queue differently. Not exhaustive — `poll.<provider>` is built
- * per provider by `pollQueueName`.
+ * packages cannot spell the same queue differently. TD-004's `poll.<provider>` (cron) is **not**
+ * one of them: the ticket poller is one queue keyed per binding, `ticket.poll` (WP-87), and the
+ * `pollQueueName` helper that built the per-provider names — which nothing ever enqueued — is gone.
  *
  * There is deliberately **no `dispatch` queue**, and adding one is a mistake a test guards against.
  * Domain events are dispatched from TD-005's `event_dispatch` table by a sweep each process runs on
@@ -395,6 +397,19 @@ export const JOB_QUEUES = {
    * counts it (`apps/server/src/config.ts`).
    */
   taskAsk: 'task.ask',
+  /**
+   * **The ticket poller** (WP-87, PROGRESS backlog 187) — one job per task-management binding that
+   * switched polling on, keyed `binding:<project>:<integration>`, each re-arming itself at the
+   * binding's own interval; plus one `sweep` job, keyed `sweep`, that lists the polling bindings and
+   * re-arms any whose chain was lost.
+   *
+   * One queue keyed per binding rather than TD-004's `poll.<provider>` cron per provider, because the
+   * ruling puts the interval in the **binding's** config — two projects on one Jira site may poll at
+   * different rates — and a cron's finest grain is a minute. Policy `stately`: one queued and one
+   * active per key, so the running poll can arm the next one while a sweep's enqueue for a live chain
+   * collapses onto the one already queued. `pipeline/ticket-poll.ts` carries the argument.
+   */
+  ticketPoll: 'ticket.poll',
   /** Budget window rollover (cron). */
   budgetWindowReset: 'budget.window.reset',
   /** Knowledge-base index rebuild; singleton per project. */
@@ -481,10 +496,3 @@ export const JOB_QUEUES = {
    */
   priceListMaintenance: 'price.list.maintain',
 } as const;
-
-/** The polling queue of one integration provider (`poll.jira_cloud`, `poll.gitlab`, …). */
-export const pollQueueName = (provider: string): string => {
-  const name = `poll.${provider}`;
-  assertJobName(name, 'poll queue name');
-  return name;
-};

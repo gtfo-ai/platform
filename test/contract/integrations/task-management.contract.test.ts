@@ -6,6 +6,7 @@
  * harness; the assertions in `../support/integrations/task-management-contract-suite.ts` do not
  * change.
  */
+import type { TicketPollPlan } from '@platform/application';
 import { createFakeTaskManagement } from '@platform/integrations';
 import {
   runTaskManagementContract,
@@ -16,9 +17,21 @@ const INTEGRATION_ID = '00000000-0000-4000-8000-0000000000a1';
 const PROJECT_ID = '00000000-0000-4000-8000-0000000000b1';
 const PICKUP_LABEL = 'agentic';
 
+const POLL_INTERVAL_SECONDS = 90;
+
 runTaskManagementContract({
   name: 'in-memory fake',
   create: async (): Promise<TaskManagementContractContext> => {
+    const seed = (poll: TicketPollPlan | null) =>
+      createFakeTaskManagement({
+        integrationId: INTEGRATION_ID,
+        poll,
+        tickets: [
+          // A second labelled ticket seeded first, so the order assertion has two to compare.
+          { key: 'FAKE-9', title: 'An older labelled ticket', labels: [PICKUP_LABEL] },
+          { key: 'FAKE-1', title: 'The pick-up ticket', labels: [PICKUP_LABEL] },
+        ],
+      });
     const port = createFakeTaskManagement({
       integrationId: INTEGRATION_ID,
       identities: [
@@ -76,6 +89,13 @@ runTaskManagementContract({
           body: '{"event":"comment.added"}',
         }),
         reason: 'malformed_payload',
+      },
+      polling: {
+        port: seed({
+          rule: { kind: 'label', label: PICKUP_LABEL },
+          interval_seconds: POLL_INTERVAL_SECONDS,
+        }),
+        intervalSeconds: POLL_INTERVAL_SECONDS,
       },
       projectId: PROJECT_ID,
       integrationId: INTEGRATION_ID,

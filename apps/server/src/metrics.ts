@@ -29,6 +29,11 @@ export interface Metrics {
   readonly sseConnections: Gauge<'state'>;
   /** SSE frames written, by frame kind — the counter that shows replay actually replaying. */
   readonly sseFramesSent: Counter<'frame'>;
+  /**
+   * Webhook deliveries answered 429 by the per-integration bucket, by provider (WP-87, Q60) — the
+   * record of a limited delivery, which writes no row by design.
+   */
+  readonly webhookDeliveriesRateLimited: Counter<'provider'>;
   /** Events committed but not yet dispatched (TD-005's `event_dispatch` backlog). */
   readonly eventDispatchPending: Gauge<never>;
   /** Events that spent their dispatch attempt bound and left the queue (WP-49). */
@@ -143,6 +148,13 @@ export const createMetrics = (options: MetricsOptions = {}): Metrics => {
     name: 'sse_frames_sent_total',
     help: 'SSE frames written to clients, by frame kind (live, replay or control).',
     labelNames: ['frame'] as const,
+    registers: [registry],
+  });
+
+  const webhookDeliveriesRateLimited = new Counter({
+    name: 'webhook_deliveries_rate_limited_total',
+    help: 'Webhook deliveries answered 429 by their integration’s rate limit, before any signature check, by provider.',
+    labelNames: ['provider'] as const,
     registers: [registry],
   });
 
@@ -295,6 +307,7 @@ export const createMetrics = (options: MetricsOptions = {}): Metrics => {
     httpRequestDuration,
     sseConnections,
     sseFramesSent,
+    webhookDeliveriesRateLimited,
     eventDispatchPending,
     eventDispatchDeadLettered,
     notificationsUndelivered,

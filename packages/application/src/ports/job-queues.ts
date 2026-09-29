@@ -95,6 +95,16 @@ export const JOB_QUEUE_DEFINITIONS: readonly JobQueueDefinition[] = [
     retryDelaySeconds: 30,
   },
   {
+    name: JOB_QUEUES.ticketPoll,
+    // `stately` per `binding:<project>:<integration>` (and one `sweep` key): see `JOB_QUEUES.ticketPoll`.
+    policy: 'stately',
+    // No retry: a poll that threw has already armed the next one (`pipeline/ticket-poll.ts` re-arms
+    // in a `finally`), so a pg-boss retry would be a second poll of the same window.
+    retryLimit: 0,
+    // One provider read and a handful of one-row transactions; five minutes is generous.
+    expireInSeconds: 5 * 60,
+  },
+  {
     name: JOB_QUEUES.taskAsk,
     // `stately` per `ask:<id>` — see the queue's own docblock for why the key is the ask and not
     // the task.

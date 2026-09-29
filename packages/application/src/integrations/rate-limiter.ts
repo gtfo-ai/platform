@@ -65,9 +65,22 @@ export interface RateLimiterSnapshot {
   readonly blockedForMs: number;
 }
 
+/** What {@link RateLimiter.tryAcquire} answers: a token taken, or how long until one would be. */
+export type RateLimitAttempt =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly retryAfterMs: number };
+
 export interface RateLimiter {
   /** Resolves when a concurrency slot **and** a token are available. */
   acquire(): Promise<RateLimitLease>;
+  /**
+   * Takes a token **now or not at all** (WP-87) — the webhook door's question, which answers a
+   * caller `429` with `Retry-After` instead of holding its request open. It takes no concurrency
+   * slot (a delivery holds nothing across its own handling that a slot would bound) and it does not
+   * queue, so it is for a limiter nobody `acquire`s: mixing the two would let this jump the FIFO
+   * `acquire` keeps. `retryAfterMs` is at least 1 and counts a penalty as well as the refill.
+   */
+  tryAcquire(): RateLimitAttempt;
   /** A provider said "not before then" — usually `Retry-After` on a 429. */
   penalise(milliseconds: number): void;
   snapshot(): RateLimiterSnapshot;
@@ -169,8 +182,19 @@ export const createRateLimiter = (
     return lease;
   };
 
+  const tryAcquire = (): RateLimitAttempt => {
+    refill();
+    const waitMs = Math.max(Math.max(0, blockedUntil - timer.now()), msUntilToken());
+    if (waitMs > 0) {
+      return { ok: false, retryAfterMs: Math.max(1, waitMs) };
+    }
+    tokens -= 1;
+    return { ok: true };
+  };
+
   return {
     acquire,
+    tryAcquire,
     penalise: (milliseconds: number) => {
       if (!Number.isFinite(milliseconds) || milliseconds < 0) {
         throw new TypeError(`penalty must be a non-negative number of milliseconds`);

@@ -30,9 +30,15 @@ import type {
   InboxStore,
   ResolvedInboundIntegration,
 } from '../ports/integrations/inbox.js';
+import { eagerInboundLoader } from '../ports/integrations/inbox.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
-import { createWebhookIngress, MAX_INBOX_ERROR_CHARS, unmappedIdentitiesOf } from './inbound.js';
+import {
+  createWebhookIngress,
+  MAX_INBOX_ERROR_CHARS,
+  unmappedIdentitiesOf,
+  type WebhookRateLimit,
+} from './inbound.js';
 import type { InboundDecisionApplier, InboundDecisionOutcome } from './inbound-decisions.js';
 
 const INTEGRATION = '00000000-0000-4000-8000-0000000000c1' as Id;
@@ -251,11 +257,11 @@ const build = (options: {
   readonly appended: IngressHarness['appended'];
   readonly sequenceReads: number[];
   readonly decisions?: InboundDecisionApplier;
+  readonly rateLimit?: WebhookRateLimit | null;
+  readonly now?: () => number;
 }) => {
   let nextId = 0;
-  const loader: InboundIntegrationLoader = {
-    forIntegration: async () => options.resolved ?? null,
-  };
+  const loader: InboundIntegrationLoader = eagerInboundLoader(async () => options.resolved ?? null);
   /**
    * A transaction that really rolls back — the double is **stricter** than a Map would be, and it
    * has to be (standing rule 1).
@@ -298,6 +304,7 @@ const build = (options: {
     },
   };
   return createWebhookIngress({
+    rateLimit: options.rateLimit ?? null,
     loader,
     inbox: options.inbox.store,
     audit: options.audit.log,
@@ -321,7 +328,7 @@ const build = (options: {
       },
     },
     clock: { now: () => NOW },
-    timer: { now: () => 0 },
+    timer: { now: options.now ?? (() => 0) },
   });
 };
 
@@ -346,7 +353,12 @@ const harnessFor = (
   });
   return {
     deliver: (delivery = DELIVERY) =>
-      ingress.deliver({ provider: 'fake', integrationId: INTEGRATION, delivery }),
+      ingress.deliver({
+        transport: 'http',
+        provider: 'fake',
+        integrationId: INTEGRATION,
+        delivery,
+      }),
     inbox,
     audit,
     appended,
@@ -879,5 +891,149 @@ describe('the refused accounts a row records (WP-44, PROGRESS backlog 198)', () 
         redacting,
       ),
     ).toEqual([]);
+  });
+});
+
+// ── The door's rate limit (WP-87, Q60) ───────────────────────────────────────
+
+describe('the webhook door’s rate limit (Q60)', () => {
+  const policy = { capacity: 2, refillPerSecond: 1, maxConcurrent: 1 };
+
+  const limited = (resolved: ResolvedInboundIntegration | null, clock = { ms: 0 }) => {
+    const inbox = inboxDouble();
+    const audit = auditDouble();
+    const counted: { provider: string; integrationId: Id }[] = [];
+    const ingress = build({
+      resolved,
+      inbox,
+      audit,
+      appended: [],
+      sequenceReads: [],
+      rateLimit: { policy, onLimited: (entry) => counted.push(entry) },
+      now: () => clock.ms,
+    });
+    return { ingress, inbox, audit, counted, clock };
+  };
+
+  it('answers the delivery past the bucket rate_limited, with a wait, and counts it', async () => {
+    const harness = limited(resolvedWith());
+    const send = (transport: 'http' | 'held_connection' = 'http') =>
+      harness.ingress.deliver({
+        provider: 'fake',
+        integrationId: INTEGRATION,
+        delivery: DELIVERY,
+        transport,
+      });
+
+    expect((await send()).kind).toBe('accepted');
+    expect((await send()).kind).toBe('duplicate');
+    const third = await send();
+
+    expect(third).toEqual({ kind: 'rate_limited', retryAfterMs: 1000 });
+    expect(harness.counted).toEqual([{ provider: 'fake', integrationId: INTEGRATION }]);
+    // A second later the bucket holds a token again.
+    harness.clock.ms = 1000;
+    expect((await send()).kind).toBe('duplicate');
+  });
+
+  it('never reaches the signature check, the audit or the inbox past the limit', async () => {
+    const seen: { delivery?: WebhookDelivery } = {};
+    let verified = 0;
+    const resolved = resolvedWith({ verify: false, seen });
+    const counting: ResolvedInboundIntegration = {
+      ...resolved,
+      inbound: {
+        ...(resolved.inbound as InboundNormaliser),
+        verify: (delivery) => {
+          verified += 1;
+          return (resolved.inbound as InboundNormaliser).verify(delivery);
+        },
+      },
+    };
+    const harness = limited(counting);
+    const send = () =>
+      harness.ingress.deliver({
+        provider: 'fake',
+        integrationId: INTEGRATION,
+        delivery: DELIVERY,
+        transport: 'http',
+      });
+
+    // Two forgeries spend the bucket, each verified and audited as refused.
+    await send();
+    await send();
+    expect(verified).toBe(2);
+    expect(harness.audit.entries).toHaveLength(2);
+
+    const outcome = await send();
+
+    expect(outcome.kind).toBe('rate_limited');
+    expect(verified, 'the verifier must not run past the limit').toBe(2);
+    expect(harness.audit.entries, 'a limited delivery writes no audit row').toHaveLength(2);
+    expect(harness.inbox.rows.size, 'nor an inbox row').toBe(0);
+  });
+
+  it('keys the bucket per integration, never globally', async () => {
+    const clock = { ms: 0 };
+    const other = '00000000-0000-4000-8000-00000000abcd' as Id;
+    const byId = new Map<Id, ResolvedInboundIntegration>([
+      [INTEGRATION, resolvedWith({ verify: false })],
+      [
+        other,
+        {
+          ...resolvedWith({ verify: false }),
+          ref: { ...resolvedWith().ref, integrationId: other },
+        },
+      ],
+    ]);
+    const counted: Id[] = [];
+    const ingress = createWebhookIngress({
+      loader: eagerInboundLoader(async (id) => byId.get(id) ?? null),
+      inbox: inboxDouble().store,
+      audit: auditDouble().log,
+      identities: { forProvider: async () => new Map() },
+      decisions: decisionsDouble(() => {
+        throw new Error('no decision here');
+      }).applier,
+      unitOfWork: {
+        transaction: async () => {
+          throw new Error('nothing is written');
+        },
+      } as never,
+      eventStore: { nextStreamSequence: async () => 1 },
+      ids: { next: () => '00000000-0000-4000-9000-000000000001' as Id },
+      clock: { now: () => NOW },
+      timer: { now: () => clock.ms },
+      rateLimit: { policy, onLimited: (entry) => counted.push(entry.integrationId) },
+    });
+    const send = (integrationId: Id) =>
+      ingress.deliver({ provider: 'fake', integrationId, delivery: DELIVERY, transport: 'http' });
+
+    await send(INTEGRATION);
+    await send(INTEGRATION);
+    expect((await send(INTEGRATION)).kind).toBe('rate_limited');
+    // The other account's bucket is untouched by the first one's flood.
+    expect((await send(other)).kind).toBe('refused');
+    expect((await send(other)).kind).toBe('refused');
+    expect((await send(other)).kind).toBe('rate_limited');
+    expect(counted).toEqual([INTEGRATION, other]);
+    // An id nobody has is answered before the bucket, so a caller cannot grow the map with it.
+    expect((await send('00000000-0000-4000-8000-00000000dead' as Id)).kind).toBe(
+      'unknown_integration',
+    );
+  });
+
+  it('never limits a held connection’s envelope, which the platform already acknowledged', async () => {
+    const harness = limited(resolvedWith({ verify: false }));
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const outcome = await harness.ingress.deliver({
+        provider: 'fake',
+        integrationId: INTEGRATION,
+        delivery: DELIVERY,
+        transport: 'held_connection',
+      });
+      expect(outcome.kind).toBe('refused');
+    }
+    expect(harness.counted).toEqual([]);
   });
 });

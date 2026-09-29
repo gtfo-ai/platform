@@ -137,6 +137,7 @@ export * from './pipeline/stage-executor.js';
 export * from './pipeline/stop-reasons.js';
 export * from './pipeline/store.js';
 export * from './pipeline/task-conflict.js';
+export * from './pipeline/ticket-poll.js';
 export * from './pipeline/ticket-snapshot.js';
 export * from './pipeline/transitions.js';
 export * from './pipeline/verdicts.js';

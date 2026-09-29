@@ -20,7 +20,7 @@ import type {
   TicketRefInput,
   WebhookDelivery,
 } from '@platform/application';
-import { ticketSchema } from '@platform/application';
+import { ticketPollPlanSchema, ticketSchema } from '@platform/application';
 import type { Id } from '@platform/contracts';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { expectCatalogueEvent, expectIntegrationError } from './shared.js';
@@ -76,6 +76,14 @@ export interface TaskManagementContractContext {
     delivery(): WebhookDelivery;
     readonly reason: IgnoredDelivery['reason'];
   };
+  /**
+   * The same provider built with polling **switched on** in its binding configuration, and the
+   * interval that configuration states (WP-87). An obligation of the contract (standing rule 23):
+   * the ticket poller asks `pollPlan()` and trusts `matchTickets`' order, so a provider that answered
+   * a plan for a binding that never asked, or returned matches newest-first, would start tickets
+   * nobody labelled or move the poller's cursor past tickets it never read.
+   */
+  readonly polling: { readonly port: TaskManagementPort; readonly intervalSeconds: number };
   readonly projectId: Id;
   readonly integrationId: Id;
   cleanup(): Promise<void>;
@@ -175,6 +183,28 @@ export const runTaskManagementContract = (harness: TaskManagementContractHarness
       it('finds the ticket by its pick-up label', async () => {
         const matches = await port.matchTickets({ kind: 'label', label: context.pickupLabel });
         expect(matches.map((match) => match.ref.key)).toContain(context.ticket.key);
+      });
+    });
+
+    describe('polling (WP-87)', () => {
+      it('polls nothing for a binding that did not switch polling on', () => {
+        // Off is the default: a plan here would have the poller read a provider nobody asked it to.
+        expect(port.pollPlan()).toBeNull();
+      });
+
+      it('polls for its pick-up rule at the binding’s own interval, oldest match first', async () => {
+        const plan = context.polling.port.pollPlan();
+        expect(plan).not.toBeNull();
+        const parsed = ticketPollPlanSchema.parse(plan);
+        expect(parsed.interval_seconds).toBe(context.polling.intervalSeconds);
+
+        // The plan's rule is the rule a webhook matches with: it finds the pick-up ticket.
+        const matches = await context.polling.port.matchTickets(parsed.rule);
+        expect(matches.map((match) => match.ref.key)).toContain(context.ticket.key);
+        const instants = matches.map((match) => Date.parse(match.updated_at));
+        expect(instants, 'matchTickets answers oldest first').toEqual(
+          instants.toSorted((left, right) => left - right),
+        );
       });
     });
 

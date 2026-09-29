@@ -203,7 +203,13 @@ the pinned CLI reading it was measured, not assumed).
   (`packages/application/src/pipeline/intake-reconcile.ts`), which appends a **new** `ticket.matched` —
   re-dispatching the old one is skipped by its `handler_executions` record and a redelivery is deduplicated
   by the very `inbox` row, so the recovery is **task**-shaped — bounded to one attempt per ticket by the
-  system actor it stamps.
+  system actor it stamps. **A binding may also poll** (WP-87, `packages/application/src/pipeline/ticket-poll.ts`):
+  a per-binding `ticket.poll` job with a cursor on the binding turns each match into the same normalised
+  signal and writes a redacted row to the same `inbox` table under its own `<provider>:poll:…@<updated_at>` key
+  (its payload shape is the match's, not a webhook's), so a
+  repeat poll starts nothing, and a poll against a webhook is deduplicated by intake's one-task-per-ticket
+  rule. The door itself is **rate-limited per `integrations.id`** (Q60): past the bucket a delivery answers
+  `429` with `Retry-After`, reaches no signature check and writes no `inbox` row.
 - **A run's prompt and its tools** (WP-17): `packages/domain/src/prompt/` is the assembler and the
   data-block contract, `packages/prompts/roles/<role>/prompt.md` are the shipped role prompts, and
   `createStageRunPlanner` (`packages/application/src/pipeline/planner.ts`) is what puts a **real**

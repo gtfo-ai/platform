@@ -240,7 +240,7 @@ describe('the agent run’s provider configuration', () => {
 
 describe('pool sizing', () => {
   it('adds the composition root’s own floor to the dispatcher’s', () => {
-    const config = load({ APP_DISPATCH_MAX_CONCURRENCY: '2', APP_DB_POOL_MAX: '24' });
+    const config = load({ APP_DISPATCH_MAX_CONCURRENCY: '2', APP_DB_POOL_MAX: '25' });
     // 2 × 2 + 1 for dispatch — the dispatcher's own transaction and the handler's — plus pg-boss,
     // the pipeline's job workers, HTTP and maintenance. Every term is symbolic on purpose: the
     // count of pipeline workers belongs to `POOL_RESERVATIONS`, and this comment saying "three"
@@ -319,12 +319,13 @@ describe('pool sizing', () => {
       thrown = error;
     }
     expect(thrown).toBeInstanceOf(UndersizedPoolError);
-    // Twenty-two since WP-56: twenty-one (WP-15c's fourth pipeline worker, WP-18a's
+    // Twenty-three since WP-87: twenty-one (WP-15c's fourth pipeline worker, WP-18a's
     // `knowledge.index`, WP-18b's three Librarian queues, WP-21's `onboarding.discovery`, WP-32's
     // digest tick, WP-31's `task.ask`, WP-35's `bootstrap.history` and WP-36's
-    // `maintenance.schedule`) plus `deadline.sweep` — **one** worker for the question, approval and
-    // take-over deadlines, which is the architect's ruling and the reason this moved by exactly one.
-    expect((thrown as UndersizedPoolError).required).toBe(22);
+    // `maintenance.schedule`) plus `deadline.sweep` (WP-56) — **one** worker for the question,
+    // approval and take-over deadlines — plus `ticket.poll` (WP-87), **one** worker for every
+    // binding that polls, each binding being a key on the queue rather than a worker of its own.
+    expect((thrown as UndersizedPoolError).required).toBe(23);
     expect((thrown as Error).message).toMatch(/APP_DB_POOL_MAX/);
     // PROGRESS backlog 22's **site 3**. The message used to say "the pipeline's five job workers"
     // beside a `POOL_RESERVATIONS.pipeline` of 6, and once the counts were interpolated it still

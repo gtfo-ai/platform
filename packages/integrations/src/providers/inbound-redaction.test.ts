@@ -50,6 +50,7 @@ import {
   createMemoryAuditLog,
   createVirtualTimer,
   createWebhookIngress,
+  eagerInboundLoader,
   type InboundAuditLog,
   type InboundDeliveryRecord,
   type InboundNormaliser,
@@ -374,7 +375,8 @@ const deliverThrough = async (testCase: InboundCase): Promise<Delivered> => {
 
   let nextId = 0;
   const ingress = createWebhookIngress({
-    loader: { forIntegration: async () => resolved },
+    rateLimit: null,
+    loader: eagerInboundLoader(async () => resolved),
     inbox,
     audit: auditLog,
     identities: { forProvider: async () => new Map() },
@@ -397,6 +399,7 @@ const deliverThrough = async (testCase: InboundCase): Promise<Delivered> => {
   });
 
   const outcome = await ingress.deliver({
+    transport: 'http',
     provider: 'under-test',
     integrationId: INTEGRATION,
     delivery: testCase.delivery as WebhookDelivery,

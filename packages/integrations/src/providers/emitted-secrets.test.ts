@@ -903,6 +903,7 @@ const JIRA_SCENARIOS: Readonly<Record<string, string>> = {
   test_connection: 'testConnection',
   read_ticket: 'readTicket',
   match_tickets: 'matchTickets',
+  poll_plan: 'pollPlan',
   transition: 'transition',
   upsert_workpad: 'upsertWorkpad',
   add_comment: 'addComment',
@@ -947,6 +948,8 @@ describe('jira emits no string carrying its own credentials (rules 31, 35)', () 
         user_email: JIRA_EMAIL,
         project_keys: ['ACME'],
         pickup_label: 'agentic',
+        // WP-87: switched on, so `pollPlan()` answers a plan rather than a `null` that emits nothing.
+        poll_enabled: true,
       },
       secrets: { api_token: JIRA_TOKEN, webhook_secret: JIRA_WEBHOOK_SECRET },
       redactor: noSecretsRedactor(),
@@ -960,6 +963,8 @@ describe('jira emits no string carrying its own credentials (rules 31, 35)', () 
     emitted.test_connection = await port.testConnection();
     emitted.read_ticket = await port.readTicket(ref);
     emitted.match_tickets = await port.matchTickets({ kind: 'label', label: 'agentic' });
+    // WP-87: pure, off the config — and a plan carries the pick-up rule, which is config text.
+    emitted.poll_plan = port.pollPlan();
     // The target is the platform's own status mapping, not provider text, so it is not planted:
     // the *response* it is matched against is (`Done ${JIRA_TOKEN}` as the transition name).
     emitted.transition = await port.transition(ref, 'Done');

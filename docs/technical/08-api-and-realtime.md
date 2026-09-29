@@ -279,3 +279,19 @@
 
 ## Rate limits and safety
 Per-user rate limits on mutating endpoints; webhook endpoints limited per integration; `POST /api/runs/:id/steer` limited to 1 message per 5 s per user; all human actions recorded in `human_actions` and `config_audit`.
+
+> **As built at WP-87 (Q60): the webhook limit.** `POST /webhooks/:provider/:integrationId` takes a
+> token from a bucket keyed per `integrations.id` — never global — **after** the integration lookup
+> (so a caller cannot grow the set of buckets by inventing ids; that read — the `integrations` row by
+> primary key, left-joined to its `bindings` — is what a limited request still costs) and **before**
+> the credentials are read and decrypted, the adapters built, the signature checked, and any row
+> written.
+> Past it the answer is **429** with `Retry-After` in whole seconds, rounded up; the delivery writes
+> **no** `inbox` row (the answer an unverified delivery gets) and **no** `integration_actions` row
+> (one row per refusal would be the amplification the limit closes), and is counted on
+> `webhook_deliveries_rate_limited_total{provider}` with one log line per integration per minute.
+> The policy is `DEFAULT_WEBHOOK_RATE_LIMIT_POLICY` (a burst of 120, 10 a second), generous because a
+> vendor that keeps receiving errors disables its webhook; it is **per process**, so N API replicas
+> admit N times it. A held connection's envelope (Slack Socket Mode) is never limited — the platform
+> opened that socket, and limiting what it acknowledged would drop a notification. This note is
+> about the webhook clause only; the steer limit is `apps/server/src/routes/commands.ts`'s.

@@ -213,3 +213,36 @@ describe('FakeTaskManagement', () => {
     );
   });
 });
+
+describe('the search index lag, on request (WP-87 review round 1)', () => {
+  it('leaves a freshly updated ticket out of matchTickets until the lag has passed', async () => {
+    const port = createFakeTaskManagement({
+      integrationId: INTEGRATION_ID,
+      searchLagMs: 5_000,
+      tickets: [{ key: 'FAKE-1', title: 'Seeded long ago', labels: ['agentic'] }],
+    });
+    // The seed is stamped at the clock's first instant, and the clock steps a second per read.
+    const rule = { kind: 'label', label: 'agentic' } as const;
+    expect(await port.matchTickets(rule)).toEqual([]);
+    for (let read = 0; read < 5; read += 1) {
+      await port.readTicket({ provider: port.ref.provider, key: 'FAKE-1', url: 'https://x.test' });
+    }
+    expect((await port.matchTickets(rule)).map((match) => match.ref.key)).toEqual(['FAKE-1']);
+  });
+});
+
+describe('the minute-grained window (divergence 11, WP-87 review round 2)', () => {
+  it('answers a ticket updated earlier in the same minute as `since`, as Jira’s rounded window does', async () => {
+    const port = createFakeTaskManagement({
+      integrationId: INTEGRATION_ID,
+      clockStart: '2026-06-01T10:00:10.000Z',
+      tickets: [{ key: 'FAKE-1', title: 'Updated at 10:00:10', labels: ['agentic'] }],
+    });
+    const rule = { kind: 'label', label: 'agentic' } as const;
+    // 40 seconds after the ticket's update, but inside the same minute.
+    expect(
+      (await port.matchTickets(rule, { since: '2026-06-01T10:00:50.000Z' })).map((m) => m.ref.key),
+    ).toEqual(['FAKE-1']);
+    expect(await port.matchTickets(rule, { since: '2026-06-01T10:01:00.000Z' })).toEqual([]);
+  });
+});

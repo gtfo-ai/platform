@@ -9,7 +9,6 @@ import {
   JOB_NAME_MAX_LENGTH,
   JOB_QUEUES,
   JobsValidationError,
-  pollQueueName,
 } from './jobs.js';
 
 describe('job names', () => {
@@ -57,8 +56,9 @@ describe('job names', () => {
       expect(isValidJobName(name)).toBe(true);
     }
     expect(JOB_QUEUES.mrCommentDebounce).toBe('mr.comment.debounce');
-    expect(pollQueueName('gitlab')).toBe('poll.gitlab');
-    expect(() => pollQueueName('GitLab')).toThrow(/poll queue name/);
+    // WP-87: the ticket poller is one queue keyed per binding, not TD-004's `poll.<provider>`.
+    expect(JOB_QUEUES.ticketPoll).toBe('ticket.poll');
+    expect(Object.values(JOB_QUEUES).some((name) => name.startsWith('poll.'))).toBe(false);
   });
 
   it('names no queue for domain-event dispatch', () => {

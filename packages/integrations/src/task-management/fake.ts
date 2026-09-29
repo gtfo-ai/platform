@@ -44,7 +44,9 @@
  *  7. **Different — writes are immediately visible to reads.** Jira's search index lags by
  *     seconds, which is why the polling fallback overlaps its window. A test asserting that a
  *     freshly labelled ticket appears in `matchTickets` at once is asserting something the real
- *     provider does not promise.
+ *     provider does not promise. **`searchLagMs`** (WP-87) turns the kindness off: a ticket updated
+ *     less than that long ago on the fake's clock is left out of `matchTickets`, which is how the
+ *     poller's overlap behind its cursor is exercised against this fake.
  *  8. **Stricter — `emitTicketMatched` produces `ticket.matched` alone** (WP-60). Jira announces a
  *     match through the same `jira:issue_updated` that carries the label or status change, so it
  *     produces `ticket.updated` beside it; this fake's match delivery is a synthetic door with no
@@ -58,6 +60,17 @@
  *     `fakeTaskManagementRegistration` (`bindings/fake-registrations.ts`), the loader's redactor is applied to the whole
  *     body before `normalise` reads it, as a real adapter does; the delivery key is still built from
  *     the header id and is not redacted, where a real adapter redacts its key.
+ * 10. **Different — the poll plan comes from an option, or from the registration** (WP-87). Built
+ *     directly, `pollPlan()` answers the `poll` option (`null` when absent, as every real provider
+ *     defaults to off); resolved through `fakeTaskManagementRegistration`, the binding's config
+ *     decides it (`poll_enabled`, `poll_interval_seconds`, `pickup_label`) — a **label** rule only,
+ *     where Jira also polls a status rule. `matchTickets` answers oldest first, as the port requires.
+ * 11. **Stricter — `since` is minute-grained** (WP-87 review round 2). Jira's JQL window is a
+ *     relative `-Nm` with the minutes rounded up, so it starts up to a minute before the instant
+ *     asked for; the fake starts it at the minute boundary at or before it. A caller that relied on
+ *     `since` being exact (the poller's first "read again from the cursor" did) fails here as it
+ *     would against Jira. The two differ in *where* in that minute the window starts, never in
+ *     whether the fake returns less.
  */
 import {
   type CommentRef,
@@ -77,8 +90,10 @@ import {
   type TicketLink,
   type TicketMatch,
   type TicketMatchRule,
+  type TicketPollPlan,
   type TicketRefInput,
   type TransitionResult,
+  ticketPollPlanSchema,
   ticketSchema,
   type WebhookDelivery,
 } from '@platform/application';
@@ -143,6 +158,20 @@ export interface FakeTaskManagementOptions {
   readonly identities?: readonly FakeIdentitySeed[];
   readonly capabilities?: Partial<TaskManagementCapabilities>;
   readonly webhookSecret?: string;
+  /**
+   * What `pollPlan()` answers (WP-87). Absent is `null` — polling off, which is every real
+   * provider's default too. Resolved through `fakeTaskManagementRegistration`, the binding's config
+   * decides it instead, as a real adapter's does.
+   */
+  readonly poll?: TicketPollPlan | null;
+  /** The fake clock's first instant (`createFakeCore`); the fixed epoch when absent. */
+  readonly clockStart?: string;
+  /**
+   * Divergence 7, made stricter on request (WP-87 review round 1): `matchTickets` leaves out a ticket
+   * updated less than this many milliseconds ago on the fake's clock, as Jira's lagging search index
+   * does. `0` (the default) keeps writes immediately visible.
+   */
+  readonly searchLagMs?: number;
 }
 
 interface StoredComment {
@@ -282,7 +311,11 @@ export const createFakeTaskManagement = (
      */
     host: null,
   };
-  const core = createFakeCore({ ref, webhookSecret: options.webhookSecret });
+  const core = createFakeCore({
+    ref,
+    webhookSecret: options.webhookSecret,
+    ...(options.clockStart === undefined ? {} : { clockStart: options.clockStart }),
+  });
   const baseUrl = options.baseUrl ?? 'https://tickets.example.test';
   const statuses = [...(options.statuses ?? DEFAULT_FAKE_STATUSES)];
   const capabilities: TaskManagementCapabilities = {
@@ -298,6 +331,11 @@ export const createFakeTaskManagement = (
 
   const tickets = new Map<string, StoredTicket>();
   const identities = new Map<string, ExternalIdentity>();
+  // Divergence 1's rule: a plan the port's schema would refuse fails at construction, not at a poll.
+  const poll =
+    options.poll === undefined || options.poll === null
+      ? null
+      : ticketPollPlanSchema.parse(options.poll);
   let commentCounter = 0;
   let createdCounter = 0;
 
@@ -612,13 +650,28 @@ export const createFakeTaskManagement = (
     matchTickets: async (rule, matchOptions) => {
       core.enter('match_tickets');
       const limit = matchOptions?.limit ?? 50;
-      const since = matchOptions?.since ?? null;
+      // Jira's window is minute-grained and starts **before** `since` (`buildJql` rounds its
+      // relative minutes up), so the fake starts it at the minute boundary at or before `since` —
+      // the wider answer, never the narrower one (divergence 11, WP-87 review round 2).
+      const asked = matchOptions?.since ?? null;
+      const since =
+        asked === null
+          ? null
+          : new Date(Math.floor(Date.parse(asked) / 60_000) * 60_000).toISOString();
+      // Oldest first, the port's order since WP-87 (the poller's cursor depends on it); a stable
+      // sort, so two tickets updated in the same instant keep their seeding order.
+      const lagMs = options.searchLagMs ?? 0;
+      const indexedUpTo = Date.parse(core.clock.now()) - lagMs;
       return [...tickets.values()]
         .filter((ticket) => matches(ticket, rule))
+        .filter((ticket) => lagMs === 0 || Date.parse(ticket.updated_at) <= indexedUpTo)
         .filter((ticket) => since === null || Date.parse(ticket.updated_at) >= Date.parse(since))
+        .toSorted((left, right) => Date.parse(left.updated_at) - Date.parse(right.updated_at))
         .slice(0, limit)
         .map(toMatch);
     },
+
+    pollPlan: () => poll,
 
     transition: async (ticketRef, targetStatusName): Promise<TransitionResult> => {
       core.enter('transition');

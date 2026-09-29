@@ -105,9 +105,9 @@ through the processes rather than reasoned about.
 
 | `ROLE` | Serves the API, SSE and `/webhooks/*` | Runs the dispatcher and the job workers | Smallest `APP_DB_POOL_MAX` (concurrency 1) |
 |---|---|---|---|
-| `all` | yes | yes | 22 |
+| `all` | yes | yes | 23 |
 | `api` | yes | no — it only **enqueues** | 4 |
-| `worker`, `runner`, `indexer` | no | yes | 20 |
+| `worker`, `runner`, `indexer` | no | yes | 21 |
 
 Each process refuses to start below its own number and names it, listing what the number is made of. The table is held to the code by a test (`apps/server/src/config.test.ts`), so it moves when a workload is added. `runner` and `indexer` are workers
 named for what you deploy them for; whether a worker runs agents is its launcher configuration,
@@ -387,6 +387,7 @@ process cannot answer*, never zero:
 | `knowledge_mirror_bytes{project_id="…"}` | one project's mirror — the axis you can act on | a project that outweighs the rest |
 | `jobs_queued{queue="…"}` | pg-boss jobs ready to run and not yet claimed, per declared queue, `0` included; a timer not yet due is not counted (every role that holds a job client, WP-86) | `queue="stage.execute"` above 0 for longer than a stage takes: no runner is taking agent stages |
 | `jobs_queued_oldest_age_seconds{queue="…"}` | how long the oldest of those has waited; no series for a queue with nothing waiting | `queue="stage.execute"` above 300 — the same condition `/readyz` reports as `agent_runs: degraded` |
+| `webhook_deliveries_rate_limited_total{provider="…"}` | webhook deliveries answered `429` by their integration's rate limit, before any signature check (API roles, WP-87) | a rate that does not stop: somebody is flooding the endpoint, or a vendor's burst is larger than the bucket — its deliveries are being retried, not lost, until the vendor gives up |
 | `command_idempotency_claims_unknown{action="…"}` | commands whose process died between claiming their `Idempotency-Key` and recording the outcome, past the in-flight window (`CLAIM_IN_FLIGHT_MS`, `apps/server/src/routes/idempotency.ts`); the key answers `409 idempotency_attempt_unknown` for good (API roles, WP-73) | anything above 0 asks a **human check** of the resource the action names — never a delete of the row, which would let a retry perform the command a second time |
 
 `APP_TRUST_PROXY=true` is what makes the app believe `X-Forwarded-For` and `X-Forwarded-Proto`. Set
@@ -534,7 +535,18 @@ would deliver to something that consumes nothing.
 over the request body, so the body reaches the handler unparsed, and an unverified delivery is
 refused and **stored nowhere** — a dedup key an unauthenticated caller can choose is a key it can
 poison. A verified delivery is stored with its headers and payload **redacted** (GitLab's legacy
-scheme sends the binding's own webhook secret in `X-Gitlab-Token`).
+scheme sends the binding's own webhook secret in `X-Gitlab-Token`). Each integration has its own rate
+limit on this endpoint (WP-87): past it a delivery is answered `429` with `Retry-After` **before**
+its signature is checked, stored nowhere, and counted on `webhook_deliveries_rate_limited_total`. The
+bucket is generous (a burst of 120, then 10 a second) and per `app` process.
+
+**No public URL?** A task-management binding can **poll** instead (WP-87): set `poll_enabled: true`
+(and, if 60 seconds is not right, `poll_interval_seconds`) in the binding's configuration. The
+platform then asks the provider for the binding's pick-up rule on that interval, and each ticket it
+finds is treated exactly as a webhook's match. A binding can have both — a ticket seen by the
+webhook and by a poll is started once. What a poll does not carry (comments, the ticket linter's
+*created* event, edits to a ticket that has left the pick-up rule) is listed in the Jira setup
+guide's step 5. GitLab merge-request events have no poller: the GitLab webhook stays required.
 
 ## 5. Upgrade
 

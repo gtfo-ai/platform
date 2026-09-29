@@ -82,6 +82,7 @@ const legacyDelivery = (iid: number, token = WEBHOOK_SECRET_TOKEN) => ({
 
 const ingressFor = () =>
   createWebhookIngress({
+    rateLimit: null,
     loader: createInboundIntegrationLoader({
       repository: secretAdapters.createPostgresBindingRepository(pool, accountOnlyFieldsOf),
       secrets: secretAdapters.createPostgresSecretStore({
@@ -209,6 +210,7 @@ const eventRows = async () => {
 describe('a GitLab delivery signed with the legacy secret token', () => {
   it('is accepted, and the header carrying the binding’s own secret is redacted on the row', async () => {
     const outcome = await ingressFor().deliver({
+      transport: 'http',
       provider: 'gitlab',
       integrationId,
       delivery: legacyDelivery(7),
@@ -235,7 +237,12 @@ describe('a GitLab delivery signed with the legacy secret token', () => {
   });
 
   it('appends the normalised event on the bound project’s stream', async () => {
-    await ingressFor().deliver({ provider: 'gitlab', integrationId, delivery: legacyDelivery(7) });
+    await ingressFor().deliver({
+      transport: 'http',
+      provider: 'gitlab',
+      integrationId,
+      delivery: legacyDelivery(7),
+    });
 
     const events = await eventRows();
     expect(events.map((event) => event.type)).toEqual(['mr.opened']);
@@ -243,7 +250,12 @@ describe('a GitLab delivery signed with the legacy secret token', () => {
   });
 
   it('records one inbound audit row, with no event of its own', async () => {
-    await ingressFor().deliver({ provider: 'gitlab', integrationId, delivery: legacyDelivery(7) });
+    await ingressFor().deliver({
+      transport: 'http',
+      provider: 'gitlab',
+      integrationId,
+      delivery: legacyDelivery(7),
+    });
 
     const audit = await auditRows();
     expect(audit).toHaveLength(1);
@@ -260,11 +272,13 @@ describe('a replayed delivery', () => {
   it('is deduplicated by the real primary key and performs nothing twice', async () => {
     const ingress = ingressFor();
     const first = await ingress.deliver({
+      transport: 'http',
       provider: 'gitlab',
       integrationId,
       delivery: legacyDelivery(7),
     });
     const second = await ingress.deliver({
+      transport: 'http',
       provider: 'gitlab',
       integrationId,
       delivery: legacyDelivery(7),
@@ -280,8 +294,18 @@ describe('a replayed delivery', () => {
 
   it('still admits a genuinely different delivery, so the dedup is on the change and not the sender', async () => {
     const ingress = ingressFor();
-    await ingress.deliver({ provider: 'gitlab', integrationId, delivery: legacyDelivery(7) });
-    await ingress.deliver({ provider: 'gitlab', integrationId, delivery: legacyDelivery(8) });
+    await ingress.deliver({
+      transport: 'http',
+      provider: 'gitlab',
+      integrationId,
+      delivery: legacyDelivery(7),
+    });
+    await ingress.deliver({
+      transport: 'http',
+      provider: 'gitlab',
+      integrationId,
+      delivery: legacyDelivery(8),
+    });
 
     expect(await inboxRows()).toHaveLength(2);
     expect(await eventRows()).toHaveLength(2);
@@ -291,6 +315,7 @@ describe('a replayed delivery', () => {
 describe('an unverifiable delivery', () => {
   it('is refused, audited, and occupies no dedup key a genuine delivery will need', async () => {
     const outcome = await ingressFor().deliver({
+      transport: 'http',
       provider: 'gitlab',
       integrationId,
       delivery: legacyDelivery(7, 'FAKE-PLANTED-wrong-token-0123456789012'),
@@ -310,11 +335,13 @@ describe('an unverifiable delivery', () => {
   it('leaves the key free, so the genuine delivery that follows is still performed', async () => {
     const ingress = ingressFor();
     await ingress.deliver({
+      transport: 'http',
       provider: 'gitlab',
       integrationId,
       delivery: legacyDelivery(7, 'FAKE-PLANTED-wrong-token-0123456789012'),
     });
     const genuine = await ingress.deliver({
+      transport: 'http',
       provider: 'gitlab',
       integrationId,
       delivery: legacyDelivery(7),
@@ -338,6 +365,7 @@ describe('an unverifiable delivery', () => {
     ['an empty token', ''],
   ])('refuses %s', async (_name, token) => {
     const outcome = await ingressFor().deliver({
+      transport: 'http',
       provider: 'gitlab',
       integrationId,
       delivery: legacyDelivery(7, token),
@@ -348,6 +376,7 @@ describe('an unverifiable delivery', () => {
 
   it('refuses a delivery with no token header at all', async () => {
     const outcome = await ingressFor().deliver({
+      transport: 'http',
       provider: 'gitlab',
       integrationId,
       delivery: { headers: {}, body: deliveryBody(7) },
@@ -361,6 +390,7 @@ describe('an unverifiable delivery', () => {
     // "provides weaker security guarantees than a signing token"), not this adapter's, and the
     // assertion below records the platform's actual behaviour rather than a property it lacks.
     const outcome = await ingressFor().deliver({
+      transport: 'http',
       provider: 'gitlab',
       integrationId,
       delivery: { headers: { 'x-gitlab-token': WEBHOOK_SECRET_TOKEN }, body: deliveryBody(9) },
@@ -372,6 +402,7 @@ describe('an unverifiable delivery', () => {
 describe('an integration nobody has', () => {
   it('writes nothing at all, because there is no row an audit could reference', async () => {
     const outcome = await ingressFor().deliver({
+      transport: 'http',
       provider: 'gitlab',
       integrationId: '00000000-0000-4000-8000-0000000000ff' as Id,
       delivery: legacyDelivery(7),

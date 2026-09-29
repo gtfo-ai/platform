@@ -54,3 +54,10 @@ gained; one queue raises it by one (`POOL_RESERVATIONS.pipeline`, floor 21 → 2
 more `kind`s on the same queue since WP-84 (`question_reminder`, `approval_reminder`). Policy `stately`, keyed per `(aggregate, id, kind)`. The
 arming enqueue can be lost the way every after-commit enqueue can (PROGRESS backlog 161), and rows
 written before this change carry no deadline (backlog 162).
+
+## Amendment (WP-87, 2026-09-29) — the ticket poller is one queue
+
+The `poll.<provider>` cron named above is built as **one** `ticket.poll` queue keyed per binding
+(`packages/application/src/pipeline/ticket-poll.ts`), declared in `JOB_QUEUE_DEFINITIONS` with every other
+queue: a binding opts in, its interval is binding configuration, and its cursor is `bindings.poll_cursor`
+(migration 0061). A lost poll is recovered by a sweep on `APP_TICKET_POLL_SWEEP_INTERVAL_MS`.

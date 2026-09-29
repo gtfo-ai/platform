@@ -85,6 +85,7 @@ import {
   type TicketDraft,
   type TicketMatch,
   type TicketMatchRule,
+  type TicketPollPlan,
   type TicketRefInput,
   type TransitionResult,
   ticketSchema,
@@ -147,6 +148,15 @@ const usersSchema = z.array(jiraUserSchema);
 const FIELDS_FOR_TICKET =
   'summary,description,issuetype,status,priority,labels,updated,created,assignee,reporter,parent,issuelinks';
 const FIELDS_FOR_MATCH = 'issuetype,status,priority,labels,updated,parent,issuelinks';
+
+/**
+ * The most issues one `search/jql` request asks for. Atlassian's swagger (`swagger-v3.v3.json`,
+ * `GET /rest/api/3/search/jql`, retrieved 2026-09-29): `maxResults` defaults to 50, and *"To manage
+ * page size, API may return fewer items per page where a large number of fields or properties are
+ * requested"*; `nextPageToken` *"is **not included** in the response for the last page"*. So a
+ * hundred is asked for and whatever arrives is paged past with the token.
+ */
+const MATCH_PAGE_MAX = 100;
 /**
  * How many comments the **marker search** asks for, oldest first — `maxResults`, a page-size
  * *request*. The search emits nothing (it looks for this binding's own marked comment and returns
@@ -572,17 +582,44 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     const jql = buildJql(rule, matchOptions?.since ?? null, options.clock.now());
     return read('match_tickets', jsonPayload({ jql, limit }), async () => {
       const action = 'match_tickets';
-      const result = parse(
-        jiraSearchResultSchema,
-        await client.send({
-          method: 'GET',
-          path: 'search/jql',
-          query: { jql, fields: FIELDS_FOR_MATCH, maxResults: limit },
+      /**
+       * Up to `limit` matches, **following `nextPageToken`** (WP-87 review round 2): the poller widens
+       * a page to reach past a bulk edit (`TICKET_POLL_MAX_LIMIT`), and Jira may return fewer issues
+       * per page than `maxResults` asks for ({@link MATCH_PAGE_MAX}), so one request is not "up to
+       * `limit`". Each request asks for at most
+       * {@link MATCH_PAGE_MAX}; the loop ends at `limit`, at `isLast`, at a page with no token, or at
+       * an empty page — never on a token alone, so a provider that kept answering one cannot spin it.
+       */
+      const found: TicketMatch[] = [];
+      let pageToken: string | null = null;
+      for (;;) {
+        const result: z.infer<typeof jiraSearchResultSchema> = parse(
+          jiraSearchResultSchema,
+          await client.send({
+            method: 'GET',
+            path: 'search/jql',
+            query: {
+              jql,
+              fields: FIELDS_FOR_MATCH,
+              maxResults: Math.min(limit - found.length, MATCH_PAGE_MAX),
+              ...(pageToken === null ? {} : { nextPageToken: pageToken }),
+            },
+            action,
+          }),
           action,
-        }),
-        action,
-      );
-      return result.issues.map((issue) => toTicketMatch(issue, siteUrl));
+        );
+        found.push(...result.issues.map((issue) => toTicketMatch(issue, siteUrl)));
+        const next: string | null = result.nextPageToken ?? null;
+        if (
+          found.length >= limit ||
+          result.isLast === true ||
+          next === null ||
+          result.issues.length === 0
+        ) {
+          return found.slice(0, limit);
+        }
+        pageToken = next;
+      }
     });
   };
 
@@ -976,6 +1013,24 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
 
   const pickup: JiraPickupRule = pickupRuleOf(config);
 
+  /**
+   * The poller's plan (WP-87): the webhook's own pick-up rule, so a polled match and a webhook match
+   * mean one thing, at the binding's interval. `null` when polling is off — the default — or when it
+   * is on with no pick-up rule, because a poll for nothing is a read a minute for no answer.
+   */
+  const pollPlan = (): TicketPollPlan | null => {
+    if (!config.poll_enabled || pickup.kind === 'none') {
+      return null;
+    }
+    return {
+      rule:
+        pickup.kind === 'label'
+          ? { kind: 'label', label: pickup.label }
+          : { kind: 'status', status: pickup.status },
+      interval_seconds: config.poll_interval_seconds,
+    };
+  };
+
   const inbound = createJiraInboundNormaliser({
     siteUrl,
     projectKeys: config.project_keys,
@@ -998,6 +1053,7 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     testConnection,
     readTicket,
     matchTickets,
+    pollPlan,
     transition,
     upsertWorkpad,
     addComment,

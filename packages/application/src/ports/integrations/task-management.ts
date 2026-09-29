@@ -130,6 +130,46 @@ export const ticketMatchSchema = z.strictObject({
   updated_at: isoDateTimeSchema,
 });
 
+/** The shortest poll interval a binding may declare — a floor on the provider traffic one binding costs. */
+export const MIN_TICKET_POLL_INTERVAL_SECONDS = 30;
+/** The longest: a day. A binding that polls less often than that is a binding that does not poll. */
+export const MAX_TICKET_POLL_INTERVAL_SECONDS = 86_400;
+/** product/08's *"every 60 s when no public URL"*, and the interval a binding that says nothing gets. */
+export const DEFAULT_TICKET_POLL_INTERVAL_SECONDS = 60;
+
+/**
+ * The keys a task-management binding's configuration switches polling with (WP-87).
+ *
+ * **Platform names, not a provider's**, for one reader that cannot build an adapter: the poll sweep
+ * (`pipeline/ticket-poll.ts`) lists the bindings to poll with one query over `bindings.config`
+ * merged over `integrations.config`, rather than decrypting every binding's credentials once a
+ * minute to ask it. `communicationChannels` is the precedent for a platform reader of a provider's
+ * config, and the difference is stated: that one is declared per registration, this one is a
+ * convention, because the value the sweep reads is a switch and not a provider-shaped field. A
+ * provider whose schema does not declare {@link TICKET_POLL_CONFIG_KEYS.enabled} can never be switched
+ * on (its strict schema refuses the key), which is the closed direction. The adapter's
+ * {@link TaskManagementPort.pollPlan} stays the authority — the sweep's query only chooses whom to
+ * ask.
+ */
+export const TICKET_POLL_CONFIG_KEYS = {
+  enabled: 'poll_enabled',
+  intervalSeconds: 'poll_interval_seconds',
+} as const;
+
+/**
+ * What a binding that polls polls for (WP-87, technical/06 § "Inbound: webhooks and polling").
+ *
+ * `rule` is the binding's **pick-up rule** — the same one its webhook announces a match with — so a
+ * polled match and a webhook match mean one thing. `interval_seconds` is the binding's own.
+ */
+export const ticketPollPlanSchema = z.strictObject({
+  rule: ticketMatchRuleSchema,
+  interval_seconds: z
+    .int()
+    .min(MIN_TICKET_POLL_INTERVAL_SECONDS)
+    .max(MAX_TICKET_POLL_INTERVAL_SECONDS),
+});
+
 /** What `transition` did. `changed: false` means the ticket was already in the target status. */
 export const transitionResultSchema = z.strictObject({
   changed: z.boolean(),
@@ -170,6 +210,7 @@ export type Ticket = z.infer<typeof ticketSchema>;
 export type CommentRef = z.infer<typeof commentRefSchema>;
 export type TicketMatchRule = z.infer<typeof ticketMatchRuleSchema>;
 export type TicketMatch = z.infer<typeof ticketMatchSchema>;
+export type TicketPollPlan = z.infer<typeof ticketPollPlanSchema>;
 export type TransitionResult = z.infer<typeof transitionResultSchema>;
 export type TicketDraft = z.infer<typeof ticketDraftSchema>;
 
@@ -215,11 +256,29 @@ export type TaskManagementInboundEvent =
 export interface TaskManagementPort extends IntegrationPort<TaskManagementCapabilities> {
   readonly readTicket: (ref: TicketRefInput) => Promise<Ticket>;
 
-  /** Polling fallback (product/08: every 60 s when no public URL). `since` narrows the window. */
+  /**
+   * The tickets a rule matches — the ticket poller's read (WP-87) and the history bootstrap's.
+   * `since` narrows the window to tickets updated at or after it; a provider whose window is coarser
+   * than the instant (Jira's JQL is minute-grained) **widens** it, never narrows it.
+   *
+   * **Ordered by `updated_at`, oldest first** — an obligation of every provider since WP-87, because
+   * the poller advances its cursor to the newest `updated_at` a page returned, and a page cut by
+   * `limit` from any other order would move the cursor past tickets it never read.
+   */
   readonly matchTickets: (
     rule: TicketMatchRule,
     options?: { readonly since?: string | null; readonly limit?: number },
   ) => Promise<readonly TicketMatch[]>;
+
+  /**
+   * Whether this binding polls, and for what (WP-87) — `null` when it does not.
+   *
+   * Off unless the binding's configuration switches it on ({@link TICKET_POLL_CONFIG_KEYS}), and
+   * `null` too when it is switched on with no pick-up rule to poll for: a poll that could match
+   * nothing is a poll that costs a provider read a minute for no answer. Pure — it reads the
+   * configuration the adapter was built with and calls nobody.
+   */
+  readonly pollPlan: () => TicketPollPlan | null;
 
   /**
    * Moves the ticket to a status **by name**, resolving the provider's transition at runtime.

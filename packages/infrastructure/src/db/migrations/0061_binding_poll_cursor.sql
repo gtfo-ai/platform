@@ -1,0 +1,25 @@
+-- 0061 — the ticket poller's cursor, on the binding it polls (WP-87, PROGRESS backlog 187).
+--
+-- A task-management binding whose configuration switches polling on (`poll_enabled`, the key the
+-- sweep reads out of `bindings.config` over `integrations.config`) is asked, at its own interval,
+-- for the tickets its pick-up rule matches **since** this instant. The ruling puts the cursor on the
+-- binding: one Jira site bound to two projects is polled once per binding, with each binding's own
+-- rule and interval, so each needs its own place in the provider's timeline.
+--
+-- **The provider's instant, not the platform's.** The value is the newest `updated_at` a poll
+-- recorded — Jira's own `fields.updated`. It does **not** make the window independent of the
+-- platform's clock: Jira's JQL window is relative (`updated >= "-Nm"`, because an absolute date is
+-- read in the site's time zone), `N` is computed on the platform's clock and evaluated on Jira's,
+-- and Jira's search index lags by seconds. So every poll starts `TICKET_POLL_OVERLAP_MS` (five
+-- minutes) **behind** this cursor, and what it re-reads collides on the `inbox` key
+-- (`pipeline/ticket-poll.ts` has the derivation).
+--
+-- **Nullable, no default.** `null` is "never polled": the first poll reads the binding's last
+-- interval only, because a first read of every ticket that ever matched would start a task for every
+-- closed ticket still carrying the label (`pipeline/ticket-poll.ts`). The PUT that replaces a
+-- project's bindings deletes and re-inserts the rows, so it resets the cursor to that same answer.
+--
+-- **One writer**, `TicketPollStore.advanceCursor`, forward only (`greatest`), after every match of a
+-- page has been recorded; **one reader**, `TicketPollStore.cursorOf`. The `inbox` row a polled match
+-- writes is the dedup; this is only where the next window starts.
+alter table bindings add column poll_cursor timestamptz;

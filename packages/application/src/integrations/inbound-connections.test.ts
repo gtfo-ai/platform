@@ -177,7 +177,10 @@ describe('a process that serves /webhooks/*', () => {
     ]);
     const delivery = { headers: { 'x-slack-signature': 'v0=fake' }, body: '{}' };
     await double.deliver(delivery);
-    expect(calls).toEqual([{ provider: 'slack', integrationId: A, delivery }]);
+    // WP-87: a held connection's envelope is never the rate-limited door.
+    expect(calls).toEqual([
+      { provider: 'slack', integrationId: A, delivery, transport: 'held_connection' },
+    ]);
     await handle.stop();
   });
 

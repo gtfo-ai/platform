@@ -129,6 +129,14 @@ runTaskManagementContract({
           }),
         reason: 'unsupported_event',
       },
+      /**
+       * The binding's own switch (WP-87): the same recorded search the pick-up case replays, asked
+       * through the plan the configuration states rather than a rule the test wrote.
+       */
+      polling: {
+        port: createJiraBinding({ config: { poll_enabled: true, poll_interval_seconds: 90 } }).port,
+        intervalSeconds: 90,
+      },
       projectId: JIRA_PROJECT_ID,
       integrationId: JIRA_INTEGRATION_ID,
       cleanup: async () => {},
@@ -479,6 +487,36 @@ describe('jira-cloud — reaching the provider', () => {
       expect(binding.replay.requests[0]?.query.jql).toBe(
         'labels = "agentic" AND updated >= "-15m" ORDER BY updated ASC',
       );
+    });
+
+    it('pages through nextPageToken up to the limit, oldest first (WP-87 review round 2)', async () => {
+      // A bulk: more labelled tickets than one replay page (REPLAY_SEARCH_PAGE_CAP).
+      for (let index = 0; index < 45; index += 1) {
+        await binding.port.createTicket({
+          project_key: 'ACME',
+          issue_type: 'Task',
+          title: `Bulk ${index}`,
+          description: '',
+          labels: [JIRA_PICKUP_LABEL],
+        });
+      }
+      const all = await binding.port.matchTickets(
+        { kind: 'label', label: JIRA_PICKUP_LABEL },
+        { limit: 1000 },
+      );
+      const searches = () =>
+        binding.replay.requests.filter((request) => request.path === 'search/jql');
+      expect(all.length).toBeGreaterThan(45);
+      expect(searches().length, 'more than one page was read').toBeGreaterThan(1);
+      expect(searches()[1]?.query.nextPageToken).toBeDefined();
+      const instants = all.map((match) => Date.parse(match.updated_at));
+      expect(instants).toEqual(instants.toSorted((left, right) => left - right));
+
+      const cut = await binding.port.matchTickets(
+        { kind: 'label', label: JIRA_PICKUP_LABEL },
+        { limit: 30 },
+      );
+      expect(cut.map((match) => match.ref.key)).toEqual(all.slice(0, 30).map((m) => m.ref.key));
     });
 
     it('applies the window: a ticket older than it is not returned', async () => {

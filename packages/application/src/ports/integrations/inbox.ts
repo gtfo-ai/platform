@@ -195,4 +195,37 @@ export interface ResolvedInboundIntegration {
  */
 export interface InboundIntegrationLoader {
   readonly forIntegration: (integrationId: Id) => Promise<ResolvedInboundIntegration | null>;
+  /**
+   * The same answer in two steps (WP-87 review round 1, Q60): the account row first — `null` for an
+   * id nobody has — and the expensive half (reading and decrypting the credentials, building one
+   * adapter per binding) only when {@link InboundAccountDoor.resolve} is called. The webhook door's
+   * rate limit sits between the two, so a limited delivery costs the account read and nothing else.
+   */
+  readonly open: (integrationId: Id) => Promise<InboundAccountDoor | null>;
 }
+
+/** An integration that exists, before its credentials are read. */
+export interface InboundAccountDoor {
+  readonly integrationId: Id;
+  /** `integrations.provider`, as the row states it. */
+  readonly provider: string;
+  /** Everything {@link InboundIntegrationLoader.forIntegration} answers for this row. */
+  readonly resolve: () => Promise<ResolvedInboundIntegration>;
+}
+
+/**
+ * A loader whose `open` defers nothing — for a double, or any loader that is cheap to build. The
+ * door's `provider` is the resolved ref's. Production uses `createInboundIntegrationLoader`, whose
+ * `open` reads only the account row.
+ */
+export const eagerInboundLoader = (
+  forIntegration: InboundIntegrationLoader['forIntegration'],
+): InboundIntegrationLoader => ({
+  forIntegration,
+  open: async (integrationId) => {
+    const resolved = await forIntegration(integrationId);
+    return resolved === null
+      ? null
+      : { integrationId, provider: resolved.ref.provider, resolve: async () => resolved };
+  },
+});

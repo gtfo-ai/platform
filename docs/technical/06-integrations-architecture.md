@@ -9,7 +9,8 @@ Each integration **type** is a TypeScript/Python interface pair: an *outbound po
 ### TaskManagement
 ```
 readTicket(ref) -> Ticket {key, url, type, title, description, comments[], labels, priority, links[{type, key, state}], epic?: {key, title, description}, siblings?: [{key, title, state}], attachmentsText[]}
-matchTickets(rule) -> TicketRef[]                   # polling fallback
+matchTickets(rule) -> TicketRef[]                   # the ticket poller's read, oldest first (WP-87)
+pollPlan() -> {rule, interval_seconds} | null        # WP-87: the binding's own switch, rule and interval
 transition(ref, targetStatusName, fields?) -> {changed, from, to}   # resolves at runtime; already there = {changed:false}; unknown target fails loudly
 upsertWorkpad(ref, markerId, markdown) -> CommentRef # edit in place (BD-023)
 addComment(ref, markdown) -> CommentRef              # questions, linter output
@@ -392,6 +393,11 @@ the existing suite (BD-017).
   - **A delivery nobody can key is received, not refused** (202, `accepted: false`): both shipped
     providers refuse to key the hook kinds their normaliser would ignore anyway (wiki, release),
     and a vendor that keeps receiving errors eventually **disables the webhook** — standing rule 20.
+  - **A delivery over its integration's rate limit is answered 429, unverified and unrecorded**
+    (WP-87, Q60): a token bucket per `integrations.id`, taken after the account row is read and
+    before the credentials are decrypted and `verify` runs, with `Retry-After`, no `inbox` row, no audit row and a counter — technical/08 §
+    "Rate limits and safety" has the as-built note. Only the HTTP door is limited; a held
+    connection's envelope is not.
   - **Authenticity is the account's question and meaning is the project's.** The URL names an
     `integrations.id`, so `verify` and the dedup key are computed from `integrations.config` alone,
     while `normalise` runs once per **binding** with that binding's `bindings.config` merged over
@@ -410,11 +416,53 @@ the existing suite (BD-017).
     With neither token configured, `verify` is `false` — an endpoint that accepts unverified
     deliveries because nothing was configured looks exactly like one that works.
 - **Polling fallback** per binding when the instance has no public URL, or as a safety net: Jira `search/jql` with `updated >= -Nm`, GitLab MR/pipeline listing since last cursor; same normaliser; dedup makes both paths safe together.
-  > **Not built (WP-73, PROGRESS backlog 187).** This build has **no ticket or merge-request poller**, so a webhook is
-  > **required**: a binding without one passes its probe and starts no ticket. The webhook URL is built from
-  > `APP_BASE_URL` (`APP_WEBHOOK_PUBLIC_URL` was removed, backlog 127). What does poll is narrower — the CI gate reads a
-  > merge request's pipeline itself (`gates.ts`), and `matchTickets`' one caller is the history bootstrap. A poller, when
-  > built, must also emit `ticket.updated` for a polled edit, or a polled binding's tasks never see one (backlog 187).
+  > **As built at WP-87 (PROGRESS backlog 187): a ticket poller; still no merge-request poller.** A
+  > task-management binding whose configuration sets `poll_enabled` (the platform's key,
+  > `TICKET_POLL_CONFIG_KEYS`; interval `poll_interval_seconds`, 30–86400, default 60) is polled by one
+  > `ticket.poll` job per binding (`packages/application/src/pipeline/ticket-poll.ts`), which asks
+  > `matchTickets` for the binding's **pick-up rule** — the rule its webhook matches with, through the
+  > port's `pollPlan()` — since a cursor on the binding (`bindings.poll_cursor`, migration 0061). The
+  > read goes through `IntegrationActionExecutor` outside every transaction; each match is redacted
+  > with the binding's redactor and recorded by `recordNormalisedDelivery`, the function the webhook
+  > ingress records through, so it becomes the **same** normalised signal — `ticket.matched` then
+  > `ticket.updated`, the pair a Jira `jira:issue_updated` produces when an edit makes a ticket match —
+  > written with its `inbox` row in one transaction. Each window starts `TICKET_POLL_OVERLAP_MS`
+  > (five minutes) **behind** the cursor, because Jira's search index lags by seconds and its relative
+  > `-Nm` is evaluated on Jira's clock while `N` is computed on the platform's (an absolute JQL date is
+  > read in the site's time zone, which the adapter does not know); what the overlap re-reads collides
+  > on its key. A window can never start *at* the cursor against Jira — `buildJql` rounds its minutes
+  > up — so a full page holding nothing newer than the cursor (a bulk edit larger than a page inside
+  > that minute) is read again in the same poll at four times the limit, up to
+  > `TICKET_POLL_MAX_LIMIT` (1000; the adapter follows `nextPageToken` to fill it), and once more
+  > without the overlap. **The one hard limit:** more than a thousand matching tickets updated in the
+  > window just before the cursor (at least the minute Jira rounds to) — the poll then cannot move
+  > past them, reports `stalled` and logs a warning on every poll. It stays stalled — the window is
+  > anchored at the cursor, so neither time nor a newer edit shrinks it; the ways out are the webhook
+  > (which intake deduplicates against the poll) or moving `bindings.poll_cursor` forward by hand,
+  > which gives up that window.
+  >
+  > **"Dedup makes both paths safe together", stated exactly.** A poll's `delivery_id` is
+  > `<provider>:poll:<project>:<ticket>@<updated_at>` on the same `inbox(provider, delivery_id)` key,
+  > so a second poll of an unchanged ticket appends nothing. A webhook's key is the provider's
+  > delivery identifier, which no search result carries, so the two doors never share a key; what
+  > keeps a binding with both from starting a ticket twice is intake's 1:1 rule
+  > (`tasks_project_id_ticket_key_mode`, `saga.ts`'s `findByTicket`), asserted end to end in both
+  > orders (`test/e2e/pipeline/ticket-poll.e2e.test.ts`). The price is a second `ticket.matched` /
+  > `ticket.updated` for one change seen by both doors — absorbed by intake, and one extra snapshot
+  > read for a live task.
+  >
+  > **A polled edit emits `ticket.updated`** (criterion 2), with `changed_fields: []` — a search result
+  > carries no changelog. **What a poll cannot see**: an edit to a ticket that no longer matches the
+  > pick-up rule (with a **status** rule, a ticket the platform's status mapping moved on), which
+  > reaches a live task only by webhook; comments and `ticket.created` (so the ticket linter is
+  > webhook-only); and tickets that matched before polling was switched on, because a binding's first
+  > poll reads its last interval only — a first read of every ticket ever labelled would start closed
+  > ones. **A lost poll is recovered**: a poll re-arms itself in a `finally`, and a sweep job
+  > (`APP_TICKET_POLL_SWEEP_INTERVAL_MS`, default a minute) enqueues a poll for every polling binding,
+  > which `stately` collapses onto a live chain's queued job and which restarts a lost one — so the
+  > bound on a lost chain is one sweep. **Not built**: a GitLab merge-request poller (the CI gate still
+  > reads a merge request's pipeline itself, `gates.ts`), and the webhook URL is still built from
+  > `APP_BASE_URL` (`APP_WEBHOOK_PUBLIC_URL` was removed, backlog 127).
 - **Slack** uses Socket Mode (research/03): a long-lived connection in the API process (or a dedicated `slack` process when scaling), emitting the same domain events.
   > **As built at WP-43.** The connection is held by **the process that serves `/webhooks/*`** —
   > `ROLE=all` or `ROLE=api` — and by construction rather than by a flag: `startRuntime` hands the

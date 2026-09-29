@@ -126,6 +126,9 @@ const DOOR_SITES: Readonly<Record<string, number>> = {
   'superseded-mr.ts': 1,
   // WP-25's two duties: the check before it creates the lint task, the post before it comments.
   'ticket-lint.ts': 2,
+  // WP-87's poller: one resolution per poll of a binding, and one more when a failed poll re-reads
+  // the plan to re-arm itself — both in a job, outside every transaction and outside any run.
+  'ticket-poll.ts': 2,
   'ticket-snapshot.ts': 1,
   'workpad.ts': 2,
 };

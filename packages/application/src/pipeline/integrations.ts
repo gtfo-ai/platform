@@ -739,15 +739,14 @@ export const gitReads = (integrations: PipelineIntegrations) => ({
  */
 export const ticketReads = (integrations: PipelineIntegrations) => ({
   /**
-   * Tickets a rule matches, since an instant — WP-35's closed-ticket half.
+   * Tickets a rule matches, since an instant — two callers, one read.
    *
-   * `matchTickets` is the port method a ticket **poller** would use to find *new* tickets for a
-   * label — and this build has none: intake is started only by a webhook delivery, so a binding
-   * without one starts no ticket (PROGRESS backlog 187; `saga.ts` says the same). This is the same
-   * read asked a different question, which is why it is a member here rather than a second
-   * mechanism. The rule is the caller's, because what "closed" means is the project's own
-   * status mapping and not a platform constant (`shadow/batch.ts` states why the platform has no
-   * definition of its own).
+   * The **ticket poller** (WP-87, `ticket-poll.ts`) asks it for the binding's pick-up rule since the
+   * binding's cursor, which is how a binding with no webhook starts tickets; the **history
+   * bootstrap** (WP-35's closed-ticket half) asks it a different question with its own rule,
+   * because what "closed" means is the project's own status mapping and not a platform constant
+   * (`shadow/batch.ts` states why the platform has no definition of its own). Both go through this
+   * member so both are audited, rate-limited and refused inside a transaction the same way.
    */
   matches: async (
     rule: TicketMatchRule,

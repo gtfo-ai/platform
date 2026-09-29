@@ -33,7 +33,7 @@ In the project's **Project settings → People / Permissions**, the account need
 
 | Permission | Used by |
 |---|---|
-| Browse projects | reading tickets, searching |
+| Browse projects | reading tickets, and searching them — the poll (step 5) and the history bootstrap |
 | Add comments | the workpad and questions |
 | Edit issues | labels |
 | Transition issues | status changes |
@@ -50,9 +50,11 @@ it out: the platform reports the missing capability instead of failing halfway t
 | `site_url` | `https://acme-example.atlassian.net` | Your site, no path |
 | `user_email` | `agentic-bot@example.test` | The account the token belongs to |
 | `api_token` | `FAKE-jira-api-token-0123456789` | **Secret.** Stored encrypted, redacted from every log and audit row |
-| `webhook_secret` | `FAKE-jira-webhook-secret-0123456789` | **Secret.** Required for tickets to be picked up: this build has no poller (step 4) |
+| `webhook_secret` | `FAKE-jira-webhook-secret-0123456789` | **Secret.** Needed for the webhook (step 4); leave it unset on a binding that only polls |
 | `project_keys` | `["ACME"]` | Deliveries for any other project are ignored and recorded as such |
 | `pickup_label` | `agentic` | The label that means "this ticket is for the platform" (product/19 §6) |
+| `poll_enabled` | `true` | Poll Jira for the pick-up rule instead of (or beside) the webhook — step 5. Off by default |
+| `poll_interval_seconds` | `60` | Seconds between two polls of this binding; 30 to 86400, default 60 |
 
 The same values can come from the environment (TD-020):
 
@@ -66,11 +68,13 @@ JIRA_WEBHOOK_SECRET=       # or JIRA_WEBHOOK_SECRET_FILE=/run/secrets/jira_webho
 The platform **does not follow redirects** (since WP-59): a `site_url` that answers with one fails
 every call as `did not complete`. Use the site URL itself, `https://<site>.atlassian.net`.
 
-## 4. Register the webhook (required)
+## 4. Register the webhook (recommended)
 
-**This build has no ticket poller**, so the webhook is the only way a ticket reaches the platform:
-a binding without one passes *Test connection* and never starts a task. The instance must be
-reachable from Atlassian at `APP_BASE_URL`, which is what the URL below is built from.
+A ticket reaches the platform in one of two ways: this webhook, or the poll in step 5. **A binding
+with neither passes *Test connection* and never starts a task.** The webhook is the faster and
+cheaper of the two and the only one that carries comments and the ticket readiness linter's
+*created* event, so use it when the instance is reachable from Atlassian at `APP_BASE_URL`, which is
+what the URL below is built from. With no public URL, skip to step 5 and switch polling on.
 
 1. **Jira settings → System → WebHooks → Create a WebHook.**
 2. **URL:** `https://<your-instance>/webhooks/jira-cloud/<integration-id>` (the exact URL is the
@@ -89,18 +93,39 @@ The platform verifies `X-Hub-Signature` on every delivery, de-duplicates on
 timestamp is more than a day old — enough for Jira's own retry schedule, not enough for a captured
 request to be replayed a week later.
 
-## 5. Choose how tickets are picked up
+## 5. Choose how tickets are picked up — and whether to poll
 
 Either a **label** (the default, `agentic`) or a **status**. The webhook announces a ticket when it
-carries the rule's label or enters its status. The same rule is also asked as JQL by the one
-reader that searches, the history bootstrap:
+carries the rule's label or enters its status.
+
+**Polling** (`poll_enabled: true`, WP-87) asks Jira for the same rule every `poll_interval_seconds`,
+as JQL over the tickets updated since the last poll:
 
 ```
 labels = "agentic" AND updated >= "-15m" ORDER BY updated ASC
 ```
 
 The window is relative on purpose: an absolute JQL date is interpreted in the *site's* time zone,
-which would silently skip tickets on a site that is not in UTC.
+which would silently skip tickets on a site that is not in UTC. It always overlaps the previous
+poll a little, and a ticket seen twice in the same state is recorded once. Each ticket a poll finds
+is treated exactly like a webhook's match — and **a binding with both the webhook and polling never
+starts a ticket twice**, whichever of the two sees it first. The history bootstrap asks the same
+rule with its own window.
+
+What polling does not see, so you can choose knowingly:
+
+- **Tickets that already matched before you switched it on.** The first poll reads the last
+  interval only, so a ticket labelled last month is not started by switching polling on today;
+  touch it (any edit) and the next poll finds it.
+- **Edits to a ticket that no longer matches.** A poll asks for the pick-up rule, so with a
+  **status** rule, a ticket the platform has moved on to *In Progress* is no longer in the answer,
+  and an edit to it reaches the running task only by webhook. With a **label** rule the label stays
+  and edits are seen (the running task is shown the new text at its next agent stage).
+- **Comments and new-ticket linting.** Both are webhook-only.
+- **A bulk edit of more than a thousand labelled tickets within a few minutes.** A poll reads up to
+  a thousand tickets at once; past that it cannot get beyond the edit, and says so in the server log
+  on every poll (*"the ticket poll is stalled"*). Use the webhook for a site that bulk-edits on that
+  scale.
 
 ## 6. Map your statuses
 
