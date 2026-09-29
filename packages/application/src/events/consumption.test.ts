@@ -237,8 +237,10 @@ describe('the declared table against the composed registrations', () => {
     );
     // Nine since WP-43, which added `task.approval.requested` once a button could be pressed; ten
     // since WP-65, whose second handler edits a settled approval's message on
-    // `task.approval.decided` (already `handled` by the pipeline — a second consumer moves nothing).
-    expect(owned.length).toBe(10);
+    // `task.approval.decided` (already `handled` by the pipeline — a second consumer moves nothing);
+    // twelve since WP-88, whose third edits a settled question's message on
+    // `task.question.answered` and `task.question.expired` (both already `handled` by the pipeline).
+    expect(owned.length).toBe(12);
     expect(unconsumedRowsOwnedBy('WP-32')).toEqual([]);
     for (const type of owned) {
       expect({ type, consumption: EVENT_CONSUMPTION[type] }).toEqual({

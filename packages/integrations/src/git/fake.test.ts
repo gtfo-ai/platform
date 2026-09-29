@@ -23,6 +23,7 @@ const context = {
   projectId: PROJECT_ID,
   integrationId: INTEGRATION_ID,
   resolveUser: () => null,
+  resolveThread: async () => null,
 };
 
 describe('FakeGitProvider credentials', () => {

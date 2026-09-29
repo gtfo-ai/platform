@@ -10,7 +10,7 @@
  * without a database per case.
  */
 import type { Transaction } from '@platform/application';
-import { notify } from '@platform/infrastructure';
+import { integrations as integrationAdapters, notify } from '@platform/infrastructure';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runNotificationStoreContract } from '../../contract/support/notification-store-suite.js';
@@ -23,6 +23,8 @@ let taskId: string;
 let approvalId: string;
 let questionId: string;
 let userId: string;
+let integrationId: string;
+let secondQuestionId: string;
 const USER_NAME = 'Fake Maintainer';
 
 beforeAll(async () => {
@@ -56,11 +58,23 @@ beforeAll(async () => {
       [taskId],
     );
     questionId = question.rows[0]?.id as string;
+    const second = await client.query<{ id: string }>(
+      "insert into questions (task_id, text) values ($1, 'Which rounding?') returning id",
+      [taskId],
+    );
+    secondQuestionId = second.rows[0]?.id as string;
     const user = await client.query<{ id: string }>(
       "insert into users (email, name) values ('maintainer@example.invalid', $1) returning id",
       [USER_NAME],
     );
     userId = user.rows[0]?.id as string;
+    // A chat account for the thread cases (WP-88); no secrets, nothing dials it.
+    const integration = await client.query<{ id: string }>(
+      `insert into integrations (org_id, type, provider, name, config)
+       values ($1, 'communication'::integration_type, 'slack', 'chat', '{}'::jsonb) returning id`,
+      [org.rows[0]?.id],
+    );
+    integrationId = integration.rows[0]?.id as string;
   } finally {
     await client.end();
   }
@@ -84,6 +98,13 @@ runNotificationStoreContract({
       approvalId: approvalId as never,
       questionId: questionId as never,
       user: { id: userId as never, name: USER_NAME },
+      integrationId: integrationId as never,
+      // On the case's own connection, so it reads the rows the case has not committed.
+      threads: integrationAdapters.createPostgresThreadDirectory({ sql: client }),
+      secondQuestionId: secondQuestionId as never,
+      closeQuestion: async (id) => {
+        await client.query("update questions set status = 'answered' where id = $1", [id]);
+      },
       cleanup: async () => {
         await client.query('rollback');
         await client.end();

@@ -380,6 +380,7 @@ const deliverThrough = async (testCase: InboundCase): Promise<Delivered> => {
     inbox,
     audit: auditLog,
     identities: { forProvider: async () => new Map() },
+    threads: { find: async () => null },
     // Nobody is mapped, so no provider can produce a human decision here (WP-43).
     decisions: {
       apply: async () => {

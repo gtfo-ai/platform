@@ -276,6 +276,7 @@ describe('GitLab inbound, through the port, in replay', () => {
     projectId: context.projectId,
     integrationId: context.integrationId,
     resolveUser: () => null,
+    resolveThread: async () => null,
   });
 
   it('accepts a legacy X-Gitlab-Token delivery, then rejects a wrong token', () => {

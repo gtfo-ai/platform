@@ -22,6 +22,9 @@ const EXPECTED_TABLES = [
   'blobs',
   'budget_windows',
   'budgets',
+  // WP-88, migration 0062: which task a chat thread belongs to — held only in an adapter's
+  // per-call memory before, so a threaded reply reached nothing (PROGRESS backlog 195).
+  'chat_threads',
   'code_files',
   'code_maps',
   // WP-67 (migration 0053): the `Idempotency-Key` record a command claims before it performs.
@@ -207,6 +210,8 @@ describe('migrate on an empty PostgreSQL 18', () => {
       // change no privilege — they are here because "the registry lists every table" is only
       // useful as an invariant if it is actually true.
       row('accounts', 'read_write', null),
+      // WP-88 (migration 0062): a thread is recorded once and never moves.
+      row('chat_threads', 'append_only', null),
       // WP-67 (migration 0053): read_write because a claim is completed in place and released
       // (deleted) when the command it guarded was refused.
       row('command_idempotency', 'read_write', null),

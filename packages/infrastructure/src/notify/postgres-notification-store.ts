@@ -191,6 +191,29 @@ export const createPostgresNotificationStore = (): NotificationStore => ({
     return row === undefined ? null : toStored(row);
   },
 
+  questionMessage: async (tx, questionId) => {
+    // `class = 'question'`: a reminder row names the question too, and carries no address.
+    const { rows } = await sqlOf(tx).query<NotificationRow>(
+      `select * from notifications
+        where question_id = $1 and class = 'question' and message_ref is not null
+        order by created_at
+        limit 1`,
+      [questionId],
+    );
+    const row = rows[0];
+    return row === undefined ? null : toStored(row);
+  },
+
+  recordThread: async (tx, input) => {
+    // First writer wins (migration 0062): a thread is recorded once and never moves.
+    await sqlOf(tx).query(
+      `insert into chat_threads (project_id, integration_id, task_id, channel, thread_id, created_at)
+       values ($1, $2, $3, $4, $5, $6)
+       on conflict (integration_id, channel, thread_id) do nothing`,
+      [input.projectId, input.integrationId, input.taskId, input.channel, input.threadId, input.at],
+    );
+  },
+
   userName: async (tx, userId) => {
     const { rows } = await sqlOf(tx).query<{ name: string }>(
       'select name from users where id = $1',

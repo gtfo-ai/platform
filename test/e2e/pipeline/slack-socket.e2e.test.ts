@@ -20,6 +20,7 @@
  * and a member's click leave the approval pending, a maintainer's decides it.
  */
 import { afterEach, describe, expect, it } from 'vitest';
+import { decisionAuditShape, expectedApprovalAudit } from '../support/decision-audit.js';
 import {
   CHAT_INTEGRATION_ID,
   inboundEvent,
@@ -34,7 +35,9 @@ import {
   findApprovalButton,
   interactiveEnvelope,
   type PostedButton,
+  SLACK_E2E_CHANNEL,
   signedHttpDelivery,
+  threadReplyFor,
 } from '../support/slack.js';
 
 const TRANSPORTS = ['http', 'socket'] as const;
@@ -203,6 +206,35 @@ describe('an approval button pressed in Slack', () => {
       );
       expect(moved.current_stage).not.toBe('architecture');
 
+      // WP-88 (backlog 199): the accepted click left the `human_actions` row the task page's
+      // decision leaves — the same shape, against the same helper as the route's e2e case — plus
+      // the door; the refused clicks above left none.
+      const audit = await pipeline.query<{
+        action: string;
+        user_id: string | null;
+        task_id: string | null;
+        params: Record<string, unknown>;
+      }>('select action, user_id, task_id, params from human_actions order by created_at');
+      expect(audit).toHaveLength(1);
+      expect(decisionAuditShape(audit[0] as NonNullable<(typeof audit)[number]>)).toEqual(
+        expectedApprovalAudit({
+          taskId: (await pipeline.task()).id,
+          approvalId: pending.id,
+          userId: pipeline.userId,
+          channel: 'slack',
+        }),
+      );
+      expect(audit[0]?.params).toMatchObject({
+        provider: 'slack',
+        integration_id: CHAT_INTEGRATION_ID,
+      });
+      expect(typeof audit[0]?.params.delivery_id).toBe('string');
+
+      // WP-65's edit, now reachable on this double: the settled approval's buttons are gone.
+      await pipeline.waitFor('the approval message to be edited', async () =>
+        slack.updated.some((update) => update.ts === button.messageTs),
+      );
+
       // The decision is the aggregate's, on the approval's own stream — never the project's.
       const decided = await pipeline.query<{
         stream_type: string;
@@ -258,6 +290,25 @@ describe('the Socket Mode connection', () => {
     expect(
       (await pipeline.events()).filter((event) => event.type === 'task.approval.decided'),
     ).toHaveLength(1);
+
+    // WP-88 (backlog 195): a reply typed in the task's thread reaches the task, through the thread
+    // row the production notify duty wrote when it opened the thread — resolved by an adapter the
+    // loader built for this delivery alone. No question is open, so it is feedback.
+    const threadTs = button.threadTs as string;
+    expect(threadTs, 'the approval was posted into the task thread').toBeTruthy();
+    const threads = await pipeline.query<{ channel: string; thread_id: string }>(
+      'select channel, thread_id from chat_threads',
+    );
+    expect(threads).toEqual([{ channel: SLACK_E2E_CHANNEL, thread_id: threadTs }]);
+    const replied = await pipeline.deliverChat(
+      signedHttpDelivery(threadReplyFor(threadTs, DECIDER, 'the plan reads well')),
+    );
+    expect(replied.status).toBe(202);
+    await pipeline.waitFor('the reply to be recorded as feedback', async () =>
+      (await pipeline.events()).some((event) => event.type === 'feedback.received'),
+    );
+    const feedback = (await pipeline.events()).find((event) => event.type === 'feedback.received');
+    expect(feedback?.payload).toMatchObject({ task_id: (await pipeline.task()).id });
 
     // Criterion 1, the other end: shutdown closes the socket and nothing reopens it.
     const opensBefore = slack.opens();

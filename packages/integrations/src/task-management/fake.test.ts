@@ -150,6 +150,7 @@ describe('FakeTaskManagement', () => {
       projectId: PROJECT_ID,
       integrationId: INTEGRATION_ID,
       resolveUser: () => null,
+      resolveThread: async () => null,
     });
     expect(result.events).toEqual([]);
     expect(result.ignored[0]?.reason).toBe('not_for_this_project');
@@ -161,6 +162,7 @@ describe('FakeTaskManagement', () => {
       projectId: PROJECT_ID,
       integrationId: INTEGRATION_ID,
       resolveUser: () => null,
+      resolveThread: async () => null,
     };
 
     const status = await port.inbound.normalise(
@@ -190,6 +192,7 @@ describe('FakeTaskManagement', () => {
       projectId: PROJECT_ID,
       integrationId: INTEGRATION_ID,
       resolveUser: () => null,
+      resolveThread: async () => null,
     };
     const result = await port.inbound.normalise(
       port.emitTicketUpdated({ ticketKey: 'FAKE-1', description: 'Now with criteria.' }),

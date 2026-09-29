@@ -936,8 +936,10 @@ describe('BD-006’s reminder before escalation (WP-84, PROGRESS backlog 165)', 
     const questionPosts: string[] = [];
     const { harness } = harnessWith({
       communication: {
-        postMessage: async (
+        // A question goes out through `postQuestion` since WP-88 (backlog 195).
+        postQuestion: async (
           thread: { channel: string; thread_id: string },
+          _question: unknown,
           body: { markdown?: string },
         ) => {
           if ((body.markdown ?? '').includes('Which currency?')) {

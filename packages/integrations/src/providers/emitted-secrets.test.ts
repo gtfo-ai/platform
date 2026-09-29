@@ -678,6 +678,7 @@ describe('gitlab emits no string carrying its own credentials (rules 31, 35)', (
         integrationId: '00000000-0000-4000-8000-0000000000a9',
         projectId: '00000000-0000-4000-8000-0000000000b9',
         resolveUser: () => null,
+        resolveThread: async () => null,
       },
     );
     // The ignored branch, whose `detail` quotes provider text **and cuts it to 32 characters** —
@@ -688,6 +689,7 @@ describe('gitlab emits no string carrying its own credentials (rules 31, 35)', (
         integrationId: '00000000-0000-4000-8000-0000000000a9',
         projectId: '00000000-0000-4000-8000-0000000000b9',
         resolveUser: () => null,
+        resolveThread: async () => null,
       },
     );
   });
@@ -1014,6 +1016,7 @@ describe('jira emits no string carrying its own credentials (rules 31, 35)', () 
         integrationId: '00000000-0000-4000-8000-0000000000a8',
         projectId: '00000000-0000-4000-8000-0000000000b8',
         resolveUser: () => null,
+        resolveThread: async () => null,
       },
     );
     emitted.ignored_delivery = await port.inbound.normalise(
@@ -1029,6 +1032,7 @@ describe('jira emits no string carrying its own credentials (rules 31, 35)', () 
         integrationId: '00000000-0000-4000-8000-0000000000a8',
         projectId: '00000000-0000-4000-8000-0000000000b8',
         resolveUser: () => null,
+        resolveThread: async () => null,
       },
     );
   });

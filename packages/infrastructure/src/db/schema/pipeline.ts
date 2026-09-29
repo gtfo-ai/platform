@@ -486,6 +486,23 @@ export const notifications = pgTable('notifications', {
 });
 
 /**
+ * Which task a chat thread belongs to (WP-88, migration 0062, PROGRESS backlog 195) — written by the
+ * notify duty when it opens the thread, read by the webhook ingress to resolve a threaded reply.
+ */
+export const chatThreads = pgTable(
+  'chat_threads',
+  {
+    projectId: uuid('project_id').notNull(),
+    integrationId: uuid('integration_id').notNull(),
+    taskId: uuid('task_id').notNull(),
+    channel: text('channel').notNull(),
+    threadId: text('thread_id').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.integrationId, table.channel, table.threadId] })],
+);
+
+/**
  * The ask-the-task thread (WP-31, migration 0024).
  *
  * `citations` is the model's own list after the application dropped the entries that name another

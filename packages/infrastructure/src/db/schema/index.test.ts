@@ -57,8 +57,10 @@ describe('Drizzle schema', () => {
     // every process compiles a redaction rule for a value only its minter held (migration 0057,
     // WP-80, TD-012's M5 amendment, backlog 259), plus `run_commands` — a human command for a live
     // run on its way to the process holding the run's lease, which no table could carry because the
-    // register it lands in is per process (migration 0060, WP-85, TD-028 decision 9, backlog 134).
-    expect(tables.length).toBe(68);
+    // register it lands in is per process (migration 0060, WP-85, TD-028 decision 9, backlog 134),
+    // plus `chat_threads` — which task a chat thread belongs to, which only an adapter's per-call
+    // memory held, so a threaded reply reached nothing (migration 0062, WP-88, backlog 195).
+    expect(tables.length).toBe(69);
   });
 
   it('names every table and column in snake_case, matching the wire format', () => {

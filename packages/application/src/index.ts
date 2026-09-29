@@ -104,6 +104,7 @@ export * from './notify/options.js';
 export * from './notify/organisation.js';
 export * from './notify/policy.js';
 export * from './notify/ports.js';
+export * from './notify/question-settled.js';
 export * from './notify/render.js';
 export * from './notify/undelivered.js';
 // Onboarding: the wizard's discovery run and the readiness evaluation (WP-21)

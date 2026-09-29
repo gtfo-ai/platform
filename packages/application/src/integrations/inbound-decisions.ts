@@ -30,9 +30,24 @@
  * project whose binding normalised the delivery. A payload is provider text and could name any id
  * (BD-022); the aggregate's own `taskId` is the answer, and a disagreement is a refusal rather than
  * a choice between the two.
+ *
+ * ## An accepted decision leaves the `human_actions` row the task page's decision leaves (WP-88)
+ *
+ * Backlog 199: until WP-88 a chat approval was attributed through the aggregate's event and the
+ * `inbox` row and nowhere else, while the same decision through
+ * `POST /api/tasks/:task_id/approvals/:approval_id/decide` left a `human_actions` row — so the task's
+ * audit panel, which pages `human_actions` only, could not say who approved a plan in Slack. The
+ * ruling (technical/13, WP-88) is that the chat decision writes its row **in the delivery's
+ * transaction**, and that the audit panel keeps one reader. So {@link InboundDecisionApplier.apply}
+ * writes one row for an **applied** decision — the mapped user, the task the aggregate names, the
+ * route's own `action` spelling and the route's own `params` keys, plus the door: `channel`,
+ * `provider`, `integration_id` and `delivery_id` — and **none** for a refused one, exactly the
+ * route's rule (*"A refused command writes no `human_actions` row"*, `routes/commands.ts`). No free
+ * text is in it: an approval from chat carries no reason, and an answer's words are the question's
+ * own column, as they are for the route.
  */
-import type { Actor, DomainEvent, Id, UserRole } from '@platform/contracts';
-import { answerChannelSchema } from '@platform/contracts';
+import type { Actor, DomainEvent, Id, JsonObject, UserRole } from '@platform/contracts';
+import { answerChannelSchema, MAX_COMMAND_TEXT_CHARS } from '@platform/contracts';
 import {
   answerQuestion,
   type CommandContext,
@@ -81,12 +96,50 @@ export type InboundDecisionOutcome =
       readonly detail: string;
     };
 
+/** Which door a decision came through — what its `human_actions` row names (WP-88). */
+export interface InboundDecisionDelivery {
+  readonly provider: string;
+  readonly integrationId: Id;
+  /** `inbox.delivery_id`, already redacted by the adapter that built it. */
+  readonly deliveryId: string;
+}
+
 export interface InboundDecisionApplier {
   apply(
     tx: Transaction,
-    input: { readonly projectId: Id; readonly draft: InboundDecisionDraft },
+    input: {
+      readonly projectId: Id;
+      readonly draft: InboundDecisionDraft;
+      readonly delivery: InboundDecisionDelivery;
+    },
   ): Promise<InboundDecisionOutcome>;
 }
+
+/** One `human_actions` row, written in the caller's transaction (WP-88, backlog 199). */
+export interface InboundHumanActionEntry {
+  readonly userId: Id;
+  readonly taskId: Id;
+  readonly action: string;
+  readonly params: JsonObject;
+}
+
+/**
+ * The `human_actions` writer the applier uses. Append-only, like the table; in the delivery's
+ * transaction, so the row commits with the aggregate's decision and the `inbox` row or not at all.
+ */
+export interface InboundHumanActionLog {
+  record(tx: Transaction, entry: InboundHumanActionEntry): Promise<void>;
+}
+
+/**
+ * The `action` each decision is recorded under — **the route's own spelling**
+ * (`apps/server/src/routes/commands.ts`), so the audit panel reads one vocabulary whichever door a
+ * person used.
+ */
+export const INBOUND_DECISION_ACTIONS = {
+  'task.approval.decided': 'task.approval.decide',
+  'task.question.answered': 'task.question.answer',
+} as const satisfies Record<InboundDecisionType, string>;
 
 /**
  * The role a decider holds **for this project** — the higher of the organisation role and a
@@ -103,6 +156,8 @@ export interface InboundDeciderRoles {
 export interface InboundDecisionApplierOptions {
   readonly store: Pick<PipelineStore, 'approvals' | 'questions' | 'tasks'>;
   readonly roles: InboundDeciderRoles;
+  /** WP-88: the audit row an accepted decision leaves. Required (rule 31). */
+  readonly actions: InboundHumanActionLog;
   /** The command context, with the delivery's own actor substituted by this module. */
   readonly context: (correlationId: Id) => CommandContext;
 }
@@ -147,11 +202,44 @@ export const createInboundDecisionApplier = (
     actor,
   });
 
+  /**
+   * The row an applied decision leaves: the route's `params` keys, then the door (module note).
+   * `channel` is the answer vocabulary's (`questions.answered_via`) for an answer, and the
+   * provider for an approval, which has no such column — both are `slack` for the one provider
+   * that produces either today.
+   */
+  const audit = async (
+    tx: Transaction,
+    input: {
+      readonly type: InboundDecisionType;
+      readonly userId: Id;
+      readonly taskId: Id;
+      readonly params: JsonObject;
+      readonly channel: string;
+      readonly delivery: InboundDecisionDelivery;
+    },
+  ): Promise<void> => {
+    await options.actions.record(tx, {
+      userId: input.userId,
+      taskId: input.taskId,
+      action: INBOUND_DECISION_ACTIONS[input.type],
+      params: {
+        task_id: input.taskId,
+        ...input.params,
+        channel: input.channel,
+        provider: input.delivery.provider,
+        integration_id: input.delivery.integrationId,
+        delivery_id: input.delivery.deliveryId,
+      },
+    });
+  };
+
   const approve = async (
     tx: Transaction,
     projectId: Id,
     draft: InboundDecisionDraft,
     userId: Id,
+    delivery: InboundDecisionDelivery,
   ): Promise<InboundDecisionOutcome> => {
     const payload = fieldsOf(draft.payload);
     const approvalId = text(payload.approval_id) as Id | null;
@@ -183,6 +271,18 @@ export const createInboundDecisionApplier = (
         contextFor(approval.taskId, draft.actor),
       );
       await options.store.approvals.save(tx, { ...stored, approval: decided.aggregate });
+      await audit(tx, {
+        type: draft.type,
+        userId,
+        taskId: approval.taskId,
+        // The route's spelling of the decision (`decideApprovalRequestSchema`), not the event's.
+        params: {
+          approval_id: approvalId,
+          decision: decision === 'approved' ? 'approve' : 'reject',
+        },
+        channel: delivery.provider,
+        delivery,
+      });
       return { kind: 'applied', events: decided.events };
     } catch (error) {
       const refusal = refusalOf(error);
@@ -198,6 +298,7 @@ export const createInboundDecisionApplier = (
     projectId: Id,
     draft: InboundDecisionDraft,
     userId: Id,
+    delivery: InboundDecisionDelivery,
   ): Promise<InboundDecisionOutcome> => {
     const payload = fieldsOf(draft.payload);
     const questionId = text(payload.question_id) as Id | null;
@@ -205,6 +306,18 @@ export const createInboundDecisionApplier = (
     const channel = answerChannelSchema.safeParse(payload.channel);
     if (questionId === null || answerText === null || !channel.success) {
       return refused('malformed_decision', 'an answer needs a question id, a text and a channel');
+    }
+    /**
+     * **Bounded like the task page's answer** (WP-88). A chat reply is untrusted text a person
+     * typed (BD-022), and the route refuses one past `MAX_COMMAND_TEXT_CHARS` at its contract. It
+     * is refused here too rather than cut: a truncated answer is a different answer, recorded as
+     * the person's. The refusal is on the delivery's `inbox` row, and the question stays open.
+     */
+    if (answerText.length > MAX_COMMAND_TEXT_CHARS) {
+      return refused(
+        'malformed_decision',
+        `an answer is at most ${MAX_COMMAND_TEXT_CHARS} characters, as on the task page; this one is ${answerText.length}`,
+      );
     }
     const question = await options.store.questions.load(tx, questionId);
     if (question === null) {
@@ -235,6 +348,14 @@ export const createInboundDecisionApplier = (
         contextFor(question.taskId, draft.actor),
       );
       await options.store.questions.save(tx, answered.aggregate);
+      await audit(tx, {
+        type: draft.type,
+        userId,
+        taskId: question.taskId,
+        params: { question_id: questionId },
+        channel: channel.data,
+        delivery,
+      });
       return { kind: 'applied', events: answered.events };
     } catch (error) {
       const refusal = refusalOf(error);
@@ -246,7 +367,7 @@ export const createInboundDecisionApplier = (
   };
 
   return {
-    apply: async (tx, { projectId, draft }) => {
+    apply: async (tx, { projectId, draft, delivery }) => {
       // The decider is the normaliser's `resolveUser` answer, carried on the actor: a normaliser
       // that could not map the author produced no decision at all (`unmapped_identity`).
       if (draft.actor.kind !== 'user') {
@@ -254,8 +375,8 @@ export const createInboundDecisionApplier = (
       }
       const userId = draft.actor.user_id as Id;
       return draft.type === 'task.approval.decided'
-        ? approve(tx, projectId, draft, userId)
-        : answer(tx, projectId, draft, userId);
+        ? approve(tx, projectId, draft, userId, delivery)
+        : answer(tx, projectId, draft, userId, delivery);
     },
   };
 };

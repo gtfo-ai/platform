@@ -71,7 +71,12 @@ import { domainEventSchemasByType } from '@platform/contracts';
 import { StreamConflictError } from '../errors.js';
 import type { EventStore } from '../ports/event-store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
-import type { NormalisedDelivery, WebhookDelivery } from '../ports/integrations/common.js';
+import type {
+  InboundThreadHandle,
+  InboundThreadMatch,
+  NormalisedDelivery,
+  WebhookDelivery,
+} from '../ports/integrations/common.js';
 import { IntegrationError } from '../ports/integrations/common.js';
 import type {
   InboundAuditLog,
@@ -165,11 +170,38 @@ export interface InboundIdentityDirectory {
   forProvider(provider: string): Promise<ReadonlyMap<string, Id>>;
 }
 
+/**
+ * The longest channel or thread handle the ingress will look up (WP-88). Slack's are about a dozen
+ * and seventeen characters; the bound is the `chat_threads` column's own check (migration 0062), so
+ * a longer handle is one no row can hold and is answered `null` without a query.
+ */
+export const MAX_THREAD_HANDLE_CHARS = 255;
+
+/**
+ * Which task a provider thread belongs to, from the platform's own rows (WP-88, PROGRESS backlog
+ * 195) — the durable half of `InboundContext.resolveThread`.
+ *
+ * Read **outside** every transaction, like {@link InboundIdentityDirectory}: normalisation happens
+ * before the delivery's transaction opens, and what it answers is re-checked by the aggregate
+ * inside it. Scoped by the binding (project **and** account), so a delivery normalised for one
+ * project cannot resolve another project's thread in a channel both happen to use.
+ */
+export interface InboundThreadDirectory {
+  find(input: {
+    readonly projectId: Id;
+    readonly integrationId: Id;
+    readonly channel: string;
+    readonly threadId: string;
+  }): Promise<InboundThreadMatch | null>;
+}
+
 export interface WebhookIngressOptions {
   readonly loader: InboundIntegrationLoader;
   readonly inbox: InboxStore;
   readonly audit: InboundAuditLog;
   readonly identities: InboundIdentityDirectory;
+  /** WP-88: the thread ↔ task map a chat reply is resolved through. Required (rule 31). */
+  readonly threads: InboundThreadDirectory;
   /**
    * Where a **human decision** goes instead of the project stream (WP-43).
    *
@@ -430,6 +462,13 @@ export const recordNormalisedDelivery = async (
               const outcome = await options.decisions.apply(scope.tx, {
                 projectId: group.projectId,
                 draft: { type: draft.type, payload: draft.payload, actor: draft.actor },
+                // Which door, for the decision's `human_actions` row (WP-88, backlog 199). The
+                // delivery id is already redacted by whoever built it.
+                delivery: {
+                  provider: record.provider,
+                  integrationId: record.integrationId,
+                  deliveryId: record.deliveryId,
+                },
               });
               if (outcome.kind === 'applied') {
                 events.push(...outcome.events);
@@ -719,6 +758,21 @@ export const createWebhookIngress = (options: WebhookIngressOptions): WebhookIng
       const resolveUser = (identity: ExternalIdentity): Id | null =>
         directory.get(identity.external_id) ?? null;
 
+      const resolveThreadFor =
+        (projectId: Id) =>
+        async (thread: InboundThreadHandle): Promise<InboundThreadMatch | null> =>
+          thread.channel.length === 0 ||
+          thread.threadId.length === 0 ||
+          thread.channel.length > MAX_THREAD_HANDLE_CHARS ||
+          thread.threadId.length > MAX_THREAD_HANDLE_CHARS
+            ? null
+            : options.threads.find({
+                projectId,
+                integrationId: resolved.ref.integrationId,
+                channel: thread.channel,
+                threadId: thread.threadId,
+              });
+
       const normalised: NormalisedDelivery[] = [];
       const byProject: InboundProjectEvents[] = [];
       for (const binding of resolved.bindings) {
@@ -726,6 +780,7 @@ export const createWebhookIngress = (options: WebhookIngressOptions): WebhookIng
           projectId: binding.projectId,
           integrationId: resolved.ref.integrationId,
           resolveUser,
+          resolveThread: resolveThreadFor(binding.projectId),
         });
         normalised.push(result);
         if (result.events.length > 0) {

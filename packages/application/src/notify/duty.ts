@@ -30,7 +30,13 @@
  */
 import type { Id, IsoDateTime, JsonObject, NotificationClass, TaskMode } from '@platform/contracts';
 import { notificationClassSchema } from '@platform/contracts';
-import { isUrgentNotification, notificationDelivery, toApprovalRecord } from '@platform/domain';
+import {
+  isUrgentNotification,
+  notificationDelivery,
+  toApprovalRecord,
+  toQuestionRecord,
+} from '@platform/domain';
+import { MAX_THREAD_HANDLE_CHARS } from '../integrations/inbound.js';
 import {
   communicationWrites,
   integrationsForProject,
@@ -45,6 +51,7 @@ import { settleApprovalMessage } from './approval-settled.js';
 import type { NotifyOptions } from './options.js';
 import { digestSettingsOf, localMinutesOf } from './policy.js';
 import { awaitsImmediateRetry } from './ports.js';
+import { settleQuestionMessage } from './question-settled.js';
 import { notificationBody, notificationDraft } from './render.js';
 import { isStillWaiting } from './waiting.js';
 
@@ -146,6 +153,17 @@ export const runNotification = async (
       return;
     }
   }
+
+  /**
+   * The question itself, for `postQuestion` (WP-88): its id and its options become the message's
+   * buttons. Read after the waiting check, which has just said it is open.
+   */
+  const question =
+    notificationClass === 'question' && data.question_id !== undefined
+      ? await options.unitOfWork.transaction(async (scope) =>
+          options.store.questions.load(scope.tx, data.question_id as Id),
+        )
+      : null;
 
   const mode: TaskMode = stored?.task.mode ?? 'normal';
   // Outside every transaction: resolving a binding is a `bindings` read, a `secrets` read and an
@@ -283,6 +301,8 @@ export const runNotification = async (
   const context = { projectId, taskId: stored?.task.id ?? null, mode };
   /** The posted approval's address, when it was posted with buttons (WP-65, backlog 202). */
   let buttonsAt: MessageRef | null = null;
+  /** The posted question's address, however it was posted (WP-88, backlog 233). */
+  let questionAt: MessageRef | null = null;
   const body = notificationBody(draft);
   const idempotencyKey = `notify:${causeEventId}:${notificationClass}`;
   if (stored === null) {
@@ -315,7 +335,57 @@ export const runNotification = async (
     if (thread === null) {
       return;
     }
-    if (approval !== null) {
+    await recordThread(options, {
+      projectId,
+      integrationId: chat.ref.integrationId,
+      taskId: stored.task.id,
+      mode,
+      thread,
+      redact: (value) => chat.redactor.redactText(value).value,
+    });
+    /**
+     * **Buttons, and a reply that counts, only once a delivery can arrive** (WP-43, WP-72). The
+     * adapter answers `buttons` from its own configuration, and for a held transport the liveness
+     * row says whether a process holds it now — the same two questions for a click and for a
+     * threaded reply, which arrive through the same door. `null` when one can arrive.
+     */
+    const unreachableReason = async (): Promise<string | null> => {
+      const capabilities = chat.port.capabilities();
+      if (!capabilities.buttons) {
+        return 'this chat binding cannot receive a click';
+      }
+      return capabilities.socketMode &&
+        !(await options.heldConnections.isHeld(chat.ref.integrationId))
+        ? 'no process is holding this chat’s connection, so a click would reach nobody'
+        : null;
+    };
+    if (question !== null) {
+      /**
+       * **A question goes out through `postQuestion`** (WP-88, PROGRESS backlog 195): one button
+       * per option and the invitation to reply in the thread, both of which reach the Question
+       * aggregate through the webhook door (`inbound-decisions.ts`). When no delivery can arrive it
+       * is posted as text naming the task page instead, as an approval is. Either way its address
+       * is recorded, so an answer or an expiry can edit it (backlog 233).
+       */
+      const unreachable = await unreachableReason();
+      questionAt =
+        unreachable === null
+          ? await chats.question(
+              { thread, question: toQuestionRecord(question), body, idempotencyKey },
+              context,
+            )
+          : await chats.message(
+              {
+                thread,
+                body: notificationBody({
+                  ...draft,
+                  detail: `${draft.detail ?? ''}\nAnswer on the task page: ${unreachable}.`.trim(),
+                }),
+                idempotencyKey,
+              },
+              context,
+            );
+    } else if (approval !== null) {
       /**
        * **Buttons only once a click can arrive** (WP-43, criterion 6). The adapter answers
        * `buttons` from its own configuration — for Slack, the transport it is set to receive on
@@ -329,12 +399,7 @@ export const runNotification = async (
        * it. Outside every transaction, like the rest of this phase; a stale or absent row posts
        * text naming the task page, which is the conservative direction.
        */
-      const capabilities = chat.port.capabilities();
-      const unreachable = !capabilities.buttons
-        ? 'this chat binding cannot receive a click'
-        : capabilities.socketMode && !(await options.heldConnections.isHeld(chat.ref.integrationId))
-          ? 'no process is holding this chat’s connection, so a click would reach nobody'
-          : null;
+      const unreachable = await unreachableReason();
       if (unreachable === null) {
         buttonsAt = await chats.approval(
           {
@@ -368,11 +433,11 @@ export const runNotification = async (
    * provider's own ids are provider text). A redaction inside an id would make the later edit miss
    * its message and fail `not_found` — the loud direction, and a case no provider's id shape reaches.
    */
+  const posted = buttonsAt ?? questionAt;
   const messageRef =
-    buttonsAt === null
+    posted === null
       ? undefined
-      : (chat.redactor.redactJson(buttonsAt as unknown as JsonObject)
-          .value as unknown as MessageRef);
+      : (chat.redactor.redactJson(posted as unknown as JsonObject).value as unknown as MessageRef);
   await options.unitOfWork.transaction(async (scope) =>
     options.notifications.markDelivered(scope.tx, {
       id,
@@ -392,6 +457,54 @@ export const runNotification = async (
      */
     await settleApprovalMessage(options, { projectId, approvalId: approval.approval.id });
   }
+  if (questionAt !== null && question !== null) {
+    // The same race for a question (WP-88): answered or expired while it was being posted.
+    await settleQuestionMessage(options, { projectId, questionId: question.id });
+  }
+};
+
+/**
+ * Records the task's thread in `chat_threads` (WP-88, PROGRESS backlog 195), so a reply in it can
+ * be resolved by a process that did not open it. The handle is provider text: redacted with the
+ * binding's redactor and refused past {@link MAX_THREAD_HANDLE_CHARS} rather than cut — a cut
+ * handle names another thread, and a refused one costs only the reply route, which is logged.
+ *
+ * A **shadow** task's thread is the executor's `would-have-…` placeholder (BD-021), never a thread
+ * anybody can reply in, so it is not recorded.
+ */
+const recordThread = async (
+  options: NotifyOptions,
+  input: {
+    readonly projectId: Id;
+    readonly integrationId: Id;
+    readonly taskId: Id;
+    readonly mode: TaskMode;
+    readonly thread: { readonly channel: string; readonly thread_id: string };
+    readonly redact: (value: string) => string;
+  },
+): Promise<void> => {
+  if (input.mode === 'shadow') {
+    return;
+  }
+  const channel = input.redact(input.thread.channel);
+  const threadId = input.redact(input.thread.thread_id);
+  if (channel.length > MAX_THREAD_HANDLE_CHARS || threadId.length > MAX_THREAD_HANDLE_CHARS) {
+    (options.logger ?? silentLogger).warn(
+      { task_id: input.taskId, max_chars: MAX_THREAD_HANDLE_CHARS },
+      'notify: the provider’s thread handle is longer than the platform stores, so a reply in this thread will not reach the task',
+    );
+    return;
+  }
+  await options.unitOfWork.transaction(async (scope) =>
+    options.notifications.recordThread(scope.tx, {
+      projectId: input.projectId,
+      integrationId: input.integrationId,
+      taskId: input.taskId,
+      channel,
+      threadId,
+      at: options.clock.now() as IsoDateTime,
+    }),
+  );
 };
 
 /**

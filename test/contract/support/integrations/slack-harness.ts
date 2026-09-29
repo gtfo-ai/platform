@@ -137,11 +137,11 @@ export const slackReplayContext = (
     redactor: overrides.redactor ?? noSecretsRedactor(),
   });
 
-  /**
+  /*
    * An inbound delivery arrives for a thread the platform opened earlier, in another process, on
-   * another day. The suite's inbound cases do not open one, so the emit helpers put the adapter in
-   * the state a running deployment would be in — rather than the `create` doing it, which would
-   * let "opens one thread per task" pass without ever reaching the provider.
+   * another day. Until WP-88 the emit helpers below seeded this adapter's own thread directory to
+   * stand in for that; the directory is no longer read on the inbound path (backlog 195), and the
+   * platform's rows are the suite's `resolveThread`, answering for `thread` below.
    */
   /**
    * The same adapter built again with nothing remembered — what the binding loader hands the
@@ -157,10 +157,6 @@ export const slackReplayContext = (
     },
     redactor: overrides.redactor ?? noSecretsRedactor(),
   });
-
-  const rememberThread = (): void => {
-    port.threads.rememberThread(SLACK_TASK_ID, { channel: CHANNEL, threadTs: THREAD_TS });
-  };
 
   return {
     replay,
@@ -182,26 +178,21 @@ export const slackReplayContext = (
     // and this adapter refuses it before the request leaves the process.
     providerBlocks: questionBlocks({
       questionId: SLACK_QUESTION_ID,
+      taskId: SLACK_TASK_ID,
       markdown: 'Which currency should totals use?',
       options: ['EUR', 'CZK'],
     }),
     providerCalls: () => replay.requests.length,
-    emitAnswer: (authorId, text) => {
-      rememberThread();
-      return signedDelivery(answerClickBody(authorId, SLACK_QUESTION_ID, text));
-    },
-    emitApproval: (authorId, decision) => {
-      rememberThread();
-      return signedDelivery(approvalClickBody(authorId, SLACK_APPROVAL_ID, decision));
-    },
-    emitFeedback: (authorId, text) => {
-      rememberThread();
-      return signedDelivery(threadReplyBody(authorId, text));
-    },
-    emitUnknownEvent: () => {
-      rememberThread();
-      return signedDelivery(unknownEventBody());
-    },
+    emitAnswer: (authorId, text) =>
+      signedDelivery(answerClickBody(authorId, SLACK_QUESTION_ID, text)),
+    emitApproval: (authorId, decision) =>
+      signedDelivery(approvalClickBody(authorId, SLACK_APPROVAL_ID, decision)),
+    emitFeedback: (authorId, text) => signedDelivery(threadReplyBody(authorId, text)),
+    // The thread every click's container and every reply names (WP-88): the platform's rows answer
+    // for it through the suite's `resolveThread`, never the adapter's own memory.
+    thread: { channel: CHANNEL, threadId: THREAD_TS },
+    emitThreadReply: (authorId, text) => signedDelivery(threadReplyBody(authorId, text)),
+    emitUnknownEvent: () => signedDelivery(unknownEventBody()),
     signedWithNoCredential: () =>
       signedDelivery(answerClickBody(MAPPED_USER, SLACK_QUESTION_ID, 'EUR'), ''),
     projectId: SLACK_PROJECT_ID,

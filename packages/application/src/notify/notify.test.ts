@@ -28,11 +28,17 @@ import {
 } from '../testing/pipeline-harness.js';
 import { approvalSettledKey, runApprovalSettled } from './approval-settled.js';
 import { runNotification } from './duty.js';
-import { approvalSettledHandler, decideNotification, notifyHandler } from './handlers.js';
+import {
+  approvalSettledHandler,
+  decideNotification,
+  notifyHandler,
+  questionSettledHandler,
+} from './handlers.js';
 import type { NotifyOptions } from './options.js';
 import { runOrganisationNotification } from './organisation.js';
 import { digestSettingsOf } from './policy.js';
 import { awaitsImmediateRetry, type StoredNotification } from './ports.js';
+import { questionSettledKey, runQuestionSettled } from './question-settled.js';
 import {
   boundText,
   boundUrl,
@@ -1075,6 +1081,252 @@ describe('an approval notification', () => {
     const handler = approvalSettledHandler({} as never);
     expect(handler.priority).toBe(210);
     expect(handler.eventTypes).toEqual(['task.approval.decided']);
+  });
+});
+
+/**
+ * **A question is posted through `postQuestion`, and its message is edited when it is settled**
+ * (WP-88, PROGRESS backlog 195 and 233). The thread the question lives in is recorded durably, so a
+ * reply in it reaches the task through a process that never opened it.
+ */
+describe('a question notification (WP-88)', () => {
+  const QUESTION = '00000000-0000-4000-8000-0000000000f9' as Id;
+  const ANSWERER = '00000000-0000-4000-8000-0000000000db' as Id;
+  const ANSWERER_NAME = 'Fake Product Owner';
+
+  const openedQuestion = async (harness: PipelineHarness, taskId: Id): Promise<void> => {
+    await harness.memory.transaction(async (scope) => {
+      await harness.store.questions.insert(scope.tx, {
+        id: QUESTION,
+        taskId,
+        projectId: PROJECT as Id,
+        stage: 'refinement' as never,
+        runId: null,
+        text: 'Which currency should totals use?',
+        options: ['EUR', 'CZK'],
+        blocking: true,
+        status: 'open',
+        askedAt: '2026-06-01T09:00:00.000Z' as never,
+        deadlineAt: null,
+        remindersSent: 0,
+        answer: null,
+        answeredByUserId: null,
+        answeredVia: null,
+        answeredAt: null,
+        sequence: 1,
+      });
+    });
+  };
+
+  const ask = async (harness: PipelineHarness, taskId: Id): Promise<void> => {
+    await notify(harness, {
+      task_id: taskId,
+      notification_class: 'question',
+      notification_detail: 'Which currency should totals use?',
+      question_id: QUESTION,
+    });
+  };
+
+  /** Settles the question the way the aggregate would. */
+  const settle = async (
+    harness: PipelineHarness,
+    status: 'answered' | 'expired',
+  ): Promise<void> => {
+    await harness.memory.transaction(async (scope) => {
+      const question = await harness.store.questions.load(scope.tx, QUESTION);
+      if (question === null) {
+        throw new Error('no question to settle');
+      }
+      await harness.store.questions.save(scope.tx, {
+        ...question,
+        status,
+        ...(status === 'answered'
+          ? {
+              answer: 'EUR',
+              answeredByUserId: ANSWERER,
+              answeredVia: 'slack' as const,
+              answeredAt: '2026-06-01T10:00:00.000Z' as never,
+            }
+          : {}),
+        sequence: question.sequence + 1,
+      });
+    });
+  };
+
+  const settled = async (harness: PipelineHarness): Promise<void> => {
+    await runQuestionSettled(optionsOf(harness), {
+      duty: 'question_settled',
+      project_id: PROJECT,
+      cause_event_id: '00000000-0000-4000-9000-00000000ca78',
+      question_id: QUESTION,
+    });
+  };
+
+  it('posts the question through `postQuestion` with its options, records its address and the thread', async () => {
+    const harness = harnessWith();
+    const taskId = await taskOf(harness);
+    await openedQuestion(harness, taskId);
+    harness.communication?.messages.splice(0);
+
+    await ask(harness, taskId);
+
+    const [message] = harness.communication?.messages ?? [];
+    expect(harness.communication?.messages).toHaveLength(1);
+    expect(message).toMatchObject({ question: QUESTION, options: ['EUR', 'CZK'] });
+    expect(harness.audit.entries.map((entry) => entry.action)).toContain('post_question');
+    const row = harness.notifications.rows.find((entry) => entry.notificationClass === 'question');
+    expect(row).toMatchObject({ deliveredAs: 'immediate', questionId: QUESTION });
+    expect(row?.messageRef?.thread_id, 'the address names the thread it was posted into').toBe(
+      message?.thread,
+    );
+    // The durable half of the thread map (backlog 195): the thread the question went into.
+    expect(harness.notifications.threads).toEqual([
+      expect.objectContaining({
+        projectId: PROJECT,
+        integrationId: harness.communication?.port.ref.integrationId,
+        taskId,
+        threadId: message?.thread,
+      }),
+    ]);
+  });
+
+  it('posts text naming the task page when no reply or click can arrive, and still records its address', async () => {
+    const harness = harnessWith({ chatConnectionHeld: false });
+    const taskId = await taskOf(harness);
+    await openedQuestion(harness, taskId);
+    harness.communication?.messages.splice(0);
+
+    await ask(harness, taskId);
+
+    const [message] = harness.communication?.messages ?? [];
+    expect(message?.question).toBeUndefined();
+    expect(message?.markdown).toContain(
+      'Answer on the task page: no process is holding this chat’s connection',
+    );
+    expect(
+      harness.notifications.rows.find((entry) => entry.notificationClass === 'question')
+        ?.messageRef,
+    ).not.toBeNull();
+  });
+
+  it('records no thread for a shadow task, whose thread is a would-have placeholder (BD-021)', async () => {
+    const harness = harnessWith();
+    const taskId = await taskOf(harness);
+    await harness.memory.transaction(async (scope) => {
+      const stored = await harness.store.tasks.load(scope.tx, taskId);
+      if (stored === null) {
+        throw new Error('no task');
+      }
+      await harness.store.tasks.save(scope.tx, {
+        ...stored,
+        task: { ...stored.task, mode: 'shadow' },
+      });
+    });
+    await openedQuestion(harness, taskId);
+    // The real thread the task's `task_started` opened before it turned shadow is already there.
+    const before = harness.notifications.threads;
+    await ask(harness, taskId);
+    expect(harness.notifications.threads).toEqual(before);
+    expect(
+      harness.notifications.threads.filter((thread) => thread.threadId.startsWith('would-have')),
+    ).toEqual([]);
+  });
+
+  for (const [outcome, sentence] of [
+    ['answered', `Answered by ${ANSWERER_NAME}.`],
+    ['expired', 'Expired: nobody answered before the deadline'],
+  ] as const) {
+    it(`edits the posted question when it is ${outcome}: its buttons go, and the answer is not repeated`, async () => {
+      const harness = harnessWith({ users: { [ANSWERER]: ANSWERER_NAME } });
+      const taskId = await taskOf(harness);
+      await openedQuestion(harness, taskId);
+      await ask(harness, taskId);
+      const posted = harness.notifications.rows.find((row) => row.notificationClass === 'question');
+
+      await settle(harness, outcome);
+      await settled(harness);
+
+      const updates = harness.communication?.updates ?? [];
+      expect(updates).toHaveLength(1);
+      expect(updates[0]?.message_id).toBe(posted?.messageRef?.message_id);
+      expect(updates[0]?.markdown).toContain(sentence);
+      expect(updates[0]?.markdown).toContain(`${TICKET_KEY}: the question is settled`);
+      expect(updates[0]?.markdown).not.toContain('EUR');
+      const audit = harness.audit.entries.filter((entry) => entry.action === 'update_message');
+      expect(audit).toHaveLength(1);
+      expect(audit[0]?.status).toBe('ok');
+
+      // A redelivered wake-up replays under the same key instead of editing twice.
+      await settled(harness);
+      expect(harness.communication?.updates).toHaveLength(1);
+    });
+  }
+
+  it('edits nothing while the question is open, when nothing was posted, or when the provider cannot edit', async () => {
+    const harness = harnessWith();
+    const taskId = await taskOf(harness);
+    await openedQuestion(harness, taskId);
+    await settled(harness);
+    expect(harness.communication?.updates, 'still open').toEqual([]);
+    await settle(harness, 'answered');
+    await settled(harness);
+    expect(harness.communication?.updates, 'no message was ever posted').toEqual([]);
+
+    const cannot = harnessWith({
+      communication: {
+        capabilities: () => ({
+          threads: true,
+          buttons: true,
+          messageUpdate: false,
+          socketMode: true,
+          digest: true,
+        }),
+      },
+    });
+    const other = await taskOf(cannot);
+    await openedQuestion(cannot, other);
+    await ask(cannot, other);
+    const before = cannot.communication?.messages.length ?? 0;
+    await settle(cannot, 'expired');
+    await settled(cannot);
+    expect(cannot.communication?.updates).toEqual([]);
+    expect(cannot.communication?.messages).toHaveLength(before);
+  });
+
+  it('closes the race: a question answered while it was being posted is edited by the posting duty', async () => {
+    let answerDuringPost: (() => Promise<void>) | null = null;
+    const harness = harnessWith({
+      communication: {
+        postQuestion: async (thread, question) => {
+          await answerDuringPost?.();
+          return {
+            provider: 'fake-chat',
+            channel: thread.channel,
+            message_id: `question-${question.id}`,
+            thread_id: thread.thread_id,
+            url: null,
+          };
+        },
+      },
+    });
+    const taskId = await taskOf(harness);
+    await openedQuestion(harness, taskId);
+    answerDuringPost = async () => {
+      await settle(harness, 'answered');
+      await settled(harness);
+    };
+    await ask(harness, taskId);
+
+    const updates = harness.communication?.updates ?? [];
+    expect(updates, 'the posting duty edited it after recording the address').toHaveLength(1);
+    expect(updates[0]?.message_id).toBe(`question-${QUESTION}`);
+    expect(questionSettledKey(QUESTION)).toBe(`notify:question-settled:${QUESTION}`);
+  });
+
+  it('is woken by an answer and by an expiry in the notify band, after the commit', () => {
+    const handler = questionSettledHandler({} as never);
+    expect(handler.priority).toBe(210);
+    expect(handler.eventTypes).toEqual(['task.question.answered', 'task.question.expired']);
   });
 });
 

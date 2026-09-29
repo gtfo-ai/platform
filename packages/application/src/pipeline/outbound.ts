@@ -42,6 +42,7 @@ import { runApprovalSettled } from '../notify/approval-settled.js';
 import { runNotification } from '../notify/duty.js';
 import type { NotifyOptions } from '../notify/options.js';
 import { runOrganisationNotification } from '../notify/organisation.js';
+import { runQuestionSettled } from '../notify/question-settled.js';
 import type { JobHandler } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
@@ -161,6 +162,9 @@ export const pipelineOutboundHandler = (
         return;
       case 'approval_settled':
         await runApprovalSettled(options, data);
+        return;
+      case 'question_settled':
+        await runQuestionSettled(options, data);
         return;
       case 'ask_answer':
         await runAskMirror(options, data);

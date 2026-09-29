@@ -627,7 +627,7 @@ describe('Slack in replay: every string it emits comes through the redactor', ()
     const button = sent.blocks[1]?.elements?.[0];
     expect(button?.text?.text, 'the button label').toBe(`EUR ${placeholder}`);
     expect(button?.value, 'the button value, which comes back as the answer').toBe(
-      JSON.stringify({ q: SLACK_QUESTION_ID, o: `EUR ${placeholder}` }),
+      JSON.stringify({ q: SLACK_QUESTION_ID, o: `EUR ${placeholder}`, t: SLACK_TASK_ID }),
     );
     expect(JSON.stringify(sent), 'and nothing else on the wire carries it either').not.toContain(
       secret,
@@ -693,8 +693,8 @@ describe('Slack in replay: every string it emits comes through the redactor', ()
     expect(opened.url, 'divergence 2: no permalink without a second call').toBeNull();
     expect(JSON.stringify(opened)).not.toContain(secret);
 
-    // The directory that remembers the thread holds the redacted channel too, so a later reply is
-    // addressed with what was emitted rather than with a second, raw copy.
+    // The directory that remembers the thread holds the redacted channel too, so a later post into
+    // it is addressed with what was emitted rather than with a second, raw copy.
     expect(context.slack.threads.threadForTask(SLACK_TASK_ID)?.channel).toBe(
       `C0FAKE-${placeholder}`,
     );
@@ -842,6 +842,8 @@ describe('Slack in replay: every string it emits comes through the redactor', ()
       projectId: context.projectId,
       integrationId: context.integrationId,
       resolveUser: () => null,
+      // The reply is in the harness's task thread, which has no open question (WP-88).
+      resolveThread: async () => ({ taskId: context.taskId, openQuestions: 0, questionId: null }),
     });
 
     const { feedback } = (result.events[0] as { payload: { feedback: { text: string } } }).payload;
@@ -934,6 +936,8 @@ describe("the binding composes its own three credentials on top of the caller's 
       projectId: context.projectId,
       integrationId: context.integrationId,
       resolveUser: () => null,
+      // The reply is in the harness's task thread, which has no open question (WP-88).
+      resolveThread: async () => ({ taskId: context.taskId, openQuestions: 0, questionId: null }),
     });
 
     const { feedback } = (result.events[0] as { payload: { feedback: { text: string } } }).payload;

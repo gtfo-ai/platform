@@ -150,6 +150,7 @@ describe('the webhook route at its integration’s rate limit (Q60)', () => {
       } as never,
       audit: { record: async (entry: unknown) => void audit.push(entry) } as never,
       identities: { forProvider: async () => new Map() },
+      threads: { find: async () => null },
       decisions: {
         apply: async () => {
           throw new Error('no decision');

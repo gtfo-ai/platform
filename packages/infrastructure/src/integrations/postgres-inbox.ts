@@ -27,7 +27,9 @@ import type {
   InboundAuditLog,
   InboundDeciderRoles,
   InboundDeliveryRecord,
+  InboundHumanActionLog,
   InboundIdentityDirectory,
+  InboundThreadDirectory,
   InboxDelivery,
   InboxStore,
   Transaction,
@@ -240,5 +242,68 @@ export const createPostgresDeciderRoles = (): InboundDeciderRoles => ({
     return row.project_role !== null && ROLE_LEVELS[row.project_role] > ROLE_LEVELS[row.org_role]
       ? row.project_role
       : row.org_role;
+  },
+});
+
+/**
+ * The thread ↔ task map a chat reply is resolved through (WP-88, PROGRESS backlog 195) — the
+ * PostgreSQL half of `InboundContext.resolveThread`.
+ *
+ * One statement: the thread's row in `chat_threads` (migration 0062) for **this** binding's project
+ * and account, and beside it the open questions posted with an address into that thread — the one
+ * a reply answers when there is exactly one, and a count that makes a reply ambiguous when there
+ * are several (WP-88 review round 1). `message_ref` is stored redacted and the delivery's handle
+ * is redacted by the same binding's redactor, so the two compare equal whenever the provider's own
+ * handles did. Outside every transaction, like the identity directory; the Question aggregate
+ * re-checks what it answers inside the delivery's.
+ */
+export const createPostgresThreadDirectory = (options: {
+  readonly sql: SqlExecutor;
+}): InboundThreadDirectory => ({
+  find: async (input) => {
+    // The distinct open questions posted into the thread, at most two: one is the answer's subject,
+    // two is enough to know a reply is ambiguous (review round 1).
+    const { rows } = await options.sql.query<{ task_id: string; open_questions: string[] | null }>(
+      `select t.task_id,
+              array(select distinct n.question_id::text
+                      from notifications n
+                      join questions q on q.id = n.question_id
+                     where n.task_id = t.task_id
+                       and n.project_id = t.project_id
+                       and n.class = 'question'
+                       and n.message_ref is not null
+                       and n.message_ref ->> 'thread_id' = t.thread_id
+                       and q.status = 'open'
+                     limit 2) as open_questions
+         from chat_threads t
+        where t.project_id = $1 and t.integration_id = $2 and t.channel = $3 and t.thread_id = $4`,
+      [input.projectId, input.integrationId, input.channel, input.threadId],
+    );
+    const row = rows[0];
+    if (row === undefined) {
+      return null;
+    }
+    const open = row.open_questions ?? [];
+    return {
+      taskId: row.task_id as Id,
+      openQuestions: open.length,
+      questionId: open.length === 1 ? (open[0] as Id) : null,
+    };
+  },
+});
+
+/**
+ * The `human_actions` row an accepted chat decision leaves (WP-88, PROGRESS backlog 199), in the
+ * delivery's own transaction — the same table and the same columns the command routes write
+ * (`apps/server/src/queries/onboarding-queries.ts`'s `insertHumanAction`); `created_at` is the
+ * column's default there and here.
+ */
+export const createPostgresHumanActionLog = (): InboundHumanActionLog => ({
+  record: async (tx, entry) => {
+    await postgresTransaction(tx).client.query(
+      `insert into human_actions (task_id, user_id, action, params)
+       values ($1, $2, $3, $4::jsonb)`,
+      [entry.taskId, entry.userId, entry.action, JSON.stringify(entry.params)],
+    );
   },
 });

@@ -286,8 +286,38 @@ export const approvalSettledHandler = (options: PipelineSagaOptions): EventHandl
   },
 });
 
+/**
+ * **An answered or expired question's message says so** (WP-88, PROGRESS backlog 233) — the
+ * question's twin of {@link approvalSettledHandler}. Since WP-88 a question is posted through
+ * `postQuestion`, with a button per option and an invitation to reply in the thread; once it is
+ * answered through any channel, or expires, the duty edits that message. Whether there is a message
+ * is the duty's to ask, on fire.
+ */
+export const questionSettledHandler = (options: PipelineSagaOptions): EventHandler => ({
+  name: 'notify.question_settled',
+  priority: NOTIFY_PRIORITY,
+  eventTypes: ['task.question.answered', 'task.question.expired'],
+  handle: async (context: HandlerContext) => {
+    const event = context.event.event;
+    if (event.type !== 'task.question.answered' && event.type !== 'task.question.expired') {
+      return;
+    }
+    const data: PipelineOutboundData = {
+      duty: 'question_settled',
+      project_id: event.payload.project_id,
+      task_id: event.payload.task_id,
+      cause_event_id: event.id,
+      question_id: event.payload.question_id,
+    };
+    context.afterCommit(async () => {
+      await enqueueOutbound(options.jobs, data);
+    });
+  },
+});
+
 /** Everything the notification band registers. */
 export const notifyHandlers = (options: PipelineSagaOptions): readonly EventHandler[] => [
   notifyHandler(options),
   approvalSettledHandler(options),
+  questionSettledHandler(options),
 ];

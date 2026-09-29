@@ -156,6 +156,11 @@ export interface PipelineOutboundData {
      * once the aggregate has settled. `approval_id` names it; the row holds the rest.
      */
     | 'approval_settled'
+    /**
+     * WP-88, PROGRESS backlog 233: a question posted through `postQuestion` was answered or
+     * expired, so its message is edited to say so and its buttons go. `question_id` names it.
+     */
+    | 'question_settled'
     /** WP-31, ask-the-task: mirror an answer into the ticket thread (product/10:57). */
     | 'ask_answer'
     /**
@@ -314,6 +319,7 @@ export interface PipelineOutboundData {
   /**
    * `notify` with class `question` (WP-84 review round 1): which question, so the duty posts
    * nothing for one answered or expired since — on a retry, and on the recovery pass's re-post.
+   * And `question_settled` (WP-88): which question's message to edit.
    */
   readonly question_id?: string;
   readonly reminder_aggregate?: 'question' | 'approval';

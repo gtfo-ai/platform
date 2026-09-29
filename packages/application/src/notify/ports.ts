@@ -126,8 +126,9 @@ export interface NotificationStore {
       readonly via: NotificationDelivery;
       /**
        * The provider's address of the posted message, **redacted** by the caller — recorded for an
-       * approval only, whose buttons a later duty removes (WP-65, backlog 202). Absent leaves the
-       * column as it was.
+       * approval, whose buttons a later duty removes (WP-65, backlog 202), and since WP-88 for a
+       * question, whose message a later duty edits to say it was answered or expired (backlog 233)
+       * and into whose thread a reply answers it (backlog 195). Absent leaves the column as it was.
        */
       readonly messageRef?: MessageRef | null;
     },
@@ -154,6 +155,34 @@ export interface NotificationStore {
    * click, or never (WP-65, backlog 202).
    */
   approvalMessage(tx: Transaction, approvalId: Id): Promise<StoredNotification | null>;
+
+  /**
+   * The message that asked this question, or `null` when none was posted with an address — the
+   * question reached a digest, or nobody (WP-88, PROGRESS backlog 233). A `reminder` row names the
+   * question too and carries no address, so it is never the answer.
+   */
+  questionMessage(tx: Transaction, questionId: Id): Promise<StoredNotification | null>;
+
+  /**
+   * Records that `taskId`'s chat thread is `channel`/`threadId` on this account (WP-88, PROGRESS
+   * backlog 195) — the durable half of the thread ↔ task map, which a chat reply is resolved
+   * through (`InboundThreadDirectory`). The adapter's own map is per instance and the loader builds
+   * one per call (Q55), so this row is the only thing that outlives the call that opened the thread.
+   *
+   * Idempotent: a thread already recorded is left as it is. `channel` and `threadId` are provider
+   * text, **redacted and bounded by the caller** (at most `MAX_THREAD_HANDLE_CHARS`).
+   */
+  recordThread(
+    tx: Transaction,
+    input: {
+      readonly projectId: Id;
+      readonly integrationId: Id;
+      readonly taskId: Id;
+      readonly channel: string;
+      readonly threadId: string;
+      readonly at: IsoDateTime;
+    },
+  ): Promise<void>;
 
   /**
    * A platform user's display name (`users.name`), or `null` for an id the store does not know —

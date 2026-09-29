@@ -673,6 +673,9 @@ export interface HarnessCommunication {
     markdown: string;
     /** Set for an approval posted with its buttons (`postApproval`, WP-43). */
     approval?: string;
+    /** Set for a question posted through `postQuestion` (WP-88), with the options it offered. */
+    question?: string;
+    options?: readonly string[];
   }[];
   /** Every `updateMessage` the port received, in order (WP-65, backlog 202). */
   readonly updates: { message_id: string; markdown: string }[];
@@ -744,6 +747,27 @@ const stubCommunication = (
         thread: thread.thread_id,
         markdown: body.markdown,
         approval: approval.id,
+      });
+      return {
+        provider: 'fake-chat',
+        channel: thread.channel,
+        message_id: id,
+        thread_id: thread.thread_id,
+        url: null,
+      };
+    },
+    postQuestion: async (
+      thread: { channel: string; thread_id: string },
+      question: { id: string; options?: readonly string[] | null },
+      body: { markdown: string },
+    ) => {
+      const id = next();
+      messages.push({
+        channel: thread.channel,
+        thread: thread.thread_id,
+        markdown: body.markdown,
+        question: question.id,
+        options: [...(question.options ?? [])],
       });
       return {
         provider: 'fake-chat',

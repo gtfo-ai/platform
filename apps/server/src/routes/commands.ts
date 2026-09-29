@@ -728,7 +728,8 @@ export const registerCommandRoutes = async (
         action: 'task.question.answer',
         key: 'required',
         subject: { question_id: questionId, body },
-        params: { task_id: taskId, question_id: questionId },
+        // `channel` names the door, as a chat answer's row does (WP-88, backlog 199).
+        params: { task_id: taskId, question_id: questionId, channel: 'ui' },
         taskId,
         perform: async () => {
           const { userId } = actorOf(request);
@@ -781,7 +782,15 @@ export const registerCommandRoutes = async (
         action: 'task.approval.decide',
         key: 'required',
         subject: { approval_id: approvalId, body },
-        params: { task_id: taskId, approval_id: approvalId, decision: body.decision },
+        // `channel` names the door: a chat decision's row carries the same keys plus its
+        // provider, integration and delivery, written in the delivery's transaction (WP-88,
+        // `inbound-decisions.ts`), so the audit panel reads one shape whichever door was used.
+        params: {
+          task_id: taskId,
+          approval_id: approvalId,
+          decision: body.decision,
+          channel: 'ui',
+        },
         taskId,
         perform: async () => {
           const { userId } = actorOf(request);

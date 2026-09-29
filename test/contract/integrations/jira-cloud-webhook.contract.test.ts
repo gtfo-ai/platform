@@ -45,6 +45,7 @@ describe('jira-cloud webhooks', () => {
     projectId: JIRA_PROJECT_ID,
     integrationId: JIRA_INTEGRATION_ID,
     resolveUser: resolve,
+    resolveThread: async () => null,
   });
 
   describe('verification (X-Hub-Signature, WebSub)', () => {

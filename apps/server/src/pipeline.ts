@@ -574,6 +574,8 @@ export const composeWebhookIngress = (options: ComposeWebhookIngressOptions): We
     inbox: integrationAdapters.createPostgresInboxStore({ sql: options.pool }),
     audit: integrationAdapters.createPostgresInboundAuditLog({ sql: options.pool }),
     identities: integrationAdapters.createPostgresIdentityDirectory({ sql: options.pool }),
+    // WP-88: a chat reply's thread → its task and its open question, off `chat_threads`.
+    threads: integrationAdapters.createPostgresThreadDirectory({ sql: options.pool }),
     /**
      * WP-43: a click on an approval button, or an answer from a thread, is decided by the Approval
      * or the Question aggregate inside the delivery's transaction — `can()` against the decider's
@@ -584,6 +586,9 @@ export const composeWebhookIngress = (options: ComposeWebhookIngressOptions): We
     decisions: createInboundDecisionApplier({
       store: pipelineAdapters.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES }),
       roles: integrationAdapters.createPostgresDeciderRoles(),
+      // WP-88 (backlog 199): an accepted chat decision leaves its `human_actions` row in the
+      // delivery's transaction, as the task page's decision does.
+      actions: integrationAdapters.createPostgresHumanActionLog(),
       context: (correlationId: Id) => ({
         ids: { next: (): Id => randomUUID() as Id },
         actor: PIPELINE_ACTOR,

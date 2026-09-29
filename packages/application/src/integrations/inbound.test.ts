@@ -35,7 +35,9 @@ import type { Transaction } from '../ports/transaction.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
 import {
   createWebhookIngress,
+  type InboundThreadDirectory,
   MAX_INBOX_ERROR_CHARS,
+  MAX_THREAD_HANDLE_CHARS,
   unmappedIdentitiesOf,
   type WebhookRateLimit,
 } from './inbound.js';
@@ -196,10 +198,10 @@ const auditDouble = () => {
  * property the ordering in `inbound.ts` exists for.
  */
 const decisionsDouble = (answer: (projectId: Id) => InboundDecisionOutcome) => {
-  const applied: { projectId: Id; type: string }[] = [];
+  const applied: { projectId: Id; type: string; delivery: unknown }[] = [];
   const applier: InboundDecisionApplier = {
-    apply: async (_tx, { projectId, draft }) => {
-      applied.push({ projectId, type: draft.type });
+    apply: async (_tx, { projectId, draft, delivery }) => {
+      applied.push({ projectId, type: draft.type, delivery });
       return answer(projectId);
     },
   };
@@ -259,6 +261,7 @@ const build = (options: {
   readonly decisions?: InboundDecisionApplier;
   readonly rateLimit?: WebhookRateLimit | null;
   readonly now?: () => number;
+  readonly threads?: InboundThreadDirectory;
 }) => {
   let nextId = 0;
   const loader: InboundIntegrationLoader = eagerInboundLoader(async () => options.resolved ?? null);
@@ -309,6 +312,7 @@ const build = (options: {
     inbox: options.inbox.store,
     audit: options.audit.log,
     identities: { forProvider: async () => new Map([['U-1', PROJECT]]) },
+    threads: options.threads ?? { find: async () => null },
     decisions:
       options.decisions ??
       decisionsDouble(() => {
@@ -334,7 +338,11 @@ const build = (options: {
 
 const harnessFor = (
   resolved: ResolvedInboundIntegration | null,
-  overrides: { readonly conflicts?: number; readonly decisions?: InboundDecisionApplier } = {},
+  overrides: {
+    readonly conflicts?: number;
+    readonly decisions?: InboundDecisionApplier;
+    readonly threads?: InboundThreadDirectory;
+  } = {},
 ): IngressHarness => {
   const inbox = inboxDouble();
   const audit = auditDouble();
@@ -350,6 +358,7 @@ const harnessFor = (
     appended,
     sequenceReads,
     ...(overrides.decisions === undefined ? {} : { decisions: overrides.decisions }),
+    ...(overrides.threads === undefined ? {} : { threads: overrides.threads }),
   });
   return {
     deliver: (delivery = DELIVERY) =>
@@ -378,6 +387,87 @@ const resolvedWith = (
     inbound: normaliserDouble(binding.script ?? script),
   })),
   redactor: redactorDouble(),
+});
+
+// ── The thread lookup a normaliser is handed (WP-88) ─────────────────────────
+
+describe('the thread lookup a normaliser is handed (WP-88, PROGRESS backlog 195)', () => {
+  it('is scoped to the binding’s project and the account, and bounded before it asks', async () => {
+    const asked: unknown[] = [];
+    const threads: InboundThreadDirectory = {
+      find: async (input) => {
+        asked.push(input);
+        return {
+          taskId: '00000000-0000-4000-8000-0000000000e1' as Id,
+          openQuestions: 0,
+          questionId: null,
+        };
+      },
+    };
+    const answers: unknown[] = [];
+    const resolved = resolvedWith();
+    const asking: InboundNormaliser = {
+      ...normaliserDouble(),
+      normalise: async (_delivery, context) => {
+        answers.push(await context.resolveThread({ channel: 'C1', threadId: '1780000000.000100' }));
+        answers.push(
+          await context.resolveThread({
+            channel: 'C1',
+            threadId: 'x'.repeat(MAX_THREAD_HANDLE_CHARS + 1),
+          }),
+        );
+        answers.push(await context.resolveThread({ channel: '', threadId: '1' }));
+        return { events: [], ignored: [] };
+      },
+    };
+    const harness = harnessFor(
+      {
+        ...resolved,
+        bindings: [
+          { bindingId: PROJECT, projectId: PROJECT, inbound: asking },
+          { bindingId: OTHER_PROJECT, projectId: OTHER_PROJECT, inbound: asking },
+        ],
+      },
+      { threads },
+    );
+    await harness.deliver();
+    // One lookup per binding, each for that binding's project and this account, and none for a
+    // handle no `chat_threads` row can hold.
+    expect(asked).toEqual([
+      {
+        projectId: PROJECT,
+        integrationId: INTEGRATION,
+        channel: 'C1',
+        threadId: '1780000000.000100',
+      },
+      {
+        projectId: OTHER_PROJECT,
+        integrationId: INTEGRATION,
+        channel: 'C1',
+        threadId: '1780000000.000100',
+      },
+    ]);
+    expect(answers.filter((answer) => answer === null)).toHaveLength(4);
+  });
+
+  it('names the delivery a human decision came through, for its audit row (backlog 199)', async () => {
+    const decisions = decisionsDouble(() => ({ kind: 'applied', events: [] }));
+    const harness = harnessFor(
+      resolvedWith({
+        key: 'fake:d-42',
+        result: (context) => ({ events: [approvalDecided(context.projectId)], ignored: [] }),
+      }),
+      { decisions: decisions.applier },
+    );
+    await harness.deliver();
+    expect(decisions.applied).toEqual([
+      {
+        projectId: PROJECT,
+        type: 'task.approval.decided',
+        delivery: { provider: 'fake', integrationId: INTEGRATION, deliveryId: 'fake:d-42' },
+      },
+    ]);
+  });
 });
 
 // ── 1. Which binding? ────────────────────────────────────────────────────────
@@ -731,7 +821,9 @@ describe('a human decision arriving from a provider', () => {
     const outcome = await harness.deliver();
 
     expect(outcome).toMatchObject({ kind: 'accepted', events: 1, ignored: 0 });
-    expect(decisions.applied).toEqual([{ projectId: PROJECT, type: 'task.approval.decided' }]);
+    expect(decisions.applied).toMatchObject([
+      { projectId: PROJECT, type: 'task.approval.decided' },
+    ]);
     // The one event that landed is the aggregate's, on the approval's stream — the draft itself
     // never reached `append`.
     expect(harness.appended).toEqual([aggregateEvent]);
@@ -992,6 +1084,7 @@ describe('the webhook door’s rate limit (Q60)', () => {
       inbox: inboxDouble().store,
       audit: auditDouble().log,
       identities: { forProvider: async () => new Map() },
+      threads: { find: async () => null },
       decisions: decisionsDouble(() => {
         throw new Error('no decision here');
       }).applier,

@@ -25,6 +25,7 @@ const context = (userId: string | null) => ({
   projectId: PROJECT_ID,
   integrationId: INTEGRATION_ID,
   resolveUser: () => userId,
+  resolveThread: async () => null,
 });
 
 describe('FakeCommunication', () => {

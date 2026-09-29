@@ -100,7 +100,6 @@ import {
   type NormalisedDelivery,
   type QuestionPost,
   type SecretRedactor,
-  type ThreadRef,
   type WebhookDelivery,
 } from '@platform/application';
 import type { Id, JsonObject } from '@platform/contracts';
@@ -126,11 +125,7 @@ import {
   type SocketConnect,
   webSocketConnect,
 } from './socket.js';
-import {
-  createMemoryThreadDirectory,
-  type SlackThreadDirectory,
-  type SlackThreadHandle,
-} from './threads.js';
+import { createMemoryThreadDirectory, type SlackThreadDirectory } from './threads.js';
 
 export interface SlackProviderOptions {
   readonly integrationId: Id;
@@ -143,7 +138,11 @@ export interface SlackProviderOptions {
   readonly clock: Clock;
   /** Mints the id of a `feedback` record. Production passes a uuid source. */
   readonly ids: IdSource;
-  /** Where the thread ↔ task mapping lives. In memory by default (divergence 1). */
+  /**
+   * Which thread this instance opened for which task — `postTaskThread`'s idempotency within one
+   * instance (divergence 1). In memory by default. **Not** the inbound map: a reply is resolved
+   * through `InboundContext.resolveThread`, the platform's rows (WP-88).
+   */
   readonly threads?: SlackThreadDirectory;
   /**
    * TD-012, applied to everything this adapter emits in either direction.
@@ -405,11 +404,6 @@ export const createSlackProvider = (options: SlackProviderOptions): SlackProvide
     };
   };
 
-  const handleOf = (thread: ThreadRef): SlackThreadHandle => ({
-    channel: thread.channel,
-    threadTs: thread.thread_id,
-  });
-
   const inbound: InboundNormaliser<CommunicationInboundEvent> = {
     verify: (delivery) =>
       verifySlackDelivery(
@@ -425,7 +419,6 @@ export const createSlackProvider = (options: SlackProviderOptions): SlackProvide
       context: InboundContext,
     ): Promise<NormalisedDelivery<CommunicationInboundEvent>> =>
       normaliseSlackDelivery(delivery, context, {
-        threads,
         teamId: config.team_id ?? null,
         botUserId,
         ids: options.ids,
@@ -505,13 +498,15 @@ export const createSlackProvider = (options: SlackProviderOptions): SlackProvide
         blocks: (redacted) =>
           questionBlocks({
             questionId: question.id,
+            taskId: question.task_id,
             markdown: redacted.markdown,
             options: asked.options,
           }),
         action: 'post_question',
       });
-      // A reply in this thread now answers *this* question (`inbound.ts`).
-      threads.rememberQuestion(handleOf(thread), question.id);
+      // Which question a reply in this thread answers is the platform's row, not this instance's
+      // memory (WP-88): the notify duty records the returned address on the question's
+      // notification, and the ingress resolves a reply through it (`InboundContext.resolveThread`).
       return posted;
     },
 

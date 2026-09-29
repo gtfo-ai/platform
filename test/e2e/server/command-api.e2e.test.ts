@@ -26,6 +26,7 @@
 import type { RunSpec } from '@platform/application';
 import type { RunRecord, TaskDetailResponse } from '@platform/contracts';
 import { afterEach, describe, expect, it } from 'vitest';
+import { decisionAuditShape, expectedApprovalAudit } from '../support/decision-audit.js';
 import { BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD, Client } from '../support/instance.js';
 import {
   inboundEvent,
@@ -617,6 +618,20 @@ describe('answering a question and deciding an approval', () => {
     const audit = await humanActions(pipeline);
     expect(audit.map((row) => row.action)).toEqual(['task.approval.decide']);
     expect(audit[0]?.params.decision).toBe('approve');
+    // WP-88 (backlog 199): the same shape a decision from Slack leaves — the chat half of this
+    // case is `test/e2e/pipeline/slack-socket.e2e.test.ts`, against the same helper.
+    const [admin0] = await pipeline.query<{ id: string }>('select id from users where email = $1', [
+      BOOTSTRAP_EMAIL,
+    ]);
+    expect(decisionAuditShape(audit[0] as NonNullable<(typeof audit)[number]>)).toEqual(
+      expectedApprovalAudit({
+        taskId: waiting.id,
+        approvalId,
+        userId: admin0?.id as string,
+        channel: 'ui',
+      }),
+    );
+    expect(audit[0]?.params.idempotency_key, 'the route’s own door').toBe('decide-1');
   }, 240_000);
 });
 

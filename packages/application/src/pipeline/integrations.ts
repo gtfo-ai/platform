@@ -48,6 +48,7 @@ import type {
   DigestItem,
   MessageBody,
   MessageRef,
+  QuestionPost,
   ThreadRef,
 } from '../ports/integrations/communication.js';
 import type {
@@ -1624,6 +1625,51 @@ export const communicationWrites = (integrations: PipelineIntegrations) => ({
       },
       context,
       async () => chat.port.postApproval(input.thread, input.approval, input.body),
+      () => ({
+        provider: chat.ref.provider,
+        channel: input.thread.channel,
+        message_id: `would-have-${input.idempotencyKey}`,
+        thread_id: input.thread.thread_id,
+        url: null,
+      }),
+      (result) => ({ channel: result.channel, message_id: result.message_id }),
+      replayable<MessageRef>(input.idempotencyKey),
+    );
+  },
+
+  /**
+   * A question in the task's thread, **through `postQuestion`** (WP-88, PROGRESS backlog 195) — the
+   * port method that renders its options as buttons and says a reply in the thread answers it.
+   * Until WP-88 it had no caller and a question went out as a plain `message`, so no button existed
+   * and nothing told a person a reply would count.
+   *
+   * The caller has already decided a click and a reply can arrive (`capabilities().buttons`, and a
+   * holder for a held transport); this is the call. Keyed like `message`, by the wake-up.
+   */
+  question: async (
+    input: {
+      readonly thread: ThreadRef;
+      readonly question: QuestionPost;
+      readonly body: MessageBody;
+      readonly idempotencyKey: string;
+    },
+    context: CallContext & { readonly mode: TaskMode },
+  ): Promise<MessageRef | null> => {
+    const chat = integrations.communication;
+    if (chat === null) {
+      return null;
+    }
+    return mutate(
+      integrations,
+      chat.ref,
+      'post_question',
+      {
+        channel: input.thread.channel,
+        thread_id: input.thread.thread_id,
+        question_id: input.question.id,
+      },
+      context,
+      async () => chat.port.postQuestion(input.thread, input.question, input.body),
       () => ({
         provider: chat.ref.provider,
         channel: input.thread.channel,

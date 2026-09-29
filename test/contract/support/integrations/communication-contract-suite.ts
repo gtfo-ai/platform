@@ -29,6 +29,18 @@
  *     acceptance of that same delivery as the control, so a green refusal cannot come from a
  *     harness that built a broken delivery.
  *
+ * ## A third, added by WP-88: a reply in a thread is resolved through the context, never memory
+ *
+ * A threaded reply carries a channel, a thread and the words — no task, no question — and the
+ * binding loader builds a fresh adapter for every delivery (Q55), so whatever an adapter remembers
+ * about the threads it opened is empty on the inbound path. That is how a Slack reply reached
+ * nothing until WP-88 (PROGRESS backlog 195). So every communication provider must resolve a reply
+ * through `InboundContext.resolveThread`, and the cases below run on `freshPort`: a reply to an
+ * open question is an answer, a reply in a known thread with none is feedback, a reply in a thread
+ * the platform does not know is ignored with a reason, and an unmapped author's answer is refused.
+ * The suite's `resolveThread` answers **only** for the harness's own thread handle, so a provider
+ * that ignored the context and answered from memory — or answered for any thread at all — fails.
+ *
  * Both take provider-shaped inputs from the harness rather than writing a literal, for the reason
  * technical/06 gives about `foreignRevokeId`: an assertion that hard-codes one provider's dialect
  * is that provider's test wearing the suite's name.
@@ -37,6 +49,7 @@ import type {
   CommunicationPort,
   ExternalIdentity,
   InboundContext,
+  InboundThreadHandle,
   WebhookDelivery,
 } from '@platform/application';
 import type { Id } from '@platform/contracts';
@@ -56,6 +69,13 @@ export interface CommunicationContractContext {
   emitAnswer(authorId: string, text: string): WebhookDelivery;
   emitApproval(authorId: string, decision: 'approved' | 'rejected'): WebhookDelivery;
   emitFeedback(authorId: string, text: string): WebhookDelivery;
+  /**
+   * The thread the harness's threaded deliveries name (WP-88) — a click's container, a reply's
+   * thread. The suite's `resolveThread` answers for this handle and nothing else.
+   */
+  readonly thread: InboundThreadHandle;
+  /** A reply typed in {@link thread}: a channel, a thread and the words, and nothing else. */
+  emitThreadReply(authorId: string, text: string): WebhookDelivery;
   /**
    * An authentic delivery of something this provider does not act on — a reaction, a presence
    * change, whatever the provider ships next. It must be *verifiable*, or the case would prove the
@@ -131,11 +151,31 @@ export const runCommunicationContract = (harness: CommunicationContractHarness):
       };
     });
 
-    const inboundContext = (userId: Id | null): InboundContext => ({
+    /**
+     * `openQuestion` is what the platform's rows say is open in the harness's thread (WP-88):
+     * `null` for none, `'several'` for two open questions (review round 1), and `'unknown'` for a
+     * thread the platform never opened.
+     */
+    const inboundContext = (
+      userId: Id | null,
+      openQuestion: Id | null | 'unknown' | 'several' = null,
+    ): InboundContext => ({
       projectId: context.projectId,
       integrationId: context.integrationId,
       resolveUser: (identity: ExternalIdentity) =>
         identity.external_id === context.mappedAuthor.providerUserId ? userId : null,
+      resolveThread: async (thread) =>
+        openQuestion === 'unknown' ||
+        thread.channel !== context.thread.channel ||
+        thread.threadId !== context.thread.threadId
+          ? null
+          : openQuestion === 'several'
+            ? { taskId: context.taskId, openQuestions: 2, questionId: null }
+            : {
+                taskId: context.taskId,
+                openQuestions: openQuestion === null ? 0 : 1,
+                questionId: openQuestion,
+              },
     });
 
     const openThread = () =>
@@ -413,6 +453,72 @@ export const runCommunicationContract = (harness: CommunicationContractHarness):
           context.unverifiablePort.inbound.verify(authentic),
           'and neither must a genuinely authentic one: an unconfigured binding verifies nothing',
         ).toBe(false);
+      });
+
+      describe('a reply in a thread (WP-88, PROGRESS backlog 195)', () => {
+        it('answers the open question, on an adapter that remembers nothing', async () => {
+          const result = await context.freshPort.inbound.normalise(
+            context.emitThreadReply(context.mappedAuthor.providerUserId, 'EUR, please'),
+            inboundContext(userId, context.questionId),
+          );
+          expect(result.ignored).toEqual([]);
+          expect(result.events.length).toBe(1);
+          const [event] = result.events;
+          const { payload } = expectCatalogueEvent(
+            event as NonNullable<typeof event>,
+            'task.question.answered',
+          );
+          expect(payload.question_id).toBe(context.questionId);
+          expect(payload.task_id).toBe(context.taskId);
+          expect(payload.answer).toBe('EUR, please');
+          expect(payload.answered_by_user_id).toBe(userId);
+        });
+
+        it('refuses an unmapped author’s answer, says who, and records no feedback either', async () => {
+          const result = await context.freshPort.inbound.normalise(
+            context.emitThreadReply(context.unmappedAuthorId, 'CZK'),
+            inboundContext(userId, context.questionId),
+          );
+          expect(result.events).toEqual([]);
+          expect(result.ignored.length).toBe(1);
+          expect(result.ignored[0]?.reason).toBe('unmapped_identity');
+          expect(result.ignored[0]?.identity?.external_id).toBe(context.unmappedAuthorId);
+        });
+
+        it('is feedback in a thread with no open question', async () => {
+          const result = await context.freshPort.inbound.normalise(
+            context.emitThreadReply(context.mappedAuthor.providerUserId, 'looks good'),
+            inboundContext(userId, null),
+          );
+          expect(result.ignored).toEqual([]);
+          const [event] = result.events;
+          const { payload } = expectCatalogueEvent(
+            event as NonNullable<typeof event>,
+            'feedback.received',
+          );
+          expect(payload.task_id).toBe(context.taskId);
+          expect((payload.feedback as { text: string }).text).toBe('looks good');
+        });
+
+        it('answers nothing, and is not feedback, when several questions are open (review round 1)', async () => {
+          const result = await context.freshPort.inbound.normalise(
+            context.emitThreadReply(context.mappedAuthor.providerUserId, 'EUR'),
+            inboundContext(userId, 'several'),
+          );
+          expect(result.events).toEqual([]);
+          expect(result.ignored.length).toBe(1);
+          expect(result.ignored[0]?.reason).toBe('unsupported_event');
+        });
+
+        it('produces nothing, with a reason, in a thread the platform never opened', async () => {
+          const result = await context.freshPort.inbound.normalise(
+            context.emitThreadReply(context.mappedAuthor.providerUserId, 'EUR'),
+            inboundContext(userId, 'unknown'),
+          );
+          expect(result.events).toEqual([]);
+          expect(result.ignored.length).toBe(1);
+          expect(result.ignored[0]?.reason).toBe('unsupported_event');
+        });
       });
 
       it('records feedback from an unmapped user with a null user id', async () => {

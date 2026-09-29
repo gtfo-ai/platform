@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ANSWER_ACTION_ID,
+  APPROVAL_REPLY_NOTE,
   APPROVE_ACTION_ID,
   approvalBlockId,
   approvalBlocks,
@@ -20,6 +21,7 @@ import {
   questionBlockId,
   questionBlocks,
   REJECT_ACTION_ID,
+  REPLY_TO_ANSWER,
 } from './blocks.js';
 
 const QUESTION_ID = '00000000-0000-4000-8000-00000000d001';
@@ -45,6 +47,7 @@ describe('questionBlocks', () => {
   it('renders one button per option, all carrying the question id', () => {
     const blocks = questionBlocks({
       questionId: QUESTION_ID,
+      taskId: TASK_ID,
       markdown: 'Which currency should totals use?',
       options: ['EUR', 'CZK'],
     });
@@ -54,11 +57,16 @@ describe('questionBlocks', () => {
     expect(actions?.elements).toHaveLength(2);
     const [first] = (actions?.elements ?? []) as { action_id: string; value: string }[];
     expect(first?.action_id).toBe(ANSWER_ACTION_ID);
-    expect(JSON.parse(first?.value ?? '{}')).toEqual({ q: QUESTION_ID, o: 'EUR' });
+    expect(JSON.parse(first?.value ?? '{}')).toEqual({ q: QUESTION_ID, o: 'EUR', t: TASK_ID });
   });
 
   it('omits the actions block for an open question rather than sending an empty one', () => {
-    const blocks = questionBlocks({ questionId: QUESTION_ID, markdown: 'Why?', options: [] });
+    const blocks = questionBlocks({
+      questionId: QUESTION_ID,
+      taskId: TASK_ID,
+      markdown: 'Why?',
+      options: [],
+    });
     assertBlockKit(blocks, 'test');
     expect(blocks.some((block) => block.type === 'actions')).toBe(false);
     // The reply route has to be visible, or an open question looks unanswerable.
@@ -67,7 +75,12 @@ describe('questionBlocks', () => {
 
   it('keeps the first 25 options and says how many are not shown', () => {
     const options = Array.from({ length: 30 }, (_, index) => `option-${index}`);
-    const blocks = questionBlocks({ questionId: QUESTION_ID, markdown: 'Pick', options });
+    const blocks = questionBlocks({
+      questionId: QUESTION_ID,
+      taskId: TASK_ID,
+      markdown: 'Pick',
+      options,
+    });
     assertBlockKit(blocks, 'test');
     const actions = blocks.find((block) => block.type === 'actions');
     expect(actions?.elements).toHaveLength(BLOCK_LIMITS.actionsElements);
@@ -77,6 +90,7 @@ describe('questionBlocks', () => {
   it('escapes an option that tries to broadcast, and still fits the button', () => {
     const blocks = questionBlocks({
       questionId: QUESTION_ID,
+      taskId: TASK_ID,
       markdown: 'Pick',
       options: ['<!channel>', 'x'.repeat(200)],
     });
@@ -91,6 +105,7 @@ describe('questionBlocks', () => {
   it('carries the same option unescaped in the button value, and in nothing Slack renders', () => {
     const blocks = questionBlocks({
       questionId: QUESTION_ID,
+      taskId: TASK_ID,
       markdown: 'Pick',
       options: ['<!channel>'],
     });
@@ -101,11 +116,34 @@ describe('questionBlocks', () => {
 
     // Deliberately raw: `inbound.ts` hands this string to the domain as the human's answer, so
     // escaping it would record `&lt;!channel&gt;` as what they chose (see `answerButtonValue`).
-    expect(JSON.parse(element?.value ?? '{}')).toEqual({ q: QUESTION_ID, o: '<!channel>' });
+    expect(JSON.parse(element?.value ?? '{}')).toEqual({
+      q: QUESTION_ID,
+      o: '<!channel>',
+      t: TASK_ID,
+    });
     // It is harmless only because nothing renders it. A refactor that used the value as a label —
     // or put any other unescaped text in a `text` field — turns it back into a broadcast.
     expect(renderedText(blocks).join('\n')).not.toContain('<!channel>');
     expect(renderedText(blocks).join('\n')).toContain('&lt;!channel&gt;');
+  });
+});
+
+describe('what a message says a thread reply does (WP-88, backlog 299, review round 1)', () => {
+  it('tells a question’s reader a reply answers it only when no other question is open', () => {
+    const text = JSON.stringify(
+      questionBlocks({ questionId: QUESTION_ID, taskId: TASK_ID, markdown: 'Why?', options: [] }),
+    );
+    expect(text).toContain(REPLY_TO_ANSWER);
+    expect(REPLY_TO_ANSWER).toContain('unless another question here is still open');
+  });
+
+  it('tells an approval’s reader a reply never decides it, and no longer invites a reason', () => {
+    const text = JSON.stringify(
+      approvalBlocks({ approvalId: APPROVAL_ID, taskId: TASK_ID, markdown: 'Approve the plan?' }),
+    );
+    expect(text).toContain(APPROVAL_REPLY_NOTE);
+    expect(text).toContain('never approves or requests changes');
+    expect(text).not.toContain('with your reasoning');
   });
 });
 
@@ -203,7 +241,12 @@ describe('assertBlockKit', () => {
   it('accepts what this module builds', () => {
     expect(() =>
       assertBlockKit(
-        questionBlocks({ questionId: QUESTION_ID, markdown: 'Pick', options: ['a'] }),
+        questionBlocks({
+          questionId: QUESTION_ID,
+          taskId: TASK_ID,
+          markdown: 'Pick',
+          options: ['a'],
+        }),
         'test',
       ),
     ).not.toThrow();

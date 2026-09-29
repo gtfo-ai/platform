@@ -48,6 +48,7 @@ const context = (resolve: InboundContext['resolveUser'] = () => null): InboundCo
   projectId: PROJECT_ID,
   integrationId: INTEGRATION_ID,
   resolveUser: resolve,
+  resolveThread: async () => null,
 });
 
 const deps = (

@@ -247,6 +247,7 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
       projectId: context.projectId,
       integrationId: context.integrationId,
       resolveUser: resolve,
+      resolveThread: async () => null,
     });
 
     describe('capabilities and health', () => {

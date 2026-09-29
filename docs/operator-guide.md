@@ -865,4 +865,7 @@ Stated here so an operator meets them in a document rather than in production:
   process the approval arrives as text naming the task page), and a click from an account an
   admin has mapped on **Settings → Provider identities** is decided like one on the task page (a
   plan needs a maintainer). `APP_INTEGRATION_HOSTS` must name `slack.com` for the connection to
-  open. A *reply* in a Slack thread is not yet matched to its task (PROGRESS backlog 195).
+  open. Since WP-88 a question is posted the same way, with a button per option, and a *reply* in
+  its Slack thread answers it from a mapped account: the platform records which thread belongs to
+  which task in its own database (`chat_threads`), so the reply reaches the task whichever process
+  receives it.

@@ -326,6 +326,47 @@ export interface InboundContext {
   readonly integrationId: Id;
   /** Platform user for a verified provider identity, or `null` when the identity is unmapped. */
   readonly resolveUser: (identity: ExternalIdentity) => Id | null;
+  /**
+   * The task a provider **thread** belongs to, and the question that is still open in it — or
+   * `null` for a thread this binding never opened (WP-88, PROGRESS backlog 195).
+   *
+   * A threaded chat reply carries a channel and a thread handle and nothing else: no task, no
+   * question. Until WP-88 the only map from one to the other was the adapter's own memory, and
+   * the binding loader builds an adapter **per delivery** (Q55), so on the inbound path it was
+   * always empty and a reply reached nothing. This is the durable answer, read from the platform's
+   * own rows (`chat_threads`, written when the thread is opened, and the `notifications` row of
+   * the question's message), scoped to **this** binding's project and account. It is a pointer,
+   * never an authority: the question it names is re-checked by the Question aggregate in the
+   * delivery's transaction (`inbound-decisions.ts`).
+   *
+   * Required (standing rule 31): a context without it is the adapter-memory lookup this replaces.
+   * A provider with no threads answers every delivery without calling it.
+   */
+  readonly resolveThread: (thread: InboundThreadHandle) => Promise<InboundThreadMatch | null>;
+}
+
+/** A provider thread, as a delivery names it — provider text, already redacted by the adapter. */
+export interface InboundThreadHandle {
+  readonly channel: string;
+  /** Slack's `thread_ts`: the `ts` of the thread's root message. */
+  readonly threadId: string;
+}
+
+/** What the platform's rows say about a thread (WP-88). */
+export interface InboundThreadMatch {
+  readonly taskId: Id;
+  /**
+   * How many questions posted into this thread (with an address) are still **open** (WP-88 review
+   * round 1). A stage opens one blocking question per artifact draft, so several can be open at
+   * once, and each message says a reply answers it.
+   */
+  readonly openQuestions: number;
+  /**
+   * The open question a reply answers — set **only when exactly one** is open. With none a reply is
+   * feedback; with several it is ambiguous and answers nothing, because recording it as the answer
+   * to one of them would put a person's name under an answer they may have meant for another.
+   */
+  readonly questionId: Id | null;
 }
 
 /**

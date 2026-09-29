@@ -67,7 +67,7 @@ which the platform reports as `forbidden` with that fix in the message — a dif
 | `team_id` | recommended | `T…`, the workspace id (`auth.test` reports it, and *Test connection* shows it). With it set, a delivery from another workspace is rejected as `not_for_this_project`. |
 | `digest_channel` | no | Where the digest goes; falls back to `channel`. |
 | ~~`digest_cron` / `digest_timezone`~~ | — | **Removed at WP-32.** *When* the digest goes out is `features.digest.at` in the project's own configuration, read in the organisation's zone (`TZ`, Q38); this schema is strict, so a binding that still carries either key is refused at load with the key named. |
-| `socket_mode` | no (on) | **On** — the manifest's own setting, and the one to pick: the process that serves the API opens one Socket Mode connection for this integration and every click and thread message arrives over it, with no public URL (a thread *reply* arrives but is not yet matched to its task — see §5). **Off** means inbound arrives over HTTP at `/webhooks/slack/<integrationId>` instead, which needs a public URL and a manifest you have edited to carry it (see *Which transport* below). |
+| `socket_mode` | no (on) | **On** — the manifest's own setting, and the one to pick: the process that serves the API opens one Socket Mode connection for this integration and every click and thread message arrives over it, with no public URL. **Off** means inbound arrives over HTTP at `/webhooks/slack/<integrationId>` instead, which needs a public URL and a manifest you have edited to carry it (see *Which transport* below). |
 | `signature_tolerance_seconds` | no (300) | How old a delivery may be before it is treated as a replay. Slack's own sample uses five minutes. |
 | `bot_token`, `app_token`, `signing_secret` | yes | Secrets, from step 2. |
 
@@ -105,16 +105,27 @@ Subscriptions* the request URL `https://<your instance>/webhooks/slack/<integrat
 
 - **One thread per task.** The first message opens the thread; every question, approval and
   notification for that task is a reply in it.
-- **A question is a message in the thread.** Answer it on the task page or in the inbox. On this
-  build a *reply* in the thread is not yet matched to its task — the adapter remembers which thread
-  belongs to which task only in the process that posted it — so a reply is recorded and changes
-  nothing (PROGRESS backlog 195).
+- **A question is a message in the thread, and a reply in that thread answers it.** It is posted
+  with one button per option and a line saying a reply answers it — when a click can reach the
+  platform, exactly as for an approval below; otherwise as text naming the task page. Pressing a
+  button or typing a reply answers it, as the task page, the inbox and a ticket reply do — a
+  *reply* only while it is the one open question in the thread: with several open, a reply names
+  none of them, so it answers nothing and is recorded on its delivery; use a question's buttons or
+  the task page. **The first answer wins**, and the rest are recorded on their delivery and change
+  nothing. The platform remembers which thread belongs to which task in its own database, so the
+  reply reaches the task whichever process receives it. Once the question is answered — anywhere —
+  or expires, its message is edited to say so and its buttons go. A reply to a question counts only
+  from a **mapped** user (below); an unmapped person's reply is recorded on the delivery, naming
+  their account for **Settings → Provider identities**, and changes nothing. An answer longer than
+  the task page accepts (8 000 characters) is refused rather than cut. None of these refusals is
+  announced in Slack: the person sees no reply, and the question stays open on the task page.
 - **An approval is Approve / Request changes**, posted with its buttons when a click can reach the
   platform — Socket Mode with the app-level token and the signing secret, or HTTP with the signing
   secret — and as text naming the task page otherwise. A decision from chat is a *human decision*
   (BD-006): it is decided by the approval itself, so the person who clicks must be **mapped** and
   must hold a role that may decide it (a maintainer, for a plan). Anything else is recorded on the
-  delivery and changes nothing. An approval raised during quiet hours reaches the digest as a line
+  delivery and changes nothing. An accepted decision — an approval or an answer — appears in the
+  task's audit exactly as one made on the task page, naming the person and that it came from Slack. An approval raised during quiet hours reaches the digest as a line
   without buttons, because by then the task page is the place to decide.
 - **A decision only counts from a mapped user.** A Slack account maps to a platform user by its
   Slack member **id**, which Slack sets and nobody can type; an unmapped author is recorded as
@@ -122,7 +133,8 @@ Subscriptions* the request URL `https://<your instance>/webhooks/slack/<integrat
   (an admin screen) before you expect a click to work (product/08, Q10). The platform never matches
   an account by email on its own.
 - **A reply with no open question is feedback**, recorded against the task — including from an
-  unmapped author, with a null user id, because feedback is data rather than a decision.
+  unmapped author, with a null user id, because feedback is data rather than a decision. A reply
+  under an approval is feedback too: an approval is decided by its buttons or on the task page.
 - **Nothing outside a task thread is read.** A message in the channel that is not a reply in a
   thread the platform opened produces no event at all.
 
@@ -141,6 +153,7 @@ four (BD-002, BD-025).
 | `forbidden` mentioning `/invite` | The channel exists and the bot is not in it (step 3). |
 | `forbidden` on identity mapping | The `users:read.email` scope is missing (step 1). Reinstall after changing scopes. |
 | Buttons do nothing | Read the delivery's `inbox.error` (no screen shows it yet; the API process also logs `held-connection delivery handled` per click): `unmapped_identity` — the clicker is not mapped on **Settings → Provider identities**; `decision_refused: not_permitted` — they are mapped but their role may not decide this approval; `decision_refused: already_decided` — somebody decided first. With no row at all, see the next line. Interactivity off, or an app installed from an older manifest, also silences them: re-apply the manifest and reinstall. |
+| A reply in a thread does not answer the question | Read the delivery's `inbox.error`: `unmapped_identity` — the author is not mapped; `decision_refused: already_decided` — the question was answered first; `… open questions names none of them` — several questions were open, so answer with the buttons or on the task page; `reply in a thread this binding did not open` — the reply was not in the question's task thread (a question raised in quiet hours reaches the digest instead, not a thread). A reply that answered nothing because no question was open is recorded as feedback. With no row at all, the app is not receiving `message` events: check the `channels:history` scope and the event subscriptions from the manifest. |
 | Every decision is `unmapped_identity` | The Slack account is not mapped to a platform user on **Settings → Provider identities**. |
 | No approval is posted, only text saying to decide on the task page | The binding cannot receive a click: the signing secret is missing, or Socket Mode is on and the app-level token is missing. |
 | Nothing arrives at all | **No process that serves the API is running** — the connection is held by `ROLE=all` or `ROLE=api`, and a `ROLE=worker` process logs that it holds none, naming the integration. Otherwise the API process's log names the integration and the reason it holds no connection: the app-level token missing or lacking `connections:write`, the signing secret missing, or `slack.com` absent from `APP_INTEGRATION_HOSTS`. With `socket_mode` off, Slack has no request URL to call unless you gave the app one. |

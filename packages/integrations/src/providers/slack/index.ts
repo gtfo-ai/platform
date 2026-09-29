@@ -77,7 +77,11 @@ export interface SlackRegistrationDeps {
    * (technical/03) and this ring has no database; `idSchema` is `z.uuid()` and accepts either.
    */
   readonly ids?: IdSource;
-  /** Where the thread ↔ task mapping lives. In memory by default (divergence 1); WP-15's seam. */
+  /**
+   * Which thread an instance opened for which task — `postTaskThread`'s idempotency within one
+   * instance. In memory by default (divergence 1). The inbound map is not this: a reply is
+   * resolved through `InboundContext.resolveThread`, the platform's rows (WP-88).
+   */
   readonly threads?: SlackThreadDirectory;
   /** Socket Mode: injected so a test drives envelopes without a network. */
   readonly connect?: SocketConnect;

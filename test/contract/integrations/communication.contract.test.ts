@@ -77,6 +77,9 @@ runCommunicationContract({
       emitApproval: (authorId, decision) =>
         port.emitApproval({ taskId: TASK_ID, approvalId: APPROVAL_ID, authorId, decision }),
       emitFeedback: (authorId, text) => port.emitFeedback({ taskId: TASK_ID, authorId, text }),
+      thread: { channel: '#agentic', threadId: 't-1' },
+      emitThreadReply: (authorId, text) =>
+        port.emitReply({ channel: '#agentic', threadId: 't-1', authorId, text }),
       projectId: PROJECT_ID,
       integrationId: INTEGRATION_ID,
       cleanup: async () => {},

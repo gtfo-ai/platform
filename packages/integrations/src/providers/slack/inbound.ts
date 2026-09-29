@@ -24,6 +24,17 @@
  * feature into a permanently failing job. The direction reverses for an outbound mutation, which
  * is `http.ts`'s unknown-slug rule.
  *
+ * ## Which task a thread belongs to is the platform's rows, not this adapter's memory (WP-88)
+ *
+ * A threaded reply carries a channel and a `thread_ts`, nothing else. Until WP-88 this module read
+ * the adapter's own `SlackThreadDirectory` to turn that into a task, and the binding loader builds a
+ * fresh adapter for every delivery (Q55) — so the directory was always empty here, and a reply
+ * reached nothing (PROGRESS backlog 195). The durable map is `InboundContext.resolveThread`: the
+ * `chat_threads` row the notify duty wrote when it opened the thread, and the open questions whose
+ * messages it posted into it — a reply answers one only when exactly one is open (review round 1). What it answers is a pointer the Question aggregate re-checks.
+ * A click resolves its task from the button's own value first (`t`, as an approval's has since
+ * WP-43) and from the thread second, and when both answer they must agree.
+ *
  * ## What is deliberately not an event
  *
  * A message that is not in a thread this binding opened produces nothing. The alternative —
@@ -39,6 +50,7 @@ import type {
   ExternalIdentity,
   IgnoredDelivery,
   InboundContext,
+  InboundThreadMatch,
   NormalisedDelivery,
   NormalisedEvent,
   SecretRedactor,
@@ -61,13 +73,11 @@ import {
   type EventCallback,
   eventCallbackSchema,
 } from './schemas.js';
-import type { SlackThreadDirectory } from './threads.js';
 
 /** `answerChannelSchema` in `@platform/contracts` has a value for this provider. */
 const ANSWER_CHANNEL = 'slack' as const;
 
 export interface SlackInboundDeps {
-  readonly threads: SlackThreadDirectory;
   /** The workspace this binding serves, or `null` for "any". */
   readonly teamId: string | null;
   /** The bot's own user id, so the adapter never answers its own question. */
@@ -142,7 +152,16 @@ const actorFor = (context: InboundContext, identity: ExternalIdentity, userId: I
  * a payload, and everything in a payload is untrusted data (BD-022). A value that is not ours
  * makes the click an unrecognised button rather than an answer.
  */
-const answerValueSchema = z.object({ q: z.uuid(), o: z.string().min(1).max(2000) });
+const answerValueSchema = z.object({
+  q: z.uuid(),
+  o: z.string().min(1).max(2000),
+  /**
+   * The task, beside the question since WP-88 (`blocks.ts`'s `answerButtonValue`) — the approval
+   * button's `t`. Optional only so a value without it is read through the thread; no production
+   * instance posted one, because `postQuestion` had no caller before WP-88.
+   */
+  t: z.uuid().optional(),
+});
 const approvalValueSchema = z.object({
   a: z.uuid(),
   d: z.enum(['approved', 'rejected']),
@@ -179,11 +198,33 @@ const recogniseAction = (payload: BlockActions): RecognisedAction | null => {
   return null;
 };
 
-const normaliseBlockActions = (
+/**
+ * The task a click is about: the button's own `t` first, the thread's row second, and a refusal
+ * when both answer and disagree — a disagreement means somebody rebuilt the message, and picking
+ * one would be picking an attacker's half.
+ */
+const taskForClick = async (
+  payload: BlockActions,
+  fromButton: string | null,
+  context: InboundContext,
+  kind: 'answer' | 'approval',
+): Promise<{ readonly taskId: Id } | NormalisedDelivery<CommunicationInboundEvent>> => {
+  const fromThread = (await threadForPayload(payload, context))?.taskId ?? null;
+  if (fromThread !== null && fromButton !== null && fromThread !== fromButton) {
+    return ignored('malformed_payload', `${kind} button and its thread name different tasks`);
+  }
+  const taskId = fromButton ?? fromThread;
+  if (taskId === null) {
+    return ignored('unsupported_event', `${kind} for a thread this binding did not open`);
+  }
+  return { taskId: taskId as Id };
+};
+
+const normaliseBlockActions = async (
   payload: BlockActions,
   context: InboundContext,
   deps: SlackInboundDeps,
-): NormalisedDelivery<CommunicationInboundEvent> => {
+): Promise<NormalisedDelivery<CommunicationInboundEvent>> => {
   const team = payload.team?.id ?? payload.user.team_id ?? null;
   if (!isForThisWorkspace(team, deps.teamId)) {
     return ignored('not_for_this_project', `interaction from workspace ${brief(team ?? 'none')}`);
@@ -215,15 +256,15 @@ const normaliseBlockActions = (
     if (!parsed.success || parsed.data.q !== recognised.id) {
       return ignored('malformed_payload', 'answer button carries no value this adapter wrote');
     }
-    const taskId = taskForPayload(payload, deps);
-    if (taskId === null) {
-      return ignored('unsupported_event', 'answer for a thread this binding did not open');
+    const task = await taskForClick(payload, parsed.data.t ?? null, context, 'answer');
+    if (!('taskId' in task)) {
+      return task;
     }
     const event: NormalisedEvent<'task.question.answered'> = {
       type: 'task.question.answered',
       payload: {
         project_id: context.projectId,
-        task_id: taskId,
+        task_id: task.taskId,
         question_id: recognised.id,
         answer: parsed.data.o,
         answered_by_user_id: userId,
@@ -245,23 +286,12 @@ const normaliseBlockActions = (
   if (parsed.data.d !== fromAction) {
     return ignored('malformed_payload', 'approval button and its value disagree');
   }
-  /**
-   * The task, from the button first and the thread directory second (WP-43).
-   *
-   * The directory is this adapter instance's memory, and the binding loader builds a fresh
-   * instance per delivery (Q55) — so on the inbound path it is empty, and a click resolved through
-   * it alone was always refused. When both answer they must agree: a disagreement means somebody
-   * rebuilt the message, and picking one would be picking an attacker's half.
-   */
-  const fromThread = taskForPayload(payload, deps);
-  const fromButton = parsed.data.t ?? null;
-  if (fromThread !== null && fromButton !== null && fromThread !== fromButton) {
-    return ignored('malformed_payload', 'approval button and its thread name different tasks');
+  // The task, from the button first and the thread's row second (WP-43, WP-88).
+  const task = await taskForClick(payload, parsed.data.t ?? null, context, 'approval');
+  if (!('taskId' in task)) {
+    return task;
   }
-  const taskId = fromButton ?? fromThread;
-  if (taskId === null) {
-    return ignored('unsupported_event', 'approval for a thread this binding did not open');
-  }
+  const taskId = task.taskId;
   const event: NormalisedEvent<'task.approval.decided'> = {
     type: 'task.approval.decided',
     payload: {
@@ -289,40 +319,43 @@ const safeJson = (value: string | null): unknown => {
 };
 
 /**
- * The task a clicked message belongs to.
+ * The thread a clicked message belongs to, through the platform's rows (WP-88).
  *
  * The container names the message that carried the button; a question is posted *into* a task
  * thread, so `thread_ts` is the thread and `message_ts` is the question. Both are tried because
- * the payload's container shape differs between a root message and a threaded one.
+ * the payload's container shape differs between a root message and a threaded one. Distinct
+ * candidates only, and at most four lookups: every one is a read the caller pays for.
  */
-const taskForPayload = (payload: BlockActions, deps: SlackInboundDeps): Id | null => {
+const threadForPayload = async (
+  payload: BlockActions,
+  context: InboundContext,
+): Promise<InboundThreadMatch | null> => {
   const channel = payload.channel?.id ?? payload.container?.channel_id ?? null;
   if (channel === null) {
     return null;
   }
-  const candidates = [
-    payload.container?.thread_ts,
-    payload.message?.thread_ts,
-    payload.container?.message_ts,
-    payload.message?.ts,
-  ];
-  for (const threadTs of candidates) {
-    if (typeof threadTs !== 'string' || threadTs === '') {
-      continue;
-    }
-    const taskId = deps.threads.taskForThread({ channel, threadTs });
-    if (taskId !== null) {
-      return taskId;
+  const candidates = new Set(
+    [
+      payload.container?.thread_ts,
+      payload.message?.thread_ts,
+      payload.container?.message_ts,
+      payload.message?.ts,
+    ].filter((value): value is string => typeof value === 'string' && value !== ''),
+  );
+  for (const threadId of candidates) {
+    const match = await context.resolveThread({ channel, threadId });
+    if (match !== null) {
+      return match;
     }
   }
   return null;
 };
 
-const normaliseMessageEvent = (
+const normaliseMessageEvent = async (
   delivery: EventCallback,
   context: InboundContext,
   deps: SlackInboundDeps,
-): NormalisedDelivery<CommunicationInboundEvent> => {
+): Promise<NormalisedDelivery<CommunicationInboundEvent>> => {
   const event = delivery.event;
   if (!isForThisWorkspace(delivery.team_id ?? null, deps.teamId)) {
     return ignored(
@@ -350,21 +383,45 @@ const normaliseMessageEvent = (
     // Not a threaded reply: a top-level channel message is not addressed to a task.
     return ignored('unsupported_event', 'message is not a reply in a task thread');
   }
-  const handle = { channel, threadTs };
-  const taskId = deps.threads.taskForThread(handle);
-  if (taskId === null) {
-    return ignored('unsupported_event', 'reply in a thread this binding did not open');
-  }
   const text = event.text ?? '';
   if (text.trim() === '') {
     return ignored('malformed_payload', 'message event carries no text');
   }
+  // The durable map (WP-88): the thread's task, and the open questions posted into it.
+  const thread = await context.resolveThread({ channel, threadId: threadTs });
+  if (thread === null) {
+    return ignored('unsupported_event', 'reply in a thread this binding did not open');
+  }
+  const taskId = thread.taskId;
+  /**
+   * **Several open questions make a reply ambiguous** (WP-88 review round 1). A stage opens one
+   * blocking question per artifact draft, and a reply names none of them; recording it as the
+   * answer to one would put a person's name under an answer they may have meant for another. So it
+   * answers nothing and is not feedback either — the words were addressed to a question — and the
+   * refusal is on the inbox row. Nobody is told in the channel; each question's buttons and the
+   * task page still answer it.
+   */
+  if (thread.openQuestions > 1) {
+    return ignored(
+      'unsupported_event',
+      `reply in a thread with ${thread.openQuestions} open questions names none of them; answer with a question's buttons or on the task page`,
+    );
+  }
 
   const identity = identityFor(user, false);
   const userId = context.resolveUser(identity);
-  const questionId = deps.threads.latestQuestion(handle);
+  const questionId = thread.questionId;
 
   if (questionId !== null) {
+    /**
+     * **A reply to an open question is an answer, and an answer is a human decision** (BD-006,
+     * Q10). From an unmapped account it is recorded on the delivery's `inbox` row — the reason and
+     * the account, which the identities screen offers for mapping — and changes nothing: the
+     * question stays open and no feedback is recorded either, because the words were addressed to
+     * the question. From a mapped one it goes to the Question aggregate, which asks the person's
+     * role and refuses a second answer (`inbound-decisions.ts`); the text is the redacted delivery
+     * (above) and is bounded there, as the task page's answer is.
+     */
     if (userId === null) {
       return ignored('unmapped_identity', `${brief(user)} is not mapped to a platform user`, {
         provider: SLACK_PROVIDER_ID,
@@ -413,11 +470,11 @@ const normaliseMessageEvent = (
 };
 
 /** One verified delivery, normalised. Never throws for a shape it does not recognise. */
-export const normaliseSlackDelivery = (
+export const normaliseSlackDelivery = async (
   delivery: WebhookDelivery,
   context: InboundContext,
   deps: SlackInboundDeps,
-): NormalisedDelivery<CommunicationInboundEvent> => {
+): Promise<NormalisedDelivery<CommunicationInboundEvent>> => {
   if (Buffer.byteLength(delivery.body, 'utf8') > deps.maxBodyBytes) {
     return ignored('malformed_payload', `delivery exceeds ${deps.maxBodyBytes} bytes`);
   }

@@ -276,3 +276,46 @@ export const settledApprovalBody = (input: {
     ].join('\n'),
   };
 };
+
+/** How a question stopped waiting, as the question aggregate records it (WP-88). */
+export type SettledQuestionOutcome = 'answered' | 'expired';
+
+/**
+ * The platform's sentence for each outcome. `answerer` is the name of the user in
+ * `answered_by_user_id`, already redacted by the caller; `null` keeps a sentence that names no one.
+ * The **answer itself is never repeated**: it is text a person (or, from chat, anybody mapped)
+ * typed, and it lives on the question and the task page, not in a channel message the platform
+ * appears to vouch for.
+ */
+const settledQuestionText = (outcome: SettledQuestionOutcome, answerer: string | null): string =>
+  outcome === 'answered'
+    ? answerer === null
+      ? 'Answered. The task page shows the answer and who gave it.'
+      : `Answered by ${answerer}. The task page shows the answer.`
+    : 'Expired: nobody answered before the deadline, so the task now needs a human on its page.';
+
+/**
+ * The edited question message — the same message with its buttons gone and the outcome in their
+ * place (WP-88, PROGRESS backlog 233), the question's twin of {@link settledApprovalBody}: markdown
+ * only, so the Slack adapter renders plain sections and the buttons are removed by being absent.
+ */
+export const settledQuestionBody = (input: {
+  readonly subject: NotificationSubject;
+  readonly outcome: SettledQuestionOutcome;
+  /** The answerer's display name, redacted; `null` when none is known or nobody answered. */
+  readonly answerer?: string | null;
+}): MessageBody => {
+  const name = boundText(unlabelledLinks(input.subject.name), NOTIFICATION_KEY_MAX);
+  const url = boundUrl(input.subject.url);
+  const answerer =
+    input.answerer === null || input.answerer === undefined || input.answerer.trim() === ''
+      ? null
+      : boundText(unlabelledLinks(input.answerer), SETTLED_APPROVAL_DECIDER_MAX);
+  return {
+    markdown: [
+      `**${boundText(`${name}: the question is settled`, NOTIFICATION_TITLE_MAX)}**`,
+      settledQuestionText(input.outcome, answerer),
+      ...(url === null ? [] : [url]),
+    ].join('\n'),
+  };
+};

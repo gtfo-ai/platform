@@ -100,6 +100,17 @@ capabilities() -> {threads, buttons, messageUpdate, socketMode, digest}
 ```
 An answer or an approval is emitted **only** for an author who maps to a platform user (BD-022, Q10); an unmapped author is reported as `ignored: unmapped_identity`. Feedback is different on purpose: it is data, not a decision, so it is recorded with the unmapped identity and a null user id.
 
+> **As built at WP-88 (PROGRESS backlog 195, 233): the thread ↔ task map is the platform's.** A
+> threaded reply carries a channel and a thread handle and nothing else, and an adapter is built per
+> call (Q55), so no adapter can remember which task a thread belongs to. The notify duty records the
+> task's thread in `chat_threads` (migration 0062) when it opens it, and a question's message on its
+> `notifications` row; the ingress hands every normaliser `InboundContext.resolveThread`, which
+> answers the thread's task and the open questions posted into it — a reply answers one only when
+> exactly one is open, and with several it answers nothing and is recorded as ambiguous. A question
+> is posted through `postQuestion` (buttons when a click and a reply can arrive, text naming the
+> task page otherwise), and the `question_settled` duty edits its message through `updateMessage`
+> once it is answered or expires, as WP-65's `approval_settled` does for an approval.
+
 ### ObservabilityErrors
 ```
 getIssue(ref) ; getLatestEvent(ref) -> {stackTrace, breadcrumbs, tags, release, firstSeen, lastSeen, count}

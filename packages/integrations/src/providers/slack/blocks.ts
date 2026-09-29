@@ -118,9 +118,12 @@ const context = (markdown: string): SlackBlock => ({
  * value is never *displayed*: the label comes from the button's `text`, which is escaped, and
  * `blocks.test.ts` asserts the raw string appears in no rendered field of the message.
  */
-export const answerButtonValue = (questionId: Id, option: string): string => {
-  const budget = BLOCK_LIMITS.buttonValue - JSON.stringify({ q: questionId, o: '' }).length;
-  return JSON.stringify({ q: questionId, o: truncate(option, Math.max(1, budget)) });
+export const answerButtonValue = (questionId: Id, option: string, taskId: Id): string => {
+  // `t` is the task, for the reason `approvalButtonValue` gives (WP-88): a click then names its
+  // task without a lookup, and the thread's row is the second opinion it must agree with.
+  const budget =
+    BLOCK_LIMITS.buttonValue - JSON.stringify({ q: questionId, o: '', t: taskId }).length;
+  return JSON.stringify({ q: questionId, o: truncate(option, Math.max(1, budget)), t: taskId });
 };
 
 const button = (input: {
@@ -147,6 +150,14 @@ export const taskThreadBlocks = (markdown: string): readonly SlackBlock[] => [
 ];
 
 /**
+ * How a question says a reply answers it — qualified, because a stage can have several questions
+ * open in one thread and a reply names none of them (WP-88 review round 1): the ingress then
+ * records it as ambiguous and answers nothing.
+ */
+export const REPLY_TO_ANSWER =
+  'Reply in this thread to answer, unless another question here is still open: then use the buttons or the task page';
+
+/**
  * A question: the text, one button per option, and the standing invitation to reply in the thread.
  *
  * A question with no options gets no `actions` block at all — an empty one is `invalid_blocks` —
@@ -156,6 +167,7 @@ export const taskThreadBlocks = (markdown: string): readonly SlackBlock[] => [
  */
 export const questionBlocks = (input: {
   readonly questionId: Id;
+  readonly taskId: Id;
   readonly markdown: string;
   readonly options: readonly string[];
 }): readonly SlackBlock[] => {
@@ -170,7 +182,7 @@ export const questionBlocks = (input: {
         button({
           actionId: ANSWER_ACTION_ID,
           text: option,
-          value: answerButtonValue(input.questionId, option),
+          value: answerButtonValue(input.questionId, option, input.taskId),
         }),
       ),
     });
@@ -178,8 +190,8 @@ export const questionBlocks = (input: {
   blocks.push(
     context(
       dropped > 0
-        ? `Reply in this thread to answer (${dropped} more option${dropped === 1 ? '' : 's'} not shown).`
-        : 'Reply in this thread to answer.',
+        ? `${REPLY_TO_ANSWER} (${dropped} more option${dropped === 1 ? '' : 's'} not shown).`
+        : `${REPLY_TO_ANSWER}.`,
     ),
   );
   return blocks;
@@ -188,11 +200,11 @@ export const questionBlocks = (input: {
 /**
  * The value an approval button carries: `{a: approval, d: decision, t: task}`.
  *
- * **`t` is there because nothing else on the inbound path can say which task a click is about**
- * (WP-43). The adapter's thread directory is in memory and the binding loader builds a fresh
- * adapter for every delivery (Q55), so the directory is empty on exactly the path that reads it —
- * a click resolved through it alone was always "an approval for a thread this binding did not
- * open". The value is ours, posted by the bot and echoed by Slack inside a verified payload; the
+ * **`t` is there because, at WP-43, nothing else on the inbound path could say which task a click
+ * is about.** The adapter's thread directory was in memory and the binding loader builds a fresh
+ * adapter for every delivery (Q55), so the directory was empty on exactly the path that read it.
+ * Since WP-88 the thread is also resolved from the platform's rows (`InboundContext.resolveThread`)
+ * and the two must agree; `t` still answers for a click in a thread no row names. The value is ours, posted by the bot and echoed by Slack inside a verified payload; the
  * task it names is still re-checked against the approval row before anything is decided
  * (`@platform/application`'s `inbound-decisions.ts`), so it is a pointer, never an authority.
  */
@@ -227,8 +239,14 @@ export const approvalBlocks = (input: {
       }),
     ],
   },
-  context('Or reply in this thread with your reasoning.'),
+  // WP-88 (backlog 299): a thread reply is never this approval's reason; it is feedback, unless a
+  // question is open in the thread, which it then answers (review round 1: the line is qualified).
+  context(APPROVAL_REPLY_NOTE),
 ];
+
+/** What a thread reply under an approval does (WP-88, backlog 299, review round 1). */
+export const APPROVAL_REPLY_NOTE =
+  'Decide with the buttons. A reply in this thread never approves or requests changes: it is feedback, or the answer to the one question open here.';
 
 export interface DigestLine {
   readonly title: string;

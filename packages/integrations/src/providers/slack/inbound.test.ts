@@ -21,7 +21,6 @@ import {
   REJECT_ACTION_ID,
 } from './blocks.js';
 import { normaliseSlackDelivery, type SlackInboundDeps } from './inbound.js';
-import { createMemoryThreadDirectory } from './threads.js';
 
 const PROJECT_ID = '00000000-0000-4000-8000-0000000000b7';
 const INTEGRATION_ID = '00000000-0000-4000-8000-0000000000a7';
@@ -38,12 +37,15 @@ const BOT_USER = 'U0FAKEBOT01';
 const TEAM = 'T0FAKETEAM1';
 
 let deps: SlackInboundDeps;
+/** The question the platform's rows say is open in the task's thread (WP-88), or none. */
+let openQuestion: string | null;
+/** How many are open — more than one makes a reply ambiguous (review round 1). */
+let openCount: number | null;
 
 beforeEach(() => {
-  const threads = createMemoryThreadDirectory();
-  threads.rememberThread(TASK_ID, { channel: CHANNEL, threadTs: THREAD_TS });
+  openQuestion = null;
+  openCount = null;
   deps = {
-    threads,
     teamId: TEAM,
     botUserId: BOT_USER,
     ids: sequentialIds(1),
@@ -55,11 +57,25 @@ beforeEach(() => {
   };
 });
 
+/**
+ * The platform's rows, as the ingress hands them over (WP-88): the task's thread is known, every
+ * other thread is not, and {@link openQuestion} is what is open in it.
+ */
+const resolveThread: InboundContext['resolveThread'] = async (thread) =>
+  thread.channel === CHANNEL && thread.threadId === THREAD_TS
+    ? {
+        taskId: TASK_ID,
+        openQuestions: openCount ?? (openQuestion === null ? 0 : 1),
+        questionId: (openCount ?? 1) === 1 ? openQuestion : null,
+      }
+    : null;
+
 const context = (mapped: boolean): InboundContext => ({
   projectId: PROJECT_ID,
   integrationId: INTEGRATION_ID,
   resolveUser: (identity: ExternalIdentity) =>
     mapped && identity.external_id === MAPPED ? USER_ID : null,
+  resolveThread,
 });
 
 const deliver = (payload: unknown) =>
@@ -187,6 +203,7 @@ describe('button answers (BD-006, Q10)', () => {
           seen.push(identity);
           return USER_ID;
         },
+        resolveThread,
       },
       deps,
     );
@@ -340,9 +357,62 @@ describe('approval decisions', () => {
   });
 });
 
+describe('which task a click is about (WP-88)', () => {
+  const OTHER_TASK = '00000000-0000-4000-8000-0000000000c8';
+  const withTask = (click: ReturnType<typeof answerClick>, taskId: string, thread = THREAD_TS) => ({
+    ...click,
+    container: { ...click.container, thread_ts: thread, message_ts: thread },
+    message: { ...click.message, ts: thread, thread_ts: thread },
+    actions: [
+      {
+        ...click.actions[0],
+        value: JSON.stringify({ q: QUESTION_ID, o: 'EUR', t: taskId }),
+      },
+    ],
+  });
+
+  it('reads the task off the button when the thread agrees', async () => {
+    const result = await deliver(withTask(answerClick(MAPPED), TASK_ID));
+    expect(result.ignored).toEqual([]);
+    expect(result.events[0]?.payload).toMatchObject({ task_id: TASK_ID, question_id: QUESTION_ID });
+  });
+
+  it('reads the task off the button in a thread the platform has no row for', async () => {
+    const result = await deliver(withTask(answerClick(MAPPED), TASK_ID, '1780000099.000100'));
+    expect(result.ignored).toEqual([]);
+    expect(result.events[0]?.payload).toMatchObject({ task_id: TASK_ID });
+  });
+
+  it('refuses a button and a thread that name different tasks', async () => {
+    const result = await deliver(withTask(answerClick(MAPPED), OTHER_TASK));
+    expect(result.events).toEqual([]);
+    expect(result.ignored[0]).toMatchObject({
+      reason: 'malformed_payload',
+      detail: 'answer button and its thread name different tasks',
+    });
+  });
+
+  it('asks the context for the thread, and never an adapter’s memory', async () => {
+    const asked: { channel: string; threadId: string }[] = [];
+    const result = await normaliseSlackDelivery(
+      { headers: {}, body: JSON.stringify(threadReply(MAPPED, 'EUR')) },
+      {
+        ...context(true),
+        resolveThread: async (thread) => {
+          asked.push({ ...thread });
+          return null;
+        },
+      },
+      deps,
+    );
+    expect(asked).toEqual([{ channel: CHANNEL, threadId: THREAD_TS }]);
+    expect(result.ignored[0]?.reason).toBe('unsupported_event');
+  });
+});
+
 describe('threaded replies', () => {
   it('answers the open question when one was posted in the thread', async () => {
-    deps.threads.rememberQuestion({ channel: CHANNEL, threadTs: THREAD_TS }, QUESTION_ID);
+    openQuestion = QUESTION_ID;
     const result = await deliver(threadReply(MAPPED, 'use EUR everywhere'));
     expect(result.ignored).toEqual([]);
     expect(result.events[0]?.type).toBe('task.question.answered');
@@ -353,8 +423,19 @@ describe('threaded replies', () => {
     });
   });
 
+  it('answers nothing when several questions are open, and records why (review round 1)', async () => {
+    openQuestion = QUESTION_ID;
+    openCount = 2;
+    const result = await deliver(threadReply(MAPPED, 'EUR'));
+    expect(result.events).toEqual([]);
+    expect(result.ignored[0]).toMatchObject({ reason: 'unsupported_event' });
+    expect(result.ignored[0]?.detail).toContain('2 open questions');
+    openCount = 1;
+    expect((await deliver(threadReply(MAPPED, 'EUR'))).events, 'control: one open').toHaveLength(1);
+  });
+
   it('refuses an unmapped reply to an open question, control included', async () => {
-    deps.threads.rememberQuestion({ channel: CHANNEL, threadTs: THREAD_TS }, QUESTION_ID);
+    openQuestion = QUESTION_ID;
     expect((await deliver(threadReply(MAPPED, 'EUR'))).events, 'control').toHaveLength(1);
     const stranger = await deliver(threadReply(STRANGER, 'CZK'));
     expect(stranger.events).toEqual([]);
@@ -497,7 +578,7 @@ describe('a delivery is redacted before any branch reads it (standing rule 31)',
   });
 
   it('redacts an answer, whether it arrives as a button value or as a reply', async () => {
-    deps.threads.rememberQuestion({ channel: CHANNEL, threadTs: THREAD_TS }, QUESTION_ID);
+    openQuestion = QUESTION_ID;
     const clicked = await deliver(answerClick(MAPPED, `option ${PLANTED}`));
     const clickedAnswer = clicked.events[0]?.payload as { answer: string } | undefined;
     expect(clickedAnswer?.answer).toBe(`option ${PLACEHOLDER}`);

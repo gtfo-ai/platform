@@ -280,6 +280,17 @@
 ## Rate limits and safety
 Per-user rate limits on mutating endpoints; webhook endpoints limited per integration; `POST /api/runs/:id/steer` limited to 1 message per 5 s per user; all human actions recorded in `human_actions` and `config_audit`.
 
+> **As built at WP-88 (PROGRESS backlog 199): a decision taken in chat is a human action too.** A
+> Slack click that approves a plan, or a Slack click or thread reply that answers a question, is
+> decided by the Approval or Question aggregate in the webhook delivery's transaction (WP-43), and
+> since WP-88 that transaction also writes one `human_actions` row — the mapped user, the task, the
+> route's own `action` (`task.approval.decide`, `task.question.answer`) and `params` keys, plus
+> `channel`, `provider`, `integration_id` and `delivery_id` — and none for a refused one, the
+> command routes' rule. The two command routes now carry `channel: 'ui'` in theirs, so the two doors
+> leave one shape. `GET /api/tasks/:task_id/audit` still reads `human_actions` only: the
+> alternative, an audit panel that also reads `inbox` rows, was rejected in technical/13's WP-88
+> row as two readers of one audit.
+
 > **As built at WP-87 (Q60): the webhook limit.** `POST /webhooks/:provider/:integrationId` takes a
 > token from a bucket keyed per `integrations.id` — never global — **after** the integration lookup
 > (so a caller cannot grow the set of buckets by inventing ids; that read — the `integrations` row by

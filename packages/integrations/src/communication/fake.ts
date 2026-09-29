@@ -49,6 +49,14 @@
  *     backlog 200): a fake that said `true` would have its approvals posted as text on every
  *     instance, for a reason that is not true of it. A test that wants the held-transport branch
  *     passes `capabilities: { socketMode: true }`.
+ * 11. **Same — a reply resolves its task and its question through the context** (WP-88, PROGRESS
+ *     backlog 195). `emitReply` carries a channel, a thread and the words and nothing else, so the
+ *     fake asks `InboundContext.resolveThread` exactly as the Slack adapter does: an unknown thread
+ *     is `unsupported_event`, a thread with exactly one open question is an answer (and an
+ *     unmapped author's answer is refused), one with several is `unsupported_event` (review round
+ *     1), one with none is feedback. A fake that read the task off the delivery would
+ *     be the kinder adapter-memory lookup WP-88 removed. `emitAnswer` and `emitFeedback` still name
+ *     the task, as a button's value does.
  * 10. **Different — this fake redacts nothing itself; its registration does** (WP-73b, PROGRESS
  *     backlog 260). Built directly, `inbound.normalise` reads the body as given. Resolved through
  *     `fakeCommunicationRegistration` (`bindings/fake-registrations.ts`), the loader's redactor is applied to the whole
@@ -146,10 +154,28 @@ const feedbackBody = z.strictObject({
   rating: z.int().min(1).max(5).nullish(),
 });
 
-const deliveryBody = z.discriminatedUnion('event', [answerBody, approvalBody, feedbackBody]);
+/**
+ * A reply typed in a thread (WP-88): a channel, a thread and the words — **no task and no
+ * question**, exactly what a real provider's threaded message carries, so the fake has to resolve
+ * both through `InboundContext.resolveThread` the way the Slack adapter does (divergence 11).
+ */
+const replyBody = z.strictObject({
+  event: z.literal('reply'),
+  channel: z.string().min(1),
+  thread_id: z.string().min(1),
+  author_id: z.string().min(1),
+  text: z.string().min(1),
+});
+
+const deliveryBody = z.discriminatedUnion('event', [
+  answerBody,
+  approvalBody,
+  feedbackBody,
+  replyBody,
+]);
 
 /** The event names this fake acts on. Anything else is `unsupported_event`, never an exception. */
-const KNOWN_EVENTS: ReadonlySet<string> = new Set(['answer', 'approval', 'feedback']);
+const KNOWN_EVENTS: ReadonlySet<string> = new Set(['answer', 'approval', 'feedback', 'reply']);
 
 export interface FakeCommunication extends CommunicationPort {
   readonly core: FakeCore;
@@ -176,6 +202,14 @@ export interface FakeCommunication extends CommunicationPort {
     readonly authorId: string;
     readonly text: string;
     readonly rating?: number;
+    readonly deliveryId?: string;
+  }): WebhookDelivery;
+  /** A reply typed in a thread: no task, no question — resolved through the context (WP-88). */
+  emitReply(input: {
+    readonly channel: string;
+    readonly threadId: string;
+    readonly authorId: string;
+    readonly text: string;
     readonly deliveryId?: string;
   }): WebhookDelivery;
   /**
@@ -322,10 +356,56 @@ export const createFakeCommunication = (options: FakeCommunicationOptions): Fake
           ignored: [{ reason: 'malformed_payload', detail: parsed.error.issues[0]?.message ?? '' }],
         };
       }
-      const body = parsed.data;
-      const identity = identityOf(body.author_id);
+      const parsedBody = parsed.data;
+      const identity = identityOf(parsedBody.author_id);
       const userId = context.resolveUser(identity);
       const author: ExternalIdentity = { ...identity, verified: userId !== null };
+
+      // Divergence 11: a reply names a thread, and only the platform's rows say what it is about.
+      let body: Exclude<z.infer<typeof deliveryBody>, { event: 'reply' }>;
+      if (parsedBody.event !== 'reply') {
+        body = parsedBody;
+      } else {
+        const thread = await context.resolveThread({
+          channel: parsedBody.channel,
+          threadId: parsedBody.thread_id,
+        });
+        if (thread === null) {
+          return {
+            events: [],
+            ignored: [
+              {
+                reason: 'unsupported_event',
+                detail: 'reply in a thread this binding did not open',
+              },
+            ],
+          };
+        }
+        if (thread.openQuestions > 1) {
+          // Several open questions: the reply names none of them (WP-88 review round 1).
+          return {
+            events: [],
+            ignored: [
+              { reason: 'unsupported_event', detail: 'reply names none of several open questions' },
+            ],
+          };
+        }
+        body =
+          thread.questionId === null
+            ? {
+                event: 'feedback',
+                task_id: thread.taskId,
+                author_id: parsedBody.author_id,
+                text: parsedBody.text,
+              }
+            : {
+                event: 'answer',
+                task_id: thread.taskId,
+                question_id: thread.questionId,
+                author_id: parsedBody.author_id,
+                text: parsedBody.text,
+              };
+      }
 
       if (body.event === 'feedback') {
         // Divergence 3: feedback is data, so an unmapped author is recorded, not dropped.
@@ -542,6 +622,20 @@ export const createFakeCommunication = (options: FakeCommunicationOptions): Fake
           author_id: input.authorId,
           text: input.text,
           rating: input.rating ?? null,
+        },
+      }),
+
+    emitReply: (input) =>
+      buildFakeDelivery({
+        secret: core.webhookSecret,
+        event: 'reply',
+        deliveryId: input.deliveryId ?? nextDeliveryId(),
+        payload: {
+          event: 'reply',
+          channel: input.channel,
+          thread_id: input.threadId,
+          author_id: input.authorId,
+          text: input.text,
         },
       }),
 

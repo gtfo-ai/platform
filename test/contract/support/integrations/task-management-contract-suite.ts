@@ -115,6 +115,7 @@ export const runTaskManagementContract = (harness: TaskManagementContractHarness
       projectId: context.projectId,
       integrationId: context.integrationId,
       resolveUser: resolve,
+      resolveThread: async () => null,
     });
 
     describe('capabilities and health', () => {

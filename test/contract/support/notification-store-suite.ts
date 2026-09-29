@@ -18,7 +18,12 @@
  * It deliberately does not assert transaction isolation: the in-memory store ignores the handle,
  * which is its one kind divergence and is written down in its register.
  */
-import type { NotificationEntry, NotificationStore, Transaction } from '@platform/application';
+import type {
+  InboundThreadDirectory,
+  NotificationEntry,
+  NotificationStore,
+  Transaction,
+} from '@platform/application';
 import type { Id, IsoDateTime } from '@platform/contracts';
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -36,6 +41,17 @@ export interface NotificationStoreHarness {
     readonly questionId: Id;
     /** A platform user the store knows, for the decider's name (WP-73, backlog 234). */
     readonly user: { readonly id: Id; readonly name: string };
+    /** A chat account of the project's organisation, for the thread cases (WP-88). */
+    readonly integrationId: Id;
+    /**
+     * The reader of what `recordThread` writes — `InboundThreadDirectory` over the same rows and,
+     * for PostgreSQL, the same transaction (WP-88).
+     */
+    readonly threads: InboundThreadDirectory;
+    /** A second question on the same task (WP-88 review round 1: several open in one thread). */
+    readonly secondQuestionId: Id;
+    /** Moves a question out of `open`, as an answer would (WP-88). */
+    closeQuestion(questionId: Id): Promise<void>;
     cleanup(): Promise<void>;
   }>;
 }
@@ -398,6 +414,130 @@ export const runNotificationStoreContract = (harness: NotificationStoreHarness):
         id: posted.id,
         approvalId: context.approvalId,
         messageRef: ref,
+      });
+    });
+
+    /** WP-88, backlog 233: the question's message, found again by the question. */
+    it('finds a question’s message by the question, and never a reminder’s row', async () => {
+      const taskId = context.taskId;
+      const ref = {
+        provider: 'fake-chat',
+        channel: '#agentic',
+        message_id: 'm-9',
+        thread_id: 't-1',
+        url: null,
+      };
+      const reminder = entry({
+        notificationClass: 'reminder',
+        plannedDelivery: 'immediate',
+        taskId,
+        questionId: context.questionId,
+      });
+      await store.record(tx, reminder);
+      await store.markDelivered(tx, {
+        id: reminder.id,
+        at: '2026-06-01T23:01:00.000Z' as IsoDateTime,
+        via: 'immediate',
+        // An address a reminder never carries in production — here to prove the class filter.
+        messageRef: { ...ref, message_id: 'm-reminder' },
+      });
+      expect(
+        await store.questionMessage(tx, context.questionId),
+        'a reminder is not it',
+      ).toBeNull();
+
+      const asked = entry({ plannedDelivery: 'immediate', taskId, questionId: context.questionId });
+      await store.record(tx, asked);
+      expect(await store.questionMessage(tx, context.questionId), 'no address yet').toBeNull();
+      await store.markDelivered(tx, {
+        id: asked.id,
+        at: '2026-06-01T23:02:00.000Z' as IsoDateTime,
+        via: 'immediate',
+        messageRef: ref,
+      });
+      expect(await store.questionMessage(tx, context.questionId)).toMatchObject({
+        id: asked.id,
+        questionId: context.questionId,
+        messageRef: ref,
+      });
+    });
+
+    /** WP-88, backlog 195: the thread ↔ task map, written by the store and read by the directory. */
+    it('records a task’s thread once, and the directory resolves it — with the open question posted into it', async () => {
+      const taskId = context.taskId as Id;
+      const key = {
+        projectId: context.projectId,
+        integrationId: context.integrationId,
+        channel: 'C0FAKECHAN1',
+        threadId: '1780000000.000100',
+      };
+      expect(await context.threads.find(key), 'nothing recorded yet').toBeNull();
+      const record = { ...key, taskId, at: '2026-06-01T23:00:00.000Z' as IsoDateTime };
+      await store.recordThread(tx, record);
+      await store.recordThread(tx, record);
+      expect(await context.threads.find(key)).toEqual({
+        taskId,
+        openQuestions: 0,
+        questionId: null,
+      });
+      // Scoped by every key half: another project's binding, another account, another channel and
+      // another thread each resolve nothing.
+      for (const [half, other] of [
+        ['projectId', '00000000-0000-4000-8000-00000000fff1'],
+        ['integrationId', '00000000-0000-4000-8000-00000000fff2'],
+        ['channel', 'C0FAKEOTHER'],
+        ['threadId', '1780000000.000999'],
+      ] as const) {
+        expect(await context.threads.find({ ...key, [half]: other }), half).toBeNull();
+      }
+
+      const post = async (questionId: Id, ts: string, at: string): Promise<void> => {
+        const asked = entry({ plannedDelivery: 'immediate', taskId, questionId });
+        await store.record(tx, asked);
+        await store.markDelivered(tx, {
+          id: asked.id,
+          at: at as IsoDateTime,
+          via: 'immediate',
+          messageRef: {
+            provider: 'fake-chat',
+            channel: key.channel,
+            message_id: ts,
+            thread_id: key.threadId,
+            url: null,
+          },
+        });
+      };
+
+      // A question posted into the thread with an address is what a reply there answers …
+      await post(context.questionId, '1780000001.000200', '2026-06-01T23:01:00.000Z');
+      expect(await context.threads.find(key)).toEqual({
+        taskId,
+        openQuestions: 1,
+        questionId: context.questionId,
+      });
+
+      // … a second open one makes a reply ambiguous: it names neither (review round 1) …
+      await post(context.secondQuestionId, '1780000002.000300', '2026-06-01T23:02:00.000Z');
+      expect(await context.threads.find(key)).toEqual({
+        taskId,
+        openQuestions: 2,
+        questionId: null,
+      });
+
+      // … once one is answered, a reply answers the other …
+      await context.closeQuestion(context.questionId);
+      expect(await context.threads.find(key)).toEqual({
+        taskId,
+        openQuestions: 1,
+        questionId: context.secondQuestionId,
+      });
+
+      // … and once none is open, a reply there is feedback again.
+      await context.closeQuestion(context.secondQuestionId);
+      expect(await context.threads.find(key)).toEqual({
+        taskId,
+        openQuestions: 0,
+        questionId: null,
       });
     });
 

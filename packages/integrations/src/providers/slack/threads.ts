@@ -1,40 +1,31 @@
 /**
- * Which thread belongs to which task, and which question is open in it.
+ * Which thread this adapter instance opened for which task — `postTaskThread`'s promise, kept for
+ * the life of one instance.
  *
- * Two port promises need this, and neither can be kept from a Slack payload alone:
+ * The port promises one thread per task: "Slack will happily start a second thread; the port
+ * promises one, so the *adapter* has to remember" (`FakeCommunication` divergence 1). This map is
+ * that memory, and it is **only** that.
  *
- *  1. **`postTaskThread` is idempotent by `taskId`.** "Slack will happily start a second thread;
- *     the port promises one, so the *adapter* has to remember" (`FakeCommunication` divergence 1).
- *  2. **A threaded reply is an answer.** An inbound `message` event carries a `thread_ts` and
- *     nothing else — no task, no question. Turning it into `task.question.answered` needs the
- *     mapping this directory holds.
+ * ## It is not the inbound map any more (WP-88, PROGRESS backlog 195)
  *
- * ## The durable half is the executor's, and that is deliberate
+ * Until WP-88 this directory also answered "which task does this thread belong to, and which
+ * question is open in it" for the inbound normaliser. The binding loader builds an adapter **per
+ * call** so the redactor can carry the call's run-scoped credentials (Q55), so on the inbound path
+ * the directory was always empty and a threaded reply reached nothing. The durable map is the
+ * platform's: the notify duty records the thread in `chat_threads` (migration 0062) and the
+ * question's message on its `notifications` row, and the ingress hands the normaliser
+ * `InboundContext.resolveThread`. The two inbound methods this interface used to carry
+ * (`taskForThread`, `latestQuestion`) and the writer beside them (`rememberQuestion`) are deleted
+ * rather than left as a second, kinder answer a test could keep passing against.
  *
- * The default implementation is in memory, so a restart forgets — and on the pipeline's path it
- * forgets *between calls*, not merely between restarts. That is a **divergence, written down**
- * (see `provider.ts`), and the platform's durable answer to "did I already do this" is
- * `IntegrationActionExecutor`'s idempotency store. A `ThreadRef` is JSON, so the executor *can*
- * replay one: given an `IdempotencyPlan` keyed by task, a second call after a restart returns the
- * stored ref and issues **zero** HTTP requests, which
- * `test/contract/integrations/slack-executor.contract.test.ts` asserts against a *fresh* adapter —
- * the only version of that assertion the in-memory map cannot fake.
+ * ## The durable half of the outbound promise is the executor's
  *
- * **The plan is the caller's, and WP-32 is the caller that finally writes one.** This docblock and
- * `provider.ts` both said `post_task_thread` "carries" one; it does not — `provider.ts`'s
- * `send({ action: 'post_task_thread' })` attaches no `idempotency`, and the plan in that contract
- * test is built by the test. What changed is that there is now a production caller:
- * `communicationWrites.taskThread` (`@platform/application`'s `pipeline/integrations.ts`) attaches
- * a plan keyed `<provider>:thread:<taskId>`, which it must — the binding loader builds this adapter
- * **per call** so the redactor can carry the call's run-scoped credentials (Q55), so the map below
- * is empty on every notification and only the executor's idempotency store remembers. The sentence
- * that used to end here — *"`slack/digest.ts` is the only place in this repository that ships
- * one"* — was made false twice over by that work package, which also moved the digest into the
- * application ring (standing rules 63 and 83: an exclusivity claim is a statement about every
- * other file, and closing a gap falsifies the sentence that described it).
- *
- * The interface is exported so WP-15 can supply a database-backed one without touching the
- * adapter: it is the seam, not an implementation detail.
+ * On the pipeline's path this map is empty on every call for the same reason, and the platform's
+ * durable answer to "did I already open this thread" is `IntegrationActionExecutor`'s idempotency
+ * store: `communicationWrites.taskThread` (`@platform/application`'s `pipeline/integrations.ts`)
+ * attaches a plan keyed `<provider>:thread:<taskId>`, and a `ThreadRef` is JSON, so a second call
+ * after a restart replays the stored ref and issues **zero** HTTP requests —
+ * `test/contract/integrations/slack-executor.contract.test.ts` asserts it against a *fresh* adapter.
  */
 import type { Id } from '@platform/contracts';
 
@@ -47,36 +38,17 @@ export interface SlackThreadDirectory {
   /** Records that `taskId`'s conversation lives at `handle`. Repeats are idempotent. */
   rememberThread(taskId: Id, handle: SlackThreadHandle): void;
   threadForTask(taskId: Id): SlackThreadHandle | null;
-  /** The task a thread belongs to, or `null` when this binding never opened it. */
-  taskForThread(handle: SlackThreadHandle): Id | null;
-  /** Records a question posted into a thread. The latest one is what a reply answers. */
-  rememberQuestion(handle: SlackThreadHandle, questionId: Id): void;
-  /** The most recently posted question in a thread, or `null`. */
-  latestQuestion(handle: SlackThreadHandle): Id | null;
 }
-
-/**
- * Map key for a thread. The separator is written as the escape `\0`, never as a literal NUL
- * byte: a NUL in the source makes git treat the whole file as binary, so its diff renders as
- * "Bin 0 -> 3808 bytes", `grep -rn` skips it and it cannot be three-way merged. It happened at
- * WP-05 and again here, which is why `pnpm run -s nul:check` now fails the build on one.
- *
- * The separator stays unambiguous: a Slack channel id is `[A-Z0-9]+` and a `ts` is digits and a
- * dot, so neither half can contain a NUL.
- */
-const keyOf = (handle: SlackThreadHandle): string => `${handle.channel}\0${handle.threadTs}`;
 
 /**
  * The default directory: a map, bounded.
  *
  * `maxThreads` exists because this is reachable from an unbounded stream of tasks in a long-lived
- * process; the oldest entry is evicted, which costs a forgotten thread (a lost answer *route*,
- * recoverable) rather than a growing map (a lost process).
+ * process; the oldest entry is evicted, which costs a second thread for an old task (the executor's
+ * idempotency plan still replays the first) rather than a growing map (a lost process).
  */
 export const createMemoryThreadDirectory = (maxThreads = 1000): SlackThreadDirectory => {
   const byTask = new Map<Id, SlackThreadHandle>();
-  const taskByThread = new Map<string, Id>();
-  const questionByThread = new Map<string, Id>();
 
   const evictIfNeeded = (): void => {
     while (byTask.size > maxThreads) {
@@ -84,26 +56,15 @@ export const createMemoryThreadDirectory = (maxThreads = 1000): SlackThreadDirec
       if (oldest === undefined) {
         return;
       }
-      const handle = byTask.get(oldest);
       byTask.delete(oldest);
-      if (handle !== undefined) {
-        taskByThread.delete(keyOf(handle));
-        questionByThread.delete(keyOf(handle));
-      }
     }
   };
 
   return {
     rememberThread: (taskId, handle) => {
       byTask.set(taskId, handle);
-      taskByThread.set(keyOf(handle), taskId);
       evictIfNeeded();
     },
     threadForTask: (taskId) => byTask.get(taskId) ?? null,
-    taskForThread: (handle) => taskByThread.get(keyOf(handle)) ?? null,
-    rememberQuestion: (handle, questionId) => {
-      questionByThread.set(keyOf(handle), questionId);
-    },
-    latestQuestion: (handle) => questionByThread.get(keyOf(handle)) ?? null,
   };
 };

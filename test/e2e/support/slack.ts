@@ -55,6 +55,8 @@ export interface FakeSlack {
   readonly fetch: SlackFetch;
   readonly connect: SocketConnect;
   readonly posted: PostedMessage[];
+  /** Every `chat.update` the adapter sent (WP-88): the settled approval's or question's edit. */
+  readonly updated: { readonly channel: string; readonly ts: string; readonly text: string }[];
   readonly connections: FakeConnection[];
   /** How many times the adapter asked for a `wss://` URL (`apps.connections.open`). */
   opens(): number;
@@ -74,6 +76,7 @@ const nextTs = (): string => {
 
 export const createFakeSlack = (): FakeSlack => {
   const posted: PostedMessage[] = [];
+  const updated: FakeSlack['updated'] = [];
   const connections: FakeConnection[] = [];
   let opens = 0;
 
@@ -115,6 +118,17 @@ export const createFakeSlack = (): FakeSlack => {
         });
         return answer({ ok: true, channel, ts, message: { text: body.text, ts } });
       }
+      case 'chat.update': {
+        // Slack answers an edit of a message it does not have with `message_not_found`, not a
+        // quiet success (rule 1).
+        const channel = String(body.channel ?? '');
+        const ts = String(body.ts ?? '');
+        if (!posted.some((message) => message.channel === channel && message.ts === ts)) {
+          return answer({ ok: false, error: 'message_not_found' });
+        }
+        updated.push({ channel, ts, text: String(body.text ?? '') });
+        return answer({ ok: true, channel, ts, text: body.text });
+      }
       default:
         return answer({ ok: false, error: 'unknown_method' });
     }
@@ -147,6 +161,7 @@ export const createFakeSlack = (): FakeSlack => {
     fetch,
     connect,
     posted,
+    updated,
     connections,
     opens: () => opens,
     live,
@@ -244,6 +259,31 @@ export const blockActionsFor = (button: PostedButton, userId: string) => {
         action_ts: `1780009${String(actionCounter).padStart(3, '0')}.000001`,
       },
     ],
+  };
+};
+
+let replyCounter = 0;
+
+/** Slack's `event_callback` for a message `userId` typed in the thread rooted at `threadTs`. */
+export const threadReplyFor = (threadTs: string, userId: string, text: string) => {
+  replyCounter += 1;
+  const ts = `1780008${String(replyCounter).padStart(3, '0')}.000001`;
+  return {
+    token: 'not-read-by-this-adapter',
+    team_id: SLACK_E2E_TEAM,
+    api_app_id: 'A0FAKEAPP01',
+    type: 'event_callback',
+    event_id: `Ev0FAKEE2E${String(replyCounter).padStart(4, '0')}`,
+    event_time: 1_780_008_000 + replyCounter,
+    event: {
+      type: 'message',
+      channel: SLACK_E2E_CHANNEL,
+      user: userId,
+      text,
+      ts,
+      thread_ts: threadTs,
+      channel_type: 'channel',
+    },
   };
 };
 
