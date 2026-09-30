@@ -178,6 +178,77 @@ describe('composing the agent runner', () => {
   });
 });
 
+/**
+ * WP-118 (TD-025's amendment, PROGRESS backlog 342): this file is the production composition, and
+ * the launcher's answer only reaches the CLI if its `build` forwards it. Driven through the composed
+ * runner to the one seam that shows it — the environment the SDK hands `spawnClaudeCodeProcess`,
+ * which the run shim gives the CLI verbatim — and stopped there.
+ */
+describe('the composed runner hands the launcher’s CLI environment to the spawn (WP-118)', () => {
+  it('spawns the CLI with the proxy, HOME, CLAUDE_CONFIG_DIR, PATH and one git list of two', async () => {
+    const { logger } = recordingLogger();
+    const spawned: Record<string, string | undefined>[] = [];
+    const answering: runnerAdapters.RunWorkspaceProvisioner = {
+      provision: async () => ({
+        workdir: '/work/repo',
+        claudeCodePath: '/usr/local/bin/claude',
+        cliEnvironment: {
+          proxy: { url: 'http://egress-wp118:8888', noProxy: 'localhost,127.0.0.1' },
+          home: '/tmp',
+          claudeConfigDir: '/tmp/claude',
+          path: '/usr/local/bin:/usr/bin:/bin',
+          gitConfig: [
+            {
+              key: 'credential.helper',
+              value: '!agentic-runlet credential --socket /ctl/cred.sock',
+            },
+          ],
+        },
+        spawn: (options) => {
+          spawned.push({ ...options.env });
+          throw new Error('the spawn is the seam under test; the run stops here');
+        },
+        release: async () => {},
+      }),
+    };
+    const composed = composeAgentRunner({
+      pool,
+      broadcast,
+      provisioner: answering,
+      runSecrets,
+      tools,
+      providerMode: 'api',
+      modelApiKey: 'FAKE-anthropic-key-not-a-real-secret-000',
+      logger,
+    });
+    if (composed.runner === null) {
+      throw new Error('expected a runner');
+    }
+    const spec = runnerAdapters.runSpecFixture({
+      env: agentRunEnvironment({
+        providerMode: 'api',
+        modelApiKey: 'FAKE-anthropic-key-not-a-real-secret-000',
+      }).env,
+      secretEnvNames: ['ANTHROPIC_API_KEY'],
+      artifactType: null,
+    });
+    await composed.runner.start(spec).outcome.catch(() => undefined);
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0]).toMatchObject({
+      ANTHROPIC_API_KEY: 'FAKE-anthropic-key-not-a-real-secret-000',
+      HTTPS_PROXY: 'http://egress-wp118:8888',
+      HTTP_PROXY: 'http://egress-wp118:8888',
+      NO_PROXY: 'localhost,127.0.0.1',
+      HOME: '/tmp',
+      CLAUDE_CONFIG_DIR: '/tmp/claude',
+      PATH: '/usr/local/bin:/usr/bin:/bin',
+      GIT_CONFIG_COUNT: '2',
+      GIT_CONFIG_KEY_0: 'credential.helper',
+      GIT_CONFIG_KEY_1: 'core.fsmonitor',
+    });
+  });
+});
+
 describe('the run environment', () => {
   it('names the credential it injects, so TD-012 step 1 covers it', () => {
     // A key in `env` that is not in `secretEnvNames` is a credential no redactor knows about, which

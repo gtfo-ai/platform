@@ -13,7 +13,9 @@
  * Two modes:
  *
  *   `agentic-runlet` (or `serve`)  listen on the control and credential sockets, own one child.
- *   `agentic-runlet credential get`  the workspace's git credential helper (technical/05).
+ *   `agentic-runlet credential --socket <path> get`  the workspace's git credential helper
+ *                                                    (technical/05; the socket is an argument
+ *                                                    since WP-118).
  *
  * **WP-22 packages this, and the import above is part of the packaging.** TD-025 §1 wants a single
  * file with no runtime dependencies in the `platform-runtime` image: `pnpm --filter @platform/runlet
@@ -30,6 +32,8 @@ import process from 'node:process';
 import {
   createRunletLogger,
   createRunletShim,
+  NO_CREDENTIAL_SOCKET_MESSAGE,
+  parseCredentialHelperArgs,
   readRunletConfig,
   runCredentialHelper,
   systemClock,
@@ -44,14 +48,19 @@ const readStdin = async (): Promise<string> => {
 };
 
 const credentialMode = async (argv: readonly string[]): Promise<void> => {
-  const socketPath = process.env['RUNLET_CREDENTIAL_SOCKET'];
-  if (socketPath === undefined || socketPath.length === 0) {
-    // No socket, no credential. Silence is what git reads as "this helper has nothing".
+  // The socket is an argument (WP-118 review round 1): the CLI's git has no `RUNLET_*` name in its
+  // environment, by design, so the environment is not where this helper can find it.
+  const { socketPath, operation } = parseCredentialHelperArgs(argv);
+  if (socketPath === null) {
+    // Loud, not silent: git prints a helper's stderr and treats a non-zero exit as a failed helper,
+    // so a misconfigured workspace says why instead of failing the push with no diagnosis.
+    process.stderr.write(`${NO_CREDENTIAL_SOCKET_MESSAGE}\n`);
+    process.exitCode = 2;
     return;
   }
   const output = await runCredentialHelper({
-    argv,
-    stdin: argv[0] === 'get' ? await readStdin() : '',
+    argv: operation === null ? [] : [operation],
+    stdin: operation === 'get' ? await readStdin() : '',
     socketPath,
   });
   if (output.length > 0) {

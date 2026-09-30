@@ -72,8 +72,8 @@
  *    before its socket's close arrives.
  *  - **The runner reaps what is left** (`packages/application/src/recovery/orphan-workspaces.ts`),
  *    because deciding that a run is over needs `runs` and this process reads no database (TD-021).
- *    It asks the two verbs below: `GET /v1/runs`, the run ids of the containers this **instance**
- *    labelled, read off the daemon — never off `creates`, which a restart empties — and
+ *    It asks the two verbs below: `GET /v1/runs`, the run ids of the containers and networks this
+ *    **instance** labelled (networks since WP-118's pre-review round), read off the daemon — never off `creates`, which a restart empties — and
  *    `POST /v1/runs/<id>/destroy`, which removes a run by label with no handle and is serialised
  *    behind this process' own create and end of the same run. The instance is the control volume's
  *    name (`WORKSPACE_LABELS.instance`); `DockerWorkspaceProvider.listLabelledRuns` states the two
@@ -307,6 +307,7 @@ export const startControlPlane = async (options: ControlPlaneOptions): Promise<C
         claudeCodePath: options.claudeCodePath,
         credentialScope: started.credentialScope,
         existingProtectedPaths: started.existingProtectedPaths,
+        cliEnvironment: started.cliEnvironment,
         replayed: false,
       };
     })();

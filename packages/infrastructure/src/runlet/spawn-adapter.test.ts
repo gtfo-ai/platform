@@ -486,3 +486,64 @@ describe('the runner-side SpawnedProcess', () => {
     });
   });
 });
+
+/**
+ * WP-118 (TD-012, PROGRESS backlog 342): the spawn frame now carries the container's facts beside
+ * the model credential, so what the two ends of the transport **log** about a spawn is held here —
+ * the command, the working directory, the pid and nothing of `env`. The frame itself is written to
+ * no transcript and no log; this is the assertion that says so for both of its ends.
+ */
+describe('the spawn’s environment reaches no log line (WP-118)', () => {
+  it('logs no env value on either end of a spawn', async () => {
+    const lines: string[] = [];
+    const recording = {
+      debug: (fields: object, message: string) =>
+        lines.push(`${message} ${JSON.stringify(fields)}`),
+      info: (fields: object, message: string) => lines.push(`${message} ${JSON.stringify(fields)}`),
+      warn: (fields: object, message: string) => lines.push(`${message} ${JSON.stringify(fields)}`),
+      error: (fields: object, message: string) =>
+        lines.push(`${message} ${JSON.stringify(fields)}`),
+    };
+    const env = {
+      PATH: process.env['PATH'] ?? '/usr/bin',
+      ANTHROPIC_API_KEY: 'FAKE-wp118-model-key-not-a-credential',
+      HTTPS_PROXY: 'http://egress-wp118-sentinel:8888',
+      HOME: '/tmp/wp118-sentinel-home',
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'credential.helper',
+      GIT_CONFIG_VALUE_0: '!wp118-sentinel-helper credential',
+    };
+    const volume = await createControlVolume();
+    const clock = manualClock(1_000);
+    const shim = createRunletShim({
+      controlSocketPath: volume.controlSocketPath,
+      credentialSocketPath: volume.credentialSocketPath,
+      token: TOKEN,
+      clock,
+      logger: recording,
+    });
+    await shim.start();
+    cleanups.push(async () => {
+      await shim.close();
+      await volume.cleanup();
+    });
+    const spawn = createRunletSpawn({
+      socketPath: volume.controlSocketPath,
+      token: TOKEN,
+      clock,
+      logger: recording,
+    });
+    const ran = spawn(spawnOptionsFor('process.exit(3)', { env }));
+    expect((await exitOf(ran))[0]).toBe(3);
+    // The shim did log the spawn — the line that would carry an environment if anything did.
+    expect(lines.some((line) => line.startsWith('runlet spawned'))).toBe(true);
+    // The distinctive values: `PATH`, `1` and `credential.helper` are words a log line may carry
+    // for its own reasons, so they prove nothing either way.
+    const sentinels = [env.ANTHROPIC_API_KEY, env.HTTPS_PROXY, env.HOME, env.GIT_CONFIG_VALUE_0];
+    for (const value of sentinels) {
+      for (const line of lines) {
+        expect(line, `a log line carries the env value ${value}`).not.toContain(value);
+      }
+    }
+  });
+});

@@ -7,24 +7,34 @@
  * not line up, each marked **DIVERGENCE** with what was done about it.
  */
 import type { Options, SpawnedProcess, SpawnOptions } from '@anthropic-ai/claude-agent-sdk';
-import type { RunSpec } from '@platform/application';
+import type {
+  RunSpec,
+  WorkspaceCliEnvironment,
+  WorkspaceGitConfigEntry,
+} from '@platform/application';
 import { PLATFORM_SKILLS_PLUGIN_DIRECTORY } from '@platform/application';
+import {
+  CLI_ENVIRONMENT_NAMES,
+  cliEnvironmentVariables,
+  GIT_CONFIG_PREFIX,
+  numberGitConfig,
+} from '../workspace/cli-environment.js';
 import { artifactJsonSchema } from './structured-output.js';
 
 /**
  * Environment the platform sets whatever the spec says.
  *
- * These are applied **after** `RunSpec.env`, so a spec — which is built from user-editable
- * effective config — cannot switch the auto-updater back on, raise the subagent depth or re-enable
- * telemetry inside a run container. technical/04 lists them under `env` as platform concerns;
- * putting them last is what makes that true rather than customary.
+ * These are applied **after** `RunSpec.env` and after the workspace's answer, so a spec — which is
+ * built from user-editable effective config — cannot switch the auto-updater back on, raise the
+ * subagent depth or re-enable telemetry inside a run container. technical/04 lists them under `env`
+ * as platform concerns; putting them last is what makes that true rather than customary.
  *
- * **This object is the CLI's whole environment in a run container**, which is why the opt-outs and
- * the git setting below live here rather than on the container (WP-104, PROGRESS backlogs 285 and
- * 282): the SDK spawns with `Options.env` verbatim when it is given (`{...options.env}`, not merged
- * with `process.env` — read in SDK 0.3.267's `sdk.mjs`), the spawn frame carries it, and the run
- * shim starts the child with `env: { ...frame.env }`, which **replaces** its own environment
- * (`../runlet/shim.ts`). A variable set only on the container reaches the shim and stops there.
+ * The opt-outs live here rather than on the container (WP-104, PROGRESS backlog 285) because the
+ * container's environment reaches the shim and stops there: the SDK spawns with `Options.env`
+ * verbatim when it is given (`{...options.env}`, not merged with `process.env` — read in SDK
+ * 0.3.267's `sdk.mjs`), the spawn frame carries it, and the run shim starts the child with
+ * `env: { ...frame.env }`, which **replaces** its own environment (`../runlet/shim.ts`). The whole
+ * environment is {@link cliEnvironment}; this is its platform half.
  */
 export const platformEnvironment = (spec: RunSpec): Record<string, string> => ({
   // technical/04 § "Hooks and policies": enforce `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`.
@@ -39,19 +49,77 @@ export const platformEnvironment = (spec: RunSpec): Record<string, string> => ({
   // (PROGRESS backlog 285). What it changes about the hosts the pinned CLI contacts is WP-33's
   // measurement (backlog 137); setting an opt-out cannot widen egress, so it does not wait for it.
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
-  // PROGRESS backlog 282 (WP-104): a `core.fsmonitor` the run writes into `.git/config` turns the
-  // allow-listed `git status` into an arbitrary command — measured in `platform-runtime` (git
-  // 2.47.3), the WP-104 notes. `GIT_CONFIG_COUNT` entries are command-line configuration, which
-  // outranks the repository's, and every git the CLI's shell starts inherits this environment.
-  // Only this key, for the export helper's reason against enumerating `-c` overrides
-  // (`../workspace/provider.ts`): the write guard refuses `.git/` for Edit and Write, and this key
-  // covers the setting whichever route wrote it — a shell redirection or `git config` is `ask`, but
-  // repository content a project command runs (BD-025's accepted residual) is not. `core.hooksPath`
-  // and the other keys git executes are not overridden here; that residual is stated, not closed.
-  GIT_CONFIG_COUNT: '1',
-  GIT_CONFIG_KEY_0: 'core.fsmonitor',
-  GIT_CONFIG_VALUE_0: 'false',
 });
+
+/**
+ * The platform's git configuration for every git the CLI starts — numbered together with the
+ * workspace's entries by {@link cliEnvironment}, never on its own index 0 (WP-118).
+ *
+ * PROGRESS backlog 282 (WP-104): a `core.fsmonitor` the run writes into `.git/config` turns the
+ * allow-listed `git status` into an arbitrary command — measured in `platform-runtime` (git 2.47.3),
+ * the WP-104 notes. `GIT_CONFIG_COUNT` entries are command-line configuration, which outranks the
+ * repository's, and every git the CLI's shell starts inherits this environment. Only this key, for
+ * the export helper's reason against enumerating `-c` overrides (`../workspace/provider.ts`): the
+ * write guard refuses `.git/` for Edit and Write, and this key covers the setting whichever route
+ * wrote it — a shell redirection or `git config` is `ask`, but repository content a project command
+ * runs (BD-025's accepted residual) is not. `core.hooksPath` and the other keys git executes are not
+ * overridden here; that residual is stated, not closed.
+ */
+export const PLATFORM_GIT_CONFIG: readonly WorkspaceGitConfigEntry[] = [
+  { key: 'core.fsmonitor', value: 'false' },
+];
+
+/**
+ * **The `claude` process's whole environment**, composed in one function — TD-025's amendment
+ * (PROGRESS backlog 342, WP-118). The SDK spawns with it verbatim and the shim replaces its child's
+ * environment with it, so what this returns is what the CLI gets; nothing on the container is
+ * inherited.
+ *
+ * In order, each later part winning over an earlier one:
+ *
+ *  1. `RunSpec.env` — the model credential (`agentRunEnvironment`), **minus every `GIT_CONFIG*`
+ *     name** (git's list is numbered once, below, and a spec entry would either collide with an
+ *     index or sit past the count) and, when there is an answer, **minus every name the answer
+ *     owns** — the proxy names included when the answer is "no sidecar", so a spec is never a second
+ *     source of a proxy — both compared case-insensitively (`https_proxy` is the spelling curl and
+ *     undici prefer);
+ *  2. the workspace's answer — `HOME`, `CLAUDE_CONFIG_DIR`, the image's `PATH` and, when the run has
+ *     a sidecar, `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` — so a spec cannot redirect the proxy or the
+ *     home the launcher answered;
+ *  3. {@link platformEnvironment};
+ *  4. **one** git list: the workspace's entries first (`credential.helper`), then
+ *     {@link PLATFORM_GIT_CONFIG} (`core.fsmonitor`), `GIT_CONFIG_COUNT=2` with contiguous indices.
+ *     A key on both sides is refused by name (`numberGitConfig`), which fails the run's start rather
+ *     than dropping one of them.
+ *
+ * `workspace` is `null` for a run with no launcher answer behind it (a test's fake CLI, or a
+ * composition that does not forward one): the environment is then what it was before WP-118 — the
+ * spec's and the platform's, and the one platform git entry at `COUNT=1`.
+ */
+export const cliEnvironment = (
+  spec: RunSpec,
+  workspace: WorkspaceCliEnvironment | null,
+): Record<string, string> => {
+  // Compared **case-insensitively** (WP-118 review round 1): curl and Node's undici read the
+  // lowercase `https_proxy`/`http_proxy`/`no_proxy` first, so an uppercase-only filter let a spec's
+  // `https_proxy` redirect the CLI past the answered sidecar. git reads `GIT_CONFIG_*` exactly, but
+  // a lowercase spelling is refused with the rest — nothing legitimate is spelled that way.
+  const answered = new Set<string>(
+    workspace === null ? [] : CLI_ENVIRONMENT_NAMES.map((name) => name.toUpperCase()),
+  );
+  const fromSpec = Object.fromEntries(
+    Object.entries(spec.env).filter(([name]) => {
+      const folded = name.toUpperCase();
+      return !folded.startsWith(GIT_CONFIG_PREFIX) && !answered.has(folded);
+    }),
+  );
+  return {
+    ...fromSpec,
+    ...(workspace === null ? {} : cliEnvironmentVariables(workspace)),
+    ...platformEnvironment(spec),
+    ...numberGitConfig([...(workspace?.gitConfig ?? []), ...PLATFORM_GIT_CONFIG]),
+  };
+};
 
 export interface QueryOptionParts {
   readonly hooks: Options['hooks'];
@@ -61,6 +129,8 @@ export interface QueryOptionParts {
   readonly abortController: AbortController;
   readonly stderr: (data: string) => void;
   readonly spawnClaudeCodeProcess?: (options: SpawnOptions) => SpawnedProcess;
+  /** The launcher's answer for this run (WP-118), or absent: {@link cliEnvironment}'s input. */
+  readonly workspaceEnvironment?: WorkspaceCliEnvironment;
 }
 
 export const buildQueryOptions = (spec: RunSpec, parts: QueryOptionParts): Options => {
@@ -168,7 +238,7 @@ export const buildQueryOptions = (spec: RunSpec, parts: QueryOptionParts): Optio
     // The platform writes its own `hook` transcript rows from the callbacks; the SDK's hook
     // lifecycle messages would duplicate every one of them.
     includeHookEvents: false,
-    env: { ...spec.env, ...platformEnvironment(spec) },
+    env: cliEnvironment(spec, parts.workspaceEnvironment ?? null),
     stderr: parts.stderr,
   };
 

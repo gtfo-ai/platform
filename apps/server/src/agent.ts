@@ -214,7 +214,7 @@ export const composeAgentRunner = (options: AgentRunnerOptions): ComposedAgentRu
     runner: runnerAdapters.createWorkspaceClaudeRunner({
       provisioner,
       logger: options.logger,
-      build: ({ spawn }) =>
+      build: ({ spawn, cliEnvironment }) =>
         runnerAdapters.createClaudeRunner({
           sink,
           approvals,
@@ -224,6 +224,10 @@ export const composeAgentRunner = (options: AgentRunnerOptions): ComposedAgentRu
           injectedSecretRedactorFor: (spec) =>
             runTranscriptRedactorFor(spec, options.runSecrets, options.logger),
           spawnClaudeCodeProcess: spawn,
+          // WP-118 (TD-025's amendment): the launcher's answer — the run container's proxy, home,
+          // image `PATH` and git credential helper — which the runner composes into the CLI's own
+          // environment. The shim replaces its child's environment, so nothing else carries them.
+          ...(cliEnvironment === undefined ? {} : { workspaceEnvironment: cliEnvironment }),
         }),
     }),
   };

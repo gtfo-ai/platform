@@ -9,6 +9,7 @@
  * recorded.
  */
 export * from './broker.js';
+export * from './cli-environment.js';
 export * from './egress.js';
 export * from './engine.js';
 export * from './fake.js';

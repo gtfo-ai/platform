@@ -9,6 +9,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { manualClock } from '../runner/clock.js';
 import {
   credentialHost,
+  NO_CREDENTIAL_SOCKET_MESSAGE,
+  parseCredentialHelperArgs,
   parseCredentialRequest,
   requestCredential,
   runCredentialHelper,
@@ -176,5 +178,31 @@ describe('the helper end to end, against the real shim', () => {
     expect(
       await requestCredential({ socketPath: '/nowhere/cred.sock', host: 'not a host' }),
     ).toBeNull();
+  });
+});
+
+describe('the helper’s arguments (WP-118 review round 1)', () => {
+  it('reads the socket from --socket, and git’s appended operation after it', () => {
+    expect(parseCredentialHelperArgs(['--socket', '/ctl/cred.sock', 'get'])).toEqual({
+      socketPath: '/ctl/cred.sock',
+      operation: 'get',
+    });
+    expect(parseCredentialHelperArgs(['--socket=/ctl/cred.sock', 'store'])).toEqual({
+      socketPath: '/ctl/cred.sock',
+      operation: 'store',
+    });
+  });
+
+  it('answers no socket for a missing, empty or relative one, so the caller refuses loudly', () => {
+    for (const argv of [
+      ['get'],
+      ['--socket'],
+      ['--socket', 'cred.sock', 'get'],
+      ['--socket=', 'get'],
+    ]) {
+      expect(parseCredentialHelperArgs(argv).socketPath, JSON.stringify(argv)).toBeNull();
+    }
+    expect(parseCredentialHelperArgs(['get']).operation).toBe('get');
+    expect(NO_CREDENTIAL_SOCKET_MESSAGE).toContain('--socket');
   });
 });

@@ -36,7 +36,7 @@ Runner service (infrastructure)  ── platform-side SDK host; the CLI itself r
 | `skills`: the stage role's platform skills, plugin-qualified (`agentic:kb`) — **amended at WP-14a**, see the note below: the `.claude/skills/_platform/` layout this row used to specify is not discovered by the pinned CLI, and the shipped delivery is a plugin directory inside the workspace. **Amended at WP-83** (PROGRESS backlog 149): the list is sent **always**, the empty list included, because an omitted `skills` is the CLI's defaults and — measured — lets the `Skill` tool load a skill the CLI bundles; and every role that holds a skill holds `Skill` in `tools`, because the base set removes it otherwise (the `system`/`init` message lists `tools: []` for `tools: []`, `claude` 2.1.267) | product/13 § "Skills"; measured against `@anthropic-ai/claude-agent-sdk@0.3.267` |
 | `plugins`: one `{type:'local', path: <workspace>/.agentic-run/plugins/agentic, skipMcpDiscovery: true}`, emitted only when the role has skills | WP-14a |
 | `outputFormat: { type: 'json_schema', schema }` | artifact schema (12) |
-| `env` (explicit, never inherited): `PATH`, `HOME`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_PROJECT_DIR_NAME=<task-id>`, telemetry/updater/auto-memory disables, provider credentials for the run only (`GITLAB_TOKEN` scoped, `LOKI_*`, `SENTRY_ACCESS_TOKEN`), `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` per provider mode | BD-025; research/05 (`env` replaces) |
+| `env` (explicit, never inherited): `PATH`, `HOME`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_PROJECT_DIR_NAME=<task-id>`, telemetry/updater/auto-memory disables, provider credentials for the run only (`GITLAB_TOKEN` scoped, `LOKI_*`, `SENTRY_ACCESS_TOKEN`), `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` per provider mode. **Where each value comes from** (WP-118, TD-025's amendment): the credential from `RunSpec.env`; `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` (when the run has a sidecar), `HOME`, `CLAUDE_CONFIG_DIR`, `PATH` (the run image's own declared `Config.Env` value) and the credential helper from the launcher's answer, `ProvisionedRunWorkspace.cliEnvironment`; the opt-outs and `CLAUDE_CODE_PROJECT_DIR_NAME` from `platformEnvironment`; git configuration as **one** `GIT_CONFIG_*` list numbered once (`credential.helper`, `core.fsmonitor`: `COUNT=2`). `cliEnvironment` (`packages/infrastructure/src/runner/options.ts`) composes them; the run shim replaces its child's environment with it, so nothing on the container is inherited — before WP-118 the container's proxy, home and helper stopped at the shim (PROGRESS backlog 342, measured) | BD-025; research/05 (`env` replaces); TD-025 |
 | `pathToClaudeCodeExecutable` in `local` mode | BD-004 |
 | `sessionStore`, `sessionStoreFlush: 'eager'` for live tailing | 03 |
 
@@ -324,9 +324,11 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 > - **`.git` is not repository content** (WP-104, PROGRESS backlog 282). The guard denies a write
 >   whose folded path has a `.git` segment anywhere (`.git/config`, `.GIT/config`,
 >   `sub/.git/hooks/x`), before any pattern is read, in every project; no plan entry can declare
->   it. The shell half is the environment: `platformEnvironment` sets `core.fsmonitor=false` through
->   `GIT_CONFIG_COUNT`/`KEY_0`/`VALUE_0`, which git reads as command-line configuration and so
->   above the repository's own. Measured in `platform-runtime` (git 2.47.3): a `core.fsmonitor`
+>   it. The shell half is the environment: the CLI's environment sets `core.fsmonitor=false` through
+>   `GIT_CONFIG_COUNT`/`KEY_n`/`VALUE_n`, which git reads as command-line configuration and so
+>   above the repository's own (since WP-118 it is `PLATFORM_GIT_CONFIG`, numbered after the
+>   launcher's `credential.helper` in one list, `COUNT=2`; at WP-104 it was `platformEnvironment`'s
+>   own index 0). Measured in `platform-runtime` (git 2.47.3): a `core.fsmonitor`
 >   written into `.git/config` ran under `git status` with the environment before the change, and
 >   did not with the environment after it (the WP-104 notes). Only that key is overridden, for the
 >   export helper's reason against enumerating `-c` overrides; a `core.hooksPath` written through

@@ -63,6 +63,17 @@ const handleFor = (runId: string) => ({
   keepUntil: '2026-01-04T00:00:00.000Z',
 });
 
+/** The launcher's WP-118 answer, as `DockerWorkspaceProvider` gives it for a run with a sidecar. */
+const CLI_ENVIRONMENT = {
+  proxy: { url: 'http://egress-sidecar:8888', noProxy: 'localhost,127.0.0.1' },
+  home: '/tmp',
+  claudeConfigDir: '/tmp/claude',
+  path: '/usr/local/bin:/usr/bin:/bin',
+  gitConfig: [
+    { key: 'credential.helper', value: '!agentic-runlet credential --socket /ctl/cred.sock' },
+  ],
+};
+
 interface Recorded {
   readonly creates: CreateRunRequestPayload[];
   readonly ends: { runId: string; payload: EndRunRequestPayload }[];
@@ -89,6 +100,7 @@ const clientWith = (
             workdir: '/work/repo',
           },
           claudeCodePath: overrides.claudeCodePath ?? '/usr/local/bin/claude',
+          cliEnvironment: CLI_ENVIRONMENT,
           credentialScope: payload.credential?.scope ?? null,
           existingProtectedPaths: {
             state: 'listed',
@@ -698,6 +710,14 @@ describe('the CLI path', () => {
     const { client } = clientWith({ claudeCodePath: '/opt/claude/claude' });
     const workspace = await provisionerWith(client).provision(runSpecFixture());
     expect(workspace.claudeCodePath).toBe('/opt/claude/claude');
+  });
+});
+
+describe('the CLI environment (WP-118)', () => {
+  it('is whatever the launcher answered for the run container, handed on beside the CLI path', async () => {
+    const { client } = clientWith();
+    const workspace = await provisionerWith(client).provision(runSpecFixture());
+    expect(workspace.cliEnvironment).toEqual(CLI_ENVIRONMENT);
   });
 });
 

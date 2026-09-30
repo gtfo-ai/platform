@@ -25,6 +25,10 @@
  */
 export { systemClock } from '../runner/clock.js';
 export { readRunletConfig } from './config.js';
-export { runCredentialHelper } from './credential-helper.js';
+export {
+  NO_CREDENTIAL_SOCKET_MESSAGE,
+  parseCredentialHelperArgs,
+  runCredentialHelper,
+} from './credential-helper.js';
 export { createRunletLogger } from './logger.js';
 export { createRunletShim } from './shim.js';

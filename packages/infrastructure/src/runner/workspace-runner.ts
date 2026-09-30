@@ -57,6 +57,7 @@ import type {
   RunTakeOverExport,
   SteerMessage,
   TerminalRunStatus,
+  WorkspaceCliEnvironment,
 } from '@platform/application';
 import { RunStartError, silentLogger, WorkspaceError } from '@platform/application';
 
@@ -108,6 +109,16 @@ export interface ProvisionedRunWorkspace {
    * one.
    */
   readonly existingProtectedPaths?: ExistingProtectedPaths;
+  /**
+   * The container facts the `claude` process needs in its own environment — the proxy, `HOME`,
+   * `CLAUDE_CONFIG_DIR`, the image's `PATH` and the git credential helper (WP-118, TD-025's
+   * amendment, PROGRESS backlog 342). Absent for a workspace with no launcher behind it (a test's
+   * fake CLI), which leaves the CLI's environment as it was before WP-118.
+   *
+   * Handed to `build` rather than substituted into the spec: the runner composes the CLI's whole
+   * environment in one function (`./options.ts`, `cliEnvironment`), and this is one of its inputs.
+   */
+  readonly cliEnvironment?: WorkspaceCliEnvironment | null;
   /** `Options.spawnClaudeCodeProcess` for this run — the runlet transport, or a test's fake CLI. */
   readonly spawn: (options: SpawnOptions) => SpawnedProcess;
   /** Called exactly once, whichever way the run ended. Must tolerate being called after a failure. */
@@ -141,6 +152,11 @@ export interface WorkspaceClaudeRunnerOptions {
   readonly build: (transport: {
     readonly spawn: (options: SpawnOptions) => SpawnedProcess;
     readonly workdir: string;
+    /**
+     * The launcher's answer for this run, or `undefined` for a workspace that has none. A
+     * composition root forwards it to `createClaudeRunner` as `workspaceEnvironment` (WP-118).
+     */
+    readonly cliEnvironment?: WorkspaceCliEnvironment;
   }) => ClaudeRunner;
   readonly logger?: Logger;
 }
@@ -265,7 +281,13 @@ export const createWorkspaceClaudeRunner = (
             );
           }
           handle = options
-            .build({ spawn: workspace.spawn, workdir: workspace.workdir })
+            .build({
+              spawn: workspace.spawn,
+              workdir: workspace.workdir,
+              ...(workspace.cliEnvironment === undefined || workspace.cliEnvironment === null
+                ? {}
+                : { cliEnvironment: workspace.cliEnvironment }),
+            })
             .start(provisioned);
           for (const message of pendingSteers.splice(0)) {
             await handle.steer(message);

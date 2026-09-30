@@ -333,8 +333,9 @@ export const WORKSPACE_LABELS = {
 export type WorkspaceLabels = Readonly<Record<string, string>>;
 
 /**
- * One run the provider labelled a container for, as the **daemon** answers it (WP-103, TD-028
- * decision 12) — never from a process's memory, which a restart empties.
+ * One run the provider labelled a container or a network for, as the **daemon** answers it (WP-103,
+ * TD-028 decision 12; networks since WP-118's pre-review round) — never from a process's memory,
+ * which a restart empties.
  */
 export interface LabelledRunWorkspace {
   readonly runId: string;
@@ -384,6 +385,49 @@ export interface WorkspaceAttachment {
   readonly token: string;
   /** `/work/repo`: the `cwd` the runner passes to `spawn`. */
   readonly workdir: string;
+}
+
+/**
+ * One git configuration entry the `claude` process must carry — a key and its value, never an
+ * environment variable name. The runner numbers the list once (`GIT_CONFIG_COUNT`, `KEY_n`,
+ * `VALUE_n`) together with its own entries, so this list carries no index.
+ */
+export interface WorkspaceGitConfigEntry {
+  readonly key: string;
+  readonly value: string;
+}
+
+/**
+ * The values that describe the **run container** and that the `claude` process needs as well —
+ * TD-025's amendment (PROGRESS backlog 342, WP-118).
+ *
+ * The shim starts the CLI with the spawn frame's environment **alone** (`env` replaces, never
+ * merges), so a variable set only on the container reaches the shim and stops there. These are the
+ * container facts only the workspace knows — its proxy, its home, the image's own `PATH`, the git
+ * credential helper — answered by the provider and composed into the CLI's environment by the
+ * runner (`packages/infrastructure/src/runner/options.ts`, `cliEnvironment`).
+ *
+ * **Structured, never a free-form record**, so a `RUNLET_*` name, a credential or anything else
+ * nobody named cannot travel in it. Every value is a path, an internal proxy URL or a command
+ * string; none is a secret. The provider writes the run container's own environment from the same
+ * object, so a `docker exec` and the CLI see the same values.
+ */
+export interface WorkspaceCliEnvironment {
+  /** The egress sidecar, or `null` when the run has none (a spec that allows no host). */
+  readonly proxy: {
+    /** `HTTPS_PROXY` and `HTTP_PROXY`. */
+    readonly url: string;
+    /** `NO_PROXY`. */
+    readonly noProxy: string;
+  } | null;
+  /** `HOME`. */
+  readonly home: string;
+  /** `CLAUDE_CONFIG_DIR`. */
+  readonly claudeConfigDir: string;
+  /** `PATH`: the run image's own declared value, read off the image. */
+  readonly path: string;
+  /** The container's git configuration (`credential.helper`), in order. */
+  readonly gitConfig: readonly WorkspaceGitConfigEntry[];
 }
 
 // ── Export and retention ─────────────────────────────────────────────────────
@@ -540,6 +584,14 @@ export interface WorkspaceProvider {
   readonly attach: (handle: WorkspaceHandle) => Promise<WorkspaceAttachment>;
 
   /**
+   * The container facts the `claude` process needs in its own environment (WP-118,
+   * {@link WorkspaceCliEnvironment}) — produced by the same function that wrote the run container's
+   * environment at {@link create}, so the two cannot disagree. Derived from the handle, so it
+   * answers after a launcher restart as well.
+   */
+  readonly cliEnvironment: (handle: WorkspaceHandle) => Promise<WorkspaceCliEnvironment>;
+
+  /**
    * Which of `patterns` exist at the **merge base of the checkout and the default branch** — the
    * base a merge request's diff is computed against, so a file an earlier run of the same task
    * added reads as new, as the CI gate's `changedExistingPaths` reads it — and every tracked symlink
@@ -590,11 +642,12 @@ export interface WorkspaceProvider {
   readonly destroy: (handle: WorkspaceHandle) => Promise<void>;
 
   /**
-   * The run ids this provider labelled a container for — **this instance's** containers, any role,
-   * running or not — read from the daemon (WP-103, TD-028 decision 12). A run whose create was
-   * interrupted can have a helper container and no run container, and it is listed all the same:
-   * that helper is what keeps the run "alive" to the retention sweep. Bounded by
-   * {@link MAX_LABELLED_RUNS}, oldest first.
+   * The run ids this provider labelled a container **or a network** for — **this instance's**
+   * objects, any role, running or not — read from the daemon (WP-103, TD-028 decision 12). A run
+   * whose create was interrupted can have a helper container and no run container, and it is listed
+   * all the same: that helper is what keeps the run "alive" to the retention sweep. One whose create
+   * was killed after its first object can have **only its network** (measured, WP-118's pre-review
+   * round), and it is listed too. Bounded by {@link MAX_LABELLED_RUNS}, oldest first.
    */
   readonly listLabelledRuns: () => Promise<readonly LabelledRunWorkspace[]>;
 

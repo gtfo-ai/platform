@@ -205,3 +205,59 @@ describe('destroy by run id (WP-103)', () => {
     expect(await aliveCount()).toBe(0);
   });
 });
+
+/**
+ * WP-118 pre-review round (orchestrator), measured on the daemon: a launcher **killed** after the
+ * create's first object — the run's network — and before its first container left the network, the
+ * workspace volume and the control directory and **no labelled container**, so a listing of
+ * containers alone never named the run and the reaper never removed it.
+ */
+describe('a run a killed create left with only its network', () => {
+  /** A `run-<id>` network as `create` labels it, planted with nothing attached. */
+  const plantNetwork = (runId: string, instance: string | null, created: string): void => {
+    const id = `net-${runId}`;
+    daemon.networks.set(id, { name: `run-${runId}`, internal: true });
+    daemon.networkMeta.set(id, {
+      labels: runLabels(runId, 'network', instance),
+      created,
+    });
+  };
+
+  it('labels the network a create makes with the run and this instance', async () => {
+    await provider.create(workspaceSpecFixture({ runId: RUN_A }));
+    const id = [...daemon.networks.entries()].find(([, n]) => n.name === `run-${RUN_A}`)?.[0];
+    expect(daemon.networkMeta.get(id ?? '')?.labels).toMatchObject({
+      [WORKSPACE_LABELS.run]: RUN_A,
+      [WORKSPACE_LABELS.instance]: CONTROL_VOLUME,
+      [WORKSPACE_LABELS.role]: 'network',
+    });
+  });
+
+  it('is listed, not running, dated by the network’s Created', async () => {
+    plantNetwork(RUN_A, CONTROL_VOLUME, new Date(NOW.getTime() - 3_600_000).toISOString());
+    expect(await provider.listLabelledRuns()).toEqual([
+      {
+        runId: RUN_A,
+        createdAt: new Date(NOW.getTime() - 3_600_000).toISOString(),
+        running: false,
+      },
+    ]);
+  });
+
+  it('is not listed when the network is another instance’s, or from before the instance label', async () => {
+    plantNetwork(RUN_A, 'agentic-staging-ctl', NOW.toISOString());
+    plantNetwork(RUN_B, null, NOW.toISOString());
+    expect(await provider.listLabelledRuns()).toEqual([]);
+  });
+
+  it('is destroyed by id with no container: the network and the control directory go, found: true', async () => {
+    plantNetwork(RUN_A, CONTROL_VOLUME, NOW.toISOString());
+    await expect(provider.destroyRun(RUN_A)).resolves.toEqual({ found: true });
+    expect([...daemon.networks.values()].map((network) => network.name)).not.toContain(
+      `run-${RUN_A}`,
+    );
+    const helpers = daemon.history.map((container) => container.name);
+    expect(helpers).toContain(`ctlrm-${RUN_A}`);
+    expect(await provider.listLabelledRuns()).toEqual([]);
+  });
+});

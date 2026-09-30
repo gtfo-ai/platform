@@ -95,7 +95,16 @@ export interface FakeDaemonOptions {
   readonly fail?: Map<string, { status: number; message: string; raw?: string }>;
   /** Epoch milliseconds the double stamps a created container with (WP-103). Default: `Date.now`. */
   readonly now?: () => number;
+  /**
+   * `Config.Env` per image, as `GET /images/<name>/json` answers it (WP-118). An image not named
+   * here declares {@link FAKE_IMAGE_PATH}, the way every `node:*` base image does; `null` declares
+   * no environment at all.
+   */
+  readonly imageEnv?: ReadonlyMap<string, readonly string[] | null>;
 }
+
+/** The `PATH` a fake image declares unless a test says otherwise — the Debian/`node` image value. */
+export const FAKE_IMAGE_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
 
 export interface RecordedRequest {
   readonly method: string;
@@ -110,6 +119,12 @@ let counter = 0;
 export class FakeDockerDaemon {
   readonly volumes = new Map<string, Record<string, string>>();
   readonly networks = new Map<string, { name: string; internal: boolean }>();
+  /**
+   * The labels and creation instant of each network, by id — kept beside {@link networks} rather
+   * than in it, so the cases that compare a network's shape are unchanged (WP-118 pre-review: the
+   * reaper lists a run by its labelled network too).
+   */
+  readonly networkMeta = new Map<string, { labels: Record<string, string>; created: string }>();
   readonly containers = new Map<string, FakeContainer>();
   /**
    * Every container ever created, removals included.
@@ -229,6 +244,13 @@ export class FakeDockerDaemon {
       send(200, 'OK');
       return;
     }
+    if (method === 'GET' && /^\/images\/.+\/json$/.test(pathname)) {
+      const name = decodeURIComponent(pathname.slice('/images/'.length, -'/json'.length));
+      const configured = this.#options.imageEnv?.get(name);
+      const env = configured === undefined ? [`PATH=${FAKE_IMAGE_PATH}`] : configured;
+      send(200, { Id: `sha256:${name}`, Config: { Env: env } });
+      return;
+    }
     if (method === 'POST' && pathname === '/volumes/create') {
       const input = body as { Name?: string; Labels?: Record<string, string> };
       if (typeof input?.Name !== 'string' || input.Name.length === 0) {
@@ -260,7 +282,11 @@ export class FakeDockerDaemon {
       return;
     }
     if (method === 'POST' && pathname === '/networks/create') {
-      const input = body as { Name?: string; Internal?: boolean };
+      const input = body as {
+        Name?: string;
+        Internal?: boolean;
+        Labels?: Record<string, string>;
+      };
       if (typeof input?.Name !== 'string') {
         send(400, { message: 'network needs a name' });
         return;
@@ -272,7 +298,34 @@ export class FakeDockerDaemon {
       counter += 1;
       const id = `net-${counter}`;
       this.networks.set(id, { name: input.Name, internal: input.Internal === true });
+      this.networkMeta.set(id, {
+        labels: { ...(input.Labels ?? {}) },
+        created: new Date(this.#now()).toISOString(),
+      });
       send(201, { Id: id });
+      return;
+    }
+    if (method === 'GET' && pathname === '/networks') {
+      const filters = JSON.parse(params.get('filters') ?? '{}') as Record<string, string[]>;
+      const wanted = filters['label'] ?? [];
+      send(
+        200,
+        [...this.networks.entries()]
+          .map(([id, network]) => ({ id, network, meta: this.networkMeta.get(id) }))
+          .filter(({ meta }) =>
+            wanted.every((entry) => {
+              const [key = '', value] = entry.split('=');
+              const labels = meta?.labels ?? {};
+              return value === undefined ? key in labels : labels[key] === value;
+            }),
+          )
+          .map(({ id, network, meta }) => ({
+            Id: id,
+            Name: network.name,
+            Labels: meta?.labels ?? {},
+            ...(meta === undefined ? {} : { Created: meta.created }),
+          })),
+      );
       return;
     }
     if (method === 'DELETE' && pathname.startsWith('/networks/')) {

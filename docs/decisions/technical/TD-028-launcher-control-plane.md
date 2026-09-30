@@ -407,8 +407,8 @@ and the handle it returns, so a container whose handle never reaches the runner 
 a restart during a create, a replay) keeps running, and nothing reconciles the daemon with `runs`.
 Decision 4's idempotency is scoped to a launcher's lifetime (the second WP-53 amendment), so it cannot
 be the bound. So:
-- the control plane gains **one read verb** answering the run ids of the containers carrying the run
-  label, read from the daemon rather than from the launcher's memory, authenticated like every other
+- the control plane gains **one read verb** answering the run ids of the containers and networks carrying the run
+  label (networks since WP-118's pre-review round: a create killed before its first container leaves one), read from the daemon rather than from the launcher's memory, authenticated like every other
   operation (decision 3);
 - `destroy` by run id removes a run's objects whether or not the launcher holds a handle, by label, and
   stays idempotent (decision 4);

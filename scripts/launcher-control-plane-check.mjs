@@ -48,6 +48,8 @@
  * are measured: the launcher answers the run image's own `/usr/local/bin/claude` (having verified it
  * with `test -x` inside the image), and the substitution reaches `SpawnOptions.command`, which is
  * the string the shim execs. It also does not prove the egress *filter*, or the compose file.
+ * Since WP-118 the real `claude` runs once as well, with a fake key and no model host, which proves
+ * its traffic reaches the sidecar and nothing about the model.
  *
  * ## What WP-82 added
  *
@@ -78,6 +80,21 @@
  *    launcher's real read verb and destroy, removing the two runs the restarts left, keeping a live
  *    one, and then removing it as an unknown run once the grace is zero.
  *
+ * ## What WP-118 added (PROGRESS backlog 342, TD-025's amendment)
+ *
+ *  - **The CLI's own environment, by name.** The runner's spec now carries what a production spec
+ *    carries — the model credential and nothing else (until WP-118 it carried a `PATH` and a `HOME`
+ *    of its own, which is what let the fake CLI start while the container's variables stopped at the
+ *    shim). `fake-claude-cli` reports the names in its `/proc/self/environ` (never values, except
+ *    `GIT_CONFIG_COUNT` and each `GIT_CONFIG_KEY_<n>`), and the check asserts the proxy names, `HOME`,
+ *    `CLAUDE_CONFIG_DIR`, `PATH`, no `RUNLET_*` and one git list of two. On the pre-fix tree the fake
+ *    CLI could not start at all (exit 127: `#!/usr/bin/env node` with no `PATH`); with a `PATH`
+ *    planted in the spec it reported fourteen names and none of the container's.
+ *  - **The image's real `claude`** ({@link measureRealCli}), with an obviously fake key and no model
+ *    host on the allow-list, so the sidecar refuses the `CONNECT` and logs the host: nothing can
+ *    reach Anthropic. On the pre-fix tree the CLI retried seven times (`api_retry`, `error:
+ *    unknown`) until the wall clock stopped it and the sidecar logged **no request at all**.
+ *
  * ## Environment
  *
  *     DOCKER_HOST=unix:///var/run/docker.sock node scripts/launcher-control-plane-check.mjs
@@ -103,9 +120,20 @@ const TIMEOUT_RUN_IDS = [
   '9f3a1c2e-0000-4000-8000-00000000286d',
   '9f3a1c2e-0000-4000-8000-00000000286e',
 ];
+/**
+ * A run a killed create left with **only its network** (WP-118 pre-review round): the host makes
+ * the network exactly as `create` labels it, so the case does not depend on where a kill lands.
+ */
+const NETWORK_ONLY_RUN_ID = '9f3a1c2e-0000-4000-8000-00000000286f';
+/** WP-118 review round 1: the CLI's git asks the shim for a credential through the helper. */
+const GIT_CREDENTIAL_RUN_ID = '9f3a1c2e-0000-4000-8000-00000000342b';
+/** WP-118's run of the image's real `claude` (PROGRESS backlog 342, consequence (a)). */
+const REAL_CLI_RUN_ID = '9f3a1c2e-0000-4000-8000-00000000342a';
 /** The shortened client bound for 286 (b), below the create's own duration on this machine. */
 const SHORT_CLIENT_TIMEOUT_MS = 1_500;
 const ALL_286_RUN_IDS = [RESTART_STOP_RUN_ID, RESTART_KILL_RUN_ID, ...TIMEOUT_RUN_IDS];
+/** How long the real CLI may retry before the runner's wall clock stops it (WP-118). */
+const REAL_CLI_WALL_CLOCK_MS = 60_000;
 const TOKEN = 'FAKE-wp53-launcher-token-000000000000';
 const PORT = '7780';
 const LAUNCHER_NAME = 'agentic-wp53-launcher';
@@ -605,6 +633,19 @@ const observeUnattachedShims = async (observeMs) => {
  * no row and the unknown grace is 0 — removed as unknown, sidecar and all.
  */
 const reapThroughTheVerbs = async () => {
+  // The first object a create makes, and nothing after it — deterministic, unlike a kill's timing.
+  await docker([
+    'network',
+    'create',
+    '--internal',
+    '--label',
+    `com.agentic.run=${NETWORK_ONLY_RUN_ID}`,
+    '--label',
+    'com.agentic.role=network',
+    '--label',
+    `com.agentic.instance=${fixture.controlVolume}`,
+    `run-${NETWORK_ONLY_RUN_ID}`,
+  ]);
   const pass = async (env) =>
     lastJsonLine(
       await runRunner({ CHECK_PHASE: 'reap', ...env }, { name: 'agentic-wp103-runner-reap' }),
@@ -613,11 +654,12 @@ const reapThroughTheVerbs = async () => {
     CHECK_REAP_STATES: [
       `${RESTART_STOP_RUN_ID}=failed`,
       `${RESTART_KILL_RUN_ID}=failed`,
+      `${NETWORK_ONLY_RUN_ID}=failed`,
       `${REPLAY_RUN_ID}=running`,
     ].join(','),
   });
   const after = {};
-  for (const runId of [RESTART_STOP_RUN_ID, RESTART_KILL_RUN_ID]) {
+  for (const runId of [RESTART_STOP_RUN_ID, RESTART_KILL_RUN_ID, NETWORK_ONLY_RUN_ID]) {
     after[runId] = await runObjectsFull(runId);
   }
   const replayObjects = await runObjectsFull(REPLAY_RUN_ID);
@@ -631,8 +673,72 @@ const reapThroughTheVerbs = async () => {
   };
 };
 
+/**
+ * WP-118, PROGRESS backlog 342 (a): the run image's **real** `claude` through the production path,
+ * with an obviously fake model key and **no model host allowed** — so a CLI that uses the proxy is
+ * refused by the sidecar, which logs the host at tinyproxy's `Notice` level (*"Proxying refused on
+ * filtered domain"*), and nothing reaches Anthropic. An allowed `CONNECT` would not be in the log
+ * at all: the sidecar's `LogLevel Notice` is above tinyproxy's `Connect` level (`egress.ts`).
+ *
+ * The sidecar's log is followed from the moment its container exists, because `release` removes
+ * it: `docker logs -f` returns when the container is gone, with everything it wrote.
+ */
+const measureRealCli = async () => {
+  const sidecar = `egress-${REAL_CLI_RUN_ID}`;
+  const runner = runRunner(
+    {
+      CHECK_PHASE: 'real-cli',
+      CHECK_REAL_CLI_RUN_ID: REAL_CLI_RUN_ID,
+      CHECK_REAL_CLI_WALL_CLOCK_MS: String(REAL_CLI_WALL_CLOCK_MS),
+    },
+    { name: 'agentic-wp118-runner-real-cli' },
+  );
+  let following = null;
+  let lastInspect = null;
+  for (let attempt = 0; attempt < 240 && following === null; attempt += 1) {
+    const exists = await docker(['container', 'inspect', sidecar], { allowFailure: true });
+    if (exists.ok) {
+      following = docker(['logs', '-f', sidecar], { allowFailure: true });
+      break;
+    }
+    lastInspect = exists.stderr.slice(0, 200);
+    await sleep(500);
+  }
+  const told = lastJsonLine(await runner);
+  const logged = following === null ? null : await following;
+  if (following === null) {
+    process.stdout.write(`the sidecar ${sidecar} was never seen: ${lastInspect}\n`);
+  }
+  const sidecarLog =
+    logged === null
+      ? null
+      : `${logged.stdout}\n${logged.stderr}`
+          .split('\n')
+          .filter((line) => line.trim().length > 0)
+          .map((line) => line.slice(0, 300));
+  return { told, sidecarLog };
+};
+
+/** The names the fake CLI reported, and what the check asserts of them (WP-118 criterion 2). */
+const environFindings = (environ) => {
+  const names = new Set(environ?.names ?? []);
+  const git = environ?.git ?? {};
+  const keys = Object.entries(git)
+    .filter(([name]) => name.startsWith('GIT_CONFIG_KEY_'))
+    .map(([, value]) => value)
+    .sort();
+  return {
+    names,
+    proxy: ['HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY'].filter((name) => !names.has(name)),
+    container: ['HOME', 'CLAUDE_CONFIG_DIR', 'PATH'].filter((name) => !names.has(name)),
+    runlet: [...names].filter((name) => name.startsWith('RUNLET_')),
+    git: { count: git.GIT_CONFIG_COUNT ?? null, keys },
+  };
+};
+
 let fixture;
 let replay = null;
+let realCli = null;
 let orphans = null;
 let report = null;
 let driven = null;
@@ -750,6 +856,86 @@ try {
       `replayed: ${report.replayed}, same handle: ${report.replayedHandleMatches}`,
     );
   }
+
+  // WP-118 (PROGRESS backlog 342): which of the container's variables reached the process the
+  // shim started. The spec carries the model credential and nothing else, as production's does.
+  const environ = report === null ? null : environFindings(report.environ);
+  process.stdout.write(
+    `--- backlog 342: the CLI's environment (names) ---\n${JSON.stringify(report?.environ ?? null)}\n`,
+  );
+  record(
+    'backlog 342: the CLI started from a production-shaped spec and reported its environment',
+    report?.environ?.source === '/proc/self/environ',
+    report?.environ === null || report?.environ === undefined
+      ? `no report in the transcript; the run ended ${report?.status}/${report?.terminalReason}`
+      : `${report.environ.names.length} names`,
+  );
+  record(
+    'backlog 342: the CLI’s environment carries HTTPS_PROXY, HTTP_PROXY and NO_PROXY (the run has a sidecar)',
+    environ !== null && report?.environ != null && environ.proxy.length === 0,
+    `missing: ${JSON.stringify(environ?.proxy ?? null)}`,
+  );
+  record(
+    'backlog 342: the CLI’s environment carries HOME, CLAUDE_CONFIG_DIR and PATH',
+    environ !== null && report?.environ != null && environ.container.length === 0,
+    `missing: ${JSON.stringify(environ?.container ?? null)}`,
+  );
+  record(
+    'backlog 342: no RUNLET_* name reached the CLI',
+    environ !== null && report?.environ != null && environ.runlet.length === 0,
+    `RUNLET_*: ${JSON.stringify(environ?.runlet ?? null)}`,
+  );
+  record(
+    'backlog 342: one git list, GIT_CONFIG_COUNT=2, credential.helper and core.fsmonitor',
+    environ !== null &&
+      environ.git.count === '2' &&
+      JSON.stringify(environ.git.keys) === JSON.stringify(['core.fsmonitor', 'credential.helper']),
+    JSON.stringify(environ?.git ?? null),
+  );
+
+  // WP-118 review round 1: the credential helper the CLI's git runs finds the shim.
+  const gitCredential = lastJsonLine(
+    await runRunner(
+      { CHECK_PHASE: 'git-credential', CHECK_GIT_CREDENTIAL_RUN_ID: GIT_CREDENTIAL_RUN_ID },
+      { name: 'agentic-wp118-runner-git-credential' },
+    ),
+  );
+  record(
+    'the CLI’s git, with the CLI’s environment, gets the run credential from the shim’s cred.get (WP-118 review)',
+    gitCredential?.ok === true &&
+      gitCredential.username === 'agentic-wp118' &&
+      gitCredential.passwordMatches === true,
+    JSON.stringify({
+      helper: gitCredential?.helper,
+      exitCode: gitCredential?.exitCode,
+      username: gitCredential?.username,
+      passwordMatches: gitCredential?.passwordMatches,
+      error: gitCredential?.error,
+      notes: gitCredential?.notes,
+    }),
+  );
+
+  realCli = await measureRealCli();
+  process.stdout.write(
+    `--- backlog 342 (a): the real CLI ---\n${JSON.stringify(realCli, null, 2)}\n`,
+  );
+  record(
+    'backlog 342 (a): the real CLI’s CONNECT api.anthropic.com reached the sidecar',
+    (realCli.sidecarLog ?? []).some(
+      (line) => line.includes('filtered domain') && line.includes('api.anthropic.com'),
+    ),
+    `claudeCodePath ${realCli.told?.claudeCodePath}; sidecar: ${JSON.stringify((realCli.sidecarLog ?? []).filter((line) => line.includes('api.anthropic.com')).slice(0, 2))}`,
+  );
+  record(
+    'backlog 342 (a): how the real CLI ended with a fake key and no model host (observation)',
+    realCli.told !== null,
+    JSON.stringify({
+      status: realCli.told?.status,
+      terminalReason: realCli.told?.terminalReason,
+      error: realCli.told?.error,
+      stderr: (realCli.told?.stderr ?? '').slice(-400),
+    }),
+  );
 
   if (report !== null) {
     record(
@@ -880,15 +1066,16 @@ try {
   const { first: reapFirst, second: reapSecond } = orphans.reap;
   record(
     'the restarted launcher lists, off the daemon, the runs a stop and a kill left (TD-028 decision 12)',
-    [RESTART_STOP_RUN_ID, RESTART_KILL_RUN_ID, REPLAY_RUN_ID].every((runId) =>
+    [RESTART_STOP_RUN_ID, RESTART_KILL_RUN_ID, NETWORK_ONLY_RUN_ID, REPLAY_RUN_ID].every((runId) =>
       (reapFirst.told?.listedBefore ?? []).includes(runId),
     ),
     JSON.stringify(reapFirst.told?.listedBefore ?? null),
   );
   record(
-    'the reaper removed the two terminal runs and kept the live one (criterion 2)',
+    'the reaper removed the three terminal runs, one of them only a network, and kept the live one (criterion 2)',
     JSON.stringify((reapFirst.told?.destroyed ?? []).map((entry) => entry.runId).sort()) ===
-      JSON.stringify([RESTART_STOP_RUN_ID, RESTART_KILL_RUN_ID].sort()) &&
+      JSON.stringify([RESTART_STOP_RUN_ID, RESTART_KILL_RUN_ID, NETWORK_ONLY_RUN_ID].sort()) &&
+      (reapFirst.told?.destroyed ?? []).every((entry) => entry.found === true) &&
       reapFirst.told?.report?.kept?.run_live === 1 &&
       reapFirst.replayContainerRunning,
     JSON.stringify({
@@ -907,6 +1094,12 @@ try {
       JSON.stringify(left),
     );
   }
+  record(
+    'a run a killed create left with only its network is listed and reaped: no network left (WP-118 pre-review)',
+    reapFirst.after[NETWORK_ONLY_RUN_ID].networks.length === 0 &&
+      reapFirst.after[NETWORK_ONLY_RUN_ID].containers.length === 0,
+    JSON.stringify(reapFirst.after[NETWORK_ONLY_RUN_ID]),
+  );
   record(
     'an unknown run past its grace is removed with its sidecar, network and control directory',
     JSON.stringify((reapSecond.told?.destroyed ?? []).map((entry) => entry.runId)) ===
@@ -954,9 +1147,18 @@ try {
   record('the check ran to completion', false, String(error?.stack ?? error));
 } finally {
   await docker(['rm', '-f', LAUNCHER_NAME, BAD_LAUNCHER_NAME], { allowFailure: true });
+  await docker(['network', 'rm', `run-${NETWORK_ONLY_RUN_ID}`], { allowFailure: true });
   await fixture?.cleanup();
   // The two run volumes retention deliberately keeps; this is a check, not an instance.
-  for (const runId of [RUN_ID, IDEMPOTENCY_RUN_ID, BAD_RUN_ID, REPLAY_RUN_ID, ...ALL_286_RUN_IDS]) {
+  for (const runId of [
+    RUN_ID,
+    IDEMPOTENCY_RUN_ID,
+    BAD_RUN_ID,
+    REPLAY_RUN_ID,
+    REAL_CLI_RUN_ID,
+    GIT_CREDENTIAL_RUN_ID,
+    ...ALL_286_RUN_IDS,
+  ]) {
     await docker(['volume', 'rm', '-f', `ws-${runId}`], { allowFailure: true });
   }
 }

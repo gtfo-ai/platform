@@ -114,6 +114,49 @@ export const requestCredential = async (
   });
 };
 
+/**
+ * `agentic-runlet credential [--socket <path>] <operation>` — the helper's arguments, as git hands
+ * them over: the configured command (`credential.helper=!agentic-runlet credential --socket
+ * /ctl/cred.sock`) with git's operation (`get`, `store`, `erase`) appended.
+ *
+ * **The socket travels as an argument, not through the environment** (WP-118 review round 1). The
+ * helper runs under the `claude` process's git, whose environment is the spawn frame's and — by
+ * design — carries no `RUNLET_*` name (TD-025's amendment), so a helper that looked for
+ * `RUNLET_CREDENTIAL_SOCKET` found nothing and answered silence: a Developer's allowed `git push`
+ * then failed with no diagnosis. The path is a path, not a secret, and the launcher writes it into
+ * the helper command from the same function that writes the container's environment.
+ *
+ * `socketPath` is `null` when no `--socket` was given (or it had no value): the caller refuses
+ * loudly rather than answering nothing.
+ */
+export const parseCredentialHelperArgs = (
+  argv: readonly string[],
+): { readonly socketPath: string | null; readonly operation: string | null } => {
+  let socketPath: string | null = null;
+  let operation: string | null = null;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index] as string;
+    if (arg === '--socket') {
+      const value = argv[index + 1];
+      socketPath = value !== undefined && value.startsWith('/') ? value : null;
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith('--socket=')) {
+      const value = arg.slice('--socket='.length);
+      socketPath = value.startsWith('/') ? value : null;
+      continue;
+    }
+    // git appends exactly one operation; anything after it is not ours to read.
+    operation ??= arg;
+  }
+  return { socketPath, operation };
+};
+
+/** What the helper prints on stderr, and exits non-zero with, when it was given no socket. */
+export const NO_CREDENTIAL_SOCKET_MESSAGE =
+  'agentic-runlet credential: no --socket <path> was given, so this helper cannot ask the run shim for a credential (the workspace configures it as `credential.helper=!agentic-runlet credential --socket /ctl/cred.sock`)';
+
 export interface CredentialHelperIo {
   readonly argv: readonly string[];
   readonly stdin: string;

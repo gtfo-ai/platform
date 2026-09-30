@@ -104,6 +104,22 @@ const inspectSchema = z.looseObject({
   Mounts: z.array(z.looseObject({})).nullish(),
 });
 
+const networkSummarySchema = z.looseObject({
+  Id: z.string().min(1),
+  Name: z.string(),
+  Labels: z.record(z.string(), z.string()).nullish(),
+  /** RFC 3339, the daemon's clock. */
+  Created: z.string().nullish(),
+});
+
+export type EngineNetworkSummary = z.infer<typeof networkSummarySchema>;
+
+const imageInspectSchema = z.looseObject({
+  Id: z.string().min(1),
+  Config: z.looseObject({ Env: z.array(z.string()).nullish() }).nullish(),
+});
+
+export type EngineImageInspect = z.infer<typeof imageInspectSchema>;
 export type EngineVolume = z.infer<typeof volumeSchema>;
 export type EngineContainerSummary = z.infer<typeof containerSummarySchema>;
 export type EngineInspect = z.infer<typeof inspectSchema>;
@@ -301,6 +317,19 @@ export class DockerEngine {
     return this.#json(response, idSchema).Id;
   }
 
+  /**
+   * Networks matching label filters — `GET /networks?filters=…`. The reaper lists a run by its
+   * network as well as by its containers (WP-118 pre-review round): the network is the first object
+   * a create makes, so a launcher killed before its first container leaves only the network.
+   */
+  async listNetworks(
+    filters: Readonly<Record<string, readonly string[]>>,
+  ): Promise<readonly EngineNetworkSummary[]> {
+    const query = `?filters=${encodeURIComponent(JSON.stringify(filters))}`;
+    const response = await this.#expect('GET', `/networks${query}`, [200]);
+    return this.#json(response, z.array(networkSummarySchema));
+  }
+
   async removeNetwork(id: string): Promise<void> {
     await this.#expect('DELETE', `/networks/${encodeURIComponent(id)}`, [204, 404]);
   }
@@ -370,6 +399,19 @@ export class DockerEngine {
   async inspectContainer(id: string): Promise<EngineInspect> {
     const response = await this.#expect('GET', `/containers/${encodeURIComponent(id)}/json`, [200]);
     return this.#json(response, inspectSchema);
+  }
+
+  /**
+   * The image's configuration, for the environment it **declares** (`Config.Env`) — WP-118 reads
+   * the run image's own `PATH` here, so the CLI gets the image's value rather than one the platform
+   * would have to guess. `GET /images/<name>/json`; the socket proxy's `IMAGES=1` admits it.
+   */
+  async inspectImage(name: string): Promise<EngineImageInspect> {
+    // Segment by segment: a registry reference keeps its slashes (`ghcr.io/org/image:tag`), which
+    // the daemon's router matches as path segments rather than as an encoded `%2F`.
+    const path = name.split('/').map(encodeURIComponent).join('/');
+    const response = await this.#expect('GET', `/images/${path}/json`, [200]);
+    return this.#json(response, imageInspectSchema);
   }
 
   async listContainers(

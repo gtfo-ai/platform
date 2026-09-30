@@ -309,6 +309,8 @@ export const createLauncherRunWorkspaceProvisioner = (
         claudeCodePath: ready.claudeCodePath,
         // WP-99: the launcher's listing of the checkout, for the path guard.
         existingProtectedPaths: ready.existingProtectedPaths,
+        // WP-118: the container facts the CLI's own environment needs, composed by the runner.
+        cliEnvironment: ready.cliEnvironment,
         spawn: createRunletSpawn({
           socketPath: ready.attachment.socketPath,
           token: ready.attachment.token,

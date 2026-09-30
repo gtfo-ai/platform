@@ -52,6 +52,7 @@ import type {
   PurgeReport,
   RunnerClock,
   WorkspaceAttachment,
+  WorkspaceCliEnvironment,
   WorkspaceExport,
   WorkspaceExportRequest,
   WorkspaceGitCredential,
@@ -85,6 +86,11 @@ export interface StartedRun {
    * start, when it could not be listed: the path guard then counts every protected path as existing.
    */
   readonly existingProtectedPaths: ExistingProtectedPaths;
+  /**
+   * The container facts the `claude` process needs in its own environment (WP-118, TD-025's
+   * amendment) — the provider's answer, from the same function that wrote the container's.
+   */
+  readonly cliEnvironment: WorkspaceCliEnvironment;
 }
 
 export interface EndRunRequest {
@@ -182,6 +188,7 @@ export class LauncherService {
       }
       handle = await provider.create(spec);
       const attachment = await provider.attach(handle);
+      const cliEnvironment = await provider.cliEnvironment(handle);
       // After `create`, before the runner starts the CLI: the index nothing has touched (WP-99).
       const existingProtectedPaths = await this.#listProtected(handle, spec);
       logger.info(
@@ -198,6 +205,7 @@ export class LauncherService {
         credential: held,
         credentialScope: credential?.scope ?? null,
         existingProtectedPaths,
+        cliEnvironment,
       };
     } catch (error) {
       // Forgotten here; **revoked by the runner**, which sees this create fail and owns the
@@ -310,7 +318,7 @@ export class LauncherService {
   }
 
   /**
-   * The run ids this instance labelled a container for, read off the daemon (TD-028 decision 12,
+   * The run ids this instance labelled a container or a network for, read off the daemon (TD-028 decision 12,
    * WP-103). The launcher lists; it does not decide — which of them is an orphan is the runner's
    * question, because only the runner reads `runs`.
    */

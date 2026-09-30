@@ -33,8 +33,9 @@
  *
  * **`.git` is not repository content** (WP-104, backlog 282): a write with a `.git` segment anywhere
  * in its folded path is denied in every project, before any pattern is read. It is the Edit/Write
- * half; the other half is `core.fsmonitor=false` in the run's git environment (`platformEnvironment`
- * in `./options.ts`), because a shell can still write the file.
+ * half; the other half is `core.fsmonitor=false` in the run's git environment (`PLATFORM_GIT_CONFIG`,
+ * numbered into the CLI's environment by `cliEnvironment` in `./options.ts`), because a shell can
+ * still write the file.
  */
 
 import path from 'node:path';

@@ -125,6 +125,29 @@ export const runWorkspaceProviderContractSuite = (
       });
     });
 
+    /**
+     * WP-118 (TD-025's amendment, PROGRESS backlog 342): both implementations answer the container
+     * facts the CLI's own environment needs — a proxy exactly when the run has a sidecar, pointing at
+     * the run's own sidecar; absolute `HOME`, `CLAUDE_CONFIG_DIR` and `PATH` entries; and the
+     * credential helper as the one git entry. The values are the Docker provider's measured ones in
+     * its unit tier (`workspace/cli-environment.test.ts`); here the contract is the shape.
+     */
+    it('answers the CLI environment of a created run: its sidecar, its home, its PATH, its helper', async () => {
+      await withRun(async ({ provider, handle }) => {
+        const answer = await provider.cliEnvironment(handle);
+        expect(answer.proxy === null).toBe(handle.sidecarContainerId === null);
+        if (answer.proxy !== null) {
+          expect(answer.proxy.url).toBe(`http://egress-${handle.runId}:8888`);
+          expect(answer.proxy.noProxy.split(',')).toContain('localhost');
+        }
+        expect(answer.home.startsWith('/')).toBe(true);
+        expect(answer.claudeConfigDir.startsWith('/')).toBe(true);
+        expect(answer.path.split(':').every((entry) => entry.startsWith('/'))).toBe(true);
+        expect(answer.path.split(':')).toContain('/usr/bin');
+        expect(answer.gitConfig.map((entry) => entry.key)).toEqual(['credential.helper']);
+      });
+    });
+
     it('refuses to create a workspace before the mirror exists', async () => {
       const harness = await context.provider();
       try {

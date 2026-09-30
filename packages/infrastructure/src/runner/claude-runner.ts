@@ -87,6 +87,7 @@ import type {
   SteerMessage,
   TerminalRunStatus,
   ToolApprovalPort,
+  WorkspaceCliEnvironment,
 } from '@platform/application';
 import { runSpecSchema, silentLogger } from '@platform/application';
 import type {
@@ -139,6 +140,12 @@ export interface ClaudeRunnerDependencies {
   readonly sessionMirror?: SessionMirrorPort;
   /** WP-13's run shim goes here; `fakeSpawnClaudeCodeProcess` goes here in tests (TD-025). */
   readonly spawnClaudeCodeProcess?: (options: SpawnOptions) => SpawnedProcess;
+  /**
+   * The launcher's answer for this run's container (WP-118, TD-025's amendment): the proxy,
+   * `HOME`, `CLAUDE_CONFIG_DIR`, the image's `PATH` and the git credential helper, composed into the
+   * CLI's environment by `cliEnvironment` (`./options.ts`). Absent for a run with no launcher.
+   */
+  readonly workspaceEnvironment?: WorkspaceCliEnvironment;
   /** Injected only by tests that need to observe the options; defaults to the SDK's `query`. */
   readonly query?: QueryFunction;
 }
@@ -381,6 +388,9 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
     sessionStore:
       deps.sessionMirror === undefined ? undefined : toSdkSessionStore(deps.sessionMirror),
     spawnClaudeCodeProcess: deps.spawnClaudeCodeProcess,
+    ...(deps.workspaceEnvironment === undefined
+      ? {}
+      : { workspaceEnvironment: deps.workspaceEnvironment }),
     // stderr from the CLI is untrusted text on its way to a log: redact it (BD-022, TD-012).
     stderr: (data) => {
       logger.debug(

@@ -38,7 +38,8 @@
  *    after its row is finished, and a pass that raced it would stop an export mid-push. The
  *    launcher also serialises a destroy behind an end of the same run, so the grace is the first
  *    line and the launcher the second;
- *  - **unknown** — no `runs` row — and its oldest container is older than
+ *  - **unknown** — no `runs` row — and its oldest labelled object (a container, or the network a
+ *    killed create left alone) is older than
  *    {@link ORPHAN_UNKNOWN_RUN_GRACE_MS}. Both sites that insert a run (the stage executor and the
  *    ask executor) commit the row **before** they provision, so a labelled run id with no row is a
  *    row that is gone, or a run of a database this runner does not read. The second is the reason
@@ -73,7 +74,7 @@ import type { RunnerClock } from '../ports/runner.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 
-/** One run id the launcher labelled a container for, as the daemon answers it. */
+/** One run id the launcher labelled a container or a network for, as the daemon answers it. */
 export interface ListedRunWorkspace {
   readonly runId: string;
   /** When the run's **oldest** labelled container was created, per the daemon. */

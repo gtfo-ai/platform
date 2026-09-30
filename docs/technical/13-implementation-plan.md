@@ -260,7 +260,7 @@ A row that adds a migration takes the next free number **at merge**, in merge or
 **Decisions taken before the rows**, so an implementer does not re-open them.
 - **TD-028 amendment (M6)**:
   - decision **11**: a cancel of a run whose lease is live is a `run_commands` row the holder applies as `handle.stop`, and a run with no live lease is ended in place as today (WP-101);
-  - decision **12**: the launcher gains one read verb listing the run ids of the containers it labelled, `destroy` works for a container it holds no handle for, and the reaper is a runner-side recovery row, so the launcher still reads no database (WP-103).
+  - decision **12**: the launcher gains one read verb listing the run ids of the containers and networks it labelled, `destroy` works for a container it holds no handle for, and the reaper is a runner-side recovery row, so the launcher still reads no database (WP-103).
 - **TD-012 amendment (M6)**: a recorded shape reaches every process on commit, with the timer as the guarantee; the repository reading redacts prompt texts by the project's binding credentials before it stores them; the content guard uses the redactor's corpus (WP-104, WP-107).
 - **Q109 switched to (b)** by the architect (reversible by the founder): the tamper check's confirmation is read in the rebase gate's settlement, in its transaction, not by a second pass through `ci_gate`. This amends WP-81's ruling that the check lives entirely inside `ci_gate`'s read (WP-102).
 - **Decisions inside rows**:

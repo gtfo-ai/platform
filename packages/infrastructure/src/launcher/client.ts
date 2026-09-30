@@ -90,7 +90,7 @@ export interface LauncherControlClient {
   createRun(request: CreateRunRequestPayload): Promise<CreateRunResponse>;
   endRun(runId: string, request: EndRunRequestPayload): Promise<EndRunResponse>;
   health(): Promise<HealthResponse>;
-  /** The run ids this launcher's instance labelled a container for (WP-103, TD-028 decision 12). */
+  /** The run ids this launcher's instance labelled a container or network for (WP-103, TD-028 decision 12). */
   listRuns(): Promise<ListRunsResponse>;
   /** Removes a run's objects by label, with no handle; idempotent (WP-103). */
   destroyRun(runId: string): Promise<DestroyRunResponse>;

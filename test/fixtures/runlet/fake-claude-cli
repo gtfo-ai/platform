@@ -25,8 +25,49 @@
  *
  * `--pid-file <path>` writes its own pid, so a test can ask the operating system whether the child
  * is gone rather than believing a frame that says so.
+ *
+ * **It reports the names in its own environment** (WP-118, PROGRESS backlog 342) as a second text
+ * block of its `assistant` message — `fake-claude-cli environ source=… names=A,B git=…` — read from
+ * `/proc/self/environ` where there is one (the run container) and from `process.env` otherwise.
+ * **Names only, never values**; the one exception is `GIT_CONFIG_COUNT` and each
+ * `GIT_CONFIG_KEY_<n>`, which are git configuration names rather than secrets. On stdout rather than
+ * stderr because the transcript is what a run keeps: the launcher provisioner's transport passes no
+ * `onStderr`, so a containerised CLI's stderr reaches nothing (measured at WP-118).
+ * `scripts/launcher-control-plane-check.mjs` reads it to say which of the container's variables
+ * reached the process the shim started. The line has no quote or backslash in it, so it survives
+ * being JSON-encoded unchanged.
  */
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+
+const reportEnviron = () => {
+  let source = '/proc/self/environ';
+  let entries;
+  try {
+    entries = readFileSync('/proc/self/environ', 'utf8').split('\0');
+  } catch {
+    source = 'process.env';
+    entries = Object.entries(process.env).map(([name, value]) => `${name}=${value}`);
+  }
+  const names = [];
+  const git = {};
+  for (const entry of entries) {
+    const equals = entry.indexOf('=');
+    if (equals <= 0) {
+      continue;
+    }
+    const name = entry.slice(0, equals);
+    names.push(name);
+    if (name === 'GIT_CONFIG_COUNT' || /^GIT_CONFIG_KEY_\d+$/.test(name)) {
+      git[name] = entry.slice(equals + 1);
+    }
+  }
+  names.sort();
+  const gitPairs = Object.entries(git)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, value]) => `${name}=${value.replace(/[^\w.-]/g, '?')}`);
+  return `fake-claude-cli environ source=${source} names=${names.join(',')} git=${gitPairs.join('|')}`;
+};
+const ENVIRON = reportEnviron();
 
 const argv = process.argv.slice(2);
 const flag = (name, fallback = null) => {
@@ -65,7 +106,10 @@ const emitResult = () => {
       type: 'message',
       role: 'assistant',
       model: 'claude-opus-5',
-      content: [{ type: 'text', text: 'the shim carried this' }],
+      content: [
+        { type: 'text', text: 'the shim carried this' },
+        { type: 'text', text: ENVIRON },
+      ],
       stop_reason: 'end_turn',
       stop_sequence: null,
       usage: { input_tokens: 10, output_tokens: 5 },

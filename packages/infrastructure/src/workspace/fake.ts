@@ -49,6 +49,7 @@ import type {
   PurgedWorkspace,
   PurgeReport,
   WorkspaceAttachment,
+  WorkspaceCliEnvironment,
   WorkspaceExport,
   WorkspaceExportRequest,
   WorkspaceGitCredential,
@@ -63,17 +64,19 @@ import {
   WorkspaceError,
   workspaceSpecSchema,
 } from '@platform/application';
-import { renderEgressConfig } from './egress.js';
+import { egressProxyUrl, renderEgressConfig } from './egress.js';
 import { type DockerCreateBody, runContainerCreateBody } from './hardening.js';
 import {
   assertRunId,
   controlSocketPath,
+  egressContainerName,
   retentionHoldVolumeName,
   WORKSPACE_WORKDIR,
   workspaceVolumeName,
 } from './names.js';
 import { assertHasCheckout, assertProjectEnv, mintRunToken } from './provider.js';
 import { expiredHolds, type RetentionHold, retentionDecisions } from './retention.js';
+
 import {
   type PlatformSkillCatalogue,
   WORKSPACE_GIT_EXCLUDE_ENTRY,
@@ -81,6 +84,9 @@ import {
 } from './skills.js';
 import { filterTar, type TarInput, writeTar } from './tar.js';
 import { listingRefusal, parseTrackedListing, trackedListingOutput } from './tracked.js';
+
+/** The `PATH` the fake's run image "declares": the value every `node:*` base image does. */
+export const FAKE_RUN_IMAGE_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
 
 interface FakeRun {
   readonly spec: WorkspaceSpec;
@@ -323,6 +329,31 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
       socketPath: controlSocketPath(this.#controlRoot, handle.runId),
       token: run.token,
       workdir: WORKSPACE_WORKDIR,
+    };
+  }
+
+  /**
+   * The container facts the CLI needs (WP-118), in the Docker provider's shape: a proxy exactly
+   * when the run has a sidecar, and the helper command the Docker provider writes for a run image
+   * with no source mount. `PATH` is the value a `node:*` image declares — the fake has no image to
+   * read it from (divergence 6's family: no image, no daemon).
+   */
+  async cliEnvironment(handle: WorkspaceHandle): Promise<WorkspaceCliEnvironment> {
+    this.#run(handle.runId);
+    return {
+      proxy:
+        handle.sidecarContainerId === null
+          ? null
+          : {
+              url: egressProxyUrl(egressContainerName(handle.runId)),
+              noProxy: 'localhost,127.0.0.1',
+            },
+      home: '/tmp',
+      claudeConfigDir: '/tmp/claude',
+      path: FAKE_RUN_IMAGE_PATH,
+      gitConfig: [
+        { key: 'credential.helper', value: '!agentic-runlet credential --socket /ctl/cred.sock' },
+      ],
     };
   }
 

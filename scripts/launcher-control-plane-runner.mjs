@@ -32,6 +32,14 @@ const IDEMPOTENCY_RUN_ID = required('CHECK_IDEMPOTENCY_RUN_ID');
 const CONTROL_ROOT = '/run/agentic/ctl';
 /** The fake CLI, inside the run container, under the read-only checkout mount. */
 const FAKE_CLI = '/repo/test/fixtures/runlet/fake-claude-cli';
+/**
+ * The model credential a production spec carries, **obviously fake and shaped past Anthropic's key
+ * pattern** (standing rule 93: no `sk-ant-` prefix). The real-CLI leg's run allows no model host,
+ * so nothing it sends leaves the sidecar either.
+ */
+const FAKE_MODEL_KEY = 'FAKE-wp118-model-key-not-a-credential';
+/** The run's git credential in the `git-credential` phase — obviously fake, shaped past any real one. */
+const FAKE_GIT_TOKEN = 'FAKE-wp118-git-token-not-a-credential';
 
 const { noSecretsRedactor, runOrphanWorkspaceReap } = await import(
   new URL('../packages/application/src/index.ts', import.meta.url).href
@@ -41,8 +49,19 @@ const { launcher: launcherAdapters, runner: runnerAdapters } = await import(
 );
 
 const notes = [];
+/**
+ * What the CLI wrote on stderr, as the runner's own `stderr` part logs it (`claude code stderr`,
+ * already redacted there). Recorded for the real-CLI leg (WP-118) and, measured there, **empty**:
+ * the launcher provisioner's transport passes no `onStderr`, so a containerised CLI's stderr reaches
+ * nothing. The CLI's error is read off its transcript instead (`api_retry`).
+ */
+const cliStderr = [];
 const logger = {
-  debug: () => undefined,
+  debug: (fields, message) => {
+    if (message === 'claude code stderr' && typeof fields?.stderr === 'string') {
+      cliStderr.push(fields.stderr);
+    }
+  },
   info: () => undefined,
   warn: (fields, message) => notes.push(`warn: ${message} ${JSON.stringify(fields)}`),
   error: (fields, message) => notes.push(`error: ${message} ${JSON.stringify(fields)}`),
@@ -135,9 +154,33 @@ const specFor = (runId) =>
     providerMode: 'api',
     claudeCodePath: null,
     checkoutRef: 'agentic/wp53-check',
-    env: { PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', HOME: '/tmp' },
-    secretEnvNames: [],
+    // WP-118: the environment **production** gives a run — `agentRunEnvironment`, the model
+    // credential and nothing else. Until WP-118 this spec carried `PATH` and `HOME` of its own, which
+    // no production spec does, and that is what let the fake CLI start while the container's
+    // variables stopped at the shim (PROGRESS backlog 342).
+    env: { ANTHROPIC_API_KEY: FAKE_MODEL_KEY },
+    secretEnvNames: ['ANTHROPIC_API_KEY'],
   });
+
+/**
+ * The fake CLI's environment report — the second text block of its `assistant` message
+ * (`fake-claude-cli environ source=… names=… git=…`), read out of the transcript. Names only.
+ */
+const environReport = (transcriptText) => {
+  const match = /fake-claude-cli environ source=(\S+) names=([\w,]*) git=([\w.=?|-]*)/.exec(
+    transcriptText,
+  );
+  if (match === null) {
+    return null;
+  }
+  const git = Object.fromEntries(
+    (match[3] ?? '')
+      .split('|')
+      .filter((pair) => pair.includes('='))
+      .map((pair) => [pair.slice(0, pair.indexOf('=')), pair.slice(pair.indexOf('=') + 1)]),
+  );
+  return { source: match[1], names: (match[2] ?? '').split(',').filter(Boolean), git };
+};
 
 /**
  * Which of the SDK's per-platform `claude` packages this process could resolve — PROGRESS backlog
@@ -281,8 +324,155 @@ if (PHASE === 'reap') {
   process.exit(0);
 }
 
+/**
+ * WP-118 review round 1: **the CLI's git asks the shim for the run's credential**, end to end.
+ *
+ * A run minted a (fake) `read` credential — the one piece this check has no provider for — is
+ * provisioned through the production provisioner and launcher. Then, through the run's own spawn
+ * transport and with **exactly the environment the CLI gets** (`cliEnvironment` over the launcher's
+ * answer), the run container execs `git credential fill` for the run's git host: git reads the
+ * workspace's `credential.helper` from that environment, runs `agentic-runlet credential --socket
+ * /ctl/cred.sock get`, the helper asks the shim's `cred.get`, the shim asks this runner, and the
+ * answer comes back. Before review round 1 the helper looked for `RUNLET_CREDENTIAL_SOCKET`, which
+ * the CLI's environment never carries, and answered nothing. The token is compared here and never
+ * printed.
+ */
+if (PHASE === 'git-credential') {
+  const runId = required('CHECK_GIT_CREDENTIAL_RUN_ID');
+  const minted = {
+    username: 'agentic-wp118',
+    password: FAKE_GIT_TOKEN,
+    scope: 'read',
+    expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    revoke: async () => undefined,
+  };
+  const minting = launcherAdapters.createLauncherRunWorkspaceProvisioner({
+    client,
+    credentials: { mint: async () => ({ kind: 'minted', credential: minted }) },
+    projects: projectSource,
+    controlRoot: CONTROL_ROOT,
+    modelEgressHosts: [],
+    runRegistryHosts: [],
+    credentialTtlSeconds: 3_600,
+    clock: runnerAdapters.systemClock,
+    logger,
+  });
+  const phase = { phase: PHASE, ok: false, notes };
+  let workspace = null;
+  try {
+    const spec = specFor(runId);
+    workspace = await minting.provision(spec);
+    const env = runnerAdapters.cliEnvironment(spec, workspace.cliEnvironment ?? null);
+    phase.helper = env.GIT_CONFIG_VALUE_0 ?? null;
+    const child = workspace.spawn({
+      // The spawn frame takes an absolute command (TD-025 §1); the image's git.
+      command: '/usr/bin/git',
+      args: ['credential', 'fill'],
+      cwd: workspace.workdir,
+      env,
+      signal: new AbortController().signal,
+    });
+    let out = '';
+    child.stdout.on('data', (chunk) => {
+      out += chunk.toString('utf8');
+    });
+    child.on('error', (error) => {
+      phase.error = String(error?.message ?? error);
+    });
+    const exited = new Promise((resolve) => child.once('exit', (code) => resolve(code)));
+    child.stdin.write(`protocol=https\nhost=${required('CHECK_REPO_HOST')}\n\n`);
+    child.stdin.end();
+    phase.exitCode = await exited;
+    const fields = Object.fromEntries(
+      out
+        .split('\n')
+        .filter((line) => line.includes('='))
+        .map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]),
+    );
+    phase.username = fields.username ?? null;
+    phase.passwordMatches = fields.password === FAKE_GIT_TOKEN;
+    phase.passwordLength = (fields.password ?? '').length;
+    phase.ok = phase.exitCode === 0 && phase.passwordMatches;
+  } catch (error) {
+    phase.error = String(error?.message ?? error).slice(0, 600);
+  } finally {
+    await workspace?.release({ kind: 'not_started' });
+  }
+  process.stdout.write(`${JSON.stringify(phase)}\n`);
+  process.exit(0);
+}
+
+/**
+ * WP-118, PROGRESS backlog 342 (consequence (a)): the run image's **real** `claude`, started through
+ * the production path — the launcher's own `claudeCodePath`, the real SDK, the real shim — with the
+ * obviously fake model key. The run allows **no model host** (the git host alone keeps a sidecar in
+ * front of it), so a CLI that uses the proxy is refused *by the sidecar*, which logs the host it was
+ * asked for; the host follows that log (`launcher-control-plane-check.mjs`). No request can reach
+ * Anthropic, with or without a credential. The wall clock bounds a CLI that retries.
+ */
+if (PHASE === 'real-cli') {
+  const runId = required('CHECK_REAL_CLI_RUN_ID');
+  const transcript = [];
+  const phase = { phase: PHASE, ok: false, claudeCodePath: null, status: null, notes };
+  try {
+    const runner = runnerAdapters.createWorkspaceClaudeRunner({
+      provisioner: {
+        provision: async (spec) => {
+          const workspace = await provisioner.provision(spec);
+          phase.claudeCodePath = workspace.claudeCodePath ?? null;
+          return workspace;
+        },
+      },
+      logger,
+      build: (transport) =>
+        runnerAdapters.createClaudeRunner({
+          sink: { append: async (event) => transcript.push(event) },
+          approvals: {
+            requestApproval: async () => ({
+              decision: 'deny',
+              reason: 'unattended',
+              questionId: null,
+            }),
+          },
+          tools: runnerAdapters.recordingTools(),
+          clock: runnerAdapters.systemClock,
+          logger,
+          injectedSecretRedactorFor: () => noSecretsRedactor(),
+          spawnClaudeCodeProcess: transport.spawn,
+          ...(transport.cliEnvironment === undefined
+            ? {}
+            : { workspaceEnvironment: transport.cliEnvironment }),
+        }),
+    });
+    const spec = runnerAdapters.runSpecFixture({
+      ...specFor(runId),
+      // A file tool, so the run has a checkout — and therefore the git host on its allow-list and a
+      // sidecar in front of it. A spec with no file tool and no shell gets neither (WP-74), and its
+      // CLI has no proxy to find whatever the environment says.
+      tools: ['Read'],
+      limits: {
+        ...runnerAdapters.runSpecFixture().limits,
+        wallClockMs: Number(process.env['CHECK_REAL_CLI_WALL_CLOCK_MS'] ?? 90_000),
+        stallTimeoutMs: Number(process.env['CHECK_REAL_CLI_WALL_CLOCK_MS'] ?? 90_000),
+      },
+    });
+    const outcome = await runner.start(spec).outcome;
+    phase.ok = true;
+    phase.status = outcome.status;
+    phase.terminalReason = outcome.terminalReason;
+  } catch (error) {
+    phase.error = String(error?.message ?? error).slice(0, 600);
+  }
+  const redact = (text) => text.split(FAKE_MODEL_KEY).join('[FAKE_MODEL_KEY]');
+  phase.stderr = redact(cliStderr.join('')).slice(-4_000);
+  phase.transcript = redact(JSON.stringify(transcript)).slice(-4_000);
+  process.stdout.write(`${JSON.stringify(phase)}\n`);
+  process.exit(0);
+}
+
 const report = {
   sdkPlatformPackages: sdkPlatformPackages(),
+  environ: null,
   ok: false,
   health: null,
   wrongTokenCode: null,
@@ -347,7 +537,7 @@ try {
       },
     },
     logger,
-    build: ({ spawn }) =>
+    build: ({ spawn, cliEnvironment }) =>
       runnerAdapters.createClaudeRunner({
         sink: { append: async (event) => transcript.push(event) },
         approvals: {
@@ -367,6 +557,8 @@ try {
           report.spawnCommand = options.command;
           return spawn(options);
         },
+        // WP-118: what `apps/server/src/agent.ts` forwards — the launcher's answer.
+        ...(cliEnvironment === undefined ? {} : { workspaceEnvironment: cliEnvironment }),
       }),
   });
 
@@ -376,6 +568,7 @@ try {
   report.kinds = transcript.map((entry) => entry.kind);
   report.text = JSON.stringify(transcript);
   report.releases = releases;
+  report.environ = environReport(report.text);
 
   const created = creates.find((entry) => entry.spec.runId === RUN_ID);
   report.socketPath = created?.response.attachment.socketPath ?? null;

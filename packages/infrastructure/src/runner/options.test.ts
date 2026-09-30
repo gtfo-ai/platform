@@ -1,6 +1,8 @@
+import type { WorkspaceCliEnvironment } from '@platform/application';
+import { WorkspaceError } from '@platform/application';
 import { describe, expect, it } from 'vitest';
 import { runSpecFixture } from './fixtures.js';
-import { buildQueryOptions, platformEnvironment } from './options.js';
+import { buildQueryOptions, cliEnvironment, platformEnvironment } from './options.js';
 
 const parts = () => ({
   hooks: {},
@@ -211,5 +213,157 @@ describe('buildQueryOptions', () => {
     // "Omitted is not skills off" (`sdk.d.ts:2089-2098`): for such a role the restriction is that
     // provisioning copied nothing, which is the stronger of the two lanes.
     expect(buildQueryOptions(runSpecFixture({ skills: [] }), parts()).plugins).toBeUndefined();
+  });
+});
+
+/**
+ * WP-118 (TD-025's amendment, PROGRESS backlog 342): the CLI's whole environment, composed in one
+ * function from the spec, the launcher's answer and the platform's own settings. Measured before
+ * the fix: none of the answer's names reached the CLI, because the shim replaces its child's
+ * environment with the frame's and the frame carried only the spec's and the platform's.
+ */
+describe('cliEnvironment (WP-118)', () => {
+  /** The shape `DockerWorkspaceProvider` answers for a run with a sidecar. */
+  const answer = (overrides: Partial<WorkspaceCliEnvironment> = {}): WorkspaceCliEnvironment => ({
+    proxy: {
+      url: 'http://egress-11111111-1111-4111-8111-111111111111:8888',
+      noProxy: 'localhost,127.0.0.1',
+    },
+    home: '/tmp',
+    claudeConfigDir: '/tmp/claude',
+    path: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+    gitConfig: [
+      { key: 'credential.helper', value: '!agentic-runlet credential --socket /ctl/cred.sock' },
+    ],
+    ...overrides,
+  });
+  const credentialOnly = () =>
+    runSpecFixture({
+      env: { ANTHROPIC_API_KEY: 'FAKE-wp118-model-key-not-a-credential' },
+      secretEnvNames: ['ANTHROPIC_API_KEY'],
+    });
+
+  it('puts the answer into the environment the SDK spawns with: proxy, HOME, CLAUDE_CONFIG_DIR, PATH', () => {
+    const env = buildQueryOptions(credentialOnly(), {
+      ...parts(),
+      workspaceEnvironment: answer(),
+    }).env;
+    expect(env).toMatchObject({
+      ANTHROPIC_API_KEY: 'FAKE-wp118-model-key-not-a-credential',
+      HTTPS_PROXY: 'http://egress-11111111-1111-4111-8111-111111111111:8888',
+      HTTP_PROXY: 'http://egress-11111111-1111-4111-8111-111111111111:8888',
+      NO_PROXY: 'localhost,127.0.0.1',
+      HOME: '/tmp',
+      CLAUDE_CONFIG_DIR: '/tmp/claude',
+      PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+      DISABLE_AUTOUPDATER: '1',
+    });
+    // No sidecar, no proxy: the three names are absent rather than empty.
+    const bare = cliEnvironment(credentialOnly(), answer({ proxy: null }));
+    expect(Object.keys(bare).filter((name) => name.endsWith('PROXY'))).toEqual([]);
+    expect(bare['PATH']).toBe('/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin');
+  });
+
+  it('numbers one git list once: credential.helper and core.fsmonitor under COUNT=2, contiguous', () => {
+    const env = cliEnvironment(credentialOnly(), answer());
+    const git = Object.fromEntries(
+      Object.entries(env).filter(([name]) => name.startsWith('GIT_CONFIG')),
+    );
+    expect(git).toEqual({
+      GIT_CONFIG_COUNT: '2',
+      GIT_CONFIG_KEY_0: 'credential.helper',
+      GIT_CONFIG_VALUE_0: '!agentic-runlet credential --socket /ctl/cred.sock',
+      GIT_CONFIG_KEY_1: 'core.fsmonitor',
+      GIT_CONFIG_VALUE_1: 'false',
+    });
+  });
+
+  it('refuses a configuration key present on both sides by name, never deduplicating it', () => {
+    const clash = answer({
+      gitConfig: [
+        { key: 'credential.helper', value: '!agentic-runlet credential --socket /ctl/cred.sock' },
+        { key: 'Core.FSMonitor', value: 'true' },
+      ],
+    });
+    expect(() => cliEnvironment(credentialOnly(), clash)).toThrow(WorkspaceError);
+    expect(() => cliEnvironment(credentialOnly(), clash)).toThrow(/core\.fsmonitor.*given twice/i);
+  });
+
+  it('does not let RunSpec.env override an answered name or any GIT_CONFIG_* variable', () => {
+    const spec = runSpecFixture({
+      env: {
+        ANTHROPIC_API_KEY: 'FAKE-wp118-model-key-not-a-credential',
+        HTTPS_PROXY: 'http://attacker.invalid:3128',
+        HTTP_PROXY: 'http://attacker.invalid:3128',
+        NO_PROXY: '*',
+        HOME: '/root',
+        CLAUDE_CONFIG_DIR: '/work/repo/.claude',
+        PATH: '/work/repo/bin',
+        GIT_CONFIG_COUNT: '3',
+        GIT_CONFIG_KEY_2: 'core.hooksPath',
+        GIT_CONFIG_VALUE_2: '/work/repo/hooks',
+        GIT_CONFIG_PARAMETERS: "'core.pager=sh'",
+        GIT_CONFIG_GLOBAL: '/work/repo/gitconfig',
+      },
+      secretEnvNames: ['ANTHROPIC_API_KEY'],
+    });
+    const env = cliEnvironment(spec, answer());
+    expect(env).toMatchObject({
+      HTTPS_PROXY: 'http://egress-11111111-1111-4111-8111-111111111111:8888',
+      HTTP_PROXY: 'http://egress-11111111-1111-4111-8111-111111111111:8888',
+      NO_PROXY: 'localhost,127.0.0.1',
+      HOME: '/tmp',
+      CLAUDE_CONFIG_DIR: '/tmp/claude',
+      PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+      GIT_CONFIG_COUNT: '2',
+    });
+    for (const name of [
+      'GIT_CONFIG_KEY_2',
+      'GIT_CONFIG_VALUE_2',
+      'GIT_CONFIG_PARAMETERS',
+      'GIT_CONFIG_GLOBAL',
+    ]) {
+      expect(env, name).not.toHaveProperty(name);
+    }
+    // The spec's own proxy does not survive where there is no sidecar either: an answered `null`
+    // is "no proxy", and the spec is not a second source of one.
+    const noSidecar = cliEnvironment(spec, answer({ proxy: null }));
+    expect(Object.keys(noSidecar).filter((name) => name.endsWith('PROXY'))).toEqual([]);
+    expect(noSidecar['HOME']).toBe('/tmp');
+  });
+
+  it('drops a lowercase proxy, home or git name from the spec too, since curl and undici prefer lowercase (review round 1)', () => {
+    const spec = runSpecFixture({
+      env: {
+        ANTHROPIC_API_KEY: 'FAKE-wp118-model-key-not-a-credential',
+        https_proxy: 'http://attacker.invalid:3128',
+        http_proxy: 'http://attacker.invalid:3128',
+        no_proxy: '*',
+        Home: '/root',
+        git_config_count: '5',
+      },
+      secretEnvNames: ['ANTHROPIC_API_KEY'],
+    });
+    for (const workspace of [answer(), answer({ proxy: null })]) {
+      const env = cliEnvironment(spec, workspace);
+      for (const name of ['https_proxy', 'http_proxy', 'no_proxy', 'Home', 'git_config_count']) {
+        expect(env, name).not.toHaveProperty(name);
+      }
+      expect(env['ANTHROPIC_API_KEY']).toBe('FAKE-wp118-model-key-not-a-credential');
+    }
+  });
+
+  it('with no launcher answer (no provisioner) is the environment before WP-118: the spec’s and the platform’s', () => {
+    const spec = runSpecFixture();
+    // The formula this function replaced, spelled out: `{ ...spec.env, ...platformEnvironment }`
+    // with the one platform git entry at index 0. A test's fake CLI and `local` mode run this way.
+    expect(cliEnvironment(spec, null)).toEqual({
+      ...spec.env,
+      ...platformEnvironment(spec),
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'core.fsmonitor',
+      GIT_CONFIG_VALUE_0: 'false',
+    });
+    expect(buildQueryOptions(spec, parts()).env).toEqual(cliEnvironment(spec, null));
   });
 });

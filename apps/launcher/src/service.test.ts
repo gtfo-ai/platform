@@ -87,6 +87,12 @@ describe('startRun', () => {
     expect(started.handle.runId).toBe(spec.runId);
   });
 
+  it('answers the container facts the CLI’s environment needs, from the provider (WP-118)', async () => {
+    const { started } = await start();
+    expect(started.cliEnvironment).toEqual(await provider.cliEnvironment(started.handle));
+    expect(started.cliEnvironment.proxy?.url).toBe(`http://egress-${started.handle.runId}:8888`);
+  });
+
   /**
    * WP-99: the create answers which of the spec's protected paths exist at the merge base with the default branch — and a
    * listing that throws is an `unlisted` answer, never a failed start: the guard then fails closed.
@@ -109,6 +115,7 @@ describe('startRun', () => {
       updateMirror: (input) => provider.updateMirror(input),
       create: (spec) => provider.create(spec),
       attach: (handle) => provider.attach(handle),
+      cliEnvironment: (handle) => provider.cliEnvironment(handle),
       listExistingProtectedPaths: async () => {
         throw new Error('the daemon went away mid-listing');
       },
@@ -249,6 +256,8 @@ describe('startRun leaves no container behind on any failure path', () => {
         updateMirror: (input) => step('updateMirror', () => target.updateMirror(input)),
         create: (spec) => step('create', () => target.create(spec)),
         attach: (handle) => step('attach', () => target.attach(handle)),
+        // Not a step either: it reads what `create` already decided (WP-118).
+        cliEnvironment: (handle) => target.cliEnvironment(handle),
         // Not a step: a listing that fails is an `unlisted` answer, never a failed start (WP-99),
         // so it is no point at which this harness's injected failure could stop the create.
         listExistingProtectedPaths: (handle, request) =>
@@ -379,6 +388,7 @@ describe('endRun — the container stop happens on every path (WP-13 obligation 
       updateMirror: (input) => provider.updateMirror(input),
       create: (spec) => provider.create(spec),
       attach: (handle) => provider.attach(handle),
+      cliEnvironment: (handle) => provider.cliEnvironment(handle),
       listExistingProtectedPaths: (handle, request) =>
         provider.listExistingProtectedPaths(handle, request),
       kill: (handle) => provider.kill(handle),
@@ -456,6 +466,7 @@ describe('endRun — the container stop happens on every path (WP-13 obligation 
       updateMirror: (input) => provider.updateMirror(input),
       create: (spec) => provider.create(spec),
       attach: (handle) => provider.attach(handle),
+      cliEnvironment: (handle) => provider.cliEnvironment(handle),
       listExistingProtectedPaths: (handle, request) =>
         provider.listExistingProtectedPaths(handle, request),
       kill: (handle) => provider.kill(handle),
@@ -495,6 +506,7 @@ describe('endRun — the container stop happens on every path (WP-13 obligation 
       updateMirror: (input) => provider.updateMirror(input),
       create: (spec) => provider.create(spec),
       attach: (handle) => provider.attach(handle),
+      cliEnvironment: (handle) => provider.cliEnvironment(handle),
       listExistingProtectedPaths: (handle, request) =>
         provider.listExistingProtectedPaths(handle, request),
       kill: (handle) => provider.kill(handle),
@@ -634,6 +646,7 @@ describe('retention sweep', () => {
       updateMirror: unused('updateMirror'),
       create: unused('create'),
       attach: unused('attach'),
+      cliEnvironment: unused('cliEnvironment'),
       listExistingProtectedPaths: unused('listExistingProtectedPaths'),
       kill: unused('kill'),
       export: unused('export'),
@@ -696,6 +709,7 @@ describe('retention sweep', () => {
       updateMirror: unused('updateMirror'),
       create: unused('create'),
       attach: unused('attach'),
+      cliEnvironment: unused('cliEnvironment'),
       listExistingProtectedPaths: unused('listExistingProtectedPaths'),
       kill: unused('kill'),
       export: unused('export'),

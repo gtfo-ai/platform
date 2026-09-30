@@ -58,6 +58,8 @@ interface Harness {
   /** The `cwd` the inner runner was given, once it has been built. */
   readonly startedWith: RunSpec[];
   readonly spawnCalls: number;
+  /** What `build` was handed, per run: the transport and, since WP-118, the launcher's answer. */
+  readonly transports: { readonly workdir: string; readonly cliEnvironment?: unknown }[];
 }
 
 const harness = (options: {
@@ -69,6 +71,7 @@ const harness = (options: {
   const provisioned: RunSpec[] = [];
   const startedWith: RunSpec[] = [];
   let spawnCalls = 0;
+  const transports: { readonly workdir: string; readonly cliEnvironment?: unknown }[] = [];
   const spawn = (_options: SpawnOptions): SpawnedProcess => {
     spawnCalls += 1;
     return {} as SpawnedProcess;
@@ -90,8 +93,9 @@ const harness = (options: {
         return options.provision === undefined ? workspace : await options.provision();
       },
     },
-    build: () => ({
+    build: (transport) => ({
       start: (spec) => {
+        transports.push(transport);
         startedWith.push(spec);
         return (
           options.inner?.(spec) ?? {
@@ -110,6 +114,7 @@ const harness = (options: {
     released,
     provisioned,
     startedWith,
+    transports,
     get spawnCalls() {
       return spawnCalls;
     },
@@ -243,6 +248,33 @@ describe('the run is executed in the workspace’s own working directory', () =>
     const silent = harness({});
     await silent.runner.start(spec).outcome;
     expect(silent.startedWith[0]?.existingProtectedPaths).toEqual(spec.existingProtectedPaths);
+  });
+
+  it('hands the launcher’s CLI environment to build, and nothing when the workspace has none (WP-118)', async () => {
+    const answer = {
+      proxy: null,
+      home: '/tmp',
+      claudeConfigDir: '/tmp/claude',
+      path: '/usr/bin:/bin',
+      gitConfig: [
+        { key: 'credential.helper', value: '!agentic-runlet credential --socket /ctl/cred.sock' },
+      ],
+    };
+    const spawn = (_options: SpawnOptions): SpawnedProcess => ({}) as SpawnedProcess;
+    const answered = harness({
+      provision: async () => ({
+        workdir: WORKDIR,
+        cliEnvironment: answer,
+        spawn,
+        release: async () => {},
+      }),
+    });
+    await answered.runner.start(runSpecFixture()).outcome;
+    expect(answered.transports[0]?.cliEnvironment).toEqual(answer);
+
+    const bare = harness({});
+    await bare.runner.start(runSpecFixture()).outcome;
+    expect(bare.transports[0]).not.toHaveProperty('cliEnvironment');
   });
 });
 

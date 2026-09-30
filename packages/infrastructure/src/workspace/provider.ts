@@ -71,6 +71,7 @@ import type {
   PurgedWorkspace,
   PurgeReport,
   WorkspaceAttachment,
+  WorkspaceCliEnvironment,
   WorkspaceExport,
   WorkspaceExportRequest,
   WorkspaceGitCredential,
@@ -90,6 +91,7 @@ import {
   WorkspaceError,
   workspaceSpecSchema,
 } from '@platform/application';
+import { cliEnvironmentVariables, numberGitConfig } from './cli-environment.js';
 import { EGRESS_CONFIG_MOUNT, egressProxyUrl, renderEgressConfig } from './egress.js';
 import type { DockerEngine, EngineVolume } from './engine.js';
 import {
@@ -137,6 +139,15 @@ import {
  * shim rather than something in the repository. A project narrowing the org's maximum is BD-025's
  * design; a project *redirecting* the run's proxy is not, so these are refused rather than
  * overridden — an overridden value is a policy violation that succeeds quietly.
+ *
+ * **This list guards the container's environment, which the `claude` process does not inherit.**
+ * The shim starts the CLI with the spawn frame's environment alone, so until WP-118 the proxy,
+ * `HOME`, `CLAUDE_CONFIG_DIR` and the credential helper written below stopped at the shim (PROGRESS
+ * backlog 342, measured: none of them reached the CLI, and a real `claude` never reached the
+ * sidecar). The CLI now gets them as `cliEnvironment`'s answer, composed by the runner
+ * (`../runner/options.ts`), where `RunSpec.env` cannot override an answered name or any
+ * `GIT_CONFIG_*` either. A project's own variables (`spec.env`, `containerEnv`) still reach the
+ * container and not the CLI; production passes none today (`apps/server/src/workspaces.ts`).
  */
 const RESERVED_ENV_PREFIXES = [
   'RUNLET_',
@@ -151,6 +162,15 @@ const RESERVED_ENV_PREFIXES = [
   'LD_LIBRARY_PATH',
   'NODE_OPTIONS',
 ];
+
+/**
+ * Where the shim listens for `cred.get`, as the run container sees it — the shim's
+ * `RUNLET_CREDENTIAL_SOCKET` and the helper's `--socket`, one constant so the two cannot drift.
+ */
+export const CONTAINER_CREDENTIAL_SOCKET = '/ctl/cred.sock';
+
+/** A `PATH` of absolute directories, colon-separated — what the run image may declare (WP-118). */
+const IMAGE_PATH_PATTERN = /^\/[\w./+-]*(?::\/[\w./+-]*)*$/;
 
 /**
  * What the clone helper prints when the project's mirror is not on the volume (WP-75). A fixed
@@ -452,6 +472,11 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
   readonly #mirrorLocks = new Map<string, Promise<unknown>>();
   /** The memoised verdict of {@link assertRuntimeCli}; one helper container per process. */
   #runtimeCliVerified: Promise<void> | null = null;
+  /**
+   * The run image's own declared `PATH`, read by {@link assertRuntimeCli} beside the CLI path
+   * (WP-118) and `null` until it has been. The CLI is given it rather than a platform guess.
+   */
+  #runtimeImagePath: string | null = null;
 
   constructor(options: DockerWorkspaceProviderOptions) {
     assertRunnerUid(options.runnerUid);
@@ -533,10 +558,46 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       }
       throw error;
     }
+    this.#runtimeImagePath = await this.#readRuntimeImagePath();
     this.#logger.info(
       { image: this.#images.runtime, claude_code_path: cliPath },
       'the run image carries the CLI the platform will ask the shim to exec',
     );
+  }
+
+  /**
+   * The `PATH` the run image **declares** (`Config.Env`) — WP-118, read where the CLI path is
+   * verified and for the same reason: it is a fact about the image, and only the launcher knows the
+   * image. The shim starts the CLI with the spawn frame's environment alone, so without this the
+   * CLI and everything its shell starts had no `PATH` at all — measured on the pre-fix tree, a
+   * `#!/usr/bin/env node` executable could not start (exit 127).
+   *
+   * An image that declares none is `invalid_spec` naming the image: the daemon's own default is
+   * applied to a *container*, not to an `execve` the shim makes with an explicit environment, so
+   * there is no value to fall back on that is the image's. A value that is not a list of absolute
+   * directories is refused the same way, since it becomes the CLI's command search path.
+   */
+  async #readRuntimeImagePath(): Promise<string> {
+    const image = this.#images.runtime;
+    const inspected = await this.#engine.inspectImage(image);
+    const declared = (inspected.Config?.Env ?? [])
+      .filter((entry) => entry.startsWith('PATH='))
+      .map((entry) => entry.slice('PATH='.length))
+      .at(-1);
+    if (declared === undefined) {
+      throw new WorkspaceError(
+        'invalid_spec',
+        `the run image ${image} declares no PATH in its configuration, so the CLI would start with no command search path (WP-118)`,
+      );
+    }
+    if (!IMAGE_PATH_PATTERN.test(declared) || declared.length > 4_096) {
+      throw new WorkspaceError(
+        'invalid_spec',
+        `the run image ${image} declares a PATH that is not a list of absolute directories (WP-118)`,
+        { detail: declared.slice(0, 200) },
+      );
+    }
+    return declared;
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
@@ -809,7 +870,10 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
 
       const sidecarHost = await this.#startSidecar(spec, made);
 
-      const env = this.#runContainerEnv(spec, sidecarHost);
+      const env = this.#runContainerEnv(
+        spec,
+        this.#runCliEnvironment(spec.runId, sidecarHost !== null),
+      );
       made.container = await this.#engine.createContainer(
         names.container,
         runContainerCreateBody({
@@ -1165,38 +1229,87 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     return this.#images.runtimeSourceDir === null ? null : [];
   }
 
-  /** What the git credential helper inside the workspace is (TD-021: `credential.helper=!agentic-cred`). */
+  /**
+   * What the git credential helper inside the workspace is (TD-021: `credential.helper=!agentic-cred`).
+   *
+   * **It names its socket** (WP-118 review round 1): the helper runs under the CLI's git, whose
+   * environment carries no `RUNLET_*` name, so `--socket` is how it finds the shim's credential
+   * socket — the same path the shim is told to listen on ({@link CONTAINER_CREDENTIAL_SOCKET}).
+   */
   #credentialHelperCommand(): string {
-    return this.#images.runtimeSourceDir === null
-      ? '!agentic-runlet credential'
-      : `!node --import ${RUNTIME_SOURCE_MOUNT}/scripts/ts-source-resolver.mjs ` +
+    const command =
+      this.#images.runtimeSourceDir === null
+        ? '!agentic-runlet credential'
+        : `!node --import ${RUNTIME_SOURCE_MOUNT}/scripts/ts-source-resolver.mjs ` +
           `${RUNTIME_SOURCE_MOUNT}/apps/runlet/src/index.ts credential`;
+    return `${command} --socket ${CONTAINER_CREDENTIAL_SOCKET}`;
   }
 
-  #runContainerEnv(spec: WorkspaceSpec, sidecar: string | null): Record<string, string> {
-    const proxy = sidecar === null ? null : egressProxyUrl(egressContainerName(spec.runId));
+  /**
+   * **The one function** that produces the container facts the `claude` process needs — TD-025's
+   * amendment (PROGRESS backlog 342, WP-118). {@link create} writes the run container's environment
+   * from its result ({@link #runContainerEnv}) and {@link cliEnvironment} answers the same result to
+   * the runner, which composes the CLI's environment from it; `provider.test.ts` holds the two to
+   * each other.
+   *
+   * Derived from the run id and whether the run has a sidecar, both of which a handle carries, so a
+   * launcher that restarted answers the same values for a run it did not create.
+   */
+  #runCliEnvironment(runId: string, hasSidecar: boolean): WorkspaceCliEnvironment {
+    if (this.#runtimeImagePath === null) {
+      // Unreachable through `create` and `cliEnvironment`, which both await `assertRuntimeCli`.
+      throw new WorkspaceError(
+        'workspace_failed',
+        'the run image has not been verified, so its PATH is not known',
+        { runId },
+      );
+    }
+    return {
+      // technical/05 § "Network policy": the sidecar is the only way off the `internal: true`
+      // network, and this is how anything in the run finds it.
+      proxy: hasSidecar
+        ? { url: egressProxyUrl(egressContainerName(runId)), noProxy: 'localhost,127.0.0.1' }
+        : null,
+      home: '/tmp',
+      claudeConfigDir: '/tmp/claude',
+      path: this.#runtimeImagePath,
+      // TD-021: `credential.helper=!agentic-cred` — git asks the shim, which asks the runner.
+      gitConfig: [{ key: 'credential.helper', value: this.#credentialHelperCommand() }],
+    };
+  }
+
+  #runContainerEnv(spec: WorkspaceSpec, cli: WorkspaceCliEnvironment): Record<string, string> {
     return {
       ...spec.env,
-      HOME: '/tmp',
-      CLAUDE_CONFIG_DIR: '/tmp/claude',
+      // The CLI's copy of these is `cliEnvironment`'s answer, composed by the runner; this copy is
+      // the container's own, for the shim and for a `docker exec`. One object, two readers.
+      ...cliEnvironmentVariables(cli),
+      ...numberGitConfig(cli.gitConfig),
       // technical/05 § "Network policy". This copy reaches the **shim's** environment and nothing
       // it starts: the shim replaces its child's environment with the spawn frame's
       // (`../runlet/shim.ts`), so the `claude` process is told not to try by `platformEnvironment`
       // (`../runner/options.ts`, WP-104, PROGRESS backlog 285), never by this line. Kept so a
       // process run with the container's own environment (a `docker exec`) is told the same.
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      // The shim's own coordinates. Never in the CLI's environment: the answer above is a
+      // structured object with no field that could carry one (WP-118).
       RUNLET_CONTROL_SOCKET: '/ctl/ctl.sock',
-      RUNLET_CREDENTIAL_SOCKET: '/ctl/cred.sock',
+      RUNLET_CREDENTIAL_SOCKET: CONTAINER_CREDENTIAL_SOCKET,
       RUNLET_TOKEN_FILE: '/ctl/token',
       RUNLET_CHILD_UID: String(WORKSPACE_UID),
       RUNLET_CHILD_GID: String(WORKSPACE_GID),
-      GIT_CONFIG_COUNT: '1',
-      GIT_CONFIG_KEY_0: 'credential.helper',
-      GIT_CONFIG_VALUE_0: this.#credentialHelperCommand(),
-      ...(proxy === null
-        ? {}
-        : { HTTP_PROXY: proxy, HTTPS_PROXY: proxy, NO_PROXY: 'localhost,127.0.0.1' }),
     };
+  }
+
+  /**
+   * The container facts the `claude` process needs (WP-118) — {@link #runCliEnvironment}'s answer
+   * for this handle. Awaits the image verification first, because `PATH` is read there and a
+   * launcher that restarted has not read it yet.
+   */
+  async cliEnvironment(handle: WorkspaceHandle): Promise<WorkspaceCliEnvironment> {
+    assertRunId(handle.runId);
+    await this.assertRuntimeCli();
+    return this.#runCliEnvironment(handle.runId, handle.sidecarContainerId !== null);
   }
 
   // ── Attach, kill, destroy ──────────────────────────────────────────────────
@@ -1398,15 +1511,42 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
    *  - a container created **before WP-103** carries no instance label and is never listed, so an
    *    orphan from an older build is removed by hand (`docker ps --filter label=com.agentic.run`).
    *
-   * A run is dated by its oldest container's `Created` (the daemon's clock), falling back to the
-   * label's `created_at`, and to *now* when neither parses — the young direction, because an
-   * undatable container is one the reaper must not call old.
+   * **And every network carrying the same two labels** (WP-118 pre-review round): a launcher killed
+   * after the network and before the first container leaves no container to list — measured, the
+   * run's network, volume and control directory were then orphaned for ever. A network-only run is
+   * listed as not running, dated by the network's `Created`.
+   *
+   * A run is dated by its oldest labelled object's `Created` (the daemon's clock), falling back to
+   * the label's `created_at`, and to *now* when neither parses — the young direction, because an
+   * undatable object is one the reaper must not call old.
    */
   async listLabelledRuns(): Promise<readonly LabelledRunWorkspace[]> {
     const containers = await this.#engine.listContainers({
       label: [WORKSPACE_LABELS.run, `${WORKSPACE_LABELS.instance}=${this.#controlVolume}`],
     });
     const runs = new Map<string, { createdAt: number; running: boolean }>();
+    // The run's **network** as well (WP-118 pre-review round, measured): it is the first object a
+    // create makes, so a launcher killed after it and before any container leaves a network, a
+    // volume and a control directory and no container at all — listed by containers alone, that
+    // run was never listed and never reaped. Same two labels, same instance filter.
+    const networks = await this.#engine.listNetworks({
+      label: [WORKSPACE_LABELS.run, `${WORKSPACE_LABELS.instance}=${this.#controlVolume}`],
+    });
+    for (const network of networks) {
+      const runId = network.Labels?.[WORKSPACE_LABELS.run];
+      if (runId === undefined || !RUN_ID_PATTERN.test(runId)) {
+        continue;
+      }
+      const created = Date.parse(
+        network.Created ?? network.Labels?.[WORKSPACE_LABELS.createdAt] ?? '',
+      );
+      const at = Number.isFinite(created) ? created : this.#now().getTime();
+      const seen = runs.get(runId);
+      runs.set(runId, {
+        createdAt: seen === undefined ? at : Math.min(seen.createdAt, at),
+        running: seen?.running ?? false,
+      });
+    }
     for (const container of containers) {
       const runId = container.Labels?.[WORKSPACE_LABELS.run];
       if (runId === undefined || !RUN_ID_PATTERN.test(runId)) {
@@ -1436,7 +1576,9 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
   /**
    * {@link destroy} for a run no handle names — TD-028 decision 12's second half (WP-103).
    *
-   * Found **by label**: every container carrying the run's label for this instance. The run
+   * Found **by label**: every container carrying the run's label for this instance — and, since
+   * WP-118's pre-review round, a network carrying it, so a run a killed create left with only its
+   * network answers `found: true`. The run
    * container and the sidecar go through the same `#teardown` `destroy` uses, so the order (stop
    * before remove) and the tolerance of "no such thing" are one implementation; any **other**
    * container — the helper a create was running when its launcher died — is stopped and removed
@@ -1445,8 +1587,9 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
    * object as done. The workspace volume is kept, as `destroy` keeps it: retention owns it, and it
    * is reclaimed on its own window now that no container holds it.
    *
-   * The instance filter covers the **containers** only: the network and the configuration volume
-   * are removed by the names derived from the run id, whatever instance made them. That is
+   * The instance filter decides what is **found** (containers, and the network for `found`); the
+   * network and the configuration volume are **removed** by the names derived from the run id,
+   * whatever instance made them. That is
    * reachable only with an id this instance listed, and the daemon refuses to remove a network or
    * volume a container still uses, so another instance's live run cannot lose either (WP-103
    * review).
@@ -1477,6 +1620,14 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
         );
       }
     }
+    // A run a killed create left with only its network (WP-118 pre-review round): found by the
+    // same two labels, so `found` is true and the caller counts it as removed.
+    const networks = await this.#engine.listNetworks({
+      label: [
+        `${WORKSPACE_LABELS.run}=${id}`,
+        `${WORKSPACE_LABELS.instance}=${this.#controlVolume}`,
+      ],
+    });
     await this.#teardown(
       id,
       {
@@ -1489,7 +1640,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       },
       20,
     );
-    return { found: containers.length > 0 };
+    return { found: containers.length > 0 || networks.length > 0 };
   }
 
   /**

@@ -285,7 +285,7 @@ describe('create', () => {
     const handle = await provider.create(workspaceSpecFixture());
     const env = daemon.containers.get(handle.containerId)?.body.Env ?? [];
     expect(env).toContain('GIT_CONFIG_KEY_0=credential.helper');
-    expect(env).toContain('GIT_CONFIG_VALUE_0=!agentic-runlet credential');
+    expect(env).toContain('GIT_CONFIG_VALUE_0=!agentic-runlet credential --socket /ctl/cred.sock');
     expect(env).toContain('RUNLET_TOKEN_FILE=/ctl/token');
     // The token itself never reaches the run container's environment: it is a file on the control
     // volume, which the launcher can unlink (`runlet/config.ts`).

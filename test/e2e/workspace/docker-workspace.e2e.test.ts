@@ -2451,6 +2451,7 @@ runWorkspaceProviderContractSuite('DockerWorkspaceProvider', {
           return handle;
         },
         attach: (handle) => fixture.provider.attach(handle),
+        cliEnvironment: (handle) => fixture.provider.cliEnvironment(handle),
         listExistingProtectedPaths: (handle, request) =>
           fixture.provider.listExistingProtectedPaths(handle, request),
         kill: (handle) => fixture.provider.kill(handle),

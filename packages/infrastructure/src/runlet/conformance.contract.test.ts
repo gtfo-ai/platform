@@ -414,12 +414,19 @@ describe('agentic-runlet conformance, against the real shim process', () => {
     const ask = async (input: string): Promise<string> => {
       const helper = spawnProcess(
         process.execPath,
-        ['--import', RESOLVER, SHIM_ENTRY, 'credential', 'get'],
+        // The socket as an argument, as the workspace's `credential.helper` passes it (WP-118):
+        // the environment is the CLI's, which carries no `RUNLET_*` name.
+        [
+          '--import',
+          RESOLVER,
+          SHIM_ENTRY,
+          'credential',
+          '--socket',
+          shim.credentialSocketPath,
+          'get',
+        ],
         {
-          env: {
-            PATH: process.env['PATH'] ?? '/usr/bin',
-            RUNLET_CREDENTIAL_SOCKET: shim.credentialSocketPath,
-          },
+          env: { PATH: process.env['PATH'] ?? '/usr/bin' },
           stdio: ['pipe', 'pipe', 'pipe'],
         },
       );
@@ -442,6 +449,37 @@ describe('agentic-runlet conformance, against the real shim process', () => {
     expect(await ask('protocol=https\nhost=evil.example.com\n\n')).toBe('');
     // Cleartext has no representation on the wire at all.
     expect(await ask('protocol=http\nhost=gitlab.example.com\n\n')).toBe('');
+
+    // WP-118 review round 1: no `--socket` is a loud refusal — stderr and a non-zero exit, which
+    // git surfaces — never the silence that used to fail a push with no diagnosis. The shim's own
+    // `RUNLET_CREDENTIAL_SOCKET` in the environment does not stand in for the argument.
+    const bare = spawnProcess(
+      process.execPath,
+      ['--import', RESOLVER, SHIM_ENTRY, 'credential', 'get'],
+      {
+        env: {
+          PATH: process.env['PATH'] ?? '/usr/bin',
+          RUNLET_CREDENTIAL_SOCKET: shim.credentialSocketPath,
+        },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      },
+    );
+    started.push(bare);
+    bare.stdin?.end('protocol=https\nhost=gitlab.example.com\n\n');
+    let bareOut = '';
+    let bareErr = '';
+    bare.stdout?.on('data', (chunk: Buffer) => {
+      bareOut += chunk.toString('utf8');
+    });
+    bare.stderr?.on('data', (chunk: Buffer) => {
+      bareErr += chunk.toString('utf8');
+    });
+    const bareCode = await new Promise<number | null>((resolve) =>
+      bare.once('exit', (code) => resolve(code)),
+    );
+    expect(bareCode).toBe(2);
+    expect(bareOut).toBe('');
+    expect(bareErr).toContain('no --socket <path> was given');
 
     child.kill('SIGKILL');
     await new Promise<void>((resolve) => child.once('exit', () => resolve()));

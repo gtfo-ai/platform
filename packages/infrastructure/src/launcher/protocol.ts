@@ -40,6 +40,7 @@
  */
 import type {
   WorkspaceAttachment,
+  WorkspaceCliEnvironment,
   WorkspaceErrorCode,
   WorkspaceExport,
   WorkspaceHandle,
@@ -134,6 +135,62 @@ const workspaceExportSchema: z.ZodType<WorkspaceExport> = z.strictObject({
   tarballPath: nonEmptyStringSchema.max(4_096).nullable(),
   tarballBytes: z.int().min(0),
   droppedLinks: z.int().min(0),
+});
+
+/**
+ * {@link WorkspaceCliEnvironment} on the wire — **TD-025's amendment** (PROGRESS backlog 342,
+ * WP-118): the container facts the `claude` process needs in its own environment, answered by the
+ * launcher beside `claudeCodePath` and composed into the CLI's environment by the runner.
+ *
+ * **Strict and structured, never a record of names to values.** A free-form map would carry
+ * whatever the launcher put in it, and the launcher's own environment is where `RUNLET_*` — the
+ * control channel's coordinates — lives. Here there is no field a variable name can ride in: an
+ * unknown key is refused, a git entry is a key and a value with nothing else, and each value is
+ * shaped (an absolute path, an internal `http://<name>:<port>` URL, a `NO_PROXY` host list, a git key
+ * of `section.name`). None is a secret; `../workspace/cli-environment.test.ts` runs every value both
+ * providers answer through TD-012's detector to say so.
+ *
+ * The git key shape is **narrower than git's** (no subsection), stated rather than hidden: the two
+ * keys the platform writes are `credential.helper` and `core.fsmonitor`, and a key this refuses is a
+ * key nobody decided to send.
+ */
+const absolutePathSchema = z
+  .string()
+  .max(4_096)
+  .regex(/^\/[\w./+-]*$/, 'expected an absolute path');
+
+export const workspaceCliEnvironmentSchema: z.ZodType<WorkspaceCliEnvironment> = z.strictObject({
+  proxy: z
+    .strictObject({
+      url: z
+        .string()
+        .max(300)
+        .regex(/^http:\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)*:\d{1,5}$/, 'expected http://<host>:<port>'),
+      noProxy: z
+        .string()
+        .max(1_024)
+        .regex(/^[a-z0-9.:-]+(?:,[a-z0-9.:-]+)*$/, 'expected a comma-separated host list'),
+    })
+    .nullable(),
+  home: absolutePathSchema,
+  claudeConfigDir: absolutePathSchema,
+  path: z
+    .string()
+    .max(4_096)
+    .regex(/^\/[\w./+-]*(?::\/[\w./+-]*)*$/, 'expected a list of absolute directories'),
+  gitConfig: z
+    .array(
+      z.strictObject({
+        key: z
+          .string()
+          .max(128)
+          .regex(/^[A-Za-z][A-Za-z0-9-]*\.[A-Za-z][A-Za-z0-9-]*$/, 'expected section.name'),
+        value: nonEmptyStringSchema
+          .max(4_096)
+          .refine((value) => !/[\r\n]/.test(value) && !value.includes('\0'), 'one line'),
+      }),
+    )
+    .max(8),
 });
 
 // ── Requests ─────────────────────────────────────────────────────────────────
@@ -270,6 +327,12 @@ export const createRunResponseSchema = z.strictObject({
    * puts it on the spec (`workspace-runner.ts` substitutes it beside `workspacePath`).
    */
   claudeCodePath: nonEmptyStringSchema.max(4_096),
+  /**
+   * The run container's proxy, home, config directory, image `PATH` and git configuration, for the
+   * CLI's own environment — WP-118, {@link workspaceCliEnvironmentSchema}. Answered beside
+   * `claudeCodePath` for the same reason: only the launcher knows the image and the run's network.
+   */
+  cliEnvironment: workspaceCliEnvironmentSchema,
   /**
    * The scope of the run credential the launcher **holds** for this run, or `null` when it holds
    * none — a repo-less run, or a read-only one that fetches anonymously. It minted nothing: the

@@ -173,6 +173,17 @@ Recorded here because a reviewer of TD-025 will want to know where the code went
   keeps a compromised child off the control channel is that the *slot is already taken* before the
   child exists, and that a dropped connection kills the run rather than freeing the slot. Stated at
   the top of `shim.ts` so nobody later mistakes the token for a secret from the agent.
+* **The child's environment is the frame's, and nothing else — so the frame must carry the
+  container's facts too.** `env` replaces, never merges (TD-025 §1), which is why the run token in the
+  shim's own environment never reaches the CLI. It also meant, until WP-118, that nothing the
+  launcher wrote on the **container** reached it either: the egress proxy, `HOME`,
+  `CLAUDE_CONFIG_DIR`, the image's `PATH` and the git credential helper stopped at the shim. Measured
+  through the production path (`scripts/launcher-control-plane-check.mjs`, PROGRESS backlog 342): the
+  fake CLI's `/proc/self/environ` held the model credential, the platform's opt-outs and one git
+  entry, a `#!/usr/bin/env node` executable could not start without a `PATH` (exit 127), and the
+  image's real `claude` retried its first request for a minute with nothing reaching the sidecar.
+  The fix is TD-025's amendment, not a shim change: the launcher answers those values and the runner
+  composes them into the frame.
 * **`exit.signal` is wider than the signals the runner may send.** A child can die of `SIGSEGV`;
   reporting that as `null` would turn a crash into an ordinary exit.
 * **The window between the child's `exit` and its stdio's `close` bounds *silence*, not the drain.**
