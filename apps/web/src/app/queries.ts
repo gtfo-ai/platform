@@ -291,6 +291,22 @@ export const useKbProposals = (projectId: string | null) => {
   });
 };
 
+/**
+ * `GET /api/projects/:id/kb/health` (WP-95, PROGRESS backlog 37). `retry: false` for
+ * `useProjectReadiness`'s reason: a 409 `kb_health_not_reported` is an answer — no pass has run
+ * for this project yet — not a transport failure to poll through.
+ */
+export const useKbHealth = (projectId: string | null) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: queryKeys.kbHealth(projectId ?? ''),
+    queryFn: () => endpoints.kbHealth(projectId ?? ''),
+    enabled: projectId !== null,
+    retry: false,
+    ...FOREVER,
+  });
+};
+
 export const useTask = (taskId: string, enabled = true) => {
   const { endpoints } = useServices();
   return useQuery({
@@ -483,6 +499,20 @@ export const useIdentityCandidates = (enabled: boolean) => {
     queryKey: [...queryKeys.identityCandidates],
     queryFn: () => endpoints.identityCandidates(),
     enabled,
+    retry: false,
+  });
+};
+
+/**
+ * `GET /api/org/dead-letters` (WP-95, PROGRESS backlog 126): the newest page. Admin-only on the
+ * server, so a non-admin's 403 is an answer the section names — not retried, and not drawn as an
+ * empty list that would read as "nothing is poisoned".
+ */
+export const useDeadLetters = () => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: [...queryKeys.deadLetters],
+    queryFn: () => endpoints.deadLetters({}),
     retry: false,
   });
 };
@@ -1033,6 +1063,24 @@ export const useSettingsCommands = (mint?: MintKey) => {
         await queryClient.invalidateQueries({ queryKey: [...queryKeys.projects] });
         // Every project's reads (`['project', id, …]`): the dial and the effective configuration.
         await queryClient.invalidateQueries({ queryKey: ['project'] });
+      },
+    }),
+    /**
+     * `POST /api/org/dead-letters/:position/requeue` (WP-95). One key per intent, so a double click
+     * is one re-queue on the server; the list is re-read either way, because a refusal (`409
+     * event_not_dead_lettered`) means somebody else already re-queued it.
+     */
+    requeueDeadLetter: useMutation({
+      mutationFn: (position: number) =>
+        endpoints.requeueDeadLetter(
+          position,
+          intents.keyFor(['org.dead_letter.requeue', position]),
+        ),
+      onSuccess: (_result, position) => {
+        intents.release(['org.dead_letter.requeue', position]);
+      },
+      onSettled: async () => {
+        await queryClient.invalidateQueries({ queryKey: [...queryKeys.deadLetters] });
       },
     }),
     setOrgBudget: useMutation({

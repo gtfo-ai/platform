@@ -77,9 +77,9 @@ cheaper of the two and the only one that carries comments and the ticket readine
 what the URL below is built from. With no public URL, skip to step 5 and switch polling on.
 
 1. **Jira settings → System → WebHooks → Create a WebHook.**
-2. **URL:** `https://<your-instance>/webhooks/jira-cloud/<integration-id>` (the exact URL is the
-   `webhook_url` field of `GET /api/integrations/<integration-id>/setup-guide`; the integrations
-   screen does not display it yet).
+2. **URL:** `https://<your-instance>/webhooks/jira-cloud/<integration-id>` (the exact URL is shown
+   above this guide on the integrations screen, with a Copy button; the API publishes it as the
+   `webhook_url` field of `GET /api/integrations/<integration-id>/setup-guide`).
 3. **Secret:** generate one and paste the same value into `webhook_secret`. Atlassian shows it once.
 4. **Events:** *Issue: created, updated* and *Comment: created*. Nothing else is used, and every
    other event is answered with "not handled by this provider" in the delivery log. *Issue updated*

@@ -9,12 +9,14 @@
  * the browser, the proposals queue with its decisions, the budget bars and the effective
  * configuration with the source of every key.
  */
-import type { KnowledgeProposalSource } from '@platform/contracts';
+import type { KbHealthResponse, KnowledgeProposalSource } from '@platform/contracts';
 import { Link } from '@tanstack/react-router';
 import type { ReactElement } from 'react';
 import { useState } from 'react';
+import { ApiError } from '../api/http.js';
 import {
   useKbDoc,
+  useKbHealth,
   useKbProposalCommands,
   useKbProposals,
   useKbTree,
@@ -29,6 +31,7 @@ import {
   Card,
   EmptyState,
   ErrorNotice,
+  formatDateTime,
   formatInteger,
   formatUsd,
   Loading,
@@ -66,6 +69,101 @@ const useProjectId = (projectKey: string): string | null => {
 };
 
 // ── Knowledge ────────────────────────────────────────────────────────────────
+
+/**
+ * What each finding kind means, in a maintainer's words — `kbHealthReportFindingSchema.kind`.
+ *
+ * A `Record` over the enum for `SOURCE_LABEL`'s reason: an eighth kind fails the typecheck here
+ * rather than rendering as a bare token. The strings are the platform's; the finding's `path` and
+ * `detail` quote a committed page and stay untrusted (BD-022).
+ */
+const FINDING_LABEL: Readonly<Record<KbHealthResponse['findings'][number]['kind'], string>> = {
+  invalid: 'refused by the parser — in no context pack',
+  unresolved_paths: 'paths match nothing tracked — dropped from packs',
+  expired: 'expired',
+  dangling: 'dangling link',
+  duplicate: 'duplicate id',
+  contradiction: 'contradiction',
+  oversized: 'oversized',
+};
+
+/**
+ * The knowledge health report (WP-95, PROGRESS backlog 37): the nightly hygiene pass has written
+ * `kb_health_reports` since WP-18b and `GET …/kb/health` has served the newest since WP-15h part 2,
+ * and no screen asked for it — so a page the parser refused was silently absent from every pack and
+ * the one place that said so was a table nobody read.
+ *
+ * Three answers, kept apart (standing rule 18): **no report yet** (the read's `409
+ * kb_health_not_reported`), **a report with no findings**, and **a report with findings**. A finding
+ * is an observation: nothing in the platform rewrites a page because one names it (product/05), and
+ * this panel offers no control that would.
+ */
+export const KnowledgeHealth = ({
+  projectId,
+}: {
+  readonly projectId: string | null;
+}): ReactElement => {
+  const health = useKbHealth(projectId);
+  const notReported =
+    health.error instanceof ApiError && health.error.code === 'kb_health_not_reported';
+  return (
+    <div>
+      <SectionHeading>Health</SectionHeading>
+      {health.isPending && projectId !== null ? (
+        <Loading label="Loading the health report…" />
+      ) : null}
+      {notReported ? (
+        <EmptyState
+          title="No health report yet"
+          hint="The nightly hygiene pass writes one per project: documents the parser refused, links that point nowhere, expired pages, duplicates. None has run for this project yet."
+        />
+      ) : health.isError ? (
+        <ErrorNotice title="The health report could not be loaded." detail={String(health.error)} />
+      ) : null}
+      {health.data === undefined ? null : (
+        <Card className="flex flex-col gap-2">
+          <p className="text-xs text-fg-muted">
+            {`${formatInteger(health.data.documents)} document${health.data.documents === 1 ? '' : 's'} indexed · ${health.data.source === 'hygiene' ? 'nightly hygiene pass' : 'Librarian run'} · ${formatDateTime(health.data.created_at)}`}
+            {health.data.commit_sha === null ? null : (
+              <>
+                {' · index at '}
+                <UntrustedText value={health.data.commit_sha.slice(0, 12)} />
+              </>
+            )}
+          </p>
+          {health.data.findings.length === 0 ? (
+            <p className="text-sm" data-kb-health="clean">
+              The last pass found nothing wrong.
+            </p>
+          ) : (
+            <ul className="flex flex-col gap-1 text-xs" data-kb-health="findings">
+              {health.data.findings.map((finding, index) => (
+                <li
+                  // biome-ignore lint/suspicious/noArrayIndexKey: findings are positional; two may share a path and kind.
+                  key={index}
+                  className="flex flex-col gap-0.5 border-t border-line pt-1"
+                >
+                  <span className="flex flex-wrap items-center gap-2">
+                    <Badge tone={finding.kind === 'invalid' ? 'danger' : 'warning'}>
+                      {FINDING_LABEL[finding.kind]}
+                    </Badge>
+                    <span className="font-mono">
+                      <UntrustedText value={finding.path} />
+                    </span>
+                  </span>
+                  <UntrustedText value={finding.detail} />
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="text-xs text-fg-muted">
+            An observation, not an instruction: nothing rewrites a page because a finding names it.
+          </p>
+        </Card>
+      )}
+    </div>
+  );
+};
 
 export const KnowledgeScreen = ({ projectKey }: { readonly projectKey: string }): ReactElement => {
   const projectId = useProjectId(projectKey);
@@ -129,6 +227,8 @@ export const KnowledgeScreen = ({ projectKey }: { readonly projectKey: string })
             </Card>
           )}
         </div>
+
+        <KnowledgeHealth projectId={projectId} />
 
         <div>
           <SectionHeading>Proposals</SectionHeading>

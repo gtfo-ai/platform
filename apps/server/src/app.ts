@@ -53,7 +53,7 @@ import fastifyCompress from '@fastify/compress';
 import fastifySse from '@fastify/sse';
 import fastifySwagger from '@fastify/swagger';
 import underPressure from '@fastify/under-pressure';
-import type { WebhookIngress } from '@platform/application';
+import type { DeadLetterCommands, WebhookIngress } from '@platform/application';
 import type { IsoDateTime } from '@platform/contracts';
 import { redaction as redactionAdapters } from '@platform/infrastructure';
 import { type FastifyBaseLogger, type FastifyInstance, fastify, LogController } from 'fastify';
@@ -127,6 +127,7 @@ import { registerAskRoutes } from './routes/asks.js';
 import { registerBootstrapRoutes } from './routes/bootstrap.js';
 import { registerBreakdownRoutes } from './routes/breakdown.js';
 import { registerCommandRoutes } from './routes/commands.js';
+import { registerDeadLetterRoutes } from './routes/dead-letters.js';
 import { registerDownloadRoutes } from './routes/downloads.js';
 import { registerIntegrationRoutes } from './routes/integrations.js';
 import { registerKbRoutes } from './routes/kb.js';
@@ -217,6 +218,13 @@ export interface BuildAppOptions {
    * composed none. Nullable like `shadow`; the routes answer `503` by name.
    */
   readonly projectConfig?: ProjectConfigCommands | null;
+  /**
+   * The dead-letter list and its re-queue (WP-95, PROGRESS backlog 126), or `null`/absent for a
+   * process that composed no eventing. Optional like `projectConfig`: `app.test.ts` and the census
+   * build an app with no database, and the routes are registered either way and answer `503` by
+   * name — behind their admin guard, which is what the census probes.
+   */
+  readonly deadLetters?: DeadLetterCommands | null;
   /**
    * Whether a project may start a shadow batch — the same predicate the command refuses with.
    *
@@ -496,6 +504,19 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         listCandidates: async () => listIdentityCandidates(options.database),
         recordAction: async (input) => recordHumanAction(options.database, input),
       },
+    });
+    // WP-95, backlog 126: the operator's two instruments over the events WP-49 dead-lettered.
+    await registerDeadLetterRoutes(app, {
+      commands: options.deadLetters ?? null,
+      records: {
+        claimAttempt: async (query) => claimCommandAttempt(options.database, query),
+        releaseAttempt: async (query) => releaseCommandAttempt(options.database, query),
+        recordAction: async (input) => recordHumanAction(options.database, input),
+      },
+      projectRole: async (projectId, userId) =>
+        findProjectRole(options.database, projectId, userId),
+      // TD-012 step 2, the platform's patterns: a handler's error may quote a credential.
+      redactor: redactionAdapters.patternRedactor(),
     });
     await registerIntegrationRoutes(app, {
       database: options.database,

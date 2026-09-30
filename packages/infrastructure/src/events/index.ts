@@ -15,6 +15,7 @@ import { PostgresEventStore } from './postgres-event-store.js';
 import { PostgresUnitOfWork } from './postgres-unit-of-work.js';
 
 export * from './config.js';
+export * from './postgres-dead-letters.js';
 export * from './postgres-event-store.js';
 export * from './postgres-unit-of-work.js';
 export { type EventRow, eventColumns, type SqlExecutor } from './sql.js';

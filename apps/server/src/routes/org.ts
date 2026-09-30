@@ -14,18 +14,18 @@
  * `org_id`. Written up in `PROGRESS.md` as the assumption it is.
  *
  * The pair WP-31 added — `POST` and `GET /api/org/identities` (`org.users.manage`, admin) — is the
- * only **command** on this file, and no screen calls either of them. That makes both invisible to
- * `routes/client-census.test.ts`, which compares the *client's* paths against the router, so they
- * are asserted by hand: positively in that census (served, 401, and absent from the client's list —
- * the shape `GET /api/projects/:id/kb/health` already has) and behaviourally in `./org.test.ts`,
- * which drives them through a real Fastify instance over a **fake** `IdentityQueries`.
+ * only **command** on this file. No screen called either until WP-43 gave them the settings page's
+ * identity section, so they were invisible to `routes/client-census.test.ts` — which compares the
+ * *client's* paths against the router — and asserted by hand; the census now sees them as callers'
+ * paths, and `./org.test.ts` drives them behaviourally through a real Fastify instance over a
+ * **fake** `IdentityQueries`.
  *
  * That last word is why they are also driven against a real PostgreSQL in
  * `test/e2e/server/identity-api.e2e.test.ts`. A fake that returns what the route would like is not
  * evidence about the driver that answers it: the pair shipped answering **500** on every real
  * request, green in every tier, because the fake's `created_at` was a `Date` and the database's was
- * a string (`toWireIdentityMapping` below carries the mechanism). No screen calls these two, so no
- * client-driven tier would ever have found it either.
+ * a string (`toWireIdentityMapping` below carries the mechanism). No screen called these two then,
+ * so no client-driven tier would have found it either.
  *
  * What technical/08 names and this server still does not serve is enumerated, with the row that
  * owns each one, in `routes/client-census.test.ts` — which fails if that list drifts from the

@@ -40,6 +40,7 @@ const task = (overrides: Partial<TaskRecord>): TaskRecord =>
       key: 'ACME-12',
       url: 'https://tickets.example.invalid/browse/ACME-12',
     },
+    ticket_title: null,
     template: 'feature',
     mode: 'normal',
     state: 'active',

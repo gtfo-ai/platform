@@ -37,7 +37,7 @@ import {
   Loading,
   SectionHeading,
 } from '../ui/kit.js';
-import { UntrustedProse, UntrustedText } from '../ui/untrusted.js';
+import { CopyableUrl, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
 
 const HEALTH_TONE: Record<string, BadgeTone> = {
   ok: 'success',
@@ -124,7 +124,12 @@ export const IntegrationsScreen = (): ReactElement => {
   const integrations = useIntegrations();
   const commands = useOnboardingCommands();
   const { endpoints } = useServices();
-  const [guide, setGuide] = useState<{ id: string; markdown: string; title: string } | null>(null);
+  const [guide, setGuide] = useState<{
+    id: string;
+    markdown: string;
+    title: string;
+    webhookUrl: string | null;
+  } | null>(null);
   const [guideError, setGuideError] = useState(false);
   const [draft, setDraft] = useState({
     type: 'task_management' as (typeof INTEGRATION_TYPES)[number],
@@ -194,6 +199,7 @@ export const IntegrationsScreen = (): ReactElement => {
                         id: integration.id,
                         markdown: response.markdown,
                         title: response.title,
+                        webhookUrl: response.webhook_url,
                       });
                     })
                     .catch(() => {
@@ -328,6 +334,20 @@ export const IntegrationsScreen = (): ReactElement => {
           >
             <UntrustedText value={guide.title} />
           </SectionHeading>
+          {/*
+            WP-95, PROGRESS backlog 272: the URL an operator pastes into the provider. The API has
+            published it since WP-21 and this card kept only the guide's text, so the guides told the
+            operator to call the API for it. It is copied, never followed (`CopyableUrl` says why),
+            and a provider with no inbound half has none — which the card says rather than drawing
+            an empty field.
+          */}
+          {guide.webhookUrl === null ? (
+            <p className="text-xs text-fg-muted" data-webhook-url="none">
+              This provider has no inbound half on this build, so there is no webhook URL to paste.
+            </p>
+          ) : (
+            <CopyableUrl url={guide.webhookUrl} label="Webhook URL" />
+          )}
           {/* A provider's own guide text: paragraphs and code fences, never HTML (BD-022). */}
           <UntrustedProse value={guide.markdown} />
         </Card>

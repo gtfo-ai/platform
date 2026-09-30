@@ -3,7 +3,7 @@
  *
  * Five paths. Four of them closed the three `kb/*` reads and the proposal command that
  * `routes/client-census.test.ts` had carried as admitted gaps since WP-15h; the fifth was added by
- * WP-15h part 2 and is the one the census **cannot** see, because no screen calls it:
+ * WP-15h part 2, and **no screen called it until WP-95** gave the knowledge screen its health panel:
  *
  *   GET  /api/projects/:project_id/kb/tree
  *   GET  /api/projects/:project_id/kb/doc?path=…
@@ -13,11 +13,10 @@
  *
  * `kb/health` is served because the rows exist and nothing could read them: the nightly hygiene pass
  * has written `kb_health_reports` since WP-18b (migration 0018) and PROGRESS backlog **37** is that
- * nobody reads it. A client-driven census is blind to that — it compares the client's calls against
- * the router — so this one is a criterion on WP-15h's plan row rather than a gap a test would find.
- * It has no screen yet, which is why `apps/web/src/api/endpoints.ts` does not call it: a client
- * method with no caller would make the census's own "every path here is one the app talks to" claim
- * false.
+ * nobody read it. A client-driven census is blind to a route with no caller — it compares the
+ * client's calls against the router — so for WP-15h part 2 through WP-94 this path was asserted by
+ * hand there. Since WP-95 `apps/web/src/api/endpoints.ts` calls it (`kbHealth`) and the census sees
+ * it like any other path.
  *
  * ## Everything served here is untrusted text, and none of it is interpreted
  *

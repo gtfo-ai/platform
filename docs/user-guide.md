@@ -254,7 +254,9 @@ live.
 
 ## 3. The board
 
-**A project → board.** One column per task state, with the pipeline stage shown on the card.
+**A project → board.** One column per task state. Each card carries the ticket key and the ticket's
+**title** — its own words as the platform read them, or *Ticket not read yet* before it has — with
+the state and the pipeline stage beneath.
 
 The columns are task **states**, not pipeline stages, and that is deliberate for now: the column list
 in the product spec is "the stages of the project's pipeline template, plus Queued / Needs human /
@@ -451,7 +453,9 @@ its buttons go. A decision taken in Slack appears in the task's audit like one t
 inbox links to the task rather than pretending to be the only way in. A
 question is due after the project's question timeout — **1 working day** by default, counted on the
 organisation's working calendar, so one asked late on a Friday is due on Monday — and an expired
-question is not silently dropped; it moves the task to needing a human. **Before that, one
+question is not silently dropped; it moves the task to needing a human. It also **leaves the
+inbox**, because it can no longer be answered — the inbox says so above the list — and the task page
+is where it is retried or cancelled. **Before that, one
 reminder**: halfway through the working time to the deadline, the project's chat channel gets a
 message saying the question is still unanswered, which names the task page (it has no buttons). A
 question answered before then is not reminded about.
@@ -486,10 +490,14 @@ Two messages come from the platform rather than from a task:
 
 ## 7. Knowledge
 
-**A project → knowledge.** Three things:
+**A project → knowledge.** Four things:
 
 - the **browser**: the knowledge base as it exists in the project's repository, as a tree and a
   document view;
+- the **health report**: what the nightly hygiene pass last found — a page the parser refused (and
+  which is therefore in no agent's context), links that point nowhere, expired pages, duplicates —
+  or *No health report yet* before the first pass has run. A finding is an observation; nothing
+  rewrites a page because one names it;
 - the **proposal queue**: what agents have suggested, each approvable or rejectable;
 - what an approval does: a commit on an `agentic/knowledge/*` branch and a merge request. Never the
   default branch, and never without a maintainer's decision.
@@ -521,8 +529,9 @@ as a free run.
 ## 9. Integrations
 
 Per-provider cards with health, and each provider's **setup guide** — written for the provider's own
-screens, and the same text the operator reads. For a provider with an inbound webhook, the card shows
-the URL to paste in.
+screens, and the same text the operator reads. For a provider with an inbound webhook, the **Setup
+guide** card shows the webhook URL to paste into the provider, with a **Copy** button; a provider
+with no inbound half says it has none.
 
 Nothing on this screen is a credential: the server strips every field a provider declares to be a
 secret before publishing an integration's configuration, and publishes nothing at all for a provider
@@ -545,9 +554,11 @@ parameters. A *refused* command records nothing.
 ## 11. Settings
 
 The signed-in session, the theme, the instance version, the user list with roles, the
-**organisation budgets** (the caps that stop a new run anywhere in the organisation), and **provider
+**organisation budgets** (the caps that stop a new run anywhere in the organisation), **provider
 identities** — which Slack, Jira or GitLab account is which person, without which a decision made in
-those tools is refused as unmapped.
+those tools is refused as unmapped — and, for an administrator, the **dead letters**: events the
+platform stopped retrying after their handler failed every attempt, each with a **Re-queue** button
+for once the fault is fixed (the operator guide's §9 says what a re-queue does and does not do).
 
 **Organisation settings** (since WP-93) are the maximums every project is held to, and an
 administrator saves each section on its own:

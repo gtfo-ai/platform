@@ -39,6 +39,15 @@ const INTEGRATIONS: IntegrationsResponse = {
   ],
 };
 
+/** The setup guide as the server answers it: the guide's text and the URL built from `APP_BASE_URL`. */
+const WEBHOOK_URL = `https://agentic.example.test/webhooks/jira-cloud/${INTEGRATION}`;
+const GUIDE = {
+  provider: 'jira-cloud',
+  title: 'Jira Cloud',
+  markdown: 'Create a webhook in Jira and paste the URL shown above.',
+  webhook_url: WEBHOOK_URL,
+};
+
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
@@ -69,6 +78,7 @@ const recorder = () => {
     }
     if (url.includes('/api/auth/get-session')) return json(SESSION);
     if (url.endsWith('/api/integrations')) return json(INTEGRATIONS);
+    if (url.endsWith(`/api/integrations/${INTEGRATION}/setup-guide`)) return json(GUIDE);
     if (url.endsWith('/api/projects')) return json({ items: [] });
     return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
   }) as typeof fetch;
@@ -199,5 +209,52 @@ describe('the integrations screen', () => {
     await waitFor(() => {
       expect(document.body.textContent).toContain('does not ship provider');
     });
+  });
+
+  /**
+   * PROGRESS backlog 272 (WP-95): the webhook URL the API has published since WP-21 reaches the
+   * setup-guide card, as text with a copy control — and a provider with no inbound half says it has
+   * none rather than drawing an empty field (standing rule 42: both directions).
+   */
+  it('shows the webhook URL on the setup-guide card and copies it', async () => {
+    const copied: string[] = [];
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (text: string) => {
+          copied.push(text);
+        },
+      },
+    });
+    const { fetchImpl } = recorder();
+    const { container } = render(createApp({ fetchImpl, realtime: false }).element);
+    fireEvent.click(await screen.findByRole('button', { name: 'Setup guide' }));
+    await waitFor(() => {
+      expect(container.querySelector('[data-copyable-url]')?.textContent).toBe(WEBHOOK_URL);
+    });
+    // Copied, never followed: the webhook route answers a provider's signed POST.
+    expect(
+      [...container.querySelectorAll('a')].some((anchor) => anchor.textContent === WEBHOOK_URL),
+    ).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Copy Webhook URL' }));
+    await waitFor(() => {
+      expect(copied).toEqual([WEBHOOK_URL]);
+    });
+  });
+
+  it('says a provider with no inbound half has no webhook URL', async () => {
+    const { fetchImpl: base } = recorder();
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/setup-guide')) {
+        return json({ ...GUIDE, webhook_url: null });
+      }
+      return base(input, init);
+    }) as typeof fetch;
+    const { container } = render(createApp({ fetchImpl, realtime: false }).element);
+    fireEvent.click(await screen.findByRole('button', { name: 'Setup guide' }));
+    await waitFor(() => {
+      expect(container.querySelector('[data-webhook-url="none"]')).not.toBeNull();
+    });
+    expect(container.querySelector('[data-copyable-url]')).toBeNull();
   });
 });

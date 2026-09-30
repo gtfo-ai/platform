@@ -539,6 +539,19 @@ export const taskRecordSchema = z.strictObject({
   id: idSchema,
   project_id: idSchema,
   ticket: ticketRefSchema,
+  /**
+   * The ticket's title as the platform read it — `tasks.ticket_snapshot->>'title'` (WP-95, Q48).
+   *
+   * **A projection over the snapshot, not a field of {@link ticketRefSchema}**, which is what Q48
+   * first recommended. `ticketRef` is the ticket's identity and it travels on eight event payloads
+   * and two port calls; a title is none of those things' business, it changes on the provider, and
+   * the snapshot is the one place the platform already holds it bounded and redacted at the write
+   * (WP-15f). So the title is read where it is stored and published beside the ref.
+   *
+   * `null` means **the platform has not read the ticket** — the snapshot is absent — never an empty
+   * title (standing rule 18). It is untrusted provider text (BD-022): render it as text.
+   */
+  ticket_title: z.string().nullable(),
   template: templateIdSchema,
   mode: taskModeSchema,
   state: taskStateSchema,

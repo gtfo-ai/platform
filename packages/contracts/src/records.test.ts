@@ -38,6 +38,7 @@ describe('records', () => {
       id: uuid(1),
       project_id: uuid(2),
       ticket: { provider: 'jira', key: 'PROJ-1', url: 'https://example.atlassian.net/x' },
+      ticket_title: 'Log in with a passkey',
       template: 'feature',
       mode: 'normal' as const,
       state: 'active' as const,

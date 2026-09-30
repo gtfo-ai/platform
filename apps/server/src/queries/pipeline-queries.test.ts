@@ -23,6 +23,7 @@ import {
   CLOSED_TASK_STATES,
   stageStateOf,
   TERMINAL_RUN_STATUSES,
+  ticketTitleOf,
   UnknownStageStateError,
 } from './pipeline-queries.js';
 
@@ -85,5 +86,24 @@ describe('stageStateOf', () => {
     expect(() => stageStateOf({ stage: 'ci_gate', attempt: 2, state: 'exited' })).toThrow(
       /ci_gate#2 has state "exited"/,
     );
+  });
+});
+
+/** WP-95, Q48: the board card's title comes out of the stored snapshot, or it is `null`. */
+describe('ticketTitleOf', () => {
+  it('reads the snapshot’s title as stored, including an empty one', () => {
+    expect(ticketTitleOf({ title: 'Log in with a passkey', description: '' })).toBe(
+      'Log in with a passkey',
+    );
+    // An empty title is what the provider said; it is not "not read" (standing rule 18).
+    expect(ticketTitleOf({ title: '' })).toBe('');
+  });
+
+  it('answers null for no snapshot and for a snapshot whose title is not a string', () => {
+    expect(ticketTitleOf(null)).toBeNull();
+    expect(ticketTitleOf(undefined)).toBeNull();
+    expect(ticketTitleOf({ description: 'no title key' })).toBeNull();
+    expect(ticketTitleOf({ title: 42 })).toBeNull();
+    expect(ticketTitleOf('a string')).toBeNull();
   });
 });

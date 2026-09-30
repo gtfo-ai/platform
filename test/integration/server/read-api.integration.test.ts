@@ -675,6 +675,60 @@ describe('the task projection', () => {
   });
 
   /**
+   * **The board card's title comes out of the stored snapshot** (WP-95, Q48): `ticket_title` is
+   * `tasks.ticket_snapshot->>'title'` on both reads that build a task record, and `null` — never the
+   * key, never an empty string — for a task whose ticket the platform has not read.
+   */
+  it('publishes the snapshot’s title as ticket_title, and null before the ticket is read', async () => {
+    // A project and a task of their own, so the keyset cases' counts over `projectId` are
+    // untouched; and the snapshot is written by the store's own narrow writer
+    // (`saveTicketSnapshot`), the one statement `tasks-column-ownership.test.ts` admits for it.
+    const one = async <T extends Record<string, unknown>>(text: string, values: unknown[] = []) =>
+      (await pool.query<T>(text, values)).rows[0] as T;
+    const org = await one<{ id: string }>(
+      "insert into organizations (name) values ('title') returning id",
+    );
+    const titleProject = await one<{ id: string }>(
+      `insert into projects (org_id, key, name, repo_url)
+       values ($1, 'title', 'Title', 'https://git.example.test/acme/title.git') returning id`,
+      [org.id],
+    );
+    const titleTask = await one<{ id: string }>(
+      `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state,
+                          current_stage)
+       values ($1, 'fake-jira', 'ACME-48', 'https://jira.example.test/browse/ACME-48', 'feature',
+               'active', 'refinement') returning id`,
+      [titleProject.id],
+    );
+    const titleOf = async (): Promise<[unknown, unknown]> => [
+      (await findTaskDetail(drizzled, titleTask.id))?.task.ticket_title,
+      (await listProjectTasks(drizzled, titleProject.id, { limit: 50 }))?.items.find(
+        (task) => task.id === titleTask.id,
+      )?.ticket_title,
+    ];
+    expect(await titleOf()).toEqual([null, null]);
+
+    const store = pipelineAdapters.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES });
+    const tx = { adapter: 'postgres', client: pool } as unknown as Transaction;
+    await store.tasks.saveTicketSnapshot(
+      tx,
+      titleTask.id as Id,
+      {
+        title: 'Log in with a passkey',
+        description: 'As a user…',
+        comments: [],
+        truncated: false,
+        comment_count: 0,
+        redaction_count: 0,
+        ticket_updated_at: null,
+      },
+      new Date().toISOString() as IsoDateTime,
+    );
+    // Both reads that build a task record, and the title — never the key it sits beside.
+    expect(await titleOf()).toEqual(['Log in with a passkey', 'Log in with a passkey']);
+  });
+
+  /**
    * **product/18:32's *"per user breakdown off by default"*, both directions** (WP-29).
    *
    * The rows are seeded here rather than folded from events **because this is a test of the read**:

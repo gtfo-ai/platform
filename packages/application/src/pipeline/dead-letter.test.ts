@@ -161,6 +161,14 @@ describe('the dead-letter escalation', () => {
     expect(payload.blocker_brief).toContain('task.queued');
     expect(payload.blocker_brief).toContain('core.workpad');
     expect(payload.blocker_brief).toContain('ACME-9');
+    // WP-95, backlog 323: the brief names the re-queue an administrator can now perform — before
+    // the hand-back, because a hand-back first would run the stage without the missing step.
+    expect(payload.blocker_brief).toContain(
+      `an administrator can re-queue event ${event.position} from Settings → Dead letters`,
+    );
+    expect(payload.blocker_brief.indexOf('re-queue')).toBeLessThan(
+      payload.blocker_brief.indexOf('hand it back'),
+    );
     // The one thing it must not repeat: the handler's error text. Nothing on this path holds a
     // redactor, and an error may quote a provider, a URL or a credential (BD-022, Q59's answer at
     // the other escalation). It is on the queue row and in the log instead.

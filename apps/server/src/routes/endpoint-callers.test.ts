@@ -69,9 +69,14 @@ describe('every client command has a control', () => {
     expect(mutations).toContain('createIntegration');
     // WP-94's pair, named so the scope is known to include it: the re-evaluate command and its gate.
     expect(mutations).toContain('startRediscovery');
+    // WP-95's: the dead-letter re-queue, and the two reads that gave a screen to what the server
+    // already published (the dead-letter list and the knowledge health report).
+    expect(mutations).toContain('requeueDeadLetter');
     const hooks = declarationsIn(READ_HOOK_DECLARATION);
     expect(hooks).toContain('useProjectAutonomy');
     expect(hooks).toContain('useRediscoveryGate');
+    expect(hooks).toContain('useDeadLetters');
+    expect(hooks).toContain('useKbHealth');
   });
 
   it('fires every mutation `app/queries.ts` declares from somewhere outside it', () => {

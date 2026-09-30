@@ -67,11 +67,12 @@ const ADMITTED_GAPS: Readonly<Record<string, string>> = {
   // server's routes in one change, so the two halves were never out of step and there was nothing
   // to admit; they too are asserted positively below.
   //
-  // What this census **cannot** see is unchanged and is asserted by hand further down: a route no
-  // screen calls. There is one path left — `GET /api/projects/:id/kb/health` (WP-15h part 2).
-  // WP-31's `/api/org/identities` pair left that list when WP-43 gave it a screen, and WP-27's
-  // `take-over`/`hand-back` and WP-40's breakdown pair left it when WP-44 did (the task page's
-  // take-over control and breakdown panel), so the comparison above now sees all of them.
+  // What this census **cannot** see is a route no screen calls, and that list is now **empty**:
+  // the last path on it, `GET /api/projects/:id/kb/health` (WP-15h part 2), left it when WP-95
+  // gave it the knowledge screen's health panel. WP-31's `/api/org/identities` pair left it when
+  // WP-43 gave it a screen, and WP-27's `take-over`/`hand-back` and WP-40's breakdown pair left it
+  // when WP-44 did, so the comparison above now sees all of them. A route added without a caller
+  // is invisible here again, and nothing but a hand-written case would say so.
 };
 
 /**
@@ -615,11 +616,13 @@ describe('the client’s endpoint list against the server’s router', () => {
     }
   });
 
-  it('serves the kb health read no client calls, which is why the census cannot see it', async () => {
-    // `GET /api/projects/:id/kb/health` reads `kb_health_reports` (WP-18b, migration 0018) and no
-    // screen asks for it, so it appears in neither half of the comparison above — this census is
-    // driven by the client's calls. It is a criterion on WP-15h's plan row (PROGRESS backlog 37)
-    // and therefore asserted here by hand, including the 401 its siblings get automatically.
+  it('serves the kb health read WP-95 gave a screen, and the client calls it', async () => {
+    // `GET /api/projects/:id/kb/health` reads `kb_health_reports` (WP-18b, migration 0018). Until
+    // WP-95 **no screen asked for it**, so it was in neither half of the comparison above and this
+    // case asserted it by hand — served, 401, and *absent* from the client's list (PROGRESS backlog
+    // 37). The knowledge screen's health panel (`features/project-panels.tsx`) is its caller now, so
+    // the comparison covers it, and the last assertion is the inverted form of the one that held it
+    // absent: a screen that loses the call fails here rather than returning the report to nobody.
     const probed = await probe('/api/projects/{}/kb/health');
     expect(probed.served).toBe(true);
     expect(probed.status).toBe(401);
@@ -631,7 +634,34 @@ describe('the client’s endpoint list against the server’s router', () => {
         source: readSource(path),
       })),
     );
-    expect(paths).not.toContain('/api/projects/{}/kb/health');
+    expect(paths).toContain('/api/projects/{}/kb/health');
+  });
+
+  it('serves the dead-letter pair WP-95 added, the client calls both, and each refuses an anonymous caller by its own method', async () => {
+    // PROGRESS backlog 126: a dead-lettered event was a gauge and a hand-typed `update`. Named
+    // positively (standing rule 10) and matched against the client's own sweep, and each method is
+    // asked with **no body at all**: both guards are `preValidation` hooks, and one that slipped back
+    // to `preHandler` would answer the route's shape (400) instead of 401.
+    const paths = clientPaths(
+      webSourceFiles().map((path) => ({
+        path,
+        source: readSource(path),
+      })),
+    );
+    for (const path of ['/api/org/dead-letters', '/api/org/dead-letters/{}/requeue']) {
+      expect(paths, path).toContain(path);
+      expect((await probe(path)).served, path).toBe(true);
+    }
+    for (const [method, url] of [
+      ['GET', '/api/org/dead-letters?cursor=not-a-cursor'],
+      ['POST', '/api/org/dead-letters/not-a-position/requeue'],
+    ] as const) {
+      const response = await app.inject({ method, url });
+      const body = response.json() as ApiErrorBody;
+      expect(`${method} ${url} -> ${response.statusCode} ${body.error?.code ?? ''}`).toBe(
+        `${method} ${url} -> 401 unauthenticated`,
+      );
+    }
   });
 
   it('refuses an anonymous caller on every served path that is not deliberately public', async () => {

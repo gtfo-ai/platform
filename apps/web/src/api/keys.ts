@@ -22,6 +22,8 @@ export const queryKeys = {
   integrationSetupGuide: (id: string) => ['integrations', id, 'setup-guide'] as const,
   orgBudgets: ['org', 'budgets'] as const,
   orgSettings: ['org', 'settings'] as const,
+  /** WP-95: under the org prefix, so an `org` frame refreshes the list. */
+  deadLetters: ['org', 'dead-letters'] as const,
   /**
    * WP-41. Keyed by the filters, because a range and a bucket are two different answers rather than
    * one cached one — the shape `historyBootstraps` uses for its N.
@@ -55,6 +57,8 @@ export const queryKeys = {
   kbTree: (id: string) => ['project', id, 'kb', 'tree'] as const,
   kbDoc: (id: string, path: string) => ['project', id, 'kb', 'doc', path] as const,
   kbProposals: (id: string) => ['project', id, 'kb', 'proposals'] as const,
+  /** WP-95: under the project's prefix, so a `project:<id>` frame refreshes the health panel. */
+  kbHealth: (id: string) => ['project', id, 'kb', 'health'] as const,
 
   task: (id: string) => ['task', id] as const,
   /**

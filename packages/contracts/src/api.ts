@@ -1519,6 +1519,82 @@ export const refusedDeliveriesResponseSchema = z.strictObject({
 /** The most refused deliveries one read returns: a debugging surface, not an archive. */
 export const MAX_REFUSED_DELIVERIES = 50;
 
+// ── Dead letters (WP-95, PROGRESS backlog 126) ──────────────────────────────
+
+/** The most dead letters one page of `GET /api/org/dead-letters` returns. */
+export const MAX_DEAD_LETTERS_PAGE = 100;
+
+/**
+ * Longest `error` a dead letter is published with, **after** redaction. A handler's message can
+ * quote a provider or a URL, so it is redacted by the platform's patterns and then bounded — in that
+ * order, for the reason `routes/settings.ts`'s `auditedText` states.
+ */
+export const MAX_DEAD_LETTER_ERROR_CHARS = 2_000;
+
+/**
+ * One event whose dispatch spent `APP_DISPATCH_MAX_ATTEMPTS` (WP-49) — a row of `event_dispatch`
+ * carrying `dead_lettered_at`, joined to its event in the log.
+ *
+ * `event_type` and `stream_type` are **strings, not the catalogue's enums**: a schema change under a
+ * queued event is one of the ways an event is dead-lettered at all, and a read that refused a type
+ * this build no longer knows would hide exactly the row an operator is looking for. `handler` is
+ * the handler whose failure spent the bound (`dead_letter_handler`). `error` is the last failure's
+ * text, redacted and bounded (`error_truncated` says whether the bound cut it); it is the platform's
+ * own handler's words, but they may quote provider text, so it is rendered as text (BD-022).
+ *
+ * `task` is the task the dead-letter sink escalated — the event's own stream when that is a task,
+ * else its `correlation_id` — **when that task exists**; `null` for an event that names none, which
+ * is the population with no brief anywhere and the reason this read exists.
+ */
+export const deadLetterSchema = z.strictObject({
+  position: z.int().positive(),
+  event_type: nonEmptyStringSchema,
+  stream_type: nonEmptyStringSchema,
+  stream_id: idSchema,
+  occurred_at: isoDateTimeSchema,
+  dead_lettered_at: isoDateTimeSchema,
+  handler: nonEmptyStringSchema.nullable(),
+  attempts: z.int().nonnegative(),
+  error: z.string().max(MAX_DEAD_LETTER_ERROR_CHARS).nullable(),
+  error_truncated: z.boolean(),
+  task: z
+    .strictObject({
+      id: idSchema,
+      ticket_key: nonEmptyStringSchema,
+      project_key: nonEmptyStringSchema,
+    })
+    .nullable(),
+});
+
+/**
+ * `GET /api/org/dead-letters` — newest position first, paged by an **opaque** cursor.
+ *
+ * `total` is every dead letter there is (`countDeadLettered`, the gauge's own statement), so a page
+ * of fifty is never read as "fifty poisoned events" (standing rule 16).
+ */
+export const deadLettersResponseSchema = z.strictObject({
+  items: z.array(deadLetterSchema),
+  total: z.int().nonnegative(),
+  next_cursor: nonEmptyStringSchema.nullable(),
+});
+
+export const deadLetterParamsSchema = z.strictObject({
+  position: z.coerce.number().int().positive(),
+});
+
+/**
+ * `POST /api/org/dead-letters/:position/requeue` — the answer.
+ *
+ * `performed: false` is an `Idempotency-Key` replay: the first request under the key re-queued the
+ * event and this one performed nothing. `requeued_at` is when the row went back to the queue — the
+ * first request's instant on a replay, read from its audit row.
+ */
+export const requeueDeadLetterResponseSchema = z.strictObject({
+  position: z.int().positive(),
+  performed: z.boolean(),
+  requeued_at: isoDateTimeSchema,
+});
+
 export const takeOverResponseSchema = z.strictObject({
   task_id: idSchema,
   state: taskStateSchema,
@@ -2134,6 +2210,9 @@ export type WebhookDelivery = z.infer<typeof webhookDeliverySchema>;
 export type WebhookParams = z.infer<typeof webhookParamsSchema>;
 export type WebhookAcceptedResponse = z.infer<typeof webhookAcceptedResponseSchema>;
 export type SetupGuideResponse = z.infer<typeof setupGuideResponseSchema>;
+export type DeadLetter = z.infer<typeof deadLetterSchema>;
+export type DeadLettersResponse = z.infer<typeof deadLettersResponseSchema>;
+export type RequeueDeadLetterResponse = z.infer<typeof requeueDeadLetterResponseSchema>;
 export type BudgetsResponse = z.infer<typeof budgetsResponseSchema>;
 export type SetAutonomyRequest = z.infer<typeof setAutonomyRequestSchema>;
 export type AutonomyResponse = z.infer<typeof autonomyResponseSchema>;

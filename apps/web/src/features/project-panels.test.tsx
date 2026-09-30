@@ -60,6 +60,31 @@ const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 let proposals: KbProposalsResponse;
+/** What `GET …/kb/health` answers in the current case (WP-95): a status and a body. */
+let health: { readonly status: number; readonly body: unknown };
+
+const NOT_REPORTED = {
+  status: 409,
+  body: {
+    error: {
+      code: 'kb_health_not_reported',
+      message: 'no knowledge health report for this project yet',
+    },
+  },
+};
+
+const report = (findings: readonly unknown[]) => ({
+  status: 200,
+  body: {
+    id: '00000000-0000-4000-8000-0000000000e1',
+    project_id: PROJECT,
+    commit_sha: 'c'.repeat(40),
+    documents: 12,
+    findings,
+    source: 'hygiene',
+    created_at: '2026-09-29T02:00:00.000Z',
+  },
+});
 
 const fetchImpl = (async (input: RequestInfo | URL): Promise<Response> => {
   const url = String(input);
@@ -87,6 +112,7 @@ const fetchImpl = (async (input: RequestInfo | URL): Promise<Response> => {
     });
   }
   if (url.includes('/kb/proposals')) return json(proposals);
+  if (url.includes('/kb/health')) return json(health.body, health.status);
   if (url.includes('/kb/tree')) return json({ commit_sha: null, entries: [] });
   return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
 }) as typeof fetch;
@@ -98,6 +124,7 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
+  health = NOT_REPORTED;
   proposals = {
     items: [
       proposal({ source: 'history' }),
@@ -141,5 +168,47 @@ describe('the proposal queue', () => {
       expect(container.textContent).toContain(HOSTILE_EVIDENCE);
     });
     expect(container.querySelector('script')).toBeNull();
+  });
+});
+
+/**
+ * The knowledge health report (WP-95, PROGRESS backlog 37): three answers the panel keeps apart —
+ * no report yet, a report with nothing wrong, and a report with findings (standing rule 18).
+ */
+describe('the knowledge health panel', () => {
+  it('says no pass has reported yet on the read’s 409, rather than drawing a clean vault', async () => {
+    const container = await renderScreen();
+    await waitFor(() => {
+      expect(container.textContent).toContain('No health report yet');
+    });
+    expect(container.querySelector('[data-kb-health]')).toBeNull();
+  });
+
+  it('lists the findings as text, naming a refused page as absent from every pack', async () => {
+    const hostile = 'frontmatter key <img src=x onerror=alert(1)> is not allowed';
+    health = report([
+      { kind: 'invalid', path: 'technical/broken.md', detail: hostile },
+      { kind: 'dangling', path: 'conventions.md', detail: 'links to [[nowhere]]' },
+    ]);
+    const container = await renderScreen();
+    await waitFor(() => {
+      expect(container.querySelector('[data-kb-health="findings"]')).not.toBeNull();
+    });
+    const text = container.textContent ?? '';
+    expect(text).toContain('refused by the parser — in no context pack');
+    expect(text).toContain('technical/broken.md');
+    expect(text).toContain(hostile);
+    expect(text).toContain('dangling link');
+    expect(text).toContain('12 documents indexed');
+    expect(container.querySelector('img')).toBeNull();
+  });
+
+  it('says the last pass found nothing wrong for a report with no findings', async () => {
+    health = report([]);
+    const container = await renderScreen();
+    await waitFor(() => {
+      expect(container.querySelector('[data-kb-health="clean"]')).not.toBeNull();
+    });
+    expect(container.textContent).not.toContain('No health report yet');
   });
 });

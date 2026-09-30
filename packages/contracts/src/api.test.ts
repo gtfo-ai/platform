@@ -414,6 +414,7 @@ describe('the list envelopes and the KB health report', () => {
       id: uuid(12),
       project_id: uuid(10),
       ticket: { provider: 'jira-cloud', key: 'ACME-1', url: 'https://jira.example.test/ACME-1' },
+      ticket_title: null,
       template: 'feature',
       mode: 'normal' as const,
       state: 'active' as const,

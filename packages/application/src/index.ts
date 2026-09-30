@@ -66,6 +66,7 @@ export * from './events/handler.js';
 export * from './events/open-transaction.js';
 export * from './events/outbox.js';
 export * from './events/replay.js';
+export * from './events/requeue.js';
 // Human time accounting: the projector product/19 §16 defines (WP-29)
 export * from './human-time/minutes.js';
 export * from './human-time/ports.js';
@@ -150,6 +151,7 @@ export * from './pipeline/verdicts.js';
 export * from './pipeline/workpad.js';
 // Ports
 export * from './ports/broadcast.js';
+export * from './ports/dead-letters.js';
 // Integration type ports (technical/06, BD-017)
 export * from './ports/dependency-metadata.js';
 export * from './ports/dispatch-queue.js';

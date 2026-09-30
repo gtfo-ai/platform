@@ -81,3 +81,27 @@ describe('the approval card', () => {
     expect(container.textContent).not.toContain(' · due ');
   });
 });
+
+/**
+ * PROGRESS backlog 163's inbox half, closed by decision at WP-95: an expired question or approval
+ * leaves the inbox (`listInbox` serves `open` and `pending` only), and the screen says where it went
+ * — on a full inbox and on an empty one, because the person who needs the sentence is the one whose
+ * card just disappeared.
+ */
+describe('what the inbox says about an item that expired', () => {
+  it('says an expired item leaves the list and names where its task is retried', async () => {
+    inbox = { questions: [], approvals: [approval(DUE)] };
+    const container = await renderInbox();
+    const note = container.querySelector('[data-inbox-expiry-note]');
+    expect(note?.textContent).toContain('expires leaves this list');
+    expect(note?.textContent).toContain('Needs human');
+    expect(note?.textContent).toContain('task page');
+  });
+
+  it('says it on an empty inbox too', async () => {
+    inbox = { questions: [], approvals: [] };
+    const { container } = render(createApp({ fetchImpl, realtime: false }).element);
+    await screen.findByText('Nothing is waiting for you');
+    expect(container.querySelector('[data-inbox-expiry-note]')).not.toBeNull();
+  });
+});

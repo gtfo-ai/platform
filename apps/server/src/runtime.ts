@@ -46,6 +46,7 @@
 import { randomUUID } from 'node:crypto';
 import type { InboundConnectionsHandle, Jobs, Logger, WebhookIngress } from '@platform/application';
 import {
+  createDeadLetterCommands,
   createLiveRuns,
   createWorkingCalendar,
   DEFAULT_WEBHOOK_RATE_LIMIT_POLICY,
@@ -1031,6 +1032,17 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       commands: taskCommands,
       asks,
       breakdown,
+      /**
+       * WP-95, backlog 126: the dead-letter list and its re-queue. Composed for every process that
+       * serves the API — neither needs a worker: the list is a read and the re-queue is one write
+       * plus the `events.appended` hint, which wakes whichever process dispatches.
+       */
+      deadLetters: capabilities.api
+        ? createDeadLetterCommands({
+            unitOfWork: eventing.unitOfWork,
+            store: new eventingAdapters.PostgresDeadLetterStore(database.pool),
+          })
+        : null,
       /**
        * The browser application (WP-15j): the operator's directory, or the one the image carries.
        *

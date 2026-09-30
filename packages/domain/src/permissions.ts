@@ -60,6 +60,8 @@ export const PERMISSION_ACTIONS = [
   'org.settings.write',
   'org.users.manage',
   'org.audit.read',
+  // The dead-letter list and its re-queue (WP-95, PROGRESS backlog 126): an operator's instrument.
+  'org.dead_letters.manage',
   // Integrations (credentials are org-level; admin manages them — product/11)
   'integration.read',
   'integration.write',
@@ -124,6 +126,10 @@ export const PERMISSION_REQUIREMENTS = {
   'org.settings.write': 'admin',
   'org.users.manage': 'admin',
   'org.audit.read': 'maintainer',
+  // Admin, both the read and the re-queue, the shape `org.users.manage` gives the identity pair:
+  // the list names handlers and events across every project and quotes a handler's error, and the
+  // re-queue serves an event again to handlers that write — an operator's act, not a maintainer's.
+  'org.dead_letters.manage': 'admin',
 
   'integration.read': 'maintainer',
   'integration.write': 'admin',

@@ -46,8 +46,10 @@ Product-definition items were decided on 2026-08-28 and moved into `product/19-o
       package. **Since WP-49 there are two numbers in that state**: `event_dispatch_dead_lettered`
       counts the events that spent `APP_DISPATCH_MAX_ATTEMPTS` and left the queue, and it is the
       whole signal for a poisoned event that names no task — the backlog gauge rises and falls, this
-      one only rises. Nothing lists the rows and no command re-queues one either; the evidence, the
-      recommendation and why no M4 row owns it are PROGRESS backlog **126**. Owner: nobody.
+      one only rises. **Since WP-95 the rows are listed and re-queued** (Settings → Dead letters,
+      `GET /api/org/dead-letters` and `POST …/:position/requeue`, admin, audited; PROGRESS backlog
+      **126**) and the operator guide's §3 names both gauges with what a rise means. What stays
+      open is the alerting itself: nothing pages anyone on either number. Owner: nobody.
       The interpreter exists now, and the shape of the answer is visible: a `stage.execute` job that fires
       for a stage whose previous run ended `failed` could resume the session (`RunSpec.resumeSessionId`,
       TD-007's mirror) instead of starting a fresh one. WP-15 does neither — a run that ends without a

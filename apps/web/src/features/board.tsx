@@ -79,10 +79,21 @@ const TaskCard = ({
         <Badge tone="neutral">{task.template}</Badge>
       </div>
       {/*
-        product/10 asks for "ticket key + title" here. `ticketRefSchema` publishes provider, key and
-        url and **no title**, and inventing one client-side would mean guessing. The state and the
-        stage take its place until the contract carries one (Q48).
+        product/10's "ticket key + title" (Q48, WP-95). The title is the ticket's own words as the
+        platform stored them — `tasks.ticket_snapshot`, bounded and redacted at the write — so it is
+        provider text and goes through `UntrustedText` (BD-022). `null` means the platform has not
+        read the ticket yet, and the card says so rather than drawing an empty line or guessing one
+        from the branch name.
       */}
+      {task.ticket_title === null ? (
+        <p className="text-xs text-fg-muted" data-ticket-title="unread">
+          Ticket not read yet
+        </p>
+      ) : (
+        <p className="text-sm font-medium" data-ticket-title="read">
+          <UntrustedText value={task.ticket_title} />
+        </p>
+      )}
       <p className="text-sm">
         <Badge tone={task.state === 'needs_human' ? 'warning' : 'neutral'}>{task.state}</Badge>
       </p>

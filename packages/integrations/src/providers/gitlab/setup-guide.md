@@ -48,8 +48,8 @@ Environment names for the bundled `glab` CLI follow TD-020: `GITLAB_HOST`, `GITL
 ## 3. Create the webhook
 
 **Settings → Webhooks → Add new webhook**, URL `<APP_BASE_URL>/webhooks/gitlab/<integrationId>` — the
-exact URL is the `webhook_url` field of `GET /api/integrations/<integrationId>/setup-guide`
-(the integrations screen does not display it yet).
+exact URL is shown above this guide on the integrations screen, with a Copy button (the API
+publishes it as the `webhook_url` field of `GET /api/integrations/<integrationId>/setup-guide`).
 
 Triggers to enable:
 

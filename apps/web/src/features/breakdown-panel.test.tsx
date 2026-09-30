@@ -35,6 +35,7 @@ const TASK_DETAIL: TaskDetailResponse = {
     id: TASK,
     project_id: PROJECT,
     ticket: { provider: 'jira', key: 'ACME-9', url: 'https://jira.example.test/browse/ACME-9' },
+    ticket_title: null,
     template: 'epic_split',
     mode: 'normal',
     state: 'active',

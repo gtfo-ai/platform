@@ -12,7 +12,9 @@
  * organisation cap that is supposed to stop every new run everywhere was a row no instance could
  * have. Since WP-93 the **organisation settings document** is here too (`features/org-settings.tsx`,
  * `GET/PATCH /api/org`): the command, autonomy and WIP maximums, quiet hours and the default chat
- * account. What is *still* absent is the rest of that list — the Claude provider mode (an
+ * account. Since WP-95 the **dead letters** are here as well (`features/dead-letters.tsx`, `GET
+ * /api/org/dead-letters` and its re-queue) — an operator's instrument, admin only, on the page an
+ * administrator already opens. What is *still* absent is the rest of that list — the Claude provider mode (an
  * environment setting, `APP_PROVIDER_MODE`) and feature flags (a project's `features.*`) — which
  * the document does not carry; they stay named rather than drawn as controls that silently do
  * nothing.
@@ -38,6 +40,7 @@ import {
 } from '../ui/kit.js';
 import { useTheme } from '../ui/theme.js';
 import { UntrustedText } from '../ui/untrusted.js';
+import { DeadLetters } from './dead-letters.js';
 import { IdentityMappings } from './identities.js';
 import { Budgets } from './operating-mode.js';
 import { OrganisationSettingsPanel } from './org-settings.js';
@@ -124,6 +127,10 @@ export const SettingsScreen = (): ReactElement => {
 
       {/* WP-93: the organisation settings document — the writer the organisation layer never had. */}
       <OrganisationSettingsPanel />
+
+      {/* WP-95, backlog 126: the events the dispatcher gave up on, and the re-queue that serves one
+          again — the operator guide's hand-typed `update`, made a product action. Admin only. */}
+      <DeadLetters />
 
       <section>
         <SectionHeading>Instance</SectionHeading>

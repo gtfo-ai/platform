@@ -378,7 +378,7 @@ process cannot answer*, never zero:
 | Metric | What it says | Alert on |
 |---|---|---|
 | `event_dispatch_pending` | events committed and not yet dispatched (worker roles) | a value that keeps growing |
-| `event_dispatch_dead_lettered` | events that spent `APP_DISPATCH_MAX_ATTEMPTS` and left the queue | anything above 0 |
+| `event_dispatch_dead_lettered` | events that spent `APP_DISPATCH_MAX_ATTEMPTS` and left the queue — **Settings → Dead letters** names each one (§9) | anything above 0 |
 | `notifications_undelivered{planned="immediate"}` | chat notifications nobody received, past `pipeline.outbound`'s whole retry window (about 48 minutes), after every one of the job's three attempts tried to deliver and failed — on a project with the digest off, and for every organisation budget alarm, the recovery pass re-posts each one **once** more under the same idempotency key (WP-84) and nothing retries it after that; an organisation budget alarm whose chat configuration the platform refused (two accounts each naming a channel, Q103) is counted here too; a question or approval notification the platform **withheld** because the question was answered or the approval decided first is not (it was correctly not sent) | anything above 0: a revoked chat token or a refused organisation configuration shows up here, not as an absence of messages |
 | `notifications_undelivered{planned="digest"}` | lines held for a digest that has not carried them a day later | anything above 0 |
 | `platform_storage_bytes{component="database"}` | `pg_database_size` of the platform's database | growth; see §6 |
@@ -517,9 +517,9 @@ This guide does not repeat them.
 
 ### The webhook URL
 
-For a provider with an inbound half, the API publishes the URL to paste into the provider — the
-`webhook_url` field of `GET /api/integrations/:id/setup-guide` (the integrations screen does not
-display it yet, PROGRESS backlog 272). It is built from `APP_BASE_URL`:
+For a provider with an inbound half, the integrations screen's **Setup guide** card shows the URL to
+paste into the provider, with a **Copy** button — the same value the API publishes as the
+`webhook_url` field of `GET /api/integrations/:id/setup-guide`. It is built from `APP_BASE_URL`:
 
 ```
 <APP_BASE_URL>/webhooks/<provider>/<integration_id>
@@ -815,6 +815,28 @@ Friday with the defaults (Monday–Friday, 09:00–17:00) expires at 16:00 on Mo
 They are read at start-up: an empty value is the default in `.env.example`, and a malformed one
 refuses to start with the variable's name in the message. The platform never guesses public holidays
 — list yours in `APP_HOLIDAYS`.
+
+### Dead letters: an event the platform stopped retrying
+
+An event whose handler fails `APP_DISPATCH_MAX_ATTEMPTS` times (10 by default, about twenty minutes
+of retrying) is **dead-lettered**: it leaves the dispatch queue, the events behind it in its stream
+move on, and — when it belongs to a task — that task is parked in *Needs human* with a brief naming
+the event and the handler. `event_dispatch_dead_lettered` (§3) counts them. **Settings → Dead
+letters** (admin only; `GET /api/org/dead-letters`) lists each one: its position, event type, stream,
+the handler that failed, how many times, the last error (redacted by the platform's patterns and cut
+at 2 000 characters — the full text is in the log), and the task it escalated, if any. An event that
+names no task has no brief anywhere else, so this list is where it shows up.
+
+Once the handler is fixed — usually a new build, sometimes a provider permission — press
+**Re-queue** (`POST /api/org/dead-letters/:position/requeue`). It puts the **same** event back in the
+queue: nothing is copied into the log, and every handler that already succeeded for it is skipped,
+so what those did is not done twice. The press is recorded in the audit (`human_actions`, action
+`org.dead_letter.requeue`, with the event's task when it has one). The task the dead letter escalated
+stays in *Needs human*; look at it afterwards and hand it back or retry the stage as its brief says.
+If the handler still fails, the event is dead-lettered again after the same number of attempts.
+
+This replaces the hand-typed `update event_dispatch …` statement earlier builds documented, which
+left no audit row.
 
 ## 10. Known limits of this build
 

@@ -23,8 +23,9 @@
  * stands (the event is out of the queue, the row records the handler, `event_dispatch_dead_lettered`
  * counts it and the bus logged an error naming it), and nothing is escalated, because there is no
  * task to park and inventing one would put a maintenance fault in a human's work queue. An
- * organisation-scoped or project-scoped event that keeps failing is an **operator's** problem, and
- * the metric is what tells them.
+ * organisation-scoped or project-scoped event that keeps failing is an **operator's** problem: the
+ * metric tells them how many, and since WP-95 the admin-only dead-letter list names each one
+ * (`GET /api/org/dead-letters`) and re-queues it once the handler is fixed.
  *
  * ## What the brief may say
  *
@@ -32,7 +33,9 @@
  * **Never the handler's error message**, for the reason `stage-executor.ts` states at the other
  * escalation Q59 answers: an error may quote a provider, a URL or a credential, and nothing on this
  * path holds a redactor (BD-022, TD-012). The message is on `event_dispatch.error` and in the log,
- * both of which an operator reads and neither of which the API serves.
+ * both of which an operator reads; since WP-95 the admin-only dead-letter list serves it too, but
+ * **redacted by the platform's patterns and bounded** at that read (`routes/dead-letters.ts`), which
+ * is the redactor this path does not have.
  *
  * ## It runs inside the dispatcher's transaction
  *
@@ -84,8 +87,10 @@ const blockerBriefFor = (record: DeadLetterRecord, ticketKey: string): string =>
   'the dispatch queue and the events behind it are moving again. That means a step of this task ' +
   'was never performed — which one depends on the handler — and nothing will retry it by itself. ' +
   'The error text is in the platform log and on the dispatch row; it is deliberately not repeated ' +
-  'here, because it may quote text the platform does not control. Look at the task, then hand it ' +
-  'back at the stage it should resume from.';
+  'here, because it may quote text the platform does not control. Once the handler is fixed, an ' +
+  `administrator can re-queue event ${record.event.position} from Settings → Dead letters, which ` +
+  'serves the same event again without repeating the steps that already succeeded; then look at ' +
+  'the task and hand it back at the stage it should resume from.';
 
 /**
  * The sink the composition root registers on the bus.

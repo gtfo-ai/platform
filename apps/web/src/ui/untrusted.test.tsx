@@ -1,7 +1,8 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   CodeText,
+  CopyableUrl,
   DownloadLink,
   ExternalLink,
   JsonView,
@@ -235,5 +236,57 @@ describe('DownloadLink (WP-44)', () => {
     const { container } = render(<DownloadLink path={path} label="Transcript" />);
     expect(container.querySelector('a')).toBeNull();
     expect(screen.getByText('Transcript').getAttribute('data-link-refused')).toBe('true');
+  });
+});
+
+describe('CopyableUrl (WP-95)', () => {
+  it('shows and copies the parser’s normalised URL, as text and never as a link', async () => {
+    const copied: string[] = [];
+    const { container } = render(
+      <CopyableUrl
+        url="HTTPS://Agentic.Example.test/webhooks/gitlab/abc"
+        label="Webhook URL"
+        copy={async (text) => {
+          copied.push(text);
+        }}
+      />,
+    );
+    const shown = container.querySelector('[data-copyable-url]');
+    expect(shown?.textContent).toBe('https://agentic.example.test/webhooks/gitlab/abc');
+    // Copied, not followed: a click would send a GET at a route that answers a signed POST.
+    expect(container.querySelector('a')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Copy Webhook URL' }));
+    await waitFor(() => {
+      expect(screen.getByRole('status').textContent).toBe('Copied.');
+    });
+    // What is copied is what is shown — one string, not two spellings of it.
+    expect(copied).toEqual(['https://agentic.example.test/webhooks/gitlab/abc']);
+  });
+
+  it('refuses a URL that is not http(s), shows the refusal and offers nothing to copy', () => {
+    const { container } = render(
+      <CopyableUrl url="javascript:window.__pwned=1" label="Webhook URL" copy={async () => {}} />,
+    );
+    expect(container.querySelector('[data-link-refused="true"]')?.textContent).toContain(
+      'is not an http(s) URL',
+    );
+    expect(container.querySelector('[data-copyable-url]')).toBeNull();
+    expect(container.querySelector('button')).toBeNull();
+  });
+
+  it('says it could not copy when the clipboard refuses, rather than claiming it did', async () => {
+    render(
+      <CopyableUrl
+        url="https://agentic.example.test/webhooks/jira-cloud/abc"
+        label="Webhook URL"
+        copy={async () => {
+          throw new Error('not a secure context');
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Copy Webhook URL' }));
+    await waitFor(() => {
+      expect(screen.getByRole('status').textContent).toContain('Could not copy here');
+    });
   });
 });

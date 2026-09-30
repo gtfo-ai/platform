@@ -814,6 +814,21 @@ const estimatedSpendFor = async (
   return new Map(rows.map((row) => [row.taskId, usd(row.usd)]));
 };
 
+/**
+ * The title out of `tasks.ticket_snapshot`, or `null` when there is no snapshot.
+ *
+ * The column is `jsonb` typed by the writer, so the value is checked rather than trusted: a
+ * snapshot whose `title` is not a string publishes `null` — the same answer as no snapshot —
+ * instead of failing the whole page's schema.
+ */
+export const ticketTitleOf = (snapshot: unknown): string | null => {
+  if (typeof snapshot !== 'object' || snapshot === null) {
+    return null;
+  }
+  const title = (snapshot as { readonly title?: unknown }).title;
+  return typeof title === 'string' ? title : null;
+};
+
 const toTaskRecord = (
   row: typeof tasks.$inferSelect,
   conflict: TaskConflict | null,
@@ -822,6 +837,10 @@ const toTaskRecord = (
   id: row.id as Id,
   project_id: row.projectId as Id,
   ticket: { provider: row.ticketProvider, key: row.ticketKey, url: row.ticketUrl },
+  // WP-95, Q48: the board card's title, read out of the snapshot the platform stored bounded and
+  // redacted at the write (WP-15f) — never re-fetched, never derived from a branch name. `null` is
+  // "the platform has not read the ticket", which the card says rather than drawing an empty title.
+  ticket_title: ticketTitleOf(row.ticketSnapshot),
   template: row.template,
   mode: row.mode,
   state: row.state,

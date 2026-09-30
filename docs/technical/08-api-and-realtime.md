@@ -11,7 +11,7 @@
 | Area | Endpoints |
 |---|---|
 | Auth | Better Auth routes under `/api/auth/*` (sign-in, sign-out, session, password reset, API keys, admin user management) |
-| Org | `GET/PATCH /api/org` (**WP-93**: the organisation settings document — the command, autonomy and WIP maximums, quiet hours and the default chat account, technical/12 § "The organisation settings document"; `GET` is `org.read`, `PATCH` replaces the sections it names and is `org.settings.write`, admin, audited, `Idempotency-Key` optional; a stored document that does not parse is `409 invalid_organisation_config`; a lowered maximum applies at the next read and never moves a task's frozen dial), `GET /api/org/budgets`, `PUT /api/org/budgets/:id`, `GET /api/org/stats?range=…`, `GET /api/org/audit?…`, `GET /api/org/users`, `POST /api/org/users/invite`, `GET/POST /api/org/identities`, `GET /api/org/identities/candidates` (**WP-44**: refused accounts nobody has mapped — a proposal for the mapping form, never a write; `org.users.manage`) |
+| Org | `GET/PATCH /api/org` (**WP-93**: the organisation settings document — the command, autonomy and WIP maximums, quiet hours and the default chat account, technical/12 § "The organisation settings document"; `GET` is `org.read`, `PATCH` replaces the sections it names and is `org.settings.write`, admin, audited, `Idempotency-Key` optional; a stored document that does not parse is `409 invalid_organisation_config`; a lowered maximum applies at the next read and never moves a task's frozen dial), `GET /api/org/budgets`, `PUT /api/org/budgets/:id`, `GET /api/org/stats?range=…`, `GET /api/org/audit?…`, `GET /api/org/users`, `POST /api/org/users/invite`, `GET/POST /api/org/identities`, `GET /api/org/identities/candidates` (**WP-44**: refused accounts nobody has mapped — a proposal for the mapping form, never a write; `org.users.manage`), `GET /api/org/dead-letters` and `POST /api/org/dead-letters/:position/requeue` (**WP-95**, PROGRESS backlog 126: the events WP-49 dead-lettered — position, type, stream, the handler that spent the bound, attempts, the error **redacted and bounded**, the task the sink escalated or `null`, and `total` beside the page; the re-queue clears `dead_lettered_at` and `attempts` on the **same** queue row under its row lock — nothing is appended and handlers that already succeeded are skipped — refusing `409 event_not_dead_lettered`, `409 event_already_dispatched` or `404`; one `human_actions` row per accepted re-queue, `task_id` the escalated task; `Idempotency-Key` optional and honoured; both `org.dead_letters.manage`, admin) |
 | Integrations | `GET/POST /api/integrations`, `PATCH /api/integrations/:id`, `POST /api/integrations/:id/test`, `GET /api/integrations/:id/setup-guide`, `GET /api/integrations/:id/refused-deliveries` (**WP-44**: the newest inbound deliveries the platform **refused** — since WP-73b filtered on `inbox.error_reasons`, never an ordinary ignore — with the accounts refused as `unmapped_identity`; `integration.read`) |
 | Projects | `GET/POST /api/projects`, `GET/PATCH /api/projects/:id`, `GET /api/projects/:id/config` (effective, with sources), `PUT /api/projects/:id/config`, `POST /api/projects/:id/config/export` (to repo MR, **served since WP-63**), `POST /api/projects/:id/config/refresh` (**WP-63**: re-read the default branch's `.agentic/config.yml`), `GET /api/projects/:id/readiness`, `POST /api/projects/:id/discovery`, `GET/POST /api/projects/:id/rediscovery` (**WP-94**: a maintainer's re-evaluate — `discovery.run`, `Idempotency-Key` required, a new one-off discovery task with every guard the first had; the `GET` publishes the gate, the stage's run budget as the ceiling and the last discovery's cost), `POST /api/projects/:id/interview` (**WP-64**: the wizard's step 3 — one knowledge proposal per answered section, never a commit; `Idempotency-Key` required, `kb.write`), `GET/PUT /api/projects/:id/bindings`, `GET/PUT /api/projects/:id/budgets`, `GET /api/projects/:id/stats` |
 | Tasks | `GET /api/projects/:id/tasks?state=…`, `POST /api/projects/:id/tasks` (manual start from ticket key), `GET /api/tasks/:id` (with stages, artifacts, checks), `POST /api/tasks/:id/{pause,resume,cancel,retry-stage,return-to-stage,take-over,hand-back,rework}` (**take-over's stop of a live run is accepted, then applied or refused** — WP-85, TD-028 decision 9: the pause and the stop are recorded in one transaction, the run is found in the database and its id recorded on `task.taken_over`, and the process holding the run applies the stop; the response's `workspace_export: "requested"` is that tense), `GET /api/tasks/:id/events`, `GET /api/tasks/:id/export` (JSON), `POST /api/tasks/:id/questions/:qid/answer`, `POST /api/tasks/:id/approvals/:aid/decide`, `POST /api/tasks/:id/feedback`, `POST /api/tasks/:id/ask` (ask-the-task), `GET /api/artifacts/:id` (one artifact's body, gated at `artifact.read`; **added at WP-52**, and until then `GET /api/tasks/:id` published every artifact with a literal `null` `url` and no route served a body) |
@@ -53,9 +53,10 @@
 > Librarian uses plus an editor the SPA does not have; `GET …/kb/search` duplicates the `kb_search`
 > platform tool over HTTP and nothing calls it; `POST …/kb/bootstrap` is product/18's history
 > bootstrap, which is its own work package. `apps/server/src/routes/client-census.test.ts` is the
-> list that is kept true — it compares the client's calls against the router in both directions, and
-> **`kb/health` is the one endpoint it cannot see**: no screen calls it, so the census is blind to it
-> by construction and `routes/kb.ts` carries the assertion by hand.
+> list that is kept true — it compares the client's calls against the router in both directions.
+> `kb/health` was the one endpoint it could not see until **WP-95**: no screen called it, so the
+> census was blind to it by construction and carried the assertion by hand. The knowledge screen's
+> health panel calls it now (PROGRESS backlog 37), and the census sees it like any other path.
 >
 > **Two refusals changed shape at WP-57.** `GET …/kb/health` answered a bare **404** for a project
 > whose nightly pass has not run yet — the same status and code as a project that does not exist — so
@@ -260,11 +261,11 @@
 > client's calls and the routes landed in one change, so there was nothing to admit, and they are
 > asserted **positively** in the census instead, as the eleven commands of WP-15i and WP-27's steer
 > now are. The reads above, the writes no screen fires, and any route served but uncalled are
-> outside it **by construction**, not by omission — there is **one** of those today: `kb/health`
-> (WP-18b's report, which no screen asks for), asserted by hand in the census beside the automatic
-> half. WP-27's `take-over` and `hand-back` and WP-40's breakdown pair were the other four until
-> **WP-44** gave them a screen (the task page's take-over control and breakdown panel), and their
-> hand-written census cases were deleted in the same change. This paragraph is the only record of
+> outside it **by construction**, not by omission — there are **none** today. The last was
+> `kb/health` (WP-18b's report), asserted by hand in the census until **WP-95** gave it the knowledge
+> screen's health panel. WP-27's `take-over` and `hand-back` and WP-40's breakdown pair were the
+> other four until **WP-44** gave them a screen (the task page's take-over control and breakdown
+> panel), and their hand-written census cases were deleted in the same change. This paragraph is the only record of
 > that class, so it is the one to correct when one of them gains a caller.
 >
 > **The two reads answer from the index, not from git.** `kb/tree` is the pages the platform has

@@ -182,6 +182,9 @@ const baseTask = {
   mr_ref: null,
   workpad_ref: null,
   iteration_counters: { review: 1 },
+  // WP-95 (Q48): the card's title, from the ticket snapshot. `null` on the base — the platform has
+  // not read the ticket — and a hostile one on DEMO-1, so the board renders provider text as text.
+  ticket_title: null,
   risk_classes: ['payments'],
   // WP-39: a measured delta, with a **branch name a repository chose** as its base — so the line
   // the panel prints under the metric is provider text going through `UntrustedText`, like every
@@ -269,6 +272,7 @@ export const featureTask = taskRecordSchema.parse({
   ...baseTask,
   id: IDS.taskFeature,
   ticket: { provider: 'jira', key: 'DEMO-1', url: HOSTILE.safeUrl },
+  ticket_title: `Checkout ${HOSTILE.script}`,
   // A merge request whose URL is a `data:` document. `taskRecordSchema` accepts it — which is the
   // point — and React would render it unchanged, so whatever refuses it is the application's own.
   mr_ref: { provider: 'gitlab', project_path: 'demo/service', iid: 7, url: HOSTILE.mrUrlData },

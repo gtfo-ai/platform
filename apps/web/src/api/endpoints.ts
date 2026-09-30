@@ -43,6 +43,7 @@ import {
   createIdentityMappingRequestSchema,
   createIntegrationRequestSchema,
   createProjectRequestSchema,
+  deadLettersResponseSchema,
   decideApprovalRequestSchema,
   decideBreakdownRequestSchema,
   decideBreakdownResponseSchema,
@@ -58,6 +59,7 @@ import {
   inboxResponseSchema,
   integrationsResponseSchema,
   kbDocResponseSchema,
+  kbHealthResponseSchema,
   kbProposalsResponseSchema,
   kbTreeResponseSchema,
   orgAuditResponseSchema,
@@ -77,6 +79,7 @@ import {
   rediscoveryGateResponseSchema,
   refreshProjectConfigResponseSchema,
   refusedDeliveriesResponseSchema,
+  requeueDeadLetterResponseSchema,
   resumeTaskRequestSchema,
   retryRunRequestSchema,
   retryStageRequestSchema,
@@ -137,6 +140,21 @@ export interface Endpoints {
    * write.
    */
   readonly identityCandidates: () => Promise<z.output<typeof identityCandidateListSchema>>;
+  /**
+   * `GET /api/org/dead-letters` — events whose dispatch spent its attempt bound (WP-95, backlog
+   * 126). Admin only; `error` arrives redacted and bounded, and is rendered as text.
+   */
+  readonly deadLetters: (query: {
+    readonly cursor?: string;
+  }) => Promise<z.output<typeof deadLettersResponseSchema>>;
+  /**
+   * `POST /api/org/dead-letters/:position/requeue` — serve one dead-lettered event again. Carries
+   * an `Idempotency-Key`, so a double-clicked Re-queue is one re-queue and one audit row.
+   */
+  readonly requeueDeadLetter: (
+    position: number,
+    idempotencyKey?: string,
+  ) => Promise<z.output<typeof requeueDeadLetterResponseSchema>>;
   /** The newest refused or ignored inbound deliveries of one integration (WP-44, backlog 198). */
   readonly refusedDeliveries: (
     integrationId: string,
@@ -227,6 +245,12 @@ export interface Endpoints {
     path: string,
   ) => Promise<z.output<typeof kbDocResponseSchema>>;
   readonly kbProposals: (projectId: string) => Promise<z.output<typeof kbProposalsResponseSchema>>;
+  /**
+   * `GET /api/projects/:id/kb/health` — the newest knowledge health report (WP-57's read, WP-95's
+   * screen, PROGRESS backlog 37). A project no pass has reported on answers `409
+   * kb_health_not_reported`, which the screen tells apart from a report with no findings.
+   */
+  readonly kbHealth: (projectId: string) => Promise<z.output<typeof kbHealthResponseSchema>>;
   readonly projectBindings: (
     projectId: string,
   ) => Promise<z.output<typeof projectBindingsResponseSchema>>;
@@ -479,6 +503,18 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
       client.get(`/api/integrations/${seg(integrationId)}/refused-deliveries`, {
         schema: refusedDeliveriesResponseSchema,
       }),
+    deadLetters: (query) =>
+      client.get('/api/org/dead-letters', {
+        schema: deadLettersResponseSchema,
+        query: { ...query },
+      }),
+    requeueDeadLetter: (position, idempotencyKey) =>
+      client.command(`/api/org/dead-letters/${seg(String(position))}/requeue`, {
+        schema: requeueDeadLetterResponseSchema,
+        body: {},
+        idempotent: true,
+        ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+      }),
     orgAudit: (query) =>
       client.get('/api/org/audit', { schema: orgAuditResponseSchema, query: { ...query } }),
     orgStats: (query) =>
@@ -572,6 +608,8 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
       client.get(`/api/projects/${seg(projectId)}/kb/proposals`, {
         schema: kbProposalsResponseSchema,
       }),
+    kbHealth: (projectId) =>
+      client.get(`/api/projects/${seg(projectId)}/kb/health`, { schema: kbHealthResponseSchema }),
     projectBindings: (projectId) =>
       client.get(`/api/projects/${seg(projectId)}/bindings`, {
         schema: projectBindingsResponseSchema,

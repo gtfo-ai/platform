@@ -48,6 +48,7 @@ const TASK_ROW: TaskRecord = {
   id: TASK,
   project_id: PROJECT,
   ticket: { provider: 'jira', key: 'ACME-1', url: 'https://jira.example.test/browse/ACME-1' },
+  ticket_title: null,
   template: 'feature',
   mode: 'normal',
   state: 'active',

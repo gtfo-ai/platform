@@ -67,9 +67,10 @@ describe('toWireIdentityMapping (WP-31, PROGRESS backlog 79)', () => {
  * The identity pair, driven through a real Fastify instance (WP-31 round 2).
  *
  * **Why by hand.** `routes/client-census.test.ts` compares the *client's* `/api/*` paths against
- * the router, and no screen calls either of these — so the census is blind to them by construction,
- * exactly as it is to `GET /api/projects/:id/kb/health`. It names them positively there (served,
- * 401, absent from the client's list) and this file asserts what the census cannot see: the
+ * the router, and until WP-43 no screen called either of these — so the census was blind to them by
+ * construction, as it was to `GET /api/projects/:id/kb/health` until WP-95 gave that a screen. Both
+ * are callers' paths now and the census names them positively; this file asserts what no census can
+ * see: the
  * wrong-role refusal, the upsert, the `unknown_user` 409, and the `human_actions` row the write
  * owes — which it did not write at all until this round.
  *

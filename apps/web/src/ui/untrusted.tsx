@@ -11,7 +11,7 @@
  * application renders passes through `safeHref` here (`UntrustedText` for a link found in text,
  * `ExternalLink` for a link a DTO carried).
  */
-import type { ReactElement } from 'react';
+import { type ReactElement, useState } from 'react';
 import {
   safeHref,
   sanitiseUntrusted,
@@ -67,6 +67,88 @@ export const ExternalLink = ({
     <a href={resolved} target="_blank" rel="noopener noreferrer nofollow" className={className}>
       {label}
     </a>
+  );
+};
+
+/**
+ * A URL a person has to **copy somewhere else** — the webhook URL an operator pastes into GitLab or
+ * Jira (WP-95, PROGRESS backlog 272) — rendered as text with a copy control, never as a link.
+ *
+ * Not a link, because following it would be wrong: the webhook route answers a signed `POST` from a
+ * provider, and a click would send the browser's `GET` at it. Still through {@link safeHref}, for
+ * the reason every URL in this application is: `setupGuideResponseSchema.webhook_url` is
+ * `urlSchema`, which accepts `javascript:` and `data:` (Q49). The server builds this one from
+ * `APP_BASE_URL`, so it is platform text — but the rule is one path for every URL rather than a
+ * judgement per field, and a refused URL is shown as refused (the `ExternalLink` shape) rather than
+ * copied. What is shown **and** what is copied is the parser's normalised string, so the two cannot
+ * differ.
+ *
+ * `copy` is injected for the tests; the default is the Clipboard API, which a browser offers only in
+ * a secure context — so on a plain-`http` instance the control says it could not copy and the text
+ * stays selectable, rather than the button silently doing nothing.
+ */
+export const CopyableUrl = ({
+  url,
+  label,
+  copy,
+}: {
+  readonly url: string;
+  readonly label: string;
+  readonly copy?: (text: string) => Promise<void>;
+}): ReactElement => {
+  const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const resolved = safeHref(url);
+  if (resolved === null) {
+    return (
+      <span className="text-xs text-fg-muted" data-link-refused="true">
+        {`${label}: not shown, because ${sanitiseUntrusted(url)} is not an http(s) URL.`}
+      </span>
+    );
+  }
+  const write =
+    copy ??
+    (async (text: string): Promise<void> => {
+      if (typeof navigator === 'undefined' || navigator.clipboard === undefined) {
+        throw new Error('the Clipboard API is not available here');
+      }
+      await navigator.clipboard.writeText(text);
+    });
+  return (
+    <span className="flex flex-col gap-1">
+      <span className="text-xs font-semibold">{label}</span>
+      <span className="flex flex-wrap items-center gap-2">
+        <code
+          className="rounded-md bg-surface-muted px-2 py-1 font-mono text-xs break-all select-all"
+          data-copyable-url="true"
+        >
+          {resolved}
+        </code>
+        <button
+          type="button"
+          className="rounded-md border border-line px-2 py-1 text-xs"
+          aria-label={`Copy ${label}`}
+          onClick={() => {
+            write(resolved).then(
+              () => {
+                setState('copied');
+              },
+              () => {
+                setState('failed');
+              },
+            );
+          }}
+        >
+          Copy
+        </button>
+        <span role="status" className="text-xs text-fg-muted">
+          {state === 'copied'
+            ? 'Copied.'
+            : state === 'failed'
+              ? 'Could not copy here — select the text and copy it by hand.'
+              : ''}
+        </span>
+      </span>
+    </span>
   );
 };
 

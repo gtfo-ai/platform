@@ -32,6 +32,7 @@ const EXPECTED_ROLES: Record<PermissionAction, readonly UserRole[]> = {
   'org.settings.write': ADMIN_ONLY,
   'org.users.manage': ADMIN_ONLY,
   'org.audit.read': MAINTAINER_UP,
+  'org.dead_letters.manage': ADMIN_ONLY,
 
   'integration.read': MAINTAINER_UP,
   'integration.write': ADMIN_ONLY,
