@@ -31,9 +31,10 @@ import { chmod, mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import type { Logger } from '@platform/application';
+import { type Logger, WORKSPACE_LABELS } from '@platform/application';
 import { workspace } from '@platform/infrastructure';
 import { PLATFORM_SKILLS } from '@platform/prompts';
+import { harnessVolumeLabels, sweepStaleHarnessVolumes } from './harness-volumes.js';
 
 const run = promisify(execFile);
 
@@ -358,6 +359,10 @@ export const startDockerFixture = async (
   // reached through the CLI (which pulls) or through the engine (which does not).
   const images = imageTagsOf(providerImages);
   await ensureImages(images);
+  // The two volumes a killed run left behind, which no label sweep could see before they carried
+  // a label (WP-96, backlog 7 bullet 8): only this repository's exact names, only marked, and only
+  // a creator pid that is no longer alive — a parallel file's volumes are left alone.
+  await sweepStaleHarnessVolumes(docker);
   const suffix = uniqueSuffix();
   const network = `agentic-e2e-${suffix}`;
   const repoContainer = `agentic-e2e-repo-${suffix}`;
@@ -401,10 +406,11 @@ export const startDockerFixture = async (
   // same name is idempotent, which is what lets the provider's own `ensureVolume` run afterwards.
   await docker(
     options.controlVolumeBind === false
-      ? ['volume', 'create', controlVolume]
+      ? ['volume', 'create', ...harnessVolumeLabels(), controlVolume]
       : [
           'volume',
           'create',
+          ...harnessVolumeLabels(),
           '--driver',
           'local',
           '--opt',
@@ -416,6 +422,18 @@ export const startDockerFixture = async (
           controlVolume,
         ],
   );
+  // Created here rather than by the provider's `ensureVolume`, so it carries the harness labels a
+  // start sweep reads (WP-96); the provider's own label is set too, and its later create of the
+  // same name is idempotent and keeps these (measured at WP-27: a second create keeps the first
+  // create's labels).
+  await docker([
+    'volume',
+    'create',
+    ...harnessVolumeLabels(),
+    '--label',
+    `${WORKSPACE_LABELS.role}=shared`,
+    cacheVolume,
+  ]);
   await startRepoContainer(repoContainer, network);
 
   const engine = new RecordingDockerEngine({ socketPath: '/var/run/docker.sock' });

@@ -36,16 +36,17 @@
  *    test *must* construct an engine to verify the adapter (`workspace/engine.test.ts`,
  *    `workspace/provider.test.ts`, `test/e2e/support/docker-workspace.ts` all do), and a test does
  *    not ship in an image. A production leak written *inside* a `*.test.ts` file would pass.
- *  - **Comments are stripped crudely** (a `*`-prefixed line, and everything after a `//`), so a
- *    string literal containing `//` loses its tail. The failure direction of that is a false
- *    *negative* only for a construction written after a `//` on the same line as code, which is not
- *    a spelling this repository's formatter produces; the common direction — prose naming
- *    `DOCKER_HOST` in a docblock — is stripped, because a guard that fires on legitimate content
- *    gets switched off.
+ *  - **Comments are stripped by the shared scanner** (`scripts/source-scanner.mjs`, WP-96,
+ *    backlog 269), which keeps string, template and regular-expression contents, so a `//` inside
+ *    a string no longer drops the rest of its line. Until WP-96 this file cut every line at its
+ *    first `//`; prose naming `DOCKER_HOST` in a docblock is still stripped, because a guard that
+ *    fires on legitimate content gets switched off. The scanner's own residuals (JSX text read as
+ *    code) are stated in its docblock.
  */
 import { execFileSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { censusFiles, censusPaths } from '../../../scripts/census-files.mjs';
+import { withoutComments } from '../../../scripts/source-scanner.mjs';
 
 const REPO_ROOT = process.cwd();
 
@@ -72,20 +73,6 @@ const isTestTier = (file: string): boolean =>
   file.startsWith('test/') ||
   /\.(?:test|spec)\.[cm]?tsx?$/.test(file) ||
   /(?:^|\/)(?:testing|fixtures)\.ts$/.test(file);
-
-/** Crude comment stripping; the docblock above states what it trades. */
-const withoutComments = (source: string): string =>
-  source
-    .split('\n')
-    .map((line) => {
-      const trimmed = line.trimStart();
-      if (trimmed.startsWith('*') || trimmed.startsWith('//') || trimmed.startsWith('/*')) {
-        return '';
-      }
-      const comment = line.indexOf('//');
-      return comment < 0 ? line : line.slice(0, comment);
-    })
-    .join('\n');
 
 /** `new DockerEngine`, `new workspace.DockerEngine`, and a subclass of either. */
 const CONSTRUCTS_ENGINE = /\b(?:new|extends)\s+(?:[A-Za-z_$][\w$]*\s*\.\s*)?\w*DockerEngine\b/;
@@ -157,11 +144,22 @@ describe('TD-021: exactly one component reaches the Docker daemon', () => {
 
   it('does not see a docblock that merely names the variable or the class', () => {
     expect(
-      READS_DOCKER_HOST.test(withoutComments(' * `DOCKER_HOST` is tool-native on purpose.')),
+      READS_DOCKER_HOST.test(
+        withoutComments('/**\n * `DOCKER_HOST` is tool-native on purpose.\n */'),
+      ),
     ).toBe(false);
     expect(
       CONSTRUCTS_ENGINE.test(withoutComments('// `new DockerEngine` stores an address.')),
     ).toBe(false);
+  });
+
+  it('sees a construction after a `//` inside a string on the same line (backlog 269)', () => {
+    // The line-by-line stripper this file carried until WP-96 cut the line at the URL's `//`.
+    const planted = "const at = 'unix:///var/run/docker.sock'; const e = new DockerEngine({ at });";
+    expect(CONSTRUCTS_ENGINE.test(withoutComments(planted))).toBe(true);
+    expect(
+      READS_DOCKER_HOST.test(withoutComments("const u = 'tcp://x'; process.env.DOCKER_HOST")),
+    ).toBe(true);
   });
 
   it('has a non-empty scope, so neither claim above can pass over nothing', () => {

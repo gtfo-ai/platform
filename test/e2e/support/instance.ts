@@ -225,6 +225,23 @@ export const seedProject = async (instance: Instance): Promise<SeededProject> =>
 };
 
 /** A `fetch` bound to the instance, carrying the cookie jar and the headers the CSRF rule wants. */
+/** One zero-byte 2xx answer, as {@link Client.zeroByteBodies} records it (backlog 132). */
+export interface ZeroByteBody {
+  readonly method: string;
+  readonly path: string;
+  readonly status: number;
+  readonly headers: Record<string, string>;
+}
+
+/** Every response header but `set-cookie`, which carries the session and says nothing about framing. */
+const recordableHeaders = (headers: Headers): Record<string, string> => {
+  const recorded: Record<string, string> = {};
+  headers.forEach((value, name) => {
+    if (name !== 'set-cookie') recorded[name] = value;
+  });
+  return recorded;
+};
+
 export class Client {
   readonly #baseUrl: string;
   readonly #cookies = new Map<string, string>();
@@ -267,12 +284,39 @@ export class Client {
     return response;
   }
 
-  async json<T>(path: string, init: RequestInit = {}): Promise<{ status: number; body: T }> {
+  /**
+   * Every 2xx answer (but 204) that arrived with **zero bytes**, with the response's headers —
+   * PROGRESS backlog 132. WP-52 saw an authenticated `GET /api/artifacts/:id` answer 200 with an
+   * empty body, a response that route has no ending for, and nobody could say which component
+   * answered because this client kept only the status and the parsed body. The next occurrence
+   * records what that one could not: the method, the path, the status and every response header
+   * but `set-cookie` (`content-length`, `content-encoding`, `content-type`, `connection`,
+   * `transfer-encoding`, `vary`, …) — here, and as one line on stderr, so the failing test's own
+   * output carries it whatever the assertion printed.
+   */
+  readonly zeroByteBodies: ZeroByteBody[] = [];
+
+  async json<T>(
+    path: string,
+    init: RequestInit = {},
+  ): Promise<{ status: number; body: T; headers: Record<string, string> }> {
     const response = await this.request(path, init);
     const text = await response.text();
+    const headers = recordableHeaders(response.headers);
+    if (text === '' && response.status >= 200 && response.status < 300 && response.status !== 204) {
+      const entry: ZeroByteBody = {
+        method: (init.method ?? 'GET').toUpperCase(),
+        path,
+        status: response.status,
+        headers,
+      };
+      this.zeroByteBodies.push(entry);
+      process.stderr.write(`e2e client: zero-byte ${JSON.stringify(entry)} (backlog 132)\n`);
+    }
     return {
       status: response.status,
       body: (text === '' ? null : JSON.parse(text)) as T,
+      headers,
     };
   }
 

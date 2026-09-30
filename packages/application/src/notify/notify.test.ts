@@ -21,6 +21,7 @@ import type { PipelineOutboundData } from '../pipeline/jobs.js';
 import { staticProjectSettings } from '../pipeline/settings.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import {
+  cannotStart,
   createPipelineHarness,
   type HarnessOptions,
   type PipelineHarness,
@@ -122,8 +123,14 @@ const optionsOf = (
   };
 };
 
+/** Why the walk may stop at refinement in this file (backlog 249). */
+const NO_STAGE =
+  'this case is about what the notification band does with a task; the walk stops at its first stage, which escalates as a runner that cannot start';
+
 /** Drives a ticket to a task and returns it, so a notification has something real to be about. */
 const taskOf = async (harness: PipelineHarness, url: string = TICKET_URL): Promise<Id> => {
+  // Backlog 249: declared, not left unscripted — this band needs a task, never a stage's artifact.
+  harness.script('refinement', cannotStart(NO_STAGE));
   await harness.publish([matched(url)]);
   const task = harness.store.snapshot()[0];
   expect(task, 'intake created no task').toBeDefined();
@@ -297,7 +304,7 @@ describe('the handler decides and never calls', () => {
 
   it('posts the thread and the message through the executor, and records the row', async () => {
     const harness = harnessWith();
-    await harness.publish([matched()]);
+    await taskOf(harness);
     const rows = harness.notifications.rows.filter(
       (row) => row.notificationClass === 'task_started',
     );

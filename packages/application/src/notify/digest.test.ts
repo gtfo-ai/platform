@@ -16,6 +16,7 @@ import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import {
+  cannotStart,
   createPipelineHarness,
   type HarnessOptions,
   type PipelineHarness,
@@ -101,6 +102,16 @@ const optionsOf = (harness: PipelineHarness, now: string, timezone = 'UTC'): Not
   };
 };
 
+/** Why the walk may stop at refinement in this file (backlog 249). */
+const NO_STAGE =
+  'this case is about what the notification band does with a task; the walk stops at its first stage, which escalates as a runner that cannot start';
+
+/** Drives a ticket to a task; the walk stops at its first stage, declared (backlog 249). */
+const taskOf = async (harness: PipelineHarness): Promise<void> => {
+  harness.script('refinement', cannotStart(NO_STAGE));
+  await harness.publish([matched()]);
+};
+
 /** A task, and one notification deferred into the night. */
 const deferred = async (
   harness: PipelineHarness,
@@ -153,7 +164,7 @@ const digestKeys = (harness: PipelineHarness): readonly string[] =>
 describe('the digest', () => {
   it('posts nothing before the project’s own hour, and posts at it', async () => {
     const harness = harnessWith();
-    await harness.publish([matched()]);
+    await taskOf(harness);
     await deferred(harness);
     harness.communication?.messages.splice(0);
 
@@ -177,7 +188,7 @@ describe('the digest', () => {
 
   it('carries the deferred notification and marks it delivered by digest', async () => {
     const harness = harnessWith();
-    await harness.publish([matched()]);
+    await taskOf(harness);
     await deferred(harness);
     await runProjectDigest(optionsOf(harness, '2026-06-02T09:00:00.000Z'), {
       projectId: PROJECT,
@@ -194,7 +205,7 @@ describe('the digest', () => {
 
   it('posts one message for a day however often the job runs — read from the audit, not the port', async () => {
     const harness = harnessWith();
-    await harness.publish([matched()]);
+    await taskOf(harness);
     await deferred(harness);
     harness.communication?.messages.splice(0);
     const run = async () =>
@@ -219,7 +230,7 @@ describe('the digest', () => {
      * reaching the provider.
      */
     const harness = harnessWith();
-    await harness.publish([matched()]);
+    await taskOf(harness);
     await deferred(harness);
     await intoShadowMode(harness);
     await deferred(harness, {
@@ -272,7 +283,7 @@ describe('the digest', () => {
    */
   it('posts one digest per project when two projects share an account and a channel on one day', async () => {
     const harness = harnessWith();
-    await harness.publish([matched()]);
+    await taskOf(harness);
     await deferred(harness);
     const OTHER = '00000000-0000-4000-8000-0000000000b2' as Id;
     // The second project's row, written as the duty would have written it; the harness's
@@ -353,7 +364,7 @@ describe('the digest', () => {
 
   it('posts nothing at all on an empty day', async () => {
     const harness = harnessWith();
-    await harness.publish([matched()]);
+    await taskOf(harness);
     // Everything the drain produced was delivered immediately (09:00 is outside the window).
     harness.communication?.messages.splice(0);
     expect(
@@ -376,7 +387,7 @@ describe('the digest', () => {
         },
       },
     });
-    await harness.publish([matched()]);
+    await taskOf(harness);
     // With the digest off nothing is ever deferred, so this row is an immediate delivery that
     // failed — which the digest does not turn into a daily message the project did not ask for.
     await harness.memory.transaction(async (scope) =>
@@ -417,7 +428,7 @@ describe('the digest', () => {
 
   it('reads the day and the hour in the organisation’s zone', async () => {
     const harness = harnessWith();
-    await harness.publish([matched()]);
+    await taskOf(harness);
     await deferred(harness, { at: '2026-06-01T23:00:00.000Z' });
     harness.communication?.messages.splice(0);
     // 07:30 UTC is 09:30 in Prague: due there, an hour and a half early in UTC.
@@ -465,7 +476,7 @@ describe('the digest', () => {
 
   it('serves every project with something waiting from one tick', async () => {
     const harness = harnessWith();
-    await harness.publish([matched()]);
+    await taskOf(harness);
     await deferred(harness);
     harness.communication?.messages.splice(0);
     await digestTickHandler(optionsOf(harness, '2026-06-02T09:00:00.000Z'))({
@@ -568,7 +579,7 @@ describe('the digest re-checks what it carries (WP-84 review round 2)', () => {
 
   it('carries a reminder whose question is still open (the control)', async () => {
     const harness = harnessWith();
-    await harness.publish([matched()]);
+    await taskOf(harness);
     const taskId = await withOpenQuestion(harness);
     await remindAtNight(harness, taskId);
     expect(reminderRow(harness)).toMatchObject({ plannedDelivery: 'digest', questionId: QUESTION });
@@ -581,7 +592,7 @@ describe('the digest re-checks what it carries (WP-84 review round 2)', () => {
 
   it('does not carry a reminder answered overnight, closes it withheld, and never carries it later', async () => {
     const harness = harnessWith();
-    await harness.publish([matched()]);
+    await taskOf(harness);
     const taskId = await withOpenQuestion(harness);
     await remindAtNight(harness, taskId);
     await answer(harness);
@@ -600,7 +611,7 @@ describe('the digest re-checks what it carries (WP-84 review round 2)', () => {
 
   it('carries the rest of the day and withholds only the settled reminder', async () => {
     const harness = harnessWith();
-    await harness.publish([matched()]);
+    await taskOf(harness);
     const taskId = await withOpenQuestion(harness);
     await remindAtNight(harness, taskId);
     await deferred(harness, {

@@ -24,6 +24,7 @@
 import type { Id, Slug } from '@platform/contracts';
 import { IllegalTransitionError, InvariantViolationError } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
+import { withoutComments } from '../../../../scripts/source-scanner.mjs';
 import { IntegrationError } from '../ports/integrations/common.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import { type Logger, silentLogger } from '../ports/logger.js';
@@ -31,6 +32,7 @@ import type { RunStop, RunTakeOverExport, SteerMessage } from '../ports/runner.j
 import { runStrandedRecovery, STRANDED_ENDING_AFTER_MS } from '../recovery/stranded.js';
 import {
   createPipelineHarness,
+  type HarnessScript,
   type PipelineHarness,
   type ScriptedRun,
 } from '../testing/pipeline-harness.js';
@@ -169,7 +171,7 @@ const ok = (structuredOutput: unknown): ScriptedRun => ({
   structuredOutput,
 });
 
-const runs = (overrides: Readonly<Record<string, ScriptedRun>> = {}) => ({
+const runs = (overrides: Readonly<Record<string, HarnessScript>> = {}) => ({
   refinement: ok(REFINED_SPEC),
   architecture: ok(PLAN),
   implementation: ok(NOTES),
@@ -2130,12 +2132,9 @@ describe('a human’s way into Ready (WP-79)', () => {
   it('has exactly one stage entry in the command module, the one that routes Ready to the duty', async () => {
     const { readFileSync } = await import('node:fs');
     const raw = readFileSync(new URL('./commands.ts', import.meta.url), 'utf8');
-    // Comment lines out, so a docblock that names a function is not a call (the census trade
-    // `task-save-sites.test.ts` states).
-    const source = raw
-      .split('\n')
-      .filter((line) => !/^\s*(?:\*|\/\/|\/\*)/.test(line))
-      .join('\n');
+    // Comments out through the shared scanner (WP-96 review round 1), so a docblock that names a
+    // function is not a call and a trailing comment is not one either.
+    const source = withoutComments(raw);
     const count = (pattern: RegExp): number => source.match(pattern)?.length ?? 0;
     // Round 2 (the reviewer's canary: a direct `markReadyForMerge(` + `tasks.save` survived a census
     // that counted only `kind: 'enter'`): every way this module can move a task's state, counted.

@@ -20,7 +20,10 @@
  * prose does not prevent recurrence; standing rule 33: a guard with no test of its own is not a
  * guard). So the enumeration is executed:
  *
- *  1. every port method of both adapters is driven from a **hostile document** — every member
+ *  1. every port method of both adapters is driven from a **hostile document** — and since WP-96
+ *     (backlog 304) that *every* is read off the constructed adapter and compared with the driven
+ *     list in both directions, where it used to be a hand-picked list that missed WP-89's two
+ *     members. Every member
  *     whose bound is a **cut** carries a value far longer than every cap. The members whose bound
  *     is a **refusal** carry *safe* values there, because a hostile one throws and the walk would
  *     then measure nothing at all; each of those gets a hostile document of its own in
@@ -170,6 +173,18 @@ const at = (strings: readonly EmittedString[], path: string): EmittedString => {
   }
   return found;
 };
+
+/**
+ * The port, with every member `answers()` reads recorded (WP-96 review round 1, backlog 304), so
+ * the member census compares the adapter with what the walk really drove.
+ */
+const recordingMembers = <T extends object>(port: T, driven: Set<string>): T =>
+  new Proxy(port, {
+    get: (target, property, receiver) => {
+      if (typeof property === 'string') driven.add(property);
+      return Reflect.get(target, property, receiver) as unknown;
+    },
+  });
 
 /** A redactor that makes text **longer**, which is what redaction really does (TD-012). */
 const expandingRedactor = (): SecretRedactor =>
@@ -366,7 +381,9 @@ const sentryPort = (options: {
 
 describe('Sentry: every emitted field is bounded by a named cap (standing rule 37)', () => {
   const unmapped: UnmappedValue[] = [];
-  const port = sentryPort({ onUnmapped: (value) => unmapped.push(value) });
+  const built = sentryPort({ onUnmapped: (value) => unmapped.push(value) });
+  const driven = new Set<string>();
+  const port = recordingMembers(built, driven);
 
   const answers = async () => ({
     capabilities: port.capabilities(),
@@ -376,7 +393,35 @@ describe('Sentry: every emitted field is bounded by a named cap (standing rule 3
     event: await port.getLatestEvent({ id: '4242' }),
     search: await port.searchIssues({ project: 'api', query: '' }),
     resolved: await port.resolve({ id: '4242' }, { inRelease: '1.2.3' }),
+    // WP-89's member, driven since WP-96 (backlog 304): hostile text around one link to this
+    // binding's own instance and organisation.
+    linked: port.linkedIssues(
+      `${HOSTILE} https://sentry.example.test/organizations/acme-example/issues/4242/ ${HOSTILE}`,
+    ),
     unmapped_reports: unmapped,
+  });
+
+  /**
+   * **Every member of the port is driven above or exempt here** (WP-96, PROGRESS backlog 304 —
+   * standing rule 37 one level up: enumerate the port's members, not the call sites). Read off the
+   * constructed adapter and compared in both directions, so a member added to the port fails until
+   * it is driven or given a reason.
+   */
+  const SENTRY_EXEMPT: Readonly<Record<string, string>> = {
+    ref: 'the binding reference the executor audits by — built from the binding’s own configuration, not from anything the provider sends',
+    comment:
+      'refuses with IntegrationUnsupportedError (capabilities.comments is false) and emits nothing',
+    linkMergeRequest:
+      'refuses with IntegrationUnsupportedError (capabilities.linkMergeRequest is false) and emits nothing',
+  };
+
+  it('drives every member of the port, or states why it emits nothing to bound', async () => {
+    // The driven set is what `answers()` really touched, recorded — not a list typed beside it.
+    await answers();
+    expect(Object.keys(built).toSorted()).toEqual(
+      [...driven, ...Object.keys(SENTRY_EXEMPT)].toSorted(),
+    );
+    expect([...driven].filter((member) => member in SENTRY_EXEMPT)).toEqual([]);
   });
 
   it('emits no string longer than the largest cap, anywhere in any answer', async () => {
@@ -713,7 +758,9 @@ const lokiPort = (
   });
 
 describe('Loki: every emitted field is bounded by a named cap (standing rule 37)', () => {
-  const port = lokiPort();
+  const built = lokiPort();
+  const driven = new Set<string>();
+  const port = recordingMembers(built, driven);
 
   const answers = async () => ({
     capabilities: port.capabilities(),
@@ -728,6 +775,23 @@ describe('Loki: every emitted field is bounded by a named cap (standing rule 37)
     label_names: await port.labels(),
     label_values: await port.labels('app'),
     series: await port.series('{app="api"}', '2026-06-01T09:00:00.000Z'),
+    // WP-89's member, driven since WP-96 (backlog 304). Operator configuration, and this binding
+    // names none, so the answer is `null`; the selector's own bound is its config schema's.
+    excerpt_selector: port.excerptSelector(),
+  });
+
+  /** Every member of the port is driven above or exempt here (WP-96, backlog 304). */
+  const LOKI_EXEMPT: Readonly<Record<string, string>> = {
+    ref: 'the binding reference the executor audits by — built from the binding’s own configuration, not from anything the provider sends',
+  };
+
+  it('drives every member of the port, or states why it emits nothing to bound', async () => {
+    // The driven set is what `answers()` really touched, recorded — not a list typed beside it.
+    await answers();
+    expect(Object.keys(built).toSorted()).toEqual(
+      [...driven, ...Object.keys(LOKI_EXEMPT)].toSorted(),
+    );
+    expect([...driven].filter((member) => member in LOKI_EXEMPT)).toEqual([]);
   });
 
   it('emits no string longer than the largest cap, anywhere in any answer', async () => {

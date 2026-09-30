@@ -197,6 +197,20 @@ test('org settings shows the organisation document and saves a section through P
     .toEqual([{ path: '/api/org', body: { autonomy: { maximum: 'assist' } } }]);
 });
 
+test('org settings lists a dead letter with its re-queue control (WP-96, backlog 326)', async ({
+  page,
+}) => {
+  // Until WP-96 the fake answered this read with its 404, so the bundle drew only the error notice.
+  await page.goto('/settings');
+  const letter = page.locator('[data-dead-letter="4242"]');
+  await expect(letter).toBeVisible();
+  await expect(letter.getByText('pipeline.saga')).toBeVisible();
+  // Handler text is untrusted: its markup is on the screen as characters.
+  await expect(letter.getByText('boom <script>window.__pwned = true;</script>')).toBeVisible();
+  await expect(letter.getByRole('button', { name: 'Re-queue' })).toBeVisible();
+  await expect(page.getByText('The dead letters could not be loaded.')).toHaveCount(0);
+});
+
 test('the project settings page mirrors every wizard step', async ({ page }) => {
   // product/18:55 — *"nothing is only reachable during onboarding"*. Driven against the built
   // bundle, so this is the one tier that shows the route exists and the page renders in a browser.
@@ -279,6 +293,10 @@ test('the project panels render the vault, the proposals and the budget meter', 
   await expect(page.getByRole('button', { name: 'technical/architecture.md' })).toBeVisible();
   await expect(page.getByText('lessons/retries.md').first()).toBeVisible();
   await expect(page.getByText('significance 0.72')).toBeVisible();
+  // WP-96 (backlog 326): the health panel's success branch, which the fake's 404 used to hide.
+  await expect(page.locator('[data-kb-health="findings"]')).toBeVisible();
+  await expect(page.getByText('links to runbooks/missing.md')).toBeVisible();
+  await expect(page.getByText('The health report could not be loaded.')).toHaveCount(0);
 
   await page.goto(`/projects/${PROJECT_KEY}/budgets`);
   await expect(page.getByLabel('Budget used')).toBeVisible();

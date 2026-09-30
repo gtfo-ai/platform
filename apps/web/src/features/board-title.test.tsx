@@ -16,7 +16,7 @@ import type { SessionResponse } from '../auth/session.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000a1';
 
-const SESSION = {
+const SESSION: SessionResponse = {
   user: {
     id: '00000000-0000-4000-8000-000000000001',
     email: 'operator@example.invalid',
@@ -24,7 +24,7 @@ const SESSION = {
     role: 'viewer',
   },
   session: { id: 'session-1', expiresAt: '2030-01-01T00:00:00.000Z' },
-} as unknown as SessionResponse;
+};
 
 /** Markup in a title a ticket author chose: it must be shown, never parsed. */
 const HOSTILE_TITLE = 'Checkout <img src=x onerror="window.__pwned=true"> button';

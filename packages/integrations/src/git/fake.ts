@@ -169,6 +169,15 @@
  *     `fakeGitRegistration` (`bindings/fake-registrations.ts`), the loader's redactor is applied to the whole
  *     body before `normalise` reads it, as a real adapter does; the delivery key is still built from
  *     the header id and is not redacted, where a real adapter redacts its key.
+ * 20. **Kinder — `mr.updated` carries `blocking_threads_resolved` whenever a test asks** (WP-96,
+ *     PROGRESS backlog 306). `emitMergeRequestEvent({ blockingThreadsResolved })` sends the flag
+ *     on any project, true or false, on any update. GitLab's hook carries it in an update's
+ *     `changes` when the threads' resolution changes (`test/fixtures/http/gitlab/SOURCES.md`, the
+ *     WP-90 section), and WP-90's notes record it as sent only on a project that requires resolved
+ *     threads before a merge, for the last resolution. A consumer must
+ *     treat the flag's **absence** as "no signal" — as the refresh handler does — and never wait
+ *     for it; one that waited would pass here and never fire on a project with the setting off.
+ *     Absent from the request, it is absent from the delivery and from the normalised event.
  */
 import {
   type CodeownersRules,
@@ -376,6 +385,8 @@ const mrEventBody = z.strictObject({
   iid: z.int().positive(),
   /** `mr.updated` only: the provider's instant of the change (WP-60 review round 1). */
   updated_at: z.string().min(1).optional(),
+  /** `mr.updated` only, and only when sent: divergence 20 (WP-96, PROGRESS backlog 306). */
+  blocking_threads_resolved: z.boolean().optional(),
 });
 
 /** A person approved a merge request (WP-60); `approver_id` is the account that did. */
@@ -558,6 +569,11 @@ export interface FakeGitProvider extends GitProviderPort {
      * only through the delivery.
      */
     readonly headSha?: string;
+    /**
+     * `mr.updated` only: the provider's *"every blocking thread is now resolved"* flag (WP-96,
+     * PROGRESS backlog 306) — sent on request, which GitLab does not do (divergence 20).
+     */
+    readonly blockingThreadsResolved?: boolean;
     readonly deliveryId?: string;
   }): WebhookDelivery;
   /** A person approved the merge request (WP-60). */
@@ -978,7 +994,15 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
         // updates keep their order however they are normalised (WP-60 review round 1).
         const event: NormalisedEvent<'mr.updated'> = {
           type: 'mr.updated',
-          payload: { ...payload, updated_at: body.updated_at ?? null },
+          payload: {
+            ...payload,
+            updated_at: body.updated_at ?? null,
+            // Carried only when the delivery sent it — GitLab's normaliser's absence rule
+            // (`providers/gitlab/inbound.ts`), which the refresh handler reads as "no signal".
+            ...(body.blocking_threads_resolved === undefined
+              ? {}
+              : { blocking_threads_resolved: body.blocking_threads_resolved }),
+          },
           actor,
         };
         return { events: [event], ignored: [] };
@@ -1692,6 +1716,14 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
         }
         mr.head_sha = input.headSha;
       }
+      if (input.blockingThreadsResolved !== undefined && input.event !== 'mr.updated') {
+        // Stricter (standing rule 1): GitLab sends the flag in an update's `changes`, nowhere else.
+        throw invalidRequest(
+          PROVIDER,
+          'emit',
+          `blocking_threads_resolved rides on mr.updated, not ${input.event}`,
+        );
+      }
       return buildFakeDelivery({
         secret: core.webhookSecret,
         event: input.event,
@@ -1701,6 +1733,9 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
           project: input.project,
           iid: input.iid,
           ...(input.event === 'mr.updated' ? { updated_at: core.clock.now() } : {}),
+          ...(input.blockingThreadsResolved === undefined
+            ? {}
+            : { blocking_threads_resolved: input.blockingThreadsResolved }),
         },
       });
     },

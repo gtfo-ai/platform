@@ -18,6 +18,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { withoutComments } from '../routes/web-sources.js';
 import { CLIENT_ROUTE_SEGMENTS, isClientRoute } from './client-routes.js';
 
 const TREE = fileURLToPath(new URL('../../../web/src/routes/tree.tsx', import.meta.url));
@@ -26,11 +27,8 @@ const TREE = fileURLToPath(new URL('../../../web/src/routes/tree.tsx', import.me
 const ROUTE_PATH = /(['"`])(\/[^'"`]*)\1/g;
 
 const declaredPaths = (): string[] => {
-  const source = readFileSync(TREE, 'utf8')
-    .replaceAll(/\/\*[\s\S]*?\*\//g, '')
-    .split('\n')
-    .filter((line) => !line.trimStart().startsWith('//'))
-    .join('\n');
+  // The shared scanner (WP-96): the block-comment regex this used is backlog 261's defect.
+  const source = withoutComments(readFileSync(TREE, 'utf8'));
   return [...new Set([...source.matchAll(ROUTE_PATH)].map(([, , path]) => path ?? ''))].sort();
 };
 

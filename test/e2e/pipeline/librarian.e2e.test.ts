@@ -258,6 +258,38 @@ describe('the librarian stage, over a merged ticket', () => {
     // The payload describes what was touched; it is not a copy of the page's bytes.
     expect(JSON.stringify(commitAction?.payload)).toContain(AUTO_APPLIED_PATH);
     expect(JSON.stringify(commitAction?.payload)).not.toContain('Sum the invoice model');
+
+    // ── a redelivered `knowledge.apply` commits nothing twice (WP-96, backlog 7 bullet 2) ────
+    //
+    // The pass calls the provider and writes `applied` **afterwards**, in its own transaction, so
+    // the redelivery that matters is the one after a pass whose provider call landed and whose
+    // row write did not (a worker that died between them, a lease that expired). The row is put
+    // back in exactly that state — awaiting apply, no commit sha — and the job is re-delivered
+    // through the instance's own queue (`ServerRuntime.jobs`, WP-15d's labelled seam). The batch
+    // is rebuilt from the same proposal, so its branch and therefore its `knowledge_commit:` and
+    // `knowledge_mr:` idempotency keys are the same; the executor answers from its record.
+    const appliedId = byPath.get(AUTO_APPLIED_PATH)?.id;
+    await pipeline.query(
+      `update kb_proposals set status = 'auto_applied', applied_commit_sha = null where id = $1`,
+      [appliedId],
+    );
+    await pipeline.instance.runtime.jobs?.enqueue({
+      queue: JOB_QUEUES.knowledgeApply,
+      data: { project_id: pipeline.projectId, reason: 'sweep' },
+    });
+    await pipeline.waitFor('the re-delivered apply to finish the row again', async () =>
+      (await pipeline.proposals()).some((row) => row.id === appliedId && row.status === 'applied'),
+    );
+    // One commit, not two — and the row names the commit the first pass made.
+    expect(pipeline.git.commits).toHaveLength(1);
+    const reapplied = (await pipeline.proposals()).find((row) => row.id === appliedId);
+    expect(reapplied?.applied_commit_sha).toBe(commit?.sha);
+    // The second call was answered from the idempotency record, never sent (`attempts: 0`).
+    const commitCalls = (await pipeline.auditRows()).filter((row) => row.action === 'commit_files');
+    expect(commitCalls.map((row) => [row.status, row.attempts])).toEqual([
+      ['ok', 1],
+      ['replayed', 0],
+    ]);
   }, 300_000);
 
   it('serves the queue, the tree and a document, and commits what a maintainer approves', async () => {

@@ -27,10 +27,12 @@ import {
   autonomyResponseSchema,
   budgetsResponseSchema,
   contextPackRecordSchema,
+  deadLettersResponseSchema,
   effectiveConfigResponseSchema,
   identityMappingListSchema,
   inboxResponseSchema,
   integrationSummarySchema,
+  kbHealthResponseSchema,
   kbProposalsResponseSchema,
   kbTreeResponseSchema,
   orgAuditResponseSchema,
@@ -1038,6 +1040,44 @@ export const kbProposals = kbProposalsResponseSchema.parse({
     },
   ],
   next_cursor: null,
+});
+
+/**
+ * `GET /api/org/dead-letters` and `GET /api/projects/:id/kb/health` (WP-96, PROGRESS backlog 326).
+ * Until WP-96 the fake answered both with its documented 404, so the bundle drew only their error
+ * notices and no test looked. Parsed by the published schemas, like every fixture here.
+ */
+export const deadLetters = deadLettersResponseSchema.parse({
+  items: [
+    {
+      position: 4242,
+      event_type: 'task.stage.completed',
+      stream_type: 'task',
+      stream_id: IDS.taskFeature,
+      occurred_at: now,
+      dead_lettered_at: now,
+      handler: 'pipeline.saga',
+      attempts: 5,
+      // Handler text is untrusted: it is shown as characters.
+      error: `boom ${HOSTILE.script}`,
+      error_truncated: false,
+      task: { id: IDS.taskFeature, ticket_key: 'ACME-1', project_key: PROJECT_KEY },
+    },
+  ],
+  total: 1,
+  next_cursor: null,
+});
+
+export const kbHealth = kbHealthResponseSchema.parse({
+  id: id(61),
+  project_id: IDS.project,
+  commit_sha: 'fakehealth00000000000000000000000000000000',
+  documents: 12,
+  findings: [
+    { kind: 'dangling', path: 'technical/architecture.md', detail: 'links to runbooks/missing.md' },
+  ],
+  source: 'hygiene',
+  created_at: now,
 });
 
 export const tasksPage = { items: [featureTask, bugTask], next_cursor: null };

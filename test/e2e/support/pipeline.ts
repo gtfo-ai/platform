@@ -80,6 +80,7 @@ import type {
   FakeLogStreamSeed,
   IntegrationRegistry,
   PipelineProviderRegistryOptions,
+  SentryFetch,
 } from '@platform/integrations';
 import {
   createFakeCommunication,
@@ -88,6 +89,7 @@ import {
   createFakeObservabilityLogs,
   createFakeTaskManagement,
   createIntegrationRegistry,
+  createSentryRegistration,
   createSlackRegistration,
   FAKE_ERRORS_PROVIDER_ID,
   FAKE_GIT_PROVIDER_ID,
@@ -708,6 +710,13 @@ export interface StartPipelineOptions {
    * is a project with neither binding — every other test's world, unchanged.
    */
   readonly observability?: ObservabilitySeed;
+  /**
+   * WP-96 (PROGRESS backlog 7 bullet 1): register the **production** Sentry registration over this
+   * transport, beside the fakes. Nothing is seeded or bound — a test creates the integration through
+   * `POST /api/integrations` and binds it through `PUT …/bindings`, so the credential the loader
+   * opens is one the route sealed. Absent registers no Sentry, as before.
+   */
+  readonly sentry?: { readonly fetch: SentryFetch };
 }
 
 /** The fake observability world a test asks for (WP-89). */
@@ -1108,6 +1117,14 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
         // binding, and the pre-fetch reads the `bindings` table.
         fakeErrorsRegistration({ port: errorTracker, token: ERRORS_BINDING_TOKEN }),
         fakeLogsRegistration({ port: logStore, token: LOGS_BINDING_TOKEN }),
+        ...(options.sentry === undefined
+          ? []
+          : [
+              createSentryRegistration({
+                clock: registryOptions.clock,
+                fetch: options.sentry.fetch,
+              }),
+            ]),
         options.slack === undefined
           ? fakeCommunicationRegistration({ port: chat, token: CHAT_BINDING_TOKEN })
           : // WP-43: the production registration, with the process's clock and timer, over the

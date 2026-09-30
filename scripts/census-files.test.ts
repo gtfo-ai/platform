@@ -145,7 +145,10 @@ describe('censusFiles', () => {
  * `apps/server/src/routes/web-sources.ts`, whose own importers must in turn be tests. It reads
  * tracked **and** untracked files (standing rule 85), and its planted case below is the calibration.
  */
-const IMPORTS_CENSUS_HELPER = /(?:from|import\()\s*['"][^'"]*\/census-files\.mjs['"]/;
+// `source-scanner.mjs` (WP-96, backlog 269) has the same re-allowance in `biome.json` and the same
+// narrowing here: the comment stripper every census reads.
+const IMPORTS_CENSUS_HELPER =
+  /(?:from|import\()\s*['"][^'"]*\/(?:census-files|source-scanner)\.mjs['"]/;
 const IMPORTS_WEB_SOURCES = /(?:from|import\()\s*['"][^'"]*\/web-sources\.js['"]/;
 const TEST_SOURCE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
 const CENSUS_HELPER_SEAM = 'apps/server/src/routes/web-sources.ts';
@@ -181,6 +184,10 @@ describe('who may import census-files.mjs', () => {
     writeFileSync(join(root, 'packages/domain/src/tracked.ts'), helper);
     writeFileSync(join(root, 'packages/domain/src/untracked.ts'), helper);
     writeFileSync(join(root, 'packages/domain/src/fine.test.ts'), helper);
+    writeFileSync(
+      join(root, 'packages/domain/src/scanner.ts'),
+      "import { withoutComments } from '../../../scripts/source-scanner.mjs';\n",
+    );
     writeFileSync(join(root, CENSUS_HELPER_SEAM), helper);
     writeFileSync(
       join(root, 'apps/server/src/leak.ts'),
@@ -189,6 +196,7 @@ describe('who may import census-files.mjs', () => {
     git('add', 'packages/domain/src/tracked.ts');
     expect(productionImporters(root)).toEqual([
       'apps/server/src/leak.ts',
+      'packages/domain/src/scanner.ts',
       'packages/domain/src/tracked.ts',
       'packages/domain/src/untracked.ts',
     ]);

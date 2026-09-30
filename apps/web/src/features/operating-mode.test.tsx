@@ -24,6 +24,7 @@ import {
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { censusFiles } from '../../../../scripts/census-files.mjs';
+import { withoutComments } from '../../../../scripts/source-scanner.mjs';
 import {
   DIAL_TIMING_NOTE,
   FEATURE_CARDS,
@@ -151,10 +152,8 @@ const clientPaths = (): ReadonlySet<string> => {
   });
   const found = new Set<string>();
   for (const file of files) {
-    const source = file.contents
-      .split('\n')
-      .filter((line) => !/^\s*(?:\*|\/\/|\/\*)/.test(line))
-      .join('\n');
+    // The shared scanner (WP-96 review round 1): a line-by-line filter missed trailing comments.
+    const source = withoutComments(file.contents);
     for (const [, , path] of source.matchAll(/(['"`])(\/api\/[^'"`]*)\1/g)) {
       if (path !== undefined) {
         found.add(

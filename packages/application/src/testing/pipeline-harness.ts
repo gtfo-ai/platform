@@ -34,6 +34,7 @@ import type {
 import { agentRoleSchema, artifactDataSchemas, refinedSpecDataSchema } from '@platform/contracts';
 import type { RolePromptDefinition, SkillDefinition } from '@platform/domain';
 import { readDataBlocks, SHIPPED_TEMPLATES } from '@platform/domain';
+import { onTestFinished, TestRunner } from 'vitest';
 import type * as z from 'zod';
 import { type AskRunPlanner, createAskRunPlanner } from '../ask/planner.js';
 import { createBudgetGuard } from '../cost/guard.js';
@@ -248,6 +249,118 @@ export class ScriptedRunRefusedError extends Error {
   }
 }
 
+/**
+ * A run the walk reached and the test scripted nothing for (PROGRESS backlog 249).
+ *
+ * Until WP-96 the runner's `start` threw a plain `Error` here, which the stage executor records as
+ * a run that could not start — so the task escalated to `needs_human` and the case passed unless it
+ * asserted the task's ending. Measured when the refusal was routed through `drain`: **71** cases in
+ * **7** files had been passing over a walk that stopped at a stage they never scripted. It is now a
+ * `drain` refusal like {@link ScriptedRunRefusedError}; a case that *means* the run not to start
+ * says so with {@link cannotStart}.
+ */
+export class UnscriptedRunError extends Error {
+  readonly key: string;
+  constructor(key: string) {
+    super(
+      `the test scripted no run for "${key}": script one, or declare cannotStart(reason) on the ` +
+        'script map if the case means this run not to start',
+    );
+    this.name = 'UnscriptedRunError';
+    this.key = key;
+  }
+}
+
+/**
+ * A script-map entry that says the runner **cannot start** this run, and why the case wants that
+ * (backlog 249) — the declared form of what an unscripted key used to do by accident.
+ *
+ * The runner's `start` throws {@link DeclaredCannotStartError}, which the stage executor records
+ * as production records a runner that could not start: the run failed, the task escalated. Unlike
+ * `ScriptedRun.throwsOnStart` (a test of that branch, with the error it wants), this is for a case
+ * whose subject lies elsewhere and that needs the walk to stop at this key. A declaration no run
+ * reaches is refused when the test finishes, so it cannot go stale.
+ */
+export interface DeclaredCannotStart {
+  readonly cannotStart: string;
+}
+
+/** What one key of {@link HarnessOptions.runs} may hold. */
+export type HarnessScript = ScriptedRun | DeclaredCannotStart;
+
+/** Declares that the run under this key does not start, and why (backlog 249). */
+export const cannotStart = (reason: string): DeclaredCannotStart => {
+  if (reason.trim() === '') {
+    throw new Error('cannotStart needs the reason the case wants this run not to start');
+  }
+  return { cannotStart: reason };
+};
+
+const isDeclaredCannotStart = (script: HarnessScript): script is DeclaredCannotStart =>
+  'cannotStart' in script;
+
+/** What the harness runner throws for a {@link cannotStart} key. */
+export class DeclaredCannotStartError extends Error {
+  readonly key: string;
+  constructor(key: string, reason: string) {
+    super(`the test declared that the run for "${key}" cannot start: ${reason}`);
+    this.name = 'DeclaredCannotStartError';
+    this.key = key;
+  }
+}
+
+const hasDeclaration = (scripts: ReadonlyMap<string, HarnessScript>): boolean =>
+  [...scripts.values()].some(isDeclaredCannotStart);
+
+const staleDeclarations = (
+  scripts: ReadonlyMap<string, HarnessScript>,
+  started: ReadonlySet<string>,
+): readonly string[] =>
+  [...scripts.entries()]
+    .filter(([key, script]) => isDeclaredCannotStart(script) && !started.has(key))
+    .map(([key]) => key);
+
+/**
+ * Registers the end-of-test refusal of stale declarations with the running test. A harness built
+ * outside a test (a `describe` body, a `beforeAll`) has no test to fail, so a declaration there is
+ * refused at once rather than left unchecked.
+ */
+const refuseStaleDeclarationsWhenTheTestFinishes = (
+  stale: () => readonly string[],
+  register: ((check: () => void) => void) | undefined,
+): void => {
+  const check = (): void => {
+    const keys = stale();
+    if (keys.length > 0) {
+      throw new StaleCannotStartError(keys);
+    }
+  };
+  if (register !== undefined) {
+    register(check);
+    return;
+  }
+  if (TestRunner.getCurrentTest() === undefined) {
+    throw new Error(
+      'a cannotStart declaration needs a harness built inside a test, which is where its ' +
+        'staleness is checked (backlog 249)',
+    );
+  }
+  onTestFinished(check);
+};
+
+/** A {@link cannotStart} declaration no run reached, refused when the test finishes (backlog 249). */
+export class StaleCannotStartError extends Error {
+  readonly keys: readonly string[];
+  constructor(keys: readonly string[]) {
+    super(
+      `the test declared cannotStart for ${keys.map((key) => `"${key}"`).join(', ')} and no ` +
+        'run reached it; drop the declaration (backlog 249)',
+    );
+    this.name = 'StaleCannotStartError';
+    this.keys = keys;
+  }
+}
+
 /** `path.to.field: message`, the shape `validateStructuredOutput` reports in production. */
 const describeIssues = (issues: readonly z.core.$ZodIssue[]): string =>
   issues
@@ -364,16 +477,23 @@ export interface HarnessOptions {
   readonly runsAgents?: boolean;
   readonly settings?: Partial<Omit<ProjectSettings, 'projectId'>>;
   /**
-   * One scripted run per key. A run with no script makes the runner's `start` throw, which the
-   * stage executor records as a run that could not start — the task **escalates**; the test fails
-   * only if it asserts otherwise (PROGRESS backlog 249). A script production could not have
-   * produced fails the test itself, through `drain` ({@link ScriptedRunRefusedError}).
+   * One scripted run per key. A run the walk reaches with no script fails the test through
+   * `drain` ({@link UnscriptedRunError}, PROGRESS backlog 249), and so does a script production
+   * could not have produced ({@link ScriptedRunRefusedError}). A case that means a run not to start
+   * declares it with {@link cannotStart}.
    *
    * The key is the **stage id** for a pipeline stage and `ask:<question>` for an ask-the-task run,
    * which has no stage — see {@link harnessScriptKey}, which reads the question out of the prompt
    * the planner actually produced (standing rule 82).
    */
-  readonly runs?: Readonly<Record<string, ScriptedRun>>;
+  readonly runs?: Readonly<Record<string, HarnessScript>>;
+  /**
+   * Where the end-of-test refusal of a stale {@link cannotStart} declaration is registered —
+   * vitest's `onTestFinished` when absent, which is every case but one. The seam exists so this
+   * harness's own test can run the check and assert its error by type and message (WP-96 review
+   * round 1), rather than an `it.fails` case that passed on any failure at all.
+   */
+  readonly declarationCheck?: (check: () => void) => void;
   /** The ask-the-task thread, when a test wants to read it back or seed it (WP-31). */
   readonly asks?: MemoryAskStore;
   /**
@@ -557,10 +677,19 @@ export interface PipelineHarness {
   readonly commands: TaskCommandDependencies;
   /** The same, plus what the HTTP command surface needs (WP-15i): the queue and the event store. */
   readonly humanCommands: HumanCommandDependencies;
-  script(stage: string, run: ScriptedRun): void;
+  script(stage: string, run: HarnessScript): void;
+  /**
+   * The {@link cannotStart} declarations no run has reached yet (backlog 249). When the harness
+   * was built inside a test, a non-empty answer at the test's end fails it; this is the same list,
+   * for a test of the check itself.
+   */
+  staleDeclarations(): readonly string[];
   /** Appends the events and dispatches everything, running stage jobs until the loop is quiet. */
   publish(events: readonly DomainEvent[]): Promise<void>;
-  /** Runs the loop until it is quiet; rejects with the first {@link ScriptedRunRefusedError}. */
+  /**
+   * Runs the loop until it is quiet; rejects with the first {@link ScriptedRunRefusedError} or
+   * {@link UnscriptedRunError}.
+   */
   drain(): Promise<void>;
   /** Every event in the log, in position order. */
   events(): readonly DomainEvent[];
@@ -955,7 +1084,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
   // pipeline's ticket writes are replayable in this tier too: a fake may be stricter than the real
   // adapter, never kinder (standing rule 1), and one with **no** store would be kinder.
   const idempotency = createMemoryIdempotencyStore();
-  const scripts = new Map<string, ScriptedRun>(Object.entries(options.runs ?? {}));
+  const scripts = new Map<string, HarnessScript>(Object.entries(options.runs ?? {}));
   /**
    * The ask-the-task store and the identity map its ticket door reads (WP-31).
    *
@@ -1047,7 +1176,22 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
       : null;
   const specs: RunSpec[] = [];
   /** What {@link checkScripted} refused, thrown by `drain` (see {@link ScriptedRunRefusedError}). */
-  const refusals: ScriptedRunRefusedError[] = [];
+  const refusals: (ScriptedRunRefusedError | UnscriptedRunError)[] = [];
+  const startedDeclarations = new Set<string>();
+  // Backlog 249: a `cannotStart` declaration the walk never reached is refused when the test
+  // finishes, so a declaration cannot outlive the case that needed it.
+  let watchingDeclarations = false;
+  const watchDeclarations = (): void => {
+    if (watchingDeclarations || !hasDeclaration(scripts)) {
+      return;
+    }
+    watchingDeclarations = true;
+    refuseStaleDeclarationsWhenTheTestFinishes(
+      () => staleDeclarations(scripts, startedDeclarations),
+      options.declarationCheck,
+    );
+  };
+  watchDeclarations();
 
   const gitPort = stubGit(options.git);
   const taskManagementPort = stubTaskManagement(options.taskManagement);
@@ -1149,7 +1293,15 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
       specs.push(spec);
       const { key, scripted } = scriptFor(scripts, spec);
       if (scripted === undefined) {
-        throw new Error(`the test scripted no run for "${key}"`);
+        // Backlog 249: a run nobody scripted fails the **test**, through `drain`, like a script
+        // production would refuse — never the escalation the executor makes of a `start` that threw.
+        const refusal = new UnscriptedRunError(key);
+        refusals.push(refusal);
+        throw refusal;
+      }
+      if (isDeclaredCannotStart(scripted)) {
+        startedDeclarations.add(key);
+        throw new DeclaredCannotStartError(key, scripted.cannotStart);
       }
       const checked = checkScripted(spec, scripted);
       if (!checked.ok) {
@@ -1488,7 +1640,9 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     },
     script: (stage, run) => {
       scripts.set(stage, run);
+      watchDeclarations();
     },
+    staleDeclarations: () => staleDeclarations(scripts, startedDeclarations),
     publish: async (events) => {
       await memory.transaction(async (scope) => scope.events.append(events));
       await drain();
@@ -1521,9 +1675,9 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
  * The variant is chosen off the prompt the planner built (standing rule 82), never off a task id.
  */
 const scriptFor = (
-  scripts: ReadonlyMap<string, ScriptedRun>,
+  scripts: ReadonlyMap<string, HarnessScript>,
   spec: RunSpec,
-): { readonly key: string; readonly scripted: ScriptedRun | undefined } => {
+): { readonly key: string; readonly scripted: HarnessScript | undefined } => {
   const key = harnessScriptKey(spec);
   const variant = `${key}+merge_request`;
   if (
@@ -1551,12 +1705,13 @@ export const harnessScriptKey = (spec: RunSpec): string => {
  */
 const wrapRunner = (
   runner: ClaudeRunner,
-  scripts: Map<string, ScriptedRun>,
+  scripts: Map<string, HarnessScript>,
   clock: () => TestClock,
   sink: RunTranscriptSink,
 ): ClaudeRunner => ({
   start: (spec) => {
-    const { scripted } = scriptFor(scripts, spec);
+    const found = scriptFor(scripts, spec).scripted;
+    const scripted = found === undefined || isDeclaredCannotStart(found) ? undefined : found;
     if (scripted?.throwsOnStart !== undefined) {
       throw scripted.throwsOnStart;
     }

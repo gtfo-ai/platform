@@ -26,6 +26,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { SessionResponse } from '../auth/session.js';
 import { ErrorBoundary, ErrorFallback, errorMessage } from '../ui/error-boundary.js';
 import { createApp } from './app.js';
 
@@ -187,7 +188,8 @@ describe('ErrorBoundary', () => {
 
 // ── The application, composed the way it ships ───────────────────────────────
 
-const SESSION = {
+// Annotated, so a field added to the DTO fails here by name (PROGRESS backlog 93's residual, WP-96).
+const SESSION: SessionResponse = {
   user: {
     id: '00000000-0000-4000-8000-000000000001',
     email: 'operator@example.invalid',

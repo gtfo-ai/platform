@@ -518,6 +518,50 @@ describe('FakeGitProvider discussions', () => {
   });
 
   /**
+   * Divergence 20 (WP-96, PROGRESS backlog 306): the fake sends `blocking_threads_resolved` when a
+   * test asks, both values, only on an update — and absent means absent, which is the half a
+   * consumer must survive because GitLab usually sends nothing.
+   */
+  it('carries blocking_threads_resolved on an update when asked, and only then', async () => {
+    const port = build();
+    const mr = await port.openMergeRequest({
+      project: PROJECT,
+      branch: 'agentic/task-6',
+      target: 'main',
+      title: 'Threads',
+      description: '',
+      draft: false,
+      labels: [],
+      reviewers: [],
+      remove_source_branch: true,
+    });
+    const flagOf = async (blockingThreadsResolved?: boolean) => {
+      const result = await port.inbound.normalise(
+        port.emitMergeRequestEvent({
+          event: 'mr.updated',
+          project: PROJECT,
+          iid: mr.ref.iid,
+          ...(blockingThreadsResolved === undefined ? {} : { blockingThreadsResolved }),
+        }),
+        context,
+      );
+      const payload = result.events[0]?.payload as Record<string, unknown>;
+      return 'blocking_threads_resolved' in payload ? payload.blocking_threads_resolved : 'absent';
+    };
+    expect(await flagOf(true)).toBe(true);
+    expect(await flagOf(false)).toBe(false);
+    expect(await flagOf()).toBe('absent');
+    expect(() =>
+      port.emitMergeRequestEvent({
+        event: 'mr.merged',
+        project: PROJECT,
+        iid: mr.ref.iid,
+        blockingThreadsResolved: true,
+      }),
+    ).toThrow(/rides on mr\.updated/);
+  });
+
+  /**
    * WP-60 (PROGRESS backlog 182): a push the platform did not make is a test control of its own,
    * and only an update can carry one — a merge or a close that moved the head would be a delivery
    * GitLab never sends (stricter, standing rule 1).

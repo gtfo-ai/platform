@@ -36,6 +36,7 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { censusPaths, censusText } from '../../../../scripts/census-files.mjs';
+import { withoutComments } from '../../../../scripts/source-scanner.mjs';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
 
@@ -128,20 +129,6 @@ const isTestTier = (file: string): boolean =>
   /(?:^|\/)(?:testing|fixtures)\.ts$/.test(file) ||
   file.includes('/src/testing/');
 
-/** Crude comment stripping, the same trade `apps/launcher/src/docker-access.test.ts` states. */
-const withoutComments = (source: string): string =>
-  source
-    .split('\n')
-    .map((line) => {
-      const trimmed = line.trimStart();
-      if (trimmed.startsWith('*') || trimmed.startsWith('//') || trimmed.startsWith('/*')) {
-        return '';
-      }
-      const comment = line.indexOf('//');
-      return comment === -1 ? line : line.slice(0, comment);
-    })
-    .join('\n');
-
 const SAVE_CALL = /\btasks\s*\.\s*save\s*\(/g;
 
 const census = (): Map<string, number> => {
@@ -201,6 +188,13 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     const total = [...census().values()].reduce((sum, count) => sum + count, 0);
     expect(total).toBe(33);
     expect([...EXPECTED_SITES.values()].reduce((sum, count) => sum + count, 0)).toBe(total);
+  });
+
+  it('sees a site written after a `//` inside a string on the same line (backlog 269)', () => {
+    // The line-by-line stripper this file carried until WP-96 cut the line at the URL's `//`.
+    const planted = "const url = 'https://jira.example.test/x'; await store.tasks.save(tx, t);";
+    expect(withoutComments(planted).match(SAVE_CALL)).toHaveLength(1);
+    expect(withoutComments(`${planted} // tasks.save(tx, t)`).match(SAVE_CALL)).toHaveLength(1);
   });
 
   it('reads a tree that includes untracked sources, so a planted site is seen (rule 85)', () => {

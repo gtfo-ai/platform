@@ -21,7 +21,11 @@ import { staticPipelineIntegrations } from '../pipeline/integrations.js';
 import { staticProjectSettings } from '../pipeline/settings.js';
 import type { MergedMergeRequest, MergeRequest } from '../ports/integrations/git-provider.js';
 import type { Ticket } from '../ports/integrations/task-management.js';
-import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
+import {
+  cannotStart,
+  createPipelineHarness,
+  type PipelineHarness,
+} from '../testing/pipeline-harness.js';
 import { startShadowBatch } from './batch.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000e1' as Id;
@@ -114,8 +118,10 @@ const world = (options: WorldOptions = {}) => {
         appliedBy: null,
       }),
     },
-    // Every stage answers, so a shadow task walks its whole template and reaches the point where
-    // its mutating writes would happen.
+    // No stage is scripted: what these cases assert — the shadow split, the dial, the budget — is
+    // decided before or at the first stage, and the writes they count are the workpad and the
+    // status mapping's. A case that reaches the runner declares it (`FIRST_STAGE_ONLY`, backlog
+    // 249); until WP-96 this comment said every stage answered, and none did.
     runs: {},
     git: {
       getMergeRequest: async () =>
@@ -133,6 +139,10 @@ const world = (options: WorldOptions = {}) => {
     },
   });
 };
+
+/** Why a case may stop at the first stage (backlog 249): its subject is decided before a run. */
+const FIRST_STAGE_ONLY =
+  'this case is about the batch, the dial or the budget; the walk stops at refinement, which escalates as a runner that cannot start';
 
 const run = async (harness: PipelineHarness, keys: readonly string[]) =>
   startShadowBatch(
@@ -345,6 +355,7 @@ describe('a shadow task’s outbound writes', () => {
 
   it('records every mutating provider call as would_have and calls nobody', async () => {
     const harness = world();
+    harness.script('refinement', cannotStart(FIRST_STAGE_ONLY));
     await run(harness, ['ACME-1']);
     await harness.drain();
 
@@ -365,6 +376,7 @@ describe('a shadow task’s outbound writes', () => {
     // because an Observe project picks no new ticket up at all — the *other* policy this work
     // package gave a reader, asserted on its own below.
     const harness = world({ level: 'supervised', knownTickets: ['ACME-9'] });
+    harness.script('refinement', cannotStart(FIRST_STAGE_ONLY));
     await harness.publish([ticketMatched('ACME-9')]);
     await harness.drain();
 
@@ -384,6 +396,7 @@ describe('picksUpNewTickets — the other half of Observe', () => {
 
   it('creates one on a Supervised project — the same event, the other dial position', async () => {
     const harness = world({ level: 'supervised' });
+    harness.script('refinement', cannotStart(FIRST_STAGE_ONLY));
     await harness.publish([ticketMatched('ACME-9')]);
     const tasks = await tasksOf(harness);
     expect(tasks).toHaveLength(1);
@@ -434,6 +447,7 @@ describe('the separate shadow budget', () => {
 
   it('lets the same run start when the cap is not reached — the other direction', async () => {
     const harness = world({ budgetUsd: 1000 });
+    harness.script('refinement', cannotStart(FIRST_STAGE_ONLY));
     harness.shadow.seedShadowSpend(PROJECT, 10);
     await run(harness, ['ACME-1']);
     await harness.drain();
@@ -445,6 +459,7 @@ describe('the separate shadow budget', () => {
     // The cap is a statement about shadow runs, not about the project: a build that read it for
     // every task would stop delivery the first time somebody demoed the feature.
     const harness = world({ level: 'supervised', budgetUsd: 1, knownTickets: ['ACME-9'] });
+    harness.script('refinement', cannotStart(FIRST_STAGE_ONLY));
     harness.shadow.seedShadowSpend(PROJECT, 500);
     await harness.publish([ticketMatched('ACME-9')]);
     await harness.drain();
@@ -457,6 +472,7 @@ describe('the separate shadow budget', () => {
     // invisible to a state assertion.
     let asked = 0;
     const harness = world();
+    harness.script('refinement', cannotStart(FIRST_STAGE_ONLY));
     const original = harness.shadow.shadowSpendSince.bind(harness.shadow);
     (harness.shadow as { shadowSpendSince: typeof original }).shadowSpendSince = async (
       ...args

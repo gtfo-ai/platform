@@ -23,7 +23,11 @@ import type {
 } from '../ports/integrations/task-management.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import { IMPLEMENTATION_PLAN } from '../testing/artifact-fixtures.js';
-import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
+import {
+  cannotStart,
+  createPipelineHarness,
+  type PipelineHarness,
+} from '../testing/pipeline-harness.js';
 import {
   BreakdownRefusedError,
   childTicketIdempotencyKey,
@@ -181,6 +185,16 @@ const splitHarness = (
               ? IMPLEMENTATION_PLAN
               : BREAKDOWN(options.children ?? 2),
       },
+      // A ticket that stays a `feature` walks on to `implementation`. These cases assert the
+      // routing and the duties' early-outs, not the build, so the walk stops there — declared
+      // (WP-96, backlog 249) where it used to be left unscripted.
+      ...(which === 'off' || options.createTicket === false
+        ? {
+            implementation: cannotStart(
+              'a ticket routed to the feature template; the case asserts the routing, not the build',
+            ),
+          }
+        : {}),
     },
     settings: {
       config: {

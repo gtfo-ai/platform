@@ -29,7 +29,11 @@ import type { DependencyMetadataPort } from '../ports/dependency-metadata.js';
 import type { FileDiff, MergeRequest } from '../ports/integrations/git-provider.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import { questionTimeoutAt } from '../scheduling/working-calendar.js';
-import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
+import {
+  cannotStart,
+  createPipelineHarness,
+  type PipelineHarness,
+} from '../testing/pipeline-harness.js';
 import { pauseTaskCommand, resumeTaskCommand } from './commands.js';
 import { runDependencyGate } from './dependency-gate.js';
 import { staticPipelineIntegrations } from './integrations.js';
@@ -746,6 +750,10 @@ describe('a decision that meets a stop a human owns is deferred to the resume (W
 
   it('drops a deferred block when the merge ended the pause, and does not escalate the merged task (Q104)', async () => {
     const { harness } = await pausedAtReady('block');
+    harness.script(
+      'retrospective',
+      cannotStart('the case is about the merge and the deferred block, not the retrospective'),
+    );
     const returnsBefore = returns(harness).length;
     await harness.publish([
       domainEventSchemasByType['mr.merged'].parse({
@@ -774,7 +782,7 @@ describe('a decision that meets a stop a human owns is deferred to the resume (W
     const stored = await storedTask(harness);
     // The package is on the default branch: returning a merged task is not an edge, and the
     // escalation `applyDecision` would have fallen back to is what this case refuses.
-    // (This walk scripts no retrospective run, so the task ends escalated *by that stage*; what is
+    // (This walk declares the retrospective cannot start, so the task ends escalated *by that stage*; what is
     // asserted is that the merge was recorded and nothing the gate did moved or parked the task.)
     const entered = harness
       .events()

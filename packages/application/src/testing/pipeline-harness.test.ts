@@ -11,13 +11,16 @@
 import path from 'node:path';
 import type { DomainEvent } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { censusPaths, censusText } from '../../../../scripts/census-files.mjs';
 import { askingRefinedSpec, PROCEEDING_REFINED_SPEC } from './artifact-fixtures.js';
 import {
+  cannotStart,
   createPipelineHarness,
   type ScriptedRun,
   ScriptedRunRefusedError,
+  StaleCannotStartError,
+  UnscriptedRunError,
 } from './pipeline-harness.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b9';
@@ -128,6 +131,121 @@ describe('the scripts declared deliberately invalid', () => {
       if (file === 'packages/application/src/testing/pipeline-harness.test.ts') continue;
       const count = (censusText(REPO_ROOT, file).match(/deliberatelyInvalid:\s*['"`]/g) ?? [])
         .length;
+      if (count > 0) found[file] = count;
+    }
+    expect(found).toEqual(DECLARED);
+  });
+});
+
+/**
+ * A run the walk reaches and nobody scripted (WP-96, PROGRESS backlog 249). Until WP-96 it was
+ * escalated by the stage executor like any `start` that threw, so a case that forgot a stage
+ * passed unless it asserted the task's ending — 71 cases in 7 files, measured. Both directions:
+ * the omission is refused by name, and the declared form walks to the escalation it asks for.
+ */
+describe('a run with no script', () => {
+  it('fails the test through drain, naming the key, instead of escalating the task', async () => {
+    const harness = createPipelineHarness({ projectId: PROJECT, runs: {} });
+    const refused = harness.publish([ticketMatched()]);
+    await expect(refused).rejects.toBeInstanceOf(UnscriptedRunError);
+    await expect(refused).rejects.toThrow(/scripted no run for "refinement"/);
+  });
+
+  it('escalates the task when the case declares the run cannot start, and the declaration is spent', async () => {
+    const harness = createPipelineHarness({
+      projectId: PROJECT,
+      runs: { refinement: cannotStart('this case needs a task and no stage') },
+    });
+    await harness.publish([ticketMatched()]);
+    expect(harness.store.snapshot()[0]?.task.state).toBe('needs_human');
+    expect(harness.staleDeclarations()).toEqual([]);
+  });
+
+  it('refuses a declaration with no reason', () => {
+    expect(() => cannotStart('  ')).toThrow(/needs the reason/);
+  });
+
+  it('lists a declaration no run reached as stale', () => {
+    const harness = createPipelineHarness({
+      projectId: PROJECT,
+      runs: { refinement: cannotStart('the walk never gets here') },
+    });
+    expect(harness.staleDeclarations()).toEqual(['refinement']);
+    // Spent here, so this case's own end-of-test check passes; the next case measures the check.
+    harness.script('refinement', completed(askingRefinedSpec()));
+  });
+
+  it('refuses, when the test finishes, a declaration no run reached — by type and message', async () => {
+    const checks: (() => void)[] = [];
+    const harness = createPipelineHarness({
+      projectId: PROJECT,
+      runs: {
+        refinement: cannotStart('the walk stops here'),
+        architecture: cannotStart('the walk never gets here'),
+      },
+      declarationCheck: (check) => checks.push(check),
+    });
+    expect(checks).toHaveLength(1);
+    await harness.publish([ticketMatched()]);
+    const run = () => (checks[0] as () => void)();
+    expect(run).toThrow(StaleCannotStartError);
+    expect(run).toThrow(/declared cannotStart for "architecture" and no run reached it/);
+    // …and once the stale key is scripted instead, it is no longer a declaration to refuse.
+    harness.script('architecture', completed(askingRefinedSpec()));
+    expect(run).not.toThrow();
+  });
+
+  it('passes the check when every declaration was reached', async () => {
+    const checks: (() => void)[] = [];
+    const harness = createPipelineHarness({
+      projectId: PROJECT,
+      runs: { refinement: cannotStart('the walk stops here') },
+      declarationCheck: (check) => checks.push(check),
+    });
+    await harness.publish([ticketMatched()]);
+    expect(() => (checks[0] as () => void)()).not.toThrow();
+  });
+
+  describe('outside a test', () => {
+    let thrown: unknown;
+    beforeAll(() => {
+      try {
+        createPipelineHarness({
+          projectId: PROJECT,
+          runs: { refinement: cannotStart('built in a beforeAll') },
+        });
+      } catch (error) {
+        thrown = error;
+      }
+    });
+    it('refuses a declaration at once, since no test could check its staleness', () => {
+      expect(String(thrown)).toMatch(/needs a harness built inside a test/);
+    });
+  });
+});
+
+/**
+ * Every `cannotStart` declaration, pinned (WP-96, backlog 249) — the same census as the
+ * deliberately-invalid one above, for the same reason: a declaration is an exemption from the
+ * refusal, so a new one is a reviewed decision rather than a line.
+ */
+describe('the runs declared unable to start', () => {
+  const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
+  const DECLARED: Readonly<Record<string, number>> = {
+    'packages/application/src/notify/digest.test.ts': 1,
+    'packages/application/src/notify/notify.test.ts': 1,
+    'packages/application/src/pipeline/delivery-measures.test.ts': 1,
+    'packages/application/src/pipeline/dependency-gate.test.ts': 1,
+    'packages/application/src/pipeline/epic-split.test.ts': 1,
+    'packages/application/src/shadow/batch.test.ts': 6,
+  };
+
+  it('are exactly the declared list, in both directions', () => {
+    const found: Record<string, number> = {};
+    for (const file of censusPaths(REPO_ROOT, { pathspecs: ['*.ts', '*.tsx'] })) {
+      if (file === 'packages/application/src/testing/pipeline-harness.test.ts') continue;
+      if (file === 'packages/application/src/testing/pipeline-harness.ts') continue;
+      const count = (censusText(REPO_ROOT, file).match(/\bcannotStart\(/g) ?? []).length;
       if (count > 0) found[file] = count;
     }
     expect(found).toEqual(DECLARED);

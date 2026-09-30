@@ -401,7 +401,9 @@ describe('the question and the answer are untrusted in both directions (criterio
     const secret = 'glpat-FAKEFAKEFAKEFAKEFAKE';
     const harness = harnessWith({
       askRedactor: exactSecretRedactor([{ name: 'GIT_TOKEN', value: secret }]),
-      question: `why did you use ${secret} here?`,
+      // The run is keyed by the question **as the prompt carries it** — redacted. Keyed by the raw
+      // question, no run was scripted and the ask escalated unseen until WP-96 (backlog 249).
+      question: 'why did you use [REDACTED:integration:GIT_TOKEN] here?',
     });
     await seedTask(harness);
     await askThroughHttp(
@@ -414,6 +416,7 @@ describe('the question and the answer are untrusted in both directions (criterio
     expect(ask?.question).not.toContain(secret);
     expect(ask?.question).toContain('[REDACTED');
     expect(ask?.redactionCount).toBeGreaterThan(0);
+    expect(ask?.status, 'the ask ran, rather than failing to start').toBe('answered');
   });
 
   it('bounds the stored question at the cap rather than refusing the row', async () => {

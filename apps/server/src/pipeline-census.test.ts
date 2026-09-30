@@ -441,3 +441,225 @@ describe('the dead-letter sink (WP-49)', () => {
     expect((compositionSource.match(/eventing\.bus\.register\(/g) ?? []).length).toBeGreaterThan(2);
   });
 });
+
+/**
+ * **Every other runtime's composition, censused the same way** (WP-96, the remainder of PROGRESS
+ * backlog 104).
+ *
+ * The pipeline's census above was the instance; the class is every `create…Runtime` this process
+ * composes. The knowledge-index, librarian, onboarding and history-bootstrap runtimes — and the ask
+ * block the pipeline runtime takes as `ask:` — each take an options object with optional members,
+ * and each is composed in its own file under `apps/server/src`, so an optional collaborator added
+ * to any of them and wired only in a test harness is backlog 104 again. Each row names an options
+ * interface, the file that declares it, and the object literal in the composition that fills it —
+ * anchored inside the runtime's own call, because `record: {` and `apply: {` are not unique words.
+ *
+ * The same rules as above: optional members read off the interface (and every interface it
+ * extends, which must itself be a row's or {@link RUNTIME_EXTENDS}' — both directions), passed keys
+ * read off the literal, an equality against an admitted-omission list with the reason at the line,
+ * and a calibration that the same parse finds every **required** member.
+ *
+ * **Every runtime, asserted rather than listed**: the set of `create…Runtime(` calls under
+ * `apps/server/src` (tracked and untracked, rule 85) must equal the runtimes this table names plus
+ * the pipeline's, so a sixth runtime composed in a new file fails here until it has rows.
+ */
+interface RuntimeOptionsRow {
+  /** The options interface. */
+  readonly name: string;
+  /** Where it is declared. */
+  readonly source: string;
+  /** The composition file, the runtime call inside it, and the literal (inside that call) it fills. */
+  readonly site: string;
+  readonly call: string;
+  readonly literal: string;
+}
+
+const RUNTIME_OPTION_ROWS: readonly RuntimeOptionsRow[] = [
+  {
+    name: 'HistoryBootstrapRuntimeOptions',
+    source: 'packages/application/src/bootstrap/runtime.ts',
+    site: 'apps/server/src/bootstrap.ts',
+    call: 'createHistoryBootstrapRuntime({',
+    literal: 'createHistoryBootstrapRuntime({',
+  },
+  {
+    name: 'HistoryCollectOptions',
+    source: 'packages/application/src/bootstrap/collect.ts',
+    site: 'apps/server/src/bootstrap.ts',
+    call: 'createHistoryBootstrapRuntime({',
+    literal: 'collect: {',
+  },
+  {
+    name: 'HistoryRecordOptions',
+    source: 'packages/application/src/bootstrap/record.ts',
+    site: 'apps/server/src/bootstrap.ts',
+    call: 'createHistoryBootstrapRuntime({',
+    literal: 'record: {',
+  },
+  {
+    name: 'KnowledgeIndexRuntimeOptions',
+    source: 'packages/application/src/knowledge/index-job.ts',
+    site: 'apps/server/src/knowledge.ts',
+    call: 'createKnowledgeIndexRuntime({',
+    literal: 'createKnowledgeIndexRuntime({',
+  },
+  {
+    name: 'LibrarianRuntimeOptions',
+    source: 'packages/application/src/knowledge/runtime.ts',
+    site: 'apps/server/src/knowledge.ts',
+    call: 'createLibrarianRuntime({',
+    literal: 'createLibrarianRuntime({',
+  },
+  {
+    name: 'LibrarianJobOptions',
+    source: 'packages/application/src/knowledge/librarian.ts',
+    site: 'apps/server/src/knowledge.ts',
+    call: 'createLibrarianRuntime({',
+    literal: 'curation: {',
+  },
+  {
+    name: 'KnowledgeApplyOptions',
+    source: 'packages/application/src/knowledge/apply.ts',
+    site: 'apps/server/src/knowledge.ts',
+    call: 'createLibrarianRuntime({',
+    literal: 'apply: {',
+  },
+  {
+    name: 'KnowledgeHygieneOptions',
+    source: 'packages/application/src/knowledge/hygiene.ts',
+    site: 'apps/server/src/knowledge.ts',
+    call: 'createLibrarianRuntime({',
+    literal: 'hygiene: {',
+  },
+  {
+    name: 'OnboardingRuntimeOptions',
+    source: 'packages/application/src/onboarding/runtime.ts',
+    site: 'apps/server/src/onboarding.ts',
+    call: 'createOnboardingRuntime({',
+    literal: 'createOnboardingRuntime({',
+  },
+  {
+    name: 'DiscoveryRecordOptions',
+    source: 'packages/application/src/onboarding/record.ts',
+    site: 'apps/server/src/onboarding.ts',
+    call: 'const record: DiscoveryRecordOptions = {',
+    literal: 'const record: DiscoveryRecordOptions = {',
+  },
+  {
+    name: 'ReadinessRecheckOptions',
+    source: 'packages/application/src/onboarding/recheck.ts',
+    site: 'apps/server/src/onboarding.ts',
+    call: 'const recheck: ReadinessRecheckOptions = {',
+    literal: 'const recheck: ReadinessRecheckOptions = {',
+  },
+  {
+    name: 'AskRuntimeOptions',
+    source: 'packages/application/src/ask/runtime.ts',
+    site: COMPOSITION,
+    call: 'createPipelineRuntime({',
+    literal: 'ask: {',
+  },
+];
+
+/** Interfaces a row's interface extends, and where each lives — held to the sources below. */
+const RUNTIME_EXTENDS: Readonly<Record<string, string>> = {
+  KnowledgeIndexJobOptions: 'packages/application/src/knowledge/index-job.ts',
+};
+
+/** The runtimes composed under `apps/server/src`, by the factory the table's rows are filled for. */
+const CENSUSED_RUNTIMES = [
+  'createHistoryBootstrapRuntime',
+  'createKnowledgeIndexRuntime',
+  'createLibrarianRuntime',
+  'createOnboardingRuntime',
+  'createPipelineRuntime',
+];
+
+/** Optional members these compositions deliberately do not pass, as `Interface.member` → why. */
+const ADMITTED_RUNTIME_OMISSIONS: Readonly<Record<string, string>> = {
+  'AskRuntimeOptions.concurrency':
+    'how many asks one process answers at once, whose default (1 — "an ask is a minute") is the shipped behaviour: a number with a stated default, like reviewCommentWindowMs above, rather than a collaborator whose absence changes what the process can do.',
+};
+
+/** The literal `literal`, found at or after the runtime call `call`. */
+const literalKeys = (row: RuntimeOptionsRow): Set<string> => {
+  const source = read(row.site);
+  const at = source.indexOf(row.call);
+  if (at < 0) {
+    throw new Error(`census: ${row.call} not found in ${row.site}`);
+  }
+  return passedKeys(source.slice(at), row.literal);
+};
+
+/** The row's interface and everything it extends, as `[name, source]` pairs. */
+const interfaceChain = (name: string, source: string): [string, string][] => [
+  [name, source],
+  ...extendsOf(read(source), name).flatMap((base) => {
+    const baseSource = RUNTIME_EXTENDS[base];
+    if (baseSource === undefined) {
+      throw new Error(`census: ${name} extends ${base}, which RUNTIME_EXTENDS does not name`);
+    }
+    return interfaceChain(base, baseSource);
+  }),
+];
+
+const runtimeMembers = (row: RuntimeOptionsRow, optional: boolean): string[] =>
+  interfaceChain(row.name, row.source).flatMap(([name, source]) =>
+    members(interfaceBody(read(source), name), optional),
+  );
+
+describe('every runtime’s optional collaborators (WP-96, backlog 104)', () => {
+  it('passes every optional member of every row, or admits the omission with a reason', () => {
+    const omitted = RUNTIME_OPTION_ROWS.flatMap((row) =>
+      missing(runtimeMembers(row, true), literalKeys(row)).map((key) => `${row.name}.${key}`),
+    );
+    expect(omitted.toSorted()).toEqual(Object.keys(ADMITTED_RUNTIME_OMISSIONS).toSorted());
+  });
+
+  it('is calibrated: the same parse finds every required member of every row', () => {
+    for (const row of RUNTIME_OPTION_ROWS) {
+      const required = runtimeMembers(row, false);
+      expect(required.length, row.name).toBeGreaterThan(0);
+      expect(missing(required, literalKeys(row)), row.name).toEqual([]);
+    }
+  });
+
+  it('finds the optional members it was written for, so an empty parse cannot pass', () => {
+    // The four runtimes backlog 104 named each took one optional `logger` when it was filed.
+    const optional = new Set(
+      RUNTIME_OPTION_ROWS.flatMap((row) =>
+        runtimeMembers(row, true).map((key) => `${row.name}.${key}`),
+      ),
+    );
+    expect(optional.has('HistoryBootstrapRuntimeOptions.logger')).toBe(true);
+    expect(optional.has('AskRuntimeOptions.budgets')).toBe(true);
+    expect(optional.size).toBeGreaterThan(5);
+  });
+
+  it('names every interface a row extends, and nothing no row extends', () => {
+    const extended = RUNTIME_OPTION_ROWS.flatMap((row) =>
+      interfaceChain(row.name, row.source)
+        .slice(1)
+        .map(([name]) => name),
+    );
+    expect([...new Set(extended)].toSorted()).toEqual(Object.keys(RUNTIME_EXTENDS).toSorted());
+  });
+
+  it('covers every runtime this process composes, read off disk', () => {
+    const composed = new Set<string>();
+    for (const path of sourceFilesUnder('apps/server/src')) {
+      for (const [, factory] of withoutComments(readSource(path)).matchAll(
+        /\b(create\w+Runtime)\s*\(/g,
+      )) {
+        composed.add(factory as string);
+      }
+    }
+    // `createPipelineRuntime` is the census above's; the rest are this table's.
+    expect([...composed].toSorted()).toEqual(CENSUSED_RUNTIMES.toSorted());
+    expect(
+      [...new Set(RUNTIME_OPTION_ROWS.map((row) => row.call.replace(/\(\{$/, '')))]
+        .filter((call) => call.startsWith('create'))
+        .toSorted(),
+    ).toEqual(CENSUSED_RUNTIMES.toSorted());
+  });
+});

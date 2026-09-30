@@ -25,6 +25,7 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { censusPaths, censusText } from '../../../../scripts/census-files.mjs';
+import { withoutComments } from '../../../../scripts/source-scanner.mjs';
 import {
   declareJobQueues,
   JOB_QUEUE_DEFINITIONS,
@@ -43,20 +44,6 @@ const isTestTier = (file: string): boolean =>
   /\.(?:test|spec)\.[cm]?tsx?$/.test(file) ||
   /(?:^|\/)(?:testing|fixtures)\.ts$/.test(file) ||
   file.includes('/src/testing/');
-
-/** Crude comment stripping, the trade `pipeline/wip-commit-sites.test.ts` states. */
-const withoutComments = (source: string): string =>
-  source
-    .split('\n')
-    .map((line) => {
-      const trimmed = line.trimStart();
-      if (trimmed.startsWith('*') || trimmed.startsWith('//') || trimmed.startsWith('/*')) {
-        return '';
-      }
-      const comment = line.indexOf('//');
-      return comment === -1 ? line : line.slice(0, comment);
-    })
-    .join('\n');
 
 const CALL = /\.defineQueue\(\s*/g;
 const TABLE_LOOKUP = /^jobQueueDefinition\(\s*JOB_QUEUES\.([A-Za-z]+)\s*\)/;
@@ -92,6 +79,11 @@ describe('the queue census (WP-86, criterion 2)', () => {
   it('reads the tree: it finds the workers’ declarations at all', () => {
     // A census that read nothing would pass every assertion below.
     expect(found.length).toBeGreaterThanOrEqual(JOB_QUEUE_DEFINITIONS.length);
+  });
+
+  it('sees a call after a `//` inside a string on the same line (backlog 269)', () => {
+    const planted = "const u = 'https://x'; jobs.defineQueue({ name: 'inline' });";
+    expect([...withoutComments(planted).matchAll(CALL)]).toHaveLength(1);
   });
 
   it('refuses a defineQueue call whose argument is not the table’s row', () => {

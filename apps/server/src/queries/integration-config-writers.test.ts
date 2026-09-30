@@ -49,7 +49,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { censusFiles } from '../../../../scripts/census-files.mjs';
-import { repositoryRoot } from '../routes/web-sources.js';
+import { repositoryRoot, withoutComments } from '../routes/web-sources.js';
 
 /** The declared writers of `integrations.config`, with how many statements each holds. One. */
 const CONFIG_WRITERS: ReadonlyMap<string, number> = new Map([
@@ -63,20 +63,6 @@ const isTestTier = (file: string): boolean =>
   /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(file) ||
   /(?:^|\/)(?:testing|fixtures)\.ts$/.test(file) ||
   file.includes('/src/testing/');
-
-/** Crude comment stripping — the trade `apps/launcher/src/docker-access.test.ts` states. */
-const withoutComments = (source: string): string =>
-  source
-    .split('\n')
-    .map((line) => {
-      const trimmed = line.trimStart();
-      if (trimmed.startsWith('*') || trimmed.startsWith('//') || trimmed.startsWith('/*')) {
-        return '';
-      }
-      const comment = line.indexOf('//');
-      return comment === -1 ? line : line.slice(0, comment);
-    })
-    .join('\n');
 
 const DRIZZLE_STATEMENT = /\.(insert|update)\(\s*integrations\s*\)/g;
 const RAW_STATEMENT = /\b(insert\s+into|update)\s+integrations\b/gi;
@@ -188,6 +174,12 @@ describe('the writers of integrations.config (backlog 130)', () => {
         'apps/raw.ts',
         'export const q = `update integrations set config = $1 where id = $2`;\n',
       );
+      // Backlog 269: a `//` inside a string on the line of the call — the line-by-line stripper
+      // this file carried until WP-96 cut the line there and never saw the writer.
+      plant(
+        'apps/after-url.ts',
+        "export const u = (db, config) => { const at = 'https://x'; db.update(integrations).set({ config }); };\n",
+      );
       plant(
         'apps/health.ts',
         "export const h = (db) => db.update(integrations).set({ health: { status: 'ok' } });\n",
@@ -195,6 +187,7 @@ describe('the writers of integrations.config (backlog 130)', () => {
       git('add', '.gitignore', 'apps/server/src/routes/patch.ts');
 
       expect([...writersOf(census(root)).keys()].sort()).toEqual([
+        'apps/after-url.ts',
         'apps/dynamic.ts',
         'apps/raw.ts',
         'apps/server/src/routes/patch.ts',

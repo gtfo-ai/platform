@@ -33,6 +33,7 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { censusPaths, censusText } from '../../../../scripts/census-files.mjs';
+import { withoutComments } from '../../../../scripts/source-scanner.mjs';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
 
@@ -128,18 +129,6 @@ const isTestTier = (file: string): boolean =>
   file.includes('/src/testing/') ||
   file.includes('/dist/');
 
-/** Comment lines out, so a docblock that names the function is not a call site. */
-const withoutComments = (source: string): string =>
-  source
-    .split('\n')
-    .map((line) => {
-      const trimmed = line.trimStart();
-      return trimmed.startsWith('*') || trimmed.startsWith('//') || trimmed.startsWith('/*')
-        ? ''
-        : line;
-    })
-    .join('\n');
-
 /** The top-level arguments of every `compilePipeline(` call in `source`, as trimmed text. */
 export const compileCalls = (source: string): string[][] => {
   const calls: string[][] = [];
@@ -213,6 +202,16 @@ describe('the `compilePipeline` call-site census (WP-62, criterion 4)', () => {
 
   it('passes every site the task’s frozen copy, so none asks the settings port', () => {
     expect(unfrozenCalls(census())).toEqual([]);
+  });
+
+  it('sees a call after a `//` inside a string, and drops a trailing comment from its arguments (backlog 269)', () => {
+    // Until WP-96 this file dropped only whole comment lines, so a trailing comment inside a call
+    // rode into the argument text; the shared scanner removes it and keeps the string's `//`.
+    const planted =
+      "const u = 'https://x'; compilePipeline(t, stored.template, // the dial\n  pipelineDialFor(settings));";
+    expect(compileCalls(withoutComments(planted))).toEqual([
+      ['t', 'stored.template', 'pipelineDialFor(settings)'],
+    ]);
   });
 
   it('refuses a site that resolves the dial from the project’s current settings (the canary)', () => {

@@ -19,7 +19,11 @@ import { markTransactions } from '../events/open-transaction.js';
 import { exactSecretRedactor } from '../integrations/redaction.js';
 import type { MergeRequest } from '../ports/integrations/git-provider.js';
 import type { Ticket, TicketLink } from '../ports/integrations/task-management.js';
-import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
+import {
+  cannotStart,
+  createPipelineHarness,
+  type PipelineHarness,
+} from '../testing/pipeline-harness.js';
 import {
   DELIVERY_MEASURE_APPEND_ATTEMPTS,
   type DeliveryMeasuresOptions,
@@ -245,6 +249,18 @@ const startWorld = (options: {
   return { harness, ...world } as World;
 };
 
+/**
+ * A task whose merge request is open. The measures read nothing past it, so the walk stops at
+ * `code_review` — declared rather than left unscripted (WP-96, backlog 249).
+ */
+const walkToMergeRequest = async (harness: PipelineHarness): Promise<void> => {
+  harness.script(
+    'code_review',
+    cannotStart('these cases measure a merge and a bug trace; the walk stops once the MR is open'),
+  );
+  await harness.publish([ticketMatched()]);
+};
+
 const eventsOf = <T extends DomainEvent['type']>(harness: PipelineHarness, type: T) =>
   harness.events().filter((event) => event.type === type) as Extract<DomainEvent, { type: T }>[];
 
@@ -281,7 +297,7 @@ describe('which tickets are bugs', () => {
 describe('the size of a merge the platform made (backlog 179)', () => {
   it('reads the counts once and records them, although the merge event carried none', async () => {
     const world = startWorld({ diffStats: { files_changed: 3, insertions: 40, deletions: 12 } });
-    await world.harness.publish([ticketMatched()]);
+    await walkToMergeRequest(world.harness);
     await world.harness.publish([merged(IID, null)]);
 
     const measured = eventsOf(world.harness, 'task.mr.measured');
@@ -304,7 +320,7 @@ describe('the size of a merge the platform made (backlog 179)', () => {
     // What the fake sends (divergence 17) with what an old GitLab answers: a duty that trusted the
     // event would record 1/1/1 here.
     const world = startWorld({ diffStats: null });
-    await world.harness.publish([ticketMatched()]);
+    await walkToMergeRequest(world.harness);
     await world.harness.publish([merged(IID, { files_changed: 1, insertions: 1, deletions: 1 })]);
     expect(
       eventsOf(world.harness, 'task.mr.measured').map((event) => event.payload.diff_stats),
@@ -313,7 +329,7 @@ describe('the size of a merge the platform made (backlog 179)', () => {
 
   it('measures nothing for a merge request no task owns — a human’s merge is not the platform’s', async () => {
     const world = startWorld({ diffStats: { files_changed: 3, insertions: 40, deletions: 12 } });
-    await world.harness.publish([ticketMatched()]);
+    await walkToMergeRequest(world.harness);
     await world.harness.publish([merged(99, null)]);
     expect(eventsOf(world.harness, 'task.mr.measured')).toEqual([]);
     expect(world.diffStatsCalls).toEqual([]);
@@ -321,7 +337,7 @@ describe('the size of a merge the platform made (backlog 179)', () => {
 
   it('records nothing — not even an unmeasured merge — for a project whose git binding is gone', async () => {
     const world = startWorld({ diffStats: { files_changed: 3, insertions: 40, deletions: 12 } });
-    await world.harness.publish([ticketMatched()]);
+    await walkToMergeRequest(world.harness);
     const data: PipelineOutboundData = {
       duty: 'merge_measure',
       project_id: PROJECT,
@@ -346,7 +362,7 @@ describe('the defect trace of a bug ticket (backlog 114, Q87)', () => {
 
   it('traces a bug through its own link to the platform task whose merge request it names', async () => {
     const world = startWorld({ tickets: { 'BUG-1': ticketWith('BUG-1', [link(MR_REF.url)]) } });
-    await world.harness.publish([ticketMatched()]);
+    await walkToMergeRequest(world.harness);
     await world.harness.publish([bugFiled('BUG-1', 'Bug')]);
 
     const traced = eventsOf(world.harness, 'ticket.bug.traced');
@@ -470,7 +486,7 @@ describe('a link added after filing — the re-trace (WP-90, backlog 192)', () =
   it('re-traces a `no_link` bug on an edit, and records the link with the ticket’s own filing instant', async () => {
     const tickets: Record<string, Ticket> = { 'BUG-8': ticketWith('BUG-8', []) };
     const world = startWorld({ tickets });
-    await world.harness.publish([ticketMatched()]);
+    await walkToMergeRequest(world.harness);
     await world.harness.publish([bugFiled('BUG-8', 'Bug')]);
     // The reporter links the merge request an hour later.
     tickets['BUG-8'] = ticketWith('BUG-8', [link(MR_REF.url)]);
@@ -491,7 +507,7 @@ describe('a link added after filing — the re-trace (WP-90, backlog 192)', () =
       'STORY-3': ticketWith('STORY-3', [], 'Story'),
     };
     const world = startWorld({ tickets });
-    await world.harness.publish([ticketMatched()]);
+    await walkToMergeRequest(world.harness);
     await world.harness.publish([bugFiled('BUG-9', 'Bug'), bugFiled('STORY-3', 'Story')]);
     // A trace recorded `unreadable` when the tracker binding was missing, appended as the duty would.
     await runBugTrace(
@@ -549,7 +565,7 @@ describe('a link added after filing — the re-trace (WP-90, backlog 192)', () =
   it('re-validates on fire: a re-trace for a ticket traced `linked` since reads nothing', async () => {
     const tickets: Record<string, Ticket> = { 'BUG-12': ticketWith('BUG-12', [link(MR_REF.url)]) };
     const world = startWorld({ tickets });
-    await world.harness.publish([ticketMatched()]);
+    await walkToMergeRequest(world.harness);
     await world.harness.publish([bugFiled('BUG-12', 'Bug')]);
     world.readTickets.length = 0;
     await runBugTrace(optionsOf(world.harness), {
@@ -629,7 +645,7 @@ describe('a lost race on the project stream (WP-90, backlog 193)', () => {
 
   it('measures a merge with one provider read although the first append lost the race', async () => {
     const world = startWorld({ diffStats: { files_changed: 3, insertions: 40, deletions: 12 } });
-    await world.harness.publish([ticketMatched()]);
+    await walkToMergeRequest(world.harness);
     await runMergeMeasure(racingOptions(world, 1), measureData(world));
 
     expect(ownMeasurements(world)).toHaveLength(1);
@@ -643,7 +659,7 @@ describe('a lost race on the project stream (WP-90, backlog 193)', () => {
 
   it('traces a bug with one ticket read although the first append lost the race', async () => {
     const world = startWorld({ tickets: { 'BUG-13': ticketWith('BUG-13', [link(MR_REF.url)]) } });
-    await world.harness.publish([ticketMatched()]);
+    await walkToMergeRequest(world.harness);
     await runBugTrace(racingOptions(world, 1), {
       duty: 'bug_trace',
       project_id: PROJECT,
@@ -665,7 +681,7 @@ describe('a lost race on the project stream (WP-90, backlog 193)', () => {
   it('gives up after the last attempt, one loss short and one loss past the bound, still with one read', async () => {
     // Rule 42: the boundary from both sides. One loss fewer than the bound lands the event…
     const inside = startWorld({ diffStats: { files_changed: 1, insertions: 1, deletions: 1 } });
-    await inside.harness.publish([ticketMatched()]);
+    await walkToMergeRequest(inside.harness);
     await runMergeMeasure(
       racingOptions(inside, DELIVERY_MEASURE_APPEND_ATTEMPTS - 1),
       measureData(inside),
@@ -675,7 +691,7 @@ describe('a lost race on the project stream (WP-90, backlog 193)', () => {
 
     // …and a loss on every attempt fails the job with the conflict, for pg-boss to retry.
     const past = startWorld({ diffStats: { files_changed: 1, insertions: 1, deletions: 1 } });
-    await past.harness.publish([ticketMatched()]);
+    await walkToMergeRequest(past.harness);
     await expect(
       runMergeMeasure(racingOptions(past, DELIVERY_MEASURE_APPEND_ATTEMPTS), measureData(past)),
     ).rejects.toBeInstanceOf(StreamConflictError);

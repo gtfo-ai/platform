@@ -2,6 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { withoutComments } from '../../../scripts/source-scanner.mjs';
 
 /**
  * **No source in this application may hand a string to the DOM as HTML.**
@@ -176,9 +177,18 @@ const FORBIDDEN = [
 
 /**
  * Removes `/* … *`+`/` comments and nothing else. Exported so both directions are testable.
+ *
+ * **The shared scanner in its JSX mode** since WP-96 review round 1 (PROGRESS backlogs 261 and
+ * 269): this was `replace(/\/\*[\s\S]*?\*\//g, ' ')`, which takes a `/*` inside a string —
+ * `'tests/**'` — for an opener and deletes the code after it up to the next real close; measured
+ * on the tree, it hid `onboarding.test.tsx` from its line 181 to its line 292. `keepLineComments`
+ * keeps every `//` comment's text (so a URL in JSX prose takes nothing with it, the reason this
+ * guard never stripped line comments) while still reading it as a comment, so a `/*` after a `//`
+ * opens nothing. The residual is the scanner's own, stated in `scripts/source-scanner.mjs`: a `/*`
+ * in JSX text with no `//` before it on its line still opens a block comment.
  */
 export const stripBlockComments = (source: string): string =>
-  source.replace(/\/\*[\s\S]*?\*\//g, ' ');
+  withoutComments(source, { keepLineComments: true });
 
 const walk = (directory: string): string[] =>
   readdirSync(directory).flatMap((entry) => {
@@ -227,6 +237,31 @@ describe('the web application', () => {
     expect(stripBlockComments('<div dangerouslySetInnerHTML={{ __html: value }} />')).toContain(
       'dangerouslySetInnerHTML',
     );
+  });
+
+  /**
+   * WP-96 review round 1: the regex this replaced took a `/*` inside a string for a comment and
+   * deleted the code after it. Each direction, for a string and for JSX text.
+   */
+  it('keeps code after a `/*` inside a string, and still strips a real comment after it', () => {
+    const code = stripBlockComments(
+      "const glob = 'tests/**'; element.innerHTML = value; /* innerHTML in prose */",
+    );
+    expect(code).toContain('element.innerHTML = value');
+    expect(code).not.toContain('in prose');
+    expect(stripBlockComments("const a = '/* x'; el.outerHTML = v;")).toContain('outerHTML');
+  });
+
+  it('keeps JSX text with a `//` in it and the code beside it, and strips a JSX comment', () => {
+    const jsx = [
+      '<p>See https://example.test/docs <div dangerouslySetInnerHTML={x} /></p>',
+      "<p>it's // not a comment, and /* not one after a // either */ <b>{v}</b></p>",
+      '{/* dangerouslySetInnerHTML is named in a JSX comment */}',
+    ].join('\n');
+    const code = stripBlockComments(jsx);
+    expect(code).toContain('<div dangerouslySetInnerHTML={x} />');
+    expect(code).toContain('<b>{v}</b>');
+    expect(code.split('\n')[2]).toBe('{}');
   });
 
   it.each(URL_ATTRIBUTES)('writes %s in no source but ui/untrusted.tsx', (attribute) => {
