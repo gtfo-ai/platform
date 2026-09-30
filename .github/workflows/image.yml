@@ -118,6 +118,19 @@ jobs:
         with:
           persist-credentials: false
 
+      # The repository's Node, not the runner's (WP-118 follow-up). Every step below is a plain
+      # Node script, and until this step they ran on the runner image's default interpreter, Node
+      # 22.23.3. Its bundled undici 6.28.1 compiles the HTTP parser asynchronously on the first
+      # connection and attaches the socket listeners only afterwards, so a peer that closes that
+      # connection first is never observed: the request stays pending with no handle behind it and
+      # Node exits 13 on an unsettled top-level await. `docker-proxy` does exactly that to the
+      # first `/healthz` probe before the app listens, which is how `web-compose-check` failed.
+      # Node 24's undici compiles it synchronously. No dependency is installed, hence no cache.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
       # Build metadata the image reports at `GET /api/version` (`runtime.ts` § buildInfo): the
       # version the `version` job computed when this push releases one, `0.0.0-edge+<sha>` otherwise.
       - id: meta

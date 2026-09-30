@@ -912,3 +912,85 @@ describe('untrusted contexts in run: scripts', () => {
     expect(findings, 'pass these through `env:` and read "$NAME" in the script').toEqual([]);
   });
 });
+
+/**
+ * **Every workflow job that runs Node runs the repository's Node** (WP-118 follow-up).
+ *
+ * `image.yml`'s `build` job had no `setup-node`, so its three scripts ran on the runner image's
+ * default interpreter, Node 22.23.3, with no version this repository pins. Its bundled undici
+ * attaches a connection's socket listeners only after the HTTP parser's first, asynchronous
+ * compile, so a peer that closes the process's first connection inside that window is never seen:
+ * the `fetch` stays pending with nothing behind it and Node exits 13 on an unsettled top-level
+ * await. `web-compose-check` failed that way twice in three runs, on the first `/healthz` probe,
+ * which `docker-proxy` closes while the app is not yet listening. The rule is general: a job that
+ * starts `node`, `pnpm`, `npx`, `npm`, `yarn` or `corepack` has an `actions/setup-node` step reading `.nvmrc` **before** it.
+ */
+/** A command in a command position: a line's first word, or the first after `;`, `&`, `|` or `(`. */
+const NODE_COMMAND = /(?:^|[;&|(]\s*)(?:node|pnpm|npx|npm|yarn|corepack)(?:\s|$)/;
+
+const jobsRunningNodeUnpinned = (workflow: string): string[] => {
+  const jobs = workflow.slice(workflow.indexOf('\njobs:\n') + 1);
+  const keys = [...jobs.matchAll(/\n {2}([a-z][\w-]*):\n/g)];
+  return keys.flatMap((key, index) => {
+    const job = jobs.slice(key.index, keys[index + 1]?.index ?? jobs.length);
+    const firstRun = runBlockLines(job).find(({ text }) => NODE_COMMAND.test(text.trim()));
+    if (firstRun === undefined) return [];
+    const lines = job.split('\n');
+    const setup = lines.findIndex(
+      (line, at) =>
+        /uses: actions\/setup-node@/.test(line) &&
+        lines.slice(at + 1, at + 5).some((next) => /node-version-file: \.nvmrc/.test(next)),
+    );
+    return setup !== -1 && setup + 1 < firstRun.line ? [] : [key[1] ?? '?'];
+  });
+};
+
+describe("the Node a workflow's scripts run on (WP-118 follow-up)", () => {
+  it('finds a planted job that runs a script on the runner’s interpreter, and passes a pinned one', () => {
+    const planted = [
+      'jobs:',
+      '  pinned:',
+      '    steps:',
+      '      - uses: actions/setup-node@0000000000000000000000000000000000000000 # vX',
+      '        with:',
+      '          node-version-file: .nvmrc',
+      '      - run: node scripts/a.mjs',
+      '  late:',
+      '    steps:',
+      '      - run: |',
+      '          set -eu',
+      '          pnpm run -s verify',
+      '      - uses: actions/setup-node@0000000000000000000000000000000000000000 # vX',
+      '        with:',
+      '          node-version-file: .nvmrc',
+      '  unpinned:',
+      '    steps:',
+      '      - name: serve',
+      '        run: >-',
+      '          node scripts/web-compose-check.mjs --tag ci',
+      '  shell-only:',
+      '    steps:',
+      '      - run: echo "# node is only mentioned here"',
+      '',
+    ].join('\n');
+    expect(jobsRunningNodeUnpinned(planted)).toEqual(['late', 'unpinned']);
+  });
+
+  it('holds in every workflow this repository runs', () => {
+    const workflows = tracked('.github/workflows/*.yml');
+    expect(workflows.length).toBeGreaterThanOrEqual(3);
+    // Not vacuous: image.yml's build job runs three repository scripts.
+    expect(
+      runBlockLines(jobOf(read(IMAGE_WORKFLOW), 'build')).some(({ text }) =>
+        NODE_COMMAND.test(text.trim()),
+      ),
+    ).toBe(true);
+    const findings = workflows.flatMap((path) =>
+      jobsRunningNodeUnpinned(read(path)).map((job) => `${path} ${job}`),
+    );
+    expect(
+      findings,
+      'add actions/setup-node with node-version-file: .nvmrc before the first run',
+    ).toEqual([]);
+  });
+});

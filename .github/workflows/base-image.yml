@@ -53,6 +53,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The repository's Node rather than the runner image's default (WP-118 follow-up: image.yml's
+      # build job ran its scripts on Node 22 and its `fetch` lost a closed first connection).
+      # `scripts/release.test.ts` holds every job that runs Node to this. Nothing is installed.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
       # Both images: `platform-runtime` is where the six agent CLIs and the `claude` binary live, so
       # a build of `platform-base` alone would check the smaller half of the tool layer.
       - run: node scripts/build-images.mjs base runtime --size-check

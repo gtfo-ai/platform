@@ -39,6 +39,12 @@
  *      byte for byte (rounds 2 and 3). The asset rather than the shell for the coding assertion:
  *      this bundle's `index.html` is below the 1 024-byte coding threshold;
  *   6. `docker compose down -v`, always, including on a failure.
+ *
+ * **A failure names its cause** (WP-118 follow-up). Every wait has a deadline on a *ref'd* timer, so
+ * the event loop cannot empty under a pending `fetch` and end the process as an "unsettled
+ * top-level await" (exit 13) that says nothing, which is how this check failed on CI twice, on the
+ * runner's Node 22 (the mechanism is at {@link MINIMUM_NODE_MAJOR}). A failed run prints the stage
+ * it was in, then `compose ps` and the app container's last log lines, before the teardown.
  */
 import { execFile } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
@@ -50,6 +56,27 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
+
+/**
+ * The repository's Node (`.nvmrc`, `engines`), refused below it rather than run on it.
+ *
+ * Node 22's bundled undici (6.28.1 in 22.23.3) compiles its HTTP parser asynchronously on the
+ * process's **first** connection and attaches that socket's listeners only afterwards, so a peer
+ * that closes the connection inside the window is never observed: the `fetch` stays pending with
+ * no handle behind it and the process exits 13. `docker-proxy` closes exactly that connection:
+ * the first `/healthz` probe, sent before the app listens. Measured with a server that closes on
+ * accept: 11 of 20 fresh Node 22.23.3 processes exited 13, 0 of 20 on Node 24.21.0, whose undici
+ * compiles the parser synchronously. `image.yml` now sets this Node up; this is the named refusal
+ * for a caller that did not.
+ */
+const MINIMUM_NODE_MAJOR = 24;
+if (Number(process.versions.node.split('.')[0]) < MINIMUM_NODE_MAJOR) {
+  console.error(
+    `FAIL: web-compose-check — Node ${process.versions.node} is below this repository's ` +
+      `${MINIMUM_NODE_MAJOR} (.nvmrc): its fetch loses a first connection the peer closes early`,
+  );
+  process.exit(1);
+}
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const args = process.argv.slice(2);
@@ -158,22 +185,91 @@ const compose = async (args, env) =>
     },
   );
 
-/** Waits for the container to answer its own liveness probe before anything is concluded. */
+/** What the check is waiting for right now, named in every failure it reports. */
+let stage = 'starting';
+
+/** A wait that outlived its deadline: never "not ready yet", always a failure. */
+class Unsettled extends Error {}
+
+/**
+ * `work()` within `ms`, or a rejection naming `what`.
+ *
+ * The timer is deliberately **ref'd**: it is what keeps the event loop alive under a promise that
+ * nothing else is behind, so a wedged request is reported by name instead of the process ending
+ * on an unsettled top-level await.
+ */
+const within = async (what, ms, work) => {
+  stage = what;
+  let timer;
+  try {
+    return await Promise.race([
+      work(),
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Unsettled(`${what} did not settle within ${ms / 1000} s`)),
+          ms,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+const REQUEST_MS = 30_000;
+/** One request and its whole body, bounded. */
+const get = (url, init) =>
+  within(`GET ${url}`, REQUEST_MS, async () => {
+    const response = await fetch(url, init);
+    return { response, body: await response.text() };
+  });
+
+/**
+ * Waits for the container to answer its own liveness probe before anything is concluded.
+ *
+ * A probe that is *refused or closed* is the app not listening yet, and is tried again; a probe
+ * that does not settle is not that, and fails the check by name rather than being retried.
+ */
 const waitForHealth = async (baseUrl) => {
   const deadline = Date.now() + 180_000;
   for (;;) {
+    let answered;
     try {
-      const response = await fetch(`${baseUrl}/healthz`);
-      if (response.ok) {
-        return;
+      answered = await within(`GET ${baseUrl}/healthz (waiting for the app)`, 10_000, () =>
+        fetch(`${baseUrl}/healthz`),
+      );
+    } catch (error) {
+      if (error instanceof Unsettled) {
+        throw error;
       }
-    } catch {
-      // not listening yet
+      // refused or closed: not listening yet
+    }
+    await answered?.body?.cancel();
+    if (answered?.ok) {
+      return;
     }
     if (Date.now() > deadline) {
       throw new Error(`the app container never answered /healthz on ${baseUrl}`);
     }
     await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
+};
+
+/**
+ * What the instance looked like when the check failed: every service's state (a dead app shows
+ * its exit code there) and the app's last log lines. Best effort: it reports, it never decides.
+ */
+const describeInstance = async (env) => {
+  for (const args of [
+    ['ps', '--all'],
+    ['logs', '--no-color', '--tail', '80', 'app'],
+  ]) {
+    try {
+      const { stdout, stderr } = await compose(args, env);
+      console.error(`--- docker compose ${args.join(' ')}\n${stdout}${stderr}`);
+    } catch (error) {
+      console.error(`--- docker compose ${args.join(' ')} failed: ${String(error)}`);
+    }
   }
 };
 
@@ -209,11 +305,11 @@ const main = async () => {
     console.log(
       `${BUILD ? 'building and starting' : 'starting'} ${PROJECT} from platform:${TAG} on ${baseUrl} …`,
     );
+    stage = 'docker compose up';
     await compose(['up', '-d', ...(BUILD ? ['--build'] : []), 'app'], env);
     await waitForHealth(baseUrl);
 
-    const shell = await fetch(`${baseUrl}/`);
-    const shellBody = await shell.text();
+    const { response: shell, body: shellBody } = await get(`${baseUrl}/`);
     check('GET / answers 200', shell.status === 200, `status ${shell.status}`);
     check(
       'GET / answers HTML',
@@ -226,6 +322,7 @@ const main = async () => {
       shell.headers.get('cache-control') ?? 'no cache-control',
     );
 
+    stage = 'reading index.html inside the container';
     const inImage = await compose(
       ['exec', '-T', 'app', 'cat', '/app/apps/web/dist/index.html'],
       env,
@@ -239,7 +336,7 @@ const main = async () => {
     const asset = /<script[^>]+src="([^"]+)"/.exec(shellBody)?.[1];
     check('the shell names a bundled script', asset !== undefined, asset ?? 'none found');
     if (asset !== undefined) {
-      const response = await fetch(`${baseUrl}${asset}`);
+      const { response } = await get(`${baseUrl}${asset}`);
       check(`GET ${asset} answers 200`, response.status === 200, `status ${response.status}`);
       check(
         `GET ${asset} is JavaScript`,
@@ -253,15 +350,14 @@ const main = async () => {
       );
     }
 
-    const deepLink = await fetch(`${baseUrl}/projects/ACME/tasks/7`);
-    const deepBody = await deepLink.text();
+    const { response: deepLink, body: deepBody } = await get(`${baseUrl}/projects/ACME/tasks/7`);
     check(
       'a deep link answers the shell',
       deepLink.status === 200 && deepBody === shellBody,
       `status ${deepLink.status}`,
     );
 
-    const version = await fetch(`${baseUrl}/api/version`);
+    const { response: version } = await get(`${baseUrl}/api/version`);
     check(
       'GET /api/version answers the API',
       version.status === 200 &&
@@ -269,18 +365,19 @@ const main = async () => {
       `status ${version.status}, ${version.headers.get('content-type') ?? 'no content-type'}`,
     );
 
-    const missing = await fetch(`${baseUrl}/api/wp15j-no-such-endpoint`);
-    const missingBody = await missing.text();
+    const { response: missing, body: missingBody } = await get(
+      `${baseUrl}/api/wp15j-no-such-endpoint`,
+    );
     check(
       'an unserved /api path answers the JSON 404, not the shell',
       missing.status === 404 && missingBody.includes('"not_found"'),
       `status ${missing.status}, body ${missingBody.slice(0, 60)}`,
     );
 
-    const health = await fetch(`${baseUrl}/healthz`);
+    const { response: health, body: healthBody } = await get(`${baseUrl}/healthz`);
     check(
       'GET /healthz is untouched',
-      health.status === 200 && (await health.text()).includes('"ok"'),
+      health.status === 200 && healthBody.includes('"ok"'),
       `status ${health.status}`,
     );
 
@@ -291,11 +388,12 @@ const main = async () => {
     // fetched plainly, so a coding that dropped or altered a byte fails here, not in a browser
     // (`fetch` decodes the payload and keeps the header).
     if (asset !== undefined) {
-      const plain = await (
-        await fetch(`${baseUrl}${asset}`, { headers: { 'accept-encoding': 'identity' } })
-      ).text();
-      const coded = await fetch(`${baseUrl}${asset}`, { headers: { 'accept-encoding': 'gzip' } });
-      const codedBody = await coded.text();
+      const { body: plain } = await get(`${baseUrl}${asset}`, {
+        headers: { 'accept-encoding': 'identity' },
+      });
+      const { response: coded, body: codedBody } = await get(`${baseUrl}${asset}`, {
+        headers: { 'accept-encoding': 'gzip' },
+      });
       check(
         `GET ${asset} is gzipped for a client that accepts it, and decodes to the same bytes`,
         (coded.headers.get('content-encoding') ?? '') === 'gzip' && codedBody === plain,
@@ -316,8 +414,13 @@ const main = async () => {
       }`,
     );
   } catch (error) {
-    check('the instance came up and answered', false, String(error));
+    const where = error instanceof Unsettled ? '' : ` (while: ${stage})`;
+    check('the instance came up and answered', false, `${String(error)}${where}`);
   } finally {
+    if (failures.length > 0) {
+      await describeInstance(env);
+    }
+    stage = 'docker compose down';
     await compose(['down', '-v'], env).catch((error) => {
       console.error(`cleanup failed: ${String(error)}`);
     });
@@ -330,4 +433,20 @@ const main = async () => {
   console.log('PASS: web-compose-check');
 };
 
+/**
+ * The backstop for a wait nothing bounded: the loop emptied while `main()` was still pending. It
+ * names the stage and exits 1 instead of Node's bare "unsettled top-level await" (exit 13). The
+ * teardown cannot run from here, which `image.yml`'s `always` step covers.
+ */
+let finished = false;
+process.on('beforeExit', () => {
+  if (!finished) {
+    console.error(
+      `FAIL: web-compose-check — the event loop emptied while waiting on: ${stage} ` +
+        '(an awaited promise had nothing behind it)',
+    );
+    process.exit(1);
+  }
+});
 await main();
+finished = true;
