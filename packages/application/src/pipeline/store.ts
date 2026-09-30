@@ -1186,9 +1186,10 @@ export interface RunRepository {
 }
 
 /**
- * What a recorded run command asks the holder to do (WP-85, TD-028 decision 9) — a steer's turn, or
- * a take-over's stop with the export its workspace owes. Stored redacted: the command redacted the
- * text before it was recorded, and the holder delivers the stored bytes.
+ * What a recorded run command asks the holder to do (WP-85, TD-028 decision 9) — a steer's turn, a
+ * take-over's stop with the export its workspace owes, or (WP-101, TD-028 decision 11) a cancel's
+ * stop, which owes nothing but the stop. Stored redacted: the command redacted the text before it
+ * was recorded, and the holder delivers the stored bytes.
  */
 export type RunCommandInstruction =
   | {
@@ -1204,7 +1205,14 @@ export type RunCommandInstruction =
       readonly commitMessage: string;
       readonly tarball: boolean;
       readonly keepUntil: IsoDateTime;
-    };
+    }
+  | { readonly kind: 'cancel' };
+
+/** The two instructions that stop the session; a steer recorded behind one waits for the ending. */
+export const STOPPING_RUN_COMMAND_KINDS: readonly RunCommandInstruction['kind'][] = [
+  'take_over',
+  'cancel',
+];
 
 /** Why the process that could have applied a command did not (migration 0060). */
 export type RunCommandRefusal = 'run_ended' | 'register_miss' | 'delivery_failed' | 'undecodable';
@@ -1242,6 +1250,13 @@ export interface LockedRun {
   /** `runs.lease_owner`: the process the notification is addressed to, or `null` when none holds it. */
   readonly leaseOwner: string | null;
   /**
+   * `runs.lease_expires_at`, or `null` for a run no process ever leased (WP-101, TD-028 decision
+   * 11). A cancel compares it with its own clock: in the future, a holder is renewing it and the
+   * cancel is recorded for that holder; absent or past, nobody holds the session and the record is
+   * ended in place.
+   */
+  readonly leaseExpiresAt: IsoDateTime | null;
+  /**
    * The SDK session the run is in, as far as the **database** knows it — or `null`.
    *
    * `runs.session_id` is written only when a run ends, and the handle that knows it mid-run is in
@@ -1267,14 +1282,29 @@ export interface LockedRun {
  * stamp and the ending are ordered the same way.
  */
 export interface RunCommandRepository {
-  /** The run, locked `for share`, or `null` when there is no such run. */
-  lockRun(tx: Transaction, runId: Id): Promise<LockedRun | null>;
+  /**
+   * The run, locked `for share`, or `null` when there is no such run.
+   *
+   * `forUpdate` takes the row exclusively instead (WP-101): a cancel may go on to `finish` the row
+   * it read, and two cancels that each held `for share` and then both asked for the row
+   * exclusively would deadlock rather than one refusing the other.
+   */
+  lockRun(
+    tx: Transaction,
+    runId: Id,
+    options?: { readonly forUpdate?: boolean },
+  ): Promise<LockedRun | null>;
   /** The task's live run (`ACTIVE_RUN_STATUSES`), locked `for share`, or `null` when it has none. */
   lockLiveRunOf(tx: Transaction, taskId: Id): Promise<LockedRun | null>;
   insert(tx: Transaction, command: NewRunCommand): Promise<void>;
   /**
    * Pending commands for the live runs **this holder** leases, oldest first — optionally for one run.
    * Bounded by `limit`; a burst beyond it is taken by the next drain.
+   *
+   * **A steer behind a stop is not handed out** (WP-101): while the run has a `cancel` or
+   * `take_over` row that is not refused ({@link STOPPING_RUN_COMMAND_KINDS}), its pending steers are
+   * left for the run's own ending to close `run_ended`. A turn delivered to a session that is being
+   * stopped is a turn the run pays for and nobody reads.
    */
   pending(
     tx: Transaction,
@@ -1300,6 +1330,22 @@ export interface RunCommandRepository {
   markRefused(
     tx: Transaction,
     input: { readonly id: Id; readonly reason: RunCommandRefusal },
+  ): Promise<boolean>;
+  /**
+   * technical/08's steer window, **shared by every process on the database** (WP-101, PROGRESS
+   * backlog 295): takes a transaction-scoped advisory lock on `userId` and answers whether that user
+   * has recorded **no** `steer` row within the last `windowMs`, read by the database's own clock
+   * (`created_at` is its default).
+   *
+   * The lock is the point. Two steers by one user in two processes would otherwise both read "no
+   * row yet" at READ COMMITTED and both insert; with it the second transaction waits for the first
+   * to commit and then reads its row. It is held to the end of the caller's transaction, so the
+   * caller must insert the row it admitted **in the same transaction**, and must take it before any
+   * row lock (`lockRun`), which is the order every steer takes.
+   */
+  admitSteer(
+    tx: Transaction,
+    input: { readonly userId: Id; readonly windowMs: number },
   ): Promise<boolean>;
 }
 

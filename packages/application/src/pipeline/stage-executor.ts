@@ -47,6 +47,7 @@ import type {
   Id,
   IsoDateTime,
   JsonValue,
+  RunCost,
   Slug,
 } from '@platform/contracts';
 import { stageVerdictSchema } from '@platform/contracts';
@@ -1173,7 +1174,21 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
  * nothing (`cost_unreported`, which is a fault rather than a free run — BD-011, standing rule 16).
  */
 const spendOf = (outcome: RunOutcome): number =>
-  Number.isFinite(outcome.cost.usd) ? Math.max(0, outcome.cost.usd) : 0;
+  outcome.costUnmeasured === true
+    ? 0
+    : Number.isFinite(outcome.cost.usd)
+      ? Math.max(0, outcome.cost.usd)
+      : 0;
+
+/**
+ * The cost `runs.finish` writes: the outcome's, or **`null`** when nothing measured it (WP-101
+ * review round 1, standing rule 16) — a human's stop whose interrupted turn sent no `result` inside
+ * the grace. Both cost columns then stay empty, as for a run the lease sweep ended, and the ledger
+ * writes no row (the terminal event carries no usage and no reported figure), rather than a `0`
+ * that every later reader would take for a measurement.
+ */
+const rowCostOf = (outcome: RunOutcome): RunCost | null =>
+  outcome.costUnmeasured === true ? null : outcome.cost;
 
 interface RecordInput {
   readonly job: StageExecutionJob;
@@ -1301,7 +1316,7 @@ const record = async (
     sessionId: outcome.sessionId,
     numTurns: outcome.numTurns,
     usage: outcome.usage,
-    cost: outcome.cost,
+    cost: rowCostOf(outcome),
     wallMs: outcome.wallMs,
   });
   if (!owned) {
@@ -1470,7 +1485,10 @@ const record = async (
  * Somebody else ended this run while it was in flight, so this process writes **only its cost**.
  *
  * `RunRepository.finish` is conditional on the run still being live, and there are two other
- * writers: `POST /api/runs/:run_id/cancel` (WP-15i) and the lease sweep (WP-47). Losing that race is
+ * writers: `POST /api/runs/:run_id/cancel` (WP-15i) and the lease sweep (WP-47). Since WP-101 the
+ * cancel is a foreign writer only when no process held the run's lease (TD-028 decision 11); with a
+ * live lease it is a `run_commands` row this process applies as the session's stop, and the ending
+ * is then this process's own, with its measured cost — this path is not taken. Losing that race is
  * not a failure — the other writer's decision is the one that stands, and this transaction rewrites
  * no status, completes no stage and appends no second terminal event.
  *
@@ -1497,6 +1515,11 @@ const lostTheRun = async (input: {
   if (outcome === undefined) {
     // `recordUnstarted`'s path: the run never started, so there is no spend to record and nothing
     // for the ledger to be late about.
+    return { kind: 'skipped', reason };
+  }
+  if (outcome.costUnmeasured === true) {
+    // Stopped with no result inside the grace (WP-101 review round 1): there is no figure to be
+    // late with, and a zero would be a claim (rule 16).
     return { kind: 'skipped', reason };
   }
   const recorder = options.lateCost ?? noLateCostRecorder;
@@ -1563,7 +1586,7 @@ const recordOntoStoppedTask = async (
     sessionId: outcome.sessionId,
     numTurns: outcome.numTurns,
     usage: outcome.usage,
-    cost: outcome.cost,
+    cost: rowCostOf(outcome),
     wallMs: outcome.wallMs,
   });
   if (!owned) {
@@ -1626,7 +1649,7 @@ const recordUnsuccessful = async (
     sessionId: outcome.sessionId,
     numTurns: outcome.numTurns,
     usage: outcome.usage,
-    cost: outcome.cost,
+    cost: rowCostOf(outcome),
     wallMs: outcome.wallMs,
   });
   if (!owned) {

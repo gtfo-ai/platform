@@ -83,8 +83,10 @@
  *  - a run that is **not terminal**: a live run's credential is its runner's. The lease sweep ends a
  *    run nobody is renewing, and the pass after that reaches its credential here — which, for a
  *    runner that was only **partitioned** from the database, cuts its credential while it may still
- *    be working: `./run-lease.ts` states that consequence. A **cancelled** run is the other terminal
- *    row whose session may still be running (`cancelRunCommand` ends the row, not the session): about
+ *    be working: `./run-lease.ts` states that consequence. A run **cancelled in place** is the other
+ *    terminal row whose session may still be running — since WP-101 (TD-028 decision 11) a cancel
+ *    ends the row itself only when no process held the run's lease, and a holder cut off from the
+ *    database may still be driving that session: about
  *    one pass interval after the cancel its token is revoked here, which is the safe direction, and
  *    the session's own teardown revoke then answers `not_found` and logs a failure for a token that is
  *    already gone; a take-over export after a cancel pushes with a revoked token and fails (WP-77

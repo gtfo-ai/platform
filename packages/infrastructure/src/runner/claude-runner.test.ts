@@ -19,9 +19,18 @@ import path from 'node:path';
 import type { RunOutcome, RunSpec, ToolApprovalDecision } from '@platform/application';
 import type { TranscriptEvent } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
-import { type ClaudeRunnerDependencies, createClaudeRunner } from './claude-runner.js';
+import {
+  type ClaudeRunnerDependencies,
+  createClaudeRunner,
+  INTERRUPT_GRACE_MS,
+} from './claude-runner.js';
 import { manualClock } from './clock.js';
-import { type FakeCli, type FakeCliScript, fakeSpawnClaudeCodeProcess } from './fake-spawn.js';
+import {
+  type FakeCli,
+  type FakeCliOptions,
+  type FakeCliScript,
+  fakeSpawnClaudeCodeProcess,
+} from './fake-spawn.js';
 import {
   FIXTURE_CLOCK_START,
   FIXTURE_INJECTED_SECRET,
@@ -78,6 +87,8 @@ type StartOptions = {
   spec?: Partial<RunSpec>;
   approval?: ToolApprovalDecision | 'never-answers';
   deps?: Partial<ClaudeRunnerDependencies>;
+  /** The fake CLI's own options — its interrupted turn's result, for WP-101's cases. */
+  cli?: FakeCliOptions;
 };
 
 /**
@@ -91,7 +102,7 @@ type StartOptions = {
 const startScript = (script: FakeCliScript, options: StartOptions = {}): Harness => {
   const sink = recordingSink();
   const clock = manualClock(FIXTURE_CLOCK_START);
-  const cli = fakeSpawnClaudeCodeProcess(script);
+  const cli = fakeSpawnClaudeCodeProcess(script, options.cli);
   const runner = createClaudeRunner({
     sink,
     approvals: scriptedApprovals(options.approval),
@@ -624,19 +635,141 @@ describe('the wall clock', () => {
   });
 });
 
+/**
+ * Drives a stop to its end on the manual clock: the stop waits up to {@link INTERRUPT_GRACE_MS} for
+ * the interrupted turn's result (WP-101), and a script that never sends one is released only by that
+ * grace — so the case advances the clock until the stop settles, never the wall clock (rule 2).
+ */
+const settleStop = async (harness: Harness, stopping: Promise<void>): Promise<RunOutcome> => {
+  let settled = false;
+  void stopping.then(() => {
+    settled = true;
+  });
+  for (let round = 0; round < 50 && !settled; round += 1) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    harness.clock.advance(INTERRUPT_GRACE_MS);
+  }
+  await stopping;
+  return harness.outcome;
+};
+
+/** The interrupted turn's `result`, as the SDK documents it arriving after the interrupt's receipt. */
+const INTERRUPTED_RESULT = {
+  type: 'result',
+  subtype: 'error_during_execution',
+  duration_ms: 900,
+  duration_api_ms: 700,
+  is_error: true,
+  num_turns: 1,
+  stop_reason: null,
+  total_cost_usd: 0.13,
+  usage: {
+    input_tokens: 800,
+    output_tokens: 60,
+    cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0,
+    cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 },
+  },
+  modelUsage: {
+    'claude-opus-5': {
+      inputTokens: 800,
+      outputTokens: 60,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+      webSearchRequests: 0,
+      costUSD: 0.13,
+      contextWindow: 200_000,
+      maxOutputTokens: 64_000,
+    },
+  },
+  permission_denials: [],
+  errors: [],
+  uuid: '00000009-0000-4000-8000-000000000000',
+  session_id: 'fake-session-0001',
+};
+
 describe('cancellation', () => {
   it('stops a live run and reports `cancelled`', async () => {
     const harness = start('stall');
-    await harness.handle.stop({ reason: 'cancelled' });
-    const result = await harness.outcome;
+    const result = await settleStop(harness, harness.handle.stop({ reason: 'cancelled' }));
     expect(result.status).toBe('cancelled');
     expect(result.terminalReason).toBe('cancelled');
+    // No interrupted result arrived, so nothing was measured — and the outcome says so, rather than
+    // reporting a zero the run row would store as a figure (WP-101 review round 1, rule 16).
+    expect(result.modelUsage).toEqual([]);
+    expect(result.costUnmeasured).toBe(true);
   });
 
   it('reports a take-over as a cancellation of the run', async () => {
     const harness = start('stall');
-    await harness.handle.stop({ reason: 'taken_over', workspaceExport: TAKE_OVER_EXPORT });
-    expect((await harness.outcome).status).toBe('cancelled');
+    const result = await settleStop(
+      harness,
+      harness.handle.stop({ reason: 'taken_over', workspaceExport: TAKE_OVER_EXPORT }),
+    );
+    expect(result.status).toBe('cancelled');
+  });
+
+  /**
+   * WP-101 (TD-028 decision 11): a cancel now stops a session that has been spending, so the stopped
+   * run must carry what it spent — which only the CLI knows, in the interrupted turn's result.
+   * Without the read (`readInterruptedResult` removed) the outcome's cost is `0` and its model usage
+   * empty, and the ledger writes no row for a session that cost money.
+   */
+  it('carries the interrupted turn’s measured cost into a cancelled outcome, before the script ends (WP-101)', async () => {
+    const script = loadScript('stall');
+    const harness = startScript(script, {
+      cli: { interruptedResult: { ...INTERRUPTED_RESULT } },
+    });
+    // Held after its first turn: the session is live and spending when the human stops it.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const result = await settleStop(harness, harness.handle.stop({ reason: 'cancelled' }));
+
+    expect(result.status).toBe('cancelled');
+    expect(result.terminalReason).toBe('cancelled');
+    expect(result.cost).toEqual({ usd: 0.13, is_estimate: false, price_list_id: null });
+    expect(result.costUnmeasured).toBeUndefined();
+    expect(result.modelUsage.map((entry) => [entry.model, entry.usd])).toEqual([
+      ['claude-opus-5', 0.13],
+    ]);
+    expect(result.structuredOutput).toBeNull();
+    // The session was interrupted, not played out: its script never reached its own end.
+    expect(harness.cli.interrupts).toBe(1);
+    expect(harness.cli.scriptEnded).toBe(false);
+    // The transcript says both, in order: the interrupted turn's result, then the platform's stop.
+    const kinds = harness.events.map((event) =>
+      event.kind === 'system' ? `system:${event.subtype}` : event.kind,
+    );
+    expect(kinds.slice(-2)).toEqual(['result', 'system:run_stopped']);
+  });
+
+  it('does not read past the grace for a result the CLI never sends (the bound, WP-101)', async () => {
+    const harness = startScript(loadScript('stall'));
+    const stopping = harness.handle.stop({ reason: 'cancelled' });
+    let settled = false;
+    void stopping.then(() => {
+      settled = true;
+    });
+    for (let round = 0; round < 10; round += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    // Waiting for a result that is not coming: only the grace releases it.
+    expect(settled).toBe(false);
+    harness.clock.advance(INTERRUPT_GRACE_MS);
+    await stopping;
+    const result = await harness.outcome;
+    expect(result.status).toBe('cancelled');
+    // Released by the grace with nothing read: unmeasured, never a measured zero (review round 1).
+    expect(result.costUnmeasured).toBe(true);
+    expect(result.modelUsage).toEqual([]);
+  });
+
+  it('keeps a platform stop measured as before: a stall is not a human stop (WP-101 review round 1)', async () => {
+    const harness = start('stall');
+    harness.clock.advance(runSpecFixture().limits.stallTimeoutMs);
+    const result = await harness.outcome;
+    expect(result.status).toBe('stalled');
+    // Backlog 334's question, deliberately not answered here.
+    expect(result.costUnmeasured).toBeUndefined();
   });
 });
 

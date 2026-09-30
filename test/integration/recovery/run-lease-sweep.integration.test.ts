@@ -275,6 +275,35 @@ describe('the sweep', () => {
     expect(await pendingUsd(reserve)).toBe(0);
   });
 
+  /**
+   * WP-101 (TD-028 decision 11, criterion 3): a cancel recorded for a live lease whose holder then
+   * died. Nobody is left to apply the stop, so the row waits — and the sweep's ending is what closes
+   * it, like every command still pending when a run ends. The run reads `lease_expired`, not
+   * `cancelled`, because no process confirmed the stop.
+   */
+  it('closes a cancel the dead holder never applied run_ended, and the run reads lease_expired (WP-101)', async () => {
+    const runId = await seedRun();
+    const command = crypto.randomUUID();
+    await pool.query(
+      `insert into run_commands (id, run_id, task_id, kind, payload)
+       values ($1, $2, $3, 'cancel', '{}'::jsonb)`,
+      [command, runId, taskId],
+    );
+
+    expect(await sweep()).toEqual({ found: 1, ended: 1, skipped: 0 });
+
+    const run = await pool.query<{ status: string; terminal_reason: string }>(
+      'select status, terminal_reason from runs where id = $1',
+      [runId],
+    );
+    expect(run.rows[0]).toEqual({ status: 'failed', terminal_reason: 'lease_expired' });
+    const row = await pool.query<{ applied: boolean; refused_reason: string | null }>(
+      'select applied_at is not null as applied, refused_reason from run_commands where id = $1',
+      [command],
+    );
+    expect(row.rows[0]).toEqual({ applied: false, refused_reason: 'run_ended' });
+  });
+
   it('appends one `run.failed` carrying no usage and no cost, so the ledger writes nothing', async () => {
     const runId = await seedRun();
     await sweep();

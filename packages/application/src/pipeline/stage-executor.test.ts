@@ -789,11 +789,14 @@ describe('a task a human stopped while its stage was running', () => {
       tx: Parameters<PipelineHarness['store']['tasks']['save']>[0],
       runId: string,
     ) => Promise<void>,
-    options: { readonly cost?: boolean } = {},
+    options: {
+      readonly cost?: boolean;
+      readonly outcome?: NonNullable<HarnessOptions['runs']>[string];
+    } = {},
   ): PipelineHarness => {
     const harness = harnessWith({
       runs: {
-        refinement: {
+        refinement: options.outcome ?? {
           status: 'completed',
           terminalReason: 'success',
           costUsd: 0.4,
@@ -946,6 +949,90 @@ describe('a task a human stopped while its stage was running', () => {
     );
     // Labelled, not merged: this charge was made after the row was already terminal.
     expect(ledger.entries.every((entry) => entry.late)).toBe(true);
+  });
+
+  /**
+   * WP-101 review round 1 (standing rule 16): a cancel applied by the holder whose interrupted turn
+   * sent no `result` inside the grace measured **nothing**. The row's cost stays `null` — never a
+   * `usd_reported = 0` a later reader takes for a free run — and the ledger writes no row, as for a
+   * run the lease sweep ended. The measured branch is the topology e2e's (`0.13`, not late).
+   */
+  it('writes no figure and no ledger row for a cancelled run whose stop measured nothing (WP-101)', async () => {
+    const harness = harnessWith({
+      runs: {
+        refinement: {
+          status: 'cancelled',
+          terminalReason: 'cancelled',
+          costUnmeasured: true,
+          error: 'the platform stopped the run: cancelled',
+        },
+      },
+      cost: true,
+    });
+    await harness.publish([ticketMatched()]);
+    const ledger = harness.cost;
+    if (ledger === null) {
+      throw new Error('the harness was asked for the ledger and composed none');
+    }
+    const runId = harness.specs.at(-1)?.runId as Id;
+    const run = await harness.memory.transaction(async (scope) =>
+      harness.store.runs.load(scope.tx, runId),
+    );
+    expect(run?.status).toBe('cancelled');
+    expect(run?.cost).toBeNull();
+    expect(ledger.entries).toEqual([]);
+    expect(taskOf(harness).costActualUsd).toBe(0);
+  });
+
+  /**
+   * The same rule on the late path (WP-101 review round 2): a run another writer ended, whose own stop
+   * then measured nothing, has no figure to be late with — `lostTheRun` records no late charge rather
+   * than a zero the ledger would take for a free run (rule 16).
+   */
+  it('records no late charge for a run ended by another writer whose stop measured nothing (WP-101)', async () => {
+    const harness = harnessThatStopsMidRun(
+      async (instance, tx, runId) => {
+        await instance.store.runs.finish(tx, {
+          runId,
+          status: 'cancelled',
+          terminalReason: 'cancelled',
+          sessionId: null,
+          numTurns: 0,
+          usage: {
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_write_5m_tokens: 0,
+            cache_write_1h_tokens: 0,
+            cache_read_tokens: 0,
+          },
+          cost: null,
+          wallMs: 0,
+        });
+      },
+      {
+        cost: true,
+        outcome: {
+          status: 'cancelled',
+          terminalReason: 'cancelled',
+          costUnmeasured: true,
+          error: 'the platform stopped the run: cancelled',
+        },
+      },
+    );
+    await harness.publish([ticketMatched()]);
+    const ledger = harness.cost;
+    if (ledger === null) {
+      throw new Error('the harness was asked for the ledger and composed none');
+    }
+    expect(ledger.entries).toEqual([]);
+    expect(taskOf(harness).costActualUsd).toBe(0);
+    const runId = harness.specs.at(-1)?.runId as Id;
+    const run = await harness.memory.transaction(async (scope) =>
+      harness.store.runs.load(scope.tx, runId),
+    );
+    // The row the human's cancel wrote with no figure keeps no figure: a late `recordCost` of the
+    // outcome's zero would be the claim rule 16 forbids.
+    expect(run?.cost).toBeNull();
   });
 
   it('claims a lease on the run it starts, so a sweep can tell it apart from one nobody is driving', async () => {

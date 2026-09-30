@@ -1167,8 +1167,20 @@ export const steerRunResponseSchema = runCommandResponseSchema.extend({
   command_id: idSchema,
 });
 
-/** The two commands that reach a live run through the database (WP-85). */
-export const runCommandKindSchema = z.enum(['steer', 'take_over']);
+/**
+ * `POST /api/runs/:id/cancel` — which of TD-028 decision 11's two branches it took (WP-101).
+ *
+ * `command_id` names the `run_commands` row the process holding the session applies as its stop,
+ * and the answer is then `202`: the run's `status` is still live and becomes `cancelled` when that
+ * process ends it, with the cost the session measured. `null` when no process held the run's lease,
+ * and the answer is `200`: the record was ended in place and `status` already reads `cancelled`.
+ */
+export const cancelRunResponseSchema = runCommandResponseSchema.extend({
+  command_id: idSchema.nullable(),
+});
+
+/** The three commands that reach a live run through the database (WP-85; `cancel` since WP-101). */
+export const runCommandKindSchema = z.enum(['steer', 'take_over', 'cancel']);
 
 /**
  * Why a recorded run command was not applied (WP-85). `run_ended`: the run ended while the command
@@ -1189,7 +1201,7 @@ export const runCommandRefusalSchema = z.enum([
  *
  * `state` is derived from the two stamps and is there so a client does not re-derive it. `message`
  * is the steer's text **as the platform stored it** — redacted once by the command (TD-012) — and
- * `null` for a take-over's stop; it is untrusted text (BD-022) and is rendered as such.
+ * `null` for a take-over's or a cancel's stop; it is untrusted text (BD-022) and is rendered as such.
  */
 export const runCommandRecordSchema = z.strictObject({
   id: idSchema,
@@ -2250,6 +2262,7 @@ export type CreateIdentityMappingRequest = z.infer<typeof createIdentityMappingR
 export type IdentityMapping = z.infer<typeof identityMappingSchema>;
 export type HandBackRequest = z.infer<typeof handBackRequestSchema>;
 export type RunCommandResponse = z.infer<typeof runCommandResponseSchema>;
+export type CancelRunResponse = z.infer<typeof cancelRunResponseSchema>;
 export type SteerRunResponse = z.infer<typeof steerRunResponseSchema>;
 export type RunCommandKind = z.infer<typeof runCommandKindSchema>;
 export type RunCommandRefusal = z.infer<typeof runCommandRefusalSchema>;

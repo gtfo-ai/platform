@@ -154,6 +154,9 @@ const ZERO_USAGE: TokenUsage = {
 /** Why the platform stopped the run, when it was the platform that stopped it. */
 type StopCause = 'stalled' | 'timed_out' | 'budget_exceeded' | 'cost_unreported' | RunStopReason;
 
+/** A human's stop — the two whose interrupted turn's result is read for its cost (WP-101). */
+const HUMAN_STOPS: ReadonlySet<StopCause> = new Set<StopCause>(['cancelled', 'taken_over']);
+
 const STOP_STATUS: Record<StopCause, TerminalRunStatus> = {
   stalled: 'stalled',
   timed_out: 'timed_out',
@@ -450,11 +453,12 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
     // `ClaudeRunner.start()` would blow up in the caller's face instead of returning a handle whose
     // outcome is `failed(crash)`. Found by the test below rather than reasoned about.
     let session: ReturnType<QueryFunction> | null = null;
+    let iterator: AsyncIterator<SDKMessage, void> | null = null;
     let pending: Promise<IteratorResult<SDKMessage, void>> | null = null;
 
     try {
       session = queryFn({ prompt: inputs.iterable, options });
-      const iterator = session[Symbol.asyncIterator]();
+      iterator = session[Symbol.asyncIterator]();
       for (;;) {
         pending ??= iterator.next();
         pending.catch(() => undefined);
@@ -503,12 +507,13 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
         // is told there are no more turns, and it closes the CLI's stdin — after which the
         // interrupt control request has no transport to travel on and its promise never settles.
         // That ordering cost one debugging round and is the reason this comment exists.
-        await Promise.race([
-          session.interrupt().catch(() => undefined),
-          new Promise<void>((resolve) => {
-            deps.clock.setTimer(INTERRUPT_GRACE_MS, resolve);
-          }),
-        ]);
+        const grace = new Promise<'grace'>((resolve) => {
+          deps.clock.setTimer(INTERRUPT_GRACE_MS, () => resolve('grace'));
+        });
+        await Promise.race([session.interrupt().catch(() => undefined), grace]);
+        if (HUMAN_STOPS.has(stopCause) && result === null && iterator !== null) {
+          await readInterruptedResult(iterator, pending, grace);
+        }
         abortController.abort();
         await append((envelope) => ({
           ...envelope,
@@ -540,6 +545,50 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
     return outcomeOf(failure);
   };
 
+  /**
+   * **The interrupted turn's own result**, read within the same grace the interrupt had (WP-101).
+   *
+   * A human's stop (a cancel, a take-over) interrupts a session that has been spending, and the only
+   * party that knows what it spent is the CLI: the SDK documents that on a clean interrupt the CLI
+   * writes its receipt and then **the interrupted turn's result** (`interrupt_receipt_v1`, *"on a
+   * clean interrupt this receipt is written before the interrupted turn result"* — the installed
+   * 0.3.267 `sdk.d.ts`, `SDKControlInterruptResponse`). Until WP-101 the loop broke on the stop and
+   * never read it, so a stopped run's outcome carried a zero and the ledger no row — which was
+   * invisible while a cancel ended only the record (the session then ran on to its own `result`,
+   * charged late), and is not once the cancel stops the session (TD-028 decision 11).
+   *
+   * So the messages after the interrupt are handled like any other — the transcript gets them, and
+   * a `result` among them sets {@link result}, whose cost the outcome then carries — until that
+   * result, the end of the stream, or the grace. Bounded by the **same** timer as the interrupt, so
+   * a stop never waits longer than it did. Only for a human's stop: the platform's own stops
+   * (stalled, timed out, over budget) are the cases where the stream is least likely to answer, and
+   * a budget stop already has its result.
+   */
+  const readInterruptedResult = async (
+    iterator: AsyncIterator<SDKMessage, void>,
+    inFlight: Promise<IteratorResult<SDKMessage, void>> | null,
+    grace: Promise<'grace'>,
+  ): Promise<void> => {
+    let next = inFlight;
+    try {
+      while (result === null) {
+        next ??= iterator.next();
+        next.catch(() => undefined);
+        const step = await Promise.race([next, grace]);
+        if (step === 'grace' || step.done === true) {
+          return;
+        }
+        next = null;
+        await handle(step.value);
+      }
+    } catch (error) {
+      logger.debug(
+        { run_id: spec.runId, error: error instanceof Error ? error.message : 'unknown' },
+        'reading the interrupted turn’s result failed; the stopped run carries no measured cost',
+      );
+    }
+  };
+
   const outcomeOf = (failure: string | null): RunOutcome => {
     const wallMs = Math.max(0, deps.clock.now() - startedAt);
     const finished = result;
@@ -560,6 +609,8 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
     if (stopCause !== null) {
       return {
         runId: spec.runId,
+        // A human's stop that read no interrupted result measured nothing (WP-101 review round 1).
+        ...(finished === null && HUMAN_STOPS.has(stopCause) ? { costUnmeasured: true } : {}),
         status: STOP_STATUS[stopCause],
         terminalReason: STOP_REASON[stopCause],
         sessionId,

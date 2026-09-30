@@ -39,6 +39,10 @@
  *  9. **A deployment with no runner is visible** (WP-86, backlog 135): `app`'s `/readyz` reports
  *     `agent_runs` degraded (still 200) with `details.agent_runs: unserved`, and `/metrics` the
  *     `stage.execute` backlog and its age — then `ok` once a runner takes the job.
+ * 10. **A cancel answered by `app` stops the session in `runner`, and the steer window is one
+ *     window** (WP-101, TD-028 decision 11, backlog 294 and 295): the run ends `cancelled` in the
+ *     runner with its measured cost, charged once and not late; and two steers by one person
+ *     through two `ROLE=api` processes admit one.
  *
  * ## The connection budget (criterion 3)
  *
@@ -49,12 +53,16 @@
  * with this file in it, and the margin under `max_connections`, are in PROGRESS under WP-72 and in
  * `test/integration/support/global-setup.ts`.
  */
-import type { RunRecord } from '@platform/contracts';
+import type { CancelRunResponse, RunRecord } from '@platform/contracts';
 import { redaction as redactionAdapters } from '@platform/infrastructure';
 import { loadServerConfig, requiredPoolConnections, UndersizedPoolError } from '@platform/server';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createMigratedDatabase } from '../../integration/support/migrated.js';
-import { PLANTED_MODEL_KEY, PLANTED_MODEL_KEY_PLACEHOLDER } from '../support/agent-workspace.js';
+import {
+  INTERRUPTED_COST_USD,
+  PLANTED_MODEL_KEY,
+  PLANTED_MODEL_KEY_PLACEHOLDER,
+} from '../support/agent-workspace.js';
 import {
   BOOTSTRAP_EMAIL,
   BOOTSTRAP_PASSWORD,
@@ -512,6 +520,199 @@ describe('the shipped topology: app (ROLE=all, no launcher) beside runner (ROLE=
     ).toMatchObject({ branch: 'agentic/ACME-2', tarball: false });
     // The task stays where the human put it: nothing re-ran the stage behind them.
     expect((await pipeline.task()).state).toBe('paused');
+  }, 300_000);
+
+  /**
+   * WP-101 (TD-028 decision 11, PROGRESS backlog 294): a cancel answered by `app` stops the session
+   * running in `runner`. Until WP-101 `app` ended the **record** and the session played its script
+   * to the end and was charged late; now `app` records a `cancel` row for the lease holder and the
+   * holder interrupts the session, so the run ends `cancelled` in `runner` with what the session
+   * measured, charged once by the ordinary ledger handler.
+   *
+   * The session is held open by `awaitSteers: 1` — after its first turn, waiting for a user turn
+   * that never comes — so "before its script ends" is a fact the fake CLI can report
+   * (`scriptEnded`), and the cost it measured is `INTERRUPTED_COST_USD`, a figure no script played
+   * to its end produces.
+   */
+  it('cancels, from app, the session running in runner before its script ends, and charges what it measured once (WP-101)', async () => {
+    const pipeline = await startPipeline({
+      scenarios: (world) => ({
+        ...featureScenarios(world),
+        refinement: { ...featureScenarios(world).refinement, awaitSteers: 1 },
+      }),
+      label: 'topology-cancel',
+      tickets: TICKETS,
+      agent: 'none',
+      processName: 'app',
+    });
+    harness = pipeline;
+    await pipeline.addProcess({
+      name: 'runner',
+      role: 'runner',
+      agent: 'real-over-fake-cli',
+      env: { APP_DB_POOL_MAX: String(floorOf('runner')) },
+    });
+    const app = await signIn(pipeline.instance.baseUrl);
+    await pipeline.publish([ticketMatched(pipeline, 'ACME-3')]);
+
+    // The session is open and has been spending: its first turn is in the transcript, written by
+    // the runner, and the CLI is waiting for a turn nobody sends.
+    await pipeline.waitFor('the refinement session to have taken its first turn', async () => {
+      const rows = await pipeline.query(
+        `select 1 from run_messages m join runs r on r.id = m.run_id
+          where r.status = 'running' and m.kind = 'assistant'`,
+      );
+      return rows.length > 0;
+    });
+    const [live] = await pipeline.query<{ id: string }>(
+      "select id from runs where status = 'running'",
+    );
+    const runId = live?.id as string;
+
+    const cancelled = await app.json<CancelRunResponse>(`/api/runs/${runId}/cancel`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': 'cancel-topology' },
+      body: JSON.stringify({ reason: 'wrong ticket' }),
+    });
+    // Accepted, not done: `app` holds no session and says so — the run still reads running.
+    expect(cancelled.status, JSON.stringify(cancelled.body)).toBe(202);
+    expect(cancelled.body.status).toBe('running');
+    expect(cancelled.body.task_state).toBe('paused');
+    const commandId = cancelled.body.command_id as string;
+    expect(
+      await pipeline.query('select run_id, kind from run_commands where id = $1', [commandId]),
+    ).toEqual([{ run_id: runId, kind: 'cancel' }]);
+
+    // The last rows the platform writes (rule 87): the run's ending, then the ledger's charge.
+    await pipeline.waitFor(
+      'the runner to end the stopped run and the ledger to charge it',
+      async () => {
+        const [row] = await pipeline.query<{ status: string }>(
+          'select status::text as status from runs where id = $1',
+          [runId],
+        );
+        const charged = await pipeline.query('select 1 from cost_entries where run_id = $1', [
+          runId,
+        ]);
+        return row?.status === 'cancelled' && charged.length > 0;
+      },
+    );
+
+    expect(
+      await pipeline.query<{ applied: boolean; refused_reason: string | null }>(
+        'select applied_at is not null as applied, refused_reason from run_commands where id = $1',
+        [commandId],
+      ),
+    ).toEqual([{ applied: true, refused_reason: null }]);
+    const [ended] = await pipeline.query<{
+      status: string;
+      terminal_reason: string;
+      usd_reported: string | null;
+    }>(
+      `select status::text as status, terminal_reason::text as terminal_reason,
+              usd_reported::text as usd_reported
+         from runs where id = $1`,
+      [runId],
+    );
+    expect(ended).toEqual({
+      status: 'cancelled',
+      terminal_reason: 'cancelled',
+      usd_reported: '0.130000',
+    });
+    // Exactly once and not late: the ordinary handler charged what the session measured.
+    const entries = await pipeline.query<{ usd: string; late: boolean }>(
+      'select usd::text as usd, late from cost_entries where run_id = $1',
+      [runId],
+    );
+    expect(entries).toEqual([{ usd: String(INTERRUPTED_COST_USD.toFixed(6)), late: false }]);
+    // Stopped, not played out: the CLI was interrupted and never reached its own end, and no
+    // `result` of the finished script — the scenario's full cost — was ever read.
+    const session = pipeline.agentRuns.find((run) => run.spec.runId === runId);
+    expect(session?.cli.interrupts).toBe(1);
+    expect(session?.cli.scriptEnded).toBe(false);
+    expect(
+      await pipeline.query<{ reason: string }>(
+        "select payload->>'terminal_reason' as reason from run_messages where run_id = $1 and kind = 'result'",
+        [runId],
+      ),
+    ).toEqual([{ reason: 'error_during_execution' }]);
+    // The human's pause stands: nothing re-ran the stage behind them.
+    expect((await pipeline.task()).state).toBe('paused');
+  }, 300_000);
+});
+
+/**
+ * WP-101 (PROGRESS backlog 295, criterion 5): technical/08's one-per-five-seconds steer window is
+ * one window for the installation. Two steers by one person, one through each of two `ROLE=api`
+ * processes, admit exactly one; the other gets the window's own `429 rate_limited`. Until WP-101
+ * each process held its own window, and two processes admitted two paid turns. The deterministic
+ * interleaving — the second transaction waiting on the user's advisory lock, and the canary that
+ * removes it — is `test/integration/pipeline/run-commands.integration.test.ts`; this is the same
+ * property through the processes.
+ */
+describe('two API processes, one steer window', () => {
+  it('admits one of two steers sent within five seconds, one through each ROLE=api process', async () => {
+    const pipeline = await startPipeline({
+      scenarios: (world) => ({
+        ...featureScenarios(world),
+        refinement: { ...featureScenarios(world).refinement, awaitSteers: 1 },
+      }),
+      label: 'topology-steer-window',
+      tickets: TICKETS,
+      role: 'api',
+      agent: 'none',
+      processName: 'api-1',
+      env: { APP_DB_POOL_MAX: String(floorOf('api')) },
+    });
+    harness = pipeline;
+    await pipeline.addProcess({
+      name: 'runner',
+      role: 'runner',
+      agent: 'real-over-fake-cli',
+      env: { APP_DB_POOL_MAX: String(floorOf('runner')) },
+    });
+    const second = await pipeline.addProcess({
+      name: 'api-2',
+      role: 'api',
+      agent: 'none',
+      env: { APP_DB_POOL_MAX: String(floorOf('api')) },
+    });
+    const one = await signIn(pipeline.instance.baseUrl);
+    const two = await signIn(second.baseUrl);
+    await pipeline.publish([ticketMatched(pipeline, 'ACME-4')]);
+    await pipeline.waitFor('the refinement session to be running', async () => {
+      const rows = await pipeline.query("select 1 from runs where status = 'running'");
+      return rows.length === 1;
+    });
+    const [live] = await pipeline.query<{ id: string }>(
+      "select id from runs where status = 'running'",
+    );
+    const runId = live?.id as string;
+
+    const steerThrough = (client: Client, key: string, message: string) =>
+      client.json<{ command_id?: string; error?: { code: string } }>(`/api/runs/${runId}/steer`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'idempotency-key': key },
+        body: JSON.stringify({ message }),
+      });
+    // At once, one per process: whichever commits first is the one the window admits.
+    const answers = await Promise.all([
+      steerThrough(one, 'window-1', 'check the rounding'),
+      steerThrough(two, 'window-2', 'and the currency'),
+    ]);
+    const outcomes = answers
+      .map((answer) => `${answer.status} ${answer.body.error?.code ?? 'accepted'}`)
+      .sort();
+    expect(outcomes, JSON.stringify(answers.map((answer) => answer.body))).toEqual([
+      '202 accepted',
+      '429 rate_limited',
+    ]);
+    // One paid turn recorded, and only one.
+    expect(
+      await pipeline.query("select 1 from run_commands where run_id = $1 and kind = 'steer'", [
+        runId,
+      ]),
+    ).toHaveLength(1);
   }, 300_000);
 });
 

@@ -215,6 +215,11 @@ export interface ScriptedRun {
    */
   readonly deliberatelyInvalid?: string;
   readonly costUsd?: number;
+  /**
+   * The outcome says nothing measured its spend (WP-101 review round 1): a human's stop whose
+   * interrupted turn sent no result. `costUsd` is then ignored and the outcome carries the floor.
+   */
+  readonly costUnmeasured?: boolean;
   readonly error?: string | null;
   /** Written to the transcript as the `run_stopped` row's reason (WP-12). */
   readonly stopReason?: string;
@@ -445,15 +450,21 @@ const outcomeFor = (runId: Id, scripted: ScriptedRun, structuredOutput: unknown)
   terminalReason: scripted.terminalReason,
   sessionId: `session-${runId}`,
   numTurns: 1,
+  // An unmeasured stop read no `result`, so it has no usage either — what the real runner reports.
   usage: {
-    input_tokens: 100,
-    output_tokens: 50,
+    input_tokens: scripted.costUnmeasured === true ? 0 : 100,
+    output_tokens: scripted.costUnmeasured === true ? 0 : 50,
     cache_write_5m_tokens: 0,
     cache_write_1h_tokens: 0,
     cache_read_tokens: 0,
   },
   modelUsage: [],
-  cost: { usd: scripted.costUsd ?? 0.25, is_estimate: false, price_list_id: null },
+  cost: {
+    usd: scripted.costUnmeasured === true ? 0 : (scripted.costUsd ?? 0.25),
+    is_estimate: false,
+    price_list_id: null,
+  },
+  ...(scripted.costUnmeasured === true ? { costUnmeasured: true } : {}),
   wallMs: 1000,
   // Parsed by `checkScripted` before it gets here; the cast is from `unknown` to the JSON shape
   // the parse already established, not a statement nobody checked.

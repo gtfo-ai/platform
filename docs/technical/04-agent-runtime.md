@@ -397,6 +397,17 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 > hints), so the frames a client renders have to be read back from these rows — which is what having
 > rows finally makes possible.
 - **Steer:** the run's input is an async queue; a `run.steered` command pushes an `SDKUserMessage` (author recorded). **Pause/cancel:** `interrupt()`; cancel then ends the run with `cancelled`. **Tighten:** `applyFlagSettings` to reduce permissions after untrusted input if a policy requires (future).
+
+> **As built at WP-101 (TD-028 decision 11): a human's stop keeps what the session measured.** A
+> cancel of a run whose lease is live reaches the holder as a `run_commands` row and is applied as
+> `RunHandle.stop({ reason: 'cancelled' })`, as a take-over's stop is. After `interrupt()` the runner
+> reads the stream on until **the interrupted turn's own `result`** — the SDK documents the CLI
+> writing it after the interrupt's receipt (`interrupt_receipt_v1`) — within the same
+> `INTERRUPT_GRACE_MS` the interrupt already had, so a stop never waits longer than it did. The
+> outcome is still `cancelled`, and its cost and model usage are that result's, so the ledger charges
+> what the session spent, once and not late. Only for a human's stop (cancel, take-over): the
+> platform's own stops (stall, wall clock, budget) are where the stream is least likely to answer.
+> With no result inside the grace the stopped run carries no measured cost, as before.
 - Heartbeat: last output timestamp; `stalled` after `stallTimeoutMs` → interrupt, mark stalled, pipeline retries once with failure context (research/01 Symphony).
 - Transport: `spawnClaudeCodeProcess` returns a `SpawnedProcess` backed by the run shim's control socket (frames for stdin/stdout/stderr/signal/exit); `stderr` frames go to the SDK `stderr` callback and the run log; the SDK teardown signal maps to `signal{SIGTERM}` and then container stop.
 

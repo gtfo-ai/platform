@@ -1,10 +1,12 @@
 /**
- * `run_commands` on PostgreSQL (migration 0060, WP-85, TD-028 decision 9).
+ * `run_commands` on PostgreSQL (migrations 0060 and 0064; WP-85 and WP-101, TD-028 decisions 9
+ * and 11).
  *
  * The port's docblock (`RunCommandRepository`) carries the ordering argument; this file is where
- * the three locks it relies on are written down as SQL:
+ * the four locks it relies on are written down as SQL:
  *
- * - **`lockRun` / `lockLiveRunOf` take `for share` on the run.** The command inserts its row only
+ * - **`lockRun` / `lockLiveRunOf` take `for share` on the run** — `for update` when a cancel asks,
+ *   because a cancel may go on to `finish` the row it read. The command inserts its row only
  *   after reading the run live under that lock, in the same transaction. `runs.finish` needs the
  *   row exclusively, so it waits for a command that holds the lock and — its close being a later
  *   statement with a later snapshot — then sees and closes the committed row; or the command waits
@@ -14,6 +16,10 @@
  *   run terminal (the ending closed the row), or the ending waits for the stamp.
  * - **`closePendingRunCommands` runs inside `finish`**, after the `update runs`, and only for the
  *   caller that won it.
+ * - **`admitSteer` takes a transaction-scoped advisory lock on the user** before any row lock, and
+ *   reads the user's `steer` rows inside the window; the caller inserts the row it admitted in the
+ *   same transaction, so the next steer by that user — through any process — waits for the commit
+ *   and reads it (WP-101, PROGRESS backlog 295).
  *
  * `payload` is read back through a schema: it is stored state, and a row a future build wrote in a
  * shape this one does not know is refused by name rather than delivered as a guess.
@@ -26,6 +32,7 @@ import type {
   RunCommandRepository,
   Transaction,
 } from '@platform/application';
+import { STOPPING_RUN_COMMAND_KINDS } from '@platform/application';
 import type { Id, IsoDateTime, RunStatus } from '@platform/contracts';
 import { ACTIVE_RUN_STATUSES } from '@platform/domain';
 import * as z from 'zod';
@@ -52,22 +59,31 @@ const takeOverPayloadSchema = z.strictObject({
   keep_until: z.iso.datetime({ offset: true }),
 });
 
+/** A cancel's stop carries nothing but its kind (migration 0064, WP-101). */
+const cancelPayloadSchema = z.strictObject({});
+
 /** The instruction as the `payload` column stores it — the wire format is snake_case. */
 export const encodeRunCommandPayload = (
   instruction: RunCommandInstruction,
-): Record<string, unknown> =>
-  instruction.kind === 'steer'
-    ? {
+): Record<string, unknown> => {
+  switch (instruction.kind) {
+    case 'steer':
+      return {
         text: instruction.text,
         author_user_id: instruction.authorUserId,
         author_label: instruction.authorLabel,
-      }
-    : {
+      };
+    case 'take_over':
+      return {
         branch: instruction.branch,
         commit_message: instruction.commitMessage,
         tarball: instruction.tarball,
         keep_until: instruction.keepUntil,
       };
+    case 'cancel':
+      return {};
+  }
+};
 
 export const decodeRunCommandPayload = (
   id: string,
@@ -95,6 +111,10 @@ export const decodeRunCommandPayload = (
         keepUntil: parsed.data.keep_until as IsoDateTime,
       };
     }
+  } else if (kind === 'cancel') {
+    if (cancelPayloadSchema.safeParse(payload).success) {
+      return { kind: 'cancel' };
+    }
   }
   throw new RunCommandPayloadError(
     `run command ${id} of kind "${kind}" has a payload this build cannot deliver`,
@@ -117,6 +137,7 @@ type LockedRow = {
   task_id: string;
   status: RunStatus;
   lease_owner: string | null;
+  lease_expires_at: Date | string | null;
   session_id: string | null;
 };
 
@@ -125,6 +146,10 @@ const lockedOf = (row: LockedRow): LockedRun => ({
   taskId: row.task_id as Id,
   status: row.status,
   leaseOwner: row.lease_owner,
+  leaseExpiresAt:
+    row.lease_expires_at === null
+      ? null
+      : (new Date(row.lease_expires_at).toISOString() as IsoDateTime),
   sessionId: row.session_id === '' ? null : row.session_id,
 });
 
@@ -154,10 +179,13 @@ export const closePendingRunCommands = async (sql: SqlExecutor, runId: string): 
 };
 
 export const createPostgresRunCommandRepository = (): RunCommandRepository => ({
-  lockRun: async (tx, runId) => {
+  lockRun: async (tx, runId, options) => {
+    // `for update` for a cancel, which may go on to `finish` the row (WP-101): two share locks
+    // upgraded at once deadlock where one exclusive lock makes the second cancel wait and refuse.
+    const strength = options?.forUpdate === true ? 'update' : 'share';
     const { rows } = await sqlOf(tx).query<LockedRow>(
-      `select r.id, r.task_id, r.status, r.lease_owner, ${SESSION_OF_RUN}
-         from runs r where r.id = $1 for share of r`,
+      `select r.id, r.task_id, r.status, r.lease_owner, r.lease_expires_at, ${SESSION_OF_RUN}
+         from runs r where r.id = $1 for ${strength} of r`,
       [runId],
     );
     const row = rows[0];
@@ -167,7 +195,7 @@ export const createPostgresRunCommandRepository = (): RunCommandRepository => ({
     // Newest first: technical/02 allows a task one active run, so more than one row here is a
     // defect elsewhere — and the newest is the one a person looking at the task is looking at.
     const { rows } = await sqlOf(tx).query<LockedRow>(
-      `select r.id, r.task_id, r.status, r.lease_owner, ${SESSION_OF_RUN}
+      `select r.id, r.task_id, r.status, r.lease_owner, r.lease_expires_at, ${SESSION_OF_RUN}
          from runs r
         where r.task_id = $1 and r.status = any($2::run_status[])
         order by r.created_at desc, r.id desc
@@ -208,9 +236,13 @@ export const createPostgresRunCommandRepository = (): RunCommandRepository => ({
           and r.status = any($2::run_status[])
           and r.lease_owner = $1
           and ($3::uuid is null or c.run_id = $3::uuid)
+          -- A steer behind a stop that was not refused waits for the run's ending (WP-101).
+          and not (c.kind = 'steer' and exists (
+                select 1 from run_commands s
+                 where s.run_id = c.run_id and s.kind = any($5::text[]) and s.refused_at is null))
         order by c.created_at, c.id
         limit $4`,
-      [query.owner, ACTIVE, query.runId ?? null, query.limit],
+      [query.owner, ACTIVE, query.runId ?? null, query.limit, [...STOPPING_RUN_COMMAND_KINDS]],
     );
     return rows.map(
       (row): PendingRunCommand => ({
@@ -261,5 +293,22 @@ export const createPostgresRunCommandRepository = (): RunCommandRepository => ({
       [input.id, input.reason],
     );
     return result.rowCount !== 0;
+  },
+  admitSteer: async (tx, input) => {
+    const sql = sqlOf(tx);
+    // Held to the end of the caller's transaction, which inserts the row it admits: the next steer
+    // by this user, through any process, waits here and then reads that row (WP-101, backlog 295).
+    await sql.query(`select pg_advisory_xact_lock(hashtextextended('steer_window/' || $1, 0))`, [
+      input.userId,
+    ]);
+    const { rows } = await sql.query<{ recent: boolean }>(
+      `select exists (
+         select 1 from run_commands
+          where kind = 'steer' and actor_user_id = $1
+            and created_at > now() - make_interval(secs => $2::double precision / 1000)
+       ) as recent`,
+      [input.userId, input.windowMs],
+    );
+    return rows[0]?.recent !== true;
   },
 });

@@ -644,9 +644,11 @@ export const taskRecordSchema = z.strictObject({
    *
    * **It used to understate on a task a human intervened in** — a cancelled run's spend reached no
    * `cost_entries` row and so no `cost_actual` (PROGRESS backlog 50) — and WP-47 closed that: the
-   * process that ran the session records what the attempt cost against the terminated row. What is
-   * still understated is the narrower case Q52 owns: a cancelled run whose process then **dies**
-   * has nobody left to report the number, so nothing measures it and nothing invents one.
+   * process that ran the session records what the attempt cost against the terminated row, and
+   * since WP-101 a cancel of a run a process holds is that process's own ending, charged with what
+   * the session measured. What is still understated is the narrower case: a cancelled run whose
+   * process then **dies** has nobody left to report the number, so nothing measures it and nothing
+   * invents one.
    */
   estimate_accuracy: z.number().nonnegative().nullable(),
   requested_by_user_id: idSchema.nullish(),

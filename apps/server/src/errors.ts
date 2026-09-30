@@ -25,6 +25,7 @@ import {
   RunNotLiveError,
   StageNotCurrentError,
   StageNotInTemplateError,
+  SteerWindowClosedError,
   TaskConflictExhaustedError,
   UnknownAggregateError,
 } from '@platform/application';
@@ -182,6 +183,10 @@ export const commandRefusal = (error: unknown): HttpError | null => {
   }
   if (error instanceof CommandsUnavailableError) {
     return new HttpError(503, 'commands_unavailable', error.message);
+  }
+  if (error instanceof SteerWindowClosedError) {
+    // technical/08's one rate limit, read off the database since WP-101 (backlog 295).
+    return new HttpError(429, 'rate_limited', error.message);
   }
   return null;
 };

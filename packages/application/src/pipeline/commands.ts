@@ -14,6 +14,7 @@
  */
 import type {
   AnswerChannel,
+  DomainEvent,
   Effort,
   Id,
   IsoDateTime,
@@ -421,6 +422,28 @@ export class RunNotLiveError extends Error {
   }
 }
 
+/** technical/08 — *"`POST /api/runs/:id/steer` limited to 1 message per 5 s per user"*, verbatim. */
+export const STEER_MIN_INTERVAL_MS = 5_000;
+
+/**
+ * The steer window refused this one: the same person had a steer recorded within
+ * {@link STEER_MIN_INTERVAL_MS} (technical/08). The HTTP answer is `429 rate_limited`.
+ *
+ * Raised from inside the recording transaction, after the run and the role were checked, so a steer
+ * refused for any other reason says that reason rather than this one — and a refused steer records
+ * nothing, so it never takes a slot (WP-73's refund, now a property of the row rather than of a
+ * per-process map).
+ */
+export class SteerWindowClosedError extends Error {
+  override readonly name = 'SteerWindowClosedError';
+
+  constructor() {
+    super(
+      `steering is limited to one message every ${STEER_MIN_INTERVAL_MS / 1_000} seconds per person (technical/08); your last message was accepted moments ago, try again in a moment`,
+    );
+  }
+}
+
 /**
  * The bounded loop a **human** return spends.
  *
@@ -652,10 +675,11 @@ const auditedReason = (
  * are handed back to the transport for the `human_actions` row, redacted — see
  * {@link auditedReason} for why that is the only home they have and why the redaction is here.
  *
- * A run already in flight is **not** stopped — nothing in this build can reach a live session from
- * another process (Q52) — but it can no longer advance the task: the stage executor records the run
- * and stops, because `isRunnableTaskState` is false for a paused task. Stopping the session itself
- * is `POST /api/runs/:run_id/cancel`, which is why both commands exist.
+ * A run already in flight is **not** stopped — a pause is about the task, not the session — but it
+ * can no longer advance the task: the stage executor records the run and stops, because
+ * `isRunnableTaskState` is false for a paused task. Stopping the session itself is
+ * `POST /api/runs/:run_id/cancel`, which reaches the process holding it since WP-101 (TD-028
+ * decision 11), and that is why both commands exist.
  */
 export const pauseTaskCommand = async (
   deps: HumanCommandDependencies,
@@ -1085,38 +1109,80 @@ const toRunAggregate = (stored: StoredRun, sequence: number): Run => {
   };
 };
 
+/** What a run cancel did — which of TD-028 decision 11's two branches, and what it recorded. */
+export interface CancelRunOutcome {
+  readonly taskId: Id;
+  /**
+   * The `run_commands` row the lease holder applies as the session's stop, or `null` when no
+   * process held the run and the record was ended in place. The HTTP answer is `202` for the first
+   * and `200` for the second.
+   */
+  readonly commandId: Id | null;
+}
+
 /**
- * `POST /api/runs/:run_id/cancel` — stop this attempt.
+ * Whether some process is renewing the run's lease **now**, by this command's clock — the same
+ * comparison the lease sweep makes (`../recovery/run-lease.ts`), without its grace: a lease that has
+ * lapsed but not yet been swept is one nobody renewed in time, and a cancel is not the place to wait
+ * for it.
+ */
+const leaseIsLive = (run: LockedRun, now: IsoDateTime): boolean =>
+  run.leaseOwner !== null &&
+  run.leaseExpiresAt !== null &&
+  Date.parse(run.leaseExpiresAt) > Date.parse(now);
+
+/**
+ * `POST /api/runs/:run_id/cancel` — stop this attempt. **Two branches, and the lease decides which**
+ * (TD-028 decision 11, WP-101, PROGRESS backlog 294).
  *
- * ## What it can and cannot do, stated at the line
+ * ## A live lease: the stop is recorded for the process holding the session
  *
- * It ends the run **as a record**: the row moves to `cancelled`, `run.finished` is appended, and the
- * task is paused so the pipeline does not act on an attempt nobody will finish. What it does **not**
- * do is interrupt the model's session. `RunHandle.stop` exists and belongs to the process that
- * started the run; reaching it from an HTTP request in another process is Q52's out-of-process
- * transport, which is deliberately unbuilt. So a cancelled run may keep spending for as long as its
- * session takes to end, and when it does end its own process finds the row terminal and discards its
- * **verdict** (`stage-executor.ts`'s `lostTheRun`).
+ * When `runs.lease_expires_at` is in the future, a process is driving the session and renewing its
+ * lease. The command then does what a take-over does: in one transaction it pauses the task (so the
+ * pipeline does not act on an attempt nobody will finish) and records a `cancel` row in
+ * `run_commands`, and it wakes the holder with `pg_notify`. The holder applies it as
+ * `RunHandle.stop({ reason: 'cancelled' })` (`./run-commands.ts`), the session is interrupted, and
+ * the run ends `cancelled` **in its own process, with its measured cost** — the one process that
+ * knows what the attempt spent is the one that writes the row, so the ledger is charged once, by the
+ * ordinary `run.finished` handler, and not `late`. The run row is **not** touched here: there is one
+ * terminal writer in this branch, the holder. The heartbeat's poll is the guarantee and the
+ * notification only the latency (decision 9).
  *
- * **Its spend is no longer discarded with it** (WP-47, Q70 (b)): that process is the only one that
- * knows what the attempt cost, so it writes the figure through the narrow `runs.recordCost` and
- * charges the ledger from the same transaction. Which is why the cost this command stores is `null`
- * rather than a zero — see the call below.
+ * A holder that dies before applying leaves the row pending; the lease sweep ends the run
+ * `lease_expired` and that `finish` closes the row `run_ended`. The run then reads `lease_expired`
+ * rather than `cancelled`, which is the truth: no process confirmed the stop.
  *
- * ## The arbiter is the row, and that is what makes this safe beside a running stage
+ * ## No live lease: the record is ended in place, as it always was
  *
- * `RunRepository.finish` is conditional on the run still being live, and PostgreSQL re-evaluates
- * that predicate against the row version a concurrent updater committed — so exactly one of this
- * command and the executor wins, the loser writes nothing, and the winner is the only one that
- * appends to the run's stream. The sequence is read after the row is won for the same reason.
+ * Absent (a run no process ever leased) or expired: nothing holds the session, so waiting for a
+ * holder would wait for nobody. The command wins the row through the conditional `runs.finish` with
+ * status `cancelled` and appends `run.finished` itself — the synchronous answer, kept for this branch
+ * only. If a process *was* still running the session (a holder partitioned from the database), it
+ * finds the row terminal when the session ends, discards its **verdict** (`stage-executor.ts`'s
+ * `lostTheRun`) and records its spend through the narrow `runs.recordCost` (WP-47, Q70 (b)) — which
+ * is why the cost stored here is `null` rather than a zero (see the call below).
+ *
+ * ## The arbiter is the row, and it is taken exclusively
+ *
+ * The run is read under `for update` before the task row is written — `runs` then `tasks`, the
+ * order every writer of both takes. Exclusively rather than `for share`, because this branch may go
+ * on to `finish` the row it read and two cancels that each held a share lock would deadlock on the
+ * upgrade instead of one refusing the other. The lease sweep and the holder's `markApplied` wait for
+ * it the same way. `RunRepository.finish` stays conditional on the run being live, so exactly one of
+ * this command and the executor wins the in-place branch, and the loser writes nothing.
  *
  * The task is paused only when the state machine has that edge: a task that is already `paused`, or
  * one that has finished, keeps the state it is in rather than making this command fail.
  */
 export const cancelRunCommand = async (
   deps: HumanCommandDependencies,
-  input: { readonly runId: Id; readonly userId: Id },
-): Promise<{ readonly taskId: Id }> => {
+  input: {
+    readonly runId: Id;
+    readonly userId: Id;
+    /** The `cancel` row's id when one is recorded; see {@link steerRunCommand}'s. */
+    readonly commandId?: Id;
+  },
+): Promise<CancelRunOutcome> => {
   // Read once before the retry, for the task id: `retryOnTaskConflict` names the task in its log
   // line and in the error it raises, and a run id in that field would make both say something
   // untrue. The transaction re-reads and re-decides — this value is only the label.
@@ -1134,66 +1200,95 @@ export const cancelRunCommand = async (
     },
     async () =>
       deps.unitOfWork.transaction(async (scope) => {
-        const run = await deps.store.runs.load(scope.tx, input.runId);
-        if (run === null) {
+        const locked = await deps.store.runCommands.lockRun(scope.tx, input.runId, {
+          forUpdate: true,
+        });
+        const run = locked === null ? null : await deps.store.runs.load(scope.tx, input.runId);
+        if (locked === null || run === null) {
           throw new UnknownAggregateError(`run ${input.runId} does not exist`);
         }
         const context = humanContext(deps, run.taskId, input.userId);
         // The Run's own table decides: a terminal run has no edge to `cancelled`, and the error
         // names the transition it refused.
         assertRunTransition(run.status, 'cancelled');
-        const won = await deps.store.runs.finish(scope.tx, {
-          runId: run.id,
-          status: 'cancelled',
-          terminalReason: 'cancelled',
-          sessionId: run.sessionId,
-          numTurns: run.numTurns,
-          usage: run.usage ?? NO_USAGE,
-          /**
-           * **`null`, not a zero** — WP-47, Q70 (b).
-           *
-           * Nothing here measured this attempt's spend: the session is still the other process's,
-           * and what it had burned when the human pressed cancel is not a number anybody in this
-           * request has. Until WP-47 that was written as `{ usd: 0, is_estimate: true }`, which put
-           * a `0` in `runs.usd_estimated` — a measurement, as far as every later reader is
-           * concerned, and the one thing that would stop the process that *does* know the number
-           * from writing it: `runs.recordCost` refuses a row that already carries a figure. So the
-           * honest absence is what is stored, and the money arrives when that process finishes.
-           */
-          cost: run.cost,
-          wallMs: wallMsSince(run.startedAt, context.clock.now()),
-        });
-        if (!won) {
-          throw new RunNotLiveError(run.id, run.status, 'cancelled: it has already ended');
+        if (leaseIsLive(locked, context.clock.now())) {
+          const commandId = input.commandId ?? context.ids.next();
+          await pauseForCancel(deps, scope, run.taskId, context, []);
+          await recordRunCommand(deps, scope, locked, {
+            id: commandId,
+            actorUserId: input.userId,
+            instruction: { kind: 'cancel' },
+          });
+          return { taskId: run.taskId, commandId };
         }
-        const aggregate = toRunAggregate(
-          run,
-          await deps.eventStore.nextStreamSequence('run', run.id),
-        );
-        const decision = finishRun(
-          aggregate,
-          {
-            status: 'cancelled',
-            terminalReason: 'cancelled',
-            usage: run.usage ?? NO_USAGE,
-            modelUsage: [],
-            cost: run.cost ?? { usd: 0, is_estimate: true, price_list_id: null },
-            numTurns: run.numTurns,
-          },
-          context,
-        );
-        const events = [...decision.events];
-
-        const stored = await deps.store.tasks.load(scope.tx, run.taskId);
-        if (stored !== null && canTransitionTask(stored.task.state, 'paused')) {
-          const paused = pauseTask(stored.task, { reason: 'manual' }, context);
-          await deps.store.tasks.save(scope.tx, { ...stored, task: paused.aggregate });
-          events.push(...paused.events);
-        }
-        await scope.events.append(events);
-        return { taskId: run.taskId };
+        await endCancelledRunInPlace(deps, scope, run, context);
+        return { taskId: run.taskId, commandId: null };
       }),
   );
+};
+
+/** Pauses the run's task when the state machine has the edge, and appends `events` with it. */
+const pauseForCancel = async (
+  deps: HumanCommandDependencies,
+  scope: TransactionScope,
+  taskId: Id,
+  context: CommandContext,
+  events: DomainEvent[],
+): Promise<void> => {
+  const stored = await deps.store.tasks.load(scope.tx, taskId);
+  if (stored !== null && canTransitionTask(stored.task.state, 'paused')) {
+    const paused = pauseTask(stored.task, { reason: 'manual' }, context);
+    await deps.store.tasks.save(scope.tx, { ...stored, task: paused.aggregate });
+    events.push(...paused.events);
+  }
+  await scope.events.append(events);
+};
+
+/** {@link cancelRunCommand}'s second branch: no process holds the session, so the row is ended here. */
+const endCancelledRunInPlace = async (
+  deps: HumanCommandDependencies,
+  scope: TransactionScope,
+  run: StoredRun,
+  context: CommandContext,
+): Promise<void> => {
+  const won = await deps.store.runs.finish(scope.tx, {
+    runId: run.id,
+    status: 'cancelled',
+    terminalReason: 'cancelled',
+    sessionId: run.sessionId,
+    numTurns: run.numTurns,
+    usage: run.usage ?? NO_USAGE,
+    /**
+     * **`null`, not a zero** — WP-47, Q70 (b).
+     *
+     * Nothing here measured this attempt's spend: if a session is still running somewhere, what it
+     * had burned when the human pressed cancel is not a number anybody in this request has. Until
+     * WP-47 that was written as `{ usd: 0, is_estimate: true }`, which put a `0` in
+     * `runs.usd_estimated` — a measurement, as far as every later reader is concerned, and the one
+     * thing that would stop the process that *does* know the number from writing it:
+     * `runs.recordCost` refuses a row that already carries a figure. So the honest absence is what
+     * is stored, and the money arrives if that process finishes.
+     */
+    cost: run.cost,
+    wallMs: wallMsSince(run.startedAt, context.clock.now()),
+  });
+  if (!won) {
+    throw new RunNotLiveError(run.id, run.status, 'cancelled: it has already ended');
+  }
+  const aggregate = toRunAggregate(run, await deps.eventStore.nextStreamSequence('run', run.id));
+  const decision = finishRun(
+    aggregate,
+    {
+      status: 'cancelled',
+      terminalReason: 'cancelled',
+      usage: run.usage ?? NO_USAGE,
+      modelUsage: [],
+      cost: run.cost ?? { usd: 0, is_estimate: true, price_list_id: null },
+      numTurns: run.numTurns,
+    },
+    context,
+  );
+  await pauseForCancel(deps, scope, run.taskId, context, [...decision.events]);
 };
 
 /** Wall time for a run ended from outside the process that started it; `0` when it never started. */
@@ -1346,7 +1441,7 @@ const recordRunCommand = async (
  * `POST /api/runs/:run_id/steer` — a user turn for a live session (product/18, WP-27), **recorded,
  * then applied or refused** by the process holding the run (WP-85, TD-028 decision 9).
  *
- * ## Three checks, in the order that makes each one mean something
+ * ## Four checks, in the order that makes each one mean something
  *
  * The **row** first: `runs.status` is the platform's record of the run, and a run that has ended is
  * refused with {@link RunNotLiveError} — a 409 naming the status — rather than with a 403 from the
@@ -1354,7 +1449,20 @@ const recordRunCommand = async (
  * and again **under the `for share` lock** the command is recorded beside, which is the answer that
  * counts — the run's ending takes the row exclusively and then closes every pending command, so a
  * steer recorded here is either closed by that ending or refused here. Then the **role**, inside
- * `steerRun`, which is where `can()` lives.
+ * `steerRun`, which is where `can()` lives. Then the **window**.
+ *
+ * ## The window is the database's, not a process's (WP-101, PROGRESS backlog 295)
+ *
+ * technical/08 gives the one number the API has: one steer per five seconds per user. It was a
+ * `Map` in each API process, so N processes admitted N steers per window — and since WP-85 every
+ * admitted steer is a turn the run pays for. Now the recording transaction first takes a
+ * `pg_advisory_xact_lock` on the user and reads that user's `steer` rows inside the interval
+ * (`RunCommandRepository.admitSteer`); the row this transaction inserts is what the next one reads,
+ * so a second steer through **any** process waits for the first to commit and is then refused
+ * {@link SteerWindowClosedError}. No new table: the rows the window counts are the commands it
+ * admitted. The lock is taken **before** the run's row lock, the order every steer takes, and the
+ * verdict is applied **after** the row and role checks, so a steer refused for another reason says
+ * that reason — and records nothing, so it takes no slot (what WP-73's refund did by hand).
  *
  * ## Recorded, not delivered
  *
@@ -1402,6 +1510,11 @@ export const steerRunCommand = async (
   const message = deps.redactor.redactText(input.message).value;
   const label = actorLabel(input.authorName);
   const commandId = await deps.unitOfWork.transaction(async (scope) => {
+    // The user's lock first, then the run's row lock: the order every steer takes (see above).
+    const admitted = await deps.store.runCommands.admitSteer(scope.tx, {
+      userId: input.userId,
+      windowMs: STEER_MIN_INTERVAL_MS,
+    });
     const locked = await deps.store.runCommands.lockRun(scope.tx, run.id);
     if (locked === null) {
       throw new UnknownAggregateError(`run ${input.runId} does not exist`);
@@ -1421,6 +1534,9 @@ export const steerRunCommand = async (
       },
       context,
     );
+    if (!admitted) {
+      throw new SteerWindowClosedError();
+    }
     // No `tasks.save`: steering moves nothing, so the row is untouched and its version is not
     // spent — the same shape `submitFeedbackCommand` has, and the reason neither needs
     // `retryOnTaskConflict`.

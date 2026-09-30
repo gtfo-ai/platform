@@ -1,5 +1,6 @@
 /**
- * What became of the steers and take-over stops sent to a run — WP-85, TD-028 decision 9.
+ * What became of the steers, take-over stops and cancels sent to a run — WP-85, TD-028 decision 9
+ * (and decision 11 for the cancel, WP-101).
  *
  * A command is **accepted** by the process that answered the request and **applied or refused** by
  * the process holding the run, which on the shipped topology is never the same process. So the run
@@ -24,9 +25,7 @@ export const runCommandStateText = (
     case 'pending':
       return `Accepted — waiting for the process running the agent to apply this ${what}.`;
     case 'applied':
-      return command.kind === 'steer'
-        ? `Applied${command.applied_at === null ? '' : ` at ${formatDateTime(command.applied_at)}`} — delivered to the live session as a turn.`
-        : `Applied${command.applied_at === null ? '' : ` at ${formatDateTime(command.applied_at)}`} — the run was asked to stop and export its workspace.`;
+      return `Applied${command.applied_at === null ? '' : ` at ${formatDateTime(command.applied_at)}`} — ${APPLIED[command.kind]}`;
     default:
       switch (command.refused_reason) {
         case 'run_ended':
@@ -39,6 +38,20 @@ export const runCommandStateText = (
           return `Refused — the process holding the run found no live session to apply this ${what} to.`;
       }
   }
+};
+
+/** What an applied command did, per kind — a record per kind so a new kind is a type error here. */
+const APPLIED: Record<RunCommandRecord['kind'], string> = {
+  steer: 'delivered to the live session as a turn.',
+  take_over: 'the run was asked to stop and export its workspace.',
+  cancel: 'the session was asked to stop; the run ends cancelled with what it had cost.',
+};
+
+/** The command's name on the screen. */
+const LABEL: Record<RunCommandRecord['kind'], string> = {
+  steer: 'Steer',
+  take_over: 'Take-over stop',
+  cancel: 'Cancel',
 };
 
 const TONE = { pending: 'warning', applied: 'success', refused: 'danger' } as const;
@@ -59,9 +72,7 @@ export const RunCommandLog = ({
           <li key={command.id} className="flex flex-col gap-0.5" data-command-state={command.state}>
             <div className="flex flex-wrap items-center gap-2">
               <Badge tone={TONE[command.state]}>{command.state}</Badge>
-              <span className="font-medium">
-                {command.kind === 'steer' ? 'Steer' : 'Take-over stop'}
-              </span>
+              <span className="font-medium">{LABEL[command.kind]}</span>
               <span className="text-fg-muted">{formatDateTime(command.created_at)}</span>
             </div>
             {command.message === null ? null : (

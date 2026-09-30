@@ -1,5 +1,6 @@
 /**
- * The run screen says what became of each steer and take-over stop (WP-85, TD-028 decision 9).
+ * The run screen says what became of each steer, take-over stop and cancel (WP-85, TD-028 decision
+ * 9; the cancel since WP-101, decision 11).
  *
  * A command is accepted by one process and applied or refused by another, so the screen reads the
  * outcome rather than assuming one. Every state is rendered in words, and each refusal names its
@@ -47,6 +48,15 @@ describe('runCommandStateText', () => {
         applied_at: '2026-09-28T09:00:02.000Z',
       }),
     ).toContain('asked to stop and export its workspace');
+    // WP-101: a cancel's stop says it stops the session and costs what it cost — no export.
+    const cancelled = runCommandStateText({
+      ...base,
+      kind: 'cancel',
+      state: 'applied',
+      applied_at: '2026-09-28T09:00:02.000Z',
+    });
+    expect(cancelled).toContain('the session was asked to stop');
+    expect(cancelled).not.toContain('export');
   });
 
   it('names each refusal by its reason', () => {
@@ -94,6 +104,13 @@ describe('RunCommandLog', () => {
             refused_at: '2026-09-28T09:01:00.000Z',
             refused_reason: 'run_ended',
           },
+          {
+            ...base,
+            id: '00000000-0000-4000-8000-0000000000c3',
+            kind: 'cancel',
+            state: 'pending',
+            message: null,
+          },
         ]}
       />,
     );
@@ -101,7 +118,12 @@ describe('RunCommandLog', () => {
     expect(items.map((item) => item.getAttribute('data-command-state'))).toEqual([
       'pending',
       'refused',
+      'pending',
     ]);
+    expect(items[2]?.textContent).toContain('Cancel');
+    expect(items[2]?.textContent).toContain(
+      'waiting for the process running the agent to apply this stop',
+    );
     // Untrusted text stays text (BD-022): the tag is characters, not an element.
     expect(container.querySelector('b')).toBeNull();
     expect(items[0]?.textContent).toContain('<b>not markup</b>');

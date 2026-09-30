@@ -60,7 +60,7 @@ One Unix socket per run on the `ctl` volume: runner ↔ shim frames for spawn/st
 
 ### Amendment (WP-85, 2026-09-28) — a human command reaches a live run through the database, not a route
 
-TD-028 decision 9 (M5 amendment). A steer or a take-over's stop is issued to the process that serves the API, and the session it is for is held by another process — on the shipped topology, always: `app` never holds a run and `runner` serves no route. The command crosses through the **database**, and nothing here gains a listener or an address (the reason decision 2 exists):
+TD-028 decision 9 (M5 amendment). A steer or a take-over's stop — and since WP-101 a run cancel, below — is issued to the process that serves the API, and the session it is for is held by another process — on the shipped topology, always: `app` never holds a run and `runner` serves no route. The command crosses through the **database**, and nothing here gains a listener or an address (the reason decision 2 exists):
 
 - The API process **records** it — a `run_commands` row (migration 0060) in the command's own transaction, after reading the run live under a `for share` lock — and answers that the command was **accepted**, never that the model heard it (`POST /api/runs/:id/steer` is `202`).
 - It wakes the lease holder with `pg_notify` on a broadcast topic keyed by `runs.lease_owner`. The holder applies the command to its own live-run register — a steer becomes a user turn and a `steer` transcript entry; a take-over's stop is `RunHandle.stop` with the export instruction, which then drives this page's step 5 and 6 — and stamps the row **applied**, or **refused** `register_miss`.
@@ -68,6 +68,15 @@ TD-028 decision 9 (M5 amendment). A steer or a take-over's stop is issued to the
 - A command still pending when the run ends is closed **`run_ended`** by the run's own ending, in its transaction, so it is never applied late. `ROLE=all` takes the same path, so there is one mechanism.
 
 The data plane above is unchanged: the command reaches the session through the holder's in-process handle, which already owns the run's Unix socket.
+
+### Amendment (WP-101, 2026-09-30) — a run cancel rides the same row, and which branch it takes
+
+TD-028 decision 11 (M6 amendment), PROGRESS backlog 294. Until WP-101 `POST /api/runs/:id/cancel` ended the run **as a record** in the answering process and the session kept running — and spending — in the holder until it ended on its own. Now the cancel takes one of two branches, decided by the run's lease under an exclusive lock on the run row:
+
+- **The lease is live** (`runs.lease_expires_at` in the future): the task is paused and a `cancel` row is recorded in `run_commands` (migration 0064) in one transaction, the holder is woken as above, and the answer is `202`. The holder applies it as `RunHandle.stop({ reason: 'cancelled' })`: the session is interrupted and the run ends `cancelled` **in its own process**, with the cost the interrupted turn's result reports (the runner reads that result within the interrupt's grace), charged once by the ordinary ledger handler. There is one terminal writer, the holder.
+- **No live lease** (absent or expired): nothing holds the session, so the record is ended in place, as before, and the answer is `200`.
+- **A holder that dies before applying** leaves the row pending; the lease sweep ends the run `lease_expired` and its `finish` closes the row `run_ended`. The run then reads `lease_expired`, not `cancelled`: no process confirmed the stop.
+- **A steer behind a stop is never delivered**: once a run has a `cancel` or `take_over` row that was not refused, the holder's drain no longer lists that run's pending steers, and the run's ending closes them `run_ended`.
 
 ## Kubernetes later
 `WorkspaceProvider` implemented with Jobs or `agent-sandbox` claims, NetworkPolicy + Cilium FQDN policies, exec/attach WebSocket for the spawn hook, session store adapter for cross-node resume.

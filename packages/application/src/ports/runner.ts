@@ -271,6 +271,13 @@ export interface RunOutcome {
   readonly usage: TokenUsage;
   readonly modelUsage: readonly ModelUsage[];
   readonly cost: RunCost;
+  /**
+   * `true` when **nothing measured** this run's spend (WP-101 review round 1): a human's stop whose
+   * interrupted turn sent no `result` within the interrupt grace. `cost` then holds the column's
+   * floor and is not a figure — the stage executor writes `null` to the run row and the ledger no
+   * row (standing rule 16). Absent means the cost was reported.
+   */
+  readonly costUnmeasured?: boolean;
   readonly wallMs: number;
   /**
    * `structured_output`, re-validated against `RunSpec.outputSchema` by the platform (defence in

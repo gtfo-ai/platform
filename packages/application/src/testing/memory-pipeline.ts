@@ -17,7 +17,7 @@
  * | 4 | No transaction isolation: a `Transaction` handle is accepted and ignored, so a rolled-back "transaction" leaves its writes. | **kinder** | This is the one that matters, and the reason the same suite runs against PostgreSQL: rollback semantics cannot be faked in a Map. **Positive assertion**: `memory-pipeline.test.ts` asserts the divergence explicitly (`keeps writes a rolled-back scope made, which PostgreSQL does not`), so a reader meets it as a test rather than as a warning, and the e2e tier runs the pipeline on the real thing. |
  * | 7 | `task.sequence` was the number the stored aggregate carried; PostgreSQL derives it from the **event log** (`max(stream_seq) + 1`, `TASK_COLUMNS`). **Closed at WP-26** by {@link MemoryPipelineStoreOptions.streamSequence}: a harness that wires the event log in gets the derived number. | **same, when wired** | It was *kinder* and it hid a whole class: an event appended to a task's stream by anything other than the aggregate — `task.review.observed` (WP-24), `task.lint.posted` (WP-25), `task.rebase.checked` and `task.conflict.warned` (WP-26) — left the fake's aggregate one behind the log, so the **next** aggregate write would clash in production and not here. It only stayed invisible because the first three land on a task that has stopped. Unwired, the old behaviour remains, which is why the accessor takes the **maximum** of the two rather than replacing one with the other: a transaction's own staged appends are not committed yet, and the aggregate's number is the right answer for them. |
  * | 8 | `takenOver` reads the **committed** log through {@link MemoryPipelineStoreOptions.taskEvents}; PostgreSQL's query also sees the calling transaction's own staged appends (WP-56). Unwired, it answers `null`; its `lastActivityAt` reads {@link MemoryPipelineStoreOptions.humanActions} (WP-44), and unwired that is the take-over's own instant. | **same, when wired; kinder by one window** | Both readers of it — the workpad render and the take-over timer — run in a job's **own** transaction after the events they react to have committed, so the window this cannot see is one neither reader stands in. A caller that asked inside the transaction that appended the take-over would get `null` here and the record from PostgreSQL; nothing does, and the contract suite drives the committed case against both. |
- * | 9 | `runCommands` (WP-85): `lockRun`/`lockLiveRunOf`/`markApplied` take no lock, and `LockedRun.sessionId` is the run row's `sessionId` where PostgreSQL reads the run's `system`/`init` transcript entry (this store keeps no transcript). | **kinder** on ordering, **same** on predicates | The `for share` ordering between a command and the run's ending is a property of two concurrent transactions, which a single-threaded store cannot interleave; it is asserted against PostgreSQL in `test/integration/pipeline/run-commands.integration.test.ts`, both orders. Every predicate — live run, this owner's lease, still pending, closed `run_ended` by the winning `finish` — is the SQL's, and the contract suite drives each against both stores. |
+ * | 9 | `runCommands` (WP-85): `lockRun`/`lockLiveRunOf`/`markApplied` take no lock, `admitSteer` (WP-101) takes no advisory lock and reads `created_at` off {@link MemoryPipelineStoreOptions.now} rather than the database's clock, and `LockedRun.sessionId` is the run row's `sessionId` where PostgreSQL reads the run's `system`/`init` transcript entry (this store keeps no transcript). | **kinder** on ordering, **same** on predicates | The `for share` ordering between a command and the run's ending is a property of two concurrent transactions, which a single-threaded store cannot interleave; it is asserted against PostgreSQL in `test/integration/pipeline/run-commands.integration.test.ts`, both orders — and the steer window's lock there by a second transaction that must wait (WP-101). Every predicate — live run, this owner's lease, still pending, closed `run_ended` by the winning `finish` — is the SQL's, and the contract suite drives each against both stores. |
  * | 10 | `bugTraces.latest` (WP-90) reads the **committed** project log through {@link MemoryPipelineStoreOptions.projectEvents}, in stream order; PostgreSQL orders by `occurred_at` then `position` and also sees the calling transaction's own staged appends. Unwired, it answers `null`. | **same, when wired** | Its one caller, the `ticket.updated` handler, asks in the dispatcher's transaction about traces an earlier job committed; a trace appended in the asking transaction does not exist, because no handler appends one. Stream order and `occurred_at` order agree for every trace the duty writes, which appends with the platform clock in sequence. The contract suite drives both. |
  */
 import type {
@@ -67,7 +67,11 @@ import type {
   SupersededMergeRequestOutcome,
   TaskRepository,
 } from '../pipeline/store.js';
-import { TAKE_OVER_BOUNDARY_EVENTS, TaskConcurrentModificationError } from '../pipeline/store.js';
+import {
+  STOPPING_RUN_COMMAND_KINDS,
+  TAKE_OVER_BOUNDARY_EVENTS,
+  TaskConcurrentModificationError,
+} from '../pipeline/store.js';
 import type { DeadlineRecoveryStore, HeldTask, WaitingAggregate } from '../recovery/deadline.js';
 import type { SupersededMergeRequestRecoveryStore } from '../recovery/superseded-mr.js';
 
@@ -155,6 +159,8 @@ export interface MemoryRunCommandRow {
   readonly sequence: number;
   readonly applied: boolean;
   readonly refusedReason: RunCommandRefusal | null;
+  /** `created_at`, in milliseconds by {@link MemoryPipelineStoreOptions.now} — the steer window reads it. */
+  readonly createdAtMs: number;
 }
 
 export interface MemoryPipelineStoreOptions {
@@ -190,6 +196,11 @@ export interface MemoryPipelineStoreOptions {
    * `createPipelineHarness` wires it.
    */
   readonly projectEvents?: (projectId: Id) => readonly DomainEvent[];
+  /**
+   * The clock `run_commands.created_at` is stamped by and the steer window reads (WP-101) — the
+   * database's `now()` in PostgreSQL. Defaults to `Date.now`.
+   */
+  readonly now?: () => number;
 }
 
 /** One `superseded_merge_requests` row, as the memory store keeps it. */
@@ -891,6 +902,7 @@ export const createMemoryPipelineStore = (
     taskId: run.taskId,
     status: run.status,
     leaseOwner: leases.get(run.id)?.owner ?? null,
+    leaseExpiresAt: leases.get(run.id)?.expiresAt ?? null,
     // This store has no transcript, so the row's own session stands in for the `init` entry the SQL
     // adapter reads (WP-85): a fixture that seeds a live run with a session is the same statement.
     sessionId: run.sessionId,
@@ -901,6 +913,15 @@ export const createMemoryPipelineStore = (
    * store: the SQL adapter's `for share` orders two transactions, and here nothing interleaves
    * inside one call, so the predicates alone are the whole contract.
    */
+  const now = options.now ?? (() => Date.now());
+  /** Whether a run has a `cancel` or `take_over` row that was not refused (WP-101). */
+  const stopRecordedFor = (runId: Id): boolean =>
+    [...runCommandRows.values()].some(
+      (row) =>
+        row.runId === runId &&
+        STOPPING_RUN_COMMAND_KINDS.includes(row.instruction.kind) &&
+        row.refusedReason === null,
+    );
   const runCommandRepository: RunCommandRepository = {
     lockRun: async (_tx, runId) => {
       const run = runs.get(runId);
@@ -930,6 +951,7 @@ export const createMemoryPipelineStore = (
         sequence: runCommandSequence,
         applied: false,
         refusedReason: null,
+        createdAtMs: now(),
       });
     },
     pending: async (_tx, query) =>
@@ -942,7 +964,9 @@ export const createMemoryPipelineStore = (
             (query.runId === undefined || row.runId === query.runId) &&
             run !== undefined &&
             isActiveRunStatus(run.status) &&
-            leases.get(row.runId)?.owner === query.owner
+            leases.get(row.runId)?.owner === query.owner &&
+            // A steer behind a stop that was not refused waits for the ending (WP-101).
+            !(row.instruction.kind === 'steer' && stopRecordedFor(row.runId))
           );
         })
         .sort((left, right) => left.sequence - right.sequence)
@@ -986,6 +1010,15 @@ export const createMemoryPipelineStore = (
       }
       runCommandRows.set(row.id, { ...row, refusedReason: input.reason });
       return true;
+    },
+    admitSteer: async (_tx, input) => {
+      const since = now() - input.windowMs;
+      return ![...runCommandRows.values()].some(
+        (row) =>
+          row.instruction.kind === 'steer' &&
+          row.actorUserId === input.userId &&
+          row.createdAtMs > since,
+      );
     },
   };
 

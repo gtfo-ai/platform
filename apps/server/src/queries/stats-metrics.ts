@@ -546,7 +546,7 @@ export const STATS_CATALOGUE: Readonly<Record<StatMetricId, MetricDefinition>> =
     unit: 'usd',
     aggregation: 'ratio',
     caveats: [
-      'Understates a task whose cancelled run’s process then died before reporting: the run that still runs records its spend against the terminated row (WP-47), but a dead process has nobody left to report the figure, so nothing measures it and nothing invents one (Q52).',
+      'Understates a task whose cancelled run’s process then died before reporting: a cancel stops a session its process holds and that process charges it (WP-101), and a session still running after a cancel ended its row records its spend against it (WP-47), but a dead process has nobody left to report the figure, so nothing measures it and nothing invents one.',
     ],
   },
   estimated_spend_share: {

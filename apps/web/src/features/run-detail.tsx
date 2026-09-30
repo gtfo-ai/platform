@@ -277,6 +277,14 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
         </div>
       </div>
 
+      {commands.cancel.isError ? <ErrorNotice title="That cancel was refused." /> : null}
+      {commands.cancel.isSuccess ? (
+        <p className="text-xs text-fg-muted">
+          {commands.cancel.data.command_id === null
+            ? 'No process was running this session, so the run was ended here.'
+            : 'Cancel accepted — the process running the agent stops the session and ends the run with what it cost; the commands below say when it was applied.'}
+        </p>
+      ) : null}
       {commands.retry.isError ? <ErrorNotice title="That retry was refused." /> : null}
       {commands.retry.isSuccess ? (
         <p className="text-xs text-fg-muted">

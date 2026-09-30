@@ -785,9 +785,14 @@ export const useRunCommands = (runId: string) => {
         await queryClient.invalidateQueries({ queryKey: queryKeys.runCommandLog(runId) });
       },
     }),
+    // With a live lease the stop is recorded for the process holding the run (WP-101), so the run
+    // still reads `running` and the command log is what says when it was applied.
     cancel: useMutation({
       mutationFn: (reason: string) => endpoints.cancelRun(runId, { reason }),
-      onSuccess: invalidate,
+      onSuccess: async () => {
+        await invalidate();
+        await queryClient.invalidateQueries({ queryKey: queryKeys.runCommandLog(runId) });
+      },
     }),
     /**
      * Retry with a different model or effort. The command **creates a new run**, so the task is

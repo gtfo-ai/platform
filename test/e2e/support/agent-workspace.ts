@@ -163,6 +163,51 @@ export const SUBAGENT_MODEL = 'claude-haiku-4-5';
 
 /** What the sub-agent's share of a run costs in the script. */
 export const SUBAGENT_COST_USD = 0.05;
+
+/**
+ * What a scripted session reports it had spent when a human's stop interrupted it (WP-101) —
+ * deliberately different from every scenario's full cost, so a ledger row carrying it can only have
+ * come from the interrupted turn and never from a script played to its end.
+ */
+export const INTERRUPTED_COST_USD = 0.13;
+
+/**
+ * The interrupted turn's `result`, which the SDK documents the CLI writing after the interrupt's
+ * receipt (`interrupt_receipt_v1`); the scripted CLI writes it when a stop interrupts it.
+ */
+export const interruptedResultFor = (spec: RunSpec): Record<string, unknown> => ({
+  type: 'result',
+  subtype: 'error_during_execution',
+  duration_ms: 600,
+  duration_api_ms: 500,
+  is_error: true,
+  num_turns: 1,
+  stop_reason: null,
+  total_cost_usd: INTERRUPTED_COST_USD,
+  usage: {
+    input_tokens: 700,
+    output_tokens: 40,
+    cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0,
+    cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 },
+  },
+  modelUsage: {
+    [spec.model]: {
+      inputTokens: 700,
+      outputTokens: 40,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+      webSearchRequests: 0,
+      costUSD: INTERRUPTED_COST_USD,
+      contextWindow: 200_000,
+      maxOutputTokens: 64_000,
+    },
+  },
+  permission_denials: [],
+  errors: [],
+  uuid: '00000004-0000-4000-8000-000000000000',
+  session_id: SESSION,
+});
 export const fakeCliScriptFor = (
   spec: RunSpec,
   scenario: {
@@ -348,10 +393,11 @@ export const scriptedWorkspaces = (
         await onSpec?.(spec);
         const scenario = scenarioFor(stage, spec);
         const workdir = scenario.writes?.workdir ?? scenario.bash?.workdir;
-        const cli = runnerAdapters.fakeSpawnClaudeCodeProcess(
-          fakeCliScriptFor(spec, scenario),
-          workdir === undefined ? {} : { workdir },
-        );
+        const cli = runnerAdapters.fakeSpawnClaudeCodeProcess(fakeCliScriptFor(spec, scenario), {
+          ...(workdir === undefined ? {} : { workdir }),
+          // A human's stop interrupts the session, and the session answers with what it spent.
+          interruptedResult: interruptedResultFor(spec),
+        });
         runs.push({ stage, spec, cli });
         // WP-99: what the launcher answers on create — the checkout's listing — for a scenario that
         // has a checkout on disk; every other run keeps the planner's fail-closed `unlisted`.

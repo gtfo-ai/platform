@@ -30,6 +30,7 @@
  * | 4 | A `hook` step does not *act* on its verdict: a `deny` from `PreToolUse` is recorded, not enforced, and the script continues as written. **The `bash` step does** (WP-54): it runs the command only when the platform allowed it — directly, or through `canUseTool` after an `ask` — exactly as the CLI does, and a denied command is never executed. **So does the `write` step** (WP-99): a `Write` or `Edit` changes the host file only when the write hook allowed it (`fake-spawn.test.ts` › "writes an allowed file under the workdir and leaves a denied one unwritten"). | **different** (the `hook` step) | For the `hook` step the subject under test is the platform's verdict, and the recorded verdicts are asserted positively (`records the deny the command policy returned`). The `bash` step exists because a fake that runs nothing is how PROGRESS backlog 49 survived every tier: its effect is something the *command* produced (a file, an exit status), never the verdict string. |
  * | 7 | The `bash` step runs the command with `/bin/sh -c` in a **host** directory standing in for the container's `/work/repo`, with the test process's `PATH`. The CLI runs it in the run container. | **different** | What this seam can prove is that the platform's policy lets a declared command through and stops an undeclared one, and that the command's own output reaches the transcript. The container, its user and its egress are `test/e2e/workspace/docker-workspace.e2e.test.ts`'s. A script with a `bash` step and no `workdir` throws (**stricter**) rather than running in the test's own directory. |
  * | 5 | `kill(signal)` records the signal and resolves `exit` with it; it does not terminate anything. | **different** | There is no process. `killed`, `exitCode` and the `exit` event follow the `SpawnedProcess` contract, which is what the SDK reads. |
+ * | 8 | An interrupt is acknowledged and, only when {@link FakeCliOptions.interruptedResult} is given, followed by that one `result` line; the script itself keeps waiting where it was (a real CLI ends the turn). Without the option nothing follows, so the interrupted turn reports no cost. | **different** | The platform reads the interrupted turn's result for its cost (WP-101) and must stop within the interrupt grace whether or not one arrives; both halves are driven in `claude-runner.test.ts` › "carries the interrupted turn’s measured cost into a cancelled outcome, before the script ends (WP-101)" and its neighbour on the grace. That the script did not run to its end is readable as `FakeCli.scriptEnded`, beside `FakeCli.interrupts`. |
  * | 6 | No stdout backpressure: every scripted line is written immediately. | **kinder** | A real CLI writing 100 MB of tool output would block on the pipe. Nothing in the adapter reads `stdout` directly — the SDK owns that stream — so there is no platform behaviour behind this. The size limit that *is* the platform's (`toolOutputMaxChars`) is tested through the `PostToolUse` hook, in `truncates tool output past the cap`, which does not need backpressure to be reached. |
  *
  * Entry 6 is the kindest, so it carries the positive assertion the standing rule asks for rather
@@ -142,6 +143,13 @@ export interface FakeCliOptions {
   readonly containerWorkdir?: string;
   /** Bound on one command's wall clock. */
   readonly commandTimeoutMs?: number;
+  /**
+   * The interrupted turn's `result`, written after the interrupt's acknowledgement (WP-101) — the
+   * order the SDK documents for a clean interrupt (`interrupt_receipt_v1`: *"this receipt is written
+   * before the interrupted turn result"*). Absent, an interrupt is acknowledged and nothing follows,
+   * which is what every script before WP-101 relied on (divergence 8).
+   */
+  readonly interruptedResult?: Record<string, unknown>;
 }
 
 /** What the platform answered, so a test can assert the verdict rather than only its effect. */
@@ -168,6 +176,10 @@ export interface FakeCli {
   readonly writes: readonly FakeCliWrite[];
   /** Resolves when the script has finished (or thrown). */
   readonly finished: Promise<void>;
+  /** Interrupts answered with {@link FakeCliOptions.interruptedResult} (WP-101). */
+  readonly interrupts: number;
+  /** Whether the script reached its own `exit` step — `false` for a run stopped before its end. */
+  readonly scriptEnded: boolean;
 }
 
 interface HookRegistration {
@@ -215,6 +227,8 @@ export const fakeSpawnClaudeCodeProcess = (
   const userMessages: (() => void)[] = [];
   let pendingUserMessages = 0;
   let initialised = false;
+  let interrupted = 0;
+  let scriptEnded = false;
   let spawnOptions: SpawnOptions | null = null;
   let requestCounter = 0;
   let finish!: () => void;
@@ -593,6 +607,7 @@ export const fakeSpawnClaudeCodeProcess = (
           await new Promise<never>(() => {});
           break;
         case 'exit':
+          scriptEnded = true;
           exitCode = step.code;
           stdout.end();
           events.emit('exit', step.code, step.signal);
@@ -653,6 +668,10 @@ export const fakeSpawnClaudeCodeProcess = (
         type: 'control_response',
         response: { subtype: 'success', request_id: requestId, response: {} },
       });
+      if (inner?.['subtype'] === 'interrupt' && options.interruptedResult !== undefined) {
+        interrupted += 1;
+        write(options.interruptedResult);
+      }
       return;
     }
     if (!initialised) {
@@ -734,6 +753,12 @@ export const fakeSpawnClaudeCodeProcess = (
     },
     get writes() {
       return writes;
+    },
+    get interrupts() {
+      return interrupted;
+    },
+    get scriptEnded() {
+      return scriptEnded;
     },
     spawn: (options: SpawnOptions): SpawnedProcess => {
       if (spawnOptions !== null) {

@@ -38,6 +38,7 @@ import {
   businessInterviewRequestSchema,
   businessInterviewResponseSchema,
   cancelRunRequestSchema,
+  cancelRunResponseSchema,
   cancelTaskRequestSchema,
   contextPackRecordSchema,
   createIdentityMappingRequestSchema,
@@ -464,10 +465,15 @@ export interface Endpoints {
     body: z.input<typeof steerRunRequestSchema>,
   ) => Promise<z.output<typeof steerRunResponseSchema>>;
   readonly retryRun: (runId: string, body: z.input<typeof retryRunRequestSchema>) => Promise<void>;
+  /**
+   * `POST /api/runs/:id/cancel` — TD-028 decision 11 (WP-101): `command_id` names the stop recorded
+   * for the process holding the run (`202`, the run still reads `running`), or is `null` when the
+   * record was ended in place (`200`).
+   */
   readonly cancelRun: (
     runId: string,
     body: z.input<typeof cancelRunRequestSchema>,
-  ) => Promise<void>;
+  ) => Promise<z.output<typeof cancelRunResponseSchema>>;
   readonly decideKbProposal: (
     projectId: string,
     proposalId: string,
@@ -814,7 +820,11 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
     retryRun: (runId, body) =>
       command(`/api/runs/${seg(runId)}/retry`, retryRunRequestSchema, body, true),
     cancelRun: (runId, body) =>
-      command(`/api/runs/${seg(runId)}/cancel`, cancelRunRequestSchema, body),
+      client.command(`/api/runs/${seg(runId)}/cancel`, {
+        schema: cancelRunResponseSchema,
+        body: cancelRunRequestSchema.parse(body),
+        idempotent: false,
+      }),
 
     // technical/08 spells this one as three paths — `.../proposals/:pid/{approve,reject,edit}` —
     // while contracts publishes a single body carrying the decision. Docs win (CLAUDE.md), so the

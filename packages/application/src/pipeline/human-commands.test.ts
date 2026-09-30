@@ -1192,6 +1192,63 @@ describe('cancel a run', () => {
     );
   });
 
+  it('records a stop for the holder of a live lease, pauses the task, and leaves the run to it (WP-101, criterion 3)', async () => {
+    const harness = await asking();
+    const task = taskOf(harness).task.id;
+    const runId = await seedLiveRun(harness, 'refinement' as Slug);
+    await leaseTo(harness, runId);
+    const recorder = liveRunFor(runId, task);
+    const holder = holderFor(harness, recorder.live);
+    await holder.listen(harness.memory.broadcast);
+
+    const outcome = await cancelRunCommand(harness.humanCommands, {
+      runId,
+      userId: USER,
+      commandId: '00000000-0000-4000-8000-0000000000c7' as Id,
+    });
+    expect(outcome).toEqual({ taskId: task, commandId: '00000000-0000-4000-8000-0000000000c7' });
+
+    // The row is not this command's to end: one terminal writer, the holder.
+    const run = await harness.memory.transaction(async (scope) =>
+      harness.store.runs.load(scope.tx, runId),
+    );
+    expect(run?.status).toBe('running');
+    expect(
+      harness
+        .events()
+        .filter((event) => event.type === 'run.finished' && event.stream_id === runId),
+    ).toEqual([]);
+    // …and the task is paused in the same transaction, as it always was.
+    expect(taskOf(harness).task.state).toBe('paused');
+    expect(harness.store.runCommandRows()).toMatchObject([
+      { id: '00000000-0000-4000-8000-0000000000c7', instruction: { kind: 'cancel' } },
+    ]);
+
+    // Woken by the notification, the holder stops the session and stamps the row; the drain it
+    // queued is chained, so waiting for one more drain waits for that one (the steer case's shape).
+    await holder.drain();
+    expect(recorder.stops).toEqual([{ reason: 'cancelled' }]);
+    expect(harness.store.runCommandRows()).toMatchObject([{ applied: true, refusedReason: null }]);
+    await holder.stop();
+  });
+
+  it('ends the record in place when the lease has expired, and records nothing (WP-101, criterion 3)', async () => {
+    const harness = await asking();
+    const runId = await seedLiveRun(harness, 'refinement' as Slug);
+    await leaseTo(harness, runId, HOLDER, EXPIRED_LEASE);
+
+    const outcome = await cancelRunCommand(harness.humanCommands, { runId, userId: USER });
+    expect(outcome.commandId).toBeNull();
+    const run = await harness.memory.transaction(async (scope) =>
+      harness.store.runs.load(scope.tx, runId),
+    );
+    expect(run?.status).toBe('cancelled');
+    // Nobody measured it, so nothing is claimed (WP-47): both cost columns stay empty.
+    expect(run?.cost).toBeNull();
+    expect(harness.store.runCommandRows()).toEqual([]);
+    expect(taskOf(harness).task.state).toBe('paused');
+  });
+
   it('refuses a run that has already completed, naming its status', async () => {
     const harness = await asking();
     const completed = harness.specs.at(-1)?.runId as Id;
@@ -1345,12 +1402,20 @@ const liveRunFor = (
 };
 
 /** Claims the seeded run's lease for {@link HOLDER}, as the executor's first transaction does. */
-const leaseTo = async (harness: PipelineHarness, runId: Id, owner = HOLDER): Promise<void> => {
+/** A lease no holder renewed in time: before any clock these cases run on (WP-101). */
+const EXPIRED_LEASE = '2000-01-01T00:00:00.000Z';
+
+const leaseTo = async (
+  harness: PipelineHarness,
+  runId: Id,
+  owner = HOLDER,
+  expiresAt = '2099-01-01T00:00:00.000Z',
+): Promise<void> => {
   await harness.memory.transaction(async (scope) => {
     await harness.store.runs.renewLease(scope.tx, {
       runId,
       owner,
-      expiresAt: '2099-01-01T00:00:00.000Z' as never,
+      expiresAt: expiresAt as never,
     });
   });
 };
@@ -1510,7 +1575,9 @@ describe('steer a run', () => {
     const harness = await asking();
     const task = taskOf(harness).task.id;
     const runId = await seedLiveRun(harness, 'refinement' as Slug);
-    await leaseTo(harness, runId);
+    // Leased once and lapsed: the cancel below ends the record itself (WP-101's second branch),
+    // which makes it one of `finish`'s callers — the ending this case is about.
+    await leaseTo(harness, runId, HOLDER, EXPIRED_LEASE);
     const recorder = liveRunFor(runId, task);
 
     await steerRunCommand(harness.humanCommands, {
@@ -1541,6 +1608,58 @@ describe('steer a run', () => {
         authorName: 'Ada',
       }),
     ).rejects.toThrow(RunNotLiveError);
+  });
+
+  it('closes a steer still pending when a cancel lands run_ended, by the run’s own ending, and never delivers it (WP-101, criterion 4)', async () => {
+    const harness = await asking();
+    const task = taskOf(harness).task.id;
+    const runId = await seedLiveRun(harness, 'refinement' as Slug);
+    await leaseTo(harness, runId);
+    const recorder = liveRunFor(runId, task);
+
+    const steered = await steerRunCommand(harness.humanCommands, {
+      runId,
+      userId: USER,
+      role: 'maintainer',
+      message: 'pending when the cancel lands',
+      authorName: 'Ada',
+    });
+    const cancelled = await cancelRunCommand(harness.humanCommands, { runId, userId: USER });
+    expect(cancelled.commandId).not.toBeNull();
+
+    // The holder applies the stop and hands the session no turn: the steer is behind a stop.
+    await holderFor(harness, recorder.live).drain({ runId, onMiss: 'refuse' });
+    expect(recorder.stops).toEqual([{ reason: 'cancelled' }]);
+    expect(recorder.steers).toEqual([]);
+    const rows = () => new Map(harness.store.runCommandRows().map((row) => [row.id, row] as const));
+    expect(rows().get(steered.commandId)).toMatchObject({ applied: false, refusedReason: null });
+    expect(rows().get(cancelled.commandId as Id)).toMatchObject({ applied: true });
+
+    // The stopped session's ending — what the holder's stage executor writes — closes the steer.
+    await harness.memory.transaction(async (scope) =>
+      harness.store.runs.finish(scope.tx, {
+        runId,
+        status: 'cancelled',
+        terminalReason: 'cancelled',
+        sessionId: 'session-live',
+        numTurns: 2,
+        usage: {
+          input_tokens: 10,
+          output_tokens: 5,
+          cache_write_5m_tokens: 0,
+          cache_write_1h_tokens: 0,
+          cache_read_tokens: 0,
+        },
+        cost: { usd: 0.13, is_estimate: false, price_list_id: null },
+        wallMs: 900,
+      }),
+    );
+    expect(rows().get(steered.commandId)).toMatchObject({
+      applied: false,
+      refusedReason: 'run_ended',
+    });
+    await holderFor(harness, recorder.live).drain({ runId, onMiss: 'refuse' });
+    expect(recorder.steers).toEqual([]);
   });
 });
 

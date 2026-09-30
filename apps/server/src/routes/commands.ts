@@ -65,22 +65,23 @@
  * property this paragraph has always been about. The other seven are stored by the command itself
  * and are not repeated here.
  *
- * **One rate limit, and it is the only one in this file.** technical/08:137 —
- * *"`POST /api/runs/:id/steer` limited to 1 message per 5 s per user"* — is the one endpoint the
- * document gives a number to, and {@link steerGate} is that number. It is **per process**: a
- * deployment running N API containers allows N messages per window, which is stated here rather
- * than discovered, and is the same trade every in-memory limiter in this repository makes. What it
- * protects is not the platform but the **run**: each steer is a turn the model pays for, and a
- * stuck key would spend a run's budget on repetition.
+ * **One rate limit, and it is the only one in this file — and it is not held here.**
+ * technical/08:137 — *"`POST /api/runs/:id/steer` limited to 1 message per 5 s per user"* — is the
+ * one endpoint the document gives a number to. What it protects is not the platform but the
+ * **run**: each steer is a turn the model pays for, and a stuck key would spend a run's budget on
+ * repetition. Until WP-101 it was a `Map` in this process, so N processes serving the API admitted N
+ * paid turns per window (PROGRESS backlog 295). Now it is shared state: the application command
+ * takes a `pg_advisory_xact_lock` on the user and reads that user's `steer` rows inside the
+ * interval, in the transaction that records the steer (`steerRunCommand`), and its refusal reaches
+ * the caller as the same `429 rate_limited` through `commandRefusal`. A steer refused for another
+ * reason records nothing, so it spends no slot — what WP-73's refund (backlog 263) did by hand.
  *
  * **What the window admits is a record, not a delivery** (WP-85, TD-028 decision 9). The process
  * that serves the API is pinned never to hold a run, so an admitted steer is recorded as a
  * `run_commands` row and applied by the process holding the run; until WP-85 every steer that
- * reached the gate was refused `409 run_not_reachable` (PROGRESS backlog 134). The gate records the
- * attempt before the call and **refunds** it when the call refuses (WP-73, PROGRESS backlog 263) —
- * a run that has ended, a role that may not steer — so a person who retries is told the refusal
- * again rather than `429`. The N-containers arithmetic is now real: N API processes admit N
- * records per window, and each is a turn the run pays for once applied.
+ * reached the window was refused `409 run_not_reachable` (PROGRESS backlog 134). **A run cancel
+ * rides the same row since WP-101** (TD-028 decision 11): with a live lease it is recorded for the
+ * holder and answers `202`, and with none it ends the record in place and answers `200`.
  */
 
 import type { RunStatus, TaskState, UserRole } from '@platform/contracts';
@@ -88,6 +89,7 @@ import {
   answerQuestionRequestSchema,
   apiErrorSchema,
   cancelRunRequestSchema,
+  cancelRunResponseSchema,
   cancelTaskRequestSchema,
   decideApprovalRequestSchema,
   handBackRequestSchema,
@@ -162,8 +164,6 @@ export interface CommandQueries {
 
 export interface CommandRoutesOptions {
   readonly queries: CommandQueries;
-  /** The steer window; the default is technical/08:137's. Injected so a test can drive its clock. */
-  readonly steerGate?: SteerGate;
   /**
    * The commands, or `null` on a process that composed no pipeline.
    *
@@ -205,82 +205,12 @@ const runParamsSchema = z.strictObject({ run_id: z.uuid() });
 /** Whether a repeat under a used key would create a second thing (see the module note). */
 type KeyPolicy = 'required' | 'optional';
 
-/** technical/08:137 — *"1 message per 5 s per user"*, verbatim. */
-export const STEER_MIN_INTERVAL_MS = 5_000;
-
-/**
- * A bound on how many users this process remembers a steer for.
- *
- * Not a policy: an entry is one timestamp per user who has steered, and it is dropped as soon as
- * its window has passed. The cap is here so that a pathological caller cannot grow the map without
- * limit, and eviction is oldest-first — which lets the evicted user steer once more immediately,
- * the fail-**open** direction. That is deliberate for a rate limit and would not be for a
- * permission: over-refusing a person's message loses the thing the feature exists for, and the
- * spend it protects is bounded by the run's own budget either way (BD-010).
- */
-export const STEER_GATE_MAX_USERS = 4_096;
-
-/**
- * Gives back the window slot one admitted attempt took (WP-73, PROGRESS backlog 263). It releases
- * that attempt's slot only — a later attempt the window has since admitted keeps its own.
- */
-export type SteerRefund = () => void;
-
-export interface SteerGate {
-  /**
-   * When this caller may steer now: records the attempt and answers the refund for it, which the
-   * route calls when the steer is then refused. `null` when the window has not passed.
-   */
-  allow(userId: string): SteerRefund | null;
-}
-
-/**
- * The per-user steer window, in memory (see the module note for what "per process" costs).
- *
- * `now` is injected for the reason every other duration in this repository is: a test that waited
- * five real seconds to prove a five-second window would be asserting something about the machine.
- */
-export const createSteerGate = (
-  now: () => number = () => Date.now(),
-  intervalMs: number = STEER_MIN_INTERVAL_MS,
-  maxUsers: number = STEER_GATE_MAX_USERS,
-): SteerGate => {
-  const last = new Map<string, number>();
-  return {
-    allow: (userId) => {
-      const at = now();
-      const previous = last.get(userId);
-      if (previous !== undefined && at - previous < intervalMs) {
-        return null;
-      }
-      if (last.size >= maxUsers && previous === undefined) {
-        const oldest = last.keys().next();
-        if (!oldest.done) {
-          last.delete(oldest.value);
-        }
-      }
-      // Delete first so the insertion order is the recency order the eviction above reads.
-      last.delete(userId);
-      last.set(userId, at);
-      return () => {
-        // Only this attempt's slot: if the window passed and a later steer was admitted, the entry
-        // is that one's and stays. Deleting rather than restoring `previous` is equivalent, because
-        // an admitted attempt means `previous` was already outside the window.
-        if (last.get(userId) === at) {
-          last.delete(userId);
-        }
-      };
-    },
-  };
-};
-
 export const registerCommandRoutes = async (
   app: FastifyInstance,
   options: CommandRoutesOptions,
 ): Promise<void> => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
   const guard = { projectRole: options.queries.projectRole };
-  const steerGate = options.steerGate ?? createSteerGate();
 
   /**
    * The project a task or a run belongs to, resolved before the guard decides.
@@ -990,34 +920,45 @@ export const registerCommandRoutes = async (
       schema: {
         summary: 'Stop this attempt',
         description:
-          'Ends the run as a **record** — the row becomes `cancelled`, `run.finished` is appended and the task is paused so the pipeline does not act on an attempt nobody will finish. It does **not** interrupt the model’s session: reaching a live run from another process is the transport Q52 leaves unbuilt, so the session ends on its own and its **verdict** is then discarded — but not its spend: since WP-47 the process that ran it records what the attempt cost against the terminated row and charges the ledger for it (Q70 (b)). A run that has already ended answers 409.',
+          'Stops the model’s session **and** ends the run, by one of two branches (TD-028 decision 11, WP-101). **A process holds the run’s lease** (the usual case): the task is paused and the stop is recorded for that process, and the answer is `202` with `command_id` — the run still reads `running`, and the process holding it interrupts the session and ends the run `cancelled` with the cost the session measured; `GET /api/runs/:run_id/commands` says whether the stop was applied. If that process dies before applying it, the run is ended `lease_expired` by the lease sweep and the stop is closed `run_ended`. **No process holds the lease** (absent or expired): nothing is running the session, so the run is ended here — the answer is `200` with `command_id: null`, the row reads `cancelled`, `run.finished` is appended and the task is paused; a session that was in fact still running somewhere has its verdict discarded and its spend recorded when it ends (WP-47, Q70 (b)). A run that has already ended answers 409.',
         tags: ['runs'],
         params: runParamsSchema,
         body: cancelRunRequestSchema,
         response: {
-          200: runCommandResponseSchema,
+          200: cancelRunResponseSchema,
+          202: cancelRunResponseSchema,
           400: apiErrorSchema,
           409: apiErrorSchema,
           503: apiErrorSchema,
         },
       },
     },
-    async (request) => {
+    async (request, reply) => {
       const runId = request.params.run_id;
       const body = request.body;
-      return command({
+      const answer = await command({
         request,
         action: 'run.cancel',
         key: 'optional',
         subject: { run_id: runId, body },
         params: { run_id: runId },
+        // Which branch ran, for a replay's answer: the id of the recorded stop, or `null`.
+        auditResult: (result) => ({ command_id: result.commandId }),
         taskId: (result) => result.taskId,
-        perform: async () => {
+        perform: async (idempotencyKey: string | null) => {
           const { userId } = actorOf(request);
-          return commands().cancelRun({ runId, userId });
+          return commands().cancelRun({ runId, userId, idempotencyKey });
         },
-        answer: async ({ performed }) => ({ ...(await runPositionOf(runId)), performed }),
+        answer: async ({ performed, result, previous }) => ({
+          ...(await runPositionOf(runId)),
+          performed,
+          command_id:
+            result?.commandId ??
+            (typeof previous?.command_id === 'string' ? previous.command_id : null),
+        }),
       });
+      // `202` exactly when a stop was recorded for another process to apply: accepted, not done.
+      return reply.code(answer.command_id === null ? 200 : 202).send(answer);
     },
   );
 
@@ -1028,7 +969,7 @@ export const registerCommandRoutes = async (
       schema: {
         summary: 'Send a message to the running agent',
         description:
-          'product/18’s steer, **accepted, then applied or refused** (TD-028 decision 9, WP-85). The text is recorded for the process holding the run — on the shipped topology never the process answering — and the answer is `202` with the command’s id: it says the message was accepted, never that the model heard it. The holder then applies it as a **user turn** in the live session and a `steer` entry in the run’s transcript, attributed to whoever sent it, and stamps the command applied; a command still pending when the run ends is refused `run_ended` and never applied late. `GET /api/runs/:run_id/commands` is where the run screen reads which. Only while the run is running — a run that has ended answers 409 naming its status. Limited to one message per five seconds per user (technical/08); the text is untrusted and is redacted once, before it is recorded.',
+          'product/18’s steer, **accepted, then applied or refused** (TD-028 decision 9, WP-85). The text is recorded for the process holding the run — on the shipped topology never the process answering — and the answer is `202` with the command’s id: it says the message was accepted, never that the model heard it. The holder then applies it as a **user turn** in the live session and a `steer` entry in the run’s transcript, attributed to whoever sent it, and stamps the command applied; a command still pending when the run ends is refused `run_ended` and never applied late. `GET /api/runs/:run_id/commands` is where the run screen reads which. Only while the run is running — a run that has ended answers 409 naming its status. Limited to one message per five seconds per user (technical/08) — one window shared by every process serving the API, read off the recorded steers (WP-101), refused `429`; the text is untrusted and is redacted once, before it is recorded.',
         tags: ['runs'],
         params: runParamsSchema,
         body: steerRunRequestSchema,
@@ -1058,35 +999,20 @@ export const registerCommandRoutes = async (
         taskId: (result) => result.taskId,
         perform: async (idempotencyKey: string | null) => {
           const { userId, name } = actorOf(request);
-          // After the replay check and before the command: a replayed request records nothing, so
-          // charging it against the window would refuse the *next* real steer. The gate is the
-          // last thing between the caller and the record.
-          const refund = steerGate.allow(userId);
-          if (refund === null) {
-            throw new HttpError(
-              429,
-              'rate_limited',
-              `steering is limited to one message every ${STEER_MIN_INTERVAL_MS / 1_000} seconds per person (technical/08); your last message was accepted moments ago, try again in a moment`,
-            );
-          }
-          try {
-            return await commands().steerRun({
-              runId,
-              userId,
-              // The role the guard actually applied — the project membership where there is one,
-              // the organisation role otherwise. The aggregate asks `can()` again with it.
-              role: request.effectiveRole ?? 'viewer',
-              message: body.message,
-              authorName: name,
-              idempotencyKey,
-            });
-          } catch (error) {
-            // A refused steer recorded nothing, so it gives its slot back (WP-73, backlog 263).
-            // Recorded *before* the call and refunded on refusal — never recorded after it, which
-            // would let two concurrent steers through the window.
-            refund();
-            throw error;
-          }
+          // The window is the command's (WP-101): it is read off the user's `steer` rows under a
+          // per-user advisory lock, in the transaction that records this one, so a replay — which
+          // records nothing and never reaches here — cannot spend it, and a refusal from the window
+          // is `429 rate_limited` through `commandRefusal`.
+          return commands().steerRun({
+            runId,
+            userId,
+            // The role the guard actually applied — the project membership where there is one,
+            // the organisation role otherwise. The aggregate asks `can()` again with it.
+            role: request.effectiveRole ?? 'viewer',
+            message: body.message,
+            authorName: name,
+            idempotencyKey,
+          });
         },
         answer: async ({ performed, result, previous }) => ({
           ...(await runPositionOf(runId)),

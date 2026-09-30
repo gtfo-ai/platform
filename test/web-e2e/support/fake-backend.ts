@@ -545,6 +545,20 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
         });
         return;
       }
+      if (runCommand?.[1] === 'cancel') {
+        // WP-101 (TD-028 decision 11): a cancel of a run whose lease is live is **accepted** (202)
+        // and names the stop recorded for the process holding it; the client parses the answer
+        // (`cancelRunResponseSchema`). The in-place branch is `200` with `command_id: null`.
+        json(response, 202, {
+          run_id: fixtures.IDS.run,
+          task_id: fixtures.IDS.taskFeature,
+          status: 'running',
+          task_state: 'paused',
+          performed: true,
+          command_id: '00000000-0000-4000-8000-0000000000ca',
+        });
+        return;
+      }
       json(response, 200, commandAnswer(path, taskCommand?.[1]));
       return;
     }

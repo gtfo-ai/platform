@@ -15,7 +15,7 @@
 | Integrations | `GET/POST /api/integrations`, `PATCH /api/integrations/:id` (**WP-100**: `config` sets keys and `remove` deletes them, and the merged document passes the create's checks — no credential key, declared hosts, the provider's own schema — `400 invalid_integration_config` naming the key paths; `integration.write`), `GET /api/integrations/providers` (**WP-100**: each shipped provider's non-credential `config_fields`, `required` when its schema supplies no default, and its `secret_fields`, read off the provider's schema — what the create form renders; `integration.read`), `POST /api/integrations/:id/test`, `GET /api/integrations/:id/setup-guide`, `GET /api/integrations/:id/refused-deliveries` (**WP-44**: the newest inbound deliveries the platform **refused** — since WP-73b filtered on `inbox.error_reasons`, never an ordinary ignore — with the accounts refused as `unmapped_identity`; `integration.read`) |
 | Projects | `GET/POST /api/projects`, `GET/PATCH /api/projects/:id`, `GET /api/projects/:id/config` (effective, with sources), `PUT /api/projects/:id/config`, `POST /api/projects/:id/config/export` (to repo MR, **served since WP-63**), `POST /api/projects/:id/config/refresh` (**WP-63**: re-read the default branch's `.agentic/config.yml`), `GET /api/projects/:id/readiness`, `POST /api/projects/:id/discovery`, `GET/POST /api/projects/:id/rediscovery` (**WP-94**: a maintainer's re-evaluate — `discovery.run`, `Idempotency-Key` required, a new one-off discovery task with every guard the first had; the `GET` publishes the gate, the stage's run budget as the ceiling and the last discovery's cost), `POST /api/projects/:id/interview` (**WP-64**: the wizard's step 3 — one knowledge proposal per answered section, never a commit; `Idempotency-Key` required, `kb.write`), `GET/PUT /api/projects/:id/bindings`, `GET/PUT /api/projects/:id/budgets`, `GET /api/projects/:id/stats` |
 | Tasks | `GET /api/projects/:id/tasks?state=…`, `POST /api/projects/:id/tasks` (manual start from ticket key), `GET /api/tasks/:id` (with stages, artifacts, checks), `POST /api/tasks/:id/{pause,resume,cancel,retry-stage,return-to-stage,take-over,hand-back,rework}` (**take-over's stop of a live run is accepted, then applied or refused** — WP-85, TD-028 decision 9: the pause and the stop are recorded in one transaction, the run is found in the database and its id recorded on `task.taken_over`, and the process holding the run applies the stop; the response's `workspace_export: "requested"` is that tense), `GET /api/tasks/:id/events`, `GET /api/tasks/:id/export` (JSON), `POST /api/tasks/:id/questions/:qid/answer`, `POST /api/tasks/:id/approvals/:aid/decide`, `POST /api/tasks/:id/feedback`, `POST /api/tasks/:id/ask` (ask-the-task), `GET /api/artifacts/:id` (one artifact's body, gated at `artifact.read`; **added at WP-52**, and until then `GET /api/tasks/:id` published every artifact with a literal `null` `url` and no route served a body) |
-| Runs | `GET /api/runs/:id`, `GET /api/runs/:id/messages?after=<seq>&limit=`, `GET /api/runs/:id/prompt`, `GET /api/runs/:id/context-pack`, `POST /api/runs/:id/{steer,cancel}` (**steer is accepted, then applied or refused** — WP-85, TD-028 decision 9: it answers `202` with the `run_commands` id and never claims the model heard it; the process holding the run applies it and stamps the row, and a command still pending when the run ends is refused `run_ended`), `GET /api/runs/:id/commands` (**WP-85**: the run's steers and take-over stops, newest first, each `pending`, `applied` or `refused` with its reason — what the run screen reads; `transcript.read`), `POST /api/runs/:id/retry` (model/effort override), `GET /api/runs/:id/transcript.jsonl` and `GET /api/runs/:id/export.tar` (**WP-44**, the take-over's two downloads — **served, not copied** (Q93): the transcript is `run_messages` rendered one entry per line through the `/messages` projection, as an attachment, gated at `transcript.read`; the tarball is the launcher's file on the shared export volume read through the SPA's realpath guard, gated at `task.take_over`, kept fourteen days) |
+| Runs | `GET /api/runs/:id`, `GET /api/runs/:id/messages?after=<seq>&limit=`, `GET /api/runs/:id/prompt`, `GET /api/runs/:id/context-pack`, `POST /api/runs/:id/{steer,cancel}` (**steer is accepted, then applied or refused** — WP-85, TD-028 decision 9: it answers `202` with the `run_commands` id and never claims the model heard it; the process holding the run applies it and stamps the row, and a command still pending when the run ends is refused `run_ended`; limited to one per five seconds per user **across every process**, read off the user's recorded steers under a per-user advisory lock since WP-101. **Cancel stops the session when a process holds it** — WP-101, TD-028 decision 11: with a live lease it pauses the task, records a `cancel` row for the holder and answers `202` with `command_id`, and the holder interrupts the session and ends the run `cancelled` with the cost the session measured, charged once and not late; if that holder dies first the lease sweep ends the run `lease_expired` and closes the row `run_ended`. With no live lease (absent or expired) it ends the record in place and answers `200` with `command_id: null`. A steer still pending behind a stop is not delivered and is closed `run_ended` by the run's ending), `GET /api/runs/:id/commands` (**WP-85**: the run's steers, take-over stops and — since WP-101 — cancels, newest first, each `pending`, `applied` or `refused` with its reason — what the run screen reads; `transcript.read`), `POST /api/runs/:id/retry` (model/effort override), `GET /api/runs/:id/transcript.jsonl` and `GET /api/runs/:id/export.tar` (**WP-44**, the take-over's two downloads — **served, not copied** (Q93): the transcript is `run_messages` rendered one entry per line through the `/messages` projection, as an attachment, gated at `transcript.read`; the tarball is the launcher's file on the shared export volume read through the SPA's realpath guard, gated at `task.take_over`, kept fourteen days) |
 | Agents | `GET /api/org/agents` (running runs) |
 | Inbox | `GET /api/org/inbox` (questions + approvals pending for the caller) |
 | Knowledge | `GET /api/projects/:id/kb/tree`, `GET /api/projects/:id/kb/doc?path=`, `PUT /api/projects/:id/kb/doc` (creates commit/MR), `GET /api/projects/:id/kb/search?q=`, `GET /api/projects/:id/kb/proposals`, `POST /api/projects/:id/kb/proposals/:pid/{approve,reject,edit}`, `GET /api/projects/:id/kb/health`, `POST /api/projects/:id/kb/bootstrap` |
@@ -168,13 +168,16 @@
 > `/take-over` accepted a `reason` and dropped it).
 >
 > Two limits of that surface are the product's rather than the code's. `POST /api/runs/:id/cancel`
-> ends the run **as a record** and pauses its task; it cannot interrupt the model's session, because
-> reaching a live run from another process is Q52's unbuilt transport — the session ends on its own
-> and its **verdict** is then discarded. Its **spend is not**, since WP-47: the process that ran the
-> session is the only one that knows what the attempt cost, so it writes the figure onto the
-> already-terminal row through the narrow `runs.recordCost` and charges the ledger from the same
-> transaction (Q70 (b)). What is still lost is a cancel whose process then dies before it finishes —
-> nobody is left to report the number — and that residual is Q52's.
+> takes one of two branches since WP-101 (TD-028 decision 11). **A process holds the run's lease**:
+> the task is paused and a `cancel` row is recorded for that process in the same transaction, the
+> answer is `202`, and the holder interrupts the session — so the run ends `cancelled` in its own
+> process with what the session measured, charged once by the ordinary ledger handler. **No process
+> holds it** (the lease absent or expired): the run is ended **as a record** in place and the answer
+> is `200`; a session that was in fact still running somewhere (a holder cut off from the database)
+> then has its **verdict** discarded, and its **spend** — since WP-47 — written onto the terminal row
+> through the narrow `runs.recordCost` and charged from the same transaction, labelled late (Q70
+> (b)). What is still unmeasured is a session whose process dies before it reports: a recorded cancel
+> is then closed `run_ended` by the lease sweep, whose `run.failed` carries no cost.
 > And **no HTTP request escalates a task**: a spent iteration loop and an exhausted write-conflict
 > bound are both answered to the caller rather than parking the task in `needs_human`.
 >
@@ -296,6 +299,15 @@
 ## Rate limits and safety
 Per-user rate limits on mutating endpoints; webhook endpoints limited per integration; `POST /api/runs/:id/steer` limited to 1 message per 5 s per user; all human actions recorded in `human_actions` and `config_audit`.
 
+> **As built at WP-101 (PROGRESS backlog 295): the steer limit is one window for the
+> installation.** Until WP-101 it was a `Map` in each API process, so N processes serving the API
+> admitted N steers per user per five seconds — and since WP-85 every admitted steer is a turn the
+> run pays for. Now the command's own transaction takes a `pg_advisory_xact_lock` on the user and
+> reads that user's `steer` rows in `run_commands` inside the interval, before it records the new
+> one; a second steer through any process waits for the first to commit and is refused
+> `429 rate_limited`. No new table: the rows the window counts are the steers it admitted. A steer
+> refused for another reason (the run ended, the role) records nothing and so spends no slot.
+
 > **As built at WP-88 (PROGRESS backlog 199): a decision taken in chat is a human action too.** A
 > Slack click that approves a plan, or a Slack click or thread reply that answers a question, is
 > decided by the Approval or Question aggregate in the webhook delivery's transaction (WP-43), and
@@ -321,4 +333,5 @@ Per-user rate limits on mutating endpoints; webhook endpoints limited per integr
 > vendor that keeps receiving errors disables its webhook; it is **per process**, so N API replicas
 > admit N times it. A held connection's envelope (Slack Socket Mode) is never limited — the platform
 > opened that socket, and limiting what it acknowledged would drop a notification. This note is
-> about the webhook clause only; the steer limit is `apps/server/src/routes/commands.ts`'s.
+> about the webhook clause only; the steer limit is the WP-101 note above, and — unlike this bucket —
+> it is shared by every process.

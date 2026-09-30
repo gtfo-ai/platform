@@ -16,7 +16,7 @@
  *             └─▶ pending rows for my leased runs ─▶ markApplied (conditional) ─▶ handle.steer / stop
  * ```
  *
- * ## Four decisions
+ * ## Five decisions
  *
  *  1. **The notification is latency; the heartbeat poll is the guarantee.** A notification is not
  *     delivered to a connection that was reconnecting, so the lease heartbeat (`./lease.ts`) drains
@@ -32,8 +32,9 @@
  *     back. A delivery that throws (a session closing near its end) turns the stamp into the
  *     refusal `delivery_failed` — conditionally, and never back to pending — so the run screen does
  *     not state a turn the session did not take, and the command is not retried (review round 1).
- *     A take-over's stop is not awaited (it resolves with the run's outcome), so its later
- *     rejection is logged and the row keeps `applied`: the stop *was* delivered.
+ *     A stop — a take-over's or, since WP-101, a cancel's — is not awaited (it resolves with the
+ *     run's outcome), so its later rejection is logged and the row keeps `applied`: the stop *was*
+ *     delivered.
  *  3. **A register miss is not always a refusal.** A run's row is `running` and leased to this
  *     process from the transaction that created it, a moment **before** `runner.start` registers its
  *     handle; a notification that lands in that window finds no handle for a run that is about to
@@ -45,6 +46,12 @@
  *  4. **One drain at a time per process.** Drains are chained, so two wake-ups cannot interleave
  *     their deliveries out of the order the rows were recorded in, and `stop()` waits for the one in
  *     flight — the composition root closes the pool on the lines after it.
+ *  5. **A steer behind a stop is never handed out** (WP-101). Once a run has a `cancel` or a
+ *     `take_over` row that is not refused, `RunCommandRepository.pending` stops listing its steers,
+ *     so a turn is not pushed into a session that is being stopped — a turn the run would pay for
+ *     and nobody would read — and the run's own ending closes them `run_ended`, like any command
+ *     still pending when a run ends. A steer recorded *before* the stop is included: the stop is the
+ *     later instruction and it is the one that stands.
  *
  * Nothing here is a network route: the holder has no listener and no address, which is what
  * decision 2 of TD-028 exists to keep (the alternatives the amendment rejected are recorded there).
@@ -154,23 +161,35 @@ export const createRunCommandInbox = (deps: RunCommandInboxDependencies): RunCom
     }
     // Not awaited, as the take-over always was (`./commands.ts`): the stop resolves with the run's
     // outcome — interrupt, grace, the export, teardown — and the drain must not hold every other
-    // command behind one run's wind-down.
-    void live.handle
-      .stop({
-        reason: 'taken_over',
-        workspaceExport: {
-          branch: instruction.branch,
-          commitMessage: instruction.commitMessage,
-          tarball: instruction.tarball,
-          keepUntil: instruction.keepUntil,
+    // command behind one run's wind-down. A cancel (WP-101, TD-028 decision 11) is the same stop
+    // without the export: the run then ends `cancelled` in this process, with the cost its session
+    // measured, through the stage executor's own ending.
+    const stop =
+      instruction.kind === 'cancel'
+        ? live.handle.stop({ reason: 'cancelled' })
+        : live.handle.stop({
+            reason: 'taken_over',
+            workspaceExport: {
+              branch: instruction.branch,
+              commitMessage: instruction.commitMessage,
+              tarball: instruction.tarball,
+              keepUntil: instruction.keepUntil,
+            },
+          });
+    void stop.catch((error: unknown) => {
+      logger.error(
+        {
+          err: error,
+          run_id: row.runId,
+          task_id: row.taskId,
+          command_id: row.id,
+          kind: instruction.kind,
         },
-      })
-      .catch((error: unknown) => {
-        logger.error(
-          { err: error, run_id: row.runId, task_id: row.taskId, command_id: row.id },
-          'the taken-over run could not be stopped; its workspace may not have been exported',
-        );
-      });
+        instruction.kind === 'cancel'
+          ? 'the cancelled run could not be stopped; its session may still be running'
+          : 'the taken-over run could not be stopped; its workspace may not have been exported',
+      );
+    });
     return Promise.resolve();
   };
 

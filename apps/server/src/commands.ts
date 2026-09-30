@@ -126,10 +126,17 @@ export interface TaskCommands {
     readonly model?: string;
     readonly effort?: Effort;
   }): Promise<{ readonly taskId: string; readonly stage: string }>;
+  /**
+   * TD-028 decision 11 (WP-101): with a live lease, **records** the stop for the process holding the
+   * session and answers its `run_commands` id; with none, ends the record in place and answers
+   * `commandId: null`.
+   */
   cancelRun(input: {
     readonly runId: string;
     readonly userId: string;
-  }): Promise<{ readonly taskId: string }>;
+    /** The request's `Idempotency-Key`: the recorded stop's id is derived from it. */
+    readonly idempotencyKey: string | null;
+  }): Promise<{ readonly taskId: string; readonly commandId: string | null }>;
   /**
    * **Records** the turn for the process holding the run and answers the `run_commands` id (WP-85,
    * TD-028 decision 9) — never a claim that the session took it.
@@ -286,7 +293,13 @@ export const createTaskCommands = (options: TaskCommandOptions): TaskCommands =>
         ...(input.effort === undefined ? {} : { effort: input.effort }),
       }),
     cancelRun: async (input) =>
-      cancelRunCommand(deps, { runId: id(input.runId), userId: id(input.userId) }),
+      cancelRunCommand(deps, {
+        runId: id(input.runId),
+        userId: id(input.userId),
+        ...(input.idempotencyKey === null
+          ? {}
+          : { commandId: runCommandIdFor(input.userId, 'run.cancel', input.idempotencyKey) }),
+      }),
     steerRun: async (input) =>
       steerRunCommand(deps, {
         runId: id(input.runId),

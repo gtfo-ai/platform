@@ -24,6 +24,7 @@ import {
   RunNotLiveError,
   StageNotCurrentError,
   StageNotInTemplateError,
+  SteerWindowClosedError,
   TaskConflictExhaustedError,
   UnknownAggregateError,
 } from '@platform/application';
@@ -33,13 +34,7 @@ import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { toApiError } from '../errors.js';
-import {
-  type CommandQueries,
-  createSteerGate,
-  registerCommandRoutes,
-  STEER_MIN_INTERVAL_MS,
-  type SteerGate,
-} from './commands.js';
+import { type CommandQueries, registerCommandRoutes } from './commands.js';
 import { memoryAttemptRecords } from './idempotency-memory.js';
 
 const TASK = '00000000-0000-4000-8000-0000000000a1';
@@ -77,18 +72,7 @@ interface World {
   signedIn: boolean;
 }
 
-const build = async (
-  overrides: Partial<CommandQueries> = {},
-  /**
-   * The steer window, **open by default here** (WP-27).
-   *
-   * Every enumerated case below posts to each command two or three times as one user, and the
-   * shipped gate would refuse the second steer within five seconds — turning a question about the
-   * key policy into a question about the clock. The window has its own `describe` further down,
-   * where it is driven on an injected clock (standing rule 2).
-   */
-  steerGate: SteerGate = { allow: () => () => {} },
-): Promise<World> => {
+const build = async (overrides: Partial<CommandQueries> = {}): Promise<World> => {
   const calls: Call[] = [];
   const actions: World['actions'] = [];
   const attempts = new Map<string, { bodyDigest: string | null; params: JsonObject }>();
@@ -159,7 +143,6 @@ const build = async (
     };
 
   await registerCommandRoutes(app, {
-    steerGate,
     queries: {
       taskProjectId: async (taskId) => (taskId === TASK ? PROJECT : null),
       runProjectId: async (runId) => (runId === RUN ? PROJECT : null),
@@ -244,7 +227,9 @@ const COMMANDS: readonly {
   readonly role: UserRole;
   /**
    * The status an accepted request answers — `200`, except the steer's `202`: since WP-85 it is
-   * **accepted**, then applied or refused by the process holding the run (TD-028 decision 9).
+   * **accepted**, then applied or refused by the process holding the run (TD-028 decision 9) — and
+   * a run cancel's when it recorded a stop (WP-101, TD-028 decision 11), which the recorder's
+   * default `commandId` says it did. The in-place branch's `200` is its own case below.
    */
   readonly accepted?: 202;
 }[] = [
@@ -335,6 +320,7 @@ const COMMANDS: readonly {
     otherBody: { reason: 'it is stuck' },
     key: 'optional',
     role: 'member',
+    accepted: 202,
   },
   {
     name: 'run-steer',
@@ -433,7 +419,9 @@ describe('every command, enumerated', () => {
           `${command.name} 400 idempotency_key_required`,
         );
       } else {
-        expect(`${command.name} ${reply.status}`).toBe(`${command.name} 200`);
+        expect(`${command.name} ${reply.status}`).toBe(
+          `${command.name} ${command.accepted ?? 200}`,
+        );
       }
     }
     // The four that need none performed; the seven that need one did not.
@@ -502,89 +490,22 @@ describe('every command, enumerated', () => {
 });
 
 describe('the steer window (technical/08: one message per five seconds per user)', () => {
-  /** A world whose gate runs on a clock the case advances (standing rule 2: never the wall clock). */
-  const windowed = async () => {
-    let at = 1_000_000;
-    const world = await build(
-      {},
-      createSteerGate(() => at),
-    );
-    return { world, advance: (ms: number) => (at += ms) };
-  };
-
-  it('refuses a second message inside the window and takes the next one after it', async () => {
-    const { world: gated, advance } = await windowed();
-    const first = await post(gated, `/api/runs/${RUN}/steer`, { message: 'one' }, 'steer-1');
-    expect(first.status, JSON.stringify(first.body)).toBe(202);
-
-    advance(STEER_MIN_INTERVAL_MS - 1);
-    const tooSoon = await post(gated, `/api/runs/${RUN}/steer`, { message: 'two' }, 'steer-2');
+  /**
+   * The window is not this file's any more (WP-101, PROGRESS backlog 295): it is read off the
+   * recorded steers under a per-user advisory lock, in the command's own transaction, so what the
+   * route owns is the translation. The window itself — both processes, the lock and its canary —
+   * is `test/integration/pipeline/run-commands.integration.test.ts` and the topology e2e.
+   */
+  it('answers the window’s refusal 429 rate_limited, and audits nothing', async () => {
+    world.throws = new SteerWindowClosedError();
+    const tooSoon = await post(world, `/api/runs/${RUN}/steer`, { message: 'two' }, 'steer-2');
     expect(`${tooSoon.status} ${tooSoon.body.error?.code ?? ''}`).toBe('429 rate_limited');
-    // Refused means refused: nothing was recorded for the session and nothing was audited.
-    expect(gated.calls.filter((call) => call.name === 'run-steer')).toHaveLength(1);
-    expect(gated.actions).toHaveLength(1);
-
-    // The boundary from the other side (standing rule 42): one millisecond later it is allowed.
-    advance(1);
-    const later = await post(gated, `/api/runs/${RUN}/steer`, { message: 'three' }, 'steer-3');
-    expect(later.status, JSON.stringify(later.body)).toBe(202);
-  });
-
-  it('gives the slot back when the steer is refused, so the retry meets the refusal and not a 429 (backlog 263)', async () => {
-    const { world: gated, advance } = await windowed();
-    gated.throws = new RunNotLiveError(RUN as never, 'completed', 'steered');
-    const refused = await post(gated, `/api/runs/${RUN}/steer`, { message: 'one' }, 'steer-r1');
-    expect(`${refused.status} ${refused.body.error?.code ?? ''}`).toBe('409 run_not_live');
-
-    advance(1);
-    gated.throws = new RunNotLiveError(RUN as never, 'completed', 'steered');
-    const retry = await post(gated, `/api/runs/${RUN}/steer`, { message: 'one' }, 'steer-r2');
-    // With the refund removed (md5-confirmed revert) this read `429 rate_limited`.
-    expect(`${retry.status} ${retry.body.error?.code ?? ''}`).toBe('409 run_not_live');
-
-    // The other direction (standing rule 42): an accepted steer still spends the window.
-    const accepted = await post(gated, `/api/runs/${RUN}/steer`, { message: 'two' }, 'steer-r3');
-    expect(accepted.status, JSON.stringify(accepted.body)).toBe(202);
-    advance(1);
-    const tooSoon = await post(gated, `/api/runs/${RUN}/steer`, { message: 'three' }, 'steer-r4');
-    expect(`${tooSoon.status} ${tooSoon.body.error?.code ?? ''}`).toBe('429 rate_limited');
-    expect(tooSoon.body.error?.message).not.toContain('still listening');
-  });
-
-  it('refunds only the attempt it admitted, never a later one the window let through', () => {
-    let at = 0;
-    const gate = createSteerGate(() => at);
-    const first = gate.allow('u');
-    at += STEER_MIN_INTERVAL_MS;
-    expect(gate.allow('u'), 'the window passed, so a second attempt is admitted').not.toBeNull();
-    first?.();
-    at += 1;
-    expect(gate.allow('u'), 'the second attempt still holds its slot').toBeNull();
-  });
-
-  it('is per user: a colleague’s message is not refused because of mine', async () => {
-    const { world: gated } = await windowed();
-    await post(gated, `/api/runs/${RUN}/steer`, { message: 'one' }, 'steer-a');
-    gated.userId = '00000000-0000-4000-8000-0000000000ea';
-    const other = await post(gated, `/api/runs/${RUN}/steer`, { message: 'two' }, 'steer-b');
-    expect(other.status, JSON.stringify(other.body)).toBe(202);
-  });
-
-  it('does not spend the window on a replay, which delivered nothing', async () => {
-    // The ordering the route is written to: the gate is asked **after** the replay check, so a
-    // retried request under a used key cannot refuse the next real steer. The case discriminates:
-    // the replay lands exactly at the end of the window, so a gate that saw it would restart the
-    // window there and the real steer on the next line would be a 429.
-    const { world: gated, advance } = await windowed();
-    await post(gated, `/api/runs/${RUN}/steer`, { message: 'one' }, 'steer-once');
-    advance(STEER_MIN_INTERVAL_MS);
-    const replay = await post(gated, `/api/runs/${RUN}/steer`, { message: 'one' }, 'steer-once');
-    expect(replay.status).toBe(202);
-    expect(replay.body.performed).toBe(false);
-
-    const real = await post(gated, `/api/runs/${RUN}/steer`, { message: 'two' }, 'steer-next');
-    expect(real.status, JSON.stringify(real.body)).toBe(202);
-    expect(gated.calls.filter((call) => call.name === 'run-steer')).toHaveLength(2);
+    expect(tooSoon.body.error?.message).toContain('one message every 5 seconds per person');
+    expect(world.actions).toEqual([]);
+    // The key is given back with the refusal, so a retry under it performs (WP-67).
+    const retry = await post(world, `/api/runs/${RUN}/steer`, { message: 'two' }, 'steer-2');
+    expect(retry.status, JSON.stringify(retry.body)).toBe(202);
+    expect(retry.body.performed).toBe(true);
   });
 });
 
@@ -640,6 +561,11 @@ describe('what each refusal maps to', () => {
       error: new CommandsUnavailableError('this process runs no job workers'),
       status: 503,
       code: 'commands_unavailable',
+    },
+    {
+      error: new SteerWindowClosedError(),
+      status: 429,
+      code: 'rate_limited',
     },
   ];
 
@@ -717,15 +643,46 @@ describe('the routes’ own answers', () => {
     });
   });
 
-  it('answers a run command with the run and its task', async () => {
-    const reply = await post(world, `/api/runs/${RUN}/cancel`, {});
+  it('answers a cancel that recorded a stop 202 with its command, and a replay the same (WP-101)', async () => {
+    const reply = await post(world, `/api/runs/${RUN}/cancel`, {}, 'cancel-live');
+    expect(reply.status, JSON.stringify(reply.body)).toBe(202);
     expect(reply.body).toEqual({
       run_id: RUN,
       task_id: TASK,
       status: 'completed',
       task_state: 'active',
       performed: true,
+      command_id: '00000000-0000-4000-8000-0000000000c1',
     });
+    // The key reaches the command, which derives the stop's id from it.
+    expect(world.calls[0]?.input).toMatchObject({ idempotencyKey: 'cancel-live' });
+    expect(world.actions[0]?.params).toMatchObject({
+      command_id: '00000000-0000-4000-8000-0000000000c1',
+    });
+    const replay = await post(world, `/api/runs/${RUN}/cancel`, {}, 'cancel-live');
+    expect(`${replay.status} ${String(replay.body.performed)}`).toBe('202 false');
+    expect(replay.body.command_id).toBe('00000000-0000-4000-8000-0000000000c1');
+    expect(world.calls).toHaveLength(1);
+  });
+
+  it('answers a cancel that ended the record in place 200 with no command, and a replay the same (WP-101)', async () => {
+    world.result = { taskId: TASK, commandId: null };
+    const reply = await post(world, `/api/runs/${RUN}/cancel`, {}, 'cancel-in-place');
+    expect(reply.status, JSON.stringify(reply.body)).toBe(200);
+    expect(reply.body).toEqual({
+      run_id: RUN,
+      task_id: TASK,
+      status: 'completed',
+      task_state: 'active',
+      performed: true,
+      command_id: null,
+    });
+    const replay = await post(world, `/api/runs/${RUN}/cancel`, {}, 'cancel-in-place');
+    expect(`${replay.status} ${String(replay.body.performed)}`).toBe('200 false');
+    expect(replay.body.command_id).toBeNull();
+    // No key, no derived id: the command is told so rather than handed an empty string.
+    await post(world, `/api/runs/${RUN}/cancel`, {});
+    expect(world.calls.map((call) => call.input.idempotencyKey)).toEqual(['cancel-in-place', null]);
   });
 
   it('gives the key back when the command refuses, and performs a retry of it', async () => {

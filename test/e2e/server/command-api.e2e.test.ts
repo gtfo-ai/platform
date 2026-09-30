@@ -101,6 +101,8 @@ interface CommandReply {
     readonly current_stage?: string | null;
     readonly performed?: boolean;
     readonly feedback_id?: string;
+    /** A run cancel's recorded stop, or `null` when it ended the record in place (WP-101). */
+    readonly command_id?: string | null;
     readonly error?: { readonly code: string; readonly message: string };
   };
 }
@@ -664,11 +666,44 @@ describe('the run command surface', () => {
     const task = await pipeline.task();
 
     // ── cancel a live run ─────────────────────────────────────────────────
+    // WP-101 (TD-028 decision 11): this process holds the run's lease, so the cancel is recorded
+    // for it and answered `202` — the run still reads running until the session is stopped.
     const cancelled = await send(client, `/api/runs/${runId}/cancel`, { reason: 'wrong branch' });
-    expect(cancelled.status, JSON.stringify(cancelled.body)).toBe(200);
-    expect(cancelled.body.status).toBe('cancelled');
+    expect(cancelled.status, JSON.stringify(cancelled.body)).toBe(202);
+    expect(cancelled.body.status).toBe('running');
+    expect(cancelled.body.command_id).toEqual(expect.any(String));
     // The task stops with it, so the pipeline does not act on an attempt nobody will finish.
     expect(cancelled.body.task_state).toBe('paused');
+
+    // ── the session is stopped, and the run ends in the process that held it ──
+    // The run was held at its workspace; released, it starts, the pending stop is applied the
+    // moment its handle exists, and the stage executor records the ending with the cost the
+    // interrupted session reported — the last row being the ledger's (rule 87).
+    held.open();
+    await pipeline.waitFor('the stopped run to end and be charged', async () => {
+      const rows = await pipeline.query<{ status: string }>(
+        'select status::text as status from runs where id = $1',
+        [runId],
+      );
+      const charged = await pipeline.query('select 1 from cost_entries where run_id = $1', [runId]);
+      return rows[0]?.status === 'cancelled' && charged.length > 0;
+    });
+    expect(
+      await pipeline.query<{ applied: boolean }>(
+        'select applied_at is not null as applied from run_commands where id = $1',
+        [cancelled.body.command_id],
+      ),
+    ).toEqual([{ applied: true }]);
+    // Charged by the ordinary handler, never as `late`: this process measured what it spent. (The
+    // run was stopped as it started, so its session may have reached its own result first; either
+    // way the figure is the session's and it is charged once.)
+    const entries = await pipeline.query<{ late: boolean }>(
+      'select late from cost_entries where run_id = $1',
+      [runId],
+    );
+    expect(entries.length).toBeGreaterThan(0);
+    expect(entries.every((entry) => !entry.late)).toBe(true);
+    expect((await pipeline.task()).state).toBe('paused');
     // It is gone from the running-agents list, which is the projection over `runs.status`.
     const agents = await client.json<{ items: unknown[] }>('/api/org/agents');
     expect(agents.body.items).toEqual([]);
@@ -677,19 +712,6 @@ describe('the run command surface', () => {
     const twice = await send(client, `/api/runs/${runId}/cancel`, {});
     expect(twice.status).toBe(409);
     expect(twice.body.error?.code).toBe('illegal_transition');
-
-    // ── the session ends anyway, and its outcome is discarded ─────────────
-    // The platform cannot interrupt a live session from another process (Q52), so the run finishes
-    // on its own — and finds its row already terminal. The human's decision stands.
-    held.open();
-    await pipeline.waitFor('the released run to have been discarded', async () => {
-      const rows = await pipeline.query<{ status: string }>(
-        'select status from runs where id = $1',
-        [runId],
-      );
-      return rows[0]?.status === 'cancelled';
-    });
-    expect((await pipeline.task()).state).toBe('paused');
 
     // ── retry the cancelled run, on a different model ─────────────────────
     const retried = await send(

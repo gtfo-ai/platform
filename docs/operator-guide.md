@@ -124,17 +124,21 @@ never its role (above).
 - **The live run.** The runner writes the transcript and announces it with PostgreSQL `NOTIFY`; the
   process that serves your browser reads the rows back, so the run screen fills from `app` while the
   run executes in `runner`.
-- **Steer and take-over cross through the database** (WP-85, TD-028 decision 9). The process that
+- **Steer, take-over and cancel cross through the database** (WP-85, TD-028 decision 9; cancel
+  since WP-101, decision 11). The process that
   serves the API never holds a run, so it does not deliver the command: it records it (a
   `run_commands` row) and wakes the process holding the run's lease with PostgreSQL `NOTIFY`. The
   command is **accepted, then applied or refused** — a steer answers `202`, and the run screen shows,
   per command, whether the runner applied it or refused it (`run_ended` when the run finished first;
   it is never applied late). A take-over pauses the task, records which run it stopped, and the runner
-  stops that run and exports its workspace. The runner also polls on its lease heartbeat (every 100
+  stops that run and exports its workspace. A run cancel does the same without the export when the
+  runner holds the run's lease (`202`; the run ends `cancelled` in the runner with what it cost), and
+  ends the run in place when no process holds it (`200`). The runner also polls on its lease heartbeat (every 100
   s), so a command recorded while its `NOTIFY` connection was reconnecting is applied within one beat
   — a steer that sits at *pending* for a couple of minutes means the runner's database connection is
-  struggling. Nothing new listens on a port. The steer limit (one message per 5 s per person) is
-  counted per API process, so N API replicas allow N.
+  struggling. Nothing new listens on a port. The steer limit (one message per 5 s per person) is one
+  window for the whole installation since WP-101 — it is read off the recorded steers under a
+  per-user database lock — so adding API replicas does not multiply it.
 - **The chat connection.** Slack's Socket Mode is held by the process that serves `/webhooks/*`, and
   that process renews a liveness row for it every 20 s (fresh for 60 s). An approval is posted with
   buttons only while the row is fresh; with no such process running — a worker-only deployment, or
@@ -888,7 +892,7 @@ Stated here so an operator meets them in a document rather than in production:
   `apps/server/src/routes/client-census.test.ts` holds it, admitted gaps empty since WP-27, which added
   steer, take-over and hand-back). Since WP-85 a steer and a take-over's stop reach the run in the
   `runner` container through the database — accepted by `app`, then applied or refused by the runner
-  (§1, *The topology*; TD-028 decision 9).
+  (§1, *The topology*; TD-028 decision 9) — and since WP-101 so does a run cancel (decision 11).
 - **Chat notifications ship since WP-32**: a project bound to a Slack integration with a channel gets a
   thread per task and the project's quiet hours and daily digest apply; an organisation-level budget
   posts to the organisation's own chat account's channel (WP-65), and since WP-93 the organisation's

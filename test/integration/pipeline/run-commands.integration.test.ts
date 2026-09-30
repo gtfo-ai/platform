@@ -14,6 +14,8 @@
  *     real `PostgresBroadcast`, closed before the command commits, so its notification reaches
  *     nobody, and the real heartbeat with one driven beat.
  *  3. **With `LISTEN` up, the notification alone applies it** — no beat at all.
+ *  4. **The steer window is one window** (WP-101, backlog 295): a second steer by the same user in
+ *     another transaction waits on the user's advisory lock and is then refused.
  */
 import {
   createLiveRuns,
@@ -312,6 +314,118 @@ describe('a command for a run that ended is never applied late (criterion 3)', (
     await holder.commit();
 
     expect(await rowOf(id)).toEqual({ applied_at: null, refused_reason: 'run_ended' });
+  });
+});
+
+/**
+ * WP-101, PROGRESS backlog 295: technical/08's steer window is **shared state**. Two steers by one
+ * user in two processes are two transactions on two connections, and at READ COMMITTED each would
+ * read "no steer yet" and insert — which is what a per-process `Map` did N times over. The
+ * advisory lock `admitSteer` takes is what makes the second wait for the first and then read it.
+ *
+ * **The canary is this case**: with the `pg_advisory_xact_lock` statement removed from
+ * `postgres-run-commands.ts`'s `admitSteer`, the second transaction never blocks —
+ * `blockedOnLock` throws *"backend … never blocked on a lock"* — and it admits a second steer.
+ */
+describe('the steer window is one window for every process (WP-101, criterion 5)', () => {
+  const freshUser = async (): Promise<Id> => {
+    const client = createTestClient(database.connectionString);
+    await client.connect();
+    try {
+      const { rows } = await client.query<{ id: string }>(
+        'insert into users (email, name) values ($1, $2) returning id',
+        [`steerer-${nextId()}@example.test`, 'Steerer'],
+      );
+      return rows[0]?.id as Id;
+    } finally {
+      await client.end();
+    }
+  };
+
+  it('makes a second steer by the same user wait for the first to commit, then refuses it', async () => {
+    const run = await liveRun();
+    const author = await freshUser();
+    const window = { userId: author, windowMs: 5_000 };
+
+    const first = await begin();
+    expect(await store.runCommands.admitSteer(first.tx, window)).toBe(true);
+    await store.runCommands.insert(first.tx, {
+      id: nextId(),
+      ...run,
+      actorUserId: author,
+      instruction: { kind: 'steer', text: 'first', authorUserId: author, authorLabel: 'Steerer' },
+    });
+
+    const second = await begin();
+    const admitting = store.runCommands.admitSteer(second.tx, window);
+    // The second process waits on the user's lock, not on anything the first holds by accident.
+    await blockedOnLock(second.pid);
+    await first.commit();
+    expect(await admitting).toBe(false);
+    await second.rollback();
+
+    // Per user: a colleague's window is their own.
+    const colleague = await freshUser();
+    const other = await begin();
+    expect(await store.runCommands.admitSteer(other.tx, { ...window, userId: colleague })).toBe(
+      true,
+    );
+    await other.rollback();
+  });
+
+  it('forgets a steer once it is older than the window', async () => {
+    const run = await liveRun();
+    const author = await freshUser();
+    const seed = createTestClient(database.connectionString);
+    await seed.connect();
+    try {
+      await seed.query(
+        `insert into run_commands (id, run_id, task_id, kind, payload, actor_user_id, created_at)
+         values ($1, $2, $3, 'steer', $4::jsonb, $5, now() - interval '6 seconds')`,
+        [
+          nextId(),
+          run.runId,
+          run.taskId,
+          JSON.stringify({ text: 'old', author_user_id: author, author_label: 'Steerer' }),
+          author,
+        ],
+      );
+    } finally {
+      await seed.end();
+    }
+    const check = await begin();
+    expect(await store.runCommands.admitSteer(check.tx, { userId: author, windowMs: 5_000 })).toBe(
+      true,
+    );
+    // …and the same row is inside a window one second longer (rule 42, the other side).
+    expect(await store.runCommands.admitSteer(check.tx, { userId: author, windowMs: 7_000 })).toBe(
+      false,
+    );
+    await check.rollback();
+  });
+});
+
+describe('the kinds a row may carry (migration 0064, WP-101)', () => {
+  it('admits cancel beside steer and take_over, and refuses a kind it does not know', async () => {
+    const run = await liveRun();
+    const seed = createTestClient(database.connectionString);
+    await seed.connect();
+    try {
+      await seed.query(
+        `insert into run_commands (id, run_id, task_id, kind, payload)
+         values ($1, $2, $3, 'cancel', '{}'::jsonb)`,
+        [nextId(), run.runId, run.taskId],
+      );
+      await expect(
+        seed.query(
+          `insert into run_commands (id, run_id, task_id, kind, payload)
+           values ($1, $2, $3, 'pause', '{}'::jsonb)`,
+          [nextId(), run.runId, run.taskId],
+        ),
+      ).rejects.toThrow(/run_commands_kind_known/);
+    } finally {
+      await seed.end();
+    }
   });
 });
 

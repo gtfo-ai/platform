@@ -419,8 +419,19 @@ in the transcript as a turn attributed to you) or *refused* — *the run ended b
 applied* (it is never applied late), *the live session did not take it* (it was closing; not
 retried) or *no live session was found*. A message usually applies within
 a second; one that stays *pending* for a couple of minutes means the runner's database connection is
-struggling. Cancelling still has the old limit: it ends the run as a *record*, and does not
-interrupt what is executing.
+struggling. You can send one message every five seconds; the limit is yours across the whole
+installation, however many processes serve this application (WP-101).
+
+**Cancel stops the session** (WP-101). When the runner is holding the run — the usual case — the
+task is paused at once, the cancel is handed to the runner the same way a steer is, and **Commands
+sent to this run** shows it as *Cancel*: *pending* until the runner interrupts the session, then
+*applied*. The run then ends *cancelled* with what the session had cost up to that moment, charged
+once like any other run. A message you steered that was still waiting is not delivered — the run
+ends before it, and it reads *the run ended before it could be applied*. If no process is holding the
+run (the runner is down, or its lease lapsed), there is nothing to interrupt: the run is ended here
+and reads *cancelled* straight away. If the runner dies after you cancel and before it stops the
+session, the platform ends the run itself a few minutes later and it reads *lease expired* rather
+than *cancelled*, because nothing confirmed the stop.
 
 One tab can answer "not available" rather than showing you a document, and that too is deliberate:
 
@@ -598,7 +609,6 @@ In one place, so it is not spread across thirteen sections:
 
 | Not built | Where you meet it |
 |---|---|
-| Interrupting a live run from **Cancel** (it ends the record; steer and take-over do reach the run, since WP-85) | run detail |
 | The business interview as a *conversation* with the Product Manager role (the form is built; Q102) | onboarding step 3 |
 | Committing `.agentic/` configuration from the wizard itself (the project settings page does it) | onboarding step 5 |
 | Re-answering the nine run-dependent readiness criteria after a merge (five are re-checked) | onboarding step 2 |

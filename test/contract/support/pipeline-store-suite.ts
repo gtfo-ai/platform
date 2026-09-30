@@ -2214,15 +2214,28 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
 
         it('locks a run and answers its status and lease holder, or null for no such run', async () => {
           const target = await leased();
-          expect(await store.runCommands.lockRun(tx, target.runId)).toEqual({
+          const expected = {
             runId: target.runId,
             taskId: target.taskId,
             status: 'running',
             leaseOwner: OWNER,
+            // WP-101: what a cancel compares with its clock to choose its branch.
+            leaseExpiresAt: '2026-06-01T09:05:00.000Z',
             // No session reported yet: no `init` entry, and `runs.session_id` waits for the end.
             sessionId: null,
-          });
+          };
+          expect(await store.runCommands.lockRun(tx, target.runId)).toEqual(expected);
+          // A cancel's exclusive read answers the same row (WP-101).
+          expect(await store.runCommands.lockRun(tx, target.runId, { forUpdate: true })).toEqual(
+            expected,
+          );
           expect(await store.runCommands.lockRun(tx, nextId())).toBeNull();
+          // A run no process ever leased has neither half.
+          const unleased = await liveRun();
+          expect(await store.runCommands.lockRun(tx, unleased)).toMatchObject({
+            leaseOwner: null,
+            leaseExpiresAt: null,
+          });
         });
 
         it('finds a task’s live run, and none once it has ended', async () => {
@@ -2236,9 +2249,11 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
 
         it('lists the pending commands of the live runs this owner leases, oldest first, bounded', async () => {
           const mine = await leased();
+          const mineToo = await leased();
           const theirs = await leased('another-host:1');
           const first = await recordOn(mine, steerOf('first'));
-          const second = await recordOn(mine, {
+          // On a second run of mine: a steer behind a stop on the *same* run is its own case below.
+          const second = await recordOn(mineToo, {
             kind: 'take_over',
             branch: 'agentic/ACME-1',
             commitMessage: 'wip: hand-over to Ada',
@@ -2331,6 +2346,67 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           ).toBe(false);
           // A second ending (the loser of `finish`) closes nothing and changes nothing.
           expect(await end(target.runId)).toBe(false);
+        });
+
+        it('round-trips a cancel, and holds a run’s steers behind a stop until its ending closes them (WP-101)', async () => {
+          const target = await leased();
+          const steer = await recordOn(target, steerOf('recorded before the stop'));
+          const cancel = await recordOn(target, { kind: 'cancel' });
+
+          // The stop is handed out; the steer recorded before it is not (run-commands.ts decision 5).
+          const pending = await store.runCommands.pending(tx, { owner: OWNER, limit: 10 });
+          expect(pending.map((row) => [row.id, row.kind])).toEqual([[cancel, 'cancel']]);
+          expect(pending[0]?.instruction).toEqual({ kind: 'cancel' });
+
+          // Applied, the stop still holds the steer back: the session is winding down.
+          expect(await store.runCommands.markApplied(tx, { id: cancel, owner: OWNER })).toBe(true);
+          expect(await store.runCommands.pending(tx, { owner: OWNER, limit: 10 })).toEqual([]);
+
+          // The run's own ending closes it run_ended — criterion 4's shape, at the port.
+          expect(await end(target.runId)).toBe(true);
+          expect(await store.runCommands.markApplied(tx, { id: steer, owner: OWNER })).toBe(false);
+          expect(
+            await store.runCommands.markRefused(tx, { id: steer, reason: 'register_miss' }),
+          ).toBe(false);
+        });
+
+        it('lets a steer through again once the stop in front of it was refused (WP-101)', async () => {
+          const target = await leased();
+          const stop = await recordOn(target, {
+            kind: 'take_over',
+            branch: 'agentic/ACME-1',
+            commitMessage: 'wip: hand-over to Ada',
+            tarball: false,
+            keepUntil: '2026-06-15T09:00:00.000Z' as IsoDateTime,
+          });
+          const steer = await recordOn(target, steerOf('after a stop nobody applied'));
+          expect(
+            (await store.runCommands.pending(tx, { owner: OWNER, limit: 10 })).map((row) => row.id),
+          ).toEqual([stop]);
+          // A refused stop stops nothing, so the steer is the session's again.
+          expect(
+            await store.runCommands.markRefused(tx, { id: stop, reason: 'register_miss' }),
+          ).toBe(true);
+          expect(
+            (await store.runCommands.pending(tx, { owner: OWNER, limit: 10 })).map((row) => row.id),
+          ).toEqual([steer]);
+        });
+
+        it('admits a steer only while its author has none recorded inside the window (WP-101)', async () => {
+          const target = await leased();
+          const window = { userId, windowMs: 60_000 };
+          expect(await store.runCommands.admitSteer(tx, window)).toBe(true);
+          // Only steers count: a stop by the same person is not a message.
+          await recordOn(target, { kind: 'cancel' });
+          expect(await store.runCommands.admitSteer(tx, window)).toBe(true);
+          await recordOn(target, steerOf('one'));
+          expect(await store.runCommands.admitSteer(tx, window)).toBe(false);
+          // Per user: somebody else's window is untouched.
+          expect(await store.runCommands.admitSteer(tx, { ...window, userId: nextId() })).toBe(
+            true,
+          );
+          // The boundary from the other side (rule 42): a row exactly as old as the window is out.
+          expect(await store.runCommands.admitSteer(tx, { ...window, windowMs: 0 })).toBe(true);
         });
 
         it('refuses a second row under one id — the Idempotency-Key’s second line', async () => {
