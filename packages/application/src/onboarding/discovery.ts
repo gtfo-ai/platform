@@ -32,8 +32,10 @@
  * task therefore carries a **platform-issued** reference: provider {@link DISCOVERY_TICKET_PROVIDER},
  * key {@link DISCOVERY_TICKET_KEY} and the project's own page as the URL. Two consequences worth
  * knowing. First, `unique (project_id, ticket_key, mode)` is what makes this command idempotent —
- * a second call finds the row and starts nothing, which is the answer product/06 needs because
- * re-running discovery would spend a second budget for the same question. Second, no
+ * a second call finds the row and starts nothing, which is the answer the wizard's step needs: a
+ * double click must not spend a second budget. Running discovery **again** is a different command
+ * with a key of its own — a maintainer's *re-evaluate* (`rediscovery.ts`, WP-94, Q107 (a)) — so the
+ * first run's task and record stand beside every later one. Second, no
  * task-management adapter is ever asked about this key — since WP-36 that is a **refusal by
  * provider value** in `ticketReads.ticket` rather than a hope (PROGRESS backlog 62): the read is
  * not attempted, and the ticket snapshot stays `null`, which `ensureTicketSnapshot` already treats
@@ -62,7 +64,7 @@ import { applyDecision } from '../pipeline/transitions.js';
 import type { Jobs } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
-import type { UnitOfWork } from '../ports/unit-of-work.js';
+import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
 
 /** The template id `DISCOVERY_TEMPLATE` is registered under — one spelling, in the domain ring. */
 export { DISCOVERY_TEMPLATE_ID };
@@ -103,7 +105,7 @@ const ticketFor = (baseUrl: string, projectId: Id) => ({
 });
 
 const contextFor = (
-  options: StartDiscoveryOptions,
+  options: Pick<StartDiscoveryOptions, 'ids' | 'clock'>,
   correlationId: Id | null,
   actorUserId: Id | null,
 ): CommandContext => ({
@@ -116,6 +118,106 @@ const contextFor = (
   correlationId,
   causeEventId: null,
 });
+
+/**
+ * Inserts one discovery task and enters its first stage, inside the caller's transaction — the
+ * half the first discovery and a maintainer's re-evaluation share (WP-94, Q107 (a)), so a second
+ * discovery is created by exactly the code the first one is: the same template, no dial, the front
+ * of the queue, the requester recorded, and the one agent stage that the stage executor then admits
+ * under the same guard and charges to the same ledger. Returns the work to enqueue **after** the
+ * commit (TD-004).
+ */
+export const openDiscoveryTask = async (
+  options: Pick<StartDiscoveryOptions, 'store' | 'ids' | 'clock' | 'logger'>,
+  scope: TransactionScope,
+  input: {
+    readonly projectId: Id;
+    readonly ticket: { readonly provider: string; readonly key: string; readonly url: string };
+    readonly template: PipelineTemplate;
+    readonly settings: Awaited<ReturnType<ProjectSettingsPort['forProject']>>;
+    readonly requestedByUserId: Id | null;
+  },
+): Promise<{
+  readonly taskId: Id;
+  readonly work: Awaited<ReturnType<typeof applyDecision>>['work'];
+}> => {
+  const created = createTask(
+    {
+      id: options.ids.next(),
+      projectId: input.projectId,
+      ticket: input.ticket,
+      template: DISCOVERY_TEMPLATE_ID,
+      mode: 'normal',
+      limits: iterationLimitsFor(input.settings),
+    },
+    contextFor(options, null, input.requestedByUserId),
+  );
+  const stored: StoredTask = {
+    task: created.aggregate,
+    template: input.template,
+    // WP-62: no dial — discovery is a one-off onboarding task, not a picked-up ticket.
+    pipelineDial: null,
+    // Discovery blocks the wizard, so it goes to the front of the queue when the WIP policy
+    // orders one. Zero is the most urgent rank `priorityRankOf` produces.
+    priorityRank: 0,
+    createdAt: options.clock.now() as IsoDateTime,
+    branch: null,
+    mr: null,
+    workpad: null,
+    costActualUsd: 0,
+    estimateUsd: null,
+    estimateBasis: null,
+    estimateSamples: null,
+    version: INITIAL_TASK_VERSION,
+    // There is no ticket to read, so there is no snapshot, and since WP-36 the read is not even
+    // attempted: `ticketReads.ticket` refuses the `platform` provider by name. `null` is exactly
+    // what `ensureTicketSnapshot` reads as "the platform has not read this ticket".
+    ticketSnapshot: null,
+    reviewSubject: null,
+    historySample: null,
+    ticketSnapshotAt: null,
+    ticketSignalAt: null,
+    // No merge request, so nothing to classify.
+    riskClasses: [],
+    coverage: null,
+    dependencies: null,
+    requiredReviewers: null,
+    reviewThreads: null,
+    readyHeadSha: null,
+    ciHeadSha: null,
+    // The person who started discovery — the requester product/19:138's third reviewer step
+    // falls back to (WP-67, PROGRESS backlog 92). The route also records them in `human_actions`;
+    // this is the column the routing reads.
+    requestedByUserId: input.requestedByUserId,
+  };
+  await options.store.tasks.insert(scope.tx, stored);
+
+  /**
+   * **No WIP admission check, and that is a decision rather than an omission.**
+   *
+   * `evaluateTaskAdmission` parks a task behind `max_parallel_runs` so that a busy project does
+   * not start an eleventh delivery. Discovery is not a delivery: it is the step that makes the
+   * project usable at all — once at onboarding, and again only when a maintainer asks for it
+   * (WP-94) — and a queued discovery task would leave the wizard waiting on a dequeue that only a
+   * *ticket* finishing can trigger. The cost is one Sonnet run over the WIP limit, capped at the
+   * `discovery` stage's run budget (`DEFAULT_STAGE_RUN_BUDGET_USD.discovery` unless the project
+   * sets one), and the org and project **budgets** still apply — the admission guard the stage
+   * executor consults before creating the run is untouched.
+   */
+  const pipeline = compilePipeline(DISCOVERY_TEMPLATE_ID, stored.template, stored.pipelineDial);
+  const applied = await applyDecision({
+    store: options.store,
+    pipeline,
+    tx: scope.tx,
+    stored,
+    decision: interpret(pipeline, { kind: 'start' }),
+    context: contextFor(options, stored.task.id, input.requestedByUserId),
+    causedByEventId: null,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
+  });
+  await scope.events.append([...created.events, ...applied.events]);
+  return { taskId: stored.task.id, work: applied.work };
+};
 
 /**
  * Creates the project's discovery task and enqueues its one agent stage.
@@ -170,7 +272,7 @@ export const startProjectDiscovery = async (
       status: 'already_started',
       taskId: existing.task.id,
       detail:
-        'this project already has a discovery task; re-running discovery would spend a second budget for the same question',
+        'this project already has a discovery task, so nothing was started; a maintainer runs discovery again with the re-evaluate command (POST /api/projects/:id/rediscovery), which spends a second budget on purpose',
     };
   }
 
@@ -187,82 +289,14 @@ export const startProjectDiscovery = async (
     if (raced !== null) {
       return { started: false, taskId: raced.task.id, work: null };
     }
-
-    const created = createTask(
-      {
-        id: options.ids.next(),
-        projectId,
-        ticket,
-        template: DISCOVERY_TEMPLATE_ID,
-        mode: 'normal',
-        limits: iterationLimitsFor(settings),
-      },
-      contextFor(options, null, input.requestedByUserId),
-    );
-    const stored: StoredTask = {
-      task: created.aggregate,
+    const opened = await openDiscoveryTask(options, scope, {
+      projectId,
+      ticket,
       template: template as PipelineTemplate,
-      // WP-62: no dial — discovery is a one-off onboarding task, not a picked-up ticket.
-      pipelineDial: null,
-      // Discovery blocks the wizard, so it goes to the front of the queue when the WIP policy
-      // orders one. Zero is the most urgent rank `priorityRankOf` produces.
-      priorityRank: 0,
-      createdAt: options.clock.now() as IsoDateTime,
-      branch: null,
-      mr: null,
-      workpad: null,
-      costActualUsd: 0,
-      estimateUsd: null,
-      estimateBasis: null,
-      estimateSamples: null,
-      version: INITIAL_TASK_VERSION,
-      // There is no ticket to read, so there is no snapshot, and since WP-36 the read is not even
-      // attempted: `ticketReads.ticket` refuses the `platform` provider by name. `null` is exactly
-      // what `ensureTicketSnapshot` reads as "the platform has not read this ticket".
-      ticketSnapshot: null,
-      reviewSubject: null,
-      historySample: null,
-      ticketSnapshotAt: null,
-      ticketSignalAt: null,
-      // No merge request, so nothing to classify.
-      riskClasses: [],
-      coverage: null,
-      dependencies: null,
-      requiredReviewers: null,
-      reviewThreads: null,
-      readyHeadSha: null,
-      ciHeadSha: null,
-      // The person who started discovery — the requester product/19:138's third reviewer step
-      // falls back to (WP-67, PROGRESS backlog 92). The route also records them in `human_actions`;
-      // this is the column the routing reads.
+      settings,
       requestedByUserId: input.requestedByUserId,
-    };
-    await options.store.tasks.insert(scope.tx, stored);
-
-    /**
-     * **No WIP admission check, and that is a decision rather than an omission.**
-     *
-     * `evaluateTaskAdmission` parks a task behind `max_parallel_runs` so that a busy project does
-     * not start an eleventh delivery. Discovery is not a delivery: it is the step that makes the
-     * project usable at all, it runs once per project, and a queued discovery task would leave the
-     * wizard waiting on a dequeue that only a *ticket* finishing can trigger. The cost is one
-     * Sonnet run over the WIP limit, capped at `DEFAULT_STAGE_RUN_BUDGET_USD.discovery`, and the
-     * org and project **budgets** still apply — the admission guard the stage executor consults
-     * before creating the run is untouched.
-     */
-    const pipeline = compilePipeline(DISCOVERY_TEMPLATE_ID, stored.template, stored.pipelineDial);
-    const applied = await applyDecision({
-      store: options.store,
-      pipeline,
-      tx: scope.tx,
-      stored,
-      decision: interpret(pipeline, { kind: 'start' }),
-      context: contextFor(options, stored.task.id, input.requestedByUserId),
-      causedByEventId: null,
-      ...(options.logger === undefined ? {} : { logger: options.logger }),
     });
-    await scope.events.append([...created.events, ...applied.events]);
-    return { started: true, taskId: stored.task.id, work: applied.work };
+    return { started: true, taskId: opened.taskId, work: opened.work };
   });
 
   if (outcome.work !== null) {

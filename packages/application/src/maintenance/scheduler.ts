@@ -153,11 +153,17 @@ export interface ChoreResult {
 }
 
 /** Why a whole project was skipped, before any chore type was considered. */
-export type MaintenanceBlocker = 'feature_disabled' | 'no_chore_types' | 'no_chore_template';
+export type MaintenanceBlocker =
+  | 'feature_disabled'
+  | 'paused_at_observe'
+  | 'no_chore_types'
+  | 'no_chore_template';
 
 export const MAINTENANCE_BLOCKED_DETAIL: Readonly<Record<MaintenanceBlocker, string>> = {
   feature_disabled:
     'the maintenance pipeline is off for this project (features.maintenance.enabled); nothing was scheduled',
+  paused_at_observe:
+    'the maintenance pipeline is paused at Observe: the project’s autonomy dial is at Observe, which means no agent merge requests, so no chore was created (Q100)',
   no_chore_types:
     'this project’s features.maintenance.chores is an empty list, which means “no chore type”; nothing was scheduled',
   no_chore_template:
@@ -319,6 +325,32 @@ const scheduleProject = async (
   if (!config.enabled) {
     return { projectId, period: null, blocker: 'feature_disabled', chores: [] };
   }
+  /**
+   * **Q100, answered per its recommendation (WP-94, reversible by the founder): the dial's level
+   * definition binds maintenance; its per-stage policies do not.** Observe is *"no agent MRs"*
+   * (product/18), and a chore is a merge request, so at Observe no chore is created — whatever the
+   * feature says. The level read is the one **in force**: the composition root has already capped
+   * the project's dial at the organisation's maximum (WP-93, `capMaterialisedAutonomy`), so an
+   * organisation that lowers its maximum to Observe pauses every project's maintenance at the next
+   * pass. A project whose dial was never materialised (`autonomy: null`, a test-harness row) is not
+   * Observe and is not paused: nothing says it is.
+   *
+   * At Assist, Supervised and Autonomous the chore still runs to a merge request with **no dial**
+   * (`pipelineDial: null` below): it is a separate opt-in with its own budget and chore types, the
+   * feature card names merge requests as what it touches, and a human reviews the MR either way.
+   * Freezing the dial into a chore would park every Assist chore before anything runs (Q99's
+   * fail-closed park, `chore` has no `architecture` stage) — a switch that does nothing.
+   *
+   * The skip is said on every pass at `info`, by name: the maintenance card shows the same state
+   * (*paused at Observe*), so the log line is the audit, not the only place it is said.
+   */
+  if (settings.autonomy?.level === 'observe') {
+    logger.info(
+      { project_id: projectId, autonomy_level: 'observe' },
+      MAINTENANCE_BLOCKED_DETAIL.paused_at_observe,
+    );
+    return { projectId, period: null, blocker: 'paused_at_observe', chores: [] };
+  }
   if (config.chores.length === 0) {
     logger.info({ project_id: projectId }, MAINTENANCE_BLOCKED_DETAIL.no_chore_types);
     return { projectId, period: null, blocker: 'no_chore_types', chores: [] };
@@ -446,7 +478,8 @@ const scheduleProject = async (
         template: template as PipelineTemplate,
         // WP-62: no dial. Maintenance is its own opt-in (`features.maintenance`), scheduled by the
         // platform rather than picked up from a ticket, and product/19 §11 sets the dial's pipeline
-        // policies for picked-up tickets.
+        // policies for picked-up tickets. The dial's *level* still binds it: at Observe no chore is
+        // created at all (Q100, WP-94 — the skip above).
         pipelineDial: null,
         // Behind every ticket a human is waiting for: upkeep never jumps the delivery queue.
         priorityRank: 3,

@@ -219,6 +219,13 @@ export interface ReadinessObservations {
   readonly agentInstructions: { readonly passed: boolean; readonly evidence: string } | null;
   /** R3, or `null` when nothing was observed in the window (pass-only). */
   readonly mergeRequestPipelines: { readonly passed: boolean; readonly evidence: string } | null;
+  /**
+   * R10 (WP-94, backlog 231), or `null` when the named files did not both answer — or could not be
+   * read (pass-only). Optional so a caller that reads no tree says nothing rather than "missing".
+   */
+  readonly mergeRequestConventions?: { readonly passed: boolean; readonly evidence: string } | null;
+  /** R13 (WP-94, backlog 231), or `null` when no named file names a scanner (pass-only). */
+  readonly secretScanning?: { readonly passed: boolean; readonly evidence: string } | null;
 }
 
 export interface RecheckReadinessInput {
@@ -249,7 +256,13 @@ const carriedEvidence = (
   if (stored.startsWith(CARRIED_EVIDENCE_PREFIX)) {
     return stored;
   }
-  const text = `${CARRIED_EVIDENCE_PREFIX}${previous.source} evaluation of ${previous.evaluatedAt} (not re-checked after a merge: ${criterion.recheckReason}): ${stored}`;
+  // A pass-only source *was* re-checked and saw no pass; only a `carried` row was not asked at all
+  // (WP-94: R10 and R13 joined R3 as pass-only, and "not re-checked" would have been false of them).
+  const why =
+    criterion.recheck === 'carried'
+      ? 'not re-checked after a merge'
+      : 'no pass observed after a merge';
+  const text = `${CARRIED_EVIDENCE_PREFIX}${previous.source} evaluation of ${previous.evaluatedAt} (${why}: ${criterion.recheckReason}): ${stored}`;
   return text.length <= MAX_READINESS_EVIDENCE_CHARS
     ? text
     : `${text.slice(0, MAX_READINESS_EVIDENCE_CHARS)}…`;
@@ -258,12 +271,14 @@ const carriedEvidence = (
 /**
  * One re-check evaluation — product/17's *"re-checked after every merged task"*. Pure.
  *
- * Four rules, one per `ReadinessRecheckSource`, and each is stated at the source:
+ * Five rules, one per `ReadinessRecheckSource`, and each is stated at the source:
  *
  *  - `platform` (R9, R11, R12) — answered exactly as discovery answers them, by the same function,
  *    and **never** from anything the previous evaluation's model said;
  *  - `tree` (R8) — the file inspection, in both directions; when the files could not be read, the
  *    previous answer is carried;
+ *  - `tree_pass` (R10, R13; WP-94) — a pass read from a named file replaces the previous answer;
+ *    a miss carries it;
  *  - `ci_events` (R3) — an observed pass replaces the previous answer; no observation carries it;
  *  - `carried` — the previous answer, with evidence naming where it came from and why.
  *
@@ -311,6 +326,17 @@ export const recheckReadiness = (input: RecheckReadinessInput): ReadinessEvaluat
       case 'tree': {
         const answer = criterion.id === 'R8' ? input.observations.agentInstructions : null;
         return answer === null ? carry(criterion) : observed(criterion, answer);
+      }
+      case 'tree_pass': {
+        // R10 and R13 (WP-94): a pass read from a named file replaces the previous answer; a miss
+        // at the named paths is not absence, so it carries — never fails.
+        const answer =
+          criterion.id === 'R10'
+            ? input.observations.mergeRequestConventions
+            : criterion.id === 'R13'
+              ? input.observations.secretScanning
+              : null;
+        return answer?.passed === true ? observed(criterion, answer) : carry(criterion);
       }
       case 'ci_events': {
         const answer = criterion.id === 'R3' ? input.observations.mergeRequestPipelines : null;

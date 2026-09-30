@@ -236,6 +236,11 @@ describe('the project settings port', () => {
     // At or above the chosen level, nothing moves.
     expect((await read({ autonomy: { maximum: 'autonomous' } })).autonomy).toEqual(stored);
 
+    // WP-94 review round 1: a maximum of Observe hands the maintenance scheduler an Observe dial —
+    // the level its Q100 skip reads (`scheduler.test.ts` › "pauses at an organisation maximum of
+    // Observe, though the project chose Supervised").
+    expect((await read({ autonomy: { maximum: 'observe' } })).autonomy?.level).toBe('observe');
+
     // A document that does not parse — an unknown key — refuses the read, naming it.
     await expect(read({ autonomy: { maximum: 'assist' }, quiet: true })).rejects.toThrow(
       /organizations\.settings does not parse \(\(root\) \(Unrecognized key: "quiet"\)\)/,

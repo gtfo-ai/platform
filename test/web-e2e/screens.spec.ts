@@ -236,6 +236,25 @@ test('the project settings page mirrors every wizard step', async ({ page }) => 
   await expect(page.getByText(/Not proposed, and why/)).toHaveCount(0);
 });
 
+test('the project settings page re-evaluates readiness with its ceiling on the button (WP-94)', async ({
+  page,
+  request,
+}) => {
+  // PROGRESS backlog 230, Q107 (a): discovery again on a maintainer's click. The ceiling is the
+  // server's figure, and pressing the button sends one keyed command the fake backend logged.
+  await page.goto(`/projects/${PROJECT_KEY}/settings`);
+  const button = page.getByRole('button', { name: /Re-evaluate readiness — up to \$2\.00/ });
+  await expect(button).toBeVisible();
+  await expect(page.getByText(/the last discovery cost \$0\.84/)).toBeVisible();
+  await button.click();
+  await expect(page.getByText('the Discovery agent is queued again')).toBeVisible();
+  await expect
+    .poll(async () =>
+      (await commandLog(request)).filter((entry) => entry.path.endsWith('/rediscovery')),
+    )
+    .toHaveLength(1);
+});
+
 test('the integrations screen carries the create and test controls', async ({ page }) => {
   // PROGRESS backlog 55: `POST /api/integrations` was served and no component called it, so the
   // product's front door had a step that could only be taken with `curl`.

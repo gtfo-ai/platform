@@ -11,7 +11,7 @@
  * here and start an agent on an identifier (standing rule 82, one ring in from the e2e).
  */
 import type { Id, IsoDateTime } from '@platform/contracts';
-import { choreTicketKey } from '@platform/domain';
+import { capMaterialisedAutonomy, choreTicketKey, materialiseAutonomy } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import {
   createMaintenanceReportSink,
@@ -104,11 +104,25 @@ const STALE: readonly StaleDependency[] = [
 
 const harnessWith = (
   config: Record<string, unknown>,
-  options: { readonly chat?: boolean } = {},
+  options: {
+    readonly chat?: boolean;
+    readonly dial?: 'observe' | 'assist' | 'supervised' | 'autonomous';
+  } = {},
 ): PipelineHarness =>
   createPipelineHarness({
     projectId: PROJECT,
-    settings: { config: config as never },
+    settings: {
+      config: config as never,
+      ...(options.dial === undefined
+        ? {}
+        : {
+            autonomy: materialiseAutonomy({
+              level: options.dial,
+              at: '2026-06-01T09:00:00.000Z' as IsoDateTime,
+              appliedBy: null,
+            }),
+          }),
+    },
     ...(options.chat === true ? { communication: {} } : {}),
   });
 
@@ -207,6 +221,72 @@ describe('one maintenance pass', () => {
     expect(types).toContain('task.stage.entered');
     expect(types).toContain('task.stage.completed');
     expect(report.created).toBe(2);
+  });
+
+  /**
+   * Q100 per its recommendation (WP-94): the dial's **level** binds maintenance. Observe is "no
+   * agent MRs", so no chore is created; Assist keeps running chores to a merge request with no dial.
+   * Counted as tasks (rule 79), each way.
+   */
+  it('creates no chore at Observe, with a named line, while Assist does (Q100)', async () => {
+    const config = {
+      features: { maintenance: { enabled: true, schedule: 'weekly', chores: ['kb', 'deps'] } },
+    };
+    const observe = harnessWith(config, { dial: 'observe' });
+    const logger = recordingLogger();
+    const paused = await pass(observe, storeDouble({ hygiene: HYGIENE, stale: STALE }), { logger });
+    expect(paused.created).toBe(0);
+    expect(paused.results[0]).toMatchObject({ blocker: 'paused_at_observe', chores: [] });
+    expect(observe.store.snapshot()).toEqual([]);
+    expect(observe.events().filter((event) => event.type === 'task.created')).toEqual([]);
+    const line = logger.lines.find((entry) => entry.message.includes('paused at Observe'));
+    expect(line).toMatchObject({ level: 'info', fields: { project_id: PROJECT } });
+
+    const assist = harnessWith(config, { dial: 'assist' });
+    const running = await pass(assist, storeDouble({ hygiene: HYGIENE, stale: STALE }));
+    expect(running.created).toBe(2);
+    const chores = assist.store.snapshot().filter((task) => task.task.template === 'chore');
+    expect(chores).toHaveLength(2);
+    // …with no dial frozen into it: a frozen Assist dial would park the chore before it ran.
+    expect(chores.every((task) => task.pipelineDial === null)).toBe(true);
+  });
+
+  /**
+   * Review round 1: an organisation maximum of Observe pauses maintenance through the **effective**
+   * dial. The project chose Supervised; the settings port hands the scheduler the dial capped by
+   * `capMaterialisedAutonomy` (WP-93 — `apps/server/src/pipeline.test.ts` asserts the port does so
+   * for an Observe maximum), and that capped dial is what the skip reads.
+   */
+  it('pauses at an organisation maximum of Observe, though the project chose Supervised', async () => {
+    const chosen = materialiseAutonomy({
+      level: 'supervised',
+      at: '2026-06-01T09:00:00.000Z' as IsoDateTime,
+      appliedBy: null,
+    });
+    const harness = createPipelineHarness({
+      projectId: PROJECT,
+      settings: {
+        config: {
+          features: { maintenance: { enabled: true, schedule: 'weekly', chores: ['kb'] } },
+        } as never,
+        autonomy: capMaterialisedAutonomy(chosen, 'observe'),
+        organisationAutonomyMaximum: 'observe',
+      },
+    });
+    const report = await pass(harness, storeDouble({ hygiene: HYGIENE }));
+    expect(report.results[0]?.blocker).toBe('paused_at_observe');
+    expect(harness.store.snapshot()).toEqual([]);
+    // …and without the maximum the same project's chore is created (the other side, rule 42).
+    const uncapped = createPipelineHarness({
+      projectId: PROJECT,
+      settings: {
+        config: {
+          features: { maintenance: { enabled: true, schedule: 'weekly', chores: ['kb'] } },
+        } as never,
+        autonomy: capMaterialisedAutonomy(chosen, undefined),
+      },
+    });
+    expect((await pass(uncapped, storeDouble({ hygiene: HYGIENE }))).created).toBe(1);
   });
 
   it('creates one task when the pass runs twice in the same period', async () => {

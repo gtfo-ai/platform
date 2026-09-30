@@ -90,19 +90,29 @@ commit, push or add a dependency, and nothing it writes is kept. It drafts **tec
 the business pages are step 3's.
 
 **Readiness is re-checked after every merge onto the default branch** — a merged task, a merged
-knowledge proposal — without running an agent. The re-check re-answers five criteria and carries the
-other nine from the previous evaluation, saying so in each one's evidence (*"carried from the
+knowledge proposal — without running an agent. The re-check re-answers seven criteria and carries the
+other seven from the previous evaluation, saying so in each one's evidence (*"carried from the
 discovery evaluation of …"*):
 
 | Re-answered after a merge | How |
 |---|---|
 | R9, R11, R12 | the platform's own answers, as at discovery (git provider, bindings, the index) |
 | R8 | `CLAUDE.md` and `AGENTS.md` read at the merged commit: present, at most 200 lines, naming `<knowledge dir>/index.md` |
+| R10 | passes when a merge request template (`.gitlab/merge_request_templates/Default.md`, or `pull_request_template.md` at the root, in `docs/` or in `.github/`) **and** a commitlint configuration file are both present at the merged commit; otherwise carried |
+| R13 | passes when `.pre-commit-config.yaml`, `lefthook.yml`, `.husky/pre-commit` or `.gitlab-ci.yml` **runs** a secret scanner (gitleaks, trufflehog, detect-secrets, ggshield, secretlint): a pre-commit hook of that scanner, or a command line that starts with it; or `.gitlab-ci.yml` includes GitLab's secret-detection template without switching it off. Merely mentioning a scanner does not count. Otherwise carried |
 | R3 | passes when the platform has stored a pipeline event for a merge request in the last 30 days; otherwise carried |
 
-R1, R2, R4, R5, R6, R7, R10, R13 and R14 need a run or a judgement, so they keep the answer
-discovery gave — and discovery runs once per project. A project that was never evaluated is not
-re-checked: the readiness panel keeps saying there is no evaluation until discovery runs.
+R10, R13 and R3 are never *failed* by a re-check: a template under another name, a scanner in a
+GitHub Actions workflow or a convention written in prose is invisible to the files the platform
+reads, so a miss keeps the previous answer. R1, R2, R4, R5, R6, R7 and R14 need a run, so they keep
+the latest discovery's answer. **To have them answered again, press *Re-evaluate readiness*** on the
+project settings page (maintainers): it runs the Discovery agent again as a new task, with the same
+budget cap, cost accounting and transcript as the first run, and records its evaluation as a
+*re-evaluation* beside the earlier ones. The button shows the run's budget cap (a ceiling, not a
+prediction) and what the last discovery cost; it is off, with the reason, while a discovery is
+running or parked, before the first discovery, and after three re-evaluations in a row recorded
+nothing. A project that was never evaluated is not re-checked: the readiness panel keeps saying
+there is no evaluation until discovery runs.
 
 ### Step 3 — Business interview
 
@@ -174,6 +184,13 @@ allow three, and auto-applies knowledge proposals in the middle significance ban
 overrides **none** of the four: from the file they are *not applied* (step 5 below says why). The policy list under the dial
 marks the two that set nothing by themselves: `review_only` (the Review-only card is the switch) and
 `suggested_readiness_min`.
+
+**The dial and the maintenance pipeline.** The dial's *level* applies to scheduled maintenance chores
+and its per-stage policies do not. At **Observe** the nightly pass creates no chore — Observe means no
+agent merge requests — and the Maintenance card says *Paused at Observe* while the feature is on
+(the level in force counts, so an organisation maximum of Observe pauses it too). At **Assist**,
+**Supervised** and **Autonomous** each chore runs to a merge request a human reviews, with no dial of
+its own: Assist's stop after architecture would otherwise park every chore before it ran.
 
 The same step offers **risk classes** — product/19 §14's six (auth, payments, data, infra,
 agent-config, public-api) or what the discovery agent proposed — and applies none until you accept.

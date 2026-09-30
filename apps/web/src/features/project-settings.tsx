@@ -10,7 +10,7 @@
  * | wizard step | here |
  * |---|---|
  * | 1 connect | integrations and bindings — the create and test controls live on the Integrations screen, which this page links to and whose buttons WP-30 added (PROGRESS backlog 55) |
- * | 2 technical discovery | start discovery — **once per project**: a second start answers `started: false` and runs nothing (PROGRESS backlog 230) — and read the readiness level, which the post-merge re-check moves only for the criteria it answers |
+ * | 2 technical discovery | start discovery — a second start answers `started: false` and runs nothing — plus a maintainer's **re-evaluate**, which runs discovery again as a new task with its ceiling on the button (WP-94, Q107 (a); not a wizard control, since the wizard's step is the first run), and read the readiness level, which the post-merge re-check moves for the criteria it answers without a run |
  * | 3 business interview | `BusinessInterview`, the same component the wizard renders (WP-64) |
  * | 4 operating mode | `features/operating-mode.tsx`, the *same component* the wizard renders |
  * | 5 commit | the knowledge proposal queue |
@@ -57,6 +57,7 @@ import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
 import { BusinessInterview } from './business-interview.js';
 import { HistoryBootstrap } from './history-bootstrap.js';
 import { bindingConfigOf, OperatingMode } from './operating-mode.js';
+import { Rediscovery } from './rediscovery.js';
 
 /**
  * What the export's answer — or the last recorded export — says, in one sentence.
@@ -67,6 +68,13 @@ import { bindingConfigOf, OperatingMode } from './operating-mode.js';
 /** A published limit, or a statement that the server published none — never a made-up zero. */
 const wipLimit = (value: number | undefined): string =>
   value === undefined ? 'not published' : formatInteger(value);
+
+/** Who recorded the evaluation shown (`readiness_evaluations.source`), in the screen's words. */
+const READINESS_SOURCE_LABEL: Readonly<Record<string, string>> = {
+  discovery: 'the first discovery',
+  rediscovery: 'a re-evaluation',
+  recheck: 'the re-check after a merge',
+};
 
 const exportSentence = (status: 'exported' | 'unchanged' | 'open'): string =>
   status === 'unchanged'
@@ -203,8 +211,9 @@ export const ProjectSettingsScreen = ({
           </Button>
         </div>
         <p className="text-xs text-fg-muted">
-          Discovery runs once per project: once it has run, this starts nothing. After a merge the
-          platform re-checks some readiness criteria; the rest keep the answer discovery gave.
+          Start discovery runs the first evaluation; once it has run, it starts nothing. After a
+          merge the platform re-checks the readiness criteria it can read without a run; the rest
+          keep the latest discovery’s answer until a maintainer re-evaluates.
         </p>
         {commands.startDiscovery.isError ? (
           <ErrorNotice
@@ -212,13 +221,18 @@ export const ProjectSettingsScreen = ({
             detail={String(commands.startDiscovery.error)}
           />
         ) : null}
+        {/* WP-94, Q107 (a): discovery again, on a maintainer's click, with its ceiling shown. */}
+        <Rediscovery projectId={project.id} />
         {readiness.isSuccess ? (
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <Badge tone={readiness.data.level >= 2 ? 'success' : 'warning'}>
               Readiness level {readiness.data.level}
             </Badge>
             <span className="text-fg-muted">
-              evaluated {formatDateTime(readiness.data.evaluated_at)}
+              evaluated {formatDateTime(readiness.data.evaluated_at)} by{' '}
+              <UntrustedText
+                value={READINESS_SOURCE_LABEL[readiness.data.source] ?? readiness.data.source}
+              />
             </span>
           </div>
         ) : (

@@ -1,6 +1,7 @@
 /**
  * `readiness.evaluated` — the event both readiness producers append beside the row they record
- * (WP-73, PROGRESS backlog 228).
+ * (WP-73, PROGRESS backlog 228). The discovery recorder writes two sources since WP-94 —
+ * `discovery` for the first run and `rediscovery` for a maintainer's re-evaluation (Q107 (a)).
  *
  * The event was in the catalogue with named producers and a named consumer from WP-01, and until
  * WP-73 nothing appended it: the discovery recorder and the post-merge re-check wrote
@@ -19,7 +20,7 @@ import { type Id, type IsoDateTime, readinessEvaluatedEvent } from '@platform/co
 import type { ReadinessEvaluation } from './ports.js';
 
 /** Which producer wrote the row — `readiness_evaluations.source`, and the event's `source`. */
-const EVENT_SOURCES = ['discovery', 'recheck'] as const;
+const EVENT_SOURCES = ['discovery', 'rediscovery', 'recheck'] as const;
 
 type ReadinessEventSource = (typeof EVENT_SOURCES)[number];
 

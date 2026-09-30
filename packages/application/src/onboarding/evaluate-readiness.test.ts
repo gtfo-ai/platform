@@ -335,10 +335,42 @@ describe('recheckReadiness', () => {
     expect(row(silent, 'R3')?.evidence).toContain('the model says R3 passes');
   });
 
-  it('carries the nine it cannot answer, saying from where and why', () => {
+  it('passes R10 and R13 from a named file, and carries them on a miss — never fails them (WP-94)', () => {
+    const failedAtDiscovery = evaluate({
+      claims: [
+        { id: 'R10', passed: false, evidence: 'no MR template' },
+        { id: 'R13', passed: false, evidence: 'no scanner' },
+      ],
+    }).evaluation;
+    const gained = recheck({
+      previous: failedAtDiscovery,
+      observations: {
+        mergeRequestConventions: { passed: true, evidence: 'template and commitlint present' },
+        secretScanning: { passed: true, evidence: '.pre-commit-config.yaml names gitleaks' },
+      },
+    });
+    expect(row(gained, 'R10')).toMatchObject({
+      passed: true,
+      evidence: 'template and commitlint present',
+      detectedBy: 'platform',
+    });
+    expect(row(gained, 'R13')).toMatchObject({ passed: true, detectedBy: 'platform' });
+    // The other way: nothing seen at the named paths carries the previous answer, pass or fail.
+    const missFromFail = recheck({ previous: failedAtDiscovery });
+    expect(row(missFromFail, 'R10')?.passed).toBe(false);
+    expect(row(missFromFail, 'R13')?.passed).toBe(false);
+    const missFromPass = recheck({});
+    expect(row(missFromPass, 'R10')?.passed).toBe(true);
+    expect(row(missFromPass, 'R13')?.passed).toBe(true);
+    // …and says that the re-check looked, rather than that it did not.
+    expect(row(missFromPass, 'R10')?.evidence).toContain('(no pass observed after a merge: ');
+    expect(row(missFromPass, 'R10')?.evidence).not.toContain('not re-checked');
+  });
+
+  it('carries the seven it cannot answer, saying from where and why', () => {
     const evaluation = recheck({});
     const carried = READINESS_CRITERIA.filter((criterion) => criterion.recheck === 'carried');
-    expect(carried).toHaveLength(9);
+    expect(carried).toHaveLength(7);
     for (const criterion of carried) {
       const stored = row(evaluation, criterion.id);
       expect(stored?.passed, criterion.id).toBe(true);

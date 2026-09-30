@@ -63,6 +63,11 @@ export type ReadinessDetector = 'agent' | 'platform';
  *  - `tree` — a **file inspection at the merged commit**, through the platform's own mirror and no
  *    checkout (`RepositoryFileSource`, the widened vault read). Decided in both directions: the
  *    file answers pass *and* fail, because a file read is complete evidence for the criterion.
+ *  - `tree_pass` — a file inspection at the merged commit through the same reader, **pass-only**
+ *    (WP-94, PROGRESS backlog 231): R10 and R13 are read from exact named paths, and a file found
+ *    there is the criterion's evidence while a miss is not evidence of absence (a template under
+ *    another name, a scanner in a workflow file the reader does not name), so a miss carries the
+ *    previous answer. The paths are `READINESS_TREE_PATHS` in `./recheck.ts`.
  *  - `ci_events` — the provider's pipeline events the platform already stored. **Pass-only**: an
  *    observed event is the criterion's own wording (*"pipeline events observed for MRs"*), while the
  *    absence of one in the window is not evidence of absence (a project with no merge request in the
@@ -71,11 +76,13 @@ export type ReadinessDetector = 'agent' | 'platform';
  *    evaluation, **with evidence that says so**, because a discovery run per merged task is exactly
  *    what product/17's *"cheap"* refuses.
  *
- * So the honest count is **five of fourteen** re-answered after a merge (R3 pass-only, R8, R9, R11,
- * R12) and nine carried — product/17's *"mostly"* is not true of this build, and the WP-64 notes
- * say so for the orchestrator.
+ * So the honest count is **seven of fourteen** re-answered after a merge (R3, R10 and R13
+ * pass-only, R8, R9, R11, R12) and seven carried (R1, R2, R4, R5, R6, R7, R14) — product/17's
+ * *"mostly"* is still not true of this build. The seven carried ones are answered again only by a
+ * discovery run, which a maintainer can start again since WP-94 (`onboarding/rediscovery.ts`, Q107
+ * (a)); R4 stays carried until the platform keeps a flaky-rerun statistic.
  */
-export type ReadinessRecheckSource = 'platform' | 'tree' | 'ci_events' | 'carried';
+export type ReadinessRecheckSource = 'platform' | 'tree' | 'tree_pass' | 'ci_events' | 'carried';
 
 export interface ReadinessCriterion {
   /** `R1` … `R14`, product/17's own numbering. */
@@ -193,8 +200,11 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     detection: 'files/KB',
     unlocks: 'MR hygiene checks are objective',
     detectedBy: 'agent',
-    recheck: 'carried',
-    recheckReason: 'a commit convention can be documented anywhere, so no file settles it',
+    // WP-94 (backlog 231): a template and a commitlint configuration at named paths pass it; a
+    // convention documented in prose is invisible to a path, so a miss carries.
+    recheck: 'tree_pass',
+    recheckReason:
+      'no merge request template and commitlint configuration were both found at the paths the platform reads, and a convention documented elsewhere is not visible to a file read',
   },
   {
     id: 'R11',
@@ -220,8 +230,11 @@ export const READINESS_CRITERIA: readonly ReadinessCriterion[] = [
     detection: 'config',
     unlocks: 'Lower risk from agent commits',
     detectedBy: 'agent',
-    recheck: 'carried',
-    recheckReason: 'it needs a judgement about the CI configuration and the hooks',
+    // WP-94 (backlog 231): a hook or CI file naming a scanner passes it; a scanner in a file the
+    // platform does not read (a GitHub Actions workflow) is invisible, so a miss carries.
+    recheck: 'tree_pass',
+    recheckReason:
+      'no hook or CI file the platform reads names a secret scanner, and a scanner configured elsewhere is not visible to a file read',
   },
   {
     id: 'R14',

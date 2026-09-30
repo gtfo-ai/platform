@@ -27,6 +27,7 @@ import {
   type VaultReadResult,
 } from '@platform/application';
 import type { Id } from '@platform/contracts';
+import { READINESS_TREE_PATHS } from '@platform/domain';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   createGitRepositoryFileSource,
@@ -613,15 +614,52 @@ describe('createGitRepositoryFileSource', () => {
     expect(pinned.status).toBe('unavailable');
   });
 
-  it('refuses a path outside the two it may read, before any git runs', async () => {
-    const runner = recordingRunner();
-    const result = await createGitRepositoryFileSource({
-      mirrorRoot,
-      git: runner,
-      target: async () => target(),
-    }).read({ projectId: PROJECT as Id, paths: ['src/app.ts' as never] });
-    expect(result.status).toBe('unavailable');
-    expect(runner.calls).toEqual([]);
+  it('refuses a path outside the named ones it may read, before any git runs', async () => {
+    // A neighbour of every widening (rule 43): a source file, GitLab's template directory's other
+    // templates, and a GitHub workflow — none of them named, so none of them read.
+    for (const outside of [
+      'src/app.ts',
+      '.gitlab/merge_request_templates/Bug.md',
+      '.github/workflows/gitleaks.yml',
+      '.gitleaks.toml',
+    ]) {
+      const runner = recordingRunner();
+      const result = await createGitRepositoryFileSource({
+        mirrorRoot,
+        git: runner,
+        target: async () => target(),
+      }).read({ projectId: PROJECT as Id, paths: [outside as never] });
+      expect(result.status, outside).toBe('unavailable');
+      expect(runner.calls, outside).toEqual([]);
+    }
+  });
+
+  it('reads the readiness re-check’s named paths in the same pass, nested ones included (WP-94)', async () => {
+    await write(origin, '.gitlab/merge_request_templates/Default.md', '## What\n');
+    await write(origin, '.gitlab/merge_request_templates/Bug.md', 'not a named path\n');
+    await write(origin, 'commitlint.config.mjs', 'export default {};\n');
+    await write(origin, '.husky/pre-commit', 'npx gitleaks protect --staged\n');
+    await git(['-C', origin, 'add', '-A']);
+    await commit(origin, 'readiness files');
+    const read = expectFiles(
+      await createGitRepositoryFileSource({ mirrorRoot, target: async () => target() }).read({
+        projectId: PROJECT as Id,
+        paths: [...READINESS_TREE_PATHS],
+      }),
+    );
+    // An entry for every path asked, and none for a path that was not (the template beside).
+    expect(Object.keys(read.files).sort()).toEqual([...READINESS_TREE_PATHS].sort());
+    expect(read.files['.gitlab/merge_request_templates/Default.md']).toMatchObject({
+      kind: 'file',
+      text: '## What\n',
+    });
+    expect(read.files['commitlint.config.mjs']).toMatchObject({ kind: 'file' });
+    expect(read.files['.husky/pre-commit']).toMatchObject({
+      kind: 'file',
+      text: 'npx gitleaks protect --staged\n',
+    });
+    expect(read.files['.gitlab-ci.yml']).toEqual({ kind: 'absent' });
+    expect(JSON.stringify(read)).not.toContain('not a named path');
   });
 
   it('lists a symlink, a directory and an oversized blob without reading their bodies', async () => {

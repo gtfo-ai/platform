@@ -492,6 +492,41 @@ export const startDiscoveryResponseSchema = z.strictObject({
 });
 
 /**
+ * `GET /api/projects/:id/rediscovery` — whether a maintainer may run discovery again, and what it
+ * may cost (WP-94, PROGRESS backlog 230, Q107 (a)).
+ *
+ * The gate is published on the read so the screen says *why* the button is off rather than offering
+ * one that answers 409 — the command answers from the same function. `ceiling_usd` is the
+ * `discovery` stage's run budget, the figure the admission guard reserves: **a cap, not a
+ * prediction**. `last_discovery.cost_usd` is what the project's most recent discovery task actually
+ * cost (`tasks.cost_actual`), the nearest thing to an estimate the platform has measured.
+ */
+export const rediscoveryGateResponseSchema = z.strictObject({
+  can_start: z.boolean(),
+  blocker: z
+    .strictObject({
+      code: z.enum([
+        'discovery_unavailable',
+        'discovery_not_started',
+        'discovery_in_flight',
+        'rediscovery_attempts_spent',
+      ]),
+      detail: z.string(),
+      /** The live discovery task, for `discovery_in_flight`; otherwise `null`. */
+      task_id: idSchema.nullable(),
+    })
+    .nullable(),
+  ceiling_usd: z.number().nonnegative(),
+  last_discovery: z
+    .strictObject({
+      task_id: idSchema,
+      state: taskStateSchema,
+      cost_usd: z.number().nonnegative(),
+    })
+    .nullable(),
+});
+
+/**
  * `POST /api/projects/:id/interview` — the wizard's step 3, the business interview (product/06,
  * product/19 §8; WP-64).
  *
@@ -605,7 +640,10 @@ export const readinessResponseSchema = z.strictObject({
       detected_by: z.enum(['agent', 'platform']),
     }),
   ),
-  /** `readiness_evaluations.source`: which producer wrote this row (`discovery`, `recheck`). */
+  /**
+   * `readiness_evaluations.source`: which producer wrote this row — `discovery` (the first run),
+   * `rediscovery` (a maintainer's re-evaluation, WP-94) or `recheck` (after a merge).
+   */
   source: nonEmptyStringSchema,
   /** product/17: the three cheapest criteria to improve next, in the wizard's order. */
   next_improvements: z.array(
@@ -2036,6 +2074,7 @@ export type ProjectBindingSummary = z.infer<typeof projectBindingSummarySchema>;
 export type ProjectBindingsResponse = z.infer<typeof projectBindingsResponseSchema>;
 export type PutProjectBindingsRequest = z.infer<typeof putProjectBindingsRequestSchema>;
 export type StartDiscoveryResponse = z.infer<typeof startDiscoveryResponseSchema>;
+export type RediscoveryGateResponse = z.infer<typeof rediscoveryGateResponseSchema>;
 export type BusinessInterviewRequest = z.infer<typeof businessInterviewRequestSchema>;
 export type BusinessInterviewResponse = z.infer<typeof businessInterviewResponseSchema>;
 export type ListTasksQuery = z.infer<typeof listTasksQuerySchema>;

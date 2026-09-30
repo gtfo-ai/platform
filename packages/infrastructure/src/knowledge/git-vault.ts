@@ -828,9 +828,11 @@ export const unavailableVaultSource = (reason: string): VaultSource => ({
  * `RepositoryFileSource` over the same mirror — **the widening of this adapter**, stated (WP-63).
  *
  * The vault read above answers the four indexed kinds of path and nothing else; this answers the
- * paths `REPOSITORY_FILE_PATHS` names — `.agentic/config.yml`, `CLAUDE.md` and (WP-64) `AGENTS.md` — and **refuses any
+ * paths `REPOSITORY_FILE_PATHS` names — `.agentic/config.yml`, `CLAUDE.md`, (WP-64) `AGENTS.md` and
+ * (WP-94) the twenty-six exact paths the readiness re-check reads R10 and R13 from — and **refuses any
  * other path it is handed**, so the allow-list is enforced where the bytes are read and not only in
- * the type. **WP-92 widens it by one named directory**: with `promptDirectory`, it also lists
+ * the type. The batch's output bound grows with the paths asked (`MAX_REPOSITORY_FILE_BYTES` each),
+ * so a re-check's read is bounded at 29 files of 64 KiB. **WP-92 widens it by one named directory**: with `promptDirectory`, it also lists
  * `.agentic/prompts/` in the same `ls-tree` and reads the direct children `isProjectPromptPath`
  * accepts (`<name>.md`, marker alphabet, no subdirectory) — the first `MAX_PROJECT_PROMPT_FILES` by
  * path, each under `MAX_PROJECT_PROMPT_FILE_BYTES` — through the same `cat-file --batch`. A symlink or
@@ -858,7 +860,7 @@ export const createGitRepositoryFileSource = (options: GitVaultOptions): Reposit
       const refused = request.paths.filter((entry) => !permitted.includes(entry));
       if (refused.length > 0 || request.paths.length === 0) {
         return unavailable(
-          `this reader answers ${permitted.join(' and ')} only; ${JSON.stringify(refused)} is outside what the platform reads from a repository`,
+          `this reader answers the ${permitted.length} exact paths REPOSITORY_FILE_PATHS names and nothing else; ${JSON.stringify(refused)} is outside what the platform reads from a repository`,
         );
       }
       try {

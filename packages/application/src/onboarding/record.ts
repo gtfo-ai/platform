@@ -50,8 +50,10 @@
  *
  *  - a drafted page is at most `MAX_PROPOSAL_DELTA_BYTES` (64 KiB) — the curator's own cap, shared
  *    with the Librarian so one page has one budget;
- *  - at most {@link MAX_DISCOVERY_DOCUMENTS} pages are curated, and the rest are recorded as
- *    refusals rather than dropped.
+ *  - at most {@link MAX_DISCOVERY_DOCUMENTS} pages are curated; the rest are **dropped** — no row is
+ *    written for them — and **counted**: the report's `overCap` and the job's log line carry how
+ *    many, so a draft that exceeded the cap is visible to an operator rather than silently short
+ *    (PROGRESS backlog 271; this line used to say they were recorded as refusals, which no code did).
  *
  * So one discovery run writes at most `MAX_DISCOVERY_DOCUMENTS × MAX_PROPOSAL_DELTA_BYTES` of page
  * text — **1.25 MiB** at the shipped constants (20 × 64 KiB) — plus the evaluation's `14 × 600`
@@ -92,6 +94,7 @@ import type { UnitOfWork } from '../ports/unit-of-work.js';
 import { evaluateReadiness } from './evaluate-readiness.js';
 import type { PlatformReadinessProbe, ReadinessStore } from './ports.js';
 import { readinessEvaluatedEventFor } from './readiness-event.js';
+import { isRediscoveryTicketKey, REDISCOVERY_SOURCE } from './rediscovery.js';
 
 /** `onboarding.discovery` job payload — snake_case, like every other payload on the wire. */
 export interface DiscoveryRecordData {
@@ -139,10 +142,15 @@ export interface DiscoveryProject {
   readonly knowledgeDir: string;
 }
 
-/** The artifact and the run that produced it. */
+/** The artifact, the run that produced it, and the ticket key of the task it belongs to. */
 export interface DiscoveryArtifact {
   readonly data: JsonValue;
   readonly runId: Id | null;
+  /**
+   * `tasks.ticket_key` — what tells a maintainer's re-evaluation (WP-94) from the first discovery,
+   * so the evaluation is recorded with `source: 'rediscovery'` rather than `discovery`.
+   */
+  readonly ticketKey: string;
 }
 
 export interface DiscoveryRecordOptions {
@@ -189,6 +197,12 @@ export interface DiscoveryRecordReport {
    * the queue at all — once approved it would credit R12 exactly as the interviewee's words would.
    */
   readonly businessRefused: number;
+  /**
+   * Drafted pages past {@link MAX_DISCOVERY_DOCUMENTS}, dropped unread (PROGRESS backlog 271).
+   * Counted, never stored: the cap is on what a first look at a repository may put in front of a
+   * maintainer, and a row per dropped page would be the unbounded write the cap exists to stop.
+   */
+  readonly overCap: number;
 }
 
 const EMPTY: DiscoveryRecordReport = {
@@ -200,6 +214,7 @@ const EMPTY: DiscoveryRecordReport = {
   redactions: 0,
   riskClasses: 0,
   businessRefused: 0,
+  overCap: 0,
 };
 
 /**
@@ -255,7 +270,8 @@ export const isBusinessDraftPath = (path: string): boolean => {
 };
 
 /**
- * The drafted pages the recorder will curate, and how many it refused for their path.
+ * The drafted pages the recorder will curate, how many it refused for their path, and how many it
+ * dropped past the document cap (backlog 271).
  *
  * `kind` is `technical` for every page it keeps, and that is now a **statement** rather than a
  * default: a `business/` page is refused before this point rather than labelled by path (backlog
@@ -265,10 +281,18 @@ export const isBusinessDraftPath = (path: string): boolean => {
  */
 const draftedPages = (
   draft: DiscoveryDraftData,
-): { readonly kept: DiscoveryDraftData['documents']; readonly businessRefused: number } => {
+): {
+  readonly kept: DiscoveryDraftData['documents'];
+  readonly businessRefused: number;
+  readonly overCap: number;
+} => {
   const considered = draft.documents.slice(0, MAX_DISCOVERY_DOCUMENTS);
   const kept = considered.filter((document) => !isBusinessDraftPath(document.path));
-  return { kept, businessRefused: considered.length - kept.length };
+  return {
+    kept,
+    businessRefused: considered.length - kept.length,
+    overCap: draft.documents.length - considered.length,
+  };
 };
 
 /** One drafted page as the curator's input. Every string the model wrote is redacted here. */
@@ -374,7 +398,8 @@ export const recordDiscoveryFindings = async (
     id: options.ids.next(),
     projectId,
     evaluatedAt: createdAt,
-    source: 'discovery',
+    // Q107 (a): a re-evaluation's row says so, beside `discovery` and `recheck`.
+    source: isRediscoveryTicketKey(artifact.ticketKey) ? REDISCOVERY_SOURCE : 'discovery',
     agentClaims: draft.readiness,
     signals,
     redactor: options.redactor,
@@ -480,6 +505,7 @@ export const recordDiscoveryFindings = async (
     redactions: tally.count,
     riskClasses: Object.keys(proposedClasses).length,
     businessRefused: pages.businessRefused,
+    overCap: pages.overCap,
   };
 };
 
@@ -498,6 +524,7 @@ export const discoveryRecordHandler =
       discarded: report.discarded,
       risk_classes: report.riskClasses,
       business_refused: report.businessRefused,
+      pages_over_cap: report.overCap,
       redactions: report.redactions,
       reason: report.reason,
     };

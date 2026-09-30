@@ -141,6 +141,7 @@ const build = async (): Promise<FastifyInstance> => {
     shadowGate: null,
     historyBootstrap: null,
     historyBootstrapGate: null,
+    rediscoveryGate: null,
     commands: null,
     // WP-31: no pipeline here, so the ask command refuses by name; the reads answer nothing.
     asks: {

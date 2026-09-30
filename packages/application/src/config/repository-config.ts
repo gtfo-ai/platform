@@ -13,7 +13,8 @@
  * Through the platform's own bare mirror (TD-026), with the same fetch, the same credential and the
  * same default-branch rule the knowledge index uses: {@link RepositoryFileSource} is the widening of
  * that read to **named paths outside the four indexed ones** — this file, `CLAUDE.md` (the export's
- * pointer, WP-63 criterion 1), `AGENTS.md` (WP-64) and the direct children of one named directory,
+ * pointer, WP-63 criterion 1), `AGENTS.md` (WP-64), the twenty-six exact paths product/17 R10 and
+ * R13 are read from (WP-94, `READINESS_TREE_PATHS`) and the direct children of one named directory,
  * `.agentic/prompts/` (WP-92, `project-prompts.ts`) — and nothing else. Configuration is trusted from the default
  * branch only (BD-025 §1): a task branch or a merge request must not be able to change the rules that
  * govern its own run, so no reader here accepts a ref, and a pinned commit must be an ancestor of the
@@ -53,7 +54,12 @@ import {
   type IsoDateTime,
   type JsonObject,
 } from '@platform/contracts';
-import { type ConfigProvenance, type ConfigValues, mergeConfigLayers } from '@platform/domain';
+import {
+  type ConfigProvenance,
+  type ConfigValues,
+  mergeConfigLayers,
+  READINESS_TREE_PATHS,
+} from '@platform/domain';
 import { assertOutsideTransaction } from '../events/open-transaction.js';
 import type { RepositoryConfigState } from '../pipeline/settings.js';
 import type { Logger } from '../ports/logger.js';
@@ -74,10 +80,11 @@ export const CLAUDE_MD_PATH = 'CLAUDE.md';
  * **Every** path {@link RepositoryFileSource} will read — the widening of WP-18a's vault read, stated.
  *
  * The indexer reads the knowledge directory, `.agentic/rules/`, and `CLAUDE.md`/`AGENTS.md`
- * (`isIndexedVaultPath`), and a project's other files are none of the platform's business. These
- * three are the exceptions and they are exact paths, never a glob: `CLAUDE.md` (WP-63) and
- * `AGENTS.md` (WP-64, the readiness re-check's R8) are already read by the indexer, so their entries
- * add no exposure, and `.agentic/config.yml` is the one genuinely new path. The prompt files are
+ * (`isIndexedVaultPath`), and a project's other files are none of the platform's business. The
+ * exceptions are exact paths, never a glob: `CLAUDE.md` (WP-63) and `AGENTS.md` (WP-64, the
+ * readiness re-check's R8) are already read by the indexer, so their entries add no exposure;
+ * `.agentic/config.yml` was the first genuinely new path, and R10's and R13's twenty-six (WP-94,
+ * stated at the list) are the rest. The prompt files are
  * read too since WP-92, but through a **directory** request of their own (`promptDirectory`, one
  * named directory, never a glob), so they are not in this list. A project's `.agentic/pipeline.yml`
  * is **still unread** (M5 declines `custom_stages` for 0.1).
@@ -92,10 +99,22 @@ export const CLAUDE_MD_PATH = 'CLAUDE.md';
  */
 export const AGENTS_MD_PATH = 'AGENTS.md';
 
+/**
+ * **WP-94 widens the list by twenty-six exact paths** — the readiness re-check's R10 and R13
+ * (PROGRESS backlog 231): five merge-request template paths, commitlint's sixteen configuration
+ * files and five hook or CI files (`READINESS_TREE_PATHS` in `@platform/domain`, each with the
+ * document it is taken from). Exact names, never a directory or a glob, so the reader still refuses
+ * every other path; each file is bounded by {@link MAX_REPOSITORY_FILE_BYTES} like the others, so
+ * one re-check reads at most `29 × 64 KiB` (the three above plus these). The new exposure is stated
+ * rather than implied: a project's `.gitlab-ci.yml` and hook files now reach the platform's memory
+ * at every re-check, and **nothing of them is stored** — the re-check's evidence names the path and
+ * the scanner's name from a fixed list, never a byte of the file (`secretScanningReadiness`).
+ */
 export const REPOSITORY_FILE_PATHS = [
   REPOSITORY_CONFIG_PATH,
   CLAUDE_MD_PATH,
   AGENTS_MD_PATH,
+  ...READINESS_TREE_PATHS,
 ] as const;
 export type RepositoryFilePath = (typeof REPOSITORY_FILE_PATHS)[number];
 

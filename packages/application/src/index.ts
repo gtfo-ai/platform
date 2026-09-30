@@ -116,6 +116,7 @@ export * from './onboarding/interview.js';
 export * from './onboarding/ports.js';
 export * from './onboarding/recheck.js';
 export * from './onboarding/record.js';
+export * from './onboarding/rediscovery.js';
 export * from './onboarding/runtime.js';
 // The pipeline (WP-15): interpreter-driven sagas, the stage executor and their ports
 export * from './pipeline/commands.js';

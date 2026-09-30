@@ -696,9 +696,8 @@ export const STATS_CATALOGUE: Readonly<Record<StatMetricId, MetricDefinition>> =
     aggregation: 'ratio',
     absent: {
       reason:
-        'No return carries a readiness criterion. `task_stages.return_reason` is prose written by an agent and names no criterion id, and readiness itself is evaluated **once**, at discovery, so an attribution over it would be a constant per project rather than a trend.',
-      owner:
-        'PROGRESS backlog 46 (readiness is never re-evaluated); the tagging has no owner and no producer.',
+        'No return carries a readiness criterion. `task_stages.return_reason` is prose written by an agent and names no criterion id, so there is nothing to attribute. Readiness itself is re-evaluated — after every merge for the criteria a file or an event answers (WP-64), and on a maintainer’s re-evaluate for the rest (WP-94) — but no return is tagged with the criterion that would have prevented it.',
+      owner: 'The tagging has no owner and no producer (product/17 § “Where it shows up”).',
     },
   },
   loc_changed: {

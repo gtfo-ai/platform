@@ -198,7 +198,7 @@ export const FEATURE_CARDS: readonly FeatureCard[] = [
     cost: 'the budget you set',
     touches: 'opens merge requests',
     caveat:
-      'Two of the five chore types run in this build — dependency bumps, from what the dependency gate recorded about this project’s packages, and knowledge-base hygiene, from the nightly pass. The other three are refused by name when they are configured, and the nightly pass reports them in the project’s daily digest (in the server log when the project has no digest or no chat binding): Flaky tests and docs drift have no detector in this build, and lint debt has no finding source — nothing records your project’s lint output for a chore to be briefed from.',
+      'The autonomy dial’s level applies here and its per-stage policies do not: at Observe no chore is created (Observe means no agent merge requests), and at Assist, Supervised and Autonomous each chore runs to a merge request a human reviews. Two of the five chore types run in this build — dependency bumps, from what the dependency gate recorded about this project’s packages, and knowledge-base hygiene, from the nightly pass. The other three are refused by name when they are configured, and the nightly pass reports them in the project’s daily digest (in the server log when the project has no digest or no chat binding): Flaky tests and docs drift have no detector in this build, and lint debt has no finding source — nothing records your project’s lint output for a chore to be briefed from.',
   },
   {
     key: 'digest',
@@ -534,6 +534,10 @@ export const PolicyTable = ({
 export const FeatureToggles = ({ projectId }: { readonly projectId: string }): ReactElement => {
   const config = useProjectConfig(projectId);
   const commands = useOnboardingCommands();
+  // Q100 (WP-94): the level **in force** (the organisation's maximum already applied) is what the
+  // scheduler reads, so it is what decides whether the maintenance card says it is paused.
+  const autonomy = useProjectAutonomy(projectId);
+  const pausedAtObserve = autonomy.data?.level_in_force === 'observe';
   const features =
     (config.data?.config as { features?: Record<string, { enabled?: boolean }> } | undefined)
       ?.features ?? {};
@@ -585,6 +589,14 @@ export const FeatureToggles = ({ projectId }: { readonly projectId: string }): R
             {card.unbuilt === undefined ? null : (
               <p className="text-xs text-warning">{card.unbuilt}</p>
             )}
+            {card.key === 'maintenance' &&
+            pausedAtObserve &&
+            features.maintenance?.enabled === true ? (
+              <p className="text-xs text-warning">
+                Paused at Observe: the autonomy dial is at Observe, so the nightly pass creates no
+                chore until the dial moves past it.
+              </p>
+            ) : null}
           </Card>
         ))}
       </div>

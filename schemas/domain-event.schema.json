@@ -4479,6 +4479,7 @@
               "type": "string",
               "enum": [
                 "discovery",
+                "rediscovery",
                 "recheck",
                 "ci_gate",
                 "maintenance",

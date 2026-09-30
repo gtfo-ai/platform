@@ -24,6 +24,7 @@ import type { RunSpec } from '@platform/application';
 import { readDataBlocks } from '@platform/domain';
 import { jobs as jobsAdapters } from '@platform/infrastructure';
 import { afterEach, describe, expect, it } from 'vitest';
+import { BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD, Client } from '../support/instance.js';
 import { GIT_PROJECT, inboundEvent, type PipelineE2E, startPipeline } from '../support/pipeline.js';
 import { featureScenarios } from '../support/scenarios.js';
 
@@ -321,6 +322,62 @@ describe('a scheduled maintenance chore', () => {
       "select ticket_key from tasks where ticket_key like 'chore!%'",
     );
     expect(rows).toHaveLength(1);
+  });
+
+  /**
+   * WP-94 criterion 4, Q100 per its recommendation: the dial's **level** binds maintenance. The
+   * dial is moved through the real `PUT …/autonomy`, and the pass is the instance's own worker —
+   * so the level read is the settings port's, capped like every other read (WP-93).
+   */
+  it('creates no chore at Observe, and one at Assist (Q100)', async () => {
+    const pipeline = await startWith('maintenance-dial', ['kb']);
+    const client = new Client(pipeline.instance.baseUrl);
+    const signedIn = await client.post('/api/auth/sign-in/email', {
+      email: BOOTSTRAP_EMAIL,
+      password: BOOTSTRAP_PASSWORD,
+    });
+    expect(signedIn.status).toBe(200);
+    const dial = async (level: 'observe' | 'assist', key: string) => {
+      const response = await client.json(`/api/projects/${pipeline.projectId}/autonomy`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json', 'idempotency-key': key },
+        body: JSON.stringify({ autonomy: level }),
+      });
+      expect(response.status, JSON.stringify(response.body)).toBe(200);
+    };
+    const drained = async () => {
+      const jobs = await pipeline.query<{ count: string }>(
+        `select count(*)::text as count from pgboss.job
+          where name = 'maintenance.schedule' and state in ('created', 'active', 'retry')`,
+      );
+      return jobs[0]?.count === '0';
+    };
+
+    await dial('observe', 'maintenance-dial-observe');
+    await fireTheSchedule(pipeline);
+    // Waited on the pass draining, not on a sleep: the skip writes no row, so the countable effect
+    // is the absence of one, read after the job completed (rule 87).
+    await pipeline.waitFor('the Observe pass to finish', drained);
+    await pipeline.waitFor('the Observe pass to be recorded complete', async () => {
+      const done = await pipeline.query<{ count: string }>(
+        "select count(*)::text as count from pgboss.job where name = 'maintenance.schedule' and state = 'completed'",
+      );
+      return Number(done[0]?.count ?? 0) >= 1;
+    });
+    expect(await choreTask(pipeline)).toBeUndefined();
+
+    await dial('assist', 'maintenance-dial-assist');
+    await fireTheSchedule(pipeline);
+    await pipeline.waitFor(
+      'the Assist pass to create the chore',
+      async () => (await choreTask(pipeline)) !== undefined,
+    );
+    const rows = await pipeline.query<{ pipeline_dial: unknown }>(
+      "select pipeline_dial from tasks where ticket_key like 'chore!%'",
+    );
+    expect(rows).toHaveLength(1);
+    // No dial frozen into the chore: Assist's scope stop would park it before anything ran.
+    expect(rows[0]?.pipeline_dial).toBeNull();
   });
 
   it('registers the daily schedule in the organisation’s zone', async () => {

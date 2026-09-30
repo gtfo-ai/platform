@@ -822,10 +822,11 @@ export const readinessEvaluatedEvent = defineEvent('readiness.evaluated', {
   ),
   /**
    * Which producer wrote the row. `discovery` and `recheck` (the post-merge re-check, WP-64) are the
-   * two that append it since WP-73 (PROGRESS backlog 228); the other three are technical/02's
-   * original list and have no producer on this build.
+   * two that append it since WP-73 (PROGRESS backlog 228), and `rediscovery` — a maintainer's
+   * re-evaluation, a second discovery run (WP-94, Q107 (a)) — since WP-94; the other three are
+   * technical/02's original list and have no producer on this build.
    */
-  source: z.enum(['discovery', 'recheck', 'ci_gate', 'maintenance', 'manual']),
+  source: z.enum(['discovery', 'rediscovery', 'recheck', 'ci_gate', 'maintenance', 'manual']),
 });
 
 // ── Configuration and integrations ───────────────────────────────────────────

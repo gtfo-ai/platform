@@ -162,6 +162,7 @@ beforeAll(async () => {
     shadowGate: null,
     historyBootstrap: null,
     historyBootstrapGate: null,
+    rediscoveryGate: null,
     commands: null,
     // WP-31: no pipeline here, so the ask command refuses by name; the reads answer nothing.
     asks: {
@@ -363,6 +364,19 @@ describe('the client’s endpoint list against the server’s router', () => {
     // gate and the estimate the write refuses on, which is what keeps the wizard from offering a
     // button that answers 409.
     expect((await probe('/api/projects/{}/history-bootstraps')).served).toBe(true);
+  });
+
+  it('serves the re-evaluate pair WP-94 added, and refuses an anonymous caller on each method', async () => {
+    // Named positively (standing rule 10). One path carrying both methods, like the history
+    // bootstrap's: the read publishes the gate and the ceiling the write refuses and spends on.
+    expect((await probe('/api/projects/{}/rediscovery')).served).toBe(true);
+    for (const method of ['GET', 'POST'] as const) {
+      const response = await app.inject({ method, url: probeUrl('/api/projects/{}/rediscovery') });
+      const body = response.json() as ApiErrorBody;
+      expect(`${method} -> ${response.statusCode} ${body.error?.code ?? ''}`).toBe(
+        `${method} -> 401 unauthenticated`,
+      );
+    }
   });
 
   it('serves the three shadow-mode endpoints WP-34 added', async () => {

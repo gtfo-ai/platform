@@ -31,7 +31,7 @@ export interface ReadinessEvaluation {
   readonly level: number;
   readonly criteria: readonly StoredReadinessCriterion[];
   readonly evaluatedAt: IsoDateTime;
-  /** `readiness_evaluations.source` — which producer wrote it (`discovery`, `recheck`). */
+  /** `readiness_evaluations.source` — which producer wrote it (`discovery`, `rediscovery`, `recheck`). */
   readonly source: string;
 }
 

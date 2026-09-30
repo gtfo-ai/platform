@@ -475,6 +475,23 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
     }
 
     // ── REST ─────────────────────────────────────────────────────────────────
+    // WP-94: the re-evaluate command. Its body is empty; the key is what the log records, since a
+    // command without one is refused by the real server (`requireIdempotencyKey`).
+    if (path === `/api/projects/${fixtures.IDS.project}/rediscovery` && method === 'POST') {
+      const key = request.headers['idempotency-key'];
+      if (typeof key !== 'string' || key.length === 0) {
+        problem(response, 400, 'idempotency_key_required', 'this command needs an Idempotency-Key');
+        return;
+      }
+      await readBody(request);
+      commands.push({ path, body: {} });
+      json(response, 202, {
+        task_id: fixtures.IDS.taskBug,
+        started: true,
+        detail: 'the Discovery agent is queued again',
+      });
+      return;
+    }
     // WP-93: `PATCH /api/org`, parsed with the published schema and logged like every command.
     if (path === '/api/org' && method === 'PATCH') {
       const parsed = patchOrgSettingsRequestSchema.safeParse(await readBody(request));
@@ -587,6 +604,7 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
         // statistics.test.tsx` drives the JSON half against this same shape).
         '/api/org/stats': fixtures.orgStats,
         [`/api/projects/${fixtures.IDS.project}/autonomy`]: fixtures.autonomy,
+        [`/api/projects/${fixtures.IDS.project}/rediscovery`]: fixtures.rediscoveryGate,
         [`/api/projects/${fixtures.IDS.project}/audit`]: fixtures.projectAudit,
         [`/api/projects/${fixtures.IDS.project}/kb/tree`]: fixtures.kbTree,
         [`/api/projects/${fixtures.IDS.project}/kb/doc`]: fixtures.kbDoc,

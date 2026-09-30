@@ -67,8 +67,11 @@ describe('every client command has a control', () => {
     const mutations = declarationsIn(MUTATION_DECLARATION);
     expect(mutations.length).toBeGreaterThan(10);
     expect(mutations).toContain('createIntegration');
+    // WP-94's pair, named so the scope is known to include it: the re-evaluate command and its gate.
+    expect(mutations).toContain('startRediscovery');
     const hooks = declarationsIn(READ_HOOK_DECLARATION);
     expect(hooks).toContain('useProjectAutonomy');
+    expect(hooks).toContain('useRediscoveryGate');
   });
 
   it('fires every mutation `app/queries.ts` declares from somewhere outside it', () => {

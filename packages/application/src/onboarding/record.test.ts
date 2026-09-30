@@ -20,6 +20,7 @@ import { memoryKnowledgeStore } from '../testing/memory-knowledge.js';
 import { memoryProposalStore } from '../testing/memory-proposals.js';
 import { memoryReadinessStore } from '../testing/memory-readiness.js';
 import { recordingJobs } from '../testing/pipeline-harness.js';
+import { DISCOVERY_TICKET_KEY } from './discovery.js';
 import type { PlatformReadinessSignals } from './ports.js';
 import {
   type DiscoveryRecordData,
@@ -29,6 +30,7 @@ import {
   MAX_DISCOVERY_DOCUMENTS,
   recordDiscoveryFindings,
 } from './record.js';
+import { REDISCOVERY_SOURCE, rediscoveryTicketKeyFor } from './rediscovery.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b1' as Id;
 const TASK = '00000000-0000-4000-8000-0000000000b2' as Id;
@@ -69,7 +71,12 @@ const harness = (
     readonly indexedPaths?: readonly string[];
     readonly knowledgeDir?: string;
     readonly project?: { readonly knowledgeDir: string } | null;
-    readonly artifact?: { readonly data: unknown; readonly runId: Id | null } | null;
+    readonly artifact?: {
+      readonly data: unknown;
+      readonly runId: Id | null;
+      readonly ticketKey: string;
+    } | null;
+    readonly ticketKey?: string;
   } = {},
 ): Harness => {
   const readiness = memoryReadinessStore();
@@ -109,7 +116,11 @@ const harness = (
           : options.project,
       artifact: async () =>
         options.artifact === undefined
-          ? { data: (options.data ?? draft()) as never, runId: RUN }
+          ? {
+              data: (options.data ?? draft()) as never,
+              runId: RUN,
+              ticketKey: options.ticketKey ?? DISCOVERY_TICKET_KEY,
+            }
           : (options.artifact as never),
       logger: silentLogger,
     },
@@ -329,7 +340,7 @@ describe('recordDiscoveryFindings', () => {
     expect(MAX_DISCOVERY_DOCUMENTS * MAX_PROPOSAL_DELTA_BYTES).toBe(1.25 * 1024 * 1024);
   });
 
-  it('curates at most the document cap and records the rest as refusals', async () => {
+  it('curates at most the document cap and counts the pages it drops (backlog 271)', async () => {
     const documents = Array.from({ length: MAX_DISCOVERY_DOCUMENTS + 5 }, (_, index) =>
       page({ path: `technical/page-${index}.md` }),
     );
@@ -337,6 +348,28 @@ describe('recordDiscoveryFindings', () => {
     const report = await recordDiscoveryFindings(options, job);
     expect(report.queued).toBe(MAX_DISCOVERY_DOCUMENTS);
     expect(proposals.rows).toHaveLength(MAX_DISCOVERY_DOCUMENTS);
+    // The five past the cap are dropped — no row, not even a discarded one — and counted.
+    expect(report.overCap).toBe(5);
+    expect(report.discarded).toBe(0);
+    expect(proposals.rows.map((row) => row.targetPath)).not.toContain(
+      `.agentic/knowledge/technical/page-${MAX_DISCOVERY_DOCUMENTS}.md`,
+    );
+    // …and a draft at the cap drops none (rule 42: both sides of the bound).
+    const atCap = harness({
+      data: draft({ documents: documents.slice(0, MAX_DISCOVERY_DOCUMENTS) }),
+    });
+    expect((await recordDiscoveryFindings(atCap.options, job)).overCap).toBe(0);
+  });
+
+  it('records a re-evaluation’s evaluation as a rediscovery, and the first as discovery (WP-94)', async () => {
+    const first = harness();
+    await recordDiscoveryFindings(first.options, job);
+    expect(first.readiness.rows.map((row) => row.source)).toEqual(['discovery']);
+    const again = harness({ ticketKey: rediscoveryTicketKeyFor(null, 1) });
+    await recordDiscoveryFindings(again.options, job);
+    expect(again.readiness.rows.map((row) => row.source)).toEqual([REDISCOVERY_SOURCE]);
+    const stream = await again.eventing.store.readStream('project', PROJECT);
+    expect(stream[0]?.event.payload).toMatchObject({ source: 'rediscovery' });
   });
 
   it('turns a page the index already holds into an update rather than a second add', async () => {
@@ -353,7 +386,7 @@ describe('recordDiscoveryFindings', () => {
     // task and no run. The row is still written — provenance that is partly missing is not a reason
     // to drop a page a human is waiting to review.
     const { options, proposals, readiness } = harness({
-      artifact: { data: draft() as never, runId: null },
+      artifact: { data: draft() as never, runId: null, ticketKey: DISCOVERY_TICKET_KEY },
     });
     const report = await recordDiscoveryFindings(options, job);
     expect(report.status).toBe('recorded');

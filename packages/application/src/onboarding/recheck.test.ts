@@ -8,7 +8,12 @@
  * trigger is asserted through the pipeline and never by calling this directly.
  */
 import type { Id, IsoDateTime } from '@platform/contracts';
-import { fixedClock, READINESS_CI_WINDOW_DAYS, sequentialIds } from '@platform/domain';
+import {
+  fixedClock,
+  READINESS_CI_WINDOW_DAYS,
+  READINESS_TREE_PATHS,
+  sequentialIds,
+} from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import type { RepositoryFileRequest, RepositoryFilesResult } from '../config/repository-config.js';
 import { noSecretsRedactor } from '../integrations/redaction.js';
@@ -125,9 +130,14 @@ describe('recheckProjectReadiness', () => {
     expect(row?.evaluatedAt).toBe(NOW);
     // The pair lands together: the projection moved with the row.
     expect(readiness.levels.get(PROJECT)).toBe(row?.level);
-    // The files were read at the commit the index run read, and only R8's two.
+    // The files were read at the commit the index run read: R8's two, then R10's and R13's named
+    // paths (WP-94) — one read, every path exact.
     expect(reads).toEqual([
-      { projectId: PROJECT, paths: ['CLAUDE.md', 'AGENTS.md'], commitSha: COMMIT },
+      {
+        projectId: PROJECT,
+        paths: ['CLAUDE.md', 'AGENTS.md', ...READINESS_TREE_PATHS],
+        commitSha: COMMIT,
+      },
     ]);
     const r8 = row?.criteria.find((criterion) => criterion.id === 'R8');
     expect(r8?.passed).toBe(true);
@@ -173,6 +183,45 @@ describe('recheckProjectReadiness', () => {
     };
     await expect(recheckProjectReadiness(failing, data)).rejects.toThrow('could not be written');
     expect(await eventing.store.readStream('project', PROJECT)).toEqual([]);
+  });
+
+  it('passes R10 and R13 from the files at the merged commit, and carries them when absent (WP-94)', async () => {
+    const file = (text: string) => ({ kind: 'file' as const, text, blobSha: 'c'.repeat(40) });
+    const withFiles = harness({
+      files: {
+        status: 'ok',
+        commitSha: COMMIT,
+        files: {
+          'CLAUDE.md': { kind: 'absent' },
+          'AGENTS.md': { kind: 'absent' },
+          '.github/pull_request_template.md': file('## Summary\n'),
+          '.commitlintrc.yml': file('extends: ["@commitlint/config-conventional"]\n'),
+          '.pre-commit-config.yaml': file('repos:\n  - hooks:\n      - id: detect-secrets\n'),
+        },
+      },
+    });
+    await seedDiscovery(withFiles.readiness);
+    await recheckProjectReadiness(withFiles.recheck, data);
+    const passed = withFiles.readiness.rows[1]?.criteria;
+    expect(passed?.find((criterion) => criterion.id === 'R10')).toMatchObject({
+      passed: true,
+      detectedBy: 'platform',
+      evidence: `at ${COMMIT.slice(0, 12)}: the merge request template .github/pull_request_template.md and the commit convention .commitlintrc.yml are present`,
+    });
+    expect(passed?.find((criterion) => criterion.id === 'R13')?.evidence).toBe(
+      `at ${COMMIT.slice(0, 12)}: .pre-commit-config.yaml runs detect-secrets`,
+    );
+
+    // The other way: the default harness's tree has neither, and the discovery answer (unreported,
+    // so failing) is carried rather than re-decided.
+    const without = harness();
+    await seedDiscovery(without.readiness);
+    await recheckProjectReadiness(without.recheck, data);
+    for (const id of ['R10', 'R13']) {
+      const row = without.readiness.rows[1]?.criteria.find((criterion) => criterion.id === id);
+      expect(row?.passed, id).toBe(false);
+      expect(row?.evidence, id).toContain('carried from the discovery evaluation');
+    }
   });
 
   it('carries R8 when the mirror cannot be read, rather than failing it', async () => {

@@ -74,6 +74,7 @@ import {
   putBudgetsRequestSchema,
   putProjectBindingsRequestSchema,
   readinessResponseSchema,
+  rediscoveryGateResponseSchema,
   refreshProjectConfigResponseSchema,
   refusedDeliveriesResponseSchema,
   resumeTaskRequestSchema,
@@ -169,6 +170,10 @@ export interface Endpoints {
   readonly projectReadiness: (
     projectId: string,
   ) => Promise<z.output<typeof readinessResponseSchema>>;
+  /** `GET …/rediscovery` (WP-94): whether discovery may run again, and its ceiling. */
+  readonly rediscoveryGate: (
+    projectId: string,
+  ) => Promise<z.output<typeof rediscoveryGateResponseSchema>>;
   readonly projectBudgets: (projectId: string) => Promise<z.output<typeof budgetsResponseSchema>>;
   readonly orgBudgets: () => Promise<z.output<typeof budgetsResponseSchema>>;
   /** `GET /api/org` — the organisation settings document (WP-93). */
@@ -257,6 +262,14 @@ export interface Endpoints {
   readonly startDiscovery: (
     projectId: string,
     idempotencyKey?: string,
+  ) => Promise<z.output<typeof startDiscoveryResponseSchema>>;
+  /**
+   * `POST …/rediscovery` (WP-94, Q107 (a)): a maintainer's re-evaluate — a new discovery run, so
+   * the key is required (a repeat would spend a second budget).
+   */
+  readonly startRediscovery: (
+    projectId: string,
+    idempotencyKey: string,
   ) => Promise<z.output<typeof startDiscoveryResponseSchema>>;
   /**
    * `POST …/interview` (WP-64): the wizard's step 3. It creates proposals, so the key is required
@@ -485,6 +498,10 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
       }),
     projectReadiness: (projectId) =>
       client.get(`/api/projects/${seg(projectId)}/readiness`, { schema: readinessResponseSchema }),
+    rediscoveryGate: (projectId) =>
+      client.get(`/api/projects/${seg(projectId)}/rediscovery`, {
+        schema: rediscoveryGateResponseSchema,
+      }),
     projectBudgets: (projectId) =>
       client.get(`/api/projects/${seg(projectId)}/budgets`, { schema: budgetsResponseSchema }),
     orgBudgets: () => client.get('/api/org/budgets', { schema: budgetsResponseSchema }),
@@ -611,6 +628,12 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
         body: {},
         idempotent: true,
         ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+      }),
+    startRediscovery: (projectId, idempotencyKey) =>
+      client.command(`/api/projects/${seg(projectId)}/rediscovery`, {
+        schema: startDiscoveryResponseSchema,
+        body: {},
+        idempotencyKey,
       }),
     recordInterview: (projectId, body, idempotencyKey) =>
       client.command(`/api/projects/${seg(projectId)}/interview`, {

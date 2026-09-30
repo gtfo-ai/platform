@@ -87,7 +87,11 @@ import {
 } from './knowledge.js';
 import { asLoggerPort, createLogger, type PinoLogger } from './logging.js';
 import { createMetrics, type Metrics } from './metrics.js';
-import { composeOnboardingRecording, createOnboardingCommands } from './onboarding.js';
+import {
+  composeOnboardingRecording,
+  createOnboardingCommands,
+  createRediscoveryGate,
+} from './onboarding.js';
 import {
   composeIntegrationStack,
   composePipeline,
@@ -1021,6 +1025,9 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       shadowGate,
       historyBootstrap: bootstrapCommands,
       historyBootstrapGate: bootstrapGate,
+      rediscoveryGate: capabilities.api
+        ? createRediscoveryGate({ pool: database.pool, eventing })
+        : null,
       commands: taskCommands,
       asks,
       breakdown,

@@ -24,15 +24,17 @@
  *
  * `READINESS_CRITERIA[].recheck` is the stated split: R9, R11 and R12 are the platform's and are
  * asked again; R8 is read from `CLAUDE.md`/`AGENTS.md` at the merged commit through the platform's
- * mirror (`RepositoryFileSource`, no checkout); R3 passes on an observed merge-request pipeline
- * event and otherwise carries; the other nine need a run and are **carried** with evidence that says
- * so. It never starts a run — product/17's *"cheap"* is the whole constraint.
+ * mirror (`RepositoryFileSource`, no checkout); R10 and R13 pass on a named file at the same commit
+ * and otherwise carry (WP-94, backlog 231); R3 passes on an observed merge-request pipeline event
+ * and otherwise carries; the other seven need a run and are **carried** with evidence that says so.
+ * It never starts a run — product/17's *"cheap"* is the whole constraint; a maintainer who wants the
+ * seven answered again starts discovery again (`rediscovery.ts`, Q107 (a)).
  *
  * ## A project nobody evaluated is not re-checked
  *
- * A re-check re-checks: with no previous evaluation there is nothing to carry nine criteria from,
+ * A re-check re-checks: with no previous evaluation there is nothing to carry seven criteria from,
  * and a row written anyway would turn `GET …/readiness`'s honest `409 readiness_not_evaluated` into
- * a 200 whose nine carried rows are all "not reported". So it is skipped by name.
+ * a 200 whose seven carried rows are all "not reported". So it is skipped by name.
  *
  * ## The residual, stated
  *
@@ -48,8 +50,11 @@ import {
   AGENT_INSTRUCTIONS_PATHS,
   type AgentInstructionsFile,
   agentInstructionsReadiness,
+  mergeRequestConventionReadiness,
   mergeRequestPipelineReadiness,
   READINESS_CI_WINDOW_DAYS,
+  READINESS_TREE_PATHS,
+  secretScanningReadiness,
 } from '@platform/domain';
 import type { RepositoryFileEntry, RepositoryFileSource } from '../config/repository-config.js';
 import type { EventStore } from '../ports/event-store.js';
@@ -121,6 +126,20 @@ const asInstructionsFile = (entry: RepositoryFileEntry | undefined): AgentInstru
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
+/** R10 and R13 from the named files (WP-94, backlog 231): each a pass or `null`, never a fail. */
+const treeObservations = (
+  files: Readonly<Partial<Record<string, RepositoryFileEntry>>>,
+  commitSha: string,
+): Pick<ReadinessObservations, 'mergeRequestConventions' | 'secretScanning'> => {
+  const tree = Object.fromEntries(
+    READINESS_TREE_PATHS.map((path) => [path, asInstructionsFile(files[path])]),
+  );
+  return {
+    mergeRequestConventions: mergeRequestConventionReadiness({ files: tree, commitSha }),
+    secretScanning: secretScanningReadiness({ files: tree, commitSha }),
+  };
+};
+
 /** One re-check. Exported beside the handler so a test can drive it and read the report. */
 export const recheckProjectReadiness = async (
   options: ReadinessRecheckOptions,
@@ -141,9 +160,10 @@ export const recheckProjectReadiness = async (
   // Every read happens here, outside any transaction: the probe asks the git provider (R9), and
   // `integrationsForProject` refuses to run inside one.
   const signals = await options.signals.read(projectId);
+  // One read for R8's two files and R10's and R13's named paths (WP-94), pinned to the same commit.
   const read = await options.files.read({
     projectId,
-    paths: [...AGENT_INSTRUCTIONS_PATHS],
+    paths: [...AGENT_INSTRUCTIONS_PATHS, ...READINESS_TREE_PATHS],
     commitSha: data.commit_sha,
   });
   const now = options.clock.now();
@@ -166,11 +186,12 @@ export const recheckProjectReadiness = async (
           })
         : null,
     mergeRequestPipelines: mergeRequestPipelineReadiness(pipelines),
+    ...(read.status === 'ok' ? treeObservations(read.files, read.commitSha) : {}),
   };
   if (read.status === 'unavailable') {
     (options.logger ?? silentLogger).warn(
       { project_id: projectId, commit_sha: data.commit_sha, reason: read.reason },
-      'the readiness re-check could not read CLAUDE.md/AGENTS.md; R8 is carried from the previous evaluation',
+      'the readiness re-check could not read the repository files; R8, R10 and R13 are carried from the previous evaluation',
     );
   }
 

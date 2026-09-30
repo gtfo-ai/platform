@@ -561,3 +561,42 @@ describe('the project settings page', () => {
     expect(screen.getByLabelText(/Why above the suggested cap/)).toBeTruthy();
   });
 });
+
+/**
+ * Q100 per its recommendation (WP-94): the maintenance card says it is paused when the level in
+ * force is Observe and the feature is on — the state the nightly pass logs by name — and says
+ * nothing of the kind at Assist.
+ */
+describe('the maintenance card and the dial (Q100)', () => {
+  const maintenanceOn = { config: { version: 1, features: { maintenance: { enabled: true } } } };
+
+  it('says “paused at Observe” when the dial in force is Observe', async () => {
+    render(
+      createApp({
+        fetchImpl: fetchFor(
+          { level: 'observe', level_in_force: 'observe' },
+          { config: maintenanceOn },
+        ),
+        realtime: false,
+      }).element,
+    );
+    expect(await screen.findByText(/Paused at Observe/)).toBeTruthy();
+  });
+
+  it('says nothing of the kind at Assist, where chores still run', async () => {
+    render(
+      createApp({
+        fetchImpl: fetchFor(
+          { level: 'assist', level_in_force: 'assist' },
+          { config: maintenanceOn },
+        ),
+        realtime: false,
+      }).element,
+    );
+    expect(await screen.findByText('Maintenance pipeline')).toBeTruthy();
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('at Observe no chore is created');
+    });
+    expect(screen.queryByText(/Paused at Observe/)).toBeNull();
+  });
+});

@@ -93,6 +93,20 @@ export const useProjectReadiness = (projectId: string | null) => {
   });
 };
 
+/**
+ * `GET /api/projects/:id/rediscovery` (WP-94) — the re-evaluate button's gate and its ceiling, from
+ * the function the command decides with, so the button is off with the reason rather than a 409.
+ */
+export const useRediscoveryGate = (projectId: string | null) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: queryKeys.rediscoveryGate(projectId ?? ''),
+    queryFn: () => endpoints.rediscoveryGate(projectId ?? ''),
+    enabled: projectId !== null,
+    ...FOREVER,
+  });
+};
+
 export const useProjectBindings = (projectId: string | null) => {
   const { endpoints } = useServices();
   return useQuery({
@@ -909,6 +923,21 @@ export const useOnboardingCommands = (mint?: MintKey) => {
         endpoints.startDiscovery(projectId, intents.keyFor(['discovery.run', projectId])),
       onSuccess: async (_result, projectId) => {
         intents.release(['discovery.run', projectId]);
+        await queryClient.invalidateQueries({ queryKey: queryKeys.projectReadiness(projectId) });
+        await queryClient.invalidateQueries({ queryKey: queryKeys.rediscoveryGate(projectId) });
+      },
+    }),
+    /**
+     * WP-94, Q107 (a): a maintainer's re-evaluate. One key per intent — a double click is one run;
+     * released on success, so a later re-evaluation is a new one. The gate is re-read afterwards,
+     * which is what turns the button off while the run it started is in flight.
+     */
+    startRediscovery: useMutation({
+      mutationFn: (projectId: string) =>
+        endpoints.startRediscovery(projectId, intents.keyFor(['discovery.rerun', projectId])),
+      onSuccess: async (_result, projectId) => {
+        intents.release(['discovery.rerun', projectId]);
+        await queryClient.invalidateQueries({ queryKey: queryKeys.rediscoveryGate(projectId) });
         await queryClient.invalidateQueries({ queryKey: queryKeys.projectReadiness(projectId) });
       },
     }),

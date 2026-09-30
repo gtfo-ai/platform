@@ -42,8 +42,10 @@ import type {
   PlatformReadinessSignals,
   ReadinessCiEvents,
   ReadinessRecheckOptions,
+  RediscoveryGate,
   RepositoryFileSource,
   StartDiscoveryResult,
+  StartRediscoveryResult,
 } from '@platform/application';
 import {
   composeSecretRedactors,
@@ -51,8 +53,10 @@ import {
   gitReads,
   integrationsForProject,
   noRunScopedSecrets,
+  readRediscoveryGate,
   recordBusinessInterview,
   startProjectDiscovery,
+  startProjectRediscovery,
 } from '@platform/application';
 import type { Id, IntegrationType, IsoDateTime, JsonObject } from '@platform/contracts';
 import { SHIPPED_TEMPLATES } from '@platform/domain';
@@ -78,6 +82,14 @@ export interface OnboardingCommands {
     readonly projectId: Id;
     readonly userId: Id;
   }): Promise<StartDiscoveryResult>;
+  /**
+   * A maintainer's re-evaluate (WP-94, Q107 (a)): a new one-off discovery task beside the first,
+   * refused by name while one runs, before the first exists, or after the bounded attempts.
+   */
+  startRediscovery(input: {
+    readonly projectId: Id;
+    readonly userId: Id;
+  }): Promise<StartRediscoveryResult>;
   /**
    * product/06 step 3, the business interview (WP-64): one queued knowledge proposal per answered
    * section. Needs no job runtime — it writes rows and asks for nothing to run.
@@ -189,6 +201,28 @@ export const createOnboardingCommands = (options: OnboardingCommandOptions): Onb
         { projectId, requestedByUserId: userId },
       );
     },
+    startRediscovery: async ({ projectId, userId }) => {
+      const { jobs } = options;
+      if (jobs === null) {
+        throw new OnboardingUnavailableError(
+          'this process runs no job workers, so it cannot run discovery again: the task would be created and its stage would never execute. Ask an instance that runs the workers',
+        );
+      }
+      return startProjectRediscovery(
+        {
+          unitOfWork: options.eventing.unitOfWork,
+          store: pipelineAdapters.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES }),
+          settings: createProjectSettingsPort(options.pool),
+          readiness: knowledgeAdapters.createPostgresReadinessStore(options.pool),
+          jobs,
+          ids,
+          clock: { now: nowIso },
+          baseUrl: options.baseUrl,
+          logger: options.logger,
+        },
+        { projectId, requestedByUserId: userId },
+      );
+    },
     recordInterview: async ({ projectId, userId, answers, audit }) =>
       recordBusinessInterview(
         {
@@ -261,20 +295,55 @@ const readProject = async (
   return row === undefined ? null : { knowledgeDir: row.knowledge_dir };
 };
 
-/** The artifact and the run that produced it, for one task. */
+/**
+ * The artifact, the run that produced it and its task's ticket key — the key is what tells a
+ * re-evaluation from the first discovery (WP-94), so the evaluation names its source.
+ */
 const readArtifact = async (
   pool: pg.Pool,
   input: { readonly taskId: Id; readonly artifactId: Id },
-): Promise<{ data: never; runId: Id | null } | null> => {
-  const { rows } = await pool.query<{ data: unknown; produced_by_run_id: string | null }>(
-    'select data, produced_by_run_id from artifacts where id = $1 and task_id = $2',
+): Promise<{ data: never; runId: Id | null; ticketKey: string } | null> => {
+  const { rows } = await pool.query<{
+    data: unknown;
+    produced_by_run_id: string | null;
+    ticket_key: string;
+  }>(
+    `select a.data, a.produced_by_run_id, t.ticket_key
+       from artifacts a join tasks t on t.id = a.task_id
+      where a.id = $1 and a.task_id = $2`,
     [input.artifactId, input.taskId],
   );
   const row = rows[0];
   return row === undefined
     ? null
-    : { data: row.data as never, runId: (row.produced_by_run_id as Id | null) ?? null };
+    : {
+        data: row.data as never,
+        runId: (row.produced_by_run_id as Id | null) ?? null,
+        ticketKey: row.ticket_key,
+      };
 };
+
+/**
+ * Whether a re-evaluation may start, and what it may cost — the read endpoint's half (WP-94).
+ *
+ * Composed on every API process, like the history bootstrap's gate: the answer is about the
+ * project's settings, its discovery tasks and its latest evaluation, none of which needs a worker.
+ */
+export const createRediscoveryGate =
+  (options: {
+    readonly pool: pg.Pool;
+    readonly eventing: ReturnType<typeof eventingAdapters.createEventing>;
+  }) =>
+  async (projectId: string): Promise<RediscoveryGate> =>
+    readRediscoveryGate(
+      {
+        unitOfWork: options.eventing.unitOfWork,
+        store: pipelineAdapters.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES }),
+        settings: createProjectSettingsPort(options.pool),
+        readiness: knowledgeAdapters.createPostgresReadinessStore(options.pool),
+      },
+      projectId as Id,
+    );
 
 /**
  * The platform's own three readiness answers.

@@ -135,6 +135,7 @@ import { type ReadinessReport, registerOpsRoutes } from './routes/ops.js';
 import { registerOrgRoutes } from './routes/org.js';
 import { registerProjectConfigRoutes } from './routes/project-config.js';
 import { registerProjectRoutes } from './routes/projects.js';
+import { type RediscoveryGateReader, registerRediscoveryRoutes } from './routes/rediscovery.js';
 import { registerRunRoutes } from './routes/runs.js';
 import { registerSettingsRoutes } from './routes/settings.js';
 import { registerShadowRoutes } from './routes/shadow.js';
@@ -242,6 +243,12 @@ export interface BuildAppOptions {
   readonly historyBootstrapGate:
     | ((projectId: string, mergeRequests: number | null) => Promise<HistoryBootstrapGateResult>)
     | null;
+  /**
+   * Whether a maintainer may run discovery again, and what it may cost — the read half of the
+   * re-evaluate (WP-94). `null` when this process cannot read project settings; the read then
+   * answers 503 by name. The command half is `onboarding.startRediscovery`.
+   */
+  readonly rediscoveryGate: RediscoveryGateReader | null;
   /**
    * The task and run command surface (WP-15i), or `null` for a process that composed no pipeline.
    *
@@ -591,6 +598,23 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         },
       },
       bootstrap: options.historyBootstrap,
+    });
+    /**
+     * WP-94: a maintainer's re-evaluate (Q107 (a)) — the command on the onboarding composition, the
+     * gate on the read, one function deciding both (`readRediscoveryGate`).
+     */
+    await registerRediscoveryRoutes(app, {
+      queries: {
+        projectRole: async (projectId, userId) =>
+          findProjectRole(options.database, projectId, userId),
+        projectExists: async (projectId) =>
+          (await findProjectById(options.database, projectId)) !== null,
+        claimAttempt: async (query) => claimCommandAttempt(options.database, query),
+        releaseAttempt: async (query) => releaseCommandAttempt(options.database, query),
+        recordAction: async (input) => recordHumanAction(options.database, input),
+      },
+      commands: options.onboarding,
+      gate: options.rediscoveryGate,
     });
     await registerSettingsRoutes(app, {
       // The ten reads and writes the settings surface needs, bound to this process's database

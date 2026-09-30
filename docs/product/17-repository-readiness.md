@@ -8,7 +8,7 @@ Autonomy is only as safe as the repository's ability to prove work correct. An a
 
 ## What it measures
 
-Binary criteria, detected automatically by the Discovery agent at onboarding and re-checked after every merge onto the default branch without a run (WP-64): R3 from CI events, R8 from the files, R9, R11 and R12 from the platform's own records; the other nine keep the answer discovery gave (discovery cannot yet be re-run — PROGRESS backlog 230). Each criterion states **what it unlocks** so the score is a value proposition, not a scolding.
+Binary criteria, detected automatically by the Discovery agent at onboarding and re-checked after every merge onto the default branch without a run (WP-64): R3 from CI events, R8, R10 and R13 from the files (R10 and R13 since WP-94, pass-only), R9, R11 and R12 from the platform's own records; the other seven keep the latest discovery's answer until a maintainer re-evaluates, which runs discovery again as a new budgeted task (WP-94). Each criterion states **what it unlocks** so the score is a value proposition, not a scolding.
 
 | # | Criterion | How detected | Unlocks / protects |
 |---|---|---|---|

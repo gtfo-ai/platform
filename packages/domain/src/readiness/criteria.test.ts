@@ -92,16 +92,19 @@ describe('the criteria table', () => {
 
   /**
    * WP-64 (PROGRESS backlog 46, criterion 2): the re-check's split is **stated in the table**, and
-   * this is the statement pinned — five re-answered after a merge, nine carried. A criterion moving
-   * between columns is a change to what a merged task can prove, so it has to move this case.
+   * this is the statement pinned — seven re-answered after a merge, seven carried (R10 and R13 moved
+   * to `tree_pass` at WP-94, backlog 231). A criterion moving between columns is a change to what a
+   * merged task can prove, so it has to move this case.
    */
   it('states how the re-check after a merge answers each criterion', () => {
     const by = (source: string) =>
       READINESS_CRITERIA.filter((criterion) => criterion.recheck === source).map(({ id }) => id);
     expect(by('platform')).toEqual(['R9', 'R11', 'R12']);
     expect(by('tree')).toEqual(['R8']);
+    expect(by('tree_pass')).toEqual(['R10', 'R13']);
     expect(by('ci_events')).toEqual(['R3']);
-    expect(by('carried')).toEqual(['R1', 'R2', 'R4', 'R5', 'R6', 'R7', 'R10', 'R13', 'R14']);
+    // R4 stays carried until the platform keeps a flaky-rerun statistic (backlog 231).
+    expect(by('carried')).toEqual(['R1', 'R2', 'R4', 'R5', 'R6', 'R7', 'R14']);
     // The platform's three are the platform's in both producers (criterion 5).
     for (const criterion of READINESS_CRITERIA) {
       expect(criterion.recheck === 'platform', criterion.id).toBe(

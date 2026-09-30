@@ -39,6 +39,7 @@ import {
   orgUsersResponseSchema,
   projectAuditResponseSchema,
   projectSummarySchema,
+  rediscoveryGateResponseSchema,
   runCommandsResponseSchema,
   runMessagesResponseSchema,
   runPromptResponseSchema,
@@ -865,6 +866,17 @@ export const orgIdentities = identityMappingListSchema.parse({
  * The organisation settings document — `GET /api/org`, served since WP-93. The block list carries
  * markup on purpose: it is text an administrator typed, and the screen holds it as a value.
  */
+/**
+ * `GET /api/projects/:id/rediscovery` (WP-94): the re-evaluate button's gate and its ceiling, with
+ * a last discovery whose cost the button's line names.
+ */
+export const rediscoveryGate = rediscoveryGateResponseSchema.parse({
+  can_start: true,
+  blocker: null,
+  ceiling_usd: 2,
+  last_discovery: { task_id: IDS.taskBug, state: 'done', cost_usd: 0.84 },
+});
+
 export const orgSettings = orgSettingsResponseSchema.parse({
   settings: {
     commands: { block: ['<img src=x onerror=alert(1)>'] },
