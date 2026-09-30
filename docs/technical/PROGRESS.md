@@ -1239,6 +1239,17 @@ own acceptance test is worse than one that names its blocker. `--check` prints `
 **Residual.** `EVAL_MAX_USD` is unwired — nothing can spend until the credential exists, so the budget has
 nothing to bound yet. Whoever supplies the credential wires it in the same change.
 
+### 2. WP-78's mutation testing waits on an upstream StrykerJS release
+
+**What is blocked.** WP-78 (backlog 116's second half): a scheduled mutation-testing run, so technical/10's weekly row stops
+being a sentence. **Why.** StrykerJS cannot mutate this repository today: on Vitest 5 the runner's per-test name filter
+matches nothing, so every covered mutant survives (`stryker-mutator/stryker-js#6210`), and its tsconfig preprocessing does
+not accept TypeScript 7 (`#6231`). The measurement and the two reproductions are `docs/research/14-stryker-vitest5-typescript7.md`.
+**Checked 2026-09-30 (session 9):** both issues open; the latest release is v10.0.0 of 2026-08-14. **What unblocks it.** A
+StrykerJS release that closes both — then WP-78 is the next row: re-run the research note's two reproductions against the
+release first (rule 27: measure before building). **No human action is needed** beyond waiting; nothing in the plan depends
+on WP-78, and the hand-written canaries every review round plants remain the mutation instrument meanwhile.
+
 ## Open findings backlog — every loose end, with its source
 
 > Maintained by the orchestrator. A finding leaves this list when it is **merged**, not when it is agreed.
@@ -1663,7 +1674,7 @@ What done looks like is small and worth naming so it is not re-derived: the WP t
 `handled` — **WP-19** is the first — also asserts that no row it owns is still `unconsumed`, so the
 declaration is held by the work package rather than by a global list nobody maintains.
 
-### 29. **The SPA calls twenty `/api/*` paths and the server registers four — the read surface of technical/08 was never anybody's work package** (**cause RESOLVED** at `19da103`, WP-15h part 1; **every read the SPA calls is served** after WP-19, WP-18b and WP-15h part 2 — what remained in the census's admitted gaps was the **command** surface, twelve writes — **WP-15i served eleven of them at `8abccbf`**; `/api/runs/:run_id/steer` is WP-27's deliverable and stays there, the census's only admitted gap; serving the SPA itself is backlog **33**, now **WP-15j**)
+### 29. **The SPA calls twenty `/api/*` paths and the server registers four — the read surface of technical/08 was never anybody's work package** (**cause RESOLVED** at `19da103`, WP-15h part 1; **every read the SPA calls is served** after WP-19, WP-18b and WP-15h part 2 — what remained in the census's admitted gaps was the **command** surface, twelve writes — **WP-15i served eleven of them at `8abccbf`**; `/api/runs/:run_id/steer` was the twelfth and landed with **WP-27** at `37b8d6b`, so the census's admitted-gap list is **empty** (`apps/server/src/routes/client-census.test.ts`, `ADMITTED_GAPS`); serving the SPA itself was backlog **33**, **RESOLVED** at `4e85ad1` by **WP-15j** — clauses corrected at WP-98)
 > **M5 (architect, session 8): stale wording only — corrected by **WP-98**.**
 
 > **Session 5.** The recurrence is closed by `apps/server/src/routes/client-census.test.ts`, which fails on a
@@ -5085,7 +5096,7 @@ exists) shares the aggregate and none of the work; WP-38 note 5's `settle` fix i
 different site* — a gate settling for a task that had stopped — and is the precedent for the re-entry
 shape, since that one already ends with *"the gate is re-entered when the task resumes"*.
 
-### 97. **`IntegrationActionExecutor` cannot audit a call that has no binding, because `integration_actions.integration_id` is `not null` — so the platform's first outbound call of its own gets no audit row at all, and nothing says which audit it should get instead** (**RESOLVED** at `4b71d45`, WP-51, session 6 — shape (a): the audit is per binding, a call with no binding is audited by its own module under the named checklist, stated in technical/06 and the executor's docblock. Kept for its evidence; surfaced by WP-38, session 5, whose deviation is decided and reasoned; this entry is the **general** assumption underneath it, which no document stated)
+### 97. **`IntegrationActionExecutor` cannot audit a call that has no binding, because `integration_actions.integration_id` is `not null` — so the platform's first outbound call of its own gets no audit row at all, and nothing says which audit it should get instead** (**RESOLVED** at `4b71d45`, WP-51, session 6 — shape (a): the audit is per `integrations` row — a binding's, or since WP-65 an organisation-scoped account's with `project_id` null (technical/06, the third shape) — and a call with no `integrations` row at all is audited by its own module under the named checklist, stated in technical/06 and the executor's docblock (the *per binding* clause corrected at WP-98). Kept for its evidence; surfaced by WP-38, session 5, whose deviation is decided and reasoned; this entry is the **general** assumption underneath it, which no document stated)
 > **M5 (architect, session 8): stale wording only — corrected by **WP-98**.**
 > **M4 (architect, session 6): folded into WP-51.**
 >
@@ -13763,7 +13774,7 @@ the `docker-access` and `citations` halves are outside `scripts/` and are owned 
 not intend and cannot see in its own output — twice in one work package, in two files, where a space
 was meant. The check existed; its *scope* was the hole.
 
-### 22. **The pool floor is one computed constant and seven hand-written restatements of it — two of them stale on `main` at `38ea686`** (**RESOLVED** at `38a56f2`, WP-73c, session 8 — TODO, small — the class behind three repairs in one day)
+### 22. **The pool floor is one computed constant and seven hand-written restatements of it — two of them stale on `main` at `38ea686`** (**RESOLVED** at `38a56f2`, WP-73c, session 8 — was graded small — the class behind three repairs in one day; the stale *TODO* status clause removed at WP-98)
 > **M5 (architect, session 8): stale wording only — corrected by **WP-98**.**
 > **M4 (architect, session 6): folded into WP-73.**
 
@@ -15290,7 +15301,7 @@ entry is about a file deliberately taken *out* of that number.
 **Depends on / owner.** None. **No work package owns it.** Cheapest home: whoever next adds a module
 to `apps/server/src/queries/` or edits `vitest.config.ts`'s exclude list.
 
-### 116. **`codeql.yml` and `mutation.yml` are named by three documents, exist nowhere, and were never allocated to a work package — the two rows of technical/11's table that were neither absorbed into `ci.yml` nor claimed by WP-33** (**RESOLVED** by WP-71 at `dadb543`, session 8 — the CodeQL half as a recorded repository setting; **the mutation half is resolved only as a plan-row text** (WP-71 notes, *For the orchestrator*, proposed WP-78), so WP-71's criterion (2) is met when that row is added to the plan, and until then those notes are the half's only record — TODO — one cause, two halves whose costs differ by an order of magnitude; **no work package owns it**; found by WP-42, session 5)
+### 116. **`codeql.yml` and `mutation.yml` are named by three documents, exist nowhere, and were never allocated to a work package — the two rows of technical/11's table that were neither absorbed into `ci.yml` nor claimed by WP-33** (**RESOLVED** by WP-71 at `dadb543`, session 8 — the CodeQL half as a recorded repository setting; **the mutation half is owned by WP-78**, a row of the plan's M5 table since session 8 (WP-71's criterion (2) is met), and is TODO there — one cause, two halves whose costs differ by an order of magnitude; found by WP-42, session 5; the *no work package owns it* and *only as a plan-row text* clauses corrected at WP-98)
 > **M5 (architect, session 8): the mutation half is **WP-78**, placed in M5 behind an upstream precondition; the stale heading clause goes to **WP-98**.**
 > **M4 (architect, session 6): folded into WP-71.**
 
@@ -15820,7 +15831,7 @@ file, or the first work package that touches upgrade behaviour.
 | WP-100 | **No integration can be created through the product: the form sends an empty config and the create never checks it** | DONE | `c8a4773` | Folds **328** (major, found by WP-96). Depends on WP-96. Placed next by the orchestrator (session 9). **Done**: the create, a new `PATCH /api/integrations/:id` (set/remove lists, audited, no `Idempotency-Key` — stated) and every binding overlay refuse credential keys, then parse `config` with the provider's catalogue schema (a 400 naming the key path, never a value, no row written); `GET /api/integrations/providers` feeds a form that renders each provider's required fields and credential env-var names; a stored row that no longer parses carries a `config_refusal` and `/test` answers 409 naming the repairing `PATCH`; the wizard e2e, the operator guide's `curl` and `scripts/compose-stock-check.mjs` send the schema's keys. **One review round**, REQUEST CHANGES: **330** confirmed by running it (a Sentry token in a binding's config passed every check — `configIssuesOf` strips credential keys before parsing — and `listProjectBindings` served it to every viewer; live since WP-21) and folded, closed with a test and a canary each way. Orchestrator's tiers: `PASS: verify` (9156 final), `PASS: verify:integration` (699), `PASS: verify:e2e` ×2 (244), R0 `PASS: verify:ui` (447) and `PASS: verify:web-e2e` (50); rule 92's check green. `compose-stock-check` changed and ran first in `image.yml`. CI `ci` `36682270899`, `image` `36682270926` completed success. Discovered: **331**, **332**. |
 | WP-97 | **The coverage ratchet, the unseeded property run, and technical/03 held to the migrations** | DONE | `62d870b` | Folds **254**'s ratchet, **270**, **124**. **Done**: `coverage:ratchet` (second step of `verify:tests`; below the floor or more than two points above it unpinned fails; this run's summary only; four floors re-pinned; the margins measured in technical/10); one fixed seed for every gate property through a setup file in all six projects, a census refusing a file with its own seed, and `.github/workflows/property-exploration.yml` (weekly, pinned, `contents: read`) printing any failing seed; `data-model:check` in `verify:static` over sixty-nine tables, ten technical/03 entries written, `users.password_hash` corrected. The orchestrator updated CLAUDE.md's verify-contract list. **A pre-review round**: the orchestrator's pass 2 failed in `librarian.e2e.test.ts` (WP-96's re-delivered-apply assertion, untouched by WP-97; 3/3 alone) — diagnosed by reproduction: a knowledge pass that loses a project-stream race to the merge's measure waits a pg-boss retry (~79 s) past the test's wait; the test now holds the knowledge queues until the measure lands, the product behaviour filed as **333**; the implementer stalled (watchdog) mid-probe and the orchestrator verified its fix (the file alone 3×, `verify:e2e` twice — one pass lost three `docker-workspace` cases to 180 s timeouts under load, the file alone 76/76). **One review round**, APPROVE with a major the orchestrator fixed: nothing kept the two guards in `VERIFY_GROUPS` (dropping one left CI equal) — `scripts/verify.test.ts` now pins them, its canary dead; a margin corrected (infrastructure functions, 4). Canaries 5/6 dead, the sixth the major. Orchestrator's tiers: `PASS: verify` (9197 final), `PASS: verify:integration` (699), `PASS: verify:e2e` (244, twice across the round), `PASS: verify:ui` (447), `PASS: verify:web-e2e`; rule 92's check green. CI `ci` `36708343383`, `image` `36708343343` completed success — the ratchet's first CI reading. Discovered: **333**; three docs nits added to WP-98. |
 | WP-98 | **Documents that describe what the tree no longer does** | TODO | — | The `release.yml` sentences in `CLAUDE.md` and technical/15, TD-019/024/025, technical/09, stale Q lines, the closed Qs to the Decision log, stale backlog headings (29, 97, 116, 22). No product edits. |
-| WP-78 | **Mutation testing runs nowhere, and technical/10's weekly row is a sentence** | TODO | — | Folds **116**'s second half. **Upstream precondition**: a StrykerJS release fixing #6210 (Vitest 5) and #6231 (TypeScript 7) — `docs/research/14-stryker-vitest5-typescript7.md`. Mark BLOCKED with that brief when reached if it has not shipped; nothing else waits on it. |
+| WP-78 | **Mutation testing runs nowhere, and technical/10's weekly row is a sentence** | BLOCKED | — | Folds **116**'s second half. **Upstream precondition**: a StrykerJS release fixing #6210 (Vitest 5) and #6231 (TypeScript 7) — `docs/research/14-stryker-vitest5-typescript7.md`. Mark BLOCKED with that brief when reached if it has not shipped; nothing else waits on it.  **BLOCKED (session 9, 2026-09-30)** on its stated upstream precondition, checked rather than assumed: `stryker-mutator/stryker-js` issue **#6210** (the Vitest 5 runner's per-test filter matches nothing) and **#6231** (TypeScript 7 in tsconfig preprocessing) are both **open**, and the latest release, **v10.0.0** (2026-08-14), predates both. Brief: *Blocker briefs needing a human* § 2. Nothing else waits on it. |
 
 ## WP notes (decisions, assumptions, reviewer findings)
 
@@ -36434,3 +36445,41 @@ Verification: `verify` PASS (no expected fail); `verify:ui` PASS 441 (the first 
 **Discovered work** (for the refiner; no numbers claimed).
 - The three sentences above (TD-015, technical/11, CLAUDE.md) need their owners' edit.
 - `verify.mjs`'s header and technical/14's contract still say `verify` is "three" sub-targets; it has been four since `verify:bundle`.
+
+#### WP-98
+
+**Documents that describe what the tree no longer does.** Docs-only; the one code edit is `scripts/verify.mjs`'s header comment. Implementer, session 9. Every replacement below was re-derived from the tree (rule 86), not copied from a ledger claim.
+
+| # | Item (the row's order) | Outcome |
+|---|---|---|
+| 1 | `CLAUDE.md`'s release paragraph describes the deleted `release.yml` | **Already true — no edit needed.** Re-read against the tree: `release.yml`, `release-please-config.json` and `.release-please-manifest.json` are absent, the paragraph says they are deleted (since WP-71 `dadb543` and WP-73d `acb95f1`), and each of its other claims holds — `scripts/version.mjs`'s bump rules, the switch in `image.yml`, eleven manifests at `0.0.0`, `CHANGELOG.md` a pointer, the three digest-pinned linters in `ci.yml`. Handed to the orchestrator as "no replacement" |
+| 2 | technical/15:29-31 describes `release.yml` | **Already true — no edit needed.** Those lines were rewritten by the architect in `5cca72a`, the commit that wrote this row, and say there is no `release` workflow; `property-exploration.yml` is scheduled and does not run on a push, so *"a push to `main` shows `ci` and `image`"* holds |
+| 3 | TD-019 lacks WP-71's pre-1.0 minor-bump rule | **Handed to the orchestrator** (exact text in the report), with the stale title as a sibling (rule 83) |
+| 4 | TD-024's title names Bolt (Q42) | **Handed to the orchestrator** — title, plus the decision line's Bolt clause and its *"retries on 408/413/429/5xx"* (the Jira client sets `retry: 0`, the other four use `fetch`) as siblings |
+| 5 | TD-025 §3 describes one socket where two ship (Q50) | **Handed to the orchestrator.** Sibling: §3's *"from the launcher's broker"* — since WP-76 the runner mints the credential (`launcher/provisioner.ts`) |
+| 6 | technical/09 says file-based routes (Q44) | **Closed**: the stack line and the `routes/` line say code-based routes in `apps/web/src/routes/tree.tsx` and list the paths that file declares (the old list had `/onboarding/$step` and `$id` names that do not exist). Q44 records the amendment |
+| 7 | Q82 stale line (`checkoutRef` honoured since WP-53) | **Closed** in place, marked as a correction |
+| 8 | Q92 stale residual (re-derived since WP-59) | **Closed** in place: the residual is recovered by `superseded_merge_requests` and `recovery/superseded-mr.ts` (WP-59 round 1, backlog 178) |
+| 9 | Q100's line cite | **Closed**: `scheduler.ts:434-437` → `:471-483` |
+| 10 | Q35, Q45, Q52, Q59, Q61, Q64, Q69, Q70, Q89, Q90 to the Decision log | **Closed, all ten**, each read first and each genuinely answered in the tree. Moved whole under *Moved from Open at WP-98*, with a row each in the table. Q52 and Q70 share one residual (cancel does not interrupt a live session), which is backlog **294** and is stated as such on both, not left implied |
+| 11 | Delete the duplicates Q23–Q25 | **Closed**: the Decision-log rows stay |
+| 12 | Backlog headings 29, 97, 116, 22 | **Closed**: 29 (steer served at WP-27, the admitted-gap list empty; backlog 33 resolved by WP-15j), 97 (*per binding* → per `integrations` row, WP-65's organisation-scoped third shape), 116 (the mutation half is WP-78's, a plan row), 22 (a *TODO* status clause beside RESOLVED) |
+| 13 | product/19 §3 wording for Q37 | **Handed to the orchestrator** as exact text, measured (below) |
+| 14 | TD-015's WP-70 amendment, *"nothing ratchets them upward yet"* | **Handed to the orchestrator** |
+| 15 | technical/11 `:7` and `:36` omit `property-exploration.yml` | **Closed**: the layout line, a table row for the workflow, *"twelve rows … four workflows"*. Sibling: `base-image.yml`'s path trigger also lists `docker/runtime.Dockerfile` and `scripts/build-images.mjs` |
+| 16 | `scripts/verify.mjs:10` and technical/14 `:49` say three sub-targets | **Closed**, both say four. Siblings fixed as well: `verify.mjs`'s own target summary and technical/14:47 (both said *"lint + typecheck + unit + contract"*), and technical/14's *"fake-Claude compose e2e"* (the e2e tier is `apps/server` on Testcontainers, not compose) |
+| 17 | `CLAUDE.md`'s verify-contract list lacks `data-model:check` and `coverage:ratchet` | **Already fixed** on this tree (brief) — re-read, both are listed |
+
+**Siblings fixed beyond the list (rule 83)**: technical/13:13 (*"CHANGELOG via release-please"*) and technical/README.md:9 (*"release-please"*, *"two Docker images"*, *"a `local` profile"* — five images, and the local mode is the `compose.local.yml` override).
+
+**Q37 measured, not assumed.** `evaluateCommand` over the Implementation lists (a scratch script, deleted): **block** — `rm -rf /`, `git branch -D main`, `git push --force …`, `git push -f`, `git push origin agentic/x -f`, `… --force-with-lease`, `… --delete`, `git push -d …`, `git push origin :main`, `git push origin +agentic/x:main`, and `curl`/`wget` piped to `sh`, `bash`, `/bin/sh`, with no spaces and with `|&`; **ask** — `rm -fr /`, `rm -r -f /`, `git branch --delete --force main`, `git branch -d main`, `git push origin agentic/foo:main`. So the product text describes what the code does. Blocking `rm -fr /` too is the founder's call, not this row's.
+
+**Assumptions.**
+- A closed question moved to the Decision log keeps its whole text and gains one line saying why it moved. The Decision log's rows only summarise, so the reasoning would be lost otherwise.
+- technical/12 still lists no `DiscoveryDraft` data. I did **not** add it: `discoveryDraftDataSchema`'s docblock says *"technical/12 does not list its `data` fields"*, and a docs-only row that fixed the page would make that comment false.
+
+**Discovered work** (for the refiner; no numbers claimed).
+- **A shadow run's checkout base can silently fall back to the default branch.** `checkoutRefOf` hands the workspace a merge-base **commit** for a shadow task, and the clone runs `git checkout "$B" || git checkout -b "$B"`. If the commit is missing from the mirror, the second half makes a branch *named* after the sha at the default branch's head, so the run starts on today's tree. Q82 (a) says that case should be refused. Read off the tree, not run.
+- technical/12 and `discoveryDraftDataSchema`'s docblock: list the artifact's `data` and update the comment in one change.
+- `scripts/verify-targets.ts:18` says the groups are *"static checks, the compiler, the test run"*. It is historically worded and has no bundle group. This row was not allowed to touch it.
+- technical/15 still calls M4 the current milestone (*"Deliver the current milestone (M4 …)"*, *"The milestone tables … (M1–M4)"*).

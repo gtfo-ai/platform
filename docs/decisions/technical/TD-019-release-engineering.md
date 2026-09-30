@@ -38,3 +38,12 @@ release-please v5 maintains a release PR (human merges) and tags `vX.Y.Z`; commi
 > the workflows that remain. Recorded here before the workflow changes, because docs win over code.
 
 **Amendment (WP-71, 2026-09-27): what every published tag means.** `sha-<7>` — the manifest list built from that commit, published for every ref but a pull request. `edge` and `latest` — the newest push to `main`, published from `refs/heads/main` only. `X.Y.Z`, `X.Y`, `X` — once the repository variable `RELEASE_VERSIONING` is `enabled`, a copy, **by digest**, of the manifest list the push that cut version `X.Y.Z` built and attested — nothing is copied unless `sha-<7>` still points at that digest, and no release is cut unless the three tags read back as it, computed from the conventional commits since the previous `vX.Y.Z` tag; the `vX.Y.Z` git tag and a GitHub Release carrying the notes are created by the same run. No image is built for a version, `image.yml` has no tag trigger, and release-please with its configuration is deleted. A version tag names **the digest at the cut**: re-running a released push rebuilds `sha-<7>` (a second digest for the same source) and moves nothing else, so `X.Y.Z` keeps the first — by design, not drift.
+
+## Amendment (WP-98, 2026-09-30) — the version bump, and the title
+
+The title's *"release-please"* is historical: WP-71 deleted release-please and `release.yml`; a version is a **retag of the
+pushed build**, computed from conventional commits. The bump is `scripts/version.mjs`'s: a breaking change (`!` or a
+`BREAKING CHANGE` footer) is major, `feat` minor, `fix`/`perf`/`revert` patch, every other type nothing; **before 1.0.0 a
+breaking change is minor** (the retired `bump-minor-pre-major`, kept so 1.0 is a decision rather than an exclamation mark —
+a departure from Q96's *"`!` → major"* the founder may reverse in one line); the first version is `0.1.0`; a shallow clone
+is refused.

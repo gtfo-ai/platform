@@ -4,7 +4,7 @@
 
 ## Repository layout (CI-relevant)
 ```
-.github/workflows/  ci.yml integration.yml evals.yml nightly-llm.yml image.yml base-image.yml release.yml codeql.yml secrets-scan.yml mutation.yml dco.yml   (as designed; as built: ci.yml image.yml base-image.yml — the table below says where each of the others went)
+.github/workflows/  ci.yml integration.yml evals.yml nightly-llm.yml image.yml base-image.yml release.yml codeql.yml secrets-scan.yml mutation.yml dco.yml   (as designed; as built: ci.yml image.yml base-image.yml property-exploration.yml — the table below says where each of the others went, and the fourth was added at WP-97)
 .github/ISSUE_TEMPLATE/  bug.yml feature.yml integration-request.yml config.yml ; PULL_REQUEST_TEMPLATE.md ; CODEOWNERS ; dependabot.yml (security only)
 renovate.json lefthook.yml commitlint.config.js .editorconfig .gitleaks.toml
 docker/base.Dockerfile docker/app.Dockerfile compose.yml compose.local.yml .env.example
@@ -19,7 +19,8 @@ THIRD_PARTY_NOTICES.md LICENSE CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md
 | `evals.yml` | as designed | **not built — WP-33**, blocked on a model credential (`pnpm eval` says so and exits 1). A release cut without it ships prompts no tier has measured against a model, which `scripts/changelog.mjs` states in the release notes *because* this file is absent |
 | `nightly-llm.yml` | as designed | **not built — WP-33**, same blocker, same sentence in the release notes |
 | `image.yml` | `push: main`, `pull_request` (build only), `workflow_dispatch` — **no `push: tags`** since WP-71 | native amd64 + arm64 runners, manifest merge; provenance attestation, **no SBOM** (WP-22 amendment); size check per image. **What every published tag means** (TD-019's amendment of 2026-09-16 and WP-71): `sha-<7>` — the manifest list built from that commit, on every ref but a pull request; `edge` and `latest` — the newest push to `main`, published from `refs/heads/main` only (a dispatch on any other ref publishes `sha-<7>` alone); `X.Y.Z`, `X.Y`, `X` — **once `RELEASE_VERSIONING` is `enabled`**, a copy of the manifest list the push that cut version `X.Y.Z` built and attested, made by the `release` job with `imagetools create` **from that digest** (handed over by the `merge` legs as artifacts; nothing is copied unless every `sha-<7>` still points at it, and no release is cut unless all three tags read back as it), so a version is never built and carries that build's attestation. The version is computed by the `version` job (`scripts/version.mjs`) from the conventional commits since the last `vX.Y.Z` tag, and the same job's `vX.Y.Z` git tag and GitHub Release (body: `pnpm changelog --release-notes`) are created with `GITHUB_TOKEN`. `latest` has **one** definition: the tag arm that also published it on a `v*` tag is gone with the trigger that reached it |
-| `base-image.yml` | weekly, `workflow_dispatch`, paths `docker/base.Dockerfile` | rebuild base with pinned CLIs |
+| `base-image.yml` | weekly, `workflow_dispatch`, paths `docker/base.Dockerfile`, `docker/runtime.Dockerfile`, `scripts/build-images.mjs` | rebuild base with pinned CLIs |
+| `property-exploration.yml` | weekly, `workflow_dispatch` | **added at WP-97** (not in the design above): every fast-check property file on a **fresh** seed (`scripts/property-exploration.mjs`), printing the seed and the command that replays it, because the gate runs every property on one fixed seed (`scripts/property-seed.mjs`) so the coverage ratchet does not flap. Read-only token, no secret; **not a required check and never a pull-request gate** (technical/10 § Levels, *Property seeds*) |
 | ~~`codeql.yml`~~ | — | **a setting, not a file** (WP-71): TD-017's "CodeQL default setup" is enabled in the repository's security settings and writes no workflow, so it is recorded where the ruleset is — `CONTRIBUTING.md` § Repository settings — for an administrator to apply. Until one does, this build has **no SAST** |
 | ~~`secrets-scan.yml`~~ | — | **absorbed**: the `secret scan` job of `ci.yml`, gitleaks over the full history. trufflehog is not run |
 | ~~`release.yml`~~ | — | **deleted at WP-71**, with `release-please-config.json` and `.release-please-manifest.json`. It ran release-please v5 (built at WP-42), was retired to a manual dispatch by TD-019's amendment of 2026-09-16 because it was red on every push for a repository setting nobody intended to change (Q90), and was deleted when versions came back as a **retag** in `image.yml`: keeping it would have kept a second route to a version tag, one that rebuilt the images on the tag ref. The WP-42 amendment below describes it as history |
@@ -33,7 +34,7 @@ configured as a ruleset on `main`; the list of checks an administrator applies i
 `CONTRIBUTING.md` § Branch protection and is held to `ci.yml`'s job names in both directions by the
 same test.
 
-**Of the eleven rows above, three workflows exist** (`ci.yml`, `image.yml`, `base-image.yml`). Three
+**Of the twelve rows above, four workflows exist** (`ci.yml`, `image.yml`, `base-image.yml`, and `property-exploration.yml`, the one row the design did not have). Three
 were absorbed into `ci.yml` as jobs, `release.yml` was built and then deleted, and `codeql.yml` is a
 setting rather than a file. `evals.yml` and `nightly-llm.yml` are WP-33's and blocked on a human
 credential; `mutation.yml` is a plan row of its own (WP-71's notes).

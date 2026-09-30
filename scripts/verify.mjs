@@ -2,14 +2,16 @@
 /**
  * Verification script contract — docs/technical/14-orchestration-protocol.md.
  *
- *   pnpm run -s verify              lint + typecheck + unit + contract
+ *   pnpm run -s verify              static checks + typecheck + bundle budget + unit + contract
+ *                                   + process + coverage ratchet
  *   pnpm run -s verify:integration  Testcontainers / PGlite suites
  *   pnpm run -s verify:e2e          fake-Claude application e2e
  *   pnpm run -s verify:ui           web app suites
  *
- * `verify` is the concatenation of the three groups CI runs as its own jobs — `verify:static`,
- * `verify:types`, `verify:tests` — which are targets here too and can be run on their own. That is
- * so the workflow does not carry a second copy of the list; see `verify-targets.ts`.
+ * `verify` is the concatenation of the four groups CI runs as its own jobs — `verify:static`,
+ * `verify:types`, `verify:bundle`, `verify:tests` — which are targets here too and can be run on
+ * their own. That is so the workflow does not carry a second copy of the list; see
+ * `verify-targets.ts`, which has every step.
  *
  * Every target prints exactly one line on **stdout**, `PASS: <target>` or `FAIL: <target>`,
  * and exits non-zero on failure. The steps a target runs may print their own PASS/FAIL lines

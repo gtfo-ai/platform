@@ -11,3 +11,9 @@ As specified in technical/10: Vitest 5 with projects; PGlite for repository test
 
 *"Overall 80"* is withdrawn. Vitest counts every included file into a global threshold even when a ring's own glob already holds it, so the global figure averaged the rings that carry coverage with the ones that owe it, and by session 8 it sat within a few branches of 80 — a gate a single test's addition or removal could flip. The budget is now **per ring** (`COVERAGE_RINGS` in `vitest.config.ts`, the table in technical/10): the domain keeps 90/85 (lines/branches as before), every ring that met the bar is held at 80 or better on its own, and a ring below it (`apps/server`, `packages/infrastructure` outside the runlet, `packages/prompts`) is held at a floor near its measured value with **what it owes** stated beside the number, which `scripts/coverage-budget.test.ts` requires. That census also holds every counted file in exactly one ring, forbids a global threshold, and pins the exclusion list. **Residual, stated:** the floors of the two debt rings admit a new untested module of roughly 124 (server) and 87 (infrastructure) branches, where the old global number admitted about three — nothing ratchets them upward yet (PROGRESS backlog 254, unowned for M5).
 
+## Amendment (WP-98, 2026-09-30) — the ratchet exists
+
+The WP-70 amendment's *"nothing ratchets them upward yet (PROGRESS backlog 254, unowned for M5)"* is superseded: since WP-97
+`coverage:ratchet` (the second step of `verify:tests`, run in CI's unit job) fails a ring below its floor, or one whose floor
+sits below `min(bar, floor(measured − slack))`, so a gain must be pinned in the same change (backlog 254, closed). The floors
+are WP-70's, re-pinned where the ratchet's first reading found them earned (technical/10).

@@ -22,3 +22,10 @@ The shim removes every uncertainty that made this a spike: no dependence on Dock
 - Runner restart: the control connection drops → shim kills the CLI → the run is marked `interrupted`; the pipeline resumes the stage via SDK `resume` on the session store with a "you were interrupted" note (technical/04).
 - The `ctl` volume holds only sockets and per-run scratch; it is tmpfs-backed where the driver allows and cleaned per run.
 - Security review item: the shim accepts one connection, requires the per-run token in `hello`, runs the child as uid 1000, never exposes a TCP port in Docker mode.
+
+## Amendment (WP-98, 2026-09-30) — two sockets, not one (Q50)
+
+§3's *"the git credential helper … talks to the shim over the same Unix socket (`cred.get`)"* describes one socket where two
+ship: the helper talks to the shim over a **second** Unix socket on the same control volume, `/ctl/cred.sock` (`cred.get` and
+`ping` only, unauthenticated on purpose — Q50), while `/ctl/ctl.sock` stays §1's one authenticated connection; and the token it
+answers with is the one **the runner minted for this run** (TD-028, WP-76), not one from a launcher broker.

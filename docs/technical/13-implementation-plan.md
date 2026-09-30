@@ -10,7 +10,7 @@ See `14-orchestration-protocol.md` (orchestrator loop, fresh-context implementer
 2. Follow the code structure in technical/01; dependency rule `domain ← application ← infrastructure ← apps`.
 3. Tests per technical/10 are part of each WP's definition of done; contract tests for every integration port; golden fixtures for SDK streams.
 4. No secrets anywhere; `.env.example` maintained with every new variable; gitleaks pre-commit.
-5. Conventional commits with `Signed-off-by`; small MRs; each WP ends with docs updates (CHANGELOG via release-please, ADR if a decision changed).
+5. Conventional commits with `Signed-off-by`; small MRs; each WP ends with docs updates (ADR if a decision changed; the changelog is the GitHub Release body `pnpm changelog --release-notes` renders from the conventional commits since WP-71, never a committed file).
 6. Install `docs/technical/CLAUDE.md.proposed` as `CLAUDE.md` at repository root in WP-00 and keep it under 200 lines.
 
 ## Milestone M1 — the loop

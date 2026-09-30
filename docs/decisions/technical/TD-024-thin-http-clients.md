@@ -9,3 +9,10 @@ GitLab, Jira (Cloud now, Data Center later), Sentry and Loki get small typed cli
 
 ## Rationale
 No official JS clients for GitLab/Sentry/Loki; gitbeaker is stale and lacks thread resolution; jira.js is Cloud-only and heavy; thin clients keep the image small, support self-managed/DC, and are fully covered by contract tests with recorded fixtures.
+
+## Amendment (WP-98, 2026-09-30) — what shipped
+
+The title and the first paragraph describe the plan, not the build: every provider — **Slack included** — is a handwritten
+thin client on native `fetch`; `ky` is used in the Jira client only, with retries **off** (`retry: 0` — a retry is the
+executor's decision, not the client's), and **no Slack Bolt** is a dependency (Q42). Webhook verification is handwritten, as
+decided.
