@@ -307,6 +307,38 @@ export const runWorkspaceProviderContractSuite = (
       });
     });
 
+    /**
+     * TD-028 decision 12 (WP-103, PROGRESS backlog 286): the launcher lists what it labelled and
+     * destroys by run id alone, because an orphan is exactly a run whose handle nobody holds. Both
+     * implementations answer the listing from their **record of objects** — the daemon, for Docker
+     * — never from a caller's handle, and both stop before they remove.
+     */
+    it('lists a created run, destroys it by run id alone, and then no longer lists it', async () => {
+      await withRun(async ({ provider, handle }) => {
+        const listed = await provider.listLabelledRuns();
+        const entry = listed.find((run) => run.runId === handle.runId);
+        expect(entry?.running).toBe(true);
+        expect(Number.isFinite(Date.parse(entry?.createdAt ?? ''))).toBe(true);
+        await expect(provider.destroyRun(handle.runId)).resolves.toEqual({ found: true });
+        expect(context.containerOps(handle)).toEqual(['stop', 'remove']);
+        await expect(provider.attach(handle)).rejects.toBeInstanceOf(WorkspaceError);
+        expect((await provider.listLabelledRuns()).map((run) => run.runId)).not.toContain(
+          handle.runId,
+        );
+        // Idempotent (decision 4): nothing left is a success, never a second stop.
+        await expect(provider.destroyRun(handle.runId)).resolves.toEqual({ found: false });
+        expect(context.containerOps(handle)).toEqual(['stop', 'remove']);
+      });
+    });
+
+    it('refuses to destroy by an id that is not a uuid', async () => {
+      await withRun(async ({ provider }) => {
+        await expect(provider.destroyRun('not-a-run')).rejects.toMatchObject({
+          code: 'invalid_spec',
+        });
+      });
+    });
+
     it('keeps the workspace volume when the run is destroyed, because retention owns it', async () => {
       await withRun(async ({ provider, handle, tarballPath }) => {
         await provider.destroy(handle);

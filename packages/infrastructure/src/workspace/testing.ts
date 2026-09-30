@@ -40,6 +40,12 @@ export interface FakeContainer {
   exitCode: number;
   logs: string;
   networks: string[];
+  /**
+   * The daemon's `Created`, in **seconds** since the epoch, as `GET /containers/json` answers it
+   * (WP-103: the listing verb dates a run by its oldest container). Absent is "the daemon did not
+   * say", which the listing reads as the label's own `created_at`.
+   */
+  created?: number;
 }
 
 interface FakeCreateBody {
@@ -87,6 +93,8 @@ export interface FakeDaemonOptions {
    * all); otherwise the message is wrapped the way the daemon wraps its errors.
    */
   readonly fail?: Map<string, { status: number; message: string; raw?: string }>;
+  /** Epoch milliseconds the double stamps a created container with (WP-103). Default: `Date.now`. */
+  readonly now?: () => number;
 }
 
 export interface RecordedRequest {
@@ -123,6 +131,10 @@ export class FakeDockerDaemon {
 
   constructor(options: FakeDaemonOptions = {}) {
     this.#options = options;
+  }
+
+  #now(): number {
+    return this.#options.now?.() ?? Date.now();
   }
 
   get socketPath(): string {
@@ -302,6 +314,7 @@ export class FakeDockerDaemon {
         exitCode: 0,
         logs: '',
         networks: [create.HostConfig?.NetworkMode ?? 'none'],
+        created: Math.floor(this.#now() / 1000),
       };
       this.containers.set(id, container);
       this.history.push(container);
@@ -408,6 +421,7 @@ export class FakeDockerDaemon {
             Names: [`/${container.name}`],
             State: container.state,
             Labels: container.body.Labels ?? {},
+            ...(container.created === undefined ? {} : { Created: container.created }),
           })),
       );
       return;

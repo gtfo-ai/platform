@@ -5,7 +5,8 @@
  * static mount of the whole `ctl` volume and opens the per-run Unix socket itself, so no stdio, no
  * `stdin`/`stdout` and no credential-helper round trip crosses HTTP. The **control plane** is this:
  * a small request/response surface for the operations that are request/response — create a
- * workspace, end a run, report health.
+ * workspace, end a run, report health, and since WP-103 list the runs this instance labelled and
+ * destroy one by its id (TD-028 decision 12).
  *
  * ## It lives here rather than in `apps/launcher` because both ends must read the same bytes
  *
@@ -43,7 +44,11 @@ import type {
   WorkspaceExport,
   WorkspaceHandle,
 } from '@platform/application';
-import { existingProtectedPathsSchema, workspaceSpecSchema } from '@platform/application';
+import {
+  existingProtectedPathsSchema,
+  MAX_LABELLED_RUNS,
+  workspaceSpecSchema,
+} from '@platform/application';
 import { isoDateTimeSchema, nonEmptyStringSchema } from '@platform/contracts';
 import * as z from 'zod';
 
@@ -53,6 +58,12 @@ export const CONTROL_PLANE_PATHS = {
   runs: '/v1/runs',
   /** `POST /v1/runs/<run-id>/end` — export, revoke, stop and remove. */
   end: 'end',
+  /**
+   * `POST /v1/runs/<run-id>/destroy` — remove a run's objects **by label**, with no handle (TD-028
+   * decision 12, WP-103). `GET /v1/runs` is its read half: the run ids this instance labelled a
+   * container for, read off the daemon.
+   */
+  destroy: 'destroy',
   /** `GET` — liveness plus what this launcher is configured with. Unauthenticated is refused. */
   health: '/v1/health',
 } as const;
@@ -238,6 +249,13 @@ export const endRunRequestSchema = z.strictObject({
 });
 export type EndRunRequestPayload = z.infer<typeof endRunRequestSchema>;
 
+/**
+ * `POST /v1/runs/<run-id>/destroy` — an empty object, and strict: the run id is the path, and a
+ * handle is exactly what the caller of this verb does not have (TD-028 decision 12).
+ */
+export const destroyRunRequestSchema = z.strictObject({});
+export type DestroyRunRequestPayload = z.infer<typeof destroyRunRequestSchema>;
+
 // ── Responses ────────────────────────────────────────────────────────────────
 
 export const createRunResponseSchema = z.strictObject({
@@ -276,6 +294,28 @@ export const endRunResponseSchema = z.strictObject({
   failures: z.array(z.string().max(2_000)).max(16),
 });
 export type EndRunResponse = z.infer<typeof endRunResponseSchema>;
+
+/**
+ * `GET /v1/runs` (WP-103, TD-028 decision 12): the run ids this launcher's **instance** labelled a
+ * container for, read off the daemon — never off the idempotency map, which a restart empties and
+ * which is the reason orphans exist at all. Bounded by {@link MAX_LABELLED_RUNS}.
+ */
+export const listRunsResponseSchema = z.strictObject({
+  runs: z
+    .array(
+      z.strictObject({
+        runId: nonEmptyStringSchema.max(64),
+        createdAt: isoDateTimeSchema,
+        running: z.boolean(),
+      }),
+    )
+    .max(MAX_LABELLED_RUNS),
+});
+export type ListRunsResponse = z.infer<typeof listRunsResponseSchema>;
+
+/** `found: false` when nothing carried the run's label — a repeat, and still a success. */
+export const destroyRunResponseSchema = z.strictObject({ found: z.boolean() });
+export type DestroyRunResponse = z.infer<typeof destroyRunResponseSchema>;
 
 export const healthResponseSchema = z.strictObject({
   status: z.literal('ok'),

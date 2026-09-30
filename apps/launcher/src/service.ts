@@ -13,8 +13,9 @@
  * fails. It cannot discharge it for a *sequence* of calls, because between `create` returning and
  * the caller storing the handle the only reference to a running agent is a local variable in this
  * file. Round 1 proved the point: `attach` threw, the `catch` revoked the credential and rethrew,
- * and the container ran on with nothing able to name it (nothing reaps orphans — `purgeExpired`
- * removes volumes). So `startRun`'s failure path destroys the workspace it created, and
+ * and the container ran on with nothing able to name it (nothing reaped orphans then — `purgeExpired`
+ * removes volumes; since WP-103 the runner's orphan pass would remove it once its run ended, which is
+ * a backstop and not this guarantee). So `startRun`'s failure path destroys the workspace it created, and
  * `service.test.ts` › "leaves nothing running whichever step fails, for every step it performs"
  * enumerates the steps rather than naming one.
  *
@@ -34,7 +35,8 @@
  * This paragraph used to read *"what is deliberately not here: a network transport … there is no
  * second process to talk to until WP-22 has a compose file"*. WP-22 shipped that file and TD-028
  * decided the transport, so `control-plane.ts` is now the HTTP surface in front of **this** object:
- * five verbs on a run id, authenticated on every request, idempotent on the run id.
+ * five verbs on a run id — seven since WP-103 added the listing and destroy-by-id the runner's
+ * orphan pass uses (TD-028 decision 12) — authenticated on every request, idempotent on the run id.
  *
  * What is still deliberately not here is any knowledge of it. This class takes a
  * `WorkspaceProvider` and a broker and knows nothing about a listener, which is what keeps Q52's
@@ -45,6 +47,7 @@
 import path from 'node:path';
 import type {
   ExistingProtectedPaths,
+  LabelledRunWorkspace,
   Logger,
   PurgeReport,
   RunnerClock,
@@ -304,6 +307,25 @@ export class LauncherService {
       await provider.destroy(handle);
     }
     return { exported, keepUntil, failures };
+  }
+
+  /**
+   * The run ids this instance labelled a container for, read off the daemon (TD-028 decision 12,
+   * WP-103). The launcher lists; it does not decide — which of them is an orphan is the runner's
+   * question, because only the runner reads `runs`.
+   */
+  async listRuns(): Promise<readonly LabelledRunWorkspace[]> {
+    return this.#options.provider.listLabelledRuns();
+  }
+
+  /**
+   * Destroys a run by its id alone — the reaper's verb (WP-103). The credential is forgotten first,
+   * as `endRun` forgets it, so a run that is being reaped can no longer be handed one; nothing is
+   * exported, because a run nobody owns has nobody to hand its work to.
+   */
+  async destroyRun(runId: string): Promise<{ readonly found: boolean }> {
+    this.#options.broker.forget(runId);
+    return this.#options.provider.destroyRun(runId);
   }
 
   /**

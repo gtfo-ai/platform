@@ -45,6 +45,7 @@ import { connect } from 'node:net';
 import path from 'node:path';
 import type {
   ExistingProtectedPaths,
+  LabelledRunWorkspace,
   PurgedWorkspace,
   PurgeReport,
   WorkspaceAttachment,
@@ -56,7 +57,12 @@ import type {
   WorkspaceRepo,
   WorkspaceSpec,
 } from '@platform/application';
-import { WORKSPACE_LABELS, WorkspaceError, workspaceSpecSchema } from '@platform/application';
+import {
+  MAX_LABELLED_RUNS,
+  WORKSPACE_LABELS,
+  WorkspaceError,
+  workspaceSpecSchema,
+} from '@platform/application';
 import { renderEgressConfig } from './egress.js';
 import { type DockerCreateBody, runContainerCreateBody } from './hardening.js';
 import {
@@ -85,6 +91,8 @@ interface FakeRun {
   running: boolean;
   destroyed: boolean;
   volumeRemoved: boolean;
+  /** When `create` made it, on the injected clock — what the listing verb dates a run by (WP-103). */
+  readonly createdAt: string;
   /**
    * The retention hold, as a **separate** record (WP-27).
    *
@@ -296,6 +304,7 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
       running: true,
       destroyed: false,
       volumeRemoved: false,
+      createdAt: this.#now().toISOString(),
       hold: null,
     });
     this.#record('create', spec.runId);
@@ -356,6 +365,30 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
     this.#record('stop', handle.runId);
     run.destroyed = true;
     this.#record('remove', handle.runId);
+  }
+
+  /**
+   * The runs whose container has not been removed (WP-103). The fake has one instance, so the
+   * instance filter the Docker provider applies has nothing to separate here; what the shared suite
+   * asks of both is that a created run is listed and a destroyed one is not.
+   */
+  async listLabelledRuns(): Promise<readonly LabelledRunWorkspace[]> {
+    return [...this.#runs.values()]
+      .filter((run) => !run.destroyed)
+      .map((run) => ({ runId: run.spec.runId, createdAt: run.createdAt, running: run.running }))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .slice(0, MAX_LABELLED_RUNS);
+  }
+
+  /** `destroy` by run id, recording the same stop-then-remove; `found: false` for nothing left. */
+  async destroyRun(runId: string): Promise<{ readonly found: boolean }> {
+    assertRunId(runId);
+    const run = this.#runs.get(runId);
+    if (run === undefined || run.destroyed) {
+      return { found: false };
+    }
+    await this.destroy(run.handle);
+    return { found: true };
   }
 
   async export(

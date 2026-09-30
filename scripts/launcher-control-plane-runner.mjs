@@ -33,7 +33,7 @@ const CONTROL_ROOT = '/run/agentic/ctl';
 /** The fake CLI, inside the run container, under the read-only checkout mount. */
 const FAKE_CLI = '/repo/test/fixtures/runlet/fake-claude-cli';
 
-const { noSecretsRedactor } = await import(
+const { noSecretsRedactor, runOrphanWorkspaceReap } = await import(
   new URL('../packages/application/src/index.ts', import.meta.url).href
 );
 const { launcher: launcherAdapters, runner: runnerAdapters } = await import(
@@ -50,7 +50,21 @@ const logger = {
 
 const baseUrl = required('CHECK_LAUNCHER_URL');
 const token = required('CHECK_LAUNCHER_TOKEN');
-const real = launcherAdapters.createLauncherControlClient({ baseUrl, token, logger });
+/**
+ * `CHECK_CLIENT_TIMEOUT_MS` (WP-103, backlog 286 (b)): the client's outer bound, shortened so a
+ * create outlives it with the launcher alive — the shape a first mirror fetch of a large repository
+ * takes against the production default of ten minutes. Absent is the production default.
+ */
+const clientTimeoutMs =
+  process.env['CHECK_CLIENT_TIMEOUT_MS'] === undefined
+    ? undefined
+    : Number(process.env['CHECK_CLIENT_TIMEOUT_MS']);
+const real = launcherAdapters.createLauncherControlClient({
+  baseUrl,
+  token,
+  logger,
+  ...(clientTimeoutMs === undefined ? {} : { timeoutMs: clientTimeoutMs }),
+});
 
 /** Every create response, so the check can read what actually crossed the control plane. */
 const creates = [];
@@ -179,9 +193,91 @@ if (PHASE === 'replay-create' || PHASE === 'replay-retry') {
   } catch (error) {
     phase.errorCode = error?.code ?? null;
     phase.errorMessage = String(error?.message ?? error).slice(0, 600);
+    // WP-103: what `fetch failed` was underneath — a reset, a closed socket — for 286 (a).
+    const inner = error?.cause?.cause;
+    phase.errorCause = inner === undefined ? null : `${inner?.code ?? ''} ${inner?.message ?? ''}`;
   }
   phase.tokenAfter = tokenDigest(runId);
   process.stdout.write(`${JSON.stringify(phase)}\n`);
+  process.exit(0);
+}
+
+/**
+ * WP-103, backlog 286 (b): the stage executor's three start attempts against a create that outlives
+ * the client's timeout. Each attempt is a **new run id** — `recordUnstarted` fails the run row and
+ * the stage is re-enqueued, so the next attempt inserts a new `runs` row (`stage-executor.ts`,
+ * `MAX_RUN_START_ATTEMPTS`) — which is what this reproduces: one provision per id, in order, each
+ * with the shortened client. What each attempt was told is printed; what the daemon holds afterwards
+ * is the host's question.
+ */
+if (PHASE === 'timeout-attempts') {
+  const runIds = required('CHECK_ATTEMPT_RUN_IDS').split(',');
+  const attempts = [];
+  for (const runId of runIds) {
+    const started = Date.now();
+    const attempt = { runId, ok: false };
+    try {
+      const workspace = await provisioner.provision(specFor(runId));
+      attempt.ok = true;
+      // Released, so a create that beat the timeout is not counted as an orphan it is not.
+      await workspace.release({ kind: 'not_started' });
+    } catch (error) {
+      attempt.errorCode = error?.code ?? null;
+      attempt.errorMessage = String(error?.message ?? error).slice(0, 300);
+    }
+    attempt.ms = Date.now() - started;
+    attempts.push(attempt);
+  }
+  process.stdout.write(`${JSON.stringify({ phase: PHASE, attempts, notes })}\n`);
+  process.exit(0);
+}
+
+/**
+ * WP-103 (TD-028 decision 12): **the production pass**, `runOrphanWorkspaceReap`, against this
+ * launcher — its real read verb and its real destroy — with the one piece a check has no database
+ * for, the `runs` rows, given as `CHECK_REAP_STATES` (`<run-id>=<status>` pairs; a terminal one
+ * ended an hour ago, an id not named has no row). `CHECK_REAP_UNKNOWN_GRACE_MS` shortens the
+ * unknown-run grace so the check need not wait an hour.
+ */
+if (PHASE === 'reap') {
+  const now = Date.now();
+  const states = (process.env['CHECK_REAP_STATES'] ?? '')
+    .split(',')
+    .filter((pair) => pair.includes('='))
+    .map((pair) => {
+      const [runId, status] = pair.split('=');
+      return { runId, status, endedAt: new Date(now - 3_600_000).toISOString() };
+    });
+  const destroyed = [];
+  const listedBefore = (await real.listRuns()).runs.map((run) => run.runId);
+  const report = await runOrphanWorkspaceReap({
+    inventory: {
+      list: async () => (await real.listRuns()).runs,
+      destroy: async (runId) => {
+        const answer = await real.destroyRun(runId);
+        destroyed.push({ runId, found: answer.found });
+        return answer;
+      },
+    },
+    store: {
+      runStates: async (_tx, runIds) =>
+        states
+          .filter((row) => runIds.includes(row.runId))
+          .map((row) => ({
+            ...row,
+            endedAt: ['created', 'starting', 'running'].includes(row.status) ? null : row.endedAt,
+          })),
+    },
+    unitOfWork: { transaction: async (fn) => fn({ tx: null }) },
+    clock: { now: () => now },
+    graceMs: 60_000,
+    unknownGraceMs: Number(process.env['CHECK_REAP_UNKNOWN_GRACE_MS'] ?? 3_600_000),
+    logger,
+  });
+  const listedAfter = (await real.listRuns()).runs.map((run) => run.runId);
+  process.stdout.write(
+    `${JSON.stringify({ phase: PHASE, listedBefore, destroyed, report, listedAfter, notes })}\n`,
+  );
   process.exit(0);
 }
 

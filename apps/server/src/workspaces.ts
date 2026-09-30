@@ -38,9 +38,11 @@
  */
 import type {
   Logger,
+  OrphanWorkspaceReaper,
   PipelineIntegrationsPort,
   RunScopedSecrets,
   RunSpec,
+  UnitOfWork,
 } from '@platform/application';
 import {
   integrationsForProject,
@@ -50,14 +52,17 @@ import {
   runCredentialRevocations,
   runCredentialWrites,
   runGitCredentialSecretName,
+  startOrphanWorkspaceReaper,
 } from '@platform/application';
 import { taskModeSchema } from '@platform/contracts';
 import {
   launcher as launcherAdapters,
+  recovery as recoveryAdapters,
   runner as runnerAdapters,
   workspace as workspaceAdapters,
 } from '@platform/infrastructure';
 import type pg from 'pg';
+import type { Metrics } from './metrics.js';
 import {
   createProjectIntegrationsPort,
   type IntegrationStack,
@@ -283,4 +288,63 @@ export const composeRunWorkspaces = (
     clock: runnerAdapters.systemClock,
     logger: options.logger,
   });
+};
+
+export interface ComposeOrphanWorkspaceReaperOptions {
+  readonly launcherUrl: string | null;
+  readonly launcherToken: string | null;
+  readonly unitOfWork: UnitOfWork;
+  /**
+   * `APP_INTAKE_RECONCILE_INTERVAL_MS` — the recovery pass's interval and grace, reused rather than
+   * given a knob of its own: one interval for every recovery row (`recovery/stranded.ts`), and `0`
+   * switches this off with the rest.
+   */
+  readonly intervalMs: number;
+  readonly metrics: Pick<Metrics, 'orphanRunWorkspaces'>;
+  readonly logger: Logger;
+}
+
+/**
+ * The runner-side reaper of TD-028 decision 12 (WP-103, PROGRESS backlog 286), or `null` when this
+ * process has no launcher to ask — it is composed exactly where {@link composeRunWorkspaces}
+ * composes a provisioner, because the launcher client is the thing it needs and only a process
+ * configured to run agents holds one. A half configuration was already refused there.
+ *
+ * Its own client rather than the provisioner's: the provisioner exposes no client, and a second
+ * `fetch` wrapper over the same URL and token costs nothing and keeps the provisioner's surface what
+ * it was. `packages/application/src/recovery/orphan-workspaces.ts` carries the decision.
+ */
+export const composeOrphanWorkspaceReaper = (
+  options: ComposeOrphanWorkspaceReaperOptions,
+): OrphanWorkspaceReaper | null => {
+  if (options.launcherUrl === null || options.launcherToken === null) {
+    return null;
+  }
+  const client = launcherAdapters.createLauncherControlClient({
+    baseUrl: options.launcherUrl,
+    token: options.launcherToken,
+    logger: options.logger,
+  });
+  const reaper = startOrphanWorkspaceReaper({
+    inventory: {
+      list: async () => (await client.listRuns()).runs,
+      destroy: async (runId) => client.destroyRun(runId),
+    },
+    store: recoveryAdapters.createPostgresOrphanWorkspaceRunStore(),
+    unitOfWork: options.unitOfWork,
+    clock: runnerAdapters.systemClock,
+    intervalMs: options.intervalMs,
+    metrics: {
+      reaped: (reason) => options.metrics.orphanRunWorkspaces.inc({ outcome: `removed_${reason}` }),
+      failed: () => options.metrics.orphanRunWorkspaces.inc({ outcome: 'remove_failed' }),
+    },
+    logger: options.logger,
+  });
+  options.logger.info(
+    { interval_ms: options.intervalMs, armed: reaper !== null },
+    reaper === null
+      ? 'the orphaned-workspace pass is off: APP_INTAKE_RECONCILE_INTERVAL_MS is 0, so a run workspace no process owns is not removed (PROGRESS backlog 286)'
+      : 'the orphaned-workspace pass is armed: run workspaces the launcher labelled for a run that has ended, or for no run at all, are removed (WP-103)',
+  );
+  return reaper;
 };

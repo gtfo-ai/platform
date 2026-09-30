@@ -15,7 +15,9 @@
  *  3. **Every operation is idempotent on the run id** (decision 4). At-least-once delivery is this
  *     platform's assumption everywhere else, and an operation that starts a container must not be
  *     the exception: a `create` for a run that already has a handle answers the **stored** handle,
- *     and a create that is still in flight is *awaited* rather than started again.
+ *     and a create that is still in flight is *awaited* rather than started again. A `destroy` of a
+ *     run with nothing left answers `found: false` and succeeds. **The bound of that guarantee is
+ *     one launcher process** — see the next two sections for what it costs and what reaps it.
  *  4. **Failure is typed** (decision 7): a `WorkspaceError` keeps its code across the wire, so the
  *     runner's `classifyProvisionFailure` decides retryability from the same four values it always
  *     has and the stage executor's ending is unchanged (Q59).
@@ -47,11 +49,35 @@
  * alarming one (*"a replayed create can overwrite the live run's shim token and then fail"*).
  *
  * What the measurement does **not** make better is the first run's container: it keeps running,
- * and no launcher holds a handle for it. **Nothing bounds that container** — the lease sweep ends
- * the *row* and WP-77's recovery revokes the run's git credential, neither stops a container, and
+ * and no launcher holds a handle for it. Until WP-103 nothing bounded it — the lease sweep ends the
+ * *row* and WP-77's recovery revokes the run's git credential, neither stops a container, and
  * `purgeExpired` removes volumes. A daemon that did not refuse the duplicate network would reach
  * `#prepare`, so the check asserts the refusal rather than assuming it survives a daemon upgrade.
- * A restart *during* a create leaves a different partial state and was not measured.
+ *
+ * ## What reaps a container nobody holds a handle for (WP-103, TD-028 decision 12)
+ *
+ * PROGRESS backlog **286** measured three producers on Docker Engine 29.8.1 before the fix was
+ * chosen: a create that outlives the runner's timeout **completes** here (three start attempts left
+ * three running run containers, sidecars, networks and control directories); a launcher stopped or
+ * killed **during** a create answers nothing and leaves the helper it was running, the network and
+ * the volume, with no run container; and an unattached shim does not exit (ten minutes, measured).
+ * Two things bound them now, and the division between them is the decision:
+ *
+ *  - **This process abandons a create whose every requester has gone** (`abandon` below): when the
+ *    create resolves and each request waiting on it closed its connection before the answer, what it
+ *    made is ended with no export. A replay still waiting keeps it. What this cannot reach is a
+ *    launcher that stops or dies during the create — a killed process runs nothing, and a stopped one
+ *    was measured to exit about three seconds after SIGTERM with the create unfinished and its close
+ *    unresolved (why it did not wait is not established) — and a create that resolves in the instant
+ *    before its socket's close arrives.
+ *  - **The runner reaps what is left** (`packages/application/src/recovery/orphan-workspaces.ts`),
+ *    because deciding that a run is over needs `runs` and this process reads no database (TD-021).
+ *    It asks the two verbs below: `GET /v1/runs`, the run ids of the containers this **instance**
+ *    labelled, read off the daemon — never off `creates`, which a restart empties — and
+ *    `POST /v1/runs/<id>/destroy`, which removes a run by label with no handle and is serialised
+ *    behind this process' own create and end of the same run. The instance is the control volume's
+ *    name (`WORKSPACE_LABELS.instance`); `DockerWorkspaceProvider.listLabelledRuns` states the two
+ *    residuals — a shared control volume is one instance, and a pre-WP-103 container is never listed.
  *
  * ## What is never logged
  *
@@ -72,6 +98,7 @@ const {
   CONTROL_PLANE_PATHS,
   CONTROL_PLANE_STATUS_BY_CODE,
   createRunRequestSchema,
+  destroyRunRequestSchema,
   endRunRequestSchema,
 } = launcherProtocol;
 
@@ -101,7 +128,27 @@ export interface ControlPlane {
 /** One run's create, as this process remembers it. */
 interface CreateRecord {
   readonly promise: Promise<CreateRunResponse>;
+  /**
+   * Every request waiting on this create — the first and any replay — and the ones among them whose
+   * connection closed before an answer was written (WP-103). When every waiter has gone, nobody will
+   * ever hold the handle, and the create is abandoned: what it made is removed.
+   */
+  readonly waiters: Set<ServerResponse>;
+  readonly gone: Set<ServerResponse>;
 }
+
+/** Remembers a waiter, and marks it gone if its connection closes before the answer is written. */
+const watch = (record: CreateRecord, response: ServerResponse): void => {
+  record.waiters.add(response);
+  response.once('close', () => {
+    if (!response.writableFinished) {
+      record.gone.add(response);
+    }
+  });
+};
+
+const everyWaiterGone = (record: CreateRecord): boolean =>
+  record.waiters.size > 0 && [...record.waiters].every((waiter) => record.gone.has(waiter));
 
 class ControlPlaneError extends Error {
   readonly code: ControlPlaneErrorCode;
@@ -202,15 +249,54 @@ const errorOf = (error: unknown): ControlPlaneError => {
 
 export const startControlPlane = async (options: ControlPlaneOptions): Promise<ControlPlane> => {
   const creates = new Map<string, CreateRecord>();
+  /** Ends in flight, by run id, so a destroy of the same run waits for them (WP-103). */
+  const ends = new Map<string, Promise<unknown>>();
   const { logger } = options;
 
-  const createRun = async (body: string): Promise<CreateRunResponse> => {
+  /**
+   * WP-103: a create whose every requester closed its connection before the answer is **abandoned**
+   * — the workspace it made is ended here, with no export, because no process will ever hold its
+   * handle. Measured before this existed (PROGRESS backlog 286 (b)): a create that outlived the
+   * runner's timeout completed, and each of a stage's three start attempts left a running run
+   * container, a sidecar, a network and a control directory with a live token.
+   *
+   * What it cannot reach, and why: **a launcher that stops or dies during the create.** A killed
+   * process runs nothing, and a stopped one is not given the time — `docker stop` measured the
+   * in-flight create interrupted, not finished, and what it left (the helper it was running, the
+   * network, the volume) belongs to no request any more. Those are the runner-side reaper's
+   * (`packages/application/src/recovery/orphan-workspaces.ts`), which lists them off the daemon.
+   */
+  const abandon = async (runId: string, created: CreateRunResponse): Promise<void> => {
+    creates.delete(runId);
+    // Registered like any end, so a destroy of the same run waits for it (WP-103 review).
+    const ending = options.service.endRun(created.handle, { export: null });
+    ends.set(runId, ending);
+    try {
+      await ending;
+      logger.warn(
+        { run_id: runId },
+        'a create request closed before its answer was written, so nobody holds this run’s handle: the workspace it made was removed (WP-103, PROGRESS backlog 286)',
+      );
+    } catch (error) {
+      logger.error(
+        { run_id: runId, err: error },
+        'a create request closed before its answer and the workspace it made could not be removed; the runner-side reaper lists it on its next pass (PROGRESS backlog 286)',
+      );
+    } finally {
+      if (ends.get(runId) === ending) {
+        ends.delete(runId);
+      }
+    }
+  };
+
+  const createRun = async (body: string, response: ServerResponse): Promise<CreateRunResponse> => {
     const request = parseBody(body, createRunRequestSchema, 'the create request');
     const spec: WorkspaceSpec = request.spec;
     const existing = creates.get(spec.runId);
     if (existing !== undefined) {
       // Awaited rather than re-started: a redelivery that arrives while the first create is still
       // cloning must not produce a second container (TD-028 decision 4).
+      watch(existing, response);
       return { ...(await existing.promise), replayed: true };
     }
     const promise = (async (): Promise<CreateRunResponse> => {
@@ -224,9 +310,15 @@ export const startControlPlane = async (options: ControlPlaneOptions): Promise<C
         replayed: false,
       };
     })();
-    creates.set(spec.runId, { promise });
+    const record: CreateRecord = { promise, waiters: new Set(), gone: new Set() };
+    watch(record, response);
+    creates.set(spec.runId, record);
     try {
-      return await promise;
+      const created = await promise;
+      if (everyWaiterGone(record)) {
+        await abandon(spec.runId, created);
+      }
+      return created;
     } catch (error) {
       // A failed create left nothing behind — `LauncherService.startRun` destroys what it made —
       // so the next attempt must be allowed to try again rather than replaying a rejection for
@@ -245,7 +337,7 @@ export const startControlPlane = async (options: ControlPlaneOptions): Promise<C
         { runId },
       );
     }
-    const ended = await options.service.endRun(request.handle, {
+    const ending = options.service.endRun(request.handle, {
       export:
         request.export === null
           ? null
@@ -258,13 +350,43 @@ export const startControlPlane = async (options: ControlPlaneOptions): Promise<C
                 : { keepUntil: request.export.keepUntil }),
             },
     });
+    ends.set(runId, ending);
+    let ended: Awaited<typeof ending>;
+    try {
+      ended = await ending;
+    } finally {
+      if (ends.get(runId) === ending) {
+        ends.delete(runId);
+      }
+    }
     // After the end, not before: a `create` that arrives while an end is in flight should meet the
     // handle it is about rather than start a second container for a run that is being torn down.
     creates.delete(runId);
     return { exported: ended.exported, keepUntil: ended.keepUntil, failures: ended.failures };
   };
 
-  const route = async (request: IncomingMessage, url: URL): Promise<unknown> => {
+  /**
+   * TD-028 decision 12's destroy (WP-103): by run id, with no handle, found by label.
+   *
+   * **Serialised behind this process' own create and end of the same run**, whose outcome it does
+   * not care about: a destroy that interleaved with a create would race the create's own objects,
+   * and one that interleaved with a take-over's export would stop the export mid-push. The reaper's
+   * grace is the first line against the second case; this is the second.
+   */
+  const destroyRun = async (runId: string, body: string): Promise<unknown> => {
+    parseBody(body, destroyRunRequestSchema, 'the destroy request');
+    await creates.get(runId)?.promise.catch(() => undefined);
+    await ends.get(runId)?.catch(() => undefined);
+    const destroyed = await options.service.destroyRun(runId);
+    creates.delete(runId);
+    return { found: destroyed.found };
+  };
+
+  const route = async (
+    request: IncomingMessage,
+    response: ServerResponse,
+    url: URL,
+  ): Promise<unknown> => {
     const path = url.pathname.replace(/\/+$/, '') || '/';
     if (request.method === 'GET' && path === CONTROL_PLANE_PATHS.health) {
       return {
@@ -276,13 +398,24 @@ export const startControlPlane = async (options: ControlPlaneOptions): Promise<C
       };
     }
     if (request.method === 'POST' && path === CONTROL_PLANE_PATHS.runs) {
-      return await createRun(await readBody(request));
+      return await createRun(await readBody(request), response);
+    }
+    if (request.method === 'GET' && path === CONTROL_PLANE_PATHS.runs) {
+      // Read off the daemon, never off `creates` (WP-103): the orphans this exists for are the runs
+      // a restarted process has forgotten.
+      return { runs: await options.service.listRuns() };
     }
     const end = new RegExp(
       `^${CONTROL_PLANE_PATHS.runs}/([^/]{1,64})/${CONTROL_PLANE_PATHS.end}$`,
     ).exec(path);
     if (request.method === 'POST' && end !== null) {
       return await endRun(decodeURIComponent(end[1] as string), await readBody(request));
+    }
+    const destroy = new RegExp(
+      `^${CONTROL_PLANE_PATHS.runs}/([^/]{1,64})/${CONTROL_PLANE_PATHS.destroy}$`,
+    ).exec(path);
+    if (request.method === 'POST' && destroy !== null) {
+      return await destroyRun(decodeURIComponent(destroy[1] as string), await readBody(request));
     }
     throw new ControlPlaneError(
       'not_found',
@@ -298,7 +431,7 @@ export const startControlPlane = async (options: ControlPlaneOptions): Promise<C
         if (presented === null || !tokenMatches(presented, options.token)) {
           throw new ControlPlaneError('unauthorized', 'the launcher token is missing or wrong');
         }
-        const payload = await route(request, url);
+        const payload = await route(request, response, url);
         send(response, 200, payload);
       } catch (error) {
         const failure = errorOf(error);

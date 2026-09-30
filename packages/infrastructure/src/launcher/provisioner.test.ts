@@ -109,6 +109,14 @@ const clientWith = (
         claudeCodePath: '/usr/local/bin/claude',
         runs: 0,
       }),
+      // The provisioner never lists or destroys by id — that is the reaper's (WP-103) — so both
+      // refuse, and a provisioner that started calling them would fail here by name.
+      listRuns: async () => {
+        throw new Error('the provisioner does not list runs');
+      },
+      destroyRun: async () => {
+        throw new Error('the provisioner does not destroy by run id');
+      },
     },
   };
 };

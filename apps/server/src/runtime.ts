@@ -112,7 +112,11 @@ import { SseHub } from './sse/hub.js';
 import { startTranscriptBridge } from './sse/transcript-bridge.js';
 import { createStorageSamplers } from './storage.js';
 import { BUNDLED_WEB_ROOT } from './web/bundle.js';
-import { composeRunWorkspaces, createRunGitCredentialMinter } from './workspaces.js';
+import {
+  composeOrphanWorkspaceReaper,
+  composeRunWorkspaces,
+  createRunGitCredentialMinter,
+} from './workspaces.js';
 
 export interface ServerRuntime {
   readonly config: ServerConfig;
@@ -504,6 +508,27 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
             secretKey: config.secretKey,
             logger: loggerPort,
           });
+        /**
+         * WP-103 (TD-028 decision 12, PROGRESS backlog 286): the orphaned-workspace pass, composed
+         * exactly where the launcher client above is — never beside an e2e seam, whose workspaces
+         * are not the launcher's. `composeRunWorkspaces` has already refused a half configuration.
+         */
+        if (options.pipeline?.workspaces === undefined && mintingWorkspaces === undefined) {
+          const reaper = composeOrphanWorkspaceReaper({
+            launcherUrl: config.launcherUrl,
+            launcherToken: config.launcherToken,
+            unitOfWork: eventing.unitOfWork,
+            intervalMs: config.intakeReconcileIntervalMs,
+            metrics,
+            logger: loggerPort,
+          });
+          if (reaper !== null) {
+            stopCallbacks.unshift({
+              name: 'orphan-workspace-reaper',
+              stop: async () => reaper.stop(),
+            });
+          }
+        }
         const pipeline = await composePipeline({
           composition: {
             ...(options.pipeline ?? {}),

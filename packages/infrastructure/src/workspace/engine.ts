@@ -82,6 +82,8 @@ const containerSummarySchema = z.looseObject({
   Names: z.array(z.string()).nullish(),
   State: z.string().nullish(),
   Labels: z.record(z.string(), z.string()).nullish(),
+  /** Seconds since the epoch — the daemon's clock (WP-103 dates an orphan by it). */
+  Created: z.number().nullish(),
 });
 const inspectSchema = z.looseObject({
   Id: z.string().min(1),

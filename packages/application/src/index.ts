@@ -180,6 +180,7 @@ export * from './ports/workspace.js';
 export * from './recovery/deadline.js';
 export * from './recovery/deferred-dependency.js';
 export * from './recovery/notification-repost.js';
+export * from './recovery/orphan-workspaces.js';
 export * from './recovery/run-credential.js';
 export * from './recovery/run-lease.js';
 export * from './recovery/stranded.js';

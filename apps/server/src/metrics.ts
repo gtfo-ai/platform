@@ -34,6 +34,12 @@ export interface Metrics {
    * record of a limited delivery, which writes no row by design.
    */
   readonly webhookDeliveriesRateLimited: Counter<'provider'>;
+  /**
+   * Run workspaces the orphan pass acted on, by outcome (WP-103, PROGRESS backlog 286):
+   * `removed_terminal`, `removed_unknown` or `remove_failed`. Labelled, so a process that composes
+   * no launcher — and therefore no pass — exports no series rather than a `0` that reads as "none".
+   */
+  readonly orphanRunWorkspaces: Counter<'outcome'>;
   /** Events committed but not yet dispatched (TD-005's `event_dispatch` backlog). */
   readonly eventDispatchPending: Gauge<never>;
   /** Events that spent their dispatch attempt bound and left the queue (WP-49). */
@@ -155,6 +161,13 @@ export const createMetrics = (options: MetricsOptions = {}): Metrics => {
     name: 'webhook_deliveries_rate_limited_total',
     help: 'Webhook deliveries answered 429 by their integration’s rate limit, before any signature check, by provider.',
     labelNames: ['provider'] as const,
+    registers: [registry],
+  });
+
+  const orphanRunWorkspaces = new Counter({
+    name: 'orphan_run_workspaces_total',
+    help: 'Run workspaces no process owned that the runner’s orphan pass removed, or failed to remove, by outcome (WP-103).',
+    labelNames: ['outcome'] as const,
     registers: [registry],
   });
 
@@ -308,6 +321,7 @@ export const createMetrics = (options: MetricsOptions = {}): Metrics => {
     sseConnections,
     sseFramesSent,
     webhookDeliveriesRateLimited,
+    orphanRunWorkspaces,
     eventDispatchPending,
     eventDispatchDeadLettered,
     notificationsUndelivered,

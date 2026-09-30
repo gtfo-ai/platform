@@ -8,6 +8,8 @@ export * from './postgres-deferred-dependency-store.js';
 export * from './postgres-expired-run-store.js';
 /** The re-post row's read and mark — PROGRESS backlog 236 (WP-84). */
 export * from './postgres-notification-repost-store.js';
+/** The orphaned-workspace pass's row read — PROGRESS backlog 286 (WP-103). */
+export * from './postgres-orphan-workspace-store.js';
 /** The run-credential recovery's two reads — PROGRESS backlog 155 (WP-77). */
 export * from './postgres-run-credential-store.js';
 export * from './postgres-stranded-store.js';

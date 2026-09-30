@@ -38,12 +38,16 @@ import {
   type CreateRunResponse,
   controlPlaneCodeOfStatus,
   createRunResponseSchema,
+  type DestroyRunResponse,
+  destroyRunResponseSchema,
   type EndRunRequestPayload,
   type EndRunResponse,
   endRunResponseSchema,
   errorResponseSchema,
   type HealthResponse,
   healthResponseSchema,
+  type ListRunsResponse,
+  listRunsResponseSchema,
   workspaceCodeOfControlPlaneCode,
 } from './protocol.js';
 
@@ -86,6 +90,10 @@ export interface LauncherControlClient {
   createRun(request: CreateRunRequestPayload): Promise<CreateRunResponse>;
   endRun(runId: string, request: EndRunRequestPayload): Promise<EndRunResponse>;
   health(): Promise<HealthResponse>;
+  /** The run ids this launcher's instance labelled a container for (WP-103, TD-028 decision 12). */
+  listRuns(): Promise<ListRunsResponse>;
+  /** Removes a run's objects by label, with no handle; idempotent (WP-103). */
+  destroyRun(runId: string): Promise<DestroyRunResponse>;
 }
 
 const describe = (error: unknown): string =>
@@ -212,6 +220,16 @@ export const createLauncherControlClient = (
       ),
     health: async () =>
       request(CONTROL_PLANE_PATHS.health, 'GET', undefined, healthResponseSchema, null),
+    listRuns: async () =>
+      request(CONTROL_PLANE_PATHS.runs, 'GET', undefined, listRunsResponseSchema, null),
+    destroyRun: async (runId) =>
+      request(
+        `${CONTROL_PLANE_PATHS.runs}/${encodeURIComponent(runId)}/${CONTROL_PLANE_PATHS.destroy}`,
+        'POST',
+        {},
+        destroyRunResponseSchema,
+        runId,
+      ),
   };
 };
 

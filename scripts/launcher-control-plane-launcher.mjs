@@ -68,8 +68,14 @@ const runtime = await startLauncher({
 
 process.stdout.write(`${JSON.stringify({ listening: runtime.controlPlane?.port ?? null })}\n`);
 
-const stop = () => {
-  void runtime.close().finally(() => process.exit(0));
+// WP-103: each step of a stop is written down, so 286 (a) can say how the launcher left a create.
+const stop = (signal) => {
+  const started = Date.now();
+  process.stderr.write(`launcher signal: ${signal}\n`);
+  void runtime
+    .close()
+    .then(() => process.stderr.write(`launcher closed after ${String(Date.now() - started)} ms\n`))
+    .finally(() => process.exit(0));
 };
-process.on('SIGTERM', stop);
-process.on('SIGINT', stop);
+process.on('SIGTERM', () => stop('SIGTERM'));
+process.on('SIGINT', () => stop('SIGINT'));

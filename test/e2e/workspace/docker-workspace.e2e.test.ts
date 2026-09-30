@@ -2458,6 +2458,8 @@ runWorkspaceProviderContractSuite('DockerWorkspaceProvider', {
         export: (handle, request, credential) =>
           fixture.provider.export(handle, request, credential),
         extendRetention: (handle, keepUntil) => fixture.provider.extendRetention(handle, keepUntil),
+        listLabelledRuns: () => fixture.provider.listLabelledRuns(),
+        destroyRun: (runId) => fixture.provider.destroyRun(runId),
         purgeExpired: (now) => fixture.provider.purgeExpired(now),
       },
       spec,

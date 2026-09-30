@@ -25,7 +25,9 @@ import { fixedClock } from '@platform/domain';
 import { createFakeGitProvider } from '@platform/integrations';
 import type pg from 'pg';
 import { describe, expect, it } from 'vitest';
+import { createMetrics } from './metrics.js';
 import {
+  composeOrphanWorkspaceReaper,
   composeRunWorkspaces,
   createRunGitCredentialMinter,
   createRunWorkspaceProjectSource,
@@ -78,6 +80,44 @@ describe('composing the run workspaces', () => {
     // The client's own check, reached at composition rather than at the first run: TD-028 decision
     // 7's "says so by name at composition".
     expect(() => compose('file:///etc/passwd', TOKEN)).toThrow();
+  });
+});
+
+describe('composing the orphaned-workspace pass (WP-103)', () => {
+  const reaperWith = (launcherUrl: string | null, intervalMs: number) => {
+    const lines: string[] = [];
+    const reaper = composeOrphanWorkspaceReaper({
+      launcherUrl,
+      launcherToken: launcherUrl === null ? null : TOKEN,
+      unitOfWork: { transaction: async () => Promise.reject(new Error('not reached')) },
+      intervalMs,
+      metrics: createMetrics({ defaultMetrics: false }),
+      logger: { ...silentLogger, info: (_fields: unknown, message: string) => lines.push(message) },
+    });
+    return { reaper, lines };
+  };
+
+  it('composes none where no launcher is configured, because it has nobody to ask', () => {
+    expect(reaperWith(null, 60_000).reaper).toBeNull();
+  });
+
+  it('arms one where the launcher is, and says so; a 0 interval arms nothing and says that', () => {
+    const armed = reaperWith('http://launcher:7780', 60_000);
+    expect(armed.reaper).not.toBeNull();
+    armed.reaper?.stop();
+    expect(armed.lines.some((line) => line.includes('pass is armed'))).toBe(true);
+    const off = reaperWith('http://launcher:7780', 0);
+    expect(off.reaper).toBeNull();
+    expect(off.lines.some((line) => line.includes('pass is off'))).toBe(true);
+  });
+
+  it('exports no orphan series until the pass has acted, so a quiet pass is not a measured zero', async () => {
+    const metrics = createMetrics({ defaultMetrics: false });
+    expect(await metrics.registry.metrics()).not.toMatch(/orphan_run_workspaces_total\{/);
+    metrics.orphanRunWorkspaces.inc({ outcome: 'removed_terminal' });
+    expect(await metrics.registry.metrics()).toMatch(
+      /orphan_run_workspaces_total\{outcome="removed_terminal"\} 1/,
+    );
   });
 });
 

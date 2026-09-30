@@ -65,6 +65,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type {
   ExistingProtectedPaths,
+  LabelledRunWorkspace,
   Logger,
   PurgedControlDirectory,
   PurgedWorkspace,
@@ -80,6 +81,7 @@ import type {
 } from '@platform/application';
 import {
   exactSecretRedactor,
+  MAX_LABELLED_RUNS,
   MIN_SECRET_LENGTH,
   PLATFORM_SKILLS_PLUGIN_DIRECTORY,
   silentLogger,
@@ -546,6 +548,8 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       [WORKSPACE_LABELS.role]: role,
       [WORKSPACE_LABELS.keepUntil]: keepUntil,
       [WORKSPACE_LABELS.createdAt]: this.#now().toISOString(),
+      // WP-103: which instance made it — the listing verb answers only this instance's runs.
+      [WORKSPACE_LABELS.instance]: this.#controlVolume,
     };
   }
 
@@ -1366,6 +1370,122 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       },
       20,
     );
+  }
+
+  /**
+   * TD-028 decision 12's read verb, at the daemon (WP-103, PROGRESS backlog 286).
+   *
+   * **The daemon, never this process' memory**: a launcher that restarted has forgotten every run it
+   * made, and the orphans a restart leaves are exactly the ones the reaper exists for. Every
+   * container carrying a run label **and this instance's label** is read — any role, running or
+   * not — because a create interrupted by a restart leaves a *helper* (`clone-<run-id>`,
+   * `prep-<run-id>`) and no run container (measured), and that helper is what makes
+   * `#sweepControlDirectories` keep the run's directory as `run_alive` for ever.
+   *
+   * **The instance is the control volume's name** (`WORKSPACE_LABELS.instance`). Two instances on
+   * one daemon cannot share a control volume without sharing every run's token, so it is the name
+   * that already separates them, and it needs no new setting. The residuals, stated here because
+   * this is where they bite:
+   *
+   *  - two instances configured with the **same** control volume are one instance to this verb, and
+   *    each would reap the other's runs as `unknown` an hour after they start — they already share
+   *    every run token, which is the larger defect, and technical/05 says a control volume is one
+   *    instance's;
+   *  - a container created **before WP-103** carries no instance label and is never listed, so an
+   *    orphan from an older build is removed by hand (`docker ps --filter label=com.agentic.run`).
+   *
+   * A run is dated by its oldest container's `Created` (the daemon's clock), falling back to the
+   * label's `created_at`, and to *now* when neither parses — the young direction, because an
+   * undatable container is one the reaper must not call old.
+   */
+  async listLabelledRuns(): Promise<readonly LabelledRunWorkspace[]> {
+    const containers = await this.#engine.listContainers({
+      label: [WORKSPACE_LABELS.run, `${WORKSPACE_LABELS.instance}=${this.#controlVolume}`],
+    });
+    const runs = new Map<string, { createdAt: number; running: boolean }>();
+    for (const container of containers) {
+      const runId = container.Labels?.[WORKSPACE_LABELS.run];
+      if (runId === undefined || !RUN_ID_PATTERN.test(runId)) {
+        continue;
+      }
+      const created =
+        typeof container.Created === 'number'
+          ? container.Created * 1000
+          : Date.parse(container.Labels?.[WORKSPACE_LABELS.createdAt] ?? '');
+      const at = Number.isFinite(created) ? created : this.#now().getTime();
+      const seen = runs.get(runId);
+      runs.set(runId, {
+        createdAt: seen === undefined ? at : Math.min(seen.createdAt, at),
+        running: (seen?.running ?? false) || container.State === 'running',
+      });
+    }
+    return [...runs.entries()]
+      .sort(([, a], [, b]) => a.createdAt - b.createdAt)
+      .slice(0, MAX_LABELLED_RUNS)
+      .map(([runId, run]) => ({
+        runId,
+        createdAt: new Date(run.createdAt).toISOString(),
+        running: run.running,
+      }));
+  }
+
+  /**
+   * {@link destroy} for a run no handle names — TD-028 decision 12's second half (WP-103).
+   *
+   * Found **by label**: every container carrying the run's label for this instance. The run
+   * container and the sidecar go through the same `#teardown` `destroy` uses, so the order (stop
+   * before remove) and the tolerance of "no such thing" are one implementation; any **other**
+   * container — the helper a create was running when its launcher died — is stopped and removed
+   * first. The network and the sidecar's configuration volume are removed by their derived names
+   * and the control directory by the two-helper removal, each of which already answers a missing
+   * object as done. The workspace volume is kept, as `destroy` keeps it: retention owns it, and it
+   * is reclaimed on its own window now that no container holds it.
+   *
+   * The instance filter covers the **containers** only: the network and the configuration volume
+   * are removed by the names derived from the run id, whatever instance made them. That is
+   * reachable only with an id this instance listed, and the daemon refuses to remove a network or
+   * volume a container still uses, so another instance's live run cannot lose either (WP-103
+   * review).
+   */
+  async destroyRun(runId: string): Promise<{ readonly found: boolean }> {
+    const id = assertRunId(runId);
+    const containers = await this.#engine.listContainers({
+      label: [
+        `${WORKSPACE_LABELS.run}=${id}`,
+        `${WORKSPACE_LABELS.instance}=${this.#controlVolume}`,
+      ],
+    });
+    const roleOf = (container: (typeof containers)[number]): string =>
+      container.Labels?.[WORKSPACE_LABELS.role] ?? '';
+    const runContainer = containers.find((container) => roleOf(container) === 'workspace') ?? null;
+    const sidecar = containers.find((container) => roleOf(container) === 'egress') ?? null;
+    for (const helper of containers) {
+      if (helper === runContainer || helper === sidecar) {
+        continue;
+      }
+      try {
+        await this.#stopContainer(helper.Id, 5);
+        await this.#engine.removeContainer(helper.Id);
+      } catch (error) {
+        this.#logger.warn(
+          { run_id: id, role: roleOf(helper), err: error },
+          'an orphaned run’s helper container could not be removed; the next pass lists the run again',
+        );
+      }
+    }
+    await this.#teardown(
+      id,
+      {
+        network: runObjectNames(id).network,
+        volume: null,
+        configVolume: `egress-${id}`,
+        sidecar: sidecar?.Id ?? null,
+        container: runContainer?.Id ?? null,
+        controlPrepared: true,
+      },
+      20,
+    );
+    return { found: containers.length > 0 };
   }
 
   /**

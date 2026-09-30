@@ -195,3 +195,65 @@ describe('the client', () => {
     );
   });
 });
+
+describe('the reaper’s two verbs (WP-103, TD-028 decision 12)', () => {
+  const RUN = '22222222-2222-4222-8222-222222222222';
+
+  it('lists with an authenticated GET on the runs path, and reads the daemon’s answer', async () => {
+    const { client, calls } = clientWith(() => ({
+      status: 200,
+      body: JSON.stringify({
+        runs: [{ runId: RUN, createdAt: '2026-09-30T10:00:00.000Z', running: true }],
+      }),
+    }));
+    await expect(client.listRuns()).resolves.toEqual({
+      runs: [{ runId: RUN, createdAt: '2026-09-30T10:00:00.000Z', running: true }],
+    });
+    expect(calls[0]?.url).toBe('http://launcher:7780/v1/runs');
+    expect(calls[0]?.init.method).toBe('GET');
+    expect(calls[0]?.init.headers['authorization']).toBe(`Bearer ${TOKEN}`);
+    expect(calls[0]?.init.body).toBeUndefined();
+    expect(calls[0]?.init.redirect).toBe('error');
+  });
+
+  it('destroys with an authenticated POST of an empty object to the run’s destroy path', async () => {
+    const { client, calls } = clientWith(() => ({
+      status: 200,
+      body: JSON.stringify({ found: false }),
+    }));
+    // `found: false` is a repeat and still a success (decision 4): the client answers it, never throws.
+    await expect(client.destroyRun(RUN)).resolves.toEqual({ found: false });
+    expect(calls[0]?.url).toBe(`http://launcher:7780/v1/runs/${RUN}/destroy`);
+    expect(calls[0]?.init.method).toBe('POST');
+    expect(calls[0]?.init.headers['authorization']).toBe(`Bearer ${TOKEN}`);
+    expect(calls[0]?.init.body).toBe('{}');
+  });
+
+  it('refuses a listing that answers more than the bound, or a field it does not know', async () => {
+    const tooMany = clientWith(() => ({
+      status: 200,
+      body: JSON.stringify({
+        runs: Array.from({ length: 1_001 }, () => ({
+          runId: RUN,
+          createdAt: '2026-09-30T10:00:00.000Z',
+          running: false,
+        })),
+      }),
+    }));
+    await expect(tooMany.client.listRuns()).rejects.toMatchObject({ code: 'workspace_failed' });
+    const unknownKey = clientWith(() => ({
+      status: 200,
+      body: JSON.stringify({ runs: [], instance: 'ctl' }),
+    }));
+    await expect(unknownKey.client.listRuns()).rejects.toMatchObject({ code: 'workspace_failed' });
+  });
+
+  it('turns a wrong token on either verb into the terminal code, like every other verb', async () => {
+    const { client } = clientWith(() => ({
+      status: 401,
+      body: errorBody('unauthorized', 'the launcher token is missing or wrong'),
+    }));
+    await expect(client.listRuns()).rejects.toMatchObject({ code: 'invalid_spec' });
+    await expect(client.destroyRun(RUN)).rejects.toMatchObject({ code: 'invalid_spec' });
+  });
+});

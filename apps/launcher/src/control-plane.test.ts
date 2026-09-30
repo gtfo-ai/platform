@@ -33,6 +33,11 @@ let plane: ControlPlane;
 
 /** Flipped by the one case that needs a create to fail; reset in `beforeEach`. */
 let mirrorFails = false;
+/**
+ * Held by the WP-103 cases that need a create to be **in flight** when its request closes: the
+ * provider's `create` waits on it, and `started` resolves once it has begun waiting.
+ */
+let createGate: { readonly wait: Promise<void>; readonly started: () => void } | null = null;
 
 /**
  * The fake provider with one failure the launcher cannot refuse by schema: the mirror fetch.
@@ -51,7 +56,42 @@ class MirrorFailingProvider extends workspace.FakeWorkspaceProvider {
     }
     return super.updateMirror(input);
   }
+
+  override async create(
+    spec: Parameters<workspace.FakeWorkspaceProvider['create']>[0],
+  ): ReturnType<workspace.FakeWorkspaceProvider['create']> {
+    if (createGate !== null) {
+      createGate.started();
+      await createGate.wait;
+    }
+    return super.create(spec);
+  }
 }
+
+/** A gate for one create, and the two moments a case needs from it. */
+const holdCreates = (): { begun: Promise<void>; release: () => void } => {
+  let release = (): void => undefined;
+  let begun = (): void => undefined;
+  const wait = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const begunPromise = new Promise<void>((resolve) => {
+    begun = resolve;
+  });
+  createGate = { wait, started: begun };
+  return { begun: begunPromise, release };
+};
+
+/** Polls a condition the control plane reaches asynchronously, after a response it never wrote. */
+const eventually = async (condition: () => boolean, what: string): Promise<void> => {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (condition()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`never happened: ${what}`);
+};
 
 const clientFor = (token = TOKEN): launcherAdapters.LauncherControlClient =>
   launcherAdapters.createLauncherControlClient({
@@ -90,6 +130,7 @@ const credentialRequest = {
 
 beforeEach(async () => {
   mirrorFails = false;
+  createGate = null;
   dir = await workspace.shortTempDir('agentic-control-plane-');
   provider = new MirrorFailingProvider({
     controlRoot: path.join(dir, 'ctl'),
@@ -306,6 +347,143 @@ describe('end', () => {
     await expect(
       clientFor().endRun(runId, { handle: created.handle, export: null }),
     ).resolves.toMatchObject({ failures: [] });
+  });
+});
+
+/**
+ * TD-028 decision 12 (WP-103, PROGRESS backlog 286): the read verb, destroy by run id, and a create
+ * whose requester went away. "A restarted launcher" is a **second control plane** over the same
+ * provider — a new process' empty idempotency map in front of the same daemon.
+ */
+describe('orphans (WP-103)', () => {
+  const restart = async (): Promise<void> => {
+    await plane.close();
+    plane = await startControlPlane({
+      service,
+      token: TOKEN,
+      host: '127.0.0.1',
+      port: 0,
+      controlRoot: path.join(dir, 'ctl'),
+      runtimeImage: 'platform-runtime:test',
+      claudeCodePath: '/usr/local/bin/claude',
+      logger: silentLogger,
+    });
+  };
+
+  it('lists the runs the provider labelled, read from the provider rather than from its memory', async () => {
+    const runId = randomUUID();
+    await clientFor().createRun({ spec: specFor(runId), credential: credentialRequest });
+    await restart();
+    // The restarted process remembers nothing — `runs` is the idempotency map's size — and still
+    // answers the run, because the answer is the provider's (the daemon's, in production).
+    expect(await clientFor().health()).toMatchObject({ runs: 0 });
+    const listed = await clientFor().listRuns();
+    expect(listed.runs.map((run) => run.runId)).toEqual([runId]);
+    expect(listed.runs[0]?.running).toBe(true);
+  });
+
+  it('destroys a run it holds no handle for, by id alone, and a second destroy still succeeds', async () => {
+    const runId = randomUUID();
+    await clientFor().createRun({ spec: specFor(runId), credential: credentialRequest });
+    await restart();
+    await expect(clientFor().destroyRun(runId)).resolves.toEqual({ found: true });
+    expect(provider.isRunning(runId)).toBe(false);
+    expect(provider.events.filter((event) => event.runId === runId).map((e) => e.kind)).toEqual([
+      'create',
+      'attach',
+      'stop',
+      'remove',
+    ]);
+    expect((await clientFor().listRuns()).runs).toEqual([]);
+    // Idempotent on the run id (decision 4): nothing left is a success, and nothing is stopped twice.
+    await expect(clientFor().destroyRun(runId)).resolves.toEqual({ found: false });
+    expect(provider.events.filter((event) => event.kind === 'remove')).toHaveLength(1);
+  });
+
+  it('refuses both verbs without the token, and destroys nothing', async () => {
+    const runId = randomUUID();
+    await clientFor().createRun({ spec: specFor(runId), credential: credentialRequest });
+    const base = `http://127.0.0.1:${String(plane.port)}/v1/runs`;
+    expect((await fetch(base)).status).toBe(401);
+    const destroy = await fetch(`${base}/${runId}/destroy`, { method: 'POST', body: '{}' });
+    expect(destroy.status).toBe(401);
+    await expect(
+      clientFor('FAKE-launcher-token-9999999999999999').listRuns(),
+    ).rejects.toMatchObject({ code: 'invalid_spec' });
+    expect(provider.isRunning(runId)).toBe(true);
+  });
+
+  it('refuses a destroy whose body carries anything, because a handle is not this verb’s input', async () => {
+    const runId = randomUUID();
+    await clientFor().createRun({ spec: specFor(runId), credential: credentialRequest });
+    const response = await fetch(
+      `http://127.0.0.1:${String(plane.port)}/v1/runs/${runId}/destroy`,
+      {
+        method: 'POST',
+        headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ handle: { runId } }),
+      },
+    );
+    expect(response.status).toBe(400);
+    expect(provider.isRunning(runId)).toBe(true);
+  });
+
+  it('removes what a create made when its request closed before the answer (backlog 286 (b))', async () => {
+    const runId = randomUUID();
+    const gate = holdCreates();
+    const aborted = new AbortController();
+    const request = fetch(`http://127.0.0.1:${String(plane.port)}/v1/runs`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ spec: specFor(runId), credential: credentialRequest }),
+      signal: aborted.signal,
+    }).catch(() => null);
+    await gate.begun;
+    // The runner's `AbortSignal.timeout`, in miniature: the client gives up while the launcher is
+    // still creating.
+    aborted.abort();
+    expect(await request).toBeNull();
+    // The client's promise rejects before the launcher's socket sees the close — measured here: a
+    // create released on the same tick finished first and was answered to nobody, which is the
+    // window the runner-side reaper covers. A real create runs for seconds past the timeout
+    // (backlog 286 (b): the three measured ran on for about fifteen), so the case holds the create
+    // long enough for the close to arrive; a slow close fails this case, it cannot pass it.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    gate.release();
+    await eventually(
+      () => provider.events.some((event) => event.runId === runId && event.kind === 'remove'),
+      'the abandoned create’s workspace was removed',
+    );
+    expect(createdRuns()).toEqual([runId]);
+    expect(provider.isRunning(runId)).toBe(false);
+    expect((await clientFor().listRuns()).runs).toEqual([]);
+  });
+
+  it('keeps what a create made while a replay of it is still waiting for the answer', async () => {
+    // The negative (standing rule 42): the first requester left, a redelivery of the same run did
+    // not, so somebody will hold the handle and nothing is abandoned.
+    const runId = randomUUID();
+    const gate = holdCreates();
+    const aborted = new AbortController();
+    const first = fetch(`http://127.0.0.1:${String(plane.port)}/v1/runs`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ spec: specFor(runId), credential: credentialRequest }),
+      signal: aborted.signal,
+    }).catch(() => null);
+    await gate.begun;
+    aborted.abort();
+    expect(await first).toBeNull();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const replay = clientFor().createRun({ spec: specFor(runId), credential: credentialRequest });
+    // The replay must be parsed and waiting before the create is released, and nothing observable
+    // says when it is; a late replay fails this case loudly (the fake refuses a second create of
+    // one run id), it cannot pass it by accident.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    gate.release();
+    await expect(replay).resolves.toMatchObject({ replayed: true });
+    expect(provider.isRunning(runId)).toBe(true);
+    expect(provider.events.some((event) => event.kind === 'remove')).toBe(false);
   });
 });
 

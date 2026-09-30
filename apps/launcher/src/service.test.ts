@@ -117,6 +117,8 @@ describe('startRun', () => {
       export: (handle, request, credential) => provider.export(handle, request, credential),
       extendRetention: (handle, keepUntil) => provider.extendRetention(handle, keepUntil),
       purgeExpired: (now) => provider.purgeExpired(now),
+      listLabelledRuns: () => provider.listLabelledRuns(),
+      destroyRun: (runId) => provider.destroyRun(runId),
     };
     const listing = new LauncherService({
       provider: throwing,
@@ -206,7 +208,8 @@ describe('startRun', () => {
  * cannot guarantee it for a *sequence* of its own calls: `create` returns, `attach` throws, and the
  * only reference to a live container is a local in this method. Round 1 shipped exactly that — the
  * `catch` revoked the credential and rethrew, and the container ran until someone found it by hand
- * (nothing reaps orphans: `purgeExpired` removes volumes).
+ * (nothing reaped orphans then — `purgeExpired` removes volumes; since WP-103 the runner's orphan
+ * pass would find it a pass interval after its run ended, which is a backstop, not this guarantee).
  *
  * It is not an exotic path. `names.ts` records the 103-byte socket cap being hit for real, and
  * `#readToken` throws `not_found` when the control volume is mis-mounted — both inside `attach`,
@@ -255,6 +258,8 @@ describe('startRun leaves no container behind on any failure path', () => {
         extendRetention: (handle, keepUntil) =>
           step('extendRetention', () => target.extendRetention(handle, keepUntil)),
         purgeExpired: (now) => step('purgeExpired', () => target.purgeExpired(now)),
+        listLabelledRuns: () => target.listLabelledRuns(),
+        destroyRun: (runId) => target.destroyRun(runId),
         kill: (handle) => target.kill(handle),
         destroy: async (handle) => {
           if (onDestroy === 'throw') {
@@ -380,6 +385,8 @@ describe('endRun — the container stop happens on every path (WP-13 obligation 
       destroy: (handle) => provider.destroy(handle),
       extendRetention: (handle, keepUntil) => provider.extendRetention(handle, keepUntil),
       purgeExpired: (now) => provider.purgeExpired(now),
+      listLabelledRuns: () => provider.listLabelledRuns(),
+      destroyRun: (runId) => provider.destroyRun(runId),
       export: async () => {
         throw new Error('the git host is down');
       },
@@ -455,6 +462,8 @@ describe('endRun — the container stop happens on every path (WP-13 obligation 
       destroy: (handle) => provider.destroy(handle),
       extendRetention: (handle, keepUntil) => provider.extendRetention(handle, keepUntil),
       purgeExpired: (now) => provider.purgeExpired(now),
+      listLabelledRuns: () => provider.listLabelledRuns(),
+      destroyRun: (runId) => provider.destroyRun(runId),
       export: async () => {
         throw new Error('the git host is unreachable');
       },
@@ -492,6 +501,8 @@ describe('endRun — the container stop happens on every path (WP-13 obligation 
       destroy: (handle) => provider.destroy(handle),
       export: (handle, request, credential) => provider.export(handle, request, credential),
       purgeExpired: (now) => provider.purgeExpired(now),
+      listLabelledRuns: () => provider.listLabelledRuns(),
+      destroyRun: (runId) => provider.destroyRun(runId),
       extendRetention: async () => {
         throw new Error('the daemon is unreachable');
       },
@@ -628,6 +639,8 @@ describe('retention sweep', () => {
       export: unused('export'),
       destroy: unused('destroy'),
       extendRetention: unused('extendRetention'),
+      listLabelledRuns: unused('listLabelledRuns'),
+      destroyRun: unused('destroyRun'),
       purgeExpired: async () => ({
         examined: 0,
         removed: 0,
@@ -688,6 +701,8 @@ describe('retention sweep', () => {
       export: unused('export'),
       destroy: unused('destroy'),
       extendRetention: unused('extendRetention'),
+      listLabelledRuns: unused('listLabelledRuns'),
+      destroyRun: unused('destroyRun'),
       purgeExpired: async () => ({ examined: 0, removed: 0, volumes: [], controlDirectories }),
     };
     const sweeper = new LauncherService({

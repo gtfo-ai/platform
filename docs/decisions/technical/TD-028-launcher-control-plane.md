@@ -31,7 +31,7 @@
 
 ## Rationale
 
-Splitting the planes is the only shape that keeps three properties at once that a single shape loses. Putting the *whole* provider behind HTTP would mean relaying the agent's stdio through the launcher — TD-025 §5's fallback (a), which that record already ranks below the shim because it couples the stdio path to the launcher process and re-introduces the attach semantics the shim was built to avoid. Putting the *whole* thing in process would mean a Docker client in the process that serves `/webhooks/*`, which TD-021's amendment forbids and `apps/launcher/src/docker-access.test.ts` refuses mechanically. The split keeps the Docker socket in one container, keeps the run's bytes on a Unix socket that never leaves the host, and adds an HTTP surface whose whole vocabulary is five verbs on a run id.
+Splitting the planes is the only shape that keeps three properties at once that a single shape loses. Putting the *whole* provider behind HTTP would mean relaying the agent's stdio through the launcher — TD-025 §5's fallback (a), which that record already ranks below the shim because it couples the stdio path to the launcher process and re-introduces the attach semantics the shim was built to avoid. Putting the *whole* thing in process would mean a Docker client in the process that serves `/webhooks/*`, which TD-021's amendment forbids and `apps/launcher/src/docker-access.test.ts` refuses mechanically. The split keeps the Docker socket in one container, keeps the run's bytes on a Unix socket that never leaves the host, and adds an HTTP surface whose whole vocabulary is five verbs on a run id (seven since WP-103: decision 12's read verb, `GET /v1/runs`, and `destroy` by run id, which is a route of its own, `POST /v1/runs/<id>/destroy`).
 
 Authentication beside network isolation is the same reasoning BD-002 and rule 18 apply elsewhere: a control plane that is safe *only* because of a compose file is safe until somebody writes a different compose file, and this one creates containers.
 
@@ -141,9 +141,16 @@ The residual therefore stayed **`needs measurement`**, owned by backlog **136**,
 29.7.2 / API 1.55): a create replayed after a restart, the first create having completed, is refused at
 the run's network (`409 … already exists`, `workspace_failed` to the runner) before `#prepare`. The live
 run's shim token is untouched, nothing is rolled back, and no second container starts. The first run's
-container keeps running with no launcher holding a handle for it, and nothing in the platform bounds that
-container. The check asserts the refusal, so a daemon that stops refusing duplicate network names fails
-it. A restart *during* a create is not measured.
+container keeps running with no launcher holding a handle for it. The check asserts the refusal, so a
+daemon that stops refusing duplicate network names fails it. Until WP-103 nothing bounded that container;
+since WP-103 (decision 12) the runner's orphan pass lists it through `GET /v1/runs` — read off the daemon,
+filtered by the instance label — and destroys it once its run is terminal. A restart *during* a create was
+measured at WP-103 (backlog 286, Docker Engine 29.8.1): the runner is told `engine_unavailable`, and the
+helper the create was running, the network and the volume are left with no run container; the same pass
+removes the helper and the network, and the workspace volume is reclaimed by retention once no container
+holds it. The bound of decision 4 is still one launcher process; what bounds the orphans a restart
+leaves is the reaper — one recovery interval after the run's row is terminal, or an hour after the
+container was created for a run id with no row.
 
 The scope is written here because this is the document a reader goes to first. It was already stated
 at `apps/launcher/src/control-plane.ts`, in `PROGRESS.md` and in `CLAUDE.md` — three places that are

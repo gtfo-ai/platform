@@ -11,7 +11,7 @@
  * a `task_asks` row `pending` for ever. Nothing re-emits it, nothing retries it, and nothing logs
  * it — `EventBus` logs only the case where a callback *threw*.
  *
- * ## Nine sites, eight of them here, and the ninth named rather than silently absent
+ * ## Ten sites, eight of them here, and the other two named rather than silently absent
  *
  * | site | entry | what is lost | where the recovery is |
  * |---|---|---|---|
@@ -24,6 +24,7 @@
  * | a deadline's timer (WP-56) | **161** | a question, approval or take-over waits for ever | **here** — `deadline`, in `./deadline.ts`, which also backfills the rows **162** names |
  * | a rework's close (WP-59) | **178** | a rejected merge request stays open, detached from every task | **here** — `superseded_mr`, in `./superseded-mr.ts` |
  * | a deferred dependency-gate ending (WP-67) | **240** | a question nobody asks, or a block nobody applies, on an `active` task | **here** — `deferred_dependency`, in `./deferred-dependency.ts` (WP-84) |
+ * | a create answer the runner never received (WP-103) | **286** | a run container, sidecar, network and control directory nobody holds a handle for | `./orphan-workspaces.ts`, on **the runner's own timer** at this pass's interval — it needs the launcher client, which only a process configured to run agents holds, while this pass rides a job any worker takes |
  *
  * …plus three rows that are **not** lost wake-ups at all and ride the same pass because each is the
  * other half of one of them: `task_ask_run` (**121**), a question still `pending` whose run is

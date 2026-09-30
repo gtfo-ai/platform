@@ -320,8 +320,32 @@ export const WORKSPACE_LABELS = {
   role: 'com.agentic.role',
   keepUntil: 'com.agentic.keep_until',
   createdAt: 'com.agentic.created_at',
+  /**
+   * Which instance's launcher made the object (WP-103, TD-028 decision 12). The Docker provider
+   * writes its **control volume's name**: two instances on one daemon cannot share one without
+   * sharing every run's token, so it is the one name that already separates them, and it needs no
+   * new setting. The listing verb filters by it, so a second instance on the same daemon is never
+   * listed — and therefore never reaped — by this one. Objects created before WP-103 carry no such
+   * label and are not listed at all (`DockerWorkspaceProvider.listLabelledRuns` states it).
+   */
+  instance: 'com.agentic.instance',
 } as const;
 export type WorkspaceLabels = Readonly<Record<string, string>>;
+
+/**
+ * One run the provider labelled a container for, as the **daemon** answers it (WP-103, TD-028
+ * decision 12) — never from a process's memory, which a restart empties.
+ */
+export interface LabelledRunWorkspace {
+  readonly runId: string;
+  /** When the run's oldest labelled container was created, per the daemon (ISO-8601). */
+  readonly createdAt: string;
+  /** Whether any of its labelled containers is running. */
+  readonly running: boolean;
+}
+
+/** At most this many run ids per listing; the rest are answered by the next pass. */
+export const MAX_LABELLED_RUNS = 1_000;
 
 /** What a created workspace is made of. Every name is derived from the run id. */
 export interface WorkspaceHandle {
@@ -564,6 +588,24 @@ export interface WorkspaceProvider {
    * exited" is not "the workspace's processes are gone".
    */
   readonly destroy: (handle: WorkspaceHandle) => Promise<void>;
+
+  /**
+   * The run ids this provider labelled a container for — **this instance's** containers, any role,
+   * running or not — read from the daemon (WP-103, TD-028 decision 12). A run whose create was
+   * interrupted can have a helper container and no run container, and it is listed all the same:
+   * that helper is what keeps the run "alive" to the retention sweep. Bounded by
+   * {@link MAX_LABELLED_RUNS}, oldest first.
+   */
+  readonly listLabelledRuns: () => Promise<readonly LabelledRunWorkspace[]>;
+
+  /**
+   * {@link destroy} for a run no handle names — found **by label**: every container carrying the
+   * run's label for this instance, the sidecar's configuration volume, the run's network and the
+   * control directory. The workspace volume is kept, as `destroy` keeps it (retention owns it).
+   *
+   * Idempotent: a run with nothing left answers `found: false` and succeeds.
+   */
+  readonly destroyRun: (runId: string) => Promise<{ readonly found: boolean }>;
 
   /**
    * Keeps this run's workspace until `keepUntil` — technical/05 §5's *"14 days for
