@@ -213,10 +213,20 @@ export interface StoredTask {
   /**
    * The head the CI gate judged when it last settled — `null` when it failed, has not run, or the
    * row predates the column (WP-79 review round 2, migration 0056, PROGRESS backlog 275). Written
-   * only by {@link TaskRepository.saveCiHead} from the gate settlement; read by the rebase gate's
-   * settlement, which lets a task into Ready only for the head CI passed.
+   * only by {@link TaskRepository.saveCiSettlement} from the gate settlement; read by the rebase
+   * gate's settlement, which lets a task into Ready only for the head CI passed.
    */
   readonly ciHeadSha: string | null;
+  /**
+   * The protected paths the CI gate's **last** settlement excused provisionally — declared by the
+   * plan, not yet judged by the Code review (`protected_paths_awaiting_review`) — redacted, and
+   * empty for every other settlement, for a gate that has not run, and for a row written before
+   * the column (WP-102, migration 0065, Q109 (b)). Written only by
+   * {@link TaskRepository.saveCiSettlement}, beside `ciHeadSha`; read by the rebase gate's
+   * settlement, which compares them with the latest Review Verdict's confirmations before Ready
+   * (`unconfirmedExcusedPaths` in `tamper.ts`).
+   */
+  readonly ciExcusedPaths: readonly string[];
   /**
    * The ticket's own words as the platform read them once (WP-15f, migration 0015).
    *
@@ -477,13 +487,19 @@ export interface TaskRepository {
    */
   saveReadyHead(tx: Transaction, taskId: Id, headSha: string | null): Promise<void>;
   /**
-   * Writes **only** `ci_head_sha` — the head a CI gate settlement passed, or `null` for a failed
-   * one (WP-79 review round 2). One caller: the gate settlement in `jobs.ts`, inside its own
-   * transaction. No version bump: `save` does not name the column.
+   * Writes **only** `ci_head_sha` and `ci_excused_paths`, in one statement — the head a CI gate
+   * settlement passed (`null` for a failed one, WP-79 review round 2) and the protected paths it
+   * excused provisionally (empty unless it passed `protected_paths_awaiting_review`, WP-102). One
+   * caller: the CI gate's settlement in `jobs.ts`, inside its own transaction. No version bump:
+   * `save` names neither column. Named `saveCiHead` until WP-102.
    *
    * @throws when the task does not exist.
    */
-  saveCiHead(tx: Transaction, taskId: Id, headSha: string | null): Promise<void>;
+  saveCiSettlement(
+    tx: Transaction,
+    taskId: Id,
+    settlement: { readonly headSha: string | null; readonly excusedPaths: readonly string[] },
+  ): Promise<void>;
   /**
    * Fills `requested_by_user_id` when it is still `null` — the column's first `update` writer
    * (WP-79, PROGRESS backlog 243).

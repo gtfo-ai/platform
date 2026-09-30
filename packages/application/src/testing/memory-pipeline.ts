@@ -318,6 +318,7 @@ export const createMemoryPipelineStore = (
           reviewThreads: null,
           readyHeadSha: null,
           ciHeadSha: null,
+          ciExcusedPaths: [],
         }),
       );
     },
@@ -327,7 +328,7 @@ export const createMemoryPipelineStore = (
      * Written as a projection of `current` rather than as `clone(stored)` on purpose: the fields it
      * does **not** list (`workpad`, `ticketSnapshot`, `ticketSnapshotAt`, `reviewSubject`,
      * `riskClasses` (WP-37), `coverage` (WP-39), `dependencies` and `requiredReviewers` (WP-38),
-     * `reviewThreads` (WP-46), `readyHeadSha` and `ciHeadSha` (WP-79),
+     * `reviewThreads` (WP-46), `readyHeadSha` and `ciHeadSha` (WP-79), `ciExcusedPaths` (WP-102),
      * `costActualUsd` (WP-31: `addSpend` owns it),
      * `estimateUsd`, `estimateBasis`, `estimateSamples`, `priorityRank`, `createdAt`, `template`,
      * `pipelineDial` (WP-62)) belong to the narrow writers — or, for `reviewSubject` and
@@ -473,12 +474,20 @@ export const createMemoryPipelineStore = (
       // Only this field, and `null` as readily as a head — the SQL adapter's statement (WP-79).
       tasks.set(taskId, clone({ ...current, readyHeadSha: headSha }));
     },
-    saveCiHead: async (_tx, taskId, headSha) => {
+    saveCiSettlement: async (_tx, taskId, settlement) => {
       const current = tasks.get(taskId);
       if (current === undefined) {
         throw new PipelineStoreError(`task ${taskId} does not exist`);
       }
-      tasks.set(taskId, clone({ ...current, ciHeadSha: headSha }));
+      // Both columns, as the SQL adapter's one statement writes them (WP-102).
+      tasks.set(
+        taskId,
+        clone({
+          ...current,
+          ciHeadSha: settlement.headSha,
+          ciExcusedPaths: [...settlement.excusedPaths],
+        }),
+      );
     },
     saveRequester: async (_tx, taskId, userId) => {
       const current = tasks.get(taskId);

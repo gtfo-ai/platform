@@ -90,8 +90,17 @@ export const tasks = pgTable('tasks', {
    * only by `saveReadyHead` from the Ready entry; `null` when no gate judged one.
    */
   readyHeadSha: text('ready_head_sha'),
-  /** WP-79 round 2, migration 0056: the head the CI gate last passed; only `saveCiHead` writes it. */
+  /**
+   * WP-79 round 2, migration 0056: the head the CI gate last passed; only `saveCiSettlement` writes
+   * it (named `saveCiHead` until WP-102).
+   */
   ciHeadSha: text('ci_head_sha'),
+  /**
+   * WP-102, migration 0065 (Q109 (b)): the protected paths the CI gate's last settlement excused
+   * provisionally, redacted; written only by `saveCiSettlement`, in the statement that writes
+   * `ci_head_sha`, and read by the rebase gate's settlement.
+   */
+  ciExcusedPaths: text('ci_excused_paths').array().notNull().default(emptyArray),
   /**
    * WP-84, migration 0059 (backlog 240): the deferred-dependency recovery's one attempt per resume;
    * only the recovery store writes it.

@@ -56,6 +56,11 @@
  * serves both paths that settle this gate — the poll below and the pipeline's event
  * (`ci-settle.ts`) — so neither is a side door past the check.
  *
+ * **Its second half is not here** (WP-102, Q109 answered (b)): a path the plan declared and no
+ * review has judged yet is passed provisionally with its head and recorded on the task, and the
+ * rebase gate's settlement (`jobs.ts`) reads the latest Review Verdict's confirmation of it in its
+ * own transaction — which returns the task on `ci_fix`, as this gate would have.
+ *
  * That file also executes every branch of this module, including each `unsupported` refusal, and
  * the e2e drives the CI failure end to end (`test/e2e/pipeline`, "when the merge request's
  * pipeline is red"). Both exist because of what the round-1 review measured: settling
@@ -103,6 +108,14 @@ export type GateResult =
        * a provisional pass. Absent for every other settlement.
        */
       readonly outcome?: TaskStageOutcome;
+      /**
+       * The protected paths a **provisional** CI pass excused until the Code review confirms them
+       * (WP-102, Q109 (b)), redacted — present exactly when `outcome` is
+       * `protected_paths_awaiting_review`. The settlement records them as `tasks.ci_excused_paths`
+       * beside `ci_head_sha`, and the rebase gate's settlement compares them with the latest Review
+       * Verdict before Ready.
+       */
+      readonly excusedPaths?: readonly string[];
       /**
        * The length `detail` would have had uncut, when the gate cut the failing job's log to its head
        * and tail (WP-81). Stored beside the return reason so the prompt's marker announces the cut.
@@ -235,8 +248,9 @@ const NO_PIPELINE_DETAIL =
  *    `ciSignature`, because it is not a CI failure the convergence rule should count;
  *  - the pipeline failed → `settled`, failed, the job names and the log excerpt, `ciSignature`;
  *  - a declared protected path the review has not judged yet → `settled`, **passed**,
- *    `protected_paths_awaiting_review`, and **no `headSha`**, so `tasks.ci_head_sha` stays `null`
- *    and the rebase gate re-enters this gate before Ready (`rebaseAgainstCi`);
+ *    `protected_paths_awaiting_review`, with the head like any pass **and** the excused paths
+ *    (`excusedPaths`), which the settlement records on the task; the rebase gate's settlement
+ *    compares them with the latest Review Verdict before Ready (WP-102, Q109 (b));
  *  - otherwise → `settled`, passed, with the head CI judged.
  */
 export const judgeCiSettlement = async (
@@ -318,11 +332,14 @@ export const judgeCiSettlement = async (
     };
   }
   if (verdict.kind === 'awaiting_review') {
+    const excused = verdict.paths.map(redact);
     return {
       kind: 'settled',
       passed: true,
+      headSha,
       outcome: 'protected_paths_awaiting_review',
-      detail: `${ciDetail}; the tamper check (BD-024) excused declared protected paths until the Code review confirms them, and CI judges the branch again before Ready: ${verdict.paths.map(redact).join(', ')}`,
+      excusedPaths: excused,
+      detail: `${ciDetail}; the tamper check (BD-024) excused declared protected paths until the Code review confirms them, and the rebase gate checks the confirmation before Ready: ${excused.join(', ')}`,
     };
   }
   return { kind: 'settled', passed: true, headSha, detail: ciDetail };

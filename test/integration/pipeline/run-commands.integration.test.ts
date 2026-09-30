@@ -180,6 +180,7 @@ const liveRun = async (): Promise<{ runId: Id; taskId: Id }> => {
     reviewThreads: null,
     readyHeadSha: null,
     ciHeadSha: null,
+    ciExcusedPaths: [],
     requestedByUserId: null,
     version: INITIAL_TASK_VERSION,
   } as unknown as StoredTask;

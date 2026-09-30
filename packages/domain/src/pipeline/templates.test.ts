@@ -442,10 +442,11 @@ const BUSINESS_REVIEW_OFF: TaskPipelineDial = {
 };
 
 describe('the rebase gate behind every CI gate (WP-81, Q109)', () => {
-  // WP-81's provisional tamper pass records no `ci_head_sha`, and WP-79's rebase gate is what sends
-  // such a task back to `ci_gate` before Ready. That holds only while every template that runs
-  // `ci_gate` also runs `rebase_gate` after it — under every dial, since the dial is the one thing
-  // that disables a shipped stage — so a template that drops the rebase gate fails here, by name.
+  // WP-81's provisional tamper pass excuses a declared protected path until the Code review
+  // confirms it, and since WP-102 (Q109 (b)) the rebase gate's settlement is where that
+  // confirmation is read before Ready. That holds only while every template that runs `ci_gate`
+  // also runs `rebase_gate` after it — under every dial, since the dial is the one thing that
+  // disables a shipped stage — so a template that drops the rebase gate fails here, by name.
   it.each(
     Object.entries(SHIPPED_TEMPLATES).flatMap(([id, template]) =>
       [null, BUSINESS_REVIEW_OFF].map(

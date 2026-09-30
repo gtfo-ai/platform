@@ -144,10 +144,11 @@ export interface ApplyOptions {
   readonly escalationOutcome?: TaskStageOutcome;
   /**
    * The `outcome` word the settled stage's row is closed with **instead of** the default one — the
-   * gate verdict (`pass`/`fail`) on a forward move, `returned` on a return (WP-81). The CI gate's
-   * tamper check is the one caller: `protected_paths_changed` on the return it causes and
+   * gate verdict (`pass`/`fail`) on a forward move, `returned` on a return (WP-81). The tamper
+   * check is the one caller: the CI gate's `protected_paths_changed` on the return it causes and
    * `protected_paths_awaiting_review` on a pass whose declared protected paths the Code review has
-   * not judged yet (technical/02). Absent is the default word, as before; an escalation's word is
+   * not judged yet, and the rebase gate's settlement's `protected_paths_confirmed` or
+   * `protected_paths_changed` once it has read the confirmation (WP-102, technical/02). Absent is the default word, as before; an escalation's word is
    * {@link escalationOutcome}'s.
    */
   readonly stageOutcome?: TaskStageOutcome;
@@ -377,7 +378,8 @@ const closeLeftStage = async (options: ApplyOptions, next: Slug | null): Promise
     // A gate's outcome is `stageVerdictSchema`'s gate word, the one the interpreter decided on (a
     // gate whose `fail_to` points *forward* closes `completed` with `fail`, which is what
     // happened) — unless the settlement names a more specific word: the CI gate's provisional pass,
-    // `protected_paths_awaiting_review` (WP-81, `stageOutcome`). A human stage's is the event that moved it — `mr.merged` on every shipped
+    // `protected_paths_awaiting_review` (WP-81, `stageOutcome`), or the rebase gate's
+    // `protected_paths_confirmed` (WP-102). A human stage's is the event that moved it — `mr.merged` on every shipped
     // template — because a human stage has no verdict, and the event is what the reader of the row
     // needs to know (WP-46, backlog 158).
     outcome:

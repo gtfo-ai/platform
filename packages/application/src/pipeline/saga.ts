@@ -508,6 +508,7 @@ export const runIntakeCheck = async (
       reviewThreads: null,
       readyHeadSha: null,
       ciHeadSha: null,
+      ciExcusedPaths: [],
       // The reporter's platform user, resolved above through `user_identities` and never by an
       // email match (WP-79, backlog 92's half (b)); `null` when nobody mapped the account.
       requestedByUserId,

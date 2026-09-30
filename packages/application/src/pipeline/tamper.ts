@@ -36,16 +36,22 @@
  * unlike `path-guard.ts`, which folds because the filesystem underneath may alias two spellings of
  * one file. A diff lists the repository's own paths, which are exact.
  *
- * ## "Confirmed" needs a review to have happened
+ * ## "Confirmed" needs a review to have happened — and is read in the rebase settlement (WP-102)
  *
  * Every shipped template runs `ci_gate` **before** `code_review`, so on the first pass there is no
  * Review Verdict of the current change to confirm anything. The latest verdict counts as a judgement
  * of the change only when it is **newer than the latest Implementation Notes** — the Developer's
  * report after its push — which is the artifact order the store keeps. A declared path with no such
- * verdict is excused **provisionally** (`awaiting_review`): the gate passes and records no
- * `ci_head_sha`, so the rebase gate re-enters `ci_gate` before Ready and this check is made again
- * with the verdict in hand (technical/02; the cheaper alternative is Q109). A declared path a newer
- * verdict did not confirm is a failure like an undeclared one.
+ * verdict is excused **provisionally** (`awaiting_review`): the gate passes, records its head like
+ * any pass, and records the excused paths on the task (`tasks.ci_excused_paths`). The check's
+ * second half is then made by the **rebase gate's settlement**, in its own transaction and with no
+ * provider call: {@link unconfirmedExcusedPaths} compares the recorded paths with the latest
+ * Review Verdict, and an unconfirmed one returns the task to implementation on `ci_fix` — the
+ * return this gate would have made (Q109 answered (b); technical/02). Until WP-102 the provisional
+ * pass recorded no `ci_head_sha`, so the rebase settlement sent the task back through `ci_gate`,
+ * and the template's fall-through ran both review stages a second time. A declared path a newer
+ * verdict did not confirm, met by this gate itself (a second pass after a review), is a failure
+ * like an undeclared one.
  *
  * ## What it refuses to guess
  *
@@ -159,6 +165,33 @@ export const exceptionsOf = (
     reviewed,
   };
 };
+
+/**
+ * **The tamper check's second half, as the rebase gate's settlement makes it** (WP-102, Q109 (b)):
+ * which of the paths the CI gate excused provisionally the latest Review Verdict has **not**
+ * confirmed. A path counts as confirmed only when the latest plan still declares it **and** a
+ * verdict newer than the latest Implementation Notes confirms it (`exceptionsOf`, so the two halves
+ * of BD-024 §2 are read exactly as the gate reads them); with no such verdict every path is
+ * unconfirmed — a template whose review stage is disabled returns the task rather than passing it.
+ *
+ * Pure. The caller reads the artifacts in the settlement's own transaction; `excused` is the stored
+ * list, redacted when it was written, so a path a redaction changed matches no confirmation and is
+ * returned — the closed direction.
+ */
+export const unconfirmedExcusedPaths = (
+  excused: readonly string[],
+  exceptions: Pick<TamperInputs, 'declared' | 'confirmed' | 'reviewed'>,
+): readonly string[] =>
+  [...new Set(excused)]
+    .filter(
+      (path) =>
+        !(
+          exceptions.reviewed &&
+          matchesAny(exceptions.declared, path) &&
+          matchesAny(exceptions.confirmed, path)
+        ),
+    )
+    .sort();
 
 /**
  * Every path, redacted (a path is provider text). None is left out: the diff read is bounded at

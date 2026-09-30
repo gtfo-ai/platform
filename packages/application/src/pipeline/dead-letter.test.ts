@@ -76,6 +76,7 @@ const task = (state: StoredTask['task']['state'] = 'active'): StoredTask => ({
   reviewThreads: null,
   readyHeadSha: null,
   ciHeadSha: null,
+  ciExcusedPaths: [],
   requestedByUserId: null,
   pipelineDial: null,
   ticketSnapshotAt: null,

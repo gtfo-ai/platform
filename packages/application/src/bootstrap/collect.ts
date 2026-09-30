@@ -361,6 +361,7 @@ export const collectHistory = async (
         reviewThreads: null,
         readyHeadSha: null,
         ciHeadSha: null,
+        ciExcusedPaths: [],
         // The person who started the bootstrap, read off the batch this job collects for (WP-67,
         // PROGRESS backlog 92): the command held them, and the chunk tasks are theirs.
         requestedByUserId: batch.requestedBy,

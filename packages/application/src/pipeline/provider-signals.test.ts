@@ -83,6 +83,7 @@ const stored = (
   reviewThreads: null,
   readyHeadSha: null,
   ciHeadSha: null,
+  ciExcusedPaths: [],
   requestedByUserId: null,
   pipelineDial: null,
   version: INITIAL_TASK_VERSION,

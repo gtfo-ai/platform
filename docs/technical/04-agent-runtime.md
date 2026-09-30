@@ -218,7 +218,8 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 > steps plus every minted-credential shape (WP-80) — on the **whole** log before the cut, because a
 > cut first leaves a token's leading bytes that no exact-match rule can find again. The reason also
 > names the paths of a failed **tamper check** (BD-024 §2), which the gate computes as part of its
-> read (technical/02 has its inputs and endings); the workspace's path guard below enforces protected
+> read — its second half, the Code review's confirmation of a declared change, in the rebase gate's
+> settlement since WP-102 (technical/02 has its inputs and endings); the workspace's path guard below enforces protected
 > paths at write time, and the gate is the deterministic check of what actually reached the branch —
 > a `Bash` redirect never meets the guard. Since WP-99 the two hold the **same policy**: an addition
 > needs no declaration, and a modification or deletion of an existing protected file needs the plan's
@@ -230,6 +231,13 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 > `protected_path_changes`, each with a reason; the Reviewer's asks it to list in
 > `protected_path_changes_confirmed` only declared paths whose reason holds, and never a path the
 > plan did not declare. Without both, a legitimate change to an existing test could never pass.
+> **Where the confirmation is read** (WP-102, Q109 answered (b)): not by the CI gate, which runs
+> before `code_review` on every shipped template and so passes a declared change provisionally,
+> but by the **rebase gate's settlement**, in its own transaction and with no provider call —
+> against the paths the CI settlement recorded (`tasks.ci_excused_paths`). An unconfirmed path
+> returns the task to implementation on `ci_fix` with the same `protected_paths_changed` reason
+> this block then carries; a confirmed one lets it into Ready without a second review round
+> (technical/02 has the endings).
 >
 > **Layer 3 is not concatenated into the system prompt.** `.agentic/rules/*.md` come out of the
 > project's repository — the channel the vault comes from — so they arrive as tier-0 context-pack

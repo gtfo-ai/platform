@@ -14,6 +14,7 @@ import {
   judgeTamper,
   type TamperInputs,
   tamperFailureDetail,
+  unconfirmedExcusedPaths,
 } from './tamper.js';
 
 const inputs = (overrides: Partial<TamperInputs> = {}): TamperInputs => ({
@@ -248,6 +249,56 @@ describe('exceptionsOf', () => {
         stored('ReviewVerdict', {}),
       ]),
     ).toEqual({ declared: [], confirmed: [], reviewed: false });
+  });
+});
+
+describe('unconfirmedExcusedPaths (WP-102: the rebase settlement’s half)', () => {
+  const excused = ['src/totals.test.ts', 'tests/legacy.spec.ts'];
+
+  it('confirms every excused path a newer review confirmed and the plan still declares, by pattern', () => {
+    expect(
+      unconfirmedExcusedPaths(excused, {
+        declared: ['src/totals.test.ts', 'tests/**'],
+        confirmed: ['src/*.test.ts', 'tests/legacy.spec.ts'],
+        reviewed: true,
+      }),
+    ).toEqual([]);
+  });
+
+  it('names each path the review did not confirm, sorted and once', () => {
+    expect(
+      unconfirmedExcusedPaths([...excused, 'src/totals.test.ts'], {
+        declared: excused,
+        confirmed: ['src/totals.test.ts'],
+        reviewed: true,
+      }),
+    ).toEqual(['tests/legacy.spec.ts']);
+  });
+
+  it('confirms nothing without a review of this change, whatever an older verdict said', () => {
+    expect(
+      unconfirmedExcusedPaths(excused, {
+        declared: excused,
+        confirmed: excused,
+        reviewed: false,
+      }),
+    ).toEqual([...excused].sort());
+  });
+
+  it('does not count a confirmation of a path the latest plan no longer declares', () => {
+    expect(
+      unconfirmedExcusedPaths(excused, {
+        declared: ['tests/legacy.spec.ts'],
+        confirmed: excused,
+        reviewed: true,
+      }),
+    ).toEqual(['src/totals.test.ts']);
+  });
+
+  it('has nothing to confirm when nothing was excused', () => {
+    expect(unconfirmedExcusedPaths([], { declared: [], confirmed: [], reviewed: false })).toEqual(
+      [],
+    );
   });
 });
 

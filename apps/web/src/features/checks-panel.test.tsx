@@ -418,6 +418,71 @@ describe('the Checks panel’s gate, thread and verdict items (WP-46)', () => {
     }
   });
 
+  /**
+   * **The rebase settlement's outcome** (WP-102, Q109 (b)): after a provisional CI pass the Code
+   * review's confirmation is read by the rebase gate's settlement, so the item reads the rebase
+   * row entered after the CI row — and never one from an earlier round.
+   */
+  it('reads a declared change’s confirmation off the rebase settlement after the provisional CI pass (WP-102)', async () => {
+    const later = (row: TaskDetailResponse['stages'][number], at: string) => ({
+      ...row,
+      entered_at: at,
+      exited_at: row.exited_at === null ? null : at,
+    });
+    const provisional = later(
+      stage('ci_gate', 2, 'completed', 'protected_paths_awaiting_review'),
+      '2026-09-12T10:00:00.000Z',
+    );
+    const cases: readonly [TaskDetailResponse['stages'], string, string][] = [
+      [
+        [
+          provisional,
+          later(
+            stage('rebase_gate', 1, 'completed', 'protected_paths_confirmed'),
+            '2026-09-12T10:30:00.000Z',
+          ),
+        ],
+        'declared changes confirmed by the code review',
+        'Rebase statusup to date',
+      ],
+      [
+        [
+          provisional,
+          later(
+            stage('rebase_gate', 1, 'returned', 'protected_paths_changed'),
+            '2026-09-12T10:30:00.000Z',
+          ),
+        ],
+        'declared changes not confirmed, sent back',
+        'Rebase statussent back by the tamper check',
+      ],
+      [
+        [provisional, later(stage('rebase_gate', 1, 'running', null), '2026-09-12T10:30:00.000Z')],
+        'declared changes await the code review',
+        'Rebase statuschecking',
+      ],
+      // A rebase row from the round **before** this CI pass says nothing about it.
+      [
+        [
+          later(
+            stage('rebase_gate', 1, 'completed', 'protected_paths_confirmed'),
+            '2026-09-12T09:00:00.000Z',
+          ),
+          provisional,
+        ],
+        'declared changes await the code review',
+        'Rebase statusup to date',
+      ],
+    ];
+    for (const [stages, expected, rebase] of cases) {
+      const view = await render$(detailWith({ stages, artifacts: [] }));
+      await waitFor(() => expect(view.text()).toContain('Tamper check'));
+      expect(view.text(), expected).toContain(`Tamper check${expected}`);
+      expect(view.text(), rebase).toContain(rebase);
+      cleanup();
+    }
+  });
+
   it('does not call a tamper return red CI, nor a provisional pass anything but green', async () => {
     const returned = await render$(
       detailWith({

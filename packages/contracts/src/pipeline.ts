@@ -118,10 +118,15 @@ export type TaskStageState = z.infer<typeof taskStageStateSchema>;
  *    an event that spent its dispatch bound, a repository file that does not parse;
  *  - `protected_paths_changed` — the CI gate's tamper check found a protected path the change
  *    touched that the plan did not declare, or the Code review did not confirm, and sent the task
- *    back (a `returned` attempt, WP-81, BD-024 §2);
+ *    back (a `returned` attempt, WP-81, BD-024 §2) — written on `rebase_gate`'s attempt when the
+ *    unconfirmed half was found by the rebase settlement (WP-102);
  *  - `protected_paths_awaiting_review` — the CI gate passed while a declared protected path still
- *    awaited the Code review's confirmation, so the rebase gate re-enters it before Ready (a
- *    `completed` attempt, WP-81);
+ *    awaited the Code review's confirmation, which the rebase gate's settlement reads before Ready
+ *    (a `completed` attempt, WP-81; the second half moved to the rebase settlement at WP-102);
+ *  - `protected_paths_confirmed` — the rebase gate's settlement found every protected path the CI
+ *    gate excused provisionally confirmed by the latest Review Verdict, and let the task into Ready
+ *    (a `completed` attempt of `rebase_gate`, WP-102, Q109 (b)). When it found one unconfirmed it
+ *    returned the task and closed its attempt `protected_paths_changed`, the CI gate's word;
  *  - `unknown` — an agent stage that finished with no verdict at all;
  *  - `unrecognised` — a word outside this vocabulary: a model's verdict the interpreter does not
  *    know (stored as this word rather than as the model's own text), or a row written before
@@ -148,6 +153,7 @@ export const taskStageOutcomeWordSchema = z.enum([
   'context_budget_above_ceiling',
   'protected_paths_changed',
   'protected_paths_awaiting_review',
+  'protected_paths_confirmed',
   'unknown',
   'unrecognised',
 ]);

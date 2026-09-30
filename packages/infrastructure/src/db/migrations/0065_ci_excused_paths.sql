@@ -1,0 +1,26 @@
+-- 0065 — the protected paths the CI gate excused provisionally (WP-102, Q109 answered (b)).
+--
+-- BD-024 §2 excuses a change to a protected path the plan declared **and** the Code review
+-- confirmed. Every shipped template runs `ci_gate` before `code_review`, so the CI gate's tamper
+-- check (WP-81) cannot read the confirmation on its first pass: it passes a declared-but-unjudged
+-- path provisionally (`protected_paths_awaiting_review`). Until WP-102 that pass recorded no
+-- `ci_head_sha`, so the rebase gate's settlement sent the task back through `ci_gate` — and the
+-- template's fall-through ran `code_review` and `business_review` a second time (measured: two runs
+-- of each). Since WP-102 the pass records its head like any other, and the paths it excused are
+-- written here; the rebase gate's settlement compares them with the latest Review Verdict's
+-- `protected_path_changes_confirmed` in its own transaction, with no provider call, and returns the
+-- task to implementation on `ci_fix` when one is not confirmed.
+--
+-- **Not null, default empty.** Empty is "the last CI settlement excused nothing provisionally" —
+-- a clean pass, a failure, a gate that has not run, or a row written before this migration. A row
+-- that was already past a provisional pass when this ran has `ci_head_sha` null (WP-81 wrote none),
+-- so its rebase settlement still re-enters `ci_gate` through WP-79's path, and that settlement writes
+-- this column: nothing waiting at the migration is waved through.
+--
+-- **One writer**, `TaskRepository.saveCiSettlement`, called from the CI gate's settlement in
+-- `jobs.ts` in the same statement as `ci_head_sha`; `save` does not name the column and it bumps no
+-- `version` (the partition `tasks-column-ownership.test.ts` holds). The paths are the merge
+-- request's own, **redacted** by the git binding's redactor before they are stored (a path is
+-- provider text); a path a redaction changed can no longer match a confirmation, which returns the
+-- task — the closed direction.
+alter table tasks add column ci_excused_paths text[] not null default '{}';

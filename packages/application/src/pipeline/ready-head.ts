@@ -24,8 +24,9 @@
  * review round 2 (backlog 275), enters Ready only when its head is the one the CI gate passed
  * (`tasks.ci_head_sha`, `rebaseAgainstCi` in `gates.ts`) and otherwise re-enters `ci_gate` as a
  * forward move bounded by `rebase_rechecks`, so a hand-back at `code_review` or `rebase_gate` after
- * a push cannot reach Ready past CI either — and a fall-through into Ready from an agent or system
- * stage (below). The duty then:
+ * a push cannot reach Ready past CI either, and since WP-102 reads the Code review's confirmation of
+ * the protected paths CI excused provisionally before it enters (`tamper-confirmation.ts`) — and a
+ * fall-through into Ready from an agent or system stage (below). The duty then:
  *
  *  1. re-reads the task and **re-validates** it (TD-004): it acts only while the task is still in
  *     the state, and at the stage, the command saw — a cancel, a merge on the provider, or a second

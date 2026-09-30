@@ -147,6 +147,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       reviewThreads: null,
       readyHeadSha: null,
       ciHeadSha: null,
+      ciExcusedPaths: [],
       requestedByUserId: null,
       version: INITIAL_TASK_VERSION,
       ...overrides,
@@ -273,6 +274,41 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         await store.tasks.saveReadyHead(tx, stored.task.id, null);
         expect((await store.tasks.load(tx, stored.task.id))?.readyHeadSha).toBeNull();
         await expect(store.tasks.saveReadyHead(tx, nextId(), HEAD)).rejects.toThrow();
+      });
+
+      it('writes the CI settlement narrowly: its head and its excused paths together, never by the insert or save (WP-102)', async () => {
+        const HEAD = 'c'.repeat(40);
+        const stored = task(
+          { ciHeadSha: 'f'.repeat(40), ciExcusedPaths: ['src/planted.test.ts'] },
+          'ACME-CI-SETTLEMENT',
+        );
+        await store.tasks.insert(tx, stored);
+        // A row is born with neither, whatever the caller's snapshot carried.
+        const born = await store.tasks.load(tx, stored.task.id);
+        expect(born?.ciHeadSha).toBeNull();
+        expect(born?.ciExcusedPaths).toEqual([]);
+        await store.tasks.saveCiSettlement(tx, stored.task.id, {
+          headSha: HEAD,
+          excusedPaths: ['src/legacy.test.ts', 'src/a.spec.ts'],
+        });
+        const loaded = await store.tasks.load(tx, stored.task.id);
+        expect(loaded?.ciHeadSha).toBe(HEAD);
+        expect(loaded?.ciExcusedPaths).toEqual(['src/legacy.test.ts', 'src/a.spec.ts']);
+        // No version bump: `save` names neither column…
+        expect(loaded?.version).toBe(stored.version);
+        // …so a whole-row save carrying other values moves neither.
+        await store.tasks.save(tx, { ...stored, ciHeadSha: null, ciExcusedPaths: [] });
+        const saved = await store.tasks.load(tx, stored.task.id);
+        expect(saved?.ciHeadSha).toBe(HEAD);
+        expect(saved?.ciExcusedPaths).toEqual(['src/legacy.test.ts', 'src/a.spec.ts']);
+        // The next settlement replaces both — a list never outlives the settlement that wrote it.
+        await store.tasks.saveCiSettlement(tx, stored.task.id, { headSha: null, excusedPaths: [] });
+        const cleared = await store.tasks.load(tx, stored.task.id);
+        expect(cleared?.ciHeadSha).toBeNull();
+        expect(cleared?.ciExcusedPaths).toEqual([]);
+        await expect(
+          store.tasks.saveCiSettlement(tx, nextId(), { headSha: HEAD, excusedPaths: [] }),
+        ).rejects.toThrow();
       });
 
       it('saves the state, the stage, the attempts and the counters', async () => {

@@ -39,7 +39,13 @@ import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
-import { CI_GATE_STAGE, createGateEvaluator, MAX_GATE_CHECKS, rebaseAgainstCi } from './gates.js';
+import {
+  CI_GATE_STAGE,
+  createGateEvaluator,
+  type GateResult,
+  MAX_GATE_CHECKS,
+  rebaseAgainstCi,
+} from './gates.js';
 import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
 import { prefetchObservability } from './observability-prefetch.js';
 import { REBASE_GATE_STAGE, recordRebaseCheck } from './rebase.js';
@@ -52,6 +58,7 @@ import {
 import type { PipelineSagaOptions } from './saga.js';
 import type { StageExecutionJob, StageExecutor } from './stage-executor.js';
 import type { StoredTask } from './store.js';
+import { confirmExcusedPaths, unconfirmedTamperReturn } from './tamper-confirmation.js';
 import {
   escalateTaskAfterConflict,
   retryOnTaskConflict,
@@ -758,18 +765,7 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
       return;
     }
 
-    await settle(options, request, {
-      kind: 'gate_settled',
-      stage: request.stage,
-      passed: result.passed,
-      detail: result.detail,
-      ...(result.ciSignature === undefined ? {} : { ciSignature: result.ciSignature }),
-      ...(result.headSha === undefined ? {} : { headSha: result.headSha }),
-      ...(result.outcome === undefined ? {} : { outcome: result.outcome }),
-      ...(result.detailOriginalChars === undefined
-        ? {}
-        : { detailOriginalChars: result.detailOriginalChars }),
-    });
+    await settle(options, request, gateSettlementOf(request.stage, result));
 
     /**
      * The rebase gate's own measurement, after the settlement and in a transaction of its own
@@ -827,6 +823,12 @@ export type GateSettlement =
        */
       readonly outcome?: TaskStageOutcome;
       /**
+       * The protected paths a provisional CI pass excused (WP-102), recorded as
+       * `tasks.ci_excused_paths` by this settlement and compared with the latest Review Verdict by
+       * the rebase gate's.
+       */
+      readonly excusedPaths?: readonly string[];
+      /**
        * The uncut length of `detail` when the gate cut the failing job's log (WP-81), recorded beside
        * the return reason so the next run's `return_feedback` marker announces the cut.
        */
@@ -842,6 +844,28 @@ export type GateSettlement =
       readonly reason: string;
       readonly blockerBrief: string;
     };
+
+/**
+ * A settled {@link GateResult} as the settlement's signal — one conversion for the poll and for the
+ * pipeline's event (`ci-settle.ts`), so a field the gate answers cannot reach one path and not the
+ * other (WP-102: `excusedPaths`).
+ */
+export const gateSettlementOf = (
+  stage: Slug,
+  result: Extract<GateResult, { kind: 'settled' }>,
+): GateSettlement => ({
+  kind: 'gate_settled',
+  stage,
+  passed: result.passed,
+  detail: result.detail,
+  ...(result.ciSignature === undefined ? {} : { ciSignature: result.ciSignature }),
+  ...(result.headSha === undefined ? {} : { headSha: result.headSha }),
+  ...(result.outcome === undefined ? {} : { outcome: result.outcome }),
+  ...(result.excusedPaths === undefined ? {} : { excusedPaths: result.excusedPaths }),
+  ...(result.detailOriginalChars === undefined
+    ? {}
+    : { detailOriginalChars: result.detailOriginalChars }),
+});
 
 /** {@link settle}, for a duty that settles a gate outside `stage.execute` (`ci-settle.ts`). */
 export const settleGate = async (
@@ -891,16 +915,18 @@ const settle = async (
           ? await ciConvergence(options, scope, stored, signal.stage, signal.ciSignature)
           : null;
       /**
-       * **The head CI judged** (WP-79 review round 2, PROGRESS backlog 275): the one write of
-       * `tasks.ci_head_sha` — the head a passing CI settlement read, `null` for a failing one —
-       * which the rebase gate's settlement below compares with before it lets the task into Ready.
+       * **The head CI judged, and what it excused** (WP-79 review round 2, PROGRESS backlog 275;
+       * WP-102): the one write of `tasks.ci_head_sha` — the head a passing CI settlement read,
+       * `null` for a failing one — and of `tasks.ci_excused_paths`, the protected paths a
+       * provisional pass excused until the Code review confirms them (empty for every other
+       * settlement, so a list never outlives the settlement that wrote it). The rebase gate's
+       * settlement below reads both before it lets the task into Ready.
        */
       if (signal.kind === 'gate_settled' && signal.stage === CI_GATE_STAGE) {
-        await options.store.tasks.saveCiHead(
-          scope.tx,
-          stored.task.id,
-          signal.passed ? (signal.headSha ?? null) : null,
-        );
+        await options.store.tasks.saveCiSettlement(scope.tx, stored.task.id, {
+          headSha: signal.passed ? (signal.headSha ?? null) : null,
+          excusedPaths: signal.passed ? (signal.excusedPaths ?? []) : [],
+        });
       }
       /**
        * **Ready only for a head CI passed** (WP-79 review round 2, backlog 275). A passing rebase
@@ -921,16 +947,41 @@ const settle = async (
         converged === null
           ? rebaseAgainstCi(pipeline, stored.ciHeadSha, signal.headSha)
           : ({ kind: 'agree' } as const);
+      /**
+       * **The tamper check's second half** (WP-102, Q109 answered (b)): a passing rebase gate that
+       * agrees with the head CI passed compares the paths CI excused provisionally with the latest
+       * Review Verdict — here, in this transaction, with no provider call
+       * (`tamper-confirmation.ts`). Not confirmed returns the task on `ci_fix`, the return `ci_gate`
+       * would have made; a head that moved never gets here, it re-enters `ci_gate` above.
+       */
+      const confirmation =
+        signal.kind === 'gate_settled' &&
+        signal.stage === REBASE_GATE_STAGE &&
+        signal.passed &&
+        converged === null &&
+        againstCi.kind === 'agree'
+          ? await confirmExcusedPaths(options.store, scope.tx, stored)
+          : null;
+      const settledOutcome: TaskStageOutcome | undefined =
+        confirmation === null
+          ? signal.kind === 'gate_settled'
+            ? signal.outcome
+            : undefined
+          : confirmation.kind === 'confirmed'
+            ? 'protected_paths_confirmed'
+            : 'protected_paths_changed';
       const decision =
         againstCi.kind === 'reenter_ci'
           ? ({ kind: 'enter', stage: CI_GATE_STAGE } as const)
-          : signal.kind === 'escalate'
-            ? ({
-                kind: 'escalate',
-                reason: signal.reason,
-                blockerBrief: signal.blockerBrief,
-              } as const)
-            : (converged ?? interpret(pipeline, signal));
+          : confirmation?.kind === 'unconfirmed'
+            ? unconfirmedTamperReturn(pipeline, stored, confirmation.paths)
+            : signal.kind === 'escalate'
+              ? ({
+                  kind: 'escalate',
+                  reason: signal.reason,
+                  blockerBrief: signal.blockerBrief,
+                } as const)
+              : (converged ?? interpret(pipeline, signal));
       const applied = await applyDecision({
         store: options.store,
         pipeline,
@@ -941,8 +992,9 @@ const settle = async (
           ? {
               signal,
               // WP-81: the tamper check's word for the gate's row, and the log cut the return's
-              // reason carries — both read only by the settlement they came with.
-              ...(signal.outcome === undefined ? {} : { stageOutcome: signal.outcome }),
+              // reason carries — both read only by the settlement they came with. WP-102: the
+              // rebase gate's row carries the confirmation's word.
+              ...(settledOutcome === undefined ? {} : { stageOutcome: settledOutcome }),
               ...(signal.detailOriginalChars === undefined
                 ? {}
                 : { returnReasonOriginalChars: signal.detailOriginalChars }),

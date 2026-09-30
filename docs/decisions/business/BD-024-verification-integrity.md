@@ -15,5 +15,5 @@ Evidence: agents misreport completion (22.6% of misalignment episodes; 75.8% of 
 5. Bounded observations: tool output is truncated head/tail; CI logs are reduced to the failing job's error block before being fed back.
 
 ## Consequences
-- The CI gate extracts the failing job's log (head and tail, redacted — WP-81) and flags modified, deleted or renamed-away existing tests and CI/lint configuration not declared in the plan and confirmed by the code review (additions are not flagged; WP-81); on the shipped templates the confirmation is read on a second CI pass before Ready (Q109).
+- The CI gate extracts the failing job's log (head and tail, redacted — WP-81) and flags modified, deleted or renamed-away existing tests and CI/lint configuration not declared in the plan and confirmed by the code review (additions are not flagged; WP-81); on the shipped templates the confirmation is read by the rebase gate's settlement before Ready — the CI gate passes a declared-but-unjudged path provisionally and records it on the task, and the settlement compares it with the latest Review Verdict in its own transaction; a path the review did not confirm returns the task to Implementation with the tamper reason (Q109 (b), founder-confirmed 2026-09-30; WP-102).
 - Projects without CI get weaker guarantees; the readiness score (product/06) makes that visible.

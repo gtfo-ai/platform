@@ -144,6 +144,7 @@ interface TaskRow extends Record<string, unknown> {
   requested_by_user_id: string | null;
   ready_head_sha: string | null;
   ci_head_sha: string | null;
+  ci_excused_paths: string[] | null;
   version: number;
   created_at: Date;
   sequence: string | number | null;
@@ -157,7 +158,7 @@ const TASK_COLUMNS = `t.id, t.project_id, t.ticket_provider, t.ticket_key, t.tic
     t.ticket_snapshot, t.ticket_snapshot_at, t.ticket_signal_at, t.review_subject, t.history_sample,
     t.risk_classes, t.coverage,
     t.dependencies, t.required_reviewers, t.review_threads,
-    t.requested_by_user_id, t.ready_head_sha, t.ci_head_sha, t.version,
+    t.requested_by_user_id, t.ready_head_sha, t.ci_head_sha, t.ci_excused_paths, t.version,
     t.created_at,
     (select max(e.stream_seq) from events e where e.stream_type = 'task' and e.stream_id = t.id)
       as sequence`;
@@ -211,6 +212,8 @@ const toStoredTask = (row: TaskRow, template: PipelineTemplate): StoredTask => (
   requestedByUserId: (row.requested_by_user_id ?? null) as Id | null,
   readyHeadSha: row.ready_head_sha ?? null,
   ciHeadSha: row.ci_head_sha ?? null,
+  // `text[] not null default '{}'` (WP-102, migration 0065); the `?? []` is the driver's, as above.
+  ciExcusedPaths: row.ci_excused_paths ?? [],
   version: Number(row.version),
 });
 
@@ -630,13 +633,14 @@ export const createPostgresPipelineStore = (
     },
 
     /**
-     * `ci_head_sha` — the head the CI gate last passed (WP-79 review round 2, migration 0056). One
-     * column, one statement, no version bump.
+     * `ci_head_sha` — the head the CI gate last passed (WP-79 review round 2, migration 0056) — and
+     * `ci_excused_paths`, the paths it excused provisionally (WP-102, migration 0065). Two columns
+     * one settlement decides together, so one statement; no version bump.
      */
-    saveCiHead: async (tx, taskId, headSha) => {
+    saveCiSettlement: async (tx, taskId, settlement) => {
       const result = await sqlOf(tx).query(
-        'update tasks set ci_head_sha = $2, updated_at = now() where id = $1',
-        [taskId, headSha],
+        'update tasks set ci_head_sha = $2, ci_excused_paths = $3::text[], updated_at = now() where id = $1',
+        [taskId, settlement.headSha, [...settlement.excusedPaths]],
       );
       if (result.rowCount === 0) {
         throw new PipelineRowMissingError(`task ${taskId} does not exist`);

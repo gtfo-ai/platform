@@ -141,10 +141,12 @@ const EXPECTED_OWNERSHIP: Readonly<Record<string, readonly string[]>> = {
     // (`packages/application/src/pipeline/transitions.ts`), inside the entry's own transaction;
     // the `ready_head_check` duty reads it and never writes it.
     'ready_head_sha',
-    // `saveCiHead` — the head the CI gate last passed (WP-79 review round 2, backlog 275). One
-    // caller: the gate settlement in `packages/application/src/pipeline/jobs.ts`; the rebase gate's
-    // settlement reads it before it lets a task into Ready.
+    // `saveCiSettlement` — the head the CI gate last passed (WP-79 review round 2, backlog 275) and
+    // the protected paths it excused provisionally (WP-102, migration 0065, Q109 (b)), in one
+    // statement. One caller: the gate settlement in `packages/application/src/pipeline/jobs.ts`;
+    // the rebase gate's settlement reads both before it lets a task into Ready.
     'ci_head_sha',
+    'ci_excused_paths',
     // `saveRequester` — the column's first `update` (WP-79, backlog 243): the reporter a stage's
     // ticket re-read resolved through `user_identities`, filled only while the row holds `null`.
     // The other writer is the **insert** (discovery, a shadow batch, a bootstrap's chunk tasks and,

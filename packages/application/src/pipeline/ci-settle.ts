@@ -36,7 +36,7 @@ import type { UnitOfWork } from '../ports/unit-of-work.js';
 import { failingJobWithLog } from './ci-log.js';
 import { judgeCiSettlement } from './gates.js';
 import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
-import { type PipelineOutboundData, settleGate } from './jobs.js';
+import { gateSettlementOf, type PipelineOutboundData, settleGate } from './jobs.js';
 import type { PipelineSagaOptions } from './saga.js';
 
 export interface CiSettleOptions extends PipelineSagaOptions {
@@ -158,22 +158,7 @@ export const runCiSettle = async (
     );
     return;
   }
-  await settleGate(
-    options,
-    { taskId, stage },
-    {
-      kind: 'gate_settled',
-      stage,
-      passed: result.passed,
-      detail: result.detail,
-      ...(result.ciSignature === undefined ? {} : { ciSignature: result.ciSignature }),
-      // WP-79: the live head this pipeline ran on — checked equal just above; absent on a
-      // provisional pass (WP-81), so `ci_head_sha` stays null until the review has confirmed.
-      ...(result.headSha === undefined ? {} : { headSha: result.headSha }),
-      ...(result.outcome === undefined ? {} : { outcome: result.outcome }),
-      ...(result.detailOriginalChars === undefined
-        ? {}
-        : { detailOriginalChars: result.detailOriginalChars }),
-    },
-  );
+  // WP-79: the live head this pipeline ran on — checked equal just above — recorded on a
+  // provisional pass too since WP-102, with the paths it excused; the same conversion as the poll's.
+  await settleGate(options, { taskId, stage }, gateSettlementOf(stage, result));
 };

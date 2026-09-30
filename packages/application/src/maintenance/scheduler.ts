@@ -504,6 +504,7 @@ const scheduleProject = async (
         reviewThreads: null,
         readyHeadSha: null,
         ciHeadSha: null,
+        ciExcusedPaths: [],
         requestedByUserId: null,
       };
       await options.store.tasks.insert(scope.tx, stored);

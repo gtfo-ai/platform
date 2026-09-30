@@ -336,8 +336,10 @@ The product defines eleven merge-readiness checks, and the panel shows **all ele
   is never flagged. *protected paths changed, sent back* when anything
   is left (the developer is told which paths, and CI status then says *sent back by the tamper
   check* rather than red); *declared changes await the code review* when the plan declared them and
-  the review has not judged the change yet — CI checks again before Ready; *clean*; *checking*; or
-  *not reached*. It is never drawn as an empty tick for a gate that has not decided.
+  the review has not judged the change yet — the rebase gate, just before Ready, reads the code
+  review's confirmation, so neither review runs twice; then *declared changes confirmed by the code
+  review*, or *declared changes not confirmed, sent back* (the developer is told which paths, as
+  for an undeclared change); *clean*; *checking*; or *not reached*. It is never drawn as an empty tick for a gate that has not decided.
   A merge request that changes **100 files or more** is more than the check reads, so the CI gate
   cannot tell whether a protected path changed and hands the task to a human (`needs_human`) even
   on green CI — split a large refactor, or take the merge from there yourself.

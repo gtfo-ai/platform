@@ -116,7 +116,8 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > state and at the stage the command saw, and drops the wake-up (with a log line) otherwise.
 >
 > **The CI gate runs BD-024's tamper check, and it is part of the gate's read** (WP-81, PROGRESS
-> backlog 95, BD-024 §2) — not a stage of its own and not a reviewer's opinion. When the pipeline
+> backlog 95, BD-024 §2) — not a stage of its own and not a reviewer's opinion; the Code review's
+> confirmation of a *declared* change is read by the rebase gate's settlement (WP-102, below). When the pipeline
 > for the live head is terminal (or the project has no pipeline for it), the gate computes, from
 > three inputs: the **changed paths of existing files** in the merge request at that head — every
 > file the provider lists as **modified or deleted**, and the **old** name of a rename, through the
@@ -140,13 +141,26 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > - **a declared path the Code review has not judged yet** — the shipped templates run `ci_gate`
 >   *before* `code_review`, so on the first pass no Review Verdict of the current change exists — is
 >   excused **provisionally**: the gate passes with the outcome word
->   **`protected_paths_awaiting_review`** and records **no** `ci_head_sha`, so the rebase gate's
->   settlement (`rebaseAgainstCi`, WP-79) re-enters `ci_gate` before Ready and the check is made
->   again with the review's confirmation in hand. That round is the WP-79 re-entry — a forward move
->   bounded by `rebase_rechecks`, re-running the review stages — and it is paid only by a change that
->   touches a declared protected path. "Judged" is ordinal: the latest Review Verdict is newer than
->   the latest Implementation Notes (the Developer's report after its push). The alternative that
->   avoids the second review round is Q109 (`docs/OPEN-QUESTIONS.md`);
+>   **`protected_paths_awaiting_review`**, records its head as `tasks.ci_head_sha` like any pass,
+>   and records the excused paths (redacted) as **`tasks.ci_excused_paths`** (migration 0065; every
+>   other CI settlement writes it empty). "Judged" is ordinal: the latest Review Verdict is newer
+>   than the latest Implementation Notes (the Developer's report after its push). **The check's
+>   second half lives in the rebase gate's settlement** (WP-102, Q109 answered (b)): a passing
+>   rebase gate whose head agrees with `ci_head_sha` (`rebaseAgainstCi`, WP-79) compares the
+>   recorded paths with the latest Review Verdict **in its own transaction, with no provider call**
+>   — a path is confirmed when the latest plan still declares it and a review of the change
+>   confirmed it. **Confirmed** → the task enters Ready and the rebase gate's row is closed
+>   **`protected_paths_confirmed`**; **not confirmed** → the task **returns to implementation** with
+>   the tamper reason, spending **`ci_fix`** — the return `ci_gate` would have made (its `fail_to`
+>   and loop, through the interpreter), from the rebase gate, whose row is closed `returned` with
+>   **`protected_paths_changed`**. A head that moved after the CI read still re-enters `ci_gate`
+>   through WP-79's path, unchanged, and that settlement rewrites both columns. Until WP-102 the
+>   provisional pass recorded no `ci_head_sha`, so the rebase settlement re-entered `ci_gate` and the
+>   template's fall-through ran `code_review` and `business_review` a second time (measured on the
+>   fake-Claude e2e: two runs of each; one since). **Residual:** a pipeline that disables
+>   `rebase_gate` falls through `business_review` into Ready and nothing compares the recorded
+>   paths — latent (nothing on this build disables it: the per-stage `enabled` is read by nothing), older than
+>   WP-102, stated rather than closed (PROGRESS backlog 338);
 > - **cannot be decided** — the provider lists **no** changed file (a merge request's diff is
 >   computed asynchronously, so `[]` is *not yet*, never *nothing*), or lists as many files as the
 >   read's bound so the rest are unseen — is never read as *no tamper* (fail closed on a mutation):

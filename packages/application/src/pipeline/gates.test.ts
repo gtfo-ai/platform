@@ -217,6 +217,7 @@ const storedTask = (mr: StoredTask['mr']): StoredTask => ({
   reviewThreads: null,
   readyHeadSha: null,
   ciHeadSha: null,
+  ciExcusedPaths: [],
   requestedByUserId: null,
   pipelineDial: null,
   ticketSnapshotAt: null,
@@ -625,7 +626,7 @@ describe('the tamper check in the CI gate (WP-81)', () => {
     );
   });
 
-  it('excuses a declared path provisionally while no review has judged the change, recording no CI head', async () => {
+  it('excuses a declared path provisionally while no review has judged the change, with its head and the excused paths (WP-102)', async () => {
     // The review is **older** than the Developer's latest notes, so it judged an earlier push.
     const result = await evaluate(
       templateStage('ci_gate'),
@@ -643,10 +644,16 @@ describe('the tamper check in the CI gate (WP-81)', () => {
       kind: 'settled',
       passed: true,
       outcome: 'protected_paths_awaiting_review',
+      // WP-102 (Q109 (b)): the head like any pass, so the rebase gate agrees with CI instead of
+      // re-entering it, and the excused paths, which the rebase settlement compares with the
+      // latest Review Verdict before Ready.
+      headSha: HEAD_SHA,
+      excusedPaths: ['src/totals.test.ts'],
     });
-    // No head: `tasks.ci_head_sha` stays null, so the rebase gate re-enters CI before Ready.
-    expect(result).not.toHaveProperty('headSha');
     expect(result.kind === 'settled' ? result.detail : '').toContain('src/totals.test.ts');
+    expect(result.kind === 'settled' ? result.detail : '').toContain(
+      'the rebase gate checks the confirmation before Ready',
+    );
   });
 
   it('flags a deletion and a rename’s old name, and not an added file (WP-81 round 1 ruling)', async () => {

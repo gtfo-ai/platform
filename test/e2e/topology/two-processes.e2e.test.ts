@@ -655,7 +655,11 @@ describe('two API processes, one steer window', () => {
     const pipeline = await startPipeline({
       scenarios: (world) => ({
         ...featureScenarios(world),
-        refinement: { ...featureScenarios(world).refinement, awaitSteers: 1 },
+        // Two, not one: the session must still be open when the refused steer reads the run. With
+        // one, the admitted steer's delivery could end the script before the other request's
+        // transaction read the row, which answered `409 run_not_live` instead of the window's
+        // `429` (measured once in 2 runs, WP-102's verification, session 10 — rule 87).
+        refinement: { ...featureScenarios(world).refinement, awaitSteers: 2 },
       }),
       label: 'topology-steer-window',
       tickets: TICKETS,
@@ -713,6 +717,21 @@ describe('two API processes, one steer window', () => {
         runId,
       ]),
     ).toHaveLength(1);
+    // The session still waits for a second user turn that never comes; end it the way a human
+    // would, so the harness's teardown is not left waiting on it.
+    const stopped = await one.json<CancelRunResponse>(`/api/runs/${runId}/cancel`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': 'window-cancel' },
+      body: JSON.stringify({ reason: 'end of the window test' }),
+    });
+    expect(stopped.status, JSON.stringify(stopped.body)).toBe(202);
+    await pipeline.waitFor('the steered session to be stopped', async () => {
+      const rows = await pipeline.query(
+        "select 1 from runs where id = $1 and status = 'cancelled'",
+        [runId],
+      );
+      return rows.length === 1;
+    });
   }, 300_000);
 });
 

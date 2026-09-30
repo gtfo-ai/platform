@@ -185,6 +185,7 @@ export const openDiscoveryTask = async (
     reviewThreads: null,
     readyHeadSha: null,
     ciHeadSha: null,
+    ciExcusedPaths: [],
     // The person who started discovery — the requester product/19:138's third reviewer step
     // falls back to (WP-67, PROGRESS backlog 92). The route also records them in `human_actions`;
     // this is the column the routing reads.

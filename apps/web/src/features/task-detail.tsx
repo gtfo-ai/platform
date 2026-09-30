@@ -15,7 +15,9 @@
  * them with the verdict), review threads off the review window's `tasks.review_threads`, and the
  * business verdict and acceptance criteria off the latest Acceptance Verdict's body (WP-52's route)
  * — and since WP-81 the **tamper check**, BD-024's gate, off the CI gate's row too, because the
- * check is part of that gate's read and its verdict is the word the row is closed with. The whole
+ * check is part of that gate's read and its verdict is the word the row is closed with — and, for a
+ * change the plan declared, off the rebase gate's row after it, because since WP-102 (Q109 (b)) the
+ * Code review's confirmation is read in the rebase gate's settlement. The whole
  * list is held to product/10:38 by `apps/web/src/features/checks-panel.test.tsx` › "the Checks
  * panel against product/10:38" **in both directions**, so neither this paragraph nor the panel can
  * go stale on its own (WP-38, criterion 5; WP-46; WP-81).
@@ -415,15 +417,19 @@ export const gateValueText = (
     case 'running':
       return 'checking';
     case 'completed':
-      // A provisional pass of the CI gate (WP-81) is still the pipeline's pass.
-      return row.outcome === 'pass' || row.outcome === 'protected_paths_awaiting_review'
+      // A provisional pass of the CI gate (WP-81) is still the pipeline's pass, and a rebase gate
+      // that confirmed the declared protected paths (WP-102) still found no conflict.
+      return row.outcome === 'pass' ||
+        row.outcome === 'protected_paths_awaiting_review' ||
+        row.outcome === 'protected_paths_confirmed'
         ? words.pass
         : row.outcome === 'fail'
           ? words.fail
           : 'passed';
     case 'returned':
       // WP-81: the CI gate's tamper check sent the task back, whatever the pipeline said — so the
-      // CI item does not call it red.
+      // CI item does not call it red; since WP-102 the rebase gate's settlement can too, and the
+      // rebase item does not call that a conflict.
       return row.outcome === 'protected_paths_changed'
         ? 'sent back by the tamper check'
         : `${words.fail}, sent back`;
@@ -435,36 +441,55 @@ export const gateValueText = (
 };
 
 /**
- * **The tamper check** (WP-81, BD-024 §2) — the Checks panel's eleventh item, read off the same row
- * as *CI status*, because the check is part of the CI gate's read and its verdict is the word that
- * row is closed with. Every answer is one the row supports, and none is a tick for a gate that never
- * decided:
+ * **The tamper check** (WP-81, BD-024 §2) — the Checks panel's eleventh item, read off the CI gate's
+ * latest row, because the check is part of that gate's read and its verdict is the word the row is
+ * closed with — and, when that word is the provisional pass, off the **rebase gate's** row entered
+ * after it, because since WP-102 (Q109 answered (b)) the Code review's confirmation of a declared
+ * change is read in the rebase gate's settlement. Every answer is one a row supports, and none is a
+ * tick for a gate that never decided:
  *
- *  - `protected_paths_changed` — the gate sent the task back naming the paths;
- *  - `protected_paths_awaiting_review` — the plan declared the protected paths the change touches,
- *    and the Code review had not judged it yet, so CI checks again before Ready;
+ *  - `protected_paths_changed` on the CI row — the gate sent the task back naming the paths;
+ *  - `protected_paths_awaiting_review` on the CI row, then the rebase row after it:
+ *     - `protected_paths_confirmed` — the settlement found every declared path confirmed;
+ *     - `protected_paths_changed` — the settlement found one unconfirmed and sent the task back;
+ *     - anything else, or no rebase row yet — the confirmation has not been read;
  *  - `pass`, or a return for the pipeline's own failure — the check was made and found nothing the
  *    change may not touch (both are settlements the check runs in, WP-81);
  *  - an escalation — the gate could not decide, which is what it says.
+ *
+ * A rebase row entered **before** the CI row belongs to an earlier round and is not read.
  */
-export const tamperValueText = (row: StageRow | null): string => {
-  if (row === null) {
+export const tamperValueText = (ci: StageRow | null, rebase: StageRow | null = null): string => {
+  if (ci === null) {
     return 'not reached';
   }
-  if (row.state === 'running') {
+  if (ci.state === 'running') {
     return 'checking';
   }
-  switch (row.outcome) {
+  switch (ci.outcome) {
     case 'protected_paths_changed':
       return 'protected paths changed, sent back';
     case 'protected_paths_awaiting_review':
-      return 'declared changes await the code review';
+      return settledConfirmationText(ci, rebase);
     case 'pass':
       return 'clean';
     default:
-      return row.state === 'returned'
+      return ci.state === 'returned'
         ? 'clean'
-        : `not decided${row.outcome === null ? '' : ` (${row.outcome})`}`;
+        : `not decided${ci.outcome === null ? '' : ` (${ci.outcome})`}`;
+  }
+};
+
+/** The rebase settlement's answer to a provisional CI pass (WP-102), or that none was read yet. */
+const settledConfirmationText = (ci: StageRow, rebase: StageRow | null): string => {
+  const after = rebase !== null && Date.parse(rebase.entered_at) >= Date.parse(ci.entered_at);
+  switch (after ? rebase.outcome : null) {
+    case 'protected_paths_confirmed':
+      return 'declared changes confirmed by the code review';
+    case 'protected_paths_changed':
+      return 'declared changes not confirmed, sent back';
+    default:
+      return 'declared changes await the code review';
   }
 };
 
@@ -677,7 +702,9 @@ export const stageOutcomeWordSentence = (word: TaskStageOutcomeWord): string => 
     case 'protected_paths_changed':
       return 'Sent the task back: the change touches protected paths the plan did not declare or the code review did not confirm (BD-024).';
     case 'protected_paths_awaiting_review':
-      return 'Passed; the protected paths the plan declared await the code review, so CI checks again before Ready.';
+      return 'Passed; the protected paths the plan declared await the code review, whose confirmation the rebase gate checks before Ready.';
+    case 'protected_paths_confirmed':
+      return 'Passed; the code review confirmed every protected path the plan declared (BD-024).';
     case 'unknown':
       return 'Finished without a verdict.';
     case 'unrecognised':
@@ -1502,12 +1529,13 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
           <p className="-mt-2 text-[11px] text-fg-muted">{gateBasisText(ciGate, 'ci_gate')}</p>
           {/*
             **The tamper check** (WP-81, BD-024 §2): part of the CI gate's read, so its verdict is
-            the word the same row is closed with — never a tick for a gate that has not decided.
+            the word the same row is closed with — and for a declared change the rebase gate's
+            settlement after it (WP-102) — never a tick for a gate that has not decided.
           */}
           <Metric
             label="Tamper check"
-            value={tamperValueText(ciGate)}
-            definition="BD-024's check, made by the CI gate: the existing files this change modifies, deletes or renames away, against the project's protected paths (tests and CI/lint configuration by default), minus the changes the plan declared and the code review confirmed. Anything left sends the task back to the developer, naming the paths; adding a new file is never flagged."
+            value={tamperValueText(ciGate, rebaseGate)}
+            definition="BD-024's check: the existing files this change modifies, deletes or renames away, against the project's protected paths (tests and CI/lint configuration by default), minus the changes the plan declared and the code review confirmed. The CI gate makes it; a change the plan declared passes there until the rebase gate, just before Ready, reads the code review's confirmation. Anything left sends the task back to the developer, naming the paths; adding a new file is never flagged."
           />
           <Metric
             label="Rebase status"

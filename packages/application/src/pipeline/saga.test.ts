@@ -2148,9 +2148,22 @@ describe('the tamper check in the CI gate (WP-81)', () => {
     expect(taskOf(harness).task.iterationCounters.ci_fix).toBe(3);
   });
 
+  const rebaseRows = (harness: PipelineHarness) =>
+    harness.store.stageRows
+      .filter((row) => row.stage === 'rebase_gate')
+      .map((row) => ({
+        attempt: row.attempt,
+        state: row.state,
+        outcome: row.outcome,
+        returnedTo: row.returnedTo ?? null,
+      }));
+  const runsOf = (harness: PipelineHarness, stage: string) =>
+    harness.specs.filter((spec) => spec.stage === stage).length;
+
   /**
    * The subtraction's own case: this is the test a canary that drops "minus declared-and-confirmed"
-   * fails (PROGRESS, WP-81).
+   * fails (PROGRESS, WP-81). Since WP-102 (Q109 (b)) the confirmation is read by the rebase gate's
+   * settlement, so the CI gate passes once, provisionally, and neither review stage runs twice.
    */
   it('passes a declared protected path once the code review confirmed it, re-checking before Ready', async () => {
     const harness = harnessWith({
@@ -2166,16 +2179,21 @@ describe('the tamper check in the CI gate (WP-81)', () => {
     const task = taskOf(harness);
     expect(task.task.currentStage).toBe('ready_for_merge');
     expect(task.task.iterationCounters.ci_fix ?? 0).toBe(0);
-    // First pass: no review of this change yet — excused provisionally, no CI head recorded. The
-    // rebase gate then re-entered CI (a forward move on `rebase_rechecks`), and the second pass,
-    // with the review's confirmation in hand, is the gate's pass.
+    // One pass: no review of this change yet — excused provisionally, with its head and the paths
+    // recorded. The rebase gate agreed with that head, read the review's confirmation in its own
+    // settlement and let the task into Ready — no re-entry of CI, no second review round.
     expect(ciRows(harness)).toEqual([
       { attempt: 1, state: 'completed', outcome: 'protected_paths_awaiting_review' },
-      { attempt: 2, state: 'completed', outcome: 'pass' },
     ]);
-    expect(task.task.iterationCounters.rebase_rechecks).toBe(1);
+    expect(rebaseRows(harness)).toEqual([
+      { attempt: 1, state: 'completed', outcome: 'protected_paths_confirmed', returnedTo: null },
+    ]);
+    expect(task.task.iterationCounters.rebase_rechecks ?? 0).toBe(0);
     expect(task.ciHeadSha).toBe('b'.repeat(40));
-    expect(harness.specs.filter((spec) => spec.stage === 'implementation')).toHaveLength(1);
+    expect(task.ciExcusedPaths).toEqual([TEST_FILE]);
+    expect(runsOf(harness, 'implementation')).toBe(1);
+    expect(runsOf(harness, 'code_review')).toBe(1);
+    expect(runsOf(harness, 'business_review')).toBe(1);
   });
 
   /**
@@ -2217,6 +2235,11 @@ describe('the tamper check in the CI gate (WP-81)', () => {
     });
   });
 
+  /**
+   * The comparison's own case (WP-102 criterion 3): the canary that skips it in the rebase
+   * settlement (`confirmExcusedPaths` answering `null`) lets this task into Ready, and this test
+   * fails by name.
+   */
   it('returns a declared protected path the code review did not confirm', async () => {
     const harness = harnessWith({
       runs: {
@@ -2228,18 +2251,100 @@ describe('the tamper check in the CI gate (WP-81)', () => {
     });
     await harness.publish([ticketMatched()]);
 
-    const returned = harness.store.stageRows.find(
-      (row) => row.stage === 'ci_gate' && row.outcome === 'protected_paths_changed',
+    // The rebase gate's settlement found the declared path unconfirmed and made the return the CI
+    // gate would have made: to implementation, closed with the tamper word, on `ci_fix`.
+    const [returned] = harness.store.stageRows.filter(
+      (row) => row.stage === 'rebase_gate' && row.attempt === 1,
     );
-    expect(returned).toMatchObject({ state: 'returned', returnedTo: 'implementation' });
+    expect(returned).toMatchObject({
+      state: 'returned',
+      outcome: 'protected_paths_changed',
+      returnedTo: 'implementation',
+    });
     expect(returned?.returnReason).toContain(
       `the Code review did not confirm in protected_path_changes_confirmed: ${TEST_FILE}`,
     );
-    // It never reached Ready on the unconfirmed change.
-    expect(harness.store.stageRows.some((row) => row.stage === 'ready_for_merge')).toBe(false);
-    expect(harness.specs.filter((spec) => spec.stage === 'implementation').length).toBeGreaterThan(
-      1,
+    const returns = harness
+      .events()
+      .filter((entry) => entry.type === 'task.stage.returned')
+      .map((entry) => entry.payload as { from_stage: string; to_stage: string });
+    expect(returns[0]).toMatchObject({ from_stage: 'rebase_gate', to_stage: 'implementation' });
+    // The next implementation run is told, inside its feedback block.
+    const [, second] = harness.specs.filter((spec) => spec.stage === 'implementation');
+    const [feedback] = readDataBlocks(second?.userPrompt ?? '').blocks.filter(
+      (block) => block.kind === 'return_feedback',
     );
+    expect(feedback?.body).toContain(TEST_FILE);
+    // Every CI pass was provisional — the gate itself never judged a review of the change.
+    expect(ciRows(harness).every((row) => row.outcome === 'protected_paths_awaiting_review')).toBe(
+      true,
+    );
+    // It never reached Ready on the unconfirmed change; the review never confirms, so BD-008's
+    // `ci_fix` bound is spent and a human decides.
+    expect(harness.store.stageRows.some((row) => row.stage === 'ready_for_merge')).toBe(false);
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    expect(taskOf(harness).task.iterationCounters.ci_fix).toBe(3);
+    expect(taskOf(harness).task.iterationCounters.rebase_rechecks ?? 0).toBe(0);
+  });
+
+  /** WP-102 criterion 4: the first half stays the CI gate's, on its first pass. */
+  it('still returns an undeclared change from ci_gate on the first pass, before any review runs (WP-102)', async () => {
+    const harness = harnessWith({
+      runs: { ...happyRuns(), code_review: reviewConfirming([TEST_FILE]) },
+      git: gitWith(['src/totals.ts', TEST_FILE]),
+    });
+    await harness.publish([ticketMatched()]);
+    expect(ciRows(harness)[0]).toEqual({
+      attempt: 1,
+      state: 'returned',
+      outcome: 'protected_paths_changed',
+    });
+    // A review that "confirms" an undeclared path is never reached, and would not count if it were.
+    expect(runsOf(harness, 'code_review')).toBe(0);
+    expect(rebaseRows(harness)).toEqual([]);
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    expect(taskOf(harness).task.iterationCounters.ci_fix).toBe(3);
+  });
+
+  /**
+   * WP-79's path is unchanged: a head that moved after the provisional pass re-enters `ci_gate`
+   * from the rebase settlement, which never reads the confirmation for a head CI did not judge.
+   */
+  it('re-enters ci_gate when the head moved after the provisional pass, reading no confirmation (WP-102)', async () => {
+    const MOVED = 'd'.repeat(40);
+    let harness: PipelineHarness | undefined;
+    // CI reads the first head; once the business review has run, every read sees a push.
+    const pushed = () => harness?.specs.some((spec) => spec.stage === 'business_review') === true;
+    const git = gitWith(['src/totals.ts', TEST_FILE]);
+    harness = harnessWith({
+      runs: {
+        ...happyRuns(),
+        architecture: planDeclaring([TEST_FILE]),
+        code_review: reviewConfirming([TEST_FILE]),
+      },
+      git: {
+        ...git,
+        getMergeRequest: async () => {
+          const mr = mergeRequest(false);
+          return pushed() ? { ...mr, ref: { ...mr.ref, head_sha: MOVED } } : mr;
+        },
+      },
+    });
+    await harness.publish([ticketMatched()]);
+
+    const task = taskOf(harness);
+    expect(task.task.currentStage).toBe('ready_for_merge');
+    // WP-79's forward move, unchanged: the first rebase attempt is left for CI, which judges the new
+    // head with the review in hand (WP-81's second pass) and records no excused path.
+    expect(ciRows(harness)).toEqual([
+      { attempt: 1, state: 'completed', outcome: 'protected_paths_awaiting_review' },
+      { attempt: 2, state: 'completed', outcome: 'pass' },
+    ]);
+    expect(rebaseRows(harness).map((row) => row.outcome)).toEqual(['left', 'pass']);
+    expect(task.task.iterationCounters.rebase_rechecks).toBe(1);
+    expect(task.ciHeadSha).toBe(MOVED);
+    expect(task.ciExcusedPaths).toEqual([]);
+    expect(task.task.iterationCounters.ci_fix ?? 0).toBe(0);
   });
 });
 
