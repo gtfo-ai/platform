@@ -20,8 +20,8 @@ that is next, and the pace. (3) `gh run list --limit 12`: every workflow on the 
 any head the note lists as PENDING must read `completed` before you write a row — `in_progress` is an
 appointment, not a verdict (rule 84). (4) The ninety-plus standing rules in `PROGRESS.md` § "Standing
 rules earned by evidence" — read them all once; they are the house style and the implementer's
-authority to say no to you. (5) The milestone tables in `PROGRESS.md` (M1–M4) and in
-`docs/technical/13-implementation-plan.md`; the next row is the first `TODO` in M4's own order unless
+authority to say no to you. (5) The milestone tables in `PROGRESS.md` (M1 onwards) and in
+`docs/technical/13-implementation-plan.md`; the current milestone is the newest one with a `TODO` row, and the next row is its first `TODO` in the table's own order unless
 the Resume note says otherwise. (6) The open backlog headings, `docs/OPEN-QUESTIONS.md`'s open items,
 and the blocker briefs. Then fill the Resume note's PENDING run ids in with your first ledger
 commit.
@@ -34,12 +34,12 @@ tree (or the founder has set the switch; check `gh variable list` before calling
 on a human model credential — never wait on it; if the blocker brief in `PROGRESS.md` says the
 credential now exists, WP-33 becomes the first row.
 
-**The goal.** Deliver the current milestone (M4, "a real installation") row by row in the table's
+**The goal.** Deliver the current milestone (the newest with a `TODO` row) row by row in the table's
 order: the fail-closed defects that can spend money or brick a row first, then the run that makes
 them live, the record, providers, screens, onboarding, operations, the instruments. Every backlog
 entry graded major or blocker has an owner in the architect's disposition table; a new finding goes
 to a refiner, never fixed in place. When the milestone's last row merges, run one architect pass that
-writes the next milestone from the open backlog the way the M4 ruling in `PROGRESS.md` did, and
+writes the next milestone from the open backlog the way the M4, M5 and M6 rulings in `PROGRESS.md` did, and
 record the ruling in the ledger.
 
 **Constraints that stay in force.** Never generate synthetic CPU load, for any measurement, for any
@@ -94,7 +94,7 @@ vitest's coverage directory: sequence your `verify` and a reviewer's, never over
    backlog entries closed, the review rounds), push, poll `gh run list` in the background until every
    workflow on the sha is `completed`, confirm `image`'s `release` job is `skipped`.
 6. The ledger row from a draft applied by a script that asserts each anchor occurs exactly once:
-   the M4 status row (DONE, sha, dependencies, what it folded, the review rounds with the canaries,
+   the milestone's status row (DONE, sha, dependencies, what it folded, the review rounds with the canaries,
    your verification verdicts, the CI ids), each folded backlog heading marked `**RESOLVED** at
    `<sha>`, WP-nn, session N`, the Resume note (the head, its PENDING runs, the next row). Never open
    a `path › "name"` citation on a line that later carries a quoted sentence — the guard's context
