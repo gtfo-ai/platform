@@ -368,3 +368,56 @@ expire* (a known live push credential the platform could revoke and chooses not 
 delivery to *accepted, then applied or refused* on the run screen; `docs/technical/05` § 2 and
 `docs/technical/08`'s steer and take-over rows are amended by the row that builds decision 9 (M5
 **WP-85**), and decision 10 by **WP-80**.
+
+## Amendment (M6 architect pass, session 9, 2026-09-30) — a cancel reaches the session, and an orphaned run container has a reaper
+
+Two decisions M6's rows need before code. Both extend decision 9's channel or decision 1's
+control-plane surface; neither changes decisions 1–10.
+
+**11. A cancel of a run whose lease is live is a run command, and a run with no live lease is ended in
+place.** PROGRESS backlog **294**: since WP-85 the channel that stops a live session exists and the
+take-over uses it, while `cancelRunCommand` still only wins the `runs` row, so the session spends to its
+own end and its cost arrives late through `runs.recordCost`. So:
+- `run_commands.kind` admits `cancel` (a new forward-only migration; 0060 is not edited);
+- when `runs.lease_expires_at` is in the future, the cancel records a `cancel` row in the aggregate
+  operation's transaction, pauses the task there as today, notifies the lease holder and answers `202`.
+  The holder applies it as the take-over does, through `handle.stop`, and the run ends `cancelled` in
+  its own process with its measured cost. There is **one terminal writer**, the holder, and the
+  heartbeat poll is the guarantee, exactly as decision 9 says;
+- when the lease is absent or expired, no process holds the session, and the cancel ends the record in
+  place as it does today (the synchronous answer is kept for this branch only);
+- a holder that dies before applying leaves the row to the lease sweep (WP-47), whose `run.failed` with
+  `lease_expired` closes it `run_ended`. The run then reads `lease_expired` rather than `cancelled`, which
+  is the truth: no process confirmed the stop.
+
+*Alternative rejected:* recording the row **and** ending the record synchronously (backlog 294's option
+(ii)). The heartbeat stops with the terminal row, so the stop would rest on the notification alone —
+at-most-once — and `finish`'s `run_ended` closing would need an exemption for `cancel` rows.
+
+**12. The launcher lists the run containers it labelled, and a runner-side recovery row reaps the ones
+no run owns.** PROGRESS backlog **286**: the launcher's only record of a run it created is its memory
+and the handle it returns, so a container whose handle never reaches the runner (a lost create answer,
+a restart during a create, a replay) keeps running, and nothing reconciles the daemon with `runs`.
+Decision 4's idempotency is scoped to a launcher's lifetime (the second WP-53 amendment), so it cannot
+be the bound. So:
+- the control plane gains **one read verb** answering the run ids of the containers carrying the run
+  label, read from the daemon rather than from the launcher's memory, authenticated like every other
+  operation (decision 3);
+- `destroy` by run id removes a run's objects whether or not the launcher holds a handle, by label, and
+  stays idempotent (decision 4);
+- the reaper is a **recovery row in the runner**, which reads `runs`: a listed run id whose run is
+  terminal, or is unknown and older than a stated grace, is destroyed, one attempt per id per pass, and
+  counted. The launcher still reads no database (TD-021's amendment), and the decision about *which*
+  container is an orphan stays with the process that can see the runs;
+- the launcher abandons a create whose request closed before the response and removes what it made, or
+  its docblock states why it cannot.
+
+*Alternatives rejected:* a launcher-side reaper that reads `runs` (gives the one process with the Docker
+socket a database role, which TD-021 forbids); a TTL label the launcher enforces on its own (reaps a
+long, live run by the clock, or leaves an orphan for as long as the TTL).
+
+*Consequences.* A migration for decision 11; decision 12 adds a verb to decision 1's list and a row to
+the recovery table. `docs/technical/05` § 2 (the WP-53 amendment), `docs/technical/08`'s cancel row,
+`docs/user-guide.md`'s cancel paragraph and `CLAUDE.md`'s WP-53 paragraph are amended by the rows that
+build them: decision 11 by M6 **WP-101**, decision 12 by M6 **WP-103**, whose first criterion is the
+daemon measurement 286 asks for.

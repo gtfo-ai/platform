@@ -78,3 +78,32 @@ rule for the one minting provider this build ships.
 sentence at `packages/application/src/ports/integrations/git-provider.ts:377` (*"`false` means the
 operator's static bot token is used as-is"*, contradicting TD-028 decision 6) is corrected in the same
 change. Built by M5 **WP-80**.
+
+## Amendment (M6 architect pass, session 9, 2026-09-30) — a shape reaches every process on commit, a repository reading redacts by the project's credentials, and the write guard uses the redactor's corpus
+
+Three gaps M5's delivery left around the shape rule and the stored reading. None changes the M5
+amendment's decision (a shape, never a stored value).
+
+1. **Propagation.** The M5 amendment compiles the recorded shapes *"on the existing configuration
+   refresh"*, which WP-80 built as a five-second timer, so a process that did not mint learns a new
+   shape up to one interval late, and a refresher that keeps failing keeps a stale set while logging a
+   warning (PROGRESS backlog **276**). **Decision:** the transaction that records a shape notifies on
+   commit through the transactional broadcast, and every process — every `ROLE` — listens on its own
+   channel and re-reads on it; the timer stays as the guarantee (TD-028 decision 9's argument: the
+   notification is latency, the poll is the guarantee). After a stated number of consecutive failed
+   refreshes the process reports at `error`.
+2. **The repository reading.** Since WP-92 the refresh stores up to 64 files of free text a human wrote
+   (`.agentic/prompts/`) under pattern redaction only, and hands it byte-identical to the planner, so a
+   binding credential committed there in a shape no rule knows is stored, sent to the model and kept in
+   `runs.user_prompt` (PROGRESS backlog **316**). **Decision:** the reading composes an exact-value
+   redactor over the decrypted credentials of the project's bindings — the loader already decrypts them,
+   and the reading runs outside any transaction — before the texts are stored. The platform cannot
+   un-leak a secret committed to the project's history; it stops making more copies of it.
+3. **One corpus.** The write-content guard refuses secret-shaped content through the gitleaks-derived
+   list alone, while the redactor applies the shape rules first, so since WP-80 the redactor's corpus is
+   larger than the guard's (PROGRESS backlog **277**). **Decision:** the guard uses the redactor's
+   current rules, accepting that a same-shape non-secret write is refused, which is the safe direction.
+
+*Consequences.* No migration. `docs/technical/05`'s WP-80 amendment and redaction section and the stale
+comment on the refresher are corrected by the rows that build them: (1) and (2) by M6 **WP-107**, (3)
+by M6 **WP-104**.
