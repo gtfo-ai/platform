@@ -7,7 +7,14 @@
  * — plus the property backlog 53 is about, which only a double-submit can show.
  */
 
-import type { IntegrationsResponse } from '@platform/contracts';
+import type { IntegrationSummary, IntegrationsResponse } from '@platform/contracts';
+import {
+  configIssuesOf,
+  findShippedProvider,
+  type ProviderCatalogueEntry,
+  SHIPPED_PROVIDERS,
+  toIntegrationProvider,
+} from '@platform/integrations';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
@@ -35,8 +42,28 @@ const INTEGRATIONS: IntegrationsResponse = {
       name: 'ACME Jira',
       config: { base_url: 'https://acme.atlassian.net' },
       health: { status: 'unknown', checked_at: null, detail: null },
+      config_refusal: null,
     },
   ],
+};
+
+/**
+ * `GET /api/integrations/providers` as the server answers it — built from the **real** catalogue
+ * through the server's own projection (`toIntegrationProvider`), so these cases drive the form with
+ * the fields the shipped providers actually require rather than a copy (WP-100, criterion 2).
+ */
+const PROVIDERS = { items: SHIPPED_PROVIDERS.map(toIntegrationProvider) };
+
+/**
+ * A value per required field **name**, never per provider: a sixth provider whose required field is
+ * not here fails the per-provider case by name, which is the point.
+ */
+const SAMPLE_VALUES: Readonly<Record<string, string>> = {
+  base_url: 'https://provider.example.test',
+  site_url: 'https://acme.atlassian.example.test',
+  user_email: 'ops@example.test',
+  organization: 'acme',
+  channel: '#agentic',
 };
 
 /** The setup guide as the server answers it: the guide's text and the URL built from `APP_BASE_URL`. */
@@ -78,6 +105,7 @@ const recorder = () => {
     }
     if (url.includes('/api/auth/get-session')) return json(SESSION);
     if (url.endsWith('/api/integrations')) return json(INTEGRATIONS);
+    if (url.endsWith('/api/integrations/providers')) return json(PROVIDERS);
     if (url.endsWith(`/api/integrations/${INTEGRATION}/setup-guide`)) return json(GUIDE);
     if (url.endsWith('/api/projects')) return json({ items: [] });
     return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
@@ -95,11 +123,16 @@ beforeEach(() => {
   window.history.pushState({}, '', '/integrations');
 });
 
-const fillCreateForm = (): void => {
-  fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'jira-cloud' } });
+const fillCreateForm = async (): Promise<void> => {
+  const select = await screen.findByLabelText('Provider');
+  await screen.findByRole('option', { name: /Jira Cloud/ });
+  fireEvent.change(select, { target: { value: 'jira-cloud' } });
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'ACME Jira' } });
-  fireEvent.change(screen.getByLabelText('Credential field'), { target: { value: 'api_token' } });
-  fireEvent.change(screen.getByLabelText('Environment variable'), {
+  fireEvent.change(screen.getByLabelText('site_url'), {
+    target: { value: 'https://acme.atlassian.example.test' },
+  });
+  fireEvent.change(screen.getByLabelText('user_email'), { target: { value: 'ops@example.test' } });
+  fireEvent.change(screen.getByLabelText('Environment variable for api_token'), {
     target: { value: 'JIRA_API_TOKEN' },
   });
 };
@@ -109,7 +142,7 @@ describe('the integrations screen', () => {
     const { sent, fetchImpl } = recorder();
     render(createApp({ fetchImpl, realtime: false }).element);
     await screen.findByText('Add an integration');
-    fillCreateForm();
+    await fillCreateForm();
     fireEvent.click(screen.getByRole('button', { name: 'Add integration' }));
 
     await waitFor(() => {
@@ -121,7 +154,8 @@ describe('the integrations screen', () => {
       type: 'task_management',
       provider: 'jira-cloud',
       name: 'ACME Jira',
-      config: {},
+      // The provider's required fields (WP-100, backlog 328) — `{}` here was the defect.
+      config: { site_url: 'https://acme.atlassian.example.test', user_email: 'ops@example.test' },
       // The **name** of the variable, never its value: the server reads its own environment and
       // seals what it finds (TD-020, BD-002). A body carrying a token would be the defect.
       secret_refs: { api_token: 'JIRA_API_TOKEN' },
@@ -142,7 +176,7 @@ describe('the integrations screen', () => {
     const { sent, fetchImpl } = recorder();
     render(createApp({ fetchImpl, realtime: false }).element);
     await screen.findByText('Add an integration');
-    fillCreateForm();
+    await fillCreateForm();
     const submit = screen.getByRole('button', { name: 'Add integration' });
     fireEvent.click(submit);
     fireEvent.click(submit);
@@ -178,37 +212,139 @@ describe('the integrations screen', () => {
     expect(document.body.textContent).toContain('reachable');
   });
 
-  it('shows the server’s own refusal when a provider is not one this build ships', async () => {
-    // The form is a thin shell over the API and the server's message names every shipped provider,
-    // so a catalogue copied into the SPA — a second list to keep true — is not needed.
+  it('shows the server’s own refusal of a configuration, naming the path', async () => {
+    const { fetchImpl: base } = recorder();
     const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-      const url = String(input);
-      if ((init?.method ?? 'GET') !== 'GET') {
+      if ((init?.method ?? 'GET') === 'POST' && String(input).endsWith('/api/integrations')) {
         return json(
           {
             error: {
-              code: 'provider_not_shipped',
-              message: 'this build does not ship provider "acme-tracker"; the shipped ones are …',
+              code: 'invalid_integration_config',
+              message:
+                'the configuration is refused by provider "jira-cloud"\'s schema at: user_email (Invalid email address)',
+              details: [{ path: 'user_email', message: 'Invalid email address' }],
             },
           },
           400,
         );
       }
-      if (url.includes('/api/auth/get-session')) return json(SESSION);
-      if (url.endsWith('/api/integrations')) return json(INTEGRATIONS);
-      if (url.endsWith('/api/projects')) return json({ items: [] });
-      return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
+      return base(input, init);
     }) as typeof fetch;
 
     render(createApp({ fetchImpl, realtime: false }).element);
     await screen.findByText('Add an integration');
-    fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'acme-tracker' } });
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'x' } });
+    await fillCreateForm();
     fireEvent.click(screen.getByRole('button', { name: 'Add integration' }));
     expect(await screen.findByText('The integration was not created.')).toBeTruthy();
     await waitFor(() => {
-      expect(document.body.textContent).toContain('does not ship provider');
+      expect(document.body.textContent).toContain('user_email (Invalid email address)');
     });
+  });
+
+  /**
+   * WP-100, criterion 2: **each** shipped provider created through the real client, with the form
+   * rendering the fields the provider's own schema requires — and the body it sends is then parsed
+   * with that same schema here (`configIssuesOf`), so "the form sends each provider's required
+   * fields" is a statement about a document the provider accepts, not about a list of keys.
+   */
+  it.each(SHIPPED_PROVIDERS.map((entry) => [entry.id, entry] as const))(
+    'creates a %s integration with every field its schema requires',
+    async (id, entry) => {
+      const { sent, fetchImpl } = recorder();
+      render(createApp({ fetchImpl, realtime: false }).element);
+      const select = await screen.findByLabelText('Provider');
+      await waitFor(() => {
+        expect(select.querySelector(`option[value="${id}"]`), id).not.toBeNull();
+      });
+      fireEvent.change(select, { target: { value: id } });
+      fireEvent.change(screen.getByLabelText('Name'), { target: { value: `acme ${id}` } });
+      const required = entry.configFields.filter((field) => field.required).map((f) => f.name);
+      expect(required.length, id).toBeGreaterThan(0);
+      for (const name of required) {
+        const value = SAMPLE_VALUES[name];
+        expect(value, `a sample value for ${id}'s ${name}`).toBeDefined();
+        fireEvent.change(screen.getByLabelText(name), { target: { value } });
+      }
+      // No credential field is offered as configuration: each is an environment-variable name.
+      for (const field of entry.secretFields) {
+        expect(screen.queryByLabelText(field), field).toBeNull();
+        expect(screen.getByLabelText(`Environment variable for ${field}`)).toBeTruthy();
+      }
+      const firstSecret = entry.secretFields[0] as string;
+      fireEvent.change(screen.getByLabelText(`Environment variable for ${firstSecret}`), {
+        target: { value: 'FAKE_PROVIDER_TOKEN_ENV' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Add integration' }));
+
+      await waitFor(() => {
+        expect(sent.some((each) => each.url.endsWith('/api/integrations'))).toBe(true);
+      });
+      const body = sent.find((each) => each.url.endsWith('/api/integrations'))?.body as {
+        type: string;
+        provider: string;
+        config: Record<string, unknown>;
+        secret_refs: Record<string, string>;
+      };
+      expect(body.provider).toBe(id);
+      expect(body.type).toBe(entry.type);
+      expect(Object.keys(body.config).sort()).toEqual([...required].sort());
+      expect(configIssuesOf(entry, body.config as never)).toEqual([]);
+      expect(body.secret_refs).toEqual({ [firstSecret]: 'FAKE_PROVIDER_TOKEN_ENV' });
+    },
+  );
+
+  /**
+   * WP-100, criterion 4 on the screen: a stored row that would not load says so on its card, and
+   * *Edit configuration* sends the `PATCH` the refusal names — the required field set, and the
+   * key the provider does not declare removed.
+   */
+  it('shows a stored configuration’s refusal and repairs it with the PATCH it names', async () => {
+    const sentry = findShippedProvider('sentry') as ProviderCatalogueEntry;
+    const broken: IntegrationSummary = {
+      id: INTEGRATION,
+      type: 'errors',
+      provider: 'sentry',
+      name: 'ACME Sentry',
+      config: { organisation: 'acme', base_url: 'https://sentry.example.test' },
+      health: { status: 'unknown', checked_at: null, detail: null },
+      config_refusal: {
+        code: 'invalid_integration_config',
+        message: `integration ${INTEGRATION} has configuration that provider "sentry"'s schema refuses at: organisation, organization. Correct it with PATCH /api/integrations/${INTEGRATION}`,
+        paths: ['organisation', 'organization'],
+      },
+    };
+    const { sent, fetchImpl: base } = recorder();
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = String(input);
+      if ((init?.method ?? 'GET') === 'GET' && url.endsWith('/api/integrations')) {
+        return json({ items: [broken] });
+      }
+      if (init?.method === 'PATCH') {
+        await base(input, init);
+        return json({ ...broken, config_refusal: null });
+      }
+      return base(input, init);
+    }) as typeof fetch;
+
+    render(createApp({ fetchImpl, realtime: false }).element);
+    expect(await screen.findByText('This configuration would not load.')).toBeTruthy();
+    expect(document.body.textContent).toContain(`PATCH /api/integrations/${INTEGRATION}`);
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit configuration' }));
+    const field = await screen.findByLabelText('organization');
+    fireEvent.change(field, { target: { value: 'acme' } });
+    expect(document.querySelector('[data-config-remove]')?.textContent).toContain('organisation');
+    fireEvent.click(screen.getByRole('button', { name: 'Save configuration' }));
+
+    await waitFor(() => {
+      expect(sent.some((each) => each.method === 'PATCH')).toBe(true);
+    });
+    const patch = sent.find((each) => each.method === 'PATCH');
+    expect(patch?.url).toMatch(new RegExp(`/api/integrations/${INTEGRATION}$`));
+    expect(patch?.body).toEqual({ config: { organization: 'acme' }, remove: ['organisation'] });
+    // The document the PATCH leaves behind parses (the base_url is kept: it is not named).
+    expect(
+      configIssuesOf(sentry, { base_url: 'https://sentry.example.test', organization: 'acme' }),
+    ).toEqual([]);
   });
 
   /**

@@ -200,16 +200,18 @@ interface Probe {
  * "Not served" is the not-found handler's **own** body (`app.ts`'s `setNotFoundHandler`), not a bare
  * 404: a route that exists and answers 404 — `GET /api/runs/<unknown>` does — must not be read as a
  * route that does not exist. A command route is registered for one method only, so a path that
- * answers not-found to GET is asked again with POST and then with **PUT** before it is called
+ * answers not-found to GET is asked again with POST, **PUT** and **PATCH** before it is called
  * missing.
  *
  * `PUT` was added at WP-21 and it was not cosmetic: `PUT /api/projects/:id/bindings` and
  * `PUT /api/projects/:id/config` both have a GET sibling on the same path, so they passed on the
  * *sibling's* answer and this census could not have told a missing PUT from a present one.
+ * `PATCH` was added at WP-100 for the first command path with **no** sibling on any other method,
+ * `PATCH /api/integrations/:id`: without it the path read as missing however it was registered.
  */
 const probe = async (path: string): Promise<Probe> => {
   const url = probeUrl(path);
-  for (const method of ['GET', 'POST', 'PUT'] as const) {
+  for (const method of ['GET', 'POST', 'PUT', 'PATCH'] as const) {
     const response = await app.inject({ method, url });
     const body = response.json() as { error?: { code?: string } };
     const code = body.error?.code ?? null;
@@ -346,6 +348,28 @@ describe('the client’s endpoint list against the server’s router', () => {
       '/api/projects/{}/readiness',
     ]) {
       expect((await probe(path)).served, path).toBe(true);
+    }
+  });
+
+  it('serves the provider catalogue and the configuration repair WP-100 added, guarded', async () => {
+    // Named positively (standing rule 10), and each asked by its own method with no body: the
+    // PATCH takes a body, so a guard that slipped back to `preHandler` would answer 400 here.
+    for (const path of ['/api/integrations/providers', '/api/integrations/{}']) {
+      expect((await probe(path)).served, path).toBe(true);
+    }
+    const paths = clientPaths(webSourceFiles().map((path) => ({ path, source: readSource(path) })));
+    expect(paths).toEqual(
+      expect.arrayContaining(['/api/integrations/providers', '/api/integrations/{}']),
+    );
+    for (const [method, path] of [
+      ['GET', '/api/integrations/providers'],
+      ['PATCH', '/api/integrations/{}'],
+    ] as const) {
+      const response = await app.inject({ method, url: probeUrl(path) });
+      const body = response.json() as ApiErrorBody;
+      expect(`${method} ${path} -> ${response.statusCode} ${body.error?.code ?? ''}`).toBe(
+        `${method} ${path} -> 401 unauthenticated`,
+      );
     }
   });
 

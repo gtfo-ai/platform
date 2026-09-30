@@ -23,7 +23,10 @@ import type { ProviderCatalogueEntry } from '@platform/integrations';
 import { SHIPPED_PROVIDERS } from '@platform/integrations';
 import { describe, expect, it } from 'vitest';
 import { HttpError } from '../errors.js';
+import { storedConfigRefusal } from './integration-queries.js';
 import {
+  assertBindingConfigsParse,
+  assertConfigParses,
   assertHostIsDeclared,
   assertNoAccountOnlyFields,
   assertNoCredentialInConfig,
@@ -417,4 +420,184 @@ describe('createIntegration and a provider’s defaulted base_url', () => {
       expect((failure as HttpError).code).toBe('integration_host_not_permitted');
     },
   );
+});
+
+/**
+ * WP-100, PROGRESS backlog 328, criterion 1 at the unit tier: the create parses `config` with the
+ * provider's schema **before** it touches the database — the database here answers nothing, so a
+ * create that got past the parse would fail on it with a different error. One case per shipped
+ * provider, read off the catalogue, so a sixth provider is covered the day it exists; the smallest
+ * valid document is the control (standing rule 42).
+ */
+const VALID_CONFIG: Readonly<Record<string, JsonObject>> = {
+  gitlab: { base_url: 'https://gitlab.example.test' },
+  'jira-cloud': { site_url: 'https://acme.atlassian.example.test', user_email: 'ops@example.test' },
+  loki: { base_url: 'https://loki.example.test' },
+  sentry: { organization: 'acme', base_url: 'https://sentry.example.test' },
+  slack: { channel: '#agentic', base_url: 'https://slack.example.test' },
+};
+
+describe('createIntegration and the provider’s schema (backlog 328)', () => {
+  const create = (provider: ProviderCatalogueEntry, config: JsonObject) =>
+    createIntegration({} as never, {
+      orgId: 'org-1',
+      integration: {
+        type: provider.type,
+        provider: provider.id,
+        name: 'x',
+        config,
+        secretRefs: {},
+      },
+      provider,
+      egress: createIntegrationEgressPolicy(['*']),
+      secretSource: { read: async () => 'unused' } as never,
+      secretKey: {} as never,
+      newId: () => 'id-1',
+    }).catch((error: unknown) => error);
+
+  it('has a valid document for every shipped provider', () => {
+    expect(Object.keys(VALID_CONFIG).sort()).toEqual(SHIPPED_PROVIDERS.map((entry) => entry.id));
+  });
+
+  it.each(SHIPPED_PROVIDERS.map((entry) => [entry.id, entry] as const))(
+    'refuses a %s create with config {} as 400 naming each required path, before any write',
+    async (_id, provider) => {
+      const failure = await create(provider, {});
+      expect(failure).toBeInstanceOf(HttpError);
+      const error = failure as HttpError;
+      expect(`${error.statusCode} ${error.code}`).toBe('400 invalid_integration_config');
+      const required = provider.configFields.filter((f) => f.required).map((f) => f.name);
+      expect(required.length).toBeGreaterThan(0);
+      expect(error.details?.map((detail) => detail.path)).toEqual(required);
+      for (const path of required) {
+        expect(error.message).toContain(path);
+      }
+    },
+  );
+
+  it.each(SHIPPED_PROVIDERS.map((entry) => [entry.id, entry] as const))(
+    'passes a valid %s document on to the database',
+    async (id, provider) => {
+      // Past the parse, the empty database is the next thing the create meets.
+      const failure = await create(provider, VALID_CONFIG[id] as JsonObject);
+      expect(failure).not.toBeInstanceOf(HttpError);
+      expect(failure).toBeInstanceOf(TypeError);
+    },
+  );
+
+  it('names an undeclared key, and never quotes a value', () => {
+    const gitlab = SHIPPED_PROVIDERS.find(
+      (entry) => entry.id === 'gitlab',
+    ) as ProviderCatalogueEntry;
+    try {
+      assertConfigParses({ host: 'https://FAKE-value-never-quoted.example.test' }, gitlab);
+      expect.unreachable('the operator guide’s old body must be refused');
+    } catch (error) {
+      expect((error as HttpError).details?.map((detail) => detail.path).sort()).toEqual([
+        'base_url',
+        'host',
+      ]);
+      expect((error as HttpError).message).not.toContain('FAKE-value-never-quoted');
+    }
+  });
+});
+
+describe('a binding’s effective configuration (WP-100)', () => {
+  const SENTRY_ID = '00000000-0000-4000-8000-0000000000e2';
+  const egress = createIntegrationEgressPolicy(['sentry.example.test']);
+  const account = (config: JsonObject) => [{ id: SENTRY_ID, provider: 'sentry', config }];
+
+  it('accepts an overlay over an account that parses', () => {
+    expect(() =>
+      assertBindingConfigsParse(
+        [{ integrationId: SENTRY_ID, config: { max_issues: 5 } }],
+        account(VALID_CONFIG.sentry as JsonObject),
+        egress,
+      ),
+    ).not.toThrow();
+  });
+
+  it('refuses an overlay the schema refuses, naming the path', () => {
+    try {
+      assertBindingConfigsParse(
+        [{ integrationId: SENTRY_ID, config: { organization: 'Not A Slug' } }],
+        account(VALID_CONFIG.sentry as JsonObject),
+        egress,
+      );
+      expect.unreachable('a slug the schema refuses must be refused at the write');
+    } catch (error) {
+      expect(`${(error as HttpError).statusCode} ${(error as HttpError).code}`).toBe(
+        '400 invalid_binding_config',
+      );
+      expect((error as HttpError).details?.map((detail) => detail.path)).toEqual(['organization']);
+    }
+  });
+
+  it('refuses a credential field in an overlay by its name, never its value (backlog 330)', () => {
+    const token = 'sntrys_FAKE-binding-overlay-token-0001';
+    try {
+      assertBindingConfigsParse(
+        [{ integrationId: SENTRY_ID, config: { auth_token: token } }],
+        account(VALID_CONFIG.sentry as JsonObject),
+        egress,
+      );
+      expect.unreachable('a credential in a binding overlay must be refused');
+    } catch (error) {
+      expect(`${(error as HttpError).statusCode} ${(error as HttpError).code}`).toBe(
+        '400 credential_in_config',
+      );
+      expect((error as HttpError).message).toContain('auth_token');
+      expect((error as HttpError).message).not.toContain(token);
+    }
+  });
+
+  it('refuses an overlay URL on an undeclared host', () => {
+    expect(() =>
+      assertBindingConfigsParse(
+        [{ integrationId: SENTRY_ID, config: { base_url: 'https://evil.example.test' } }],
+        account(VALID_CONFIG.sentry as JsonObject),
+        egress,
+      ),
+    ).toThrow(expect.objectContaining({ code: 'integration_host_not_permitted' }));
+  });
+
+  it('names the account, and its PATCH, when the account is what no longer parses', () => {
+    expect(() =>
+      assertBindingConfigsParse([{ integrationId: SENTRY_ID }], account({}), egress),
+    ).toThrow(
+      expect.objectContaining({
+        statusCode: 409,
+        code: 'invalid_integration_config',
+        message: expect.stringContaining(`PATCH /api/integrations/${SENTRY_ID}`),
+      }),
+    );
+  });
+
+  it('leaves a provider this build does not ship alone', () => {
+    expect(() =>
+      assertBindingConfigsParse(
+        [{ integrationId: 'fake-1', config: { anything: true } }],
+        [{ id: 'fake-1', provider: 'fake-git', config: {} }],
+        egress,
+      ),
+    ).not.toThrow();
+  });
+});
+
+describe('storedConfigRefusal (WP-100, criterion 4)', () => {
+  const sentry = SHIPPED_PROVIDERS.find((entry) => entry.id === 'sentry') as ProviderCatalogueEntry;
+  const ID = '00000000-0000-4000-8000-0000000000e3';
+
+  it('names the paths and the PATCH for a row written before the create parsed', () => {
+    // The wizard e2e's old body (backlog 328): British `organisation`.
+    const refusal = storedConfigRefusal(ID, { organisation: 'acme' }, sentry);
+    expect(refusal?.code).toBe('invalid_integration_config');
+    expect(refusal?.paths.sort()).toEqual(['organisation', 'organization']);
+    expect(refusal?.message).toContain(`PATCH /api/integrations/${ID}`);
+  });
+
+  it('is null for a row that parses and for a provider this build does not ship', () => {
+    expect(storedConfigRefusal(ID, VALID_CONFIG.sentry as JsonObject, sentry)).toBeNull();
+    expect(storedConfigRefusal(ID, {}, undefined)).toBeNull();
+  });
 });

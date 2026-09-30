@@ -20,6 +20,7 @@ import {
   type IntegrationRow,
   publishableConfig,
   refusedDeliveryFilter,
+  toIntegrationSummary,
 } from './integration-queries.js';
 import { UnprojectableRowError } from './pipeline-queries.js';
 
@@ -73,6 +74,33 @@ describe('publishableConfig', () => {
         findShippedProvider('fake-git'),
       ),
     ).toEqual({});
+  });
+});
+
+/**
+ * WP-100, criterion 4: the list publishes a stored configuration's refusal on the item rather than
+ * failing the read — one broken row must not hide the others — and publishes `null` beside a row
+ * that parses (standing rule 42), with the credential strip unchanged.
+ */
+describe('toIntegrationSummary and a stored configuration', () => {
+  it('names the refused paths and the PATCH for a row the provider’s schema refuses', () => {
+    const broken = row({ config: { host: 'https://gitlab.example.test', token: PLANTED_TOKEN } });
+    const summary = toIntegrationSummary(broken, findShippedProvider('gitlab'));
+    expect(summary.config_refusal?.paths.sort()).toEqual(['base_url', 'host']);
+    expect(summary.config_refusal?.message).toContain(`PATCH /api/integrations/${broken.id}`);
+    expect(JSON.stringify(summary)).not.toContain(PLANTED_TOKEN);
+  });
+
+  it('publishes null for a row that parses and for a provider this build does not ship', () => {
+    expect(
+      toIntegrationSummary(
+        row({ config: { base_url: 'https://gitlab.example.test' } }),
+        findShippedProvider('gitlab'),
+      ).config_refusal,
+    ).toBeNull();
+    expect(
+      toIntegrationSummary(row({ provider: 'fake-git' }), undefined).config_refusal,
+    ).toBeNull();
   });
 });
 

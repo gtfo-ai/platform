@@ -52,11 +52,16 @@ import { projectRecordSchema } from '@platform/contracts';
 import { DEFAULT_AUTONOMY_LEVEL, materialiseAutonomy } from '@platform/domain';
 import { db as dbAdapters, secrets as secretAdapters } from '@platform/infrastructure';
 import type { ProviderCatalogueEntry } from '@platform/integrations';
-import { findShippedProvider } from '@platform/integrations';
+import { configIssuesOf, findShippedProvider } from '@platform/integrations';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { HttpError } from '../errors.js';
 import { completeCommandAttempt, findCommandAttempt } from './idempotency-queries.js';
 import type { Database } from './identity-queries.js';
+import {
+  describeConfigIssues,
+  publishableConfig,
+  storedConfigRefusal,
+} from './integration-queries.js';
 
 const { bindings, humanActions, integrations, organizations, projects, secrets } =
   dbAdapters.schema;
@@ -388,13 +393,14 @@ export type CreateIntegrationResult =
  * stays: it covers rows written before this check existed and rows an operator wrote with `psql`.
  * This is the layer that stops the row being created.
  *
- * One call site is the whole coverage because `createIntegration` is the only writer of
+ * Two call sites are the whole coverage because `createIntegration` and, since WP-100,
+ * `updateIntegrationConfig` (`PATCH /api/integrations/:id`) are the only writers of
  * `integrations.config` — a claim about every other file, so it is not asserted here: it is held by
- * `queries/integration-config-writers.test.ts`, whose declared list of writers is one, and whose
- * docblock states the spellings it cannot see (standing rule 63, PROGRESS backlog 130). A second
- * writer — `PATCH /api/integrations/:id` is specified in technical/08 and unbuilt — fails that
- * census until it is declared there, and has to come through here. This refusal has **no** call-time
- * twin, deliberately: the write answers the question once, and the census is the cheaper closure.
+ * `queries/integration-config-writers.test.ts`, whose declared list is those two statements, and
+ * whose docblock states the spellings it cannot see (standing rule 63, PROGRESS backlog 130). A
+ * third writer fails that census until it is declared there, and has to come through here. This
+ * refusal has **no** call-time twin, deliberately: the write answers the question once, and the
+ * census is the cheaper closure.
  */
 export const assertNoCredentialInConfig = (
   config: JsonObject,
@@ -440,12 +446,13 @@ export const assertNoCredentialInConfig = (
  * and the direction is the fail-closed one.
  *
  * The walk is recursive over objects and arrays because `config` is `jsonObjectSchema` on the wire —
- * strictly shaped only once the provider's own schema sees it, which this command never runs
- * (`createIntegration` validates credential *fields*, not the document). Rule 14: this is a runtime
- * check over a body that reached the process as JSON, not a claim `tsc` makes.
+ * strictly shaped only once the provider's own schema sees it, which since WP-100 happens *after*
+ * this guard ({@link assertConfigParses}), so the host refusal keeps its own code and message. Rule
+ * 14: this is a runtime check over a body that reached the process as JSON, not a claim `tsc` makes.
  *
- * It runs on the create path alone, which covers every write of the column for as long as the
- * create is the only writer; `queries/integration-config-writers.test.ts` is what holds that.
+ * It runs on both writers of the column — the create and `updateIntegrationConfig` — and on a
+ * binding's overlay (`assertBindingConfigsParse`); `queries/integration-config-writers.test.ts` is
+ * what holds that the first two are the only writers.
  *
  * @throws {HttpError} 403 `integration_host_not_permitted` — the request is well formed and this
  * deployment does not permit it, which is the reading `secret_name_not_permitted` already has.
@@ -479,6 +486,122 @@ export const assertHostIsDeclared = (config: JsonObject, egress: IntegrationEgre
     }
   };
   visit(config);
+};
+
+/**
+ * Refuses a configuration document the provider's own schema refuses (WP-100, PROGRESS backlog 328).
+ *
+ * The question `bindings/loader.ts` and `bindings/prober.ts` ask at **use**, asked at the **write**
+ * — rule 20's refusal moved to where the mistake is made. It runs through the catalogue
+ * (`configIssuesOf`), never a constructed provider: a write surface holds no secrets, executor or
+ * clock. Credential fields are judged separately — {@link assertNoCredentialInConfig} refuses one
+ * in the body, and the secrets are sealed rather than stored — so the document is parsed without
+ * them.
+ *
+ * @throws {HttpError} 400 `invalid_integration_config`, naming each key path in the message and in
+ * `details`, never a value.
+ */
+export const assertConfigParses = (config: JsonObject, provider: ProviderCatalogueEntry): void => {
+  const issues = configIssuesOf(provider, config);
+  if (issues.length > 0) {
+    throw new HttpError(
+      400,
+      'invalid_integration_config',
+      `the configuration is refused by provider "${provider.id}"'s schema at: ${describeConfigIssues(issues)}. Its required fields are ${
+        provider.configFields
+          .filter((field) => field.required)
+          .map((field) => field.name)
+          .join(', ') || 'none'
+      } (GET /api/integrations/providers lists them all); credentials go in \`secret_refs\`, never in \`config\``,
+      issues.map((issue) => ({ path: issue.path, message: issue.message })),
+    );
+  }
+};
+
+export interface UpdateIntegrationConfigInput {
+  readonly integrationId: string;
+  /** Keys to set. */
+  readonly set: JsonObject;
+  /** Keys to delete. */
+  readonly remove: readonly string[];
+  /** `APP_INTEGRATION_HOSTS`, required for the reason `createIntegration` gives. */
+  readonly egress: IntegrationEgressPolicy;
+  readonly audit: HumanActionInput;
+}
+
+export type UpdateIntegrationConfigResult =
+  | { readonly status: 'not_found' }
+  | { readonly status: 'written'; readonly changed: readonly string[] };
+
+/**
+ * `PATCH /api/integrations/:id`'s write — the second writer of `integrations.config` (WP-100), and
+ * the repair criterion 4's refusal points at.
+ *
+ * It goes through **every check the create makes**, in the create's order, over the merged
+ * document: no credential key in what is set ({@link assertNoCredentialInConfig}), every URL on a
+ * declared host with the provider's defaults beneath ({@link assertHostIsDeclared}), and the
+ * provider's schema ({@link assertConfigParses}). A read-modify-write under a row lock
+ * (`select … for update`), so two concurrent patches serialise rather than one erasing the other's
+ * keys.
+ *
+ * **Narrow** (standing rule 79): the statement names `config` and `health` and nothing else —
+ * never `secret_ids`, which the create owns. `health` is reset to `{}` (published as `unknown`)
+ * because the verdict stored there was about the configuration this write replaced; a probe racing
+ * the write may put a verdict about either document back, which the next test corrects.
+ */
+export const updateIntegrationConfig = async (
+  database: Database,
+  input: UpdateIntegrationConfigInput,
+): Promise<UpdateIntegrationConfigResult> => {
+  const both = input.remove.filter((key) => key in input.set);
+  if (both.length > 0) {
+    throw new HttpError(
+      400,
+      'invalid_request',
+      `${both.join(', ')} is both set in \`config\` and named in \`remove\`; send each key once`,
+    );
+  }
+  return database.transaction(async (tx) => {
+    const rows = await tx
+      .select({ provider: integrations.provider, config: integrations.config })
+      .from(integrations)
+      .where(eq(integrations.id, input.integrationId))
+      .for('update');
+    const row = rows[0];
+    if (row === undefined) {
+      return { status: 'not_found' } as const;
+    }
+    const provider = findShippedProvider(row.provider);
+    if (provider === undefined) {
+      // No schema to parse the merged document with, and no field list to tell a credential from a
+      // setting — writing blind would store a document nothing can check (rule 20).
+      throw new HttpError(
+        409,
+        'provider_not_shipped',
+        `integration ${input.integrationId} names provider "${row.provider}", which this build does not ship, so its configuration cannot be checked or changed here`,
+      );
+    }
+    assertNoCredentialInConfig(input.set, provider);
+    const stored = row.config;
+    const next: Record<string, JsonValue> = Object.fromEntries(
+      Object.entries(stored).filter(([key]) => !input.remove.includes(key)),
+    );
+    Object.assign(next, input.set);
+    assertHostIsDeclared({ ...provider.configDefaults, ...next }, input.egress);
+    assertConfigParses(next, provider);
+    const changed = [...new Set([...Object.keys(stored), ...Object.keys(next)])]
+      .filter((key) => JSON.stringify(stored[key]) !== JSON.stringify(next[key]))
+      .sort();
+    await tx
+      .update(integrations)
+      .set({ config: next, health: {} })
+      .where(eq(integrations.id, input.integrationId));
+    await insertHumanAction(tx, {
+      ...input.audit,
+      params: { ...input.audit.params, changed_keys: changed },
+    });
+    return { status: 'written', changed } as const;
+  });
 };
 
 /**
@@ -520,6 +643,9 @@ export const createIntegration = async (
     { ...input.provider.configDefaults, ...input.integration.config },
     input.egress,
   );
+  // The provider's own schema, before the row exists (WP-100, backlog 328): a create that answered
+  // 201 over `config: {}` stored a row every binding load and every probe then refused.
+  assertConfigParses(input.integration.config, input.provider);
 
   const declared = new Set(input.provider.secretFields);
   const unknown = Object.keys(input.integration.secretRefs).filter((field) => !declared.has(field));
@@ -641,7 +767,10 @@ export const listProjectBindings = async (
     type: row.type,
     provider: row.provider,
     name: row.name,
-    config: row.config,
+    // WP-100 review round 1 (backlog 330): the provider's declared credential fields removed, and
+    // nothing at all for a provider this build does not ship — `GET /api/integrations`'s rule, one
+    // function. It covers a binding row stored before the write refused a credential key.
+    config: publishableConfig(row.config, findShippedProvider(row.provider)),
   }));
 };
 
@@ -673,6 +802,51 @@ export const assertNoAccountOnlyFields = (
 };
 
 /**
+ * Refuses a binding overlay that carries one of the provider's **credential** fields (backlog 330,
+ * {@link assertNoCredentialInConfig}), and a binding whose **effective** configuration — the account's document with the binding's
+ * overlay on top, which is exactly what the binding repository hands the loader
+ * (`overlayBindingConfig`) — the provider's schema refuses, and a binding URL on an undeclared host
+ * (WP-100: "every config write"). A binding of a provider this build does not ship is not judged:
+ * there is no schema here to judge it by, which is `assertNoAccountOnlyFields`'s answer too.
+ *
+ * The account is judged first and on its own, so a binding that is refused because its **account**
+ * no longer parses says so and names the `PATCH` that repairs the account, rather than telling the
+ * operator to change a binding that carries nothing wrong.
+ */
+export const assertBindingConfigsParse = (
+  items: readonly { readonly integrationId: string; readonly config?: JsonObject }[],
+  known: readonly { readonly id: string; readonly provider: string; readonly config: JsonObject }[],
+  egress: IntegrationEgressPolicy,
+): void => {
+  for (const item of items) {
+    const account = known.find((row) => row.id === item.integrationId);
+    const provider = account === undefined ? undefined : findShippedProvider(account.provider);
+    if (account === undefined || provider === undefined) {
+      continue;
+    }
+    const refusal = storedConfigRefusal(account.id, account.config, provider);
+    if (refusal !== null) {
+      throw new HttpError(409, refusal.code, refusal.message);
+    }
+    const overlay = item.config ?? {};
+    // Before the parse, because the parse takes credential keys out (`configIssuesOf`, for rows
+    // stored before the create refused them) and would otherwise admit a token into
+    // `bindings.config` in plaintext (backlog 330).
+    assertNoCredentialInConfig(overlay, provider);
+    assertHostIsDeclared(overlay, egress);
+    const issues = configIssuesOf(provider, { ...account.config, ...overlay });
+    if (issues.length > 0) {
+      throw new HttpError(
+        400,
+        'invalid_binding_config',
+        `the binding of integration ${account.id} gives it configuration that provider "${provider.id}"'s schema refuses at: ${describeConfigIssues(issues)}`,
+        issues.map((issue) => ({ path: issue.path, message: issue.message })),
+      );
+    }
+  }
+};
+
+/**
  * Replaces a project's bindings with exactly the set given.
  *
  * One transaction: a wizard that removed every binding and then failed to add the new ones would
@@ -682,12 +856,18 @@ export const replaceProjectBindings = async (
   database: Database,
   projectId: string,
   items: readonly { readonly integrationId: string; readonly config?: JsonObject }[],
+  /** `APP_INTEGRATION_HOSTS` — required, for the reason `createIntegration` gives (WP-100). */
+  options: { readonly egress: IntegrationEgressPolicy },
 ): Promise<void> => {
   const ids = items.map((item) => item.integrationId);
   await database.transaction(async (tx) => {
     if (ids.length > 0) {
       const known = await tx
-        .select({ id: integrations.id, provider: integrations.provider })
+        .select({
+          id: integrations.id,
+          provider: integrations.provider,
+          config: integrations.config,
+        })
         .from(integrations)
         .where(inArray(integrations.id, ids));
       const missing = ids.filter((id) => !known.some((row) => row.id === id));
@@ -699,6 +879,7 @@ export const replaceProjectBindings = async (
         );
       }
       assertNoAccountOnlyFields(items, known);
+      assertBindingConfigsParse(items, known, options.egress);
     }
     await tx.delete(bindings).where(eq(bindings.projectId, projectId));
     for (const item of items) {
@@ -835,7 +1016,8 @@ export const writeProjectAutonomy = async (
  * endpoint, and that sentence is corrected there rather than left true-sounding.
  *
  * **One column** (standing rule 79): the statement never names `config` or `secret_ids`, which
- * belong to the create and which a wizard may be writing at the same moment.
+ * belong to the create (and `config` to `PATCH /api/integrations/:id` since WP-100) and which a
+ * wizard may be writing at the same moment.
  */
 export const writeIntegrationHealth = async (
   database: Database,

@@ -160,7 +160,71 @@ export const integrationSummarySchema = z.strictObject({
     checked_at: isoDateTimeSchema.nullable(),
     detail: z.string().nullable(),
   }),
+  /**
+   * Why the stored `config` would be refused by the provider's own schema, or `null` when it
+   * parses (WP-100, PROGRESS backlog 328).
+   *
+   * A row written before the create parsed its configuration can fail at every binding load and
+   * every connection test, and the list is where an operator finds it — so the refusal is part of
+   * the read rather than a 500 or a silent row. `paths` are key paths, never values; `message` is
+   * platform text that names the paths and the `PATCH /api/integrations/:id` that repairs them.
+   * `null` too for a provider this build does not ship, whose schema is unknown here.
+   */
+  config_refusal: z
+    .strictObject({
+      code: z.literal('invalid_integration_config'),
+      message: nonEmptyStringSchema,
+      paths: z.array(nonEmptyStringSchema),
+    })
+    .nullable(),
 });
+
+/**
+ * One configuration field of a provider, as the create form renders it (WP-100).
+ *
+ * Read off the provider's own schema by `packages/integrations/src/catalogue.ts`, never copied into
+ * the SPA. Credential fields are **not** here: they are `secret_fields` and are configured as
+ * environment-variable names (`secret_refs`, TD-020).
+ */
+export const integrationProviderConfigFieldSchema = z.strictObject({
+  name: nonEmptyStringSchema,
+  /** The schema refuses a document without it and supplies no default. */
+  required: z.boolean(),
+  /** Set on the account only, never on a project's binding (`accountOnlyFields`). */
+  account_only: z.boolean(),
+});
+
+export const integrationProviderSchema = z.strictObject({
+  id: nonEmptyStringSchema,
+  type: integrationTypeSchema,
+  display_name: nonEmptyStringSchema,
+  /** Credential fields, each configured by naming an environment variable in `secret_refs`. */
+  secret_fields: z.array(nonEmptyStringSchema),
+  /** Every non-credential field the provider's schema declares, in declaration order. */
+  config_fields: z.array(integrationProviderConfigFieldSchema),
+});
+
+/** `GET /api/integrations/providers` — the providers this build ships (WP-100). */
+export const integrationProvidersResponseSchema = z.strictObject({
+  items: z.array(integrationProviderSchema),
+});
+
+/**
+ * `PATCH /api/integrations/:id` — change an integration's non-secret configuration (WP-100).
+ *
+ * `config` sets keys and `remove` deletes them; a key the request names in neither is kept. Two
+ * lists rather than JSON merge-patch's `null`, because `null` is a value several provider fields
+ * accept (Jira's `pickup_label: null` turns label pickup off) and a delete spelled as a value could
+ * not set it. The merged document is parsed with the provider's schema before it is written.
+ */
+export const patchIntegrationRequestSchema = z
+  .strictObject({
+    config: jsonObjectSchema.optional(),
+    remove: z.array(nonEmptyStringSchema).optional(),
+  })
+  .refine((body) => body.config !== undefined || body.remove !== undefined, {
+    message: 'send `config`, `remove` or both',
+  });
 
 /**
  * `GET /api/integrations` — the account list (WP-15h part 2).
@@ -2133,6 +2197,10 @@ export type IntegrationSummary = z.infer<typeof integrationSummarySchema>;
 export type IntegrationsResponse = z.infer<typeof integrationsResponseSchema>;
 export type CreateIntegrationRequest = z.infer<typeof createIntegrationRequestSchema>;
 export type TestIntegrationResponse = z.infer<typeof testIntegrationResponseSchema>;
+export type IntegrationProviderConfigField = z.infer<typeof integrationProviderConfigFieldSchema>;
+export type IntegrationProvider = z.infer<typeof integrationProviderSchema>;
+export type IntegrationProvidersResponse = z.infer<typeof integrationProvidersResponseSchema>;
+export type PatchIntegrationRequest = z.infer<typeof patchIntegrationRequestSchema>;
 export type EffectiveConfigResponse = z.infer<typeof effectiveConfigResponseSchema>;
 export type UpdateProjectConfigRequest = z.infer<typeof updateProjectConfigRequestSchema>;
 export type RepositoryConfigReading = z.infer<typeof repositoryConfigReadingSchema>;

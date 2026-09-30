@@ -27,13 +27,13 @@
  * rather than seven and parks the task at `waiting_answers` with a `questions` row the pipeline
  * wrote.
  *
- * ## `integrations` is the one table with no writer anywhere in this build
+ * ## `integrations` is written by the operator, never by the pipeline
  *
- * There is no `POST /api/integrations`; a row arrives by provisioning, which is what `seedWorld`
- * does and what an operator does. So "rows the pipeline wrote" cannot apply to it, and the case
- * below says so rather than pretending: it asserts the projection over the two rows this instance
- * was configured with, including the fail-closed branch for a provider the build does not ship —
- * which both of them are.
+ * Its writers are `POST /api/integrations` and `PATCH /api/integrations/:id` (driven end to end by
+ * `test/e2e/onboarding/wizard.e2e.test.ts`) and provisioning, which is what `seedWorld` does. So
+ * "rows the pipeline wrote" cannot apply to it, and the case below says so rather than pretending:
+ * it asserts the projection over the rows this instance was configured with, including the
+ * fail-closed branch for a provider the build does not ship — which all of them are.
  */
 import { JOB_QUEUES } from '@platform/application';
 import type {
@@ -261,7 +261,9 @@ describe('the project, agent and integration reads, over a pipeline that ran', (
     // Direction 2: the row is still described, so this is not a reader that publishes nothing.
     expect(git?.name).toBe('acme fake git');
     expect(git?.type).toBe('git');
-    // Nothing writes `integrations.health`, and `unknown` is the published spelling for that.
+    // Nothing has probed this row, and `unknown` is the published spelling for that; a provider
+    // this build does not ship has no schema to judge its configuration by (WP-100).
+    expect(git?.config_refusal).toBe(null);
     expect(git?.health).toEqual({ status: 'unknown', checked_at: null, detail: null });
 
     const guide = await client.json<{ error: { code: string; message: string } }>(

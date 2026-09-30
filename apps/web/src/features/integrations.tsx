@@ -18,12 +18,32 @@
  * So a create can fail for a reason that is not about this form, and the server's own message is
  * rendered rather than replaced.
  *
- * The provider field is free text and the server's refusal names every shipped provider. That is
- * deliberate: a catalogue copied into the SPA would be a second list to keep true, and importing
+ * ## The fields come from the server's catalogue, never from a copy (WP-100)
+ *
+ * Until WP-100 the provider was free text and the form sent `config: {}` whatever it named — and
+ * every shipped provider's schema requires a key, so every integration created here answered 201
+ * and then failed at *Test connection* and at every binding load (PROGRESS backlog 328). The form
+ * now reads `GET /api/integrations/providers` — each provider's required non-credential fields and
+ * its credential fields, read off the provider's own schema by the server — and renders one input
+ * per field. A schema copied into the SPA would be a second list to keep true, and importing
  * `@platform/integrations` into the browser bundle would pull every adapter past TD-013's budget.
+ * Every value is sent as text: the five shipped providers' required fields are all strings, and a
+ * future non-string one is refused by the server by path rather than guessed at here.
+ *
+ * ## A stored configuration that would not load says so, and can be repaired here
+ *
+ * `config_refusal` is the server's reading of a row written before the create parsed (criterion 4):
+ * the card shows its message and *Edit configuration* sends the `PATCH` it names — the required
+ * fields, and the removal of every key the provider does not declare.
  */
+import type { IntegrationProvider, IntegrationSummary } from '@platform/contracts';
 import { type ReactElement, useState } from 'react';
-import { useIntegrations, useOnboardingCommands, useRefusedDeliveries } from '../app/queries.js';
+import {
+  useIntegrationProviders,
+  useIntegrations,
+  useOnboardingCommands,
+  useRefusedDeliveries,
+} from '../app/queries.js';
 import { useServices } from '../app/services.js';
 import {
   Badge,
@@ -46,8 +66,199 @@ const HEALTH_TONE: Record<string, BadgeTone> = {
   unknown: 'neutral',
 };
 
-/** The five integration types technical/03 defines; the server refuses a mismatch by name. */
-const INTEGRATION_TYPES = ['task_management', 'git', 'communication', 'logs', 'errors'] as const;
+/** The provider's required non-credential fields, in the schema's own order. */
+const requiredFieldsOf = (provider: IntegrationProvider): string[] =>
+  provider.config_fields.filter((field) => field.required).map((field) => field.name);
+
+/** The non-empty values, trimmed — an empty input is a field left out, which the server names. */
+const filled = (values: Readonly<Record<string, string>>, names: readonly string[]) =>
+  Object.fromEntries(
+    names
+      .map((name) => [name, (values[name] ?? '').trim()] as const)
+      .filter(([, value]) => value !== ''),
+  );
+
+/**
+ * *Edit configuration* — the `PATCH /api/integrations/:id` a `config_refusal` names (WP-100).
+ *
+ * It sets the provider's required fields, prefilled with what the row holds, and **removes** every
+ * stored key the provider does not declare — the operator guide's old `host` for GitLab, the
+ * British `organisation` for Sentry — so the repair of a row the old form or the old guide wrote is
+ * one press. Optional fields keep their stored values: a key the form does not name is kept.
+ */
+const ConfigEditor = ({
+  integration,
+  provider,
+}: {
+  readonly integration: IntegrationSummary;
+  readonly provider: IntegrationProvider;
+}): ReactElement => {
+  const commands = useOnboardingCommands();
+  const required = requiredFieldsOf(provider);
+  const declared = new Set(provider.config_fields.map((field) => field.name));
+  const undeclared = Object.keys(integration.config).filter((key) => !declared.has(key));
+  const [values, setValues] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      required.map((name) => {
+        const stored = integration.config[name];
+        return [name, typeof stored === 'string' ? stored : ''];
+      }),
+    ),
+  );
+  return (
+    <form
+      className="flex flex-col gap-2"
+      aria-label={`Configuration of ${integration.name}`}
+      onSubmit={(event) => {
+        event.preventDefault();
+        commands.patchIntegration.mutate({
+          integrationId: integration.id,
+          config: filled(values, required),
+          remove: undeclared,
+        });
+      }}
+    >
+      {required.map((name) => (
+        <Field
+          key={name}
+          label={name}
+          hint={`Required by ${provider.display_name}.`}
+          value={values[name] ?? ''}
+          onChange={(event) => setValues({ ...values, [name]: event.target.value })}
+        />
+      ))}
+      {undeclared.length === 0 ? null : (
+        <p className="text-xs text-fg-muted" data-config-remove>
+          Saving removes the keys {provider.display_name} does not declare:{' '}
+          <UntrustedText value={undeclared.join(', ')} />
+        </p>
+      )}
+      <div>
+        <Button type="submit" tone="primary" disabled={commands.patchIntegration.isPending}>
+          Save configuration
+        </Button>
+      </div>
+      {commands.patchIntegration.isError ? (
+        <ErrorNotice
+          title="The configuration was not saved."
+          detail={String(commands.patchIntegration.error)}
+        />
+      ) : null}
+    </form>
+  );
+};
+
+/**
+ * *Add an integration* — one input per field the chosen provider asks for (WP-100, backlog 328).
+ *
+ * The credential is still never typed here: each credential field takes the **name** of the
+ * environment variable the server reads it from (`secret_refs`, TD-020), on the operator-declared
+ * `APP_INTEGRATION_SECRET_ENV` allow-list.
+ */
+const CreateIntegrationForm = ({
+  providers,
+}: {
+  readonly providers: readonly IntegrationProvider[];
+}): ReactElement => {
+  const commands = useOnboardingCommands();
+  const [draft, setDraft] = useState<{
+    providerId: string;
+    name: string;
+    config: Record<string, string>;
+    secretEnv: Record<string, string>;
+  }>({ providerId: '', name: '', config: {}, secretEnv: {} });
+  const provider = providers.find((entry) => entry.id === draft.providerId);
+  const required = provider === undefined ? [] : requiredFieldsOf(provider);
+  return (
+    <form
+      className="flex flex-col gap-2"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (provider === undefined) {
+          return;
+        }
+        commands.createIntegration.mutate({
+          type: provider.type,
+          provider: provider.id,
+          name: draft.name.trim(),
+          config: filled(draft.config, required),
+          secret_refs: filled(draft.secretEnv, provider.secret_fields),
+        });
+      }}
+    >
+      <label className="flex flex-col gap-1 text-sm">
+        Provider
+        <select
+          aria-label="Provider"
+          value={draft.providerId}
+          onChange={(event) =>
+            // A different provider asks for different fields: the typed values do not carry over.
+            setDraft({ ...draft, providerId: event.target.value, config: {}, secretEnv: {} })
+          }
+          className="rounded-md border border-line bg-surface px-2 py-1 text-sm"
+        >
+          <option value="">Choose a provider</option>
+          {providers.map((entry) => (
+            <option key={entry.id} value={entry.id}>
+              {entry.display_name} ({entry.type})
+            </option>
+          ))}
+        </select>
+      </label>
+      <Field
+        label="Name"
+        hint="Yours — what this account is called in the platform."
+        value={draft.name}
+        onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+      />
+      {provider === undefined
+        ? null
+        : required.map((name) => (
+            <Field
+              key={name}
+              label={name}
+              hint={`Required by ${provider.display_name}.`}
+              value={draft.config[name] ?? ''}
+              onChange={(event) =>
+                setDraft({ ...draft, config: { ...draft.config, [name]: event.target.value } })
+              }
+            />
+          ))}
+      {provider === undefined
+        ? null
+        : provider.secret_fields.map((field) => (
+            <Field
+              key={field}
+              label={`Environment variable for ${field}`}
+              hint="The variable's name only, never its value. Its _FILE companion is read too (TD-020)."
+              value={draft.secretEnv[field] ?? ''}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  secretEnv: { ...draft.secretEnv, [field]: event.target.value },
+                })
+              }
+            />
+          ))}
+      <div>
+        <Button
+          type="submit"
+          tone="primary"
+          disabled={provider === undefined || commands.createIntegration.isPending}
+        >
+          Add integration
+        </Button>
+      </div>
+      {/* The server's own words: it names the path it refused, the variable, or the host. */}
+      {commands.createIntegration.isError ? (
+        <ErrorNotice
+          title="The integration was not created."
+          detail={String(commands.createIntegration.error)}
+        />
+      ) : null}
+    </form>
+  );
+};
 
 /**
  * What this integration's inbound half refused, and why (WP-44, PROGRESS backlog 198) — refusals
@@ -131,13 +342,11 @@ export const IntegrationsScreen = (): ReactElement => {
     webhookUrl: string | null;
   } | null>(null);
   const [guideError, setGuideError] = useState(false);
-  const [draft, setDraft] = useState({
-    type: 'task_management' as (typeof INTEGRATION_TYPES)[number],
-    provider: '',
-    name: '',
-    secretField: '',
-    secretEnv: '',
-  });
+  const providers = useIntegrationProviders();
+  const [editing, setEditing] = useState<string | null>(null);
+  /** The catalogue entry for this row, or `undefined` for a provider this build does not ship. */
+  const providerOf = (integration: IntegrationSummary): IntegrationProvider | undefined =>
+    providers.data?.items.find((entry) => entry.id === integration.provider);
 
   return (
     <div className="flex flex-col gap-3">
@@ -179,6 +388,12 @@ export const IntegrationsScreen = (): ReactElement => {
                 <UntrustedText value={integration.health.detail} />
               </p>
             )}
+            {integration.config_refusal === null ? null : (
+              <ErrorNotice
+                title="This configuration would not load."
+                detail={integration.config_refusal.message}
+              />
+            )}
             <div className="flex flex-wrap gap-2">
               <Button
                 tone="primary"
@@ -209,7 +424,23 @@ export const IntegrationsScreen = (): ReactElement => {
               >
                 Setup guide
               </Button>
+              {providerOf(integration) !== undefined ? (
+                <Button
+                  tone="ghost"
+                  onClick={() => {
+                    setEditing(editing === integration.id ? null : integration.id);
+                  }}
+                >
+                  {editing === integration.id ? 'Close configuration' : 'Edit configuration'}
+                </Button>
+              ) : null}
             </div>
+            {(() => {
+              const provider = providerOf(integration);
+              return editing !== integration.id || provider === undefined ? null : (
+                <ConfigEditor integration={integration} provider={provider} />
+              );
+            })()}
             <RefusedDeliveries integrationId={integration.id} />
           </Card>
         ))}
@@ -242,79 +473,17 @@ export const IntegrationsScreen = (): ReactElement => {
           The credential itself never comes through the browser: name the{' '}
           <strong>environment variable</strong> the server should read it from, and the server seals
           the value it reads (TD-020, BD-002). The name has to be on the operator-declared{' '}
-          <code>APP_INTEGRATION_SECRET_ENV</code> allow-list, which is empty by default.
+          <code>APP_INTEGRATION_SECRET_ENV</code> allow-list, which is empty by default, and every
+          URL must name a host on <code>APP_INTEGRATION_HOSTS</code>.
         </p>
-        <form
-          className="flex flex-col gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            commands.createIntegration.mutate({
-              type: draft.type,
-              provider: draft.provider.trim(),
-              name: draft.name.trim(),
-              config: {},
-              ...(draft.secretField.trim() === '' || draft.secretEnv.trim() === ''
-                ? { secret_refs: {} }
-                : { secret_refs: { [draft.secretField.trim()]: draft.secretEnv.trim() } }),
-            });
-          }}
-        >
-          <label className="flex flex-col gap-1 text-sm">
-            Type
-            <select
-              aria-label="Integration type"
-              value={draft.type}
-              onChange={(event) =>
-                setDraft({
-                  ...draft,
-                  type: event.target.value as (typeof INTEGRATION_TYPES)[number],
-                })
-              }
-              className="rounded-md border border-line bg-surface px-2 py-1 text-sm"
-            >
-              {INTEGRATION_TYPES.map((type) => (
-                <option key={type} value={type}>
-                  {type}
-                </option>
-              ))}
-            </select>
-          </label>
-          <Field
-            label="Provider"
-            hint="A provider id this build ships, such as jira-cloud or gitlab. Send an unknown one and the server names every shipped provider."
-            value={draft.provider}
-            onChange={(event) => setDraft({ ...draft, provider: event.target.value })}
-          />
-          <Field
-            label="Name"
-            hint="Yours — what this account is called in the platform."
-            value={draft.name}
-            onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-          />
-          <Field
-            label="Credential field"
-            hint="The provider's own field name, for example api_token or webhook_secret."
-            value={draft.secretField}
-            onChange={(event) => setDraft({ ...draft, secretField: event.target.value })}
-          />
-          <Field
-            label="Environment variable"
-            hint="The name only. Its _FILE companion is read too (TD-020)."
-            value={draft.secretEnv}
-            onChange={(event) => setDraft({ ...draft, secretEnv: event.target.value })}
-          />
-          <div>
-            <Button type="submit" tone="primary" disabled={commands.createIntegration.isPending}>
-              Add integration
-            </Button>
-          </div>
-        </form>
-        {commands.createIntegration.isError ? (
+        {providers.isPending ? <Loading label="Loading the shipped providers…" /> : null}
+        {providers.isError ? (
           <ErrorNotice
-            title="The integration was not created."
-            detail={String(commands.createIntegration.error)}
+            title="The shipped providers could not be loaded."
+            detail={String(providers.error)}
           />
         ) : null}
+        {providers.isSuccess ? <CreateIntegrationForm providers={providers.data.items} /> : null}
       </Card>
 
       {guideError ? <ErrorNotice title="That setup guide could not be loaded." /> : null}

@@ -19,6 +19,7 @@ export const queryKeys = {
   agents: ['org', 'agents'] as const,
   inbox: ['org', 'inbox'] as const,
   integrations: ['integrations'] as const,
+  integrationProviders: ['integration-providers'] as const,
   integrationSetupGuide: (id: string) => ['integrations', id, 'setup-guide'] as const,
   orgBudgets: ['org', 'budgets'] as const,
   orgSettings: ['org', 'settings'] as const,

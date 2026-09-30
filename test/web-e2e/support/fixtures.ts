@@ -31,6 +31,7 @@ import {
   effectiveConfigResponseSchema,
   identityMappingListSchema,
   inboxResponseSchema,
+  integrationProvidersResponseSchema,
   integrationSummarySchema,
   kbHealthResponseSchema,
   kbProposalsResponseSchema,
@@ -53,6 +54,7 @@ import {
   transcriptEventSchema,
   versionResponseSchema,
 } from '@platform/contracts';
+import { SHIPPED_PROVIDERS, toIntegrationProvider } from '@platform/integrations';
 
 const id = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
@@ -823,11 +825,23 @@ export const integrations = {
       type: 'task_management',
       provider: 'jira-cloud',
       name: 'Jira (fake)',
-      config: { site: 'https://fake.atlassian.invalid' },
+      config: {
+        site_url: 'https://fake.atlassian.invalid',
+        user_email: 'operator@example.invalid',
+      },
       health: { status: 'ok', checked_at: now, detail: null },
+      config_refusal: null,
     }),
   ],
 };
+
+/**
+ * `GET /api/integrations/providers` — the real catalogue through the server's own projection
+ * (WP-100), so the create form this tier drives renders the fields the shipped providers require.
+ */
+export const integrationProviders = integrationProvidersResponseSchema.parse({
+  items: SHIPPED_PROVIDERS.map(toIntegrationProvider),
+});
 
 export const setupGuide = setupGuideResponseSchema.parse({
   provider: 'jira-cloud',

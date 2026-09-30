@@ -40,7 +40,12 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import type { AgentTooling } from '@platform/application';
-import type { IntegrationType, JsonObject, JsonValue } from '@platform/contracts';
+import type {
+  IntegrationProvider,
+  IntegrationType,
+  JsonObject,
+  JsonValue,
+} from '@platform/contracts';
 import type { z } from 'zod';
 import { gitlabProviderRegistration } from './providers/gitlab/index.js';
 import {
@@ -93,6 +98,20 @@ export interface ProviderCatalogueEntry {
    * is judged like a typed value.
    */
   readonly configDefaults: JsonObject;
+  /**
+   * Every **non-credential** field the provider's schema declares, in declaration order, and
+   * whether the schema requires it — read off the schema field by field like
+   * {@link configDefaults}, so the create form renders what the provider asks for without a copy of
+   * the schema in the SPA (WP-100, PROGRESS backlog 328). A field is required when its own schema
+   * refuses `undefined`: Sentry's `organization`, GitLab's `base_url`.
+   */
+  readonly configFields: readonly { readonly name: string; readonly required: boolean }[];
+  /**
+   * The provider's schema **without its credential fields** — what `integrations.config` must
+   * parse as (WP-100). Credentials are sealed into `secrets` and merged in at load, so the account's
+   * own document is judged without them; {@link configIssuesOf} is the one reader.
+   */
+  readonly accountConfigSchema: z.ZodObject;
 }
 
 /**
@@ -109,6 +128,31 @@ const configDefaultsOf = (schema: z.ZodObject): JsonObject => {
     }
   }
   return defaults;
+};
+
+/** Each non-credential field of the schema, and whether it is required (no default, not optional). */
+const configFieldsOf = (
+  schema: z.ZodObject,
+  secretFields: readonly string[],
+): { readonly name: string; readonly required: boolean }[] =>
+  Object.entries(schema.shape)
+    .filter(([field]) => !secretFields.includes(field))
+    .map(([field, fieldSchema]) => ({
+      name: field,
+      required: !(fieldSchema as z.ZodType).safeParse(undefined).success,
+    }));
+
+/**
+ * The schema with its credential fields omitted — `omit` keeps the object's strictness, so an
+ * undeclared key is still refused. Only fields the shape declares are named: the mask's type is
+ * the shape's own keys, which a list read at run time cannot state to `tsc`.
+ */
+const withoutCredentials = (schema: z.ZodObject, secretFields: readonly string[]): z.ZodObject => {
+  const mask: Record<string, true> = {};
+  for (const field of secretFields.filter((name) => name in schema.shape)) {
+    mask[field] = true;
+  }
+  return schema.omit(mask as Parameters<typeof schema.omit>[0]);
 };
 
 /** The metadata half of a registration, plus the one fact a registration does not carry. */
@@ -134,6 +178,8 @@ const entryOf = (
   agentTooling: registration.agentTooling,
   accountOnlyFields: [...(registration.accountOnlyFields ?? [])],
   configDefaults: configDefaultsOf(registration.configSchema),
+  configFields: configFieldsOf(registration.configSchema, registration.secretFields),
+  accountConfigSchema: withoutCredentials(registration.configSchema, registration.secretFields),
 });
 
 /**
@@ -161,6 +207,72 @@ export const findShippedProvider = (id: string): ProviderCatalogueEntry | undefi
  */
 export const accountOnlyFieldsOf = (provider: string): readonly string[] =>
   findShippedProvider(provider)?.accountOnlyFields ?? [];
+
+/** One key path an account's configuration is refused at, and the schema's reason. */
+export interface ConfigIssue {
+  /** Dotted key path; for an undeclared key, the key itself. Never a value. */
+  readonly path: string;
+  readonly message: string;
+}
+
+/**
+ * Why this configuration document would be refused by the provider's own schema — `[]` when it
+ * parses (WP-100, PROGRESS backlog 328).
+ *
+ * It is the question the binding loader and the prober ask at use (`bindings/loader.ts`,
+ * `bindings/prober.ts`: `configSchema.safeParse({ ...config, ...secrets })`), asked **without an
+ * adapter** and without the credentials: the document is parsed against
+ * {@link ProviderCatalogueEntry.accountConfigSchema} with the provider's credential keys taken out
+ * first. Taken out rather than refused, because the write already refuses a credential key
+ * (`assertNoCredentialInConfig` in `apps/server`) and a row written before that check, whose token
+ * sits in the column, loads today — reporting it here would call a working row broken.
+ *
+ * Paths and the schema's messages only, never a value: the messages the five shipped schemas
+ * produce are about shape (*"expected a Sentry slug"*, *"Invalid input: expected string"*), and an
+ * undeclared key is reported by its **name** (zod reports it at the root with the key in `keys`),
+ * which is what an operator removes.
+ */
+export const configIssuesOf = (
+  entry: ProviderCatalogueEntry,
+  config: JsonObject,
+): readonly ConfigIssue[] => {
+  const secret = new Set(entry.secretFields);
+  const document = Object.fromEntries(Object.entries(config).filter(([key]) => !secret.has(key)));
+  const parsed = entry.accountConfigSchema.safeParse(document);
+  if (parsed.success) {
+    return [];
+  }
+  return parsed.error.issues.flatMap((issue): ConfigIssue[] => {
+    if (issue.code === 'unrecognized_keys') {
+      return issue.keys.map((key) => ({
+        path: key,
+        message: `not a configuration field of provider "${entry.id}"`,
+      }));
+    }
+    return [
+      {
+        path: issue.path.length === 0 ? '(root)' : issue.path.map(String).join('.'),
+        message: issue.message,
+      },
+    ];
+  });
+};
+
+/**
+ * The provider as `GET /api/integrations/providers` publishes it (WP-100) — one projection, so the
+ * route and the SPA's own tests read the same shape off the same catalogue.
+ */
+export const toIntegrationProvider = (entry: ProviderCatalogueEntry): IntegrationProvider => ({
+  id: entry.id,
+  type: entry.type,
+  display_name: entry.displayName,
+  secret_fields: [...entry.secretFields],
+  config_fields: entry.configFields.map((field) => ({
+    name: field.name,
+    required: field.required,
+    account_only: entry.accountOnlyFields.includes(field.name),
+  })),
+});
 
 /**
  * The repository root, derived from this module rather than from `process.cwd()`.

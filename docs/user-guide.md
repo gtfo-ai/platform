@@ -538,10 +538,16 @@ secret before publishing an integration's configuration, and publishes nothing a
 this build does not ship — because it then cannot tell configuration from credential.
 
 **Add an integration** (admin) is a form on this screen, and **Test connection** is on each card as
-well as in the wizard beside the binding it is about. The form never takes a credential: it names the
-*environment variable* the server reads, which must be on the operator's allow-list (operator guide,
-§4) — so a create can be refused for a reason outside the form, and the server's own message is
-shown.
+well as in the wizard beside the binding it is about. Choose a provider and the form asks for the
+fields that provider requires — its URL, its organisation or channel — and, for each credential, the
+*environment variable* the server reads it from, which must be on the operator's allow-list (operator
+guide, §4). The form never takes a credential. The server checks the configuration against the
+provider's own schema before it stores anything, so a create can be refused for a reason outside the
+form, and the server's own message — naming the field — is shown.
+
+An integration whose stored configuration would not load (one created before the form asked for
+these fields) says so on its card, naming the fields. **Edit configuration** fixes it: it asks for
+the required fields again and removes the keys the provider does not declare.
 
 ## 10. Audit log
 

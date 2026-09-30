@@ -28,6 +28,7 @@ const CHAT_ACCOUNT: IntegrationSummary = {
   name: '<i>acme workspace</i>',
   config: {},
   health: { status: 'unknown', checked_at: null, detail: null },
+  config_refusal: null,
 };
 
 const json = (body: unknown, status = 200): Response =>

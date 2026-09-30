@@ -546,6 +546,19 @@ export const useIntegrations = () => {
   });
 };
 
+/**
+ * The providers this build ships and each one's fields (WP-100) — build metadata, so it never goes
+ * stale inside a session.
+ */
+export const useIntegrationProviders = () => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: [...queryKeys.integrationProviders],
+    queryFn: () => endpoints.integrationProviders(),
+    ...FOREVER,
+  });
+};
+
 export const useAudit = (filters: { readonly entity_type?: string; readonly cursor?: string }) => {
   const { endpoints } = useServices();
   return useQuery({
@@ -873,6 +886,19 @@ export const useOnboardingCommands = (mint?: MintKey) => {
     testIntegration: useMutation({
       mutationFn: (integrationId: string) => endpoints.testIntegration(integrationId),
       // The probe writes `integrations.health`, which the integration list publishes.
+      onSuccess: () => queryClient.invalidateQueries({ queryKey: [...queryKeys.integrations] }),
+    }),
+    /** The repair a `config_refusal` names (WP-100): it rewrites `config` and resets `health`. */
+    patchIntegration: useMutation({
+      mutationFn: (input: {
+        integrationId: string;
+        config: Record<string, unknown>;
+        remove: readonly string[];
+      }) =>
+        endpoints.patchIntegration(input.integrationId, {
+          config: input.config,
+          ...(input.remove.length === 0 ? {} : { remove: [...input.remove] }),
+        }),
       onSuccess: () => queryClient.invalidateQueries({ queryKey: [...queryKeys.integrations] }),
     }),
     /**

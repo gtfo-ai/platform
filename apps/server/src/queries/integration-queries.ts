@@ -4,12 +4,20 @@
  *
  * ## The row is the operator's, not the platform's
  *
- * **Nothing in this build writes `integrations`.** `POST /api/integrations` and
- * `PATCH /api/integrations/:id` are on technical/08's table and belong to the work package that
- * gives the settings screen a write surface; today a row arrives by provisioning. So unlike every
- * other read in this directory, this one is not a projection of something the pipeline produced —
- * it is a projection of configuration the platform *consumes*, on every webhook delivery and every
- * binding load. That is why it is asserted against a provisioned row and says so.
+ * The row's writers are the operator's commands — `POST /api/integrations` (WP-21) and
+ * `PATCH /api/integrations/:id` (WP-100), both in `queries/onboarding-queries.ts` — and provisioning
+ * with `psql`. So unlike every other read in this directory, this one is not a projection of
+ * something the pipeline produced — it is a projection of configuration the platform *consumes*, on
+ * every webhook delivery and every binding load.
+ *
+ * ## A stored configuration that would not load is reported, not hidden (WP-100)
+ *
+ * Both commands parse `config` with the provider's schema since WP-100, but a row written before
+ * that — every create from the *Add an integration* form sent `config: {}` (PROGRESS backlog 328) —
+ * or with `psql` can still fail at every binding load. {@link storedConfigRefusal} asks the
+ * catalogue the loader's question and publishes the answer as `config_refusal`: the key paths and
+ * the `PATCH` that repairs them. The list itself is still served — one broken row must not hide
+ * the others, nor the screen the operator repairs it from.
  *
  * ## What is removed on the way out, and why it is removed here
  *
@@ -45,7 +53,8 @@ import type {
 } from '@platform/contracts';
 import { integrationSummarySchema, MAX_REFUSED_DELIVERIES } from '@platform/contracts';
 import { db as dbAdapters } from '@platform/infrastructure';
-import type { ProviderCatalogueEntry } from '@platform/integrations';
+import type { ConfigIssue, ProviderCatalogueEntry } from '@platform/integrations';
+import { configIssuesOf } from '@platform/integrations';
 import { and, asc, desc, eq, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { UnprojectableRowError } from './pipeline-queries.js';
 
@@ -139,6 +148,45 @@ export const publishableConfig = (
   return Object.fromEntries(Object.entries(config).filter(([key]) => !secret.has(key)));
 };
 
+/**
+ * The key paths a refusal names, rendered once for the 400 at a write and the 409 at a read.
+ *
+ * Paths and the schema's own messages only — `configIssuesOf` never quotes a value, because a
+ * config document is a place somebody may have pasted a credential and these strings reach an HTTP
+ * response and a log line.
+ */
+export const describeConfigIssues = (issues: readonly ConfigIssue[]): string =>
+  issues.map((issue) => `${issue.path} (${issue.message})`).join(', ');
+
+/**
+ * The refusal a **stored** row that no longer parses answers at read (WP-100, criterion 4) — the
+ * WP-30 / WP-83 / WP-93 shape: the key paths, and the command that repairs them, never a 500 and
+ * never a row published as if it would load. `null` when the row parses, and for a provider this
+ * build does not ship, whose schema is unknown here (`GET /api/integrations` logs those by id).
+ */
+export const storedConfigRefusal = (
+  integrationId: string,
+  config: JsonObject,
+  provider: ProviderCatalogueEntry | undefined,
+): {
+  readonly code: 'invalid_integration_config';
+  readonly message: string;
+  readonly paths: string[];
+} | null => {
+  if (provider === undefined) {
+    return null;
+  }
+  const issues = configIssuesOf(provider, config);
+  if (issues.length === 0) {
+    return null;
+  }
+  return {
+    code: 'invalid_integration_config',
+    message: `integration ${integrationId} has configuration that provider "${provider.id}"'s schema refuses at: ${describeConfigIssues(issues)}. Every binding load and connection test of it fails until it is corrected with PATCH /api/integrations/${integrationId}`,
+    paths: issues.map((issue) => issue.path),
+  };
+};
+
 export const toIntegrationSummary = (
   row: IntegrationRow,
   provider: ProviderCatalogueEntry | undefined,
@@ -149,6 +197,7 @@ export const toIntegrationSummary = (
   name: row.name,
   config: publishableConfig(row.config, provider),
   health: healthOf(row),
+  config_refusal: storedConfigRefusal(row.id, row.config, provider),
 });
 
 /**

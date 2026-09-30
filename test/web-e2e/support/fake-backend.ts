@@ -589,6 +589,7 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
           approvals: fixtures.inbox.approvals,
         },
         '/api/integrations': fixtures.integrations,
+        '/api/integrations/providers': fixtures.integrationProviders,
         '/api/projects': fixtures.projectsPage,
         [`/api/projects/${fixtures.IDS.project}/tasks`]: {
           ...fixtures.tasksPage,

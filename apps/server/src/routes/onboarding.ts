@@ -4,6 +4,7 @@
  *   POST /api/projects                          step 1, "connect"
  *   POST /api/integrations                      step 1
  *   POST /api/integrations/:integration_id/test step 1, "the platform validates access"
+ *   PATCH /api/integrations/:integration_id     the repair of a refused configuration (WP-100)
  *   GET  /api/projects/:project_id/bindings     step 1
  *   PUT  /api/projects/:project_id/bindings     step 1
  *   POST /api/projects/:project_id/discovery    step 2, "technical discovery"
@@ -81,7 +82,9 @@ import {
   businessInterviewResponseSchema,
   createIntegrationRequestSchema,
   createProjectRequestSchema,
+  integrationSummarySchema,
   type JsonObject,
+  patchIntegrationRequestSchema,
   projectBindingsResponseSchema,
   projectRecordSchema,
   putProjectBindingsRequestSchema,
@@ -105,6 +108,11 @@ import { claimCommandAttempt, releaseCommandAttempt } from '../queries/idempoten
 import type { Database } from '../queries/identity-queries.js';
 import { findConfigLayers, findProjectRole } from '../queries/identity-queries.js';
 import {
+  findIntegrationRow,
+  storedConfigRefusal,
+  toIntegrationSummary,
+} from '../queries/integration-queries.js';
+import {
   createIntegration,
   createProject,
   ensureOrganisation,
@@ -116,6 +124,7 @@ import {
   MissingSecretError,
   recordHumanAction,
   replaceProjectBindings,
+  updateIntegrationConfig,
   writeIntegrationHealth,
   writeProjectConfig,
 } from '../queries/onboarding-queries.js';
@@ -344,7 +353,7 @@ export const registerOnboardingRoutes = async (
       schema: {
         summary: 'Create an integration from credentials already in the process environment',
         description:
-          '`secret_refs` maps a provider credential **field** to the name of an environment variable (or its `_FILE` companion, TD-020); the value is read by the server and sealed into `secrets`. No credential crosses this API and none is written to the audit. The name must be one the operator declared in `APP_INTEGRATION_SECRET_ENV` — otherwise 403 `secret_name_not_permitted`, because the name is caller-chosen and the platform’s own variables must never be readable this way. Every URL in `config` — and every URL the provider defaults a left-out field to, such as Sentry’s and Slack’s `base_url` — must name a host the operator declared in `APP_INTEGRATION_HOSTS` and must be `http`/`https` — otherwise 403 `integration_host_not_permitted`, naming the host and the setting, because the host is caller-chosen too and the credential this binding is built with would go there. Idempotent on `(type, name)`.',
+          '`secret_refs` maps a provider credential **field** to the name of an environment variable (or its `_FILE` companion, TD-020); the value is read by the server and sealed into `secrets`. No credential crosses this API and none is written to the audit. The name must be one the operator declared in `APP_INTEGRATION_SECRET_ENV` — otherwise 403 `secret_name_not_permitted`, because the name is caller-chosen and the platform’s own variables must never be readable this way. Every URL in `config` — and every URL the provider defaults a left-out field to, such as Sentry’s and Slack’s `base_url` — must name a host the operator declared in `APP_INTEGRATION_HOSTS` and must be `http`/`https` — otherwise 403 `integration_host_not_permitted`, naming the host and the setting, because the host is caller-chosen too and the credential this binding is built with would go there. `config` is then parsed with the provider’s own schema (WP-100): a document it refuses — a required field missing, a key it does not declare, a value of the wrong shape — is 400 `invalid_integration_config` naming each key path, and no row is written. `GET /api/integrations/providers` lists each provider’s fields. Idempotent on `(type, name)`.',
         tags: ['org'],
         body: createIntegrationRequestSchema,
         response: {
@@ -451,12 +460,13 @@ export const registerOnboardingRoutes = async (
       schema: {
         summary: 'Ask the provider whether this integration’s credential works',
         description:
-          'The provider’s own read-only probe (`testConnection`), through `IntegrationActionExecutor` like every other outbound call — so it is audited (BD-003) and takes the account’s rate limit. `ok: false` is a **successful test** reporting a failed connection, not a server error. `detail` is provider text through the integration’s own redactor (TD-012): render it, never execute it. The verdict is stored in `integrations.health`, which is what `GET /api/integrations` publishes. A probe still queued behind the account’s budget after ten seconds answers `429 probe_busy` with `Retry-After`; the call is not cancelled, so its verdict lands in `integrations.health` regardless.',
+          'The provider’s own read-only probe (`testConnection`), through `IntegrationActionExecutor` like every other outbound call — so it is audited (BD-003) and takes the account’s rate limit. `ok: false` is a **successful test** reporting a failed connection, not a server error. `detail` is provider text through the integration’s own redactor (TD-012): render it, never execute it. The verdict is stored in `integrations.health`, which is what `GET /api/integrations` publishes. A stored configuration the provider’s schema refuses answers `409 invalid_integration_config` naming the key paths and the `PATCH /api/integrations/:id` that repairs them, before any provider call. A probe still queued behind the account’s budget after ten seconds answers `429 probe_busy` with `Retry-After`; the call is not cancelled, so its verdict lands in `integrations.health` regardless.',
         tags: ['org'],
         params: integrationParamsSchema,
         response: {
           200: testIntegrationResponseSchema,
           404: apiErrorSchema,
+          409: apiErrorSchema,
           429: apiErrorSchema,
         },
       },
@@ -464,6 +474,30 @@ export const registerOnboardingRoutes = async (
     async (request, reply) => {
       const actor = actorOf(request);
       const integrationId = request.params.integration_id;
+      const onboarding = commands();
+      /**
+       * **A stored row that no longer parses is refused by name before the probe** (WP-100,
+       * criterion 4). The prober would build the adapter and throw `BindingLoadError` naming the
+       * paths — a 500 to this caller — for a fault the caller can repair; the catalogue answers the
+       * same question without constructing anything, and the 409 names the `PATCH` that repairs it.
+       */
+      const stored = await findIntegrationRow(options.database, integrationId);
+      if (stored === undefined) {
+        throw new NotFoundError(`integration ${integrationId}`);
+      }
+      const refusal = storedConfigRefusal(
+        integrationId,
+        stored.config,
+        findShippedProvider(stored.provider),
+      );
+      if (refusal !== null) {
+        throw new HttpError(
+          409,
+          refusal.code,
+          refusal.message,
+          refusal.paths.map((path) => ({ path, message: 'refused by the provider schema' })),
+        );
+      }
       /**
        * **The wait is bounded here, because the caller is an HTTP request.**
        *
@@ -477,7 +511,7 @@ export const registerOnboardingRoutes = async (
        * it completes, is audited and writes `integrations.health` — so a retry finds the verdict.
        */
       const probe = await Promise.race([
-        commands().testIntegration(integrationId as never),
+        onboarding.testIntegration(integrationId as never),
         new Promise<'timeout'>((resolve) => {
           setTimeout(() => {
             resolve('timeout');
@@ -495,8 +529,8 @@ export const registerOnboardingRoutes = async (
       if (probe === null) {
         throw new NotFoundError(`integration ${integrationId}`);
       }
-      // A narrow write: `health` only (standing rule 79). `config` and `secret_ids` belong to the
-      // create, and this statement runs while a wizard may be editing the same row.
+      // A narrow write: `health` only (standing rule 79). `config` belongs to the create and the
+      // PATCH, `secret_ids` to the create, and this statement runs while either may be writing.
       await writeIntegrationHealth(options.database, integrationId, {
         ok: probe.ok,
         checkedAt: probe.checkedAt,
@@ -514,6 +548,65 @@ export const registerOnboardingRoutes = async (
     },
   );
 
+  /**
+   * `PATCH /api/integrations/:id` — the repair criterion 4's refusal points at, and the second
+   * writer of `integrations.config` (WP-100, PROGRESS backlog 328).
+   *
+   * `integration.write` (admin), like the create: the configuration decides where the account's
+   * credential is sent. Every check the create makes runs over the **merged** document
+   * (`updateIntegrationConfig`), and one `human_actions` row is written per accepted request, in
+   * the write's transaction, with the changed key **names** — the audit says what was changed,
+   * and a config value is not a credential but is still text an administrator typed.
+   *
+   * **No `Idempotency-Key`**: technical/08 asks for it on POSTs that create, and this creates
+   * nothing — the same `config`/`remove` applied twice is the same document, so a retry cannot make
+   * a second anything; it writes a second audit row, which is what it is.
+   */
+  typed.patch(
+    '/api/integrations/:integration_id',
+    {
+      preValidation: requirePermission(guard, 'integration.write'),
+      schema: {
+        summary: 'Change an integration’s non-secret configuration',
+        description:
+          '`config` sets keys and `remove` deletes them; a key named in neither is kept. The merged document goes through every check the create makes: a credential field in `config` is `400 credential_in_config`; a URL on a host outside `APP_INTEGRATION_HOSTS` is `403 integration_host_not_permitted`; a document the provider’s schema refuses is `400 invalid_integration_config` naming the key paths. The stored `health` is reset to `unknown`, because it was a verdict about the configuration this replaced. Credentials are not changed here. Admin only; audited.',
+        tags: ['org'],
+        params: integrationParamsSchema,
+        body: patchIntegrationRequestSchema,
+        response: {
+          200: integrationSummarySchema,
+          400: apiErrorSchema,
+          403: apiErrorSchema,
+          404: apiErrorSchema,
+          409: apiErrorSchema,
+        },
+      },
+    },
+    async (request) => {
+      const actor = actorOf(request);
+      const integrationId = request.params.integration_id;
+      const result = await updateIntegrationConfig(options.database, {
+        integrationId,
+        set: (request.body.config ?? {}) as JsonObject,
+        remove: request.body.remove ?? [],
+        egress,
+        audit: {
+          userId: actor.userId,
+          action: 'integration.config.write',
+          params: { integration_id: integrationId },
+        },
+      });
+      if (result.status === 'not_found') {
+        throw new NotFoundError(`integration ${integrationId}`);
+      }
+      const row = await findIntegrationRow(options.database, integrationId);
+      if (row === undefined) {
+        throw new NotFoundError(`integration ${integrationId}`);
+      }
+      return toIntegrationSummary(row, findShippedProvider(row.provider));
+    },
+  );
+
   typed.get(
     '/api/projects/:project_id/bindings',
     {
@@ -521,7 +614,7 @@ export const registerOnboardingRoutes = async (
       schema: {
         summary: 'The integrations this project is bound to',
         description:
-          'Non-secret binding configuration only — a credential belongs to the integration, never to the binding.',
+          'Non-secret binding configuration only — a credential belongs to the integration, never to the binding. The provider’s declared credential fields are removed here (a row stored before the write refused them), and a binding of a provider this build does not ship publishes an empty `config`.',
         tags: ['projects'],
         params: projectParamsSchema,
         response: { 200: projectBindingsResponseSchema, 404: apiErrorSchema },
@@ -543,7 +636,7 @@ export const registerOnboardingRoutes = async (
       schema: {
         summary: 'Replace this project’s integration bindings',
         description:
-          'The **whole** set: a binding missing from the request is removed. That is what makes the wizard’s step 1 re-submittable and what lets a mistake be corrected without a second endpoint. One transaction, so a project is never left with no bindings at all.',
+          'The **whole** set: a binding missing from the request is removed. That is what makes the wizard’s step 1 re-submittable and what lets a mistake be corrected without a second endpoint. One transaction, so a project is never left with no bindings at all. Each binding of a shipped provider is checked like an integration’s own configuration (WP-100): a credential field is `400 credential_in_config`, a URL outside `APP_INTEGRATION_HOSTS` is `403 integration_host_not_permitted`, an account whose own configuration no longer parses is `409 invalid_integration_config`, and an account-plus-overlay document the provider’s schema refuses is `400 invalid_binding_config`. The answer publishes no credential field.',
         tags: ['projects'],
         params: projectParamsSchema,
         body: putProjectBindingsRequestSchema,
@@ -563,6 +656,7 @@ export const registerOnboardingRoutes = async (
           integrationId: item.integration_id,
           ...(item.config === undefined ? {} : { config: item.config as JsonObject }),
         })),
+        { egress },
       );
       await recordHumanAction(options.database, {
         userId: actor.userId,

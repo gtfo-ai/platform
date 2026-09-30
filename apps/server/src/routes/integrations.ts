@@ -1,15 +1,23 @@
 /**
- * The two integration reads of technical/08 § "Integrations" (WP-15h part 2).
+ * The integration reads of technical/08 § "Integrations" (WP-15h part 2).
  *
  *   GET /api/integrations
  *   GET /api/integrations/:integration_id/setup-guide
+ *   GET /api/integrations/:integration_id/refused-deliveries
  *
- * Two of the other three on that row — `POST /api/integrations` and `POST …/:id/test` — are served
- * by `routes/onboarding.ts` since WP-21, with the audit row and the `Idempotency-Key` a read does
- * not have. `PATCH …/:id` is still unbuilt: editing an integration's configuration in place is the
- * settings screen's command, not the wizard's, and it needs `config_audit`'s diff to be worth
- * having. `routes/client-census.test.ts` carries what the client calls and this server does not
- * serve.
+ *   GET /api/integrations/providers           the shipped providers and their fields (WP-100)
+ *
+ * The three commands on that row — `POST /api/integrations`, `POST …/:id/test` and, since WP-100,
+ * `PATCH …/:id` — are served by `routes/onboarding.ts`, with the audit row a read does not have.
+ * `routes/client-census.test.ts` carries what the client calls and this server does not serve.
+ *
+ * ## `…/providers` is the catalogue, never a constructed provider
+ *
+ * The create form renders each provider's required non-credential fields from it (WP-100, PROGRESS
+ * backlog 328), so the field list is read off the provider's own schema by
+ * `packages/integrations/src/catalogue.ts` rather than copied into the SPA — a copy is a second list
+ * to keep true, and importing the catalogue into the browser bundle would pull every adapter past
+ * TD-013's budget.
  *
  * ## Organisation-scoped, at `maintainer`
  *
@@ -38,11 +46,17 @@
  */
 import {
   apiErrorSchema,
+  integrationProvidersResponseSchema,
   integrationsResponseSchema,
   refusedDeliveriesResponseSchema,
   setupGuideResponseSchema,
 } from '@platform/contracts';
-import { findShippedProvider, readSetupGuide } from '@platform/integrations';
+import {
+  findShippedProvider,
+  readSetupGuide,
+  SHIPPED_PROVIDERS,
+  toIntegrationProvider,
+} from '@platform/integrations';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
@@ -86,7 +100,7 @@ export const registerIntegrationRoutes = async (
       schema: {
         summary: 'The organisation’s integrations',
         description:
-          'Non-secret configuration only: the provider’s declared credential fields are removed here, and an integration whose provider this build does not ship publishes an empty `config` because the platform cannot tell its configuration from its credentials. `health.status` is `unknown` for a row nothing has probed; `POST /api/integrations/:id/test` (WP-21) is what writes `integrations.health`, so a tested integration publishes `ok` or `down` with the instant it was checked.',
+          'Non-secret configuration only: the provider’s declared credential fields are removed here, and an integration whose provider this build does not ship publishes an empty `config` because the platform cannot tell its configuration from its credentials. `health.status` is `unknown` for a row nothing has probed; `POST /api/integrations/:id/test` (WP-21) is what writes `integrations.health`, so a tested integration publishes `ok` or `down` with the instant it was checked. `config_refusal` names the key paths of a stored configuration the provider’s schema refuses (a row written before WP-100 made the create parse it), with the `PATCH /api/integrations/:id` that repairs it; `null` when it parses.',
         tags: ['org'],
         response: { 200: integrationsResponseSchema },
       },
@@ -108,6 +122,21 @@ export const registerIntegrationRoutes = async (
         items: rows.map((row) => toIntegrationSummary(row, findShippedProvider(row.provider))),
       };
     },
+  );
+
+  typed.get(
+    '/api/integrations/providers',
+    {
+      preHandler: requirePermission(guard, 'integration.read'),
+      schema: {
+        summary: 'The providers this build ships, and the configuration each one asks for',
+        description:
+          'Read off each provider’s own schema (WP-100): `config_fields` are the non-credential fields, `required` when the schema supplies no default, and `secret_fields` are the credentials — configured by naming an environment variable in `secret_refs`, never by value (TD-020). The create parses `config` with the same schema, so a form that sends every `required` field sends a document the provider accepts.',
+        tags: ['org'],
+        response: { 200: integrationProvidersResponseSchema },
+      },
+    },
+    async () => ({ items: SHIPPED_PROVIDERS.map(toIntegrationProvider) }),
   );
 
   typed.get(

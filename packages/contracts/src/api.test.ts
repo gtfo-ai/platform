@@ -18,6 +18,7 @@ import {
   orgAuditResponseSchema,
   orgUsersResponseSchema,
   paginationQuerySchema,
+  patchIntegrationRequestSchema,
   projectBindingsResponseSchema,
   projectsResponseSchema,
   putKbDocRequestSchema,
@@ -397,8 +398,12 @@ describe('the list envelopes and the KB health report', () => {
       name: 'acme gitlab',
       config: { base_url: 'https://gitlab.example.test' },
       health: { status: 'unknown' as const, checked_at: null, detail: null },
+      config_refusal: null,
     };
     expect(integrationsResponseSchema.parse({ items: [integration] })).toBeTruthy();
+    // WP-100: the refusal is required-nullable, so a server that forgot it is caught here.
+    const { config_refusal: _dropped, ...withoutRefusal } = integration;
+    expect(integrationsResponseSchema.safeParse({ items: [withoutRefusal] }).success).toBe(false);
     expect(
       integrationsResponseSchema.safeParse({
         items: [{ ...integration, health: { status: 'fine', checked_at: null, detail: null } }],
@@ -653,5 +658,19 @@ describe('businessInterviewRequestSchema', () => {
         },
       }).success,
     ).toBe(true);
+  });
+});
+
+describe('PATCH /api/integrations/:id (WP-100)', () => {
+  it('takes keys to set and keys to remove, and refuses a body with neither', () => {
+    expect(patchIntegrationRequestSchema.safeParse({ config: { channel: '#a' } }).success).toBe(
+      true,
+    );
+    expect(patchIntegrationRequestSchema.safeParse({ remove: ['host'] }).success).toBe(true);
+    expect(patchIntegrationRequestSchema.safeParse({}).success).toBe(false);
+    // Strict: an unknown key is an error, never dropped.
+    expect(patchIntegrationRequestSchema.safeParse({ config: {}, secret_refs: {} }).success).toBe(
+      false,
+    );
   });
 });

@@ -41,6 +41,7 @@ import {
   MissingSecretError,
   recordHumanAction,
   replaceProjectBindings,
+  updateIntegrationConfig,
   writeIntegrationHealth,
   writeProjectConfig,
 } from '../../../apps/server/src/queries/onboarding-queries.js';
@@ -287,7 +288,7 @@ describe('the wizard’s integration writes', () => {
         type: 'git' as IntegrationType,
         provider: 'gitlab',
         name: 'wiz gitlab',
-        config: {},
+        config: { base_url: 'https://gitlab.example.test' },
         secretRefs: { token: 'GITLAB_TOKEN' },
       },
       provider: gitlab,
@@ -312,7 +313,7 @@ describe('the wizard’s integration writes', () => {
           type: 'git' as IntegrationType,
           provider: 'gitlab',
           name: 'wiz gitlab bad field',
-          config: {},
+          config: { base_url: 'https://gitlab.example.test' },
           secretRefs: { not_a_field: 'GITLAB_TOKEN' },
         },
         provider: gitlab,
@@ -381,7 +382,7 @@ describe('the wizard’s integration writes', () => {
           type: 'git' as IntegrationType,
           provider: 'gitlab',
           name: 'wiz gitlab empty',
-          config: {},
+          config: { base_url: 'https://gitlab.example.test' },
           secretRefs: { token: 'EMPTY_TOKEN' },
         },
         provider: gitlab,
@@ -408,9 +409,94 @@ describe('the wizard’s integration writes', () => {
     // The create's columns are untouched — the narrow-write property (standing rule 79).
     expect(row.rows[0]?.config.project).toBe('acme/api');
   });
+
+  /**
+   * WP-100: `PATCH /api/integrations/:id`'s write, on a real row. It sets and removes keys, resets
+   * the health verdict the old document earned, leaves `secret_ids` to the create (rule 79) and
+   * writes one audit row with the changed key names — and a document the schema refuses writes
+   * nothing at all (the refusal is a countable effect, not only a status code).
+   */
+  it('updates the configuration through the create’s checks, narrowly, with one audit row', async () => {
+    if (created === null) return;
+    const before = await pool.query<{ secret_ids: string[] }>(
+      'select secret_ids from integrations where id = $1',
+      [created],
+    );
+    await expect(
+      updateIntegrationConfig(db, {
+        integrationId: created,
+        set: {},
+        remove: ['base_url'],
+        egress: allowAnyIntegrationHost(),
+        audit: { userId, action: 'integration.config.write', params: { integration_id: created } },
+      }),
+    ).rejects.toMatchObject({ statusCode: 400, code: 'invalid_integration_config' });
+
+    const written = await updateIntegrationConfig(db, {
+      integrationId: created,
+      set: { max_pages: 5 },
+      remove: ['project'],
+      egress: allowAnyIntegrationHost(),
+      audit: { userId, action: 'integration.config.write', params: { integration_id: created } },
+    });
+    expect(written).toEqual({ status: 'written', changed: ['max_pages', 'project'] });
+    const row = await pool.query<{
+      config: Record<string, unknown>;
+      health: Record<string, unknown>;
+      secret_ids: string[];
+    }>('select config, health, secret_ids from integrations where id = $1', [created]);
+    expect(row.rows[0]?.config).toEqual({ base_url: 'https://gitlab.example.test', max_pages: 5 });
+    expect(row.rows[0]?.health).toEqual({});
+    expect(row.rows[0]?.secret_ids).toEqual(before.rows[0]?.secret_ids);
+    const audited = await pool.query<{ params: Record<string, unknown> }>(
+      "select params from human_actions where action = 'integration.config.write'",
+    );
+    expect(audited.rows.map((each) => each.params)).toEqual([
+      { integration_id: created, changed_keys: ['max_pages', 'project'] },
+    ]);
+    expect(
+      await updateIntegrationConfig(db, {
+        integrationId: '00000000-0000-4000-8000-0000000000fe',
+        set: { max_pages: 5 },
+        remove: [],
+        egress: allowAnyIntegrationHost(),
+        audit: { userId, action: 'integration.config.write', params: {} },
+      }),
+    ).toEqual({ status: 'not_found' });
+  });
+
+  /** WP-100, criterion 1 on a real database: each provider's refused create leaves no row. */
+  it.each(SHIPPED_PROVIDERS.map((entry) => [entry.id, entry] as const))(
+    'refuses a %s create whose config the schema refuses, and writes no row',
+    async (id, provider) => {
+      const count = async () =>
+        (await pool.query<{ count: number }>('select count(*)::int as count from integrations'))
+          .rows[0]?.count;
+      const before = await count();
+      await expect(
+        createIntegration(db, {
+          orgId,
+          integration: {
+            type: provider.type,
+            provider: id,
+            name: `wiz ${id} refused config`,
+            config: { not_a_field: true },
+            secretRefs: {},
+          },
+          provider,
+          egress: allowAnyIntegrationHost(),
+          secretSource: source,
+          secretKey: key,
+          newId: () => crypto.randomUUID(),
+        }),
+      ).rejects.toMatchObject({ statusCode: 400, code: 'invalid_integration_config' });
+      expect(await count()).toBe(before);
+    },
+  );
 });
 
 describe('bindings and configuration', () => {
+  const egress = allowAnyIntegrationHost();
   it('replaces the whole binding set, so a removed binding is gone', async () => {
     const integration = await pool.query<{ id: string }>(
       `insert into integrations (org_id, type, provider, name)
@@ -418,19 +504,57 @@ describe('bindings and configuration', () => {
       [orgId],
     );
     const jiraId = integration.rows[0]?.id as string;
-    await replaceProjectBindings(db, projectId, [{ integrationId: jiraId }]);
+    await replaceProjectBindings(db, projectId, [{ integrationId: jiraId }], { egress });
     expect((await listProjectBindings(db, projectId)).map((item) => item.provider)).toEqual([
       'jira_cloud',
     ]);
-    await replaceProjectBindings(db, projectId, []);
+    await replaceProjectBindings(db, projectId, [], { egress });
     expect(await listProjectBindings(db, projectId)).toEqual([]);
     await pool.query('delete from integrations where id = $1', [jiraId]);
+  });
+
+  /**
+   * WP-100 review round 1, backlog 330: a binding overlay carrying a credential field is refused at
+   * the write and writes nothing, and a binding row stored before that refusal — written here the
+   * way `psql` or a pre-WP-100 `PUT` wrote it — is served without the credential. The canary for
+   * each direction: the non-credential key beside the token is still served, and the refusal is
+   * the credential's, not a parse failure's.
+   */
+  it('refuses a credential in a binding overlay, and never serves one stored before', async () => {
+    const TOKEN = 'sntrys_FAKE-stored-binding-token-000001';
+    const inserted = await pool.query<{ id: string }>(
+      `insert into integrations (org_id, type, provider, name, config)
+       values ($1, 'errors', 'sentry', 'wiz sentry bindings',
+               '{"organization":"acme","base_url":"https://sentry.example.test"}'::jsonb)
+       returning id`,
+      [orgId],
+    );
+    const sentryId = inserted.rows[0]?.id as string;
+    await expect(
+      replaceProjectBindings(
+        db,
+        projectId,
+        [{ integrationId: sentryId, config: { auth_token: TOKEN, max_issues: 5 } }],
+        { egress },
+      ),
+    ).rejects.toMatchObject({ statusCode: 400, code: 'credential_in_config' });
+    expect(await listProjectBindings(db, projectId)).toEqual([]);
+
+    await pool.query(
+      `insert into bindings (project_id, integration_id, config) values ($1, $2, $3::jsonb)`,
+      [projectId, sentryId, JSON.stringify({ auth_token: TOKEN, max_issues: 5 })],
+    );
+    const served = await listProjectBindings(db, projectId);
+    expect(JSON.stringify(served)).not.toContain(TOKEN);
+    expect(served.map((item) => item.config)).toEqual([{ max_issues: 5 }]);
+    await pool.query('delete from bindings where project_id = $1', [projectId]);
+    await pool.query('delete from integrations where id = $1', [sentryId]);
   });
 
   it('refuses a binding to an integration that does not exist, and writes nothing', async () => {
     const missing = '00000000-0000-4000-8000-0000000000ff';
     await expect(
-      replaceProjectBindings(db, projectId, [{ integrationId: missing }]),
+      replaceProjectBindings(db, projectId, [{ integrationId: missing }], { egress }),
     ).rejects.toThrow(/no integration with id/);
     expect(await listProjectBindings(db, projectId)).toEqual([]);
   });

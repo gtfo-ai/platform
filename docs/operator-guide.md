@@ -460,11 +460,22 @@ docker compose up -d app                  # picks up both
 ### Creating one: the Integrations screen, or the API
 
 **Since WP-30 the browser can do this.** The Integrations screen has an "Add integration" form and a
-"Test connection" button on every card; the form asks for the provider, a name, the credential
-*field* and the **name of the environment variable** the server should read it from — never the
-value. A provider this build does not ship is refused by name, and the refusal lists the ones that
-do. (Until that release, no screen called `POST /api/integrations` at all, which is the defect
-PROGRESS backlog 55 records.)
+"Test connection" button on every card. Since WP-100 the form offers the providers this build ships
+and, for the one you choose, asks for a name, each field that provider **requires** (GitLab's and
+Loki's `base_url`, Jira Cloud's `site_url` and `user_email`, Sentry's `organization`, Slack's
+`channel`) and, for each credential field, the **name of the environment variable** the server
+should read it from — never the value. The field list comes from the server
+(`GET /api/integrations/providers`), read off each provider's own schema. (Until WP-30 no screen
+called `POST /api/integrations` at all — PROGRESS backlog 55 — and until WP-100 the form sent an
+empty configuration that every provider refused at the first test — backlog 328.)
+
+**The create checks the configuration before it stores anything.** A document the provider's schema
+refuses — a required field missing, a key the provider does not declare, a value of the wrong shape —
+answers `400` with the code `invalid_integration_config` and names each key path; no row is written.
+An integration created before WP-100 whose configuration would not load shows the refusal on its card
+(and `/test` answers `409 invalid_integration_config`); **Edit configuration** repairs it, which is
+`PATCH /api/integrations/<id>` with `config` (keys to set) and `remove` (keys to delete), checked the
+same way as the create.
 
 The API is still there, and it is what a script uses:
 
@@ -484,7 +495,7 @@ curl -sS -b cookies.txt -X POST "$BASE/api/integrations" \
   -H 'x-requested-with: XMLHttpRequest' \
   -H "Idempotency-Key: $(uuidgen)" \
   -d '{"type":"git","provider":"gitlab","name":"GitLab",
-       "config":{"host":"https://gitlab.example.com"},
+       "config":{"base_url":"https://gitlab.example.com"},
        "secret_refs":{"token":"GITLAB_TOKEN"}}'
 # → 201 {"id":"…","provider":"gitlab","name":"GitLab"}
 ```

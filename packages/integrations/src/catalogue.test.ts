@@ -23,7 +23,14 @@ import type { IntegrationActionExecutor } from '@platform/application';
 import { noSecretsRedactor } from '@platform/application';
 import type { Id } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
-import { findShippedProvider, readSetupGuide, SHIPPED_PROVIDERS } from './catalogue.js';
+import {
+  configIssuesOf,
+  findShippedProvider,
+  type ProviderCatalogueEntry,
+  readSetupGuide,
+  SHIPPED_PROVIDERS,
+  toIntegrationProvider,
+} from './catalogue.js';
 import { gitlabProviderRegistration } from './providers/gitlab/index.js';
 import { fixedActionContext } from './providers/jira-cloud/index.js';
 import { createJiraCloudRegistration } from './providers/jira-cloud/registration.js';
@@ -144,15 +151,10 @@ describe('the shipped provider catalogue', () => {
   it('refuses a guide path that names no file, rather than answering with an empty one', async () => {
     await expect(
       readSetupGuide({
+        ...(findShippedProvider('gitlab') as ProviderCatalogueEntry),
         id: 'nope',
-        type: 'git',
         displayName: 'Nope',
-        secretFields: [],
         setupGuidePath: 'packages/integrations/src/providers/nope/setup-guide.md',
-        inboundWebhook: false,
-        agentTooling: null,
-        accountOnlyFields: [],
-        configDefaults: {},
       }),
     ).rejects.toThrow();
   });
@@ -207,5 +209,89 @@ describe('a provider’s published config defaults', () => {
     });
     expect(findShippedProvider('gitlab')?.configDefaults).not.toHaveProperty('base_url');
     expect(findShippedProvider('sentry')?.configDefaults).not.toHaveProperty('auth_token');
+  });
+});
+
+/**
+ * WP-100, PROGRESS backlog 328: what the create form renders and what the create parses with, both
+ * read off the provider's own schema. The required fields are named per provider (standing rule
+ * 10) so a sweep that found none would not pass by agreeing with itself.
+ */
+describe('a provider’s configuration fields and its account-config check', () => {
+  const required = (id: string): string[] =>
+    (findShippedProvider(id)?.configFields ?? [])
+      .filter((field) => field.required)
+      .map((field) => field.name);
+
+  it('names each provider’s required non-credential fields', () => {
+    expect(required('gitlab')).toEqual(['base_url']);
+    expect(required('jira-cloud')).toEqual(['site_url', 'user_email']);
+    expect(required('loki')).toEqual(['base_url']);
+    expect(required('sentry')).toEqual(['organization']);
+    expect(required('slack')).toEqual(['channel']);
+  });
+
+  it('never lists a credential field as configuration', () => {
+    for (const entry of SHIPPED_PROVIDERS) {
+      const names = entry.configFields.map((field) => field.name);
+      expect(
+        names.filter((name) => entry.secretFields.includes(name)),
+        entry.id,
+      ).toEqual([]);
+      // …and the field list is the rest of the schema, not a subset of it.
+      expect(names.length, entry.id).toBeGreaterThan(entry.secretFields.length);
+    }
+  });
+
+  it('refuses {} at every provider’s required path, and accepts the smallest valid document', () => {
+    for (const candidate of BUILDABLE) {
+      const entry = findShippedProvider(candidate.registration.id) as ProviderCatalogueEntry;
+      expect(
+        configIssuesOf(entry, {}).map((issue) => issue.path),
+        entry.id,
+      ).toEqual(required(entry.id));
+      expect(configIssuesOf(entry, candidate.config as never), entry.id).toEqual([]);
+    }
+  });
+
+  it('names an undeclared key by its name and a wrong value by its path, never the value', () => {
+    const gitlab = findShippedProvider('gitlab') as ProviderCatalogueEntry;
+    // The operator guide's old example (backlog 328): `host` instead of `base_url`.
+    const issues = configIssuesOf(gitlab, { host: 'https://gitlab.example.test' });
+    expect(issues.map((issue) => issue.path).sort()).toEqual(['base_url', 'host']);
+    const sentry = findShippedProvider('sentry') as ProviderCatalogueEntry;
+    const slug = configIssuesOf(sentry, { organization: 'FAKE Secret Value 42' });
+    expect(slug.map((issue) => issue.path)).toEqual(['organization']);
+    expect(JSON.stringify(slug)).not.toContain('FAKE Secret Value 42');
+    // The wizard e2e's old spelling (backlog 328): British `organisation` is not Sentry's key.
+    expect(
+      configIssuesOf(sentry, { organisation: 'acme' })
+        .map((issue) => issue.path)
+        .sort(),
+    ).toEqual(['organisation', 'organization']);
+  });
+
+  it('judges a stored credential key as a credential, not as an undeclared key', () => {
+    // A row written before the create refused credential keys loads today: the loader merges the
+    // secrets over it. Calling it broken would send an operator to repair a working row.
+    const sentry = findShippedProvider('sentry') as ProviderCatalogueEntry;
+    expect(
+      configIssuesOf(sentry, { organization: 'acme', auth_token: 'FAKE-token-DO-NOT-USE' }),
+    ).toEqual([]);
+  });
+
+  it('publishes the fields with their account-only flag', () => {
+    const slack = toIntegrationProvider(findShippedProvider('slack') as ProviderCatalogueEntry);
+    expect(slack.secret_fields).toContain('bot_token');
+    expect(slack.config_fields.find((field) => field.name === 'socket_mode')).toEqual({
+      name: 'socket_mode',
+      required: false,
+      account_only: true,
+    });
+    expect(slack.config_fields.find((field) => field.name === 'channel')).toEqual({
+      name: 'channel',
+      required: true,
+      account_only: false,
+    });
   });
 });

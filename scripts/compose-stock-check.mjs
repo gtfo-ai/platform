@@ -459,7 +459,7 @@ const main = async () => {
         type: 'errors',
         provider: 'sentry',
         name: 'stock check sentry',
-        config: { organisation: 'acme', base_url: `https://${PROVIDER_HOST}` },
+        config: { organization: 'acme', base_url: `https://${PROVIDER_HOST}` },
         secret_refs: { auth_token: 'SENTRY_AUTH_TOKEN' },
       }),
     });
@@ -478,7 +478,7 @@ const main = async () => {
         type: 'errors',
         provider: 'sentry',
         name: 'stock check forbidden',
-        config: { organisation: 'acme', base_url: `https://${PROVIDER_HOST}` },
+        config: { organization: 'acme', base_url: `https://${PROVIDER_HOST}` },
         secret_refs: { auth_token: 'APP_SECRET_KEY' },
       }),
     });
@@ -505,7 +505,7 @@ const main = async () => {
         type: 'errors',
         provider: 'sentry',
         name: 'stock check undeclared host',
-        config: { organisation: 'acme', base_url: `https://evil-${PROVIDER_HOST}` },
+        config: { organization: 'acme', base_url: `https://evil-${PROVIDER_HOST}` },
         secret_refs: { auth_token: 'SENTRY_AUTH_TOKEN' },
       }),
     });

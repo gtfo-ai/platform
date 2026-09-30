@@ -48,7 +48,7 @@ import type {
   EffectiveConfigResponse,
   ReadinessResponse,
 } from '@platform/contracts';
-import { FAKE_TASK_MANAGEMENT_PROVIDER_ID } from '@platform/integrations';
+import { FAKE_TASK_MANAGEMENT_PROVIDER_ID, type SentryFetch } from '@platform/integrations';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD, Client } from '../support/instance.js';
 import {
@@ -174,7 +174,7 @@ const command = async <T>(
   client: Client,
   path_: string,
   body: unknown,
-  options: { readonly method?: 'POST' | 'PUT'; readonly idempotencyKey?: string } = {},
+  options: { readonly method?: 'POST' | 'PUT' | 'PATCH'; readonly idempotencyKey?: string } = {},
 ): Promise<{ status: number; body: T }> =>
   client.json<T>(path_, {
     method: options.method ?? 'POST',
@@ -190,6 +190,18 @@ const command = async <T>(
 describe('the onboarding wizard', () => {
   it('completes on a fixture repository and produces a readiness report', async () => {
     const repo = await seedFixtureRepository();
+    const sentryRequests: { url: string; authorization: string | undefined }[] = [];
+    const sentryTransport: SentryFetch = async (url, init) => {
+      sentryRequests.push({
+        url,
+        authorization: init.headers.authorization ?? init.headers.Authorization,
+      });
+      // `GET /api/0/organizations/<slug>/` — the probe's one call (`sentry/client.ts`).
+      return new Response(JSON.stringify({ slug: 'acme', name: 'ACME' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    };
     const pipeline = await startPipeline({
       label: 'wizard',
       seedProject: false,
@@ -209,9 +221,14 @@ describe('the onboarding wizard', () => {
         // The second operator-declared list (`APP_INTEGRATION_HOSTS`, WP-51): without it
         // `POST /api/integrations` refuses every host, which is the shipped default and is
         // asserted below before the declared one is used. The fake providers the pipeline runs on
-        // publish no host at all, so this list governs the Sentry row and nothing else here.
-        APP_INTEGRATION_HOSTS: 'sentry.example.test',
+        // publish no host at all, so this list governs the Sentry row and WP-100's refused-config
+        // bodies, whose hosts are declared so the refusal under test is the schema's.
+        APP_INTEGRATION_HOSTS: 'sentry.example.test,slack.example.test,gitlab.example.test',
       },
+      // WP-100 (backlog 328, criterion 3): the **production** Sentry registration over a recording
+      // transport, so the integration the wizard creates is loaded and probed by production code
+      // and the far side of the HTTP call is the only double.
+      sentry: { fetch: sentryTransport },
     });
     harness = pipeline;
     const client = await signIn(pipeline.instance.baseUrl);
@@ -286,7 +303,7 @@ describe('the onboarding wizard', () => {
           type: 'errors',
           provider: 'sentry',
           name: `acme sentry ${forbidden}`,
-          config: { organisation: 'acme', base_url: 'https://sentry.example.test' },
+          config: { organization: 'acme', base_url: 'https://sentry.example.test' },
           secret_refs: { auth_token: forbidden },
         },
         { idempotencyKey: `wizard-forbidden-${forbidden}` },
@@ -310,7 +327,7 @@ describe('the onboarding wizard', () => {
         type: 'errors',
         provider: 'sentry',
         name: 'acme sentry plaintext',
-        config: { organisation: 'acme', auth_token: 'FAKE-plaintext-token-not-a-real-secret' },
+        config: { organization: 'acme', auth_token: 'FAKE-plaintext-token-not-a-real-secret' },
         secret_refs: {},
       },
       { idempotencyKey: 'wizard-credential-in-config' },
@@ -345,7 +362,7 @@ describe('the onboarding wizard', () => {
           type: 'errors',
           provider: 'sentry',
           name: `acme sentry ${host}`,
-          config: { organisation: 'acme', base_url: `https://${host}` },
+          config: { organization: 'acme', base_url: `https://${host}` },
           secret_refs: { auth_token: 'WP21_SENTRY_TOKEN' },
         },
         { idempotencyKey: `wizard-forbidden-host-${host}` },
@@ -371,7 +388,7 @@ describe('the onboarding wizard', () => {
         type: 'errors',
         provider: 'sentry',
         name: 'acme sentry',
-        config: { organisation: 'acme', base_url: 'https://sentry.example.test' },
+        config: { organization: 'acme', base_url: 'https://sentry.example.test' },
         secret_refs: { auth_token: 'WP21_SENTRY_TOKEN' },
       },
       { idempotencyKey: 'wizard-step-1-sentry' },
@@ -385,6 +402,210 @@ describe('the onboarding wizard', () => {
     );
     expect(JSON.stringify(audited)).not.toContain('FAKE-sentry-token');
     expect(audited[0]?.params.secret_fields).toEqual(['auth_token']);
+
+    /**
+     * **WP-100, criterion 3: the integration the wizard created loads.** Until WP-100 this row
+     * sent British `organisation`, the create stored it, and nothing here probed it — so the test
+     * passed over a row every binding load would refuse (PROGRESS backlog 328). *Test connection*
+     * builds the production Sentry adapter from the row and the sealed credential and reaches the
+     * transport with the bearer the route was given.
+     */
+    const sentryProbe = await command<{ ok: boolean; checks: { detail: string }[] }>(
+      client,
+      `/api/integrations/${integration.body.id}/test`,
+      {},
+    );
+    expect(sentryProbe.status, JSON.stringify(sentryProbe.body)).toBe(200);
+    expect(sentryProbe.body.ok, JSON.stringify(sentryProbe.body)).toBe(true);
+    expect(
+      sentryRequests.filter(
+        (each) => each.url === 'https://sentry.example.test/api/0/organizations/acme/',
+      ),
+    ).toEqual([
+      {
+        url: 'https://sentry.example.test/api/0/organizations/acme/',
+        authorization: 'Bearer FAKE-sentry-token-not-a-real-secret-00',
+      },
+    ]);
+
+    /**
+     * **WP-100, criterion 1 over HTTP: a config the provider's schema refuses is 400 naming the key
+     * path, and no row is written — for each of the five shipped providers.** Each body clears the
+     * host check (a declared host where the provider defaults one), so the refusal under test is
+     * the schema's, not the allow-list's.
+     */
+    const refusedBodies: readonly {
+      type: string;
+      provider: string;
+      config: Record<string, unknown>;
+      paths: string[];
+    }[] = [
+      { type: 'git', provider: 'gitlab', config: {}, paths: ['base_url'] },
+      // The operator guide's old example (backlog 328): `host` for `base_url`.
+      {
+        type: 'git',
+        provider: 'gitlab',
+        config: { host: 'https://gitlab.example.test' },
+        paths: ['base_url', 'host'],
+      },
+      {
+        type: 'task_management',
+        provider: 'jira-cloud',
+        config: {},
+        paths: ['site_url', 'user_email'],
+      },
+      { type: 'logs', provider: 'loki', config: {}, paths: ['base_url'] },
+      {
+        type: 'errors',
+        provider: 'sentry',
+        config: { organisation: 'acme', base_url: 'https://sentry.example.test' },
+        paths: ['organisation', 'organization'],
+      },
+      {
+        type: 'communication',
+        provider: 'slack',
+        config: { base_url: 'https://slack.example.test' },
+        paths: ['channel'],
+      },
+    ];
+    for (const [index, body] of refusedBodies.entries()) {
+      const refusedConfig = await command<{
+        error: { code: string; message: string; details?: { path: string }[] };
+      }>(
+        client,
+        '/api/integrations',
+        { ...body, paths: undefined, name: `refused config ${index}`, secret_refs: {} },
+        { idempotencyKey: `wizard-refused-config-${index}` },
+      );
+      expect(`${body.provider} ${refusedConfig.status} ${refusedConfig.body.error.code}`).toBe(
+        `${body.provider} 400 invalid_integration_config`,
+      );
+      expect(refusedConfig.body.error.details?.map((detail) => detail.path).sort()).toEqual(
+        body.paths,
+      );
+      for (const path of body.paths) {
+        expect(refusedConfig.body.error.message).toContain(path);
+      }
+    }
+    expect(
+      await pipeline.query(
+        "select count(*)::int as count from integrations where name like 'refused config %'",
+      ),
+    ).toEqual([{ count: 0 }]);
+
+    /**
+     * **WP-100, criterion 4: a stored row that no longer parses — written before the create parsed
+     * it — answers a named refusal at read, with the `PATCH` that repairs it, never a 500.** The
+     * row is the wizard's own old body, written the way every pre-WP-100 create wrote it; it shares
+     * the created row's sealed credential so that, once repaired, the probe can prove it loads.
+     */
+    const legacy = await pipeline.query<{ id: string }>(
+      `insert into integrations (org_id, type, provider, name, config, secret_ids)
+       select org_id, type, provider, 'acme sentry (pre-WP-100)',
+              '{"organisation":"acme","base_url":"https://sentry.example.test"}'::jsonb, secret_ids
+         from integrations where id = $1
+       returning id::text as id`,
+      [integration.body.id],
+    );
+    const legacyId = legacy[0]?.id as string;
+    const listed = await client.json<{
+      items: {
+        id: string;
+        config_refusal: { code: string; message: string; paths: string[] } | null;
+      }[];
+    }>('/api/integrations');
+    expect(listed.status).toBe(200);
+    const refusal = listed.body.items.find((item) => item.id === legacyId)?.config_refusal;
+    expect(refusal?.code).toBe('invalid_integration_config');
+    expect(refusal?.paths.sort()).toEqual(['organisation', 'organization']);
+    expect(refusal?.message).toContain(`PATCH /api/integrations/${legacyId}`);
+    // The row that parses carries none — the other direction (standing rule 42).
+    expect(listed.body.items.find((item) => item.id === integration.body.id)?.config_refusal).toBe(
+      null,
+    );
+    const refusedProbe = await command<{ error: { code: string; message: string } }>(
+      client,
+      `/api/integrations/${legacyId}/test`,
+      {},
+    );
+    expect(`${refusedProbe.status} ${refusedProbe.body.error.code}`).toBe(
+      '409 invalid_integration_config',
+    );
+    expect(refusedProbe.body.error.message).toContain(`PATCH /api/integrations/${legacyId}`);
+
+    // The PATCH runs the create's checks over the merged document: a host outside the list and a
+    // value the schema refuses are both refused, and neither writes.
+    const patchHost = await command<{ error: { code: string } }>(
+      client,
+      `/api/integrations/${legacyId}`,
+      { config: { base_url: 'https://evil.example.com' } },
+      { method: 'PATCH' },
+    );
+    expect(`${patchHost.status} ${patchHost.body.error.code}`).toBe(
+      '403 integration_host_not_permitted',
+    );
+    const patchSlug = await command<{ error: { code: string; details?: { path: string }[] } }>(
+      client,
+      `/api/integrations/${legacyId}`,
+      { config: { organization: 'Not A Slug' }, remove: ['organisation'] },
+      { method: 'PATCH' },
+    );
+    expect(`${patchSlug.status} ${patchSlug.body.error.code}`).toBe(
+      '400 invalid_integration_config',
+    );
+    expect(patchSlug.body.error.details?.map((detail) => detail.path)).toEqual(['organization']);
+    const patchCredential = await command<{ error: { code: string } }>(
+      client,
+      `/api/integrations/${legacyId}`,
+      { config: { auth_token: 'FAKE-plaintext-token-not-a-real-secret' } },
+      { method: 'PATCH' },
+    );
+    expect(`${patchCredential.status} ${patchCredential.body.error.code}`).toBe(
+      '400 credential_in_config',
+    );
+    expect(
+      await pipeline.query<{ config: Record<string, unknown> }>(
+        'select config from integrations where id = $1',
+        [legacyId],
+      ),
+    ).toEqual([{ config: { organisation: 'acme', base_url: 'https://sentry.example.test' } }]);
+
+    const repaired = await command<{
+      config: Record<string, unknown>;
+      config_refusal: unknown;
+      health: { status: string };
+    }>(
+      client,
+      `/api/integrations/${legacyId}`,
+      { config: { organization: 'acme' }, remove: ['organisation'] },
+      { method: 'PATCH' },
+    );
+    expect(repaired.status, JSON.stringify(repaired.body)).toBe(200);
+    expect(repaired.body.config).toEqual({
+      base_url: 'https://sentry.example.test',
+      organization: 'acme',
+    });
+    expect(repaired.body.config_refusal).toBe(null);
+    expect(repaired.body.health.status).toBe('unknown');
+    const repairedProbe = await command<{ ok: boolean }>(
+      client,
+      `/api/integrations/${legacyId}/test`,
+      {},
+    );
+    expect(repairedProbe.status, JSON.stringify(repairedProbe.body)).toBe(200);
+    expect(repairedProbe.body.ok).toBe(true);
+    // One audit row for the one accepted PATCH, naming the keys it changed and never a value.
+    const configWrites = await pipeline.query<{ params: Record<string, unknown> }>(
+      "select params from human_actions where action = 'integration.config.write'",
+    );
+    expect(configWrites).toEqual([
+      {
+        params: {
+          integration_id: legacyId,
+          changed_keys: ['organisation', 'organization'],
+        },
+      },
+    ]);
 
     // The two fake-provider rows the pipeline needs, **without** their bindings: the wizard's own
     // command is what attaches them, which is the part under test.
@@ -411,6 +632,44 @@ describe('the onboarding wizard', () => {
       'ok',
     );
 
+    /**
+     * **WP-100 review round 1, backlog 330: no credential in a binding, in either direction.** A
+     * `PUT …/bindings` whose overlay carries Sentry's `auth_token` is refused by the key's name and
+     * writes nothing; a binding row stored before that refusal (inserted the way `psql` or a
+     * pre-WP-100 `PUT` wrote it) is served by `GET …/bindings` without the token and with the key
+     * beside it — the canary that the read strips a field rather than publishing nothing.
+     */
+    const BINDING_TOKEN = 'sntrys_FAKE-wizard-binding-token-000001';
+    const credentialOverlay = await command<{ error: { code: string; message: string } }>(
+      client,
+      `/api/projects/${projectId}/bindings`,
+      {
+        items: [{ integration_id: integration.body.id, config: { auth_token: BINDING_TOKEN } }],
+      },
+      { method: 'PUT' },
+    );
+    expect(`${credentialOverlay.status} ${credentialOverlay.body.error.code}`).toBe(
+      '400 credential_in_config',
+    );
+    expect(JSON.stringify(credentialOverlay.body)).not.toContain(BINDING_TOKEN);
+    expect(await pipeline.query('select count(*)::int as count from bindings')).toEqual([
+      { count: 0 },
+    ]);
+    await pipeline.query(
+      'insert into bindings (project_id, integration_id, config) values ($1, $2, $3::jsonb)',
+      [
+        projectId,
+        integration.body.id,
+        JSON.stringify({ auth_token: BINDING_TOKEN, max_issues: 5 }),
+      ],
+    );
+    const servedBindings = await client.json<{ items: { config: Record<string, unknown> }[] }>(
+      `/api/projects/${projectId}/bindings`,
+    );
+    expect(servedBindings.status).toBe(200);
+    expect(JSON.stringify(servedBindings.body)).not.toContain(BINDING_TOKEN);
+    expect(servedBindings.body.items.map((item) => item.config)).toEqual([{ max_issues: 5 }]);
+
     const bound = await command<{ items: { provider: string }[] }>(
       client,
       `/api/projects/${projectId}/bindings`,
@@ -420,6 +679,8 @@ describe('the onboarding wizard', () => {
       { method: 'PUT' },
     );
     expect(bound.status).toBe(200);
+    // The PUT's own answer is the second read of the set: the seeded row is replaced, no token.
+    expect(JSON.stringify(bound.body)).not.toContain(BINDING_TOKEN);
     expect(bound.body.items.map((item) => item.provider).sort()).toEqual([
       'fake-git',
       'fake-task-management',
@@ -703,6 +964,11 @@ describe('the onboarding wizard', () => {
     expect(actions.map((entry) => entry.action)).toEqual([
       'project.create',
       'integration.create',
+      // WP-100: the Sentry row's probe, the pre-WP-100 row's repair and its probe; the refused
+      // creates, the refused probe and the three refused PATCHes left no row.
+      'integration.test',
+      'integration.config.write',
+      'integration.test',
       'integration.test',
       'project.bindings.write',
       'project.discovery.start',

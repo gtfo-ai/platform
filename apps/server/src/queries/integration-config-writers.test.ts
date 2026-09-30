@@ -2,17 +2,19 @@
  * **Who writes `integrations.config`** — the census the exclusivity sentence on
  * `assertNoCredentialInConfig` points at (WP-68, PROGRESS backlog 130).
  *
- * Two write-time refusals run on the create path and nowhere else: `assertHostIsDeclared` (the
- * egress allow-list, which the executor asks again at call time) and `assertNoCredentialInConfig`
+ * Three write-time refusals run on the write paths and nowhere else: `assertHostIsDeclared` (the
+ * egress allow-list, which the executor asks again at call time), `assertNoCredentialInConfig`
  * (a credential pasted into the column, which **nothing** asks again — a call-time twin was
  * considered and not built, because the write already answers the question and a re-read of every
- * stored config is the dearer closure). Their whole coverage is therefore one claim: *every writer
- * of the column goes through `createIntegration`*. An exclusivity claim is a statement about every
- * other file, so it cannot be kept by the file that makes it (standing rule 63) — it is kept here,
- * in the shape `packages/application/src/pipeline/task-save-sites.test.ts` established: a new
- * writer is a decision somebody makes in this file rather than a line somebody adds elsewhere.
- * The endpoint that would add one is specified and unbuilt (`PATCH /api/integrations/:id`,
- * technical/08), and the client census cannot see it, because no screen calls a PATCH.
+ * stored config is the dearer closure) and, since WP-100, `assertConfigParses` (the provider's own
+ * schema, which the loader asks again at use). Their whole coverage is therefore one claim: *every
+ * writer of the column goes through `createIntegration` or `updateIntegrationConfig`* — the two
+ * statements declared below, both in `queries/onboarding-queries.ts` and both running all three
+ * checks. An exclusivity claim is a statement about every other file, so it cannot be kept by the
+ * file that makes it (standing rule 63) — it is kept here, in the shape
+ * `packages/application/src/pipeline/task-save-sites.test.ts` established: a new writer is a
+ * decision somebody makes in this file rather than a line somebody adds elsewhere. The second
+ * writer, `PATCH /api/integrations/:id` (WP-100), was added exactly that way.
  *
  * ## What it reads, and what counts as a writer
  *
@@ -40,8 +42,8 @@
  *  - **the test tiers**, excluded on purpose, so a production writer hidden in a `*.test.ts`
  *    would pass.
  *
- * A floor against the accident — somebody writing `PATCH /api/integrations/:id` from technical/08
- * without reading `onboarding-queries.ts` — not a proof.
+ * A floor against the accident — somebody writing a third writer without reading
+ * `onboarding-queries.ts` — not a proof.
  */
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -51,9 +53,12 @@ import { describe, expect, it } from 'vitest';
 import { censusFiles } from '../../../../scripts/census-files.mjs';
 import { repositoryRoot, withoutComments } from '../routes/web-sources.js';
 
-/** The declared writers of `integrations.config`, with how many statements each holds. One. */
+/**
+ * The declared writers of `integrations.config`, with how many statements each holds: the create's
+ * insert and, since WP-100, `updateIntegrationConfig`'s update.
+ */
 const CONFIG_WRITERS: ReadonlyMap<string, number> = new Map([
-  ['apps/server/src/queries/onboarding-queries.ts', 1],
+  ['apps/server/src/queries/onboarding-queries.ts', 2],
 ]);
 
 const SOURCE_FILE = /\.(?:ts|tsx|mts|cts|mjs|cjs|js|jsx)$/;
@@ -133,6 +138,7 @@ describe('the writers of integrations.config (backlog 130)', () => {
     ).toEqual(
       expect.arrayContaining([
         'apps/server/src/queries/onboarding-queries.ts insert true',
+        'apps/server/src/queries/onboarding-queries.ts update true',
         'apps/server/src/queries/onboarding-queries.ts update false',
       ]),
     );

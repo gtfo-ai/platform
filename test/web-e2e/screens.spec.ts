@@ -275,7 +275,12 @@ test('the integrations screen carries the create and test controls', async ({ pa
   await page.goto('/integrations');
   await expect(page.getByRole('button', { name: 'Test connection' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Add integration' })).toBeVisible();
-  await expect(page.getByLabel('Environment variable')).toBeVisible();
+  // WP-100 (backlog 328): the chosen provider's own required fields, from the server's catalogue,
+  // and its credential as an environment-variable name.
+  await page.getByLabel('Provider').selectOption('jira-cloud');
+  await expect(page.getByLabel('site_url')).toBeVisible();
+  await expect(page.getByLabel('user_email')).toBeVisible();
+  await expect(page.getByLabel('Environment variable for api_token')).toBeVisible();
 });
 
 test('the theme control switches the document theme', async ({ page }) => {

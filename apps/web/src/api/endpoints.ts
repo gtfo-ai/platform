@@ -57,6 +57,8 @@ import {
   identityMappingListSchema,
   identityMappingSchema,
   inboxResponseSchema,
+  integrationProvidersResponseSchema,
+  integrationSummarySchema,
   integrationsResponseSchema,
   kbDocResponseSchema,
   kbHealthResponseSchema,
@@ -66,6 +68,7 @@ import {
   orgSettingsResponseSchema,
   orgStatsResponseSchema,
   orgUsersResponseSchema,
+  patchIntegrationRequestSchema,
   patchOrgSettingsRequestSchema,
   patchOrgSettingsResponseSchema,
   pauseTaskRequestSchema,
@@ -178,6 +181,12 @@ export interface Endpoints {
   readonly agents: () => Promise<z.output<typeof agentsResponseSchema>>;
   readonly inbox: () => Promise<z.output<typeof inboxResponseSchema>>;
   readonly integrations: () => Promise<z.output<typeof integrationsResponseSchema>>;
+  /**
+   * `GET /api/integrations/providers` — the providers this build ships and the fields each one asks
+   * for, read off the provider's own schema by the server (WP-100). The create form renders from
+   * it, so no copy of a schema lives in this bundle.
+   */
+  readonly integrationProviders: () => Promise<z.output<typeof integrationProvidersResponseSchema>>;
   readonly integrationSetupGuide: (
     integrationId: string,
   ) => Promise<z.output<typeof setupGuideResponseSchema>>;
@@ -275,6 +284,15 @@ export interface Endpoints {
   readonly testIntegration: (
     integrationId: string,
   ) => Promise<z.output<typeof testIntegrationResponseSchema>>;
+  /**
+   * `PATCH /api/integrations/:id` — set and remove keys of an integration's non-secret
+   * configuration (WP-100); the repair a `config_refusal` names. No `Idempotency-Key`: the same
+   * body twice is the same document, and the route says so.
+   */
+  readonly patchIntegration: (
+    integrationId: string,
+    body: z.input<typeof patchIntegrationRequestSchema>,
+  ) => Promise<z.output<typeof integrationSummarySchema>>;
   readonly putProjectBindings: (
     projectId: string,
     body: z.input<typeof putProjectBindingsRequestSchema>,
@@ -522,6 +540,8 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
     agents: () => client.get('/api/org/agents', { schema: agentsResponseSchema }),
     inbox: () => client.get('/api/org/inbox', { schema: inboxResponseSchema }),
     integrations: () => client.get('/api/integrations', { schema: integrationsResponseSchema }),
+    integrationProviders: () =>
+      client.get('/api/integrations/providers', { schema: integrationProvidersResponseSchema }),
     integrationSetupGuide: (integrationId) =>
       client.get(`/api/integrations/${seg(integrationId)}/setup-guide`, {
         schema: setupGuideResponseSchema,
@@ -636,6 +656,12 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
       client.command(`/api/integrations/${seg(integrationId)}/test`, {
         schema: testIntegrationResponseSchema,
         body: {},
+      }),
+    patchIntegration: (integrationId, body) =>
+      client.command(`/api/integrations/${seg(integrationId)}`, {
+        method: 'PATCH',
+        schema: integrationSummarySchema,
+        body: patchIntegrationRequestSchema.parse(body),
       }),
     putProjectBindings: (projectId, body) =>
       client.command(`/api/projects/${seg(projectId)}/bindings`, {
