@@ -250,7 +250,7 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 | Hook | Purpose |
 |---|---|
 | `PreToolUse(Bash)` | three-list command policy: block → deny with reason; ask → open a Question (blocking, 1-day default timeout; the hook returns `ask` so `canUseTool` decides) ; allow → allow. A redirection that writes a path floors an otherwise allowed line at `ask`, whatever the path; the protected-path rule below is the write tools' (**WP-99**: this row used to say the hook blocks protected paths *"unless the plan lists them"*, which no `Bash` hook has ever read). |
-| `PreToolUse(Edit|Write)` | path guard (workspace only; BD-024 protected paths as amended by WP-99 below; `.agentic/`, `.claude/`, `CLAUDE.md` writes flagged; secrets patterns in content denied). |
+| `PreToolUse(Edit|Write)` | path guard (workspace only; a path with a `.git` segment anywhere, compared folded, denied — git's configuration is not repository content (WP-104); BD-024 protected paths as amended by WP-99 below, a write through a tracked symlink or submodule judged as one (WP-104); `.agentic/`, `.claude/`, `CLAUDE.md` writes flagged; secrets patterns in content denied, by the redactor's current corpus — the minted-credential shape rules first, then the gitleaks-derived set (TD-012's M6 amendment (3), WP-104)). |
 | `PostToolUse(*)` | truncate outputs head/tail (default 10 k chars), redact secret-shaped strings, append `additionalContext` for CI logs (error block extraction). |
 | `SubagentStart/Stop` | nest in the transcript; enforce `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`. |
 | `PreCompact/PostCompact` | emit `compaction` markers to the transcript store. **`pre_tokens` does not come from the hook (WP-12):** `PreCompactHookInput` carries only `trigger` and `custom_instructions`, and `PostCompactHookInput` only `trigger` and `compact_summary`. The counts arrive on the `system`/`compact_boundary` **message** (`compact_metadata.pre_tokens` / `post_tokens`). So `PreCompact` writes `compaction{phase:'pre'}`, the boundary message writes `compaction{phase:'post'}` with the numbers, and `PostCompact` writes a `hook` entry — one marker per phase, no duplicate row. |
@@ -300,13 +300,37 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 >   An absent plan, or a latest plan that does not parse, contributes no pattern.
 > - **Case folding composes with existence.** The target and the listing are compared in the
 >   guard's folded form, so a case or normalisation variant of an existing file reads as existing.
+> - **A write through a link is a write to an existing protected path** (WP-104, PROGRESS backlog
+>   283). A target at or under an `opaque` entry is denied unless a planned pattern matches it,
+>   **whether or not a protected pattern matches the spelled path**: `link/conftest.py` with
+>   `link → tests/` lands on `tests/conftest.py`, and the spelling matches nothing. Before WP-104 the
+>   `opaque` entries were read only once a protected pattern had already matched. Under an
+>   `unlisted` listing nothing changes: every protected path already counts as existing, and an
+>   unprotected spelling through a link nobody listed stays invisible. The over-block, stated: a
+>   write into a tracked submodule's checkout, or through a link into an unprotected tree, is denied
+>   too, because the guard cannot tell where it lands.
 > - **What it does not see, stated.** A file this task's runs created is new for every run of the
 >   task until it reaches the default branch, exactly as it is an addition in the diff. A symlink or submodule **committed** on the task
 >   branch — by this run before the listing or by an earlier run of the task — is listed from the
 >   checkout's own tree and counts as opaque (review round 2); one the run creates **during** the
->   run is invisible to the guard. Some verbs on the `implementation` baseline write a protected path without an `ask`
->   (the measurement is in the WP-99 notes). So the guard steers at write time, and the CI gate's
->   tamper check is what enforces the branch.
+>   run is invisible to the guard. The four test-runner flags WP-99 measured writing a protected path
+>   with no `ask` — `pytest --basetemp`, `pytest --junitxml`/`--junit-xml`, `go test -o` and
+>   `cargo test --target-dir`, in every spelling the CLIs accept — are floored at `ask` since WP-104
+>   (`HAZARDOUS_ARGUMENTS`, PROGRESS backlog 281). What still writes one without an `ask` is the
+>   **repository-content route**: `make *`, `npm run *`, `pytest` running a `conftest.py`, a
+>   lockfile install's lifecycle scripts — whatever the tree says after the agent edits it, which is
+>   BD-025's accepted residual — and any path-writing flag of those verbs nobody enumerated. So the
+>   guard steers at write time, and the CI gate's tamper check is what enforces the branch.
+> - **`.git` is not repository content** (WP-104, PROGRESS backlog 282). The guard denies a write
+>   whose folded path has a `.git` segment anywhere (`.git/config`, `.GIT/config`,
+>   `sub/.git/hooks/x`), before any pattern is read, in every project; no plan entry can declare
+>   it. The shell half is the environment: `platformEnvironment` sets `core.fsmonitor=false` through
+>   `GIT_CONFIG_COUNT`/`KEY_0`/`VALUE_0`, which git reads as command-line configuration and so
+>   above the repository's own. Measured in `platform-runtime` (git 2.47.3): a `core.fsmonitor`
+>   written into `.git/config` ran under `git status` with the environment before the change, and
+>   did not with the environment after it (the WP-104 notes). Only that key is overridden, for the
+>   export helper's reason against enumerating `-c` overrides; a `core.hooksPath` written through
+>   repository content is still BD-025's residual.
 
 > **Amended by TD-027 (ruling on Q77) — where the policy a run is given comes from, and the per-stage
 > layer BD-025 always had.** The run's `ResolvedCommandPolicy` is built in the planner, at one call

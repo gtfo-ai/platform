@@ -231,13 +231,21 @@ export const LOCKFILE_INSTALL_ALLOW: readonly string[] = [
  * later option sharing the prefix moves it. The floors narrow what a model can author on the
  * command line; the boundary for what these commands *do* is the sandbox above.
  *
+ * **Flags that write or delete a path the model chose are floored too** (WP-104, PROGRESS backlog
+ * 281): `pytest --basetemp=<dir>` (pytest clears that directory), `pytest --junitxml=<path>`,
+ * `go test -o <path>` and `cargo test --target-dir <dir>`, in every spelling the CLIs accept. Until
+ * WP-104 this docblock called the first three *"contained by the workspace-only writable mount"*;
+ * the mount contains a write to the workspace and nothing else, and the workspace is exactly where
+ * BD-024's protected paths live — the path guard judges only the Edit and Write tools, so a test
+ * runner pointed at `tests/` changed a protected tree with no BD-024 reason.
+ *
  * **What the floors do not cover, stated (WP-54 review round 3).** Flags that point one of these
- * verbs at a **path the model chose** stay `allow`: `pytest --basetemp=<dir>` (pytest deletes that
- * directory), `pytest --junitxml=<path>` and `go test -c -o <path>` write one, and
- * `npm --userconfig=<file>`, `make -f <file>` and `go test -overlay=<file>` read configuration or a
- * makefile from one — which can set a script shell or node options without any floored flag. The
- * first three are contained by the workspace-only writable mount; the last three are the same class
- * as the model editing the `Makefile` or `package.json`, which BD-025 already accepts. `make -e`
+ * verbs at a **file to read** stay `allow`: `npm --userconfig=<file>`, `make -f <file>` and
+ * `go test -overlay=<file>` read configuration or a makefile from one — which can set a script
+ * shell or node options without any floored flag. They are the same class as the model editing the
+ * `Makefile` or `package.json`, which BD-025 already accepts. Other path-writing flags of these
+ * verbs that nobody enumerated (a coverage or profile output, a cache directory set through an
+ * ini override) are not floored either — this is an enumeration. `make -e`
  * (`--environment-overrides`) is `allow` in its short spelling although the long one is floored:
  * nothing model-written reaches the environment, because a leading assignment is not peeled for
  * `allow`.
@@ -634,6 +642,51 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
     pattern: 'pip install -r http*',
     hazard:
       'the allow entry `pip install -r *` is meant to be a lockfile install; a requirements file fetched over the network is not one',
+  },
+  // ── hands a project-command verb a path to write or delete that the path guard never sees (WP-104) ──
+  //
+  // PROGRESS backlog 281: the workspace is where BD-024's protected paths live, and the write guard
+  // judges only the Edit and Write tools, so a test runner told to write (or clear) a directory is
+  // a write to a protected path with no BD-024 reason. Floored **always**, in every spelling the CLI
+  // accepts, rather than only when the argument names a protected path: the evaluator does not know
+  // the run's protected patterns, and handing them to it is a larger change than the floor. **The
+  // over-block, stated**: `pytest --junitxml=reports/junit.xml` or `cargo test --target-dir /tmp/t`,
+  // which touch no protected path, ask too.
+  //
+  // Spellings measured on 2026-09-30 rather than assumed: pytest 9.1.1 accepts `--basetemp=x`,
+  // `--basetemp x`, `--junitxml`/`--junit-xml` with `=` or a space, and **refuses** a prefix
+  // (`--basete=x`, `--junitx=x`: *"unrecognized arguments"*); cargo 1.96.0 accepts
+  // `--target-dir=x` and `--target-dir x` and refuses `--target-di=x`. go was not on the machine,
+  // so its spellings are **documented, not measured**: the `flag` package treats one or two dashes
+  // as equivalent and takes `-o=x` beside `-o x`, which is what the four go entries floor, and
+  // `go help testflag` says `-o` saves the binary and *"the test still runs (unless -c is
+  // specified)"*, so `-c` is not required (https://pkg.go.dev/flag, https://pkg.go.dev/cmd/go).
+  // A later CLI version that starts accepting prefixes moves these, like npm's (above).
+  {
+    pattern: 'pytest* --basetemp*',
+    hazard:
+      'pytest --basetemp clears the directory it is given before the run and writes under it, and the path guard never sees that write (BD-024)',
+  },
+  {
+    pattern: 'pytest* --junitxml*',
+    hazard: 'pytest --junitxml writes the report to any path the path guard never sees (BD-024)',
+  },
+  {
+    pattern: 'pytest* --junit-xml*',
+    hazard: 'the other spelling pytest accepts for --junitxml',
+  },
+  {
+    pattern: 'go* -o',
+    hazard:
+      'go test -o (with or without -c) writes the compiled test binary to any path the path guard never sees (BD-024)',
+  },
+  { pattern: 'go* -o=*', hazard: 'go test -o with its value attached' },
+  { pattern: 'go* --o', hazard: 'the double-dash spelling of go test -o' },
+  { pattern: 'go* --o=*', hazard: 'the double-dash spelling of go test -o=, value attached' },
+  {
+    pattern: 'cargo* --target-dir*',
+    hazard:
+      'cargo test --target-dir writes the whole build tree under any directory the path guard never sees (BD-024), in either `--target-dir x` or `--target-dir=x`',
   },
 ];
 

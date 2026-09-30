@@ -18,6 +18,13 @@ import { artifactJsonSchema } from './structured-output.js';
  * effective config — cannot switch the auto-updater back on, raise the subagent depth or re-enable
  * telemetry inside a run container. technical/04 lists them under `env` as platform concerns;
  * putting them last is what makes that true rather than customary.
+ *
+ * **This object is the CLI's whole environment in a run container**, which is why the opt-outs and
+ * the git setting below live here rather than on the container (WP-104, PROGRESS backlogs 285 and
+ * 282): the SDK spawns with `Options.env` verbatim when it is given (`{...options.env}`, not merged
+ * with `process.env` — read in SDK 0.3.267's `sdk.mjs`), the spawn frame carries it, and the run
+ * shim starts the child with `env: { ...frame.env }`, which **replaces** its own environment
+ * (`../runlet/shim.ts`). A variable set only on the container reaches the shim and stops there.
  */
 export const platformEnvironment = (spec: RunSpec): Record<string, string> => ({
   // technical/04 § "Hooks and policies": enforce `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`.
@@ -28,6 +35,22 @@ export const platformEnvironment = (spec: RunSpec): Record<string, string> => ({
   DISABLE_AUTOUPDATER: '1',
   DISABLE_TELEMETRY: '1',
   DISABLE_ERROR_REPORTING: '1',
+  // technical/05 § "Network policy": the CLI told not to try what the egress sidecar would refuse
+  // (PROGRESS backlog 285). What it changes about the hosts the pinned CLI contacts is WP-33's
+  // measurement (backlog 137); setting an opt-out cannot widen egress, so it does not wait for it.
+  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+  // PROGRESS backlog 282 (WP-104): a `core.fsmonitor` the run writes into `.git/config` turns the
+  // allow-listed `git status` into an arbitrary command — measured in `platform-runtime` (git
+  // 2.47.3), the WP-104 notes. `GIT_CONFIG_COUNT` entries are command-line configuration, which
+  // outranks the repository's, and every git the CLI's shell starts inherits this environment.
+  // Only this key, for the export helper's reason against enumerating `-c` overrides
+  // (`../workspace/provider.ts`): the write guard refuses `.git/` for Edit and Write, and this key
+  // covers the setting whichever route wrote it — a shell redirection or `git config` is `ask`, but
+  // repository content a project command runs (BD-025's accepted residual) is not. `core.hooksPath`
+  // and the other keys git executes are not overridden here; that residual is stated, not closed.
+  GIT_CONFIG_COUNT: '1',
+  GIT_CONFIG_KEY_0: 'core.fsmonitor',
+  GIT_CONFIG_VALUE_0: 'false',
 });
 
 export interface QueryOptionParts {

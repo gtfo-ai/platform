@@ -65,6 +65,36 @@ describe('buildQueryOptions', () => {
     expect(options.env?.['PATH']).toBe('/usr/bin');
   });
 
+  it('puts CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC in the spawn environment, and a spec that sets it to 0 does not win (backlog 285)', () => {
+    const spec = runSpecFixture({
+      env: { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '0' },
+      secretEnvNames: [],
+    });
+    // `Options.env` is what the SDK spawns with, verbatim, and what the run shim hands the CLI.
+    expect(buildQueryOptions(spec, parts()).env?.['CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC']).toBe(
+      '1',
+    );
+    expect(buildQueryOptions(runSpecFixture(), parts()).env).toMatchObject({
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+    });
+  });
+
+  it('turns off a run-written core.fsmonitor for every git the CLI starts, and a spec cannot undo it (backlog 282)', () => {
+    const spec = runSpecFixture({
+      env: {
+        GIT_CONFIG_COUNT: '1',
+        GIT_CONFIG_KEY_0: 'core.fsmonitor',
+        GIT_CONFIG_VALUE_0: 'true',
+      },
+      secretEnvNames: [],
+    });
+    expect(buildQueryOptions(spec, parts()).env).toMatchObject({
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'core.fsmonitor',
+      GIT_CONFIG_VALUE_0: 'false',
+    });
+  });
+
   it('pins `CLAUDE_CODE_PROJECT_DIR_NAME` to the task id, so a resume finds the session', () => {
     const spec = runSpecFixture();
     expect(platformEnvironment(spec)['CLAUDE_CODE_PROJECT_DIR_NAME']).toBe(spec.taskId);

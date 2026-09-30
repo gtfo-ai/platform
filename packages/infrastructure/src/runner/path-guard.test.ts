@@ -1,6 +1,10 @@
 import type { ExistingProtectedPaths } from '@platform/application';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import {
+  installMintedCredentialShapes,
+  MINTED_CREDENTIAL_SHAPE_RULE_ID,
+} from '../redaction/pattern-redaction.js';
 import { parseTrackedListing, trackedListingLine } from '../workspace/tracked.js';
 import {
   FLAGGED_CONFIG_PATHS,
@@ -454,6 +458,110 @@ describe('guardWriteContent', () => {
 
   it('allows ordinary source', () => {
     expect(guardWriteContent('export const two = 1 + 1;\n').decision).toBe('allow');
+  });
+});
+
+describe('guardWriteContent — the redactor’s corpus (WP-104, backlog 277)', () => {
+  // A custom prefix no gitleaks rule knows (rule 93: not a real provider's shape), and content with
+  // no keyword the generic rule reads — so only the shape rule can refuse it.
+  const minted = 'acmepat-FAKE0shape0rule0value00';
+  const content = `export const pushed = '${minted}';\n`;
+
+  it('denies a value of an installed custom-prefix shape under minted-credential-shape', () => {
+    try {
+      installMintedCredentialShapes([
+        { prefix: 'acmepat-', charset: 'token', length: minted.length },
+      ]);
+      const verdict = guardWriteContent(content);
+      expect(verdict.decision).toBe('deny');
+      expect(verdict.reason).toContain(`(${MINTED_CREDENTIAL_SHAPE_RULE_ID})`);
+    } finally {
+      installMintedCredentialShapes([]);
+    }
+  });
+
+  it('allows the same content when no shape is installed, so the shape rule is what refused it', () => {
+    expect(guardWriteContent(content).decision).toBe('allow');
+  });
+});
+
+describe('guardWritePath — git’s directory is not repository content (WP-104, backlog 282)', () => {
+  it.each([
+    '.git/config',
+    '.GIT/config',
+    '.Git/hooks/pre-commit',
+    'sub/.git/hooks/x',
+    '.git',
+    'vendor/lib/.git',
+  ])('denies %s with the reason', (target) => {
+    const verdict = guardWritePath(target, config);
+    expect(verdict.decision).toBe('deny');
+    expect(verdict.relativePath).toBe(target);
+    expect(verdict.reason).toContain("git's own directory");
+    expect(verdict.reason).toContain('not repository content');
+    expect(verdict.reason).toContain('core.fsmonitor');
+  });
+
+  it('denies it even where a plan declares it and no protected pattern is configured', () => {
+    const verdict = guardWritePath('.git/config', {
+      ...config,
+      protectedPaths: [],
+      plannedProtectedPaths: ['.git/**'],
+    });
+    expect(verdict.decision).toBe('deny');
+  });
+
+  it('leaves names that merely contain .git alone', () => {
+    for (const target of ['.gitignore', '.gitlab-ci.yml', 'src/.github/x', 'a.git/x', '.git2/x']) {
+      expect(guardWritePath(target, config).decision, target).toBe('allow');
+    }
+  });
+});
+
+describe('guardWritePath — a write through a tracked link (WP-104, backlog 283)', () => {
+  const linked = (opaque: readonly string[]): ExistingProtectedPaths => ({
+    state: 'listed',
+    paths: ['tests/conftest.py'],
+    opaque: [...opaque],
+  });
+  const tests = {
+    workspacePath: '/work/repo',
+    protectedPaths: ['tests/**'],
+    plannedProtectedPaths: [] as string[],
+    existingProtectedPaths: linked(['link']),
+  };
+
+  it('denies link/conftest.py with link opaque, although the spelling matches no protected pattern', () => {
+    const verdict = guardWritePath('/work/repo/link/conftest.py', tests);
+    expect(verdict.decision).toBe('deny');
+    expect(verdict.reason).toContain('written through a link the platform cannot resolve');
+    expect(verdict.reason).toContain('"link", a symlink or submodule at the merge base');
+    expect(verdict.reason).toContain('(BD-024)');
+  });
+
+  it('denies the link itself and a folded spelling of it', () => {
+    expect(guardWritePath('/work/repo/link', tests).decision).toBe('deny');
+    expect(guardWritePath('/work/repo/LINK/new.py', tests).decision).toBe('deny');
+  });
+
+  it('allows it when a planned pattern matches the spelled path', () => {
+    const verdict = guardWritePath('/work/repo/link/conftest.py', {
+      ...tests,
+      plannedProtectedPaths: ['link/conftest.py'],
+    });
+    expect(verdict.decision).toBe('allow');
+  });
+
+  it('allows a sibling that is not under the link', () => {
+    expect(guardWritePath('/work/repo/linked/x.py', tests).decision).toBe('allow');
+  });
+
+  it('changes nothing under an unlisted listing — the unprotected spelling stays invisible, as stated', () => {
+    const verdict = guardWritePath('/work/repo/link/conftest.py', {
+      ...tests,
+      existingProtectedPaths: UNLISTED,
+    });
+    expect(verdict.decision).toBe('allow');
   });
 });
 

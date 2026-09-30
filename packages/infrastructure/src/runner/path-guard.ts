@@ -27,14 +27,20 @@
  * everything below is written for that: a path is compared in a folded form (see
  * {@link matchesPathPattern}) because the filesystem underneath decides which names are the same
  * file, and it is not the one asking. A symlink or submodule **tracked** at that merge base is known
- * from the listing and makes a target at or under it count as existing; a symlink the run makes
+ * from the listing and makes a target at or under it count as an existing **protected** path,
+ * whether or not the spelled path matches a pattern (WP-104, backlog 283); a symlink the run makes
  * itself is not, and the verbs that can make one without an `ask` are in the WP-99 notes.
+ *
+ * **`.git` is not repository content** (WP-104, backlog 282): a write with a `.git` segment anywhere
+ * in its folded path is denied in every project, before any pattern is read. It is the Edit/Write
+ * half; the other half is `core.fsmonitor=false` in the run's git environment (`platformEnvironment`
+ * in `./options.ts`), because a shell can still write the file.
  */
 
 import path from 'node:path';
 import type { ExistingProtectedPaths } from '@platform/application';
 import { pathPatternToRegExp } from '@platform/domain';
-import { detectSecrets } from '../redaction/pattern-redaction.js';
+import { currentPatternRules, detectSecrets } from '../redaction/pattern-redaction.js';
 
 export type PathDecision = 'allow' | 'flag' | 'deny';
 
@@ -215,6 +221,30 @@ const foldedListingOf = (
 };
 
 /**
+ * The tracked symlink or submodule `relativePath` is at or under, as the listing spells it, or null
+ * — compared folded, like everything else here. An `unlisted` listing names none, because it knows
+ * none (it already counts every protected path as existing; an *unprotected* spelling through a link
+ * nobody listed stays invisible, which is the module docblock's `realpath` limit).
+ */
+const opaqueEntryAt = (relativePath: string, listing: ExistingProtectedPaths): string | null => {
+  if (listing.state === 'unlisted') {
+    return null;
+  }
+  const opaque = foldedListingOf(listing).opaque;
+  const segments = foldForMatch(relativePath).split('/');
+  for (let depth = 1; depth <= segments.length; depth += 1) {
+    const through = opaque.get(segments.slice(0, depth).join('/'));
+    if (through !== undefined) {
+      return through;
+    }
+  }
+  return null;
+};
+
+const throughOpaqueWhy = (through: string): string =>
+  `it is at or under "${through}", a symlink or submodule at the merge base with the default branch, so it is treated as existing`;
+
+/**
  * Does `relativePath` exist at the merge base with the default branch? technical/04's WP-99 amendment, read fail closed:
  *
  *  - an `unlisted` listing — nothing listed yet, a listing that failed or passed a bound — says
@@ -237,21 +267,29 @@ export const protectedPathExistence = (
       why: `the platform could not list which files exist at the merge base with the default branch (${listing.reason}), so it is treated as existing`,
     };
   }
-  const folded = foldedListingOf(listing);
-  const segments = foldForMatch(relativePath).split('/');
-  for (let depth = 1; depth <= segments.length; depth += 1) {
-    const through = folded.opaque.get(segments.slice(0, depth).join('/'));
-    if (through !== undefined) {
-      return {
-        exists: true,
-        why: `it is at or under "${through}", a symlink or submodule at the merge base with the default branch, so it is treated as existing`,
-      };
-    }
+  const through = opaqueEntryAt(relativePath, listing);
+  if (through !== null) {
+    return { exists: true, why: throughOpaqueWhy(through) };
   }
-  return folded.paths.has(foldForMatch(relativePath))
+  return foldedListingOf(listing).paths.has(foldForMatch(relativePath))
     ? { exists: true, why: 'it exists at the merge base with the default branch' }
     : { exists: false };
 };
+
+/**
+ * The first segment of `relativePath` that is git's own directory, as spelled, or null (PROGRESS
+ * backlog 282, WP-104).
+ *
+ * **Any** segment, not only the first: `sub/.git/hooks/x` is a nested repository's hook, and a
+ * `git status` that recurses into it (or a `git -C sub …`) reads its configuration the same way.
+ * Compared **folded** ({@link foldSegment}), because `.GIT/config` is `.git/config` on a folding
+ * volume (APFS, NTFS) — the same reason every protected comparison is folded; on a case-sensitive
+ * volume the wider fold refuses a directory git would not read, which is the safe direction. A
+ * `.git` that is a *file* (a worktree's or submodule's gitfile) is refused too: it names the
+ * directory git reads.
+ */
+const gitDirectorySegment = (relativePath: string): string | null =>
+  relativePath.split('/').find((segment) => foldSegment(segment) === '.git') ?? null;
 
 /**
  * Judges one write target.
@@ -291,23 +329,54 @@ export const guardWritePath = (target: string, config: PathGuardConfig): PathVer
   }
   const relativePath = relative.split(path.sep).join('/');
 
+  // PROGRESS backlog 282 (WP-104): git's own directory is not repository content. Decided before
+  // the protected patterns, because no pattern list is the right place for it: it is refused in
+  // every project, and no plan entry can declare it.
+  const gitDirectory = gitDirectorySegment(relativePath);
+  if (gitDirectory !== null) {
+    return {
+      decision: 'deny',
+      reason:
+        `"${relativePath}" is inside "${gitDirectory}", git's own directory, and git's ` +
+        'configuration, hooks and object store are not repository content: nothing written there ' +
+        'reaches the branch, and a setting written there (core.fsmonitor, core.hooksPath) runs a ' +
+        'command under an ordinary git verb. Change the repository through its tracked files, or ' +
+        "ask a human through ask_human if git's configuration must change.",
+      relativePath,
+    };
+  }
+
   // BD-024 §2 as amended at WP-81, the CI gate's `changedExistingPaths` (WP-99): a write that
   // creates a protected path is allowed; one that changes an existing file needs the plan's entry.
+  //
+  // A write **through** a tracked symlink or submodule is judged as a write to an existing
+  // protected path whether or not a protected pattern matches the spelled path (PROGRESS backlog
+  // 283, WP-104): `link/conftest.py` with `link → tests/` lands on `tests/conftest.py`, and the
+  // spelling matches no pattern. This process cannot resolve where a link points (the module
+  // docblock), so the answer is the fail-closed one. Before WP-104 the listing's `opaque` entries
+  // were consulted only inside the protected-pattern branch, which is the order that let it through.
   const protectedPattern = firstMatch(config.protectedPaths, relativePath);
-  if (protectedPattern !== undefined) {
+  const throughLink =
+    protectedPattern === undefined
+      ? opaqueEntryAt(relativePath, config.existingProtectedPaths)
+      : null;
+  if (protectedPattern !== undefined || throughLink !== null) {
     const existence = protectedPathExistence(relativePath, config.existingProtectedPaths);
     if (existence.exists && firstMatch(config.plannedProtectedPaths, relativePath) === undefined) {
       const declared =
         config.plannedProtectedPaths.length === 0
           ? "this task's Implementation Plan declares no protected_path_changes"
           : "none of the latest Implementation Plan's protected_path_changes matches it";
+      const what =
+        protectedPattern === undefined
+          ? `"${relativePath}" is written through a link the platform cannot resolve, so it is judged as a protected path: ${existence.why}`
+          : `"${relativePath}" matches the protected path "${protectedPattern}", ${existence.why}`;
       return {
         decision: 'deny',
         reason:
-          `"${relativePath}" matches the protected path "${protectedPattern}", ${existence.why}, ` +
-          `and ${declared} (BD-024). Changing or deleting an existing protected file needs a ` +
-          'declared entry, which the Code review confirms; a new file under a protected path ' +
-          'needs none. Add a new file instead, or ask a human through ask_human if this one must change.',
+          `${what}, and ${declared} (BD-024). Changing or deleting an existing protected file ` +
+          'needs a declared entry, which the Code review confirms; a new file under a protected ' +
+          'path needs none. Add a new file instead, or ask a human through ask_human if this one must change.',
         relativePath,
       };
     }
@@ -332,10 +401,19 @@ export const guardWritePath = (target: string, config: PathGuardConfig): PathVer
  * content denied").
  *
  * It reuses the TD-012 rule set rather than a second list, so a shape the transcript redactor
- * knows how to hide is a shape the guard knows how to refuse — one corpus, two uses.
+ * knows how to hide is a shape the guard knows how to refuse — one corpus, two uses. **The
+ * redactor's corpus as it stands at the call** ({@link currentPatternRules}): the process's
+ * minted-credential shape rules first, then the gitleaks-derived set (TD-012's M6 amendment (3),
+ * PROGRESS backlog 277, WP-104). Until WP-104 the guard read `detectSecrets`' default, the gitleaks
+ * set alone, so since WP-80 the redactor's corpus was the larger one and a run could write its own
+ * minted credential under a custom prefix (a GitLab `token_prefix`) into a file. A same-shape value
+ * that is not a credential is refused too — the safe direction, accepted by the amendment.
+ *
+ * Still not the run's **exact** credential: this process is handed no value, only shapes, and the
+ * guard sees the Edit and Write tools, never a `Bash` redirect.
  */
 export const guardWriteContent = (content: string): PathVerdict => {
-  const hits = detectSecrets(content);
+  const hits = detectSecrets(content, currentPatternRules());
   if (hits.length === 0) {
     return { decision: 'allow', reason: '', relativePath: null };
   }

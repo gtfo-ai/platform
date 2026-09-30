@@ -1160,6 +1160,57 @@ describe('the project-command floors', () => {
 });
 
 /**
+ * PROGRESS backlog 281 (WP-104): four test-runner flags write or delete a path the Edit/Write path
+ * guard never sees, and the workspace is where BD-024's protected paths live. Each spelling the CLI
+ * accepts is its own case, on both baselines that carry `PROJECT_COMMAND_ALLOW`, and names the
+ * floor that caught it — so removing one entry fails the case that spells it.
+ */
+describe('the path-writing test flags are floored at ask (backlog 281)', () => {
+  const SPELLINGS: readonly (readonly [command: string, floor: string])[] = [
+    ['pytest --basetemp=tests', 'pytest* --basetemp*'],
+    ['pytest --basetemp tests', 'pytest* --basetemp*'],
+    ['pytest -q --junitxml=tests/report.test.xml', 'pytest* --junitxml*'],
+    ['pytest --junitxml tests/report.test.xml', 'pytest* --junitxml*'],
+    ['pytest --junit-xml=tests/report.test.xml', 'pytest* --junit-xml*'],
+    ['pytest --junit-xml tests/report.test.xml', 'pytest* --junit-xml*'],
+    ['go test -c -o tests/x.test ./...', 'go* -o'],
+    ['go test -c -o=tests/x.test ./...', 'go* -o=*'],
+    ['go test -o tests/x.test ./...', 'go* -o'],
+    ['go test --o=tests/x.test ./...', 'go* --o=*'],
+    ['go test --o tests/x.test ./...', 'go* --o'],
+    ['cargo test --target-dir tests', 'cargo* --target-dir*'],
+    ['cargo test --target-dir=tests', 'cargo* --target-dir*'],
+  ];
+  const BASELINES: Readonly<Record<string, readonly string[]>> = {
+    verification: DEFAULT_VERIFICATION_ALLOW,
+    implementation: DEFAULT_IMPLEMENTATION_ALLOW,
+  };
+
+  for (const [name, allow] of Object.entries(BASELINES)) {
+    it.each(SPELLINGS)(`${name}: %s is ask, floored by %s`, (command, floor) => {
+      expect(verdict(command, { ...DEFAULT_COMMAND_POLICY, allow })).toBe('ask');
+      expect(hazardousArgument(command)?.pattern).toBe(floor);
+    });
+  }
+
+  it('the floor is all that stood between each spelling and allow (the allow entry still matches)', () => {
+    for (const [command] of SPELLINGS) {
+      expect(
+        PROJECT_COMMAND_ALLOW.some((pattern) => matchesCommandPattern(pattern, command)),
+        command,
+      ).toBe(true);
+    }
+  });
+
+  it('leaves the same verbs allowed without those flags', () => {
+    const policy = { ...DEFAULT_COMMAND_POLICY, allow: DEFAULT_IMPLEMENTATION_ALLOW };
+    for (const command of ['pytest -q tests', 'go test -count=1 ./...', 'cargo test --release']) {
+      expect(verdict(command, policy), command).toBe('allow');
+    }
+  });
+});
+
+/**
  * Q97, answered at WP-54 review round 1 (PROGRESS backlog 139): a declared `allow` narrows the
  * project-command class only, over each of the three baselines, with technical/12's own example as
  * the layer.

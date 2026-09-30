@@ -1179,7 +1179,11 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       ...spec.env,
       HOME: '/tmp',
       CLAUDE_CONFIG_DIR: '/tmp/claude',
-      // technical/05 § "Network policy": telemetry hosts blocked, and the CLI told not to try.
+      // technical/05 § "Network policy". This copy reaches the **shim's** environment and nothing
+      // it starts: the shim replaces its child's environment with the spawn frame's
+      // (`../runlet/shim.ts`), so the `claude` process is told not to try by `platformEnvironment`
+      // (`../runner/options.ts`, WP-104, PROGRESS backlog 285), never by this line. Kept so a
+      // process run with the container's own environment (a `docker exec`) is told the same.
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
       RUNLET_CONTROL_SOCKET: '/ctl/ctl.sock',
       RUNLET_CREDENTIAL_SOCKET: '/ctl/cred.sock',
