@@ -150,6 +150,8 @@ describe('a comment stripper is recognised by its shape', () => {
   };
   const SHAPED: Readonly<Record<string, string>> = {
     'scripts/source-scanner.mjs chars': 'the scanner itself',
+    'scripts/check-data-model.mjs chars':
+      "a **SQL** stripper (`--`, block comments, `'…'` literals) for the migrations — another language than the scanner reads (WP-97)",
     'apps/web/src/app/shell.tsx chars': "a route comparison, `item.to === '/'`",
     'apps/web/src/routes/redirect.ts probe':
       "refuses a protocol-relative redirect, `startsWith('//')`",

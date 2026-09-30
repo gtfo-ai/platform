@@ -33,7 +33,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # Every static check `pnpm run -s verify` runs, as one command derived from the same table
       # (scripts/verify-targets.ts): biome, the generated JSON Schemas, the .gitignore guard, the
-      # NUL-byte guard, the merge-conflict-marker guard and the third-party notices check. Listing
+      # NUL-byte guard, the merge-conflict-marker guard, the third-party notices check and
+      # technical/03 held to the migrations' tables (WP-97). Listing
       # them here instead was a second
       # copy of the list, and it had
       # drifted — `ignored:check` was in `verify` and in no CI job at all, so a guard that had
@@ -131,6 +132,9 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # The coverage run, then the coverage ratchet over the figures it just wrote (WP-97): the
+      # ratchet runs here because this is where coverage is measured, and it refuses a summary
+      # written before this step started.
       - run: pnpm run -s verify:tests
       - name: upload coverage
         if: always()

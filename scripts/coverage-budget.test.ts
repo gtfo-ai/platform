@@ -7,6 +7,7 @@ import vitestConfig, {
   COVERAGE_EXCLUDED_FILES,
   COVERAGE_INCLUDE,
   COVERAGE_RINGS,
+  coverageBarOf,
   PROCESS_SUITES,
 } from '../vitest.config.js';
 import { censusPaths } from './census-files.mjs';
@@ -123,10 +124,7 @@ describe('the coverage budget', () => {
 
   it('names what a ring owes whenever it is held below the bar', () => {
     for (const [name, ring] of Object.entries(COVERAGE_RINGS)) {
-      const bar =
-        name === 'domain'
-          ? { lines: 90, branches: 85, functions: 90, statements: 90 }
-          : { lines: 80, branches: 80, functions: 80, statements: 80 };
+      const bar = coverageBarOf(name);
       const below = Object.entries(ring.thresholds).filter(
         ([metric, value]) => value < bar[metric as keyof typeof bar],
       );
@@ -136,6 +134,76 @@ describe('the coverage budget', () => {
         owes: false,
       });
     }
+  });
+});
+
+/**
+ * The floors are pinned in technical/10 (WP-97, PROGRESS backlog 254) — the census half of the
+ * ratchet. `scripts/coverage-ratchet.mjs` needs a coverage run and so runs after `pnpm test`; this
+ * half needs only the tree: every ring's four thresholds equal its row in technical/10's
+ * *pinned floors* table, and the table names exactly the rings, so lowering a floor is an edit in
+ * two places rather than one number nobody reads.
+ */
+const PINNED_HEADER =
+  /^\|\s*Ring\s*\|\s*Lines\s*\|\s*Branches\s*\|\s*Functions\s*\|\s*Statements\s*\|/;
+
+/** The rows of the first table whose header opens `| Ring | Lines | Branches | Functions | Statements |`. */
+const pinnedFloors = (markdown: string): Record<string, Record<string, number>> => {
+  const lines = markdown.split('\n').map((line) => line.trim());
+  const header = lines.findIndex((line) => PINNED_HEADER.test(line));
+  if (header === -1) return {};
+  const rows: Record<string, Record<string, number>> = {};
+  for (const line of lines.slice(header + 2)) {
+    if (!line.startsWith('|')) break;
+    const [ring = '', ...cells] = line
+      .split('|')
+      .slice(1)
+      .map((cell) => cell.trim());
+    const [lines_, branches, functions, statements] = cells.map(Number);
+    rows[ring] = {
+      lines: lines_ ?? NaN,
+      branches: branches ?? NaN,
+      functions: functions ?? NaN,
+      statements: statements ?? NaN,
+    };
+  }
+  return rows;
+};
+
+describe('the pinned floors', () => {
+  const page = readFileSync(join(repositoryRoot, 'docs/technical/10-testing-strategy.md'), 'utf8');
+
+  it('are technical/10’s table, ring for ring and number for number, in both directions', () => {
+    const pinned = pinnedFloors(page);
+    expect(Object.keys(pinned).length).toBeGreaterThanOrEqual(10);
+    const configured = Object.fromEntries(
+      Object.entries(COVERAGE_RINGS).map(([name, ring]) => [
+        name,
+        {
+          lines: ring.thresholds.lines,
+          branches: ring.thresholds.branches,
+          functions: ring.thresholds.functions,
+          statements: ring.thresholds.statements,
+        },
+      ]),
+    );
+    expect(configured).toEqual(pinned);
+  });
+
+  it('would see a floor lowered in one place only, and a ring missing from the table', () => {
+    const table = [
+      '  | Ring | Lines | Branches | Functions | Statements | Branches at WP-97 |',
+      '  |---|---|---|---|---|---|',
+      '  | server | 63 | 55 | 52 | 63 | 1516 / 2634 = 57.55 |',
+      '',
+      '  | Ring | Lines | Branches | Functions | Statements |',
+      '  | later | 1 | 1 | 1 | 1 |',
+    ].join('\n');
+    expect(pinnedFloors(table)).toEqual({
+      server: { lines: 63, branches: 55, functions: 52, statements: 63 },
+    });
+    expect(pinnedFloors(table.replace('| 55 |', '| 54 |')).server?.branches).toBe(54);
+    expect(pinnedFloors('no table here')).toEqual({});
   });
 });
 

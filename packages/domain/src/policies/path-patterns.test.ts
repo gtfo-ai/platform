@@ -9,7 +9,6 @@
  */
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import '../testing/property.js';
 import { pathMatchesPattern } from './path-patterns.js';
 
 /**

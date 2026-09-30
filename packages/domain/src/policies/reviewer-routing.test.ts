@@ -153,7 +153,7 @@ describe('resolveReviewerRouting', () => {
 
   /**
    * The rule itself, for **every** base list: `required ⊆ handles` whenever the classes' own
-   * reviewers fit under the cap, and the cap always holds. Seeded (`../testing/property.js`).
+   * reviewers fit under the cap, and the cap always holds. Seeded (the gate seed, `test/support/property-seed.ts`).
    */
   it(
     'keeps every required reviewer for any base list, and never exceeds the limit',

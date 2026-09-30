@@ -37,6 +37,8 @@ export const VERIFY_GROUPS: Readonly<Record<string, readonly string[]>> = {
     'ignored:check',
     'nul:check',
     'conflict:check',
+    // technical/03 held to the tables the migrations create (WP-97, PROGRESS backlog 124).
+    'data-model:check',
   ],
   'verify:types': ['typecheck'],
   // TD-013's bundle budget is an **acceptance criterion** of WP-20, not a nicety, so it is a step
@@ -44,7 +46,9 @@ export const VERIFY_GROUPS: Readonly<Record<string, readonly string[]>> = {
   // `verify:static` because it is the one check here that builds something: it runs
   // `vite build` and measures the initial graph `dist/index.html` requests.
   'verify:bundle': ['bundle:check'],
-  'verify:tests': ['test'],
+  // The ratchet reads the figures the `test` step just measured, so it runs where coverage is
+  // measured — this group, CI's unit job — and never in a census (WP-97, PROGRESS backlog 254).
+  'verify:tests': ['test', 'coverage:ratchet'],
 };
 
 /**

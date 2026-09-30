@@ -38,13 +38,17 @@ if (!steps) {
 const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
 let failed = null;
 
+// When this target started, for a step that must tell this run's output from a previous one's:
+// `coverage:ratchet` refuses a coverage summary written before it (WP-97).
+const env = { ...process.env, VERIFY_TARGET_STARTED_AT: String(Date.now()) };
+
 for (const step of steps) {
   process.stderr.write(`\n── ${target} › ${step} ──\n`);
   // stdin inherited, child stdout redirected onto our fd 2, stderr inherited. Passing the fd
   // (rather than piping) keeps the output streaming and keeps the child's TTY detection working.
   const result = spawnSync(pnpm, ['-s', 'run', step], {
     stdio: ['inherit', 2, 'inherit'],
-    env: process.env,
+    env,
   });
   if (result.error) {
     process.stderr.write(`${step}: ${result.error.message}\n`);

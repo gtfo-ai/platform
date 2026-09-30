@@ -15,7 +15,6 @@
  * amount of work is a stated decision rather than whatever fast-check's default happens to be, and
  * so the next property test written here inherits both.
  */
-import fc from 'fast-check';
 
 /**
  * Timeout for any `it` that runs `fc.assert`. Roughly 25× the slowest property test measured
@@ -35,18 +34,7 @@ export const PROPERTY_TEST_TIMEOUT_MS = 30_000;
  */
 export const MODEL_RUNS = 300;
 
-/**
- * **Every property in this package runs from one fixed seed** (PROGRESS backlog 253).
- *
- * Unseeded, fast-check draws a fresh seed per run, so a branch a property reaches only on some
- * draws is covered on some runs and not others — WP-70 measured two branches of
- * `cost/ledger.ts` moving between runs of one tree, which is noise in every before/after coverage
- * comparison. Fixed, a run of this tree explores exactly what the last one did, so a coverage
- * figure is a property of the tree. What that costs is exploration across runs: a new value is
- * drawn only when a test or this constant changes. A failure still prints its seed and path, so a
- * counterexample reproduces either way. Set by importing this module — which is why
- * `property.test.ts` holds every `fc.assert` in the package to importing it.
- */
-export const PROPERTY_SEED = 20_260_927;
-
-fc.configureGlobal({ ...fc.readConfigureGlobal(), seed: PROPERTY_SEED });
+// **The seed is not set here any more** (WP-97, PROGRESS backlog 270). WP-73c fixed it for this
+// package by an import every property file had to remember; it is now set for every property in
+// every package by the vitest setup file `test/support/property-seed.ts` (the decision is
+// `scripts/property-seed.mjs`'s), so importing this module is for the two numbers above only.

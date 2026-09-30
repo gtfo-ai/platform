@@ -1,0 +1,48 @@
+name: property-exploration
+
+# technical/10 § Levels, *Property seeds* (WP-97, PROGRESS backlog 270).
+#
+# The gate runs every fast-check property on one fixed seed (`scripts/property-seed.mjs`), so a
+# coverage figure is a property of the tree and the coverage ratchet does not flap — and so a gate
+# run meets only the draws the last one met. This workflow is the exploration that trade gave up:
+# weekly, every property file on a **fresh** seed (`scripts/property-exploration.mjs`), which the
+# script prints before the run, in its verdict line and in the step summary, together with the
+# command that replays it (`pnpm run -s properties:explore --seed <n>`).
+#
+# **Not a required check, and never a pull-request gate** (`scripts/release.test.ts` holds the
+# required checks to `ci.yml`'s jobs, and this file is not `ci.yml`): a counterexample found here
+# is a red scheduled run somebody reads and turns into an example test, not a merge that fails on
+# a draw it did not cause. It needs no secret and writes nothing: read-only token, no cache
+# written by anything but setup-node's own pnpm store restore.
+
+on:
+  schedule:
+    # Wednesdays, 05:41 UTC — off the hour, and not on base-image.yml's Monday.
+    - cron: '41 5 * * 3'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: property-exploration-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  explore:
+    name: properties on a fresh seed
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Draws the seed, prints it, runs every property file on it (no coverage), and on a failure
+      # prints the seed and its replay command before the one FAIL line.
+      - run: pnpm run -s properties:explore

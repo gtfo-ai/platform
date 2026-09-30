@@ -142,6 +142,14 @@ describe('the verification targets and .github/workflows/ci.yml', () => {
     expect(workflowCommands()).not.toContain('verify');
   });
 
+  it('keeps the coverage ratchet after the tests and the data-model check in the static group (WP-97)', () => {
+    // CI runs whatever this table says, so the CI-equality cases below cannot see a guard dropped
+    // from it: removing `coverage:ratchet` or `data-model:check` keeps the table and the workflow
+    // equal. This pins the two WP-97 guards where they must run (review round 1).
+    expect(VERIFY_GROUPS['verify:tests']).toEqual(['test', 'coverage:ratchet']);
+    expect(VERIFY_GROUPS['verify:static']).toContain('data-model:check');
+  });
+
   it('runs every step of `verify` in some CI job', () => {
     const inCi = new Set(workflowCommands().flatMap(expand));
 

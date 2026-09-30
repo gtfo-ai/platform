@@ -42,6 +42,17 @@ const excludeEverywhere = [
 ];
 
 /**
+ * The seed every fast-check property draws from, set before each test file by this setup file
+ * (WP-97, PROGRESS backlog 270) — `scripts/property-seed.mjs` has the decision: the gate's fixed
+ * seed, or `PROPERTY_SEED` for the weekly exploration run and a replay of what it found.
+ *
+ * In **every** project, for the reason {@link excludeEverywhere} is one constant: a new project
+ * inherits it by construction. `scripts/property-seed.test.ts` holds that, and that no file sets a
+ * seed of its own.
+ */
+export const PROPERTY_SEED_SETUP = 'test/support/property-seed.ts';
+
+/**
  * The suites that start **real processes** and wait on them structurally (WP-69, PROGRESS backlog
  * 25) — the `process` project's whole membership.
  *
@@ -159,6 +170,24 @@ interface CoverageThresholds {
   readonly statements: number;
 }
 
+/** The bar technical/10 sets for every ring but the domain's. */
+const COVERAGE_BAR: CoverageThresholds = { lines: 80, branches: 80, functions: 80, statements: 80 };
+/** The domain ring's bar: technical/10's 90 % lines / 85 % branches / 90 % functions / 90 % statements. */
+const DOMAIN_COVERAGE_BAR: CoverageThresholds = {
+  lines: 90,
+  branches: 85,
+  functions: 90,
+  statements: 90,
+};
+
+/**
+ * The bar a ring is held to when it clears it by the slack — read by the census (`owes` below the
+ * bar) and by the ratchet (`scripts/coverage-ratchet.mjs`, a floor never needs to exceed it), so
+ * the two numbers have one home.
+ */
+export const coverageBarOf = (ring: string): CoverageThresholds =>
+  ring === 'domain' ? DOMAIN_COVERAGE_BAR : COVERAGE_BAR;
+
 /**
  * The coverage budget, **per ring** (WP-70, PROGRESS backlog 87) — where coverage is owed, rather
  * than one average that lets the rings which carry it hide the rings which owe it.
@@ -168,8 +197,9 @@ interface CoverageThresholds {
  * is a weighted part of it: `packages/application` at 84 % and `packages/integrations` at 86 % were
  * paying for `apps/server` at 57 % and `packages/infrastructure` at 70 %. A module added anywhere
  * moved a gate nobody in that ring could see, and so did noise: WP-70's own runs over one tree
- * moved by two branches inside `packages/domain/src/cost/ledger.ts`, which an unseeded property
- * test reaches on some draws and not others. vitest counts every file into the global figure even when a glob
+ * moved by two branches inside `packages/domain/src/cost/ledger.ts`, which a then-unseeded
+ * property test reached on some draws and not others (every property is seeded since WP-97,
+ * {@link PROPERTY_SEED_SETUP}). vitest counts every file into the global figure even when a glob
  * already holds it (`resolveThresholds`, vitest 5.0.0), so a global threshold cannot be kept beside
  * these without re-importing all of that; it is **not** set. `text-summary` still prints it.
  *
@@ -179,6 +209,14 @@ interface CoverageThresholds {
  * three-file ring is not held to one branch. A threshold under the bar is **debt, named**: the
  * `owes` line says which files carry it. Paying it raises the number; nothing lowers one without a
  * measurement that says why.
+ *
+ * **Two checks hold that rule since WP-97** (PROGRESS backlog 254). The census
+ * (`scripts/coverage-budget.test.ts`) pins every threshold here to technical/10's *pinned floors*
+ * table, in both directions, so a floor moves only by an edit in two places. The ratchet
+ * (`scripts/coverage-ratchet.mjs`, the step after `test` in `verify:tests`) reads the run's
+ * measured figures and fails a ring below its floor, or one that has earned
+ * `min(bar, floor(measured − slack))` above its floor without a re-pin — the rule above read
+ * backwards, so re-pinning to what it names always passes.
  *
  * **The runlet ring.** The run shim's modules (`packages/infrastructure/src/runlet/`) are the files
  * the `process` project covers, whose covered branches can depend on process scheduling, so they
@@ -229,7 +267,7 @@ export const COVERAGE_RINGS: Readonly<
   infrastructure: {
     glob: 'packages/infrastructure/src/{!(testing).ts,!(runlet|testing)/**/!(testing).ts}',
     thresholds: { lines: 79, branches: 68, functions: 66, statements: 78 },
-    owes: 'branches: 858 uncovered, 541 of them in the `postgres-*` stores, which the integration tier drives against PostgreSQL 18 and collects no coverage from; then `workspace/` 95 and `runner/` 94',
+    owes: 'branches: 1012 uncovered (WP-97), 652 of them in the `postgres-*` stores, which the integration tier drives against PostgreSQL 18 and collects no coverage from; then `workspace/` 104 and `runner/` 103',
   },
   runlet: {
     glob: 'packages/infrastructure/src/runlet/{**/,}!(testing).ts',
@@ -237,13 +275,13 @@ export const COVERAGE_RINGS: Readonly<
   },
   server: {
     glob: 'apps/server/src/**/*.ts',
-    thresholds: { lines: 63, branches: 54, functions: 50, statements: 62 },
-    owes: 'branches: 995 uncovered — `queries/*.ts` 426, `routes/*` 280, `runtime.ts` 91, `knowledge.ts` 44, `pipeline.ts` 31: SQL and composition the integration and e2e tiers drive, uncounted',
+    thresholds: { lines: 63, branches: 55, functions: 52, statements: 63 },
+    owes: 'branches: 1118 uncovered (WP-97) — `queries/*.ts` 476, `routes/*` 310, `runtime.ts` 116, `knowledge.ts` 44, `pipeline.ts` 40: SQL and composition the integration and e2e tiers drive, uncounted',
   },
   launcher: {
     glob: 'apps/launcher/src/**/*.ts',
-    thresholds: { lines: 80, branches: 80, functions: 76, statements: 80 },
-    owes: 'functions: 10 of 52 — `logging.ts` 6, `runtime.ts` 3, `export-retention.ts` 1 — and two items of slack is four points here',
+    thresholds: { lines: 80, branches: 80, functions: 78, statements: 80 },
+    owes: 'functions: 10 of 55 (WP-97) — `logging.ts` 6, `runtime.ts` 3, `export-retention.ts` 1 — and two items of slack is 3.64 points here',
   },
   'test support': {
     glob: 'packages/*/src/{testing/**/*.ts,**/testing.ts}',
@@ -275,6 +313,7 @@ export default defineConfig({
       {
         test: {
           name: 'unit',
+          setupFiles: [PROPERTY_SEED_SETUP],
           environment: 'node',
           include: [
             'packages/*/src/**/*.test.ts',
@@ -300,6 +339,7 @@ export default defineConfig({
       {
         test: {
           name: 'contract',
+          setupFiles: [PROPERTY_SEED_SETUP],
           environment: 'node',
           include: ['packages/*/src/**/*.contract.test.ts', 'test/contract/**/*.test.ts'],
           exclude: [...excludeEverywhere, ...PROCESS_SUITES],
@@ -308,6 +348,7 @@ export default defineConfig({
       {
         test: {
           name: 'process',
+          setupFiles: [PROPERTY_SEED_SETUP],
           environment: 'node',
           include: PROCESS_SUITES,
           exclude: excludeEverywhere,
@@ -326,6 +367,7 @@ export default defineConfig({
       {
         test: {
           name: 'integration',
+          setupFiles: [PROPERTY_SEED_SETUP],
           environment: 'node',
           include: ['**/*.integration.test.ts', 'test/integration/**/*.test.ts'],
           exclude: excludeEverywhere,
@@ -339,6 +381,7 @@ export default defineConfig({
       {
         test: {
           name: 'e2e-fake-claude',
+          setupFiles: [PROPERTY_SEED_SETUP],
           environment: 'node',
           include: ['**/*.e2e.test.ts', 'test/e2e/**/*.test.ts'],
           exclude: excludeEverywhere,
@@ -359,6 +402,7 @@ export default defineConfig({
       {
         test: {
           name: 'ui',
+          setupFiles: [PROPERTY_SEED_SETUP],
           environment: 'happy-dom',
           include: ['apps/web/src/**/*.test.ts', 'apps/web/src/**/*.test.tsx'],
           exclude: excludeEverywhere,
