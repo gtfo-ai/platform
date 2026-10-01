@@ -1022,19 +1022,31 @@ export const RUN_MODE_BY_STAGE: Readonly<Record<string, RunSpec['mode']>> = {
  * Two producers and one default, in order:
  *
  *  1. a **shadow** task uses the merge base the batch resolved for its ticket
- *     (`StageRunRequest.checkoutBase`), because the whole point of the comparison is that both
- *     diffs are taken against the same tree;
- *  2. every other task uses **its own branch** (`tasks.branch`), which is technical/05 §2's
- *     *"checkout of the task branch for re-entries"* and product/19 §19's *"the platform
- *     re-provisions a workspace from the branch"*;
- *  3. `null` — the default branch — for a task that has no branch yet, which is every task before
+ *     (`StageRunRequest.checkoutBase`) as a **commit** (`checkoutCommit`), because the whole point
+ *     of the comparison is that both diffs are taken against the same tree;
+ *  2. every other task uses **its own branch** (`tasks.branch`) as a **branch** (`checkoutRef`),
+ *     which is technical/05 §2's *"checkout of the task branch for re-entries"* and product/19
+ *     §19's *"the platform re-provisions a workspace from the branch"*;
+ *  3. neither — the default branch — for a task that has no branch yet, which is every task before
  *     its Developer stage has pushed one.
+ *
+ * **Which field says which kind** (WP-105, WP-98's discovered work): until WP-105 both travelled in
+ * `checkoutRef`, and the clone could not tell a branch a first run creates from a commit the mirror
+ * does not hold — so a missing shadow base became a branch named after the sha at the default
+ * branch's head. The commit now has a field of its own, and the clone refuses it by name when it is
+ * absent (Q82 (a): refused, never substituted).
  *
  * The shadow case wins over the branch case and cannot collide with it: a shadow task never opens a
  * merge request, so `tasks.branch` stays `null` for one.
  */
-const checkoutRefOf = (request: StageRunRequest): string | null =>
-  request.checkoutBase ?? request.task.branch ?? null;
+export const checkoutOf = (
+  request: Pick<StageRunRequest, 'checkoutBase'> & {
+    readonly task: Pick<StageRunRequest['task'], 'branch'>;
+  },
+): Pick<RunSpec, 'checkoutRef' | 'checkoutCommit'> =>
+  request.checkoutBase !== null && request.checkoutBase !== undefined
+    ? { checkoutRef: null, checkoutCommit: request.checkoutBase }
+    : { checkoutRef: request.task.branch ?? null, checkoutCommit: null };
 
 /**
  * `runs.mode` — technical/04's mode table, which is about the **run** and not about the task.
@@ -1319,7 +1331,7 @@ export const createStageRunPlanner = (options: StageRunPlannerOptions): StageRun
         systemPromptAppend: prompt.systemPrompt,
         userPrompt: prompt.userPrompt,
         workspacePath: options.workspacePath(task.task.id),
-        checkoutRef: checkoutRefOf(request),
+        ...checkoutOf(request),
         contextPack: [...pack.runContextPack],
         limits: limitsFor(settings, stage.id, role),
         tools: [...(TOOLS_BY_ROLE[role] ?? [])],

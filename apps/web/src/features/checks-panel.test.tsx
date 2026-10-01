@@ -403,7 +403,7 @@ describe('the Checks panel’s gate, thread and verdict items (WP-46)', () => {
       [
         [
           stage('ci_gate', 1, 'returned', 'protected_paths_changed'),
-          stage('ci_gate', 2, 'completed', 'pass'),
+          stage('ci_gate', 2, 'completed', 'protected_paths_clean'),
         ],
         'clean',
       ],
@@ -414,6 +414,36 @@ describe('the Checks panel’s gate, thread and verdict items (WP-46)', () => {
       const view = await render$(detailWith({ stages, artifacts: [] }));
       await waitFor(() => expect(view.text()).toContain('Tamper check'));
       expect(view.text(), expected).toContain(`Tamper check${expected}`);
+      cleanup();
+    }
+  });
+
+  /**
+   * **A row with the check's outcome, and a row without it** (WP-105, PROGRESS backlog 280). The
+   * settlement records `protected_paths_clean` when the check ran and found nothing, on a pass and on
+   * a return for a red pipeline; a `pass` or bare `returned` row was settled before that word existed
+   * — before WP-81 no check ran at all, and from WP-81 to WP-105 a clean check wrote the same words —
+   * so it reads *not recorded*, never *clean*.
+   */
+  it('reads clean only off the recorded outcome, and not recorded off a row that has none (backlog 280)', async () => {
+    const cases: readonly [TaskDetailResponse['stages'], string, string][] = [
+      [[stage('ci_gate', 1, 'completed', 'protected_paths_clean')], 'clean', 'CI statusgreen'],
+      [
+        [stage('ci_gate', 1, 'returned', 'protected_paths_clean')],
+        'clean',
+        'CI statusred, sent back',
+      ],
+      [[stage('ci_gate', 1, 'completed', 'pass')], 'not recorded', 'CI statusgreen'],
+      [[stage('ci_gate', 1, 'returned', 'returned')], 'not recorded', 'CI statusred, sent back'],
+    ];
+    for (const [stages, expected, ci] of cases) {
+      const view = await render$(detailWith({ stages, artifacts: [] }));
+      await waitFor(() => expect(view.text()).toContain('Tamper check'));
+      expect(view.text(), expected).toContain(`Tamper check${expected}`);
+      expect(view.text(), ci).toContain(ci);
+      if (expected !== 'clean') {
+        expect(view.text(), expected).not.toContain('Tamper checkclean');
+      }
       cleanup();
     }
   });

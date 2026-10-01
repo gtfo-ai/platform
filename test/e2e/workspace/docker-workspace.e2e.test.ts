@@ -215,6 +215,85 @@ describe('the workspace lifecycle against a real daemon', () => {
     }
   }, 180_000);
 
+  /**
+   * **WP-105 (WP-98's discovered work, Q82 (a))** — a shadow task's base is a commit, and the real
+   * git answers both halves: a commit the mirror holds is checked out **detached**, at that commit,
+   * with no branch named after it; a commit it does not hold is refused by name before any run
+   * container exists — never the default branch's tree under a branch named after the sha, which is
+   * what `checkout "$B" || checkout -b "$B"` made of it before.
+   */
+  it('refuses a shadow base the mirror does not hold, and checks out one it does, detached', async () => {
+    const lost = 'f'.repeat(40);
+    const refused = specFor({ repo: { checkoutCommit: lost } });
+    await fixture.provider.updateMirror({
+      projectId: refused.projectId,
+      repo: refused.repo,
+      credential: null,
+    });
+    await expect(fixture.provider.create(refused)).rejects.toMatchObject({
+      code: 'invalid_spec',
+      message: expect.stringContaining(`the commit ${lost} this run must start from`),
+    });
+
+    // The canary: the same sha sent the way it travelled before WP-105 — as a **branch** — still
+    // takes the branch path, which creates a branch named after it at `main`'s head. That is the
+    // substitution the commit field exists to refuse.
+    const asBranch = await startRun({ repo: { checkoutBranch: lost } });
+    try {
+      const probe = await probeUnderRunContainerConfig(
+        fixture.engine,
+        asBranch.handle.containerId,
+        'git -C /work/repo rev-parse --abbrev-ref HEAD; git -C /work/repo rev-parse HEAD; git -C /work/repo rev-parse main',
+        { image: RUNTIME_IMAGE },
+      );
+      expect(probe.exitCode).toBe(0);
+      const [branch = '', head = '', main = ''] = probe.output.trim().split('\n');
+      expect(branch).toBe(lost);
+      expect(head).toBe(main);
+    } finally {
+      await fixture.provider.destroy(asBranch.handle);
+    }
+
+    // The task branch's head is a commit the mirror holds and `main` is not.
+    const branchRun = await startRun({ repo: { checkoutBranch: FIXTURE_TASK_BRANCH } });
+    let base = '';
+    try {
+      const probe = await probeUnderRunContainerConfig(
+        fixture.engine,
+        branchRun.handle.containerId,
+        'git -C /work/repo rev-parse HEAD',
+        { image: RUNTIME_IMAGE },
+      );
+      expect(probe.exitCode).toBe(0);
+      base = probe.output.trim();
+    } finally {
+      await fixture.provider.destroy(branchRun.handle);
+    }
+    expect(base).toMatch(/^[0-9a-f]{40}$/);
+
+    const { handle } = await startRun({ repo: { checkoutCommit: base } });
+    try {
+      const probe = await probeUnderRunContainerConfig(
+        fixture.engine,
+        handle.containerId,
+        'git -C /work/repo rev-parse --abbrev-ref HEAD; git -C /work/repo rev-parse HEAD; ' +
+          // `for-each-ref`, not `branch --list`: the latter also prints `(HEAD detached at …)`.
+          "git -C /work/repo for-each-ref --format='%(refname:short)' refs/heads; " +
+          `test -e /work/repo/${FIXTURE_TASK_BRANCH_FILE} && echo PRESENT || echo ABSENT`,
+        { image: RUNTIME_IMAGE },
+      );
+      expect(probe.exitCode).toBe(0);
+      const lines = probe.output.trim().split('\n');
+      // Detached, at the base, with the base's tree — and the only local branch is the clone's own.
+      expect(lines[0]).toBe('HEAD');
+      expect(lines[1]).toBe(base);
+      expect(lines.at(-1)).toBe('PRESENT');
+      expect(lines.slice(2, -1)).toEqual(['main']);
+    } finally {
+      await fixture.provider.destroy(handle);
+    }
+  }, 240_000);
+
   it('creates a task branch that is not on the remote, at the default branch’s head', async () => {
     // The `||`'s second half, which is what a task's **first** run takes: the branch does not exist
     // yet, so the clone creates it rather than failing — the behaviour backlog 71 asks the change to

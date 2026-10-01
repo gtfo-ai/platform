@@ -679,7 +679,8 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
        */
       const snapshot = await ensureTicketSnapshot(options, admitted.stored);
       // WP-73, backlog 218: a Reviewer is matched on the merge request's files too, read here for
-      // the same reason as the ticket — outside every transaction, before the plan.
+      // the same reason as the ticket — outside every transaction, before the plan. It rethrows
+      // `TransactionOpenError` as the ticket read does (WP-105, backlog 303).
       const mergeRequestPaths = await reviewedMergeRequestPaths(options, admitted.stored, stage);
       // WP-89, backlog 143: the Investigator is shown the linked issue's latest event and the log
       // lines around it — the same place and the same reason, after the ticket read because the
@@ -962,7 +963,7 @@ const settle = async (
         againstCi.kind === 'agree'
           ? await confirmExcusedPaths(options.store, scope.tx, stored)
           : null;
-      const settledOutcome: TaskStageOutcome | undefined =
+      const settledWord: TaskStageOutcome | undefined =
         confirmation === null
           ? signal.kind === 'gate_settled'
             ? signal.outcome
@@ -982,6 +983,20 @@ const settle = async (
                   blockerBrief: signal.blockerBrief,
                 } as const)
               : (converged ?? interpret(pipeline, signal));
+      /**
+       * A failed CI settlement names what its tamper check found on the row it **returns** from
+       * (WP-105). A template whose `ci_gate.fail_to` points forward closes the row `completed`
+       * instead, and there a tamper word would read as the pipeline's pass — so that row keeps the
+       * gate's `fail` (no shipped template does this).
+       */
+      const settledOutcome: TaskStageOutcome | undefined =
+        signal.kind === 'gate_settled' &&
+        !signal.passed &&
+        decision.kind !== 'return' &&
+        (settledWord === 'protected_paths_clean' ||
+          settledWord === 'protected_paths_awaiting_review')
+          ? undefined
+          : settledWord;
       const applied = await applyDecision({
         store: options.store,
         pipeline,

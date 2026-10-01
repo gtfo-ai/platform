@@ -344,6 +344,8 @@ describe('the CI gate', () => {
     // because a gate that says "not passed" with an empty account is a task nobody can triage.
     expect(result).toEqual({
       kind: 'settled',
+      // WP-105 (backlog 280): the row names what the tamper check found.
+      outcome: 'protected_paths_clean',
       headSha: HEAD_SHA,
       passed: false,
       // The failure's stable identity, for product/04 S4's convergence on this path too (WP-60).
@@ -362,6 +364,8 @@ describe('the CI gate', () => {
     // No job reports `failed`, so there are no names to give and no log to read: said, not blank.
     expect(result).toEqual({
       kind: 'settled',
+      // WP-105 (backlog 280): the row names what the tamper check found.
+      outcome: 'protected_paths_clean',
       headSha: HEAD_SHA,
       passed: false,
       // The failure's stable identity, for product/04 S4's convergence on this path too (WP-60).
@@ -489,6 +493,8 @@ describe('the CI gate', () => {
     });
     expect(result).toEqual({
       kind: 'settled',
+      // WP-105 (backlog 280): the row names what the tamper check found.
+      outcome: 'protected_paths_clean',
       headSha: HEAD_SHA,
       passed: true,
       detail: 'pipeline pipeline-1 succeeded',
@@ -597,6 +603,8 @@ describe('the tamper check in the CI gate (WP-81)', () => {
     );
     expect(result).toEqual({
       kind: 'settled',
+      // WP-105 (backlog 280): the row names what the tamper check found.
+      outcome: 'protected_paths_clean',
       passed: true,
       headSha: HEAD_SHA,
       detail: 'pipeline pipeline-1 succeeded',
@@ -683,6 +691,8 @@ describe('the tamper check in the CI gate (WP-81)', () => {
     );
     expect(result).toEqual({
       kind: 'settled',
+      // WP-105 (backlog 280): the row names what the tamper check found.
+      outcome: 'protected_paths_clean',
       passed: true,
       headSha: HEAD_SHA,
       detail: 'pipeline pipeline-1 succeeded',

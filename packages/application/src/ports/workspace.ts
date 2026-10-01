@@ -45,6 +45,7 @@ import {
   isoDateTimeSchema,
   nonEmptyStringSchema,
   pathPatternSchema,
+  shaSchema,
 } from '@platform/contracts';
 import * as z from 'zod';
 
@@ -110,16 +111,24 @@ export type WorkspaceEgress = z.infer<typeof workspaceEgressSchema>;
  * `url` is what the mirror fetches from and what the export pushes to; `cacheKey` names the bare
  * mirror on the shared `repo-cache` volume (one per project, technical/05 §1). `checkoutBranch` is
  * the task branch for a re-entry — `null` means "the default branch", which is also the only
- * branch agent configuration is ever read from (BD-025).
+ * branch agent configuration is ever read from (BD-025). `checkoutCommit` is a commit to check out
+ * detached — a shadow task's base (Q82 (a), WP-105) — which the clone **refuses by name** when the
+ * mirror does not hold it, where a branch that does not exist yet is created. At most one is set.
  */
-export const workspaceRepoSchema = z.strictObject({
-  url: nonEmptyStringSchema.max(2_048),
-  defaultBranch: nonEmptyStringSchema.max(255),
-  checkoutBranch: nonEmptyStringSchema.max(255).nullable(),
-  cacheKey: z
-    .string()
-    .regex(/^[a-z0-9][a-z0-9._-]{0,62}$/, 'expected a lowercase mirror cache key'),
-});
+export const workspaceRepoSchema = z
+  .strictObject({
+    url: nonEmptyStringSchema.max(2_048),
+    defaultBranch: nonEmptyStringSchema.max(255),
+    checkoutBranch: nonEmptyStringSchema.max(255).nullable(),
+    checkoutCommit: shaSchema.nullable(),
+    cacheKey: z
+      .string()
+      .regex(/^[a-z0-9][a-z0-9._-]{0,62}$/, 'expected a lowercase mirror cache key'),
+  })
+  .refine((repo) => repo.checkoutBranch === null || repo.checkoutCommit === null, {
+    message: 'a workspace checks out a branch or a commit, never both',
+    path: ['checkoutCommit'],
+  });
 export type WorkspaceRepo = z.infer<typeof workspaceRepoSchema>;
 
 /**

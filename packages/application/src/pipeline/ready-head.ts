@@ -39,8 +39,17 @@
  * The decision is {@link readyHeadVerdict}, and it has two answers:
  *
  *  - **the head the gates judged** (`tasks.ready_head_sha`, written by the Ready entry that the
- *    gate settlement made) → `ready_for_merge`, with `task.resumed` when the task was paused, and no
- *    gate. This is also the head recorded for the new entry, so a second pause keeps the judgement;
+ *    gate settlement made) → re-enter **`rebase_gate`** (WP-105, {@link readyEntryFor}), with
+ *    `task.resumed` when the task was paused. Until WP-105 this answer entered Ready directly with
+ *    no gate, which trusted two judgements the head cannot vouch for: the target branch may have
+ *    moved while the task was stopped (`defaultBranchHandler` re-checks only a task whose state is
+ *    `ready_for_merge`, so a paused one dropped the move — PROGRESS backlog 274, ruled option (c)),
+ *    and a round that returned out of Ready and pushed nothing may have changed the plan or written
+ *    new Implementation Notes, which invalidates the Code review's confirmation of the protected
+ *    paths CI excused without moving the head (backlog 337). The rebase gate's settlement answers
+ *    both: one mergeability read, WP-26's conflict warning on its entry, WP-102's confirmation in
+ *    its transaction, and Ready only for the head CI passed. A template that does not run
+ *    `rebase_gate` still enters Ready directly and records the head (backlog 338 is its gap);
  *  - **anything else** → re-enter `ci_gate`. *Anything else* is a different head, a task with no
  *    recorded head (a row older than migration 0056, or a Ready entered by a template whose gates
  *    are disabled), **and a head the platform could not read** — a provider that refused, a binding
@@ -51,7 +60,7 @@
  *
  * ## The edge it adds, and which loop it spends (standing rule 81)
  *
- * **None.** Re-entering `ci_gate` from a stop at Ready is a **forward move**: the duty applies an
+ * **None.** Re-entering `ci_gate` or `rebase_gate` from a stop at Ready is a **forward move**: the duty applies an
  * `enter` decision rather than interpreting a signal, because the interpreter's rule 2 would read a
  * target earlier than `ready_for_merge` as a return and charge it to a loop — and a human's push is
  * not a failure of any loop BD-008 bounds. So no iteration counter moves, and the template's own
@@ -79,10 +88,23 @@
  * The wake-up is **at most once**, like every `afterCommit` enqueue: a process that dies between
  * the command's commit and the enqueue leaves the task where the command found it — paused, or at
  * its stage — with the hand-back's event written. Nothing is moved past a gate by that loss; the
- * human presses the button again. A default branch that moved while the task was paused at Ready is
- * **not** this duty's question: it compares the task's own branch head, and the rebase gate's
- * re-check on `default_branch.moved` is only taken while the task is at Ready (filed in PROGRESS
- * under WP-79's discovered work).
+ * human presses the button again. A default branch that moved while the task was paused at Ready
+ * **is** answered since WP-105, by the rebase gate every way back into Ready now passes through;
+ * the duty itself still compares only the task's own branch head.
+ *
+ * ## Every way into Ready after WP-105, and why each is sound
+ *
+ *  1. **The rebase gate's settlement** — the judgement itself: a mergeability read, Ready only for
+ *     the head CI passed (`rebaseAgainstCi`), and WP-102's confirmation read in its transaction.
+ *  2. **This duty, for a human's resume, retry-stage, retry-run or hand-back** — through the rebase
+ *     gate (1) on every template that runs it, whatever the head; directly only on a template that
+ *     runs no rebase gate, where the head the gates judged is recorded again.
+ *  3. **A fall-through from an agent or system stage** on a template that disabled `rebase_gate` —
+ *     no gate judged anything, so it records `ready_head_sha` as `null` and every later way back in
+ *     re-enters `ci_gate` (above). No shipped template produces it (PROGRESS backlog 338).
+ *
+ * `return-to-stage` and `rework` into Ready are refused by the state machine, and a human command
+ * cannot enter Ready itself (`applyHumanDecisionRecorded`'s census) — so there is no fourth.
  */
 import type { Id, Slug } from '@platform/contracts';
 import {
@@ -147,15 +169,57 @@ export const readyHeadVerdict = (recorded: string | null, live: LiveHead): Ready
   return { kind: 'ready', sha: live.sha };
 };
 
+/** Is `id` an enabled gate of this pipeline? */
+const runsGate = (pipeline: CompiledPipeline, id: Slug): boolean => {
+  const stage = stageOf(pipeline, id);
+  return stage?.enabled === true && stage.kind === 'gate';
+};
+
 /** The first gate a human's new commits re-enter: `ci_gate`, else `rebase_gate`, else none. */
 export const gateToReenter = (pipeline: CompiledPipeline): Slug | null => {
   for (const id of [CI_GATE_STAGE, REBASE_GATE_STAGE]) {
-    const stage = stageOf(pipeline, id);
-    if (stage?.enabled === true && stage.kind === 'gate') {
+    if (runsGate(pipeline, id)) {
       return id;
     }
   }
   return null;
+};
+
+/**
+ * The `task.resumed` reason when an unmoved head re-enters the rebase gate (WP-105) — platform text.
+ */
+export const REBASE_RECHECK_REASON =
+  'the branch head is the one the gates judged, and the rebase gate judges it again against the target branch before ready_for_merge';
+
+/**
+ * **Where the duty sends the task** (WP-105, PROGRESS backlogs 274 and 337) — the verdict and the
+ * template's gates, as one pure decision:
+ *
+ *  - a head to **judge again** → {@link gateToReenter} (`ci_gate`, else `rebase_gate`), or Ready on
+ *    a template that runs neither;
+ *  - the head **the gates judged** → `rebase_gate` when the template runs it — ruled option (c) on
+ *    274: the target branch may have moved while the task was stopped, and the rebase gate's
+ *    settlement is also where the Code review's confirmation of the protected paths CI excused is
+ *    read (WP-102, `tamper-confirmation.ts`), so a round that changed the plan without pushing
+ *    cannot reach Ready on a confirmation that no longer holds (337). The entry is a forward move,
+ *    one mergeability read, and no loop;
+ *  - the head the gates judged on a template that does **not** run `rebase_gate` → Ready, as
+ *    before, with that head recorded — there is no gate to re-read (PROGRESS backlog 338 is that
+ *    template's own gap).
+ */
+export const readyEntryFor = (
+  pipeline: CompiledPipeline,
+  verdict: ReadyHeadVerdict,
+): { readonly stage: Slug; readonly gate: boolean; readonly reason: string | null } => {
+  if (verdict.kind === 'judge_again') {
+    const gate = gateToReenter(pipeline);
+    return gate === null
+      ? { stage: READY_FOR_MERGE_STAGE, gate: false, reason: null }
+      : { stage: gate, gate: true, reason: verdict.reason };
+  }
+  return runsGate(pipeline, REBASE_GATE_STAGE)
+    ? { stage: REBASE_GATE_STAGE, gate: true, reason: REBASE_RECHECK_REASON }
+    : { stage: READY_FOR_MERGE_STAGE, gate: false, reason: null };
 };
 
 /** Is the task still where the command left it? The duty's re-validation, asked twice. */
@@ -240,11 +304,9 @@ export const runReadyHeadCheck = async (
         current.pipelineDial,
       );
       const verdict = readyHeadVerdict(current.readyHeadSha, live);
-      const gate = verdict.kind === 'judge_again' ? gateToReenter(pipeline) : null;
-      const decision: PipelineDecision = {
-        kind: 'enter',
-        stage: gate ?? READY_FOR_MERGE_STAGE,
-      };
+      const entry = readyEntryFor(pipeline, verdict);
+      const gate = entry.gate ? entry.stage : null;
+      const decision: PipelineDecision = { kind: 'enter', stage: entry.stage };
       const context: CommandContext = {
         ids: options.ids,
         // The person who resumed or handed back, as their command would have recorded.
@@ -263,10 +325,9 @@ export const runReadyHeadCheck = async (
         // A person caused this, not an event: `task_stages.caused_by_event_id` stays null, which is
         // how a human command's row is told apart.
         causedByEventId: null,
-        ...(verdict.kind === 'ready' ? { readyHeadSha: verdict.sha } : {}),
-        ...(gate === null || verdict.kind !== 'judge_again'
-          ? {}
-          : { resumeReason: verdict.reason }),
+        // Recorded only by an entry into Ready itself; a gate's settlement records its own head.
+        ...(verdict.kind === 'ready' && gate === null ? { readyHeadSha: verdict.sha } : {}),
+        ...(entry.reason === null ? {} : { resumeReason: entry.reason }),
         ...(options.logger === undefined ? {} : { logger: options.logger }),
       });
       await scope.events.append(applied.events);
@@ -285,10 +346,12 @@ export const runReadyHeadCheck = async (
       recorded_head: loaded.readyHeadSha,
       live_head: live.kind === 'read' ? live.sha : null,
     },
-    outcome.verdict.kind === 'ready'
-      ? 'the branch head is the one the gates judged; the task waits at ready_for_merge'
-      : outcome.gate === null
-        ? 'the template runs no gate to re-enter; the task waits at ready_for_merge'
+    outcome.gate === null
+      ? outcome.verdict.kind === 'ready'
+        ? 'the branch head is the one the gates judged and the template runs no rebase gate; the task waits at ready_for_merge'
+        : 'the template runs no gate to re-enter; the task waits at ready_for_merge'
+      : outcome.verdict.kind === 'ready'
+        ? `${REBASE_RECHECK_REASON}: re-entering ${outcome.gate}, which spends no iteration loop`
         : `${outcome.verdict.reason}: re-entering ${outcome.gate}, which spends no iteration loop`,
   );
   if (outcome.work !== null) {

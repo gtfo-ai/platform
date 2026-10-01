@@ -178,6 +178,47 @@ const IMAGE_PATH_PATTERN = /^\/[\w./+-]*(?::\/[\w./+-]*)*$/;
  */
 const NO_MIRROR_SENTINEL = 'AGENTIC_NO_MIRROR';
 
+/**
+ * What the clone helper prints when the commit a spec names is not in the project's mirror (WP-105):
+ * a shadow task's base that the fetch did not bring. A fixed token for the reason
+ * {@link NO_MIRROR_SENTINEL} is one.
+ */
+const NO_COMMIT_SENTINEL = 'AGENTIC_NO_CHECKOUT_COMMIT';
+
+/**
+ * The clone helper's checkout lines — **a branch and a commit are answered differently** (WP-105).
+ *
+ *  - **a branch** — `git checkout "$B" || git checkout -b "$B"`: a re-entry checks out the task's
+ *    own branch from the mirror, and a task's **first** run, whose branch is not on the remote yet,
+ *    creates it at the default branch's head (backlog 71). Creating is right here: a branch that
+ *    does not exist yet is the normal state of a new task;
+ *  - **a commit** — a shadow task's base (Q82 (a)): `cat-file -e "$C^{commit}"` first, and a commit
+ *    the mirror does not hold prints {@link NO_COMMIT_SENTINEL} and exits, which `#clone` turns
+ *    into a named, terminal refusal. Then `checkout --detach`, so no branch is made at all — until
+ *    WP-105 the sha travelled as a branch name, and the `||` above turned a missing base into a new
+ *    branch **named** after the sha at the default branch's head, running the comparison on today's
+ *    tree (WP-98's discovered work);
+ *  - neither — the default branch the clone already checked out.
+ *
+ * The values reach the script as environment and are always quoted; the commit is also held to
+ * `shaSchema` (hexadecimal only) by the spec, so it cannot be read as an option.
+ */
+export const cloneCheckoutLines = (repo: WorkspaceRepo): readonly string[] => {
+  if (repo.checkoutCommit !== null) {
+    return [
+      `if ! git -C /work/repo cat-file -e "$CHECKOUT_COMMIT^{commit}" 2>/dev/null; then echo "${NO_COMMIT_SENTINEL}"; exit 4; fi`,
+      'git -C /work/repo checkout -q --detach "$CHECKOUT_COMMIT"',
+    ];
+  }
+  if (repo.checkoutBranch !== null) {
+    return [
+      'git -C /work/repo checkout "$CHECKOUT_BRANCH" 2>/dev/null || ' +
+        'git -C /work/repo checkout -b "$CHECKOUT_BRANCH"',
+    ];
+  }
+  return [];
+};
+
 /** What the export helper prints when the checkout's `.git` is not a plain directory (WP-75). */
 const UNSAFE_GITDIR_SENTINEL = 'AGENTIC_UNSAFE_GITDIR';
 
@@ -1030,11 +1071,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
    */
   async #clone(spec: WorkspaceSpec, repo: WorkspaceRepo): Promise<void> {
     const cachePath = mirrorPath(this.#cacheMount, repo.cacheKey);
-    const checkout =
-      repo.checkoutBranch === null
-        ? ''
-        : `git -C /work/repo checkout "$CHECKOUT_BRANCH" 2>/dev/null || ` +
-          `git -C /work/repo checkout -b "$CHECKOUT_BRANCH"`;
+    const checkout = cloneCheckoutLines(repo);
     await this.#helper({
       name: `clone-${spec.runId}`,
       image: this.#images.git,
@@ -1049,7 +1086,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
         'git config --global --add safe.directory /work/repo',
         `git clone --shared --branch "$DEFAULT_BRANCH" "${cachePath}" /work/repo`,
         'git -C /work/repo remote set-url origin "$REPO_URL"',
-        checkout,
+        ...checkout,
         'git -C /work/repo rev-parse HEAD',
       ]
         .filter((line) => line.length > 0)
@@ -1059,6 +1096,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
         REPO_URL: repo.url,
         DEFAULT_BRANCH: repo.defaultBranch,
         ...(repo.checkoutBranch === null ? {} : { CHECKOUT_BRANCH: repo.checkoutBranch }),
+        ...(repo.checkoutCommit === null ? {} : { CHECKOUT_COMMIT: repo.checkoutCommit }),
       },
       // **The whole volume, read-only, on purpose** (WP-75): this helper is the existence check
       // above, and a sub-path mount of a mirror that is not there would turn "no mirror" into the
@@ -1081,6 +1119,18 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
           'workspace_failed',
           `the project has no mirror to clone from (${cachePath}); updateMirror runs before create`,
           { runId: spec.runId },
+        );
+      }
+      if (error instanceof WorkspaceError && (error.detail ?? '').includes(NO_COMMIT_SENTINEL)) {
+        // **Terminal** (Q59a): the mirror was fetched from the remote immediately before this
+        // create (`LauncherService.startRun` runs `updateMirror` first), so a commit it does not
+        // hold is one no ref on the remote reaches any more — history rewritten, or a merge
+        // request's refs removed. Another attempt would fetch the same refs and refuse again; the
+        // task escalates with this sentence instead of spending its start retries.
+        throw new WorkspaceError(
+          'invalid_spec',
+          `the commit ${repo.checkoutCommit ?? ''} this run must start from is not in the project's mirror after a fetch, so the run is refused rather than started on another tree (Q82 (a))`,
+          { runId: spec.runId, detail: NO_COMMIT_SENTINEL },
         );
       }
       throw error;

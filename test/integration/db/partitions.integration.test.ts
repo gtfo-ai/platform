@@ -35,7 +35,7 @@ describe('monthly partitions', () => {
   let database: MigratedDatabase;
 
   beforeAll(async () => {
-    database = await createMigratedDatabase('partitions');
+    database = await createMigratedDatabase('partitions', { pastMonths: 0 });
   });
 
   afterAll(async () => {

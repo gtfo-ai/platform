@@ -87,6 +87,60 @@ const rebaseChecks = async (pipeline: PipelineE2E) =>
       };
     });
 
+/**
+ * A peer task with a merge request of its own, inserted as a **row**.
+ *
+ * The feature under test is the *comparison*, not the creation of a second task: the harness
+ * scripts one `ImplementationNotes` per stage, so two tasks driven through the pipeline would both
+ * claim the same merge request. A row with an `mr_ref` is exactly what the warning duty reads.
+ */
+const peer = async (
+  pipeline: PipelineE2E,
+  key: string,
+  files: readonly string[],
+): Promise<string> => {
+  const mr = await pipeline.git.openMergeRequest({
+    project: GIT_PROJECT,
+    branch: `agentic/${key.toLowerCase()}`,
+    target: 'main',
+    title: `Draft: ${key}`,
+    description: 'Opened by another task.',
+    draft: true,
+    labels: [],
+    reviewers: [],
+    remove_source_branch: true,
+  });
+  pipeline.git.setDiff({
+    project: GIT_PROJECT,
+    iid: mr.ref.iid,
+    files: files.map((path) => ({ path })),
+  });
+  const rows = await pipeline.query<{ id: string }>(
+    `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, mode,
+                        state, current_stage, priority, template_snapshot, branch, mr_ref,
+                        stage_attempts, iteration_limits, iteration_counters, cost_actual)
+     values ($1, 'fake-task-management', $2, $3, 'feature', 'normal', 'ready_for_merge',
+             'ready_for_merge', 'High', '{"stages":[{"id":"intake","kind":"system"}]}'::jsonb,
+             $4, $5::jsonb, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, 0)
+     returning id`,
+    [
+      pipeline.projectId,
+      key,
+      `https://tickets.example.test/browse/${key}`,
+      `agentic/${key.toLowerCase()}`,
+      JSON.stringify({
+        provider: 'fake-git',
+        project_path: GIT_PROJECT,
+        iid: mr.ref.iid,
+        url: mr.web_url,
+        branch: `agentic/${key.toLowerCase()}`,
+        head_sha: mr.head_sha,
+      }),
+    ],
+  );
+  return rows[0]?.id ?? '';
+};
+
 describe('the rebase gate, before Ready and when the default branch moves', () => {
   it('passes a branch that applies, and re-arms on a signed default-branch delivery', async () => {
     const pipeline = await startPipeline({
@@ -299,64 +353,14 @@ describe('conflict warnings between concurrent tasks (product/04 S6b, BD-030)', 
     });
     harness = pipeline;
 
-    /**
-     * Two peers, each with a merge request of its own, inserted as **rows**.
-     *
-     * The feature under test is the *comparison*, not the creation of a second task: the harness
-     * scripts one `ImplementationNotes` per stage, so two tasks driven through the pipeline would
-     * both claim the same merge request. A row with an `mr_ref` is exactly what the duty reads.
-     */
-    const peer = async (key: string, files: readonly string[]): Promise<string> => {
-      const mr = await pipeline.git.openMergeRequest({
-        project: GIT_PROJECT,
-        branch: `agentic/${key.toLowerCase()}`,
-        target: 'main',
-        title: `Draft: ${key}`,
-        description: 'Opened by another task.',
-        draft: true,
-        labels: [],
-        reviewers: [],
-        remove_source_branch: true,
-      });
-      pipeline.git.setDiff({
-        project: GIT_PROJECT,
-        iid: mr.ref.iid,
-        files: files.map((path) => ({ path })),
-      });
-      const rows = await pipeline.query<{ id: string }>(
-        `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, mode,
-                            state, current_stage, priority, template_snapshot, branch, mr_ref,
-                            stage_attempts, iteration_limits, iteration_counters, cost_actual)
-         values ($1, 'fake-task-management', $2, $3, 'feature', 'normal', 'ready_for_merge',
-                 'ready_for_merge', 'High', '{"stages":[{"id":"intake","kind":"system"}]}'::jsonb,
-                 $4, $5::jsonb, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, 0)
-         returning id`,
-        [
-          pipeline.projectId,
-          key,
-          `https://tickets.example.test/browse/${key}`,
-          `agentic/${key.toLowerCase()}`,
-          JSON.stringify({
-            provider: 'fake-git',
-            project_path: GIT_PROJECT,
-            iid: mr.ref.iid,
-            url: mr.web_url,
-            branch: `agentic/${key.toLowerCase()}`,
-            head_sha: mr.head_sha,
-          }),
-        ],
-      );
-      return rows[0]?.id ?? '';
-    };
-
     // The task under test changes `src/totals.ts`; one peer changes it too and the other does not.
     pipeline.git.setDiff({
       project: GIT_PROJECT,
       iid: pipeline.world.mr.iid,
       files: [{ path: 'src/totals.ts' }, { path: 'src/footer.ts' }],
     });
-    const overlapping = await peer('ACME-98', ['src/totals.ts', 'src/vat.ts']);
-    await peer('ACME-99', ['docs/readme.md']);
+    const overlapping = await peer(pipeline, 'ACME-98', ['src/totals.ts', 'src/vat.ts']);
+    await peer(pipeline, 'ACME-99', ['docs/readme.md']);
 
     await pipeline.publish([ticketMatched(pipeline, 'ACME-1')]);
     await pipeline.settle('ready_for_merge', (task) => task.state === 'ready_for_merge');
@@ -507,4 +511,123 @@ describe('conflict warnings between concurrent tasks (product/04 S6b, BD-030)', 
       path_count: 1,
     });
   }, 180_000);
+});
+
+/**
+ * **WP-105 criterion 1 (PROGRESS backlog 274, ruled option (c))**: a task paused at Ready is not
+ * re-checked when the default branch moves — `defaultBranchHandler` skips a task whose state is not
+ * `ready_for_merge` — so its resume has to re-read the rebase gate itself, or it re-enters Ready on
+ * a judgement older than its target branch. The resume re-enters `rebase_gate` through WP-79's
+ * `enter` (a forward move), so **no loop is spent**, and the gate's entry is also where WP-26's
+ * warning is computed, so an overlap that appeared during the pause is raised.
+ *
+ * Measured on the tree before the fix (`ac15d6e`): this case failed at the wait for the resume's
+ * rebase check — *"the pipeline never reached the resume's rebase check to be recorded; the task is
+ * state=ready_for_merge stage=ready_for_merge"* — because the duty found the head unmoved and
+ * entered Ready with no gate, so the only `task.rebase.checked` was the one from before the pause.
+ * That recording is the canary.
+ */
+describe('a resume from a pause at Ready (WP-105, backlog 274)', () => {
+  it('re-enters the rebase gate, raises the warning an overlap earned during the pause, and spends no loop', async () => {
+    const pipeline = await startPipeline({
+      scenarios: featureScenarios,
+      label: 'rebase-resume',
+      tickets: TICKETS,
+    });
+    harness = pipeline;
+    pipeline.git.setDiff({
+      project: GIT_PROJECT,
+      iid: pipeline.world.mr.iid,
+      files: [{ path: 'src/totals.ts' }, { path: 'src/footer.ts' }],
+    });
+
+    await pipeline.publish([ticketMatched(pipeline, 'ACME-1')]);
+    const first = await pipeline.settle(
+      'ready_for_merge',
+      (task) => task.state === 'ready_for_merge',
+    );
+    expect(first.stage_attempts.rebase_gate).toBe(1);
+    await pipeline.waitFor(
+      'the first rebase check to be recorded',
+      async () => (await rebaseChecks(pipeline)).length >= 1,
+    );
+    const loopsAtReady = first.iteration_counters;
+
+    const client = new Client(pipeline.instance.baseUrl);
+    const signedIn = await client.post('/api/auth/sign-in/email', {
+      email: BOOTSTRAP_EMAIL,
+      password: BOOTSTRAP_PASSWORD,
+    });
+    expect(signedIn.status, JSON.stringify(signedIn.body)).toBe(200);
+    const command = async (verb: 'pause' | 'resume') => {
+      const reply = await client.json(`/api/tasks/${first.id}/${verb}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'idempotency-key': `wp105-${verb}` },
+        body: JSON.stringify({}),
+      });
+      expect(reply.status, `${verb}: ${JSON.stringify(reply.body)}`).toBe(200);
+    };
+
+    await command('pause');
+    await pipeline.settle('paused at Ready', (task) => task.state === 'paused');
+
+    // The default branch moves while the task is paused: delivered, dispatched, and dropped by the
+    // re-check handler, which only takes tasks whose state is `ready_for_merge`.
+    const moved = await pipeline.deliverGit(
+      pipeline.git.emitDefaultBranchMoved({ project: GIT_PROJECT, newHead: 'e'.repeat(40) }),
+    );
+    expect(moved.status).toBe(202);
+    await pipeline.waitFor('the default-branch move to be dispatched', async () => {
+      const event = (await pipeline.events()).find(
+        (entry) => entry.type === 'default_branch.moved',
+      );
+      return event !== undefined && !(await pipeline.awaitingDispatch(event.id));
+    });
+    expect((await pipeline.task()).stage_attempts.rebase_gate).toBe(1);
+
+    // …and during the pause another task opened a merge request touching the same file.
+    const overlapping = await peer(pipeline, 'ACME-97', ['src/totals.ts']);
+
+    await command('resume');
+    // Not true before the resume (the task is `paused`), so this waits for the duty and the gate.
+    const resumed = await pipeline.settle(
+      'ready_for_merge after the resume',
+      (task) => task.state === 'ready_for_merge',
+    );
+    // The last rows the platform writes for this path, bound before anything reads them (rule 87):
+    // the gate's measurement, appended after its settlement, and the warning duty's event.
+    await pipeline.waitFor(
+      'the resume’s rebase check to be recorded',
+      async () => (await rebaseChecks(pipeline)).length >= 2,
+    );
+    await pipeline.waitFor('the conflict warning to be recorded', async () =>
+      (await pipeline.events()).some((event) => event.type === 'task.conflict.warned'),
+    );
+
+    // The rebase gate ran a second time, on the resume — and CI did not, because the head is the
+    // one CI passed (WP-79's comparison still decides between the two gates).
+    expect(resumed.stage_attempts.rebase_gate).toBe(2);
+    expect(resumed.stage_attempts.ci_gate).toBe(first.stage_attempts.ci_gate);
+    // No loop spent: not `rebase_rechecks` (a re-entry of CI), not `rebase` (a resolution run),
+    // not `human_rounds`. The counters are the ones the task reached Ready with.
+    expect(resumed.iteration_counters).toEqual(loopsAtReady);
+    expect(pipeline.specs.map((spec) => spec.stage)).not.toContain('conflict_resolution');
+    expect((await rebaseChecks(pipeline)).map((check) => check.outcome)).toEqual([
+      'clean',
+      'clean',
+    ]);
+
+    // WP-26's warning, on this task's stream, naming the peer that overlapped during the pause.
+    const warned = (await pipeline.events())
+      .filter((event) => event.type === 'task.conflict.warned')
+      .map((event) => event.payload as Record<string, unknown>)
+      .filter((payload) => payload.task_id === first.id);
+    expect(warned).toEqual([
+      expect.objectContaining({
+        other_task_id: overlapping,
+        other_ticket_key: 'ACME-97',
+        paths: ['src/totals.ts'],
+      }),
+    ]);
+  }, 240_000);
 });

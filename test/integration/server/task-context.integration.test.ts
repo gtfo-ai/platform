@@ -202,9 +202,83 @@ describe('get_task_context, scoped to the run’s own task', () => {
           returned_to: 'architecture',
           reason: 'return reason MINE',
           at: expect.any(String),
+          // WP-105: no verdict produced it and `implementation` is no gate (backlog 289).
+          cause: { kind: 'other', note: expect.stringContaining('the reason says which') },
         },
       ],
     });
+  });
+
+  /**
+   * **PROGRESS backlog 289, option (b)** (WP-105), over the real link: a review return, then a CI
+   * return, then a re-review that wrote a newer verdict. The tool keeps the history — the latest
+   * `ReviewVerdict` is version 2 — and each return names what it was for: version 1 for the review's,
+   * the gate for CI's.
+   */
+  it('names which verdict each return was for, by the run that produced it (WP-105)', async () => {
+    const task = await one<{ id: string }>(
+      `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state,
+                          current_stage, template_snapshot)
+       values ($1, 'fake-jira', 'KEY-CAUSE', 'https://jira.example.test/browse/C', 'feature',
+               'active', 'implementation',
+               '{"stages":[{"id":"code_review","kind":"agent"},{"id":"ci_gate","kind":"gate"}]}'::jsonb)
+       returning id`,
+      [mine.projectId],
+    );
+    const attempt = async (stage: string, n: number, state: string, reason: string | null) =>
+      one<{ id: string }>(
+        `insert into task_stages (task_id, stage, attempt, state, outcome, return_reason,
+                                 returned_to, entered_at, exited_at)
+         values ($1, $2, $3, $4, $5, $6, $7, now() + ($8 || ' seconds')::interval,
+                 now() + ($8 || ' seconds')::interval)
+         returning id`,
+        [
+          task.id,
+          stage,
+          n,
+          state,
+          state === 'returned'
+            ? stage === 'ci_gate'
+              ? 'protected_paths_clean'
+              : 'returned'
+            : 'approve',
+          reason,
+          state === 'returned' ? 'implementation' : null,
+          String(n * 10 + (stage === 'ci_gate' ? 5 : 0)),
+        ],
+      );
+    const review1 = await attempt('code_review', 1, 'returned', 'the footer rounds twice');
+    await attempt('ci_gate', 1, 'returned', 'pipeline failed: test:unit');
+    const review2 = await attempt('code_review', 2, 'completed', null);
+    const verdictBy = async (stageRow: string, version: number, verdict: string) => {
+      const run = await one<{ id: string }>(
+        `insert into runs (task_id, task_stage_id, project_id, role, model, prompt_version, status)
+         values ($1, $2, $3, 'reviewer', 'model-cause', 'feature@1+reviewer', 'completed')
+         returning id`,
+        [task.id, stageRow, mine.projectId],
+      );
+      await pool.query(
+        `insert into artifacts (task_id, type, version, markdown, data, schema_version,
+                                produced_by_run_id, redaction_count)
+         values ($1, 'ReviewVerdict', $2, null, $3::jsonb, '1', $4, 0)`,
+        [task.id, version, JSON.stringify({ verdict }), run.id],
+      );
+    };
+    await verdictBy(review1.id, 1, 'request_changes');
+    await verdictBy(review2.id, 2, 'approve');
+
+    const scope = { projectId: mine.projectId, taskId: task.id as Id };
+    const answer = await readTaskContext(drizzled, ['feedback', 'artifacts'], scope);
+    const returns = (
+      answer.sections.feedback as unknown as { returns: { stage: string; cause: unknown }[] }
+    ).returns;
+    expect(returns.map((entry) => [entry.stage, entry.cause])).toEqual([
+      ['code_review', { kind: 'verdict', artifact_type: 'ReviewVerdict', version: 1 }],
+      ['ci_gate', { kind: 'gate', stage: 'ci_gate' }],
+    ]);
+    // The history stays: the latest ReviewVerdict is the re-review's, and the review return above
+    // says it was for version 1, not this one.
+    expect(JSON.stringify(answer.sections.artifacts)).toContain('"version":2');
   });
 
   it('serves the latest version of each artifact type, not every version', async () => {

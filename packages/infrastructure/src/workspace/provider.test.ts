@@ -1229,3 +1229,68 @@ describe('listExistingProtectedPaths (WP-99)', () => {
     expect(daemon.history.length).toBe(before);
   });
 });
+
+/**
+ * **A branch that does not exist yet and a commit that does not exist are different answers**
+ * (WP-105, WP-98's discovered work, Q82 (a)). A task's first run creates its branch; a shadow task
+ * whose base commit the mirror does not hold is refused by name — never run on the default branch,
+ * never under a branch named after the sha. The daemon double runs no git, so the helper's exit is
+ * modelled here and the script is asserted; the real git answers in
+ * `test/e2e/workspace/docker-workspace.e2e.test.ts`.
+ */
+describe('the clone’s checkout (WP-105)', () => {
+  const BASE = 'a1'.repeat(20);
+  const runContainerCreates = (): number =>
+    daemon.history.filter((container) => container.name === `ws-${FIXTURE_RUN_ID}`).length;
+  const cloneScript = (): string =>
+    (daemon.byName(`clone-${FIXTURE_RUN_ID}`)?.body.Cmd ?? []).join('\n');
+  const cloneEnv = (): readonly string[] =>
+    daemon.byName(`clone-${FIXTURE_RUN_ID}`)?.body.Env ?? [];
+
+  it('refuses a checkout commit the mirror does not hold, by name, before the run container', async () => {
+    await daemon.stop();
+    // The helper's commit check, modelled: `cat-file -e` fails, it prints the sentinel, exits 4.
+    await startDaemon((container) =>
+      container.name.startsWith('clone-')
+        ? { exitCode: 4, logs: 'AGENTIC_NO_CHECKOUT_COMMIT\n' }
+        : { exitCode: 0, logs: '' },
+    );
+    const refusal = provider.create(workspaceSpecFixture({ repo: { checkoutCommit: BASE } }));
+    await expect(refusal).rejects.toMatchObject({
+      // Terminal: `classifyProvisionFailure` retries `workspace_failed` and not this.
+      code: 'invalid_spec',
+      message: new RegExp(`the commit ${BASE} this run must start from is not in the project`),
+    });
+    expect(runContainerCreates()).toBe(0);
+    // The check comes before any checkout, and no line of the script can create a branch.
+    const script = cloneScript();
+    expect(script.indexOf('cat-file -e "$CHECKOUT_COMMIT^{commit}"')).toBeGreaterThan(
+      script.indexOf('git clone'),
+    );
+    expect(script).not.toContain('checkout -b');
+    expect(script).not.toContain('CHECKOUT_BRANCH');
+    expect(cloneEnv()).toContain(`CHECKOUT_COMMIT=${BASE}`);
+  });
+
+  it('checks out a commit it holds detached, and a branch with the create fallback', async () => {
+    await provider.create(workspaceSpecFixture({ repo: { checkoutCommit: BASE } }));
+    expect(cloneScript()).toContain('git -C /work/repo checkout -q --detach "$CHECKOUT_COMMIT"');
+    await daemon.stop();
+    await startDaemon();
+    await provider.create(workspaceSpecFixture({ repo: { checkoutBranch: 'agentic/acme-1' } }));
+    // A branch keeps backlog 71's `||`: a task's first run creates its branch.
+    expect(cloneScript()).toContain(
+      'git -C /work/repo checkout "$CHECKOUT_BRANCH" 2>/dev/null || git -C /work/repo checkout -b "$CHECKOUT_BRANCH"',
+    );
+    expect(cloneScript()).not.toContain('CHECKOUT_COMMIT');
+  });
+
+  it('refuses a spec that names a branch and a commit at once', async () => {
+    await expect(
+      provider.create(
+        workspaceSpecFixture({ repo: { checkoutBranch: 'agentic/acme-1', checkoutCommit: BASE } }),
+      ),
+    ).rejects.toMatchObject({ code: 'invalid_spec' });
+    expect(runContainerCreates()).toBe(0);
+  });
+});

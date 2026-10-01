@@ -51,6 +51,7 @@ export const runSpecFixture = (overrides: Partial<RunSpec> = {}): RunSpec =>
     // PROGRESS backlog 71's field (WP-34): the task's own branch for a re-entry, a shadow task's
     // comparison base, and `null` — this fixture's case — for the default branch.
     checkoutRef: null,
+    checkoutCommit: null,
     contextPack: [{ tier: 0, path: '.agentic/knowledge/index.md', reason: 'tier 0 index' }],
     limits: runLimitsDefaults,
     tools: ['Bash', 'Read', 'Edit', 'Write', 'Grep', 'Glob'],

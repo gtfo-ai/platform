@@ -27,7 +27,7 @@
  * |---|---|---|
  * | `ticket` | `tasks.ticket_snapshot` (bounded and redacted at the write, WP-15f) | the platform has not read the ticket |
  * | `artifacts` | the latest version of each type, `findArtifactBody` | per artifact: stored before redaction existed (migration 0038) |
- * | `feedback` | `task_stages` rows with `state = 'returned'`: the stage, its target (`returned_to`) and the reason — escalations excluded (WP-55) | never; an empty list is an answer |
+ * | `feedback` | `task_stages` rows with `state = 'returned'`: the stage, its target (`returned_to`), the reason and — since WP-105 — its `cause` ({@link returnCauseOf}) — escalations excluded (WP-55) | never; an empty list is an answer |
  * | `mr` | `tasks.mr_ref` and `tasks.branch` | the task has no merge request yet |
  * | `ci` | `tasks.coverage` — the one per-task CI figure the platform stores | no coverage was recorded; pipeline runs themselves are **not** projected per task |
  * | `runs` | `findTaskDetail`'s runs, newest {@link TASK_CONTEXT_RUN_LIMIT} | never |
@@ -38,12 +38,13 @@
  * it), so a per-task list of pipelines would be a second resolution of that join written here.
  */
 import type { Id, JsonObject, TicketSnapshot } from '@platform/contracts';
+import { isBuiltinGateStageId } from '@platform/contracts';
 import { isPromptExcludedArtifact } from '@platform/domain';
 import { db as dbAdapters } from '@platform/infrastructure';
-import { and, asc, desc, eq, isNotNull } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull } from 'drizzle-orm';
 import { type Database, findArtifactBody, findTaskDetail } from './pipeline-queries.js';
 
-const { humanActions, taskStages, tasks } = dbAdapters.schema;
+const { artifacts, humanActions, runs, taskStages, tasks } = dbAdapters.schema;
 
 /** Every value `get_task_context`'s `include` accepts (`getTaskContextInputSchema`). */
 export type TaskContextInclude =
@@ -212,6 +213,7 @@ const findTicketSnapshot = async (
 const listReturnFeedback = async (database: Database, taskId: string) =>
   database
     .select({
+      id: taskStages.id,
       stage: taskStages.stage,
       attempt: taskStages.attempt,
       returnedTo: taskStages.returnedTo,
@@ -227,6 +229,94 @@ const listReturnFeedback = async (database: Database, taskId: string) =>
       ),
     )
     .orderBy(asc(taskStages.enteredAt), asc(taskStages.attempt));
+
+/** The artifact types a stage returns a task by (`stageVerdict`), the only possible causes. */
+const VERDICT_TYPES = ['ReviewVerdict', 'AcceptanceVerdict'] as const;
+
+/**
+ * The verdicts **a run of each stage attempt produced** — WP-83's link (`runs.task_stage_id` →
+ * `artifacts.produced_by_run_id`), the one `lastReturnReason` reads a return's cause by for the
+ * pack, read here for every attempt of the task at once.
+ */
+const listVerdictsByAttempt = async (database: Database, taskId: string) =>
+  database
+    .select({ taskStageId: runs.taskStageId, type: artifacts.type, version: artifacts.version })
+    .from(artifacts)
+    .innerJoin(runs, eq(runs.id, artifacts.producedByRunId))
+    .where(and(eq(artifacts.taskId, taskId), inArray(artifacts.type, [...VERDICT_TYPES])));
+
+/** `tasks.template_snapshot`'s stage kinds, by id — which returning stages are gates. */
+const findStageKinds = async (
+  database: Database,
+  taskId: string,
+): Promise<ReadonlyMap<string, string>> => {
+  const rows = await database
+    .select({ snapshot: tasks.templateSnapshot })
+    .from(tasks)
+    .where(eq(tasks.id, taskId))
+    .limit(1);
+  const stages = (rows[0]?.snapshot as { stages?: unknown } | null | undefined)?.stages;
+  const kinds = new Map<string, string>();
+  if (Array.isArray(stages)) {
+    for (const stage of stages) {
+      const entry = stage as { id?: unknown; kind?: unknown };
+      if (typeof entry.id === 'string' && typeof entry.kind === 'string') {
+        kinds.set(entry.id, entry.kind);
+      }
+    }
+  }
+  return kinds;
+};
+
+/**
+ * **What a return was for** (WP-105, PROGRESS backlog 289, ruled option (b)).
+ *
+ * The tool keeps the whole history — every return and, in `artifacts`, the latest verdict of each
+ * type — because a stage may legitimately need it; what it lacked was the tie between the two that
+ * WP-83 gave the pack. So each return names its cause, by the same link:
+ *
+ *  - `verdict` — the `ReviewVerdict` or `AcceptanceVerdict` a run of the **returning attempt**
+ *    produced (the highest version, as `lastReturnReason` picks), by type and version, so a model
+ *    can match it against `artifacts` and see whether the verdict it is shown is the one it was
+ *    sent back for;
+ *  - `gate` — the returning stage is a gate of the task's template (a CI failure, the tamper check,
+ *    a rebase conflict or WP-102's unconfirmed paths): a gate produces no artifact, and the reason
+ *    is its finding — **except** a person's return or rework out of a task stopped at a gate (an
+ *    escalation from `ci_gate`, say), which the row records the same way: the stage is the gate,
+ *    and the reason is the person's note, not a finding (WP-105 review round 1);
+ *  - `other` — neither: a person's return or rework, the dependency policy, or the review window's
+ *    human threads. The row does not record which of those it was, so this answer does not claim
+ *    one (the reason carries the words the return was made with).
+ *
+ * Pure over the rows the section reads, so each branch is a unit case.
+ */
+export const returnCauseOf = (
+  row: { readonly id: string; readonly stage: string },
+  verdicts: readonly {
+    readonly taskStageId: string | null;
+    readonly type: string;
+    readonly version: number;
+  }[],
+  stageKinds: ReadonlyMap<string, string>,
+):
+  | { readonly kind: 'verdict'; readonly artifact_type: string; readonly version: number }
+  | { readonly kind: 'gate'; readonly stage: string }
+  | { readonly kind: 'other'; readonly note: string } => {
+  const produced = verdicts
+    .filter((verdict) => verdict.taskStageId === row.id)
+    .sort((left, right) => right.version - left.version)[0];
+  if (produced !== undefined) {
+    return { kind: 'verdict', artifact_type: produced.type, version: produced.version };
+  }
+  const kind = stageKinds.get(row.stage);
+  if (kind === 'gate' || (kind === undefined && isBuiltinGateStageId(row.stage))) {
+    return { kind: 'gate', stage: row.stage };
+  }
+  return {
+    kind: 'other',
+    note: 'no verdict and no gate: a person’s return or rework, the dependency policy, or the review window’s threads — the reason says which',
+  };
+};
 
 /**
  * This task's `human_actions`, newest first, on the table's `(task_id, created_at desc)` index.
@@ -324,6 +414,9 @@ export const readTaskContext = async (
       }
       case 'feedback': {
         const rows = await listReturnFeedback(database, scope.taskId);
+        const verdicts =
+          rows.length === 0 ? [] : await listVerdictsByAttempt(database, scope.taskId);
+        const kinds = rows.length === 0 ? new Map() : await findStageKinds(database, scope.taskId);
         return {
           status: 'ok',
           returns: rows.map((row) => ({
@@ -332,6 +425,7 @@ export const readTaskContext = async (
             returned_to: row.returnedTo,
             reason: row.reason,
             at: iso(row.exitedAt),
+            cause: returnCauseOf(row, verdicts, kinds),
           })),
         };
       }

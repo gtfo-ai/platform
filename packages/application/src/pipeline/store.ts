@@ -204,8 +204,9 @@ export interface StoredTask {
    * migration 0056, PROGRESS backlog 267).
    *
    * Written only by {@link TaskRepository.saveReadyHead}, from `applyDecision`'s entry into Ready:
-   * the gate settlement's head, the ready-head check's head when it found the branch unmoved, and
-   * `null` for every other entry — so the value always describes the **latest** Ready entry. `null`
+   * the gate settlement's head, the ready-head check's head when it found the branch unmoved on a
+   * template with no rebase gate (since WP-105 an unmoved head otherwise re-enters `rebase_gate`,
+   * whose settlement records it), and `null` for every other entry — so the value always describes the **latest** Ready entry. `null`
    * is *"no gate judged a head"* (a template with its gates disabled, a row older than the column),
    * which the `ready_head_check` duty reads exactly like a moved head.
    */

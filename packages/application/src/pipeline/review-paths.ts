@@ -13,20 +13,25 @@
  * window. Route (b) — firing `risk_route` on `code_review` entry — was not taken: the outbound job
  * and `stage.execute` are separate queue jobs, so the planner would race the column.
  *
- * **It never fails the stage.** A read that throws, a project with no git binding and a task with
- * no merge request all answer `undefined`, and the planner then matches on the plan and logs that
- * source — the review runs with fewer classes rather than not at all (standing rule 20: the missing
- * read is named, in the log and the source, not substituted).
+ * **A provider never fails the stage.** A read that throws, a project with no git binding and a
+ * task with no merge request all answer `undefined`, and the planner then matches on the plan and
+ * logs that source — the review runs with fewer classes rather than not at all (standing rule 20:
+ * the missing read is named, in the log and the source, not substituted). **Except
+ * `TransactionOpenError`**, which is rethrown (WP-105, PROGRESS backlog 303): it is not a provider
+ * being down but a change that moved this call inside a transaction, and absorbing it would turn
+ * that programming error into a `warn` line and every Reviewer run into a plan-only match — backlog
+ * 218's defect back again with no test failing. The shape is `ticket-snapshot.ts`'s and
+ * `observability-prefetch.ts`'s.
  *
  * The paths are provider text, **redacted** with the git binding's redactor before anything
  * compares them, and they are only ever compared with `paths:`-style globs; the class names the
  * match yields are the project's configuration.
  */
 import type { PipelineStage } from '@platform/domain';
+import { TransactionOpenError } from '../events/open-transaction.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import { coalescedMergeRequestDiff, MAX_CONFLICT_FILES } from './diff-coalescer.js';
-
 import { integrationsForProject, noRunScopedSecrets } from './integrations.js';
 import type { PipelineSagaOptions } from './saga.js';
 import type { StoredTask } from './store.js';
@@ -67,6 +72,9 @@ export const reviewedMergeRequestPaths = async (
       .filter((path) => path !== '')
       .map((path) => (redactor === null ? path : redactor.redactText(path).value));
   } catch (error) {
+    if (error instanceof TransactionOpenError) {
+      throw error;
+    }
     logger.warn(
       { task_id: stored.task.id, stage: stage.id, err: error },
       'the merge request’s changed files could not be read before the review; its checklists are matched on the plan alone',

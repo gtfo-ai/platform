@@ -220,6 +220,20 @@ describe('backlog 71 — `checkoutRef` reaches the workspace', () => {
     await provisionerWith(client).provision(runSpecFixture({ checkoutRef: 'agentic/task-9' }));
     expect(recorded.creates[0]?.spec.repo?.checkoutBranch).toBe('agentic/task-9');
   });
+
+  /**
+   * WP-105 (WP-98's discovered work): a shadow task's base is a **commit**, and it reaches the
+   * create request as one — never as a branch, which `#clone` would create when the mirror lacks it.
+   */
+  it('carries a shadow base as a commit to the create request, never as a branch (WP-105)', async () => {
+    const base = 'a1'.repeat(20);
+    const { client, recorded } = clientWith();
+    await provisionerWith(client).provision(runSpecFixture({ checkoutCommit: base }));
+    expect(recorded.creates[0]?.spec.repo).toMatchObject({
+      checkoutCommit: base,
+      checkoutBranch: null,
+    });
+  });
 });
 
 describe('the workspace spec a run gets', () => {

@@ -541,7 +541,8 @@ const writeTask = async <T>(
  * branch head (PROGRESS backlog 267): the aggregate is asked whether the move is legal — a dry run
  * of `markReadyForMerge`, discarded, so a refused edge is still the command's 409 — nothing is
  * written, and the `ready_head_check` duty is left for after the commit (`ready-head.ts`), which
- * enters Ready for the head the gates judged and re-enters `ci_gate` otherwise. Resume, retry-stage,
+ * re-enters `rebase_gate` for the head the gates judged (WP-105, backlogs 274 and 337) and `ci_gate`
+ * otherwise, so Ready is entered only by the rebase gate's settlement. Resume, retry-stage,
  * retry-run and hand-back all come through here; {@link applyHumanDecisionRecorded} refuses a Ready
  * entry that did not, so a new command that forgets is a 500 in its first test rather than a side
  * door.
@@ -718,8 +719,9 @@ export const pauseTaskCommand = async (
  * at Ready may be a take-over, and the human may have pushed: so the command asks the aggregate
  * whether the move is legal (a dry run of `markReadyForMerge`, discarded — the same 409 as before),
  * writes nothing, and hands the decision to the `ready_head_check` duty after the commit, which
- * compares the branch's live head with the head the gates judged and either enters Ready or
- * re-enters `ci_gate` (`ready-head.ts`). The task therefore reads `paused` until the duty runs.
+ * compares the branch's live head with the head the gates judged and re-enters `rebase_gate` (the
+ * same head, WP-105) or `ci_gate` (any other, WP-79) — `ready-head.ts`. The task therefore reads
+ * `paused` until the duty runs.
  */
 export const resumeTaskCommand = async (
   deps: HumanCommandDependencies,
@@ -1718,8 +1720,9 @@ export const takeOverTaskCommand = async (
  * hand-back re-provisions from the **branch**, which is where the human's work now is.
  *
  * **Except into `ready_for_merge`** (WP-79, PROGRESS backlog 267): that target is not entered
- * here at all. The hand-back is recorded and the `ready_head_check` duty enters Ready only for the
- * head the gates judged, re-entering `ci_gate` otherwise — see `ready-head.ts`. That covers the
+ * here at all. The hand-back is recorded and the `ready_head_check` duty re-enters `rebase_gate`
+ * for the head the gates judged (WP-105: the target branch and the Code review's confirmation are
+ * read again, PROGRESS backlog 337) and `ci_gate` otherwise — see `ready-head.ts`. That covers the
  * take-over at Ready this entry was filed for and the wider door beside it: a hand-back into Ready
  * from an `active` task, which `active → ready_for_merge` let skip both gates.
  */

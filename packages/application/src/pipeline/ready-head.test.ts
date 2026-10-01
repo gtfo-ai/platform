@@ -6,7 +6,12 @@
 import type { PipelineTemplate } from '@platform/contracts';
 import { CHORE_TEMPLATE, compilePipeline, FEATURE_TEMPLATE } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
-import { gateToReenter, readyHeadVerdict } from './ready-head.js';
+import {
+  gateToReenter,
+  REBASE_RECHECK_REASON,
+  readyEntryFor,
+  readyHeadVerdict,
+} from './ready-head.js';
 
 const JUDGED = 'b'.repeat(40);
 const PUSHED = 'c'.repeat(40);
@@ -43,17 +48,17 @@ describe('readyHeadVerdict', () => {
   });
 });
 
+const without = (template: PipelineTemplate, ids: readonly string[]): PipelineTemplate => ({
+  ...template,
+  stages: template.stages.map((stage) =>
+    ids.includes(stage.id) ? { ...stage, enabled: false } : stage,
+  ),
+});
+
 describe('gateToReenter', () => {
   it('is ci_gate on the shipped ticket templates', () => {
     expect(gateToReenter(compilePipeline('feature', FEATURE_TEMPLATE, null))).toBe('ci_gate');
     expect(gateToReenter(compilePipeline('chore', CHORE_TEMPLATE, null))).toBe('ci_gate');
-  });
-
-  const without = (template: PipelineTemplate, ids: readonly string[]): PipelineTemplate => ({
-    ...template,
-    stages: template.stages.map((stage) =>
-      ids.includes(stage.id) ? { ...stage, enabled: false } : stage,
-    ),
   });
 
   it('falls back to the rebase gate when a project disabled CI, and to none when it disabled both', () => {
@@ -65,5 +70,54 @@ describe('gateToReenter', () => {
         compilePipeline('feature', without(FEATURE_TEMPLATE, ['ci_gate', 'rebase_gate']), null),
       ),
     ).toBeNull();
+  });
+});
+
+/**
+ * WP-105 (PROGRESS backlogs 274 and 337, ruled option (c)): an unmoved head re-enters the rebase
+ * gate on every template that runs it; Ready directly only where there is no rebase gate to re-read.
+ */
+describe('readyEntryFor', () => {
+  const feature = compilePipeline('feature', FEATURE_TEMPLATE, null);
+  const ready = { kind: 'ready', sha: JUDGED } as const;
+  const again = { kind: 'judge_again', reason: 'the branch head moved' } as const;
+
+  it('sends the head the gates judged through the rebase gate, with the platform’s reason', () => {
+    expect(readyEntryFor(feature, ready)).toEqual({
+      stage: 'rebase_gate',
+      gate: true,
+      reason: REBASE_RECHECK_REASON,
+    });
+    expect(readyEntryFor(compilePipeline('chore', CHORE_TEMPLATE, null), ready).stage).toBe(
+      'rebase_gate',
+    );
+  });
+
+  it('sends a head to judge again to the first gate, with the verdict’s reason', () => {
+    expect(readyEntryFor(feature, again)).toEqual({
+      stage: 'ci_gate',
+      gate: true,
+      reason: 'the branch head moved',
+    });
+  });
+
+  it('enters Ready directly only on a template that runs no rebase gate (backlog 338’s shape)', () => {
+    const noRebase = compilePipeline('feature', without(FEATURE_TEMPLATE, ['rebase_gate']), null);
+    expect(readyEntryFor(noRebase, ready)).toEqual({
+      stage: 'ready_for_merge',
+      gate: false,
+      reason: null,
+    });
+    expect(readyEntryFor(noRebase, again).stage).toBe('ci_gate');
+    const neither = compilePipeline(
+      'feature',
+      without(FEATURE_TEMPLATE, ['ci_gate', 'rebase_gate']),
+      null,
+    );
+    expect(readyEntryFor(neither, again)).toEqual({
+      stage: 'ready_for_merge',
+      gate: false,
+      reason: null,
+    });
   });
 });

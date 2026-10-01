@@ -288,7 +288,7 @@ error naming the transition, not as a silent no-op — and each accepted one lea
 | Command | Who | What it does |
 |---|---|---|
 | **Pause** | member | stops the task from entering another stage |
-| **Resume** | member | lets it continue. A task paused while it waited for its merge goes back to waiting for it — if its branch still has the commit the platform's gates judged; if somebody pushed while it was paused, it goes back through the CI gate first, and it reads *paused* for the moment the platform takes to check (WP-79); merging the merge request on the git provider while it is paused ends the pause, and the retrospective runs as for any merge |
+| **Resume** | member | lets it continue. A task paused while it waited for its merge goes back to waiting for it — if its branch still has the commit the platform's gates judged, through the rebase gate, which checks it against the target branch as it is now (a default branch that moved during the pause is not re-checked while the task is paused) and warns about another task touching the same files, spending no iteration limit (WP-105); if somebody pushed while it was paused, it goes back through the CI gate first (WP-79). It reads *paused* for the moment the platform takes to check; merging the merge request on the git provider while it is paused ends the pause, and the retrospective runs as for any merge |
 | **Cancel** | maintainer | ends the task; it enters no further stage |
 | **Retry stage** | member | runs the current stage again, optionally with a reason. Costs a run |
 | **Return to stage** | maintainer | sends the task back to an earlier stage; a reason is required. Costs an iteration of the loop |
@@ -339,7 +339,12 @@ The product defines eleven merge-readiness checks, and the panel shows **all ele
   the review has not judged the change yet — the rebase gate, just before Ready, reads the code
   review's confirmation, so neither review runs twice; then *declared changes confirmed by the code
   review*, or *declared changes not confirmed, sent back* (the developer is told which paths, as
-  for an undeclared change); *clean*; *checking*; or *not reached*. It is never drawn as an empty tick for a gate that has not decided.
+  for an undeclared change); *clean* when the check ran and found nothing; *checking*; or *not
+  reached*. A CI gate whose row carries no record of the check reads *not recorded*: one that
+  settled before WP-105 recorded what its check found (before WP-81 no check was made at all, and
+  from WP-81 on a clean check closed its row with the same word), or one a person returned from
+  while the task was stopped there, which no check settled — the platform cannot tell these apart
+  and does not claim *clean* for any of them. It is never drawn as an empty tick for a gate that has not decided.
   A merge request that changes **100 files or more** is more than the check reads, so the CI gate
   cannot tell whether a protected path changed and hands the task to a human (`needs_human`) even
   on green CI — split a large refactor, or take the merge from there yourself.
@@ -369,7 +374,10 @@ its end, with credentials redacted — beside the job names.
   would refuse. Handing back to **Ready for merge** does not skip the checks: when the branch is not
   the commit the platform's gates judged — you pushed, or the platform cannot read it — the task
   re-enters the CI gate and walks through review and the rebase gate to Ready again, spending none of
-  its iteration limits; only an unchanged branch goes straight back to waiting (WP-79). Handing back
+  its iteration limits; an unchanged branch goes back through the rebase gate alone — one
+  mergeability read, no iteration limit spent — which checks it against the target branch as it is
+  now and re-reads the code review's confirmation of any protected path CI excused, so a round that
+  changed the plan without pushing cannot wait at Ready on the old confirmation (WP-105). Handing back
   at a review stage or the rebase gate after a push does not skip CI either: the rebase gate lets a
   task into Ready only for the commit CI passed, and otherwise sends it back through the CI gate — a
   re-check that counts against the task's `rebase_rechecks` limit, so a branch that keeps moving

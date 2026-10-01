@@ -188,7 +188,7 @@ const startedTasks = async (
            (
              exists (select 1 from questions q where q.task_id = t.id and q.answered_at is not null)
              or exists (select 1 from approvals a where a.task_id = t.id and a.decided_at is not null)
-             or exists (select 1 from task_stages s where s.task_id = t.id and s.outcome = 'returned')
+             or exists (select 1 from task_stages s where s.task_id = t.id and s.state = 'returned')
              or t.state = 'needs_human'
            ) as intervened
       from tasks t
@@ -236,7 +236,7 @@ const deliveredTasks = async (
               from runs r
              where r.task_id = t.id and r.started_at is not null and r.ended_at is not null)
              as agent_hours,
-           (select count(*) from task_stages s where s.task_id = t.id and s.outcome = 'returned')
+           (select count(*) from task_stages s where s.task_id = t.id and s.state = 'returned')
              as returns,
            (select count(*) from human_time_entries h
              where h.task_id = t.id and h.kind = 'review'
@@ -777,13 +777,16 @@ const kbUsage = async (database: Database, bounds: RangeBounds): Promise<readonl
  * nobody reads.
  */
 /**
- * **`outcome`, not `state`.** Until WP-55 `task_stages.state` only ever held `entered` or `exited`,
- * and the return was recorded in `outcome` alone, so a predicate on `state = 'returned'` matched
- * nothing and published a return rate of exactly zero on every instance — the silent-zero this
- * whole endpoint is written against. Migration 0040 gave `state` the contracts' vocabulary and
- * rewrote every closed return to `state = 'returned'`, so the two predicates now agree; this one
- * stays on `outcome`, which every writer of a return has set since WP-15, and the integration tier
- * asserts it against real returns.
+ * **`state`, not `outcome`** (WP-105). Until WP-55 `task_stages.state` only ever held `entered` or
+ * `exited`, and the return was recorded in `outcome` alone, so a predicate on `state = 'returned'`
+ * matched nothing and published a return rate of exactly zero on every instance — the silent-zero
+ * this whole endpoint is written against. Migration 0040 gave `state` the contracts' vocabulary and
+ * rewrote every closed return to `state = 'returned'`, and every writer of a return has set it
+ * since. `outcome` stopped being the return's word at WP-81: a return the tamper check made closes
+ * its row `protected_paths_changed`, and since WP-105 a CI return names what the check found
+ * (`protected_paths_clean`, `protected_paths_awaiting_review`) — so a predicate on
+ * `outcome = 'returned'` missed every one of them. The same predicate is used by the delivered and
+ * started task reads above, and the integration tier asserts it against a tamper-word return.
  */
 const stageReturns = async (
   database: Database,
@@ -796,7 +799,7 @@ const stageReturns = async (
   }>(sql`
     select s.stage as stage,
            count(*) as entries,
-           count(*) filter (where s.outcome = 'returned') as returns
+           count(*) filter (where s.state = 'returned') as returns
       from task_stages s
       join tasks t on t.id = s.task_id
      where ${dayFilter('s.entered_at', bounds, 't.project_id')}

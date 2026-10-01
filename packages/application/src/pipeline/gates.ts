@@ -105,7 +105,9 @@ export type GateResult =
       /**
        * The word the gate's row is closed with instead of `pass`/`fail`/`returned` (WP-81): the
        * tamper check's `protected_paths_changed` on its return, `protected_paths_awaiting_review` on
-       * a provisional pass. Absent for every other settlement.
+       * a provisional pass, and since WP-105 `protected_paths_clean` on a clean one — every CI
+       * settlement names what the check found, on a red pipeline's return too. Absent for the
+       * rebase and merged gates, whose settlements make no tamper check.
        */
       readonly outcome?: TaskStageOutcome;
       /**
@@ -246,12 +248,16 @@ const NO_PIPELINE_DETAIL =
  *  - a protected path changed that may not → `settled`, **failed**, `protected_paths_changed`, the
  *    reason naming the paths (and the pipeline's own failure and log, when it failed too) — no
  *    `ciSignature`, because it is not a CI failure the convergence rule should count;
- *  - the pipeline failed → `settled`, failed, the job names and the log excerpt, `ciSignature`;
+ *  - the pipeline failed → `settled`, failed, the job names and the log excerpt, `ciSignature`,
+ *    and the tamper check's own word — `protected_paths_clean`, or
+ *    `protected_paths_awaiting_review` when a declared path is still unjudged (WP-105);
  *  - a declared protected path the review has not judged yet → `settled`, **passed**,
  *    `protected_paths_awaiting_review`, with the head like any pass **and** the excused paths
  *    (`excusedPaths`), which the settlement records on the task; the rebase gate's settlement
  *    compares them with the latest Review Verdict before Ready (WP-102, Q109 (b));
- *  - otherwise → `settled`, passed, with the head CI judged.
+ *  - otherwise → `settled`, passed, with the head CI judged and `protected_paths_clean` — the
+ *    word that tells the Checks panel the check ran (WP-105, PROGRESS backlog 280: until then this
+ *    pass closed its row `pass`, which a settlement before WP-81, with no check at all, wrote too).
  */
 export const judgeCiSettlement = async (
   options: CiGateOptions,
@@ -324,11 +330,18 @@ export const judgeCiSettlement = async (
       headSha,
       detail: composed.detail,
       ...(composed.originalChars === null ? {} : { detailOriginalChars: composed.originalChars }),
-      ...(verdict.kind === 'changed'
-        ? { outcome: 'protected_paths_changed' as const }
-        : reading.kind === 'failed'
-          ? { ciSignature: ciFailureSignature(reading.status, reading.failingJobs, headSha) }
-          : {}),
+      // WP-105 (backlog 280): every settlement names what the tamper check found — the paths it
+      // returns the task for, or, on a red pipeline's return, that it found nothing or only
+      // declared paths awaiting the review — so a row never reads like one no check was made for.
+      outcome:
+        verdict.kind === 'changed'
+          ? ('protected_paths_changed' as const)
+          : verdict.kind === 'clean'
+            ? ('protected_paths_clean' as const)
+            : ('protected_paths_awaiting_review' as const),
+      ...(verdict.kind !== 'changed' && reading.kind === 'failed'
+        ? { ciSignature: ciFailureSignature(reading.status, reading.failingJobs, headSha) }
+        : {}),
     };
   }
   if (verdict.kind === 'awaiting_review') {
@@ -342,7 +355,13 @@ export const judgeCiSettlement = async (
       detail: `${ciDetail}; the tamper check (BD-024) excused declared protected paths until the Code review confirms them, and the rebase gate checks the confirmation before Ready: ${excused.join(', ')}`,
     };
   }
-  return { kind: 'settled', passed: true, headSha, detail: ciDetail };
+  return {
+    kind: 'settled',
+    passed: true,
+    headSha,
+    outcome: 'protected_paths_clean',
+    detail: ciDetail,
+  };
 };
 
 /**

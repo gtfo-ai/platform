@@ -203,9 +203,13 @@ describe('the return channel, on the next run’s prompt (WP-55, backlog 67)', (
     const at = (stage: string, attempt: number) =>
       published.find((row) => row.stage === stage && row.attempt === attempt);
     expect(at('code_review', 1)).toMatchObject({ state: 'returned', outcome: 'returned' });
-    expect(at('ci_gate', 2)).toMatchObject({ state: 'returned', outcome: 'returned' });
+    // A CI return names what its tamper check found (WP-105, backlog 280): nothing.
+    expect(at('ci_gate', 2)).toMatchObject({ state: 'returned', outcome: 'protected_paths_clean' });
     expect(at('code_review', 2)).toMatchObject({ state: 'completed', outcome: 'approve' });
-    expect(at('ci_gate', 1)).toMatchObject({ state: 'completed', outcome: 'pass' });
+    expect(at('ci_gate', 1)).toMatchObject({
+      state: 'completed',
+      outcome: 'protected_paths_clean',
+    });
   });
 });
 
@@ -225,11 +229,14 @@ describe('a gate the pipeline walked through (WP-55, backlog 95 items 1 and 2; W
     );
 
     const rows = await stageRows(pipeline);
-    for (const gate of ['ci_gate', 'rebase_gate']) {
+    for (const [gate, outcome] of [
+      ['ci_gate', 'protected_paths_clean'],
+      ['rebase_gate', 'pass'],
+    ] as const) {
       const row = rows.find((candidate) => candidate.stage === gate);
       // (4) A passed gate's row has an outcome and an exit. The measurement before the fix read
-      // `entered` / null / null for both.
-      expect(row, gate).toMatchObject({ state: 'completed', outcome: 'pass', returned_to: null });
+      // `entered` / null / null for both. The CI gate's word names its tamper check (WP-105).
+      expect(row, gate).toMatchObject({ state: 'completed', outcome, returned_to: null });
       expect(row?.exited_at, gate).toBeInstanceOf(Date);
     }
     // The other direction: the stage the task is still at has neither.
@@ -244,7 +251,10 @@ describe('a gate the pipeline walked through (WP-55, backlog 95 items 1 and 2; W
     expect(detail.status).toBe(200);
     const published = taskDetailResponseSchema.parse(detail.body).stages;
     const stateOf = (stage: string) => published.find((row) => row.stage === stage);
-    expect(stateOf('ci_gate')).toMatchObject({ state: 'completed', outcome: 'pass' });
+    expect(stateOf('ci_gate')).toMatchObject({
+      state: 'completed',
+      outcome: 'protected_paths_clean',
+    });
     expect(stateOf('rebase_gate')).toMatchObject({ state: 'completed', outcome: 'pass' });
     expect(stateOf('ready_for_merge')).toMatchObject({ state: 'running', exited_at: null });
     // Nothing the task has left is published as running.

@@ -123,6 +123,11 @@ export type TaskStageState = z.infer<typeof taskStageStateSchema>;
  *  - `protected_paths_awaiting_review` — the CI gate passed while a declared protected path still
  *    awaited the Code review's confirmation, which the rebase gate's settlement reads before Ready
  *    (a `completed` attempt, WP-81; the second half moved to the rebase settlement at WP-102);
+ *  - `protected_paths_clean` — the CI gate's tamper check ran and found no protected path the change
+ *    may not touch, and the pipeline's own verdict decided the gate: written on a `completed`
+ *    attempt (a pass) and on a `returned` one (a red pipeline) since WP-105, PROGRESS backlog 280.
+ *    Before it a clean settlement wrote `pass` or `returned`, the words a gate that made no check
+ *    writes too, so the Checks panel reads those two as *not recorded* rather than *clean*;
  *  - `protected_paths_confirmed` — the rebase gate's settlement found every protected path the CI
  *    gate excused provisionally confirmed by the latest Review Verdict, and let the task into Ready
  *    (a `completed` attempt of `rebase_gate`, WP-102, Q109 (b)). When it found one unconfirmed it
@@ -153,6 +158,7 @@ export const taskStageOutcomeWordSchema = z.enum([
   'context_budget_above_ceiling',
   'protected_paths_changed',
   'protected_paths_awaiting_review',
+  'protected_paths_clean',
   'protected_paths_confirmed',
   'unknown',
   'unrecognised',

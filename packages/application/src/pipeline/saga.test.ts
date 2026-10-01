@@ -1618,9 +1618,10 @@ describe('the CI gate', () => {
     const gateRow = harness.store.stageRows.find(
       (row) => row.stage === 'ci_gate' && row.attempt === 1,
     );
+    // WP-105 (backlog 280): the returned row names what the tamper check found — nothing.
     expect(gateRow).toMatchObject({
       state: 'returned',
-      outcome: 'returned',
+      outcome: 'protected_paths_clean',
       returnedTo: 'implementation',
     });
     expect(gateRow?.returnReason).toContain('test:unit');
@@ -1646,7 +1647,11 @@ describe('the CI gate', () => {
       }),
     ]);
     const passed = harness.store.stageRows.find((row) => row.stage === 'ci_gate');
-    expect(passed).toMatchObject({ state: 'completed', outcome: 'pass', returnedTo: null });
+    expect(passed).toMatchObject({
+      state: 'completed',
+      outcome: 'protected_paths_clean',
+      returnedTo: null,
+    });
     expect(passed?.exitedAt).not.toBeNull();
   });
 
@@ -1696,9 +1701,13 @@ describe('the CI gate', () => {
     const harness = harnessWith();
     await harness.publish([ticketMatched()]);
     expect(taskOf(harness).task.currentStage).toBe('ready_for_merge');
-    for (const stage of ['ci_gate', 'rebase_gate']) {
+    // The CI gate's pass names its tamper check (WP-105); the rebase gate makes none.
+    for (const [stage, outcome] of [
+      ['ci_gate', 'protected_paths_clean'],
+      ['rebase_gate', 'pass'],
+    ] as const) {
       const row = harness.store.stageRows.find((candidate) => candidate.stage === stage);
-      expect(row, stage).toMatchObject({ state: 'completed', outcome: 'pass' });
+      expect(row, stage).toMatchObject({ state: 'completed', outcome });
       expect(row?.exitedAt, stage).not.toBeNull();
     }
     // The human stage the task is at is still open — a gate's close is not a sweep.
@@ -1855,7 +1864,7 @@ describe('the CI gate', () => {
     await harness.publish([finished('b'.repeat(40), 'success')]);
     expect(harness.store.stageRows.find((row) => row.stage === 'ci_gate')).toMatchObject({
       state: 'completed',
-      outcome: 'pass',
+      outcome: 'protected_paths_clean',
     });
   });
 
@@ -2338,7 +2347,7 @@ describe('the tamper check in the CI gate (WP-81)', () => {
     // head with the review in hand (WP-81's second pass) and records no excused path.
     expect(ciRows(harness)).toEqual([
       { attempt: 1, state: 'completed', outcome: 'protected_paths_awaiting_review' },
-      { attempt: 2, state: 'completed', outcome: 'pass' },
+      { attempt: 2, state: 'completed', outcome: 'protected_paths_clean' },
     ]);
     expect(rebaseRows(harness).map((row) => row.outcome)).toEqual(['left', 'pass']);
     expect(task.task.iterationCounters.rebase_rechecks).toBe(1);
@@ -3416,8 +3425,8 @@ describe('the stage-row invariant (WP-46, backlogs 158 and 160)', () => {
         .filter((row) => row.stage === 'ci_gate')
         .map((row) => [row.attempt, row.state, row.outcome]),
     ).toEqual([
-      [1, 'returned', 'returned'],
-      [2, 'returned', 'returned'],
+      [1, 'returned', 'protected_paths_clean'],
+      [2, 'returned', 'protected_paths_clean'],
       [3, 'failed', 'converged'],
     ]);
     expect(openRows(harness)).toEqual([]);

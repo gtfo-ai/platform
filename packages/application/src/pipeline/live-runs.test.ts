@@ -41,6 +41,7 @@ const specFixture = (overrides: Partial<RunSpec> = {}): RunSpec =>
     systemPromptAppend: 'You are the developer agent.',
     userPrompt: 'Fix the flaky login test.',
     checkoutRef: null,
+    checkoutCommit: null,
     workspacePath: '/workspace/task',
     contextPack: [],
     limits: runLimitsDefaults,

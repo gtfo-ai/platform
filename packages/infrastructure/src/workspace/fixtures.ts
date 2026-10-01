@@ -77,6 +77,7 @@ export const workspaceSpecFixture = (
     url: 'git://fixture-repo/acme.git',
     defaultBranch: 'main',
     checkoutBranch: null,
+    checkoutCommit: null,
     cacheKey: 'acme',
     ...overrides.repo,
   },

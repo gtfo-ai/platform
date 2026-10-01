@@ -45,6 +45,7 @@ import {
   COMMAND_ALLOW_BY_SKILL,
   COMMAND_ALLOW_BY_STAGE,
   COMMAND_BASELINE_BY_ROLE,
+  checkoutOf,
   commandBaselineFor,
   createStageRunPlanner,
   ignoredProjectAllow,
@@ -1875,5 +1876,32 @@ describe('the project prompt files a stage is given (WP-92)', () => {
     expect(empty.spec.userPrompt).toBe(without.spec.userPrompt);
     expect(without.spec.userPrompt).not.toContain('project_prompt');
     expect(warnings).toEqual([]);
+  });
+});
+
+/**
+ * **A branch and a commit are different things to check out** (WP-105, WP-98's discovered work).
+ * A shadow task's base is a commit, and it travels as one, so the clone can refuse it when the
+ * mirror does not hold it instead of creating a branch named after it.
+ */
+describe('what a run checks out', () => {
+  const BASE = 'a1'.repeat(20);
+
+  it('sends a shadow task’s base as a commit and never as a branch', () => {
+    expect(checkoutOf({ checkoutBase: BASE, task: { branch: null } })).toEqual({
+      checkoutRef: null,
+      checkoutCommit: BASE,
+    });
+  });
+
+  it('sends an ordinary task’s own branch as a branch, and the default branch as neither', () => {
+    expect(checkoutOf({ checkoutBase: null, task: { branch: 'agentic/acme-1' } })).toEqual({
+      checkoutRef: 'agentic/acme-1',
+      checkoutCommit: null,
+    });
+    expect(checkoutOf({ checkoutBase: null, task: { branch: null } })).toEqual({
+      checkoutRef: null,
+      checkoutCommit: null,
+    });
   });
 });

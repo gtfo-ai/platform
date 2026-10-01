@@ -41,7 +41,12 @@
  *    The planner has filled that field since WP-34 and it reached nothing; the one mapping is
  *    {@link runWorkspaceSpecFor}. The *"the branch is not on the remote"* half was already answered
  *    at the provider — `#clone` runs `git checkout "$B" || git checkout -b "$B"` — so a task's first
- *    run clones the default branch and creates the task branch rather than failing.
+ *    run clones the default branch and creates the task branch rather than failing. **That `||` is
+ *    right for a branch and wrong for a commit** (WP-98's discovered work, WP-105): a shadow task's
+ *    base travelled in the same field, so a base the mirror did not hold became a new branch named
+ *    after the sha at the default branch's head. It travels as `spec.checkoutCommit` →
+ *    `repo.checkoutCommit` now, and `#clone` checks it out detached or refuses the start by name
+ *    (`invalid_spec`, terminal) — Q82 (a): refused, never substituted.
  *  - **The CLI's path comes from the run image** (backlog **34**). The launcher answers it on
  *    `create`; this file puts it on the workspace so `createWorkspaceClaudeRunner` can substitute it
  *    into the spec beside `workspacePath`. Nothing here guesses a path.
@@ -190,8 +195,10 @@ export const runWorkspaceSpecFor = (input: {
     repoUrl: input.project.repoUrl,
     defaultBranch: input.project.defaultBranch,
     // PROGRESS backlog 71, in one line. `null` is the first run of a task: the branch is not on the
-    // remote yet and `#clone` creates it.
+    // remote yet and `#clone` creates it. A commit (a shadow task's base) is its own field since
+    // WP-105, and `#clone` refuses one the mirror does not hold rather than creating a branch.
     checkoutBranch: input.spec.checkoutRef,
+    checkoutCommit: input.spec.checkoutCommit,
     platformEgressHosts: input.modelEgressHosts,
     runRegistryHosts: input.runRegistryHosts,
     containerEnv: input.project.containerEnv,
@@ -297,6 +304,7 @@ export const createLauncherRunWorkspaceProvisioner = (
           project_id: spec.projectId,
           checkout: workspaceSpec.repo !== null,
           checkout_branch: workspaceSpec.repo?.checkoutBranch ?? null,
+          checkout_commit: workspaceSpec.repo?.checkoutCommit ?? null,
           read_only: workspaceSpec.readOnly,
           credential_scope: carried?.scope ?? null,
           launcher_credential_scope: ready.credentialScope,

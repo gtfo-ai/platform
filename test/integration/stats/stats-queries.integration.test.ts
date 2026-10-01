@@ -225,14 +225,17 @@ describe('the statistics reads (PostgreSQL)', () => {
     await unitOfWork.transaction(async (scope) => scope.events.append([event]));
   };
 
-  it('counts a delivery at merge time and reads its returns from `outcome`', async () => {
+  it('counts a delivery at merge time and reads its returns from `state`', async () => {
     const taskId = await seedTask({ createdAt: at(-600), estimateUsd: 6, costActual: 4 });
-    // Two stage rows in the vocabulary the interpreter really writes: `state` is `exited` and the
-    // return is in `outcome`. A read that matched `state = 'returned'` sees zero here.
+    // Stage rows in the vocabulary the pipeline really writes: a review's return closes `returned`
+    // with the word `returned`, and a CI return names what its tamper check found (WP-105, backlog
+    // 280) — `protected_paths_clean` — so a read that matched `outcome = 'returned'`, as this one
+    // did until WP-105, counted one return here instead of two.
     await pool.query(
       `insert into task_stages (task_id, stage, attempt, state, outcome, entered_at, exited_at)
        values ($1, 'code_review', 1, 'returned', 'returned', $2, $3),
-              ($1, 'code_review', 2, 'completed', 'passed', $3, $3)`,
+              ($1, 'code_review', 2, 'completed', 'passed', $3, $3),
+              ($1, 'ci_gate', 1, 'returned', 'protected_paths_clean', $2, $3)`,
       [taskId, at(-60), at(-30)],
     );
     await pool.query(
@@ -253,7 +256,7 @@ describe('the statistics reads (PostgreSQL)', () => {
     expect(sources.deliveredTasks).toHaveLength(1);
     expect(sources.deliveredTasks[0]).toMatchObject({
       mergedDay: dayOf(at(0)),
-      returns: 1,
+      returns: 2,
       questions: 0,
       costUsd: 2.5,
       estimateUsd: 6,
@@ -264,6 +267,7 @@ describe('the statistics reads (PostgreSQL)', () => {
     expect(sources.deliveredTasks[0]?.agentHours).toBeCloseTo(0.5, 2);
     // The per-stage read uses the same predicate, so the two cannot disagree.
     expect(sources.stageReturns).toEqual([
+      { stage: 'ci_gate', entries: 1, returns: 1, rate: null },
       { stage: 'code_review', entries: 2, returns: 1, rate: null },
     ]);
     // PROGRESS backlog 75's projection: the share is read off `cost_entries.is_estimate` and

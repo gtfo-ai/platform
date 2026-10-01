@@ -258,6 +258,8 @@ export interface BuildWorkspaceSpecInput {
   readonly defaultBranch: string;
   /** The task's branch for a re-entry; `null` is the default branch (BD-025). */
   readonly checkoutBranch?: string | null;
+  /** A commit to check out detached — a shadow task's base (Q82 (a), WP-105); never with a branch. */
+  readonly checkoutCommit?: string | null;
   /**
    * Hosts the platform itself needs the run to reach: the model provider, or a proxy in front of it.
    * The same list in both provider modes, because the CLI runs in the run container in both (the
@@ -319,6 +321,7 @@ export const buildWorkspaceSpec = (input: BuildWorkspaceSpecInput): WorkspaceSpe
           url: input.repoUrl,
           defaultBranch: input.defaultBranch,
           checkoutBranch: input.checkoutBranch ?? null,
+          checkoutCommit: input.checkoutCommit ?? null,
           cacheKey: mirrorCacheKeyFor(input.spec.projectId),
         }
       : null,

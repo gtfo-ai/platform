@@ -417,10 +417,12 @@ export const gateValueText = (
     case 'running':
       return 'checking';
     case 'completed':
-      // A provisional pass of the CI gate (WP-81) is still the pipeline's pass, and a rebase gate
-      // that confirmed the declared protected paths (WP-102) still found no conflict.
+      // A provisional pass of the CI gate (WP-81) is still the pipeline's pass, as is a pass whose
+      // tamper check was recorded clean (WP-105), and a rebase gate that confirmed the declared
+      // protected paths (WP-102) still found no conflict.
       return row.outcome === 'pass' ||
         row.outcome === 'protected_paths_awaiting_review' ||
+        row.outcome === 'protected_paths_clean' ||
         row.outcome === 'protected_paths_confirmed'
         ? words.pass
         : row.outcome === 'fail'
@@ -453,8 +455,12 @@ export const gateValueText = (
  *     - `protected_paths_confirmed` — the settlement found every declared path confirmed;
  *     - `protected_paths_changed` — the settlement found one unconfirmed and sent the task back;
  *     - anything else, or no rebase row yet — the confirmation has not been read;
- *  - `pass`, or a return for the pipeline's own failure — the check was made and found nothing the
- *    change may not touch (both are settlements the check runs in, WP-81);
+ *  - `protected_paths_clean` — the check was made and found nothing the change may not touch, on a
+ *    pass or on a return for the pipeline's own failure (WP-105, PROGRESS backlog 280);
+ *  - `pass`, or a return with no tamper word — **not recorded**: every settlement since WP-81 made
+ *    the check, but until WP-105 a clean one closed its row with the same `pass`/`returned` a
+ *    settlement before WP-81 wrote, and the row cannot tell the two apart. The item says so rather
+ *    than drawing *clean* for a gate that may never have looked (standing rule 16);
  *  - an escalation — the gate could not decide, which is what it says.
  *
  * A rebase row entered **before** the CI row belongs to an earlier round and is not read.
@@ -471,14 +477,26 @@ export const tamperValueText = (ci: StageRow | null, rebase: StageRow | null = n
       return 'protected paths changed, sent back';
     case 'protected_paths_awaiting_review':
       return settledConfirmationText(ci, rebase);
-    case 'pass':
+    case 'protected_paths_clean':
       return 'clean';
+    case 'pass':
+      return TAMPER_NOT_RECORDED;
     default:
       return ci.state === 'returned'
-        ? 'clean'
+        ? TAMPER_NOT_RECORDED
         : `not decided${ci.outcome === null ? '' : ` (${ci.outcome})`}`;
   }
 };
+
+/**
+ * A CI row closed `pass` or `returned` with no tamper word. Two writers leave one: a gate that
+ * settled before WP-105 recorded the check's outcome on the row (before WP-81 no check ran; from
+ * WP-81 on a clean one wrote the same word), and — still, after WP-105 — a person's return or
+ * rework out of a task stopped at `ci_gate`, which `applyDecision` closes `returned` with no gate
+ * settling it (WP-105 review round 1). Neither is *clean*, and the row cannot say which it was, so
+ * the label claims no date.
+ */
+export const TAMPER_NOT_RECORDED = 'not recorded';
 
 /** The rebase settlement's answer to a provisional CI pass (WP-102), or that none was read yet. */
 const settledConfirmationText = (ci: StageRow, rebase: StageRow | null): string => {
@@ -703,6 +721,8 @@ export const stageOutcomeWordSentence = (word: TaskStageOutcomeWord): string => 
       return 'Sent the task back: the change touches protected paths the plan did not declare or the code review did not confirm (BD-024).';
     case 'protected_paths_awaiting_review':
       return 'Passed; the protected paths the plan declared await the code review, whose confirmation the rebase gate checks before Ready.';
+    case 'protected_paths_clean':
+      return 'The tamper check found no protected path the change may not touch; the pipeline decided the gate (BD-024).';
     case 'protected_paths_confirmed':
       return 'Passed; the code review confirmed every protected path the plan declared (BD-024).';
     case 'unknown':
@@ -1530,17 +1550,18 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
           {/*
             **The tamper check** (WP-81, BD-024 §2): part of the CI gate's read, so its verdict is
             the word the same row is closed with — and for a declared change the rebase gate's
-            settlement after it (WP-102) — never a tick for a gate that has not decided.
+            settlement after it (WP-102) — never a tick for a gate that has not decided, and never
+            *clean* for a row that does not say the check ran (WP-105).
           */}
           <Metric
             label="Tamper check"
             value={tamperValueText(ciGate, rebaseGate)}
-            definition="BD-024's check: the existing files this change modifies, deletes or renames away, against the project's protected paths (tests and CI/lint configuration by default), minus the changes the plan declared and the code review confirmed. The CI gate makes it; a change the plan declared passes there until the rebase gate, just before Ready, reads the code review's confirmation. Anything left sends the task back to the developer, naming the paths; adding a new file is never flagged."
+            definition="BD-024's check: the existing files this change modifies, deletes or renames away, against the project's protected paths (tests and CI/lint configuration by default), minus the changes the plan declared and the code review confirmed. The CI gate makes it; a change the plan declared passes there until the rebase gate, just before Ready, reads the code review's confirmation. Anything left sends the task back to the developer, naming the paths; adding a new file is never flagged. A CI gate that settled before WP-105 kept no word for what its check found, and is never shown as clean."
           />
           <Metric
             label="Rebase status"
             value={gateValueText(rebaseGate, { pass: 'up to date', fail: 'conflicts' })}
-            definition="The rebase gate's verdict: whether the merge request merges cleanly onto the default branch as it is now (BD-030). It is checked again every time the default branch moves."
+            definition="The rebase gate's verdict: whether the merge request merges cleanly onto the default branch as it is now (BD-030). It is checked again every time the default branch moves while the task waits for its merge, and whenever a person brings the task back to Ready (WP-105)."
           />
           <p className="-mt-2 text-[11px] text-fg-muted">
             {gateBasisText(rebaseGate, 'rebase_gate')}

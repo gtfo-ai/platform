@@ -103,8 +103,14 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > (`tasks.ready_head_sha`, technical/03); the command validates the move against the aggregate,
 > appends only what it always appended (`task.handed_back` for a hand-back, nothing for a resume
 > or a retry), and enqueues the `ready_head_check` duty, which reads the merge request's live head **outside
-> every transaction** (WP-15d) and then decides: the recorded head → `ready_for_merge`, with
-> `task.resumed` when the task was paused, and no gate; anything else — a different head, no
+> every transaction** (WP-15d) and then decides: the recorded head → **re-enter `rebase_gate`**
+> (WP-105, PROGRESS backlogs 274 and 337, ruled option (c)), with `task.resumed` when the task was
+> paused — one mergeability read, WP-26's conflict warning on the gate's entry, WP-102's
+> confirmation in its settlement, and no loop — because the head does not vouch for the target
+> branch (a `default_branch.moved` that arrived while the task was paused was dropped: the re-check
+> below is taken only for a task whose state is `ready_for_merge`) nor for a plan a returned round
+> changed without pushing; on a template that does not run `rebase_gate`, `ready_for_merge`
+> directly, with the head recorded again (backlog 338's gap); anything else — a different head, no
 > recorded head, or a head the platform could not read (fail closed on a mutation: *unreadable* is
 > not *unmoved*) — **re-enters `ci_gate`**, the first enabled of `ci_gate` and `rebase_gate`, from
 > which the template's own fall-through runs review and the rebase gate again before Ready. That
@@ -137,7 +143,13 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 >   is a failing CI settlement: `tasks.ci_head_sha` is written `null`. The gate's row is closed
 >   `returned` with the outcome word **`protected_paths_changed`**, which is the Checks panel's
 >   *tamper check* item;
-> - **empty** → the tamper check passes and the pipeline's own verdict decides the gate;
+> - **empty** → the tamper check passes and the pipeline's own verdict decides the gate, and the
+>   row is closed with the outcome word **`protected_paths_clean`** — on a pass and on a red
+>   pipeline's return alike (WP-105, PROGRESS backlog 280). Until WP-105 such a row was closed
+>   `pass` or `returned`, the words a CI settlement before WP-81 — which made no check — wrote too,
+>   so the Checks panel reads those two as *not recorded* rather than *clean*; a red pipeline whose
+>   check found only declared, unjudged paths closes its return `protected_paths_awaiting_review`.
+>   The delivery statistics count a return by `state = 'returned'`, not by this word;
 > - **a declared path the Code review has not judged yet** — the shipped templates run `ci_gate`
 >   *before* `code_review`, so on the first pass no Review Verdict of the current change exists — is
 >   excused **provisionally**: the gate passes with the outcome word

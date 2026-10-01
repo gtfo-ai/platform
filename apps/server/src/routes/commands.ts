@@ -506,7 +506,7 @@ export const registerCommandRoutes = async (
     body: resumeTaskRequestSchema,
     summary: 'Resume the task at the stage it stopped at',
     description:
-      'Re-enters the current stage and enqueues it; no iteration round is spent, because the task stood still rather than going round. A task paused at `ready_for_merge` is not moved by the request: the answer reads `paused`, and the `ready_head_check` duty then compares the branch head with the one the gates judged — the same head resumes waiting for the merge with nothing enqueued, and a different or unreadable head re-enters `ci_gate`, spending no loop (WP-79). A state the task cannot leave for that stage answers 409 naming the transition.',
+      'Re-enters the current stage and enqueues it; no iteration round is spent, because the task stood still rather than going round. A task paused at `ready_for_merge` is not moved by the request: the answer reads `paused`, and the `ready_head_check` duty then compares the branch head with the one the gates judged — the same head re-enters `rebase_gate`, which re-reads the target branch and the Code review’s confirmation of any protected path CI excused before it lets the task wait for the merge again (WP-105), and a different or unreadable head re-enters `ci_gate` (WP-79); neither spends a loop. A template that runs no rebase gate waits for the merge again directly on the same head. A state the task cannot leave for that stage answers 409 naming the transition.',
     params: () => ({}),
     perform: async ({ deps, taskId, userId }) => deps.resume({ taskId, userId }),
   });
@@ -532,7 +532,7 @@ export const registerCommandRoutes = async (
     body: retryStageRequestSchema,
     summary: 'Run the current stage again, as a new attempt',
     description:
-      'The stage must be the one the task is at: sending it somewhere else is `return-to-stage`, which counts a round and records a reason. The attempt counter moves, which supersedes any run still in flight for the old attempt. At `ready_for_merge` (a task paused there) the request moves nothing: the `ready_head_check` duty enters Ready for the branch head the gates judged and re-enters `ci_gate` otherwise, spending no loop (WP-79).',
+      'The stage must be the one the task is at: sending it somewhere else is `return-to-stage`, which counts a round and records a reason. The attempt counter moves, which supersedes any run still in flight for the old attempt. At `ready_for_merge` (a task paused there) the request moves nothing: the `ready_head_check` duty re-enters `rebase_gate` for the branch head the gates judged (WP-105) and `ci_gate` otherwise (WP-79), spending no loop.',
     params: (body) => ({ stage: body.stage }),
     perform: async ({ deps, body, taskId, userId }) =>
       deps.retryStage({ taskId, userId, stage: body.stage }),
@@ -825,7 +825,7 @@ export const registerCommandRoutes = async (
       schema: {
         summary: 'Hand the task back to the pipeline at a stage you choose',
         description:
-          'The other half of product/19 §19: the human has pushed to the branch and picks where the pipeline resumes. Any stage the project’s template runs and has enabled — one it does not answers 409 naming what it does run, because entering a stage the pipeline has no definition for would leave the task active with nothing to run it. Handed back to `ready_for_merge`, the task is not moved by the request: the hand-back is recorded and the `ready_head_check` duty enters Ready only for the branch head the gates judged, re-entering `ci_gate` otherwise, spending no loop (WP-79). The summary travels on `task.handed_back` and onto the ticket’s workpad. Nothing is reset and the workspace export is left where it is.',
+          'The other half of product/19 §19: the human has pushed to the branch and picks where the pipeline resumes. Any stage the project’s template runs and has enabled — one it does not answers 409 naming what it does run, because entering a stage the pipeline has no definition for would leave the task active with nothing to run it. Handed back to `ready_for_merge`, the task is not moved by the request: the hand-back is recorded and the `ready_head_check` duty re-enters `rebase_gate` for the branch head the gates judged (WP-105) and `ci_gate` otherwise (WP-79), spending no loop — so Ready is reached only through the rebase gate’s settlement. The summary travels on `task.handed_back` and onto the ticket’s workpad. Nothing is reset and the workspace export is left where it is.',
         tags: ['tasks'],
         params: taskParamsSchema,
         body: handBackRequestSchema,

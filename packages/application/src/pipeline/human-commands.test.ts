@@ -21,7 +21,7 @@
  * synchronously, so no live run exists at any moment a test can observe). The e2e tier drives both
  * against a real instance, where a run really can be held open.
  */
-import type { Id, Slug } from '@platform/contracts';
+import type { Id, IsoDateTime, Slug } from '@platform/contracts';
 import { IllegalTransitionError, InvariantViolationError } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { withoutComments } from '../../../../scripts/source-scanner.mjs';
@@ -61,6 +61,7 @@ import {
   UnknownAggregateError,
 } from './commands.js';
 import type { LiveRun, LiveRuns } from './live-runs.js';
+import { REBASE_RECHECK_REASON } from './ready-head.js';
 import { createRunCommandInbox } from './run-commands.js';
 import type { StoredTask } from './store.js';
 import { TaskConcurrentModificationError } from './store.js';
@@ -412,10 +413,8 @@ describe('resume', () => {
     const harness = await walked();
     const task = taskOf(harness).task.id;
     await pauseTaskCommand(harness.humanCommands, { taskId: task, userId: USER });
-    const stageJobsBefore = harness.jobs.enqueued.filter(
-      (request) => request.queue === JOB_QUEUES.stageExecute,
-    ).length;
     const runsBefore = harness.specs.length;
+    const since = harness.events().length;
 
     await resumeTaskCommand(harness.humanCommands, { taskId: task, userId: USER });
     // WP-79: the command moves nothing at Ready — the `ready_head_check` duty decides, after the
@@ -426,10 +425,16 @@ describe('resume', () => {
     expect(taskOf(harness).task.currentStage).toBe('ready_for_merge');
     // With `task.resumed` removed from the tail-stage entry (md5-confirmed revert) this read 0.
     expect(countOf(harness, 'task.resumed')).toBe(1);
-    // Nothing runs at Ready: no stage job, and draining the worker starts no run.
+    // Since WP-105 (backlog 274 (c)) the way back is through the rebase gate — a gate job, one
+    // mergeability read — and no agent run starts. (Until WP-105 this case asserted "no stage job"
+    // by counting `jobs.enqueued`, which `drain` empties: it could not have seen one.)
     expect(
-      harness.jobs.enqueued.filter((request) => request.queue === JOB_QUEUES.stageExecute).length,
-    ).toBe(stageJobsBefore);
+      harness
+        .events()
+        .slice(since)
+        .filter((event) => event.type === 'task.stage.entered')
+        .map((event) => (event.payload as { stage: string }).stage),
+    ).toEqual(['rebase_gate', 'ready_for_merge']);
     expect(harness.specs.length).toBe(runsBefore);
   });
 
@@ -1980,6 +1985,10 @@ describe('a human’s way into Ready (WP-79)', () => {
       readonly rebaseRechecks?: number;
       /** The CI verdict of each pipeline read in turn; `success` once the list runs out. */
       readonly ciVerdicts?: readonly ('success' | 'failed')[];
+      /** Scripted runs over the defaults (WP-105, backlog 337). */
+      readonly runs?: Readonly<Record<string, HarnessScript>>;
+      /** The merge request's changed paths, when a case needs the tamper check to see them. */
+      readonly diffPaths?: readonly string[];
     } = {},
   ) => {
     const ciVerdicts = [...(options.ciVerdicts ?? [])];
@@ -2011,8 +2020,24 @@ describe('a human’s way into Ready (WP-79)', () => {
       reviewers: [],
       web_url: 'https://git.example.test/acme/api/-/merge_requests/7',
     });
+    const diffPaths = options.diffPaths;
     const harness = harnessWith({
+      ...(options.runs === undefined ? {} : { runs: options.runs }),
       git: {
+        ...(diffPaths === undefined
+          ? {}
+          : {
+              getMergeRequestDiff: async () =>
+                diffPaths.map((path) => ({
+                  new_path: path,
+                  old_path: path,
+                  diff: '@@ -1 +1 @@\n-a\n+b',
+                  new_file: false,
+                  renamed_file: false,
+                  deleted_file: false,
+                  omitted: false,
+                })),
+            }),
         getMergeRequest: async () => {
           if (branch.unreadable > 0) {
             branch.unreadable -= 1;
@@ -2135,36 +2160,138 @@ describe('a human’s way into Ready (WP-79)', () => {
     expect(taskOf(harness).readyHeadSha).toBe(PUSHED);
   });
 
-  it('enters Ready with no gate when the head did not move — for a hand-back and for a resume', async () => {
-    for (const command of ['hand_back', 'resume'] as const) {
+  /**
+   * **WP-105 (PROGRESS backlogs 274 and 337, ruled option (c))**: an unmoved head is no longer a
+   * way into Ready by itself. Every human way back in — resume, hand-back and retry-stage; retry-run
+   * has no run at Ready on any shipped template, and would take the same duty — re-enters the rebase
+   * gate, whose settlement re-reads the target branch and WP-102's confirmation, and spends no loop.
+   * Until WP-105 this case read `enteredStages` = `['ready_for_merge']` and no stage job: that is the
+   * canary a revert of `readyEntryFor` fails by name.
+   */
+  it('re-enters the rebase gate, not Ready, when the head did not move — for a hand-back, a resume and a retry of the stage', async () => {
+    for (const command of ['hand_back', 'resume', 'retry_stage'] as const) {
       const { harness } = await atReady();
       await takeOver(harness);
       const since = harness.events().length;
       const runsBefore = harness.specs.length;
-      const stageJobsBefore = harness.jobs.enqueued.filter(
-        (request) => request.queue === JOB_QUEUES.stageExecute,
-      ).length;
+      const before = taskOf(harness).task;
 
       if (command === 'hand_back') {
         await handBackToReady(harness);
-      } else {
+      } else if (command === 'resume') {
         await resumeTaskCommand(harness.humanCommands, {
           taskId: taskOf(harness).task.id,
           userId: USER,
         });
+      } else {
+        await retryStageCommand(harness.humanCommands, {
+          taskId: taskOf(harness).task.id,
+          userId: USER,
+          stage: 'ready_for_merge' as Slug,
+        });
       }
+      // The command itself still moves nothing: the duty decides after the commit.
+      expect(taskOf(harness).task.state, command).toBe('paused');
       await harness.drain();
 
-      expect(enteredStages(harness, since), command).toEqual(['ready_for_merge']);
+      // Through the rebase gate — never CI, because the head is the one CI passed.
+      expect(enteredStages(harness, since), command).toEqual(['rebase_gate', 'ready_for_merge']);
       expect(taskOf(harness).task.state, command).toBe('ready_for_merge');
-      expect(
-        harness.jobs.enqueued.filter((request) => request.queue === JOB_QUEUES.stageExecute).length,
-        command,
-      ).toBe(stageJobsBefore);
+      expect(taskOf(harness).task.stageAttempts.rebase_gate, command).toBe(
+        (before.stageAttempts.rebase_gate ?? 0) + 1,
+      );
+      expect(taskOf(harness).task.stageAttempts.ci_gate, command).toBe(
+        before.stageAttempts.ci_gate,
+      );
+      // No agent run, and no loop: the counters are the ones it had at Ready.
       expect(harness.specs.length, command).toBe(runsBefore);
-      // The judgement survives the pause: the same head is recorded for the new entry.
+      expect(taskOf(harness).task.iterationCounters, command).toEqual(before.iterationCounters);
+      expect(countOf(harness, 'task.stage.returned'), command).toBe(0);
+      // The gate's settlement recorded the head it judged for the new entry.
       expect(taskOf(harness).readyHeadSha, command).toBe(BEFORE);
+      const resumed = harness
+        .events()
+        .slice(since)
+        .find((event) => event.type === 'task.resumed');
+      expect((resumed?.payload as { reason: string | null } | undefined)?.reason, command).toBe(
+        REBASE_RECHECK_REASON,
+      );
     }
+  });
+
+  /**
+   * **PROGRESS backlog 337**: a round that changed the plan but pushed nothing, then a hand-back into
+   * Ready on the unmoved head. The head is byte-identical to the one the Code review confirmed, but
+   * the plan no longer declares the protected path CI excused — so the rebase gate's settlement,
+   * which the hand-back now passes through, returns the task on `ci_fix` with the tamper word.
+   */
+  it('reads the confirmation again on a hand-back after a plan change, and returns the task (backlog 337)', async () => {
+    const TEST_FILE = 'src/totals.test.ts';
+    const { harness } = await walkWithBranch({
+      runs: {
+        architecture: ok({
+          ...PLAN,
+          protected_path_changes: [{ path: TEST_FILE, reason: 'the old assertion was wrong' }],
+        }),
+        code_review: ok({ ...REVIEW, protected_path_changes_confirmed: [TEST_FILE] }),
+      },
+      diffPaths: ['src/totals.ts', TEST_FILE],
+    });
+    const reached = taskOf(harness);
+    expect(reached.task.state).toBe('ready_for_merge');
+    expect(reached.ciExcusedPaths).toEqual([TEST_FILE]);
+
+    await takeOver(harness);
+    // The round's plan change: a newer plan that no longer declares the path.
+    const plan = reached.task.id;
+    await harness.memory.transaction(async (scope) => {
+      const version = await harness.store.artifacts.nextVersion(
+        scope.tx,
+        plan,
+        'ImplementationPlan',
+      );
+      await harness.store.artifacts.insert(scope.tx, {
+        id: `00000000-0000-4000-8000-${String(version).padStart(12, '0')}` as Id,
+        taskId: plan,
+        type: 'ImplementationPlan',
+        version,
+        markdown: null,
+        data: { ...PLAN, protected_path_changes: [] },
+        schemaVersion: '1',
+        producedByRunId: null,
+        createdAt: '2026-06-01T12:00:00.000Z' as IsoDateTime,
+        redactionCount: 0,
+      });
+    });
+    expect(reached.task.iterationCounters.ci_fix ?? 0).toBe(0);
+    const rebaseAttempt = (reached.task.stageAttempts.rebase_gate ?? 0) + 1;
+    const since = harness.events().length;
+
+    await handBackToReady(harness);
+    await harness.drain();
+
+    // The hand-back's rebase attempt read the confirmation and made the return CI would have made.
+    expect(enteredStages(harness, since)[0]).toBe('rebase_gate');
+    expect(
+      harness.store.stageRows.find(
+        (row) => row.stage === 'rebase_gate' && row.attempt === rebaseAttempt,
+      ),
+    ).toMatchObject({
+      state: 'returned',
+      outcome: 'protected_paths_changed',
+      returnedTo: 'implementation',
+    });
+    const [firstReturn] = harness
+      .events()
+      .slice(since)
+      .filter((entry) => entry.type === 'task.stage.returned')
+      .map((entry) => entry.payload as { from_stage: string; to_stage: string });
+    expect(firstReturn).toMatchObject({ from_stage: 'rebase_gate', to_stage: 'implementation' });
+    // The plan never declares the path again, so every later round is returned the same way until
+    // BD-008's `ci_fix` bound hands the task to a human — it never waits at Ready on the old
+    // confirmation.
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    expect(taskOf(harness).task.iterationCounters.ci_fix).toBe(3);
   });
 
   it('fails closed to ci_gate when the head cannot be read — an unreadable head is not an unmoved one', async () => {
