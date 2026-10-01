@@ -379,6 +379,51 @@ describe('risk classes from the merge request’s own diff (product/19 §14, WP-
   });
 });
 
+/**
+ * WP-106 review round 1: the classes and the reviewers asked for are the project's policy, and the
+ * assignment is a provider write. With the configuration unreadable, nothing is classed or
+ * assigned on the defaults; the task is parked by name.
+ */
+describe('risk routing under a configuration that cannot be read (WP-106)', () => {
+  it('assigns nobody and parks the task by name', async () => {
+    const started = startHarness({
+      classes: CLASSES,
+      reviewers: ['@alice'],
+      accounts: { '@alice': 'u-1' },
+    });
+    await started.harness.publish([ticketMatched()]);
+    const id = await taskId(started.harness);
+    const assignedBefore = started.assigned.length;
+    const refusal =
+      'the stored settings of project p (projects.config) do not parse: pipeline.wip.max_parallel_tasks: 500';
+    await runRiskRouting(
+      {
+        ...optionsOf(started.harness),
+        settings: staticProjectSettings(() => ({
+          ...started.harness.settings,
+          configRefusal: refusal,
+        })),
+      },
+      {
+        duty: 'risk_route',
+        project_id: PROJECT,
+        task_id: id,
+        cause_event_id: '00000000-0000-4000-9000-000000000001',
+      },
+    );
+    expect(started.assigned.length).toBe(assignedBefore);
+    const stored = await started.harness.memory.transaction(async (scope) =>
+      started.harness.store.tasks.load(scope.tx, id),
+    );
+    expect(stored?.task.state).toBe('needs_human');
+    const escalated = started.harness
+      .events()
+      .filter((event) => event.type === 'task.escalated')
+      .at(-1) as { payload: { reason?: string } } | undefined;
+    expect(escalated?.payload.reason).toContain('pipeline.wip.max_parallel_tasks: 500');
+  });
+});
+
 describe('reviewer routing (product/19:138, WP-37)', () => {
   const codeowners = (owners: readonly string[]): CodeownersRules => ({
     rules: [{ pattern: 'src/', owners: [...owners] }],

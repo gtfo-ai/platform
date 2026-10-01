@@ -84,6 +84,7 @@ const VERDICT = {
 };
 
 const REVIEW_ONLY_CONFIG = {
+  version: 1,
   features: {
     review_only: {
       enabled: true,

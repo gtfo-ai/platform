@@ -47,7 +47,11 @@ export interface QueueBacklog {
   readonly oldestAgeSeconds: number | null;
 }
 
-/** `schema` is interpolated, so it is held to the same grammar `loadJobsConfig` enforces. */
+/**
+ * `schema` is interpolated, so it is held to a bare identifier here although `loadJobsConfig` admits
+ * only `pgboss` since WP-106: this reader takes a string, and the check is what keeps that true of
+ * every caller.
+ */
 const assertSchema = (schema: string): string => {
   if (!/^[a-z_][a-z0-9_]*$/.test(schema)) {
     throw new Error(`invalid pg-boss schema name ${JSON.stringify(schema)}`);

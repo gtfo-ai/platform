@@ -539,6 +539,19 @@ describe('the working calendar', () => {
     );
   });
 
+  /**
+   * WP-106 (PROGRESS backlog 296, option (b)): every server role refuses to start on an
+   * `APP_JOBS_SCHEMA` other than `pgboss`, naming the variable and `migrate` — the schema `migrate`
+   * installs into is fixed. Unset and `pgboss` start (rule 42).
+   */
+  it('refuses to start on APP_JOBS_SCHEMA=jobs naming it and migrate, and starts unset or at pgboss', () => {
+    expect(() => load({ APP_JOBS_SCHEMA: 'jobs' })).toThrow(
+      /invalid server configuration: .*APP_JOBS_SCHEMA is "jobs".*the migrate service installs pg-boss/s,
+    );
+    expect(load().jobs.schema).toBe('pgboss');
+    expect(load({ APP_JOBS_SCHEMA: 'pgboss' }).jobs.schema).toBe('pgboss');
+  });
+
   it('refuses a zone the runtime does not know, naming TZ', () => {
     expect(() => load({ TZ: 'Europe/New_Yrok' })).toThrow(/TZ/);
   });

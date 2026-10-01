@@ -177,7 +177,7 @@ const start = async () => {
     scenarioFor: (spec) => scenarioFromPrompt(spec),
     label: 'epic-split',
     ciStatus: null,
-    config: { features: { epic_split: { enabled: true } } },
+    config: { version: 1, features: { epic_split: { enabled: true } } },
     tickets: [
       {
         key: EPIC_KEY,

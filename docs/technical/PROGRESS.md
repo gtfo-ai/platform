@@ -11875,6 +11875,7 @@ a domain property asserts it for any base list, and a unit case plants the eight
 
 ### 296. **`APP_JOBS_SCHEMA` is read by the server and by nothing `migrate` runs, so a non-default value installs pg-boss, declares the queues and grants the app role in `pgboss` while every process looks elsewhere** (**ruled still latent** at WP-86's review, session 9 (the runtime's pg-boss runs `migrate: false`, so a custom schema already fails loudly at start, before and after WP-86) — TODO, **small — latent with a named trigger, and loud rather than silent on the path read off the tree**. Trigger: an operator sets `APP_JOBS_SCHEMA` to anything but `pgboss`. The stock value is `pgboss` (`.env.example:372`), which is also what `migrate` hard-wires, so a stock install is unaffected. Pre-existing; WP-86 made `migrate` the only place queues are declared ahead of a worker, so the variable now also decides where that declaration lands. **Read off the tree, not measured**; **unowned — for the orchestrator** (no M5 row names it; WP-98 is the plausible home only if the answer is option (b) below, a document-and-refusal change; option (a) is a migration and wants a row of its own); found by WP-86, session 9)
 > **M6 (architect, session 9): folded into **WP-106** — option (b): anything but `pgboss` refuses at startup, naming the variable and `migrate`.**
+> **Implemented by WP-106 (session 11)**: option (b), in every server role and in `migrate`; notes under `#### WP-106`.
 
 **What is wrong.** The variable has one reader. It is `loadJobsConfig`, `packages/infrastructure/src/jobs/config.ts:77`, and that file's own docblock at `:31` says the value *"Must match what `migrate` installed (`APP_JOBS_SCHEMA`)"*. `migrate` cannot install anything else. `apps/server/src/migrate.ts:42-48` calls `db.runMigrations` with no `pgBossSchema`, so `packages/infrastructure/src/db/migrator.ts:353` falls back to `DEFAULT_PGBOSS_SCHEMA`. The same schema then receives the WP-86 queue declaration (`:397-398`). The app role's grants are hard-wired to the literal as well: `platform_apply_grants` grants on `pgboss` only (`packages/infrastructure/src/db/migrations/0001_bootstrap.sql:295-299`). The runtime passes `config.jobs.schema` to pg-boss and to WP-86's two readers (`apps/server/src/runtime.ts:277`, `:348`, `:1046`). The operator-facing text promises a knob that does not exist: *"Change this only if migrate was run with a different schema"* (`.env.example:369-371`). `test/e2e/compose/compose-config.e2e.test.ts:538` asserts that compose delivers the variable to `migrate`, a process that never reads it.
 
@@ -12018,6 +12019,7 @@ a domain property asserts it for any base list, and a unit case plants the eight
 
 ### 311. **The pipeline's settings port and the knowledge settings read cast `projects.config` instead of parsing it, so a stored value the schema refuses reaches admission, the planner and the run's frozen snapshot, while `GET …/config` refuses the same document with a 409** (TODO, **small, latent — not major today, and the trigger that makes it major is named**: every API write parses, so no producer exists. **Urgent when** a release narrows the schema of any key the run path reads without a bespoke refusal like `contextBudgetRefusal`. That has happened twice already: backlog **58**, where `trigger: manual` was dropped, and WP-83's budget ceiling. SQL by an operator is the other trigger. **Read off the tree by the refiner, consequences traced by reading, not run**; **unowned — for the orchestrator** (WP-93 is the next row to write the settings port, per the plan's WP-91→WP-93 serialisation, and the nearest carrier; none of its criteria names this); found by WP-91, session 9)
 > **M6 (architect, session 9): the project half folded into **WP-106** — measure the fail directions first, then parse and refuse by name at admission.**
+> **Implemented by WP-106 (session 11)**: both reads parse, a failure is refused by name at admission, `contextBudgetRefusal` folded; the census is below, the notes under `#### WP-106`.
 
 **What is wrong.** `createProjectSettingsPort` reads the row and passes `(row.config ?? {}) as ConfigValues` into the layering (`apps/server/src/pipeline.ts:700`). The knowledge read does the same (`apps/server/src/knowledge.ts:490-493`). The same function **parses** `projects.autonomy_policies` two fields later, and its comment says why (*"Parsed, not cast — … a document that does not match the current schema must not be read as one that does"*, `pipeline.ts:713-716`). `GET …/config` parses the same column with `agenticConfigSchema` and refuses `409 invalid_stored_config` (`apps/server/src/routes/projects.ts:308`). So the screen and the run disagree about one row: the screen says it is invalid, and the run proceeds on it. The residual is already stated once, at `packages/application/src/pipeline/settings.ts:146-148`, which built a refusal for the one key WP-83 narrowed instead of closing the class.
 
@@ -12028,6 +12030,39 @@ a domain property asserts it for any base list, and a unit case plants the eight
 **Done.** Both reads parse the settings layer with `agenticConfigSchema`. A failure **refuses the run by name** at admission, the shape `repositoryConfigRefusal` and `contextBudgetRefusal` have (key paths, redacted and bounded values, the `PUT` to make), and is never read as empty, because an empty settings layer drops restrictions somebody wrote (rule 20). `contextBudgetRefusal`'s cast-residual paragraph is then rewritten or the function folded (rule 83). There is a unit case per read with an out-of-schema `pipeline.wip` and a canary (restore the cast, and the case fails). **Depends on** nothing. Related: **58**, **173**, **224**.
 
 > **Organisation half closed by WP-93 (session 9); the project half stays open.** The organisation document is now parsed whole at every read through `organisationSettingsFrom` (`apps/server/src/config-layers.ts:74`), called by the settings port (`apps/server/src/pipeline.ts:702`) and the organisation read (`:846`), and the per-key helpers that picked keys out of an unparsed object are gone. The project half is unchanged on the uncommitted tree. Two casts remain: `apps/server/src/pipeline.ts:705` and `apps/server/src/knowledge.ts:496`, each `(row.config ?? {}) as ConfigValues`. The WP-93 notes say plainly that it *"is not folded and stays open"*. Grade, trigger and **Done** above are unchanged.
+
+> **Census measured by WP-106 before the fix (session 11, criterion 1).** On `6f47213`, a throw-away unit file fed each value the schema refuses into the **reader the run path calls**, through `defaultProjectSettings({ config })`, which is what the cast hands every reader. One run, deleted afterwards. *Open* means the value admits or permits more than any valid value the key could hold. *Closed* means it admits or permits less, and nothing names the key. *Throws* means a `TypeError` from inside the reader, which names no key either.
+>
+> | Key (reader) | Malformed stored value | Measured result | Direction |
+> |---|---|---|---|
+> | `pipeline.wip.max_parallel_tasks` (`resolveWipLimits` → `evaluateTaskAdmission`), 1 active | `0` / `-1` | `admitted: false`, limit 0 / -1 | closed, silently: every task queued for ever under `wip` |
+> | 〃 | `500` (schema max 50) | admitted | open |
+> | 〃 | `"two"` | limit `"two"`, admitted | open |
+> | 〃 | `null` | BD-010's default 2 | read as absent |
+> | `commands.allow` (`narrowCommandPolicy`) | `"git status"` (a string) | `TypeError: layerAllow.filter is not a function` | throws, at planning |
+> | `commands.block` | `"curl *"` | block gains `"c","u","r","l"," ","*"`; `curl *` itself is **not** blocked | open |
+> | `commands.block` | `[42]` | `42` in the block list, matches nothing | open |
+> | `commands` with an unknown key (`deny`) | `{deny: ["curl *"]}` | ignored | open (a restriction somebody wrote is dropped) |
+> | `policies.protected_paths` (`effectiveProtectedPaths`) | `"infra/**"` | the string itself; the path guard's `patterns.find` has no `find` on a string, read off `path-guard.ts:186` | throws, at the run's first write |
+> | 〃 | `[]` | `[]` (valid; listed for contrast) | — |
+> | `policies.reviewers` (`risk-routing.ts:279`) | `"@alice"` | `.slice(0, 5)` answers `"@alic"`, a string `routeReviewers` iterates | wrong reviewers (characters), open |
+> | `status_mapping.refinement` (`mappedStatus`) | `42` | `42` handed to the provider as a status | reaches the provider call |
+> | `status_mapping` | `"In Progress"` | `null` | read as unmapped |
+> | `stages.implementation.budget_usd` (`runBudgetUsd`, `taskBudgetExhausted`), 49 of 50 spent | `"5"` | reserve `"5"`, exhausted `true` (string concatenation `"495"`) | closed, silently |
+> | 〃 | `-100` | reserve `-100`, not exhausted | open (the reservation is negative) |
+> | `project.context_budget_tokens` (`contextBudgetRefusal`, then the planner) | `10000000` | refused by name | closed, by name (the one bespoke refusal) |
+> | 〃 | `"lots"` / `-5` | `null` (not refused); the planner packs to `"lots"` / `-5` | reaches the planner |
+> | `pipeline.limits.code_review_iterations` (`resolveIterationLimits`) | `-1` | `-1` | closed (converges at once) |
+> | 〃 | `99` (schema max 20) | `99` | open |
+> | 〃 | `"3"` | `"3"` | coerced by `>=`, works by accident |
+> | `features.spike.enabled` / `features.review_only.enabled` | `"false"` | `"false"`, which is truthy | open (the feature is on) |
+> | `policies.risk_classes.*.paths` (`riskClassesForPaths`) | `"src/pay/**"` | `TypeError: declared.paths.some is not a function` | throws, in the risk-routing duty |
+> | `policies.knowledge_apply.auto_apply` (`knowledgeApplyThresholds`) | `"no"` | `autoApply: "no"`, truthy | open (auto-applies) |
+> | `policies.knowledge_apply.discard_below` | `2` | clamped to `proposal_above` (0.6) | closed, silently: everything below 0.6 is discarded and the queued band is empty |
+> | `features.shadow_mode.budget_usd` (`shadowBudgetUsdOf`) | `"x"` | `null`, no shadow cap | open |
+>
+> **Reading of the census.** Every direction occurs. Eleven values fail open, four fail closed with no name, three throw a `TypeError` that names no key, and one, the context-budget ceiling, is refused by name. So a live trigger would be **major**: `commands.block` and the feature switches fail open on a restriction somebody wrote. The task's own cap (`taskBudgetUsd`) is not read from `projects.config` at all (the port leaves BD-010's default), so it has no row here. The run's settings snapshot freezes whatever the cast passed, so every row above is also what the run records.
+
 
 ### 312. **`findLastConfigExport` and `listProjectAudit` filter `human_actions` on `params->>'project_id'` with no index that serves it; the first runs on every settings-page load and every export press. Unmeasured** (TODO, **nit — needs measurement: a hypothesis about cost**. **Live** on the shipped settings page. **Urgent when** `human_actions` grows large; it is installation-wide and append-only. **Graded by reading the query and the migrations, not by `EXPLAIN`**; **unowned — for the orchestrator**; found by WP-91, session 9)
 > **M6 (architect, session 9): folded into **WP-115**.**
@@ -12515,6 +12550,91 @@ So the CLI's environment is the SDK's two keys, the credential and the ten platf
 **What it costs to leave.** An agent sent back by the dependency policy and one sent back by a reviewer's thread both read `other` and must infer the source from free text, which is untrusted when it came from a person (BD-022).
 
 **Done.** The returning `task_stages` row records the loop it spent (WP-26's `RETURN_LOOPS_BY_EDGE` key, e.g. `dependency_policy`) or the actor kind — a new nullable column, so a migration, with pre-existing rows left `other` — and `returnCauseOf` gains the corresponding kinds. A unit case per source in `apps/server/src/queries/task-context-queries.test.ts`. **Needs a decision first:** loop or actor, since a person's rework spends `human_rounds` and the review window may not spend a loop at all. **Depends on** WP-105 (the `cause` field). Related: **289**.
+
+### 354. **A stored project settings document the schema refuses loses every ticket matched meanwhile and every chat notification, and stalls each in-flight task's event stream for twenty minutes before a generic dead-letter escalation — and the user guide says the lost ticket is in the dead letters, where it is not** (TODO, **major when triggered — a regression of WP-106's project half, not a pre-existing defect**: before WP-106 every reader below read a cast and carried on, so the one population known to hold such a document — a project that stored `project.context_budget_tokens` above 57 500 before WP-83 lowered the ceiling — got its tasks created, parked by name (`context_budget_above_ceiling`) and announced in chat; after it, a new ticket of that project creates **no task at all**. The organisation document has had the same shape since WP-93 (`OrganisationSettingsInvalidError`, read in the same port at `apps/server/src/pipeline.ts:703`), unrecorded until now. **Latent with named triggers**: no API write stores an invalid document (`PUT …/config` parses), so it takes a release that narrows a key the schema checks (backlog **58** and WP-83 are the two precedents), an operator's SQL, or a pre-`version` document. **Needs measurement:** whether any installation (the dogfood one first) holds such a document now. **Read off the tree by the refiner, not run.** **Owner: WP-106** (its own consequence, stated by the implementer as rule 3 but in the wrong mechanism) — the orchestrator's call whether it goes back to the row or gets one of its own. Found by WP-106, session 11)
+
+**What is wrong (read, this session).** `createProjectSettingsPort` now throws `ProjectSettingsInvalidError` on every read (`apps/server/src/pipeline.ts:710-713`), and only admission catches it (`readAdmissionSettings`, `packages/application/src/pipeline/settings.ts`). Every other reader fails, and the readers fail by **two different mechanisms**, which the implementer's note (*"a ticket matched while the document is broken is dead-lettered at intake"*) and the user guide conflate:
+
+- **Event handlers** — retried ten times over about 1 215 s with the task's stream blocked behind them (`packages/application/src/events/event-bus.ts:155-175`), then dead-lettered:
+  - `pipeline.status.mapping`, on **every** status event (`packages/application/src/pipeline/workpad.ts:95-105`). It reads the port before it asks whether any mapping exists (`:340`), so a project with no status mapping fails too.
+  - `pipeline.stage.completed`, through `planApprovalGate`. That gate reads the port before it checks the stage's product (`packages/application/src/pipeline/saga.ts:832`), so every completed stage of a normal task fails. `budgetApprovalGate` reads it too (`:1007`).
+  - `pipeline.scheduler`, on `task.completed`, `task.cancelled`, `task.escalated` and `task.paused` (`saga.ts:1592`).
+- **`pipeline.outbound` duties** — `retryLimit: 2` (`packages/application/src/ports/job-queues.ts:40-44`, `:75-79`), then a failed pg-boss job. No dead-letter queue is declared for it, nothing escalates, and nothing appears on `GET /api/org/dead-letters`, which reads `event_dispatch` alone (`apps/server/src/routes/dead-letters.ts:169`). The duties:
+  - **intake**: `runIntakeCheck` reads the port at `saga.ts:348`, before it creates the task. The `pipeline.intake` *handler* reads no settings (`saga.ts:275-306`), so the event completes and is never dead-lettered.
+  - **notify**: `packages/application/src/notify/duty.ts:185`. The read comes before anything is recorded, so whether `notifications_undelivered` counts the loss is not known: *needs measurement*.
+  - **workpad render** (`workpad.ts:396`), and the gates and checks listed by `grep -n "settings.forProject" packages/application/src/pipeline/*.ts`: epic-split, risk routing, review-only, dependency gate, ticket lint, coverage, gates, delivery measures.
+
+**What the operator sees, per case.**
+- **A new ticket.** The `intake_check` job fails three times. Then `pipeline.intake.reconcile` re-emits the `ticket.matched` **once** after its interval (`packages/application/src/pipeline/intake-reconcile.ts:30-38`), and that fails three more times. After that **nothing retries it**: a webhook redelivery is deduplicated on `inbox`, and a poll re-matches only if the ticket's `updated_at` moves. There is no task, so no escalation. The only traces are a failed job and an error log line, and no screen shows them.
+- **A task already in flight.** Its next status event blocks the stream for about 20 minutes, then is dead-lettered. The sink (`packages/application/src/pipeline/dead-letter.ts`) escalates it with the **generic** dead-letter brief. That brief deliberately does not quote the error, so the task page does not carry the named settings refusal the row was built to give. The name is on the admin-only dead-letter list and on `GET …/config`.
+- **A task parked by the admission refusal itself.** It carries `settings_config_invalid` by name, as WP-106 intended. Then its `task.escalated` costs two dead letters (status mapping and scheduler; the sink skips both because the task is already `needs_human`), and its chat notification is never sent.
+- So the named admission refusal, which is WP-106's criterion, is **unreachable for any work that arrives after the document broke**, because intake stops it first.
+
+**The false sentence (rule 83).** `docs/user-guide.md:242` says a ticket that arrives meanwhile *"fails into the dead letters (§11), which an administrator re-queues once the settings are fixed"*. It does not reach them, and the re-queue cannot bring it back. technical/12:328 lists intake among readers that fail *"that handler or job by name"*; that is true, but it does not say the ticket is lost.
+
+**What it costs to leave.** Once a narrowing release ships (or WP-83's population exists), tickets for that project vanish with no surface showing it, and humans get no chat. That is the stuck-queue shape rule 20 was earned for, applied to an inbound ticket. Each in-flight task also costs a 20-minute stall and a brief that names the wrong thing.
+
+**Done.**
+- **(a)** Rule 20 is applied per reader. A notification-shaped or inbound reader (intake, notify, status mapping, workpad) does one of two things. It reads `projectSettingsLayerFrom` itself and acts on the safe answer. Or it catches `ProjectSettingsInvalidError`, skips, and **records** the skip: for intake, a task created and parked at once with `settings_config_invalid`, so the ticket is not lost and the named refusal reaches the task page. A mutating reader (the approval gates, the scheduler's admission) stays closed, but escalates with the refusal's message rather than spending the dispatch bound. Which reader goes on which side is a decision to write down, beside the organisation half's answer, which wants the same table.
+- **(b)** `docs/user-guide.md:242` and technical/12:328 say what actually happens.
+- **(c)** One case per mechanism: an e2e (or a harness case, once `HarnessOptions.storedSettings` models a failed job rather than throwing on the first failed dispatch, the divergence stated at that option) shows a ticket matched under a broken document yielding a task with the named outcome. A unit case shows the status mapping under a broken document not throwing. Canaries on both.
+
+**Depends on** WP-106 (the throw). Related: **311**, **58**, **20**, **43**.
+
+### 355. **A schema refusal of stored settings renders an unrecognised key as its parent's whole value and drops the message that names the key — at the root as `: {…}` with no path at all — so the 120-character clause can end before the key it is refusing** (TODO, **nit: safe, unhelpful** — the clause is redacted before it is bounded (`packages/application/src/pipeline/settings.ts:231-244`), so nothing leaks. **Pre-existing** since backlog **58**'s rendering at WP-30, and since WP-106 it is also the text of the run's `settings_config_invalid` refusal, not only `GET …/config`'s 409. **Root case stated by WP-106; the nested case read off the code by the refiner, not measured.** **Unowned — for the next architect pass.** Found by WP-106, session 11)
+
+**What is wrong.** `describedConfigClauses` prints `path: <JSON of the value at path>` whenever a value exists there. It falls back to `(path) (<zod message>)` only when none does (`settings.ts:240`). A strict object's `unrecognized_keys` issue has the **object's** path. The value found there is the whole object, so the rendering quotes the object. zod's message, *"Unrecognized key: …"*, is the part that names the offending key, and it is dropped. At the root the path is empty, so the clause starts with `: `. The organisation reader prints `(root) (<why>)` instead (`apps/server/src/config-layers.ts:95`).
+
+**What it costs to leave.** An operator told *"no run of this project starts"* gets a clause that may not contain the key to remove, and must diff the document by hand.
+
+**Done.** An `unrecognized_keys` issue renders as `<path or (root)> (<message>)`, still redacted then bounded, because the message carries the key, which BD-022 treats as untrusted (WP-30's three-routes measurement). A unit case for a root unknown key and a nested one, each asserting the key's name appears. A canary restoring the value rendering fails both. **Depends on** nothing. Related: **58**, **354**.
+
+### 356. **A Librarian curation refused because the project's stored settings do not parse is abandoned after the recovery pass's single re-offer, leaving only a warn line, so that task's knowledge proposals are lost unless the document is fixed within one recovery interval** (TODO, **minor: notification-shaped** (rule 20; the proposals are suggestions, never auto-applied without the policy), and **the outcome WP-106 chose and stated**. **Latent** under the same triggers as **354**. **Stated by WP-106; read off the tree by the refiner.** **Unowned — for the next architect pass.** Found by WP-106, session 11)
+
+**What is wrong.** `readLibrarianProject` turns `ProjectSettingsInvalidError` into a `refused` report (`packages/application/src/knowledge/librarian.ts:238-252`, `:267-269`; `packages/application/src/knowledge/research.ts:104-106`). It writes no row, no event and no curation mark, so the artifact stays uncurated. The recovery pass re-offers it once, bounded by `knowledge_curations.recovery_attempted_at` (`packages/application/src/recovery/stranded.ts:84-91`). A second refusal then ends it for good.
+
+The test covering the refusal:
+`packages/application/src/knowledge/librarian.test.ts` › "records the refusal instead of proceeding when the project’s stored settings do not parse"
+
+**What it costs to leave.** One task's proposals per curation that falls in the window. Nothing durable says they were dropped: there is no row and no inbox item, only a log line.
+
+**Done.** One of these: a successful `PUT …/config` re-offers the project's refused curations, with a hook from the write to the recovery store. Or a refusal does not spend the recovery bound, and the pass re-offers it at its interval until the document parses. A case for whichever is chosen, and the refused curation is visible somewhere an operator reads. **Depends on** WP-106. Related: **354**, **36**.
+
+### 357. **The business interview reads the project stream's next sequence outside its transaction and never retries, so any other project-stream write in that window turns `POST …/interview` into `500 internal_error` — and the knowledge rejection has the same race, which 333 recorded as a different shape** (TODO, **minor: a live race on an operator command, plus an e2e flake**. Nothing is lost or doubled, because the transaction rolls back and the idempotency claim rolls back with it, but the operator gets an unexplained 500. **Live since WP-64 (`39e7d7a`)** on every instance. **Trigger:** a discovery record, an index run, a readiness re-check, a knowledge pass or a merge measurement appending on the same project's stream between the read and the commit. That is likeliest straight after onboarding, which is exactly when the wizard's step 3 is submitted. **Mechanism measured by WP-106's implementer with a throw-away unit probe. That this mechanism caused the 05:28 failure is inferred: no server log line from that run naming the error is quoted. The other two sites and the idempotency path were read off the tree by the refiner, not run.** **Unowned — for the orchestrator** (candidate: the next M6 row touching onboarding). The natural fold is **WP-109** (TODO), which already builds the shared `appendOnProjectWithRetry` this needs and already edits `onboarding/record.ts` for **319**. Found by the orchestrator's `verify:e2e` on WP-106's tree, session 11)
+
+**What is wrong.** `recordBusinessInterview` reads `nextStreamSequence('project', …)` at `packages/application/src/onboarding/interview.ts:252`, one line **before** its transaction opens (`:253`). Nothing catches `StreamConflictError` (`packages/application/src/errors.ts:34`). `toApiError` (`apps/server/src/errors.ts`) maps no such class, so the route answers `500 internal_error`.
+
+**Evidence.**
+- **The failure.** It happened once in two full `verify:e2e` runs (session 11, 05:28), on this case:
+  `test/e2e/onboarding/readiness-loop.e2e.test.ts` › "raises completeness through the interview, and re-checks readiness after a merged task"
+  It did not reproduce in isolation: 3 of 3 alone, and 5 of 5 on a copy at `LOG_LEVEL=warn`, load 3 to 4.5.
+- **The mechanism, quoted from the WP-106 round-1 notes (end of this file):** *"A throw-away unit probe (deleted) ran two interviews concurrently on one `MemoryEventing`: one recorded, and the other rejected with `StreamConflictError: stream project/… already has an event at sequence 1`."* In that test the concurrent project-stream writers are the discovery record, the index run and the readiness re-check.
+- **Not WP-106's.** Per its notes, `git diff` is empty for the interview, its route, the event store and the concurrent writers.
+
+**The two other sites the report named, read by the refiner.**
+- **`packages/application/src/knowledge/decide.ts:147` has the same defect.** This corrects **333**, which called it *"a different shape"* because the read is **inside** the transaction callback (from `:135`). The read goes through `options.eventStore`, which is `PostgresEventStore` over the **pool** (`packages/infrastructure/src/events/index.ts:100`, query at `postgres-event-store.ts:83-91`), not over the transaction's connection. So it sees nothing the transaction holds and locks nothing. Being inside the callback only shortens the window.
+  - Scope: the **reject** path only.
+  - No caller retries. `apps/server/src/knowledge.ts:208` calls it once, and the route (`apps/server/src/routes/kb.ts:304`) takes no `Idempotency-Key`.
+  - Effect: a 500, with `proposals.decide` rolled back, so the proposal stays decidable and a manual retry works.
+- **`packages/application/src/onboarding/record.ts:431` has the same defect**, read before the transaction at `:444`.
+  - No in-place retry. The `onboarding.discovery` job queue retries the whole job (`retryLimit: 2`, `retryDelaySeconds: 30`, backoff; `packages/application/src/ports/job-queues.ts:160-166`). Each retry re-runs the signal read, which asks the git provider (`record.ts:392`).
+  - A third consecutive loss leaves a failed pg-boss job, and the discovery findings are never recorded (**325**'s invisibility).
+  - This is **333**'s shape, but it sits outside 333's four writers and outside WP-109's ruling.
+
+**What a client sees on retry with the same `Idempotency-Key`.** A fresh perform, not `idempotency_attempt_unknown`. The interview is the one command that **claims with the effect**: `claimIdempotentAttemptInTransaction` (`apps/server/src/queries/onboarding-queries.ts:1120`) inserts the `command_idempotency` row and the `human_actions` row on the transaction's own client, as the transaction's first statement (`interview.ts:255-258`). `StreamConflictError` rolls that back with the proposals. The `release`/`attempt_unknown` path in `apps/server/src/routes/idempotency.ts` (`:41-61`, `:340-353`) belongs to the claim-**before**-effect commands and is not reached here. **Read, not run:** a retry after the 500 performing once is the expected outcome, not a measured one.
+
+**What it costs to leave.** An operator submitting the wizard's step 3 gets an unexplained 500 on an otherwise healthy instance, most often right after onboarding. A rejection in the knowledge queue fails the same way. A discovery's findings can be lost after three losses. The e2e tier also stays flaky on the readiness-loop case.
+
+**Done.**
+- **(1) The fix.** Each of the three writers either:
+  - retries a lost race in place, the shape already used three times: `appendOnProject` in `packages/application/src/pipeline/delivery-measures.ts:270-293` (bound `DELIVERY_MEASURE_APPEND_ATTEMPTS` = 4, re-read and rebuild, provider answer held), the inbound loop at `packages/application/src/integrations/inbound.ts:436` (`DEFAULT_INBOUND_SEQUENCE_ATTEMPTS`, `:107`), and the audit log at `packages/infrastructure/src/integrations/postgres-audit-log.ts:187-205`. Preferably through WP-109's shared helper; or
+  - takes the sequence **under a lock on the transaction's own connection** (`select … for update` on `event_streams`, or a version bump as `conflict-warning.ts:345-360` does).
+  - Moving the pool read inside the callback is **not** a fix. `decide.ts` already does that and still races.
+  - For the interview, the re-run must repeat the claim, so a retried attempt still writes one `command_idempotency` row.
+- **(2) The cases.** One unit case per writer with two concurrent writers on one `MemoryEventing`, the probe's shape: both land, and the interview answers `recorded` twice. A canary with the retry removed fails it.
+- **(3) The sweep.** A census of every `nextStreamSequence` caller outside the event store. The refiner's grep (this session) counts 16 non-test callers, of which only three hold a `StreamConflictError` loop: delivery measures, inbound and the audit log. The rest are unclassified: `bootstrap/record.ts`, `intake-reconcile.ts`, `runtime.ts`, `pipeline/commands.ts`, `recovery/run-lease.ts`, `onboarding/recheck.ts`, `postgres-pipeline-store.ts` and 333's four. Each is classified as one of: retries in place; serialised by a lock; job-retried, with the cost stated; or a defect. Ideally the census is held by a test, the way `task-save-sites.test.ts` holds `save`.
+
+**Depends on.** Nothing. If WP-109 lands first, (1) is three call sites of its helper. Related: **333** (whose `decide.ts` sentence this corrects), **193**, **319**, **325**.
 
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
@@ -37446,3 +37566,215 @@ so 0066 stays free.
 - **Orchestrator's pre-review round (session 11)**: `verify:integration` failed with 41 `no partition of relation …` errors at 00:01 UTC on 1 October — suites write rows relative to `Date.now()` and a fresh test database had partitions from the current UTC month only. `test/integration/support/migrated.ts` now creates three past months' partitions for every partitioned table (test-only, never a migration); `test/integration/db/partitions.integration.test.ts` opts out with `pastMonths: 0`. After it: `PASS: verify:integration` (710/710). Deterministic by date, not by load — the same class as `ae65e2f`'s noon anchor.
 - **Environment fact**: `verify`'s `ignored:check` fails while the harness's `.claude/scheduled_tasks.lock` exists (hidden by an unanchored pattern in this checkout's `.git/info/exclude`); the orchestrator stopped its wake-up loop and moved the lock aside before verifying.
 - Canaries: seven, plus a calibration throw — six dead in the unit tier; *dropping `cause` from the section* survived the unit tier and is held by `test/integration/server/task-context.integration.test.ts`, which the orchestrator's integration tier ran.
+
+#### WP-106
+
+**Configuration read without its schema** — backlog 311's project half and 296 (option (b)). Implementer, session 11.
+
+**Criterion 1, measured first.** The census is pasted into backlog 311 (`> **Census measured by WP-106 before the fix**`). On `6f47213`, eleven malformed values fail open, four fail closed with no name, three throw a `TypeError` naming nothing, and one (the context-budget ceiling) is refused by name. `commands.block` written as a string blocked the characters of the command and not the command; `"false"` turned a feature on; `auto_apply: "no"` auto-applied. A live trigger would therefore be **major**.
+
+Decisions and assumptions (each is also stated at the code):
+
+- **One reading of `projects.config`.** `projectSettingsLayerFrom` (`packages/application/src/pipeline/settings.ts`) parses with `agenticConfigSchema` and reads `{}` (and a missing column) as `version: 1`, which is `GET …/config`'s old rule. The pipeline's settings port and the Librarian's read call it through `projectSettingsFrom` (`apps/server/src/config-layers.ts`, the platform's pattern redactor). `GET …/config` calls it with the request's redactor through `storedSettingsForRequest` (`routes/projects.ts`), and keeps its old message. `describeConfigIssues` and `MAX_STORED_VALUE_CHARS` moved beside it and are re-exported from `routes/projects.ts`, so the run's refusal and the route quote one rendering (rule 41). A parsed document's `values` are the stored document, and `{}` still composes `{}`. So a project that configured nothing hashes its run snapshot as before.
+- **A failure throws `ProjectSettingsInvalidError`, never an empty layer.** The clauses are `key.path: <value>`, redacted before they are bounded at 120 characters (rules 13 and 37). The message quotes at most ten clauses and counts the rest, and names `PUT /api/projects/<id>/config`.
+- **Admission is where it is caught, and named.** `readAdmissionSettings` + `settingsAdmission` are the one refusal both executors ask. The order is the settings first (`settings_config_invalid`), then the repository file (`repository_config_invalid`, unchanged). The stage executor parks the task with one escalation and one `save`, as before. The ask executor refuses the ask, and now asks this **before** `features.ask.enabled`, because that switch is a key of the unreadable document.
+- **`contextBudgetRefusal` is deleted, folded.** A budget above the ceiling is a schema failure, so it is refused under `settings_config_invalid` with the clause `project.context_budget_tokens: <value>`. `context_budget_above_ceiling` stays in `taskStageOutcomeWordSchema` and keeps its task-page label, so a row written before WP-106 still reads as what it said. **`@platform/contracts` changed** (the new word), and the task page has its label.
+- ~~**Every other reader of the port fails closed on the same error.**~~ **Superseded in the pre-review round (below, backlog 354).** The first version threw at every reader. Its note said *a ticket matched while the document is broken is dead-lettered at intake*, which was **false**: intake is a `pipeline.outbound` job, not an event handler, and the ticket was simply lost. The port now answers `configRefusal` instead of throwing, and each reader is decided in the table below.
+- **Criterion 3's "index job" is read as the Librarian's curation job.** The knowledge **index** job (`knowledge.index`) reads no project settings. The only job that consumes the knowledge read is the curation (`recordLibrarianProposals`, and `recordResearchPage`, which reads the same project). Both now **record the refusal** (`readLibrarianProject` → report `status: 'refused'`, reason = the message, a warn line). They write no row, no event and no curation mark, and ask for no commit. Because the mark is not written, the recovery pass offers the artifact **once** more (WP-48's bound). A document still broken then costs that task's proposals: they are notification-shaped, rule 20.
+- **296, option (b).** `jobsSchemaRefusal` (`packages/infrastructure/src/jobs/config.ts`) refuses any value but unset, blank or `pgboss`, naming the variable and `migrate`. `loadJobsConfig` throws it, so every server role refuses at start (`loadServerConfig` collects it beside the others). `migrate` itself refuses with exit 2 before any SQL, which makes it the variable's second reader. `jobsConfigSchema.schema` is `z.literal('pgboss')`. `.env.example` says the value is fixed. The compose-config assertion now says `migrate` reads it.
+
+Tests:
+- Unit, `apps/server/src/pipeline.test.ts` › "answers a stored pipeline.wip the schema refuses as a named refusal, never as the value" (renamed in the pre-review round). It covers the class, the clause, the `PUT`, a planted `glpat-FAKE-…` value redacted out, the schema's own maximum (50) read, and `{}` composing `{}`. Four existing fixtures there gained `version: 1`.
+- Unit, `apps/server/src/knowledge.test.ts` (new, 2) › "refuses a stored pipeline.wip the schema refuses, by name, instead of reading it or reading nothing" (the Librarian's read, now exported as `createLibrarianProjectRead`), and "reads a document the schema admits, and the never-configured `{}`".
+- Unit, `packages/application/src/knowledge/librarian.test.ts` › "records the refusal instead of proceeding when the project’s stored settings do not parse". It asserts the curation **and** the research page, with no row, no mark, no enqueue and no event; any other error still escapes.
+- Unit, `packages/application/src/pipeline/stage-executor.test.ts` › "stored settings this release cannot parse" (3). These replace WP-83's context-budget describe block in the same file (rule 92: it was cited nowhere, grep). The cases: the WIP refusal names the key and the `PUT` and leaves the outcome `settings_config_invalid`; the ceiling is folded under the same word; a run at exactly the ceiling and at `max_parallel_tasks: 50` goes ahead.
+- Unit, `packages/application/src/ask/ask-pipeline.test.ts` › "is refused by name while the stored settings do not parse (%j)" (2) and "runs when the stored settings sit exactly at the ceiling". These replace WP-83's ask case.
+- Unit, `packages/infrastructure/src/jobs/config.test.ts` › "refuses APP_JOBS_SCHEMA=%s at start, naming the variable and migrate" (3) and "starts with APP_JOBS_SCHEMA unset or pgboss (%j)" (3). "reads every variable" now uses `pgboss`.
+- Unit, `apps/server/src/config.test.ts` › "refuses to start on APP_JOBS_SCHEMA=jobs naming it and migrate, and starts unset or at pgboss".
+- Unit (spawned process), `apps/server/src/migrate.test.ts` › "exits 2 and names APP_JOBS_SCHEMA and migrate when the variable is not pgboss". It points at a closed port, so only the refusal can produce exit 2.
+- **The harness gained `HarnessOptions.storedSettings`** (`packages/application/src/testing/pipeline-harness.ts`): the production parse at every read, as a function of the reading job's queue. **Divergence, stated at the option**: production throws for every reader, so a case about admission answers the other readers the valid document. This harness throws on the first failed dispatch instead of modelling the dead letter.
+- e2e fixtures that stored a non-empty `projects.config` without `version: 1` gained it. `GET …/config` already refused every one of them. Files: agent-run, ask, epic-split, librarian, maintenance, notifications, pipeline, review-only, slack-socket, ticket-lint, webhook-ingress, two-processes. Also `apps/server/src/bootstrap.test.ts` (3 fixtures). It was found by `verify`'s first run: 3 failures, "publishes `no_git_binding` …" and two estimate cases.
+
+**Canaries** (scripted replace, run, restore, md5 identical each time). Restoring the cast in the settings port fails the `pipeline.test.ts` case (1 of 12). Restoring the cast in the Librarian's read fails the `knowledge.test.ts` refusal case (1 of 2). `readLibrarianProject` answering a refusal as "no project" fails the librarian case (1 of 19).
+
+**Verification on this tree**:
+- `pnpm run -s verify`: **PASS** (479 files, 9373 tests). Its first run failed on three `bootstrap.test.ts` fixtures and its second on this note citing the deleted describe; both are fixed above. The passing run was started at a one-minute load of 13.9, just over the brief's gate of 12: a slip, recorded rather than hidden.
+- After it, docblock- and doc-only edits: `pipeline.ts`, `jobs/config.ts`, technical/12, the user guide and this note. `tsc`, biome and `scripts/citations.test.ts` were re-run on those, and passed.
+- **Not run**: `verify:integration`, `verify:e2e` (×2), `verify:ui` and `verify:web-e2e`. Five load readings a minute apart (04:16–04:20) read 47, 18, 45, 27 and 50, all ≥ 12, so the brief's gate stopped them. They are the orchestrator's to run. `@platform/contracts` changed (a new outcome word) and so did `apps/web` (its label), so `verify:ui` and `verify:web-e2e` apply. The e2e tier is where the fixtures that gained `version: 1` are exercised.
+- Docblocks were edited after this verify too (see the pre-review round below).
+- Docker: untouched; 125 volumes.
+
+**Sentences falsified** (rule 83; grep of `docs/`, `apps/`, `packages/`, `CLAUDE.md`, `.env.example` for `as ProjectSettings`, `cast`, `contextBudgetRefusal`, `APP_JOBS_SCHEMA`, `pgboss`, `jobs schema`, `read as empty`, `malformed`, `409`, judged hit by hit):
+- `packages/contracts/src/config.ts:84` (*"refused at admission (`contextBudgetRefusal` …)"*): rewritten to name the settings layer's refusal.
+- `packages/application/src/pipeline/settings.ts`, `contextBudgetRefusal`'s docblock (*"the pipeline's settings read **casts** the settings layer"*): deleted with the function.
+- `stage-executor.ts`'s admission block (*"WP-83 … refuses the run the same way … with its own outcome word"*) and its `Prepared.escalated` comment: rewritten.
+- `ask/executor.ts` (*"WP-83: a budget above the ceiling refuses an ask"*): rewritten.
+- technical/12's WP-83 migration note (*"the stage escalated … with the outcome `context_budget_above_ceiling`"*): amended to `settings_config_invalid` since WP-106.
+- technical/12 gained a paragraph (*"The settings layer is parsed at every read, never cast"*) and an `APP_JOBS_SCHEMA` row in the environment table. The variable had none.
+- `.env.example:369-371` (*"Change this only if migrate was run with a different schema"*): replaced; the value is fixed.
+- `packages/infrastructure/src/jobs/config.ts:31` (*"Must match what `migrate` installed"*): replaced.
+- `queue-backlog.ts:50` (*"the same grammar `loadJobsConfig` enforces"*): rewritten, because `loadJobsConfig` now admits only `pgboss`.
+- `test/e2e/compose/compose-config.e2e.test.ts:538`: comment added.
+- `apps/server/src/config-layers.ts`'s **project** bullet: amended to say the layer is parsed.
+- `routes/projects.ts`' `invalid_stored_config` docblock: moved onto `storedSettingsForRequest`, with WP-106's sentence.
+- Judged true and left as they are:
+  - `config-layers.ts:15` and `contracts/src/config.ts:939` (the organisation half, *"never a cast"*).
+  - `pipeline.ts`'s autonomy *"Parsed, not cast"*.
+  - `repository-config.ts:573` and `settings.ts`'s `repositoryConfigRefusal` (*"a gate, a notification … sees the settings alone"*): they are about the **repository** layer, which is still skipped by non-run readers when invalid.
+  - technical/03:96 (`pgboss.*` installed by `migrate`).
+  - TD-004:41.
+  - `docs/operator-guide.md:830` (*"a malformed one"*, about environment variables, still true).
+  - `docs/user-guide.md:232` (the repository file). A bullet on stored settings that no longer parse was added beside it.
+  - technical/08:203.
+- `docs/technical/13-implementation-plan.md` is the row itself, not touched. `as ProjectSettings`, `jobs schema` and `read as empty` have no other hit.
+
+**Decision-record sentences for the orchestrator**: none found to be false. TD-004 says the pg-boss schema lives in the same database, which is still true.
+
+**Discovered work** (for the refiner; no numbers claimed):
+- ~~An invalid stored settings document turns every settings-reading handler into dead-letter traffic~~: it was worse than stated, because tickets and notifications were lost. Filed as backlog 354 and fixed in the pre-review round below.
+- **`describeConfigIssues` quotes the whole document for a root-level issue** (an unknown top-level key), as `: {…}`, bounded at 120 characters. It is redacted, so it is safe, but it is unhelpful. The organisation reader prints `(root) (<why>)` instead. This predates WP-106; it now reaches the run's refusal too.
+- **A curation refused for broken settings is abandoned after the recovery pass's one re-offer**, so the task's proposals are lost if the document is not fixed within the interval. Re-offering on the settings write would need a hook from `PUT …/config` to the recovery store.
+
+**Residuals.** Readers outside admission are not individually unit-tested against the invalid document. The harness now gives every reader the production answer, and the stage-executor case walks intake, the status mapping, notify and the scheduler through it. A stored document written before the `version` key was required and holding no `version` is now refused at runs as it already was at `GET …/config`. No production writer ever stored one: `PUT` parses.
+
+#### WP-106 — pre-review round (backlog 354), addressed
+
+**The defect, re-derived.** The first version threw `ProjectSettingsInvalidError` at every port reader. The intake duty reads the port before it creates the task (`saga.ts:348`), and it is a `pipeline.outbound` job: it failed three times, got one reconcile re-emit, failed again, and the ticket was lost with no dead letter and no escalation. Notifications were lost the same way. In-flight tasks stalled on their status-mapping, approval-gate and scheduler handlers until a generic dead letter fired, so the named refusal was unreachable for any work arriving after the break. The organisation document (WP-93) had the same shape inside this port.
+
+**The fix.** The production port (`apps/server/src/pipeline.ts`, `readProjectLayer` / `readOrganisationLayer`) **no longer throws** on either document. The unreadable layer contributes nothing, and the port answers `ProjectSettings.configRefusal`: the refusal's message, with redacted, bounded clauses and the `PUT`/`PATCH` that fixes them. `settingsAdmission` refuses every run and ask on it by name. `readAdmissionSettings` is gone, because nothing throws to it any more. The harness gives every reader the same production answer. The `toApiError` mapping added in round 0 is removed: nothing reaches HTTP with that error any more.
+
+**The decision that makes the defaults safe.** Every run is refused at admission, so no agent is planned on them. The only path to Ready that has no run after it is the CI gate, and that gate fails closed by name.
+
+| Reader | Behaviour on a refused document | Why |
+|---|---|---|
+| Stage executor admission (`stage.execute`) | refuses the run: `needs_human`, outcome `settings_config_invalid`, the message as the brief | rule 20, the side that acts; the ruling |
+| Ask executor admission (`task.ask`) | refuses the ask, before `features.ask.enabled` | same; an ask is a run |
+| CI gate (`gates.ts`, tamper check) | `unsupported` with the message, so the task is escalated by name | a pass on the default protected paths could carry a change to Ready with no run left to refuse it |
+| Intake (`runIntakeCheck`) | proceeds on defaults: the task is created; its first stage meets the named refusal. Epic split, spike and ticket lint read as off | an inbound ticket must never be lost (rule 20); the task page is where the name lands |
+| ↳ what intake **freezes** on that task | `limits` and `pipeline_dial` from the defaults, with `settings_refreeze_pending = true` (migration 0066). The refusal's brief says no run starts until the document parses and that the first run then takes both again. The stage executor's admission does exactly that (`refrozen` + `refreezeSettings`) before the first run it admits | **closed in round 2** (below); the defaults never reach a run |
+| Notify duty, digest, maintenance report | delivers under the shipped notification defaults (`digestSettingsOf({})`: digest on at 09:00, no quiet hours), so a class the defaults defer goes in the digest rather than being dropped | a notification fails open (rule 20) |
+| Status mapping (`workpad.ts:340`) | no mapping, so no ticket-status write | a mutation, closed; it writes nothing rather than guessing |
+| Workpad render | unchanged (reads `taskBudgetUsd` only) | — |
+| Plan / budget approval gates (`saga.ts:832`, `:1007`) | ~~defaults~~ **corrected at review round 1**: the stage-completion handler parks the task by name before either gate (or the next step) is asked | the round-0 reasoning (*"both precede an agent stage"*) was false: the reviewer measured a task reaching Ready without the approval |
+| Scheduler WIP (`saga.ts:1592`) | ~~BD-010's defaults~~ **corrected at review round 1**: the schema's floor, 1 and 1 (`REFUSED_CONFIGURATION_WIP_LIMITS`) | the defaults (2 and 5) admit more than a document stating 1; the floor admits no more than any valid document |
+| Dependency gate, risk routing, coverage | ~~defaults~~ **corrected at review round 1**: the dependency gate and its deferred decision, and risk routing, park the task by name; the coverage read skips and logs | the gates are policies and risk routing is a provider write; coverage is a record nothing decides on |
+| Review-only, ticket lint, epic split, maintenance scheduler, ask mirror | starts read as off (review-only and lint now *say* why, by the refusal); **corrected at review round 1**: the review-only and lint postings and the epic split's filing park by name | the postings and the filing are provider writes on the document's policy |
+| Epic split's child-ticket filing (`epic-split.ts:835`, after a human accepted the breakdown) | ~~default child issue type~~ **corrected at review round 1**: parks by name, files nothing | a write into somebody else's backlog |
+| Question deadline (`recovery/deadline.ts`) | ~~the default timeout~~ **corrected at review round 1**: the backfill skips the row, and the next pass asks again | the timeout is the document's |
+| Shadow / history-bootstrap batch gates | `feature_disabled` | closed, but **misnamed**: `GET …/config` names the cause; residual |
+| Discovery / rediscovery | the run is refused at admission by name | same path as any run |
+| Librarian curation and research page (own read, still throws) | `refused` report, no write, no mark | auto-apply is a commit, a mutation, so closed and recorded |
+| Organisation-only readers outside this port (notify band's organisation port, `GET/PATCH /api/org`) | unchanged since WP-93: they throw or answer 409 | outside this row; an organisation-only notification under a broken organisation document is still not sent: residual |
+
+**Tests.**
+- Unit, `packages/application/src/pipeline/stage-executor.test.ts` › "makes the ticket a task and parks it by name at intake when every reader meets the broken document" (the round-1 case, split and renamed at review round 1; the admission half is › "refuses the run at admission by name, naming pipeline.wip and the PUT"). The broken document is read by **every** reader. Intake makes the task, no run is planned, and the task is escalated with the clause, `projects.config` and the `PUT`, under outcome `settings_config_invalid`. The other two cases in that describe (the ceiling folded under the same word, and both boundaries running) now enter the same way.
+- Unit, `apps/server/src/pipeline.test.ts` › "answers a stored pipeline.wip the schema refuses as a named refusal, never as the value". It checks `config` is `{}`, `wip` falls back to the default 2, `settingsAdmission` refuses, a planted token is redacted, and both boundaries hold. The two organisation-refusal cases there now assert `configRefusal` rather than a throw.
+- e2e (new), `test/e2e/pipeline/settings-refusal.e2e.test.ts` › "still makes the ticket a task, and parks it at admission by name". It runs against a real instance with `projects.config` stored with `max_parallel_tasks: 500`, and asserts `needs_human`, the reason, outcome `settings_config_invalid`, no `run.created`, and zero dead-lettered dispatches. It passed when run alone.
+- Unit, `packages/application/src/pipeline/gates.test.ts` › "refuses to judge, by name, while the project’s stored configuration cannot be read": the CI gate answers `unsupported` with the refusal, even though the pipeline is green.
+- **Canaries** (scripted, md5 identical after each). `settingsAdmission` ignoring `configRefusal` failed 2 of 37 in the stage-executor file, and the task ran. The CI gate ignoring `configRefusal` failed the gates case, 1 of 37. The port rethrowing `ProjectSettingsInvalidError` (the round-0 shape) failed the `pipeline.test.ts` case, 1 of 12.
+
+**Verification.** `pnpm run -s verify`: **PASS** (479 files, 9372 tests) at 04:32, when the load was 6.7. That run came before the `gates.test.ts` case, which then passed on its own (37 of 37), and before table and doc edits. The new e2e file **passed** on its own (1 of 1, `--project e2e-fake-claude`) at 04:35, load 7.5. The full Docker and UI tiers were **not run**: the load had gone back above 12 (19.6 at 04:33) and is only briefly below it. Those are the orchestrator's: `verify:integration`, `verify:e2e` ×2, `verify:ui` and `verify:web-e2e`. Docker untouched, 125 volumes.
+
+**Sentences fixed.**
+- My round-0 note *"a ticket matched while the document is broken is dead-lettered at intake"* is struck above.
+- `docs/user-guide.md:242` (*"fails into the dead letters (§11), which an administrator re-queues"*) is rewritten: the ticket becomes a task that stops at its first stage by name, notifications are still sent, and the CI check stops by name.
+- The technical/12 paragraph is rewritten to the behaviour above.
+- The `ProjectSettings.configRefusal` and `ProjectSettingsInvalidError` docblocks, the port's docblock and `contracts/src/config.ts:84` are amended.
+
+Backlog 354's RESOLVED marker is the orchestrator's.
+
+#### WP-106 — pre-review round 2 (the frozen defaults), addressed
+
+**What was wrong.** Round 1 left a residual. A task created under a `configRefusal` froze the defaults' `iteration_limits` and `pipeline_dial`: the document's limits, its dial overrides and, under a refused organisation document, the autonomy cap were all missing. A resume after the fix ran on those values, and cancelling could not help, because intake makes one task per ticket. That is the empty layer 311's ruling forbids.
+
+**The design (the smallest that is true).**
+- **One column, `tasks.settings_refreeze_pending boolean not null default false`** (migration `0066_task_settings_refreeze.sql`, Drizzle `settingsRefreezePending`). The insert sets it where a creating site freezes settings a refusal can reach: intake (`saga.ts`), discovery and the history bootstrap's chunk tasks. Review-only, ticket lint, maintenance and the shadow batch create nothing under a refusal, because their feature switches read as off.
+- **One narrow `update` writer**, `TaskRepository.refreezeSettings`. It writes `iteration_limits`, `pipeline_dial` and `settings_refreeze_pending = false` in one statement, with no version bump, because `save` names none of the three. It becomes the declared owner of all three in `tasks-column-ownership.test.ts`; the insert is not counted there, and `task-save-sites.test.ts` is unchanged because no `save` was added.
+- **One caller**: the stage executor's admission. Once `settingsAdmission` is readable, `refrozen(loaded, settings)` recomputes the limits with `iterationLimitsFor` and the dial with `pipelineDialFor`; the dial is recomputed only where one was frozen, since `null` is a creating site's "no dial applies". Admission writes both and plans the run from them, and transaction 1b reloads the row. So the **first admitted run** is the first to see the values, and it sees the parsed document's.
+- **The refusal's brief says so** while the document is still broken: `REFREEZE_PENDING_SENTENCE` is appended for a marked task, saying no run starts until the configuration parses and the first run then takes both values again.
+- **The budget cap** needed no change. `runBudgetUsd` and the stage cap are read from the settings at every admission and never frozen; the test asserts the run's `maxBudgetUsd` is the fixed document's.
+- **Ask runs** read no frozen limit or dial, and are refused at admission while the document is broken, so they are untouched.
+
+**Tests.**
+- Unit, `packages/application/src/pipeline/stage-executor.test.ts` › "re-takes the frozen limits and dial from the fixed document before the first run, and never runs on the defaults". The steps: a broken document at intake, so the task is parked by name and the brief carries the sentence, with defaults frozen and the mark set. Then the document is fixed, the cap reads Assist again, and `retry-stage` resumes the task. The checks: exactly one run, the mark cleared, `code_review` 1 and `human_rounds` 1, the dial Assist (`business_review: false`, `stop_after_stage: 'architecture'`), and the run's `maxBudgetUsd` 1.5.
+- **Canary**: `refrozen` returning the task unchanged fails it by name ("expected true to be false"), 1 of 38; md5 identical after the restore.
+- Contract, `test/contract/support/pipeline-store-suite.ts` › "re-takes a refused configuration’s frozen limits and dial narrowly, and clears the mark (WP-106)". It checks the round trip, no version bump, that `save` cannot move the three columns, and that a plain insert is unmarked. Memory store: 96 of 96. The PostgreSQL run and the Drizzle parity test belong to `verify:integration`.
+- Harness: `HarnessOptions.storedAutonomy` models the port's capped dial (the organisation cap), and its docblock says so.
+- The e2e case was **not extended**: a resume needs an authenticated command client and a fixed document written by SQL, so it is left to the orchestrator if it wants that layer.
+
+**Verification.** `pnpm run -s verify`: **PASS** at 04:41, load 5.4 (479 files, 9375 tests, 66 migrations). Not run, left to the orchestrator: `verify:integration` (the PostgreSQL contract run and the Drizzle parity test for 0066), `verify:e2e` ×2, `verify:ui` and `verify:web-e2e`.
+
+**Docs.** technical/03 (the `tasks` row), technical/12 (the paragraph), the user guide (no longer *"keeps them when it is resumed"*, which this round made false) and the round-1 table row.
+
+#### WP-106 — review round 1 (REQUEST CHANGES), addressed
+
+1. **[major] Gates decided on the defaults.**
+   - **Fixed by one rule.** A step that decides a task's next transition or policy from the settings parks the task **by name** under `configRefusal`, instead of deciding on the defaults. The module is `packages/application/src/pipeline/config-refusal.ts`: `escalateForConfigRefusalInHandler` for a handler and `parkForConfigRefusal` for a job (the conflict bound, a finished task logged).
+   - **The sweep**, every settings read in the application ring:
+     - Stage completion (`stageCompletedHandler`) parks before convergence, the plan and budget approval gates, and the next step.
+     - Parked by name: the CI gate (already), the dependency gate and its deferred decision, risk routing, the review-only and readiness-lint postings, and the epic split's filing.
+     - The review-only and lint *starts* settle naming the refusal, without creating a task.
+     - The question-deadline backfill skips the row; the coverage read skips and logs.
+     - The WIP limits under a refusal are the schema's floor, 1 and 1 (`REFUSED_CONFIGURATION_WIP_LIMITS`, port and harness).
+   - **Where the name lands.** The escalation's `reason` now carries the refusal itself, and the brief carries `REFREEZE_PENDING_SENTENCE` for a marked task. A completed attempt keeps its verdict (`approve`), and a system stage's row closes `system`, so on those the brief carries the name, not the outcome word.
+   - **Consequence, stated.** With every reader meeting the broken document, a new ticket's task is now parked at **intake** (its first decided step) rather than at refinement's admission. The stage-executor and e2e cases say so, and the admission cases scope the document to `stage.execute`.
+   - **Tests**:
+     - `saga.test.ts` › "parks a completed stage by name rather than deciding its approval gate on the defaults (WP-106)". This is the reviewer's scenario: Autonomous with `plan_approval: 'always'`, the document breaking during architecture, no approval and the task parked; after the fix and `retry-stage`, `waiting_approval`.
+     - `dependency-gate.test.ts` › "decides nothing on the defaults and parks the task by name when the configuration cannot be read (WP-106)".
+     - `risk-routing.test.ts` › "assigns nobody and parks the task by name".
+     - `packages/application/src/pipeline/review-only.test.ts` › "posts no finding on the defaults when the configuration cannot be read at posting time (WP-106)".
+     - `packages/application/src/pipeline/epic-split.test.ts` › "files nothing on the defaults when the configuration cannot be read at filing time (WP-106)".
+     - `gates.test.ts` (round 0's CI gate case).
+     - `stage-executor.test.ts` › "makes the ticket a task and parks it by name at intake when every reader meets the broken document".
+     - `pipeline.test.ts`: the WIP floor.
+     - **The census** `packages/application/src/pipeline/config-refusal-readers.test.ts` › "decides every settings read: guarded within the window, or declared with its reason". It reads every `settings.forProject(` / `options.settings(` call off disk; each must be guarded within 25 lines or declared by file and count with its reason, checked in both directions.
+     - **Not individually tested**: the readiness-lint posting, the deferred dependency decision, the deadline backfill and the coverage skip. The census holds each, and none has a behavioural case.
+   - **Canary.** The stage-completion guard disabled made the saga case fail by name: the task walked on to three more stages, as the reviewer measured. md5 identical after the restore.
+   - **Corrected**: the round-1 reader table above (six rows struck and rewritten), technical/12:331-335 (*"no agent is ever planned on the defaults"* is replaced), the `ProjectSettings.configRefusal` docblock, the user guide's in-flight sentence and the e2e case.
+2. **[minor] `insertReviewTask`** now sets `settingsRefreezePending` from the settings it is handed, which covers the shadow comparison's tasks (`shadow/human-review.ts`) and review-only alike.
+3. **[minor] `0066_task_settings_refreeze.sql`**: the writers sentence names all four creating sites (intake, discovery, the history bootstrap's chunk tasks, `insertReviewTask`). It is unapplied, so it was edited in place.
+   - **Two censuses followed** (each held me before `verify` passed). `task-save-sites.test.ts` declares `config-refusal.ts`'s one `save` with its two endings, and the total became thirty-four; the test was renamed *"counts thirty-four, which is the number the change states"*, and the ledger cited it nowhere. `scripts/source-scanner.test.ts` declares the new census's comment-line check as a `probe`.
+4. **[nit]** The `saveCiSettlement` docblock is re-attached: `refreezeSettings` and its docblock now sit above it in `store.ts` and in `postgres-pipeline-store.ts`.
+
+**Verification.** `pnpm run -s verify`: **PASS** at 05:24, load 11.85 (480 files, 9382 tests). Not run, left to the orchestrator: `verify:integration`, `verify:e2e` ×2 (the e2e case changed), `verify:ui` and `verify:web-e2e`.
+
+**Residuals, stated.**
+- A review-only task is `done` before its findings are posted, so under a refusal they stay unposted and the refusal is logged; nothing re-posts them.
+- A deferred dependency decision on a task that cannot be escalated from its state is logged, not decided.
+- The shadow and history-bootstrap batch gates refuse as `feature_disabled` (closed, misnamed).
+
+**The orchestrator's `verify:e2e` failure, diagnosed (round 1).** The case was `test/e2e/onboarding/readiness-loop.e2e.test.ts` › "raises completeness through the interview, and re-checks readiness after a merged task": `POST …/interview` answered 500 once, in the full tier at 05:28.
+- **Not this row's (read and measured).** Nothing on the interview path changed in WP-106: `git diff` is empty for `onboarding/interview.ts`, `routes/onboarding.ts`, `apps/server/src/onboarding.ts`, the event store, and the concurrent project-stream writers (`onboarding/record.ts`, `onboarding/recheck.ts`, `knowledge/indexer.ts`). The interview reads no settings: its `project` is `select knowledge_dir`.
+- **The mechanism, measured.** `recordBusinessInterview` reads `nextStreamSequence('project', …)` **outside** its transaction and has no conflict retry (`interview.ts:252`). A throw-away unit probe (deleted) ran two interviews concurrently on one `MemoryEventing`: one recorded, and the other rejected with `StreamConflictError: stream project/… already has an event at sequence 1`. `toApiError` maps no such class, so the route answers `500 internal_error`. In that test the other writers of the project stream (the discovery record, the index run, the readiness re-check) run beside the interview, so one of them taking the sequence in that window gives exactly the 500 observed.
+- **Not reproduced.** A copy of the file with `LOG_LEVEL=warn`, deleted afterwards, passed 5 of 5 at load 3 to 4.5; its warn lines show only the executor's own retried audit-stream conflicts.
+- **Pre-existing since WP-64 (`39e7d7a`), not fixed here, for the orchestrator** as discovered work: the interview's project-stream append wants the sequence read inside the transaction, or a conflict retry (the audit log's `StreamConflictError` loop is the model). The same shape is in `knowledge/decide.ts:147` and `onboarding/record.ts:431`, unchecked.
+
+#### WP-106 — review round 2 (REQUEST CHANGES), addressed
+
+1. **[major] The template was not re-taken.**
+   - **Now it is**, as the reviewer's first option, and decided the way intake would have decided on the parsed document. Intake keeps its routing inputs while a refusal stands: a new column `refreeze_routing jsonb` in migration 0066 (unapplied, so edited in place), holding `issue_type` and `can_create_tickets` (the binding capability intake observed).
+   - `refrozen` (`pipeline/refreeze.ts`) routes the ticket again with `templateForIssueType` on the parsed settings, from those inputs. It does so **only while the task is at `intake`**, every shipped template's first stage, because a task that has entered another stage cannot change pipelines under itself.
+   - It is now taken first in `stageCompletedHandler`, right after the refusal check and before convergence, the approval gates and `step`. The handler at `intake` is the first step decided on readable settings, so a resumed task meets it there. The stage executor's admission stays as the backstop for the limits and the dial.
+   - **One writer**: `TaskRepository.refreezeSettings` now writes `template`, `template_snapshot`, `iteration_limits`, `pipeline_dial`, `settings_refreeze_pending` and `refreeze_routing` in one statement, with no version bump (`save` names none). All six are declared in `tasks-column-ownership.test.ts`. The contract case asserts the routing round trip, the template rewrite and that `refreeze_routing` is cleared.
+   - **Test**: `packages/application/src/pipeline/epic-split.test.ts` › "routes the ticket to %s once the configuration is fixed", twice, spike and epic_split. The broken document is read by every reader; the task is parked at `intake` with template `feature` and no run. After the fix and `retry-stage intake`, the template is `spike` (or `epic_split`, whose breakdown is then queued), the snapshot is the template's, the mark and the routing are cleared, and the runs are `refinement` then `architecture`, the spike or breakdown document stage.
+   - **Canary**: no re-routing (`currentStage === 'canary'`) failed both cases; md5 identical after the restore.
+2. **[minor]** `packages/application/src/pipeline/review-only.test.ts` › "%s the task for the re-take": `insertReviewTask` under a refusal marks the task, and without one it does not. **Canary**: the flag inverted failed it (1 of 40).
+3. **[minor]** Behaviour tests for the two guards that survived:
+   - `packages/application/src/pipeline/ticket-lint.test.ts` › "posts no comment on the defaults when the configuration cannot be read at posting time (WP-106)". **Canary**: the guard at `ticket-lint.ts:666` disabled → 1 comment posted, failed.
+   - `packages/application/src/pipeline/dependency-gate.test.ts` › "performs no deferred decision on the defaults when the configuration cannot be read at resume (WP-106)". No return, the task parked by name, and `deferred_stage` kept on the record. **Canary**: the guard at the resume duty disabled failed it.
+4. **[minor] The census's invisible set**, stated rather than closed (rule 48). The spelling it cannot see is a read through another name for the port (`const { settings: port } = options; port.forProject(id)`, or a port handed to a helper). Widening the pattern to every `.forProject(` would fire on `PipelineIntegrationsPort.forProject` and `GitMirrorCredentials.forProject`, which share the name. Stated in the docblock of `config-refusal-readers.test.ts`.
+5. **[nit] `feature_disabled` misnaming**, stated at both refusal lists (`shadow/batch.ts`, `bootstrap/batch.ts`) and in the user guide's settings bullet.
+
+**Docs.**
+- The user guide now says a resumed task re-takes its pipeline too. (It said *"Before its first run it takes its iteration limits and autonomy dial again"*, which was true but incomplete.)
+- technical/12's *A task created meanwhile is marked* bullet names the template and `refreeze_routing`.
+- technical/03's `tasks` row gains `refreeze_routing`.
+
+**Verification (round 2).** `pnpm run -s verify`: **PASS** at 06:04, load 7.55 (480 files, 9388 tests). Left to the orchestrator: `verify:integration` (migration 0066's second column and the Drizzle parity test), `verify:e2e` ×2, `verify:ui` and `verify:web-e2e`.
+
+#### WP-106 — review round 3 (APPROVE with nits), fixed by the orchestrator
+
+- **(minor) Canary 2 survived**: nothing pinned `refrozen`'s `currentStage === INTAKE_STAGE` guard. Added `packages/application/src/pipeline/epic-split.test.ts` › "re-routes only at intake: a marked task past intake keeps its template" — a positive control at `intake` (the fixed settings do re-route to the spike template) and the same row at `refinement`, whose template and snapshot stay. Canary (the guard widened to `||`): dead by that test; the file restored from a copy, md5 identical.
+- **(nit)** The `refreezeSettings` docblock in `packages/infrastructure/src/pipeline/postgres-pipeline-store.ts` and the header of `0066_task_settings_refreeze.sql` described the round-1 shape (one caller, three columns): both now name the two callers (the intake stage-completion handler and the executor's admission backstop) and the six columns. The migration is unapplied (`git log --all` empty for the file), so its comment was edited in place.
+- **(nit)** `REFREEZE_PENDING_SENTENCE` (the task brief's text) now names the pipeline beside the limits and dial, and says the pipeline is re-taken only at intake; `StoredTask.settingsRefreezePending`'s docblock in `packages/application/src/pipeline/store.ts` says the same.
+- **(nit, recorded, not changed)** `refreeze_routing.issue_type` has no cap of its own: it is a copy of the event payload's value, already redacted on the inbound path, read only by `refrozen`, never by a prompt or a DTO.

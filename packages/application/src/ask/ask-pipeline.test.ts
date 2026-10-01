@@ -125,10 +125,18 @@ const harnessWith = (
     readonly cost?: boolean;
     /** Something that commits while the ask's prompt is assembled (round 2, TD-004). */
     readonly whileAskPlans?: () => Promise<void>;
+    /** WP-106: the stored settings document the **ask's** read parses (`HarnessOptions.storedSettings`). */
+    readonly storedForAsk?: unknown;
   } = {},
 ): PipelineHarness =>
   createPipelineHarness({
     projectId: PROJECT,
+    ...(options.storedForAsk === undefined
+      ? {}
+      : {
+          storedSettings: ({ job }: { readonly job: string | null }) =>
+            job === JOB_QUEUES.taskAsk ? options.storedForAsk : { version: 1 },
+        }),
     ...(options.cost === true ? { cost: true } : {}),
     ...(options.whileAskPlans === undefined ? {} : { whileAskPlans: options.whileAskPlans }),
     settings: {
@@ -946,21 +954,42 @@ describe('an ask that never runs', () => {
     expect(harness.store.snapshot()[0]?.task.state).toBe(state);
   });
 
-  /** WP-83 (backlog 173): a stored budget above the ceiling refuses an ask by name, as it does a stage. */
-  it('is refused, naming the key and the value, while the context budget is above the ceiling', async () => {
-    const harness = harnessWith({
-      settings: { project: { context_budget_tokens: MAX_CONTEXT_BUDGET_TOKENS + 1 } },
-    });
+  /**
+   * WP-106 (backlog 311): the project's stored settings are parsed at the ask's read, and a document
+   * this release refuses refuses the ask by name — the key path, the value and the `PUT` that fixes
+   * it — before the feature switch is read, since that switch is a key of the same document. WP-83's
+   * context-budget ceiling is one of those refusals now, not one of its own. Both sides (rule 42).
+   */
+  it.each([
+    [
+      { version: 1, pipeline: { wip: { max_parallel_tasks: 500 } } },
+      'pipeline.wip.max_parallel_tasks: 500',
+    ],
+    [
+      { version: 1, project: { context_budget_tokens: MAX_CONTEXT_BUDGET_TOKENS + 1 } },
+      `project.context_budget_tokens: ${MAX_CONTEXT_BUDGET_TOKENS + 1}`,
+    ],
+  ])('is refused by name while the stored settings do not parse (%j)', async (stored, clause) => {
+    const harness = harnessWith({ storedForAsk: stored });
     await seedTask(harness);
     const before = harness.specs.length;
     await askThroughHttp(harness);
     expect(harness.specs.slice(before).some((spec) => spec.role === ASK_ROLE)).toBe(false);
     const [ask] = harness.asks.all();
     expect(ask?.status).toBe('refused');
-    expect(ask?.refusalReason).toContain(
-      `project.context_budget_tokens is ${MAX_CONTEXT_BUDGET_TOKENS + 1}`,
-    );
+    expect(ask?.refusalReason).toContain(clause);
+    expect(ask?.refusalReason).toContain(`PUT /api/projects/${PROJECT}/config`);
     expect(ask?.runId).toBeNull();
+  });
+
+  it('runs when the stored settings sit exactly at the ceiling', async () => {
+    const harness = harnessWith({
+      storedForAsk: { version: 1, project: { context_budget_tokens: MAX_CONTEXT_BUDGET_TOKENS } },
+    });
+    await seedTask(harness);
+    const before = harness.specs.length;
+    await askThroughHttp(harness);
+    expect(harness.specs.slice(before).some((spec) => spec.role === ASK_ROLE)).toBe(true);
   });
 
   it('is skipped rather than run twice when the wake-up is delivered again', async () => {

@@ -89,6 +89,7 @@ import type { Ticket, TicketRefInput } from '../ports/integrations/task-manageme
 import { silentLogger } from '../ports/logger.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
+import { parkForConfigRefusal } from './config-refusal.js';
 import {
   integrationsForProject,
   noRunScopedSecrets,
@@ -479,6 +480,12 @@ export const runTicketLintCheck = async (
   }
 
   const settings = await options.settings.forProject(projectId);
+  if (settings.configRefusal !== undefined) {
+    // WP-106 review round 1: whether this project lints tickets is a key of the unreadable
+    // document, so no lint task is created on the defaults — closed, and named.
+    settle(`the project's configuration could not be read: ${settings.configRefusal}`);
+    return;
+  }
   const feature = resolveTicketLintSettings(settings);
   if (!feature.enabled) {
     settle('the ticket readiness linter is not enabled for this project');
@@ -656,6 +663,16 @@ export const runTicketLintPost = async (
   const questions = selectLintQuestions(spec);
 
   const settings = await options.settings.forProject(stored.task.projectId);
+  if (settings.configRefusal !== undefined) {
+    // WP-106 review round 1: what the lint posts on the ticket and whether it holds the ticket
+    // back are the unreadable document's policy. Parked by name, decided again on resume.
+    await parkForConfigRefusal(options, {
+      taskId,
+      refusal: settings.configRefusal,
+      what: 'what the readiness lint posts on the ticket',
+    });
+    return;
+  }
   const feature = resolveTicketLintSettings(settings);
   const integrations = await integrationsForProject(
     options.integrations,

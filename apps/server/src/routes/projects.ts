@@ -30,6 +30,8 @@ import type {
 } from '@platform/application';
 import {
   ignoredProjectAllow,
+  ProjectSettingsInvalidError,
+  projectSettingsLayerFrom,
   REPOSITORY_CONFIG_PATH,
   settingsNotApplied,
   tightenRepositoryLayer,
@@ -37,13 +39,13 @@ import {
 import {
   type AgenticConfig,
   type AutonomyLevel,
-  agenticConfigSchema,
   apiErrorSchema,
   budgetsResponseSchema,
   type ConfigSource,
   checklistNameOf,
   type EffectiveConfigResponse,
   effectiveConfigResponseSchema,
+  type Id,
   type IsoDateTime,
   type LastConfigExport,
   listTasksQuerySchema,
@@ -142,56 +144,13 @@ export const decodeTaskCursor = (raw: string): TaskCursor => {
   return { createdAt: parsed.data.createdAt, id: parsed.data.id };
 };
 
-/** Longest rendering of one offending clause; stored state came from outside (BD-022). */
-export const MAX_STORED_VALUE_CHARS = 120;
-
 /**
- * `features.review_only.trigger: "manual"` — one clause per zod issue, in the order they were found.
- *
- * The **key path and the value**, because a refusal an operator cannot act on is a 500 with better
- * manners. `instancePath`-style dotted paths are the same spelling `toApiError` gives a request's
- * own validation errors (`errors.ts`), so the two refusals read alike.
- *
- * **Every clause goes through the caller's redactor** (TD-012, BD-022), and all three of its parts
- * do: `projects.config` is text an operator typed (the repository's own file is a separate layer
- * since WP-63, refused with its key paths by `describeRepositoryConfigIssues`, which quotes no
- * value), the value is whatever was stored there, and a *strict* schema puts an
- * unrecognised **key** into both the path and zod's own message — so a credential pasted into a
- * config file reaches this string by three routes, not one. It is the same composition
- * `routes/settings.ts` gives `override_reason` and `routes/commands.ts` gives every task command,
- * injected rather than constructed here for the same reason.
- *
- * Redaction runs **before** the bound, which is the opposite order from `auditedText`'s and is
- * deliberate: truncating first can cut a credential in half, and half a credential is both
- * unmatchable by the rules and still a prefix of the secret.
+ * `describeConfigIssues` and its bound live in `@platform/application` since WP-106 (beside
+ * `projectSettingsLayerFrom`, the one reading of `projects.config`), so the run's refusal and this
+ * route's `409 invalid_stored_config` quote one rendering. Re-exported for this module's tests and
+ * its docblocks, which still name them here.
  */
-export const describeConfigIssues = (
-  document: unknown,
-  issues: readonly { readonly path: readonly PropertyKey[]; readonly message: string }[],
-  redactText: (value: string) => string,
-): string =>
-  issues
-    .map((issue) => {
-      const path = issue.path.map(String).join('.');
-      const value = valueAt(document, issue.path);
-      const clause =
-        value === undefined
-          ? `${path === '' ? '(root)' : path} (${issue.message})`
-          : `${path}: ${JSON.stringify(value)}`;
-      return redactText(clause).slice(0, MAX_STORED_VALUE_CHARS);
-    })
-    .join(', ');
-
-const valueAt = (document: unknown, path: readonly PropertyKey[]): unknown => {
-  let current: unknown = document;
-  for (const segment of path) {
-    if (typeof current !== 'object' || current === null) {
-      return undefined;
-    }
-    current = (current as Record<PropertyKey, unknown>)[segment];
-  }
-  return current;
-};
+export { describeConfigIssues, MAX_STORED_VALUE_CHARS } from '@platform/application';
 
 /**
  * What the wizard is offered for `policies.risk_classes` — product/18:52 (WP-37, WP-45).
@@ -282,6 +241,49 @@ export const publishedAutonomyMaximum = (organisation: OrganisationSettings): Au
   organisation.autonomy?.maximum ?? 'autonomous';
 
 /**
+ * The stored settings layer for `GET …/config` — `projectSettingsLayerFrom`, the one reading of
+ * `projects.config` the run path also uses (WP-106), with its refusal as this route's 409.
+ *
+ * A project that has never been configured stores `{}`, and the settings layer of "no
+ * configuration" is the schema's own minimum — version 1 — not an empty object, which would not
+ * validate; the shared reading answers that document for it.
+ *
+ * **Named, and a 409 rather than a 500** — PROGRESS backlog 58. Boundary schemas are strict, so a
+ * value a *previous* release accepted is refused rather than dropped. That is right on the write
+ * side, where the platform is about to act, and wrong on the read side, where it is being told what
+ * it stored itself: a whole document failing over one key, with a 500 that named no key and offered
+ * an import endpoint that does not exist, made wizard step 4 and the project panel unopenable and
+ * gave an operator nothing to act on (standing rule 20 splits the two sides).
+ *
+ * It stays a **refusal** — nothing is dropped, so strictness is preserved and a silently pruned
+ * document cannot be re-saved without the key the operator never saw — but it names every key it
+ * could not parse and the value it found there, which is a `PUT` an operator can make. The value is
+ * stringified, **redacted** and bounded because it is stored state, and stored state came from
+ * outside (BD-022) — `describeConfigIssues` has the order and the reason for it. Since WP-106 a run
+ * of the same project is refused at admission with the same clauses.
+ */
+const storedSettingsForRequest = (
+  projectId: string,
+  config: unknown,
+  redactText: (value: string) => string,
+): AgenticConfig => {
+  try {
+    return projectSettingsLayerFrom(projectId as Id, config, redactText).document;
+  } catch (error) {
+    if (error instanceof ProjectSettingsInvalidError) {
+      throw new HttpError(
+        409,
+        'invalid_stored_config',
+        `the stored configuration of project ${projectId} has ${error.clauses.length} key(s) this release does not accept: ` +
+          `${error.clauses.join(', ')}. ` +
+          `Send a corrected document to PUT /api/projects/${projectId}/config`,
+      );
+    }
+    throw error;
+  }
+};
+
+/**
  * `GET …/config`'s answer — pure, so every refusal and both directions of precedence are driven
  * without a database (WP-63).
  *
@@ -300,37 +302,7 @@ export const effectiveConfigResponseOf = (input: {
   readonly lastExport?: LastConfigExport | null;
 }): EffectiveConfigResponse => {
   const { projectId, row } = input;
-  // A project that has never been configured stores `{}`. The settings layer of "no
-  // configuration" is the schema's own minimum — version 1 — not an empty object, which would not
-  // validate.
-  const raw = Object.keys(row.config).length === 0 ? { version: 1 } : row.config;
-  const parsed = agenticConfigSchema.safeParse(raw);
-  if (!parsed.success) {
-    /**
-     * **Named, and a 409 rather than a 500** — PROGRESS backlog 58.
-     *
-     * Boundary schemas are strict, so a value a *previous* release accepted is refused rather
-     * than dropped. That is right on the write side, where the platform is about to act, and
-     * wrong on the read side, where it is being told what it stored itself: a whole document
-     * failing over one key, with a 500 that named no key and offered an import endpoint that
-     * does not exist, made wizard step 4 and the project panel unopenable and gave an operator
-     * nothing to act on (standing rule 20 splits the two sides).
-     *
-     * It stays a **refusal** — nothing is dropped, so strictness is preserved and a silently
-     * pruned document cannot be re-saved without the key the operator never saw — but it names
-     * every key it could not parse and the value it found there, which is a `PUT` an operator
-     * can make. The value is stringified, **redacted** and bounded because it is stored state,
-     * and stored state came from outside (BD-022) — `describeConfigIssues` has the order and
-     * the reason for it.
-     */
-    throw new HttpError(
-      409,
-      'invalid_stored_config',
-      `the stored configuration of project ${projectId} has ${parsed.error.issues.length} key(s) this release does not accept: ` +
-        `${describeConfigIssues(raw, parsed.error.issues, input.redactText)}. ` +
-        `Send a corrected document to PUT /api/projects/${projectId}/config`,
-    );
-  }
+  const stored = storedSettingsForRequest(projectId, row.config, input.redactText);
 
   const organisation = organisationSettingsForRequest(input.layers?.orgSettings);
   const organisationCommands = organisation.commands;
@@ -347,7 +319,7 @@ export const effectiveConfigResponseOf = (input: {
     );
   }
 
-  const { version: _version, ...project } = parsed.data;
+  const { version: _version, ...project } = stored;
   // WP-63 review round 1: the file may tighten, never loosen (`repository-grades.ts`). Its
   // tighten-only keys are merged against the settings here, so the merge below can only add.
   const tightened =
@@ -383,7 +355,7 @@ export const effectiveConfigResponseOf = (input: {
   };
 
   return {
-    config: parsed.data,
+    config: stored,
     effective: { version: 1, ...effectiveValues },
     sources,
     repository: repositoryReadingOf(snapshot, tightened?.notApplied ?? []),
@@ -404,7 +376,7 @@ export const effectiveConfigResponseOf = (input: {
     ignored_allow_commands: [
       ...ignoredProjectAllow(project.commands, organisationCommands, repo?.commands),
     ],
-    risk_class_proposal: riskClassProposalOf(row.proposedRiskClasses, parsed.data),
+    risk_class_proposal: riskClassProposalOf(row.proposedRiskClasses, stored),
   };
 };
 

@@ -118,6 +118,12 @@ const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
   // WP-80 (PROGRESS backlog 131): the shadow report's identifier refusal escalates its task from
   // the `pipeline.outbound` job, in a transaction of its own, under `retryOnTaskConflict`.
   ['packages/application/src/shadow/report.ts', 1],
+  // WP-106 review round 1: the parking of a task whose configuration cannot be read
+  // (`config-refusal.ts`). One `save`, two callers: an event handler's (the bus owns the
+  // transaction, so the refusal escapes and the handler re-runs) and a job's (its own
+  // transaction under `retryOnTaskConflict`; a spent bound escapes to the job's retry, and a
+  // finished task is logged, as `shadow/report.ts` logs one).
+  ['packages/application/src/pipeline/config-refusal.ts', 1],
 ]);
 
 /** Tracked *and* committable-but-untracked, which is the tree the pre-push hook sees (rule 85). */
@@ -153,7 +159,7 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     );
   });
 
-  it('counts thirty-three, which is the number the change states', () => {
+  it('counts thirty-four, which is the number the change states', () => {
     // Twenty-one inherited from WP-15d (`saga.ts` 11, `transitions.ts` 5, `stage-executor.ts` 5 —
     // backlog 18 counted twenty before `stage-executor.ts` gained its fifth) plus the one
     // `escalateTaskAfterConflict` adds, which is the ending for the other twenty-one; plus four
@@ -185,8 +191,10 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     // **Plus one at WP-80**: the shadow report's identifier refusal (backlog 131), which fails the
     // `pipeline.outbound` duty and escalates the task in its own transaction, with the job's
     // `retryOnTaskConflict` as its retry and `IllegalTransitionError` logged as its ending.
+    // **Plus one at WP-106 review round 1**: `config-refusal.ts`'s parking of a task whose
+    // configuration cannot be read, with the handler's ending or the job's, by caller.
     const total = [...census().values()].reduce((sum, count) => sum + count, 0);
-    expect(total).toBe(33);
+    expect(total).toBe(34);
     expect([...EXPECTED_SITES.values()].reduce((sum, count) => sum + count, 0)).toBe(total);
   });
 

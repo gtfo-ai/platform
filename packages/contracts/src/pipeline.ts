@@ -116,6 +116,12 @@ export type TaskStageState = z.infer<typeof taskStageStateSchema>;
  *    the budget decision that park a task;
  *  - `write_conflict`, `dead_lettered`, `repository_config_invalid` — a write that lost every race,
  *    an event that spent its dispatch bound, a repository file that does not parse;
+ *  - `settings_config_invalid` — the project's stored settings (`projects.config`) do not parse
+ *    under this release's schema, so the run was refused at admission (WP-106, PROGRESS backlog 311);
+ *  - `context_budget_above_ceiling` — WP-83's refusal of a context budget above the ceiling. **No
+ *    longer written since WP-106**, which folded it into `settings_config_invalid` (a budget above
+ *    the ceiling is one of the settings' schema failures); kept so a row written before is read as
+ *    what it said rather than as `unrecognised`;
  *  - `protected_paths_changed` — the CI gate's tamper check found a protected path the change
  *    touched that the plan did not declare, or the Code review did not confirm, and sent the task
  *    back (a `returned` attempt, WP-81, BD-024 §2) — written on `rebase_gate`'s attempt when the
@@ -155,6 +161,7 @@ export const taskStageOutcomeWordSchema = z.enum([
   'write_conflict',
   'dead_lettered',
   'repository_config_invalid',
+  'settings_config_invalid',
   'context_budget_above_ceiling',
   'protected_paths_changed',
   'protected_paths_awaiting_review',

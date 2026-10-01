@@ -101,6 +101,7 @@ import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type { FileDiff, MergeRequest } from '../ports/integrations/git-provider.js';
 import { silentLogger } from '../ports/logger.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
+import { parkForConfigRefusal } from './config-refusal.js';
 import {
   gitReads,
   integrationsForProject,
@@ -707,6 +708,12 @@ export const runReviewOnlyCheck = async (
   }
 
   const settings = await options.settings.forProject(projectId);
+  if (settings.configRefusal !== undefined) {
+    // WP-106 review round 1: whether this project reviews merge requests at all is a key of the
+    // unreadable document, so no review task is created on the defaults — closed, and named.
+    settle(`the project's configuration could not be read: ${settings.configRefusal}`);
+    return;
+  }
   const feature = resolveReviewOnlySettings(settings);
   if (!feature.enabled) {
     settle('review-only mode is not enabled for this project');
@@ -833,6 +840,9 @@ export const insertReviewTask = async (
     // one-stage template has neither a business review to switch nor a scope to stop after — a
     // copied `stop_after_stage` would park every review on an Assist project before it ran.
     pipelineDial: null,
+    // WP-106 (migration 0066): a review task created under a `configRefusal` (the shadow
+    // comparison's, `shadow/human-review.ts`) froze the defaults' limits; its first run re-takes them.
+    settingsRefreezePending: input.settings.configRefusal !== undefined,
     priorityRank: priorityRankOf(null),
     createdAt: options.clock.now(),
     branch: null,
@@ -941,6 +951,16 @@ export const runReviewOnlyPost = async (
     summary?: string;
   };
   const settings = await options.settings.forProject(stored.task.projectId);
+  if (settings.configRefusal !== undefined) {
+    // WP-106 review round 1: which findings reach the merge request (the severity floor) is the
+    // unreadable document's, and posting them is a mutation. Parked by name, posted on resume.
+    await parkForConfigRefusal(options, {
+      taskId,
+      refusal: settings.configRefusal,
+      what: 'which review findings to post',
+    });
+    return;
+  }
   const feature = resolveReviewOnlySettings(settings);
   const selected = selectFindings(verdict.findings ?? [], feature);
 

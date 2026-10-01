@@ -161,6 +161,7 @@ const startWith = async (label: string, chores: readonly string[]) => {
     scenarioFor: (spec, world) => scenarioFromPrompt(spec, world),
     label,
     config: {
+      version: 1,
       features: { maintenance: { enabled: true, schedule: 'daily', budget_usd: 50, chores } },
     },
   });

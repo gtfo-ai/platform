@@ -56,6 +56,7 @@ import type {
   Jobs,
   KnowledgeIndexProject,
   LibrarianArtifact,
+  LibrarianProject,
   Logger,
   PipelineIntegrationsPort,
   ProposalCursor,
@@ -77,7 +78,6 @@ import {
 } from '@platform/application';
 import type { Id, IsoDateTime, TaskMode } from '@platform/contracts';
 import { materialisedAutonomySchema } from '@platform/contracts';
-import type { ConfigValues } from '@platform/domain';
 import {
   config as configAdapters,
   type eventing as eventingAdapters,
@@ -92,6 +92,7 @@ import { injectedSecretRedactorForEnvironment } from './agent.js';
 import {
   cappedAutonomy,
   organisationSettingsFrom,
+  projectSettingsFrom,
   REPOSITORY_CONFIG_COLUMNS,
   type RepositoryConfigColumns,
   repositorySnapshotFrom,
@@ -354,6 +355,73 @@ export const createRepositoryConfigRefresher = (options: {
     );
 };
 
+/**
+ * The Librarian's read of a project (WP-18b): its knowledge directory and the knowledge-apply
+ * thresholds its effective configuration and its dial imply.
+ *
+ * Exported at WP-106 so the read is driven by a unit case without composing the queues. The
+ * settings layer is parsed (`projectSettingsFrom`, PROGRESS backlog 311): a stored document this
+ * release refuses throws `ProjectSettingsInvalidError` by name, which the curation records as a
+ * refusal (`readLibrarianProject`) — never read as empty, never cast.
+ */
+export const createLibrarianProjectRead =
+  (pool: pg.Pool, logger: Logger) =>
+  async (projectId: Id): Promise<LibrarianProject | null> => {
+    // The settings with the repository's own file over them (WP-63): `knowledge_apply` is a key
+    // the repository may state, and the Librarian must read the layer every run reads.
+    const { rows } = await pool.query<
+      {
+        knowledge_dir: string;
+        config: unknown;
+        autonomy_policies: unknown;
+        org_settings: unknown;
+      } & Partial<RepositoryConfigColumns>
+    >(
+      `select p.knowledge_dir, p.config, p.autonomy_policies, o.settings as org_settings,
+              ${REPOSITORY_CONFIG_COLUMNS}
+         from projects p
+         join organizations o on o.id = p.org_id
+         left join project_repository_config r on r.project_id = p.id
+        where p.id = $1`,
+      [projectId],
+    );
+    const row = rows[0];
+    if (row === undefined) {
+      return null;
+    }
+    // WP-106 (backlog 311): parsed, never cast — the settings port's reading, so a document this
+    // release refuses throws `ProjectSettingsInvalidError` by name and the curation records the
+    // refusal (`recordLibrarianProposals`) instead of deciding auto-apply on a value it cannot read.
+    const config = projectConfigWithRepository(
+      projectSettingsFrom(projectId, row.config),
+      repositorySnapshotFrom(row),
+    ).values;
+    // The dial decides `auto_apply` where the document is silent (WP-62). Parsed, never cast, and a
+    // row that fails is read as "never materialised" — the platform default, which is *off* — with
+    // a named line, the same answer `createProjectSettingsPort` gives the pipeline.
+    const autonomy = materialisedAutonomySchema.safeParse(row.autonomy_policies);
+    if (row.autonomy_policies !== null && !autonomy.success) {
+      logger.warn(
+        { project_id: projectId },
+        'projects.autonomy_policies does not match the current schema; knowledge auto-apply falls back to the platform default (re-apply the preset)',
+      );
+    }
+    return {
+      knowledgeDir: row.knowledge_dir,
+      thresholds: thresholdsFromConfig(
+        config as Parameters<typeof thresholdsFromConfig>[0],
+        // WP-93: capped at the organisation's autonomy maximum, as the pipeline's settings port
+        // caps it (`cappedAutonomy`) — the dial's auto-apply default must not outrank the
+        // organisation here while every other policy obeys it. A document that does not parse
+        // refuses the read (`organisationSettingsFrom`), the settings port's answer too.
+        cappedAutonomy(
+          autonomy.success ? autonomy.data : null,
+          organisationSettingsFrom(row.org_settings).autonomy?.maximum,
+        ),
+      ),
+    };
+  };
+
 export const composeKnowledgeIndexing = async (
   options: ComposeKnowledgeOptions,
 ): Promise<ComposedKnowledgeIndexing> => {
@@ -469,58 +537,7 @@ export const composeKnowledgeIndexing = async (
     redactionAdapters.patternRedactor(),
   );
 
-  const librarianProject = async (projectId: Id) => {
-    // The settings with the repository's own file over them (WP-63): `knowledge_apply` is a key
-    // the repository may state, and the Librarian must read the layer every run reads.
-    const { rows } = await options.pool.query<
-      {
-        knowledge_dir: string;
-        config: unknown;
-        autonomy_policies: unknown;
-        org_settings: unknown;
-      } & Partial<RepositoryConfigColumns>
-    >(
-      `select p.knowledge_dir, p.config, p.autonomy_policies, o.settings as org_settings,
-              ${REPOSITORY_CONFIG_COLUMNS}
-         from projects p
-         join organizations o on o.id = p.org_id
-         left join project_repository_config r on r.project_id = p.id
-        where p.id = $1`,
-      [projectId],
-    );
-    const row = rows[0];
-    if (row === undefined) {
-      return null;
-    }
-    const config = projectConfigWithRepository(
-      (row.config ?? {}) as ConfigValues,
-      repositorySnapshotFrom(row),
-    ).values;
-    // The dial decides `auto_apply` where the document is silent (WP-62). Parsed, never cast, and a
-    // row that fails is read as "never materialised" — the platform default, which is *off* — with
-    // a named line, the same answer `createProjectSettingsPort` gives the pipeline.
-    const autonomy = materialisedAutonomySchema.safeParse(row.autonomy_policies);
-    if (row.autonomy_policies !== null && !autonomy.success) {
-      options.logger.warn(
-        { project_id: projectId },
-        'projects.autonomy_policies does not match the current schema; knowledge auto-apply falls back to the platform default (re-apply the preset)',
-      );
-    }
-    return {
-      knowledgeDir: row.knowledge_dir,
-      thresholds: thresholdsFromConfig(
-        config as Parameters<typeof thresholdsFromConfig>[0],
-        // WP-93: capped at the organisation's autonomy maximum, as the pipeline's settings port
-        // caps it (`cappedAutonomy`) — the dial's auto-apply default must not outrank the
-        // organisation here while every other policy obeys it. A document that does not parse
-        // refuses the read (`organisationSettingsFrom`), the settings port's answer too.
-        cappedAutonomy(
-          autonomy.success ? autonomy.data : null,
-          organisationSettingsFrom(row.org_settings).autonomy?.maximum,
-        ),
-      ),
-    };
-  };
+  const librarianProject = createLibrarianProjectRead(options.pool, options.logger);
 
   /**
    * The librarian's own queues, started only when this process composed a pipeline.

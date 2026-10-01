@@ -263,17 +263,19 @@ const evaluate = (
   world: {
     readonly artifacts?: readonly StoredArtifact[];
     readonly protectedPaths?: readonly string[];
+    /** WP-106 (backlog 354): the port's answer for a stored document this release refuses. */
+    readonly configRefusal?: string;
   } = {},
 ) =>
   createGateEvaluator({
     integrations: staticPipelineIntegrations(integrationsWith(git)),
     settings: staticProjectSettings((projectId) =>
-      defaultProjectSettings(
-        projectId,
-        world.protectedPaths === undefined
+      defaultProjectSettings(projectId, {
+        ...(world.protectedPaths === undefined
           ? {}
-          : { config: { policies: { protected_paths: [...world.protectedPaths] } } },
-      ),
+          : { config: { policies: { protected_paths: [...world.protectedPaths] } } }),
+        ...(world.configRefusal === undefined ? {} : { configRefusal: world.configRefusal }),
+      }),
     ),
     unitOfWork: noTransaction,
     store: { artifacts: { listFor: async () => [...(world.artifacts ?? [])] } as never },
@@ -710,6 +712,24 @@ describe('the tamper check in the CI gate (WP-81)', () => {
     expect(detail).toContain('infra/main.tf');
     // The project's list **replaces** the default (technical/12: arrays replace).
     expect(detail).not.toContain('src/totals.test.ts');
+  });
+
+  /**
+   * WP-106 (backlog 354): a stored configuration this release cannot read stands in the defaults
+   * for the protected paths, so a pass here could carry a change to Ready with no run left to
+   * refuse it. The gate is **not evaluated** and says why, by the refusal's own sentence; a green
+   * pipeline and a diff that touches nothing the defaults protect does not make it pass.
+   */
+  it('refuses to judge, by name, while the project’s stored configuration cannot be read', async () => {
+    const refusal =
+      'the stored settings of project p (projects.config) do not parse under this release’s schema: policies.protected_paths: "infra/**"';
+    const result = await evaluate(
+      templateStage('ci_gate'),
+      storedTask(MR),
+      withDiff([changed('infra/main.tf')]),
+      { configRefusal: refusal },
+    );
+    expect(result).toEqual({ kind: 'unsupported', detail: refusal });
   });
 
   it('runs on a project with no pipeline for the commit: the CI half is skipped, the check is not', async () => {

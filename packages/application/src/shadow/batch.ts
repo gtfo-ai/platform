@@ -24,7 +24,10 @@
  *
  *  - `features.shadow_mode.enabled` is BD-028's opt-in — *"Everything here is optional, off or
  *    conservative by default"* — and it is the switch the wizard's card writes. Off is
- *    `feature_disabled`.
+ *    `feature_disabled`. **It is also the answer while the project's configuration cannot be read**
+ *    (WP-106, `ProjectSettings.configRefusal`): the switch is a key of the unreadable document and
+ *    reads as off, so the batch is refused closed — but misnamed, since the feature may well be on.
+ *    `GET …/config` names the real cause.
  *  - the **dial's** `shadowMode` is the project's autonomy position, and it is what product/19 §11
  *    means by *"Observe | Shadow mode, ticket linter, review-only on human MRs"*: `shadowMode` is
  *    `true` at `observe` and `false` at the other three. A project at Supervised that turned the

@@ -145,6 +145,8 @@ interface TaskRow extends Record<string, unknown> {
   ready_head_sha: string | null;
   ci_head_sha: string | null;
   ci_excused_paths: string[] | null;
+  settings_refreeze_pending: boolean | null;
+  refreeze_routing: { issue_type: string | null; can_create_tickets: boolean } | null;
   version: number;
   created_at: Date;
   sequence: string | number | null;
@@ -158,7 +160,7 @@ const TASK_COLUMNS = `t.id, t.project_id, t.ticket_provider, t.ticket_key, t.tic
     t.ticket_snapshot, t.ticket_snapshot_at, t.ticket_signal_at, t.review_subject, t.history_sample,
     t.risk_classes, t.coverage,
     t.dependencies, t.required_reviewers, t.review_threads,
-    t.requested_by_user_id, t.ready_head_sha, t.ci_head_sha, t.ci_excused_paths, t.version,
+    t.requested_by_user_id, t.ready_head_sha, t.ci_head_sha, t.ci_excused_paths, t.settings_refreeze_pending, t.refreeze_routing, t.version,
     t.created_at,
     (select max(e.stream_seq) from events e where e.stream_type = 'task' and e.stream_id = t.id)
       as sequence`;
@@ -188,6 +190,14 @@ const toStoredTask = (row: TaskRow, template: PipelineTemplate): StoredTask => (
   },
   template,
   pipelineDial: pipelineDialOf(row),
+  settingsRefreezePending: row.settings_refreeze_pending === true,
+  refreezeRouting:
+    row.refreeze_routing === null || row.refreeze_routing === undefined
+      ? null
+      : {
+          issueType: row.refreeze_routing.issue_type,
+          canCreateTickets: row.refreeze_routing.can_create_tickets === true,
+        },
   priorityRank: priorityRank(row.priority),
   createdAt: new Date(row.created_at).toISOString() as IsoDateTime,
   branch: row.branch,
@@ -402,10 +412,11 @@ export const createPostgresPipelineStore = (
                             workpad_ref, stage_attempts, iteration_limits, iteration_counters,
                             cost_actual, estimate_usd, estimate_basis, estimate_samples,
                             ticket_snapshot, ticket_snapshot_at, review_subject, history_sample,
-                            version, pipeline_dial, requested_by_user_id)
+                            version, pipeline_dial, requested_by_user_id, settings_refreeze_pending,
+                            refreeze_routing)
          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13::jsonb, $14::jsonb,
                  $15::jsonb, $16::jsonb, $17::jsonb, $18, $19, $20, $21, $22::jsonb, $23, $24::jsonb,
-                 $25::jsonb, $26, $27::jsonb, $28)`,
+                 $25::jsonb, $26, $27::jsonb, $28, $29, $30::jsonb)`,
         [
           task.id,
           task.projectId,
@@ -454,6 +465,15 @@ export const createPostgresPipelineStore = (
           // in-memory store and every PostgreSQL row read `null` (the contract suite now asserts
           // the round trip). `saveRequester` is its only other writer.
           stored.requestedByUserId,
+          // WP-106 (migration 0066): the frozen limits and dial were taken under a `configRefusal`.
+          stored.settingsRefreezePending === true,
+          // WP-106 round 2: intake's routing inputs, kept while the re-take is pending.
+          stored.refreezeRouting === null || stored.refreezeRouting === undefined
+            ? null
+            : JSON.stringify({
+                issue_type: stored.refreezeRouting.issueType,
+                can_create_tickets: stored.refreezeRouting.canCreateTickets,
+              }),
         ],
       );
     },
@@ -632,6 +652,31 @@ export const createPostgresPipelineStore = (
       }
     },
 
+    /**
+     * `template`, `template_snapshot`, `iteration_limits`, `pipeline_dial`, `settings_refreeze_pending`
+     * and `refreeze_routing` — one statement, their only `update` writer (WP-106, migration 0066). Called for
+     * a task created under a `configRefusal` by the intake stage-completion handler (where the
+     * template may still be routed again) and by the stage executor's admission (the backstop,
+     * before its first admitted run). No version bump: `save` names none of the six.
+     */
+    refreezeSettings: async (tx, taskId, frozen) => {
+      const result = await sqlOf(tx).query(
+        `update tasks set template = $4, template_snapshot = $5::jsonb,
+                iteration_limits = $2::jsonb, pipeline_dial = $3::jsonb,
+                settings_refreeze_pending = false, refreeze_routing = null, updated_at = now()
+          where id = $1`,
+        [
+          taskId,
+          JSON.stringify(frozen.limits),
+          frozen.pipelineDial === null ? null : JSON.stringify(frozen.pipelineDial),
+          frozen.templateId,
+          JSON.stringify(frozen.template),
+        ],
+      );
+      if (result.rowCount === 0) {
+        throw new PipelineRowMissingError(`task ${taskId} does not exist`);
+      }
+    },
     /**
      * `ci_head_sha` — the head the CI gate last passed (WP-79 review round 2, migration 0056) — and
      * `ci_excused_paths`, the paths it excused provisionally (WP-102, migration 0065). Two columns

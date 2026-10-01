@@ -33,7 +33,9 @@
  *
  *  - `feature_disabled` — BD-028's opt-in (`features.history_bootstrap.enabled`), which product/18
  *    ships **off**: *"off (offered in wizard)"*. It is published by the read endpoint so the wizard
- *    states the reason instead of offering a button that answers 409.
+ *    states the reason instead of offering a button that answers 409. **It is also the answer while
+ *    the project's configuration cannot be read** (WP-106, `configRefusal`): the switch reads as
+ *    off, so the batch is refused closed, but misnamed. `GET …/config` names the real cause.
  *  - `no_git_binding` — there is no repository to mine. Refused rather than started and found empty,
  *    because "this project has no git integration" is a thing an operator can fix and "the batch
  *    found nothing" is not.

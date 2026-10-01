@@ -81,8 +81,9 @@ import { customStageSchema } from './pipeline.js';
  *
  * **A stored configuration above it is refused by name, never clamped**: `GET …/config` answers
  * `409 invalid_stored_config` with the key and the value (PROGRESS backlog 58's shape), and a run of
- * such a project is refused at admission (`contextBudgetRefusal` in `@platform/application`) —
- * technical/12 has the migration note.
+ * such a project is refused at admission — since WP-106 by the settings layer's own schema refusal
+ * (`ProjectSettings.configRefusal` in `@platform/application`), which folded WP-83's bespoke
+ * `contextBudgetRefusal` — technical/12 has the migration note.
  *
  * `tokenCountSchema` itself is deliberately left unbounded: it also types `runs.input_tokens` and
  * the transcript's compaction counts, which are *reports* of what happened rather than *requests*,

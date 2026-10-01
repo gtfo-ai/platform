@@ -58,6 +58,7 @@ import {
   knowledgeApplyThresholds,
 } from '@platform/domain';
 import type { EventHandler } from '../events/handler.js';
+import { ProjectSettingsInvalidError } from '../pipeline/settings.js';
 import type { EventStore } from '../ports/event-store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import { jobQueueDefinition } from '../ports/job-queues.js';
@@ -124,7 +125,14 @@ export interface LibrarianJobOptions {
    * production omits (standing rule 31), and this text is written to a row and to a commit.
    */
   readonly redactor: SecretRedactor;
-  /** One `projects` read — the shape `KnowledgeIndexJobOptions.project` uses, for the same reason. */
+  /**
+   * One `projects` read — the shape `KnowledgeIndexJobOptions.project` uses, for the same reason.
+   *
+   * It reads the project's stored settings (`policies.knowledge_apply`, the dial) **parsed**, and
+   * throws `ProjectSettingsInvalidError` when they do not parse (WP-106): the curation records that
+   * refusal ({@link readLibrarianProject}) rather than deciding auto-apply on a document it cannot
+   * read.
+   */
   readonly project: (projectId: Id) => Promise<LibrarianProject | null>;
   /** The artifact's `data` and the task's mode, or `null` when either has gone. */
   readonly artifact: (input: {
@@ -136,7 +144,14 @@ export interface LibrarianJobOptions {
 
 /** What one curation run did, returned for the log and asserted by the tests. */
 export interface CurationReport {
-  readonly status: 'recorded' | 'skipped';
+  /**
+   * `refused` (WP-106): the project's stored settings do not parse, so nothing was curated and the
+   * artifact was **not** marked curated. The reason names the keys. The recovery pass offers it
+   * once more (bounded by `knowledge_curations.recovery_attempted_at`, WP-48) and then abandons it
+   * with a reason, so a document still broken by then costs that task's proposals — notification-
+   * shaped, which is why the bound is one re-offer rather than for ever (standing rule 20).
+   */
+  readonly status: 'recorded' | 'skipped' | 'refused';
   readonly reason: string | null;
   readonly queued: number;
   readonly autoApplied: number;
@@ -211,6 +226,33 @@ const rowFor = (
 });
 
 /**
+ * {@link LibrarianJobOptions.project}, with a stored settings document this release cannot parse
+ * answered as a **refusal** rather than an exception (WP-106, PROGRESS backlog 311).
+ *
+ * A refusal, not a throw, for the reason `librarianProposalsHandler` gives every skip: a throw
+ * would spend pg-boss's retries on a document no retry can fix. And not a skip that marks the
+ * artifact curated, because that would drop the proposals at once; the artifact stays uncurated, so
+ * the recovery pass offers it once more ({@link CurationReport.status} has the bound). Any other
+ * error still escapes.
+ */
+export const readLibrarianProject = async (
+  options: Pick<LibrarianJobOptions, 'project'>,
+  projectId: Id,
+): Promise<
+  | { readonly kind: 'read'; readonly project: LibrarianProject | null }
+  | { readonly kind: 'refused'; readonly reason: string }
+> => {
+  try {
+    return { kind: 'read', project: await options.project(projectId) };
+  } catch (error) {
+    if (error instanceof ProjectSettingsInvalidError) {
+      return { kind: 'refused', reason: error.message };
+    }
+    throw error;
+  }
+};
+
+/**
  * Curates one Librarian artifact into rows, and asks for a commit when the policy decided on one.
  *
  * Exported separately from the job handler so a test can drive it directly and read the report; the
@@ -222,7 +264,11 @@ export const recordLibrarianProposals = async (
 ): Promise<CurationReport> => {
   const projectId = data.project_id as Id;
   const taskId = data.task_id as Id;
-  const project = await options.project(projectId);
+  const read = await readLibrarianProject(options, projectId);
+  if (read.kind === 'refused') {
+    return { ...EMPTY_REPORT, status: 'refused', reason: read.reason };
+  }
+  const { project } = read;
   if (project === null) {
     return { ...EMPTY_REPORT, reason: 'the project no longer has a row' };
   }
@@ -376,6 +422,13 @@ export const librarianProposalsHandler =
       redactions: report.redactions,
       reason: report.reason,
     };
+    if (report.status === 'refused') {
+      logger.warn(
+        fields,
+        'a librarian curation run was refused: the project’s stored settings do not parse, so nothing was curated; the recovery pass offers the artifact once more',
+      );
+      return;
+    }
     if (report.status === 'skipped') {
       // Not a thrown error: every skip here is a state the platform can be in legitimately (a
       // deleted project, a superseded artifact) and a throw would spend two pg-boss retries on it.

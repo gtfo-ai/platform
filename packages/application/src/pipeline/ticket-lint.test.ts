@@ -18,6 +18,7 @@ import { readDataBlocks } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { exactSecretRedactor } from '../integrations/redaction.js';
 import type { CommentRef, Ticket, TicketRefInput } from '../ports/integrations/task-management.js';
+import { JOB_QUEUES } from '../ports/jobs.js';
 import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
 import {
   LINT_COMMENT_MARKER,
@@ -106,6 +107,8 @@ const lintHarness = (
      * linter's own refusal of those two writes is asserted by every other case in this file.
      */
     readonly delivering?: boolean;
+    /** WP-106: the configuration cannot be read by the duties once the lint run has run. */
+    readonly brokenAfterRun?: boolean;
   } = {},
 ): {
   harness: PipelineHarness;
@@ -115,8 +118,21 @@ const lintHarness = (
 } => {
   const posted: Posted[] = [];
   const counters = { workpads: 0, transitions: 0, reads: 0 };
+  const holder: { harness: PipelineHarness | null } = { harness: null };
   const harness = createPipelineHarness({
     projectId: PROJECT,
+    ...(options.brokenAfterRun === true
+      ? {
+          storedSettings: ({ job }: { readonly job: string | null }) =>
+            job === JOB_QUEUES.pipelineOutbound && (holder.harness?.specs.length ?? 0) >= 1
+              ? { version: 1, pipeline: { wip: { max_parallel_tasks: 500 } } }
+              : {
+                  version: 1,
+                  features: { ticket_linter: { enabled: true } },
+                  status_mapping: { ticket_lint: 'In Refinement', done: 'Done' },
+                },
+        }
+      : {}),
     runs: {
       [TICKET_LINT_STAGE]: {
         status: 'completed',
@@ -201,6 +217,7 @@ const lintHarness = (
   // `counters` itself, not a getter per field: a getter read at destructuring time answers 0 for
   // every call the test has not made yet, which is how `expect(workpads).toBe(0)` passed here
   // before the run that would have written one (WP-25 round 2).
+  holder.harness = harness;
   return { harness, posted, counters };
 };
 
@@ -429,6 +446,18 @@ describe('a ticket being created', () => {
       questions_posted: 2,
       ticket_updated_at: '2026-06-01T09:00:00.000Z',
     });
+  });
+
+  /**
+   * WP-106 review round 2: what the lint posts on the ticket (and whether it holds the ticket back)
+   * is the project's policy, and the comment is a provider write. With the configuration unreadable
+   * when the posting duty runs, nothing is posted on the defaults.
+   */
+  it('posts no comment on the defaults when the configuration cannot be read at posting time (WP-106)', async () => {
+    const { harness, posted } = lintHarness({ brokenAfterRun: true });
+    await harness.publish([created()]);
+    expect(harness.specs.map((spec) => spec.stage)).toEqual([TICKET_LINT_STAGE]);
+    expect(posted).toHaveLength(0);
   });
 
   it('does nothing at all when the project has not enabled the linter', async () => {

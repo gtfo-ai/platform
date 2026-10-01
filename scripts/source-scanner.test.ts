@@ -158,6 +158,8 @@ describe('a comment stripper is recognised by its shape', () => {
     'packages/domain/src/knowledge/frontmatter.ts probe': "a YAML alias, `startsWith('*')`",
     'packages/infrastructure/src/workspace/tracked.ts probe':
       "a path with an empty segment, `includes('//')`",
+    'packages/application/src/pipeline/config-refusal-readers.test.ts probe':
+      'whether the one line holding a settings read opens with a comment marker — a context check on a call, not a stripper',
     'packages/infrastructure/src/pipeline/tasks-column-ownership.test.ts probe':
       'whether the one line holding a SQL match opens with a comment marker — a context check on a statement, not a stripper',
     'packages/domain/src/knowledge/globs.ts slashStar': 'a trailing `/**` glob',

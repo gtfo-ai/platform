@@ -22,14 +22,41 @@ import { DEFAULT_JOBS_SCHEMA } from './pg-boss-jobs.js';
 /** The environment as this module reads it: a plain string map, so tests can pass a literal. */
 export type EnvLike = Readonly<Record<string, string | undefined>>;
 
-/** A bare, lower-case SQL identifier — the schema name is interpolated into SQL by pg-boss. */
-const schemaNameSchema = z
-  .string()
-  .regex(/^[a-z_][a-z0-9_]*$/, 'expected a bare lower-case SQL identifier');
+/**
+ * Why this process refuses `APP_JOBS_SCHEMA`, or `null` when it is unset, blank or `pgboss` — WP-106,
+ * PROGRESS backlog 296, option (b).
+ *
+ * **The value is fixed at `pgboss`.** `migrate` installs pg-boss, declares every job queue
+ * (WP-86) and grants the app role in the `pgboss` schema, and it reads no variable for another:
+ * `runMigrations` takes `pgBossSchema` and `migrate` passes none, and `platform_apply_grants`
+ * (migration 0001) grants on the literal. So a process told to look elsewhere would find nothing
+ * `migrate` installed. Before WP-106 the expected failure was pg-boss's own *"pg-boss is not
+ * installed"* at start, which names neither the variable nor `migrate` (read off pg-boss 12.30.0's
+ * `check()` in backlog 296, **predicted, not measured**). Every process that reads the
+ * variable — the server's roles through {@link loadJobsConfig}, and `migrate` itself — refuses to
+ * start on any other value and names both. Making the schema configurable would be a migration
+ * that replaces `platform_apply_grants` and a `migrate` that reads the variable (the entry's option
+ * (a)); it was ruled out at M6 rather than built.
+ */
+export const jobsSchemaRefusal = (env: EnvLike): string | null => {
+  const raw = env.APP_JOBS_SCHEMA?.trim();
+  if (raw === undefined || raw === '' || raw === DEFAULT_JOBS_SCHEMA) {
+    return null;
+  }
+  return (
+    `APP_JOBS_SCHEMA is ${JSON.stringify(raw.slice(0, 64))}, and the only value this release accepts is "${DEFAULT_JOBS_SCHEMA}": ` +
+    `the migrate service installs pg-boss, declares the job queues and grants the app role in the "${DEFAULT_JOBS_SCHEMA}" schema ` +
+    'and reads no variable for another, so a process looking anywhere else would find nothing migrate installed. ' +
+    `Unset APP_JOBS_SCHEMA or set it to ${DEFAULT_JOBS_SCHEMA}`
+  );
+};
 
 export const jobsConfigSchema = z.strictObject({
-  /** Schema pg-boss owns. Must match what `migrate` installed (`APP_JOBS_SCHEMA`). */
-  schema: schemaNameSchema,
+  /**
+   * Schema pg-boss owns: always `pgboss`, the one `migrate` installs into ({@link
+   * jobsSchemaRefusal} refuses `APP_JOBS_SCHEMA` set to anything else).
+   */
+  schema: z.literal(DEFAULT_JOBS_SCHEMA),
   /** Default worker poll interval. pg-boss's floor is 0.5 s. */
   pollingIntervalSeconds: z.number().min(0.5).max(3600),
   /** How often the cron table is re-read; pg-boss caps it at 45 s. */
@@ -73,8 +100,12 @@ const numberFromEnv = (raw: string | undefined, fallback: number): unknown => {
 };
 
 export const loadJobsConfig = (env: EnvLike = process.env): JobsConfig => {
+  const schemaRefusal = jobsSchemaRefusal(env);
+  if (schemaRefusal !== null) {
+    throw new Error(`invalid jobs configuration: ${schemaRefusal}`);
+  }
   const result = jobsConfigSchema.safeParse({
-    schema: env.APP_JOBS_SCHEMA?.trim() || JOBS_CONFIG_DEFAULTS.schema,
+    schema: JOBS_CONFIG_DEFAULTS.schema,
     pollingIntervalSeconds: numberFromEnv(
       env.APP_JOBS_POLL_INTERVAL_SECONDS,
       JOBS_CONFIG_DEFAULTS.pollingIntervalSeconds,

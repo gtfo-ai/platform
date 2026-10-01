@@ -5,9 +5,11 @@
  * the ones a template never reaches by itself: a run that overspends, a run whose cost the platform
  * could not read, a run that produced no artifact, and a job that arrives after the task has moved.
  */
-import type { DomainEvent, Id } from '@platform/contracts';
+import type { DomainEvent, Id, IsoDateTime, Slug } from '@platform/contracts';
 import { domainEventSchemasByType, MAX_CONTEXT_BUDGET_TOKENS } from '@platform/contracts';
+import { materialiseAutonomy, resolveIterationLimits } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
+import { JOB_QUEUES } from '../ports/jobs.js';
 import { RunStartError } from '../ports/runner.js';
 import { askingRefinedSpec, PROCEEDING_REFINED_SPEC } from '../testing/artifact-fixtures.js';
 import {
@@ -15,10 +17,12 @@ import {
   type HarnessOptions,
   type PipelineHarness,
 } from '../testing/pipeline-harness.js';
+import { retryStageCommand } from './commands.js';
 import { RUN_START_RETRY_MS } from './jobs.js';
 import {
   COST_UNREPORTED,
   MAX_RUN_START_ATTEMPTS,
+  REFREEZE_PENDING_SENTENCE,
   runBudgetUsd,
   taskBudgetExhausted,
   withPlatformReviewRecord,
@@ -53,6 +57,8 @@ const ticketMatched = (): DomainEvent =>
       links: [],
     },
   }) as DomainEvent;
+
+const DEFAULT_LIMITS = resolveIterationLimits();
 
 const harnessWith = (options: HarnessOptions): PipelineHarness =>
   createPipelineHarness({ projectId: PROJECT, ...options });
@@ -423,41 +429,152 @@ describe('an invalid repository configuration', () => {
 });
 
 /**
- * WP-83 criterion 1, the run half (backlog 173): a stored `context_budget_tokens` above the ceiling
- * — a value the schema accepted before the ceiling fell to 57 500 — refuses the run by name rather
- * than being packed to or clamped. Both sides of the boundary (rule 42).
+ * WP-106 (PROGRESS backlogs 311 and 354): the project's **stored** settings are parsed at every
+ * read, and a document this release refuses **refuses the run by name at admission** — the key path,
+ * the value and the `PUT` that fixes it, with its own outcome word — never planned on. WP-83's
+ * context-budget ceiling (backlog 173) is folded into the same refusal.
+ *
+ * The harness parses the document at **every** reader, as production does, and a refused document
+ * is answered (`configRefusal`) rather than thrown: so a ticket that arrives while the document is
+ * broken still becomes a task (intake is an inbound notification, rule 20), and that task ends at
+ * the named refusal instead of being lost (backlog 354). Both sides of each boundary (rule 42).
  */
-describe('a context budget above the ceiling', () => {
-  const withBudget = (budget: number) =>
-    harnessWith({
-      settings: { config: { project: { context_budget_tokens: budget } } },
-      runs: {
-        refinement: {
-          status: 'completed',
-          terminalReason: 'success',
-          structuredOutput: askingRefinedSpec(),
-        },
-      },
-    });
+describe('stored settings this release cannot parse', () => {
+  const USER = '00000000-0000-4000-8000-0000000000e9' as Id;
+  const refinementAsks = {
+    refinement: {
+      status: 'completed',
+      terminalReason: 'success',
+      structuredOutput: askingRefinedSpec(),
+    },
+  } as const;
 
-  it('refuses the run before it exists and escalates, naming the key and the value', async () => {
-    const harness = withBudget(MAX_CONTEXT_BUDGET_TOKENS + 1);
+  /**
+   * The document is broken for the **stage executor's** read only, so what is observed is the
+   * admission itself; the other readers' answers are the cases further down.
+   */
+  const admittedUnder = async (document: unknown) => {
+    const harness = harnessWith({
+      storedSettings: ({ job }) => (job === JOB_QUEUES.stageExecute ? document : { version: 1 }),
+      runs: refinementAsks,
+    });
     await harness.publish([ticketMatched()]);
+    return harness;
+  };
+
+  it('refuses the run at admission by name, naming pipeline.wip and the PUT', async () => {
+    const harness = await admittedUnder({
+      version: 1,
+      pipeline: { wip: { max_parallel_tasks: 500 } },
+    });
     expect(harness.specs).toHaveLength(0);
     expect(taskOf(harness).task.state).toBe('needs_human');
     const reason = escalationOf(harness)?.payload.reason ?? '';
-    expect(reason).toContain(`project.context_budget_tokens is ${MAX_CONTEXT_BUDGET_TOKENS + 1}`);
-    expect(reason).toContain(String(MAX_CONTEXT_BUDGET_TOKENS));
-    // Its own word on the parked row, not the repository refusal's.
+    expect(reason).toContain('pipeline.wip.max_parallel_tasks: 500');
+    expect(reason).toContain('projects.config');
+    expect(reason).toContain(`PUT /api/projects/${PROJECT}/config`);
     expect(harness.store.stageRows.find((row) => row.stage === 'refinement')?.outcome).toBe(
-      'context_budget_above_ceiling',
+      'settings_config_invalid',
     );
   });
 
-  it('runs at exactly the ceiling', async () => {
-    const harness = withBudget(MAX_CONTEXT_BUDGET_TOKENS);
+  it('refuses a context budget above the ceiling the same way, under the same word', async () => {
+    const harness = await admittedUnder({
+      version: 1,
+      project: { context_budget_tokens: MAX_CONTEXT_BUDGET_TOKENS + 1 },
+    });
+    expect(harness.specs).toHaveLength(0);
+    expect(escalationOf(harness)?.payload.reason).toContain(
+      `project.context_budget_tokens: ${MAX_CONTEXT_BUDGET_TOKENS + 1}`,
+    );
+    expect(harness.store.stageRows.find((row) => row.stage === 'refinement')?.outcome).toBe(
+      'settings_config_invalid',
+    );
+  });
+
+  it('runs at exactly the ceiling and at a WIP limit the schema admits', async () => {
+    for (const document of [
+      { version: 1, project: { context_budget_tokens: MAX_CONTEXT_BUDGET_TOKENS } },
+      { version: 1, pipeline: { wip: { max_parallel_tasks: 50 } } },
+    ]) {
+      const harness = await admittedUnder(document);
+      expect(harness.specs, JSON.stringify(document)).toHaveLength(1);
+      expect(escalationOf(harness)).toBeUndefined();
+    }
+  });
+
+  /**
+   * Backlog 354: with **every** reader meeting the broken document, as in production, the ticket
+   * still becomes a task (intake fails open), marked to re-take its frozen values, and the first
+   * step that would decide its next transition — intake's own completion — parks it by name.
+   * Nothing is lost and nothing runs.
+   */
+  it('makes the ticket a task and parks it by name at intake when every reader meets the broken document', async () => {
+    const harness = harnessWith({
+      storedSettings: () => ({ version: 1, pipeline: { wip: { max_parallel_tasks: 500 } } }),
+      runs: refinementAsks,
+    });
     await harness.publish([ticketMatched()]);
-    expect(harness.specs.length).toBeGreaterThan(0);
+    expect(harness.store.snapshot()).toHaveLength(1);
+    expect(harness.specs).toHaveLength(0);
+    const parked = taskOf(harness);
+    expect(parked.task.state).toBe('needs_human');
+    expect(parked.task.currentStage).toBe('intake');
+    expect(parked.settingsRefreezePending).toBe(true);
+    const escalated = escalationOf(harness);
+    expect(escalated?.payload.reason).toContain('pipeline.wip.max_parallel_tasks: 500');
+    expect(escalated?.payload.blocker_brief).toContain(`PUT /api/projects/${PROJECT}/config`);
+    expect(escalated?.payload.blocker_brief).toContain(REFREEZE_PENDING_SENTENCE);
+  });
+
+  /**
+   * WP-106 (migration 0066): the task created under the broken document froze the defaults'
+   * iteration limits and dial. After the fix and a resume, the run's limits, the dial and the
+   * stage's budget cap are the parsed document's, never the defaults.
+   */
+  it('re-takes the frozen limits and dial from the fixed document before the first run, and never runs on the defaults', async () => {
+    const at = '2026-06-01T08:00:00.000Z' as IsoDateTime;
+    // The dial the port answers: uncapped while the organisation document cannot be read, and
+    // capped at Assist once it can (the production port's cap, `storedAutonomy`).
+    let dial = materialiseAutonomy({ level: 'supervised', at, appliedBy: null });
+    let document: unknown = { version: 1, pipeline: { wip: { max_parallel_tasks: 500 } } };
+    const harness = harnessWith({
+      storedSettings: () => document,
+      storedAutonomy: () => dial,
+      runs: refinementAsks,
+    });
+    await harness.publish([ticketMatched()]);
+    const parked = taskOf(harness);
+    expect(harness.specs).toHaveLength(0);
+    expect(parked.settingsRefreezePending).toBe(true);
+    expect(parked.task.limits.code_review).toBe(DEFAULT_LIMITS.code_review);
+    expect(parked.pipelineDial?.level).toBe('supervised');
+
+    // The operator fixes the document (and the organisation's cap reads again); a person resumes.
+    document = {
+      version: 1,
+      pipeline: { limits: { code_review_iterations: 1, human_rounds: 1 } },
+      stages: { refinement: { budget_usd: 1.5 } },
+    };
+    dial = materialiseAutonomy({ level: 'assist', at, appliedBy: null });
+    await retryStageCommand(harness.humanCommands, {
+      taskId: parked.task.id,
+      userId: USER,
+      stage: 'intake' as Slug,
+    });
+    await harness.drain();
+
+    expect(harness.specs).toHaveLength(1);
+    const resumed = taskOf(harness);
+    expect(resumed.settingsRefreezePending).toBe(false);
+    expect(resumed.task.limits.code_review).toBe(1);
+    expect(resumed.task.limits.human_rounds).toBe(1);
+    expect(resumed.pipelineDial).toMatchObject({
+      level: 'assist',
+      business_review: false,
+      stop_after_stage: 'architecture',
+    });
+    expect(harness.specs[0]?.limits.maxBudgetUsd).toBe(1.5);
   });
 });
 

@@ -48,6 +48,7 @@ const DECIDER = 'U0FAKEDECIDER';
 
 /** Every plan of the feature template waits for a human, so the task stops at the gate. */
 const PLAN_ALWAYS = {
+  version: 1,
   pipeline: {
     template_overrides: { feature: { stages: { architecture: { plan_approval: 'always' } } } },
   },

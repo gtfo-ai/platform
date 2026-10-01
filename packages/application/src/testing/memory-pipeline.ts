@@ -319,6 +319,9 @@ export const createMemoryPipelineStore = (
           readyHeadSha: null,
           ciHeadSha: null,
           ciExcusedPaths: [],
+          // The SQL column is `not null default false` (migration 0066).
+          settingsRefreezePending: stored.settingsRefreezePending === true,
+          refreezeRouting: stored.refreezeRouting ?? null,
         }),
       );
     },
@@ -473,6 +476,24 @@ export const createMemoryPipelineStore = (
       }
       // Only this field, and `null` as readily as a head — the SQL adapter's statement (WP-79).
       tasks.set(taskId, clone({ ...current, readyHeadSha: headSha }));
+    },
+    refreezeSettings: async (_tx, taskId, frozen) => {
+      const current = tasks.get(taskId);
+      if (current === undefined) {
+        throw new PipelineStoreError(`task ${taskId} does not exist`);
+      }
+      // The three columns the SQL adapter's one statement writes (WP-106), and no version bump.
+      tasks.set(
+        taskId,
+        clone({
+          ...current,
+          task: { ...current.task, limits: frozen.limits, template: frozen.templateId },
+          template: frozen.template,
+          pipelineDial: frozen.pipelineDial,
+          settingsRefreezePending: false,
+          refreezeRouting: null,
+        }),
+      );
     },
     saveCiSettlement: async (_tx, taskId, settlement) => {
       const current = tasks.get(taskId);

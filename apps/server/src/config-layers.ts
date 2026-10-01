@@ -16,18 +16,25 @@
  *    (PROGRESS backlog 311's organisation half). A document that does not parse is a **refusal**,
  *    not an absent layer — an organisation maximum read as "none" is the permissive reading of a
  *    restriction somebody wrote (standing rule 20).
- *  - **project** — `projects.config`, the settings layer the screens and `PUT …/config` write.
+ *  - **project** — `projects.config`, the settings layer the screens and `PUT …/config` write;
+ *    since WP-106 **parsed at every read** too (`projectSettingsFrom`, below), and a document that
+ *    does not parse is refused by name rather than cast or read as empty (backlog 311's project half).
  *  - **repo** — `project_repository_config`, the last reading of the default branch's
  *    `.agentic/config.yml` (`refreshRepositoryConfig`).
  */
-import { type RepositoryConfigSnapshot, revalidateRepositorySnapshot } from '@platform/application';
+import {
+  projectSettingsLayerFrom,
+  type RepositoryConfigSnapshot,
+  revalidateRepositorySnapshot,
+} from '@platform/application';
 import {
   type AutonomyLevel,
+  type Id,
   type MaterialisedAutonomy,
   type OrganisationSettings,
   organisationSettingsSchema,
 } from '@platform/contracts';
-import { capMaterialisedAutonomy } from '@platform/domain';
+import { type ConfigValues, capMaterialisedAutonomy } from '@platform/domain';
 import { config as configAdapters, redaction as redactionAdapters } from '@platform/infrastructure';
 import { HttpError } from './errors.js';
 
@@ -91,6 +98,20 @@ export const organisationSettingsFrom = (settings: unknown): OrganisationSetting
     }),
   );
 };
+
+/**
+ * **`projects.config`, parsed** for the two run-path reads (WP-106, PROGRESS backlog 311's project
+ * half): the pipeline's settings port and the Librarian's read. `projectSettingsLayerFrom` is the
+ * one reading — `GET …/config` calls it too, with the request's redactor — and this is it composed
+ * with the platform's pattern rules, the redactor every refusal of operator text gets here (the
+ * organisation document's, above). A read carries no run-scoped credential (Q55).
+ *
+ * @throws {ProjectSettingsInvalidError} naming the key paths and the redacted, bounded values, and
+ *   the `PUT` that fixes them — never an empty layer (standing rule 20).
+ */
+export const projectSettingsFrom = (projectId: Id, stored: unknown): ConfigValues =>
+  projectSettingsLayerFrom(projectId, stored, (value) => PATTERN_REDACTOR.redactText(value).value)
+    .values;
 
 /**
  * {@link organisationSettingsFrom} for an HTTP read or write: the refusal as the **409

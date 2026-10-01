@@ -108,8 +108,9 @@ import {
   type RunLeaseOptions,
   startRunHeartbeat,
 } from './lease.js';
+import { REFREEZE_PENDING_SENTENCE, refrozen, refrozenColumns } from './refreeze.js';
 import { injectedSecretRedactorFor } from './run-redaction.js';
-import { contextBudgetRefusal, type ProjectSettings, repositoryConfigRefusal } from './settings.js';
+import { type ProjectSettings, settingsAdmission } from './settings.js';
 import { runSettingsSnapshot } from './settings-snapshot.js';
 import type { RunStopReasons } from './stop-reasons.js';
 import type { PipelineStore, ReturnCause, StoredArtifact, StoredTask } from './store.js';
@@ -523,10 +524,12 @@ export const taskBudgetExhausted = (
 type Prepared =
   | { readonly kind: 'skipped'; readonly reason: string }
   | { readonly kind: 'paused'; readonly reason: string }
-  /** Refused before any run exists, and the task parked for a human (WP-63's invalid repo file). */
+  /** Refused before any run exists, the task parked for a human (WP-63, WP-106: bad config). */
   | { readonly kind: 'escalated'; readonly reason: string }
   | {
       readonly kind: 'ready';
+      /** The settings the run was planned with ({@link Admitted.settings}). */
+      readonly settings: ProjectSettings;
       readonly spec: RunSpec;
       readonly stage: PipelineStage;
       readonly stored: StoredTask;
@@ -547,6 +550,8 @@ type Prepared =
 
 type Admitted = {
   readonly kind: 'admitted';
+  /** The settings admission read and found readable — what the plan and the run are made from. */
+  readonly settings: ProjectSettings;
   readonly stored: StoredTask;
   readonly stage: PipelineStage;
   readonly artifacts: readonly StoredArtifact[];
@@ -607,6 +612,8 @@ const revalidate = (
   return { kind: 'ok', stored, stage, role: stage.role };
 };
 
+export { REFREEZE_PENDING_SENTENCE, refrozen } from './refreeze.js';
+
 export const createStageExecutor = (options: StageExecutorOptions): StageExecutor => {
   const { unitOfWork, store, runner, planner, stopReasons } = options;
   const logger = options.logger ?? silentLogger;
@@ -640,40 +647,50 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
   };
 
   /** Transaction 1a: may this job run at all, and what does the planner need to plan it? */
-  const admit = async (job: StageExecutionJob, settings: ProjectSettings): Promise<Admission> =>
+  const admit = async (job: StageExecutionJob, read: ProjectSettings): Promise<Admission> =>
     writing(job.taskId, 'admitting a stage run', async (scope): Promise<Admission> => {
       const valid = revalidate(await store.tasks.load(scope.tx, job.taskId), job);
       if (valid.kind === 'skipped') return valid;
-      const { stored } = valid;
-      const { task } = stored;
+      const loaded = valid.stored;
+      const { task } = loaded;
 
       /**
-       * WP-63 criterion 4: a repository `.agentic/config.yml` that does not parse **refuses the
-       * run** rather than running on the settings alone or on an older reading
-       * (`repositoryConfigRefusal` has the argument). Asked first, before any budget question,
-       * because no answer to those makes this run's rules knowable. No `runs` row is created — the
-       * run never existed — and the task is parked where a human is asked to act, naming the key
-       * paths, which is the escalation every other unrunnable stage already ends in.
-       *
-       * WP-83 (backlog 173): a context budget above this release's ceiling refuses the run the
-       * same way and for the same reason — no pack this run could be given is one the project
-       * chose (`contextBudgetRefusal` has the argument). One escalation (and one `save`) for both,
-       * with its own outcome word, because the file on the default branch may be valid while the
-       * stored settings are not.
+       * **A configuration this release cannot read refuses the run** (`settingsAdmission`), asked
+       * first, before any budget question, because no answer to those makes this run's rules
+       * knowable. Two layers: the project's stored settings (WP-106, PROGRESS backlog 311 —
+       * parsed by the settings port, which answers `configRefusal` rather than handing the
+       * planner a cast; `settings_config_invalid`) and the repository's
+       * `.agentic/config.yml` on the default branch (WP-63 criterion 4,
+       * `repository_config_invalid`), which is not run on the settings alone or on an older
+       * reading. No `runs` row is created — the run never existed — and the task is parked where a
+       * human is asked to act, naming the key paths and the `PUT` that fixes them, which is the
+       * escalation every other unrunnable stage already ends in. One escalation (and one `save`)
+       * for both; WP-83's context-budget ceiling is one of the settings' schema failures since
+       * WP-106 rather than a refusal of its own.
        */
-      const repositoryRefusal = repositoryConfigRefusal(settings);
-      const refusal = repositoryRefusal ?? contextBudgetRefusal(settings);
-      if (refusal !== null) {
-        const escalated = escalate(stored, options.context(task.id), job.stage, refusal);
-        await store.tasks.save(scope.tx, { ...stored, task: escalated.aggregate });
-        await closeParkedStageRow(
-          store,
-          scope.tx,
-          escalated,
-          repositoryRefusal !== null ? 'repository_config_invalid' : 'context_budget_above_ceiling',
-        );
+      const readable = settingsAdmission(read);
+      if (readable.kind === 'refused') {
+        const reason =
+          loaded.settingsRefreezePending === true
+            ? `${readable.reason}. ${REFREEZE_PENDING_SENTENCE}`
+            : readable.reason;
+        const escalated = escalate(loaded, options.context(task.id), job.stage, reason);
+        await store.tasks.save(scope.tx, { ...loaded, task: escalated.aggregate });
+        await closeParkedStageRow(store, scope.tx, escalated, readable.word);
         await scope.events.append(escalated.events);
-        return { kind: 'escalated', reason: refusal };
+        return { kind: 'escalated', reason };
+      }
+      const { settings } = readable;
+      // WP-106 (backlog 311, migration 0066): a task created under a `configRefusal` froze the
+      // platform's defaults; the first run admitted after the document parses takes its limits and
+      // dial again from the parsed document, so it never runs on what it was created with.
+      const stored = refrozen(loaded, settings);
+      if (stored !== loaded) {
+        await store.tasks.refreezeSettings(scope.tx, task.id, refrozenColumns(stored));
+        logger.info(
+          { task_id: task.id, stage: job.stage },
+          'this task was created while its project’s stored configuration could not be read; its iteration limits and autonomy dial were taken again from the parsed configuration before its first run',
+        );
       }
 
       if (taskBudgetExhausted(stored, settings, job.stage)) {
@@ -832,6 +849,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       );
       return {
         kind: 'admitted',
+        settings,
         stored,
         stage: valid.stage,
         artifacts: await store.artifacts.listFor(scope.tx, job.taskId),
@@ -968,6 +986,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       await scope.events.append([...starting.events, ...running.events]);
       return {
         kind: 'ready',
+        settings,
         spec,
         stage: valid.stage,
         stored,
@@ -987,9 +1006,10 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
    * connection it borrows *replaces* the worker's — the same argument `POOL_RESERVATIONS.pipeline`
    * already makes for every other pipeline job worker.
    */
-  const prepare = async (job: StageExecutionJob, settings: ProjectSettings): Promise<Prepared> => {
-    const admission = await admit(job, settings);
+  const prepare = async (job: StageExecutionJob, read: ProjectSettings): Promise<Prepared> => {
+    const admission = await admit(job, read);
     if (admission.kind !== 'admitted') return admission;
+    const { settings } = admission;
     const runId = options.context(job.taskId).ids.next();
     const plan = await planner.plan({
       runId,
@@ -1032,8 +1052,9 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
   };
 
   const runStage = async (job: StageExecutionJob): Promise<StageExecutionOutcome> => {
-    const settings = await options.settings(job.projectId);
-    const prepared = await prepare(job, settings);
+    // WP-106: a stored settings document this release cannot parse is answered by the port as
+    // `configRefusal`, and admission refuses the run by that name (`settingsAdmission`).
+    const prepared = await prepare(job, await options.settings(job.projectId));
     if (prepared.kind !== 'ready') {
       logger.info(
         {
@@ -1143,7 +1164,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
     return writing(job.taskId, "recording a run's result", async (scope) =>
       record(scope, {
         job,
-        settings,
+        settings: prepared.settings,
         stage: prepared.stage,
         run: prepared.run,
         outcome,

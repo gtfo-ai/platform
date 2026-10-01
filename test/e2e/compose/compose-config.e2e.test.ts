@@ -535,6 +535,8 @@ describe('compose.yml gives the app service the environment the server reads (WP
     };
     const migrate = result.services['migrate']?.environment ?? {};
     expect(migrate['APP_DB_PARTITION_MONTHS_AHEAD']).toBe('3');
+    // Read by `migrate` since WP-106 (PROGRESS backlog 296): it refuses to start on any value but
+    // `pgboss`, the schema it installs into, so the stock `.env` must deliver exactly that.
     expect(migrate['APP_JOBS_SCHEMA']).toBe('pgboss');
     expect(migrate['DATABASE_URL']).toBe('postgres://app:app@db:5432/app');
   });

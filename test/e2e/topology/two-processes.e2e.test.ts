@@ -1038,6 +1038,7 @@ describe('each role’s pool floor', () => {
 
 describe('the approval buttons need a process holding the socket (backlog 200)', () => {
   const PLAN_ALWAYS = {
+    version: 1,
     pipeline: {
       template_overrides: { feature: { stages: { architecture: { plan_approval: 'always' } } } },
     },

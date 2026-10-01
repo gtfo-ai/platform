@@ -176,6 +176,16 @@ export const recoverDeadlines = async (
   for (const row of found.undated) {
     try {
       const settings = await site.settings.forProject(row.projectId);
+      if (settings.configRefusal !== undefined) {
+        // WP-106 review round 1: the timeout is the unreadable document's
+        // (`pipeline.limits.question_timeout`), so no deadline is written from the defaults. The
+        // row stays undated and the next pass asks again.
+        logger.warn(
+          { ...dataOf(row), task_id: row.taskId },
+          'a question or approval with no deadline was not given one: the project configuration could not be read',
+        );
+        continue;
+      }
       const deadlineAt = questionDeadlineRule(site.sweep.calendar, settings)(input.now);
       if (deadlineAt === null) {
         continue;

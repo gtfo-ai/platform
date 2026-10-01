@@ -49,6 +49,7 @@ import {
   enqueueCuration,
   type KnowledgeProposalsData,
   type LibrarianJobOptions,
+  readLibrarianProject,
 } from './librarian.js';
 import type { StoredKnowledgeProposal } from './ports.js';
 
@@ -72,7 +73,8 @@ export const RESEARCH_PAGE_SIGNIFICANCE = 0.5;
 
 /** What one recording did, returned for the log and asserted by the tests. */
 export interface ResearchPageReport {
-  readonly status: 'recorded' | 'skipped';
+  /** `refused` (WP-106): `CurationReport`'s — the project's stored settings do not parse. */
+  readonly status: 'recorded' | 'skipped' | 'refused';
   readonly reason: string | null;
   readonly path: string | null;
   readonly queued: number;
@@ -99,7 +101,11 @@ export const recordResearchPage = async (
 ): Promise<ResearchPageReport> => {
   const projectId = data.project_id as Id;
   const taskId = data.task_id as Id;
-  const project = await options.project(projectId);
+  const read = await readLibrarianProject(options, projectId);
+  if (read.kind === 'refused') {
+    return { ...EMPTY, status: 'refused', reason: read.reason };
+  }
+  const { project } = read;
   if (project === null) {
     return { ...EMPTY, reason: 'the project no longer has a row' };
   }
@@ -266,6 +272,13 @@ export const researchPageJobHandler =
       redactions: report.redactions,
       reason: report.reason,
     };
+    if (report.status === 'refused') {
+      logger.warn(
+        fields,
+        'a spike’s research page was refused: the project’s stored settings do not parse; the recovery pass offers the artifact once more',
+      );
+      return;
+    }
     if (report.status === 'skipped') {
       // Not a thrown error, for `librarianProposalsHandler`'s reason: every skip here is a state the
       // platform can legitimately be in, and a throw would spend two pg-boss retries on it.

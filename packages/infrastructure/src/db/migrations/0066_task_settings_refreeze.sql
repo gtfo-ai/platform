@@ -1,0 +1,35 @@
+-- 0066 — a task created while its project's stored configuration could not be read (WP-106,
+-- PROGRESS backlogs 311 and 354).
+--
+-- Since WP-106 the pipeline's settings port answers a stored settings document (or organisation
+-- settings document) this release refuses as `configRefusal`, and the unreadable layer contributes
+-- nothing. Intake still makes the ticket a task, so a ticket is never lost, and it freezes two values
+-- on that task: `iteration_limits` and `pipeline_dial`. Under a refusal both come from the platform's
+-- defaults, which drop the limits, the dial overrides and the organisation's autonomy cap that the
+-- document states. Every run of such a project is refused by name at admission, so no agent runs on
+-- them meanwhile. This column marks the task, so the **first run admitted after the document is
+-- fixed takes both values again from the parsed document** and never runs on the defaults it was
+-- created with.
+--
+-- **Not null, default false.** False is "this task's frozen values were taken from a readable
+-- configuration": every task before this migration, and every task created since with no refusal.
+--
+-- **Writers.** The insert sets it at every creating site that freezes settings a refusal can reach:
+-- intake, discovery, the history bootstrap's chunk tasks and the review tasks `insertReviewTask`
+-- makes (the shadow comparison's). The sites gated on a feature switch the refused document cannot
+-- turn on create nothing meanwhile. One update clears it: `TaskRepository.refreezeSettings` — called
+-- by the intake stage-completion handler and, as the backstop, in the stage executor's admission
+-- transaction — in the same statement that rewrites `template`, `template_snapshot`,
+-- `iteration_limits`, `pipeline_dial` and `refreeze_routing`; it bumps no `version`, because `save`
+-- names none of the six (the partition `tasks-column-ownership.test.ts` holds).
+--
+-- **`refreeze_routing`** (WP-106 review round 2) is what intake routed the ticket on: its issue type
+-- and whether the tracker binding could create tickets. Intake chose the task's **template** from
+-- these and from the settings' `features.spike` / `features.epic_split`, which a refusal reads as
+-- off. So a Spike ticket became a `feature` task and an epic one task. The re-take routes again,
+-- with the same inputs and the parsed document, while the task is still at `intake` (every shipped
+-- template's first stage). It is `null` for every task not created by intake under a refusal. It is
+-- written by the insert and cleared by `refreezeSettings`, which therefore also writes `template`
+-- and `template_snapshot`; `save` names neither.
+alter table tasks add column settings_refreeze_pending boolean not null default false;
+alter table tasks add column refreeze_routing jsonb;

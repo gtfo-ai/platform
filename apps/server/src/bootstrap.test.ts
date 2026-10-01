@@ -89,16 +89,16 @@ describe('createHistoryBootstrapGate', () => {
   });
 
   it('publishes `no_git_binding` for a project with nothing to mine', async () => {
-    const answer = await gate({ features: { history_bootstrap: { enabled: true } } }, [])(
-      PROJECT,
-      null,
-    );
+    const answer = await gate(
+      { version: 1, features: { history_bootstrap: { enabled: true } } },
+      [],
+    )(PROJECT, null);
     expect(answer.canStart).toBe(false);
     expect(answer.blockedReason).toContain('no git integration');
   });
 
   it('answers the estimate for the project’s own N when the caller names none', async () => {
-    const answer = await gate({ features: { history_bootstrap: { enabled: true } } }, [
+    const answer = await gate({ version: 1, features: { history_bootstrap: { enabled: true } } }, [
       { id: 'x' },
     ])(PROJECT, null);
     expect(answer.canStart).toBe(true);
@@ -112,7 +112,7 @@ describe('createHistoryBootstrapGate', () => {
 
   it('answers the estimate for the N the caller asked about, so moving the number re-asks', async () => {
     const answer = await gate(
-      { features: { history_bootstrap: { enabled: true, budget_usd: 5 } } },
+      { version: 1, features: { history_bootstrap: { enabled: true, budget_usd: 5 } } },
       [{ id: 'x' }],
     )(PROJECT, 60);
     expect(answer.estimate.mergeRequests).toBe(60);

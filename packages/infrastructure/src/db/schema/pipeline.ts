@@ -112,8 +112,21 @@ export const tasks = pgTable('tasks', {
   reviewSubject: jsonb('review_subject').$type<MergeRequestSnapshot>(),
   /** WP-35, migration 0030: the mined history one bootstrap run reads, bounded and redacted. */
   historySample: jsonb('history_sample').$type<HistorySample>(),
-  /** WP-62, migration 0049: the dial's two pipeline policies, frozen at task start (insert only). */
+  /**
+   * WP-62, migration 0049: the dial's two pipeline policies, frozen at task start — by the insert,
+   * and once more by `refreezeSettings` when the task was created under a `configRefusal` (WP-106).
+   */
   pipelineDial: jsonb('pipeline_dial').$type<TaskPipelineDial>(),
+  /**
+   * WP-106, migration 0066: the task's frozen limits and dial were taken under a `configRefusal`, and
+   * are taken again from the parsed document before its first admitted run (`refreezeSettings`).
+   */
+  settingsRefreezePending: boolean('settings_refreeze_pending').notNull().default(false),
+  /**
+   * WP-106 review round 2, migration 0066: what intake routed the ticket on (`issue_type`,
+   * `can_create_tickets`), kept while the re-take is pending so the template is routed again.
+   */
+  refreezeRouting: jsonb('refreeze_routing').$type<JsonObject>(),
   configSnapshotHash: text('config_snapshot_hash'),
   branch: text('branch'),
   mrRef: jsonb('mr_ref').$type<MergeRequestRef>(),

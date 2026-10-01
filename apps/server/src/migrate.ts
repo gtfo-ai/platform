@@ -14,7 +14,7 @@
  * before any application wiring exists does not justify pulling the logger in early.
  */
 import process from 'node:process';
-import { db } from '@platform/infrastructure';
+import { db, jobs } from '@platform/infrastructure';
 
 const pretty = (process.env.LOG_FORMAT ?? 'json') === 'pretty';
 
@@ -30,6 +30,14 @@ const emit = (record: Record<string, unknown>): void => {
 };
 
 export const main = async (): Promise<number> => {
+  // WP-106 (PROGRESS backlog 296): this process installs pg-boss into `pgboss` and reads no
+  // variable for another schema, so an `APP_JOBS_SCHEMA` naming one is refused here, by name,
+  // before anything is installed — the same refusal every server role makes at start.
+  const jobsSchemaRefusal = jobs.jobsSchemaRefusal(process.env);
+  if (jobsSchemaRefusal !== null) {
+    emit({ level: 'error', msg: 'invalid jobs configuration', error: jobsSchemaRefusal });
+    return 2;
+  }
   let config: db.DatabaseConfig;
   try {
     config = db.loadDatabaseConfig(process.env);

@@ -67,11 +67,7 @@ import {
   startRunHeartbeat,
 } from '../pipeline/lease.js';
 import { injectedSecretRedactorFor } from '../pipeline/run-redaction.js';
-import {
-  contextBudgetRefusal,
-  type ProjectSettings,
-  repositoryConfigRefusal,
-} from '../pipeline/settings.js';
+import { type ProjectSettings, settingsAdmission } from '../pipeline/settings.js';
 import { runSettingsSnapshot } from '../pipeline/settings-snapshot.js';
 import type { RunStopReasons } from '../pipeline/stop-reasons.js';
 import type { PipelineStore, StoredTask } from '../pipeline/store.js';
@@ -300,20 +296,24 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
    * It answers a verdict rather than writing one: `skipped` writes nothing (there is nothing to
    * write on), `refused` is written by the caller through {@link refuse}, so both call sites
    * produce the same row for the same reason and neither can drift into writing a different one.
-   * `settings` is the caller's, read once outside the transaction: a project that changed its
+   * `read` is the caller's, read once outside the transaction: a project that changed its
    * configuration mid-retrieval is not what this guards, and a second read would be a second
    * connection's worth of work for a value the run was planned against.
    */
   const admissionVerdict = async (
     scope: TransactionScope,
     askId: Id,
-    settings: ProjectSettings,
+    read: ProjectSettings,
   ): Promise<
     | { readonly kind: 'skipped'; readonly reason: string }
     | { readonly kind: 'refused'; readonly reason: string }
-    | { readonly kind: 'ok'; readonly ask: StoredAsk; readonly task: StoredTask }
+    | {
+        readonly kind: 'ok';
+        readonly ask: StoredAsk;
+        readonly task: StoredTask;
+        readonly settings: ProjectSettings;
+      }
   > => {
-    const feature = askFeature(settings);
     const ask = await options.asks.load(scope.tx, askId);
     if (ask === null) {
       return { kind: 'skipped', reason: 'the ask no longer exists' };
@@ -327,22 +327,22 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
     if (task === null) {
       return { kind: 'refused', reason: 'the task no longer exists' };
     }
+    // An ask is a run, so a configuration this release cannot read refuses it exactly as it
+    // refuses a stage (`settingsAdmission`): the project's stored settings (WP-106, which also
+    // folded WP-83's context-budget ceiling in) and then the repository file (WP-63). The task is
+    // not touched (an ask never moves it); the ask is refused with the key paths. Asked before the
+    // feature switch, because `features.ask.enabled` is itself a key of the unreadable document.
+    const readable = settingsAdmission(read);
+    if (readable.kind === 'refused') {
+      return { kind: 'refused', reason: readable.reason };
+    }
+    const { settings } = readable;
+    const feature = askFeature(settings);
     if (!feature.enabled) {
       return {
         kind: 'refused',
         reason: 'this project has turned ask-the-task off (`features.ask.enabled`)',
       };
-    }
-    // WP-63: an ask is a run, so an invalid repository file refuses it exactly as it refuses a
-    // stage — the task is not touched (an ask never moves it), the ask is refused with the key paths.
-    const repository = repositoryConfigRefusal(settings);
-    if (repository !== null) {
-      return { kind: 'refused', reason: repository };
-    }
-    // WP-83 (backlog 173): a budget above the ceiling refuses an ask as it refuses a stage.
-    const overBudget = contextBudgetRefusal(settings);
-    if (overBudget !== null) {
-      return { kind: 'refused', reason: overBudget };
     }
     if (askBudgetExhausted(task, settings, feature.budgetUsd)) {
       return {
@@ -380,7 +380,7 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
             : ''),
       };
     }
-    return { kind: 'ok', ask, task };
+    return { kind: 'ok', ask, task, settings };
   };
 
   /** tx 1a: may this ask run, and what does the planner need? */
@@ -398,16 +398,18 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         readonly artifacts: Awaited<ReturnType<PipelineStore['artifacts']['listFor']>>;
       }
   > => {
-    const settings = await options.settings(job.project_id as Id);
+    // WP-106: a stored settings document this release cannot parse arrives as `configRefusal`,
+    // which `admissionVerdict` refuses by name.
+    const read = await options.settings(job.project_id as Id);
     return options.unitOfWork.transaction(async (scope) => {
-      const verdict = await admissionVerdict(scope, job.ask_id as Id, settings);
+      const verdict = await admissionVerdict(scope, job.ask_id as Id, read);
       if (verdict.kind === 'skipped') {
         return verdict;
       }
       if (verdict.kind === 'refused') {
         return await refuse(scope, job.ask_id as Id, verdict.reason);
       }
-      const { ask, task } = verdict;
+      const { ask, task, settings } = verdict;
       return {
         kind: 'ready' as const,
         ask,

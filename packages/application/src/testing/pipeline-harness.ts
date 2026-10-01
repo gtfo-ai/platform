@@ -28,6 +28,7 @@ import type {
   DomainEvent,
   Id,
   IsoDateTime,
+  MaterialisedAutonomy,
   OrganisationSettings,
   PipelineTemplate,
 } from '@platform/contracts';
@@ -55,7 +56,13 @@ import type { StageExecuteData } from '../pipeline/jobs.js';
 import { createStageRunPlanner, SKILLS_BY_ROLE } from '../pipeline/planner.js';
 import { createPipelineRuntime, type PipelineRuntime } from '../pipeline/runtime.js';
 import type { ProjectSettings } from '../pipeline/settings.js';
-import { defaultProjectSettings, staticProjectSettings } from '../pipeline/settings.js';
+import {
+  defaultProjectSettings,
+  ProjectSettingsInvalidError,
+  projectSettingsLayerFrom,
+  REFUSED_CONFIGURATION_WIP_LIMITS,
+  staticProjectSettings,
+} from '../pipeline/settings.js';
 import { createRunStopReasons } from '../pipeline/stop-reasons.js';
 import type { DependencyMetadataPort } from '../ports/dependency-metadata.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
@@ -487,6 +494,26 @@ export interface HarnessOptions {
    */
   readonly runsAgents?: boolean;
   readonly settings?: Partial<Omit<ProjectSettings, 'projectId'>>;
+  /**
+   * The project's **stored** settings layer (`projects.config`), parsed at every read the way the
+   * production port parses it (`projectSettingsLayerFrom`, WP-106): a document this release refuses
+   * gives `config: {}` and `configRefusal` carrying the refusal's message, exactly as
+   * `createProjectSettingsPort` answers (backlog 354), so every reader meets what it meets in
+   * production. Its `values` replace {@link HarnessOptions.settings}' `config`. Absent, the
+   * settings are the static ones.
+   *
+   * A function of the read, so a case can change the stored document between two reads, and may
+   * answer one reader differently from another: `job` is the queue of the job doing the reading
+   * (`stage.execute`, `task.ask`, …) or `null` for an event handler. A case that does so says why.
+   */
+  readonly storedSettings?: (read: { readonly job: string | null }) => unknown;
+  /**
+   * The dial the settings port answers at each read, when a case needs it to move (WP-106): the
+   * production port answers the project's dial **capped by the organisation's maximum**, and drops
+   * the cap while the organisation document cannot be read — which this models without modelling
+   * the organisation document. Absent, the dial is {@link HarnessOptions.settings}' `autonomy`.
+   */
+  readonly storedAutonomy?: () => MaterialisedAutonomy | null;
   /**
    * One scripted run per key. A run the walk reaches with no script fails the test through
    * `drain` ({@link UnscriptedRunError}, PROGRESS backlog 249), and so does a script production
@@ -1294,6 +1321,8 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     }),
   };
 
+  /** The queue of the job running now, for {@link HarnessOptions.storedSettings}; `null` between jobs. */
+  let activeJob: string | null = null;
   const settings: ProjectSettings = defaultProjectSettings(projectId, {
     templates: SHIPPED_TEMPLATES as Readonly<Record<string, PipelineTemplate>>,
     ...options.settings,
@@ -1357,7 +1386,32 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
         pendingUsd: (options.maintenancePendingRuns ?? 0) * reserveUsd,
       }),
     },
-    settings: staticProjectSettings(() => settings),
+    settings: {
+      forProject: async (id, tx) => {
+        const stored = options.storedSettings;
+        const base = await staticProjectSettings(() => settings).forProject(id, tx);
+        const read =
+          options.storedAutonomy === undefined
+            ? base
+            : { ...base, autonomy: options.storedAutonomy() };
+        if (stored === undefined) {
+          return read;
+        }
+        try {
+          // The production reading; nothing to redact, the clauses are the harness's own.
+          const layer = projectSettingsLayerFrom(id, stored({ job: activeJob }), (value) => value);
+          return { ...read, config: layer.values };
+        } catch (error) {
+          if (!(error instanceof ProjectSettingsInvalidError)) throw error;
+          return {
+            ...read,
+            config: {},
+            configRefusal: error.message,
+            wip: REFUSED_CONFIGURATION_WIP_LIMITS,
+          };
+        }
+      },
+    },
     jobs,
     ...(options.runsAgents === undefined ? {} : { runsAgents: options.runsAgents }),
     notifications,
@@ -1548,12 +1602,17 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     }
     const requests = jobs.takeDue(queue, clock.epochMs);
     for (const request of requests) {
-      await handler({
-        id: `job-${request.singletonKey ?? 'x'}`,
-        queue: request.queue,
-        data: (request.data ?? {}) as StageExecuteData,
-        signal: AbortSignal.abort(),
-      });
+      activeJob = queue;
+      try {
+        await handler({
+          id: `job-${request.singletonKey ?? 'x'}`,
+          queue: request.queue,
+          data: (request.data ?? {}) as StageExecuteData,
+          signal: AbortSignal.abort(),
+        });
+      } finally {
+        activeJob = null;
+      }
     }
     return requests.length;
   };

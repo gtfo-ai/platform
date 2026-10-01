@@ -79,7 +79,10 @@ describe('a feature ticket, end to end', () => {
       label: 'feature',
       tickets: TICKETS,
       // technical/12's `status_mapping`, so the ticket's own status moves with the task.
-      config: { status_mapping: { refinement: 'In Progress', ready_for_merge: 'In Review' } },
+      config: {
+        version: 1,
+        status_mapping: { refinement: 'In Progress', ready_for_merge: 'In Review' },
+      },
     });
     harness = pipeline;
 
@@ -155,7 +158,10 @@ describe('a feature ticket, end to end', () => {
       scenarios: featureScenarios,
       label: 'feature-workpad',
       tickets: TICKETS,
-      config: { status_mapping: { refinement: 'In Progress', ready_for_merge: 'In Review' } },
+      config: {
+        version: 1,
+        status_mapping: { refinement: 'In Progress', ready_for_merge: 'In Review' },
+      },
       // The interleaving this test used to fail on about one run in five, forced. Since WP-15d the
       // delay lands on the render's `pipeline.outbound` job rather than inside the dispatch — the
       // status job was enqueued first and runs first on the same single worker, so the render is
@@ -241,7 +247,10 @@ describe('BD-003: the instance audits its own outbound calls (WP-15b)', () => {
       scenarios: featureScenarios,
       label: 'feature-audit',
       tickets: TICKETS,
-      config: { status_mapping: { refinement: 'In Progress', ready_for_merge: 'In Review' } },
+      config: {
+        version: 1,
+        status_mapping: { refinement: 'In Progress', ready_for_merge: 'In Review' },
+      },
     });
     harness = pipeline;
 

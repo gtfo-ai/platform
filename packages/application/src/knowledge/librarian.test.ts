@@ -18,6 +18,7 @@ import {
 import { describe, expect, it } from 'vitest';
 import type { HandlerContext } from '../events/handler.js';
 import { exactSecretRedactor } from '../integrations/redaction.js';
+import { ProjectSettingsInvalidError } from '../pipeline/settings.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import { silentLogger } from '../ports/logger.js';
 import { MemoryEventing } from '../testing/memory-eventing.js';
@@ -32,6 +33,7 @@ import {
   recordLibrarianProposals,
   thresholdsFromConfig,
 } from './librarian.js';
+import { recordResearchPage } from './research.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000c1' as Id;
 const TASK = '00000000-0000-4000-8000-0000000000c2' as Id;
@@ -298,6 +300,55 @@ describe('recording a librarian artifact', () => {
     // wake it once and then end it, rather than this build silently calling a parse failure a
     // curation (WP-48).
     expect(proposals.curationOf(ARTIFACT)).toBeNull();
+  });
+
+  /**
+   * WP-106 (PROGRESS backlog 311): the project read parses the stored settings, and a document this
+   * release refuses throws `ProjectSettingsInvalidError`. The curation **records the refusal
+   * instead of proceeding** — a `refused` report naming the key and the `PUT`, no row, no event,
+   * no commit asked for — and writes no curation mark, so the recovery pass may offer it once more
+   * rather than this build calling an unreadable configuration a curation. The research page, which
+   * reads the same project, answers the same way.
+   */
+  it('records the refusal instead of proceeding when the project’s stored settings do not parse', async () => {
+    const { options, proposals, jobs, eventing } = harness({ autoApply: true });
+    const invalid = new ProjectSettingsInvalidError(PROJECT, [
+      'pipeline.wip.max_parallel_tasks: 500',
+    ]);
+    const refusing: LibrarianJobOptions = {
+      ...options,
+      project: async () => {
+        throw invalid;
+      },
+    };
+    const report = await recordLibrarianProposals(refusing, job);
+    expect(report.status).toBe('refused');
+    expect(report.reason).toContain('pipeline.wip.max_parallel_tasks: 500');
+    expect(report.reason).toContain(`PUT /api/projects/${PROJECT}/config`);
+    expect(proposals.rows).toEqual([]);
+    expect(proposals.curationOf(ARTIFACT)).toBeNull();
+    expect(jobs.enqueued).toEqual([]);
+    expect(await eventing.store.readStream('project', PROJECT)).toEqual([]);
+
+    const research = await recordResearchPage(refusing, {
+      ...job,
+      artifact_type: 'ResearchReport',
+    });
+    expect(research.status).toBe('refused');
+    expect(research.reason).toContain('pipeline.wip.max_parallel_tasks: 500');
+
+    // Any other error is not a refusal: it escapes, as it did before.
+    await expect(
+      recordLibrarianProposals(
+        {
+          ...options,
+          project: async () => {
+            throw new Error('connection lost');
+          },
+        },
+        job,
+      ),
+    ).rejects.toThrow('connection lost');
   });
 
   /**

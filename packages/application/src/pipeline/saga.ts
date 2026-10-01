@@ -73,6 +73,7 @@ import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import type { WorkingCalendar } from '../scheduling/working-calendar.js';
+import { escalateForConfigRefusalInHandler } from './config-refusal.js';
 import { questionDeadlineRule } from './deadline-rules.js';
 import type { PipelineIntegrations, PipelineIntegrationsPort } from './integrations.js';
 import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
@@ -82,6 +83,7 @@ import {
   enqueueStage,
   type PipelineOutboundData,
 } from './jobs.js';
+import { refrozen, refrozenColumns } from './refreeze.js';
 import { isPlatformNote } from './review-threads.js';
 import type { ProjectSettingsPort } from './settings.js';
 import {
@@ -483,6 +485,18 @@ export const runIntakeCheck = async (
       // WP-62: the dial's two pipeline policies, frozen off the project's materialised preset — the
       // one creating site where they apply, because product/19 §11 sets them for picked-up tickets.
       pipelineDial: pipelineDialFor(settings),
+      // WP-106 (migration 0066): the limits and the dial above are the platform's defaults when the
+      // project's configuration could not be read; the first admitted run takes them again.
+      settingsRefreezePending: settings.configRefusal !== undefined,
+      // Review round 2: the template above was routed with the refused document's switches read as
+      // off, so the inputs are kept and the re-take routes the ticket again (`refrozen`).
+      refreezeRouting:
+        settings.configRefusal === undefined
+          ? null
+          : {
+              issueType: (data.issue_type as string | null | undefined) ?? null,
+              canCreateTickets: routing.canCreateTickets,
+            },
       priorityRank: priorityRankOf((data.priority as string | null | undefined) ?? null),
       createdAt: options.clock.now(),
       branch: null,
@@ -645,12 +659,55 @@ const stageCompletedHandler = (options: PipelineSagaOptions): EventHandler => ({
       verdict: event.payload.verdict ?? null,
     };
 
-    const converged = await convergenceEscalation(options, context, withMr, event.payload.stage);
+    /**
+     * WP-106 review round 1: **what follows a stage is not decided on the defaults.** The plan and
+     * budget approval gates below, and the interpreter's next step, all read the project's
+     * settings. Under a `configRefusal` they would read the platform's defaults (no
+     * `plan_approval: always`, no risk classes, no budget threshold), and the measured result was
+     * a task reaching `ready_for_merge` without the approval its project asks for. So the task is
+     * parked by name here, and the completion is decided again when a person resumes it on the
+     * corrected configuration.
+     */
+    const settings = await options.settings.forProject(withMr.task.projectId, context.scope.tx);
+    if (settings.configRefusal !== undefined) {
+      await escalateForConfigRefusalInHandler(
+        {
+          store: options.store,
+          tx: context.scope.tx,
+          emit: async (events) => {
+            await context.emit(events);
+          },
+          context: contextFor(options, withMr.task.id, context.event.event.id),
+        },
+        withMr,
+        settings.configRefusal,
+        `what follows the "${event.payload.stage}" stage (its approval gates and the next stage)`,
+      );
+      return;
+    }
+
+    /**
+     * WP-106 (migration 0066, review round 2): a task created while the configuration could not be
+     * read froze the defaults — its iteration limits, its dial and, for intake, its **template**
+     * (the spike and epic-split switches read as off). They are taken again here, the first step
+     * decided on readable settings, before any gate or the next stage reads them: at `intake` the
+     * ticket is routed again exactly as intake would have routed it on the parsed document.
+     */
+    const current = refrozen(withMr, settings);
+    if (current !== withMr) {
+      await options.store.tasks.refreezeSettings(
+        context.scope.tx,
+        current.task.id,
+        refrozenColumns(current),
+      );
+    }
+
+    const converged = await convergenceEscalation(options, context, current, event.payload.stage);
     if (converged) {
       return;
     }
 
-    const gate = await planApprovalGate(options, context, withMr, event.payload.stage, signal);
+    const gate = await planApprovalGate(options, context, current, event.payload.stage, signal);
     if (gate) {
       return;
     }
@@ -659,12 +716,12 @@ const stageCompletedHandler = (options: PipelineSagaOptions): EventHandler => ({
     // an `ImplementationPlan` and the budget gate on the one that produces a `RefinedSpec` — so the
     // order between them is not load-bearing. It is stated because a template that ever produced
     // both from one stage would need an arbiter rather than a sequence (standing rule 9).
-    const budget = await budgetApprovalGate(options, context, withMr, event.payload.stage, signal);
+    const budget = await budgetApprovalGate(options, context, current, event.payload.stage, signal);
     if (budget) {
       return;
     }
 
-    await step(options, context, withMr, signal);
+    await step(options, context, current, signal);
   },
 });
 

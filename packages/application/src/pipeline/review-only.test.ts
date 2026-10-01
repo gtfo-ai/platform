@@ -17,6 +17,7 @@ import { readDataBlocks } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { exactSecretRedactor, noSecretsRedactor } from '../integrations/redaction.js';
 import type { Discussion, MergeRequest } from '../ports/integrations/git-provider.js';
+import { JOB_QUEUES } from '../ports/jobs.js';
 import {
   createPipelineHarness,
   type HarnessOptions,
@@ -24,6 +25,7 @@ import {
 } from '../testing/pipeline-harness.js';
 import {
   boundMergeRequestSnapshot,
+  insertReviewTask,
   MAX_MR_DESCRIPTION_CHARS,
   MAX_MR_FILE_DIFF_CHARS,
   MAX_MR_FILES,
@@ -446,6 +448,34 @@ describe('a human merge request opening', () => {
     expect(
       (verdict?.data as { checklists_applied?: unknown } | undefined)?.checklists_applied,
     ).toEqual([]);
+  });
+
+  /**
+   * WP-106 review round 1: which findings reach the merge request is the project's policy (the
+   * severity floor, the cap), and posting is a mutation. With the document unreadable once the
+   * review has run, nothing is posted on the defaults.
+   */
+  it('posts no finding on the defaults when the configuration cannot be read at posting time (WP-106)', async () => {
+    let harness: PipelineHarness | undefined;
+    const enabled = {
+      version: 1,
+      features: { review_only: { enabled: true, trigger: 'label', label: 'agentic-review' } },
+    };
+    const built = reviewHarness({
+      harness: {
+        storedSettings: ({ job }) =>
+          job === JOB_QUEUES.pipelineOutbound && (harness?.specs.length ?? 0) >= 1
+            ? { version: 1, pipeline: { wip: { max_parallel_tasks: 500 } } }
+            : enabled,
+      },
+    });
+    harness = built.harness;
+    await harness.publish([mrEvent('mr.opened')]);
+    expect(harness.specs.map((spec) => spec.stage)).toEqual(['code_review']);
+    expect(built.posted).toHaveLength(0);
+    // A review-only task is already `done` when its findings are posted, so there is nothing to
+    // park: the refusal is logged by name, and the findings stay on the task's verdict unposted.
+    expect(reviewTask(harness)?.task.state).toBe('done');
   });
 
   it('does nothing at all when the project has not enabled the mode', async () => {
@@ -974,5 +1004,44 @@ describe('what became of the findings', () => {
     expect(harness.events().filter((entry) => entry.type === 'task.review.observed')).toHaveLength(
       0,
     );
+  });
+});
+
+/**
+ * WP-106 review round 2: a review task created under a `configRefusal` (the shadow comparison's,
+ * `shadow/human-review.ts`) froze the defaults' iteration limits, so it is marked for the re-take
+ * before its first run — and one created from readable settings is not.
+ */
+describe('a review task created while the configuration could not be read (WP-106)', () => {
+  it.each([
+    ['marks', 'the stored settings of project p do not parse: x', true],
+    ['does not mark', undefined, false],
+  ] as const)('%s the task for the re-take', async (_what, refusal, marked) => {
+    const { harness } = reviewHarness();
+    const snapshot = boundMergeRequestSnapshot(mergeRequest(), [], noSecretsRedactor());
+    const ticket = {
+      provider: REVIEW_ONLY_TICKET_PROVIDER,
+      key: reviewTicketKeyFor(IID),
+      url: MR_URL,
+    };
+    await harness.memory.transaction(async (scope) =>
+      insertReviewTask(
+        { ids: harness.ids, clock: harness.clock, store: harness.store } as never,
+        scope,
+        {
+          projectId: PROJECT as Id,
+          ticket,
+          mode: 'shadow',
+          snapshot,
+          settings: {
+            ...harness.settings,
+            ...(refusal === undefined ? {} : { configRefusal: refusal }),
+          },
+          causeEventId: null,
+        },
+      ),
+    );
+    const [task] = harness.store.snapshot();
+    expect(task?.settingsRefreezePending).toBe(marked);
   });
 });

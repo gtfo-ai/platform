@@ -94,7 +94,9 @@ import {
   defaultProjectSettings,
   humanTimeHandlers,
   PIPELINE_ACTOR,
+  ProjectSettingsInvalidError,
   projectConfigWithRepository,
+  REFUSED_CONFIGURATION_WIP_LIMITS,
   RUN_CREDENTIAL_TTL_SECONDS,
   registerMaintenanceSchedule,
   repositoryConfigStateOf,
@@ -105,7 +107,12 @@ import {
   startTicketPoller,
   statsHandlers,
 } from '@platform/application';
-import type { Id, IsoDateTime, MaterialisedAutonomy } from '@platform/contracts';
+import type {
+  Id,
+  IsoDateTime,
+  MaterialisedAutonomy,
+  OrganisationSettings,
+} from '@platform/contracts';
 import { materialisedAutonomySchema } from '@platform/contracts';
 import type { ConfigValues } from '@platform/domain';
 import { resolveWipLimits, SHIPPED_TEMPLATES } from '@platform/domain';
@@ -147,7 +154,9 @@ import type pg from 'pg';
 import { agentRunEnvironment, composeAgentRunner } from './agent.js';
 import {
   cappedAutonomy,
+  OrganisationSettingsInvalidError,
   organisationSettingsFrom,
+  projectSettingsFrom,
   REPOSITORY_CONFIG_COLUMNS,
   type RepositoryConfigColumns,
   repositorySnapshotFrom,
@@ -648,8 +657,9 @@ export const repositoryPathOf = (repoUrl: string): string => {
 /**
  * `ProjectSettingsPort` over the project's configuration layers (WP-63).
  *
- * `config` is the **settings layer** (`projects.config`) with the repository's own
- * `.agentic/config.yml` over it — the last reading of the default branch's file
+ * `config` is the **settings layer** (`projects.config`, parsed since WP-106 — a document this
+ * release refuses contributes nothing and is answered as `configRefusal`, backlog 354) with the
+ * repository's own `.agentic/config.yml` over it — the last reading of the default branch's file
  * (`project_repository_config`), merged only when that reading is `valid`, and under the
  * tighten-only ruling (`repository-grades.ts`: the file may tighten, never loosen) — and no
  * platform default written in (`mergeConfigLayers` says why). The file's `commands` narrow again
@@ -697,18 +707,31 @@ export const createProjectSettingsPort = (
       throw new Error(`project ${projectId} has no row; the pipeline cannot settle its settings`);
     }
     const snapshot = repositorySnapshotFrom(row);
-    // The organisation settings document, parsed once for every key this port reads (WP-93):
-    // one that does not parse refuses the read rather than dropping the maximums it states.
-    const organisation = organisationSettingsFrom(row.org_settings);
+    // The organisation settings document and the project's settings layer, each **parsed, never
+    // cast** (WP-93, WP-106). One that does not parse is **not thrown** (backlog 354): it
+    // contributes nothing, and its refusal travels as `configRefusal`, which every run's admission
+    // refuses by name and the CI gate fails closed on — so no agent is planned on the defaults
+    // that stand in for it, while intake, notifications and the status mapping keep working.
+    const organisationRead = readOrganisationLayer(row.org_settings);
+    const organisation = organisationRead.settings;
     const organisationCommands = organisation.commands;
     const autonomyMaximum = organisation.autonomy?.maximum;
-    const layered = projectConfigWithRepository((row.config ?? {}) as ConfigValues, snapshot);
+    const projectRead = readProjectLayer(projectId, row.config);
+    const refusals = [projectRead.refusal, organisationRead.refusal].filter(
+      (refusal): refusal is string => refusal !== null,
+    );
+    const layered = projectConfigWithRepository(projectRead.values, snapshot);
     return defaultProjectSettings(projectId, {
       templates: SHIPPED_TEMPLATES,
       config: layered.values,
       // WP-91 (backlog 224): `pipeline.wip` — the settings' value, a repository file's where it is
       // lower, BD-010's default where both are silent — never above the organisation's.
-      wip: resolveWipLimits(layered.values.pipeline?.wip, organisation.pipeline?.wip).limits,
+      // Under a refusal, the schema's floor (1 and 1), never BD-010's defaults: no valid document
+      // could allow fewer, so a refused one admits no more than the project does (WP-106 round 1).
+      wip:
+        refusals.length > 0
+          ? REFUSED_CONFIGURATION_WIP_LIMITS
+          : resolveWipLimits(layered.values.pipeline?.wip, organisation.pipeline?.wip).limits,
       ...(organisationCommands === undefined ? {} : { organisationCommands }),
       ...(layered.repositoryCommands === undefined
         ? {}
@@ -733,9 +756,42 @@ export const createProjectSettingsPort = (
         autonomyMaximum,
       ),
       ...(autonomyMaximum === undefined ? {} : { organisationAutonomyMaximum: autonomyMaximum }),
+      ...(refusals.length === 0 ? {} : { configRefusal: refusals.join('; ') }),
     });
   },
 });
+
+/**
+ * The project's settings layer for the port: parsed, or empty with the refusal's message (WP-106,
+ * backlog 354). Empty is safe **only** beside `configRefusal`, which the port always sets with it.
+ */
+const readProjectLayer = (
+  projectId: Id,
+  stored: unknown,
+): { readonly values: ConfigValues; readonly refusal: string | null } => {
+  try {
+    return { values: projectSettingsFrom(projectId, stored), refusal: null };
+  } catch (error) {
+    if (error instanceof ProjectSettingsInvalidError) {
+      return { values: {}, refusal: error.message };
+    }
+    throw error;
+  }
+};
+
+/** The organisation document for the port, the same way: parsed, or empty with its refusal. */
+const readOrganisationLayer = (
+  stored: unknown,
+): { readonly settings: OrganisationSettings; readonly refusal: string | null } => {
+  try {
+    return { settings: organisationSettingsFrom(stored), refusal: null };
+  } catch (error) {
+    if (error instanceof OrganisationSettingsInvalidError) {
+      return { settings: {}, refusal: error.message };
+    }
+    throw error;
+  }
+};
 
 /** `projects.autonomy_policies` through its published schema, or `null` with a named log line. */
 const parseMaterialisedAutonomy = (

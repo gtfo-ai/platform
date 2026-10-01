@@ -210,6 +210,8 @@ interface StartOptions {
    * that pauses the task here reproduces WP-38's measured window deterministically.
    */
   readonly onDiff?: (harness: PipelineHarness) => Promise<void>;
+  /** WP-106: the stored document each read parses, given the harness (`HarnessOptions.storedSettings`). */
+  readonly storedSettings?: (harness: PipelineHarness | null, job: string | null) => unknown;
 }
 
 const start = async (options: StartOptions = {}): Promise<PipelineHarness> => {
@@ -229,6 +231,12 @@ const start = async (options: StartOptions = {}): Promise<PipelineHarness> => {
       business_review: completedRun(ACCEPTANCE),
     },
     gitRedactor: exactSecretRedactor(options.secrets ?? []),
+    ...(options.storedSettings === undefined
+      ? {}
+      : {
+          storedSettings: ({ job }: { readonly job: string | null }) =>
+            options.storedSettings?.(holder.harness, job),
+        }),
     ...(options.metadata === undefined ? {} : { dependencyMetadata: options.metadata }),
     ...(options.git === null
       ? { git: null }
@@ -404,6 +412,31 @@ describe('the dependency gate (product/04:58, WP-38)', () => {
     );
     expect(stored?.task.iterationCounters.human_rounds ?? 0).toBe(0);
     expect(stored?.task.iterationCounters.ci_fix ?? 0).toBe(0);
+  });
+
+  /**
+   * WP-106 review round 1: the gate's three endings are the project's dependency policy, and the
+   * policy is the unreadable document's. With the document broken for the jobs once the Developer
+   * stage has run, nothing is asked, returned or passed on the defaults (whose policy is `ask`):
+   * the task is parked by name, and nothing is recorded as the gate's decision.
+   */
+  it('decides nothing on the defaults and parks the task by name when the configuration cannot be read (WP-106)', async () => {
+    const harness = await start({
+      storedSettings: (current, job) =>
+        job === JOB_QUEUES.pipelineOutbound && (current?.specs.length ?? 0) >= 3
+          ? { version: 1, pipeline: { wip: { max_parallel_tasks: 500 } } }
+          : { version: 1 },
+    });
+    expect(questionsAsked(harness)).toHaveLength(0);
+    expect(returns(harness)).toHaveLength(0);
+    const stored = await storedTask(harness);
+    expect(stored?.task.state).toBe('needs_human');
+    expect(stored?.dependencies ?? null).toBeNull();
+    const escalated = harness.events().find((event) => event.type === 'task.escalated') as
+      | { payload: { reason?: string } }
+      | undefined;
+    expect(escalated?.payload.reason).toContain('the dependency policy');
+    expect(escalated?.payload.reason).toContain('pipeline.wip.max_parallel_tasks: 500');
   });
 
   it('names a manifest it cannot read rather than reporting that nothing was added', async () => {
@@ -670,6 +703,38 @@ describe('a decision that meets a stop a human owns is deferred to the resume (W
     stored = await storedTask(harness);
     expect(stored?.dependencies?.deferred_stage ?? null).toBeNull();
     expect(stored?.task.iterationCounters.dependency_policy ?? 0).toBeGreaterThanOrEqual(1);
+  });
+
+  /**
+   * WP-106 review round 2: the deferred decision returns the task (or asks with a deadline) on the
+   * project's policy. With the configuration unreadable when the resume duty runs, nothing is
+   * decided on the defaults: the task is parked by name, and the deferred decision stays on the
+   * record for the resume after the fix.
+   */
+  it('performs no deferred decision on the defaults when the configuration cannot be read at resume (WP-106)', async () => {
+    let broken = false;
+    const harness = await start({
+      policy: 'block',
+      onDiff: pauseOnce(),
+      storedSettings: (_current, job) =>
+        broken && job === JOB_QUEUES.pipelineOutbound
+          ? { version: 1, pipeline: { wip: { max_parallel_tasks: 500 } } }
+          : { version: 1, policies: { dependency_policy: 'block' } },
+    });
+    expect((await storedTask(harness))?.dependencies?.deferred_stage).toBe('implementation');
+
+    broken = true;
+    await resumeTaskCommand(harness.humanCommands, { taskId: taskIdOf(harness), userId: USER });
+    await harness.drain();
+
+    expect(returns(harness)).toHaveLength(0);
+    const stored = await storedTask(harness);
+    expect(stored?.task.state).toBe('needs_human');
+    expect(stored?.dependencies?.deferred_stage).toBe('implementation');
+    const escalated = harness.events().find((event) => event.type === 'task.escalated') as
+      | { payload: { reason?: string } }
+      | undefined;
+    expect(escalated?.payload.reason).toContain('the deferred dependency decision');
   });
 
   /**

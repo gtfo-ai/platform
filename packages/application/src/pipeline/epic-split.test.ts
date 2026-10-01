@@ -11,7 +11,7 @@
  * Nothing here asserts through the runner: it is scripted per stage and never reads the prompt
  * (standing rule 82), which is why the e2e exists.
  */
-import type { DomainEvent, Id } from '@platform/contracts';
+import type { DomainEvent, Id, Slug } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import { EPIC_SPLIT_TEMPLATE_ID, SPIKE_HUMAN_STAGE, SPIKE_TEMPLATE_ID } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
@@ -28,6 +28,7 @@ import {
   createPipelineHarness,
   type PipelineHarness,
 } from '../testing/pipeline-harness.js';
+import { retryStageCommand } from './commands.js';
 import {
   BreakdownRefusedError,
   childTicketIdempotencyKey,
@@ -39,6 +40,8 @@ import {
   spikeReportIdempotencyKey,
   spikeReportMarkerFor,
 } from './epic-split.js';
+import { refrozen } from './refreeze.js';
+import type { ProjectSettings } from './settings.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b1';
 const EPIC_KEY = 'ACME-7';
@@ -152,6 +155,10 @@ const splitHarness = (
      */
     readonly revokeCreateAfter?: number;
     readonly noTaskManagement?: boolean;
+    /** WP-106: break the stored configuration for the `pipeline.outbound` jobs when this says so. */
+    readonly brokenForDuties?: () => boolean;
+    /** WP-106 round 2: the stored document **every** reader parses, read at each read. */
+    readonly storedDocument?: () => unknown;
   } = {},
 ): {
   harness: PipelineHarness;
@@ -211,6 +218,17 @@ const splitHarness = (
       },
       ...(which === 'spike' ? { templateByIssueType: { epic: SPIKE_TEMPLATE_ID } } : {}),
     },
+    ...(options.storedDocument === undefined
+      ? {}
+      : { storedSettings: () => options.storedDocument?.() }),
+    ...(options.brokenForDuties === undefined
+      ? {}
+      : {
+          storedSettings: ({ job }: { readonly job: string | null }) =>
+            job === JOB_QUEUES.pipelineOutbound && options.brokenForDuties?.() === true
+              ? { version: 1, pipeline: { wip: { max_parallel_tasks: 500 } } }
+              : { version: 1, features: { epic_split: { enabled: which === 'epic_split' } } },
+        }),
     // The binding's own redactor, armed: a disarmed one proves nothing (standing rules 31, 35).
     ticketRedactor: exactSecretRedactor([{ name: 'jira_token', value: PLANTED }]),
     // The **platform's** redactor, which the runtime hands the queue handler and the decision
@@ -604,6 +622,32 @@ describe('the decision', () => {
     expect(harness.types().filter((type) => type === 'task.breakdown.decided')).toHaveLength(1);
   });
 
+  /**
+   * WP-106 review round 1: the children are filed with the document's child issue type, into the
+   * tracker. With the configuration unreadable when the filing duty runs, nothing is filed on the
+   * defaults.
+   */
+  it('files nothing on the defaults when the configuration cannot be read at filing time (WP-106)', async () => {
+    let broken = false;
+    const { harness, createdTickets } = splitHarness({
+      children: 2,
+      brokenForDuties: () => broken,
+    });
+    await harness.publish([matched('Epic')]);
+    const queued = await items(harness);
+    broken = true;
+    await decideBreakdown(deps(harness), {
+      taskId: theTask(harness).task.id,
+      itemIds: queued.map((item) => item.id),
+      decision: 'accept',
+      userId: USER,
+      reason: null,
+    });
+    await harness.drain();
+    expect(createdTickets).toHaveLength(0);
+    expect((await items(harness)).every((item) => item.ticketKey === null)).toBe(true);
+  });
+
   it('files one ticket per accepted child, under the parent, and none twice', async () => {
     const { harness, createdTickets } = splitHarness({ children: 2 });
     await harness.publish([matched('Epic')]);
@@ -876,5 +920,86 @@ describe('projectKeyOf', () => {
   it('uses a key with no separator whole, so the provider refuses rather than the platform guessing', () => {
     expect(projectKeyOf({ key: '42' })).toBe('42');
     expect(projectKeyOf({ key: '-7' })).toBe('-7');
+  });
+});
+
+/**
+ * WP-106 review round 2: intake routes a ticket with the project's spike and epic-split switches,
+ * and a configuration that cannot be read reads them as off — so a Spike ticket became a `feature`
+ * task (which would open a merge request after the fix) and an epic one task. The re-take at
+ * intake routes the ticket again exactly as intake would have on the parsed document.
+ */
+describe('a ticket routed while the configuration could not be read (WP-106 review round 2)', () => {
+  const BROKEN = { version: 1, pipeline: { wip: { max_parallel_tasks: 500 } } };
+
+  it.each([
+    [SPIKE_TEMPLATE_ID, { version: 1, features: { spike: { enabled: true } } }],
+    [EPIC_SPLIT_TEMPLATE_ID, { version: 1, features: { epic_split: { enabled: true } } }],
+  ] as const)(
+    'routes the ticket to %s once the configuration is fixed',
+    async (which, document) => {
+      let broken = true;
+      const { harness } = splitHarness({
+        template: which as 'spike' | 'epic_split',
+        storedDocument: () => (broken ? BROKEN : document),
+      });
+      await harness.publish([matched('Epic')]);
+      const parked = theTask(harness);
+      expect(parked.task.state).toBe('needs_human');
+      expect(parked.task.currentStage).toBe('intake');
+      // What intake chose on the defaults, with both switches read as off.
+      expect(parked.task.template).toBe('feature');
+      expect(harness.specs).toHaveLength(0);
+
+      broken = false;
+      await retryStageCommand(harness.humanCommands, {
+        taskId: parked.task.id,
+        userId: USER,
+        stage: 'intake' as Slug,
+      });
+      await harness.drain();
+
+      const resumed = theTask(harness);
+      expect(resumed.task.template).toBe(which);
+      expect(resumed.template).toEqual(harness.settings.templates[which]);
+      expect(resumed.settingsRefreezePending).toBe(false);
+      expect(resumed.refreezeRouting ?? null).toBeNull();
+      expect(harness.specs.map((spec) => spec.stage)).toEqual(['refinement', SPIKE_DOCUMENT_STAGE]);
+      if (which === EPIC_SPLIT_TEMPLATE_ID) {
+        expect((await items(harness)).length).toBeGreaterThan(0);
+      }
+    },
+  );
+
+  /**
+   * WP-106 review round 3 (orchestrator): the re-route is held to `intake`. A marked task that left
+   * `intake` some other way keeps its template — only its limits and dial are taken again — so a
+   * pipeline never changes under a task that has entered a stage. The positive control re-routes
+   * the same row at `intake`, which proves the fixed settings below do turn the spike template on.
+   */
+  it('re-routes only at intake: a marked task past intake keeps its template', async () => {
+    const { harness } = splitHarness({
+      template: 'spike',
+      storedDocument: () => BROKEN,
+    });
+    // The harness maps `epic` to the spike template for a spike case (as the cases above do).
+    await harness.publish([matched('Epic')]);
+    const parked = theTask(harness);
+    expect(parked.settingsRefreezePending).toBe(true);
+    expect(parked.task.template).toBe('feature');
+    const fixed: ProjectSettings = {
+      ...harness.settings,
+      config: { ...harness.settings.config, features: { spike: { enabled: true } } },
+    } as ProjectSettings;
+
+    expect(refrozen(parked, fixed).task.template).toBe(SPIKE_TEMPLATE_ID);
+
+    const past = refrozen(
+      { ...parked, task: { ...parked.task, currentStage: 'refinement' as Slug } },
+      fixed,
+    );
+    expect(past.task.template).toBe('feature');
+    expect(past.template).toEqual(parked.template);
+    expect(past.settingsRefreezePending).toBe(false);
   });
 });

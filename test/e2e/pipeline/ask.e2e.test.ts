@@ -163,7 +163,7 @@ describe('ask-the-task, through a composed instance', () => {
       tickets: TICKETS,
       // Q72 (d): the mirror is off by default, so this project turns it on — which is what makes
       // the ticket comment below an assertion about the setting rather than about the default.
-      config: { features: { ask: { mirror_to_ticket: true } } },
+      config: { version: 1, features: { ask: { mirror_to_ticket: true } } },
     });
     harness = pipeline;
     const client = await signIn(pipeline.instance.baseUrl);

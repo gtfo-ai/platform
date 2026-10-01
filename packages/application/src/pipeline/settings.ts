@@ -12,6 +12,7 @@
  */
 
 import type {
+  AgenticConfig,
   AutonomyLevel,
   CommandPolicy,
   Id,
@@ -19,7 +20,7 @@ import type {
   PipelineTemplate,
   TaskPipelineDial,
 } from '@platform/contracts';
-import { MAX_CONTEXT_BUDGET_TOKENS } from '@platform/contracts';
+import { agenticConfigSchema } from '@platform/contracts';
 import type {
   AutonomyPreset,
   ConfigValues,
@@ -110,6 +111,31 @@ export interface ProjectSettings {
    * names is then rendered `unread`, never assumed absent, and a convention file is not rendered.
    */
   readonly repositoryPrompts?: ProjectPromptReading | null;
+  /**
+   * **Why this project's stored configuration cannot be read, or absent when it can** — WP-106,
+   * PROGRESS backlogs 311 and 354.
+   *
+   * Set by the production port when `projects.config` (or the organisation settings document)
+   * fails its strict schema: the message of `ProjectSettingsInvalidError` (or of the organisation
+   * document's refusal), naming the key paths, the redacted and bounded values and the write that
+   * fixes them. The unreadable layer then contributes **nothing** to {@link ProjectSettings.config},
+   * and the platform's defaults stand in for it. Every reader decides what that means for it, and
+   * none may act on the defaults where they could drop a restriction somebody wrote (rule 20):
+   *
+   *  - **every run is refused by name at admission** ({@link settingsAdmission});
+   *  - **every step that decides a task's next transition or policy parks the task by name**
+   *    (`config-refusal.ts`): stage completion (the plan and budget approval gates, the next stage),
+   *    the CI gate, the dependency gate and its deferred decision, risk routing, the review-only
+   *    posting, the lint posting and the epic split's filing;
+   *  - the WIP limits are the schema's floor (`REFUSED_CONFIGURATION_WIP_LIMITS`);
+   *  - intake still makes the ticket a task, marked to re-take its frozen values (migration 0066);
+   *  - a notification is still sent, the status mapping writes nothing, and the measurements skip;
+   *    WP-106's notes table each reader.
+   *
+   * A field rather than a throw, because a throw turned each of those readers into a lost ticket, a
+   * lost notification or a twenty-minute stall before a generic dead letter (backlog 354).
+   */
+  readonly configRefusal?: string;
 }
 
 /**
@@ -151,34 +177,183 @@ export const repositoryConfigRefusal = (settings: ProjectSettings): string | nul
   );
 };
 
+/** The most clauses a refusal quotes; the rest are counted. Each clause is bounded where it is made. */
+export const MAX_REFUSED_SETTINGS_CLAUSES = 10;
+
 /**
- * Why a run of this project may not start because its **context budget is above the ceiling**, or
- * `null` — WP-83, PROGRESS backlog 173.
+ * **The project's stored settings layer (`projects.config`) does not parse under this release's
+ * schema** — WP-106, PROGRESS backlog 311's project half.
  *
- * `MAX_CONTEXT_BUDGET_TOKENS` fell from 200 000 to 57 500 at WP-83 (the arithmetic is at the
- * constant). The schema refuses a larger value on every write and on `GET …/config`. The
- * repository layer is re-validated on every read (`revalidateRepositorySnapshot`), so a stored
- * reading that carries one arrives `invalid` and {@link repositoryConfigRefusal} names it; but the
- * pipeline's settings read **casts** the settings layer (`projects.config`) rather than parsing it
- * (`createProjectSettingsPort` in `apps/server`), so a budget stored there before the change would
- * otherwise reach the planner and be packed to. It is refused here instead, **by name**: the key,
- * the value, the ceiling and where to write the correction — never clamped, because a silently
- * smaller pack is a configuration nobody chose (standing rule 20: this is the side that acts).
+ * Thrown by every production {@link ProjectSettingsPort} read (and by the Librarian's read of the
+ * same column) instead of handing the readers a cast. Before WP-106 both reads passed the column
+ * through as `ConfigValues`, and the census WP-106 measured first (backlog 311) found every
+ * direction among the readers: a `commands.block` written as a string blocked the characters of
+ * the command rather than the command, a feature switch stored as `"false"` was on, a WIP limit of
+ * `0` queued every task for ever under no name, and three keys threw a `TypeError` that named
+ * nothing. So the document is parsed whole, and a document that fails is **refused, never read as
+ * empty**: an empty layer drops every restriction the document states (standing rule 20).
  *
- * The one reader of the key on the run path: both planners read `context_budget_tokens` only after
- * both executors have asked this at admission, so the ceiling is enforced once (rule 41).
+ * `clauses` are `key.path: <value>` (or `key.path (<why>)`), **already redacted and bounded** by
+ * the composition root that parsed the column — it is text an operator typed and may carry a
+ * pasted credential (BD-022, standing rules 13 and 37). The message quotes at most
+ * {@link MAX_REFUSED_SETTINGS_CLAUSES} of them and counts the rest, and names the `PUT` that fixes
+ * the document.
+ *
+ * Where it lands (revised after backlog 354): the production settings port **catches** it and
+ * answers {@link ProjectSettings.configRefusal} with its message, so a run's admission refuses by
+ * name (`settingsAdmission`: the stage executor escalates the task to `needs_human` with the outcome
+ * `settings_config_invalid`, the ask executor refuses the ask) — the one refusal that replaced
+ * WP-83's bespoke `contextBudgetRefusal` — and no other reader of the port meets a throw. It is
+ * still thrown by `projectSettingsLayerFrom` itself, which `GET …/config` turns into its `409
+ * invalid_stored_config` and the Librarian's read turns into a recorded `refused` curation.
  */
-export const contextBudgetRefusal = (settings: ProjectSettings): string | null => {
-  const budget: unknown = settings.config.project?.context_budget_tokens;
-  if (typeof budget !== 'number' || budget <= MAX_CONTEXT_BUDGET_TOKENS) {
-    return null;
+export class ProjectSettingsInvalidError extends Error {
+  readonly projectId: Id;
+  readonly clauses: readonly string[];
+
+  constructor(projectId: Id, clauses: readonly string[]) {
+    const quoted = clauses.slice(0, MAX_REFUSED_SETTINGS_CLAUSES).join(', ');
+    const more =
+      clauses.length > MAX_REFUSED_SETTINGS_CLAUSES
+        ? ` and ${String(clauses.length - MAX_REFUSED_SETTINGS_CLAUSES)} more`
+        : '';
+    super(
+      `the stored settings of project ${projectId} (projects.config) do not parse under this release's schema: ${quoted}${more}. ` +
+        'They are refused rather than read as empty, because an empty layer drops every restriction they state; ' +
+        `no run of this project starts until they parse — send a corrected document to PUT /api/projects/${projectId}/config ` +
+        `(GET /api/projects/${projectId}/config names the same keys)`,
+    );
+    this.name = 'ProjectSettingsInvalidError';
+    this.projectId = projectId;
+    this.clauses = clauses;
   }
-  return (
-    `project.context_budget_tokens is ${String(budget)}, above this release's ceiling of ` +
-    `${String(MAX_CONTEXT_BUDGET_TOKENS)} estimated tokens (lowered from 200000 at WP-83: a larger ` +
-    'pack can exceed the smallest model context window). No run starts on this project until it is ' +
-    'lowered — PUT /api/projects/:project_id/config, or the key in .agentic/config.yml on the default branch'
-  );
+}
+
+/** Longest rendering of one refused clause: stored state came from outside (BD-022). */
+export const MAX_STORED_VALUE_CHARS = 120;
+
+/**
+ * `features.review_only.trigger: "manual"` — one clause per zod issue, in the order they were found
+ * (PROGRESS backlog 58's shape, moved here from `apps/server/src/routes/projects.ts` at WP-106 so the
+ * run's refusal and `GET …/config`'s `409 invalid_stored_config` quote one rendering).
+ *
+ * The **key path and the value**, because a refusal an operator cannot act on is a 500 with better
+ * manners. **Every clause goes through the caller's redactor** (TD-012, BD-022), and all three of
+ * its parts do: `projects.config` is text an operator typed, the value is whatever was stored
+ * there, and a *strict* schema puts an unrecognised **key** into both the path and zod's own
+ * message — so a credential pasted into a config file reaches this string by three routes, not one.
+ *
+ * Redaction runs **before** the bound, which is deliberate: truncating first can cut a credential
+ * in half, and half a credential is both unmatchable by the rules and still a prefix of the secret.
+ */
+export const describeConfigIssues = (
+  document: unknown,
+  issues: readonly { readonly path: readonly PropertyKey[]; readonly message: string }[],
+  redactText: (value: string) => string,
+): string => describedConfigClauses(document, issues, redactText).join(', ');
+
+/** {@link describeConfigIssues}, one clause per issue — what {@link ProjectSettingsInvalidError} carries. */
+export const describedConfigClauses = (
+  document: unknown,
+  issues: readonly { readonly path: readonly PropertyKey[]; readonly message: string }[],
+  redactText: (value: string) => string,
+): readonly string[] =>
+  issues.map((issue) => {
+    const path = issue.path.map(String).join('.');
+    const value = valueAt(document, issue.path);
+    const clause =
+      value === undefined
+        ? `${path === '' ? '(root)' : path} (${issue.message})`
+        : `${path}: ${JSON.stringify(value)}`;
+    return redactText(clause).slice(0, MAX_STORED_VALUE_CHARS);
+  });
+
+const valueAt = (document: unknown, path: readonly PropertyKey[]): unknown => {
+  let current: unknown = document;
+  for (const segment of path) {
+    if (typeof current !== 'object' || current === null) {
+      return undefined;
+    }
+    current = (current as Record<PropertyKey, unknown>)[segment];
+  }
+  return current;
+};
+
+/**
+ * **`projects.config`, parsed** — the one reading of the settings layer (WP-106, standing rule 41):
+ * the pipeline's settings port, the Librarian's read and `GET …/config` all call it.
+ *
+ * A project that has never been configured stores `{}` (the column's default), and the settings
+ * layer of "no configuration" is the schema's own minimum — `version: 1` — so `{}` (and a missing
+ * column) is read as that document. Anything else is held to {@link agenticConfigSchema}, strict,
+ * with nothing dropped and nothing defaulted.
+ *
+ * `values` is what the layering reads: the stored document as parsed, and `{}` for the empty one,
+ * so a project that configured nothing composes exactly what it composed before WP-106.
+ *
+ * @throws {ProjectSettingsInvalidError} when the stored document fails the schema — with every
+ *   clause redacted by `redactText` and bounded at {@link MAX_STORED_VALUE_CHARS}.
+ */
+export const projectSettingsLayerFrom = (
+  projectId: Id,
+  stored: unknown,
+  redactText: (value: string) => string,
+): { readonly document: AgenticConfig; readonly values: ConfigValues } => {
+  const empty =
+    stored === null ||
+    stored === undefined ||
+    (typeof stored === 'object' && !Array.isArray(stored) && Object.keys(stored).length === 0);
+  const raw = empty ? { version: 1 } : stored;
+  const parsed = agenticConfigSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new ProjectSettingsInvalidError(
+      projectId,
+      describedConfigClauses(raw, parsed.error.issues, redactText),
+    );
+  }
+  return { document: parsed.data, values: empty ? {} : parsed.data };
+};
+
+/**
+ * Why a run of this project may not start because of its **configuration**, or the settings it may
+ * be planned with — the one refusal both executors ask at admission (WP-106 folded WP-83's
+ * `contextBudgetRefusal` into it).
+ *
+ * Two layers, asked in order: the stored settings ({@link ProjectSettings.configRefusal},
+ * `settings_config_invalid`) and then the repository file ({@link repositoryConfigRefusal},
+ * `repository_config_invalid`). The settings first, because a project whose settings cannot be
+ * read has no repository question to ask of them.
+ */
+/**
+ * The WIP limits a project's settings answer while its configuration cannot be read (WP-106 review
+ * round 1): the schema's own floor, **1 and 1**. It is the one value no limit a valid document could
+ * state is below. So a refused document can never admit more tasks than the project allows, while a
+ * ticket still becomes a task and the first one still reaches the named refusal. BD-010's defaults (2
+ * and 5) would admit more than a document stating 1 asks. `maxParallelRuns` is the organisation's
+ * own limit and is not a key of either document.
+ */
+export const REFUSED_CONFIGURATION_WIP_LIMITS: WipLimits = {
+  maxParallelTasks: 1,
+  maxTasksInPipeline: 1,
+  maxParallelRuns: DEFAULT_WIP_LIMITS.maxParallelRuns,
+};
+
+export type SettingsAdmission =
+  | {
+      readonly kind: 'refused';
+      readonly word: 'settings_config_invalid' | 'repository_config_invalid';
+      readonly reason: string;
+    }
+  | { readonly kind: 'readable'; readonly settings: ProjectSettings };
+
+export const settingsAdmission = (settings: ProjectSettings): SettingsAdmission => {
+  if (settings.configRefusal !== undefined) {
+    return { kind: 'refused', word: 'settings_config_invalid', reason: settings.configRefusal };
+  }
+  const repository = repositoryConfigRefusal(settings);
+  return repository === null
+    ? { kind: 'readable', settings }
+    : { kind: 'refused', word: 'repository_config_invalid', reason: repository };
 };
 
 /**

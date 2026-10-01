@@ -157,6 +157,9 @@ export const openDiscoveryTask = async (
     template: input.template,
     // WP-62: no dial — discovery is a one-off onboarding task, not a picked-up ticket.
     pipelineDial: null,
+    // WP-106 (migration 0066): the limits above are the platform's defaults when the project's
+    // configuration could not be read; the first admitted run takes them again.
+    settingsRefreezePending: input.settings.configRefusal !== undefined,
     // Discovery blocks the wizard, so it goes to the front of the queue when the WIP policy
     // orders one. Zero is the most urgent rank `priorityRankOf` produces.
     priorityRank: 0,

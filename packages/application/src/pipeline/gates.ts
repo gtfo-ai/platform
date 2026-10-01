@@ -305,6 +305,16 @@ export const judgeCiSettlement = async (
     };
   }
   const settings = await options.settings.forProject(stored.task.projectId);
+  if (settings.configRefusal !== undefined) {
+    /**
+     * **Closed, by name** (WP-106, PROGRESS backlog 354). The tamper check compares the change
+     * with the project's protected paths, and a configuration that cannot be read has stood in the
+     * platform's defaults for them — so a pass here could carry a change that touches a path the
+     * project protects towards Ready with no agent run left to refuse it. The gate cannot be
+     * evaluated, and says why: the task is escalated with the refusal's own sentence.
+     */
+    return { kind: 'unsupported', detail: settings.configRefusal };
+  }
   const artifacts = await options.unitOfWork.transaction(async (scope) =>
     options.store.artifacts.listFor(scope.tx, stored.task.id),
   );

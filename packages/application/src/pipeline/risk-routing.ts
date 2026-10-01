@@ -67,6 +67,7 @@ import type { EventHandler, HandlerContext } from '../events/handler.js';
 import type { InboundIdentityDirectory } from '../integrations/inbound.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
+import { parkForConfigRefusal } from './config-refusal.js';
 import { coalescedMergeRequestDiff, MAX_CONFLICT_FILES } from './diff-coalescer.js';
 
 import {
@@ -206,6 +207,16 @@ export const runRiskRouting = async (
   }
 
   const settings = await options.settings.forProject(stored.task.projectId);
+  if (settings.configRefusal !== undefined) {
+    // WP-106 review round 1: the classes and the reviewers asked for are the unreadable
+    // document's policy, and asking a provider for reviewers is a mutation. Parked by name.
+    await parkForConfigRefusal(options, {
+      taskId,
+      refusal: settings.configRefusal,
+      what: 'the risk classes and reviewers for its merge request',
+    });
+    return;
+  }
   // Outside every transaction (WP-15d), and outside a run, so the call's scope holds no minted
   // credential (Q55).
   const integrations = await integrationsForProject(

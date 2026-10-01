@@ -1,5 +1,7 @@
 /**
- * `migrate.ts`'s two failure exit codes, asserted on the process (PROGRESS backlog 252).
+ * `migrate.ts`'s two failure exit codes, asserted on the process (PROGRESS backlog 252) — and,
+ * since WP-106, its refusal of an `APP_JOBS_SCHEMA` it cannot honour (backlog 296), which is the
+ * first of its two exit-2 causes.
  *
  * The file is a one-shot entrypoint whose last line sets `process.exitCode`, so importing it would
  * run it; these cases start it the way `pnpm db:migrate` does — `node` with the repository's
@@ -58,6 +60,28 @@ describe('the migrate entrypoint', () => {
         level: 'error',
         msg: 'invalid database configuration',
         error: expect.stringContaining('DATABASE_URL'),
+      }),
+    ]);
+  });
+
+  /**
+   * WP-106 (PROGRESS backlog 296, option (b)): `migrate` installs pg-boss into `pgboss` and reads no
+   * variable for another schema, so it refuses an `APP_JOBS_SCHEMA` naming one — before any SQL,
+   * naming the variable and itself — rather than installing where no server would look. The
+   * environment carries a database URL to a closed port, so only the refusal can produce exit 2.
+   */
+  it('exits 2 and names APP_JOBS_SCHEMA and migrate when the variable is not pgboss', async () => {
+    const port = await closedPort();
+    const run = runMigrate({
+      APP_JOBS_SCHEMA: 'jobs',
+      DATABASE_URL: `postgres://fake:fake@127.0.0.1:${port}/none`,
+    });
+    expect(run.status, run.stderr).toBe(2);
+    expect(run.lines).toEqual([
+      expect.objectContaining({
+        level: 'error',
+        msg: 'invalid jobs configuration',
+        error: expect.stringMatching(/^APP_JOBS_SCHEMA is "jobs".*the migrate service installs/),
       }),
     ]);
   });

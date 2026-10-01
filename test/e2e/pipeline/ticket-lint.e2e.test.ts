@@ -83,6 +83,7 @@ const PIPELINE_SPEC = {
 };
 
 const LINT_CONFIG = {
+  version: 1,
   features: {
     ticket_linter: { enabled: true, issue_types: ['Story', 'Bug'], label: 'agentic' },
   },

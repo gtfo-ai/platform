@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   JOBS_CONFIG_DEFAULTS,
+  jobsSchemaRefusal,
   loadJobsConfig,
   loadWorkingCalendar,
   loadWorkingCalendarConfig,
@@ -18,12 +19,38 @@ describe('loadJobsConfig', () => {
   it('reads every variable', () => {
     expect(
       loadJobsConfig({
-        APP_JOBS_SCHEMA: 'jobs',
+        APP_JOBS_SCHEMA: 'pgboss',
         APP_JOBS_POLL_INTERVAL_SECONDS: '0.5',
         APP_JOBS_CRON_INTERVAL_SECONDS: '5',
       }),
-    ).toEqual({ schema: 'jobs', pollingIntervalSeconds: 0.5, cronMonitorIntervalSeconds: 5 });
+    ).toEqual({ schema: 'pgboss', pollingIntervalSeconds: 0.5, cronMonitorIntervalSeconds: 5 });
   });
+
+  /**
+   * WP-106 (PROGRESS backlog 296, option (b)): `migrate` installs pg-boss into `pgboss` and reads
+   * no variable for another schema, so any other value is refused at start, naming the variable
+   * and `migrate` — not left to pg-boss's own "not installed", which names neither. Unset and
+   * `pgboss` start (rule 42).
+   */
+  it.each(['jobs', 'PgBoss', 'pgboss_v2'])(
+    'refuses APP_JOBS_SCHEMA=%s at start, naming the variable and migrate',
+    (value) => {
+      expect(jobsSchemaRefusal({ APP_JOBS_SCHEMA: value })).toMatch(
+        /^APP_JOBS_SCHEMA is ".+", and the only value this release accepts is "pgboss": the migrate service installs/,
+      );
+      expect(() => loadJobsConfig({ APP_JOBS_SCHEMA: value })).toThrow(
+        /invalid jobs configuration: APP_JOBS_SCHEMA is .* migrate .* Unset APP_JOBS_SCHEMA or set it to pgboss/,
+      );
+    },
+  );
+
+  it.each([[{}], [{ APP_JOBS_SCHEMA: 'pgboss' }], [{ APP_JOBS_SCHEMA: ' pgboss ' }]])(
+    'starts with APP_JOBS_SCHEMA unset or pgboss (%j)',
+    (env) => {
+      expect(jobsSchemaRefusal(env)).toBeNull();
+      expect(loadJobsConfig(env).schema).toBe('pgboss');
+    },
+  );
 
   it.each([
     ['APP_JOBS_SCHEMA', 'Public"; drop schema pgboss;--'],

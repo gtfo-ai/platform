@@ -183,6 +183,16 @@ export const runCoverage = async (
   }
 
   const settings = await options.settings.forProject(stored.task.projectId);
+  if (settings.configRefusal !== undefined) {
+    // WP-106 review round 1: the coverage source is the unreadable document's (a project may have
+    // turned it off), so nothing is read on the defaults. Nothing decides on this record (the
+    // Checks panel shows it), so the task is not parked; the next CI result reads it again.
+    logger.warn(
+      { task_id: stored.task.id },
+      'coverage: the project configuration could not be read, so nothing was read or stored',
+    );
+    return;
+  }
   const source = coverageSourceOf(settings.config.policies);
   if (source === 'none') {
     // product/18:38's key, doing the one thing it can do. Nothing is read and nothing is stored, so

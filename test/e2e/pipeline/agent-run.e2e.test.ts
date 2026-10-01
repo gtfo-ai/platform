@@ -365,7 +365,7 @@ describe('an instance with no launcher configuration', () => {
       label: 'no-agent',
       tickets: TICKETS,
       agent: 'none',
-      config: { status_mapping: { refinement: 'In Progress' } },
+      config: { version: 1, status_mapping: { refinement: 'In Progress' } },
     });
     harness = pipeline;
 

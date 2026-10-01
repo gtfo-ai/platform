@@ -233,6 +233,20 @@ screen shows which layer every key came from. Two things to know:
   on, the configuration screen refuses to show a configuration it cannot compute, and a stage that
   would start is parked for a human with the same sentence — until a corrected file is merged and
   re-read. The platform does not quietly run on the settings alone.
+- **Settings that no longer parse stop the project's runs too** (since WP-106). This happens when an
+  upgrade narrows a key your saved settings use, or when somebody edits them outside the screens. The
+  configuration screen answers with the key and the value it cannot accept. Every run of the project
+  is refused with the same sentence: the stage is parked for a human as *the project's stored
+  settings do not parse*, and an ask is refused. This lasts until a corrected configuration is saved.
+  The platform never plans a run on the settings as if they were empty. Tickets keep arriving
+  meanwhile: each one becomes a task, the task stops at its first stage with that sentence, and chat
+  notifications are still sent. A task already in flight stops with the same sentence at its next
+  step (a finished stage, the CI check, the dependency check) rather than going on. Once the settings are fixed, resume the parked tasks from their pages.
+  The shadow and history-bootstrap batches answer *the feature is off* meanwhile, whatever their
+  switch says: that switch is part of the settings that cannot be read. A task **created** while
+  the settings could not be read is told so in its brief. When it is resumed it takes its iteration
+  limits, its autonomy dial and its pipeline (a Spike ticket's spike pipeline, an epic's breakdown)
+  again from the corrected settings, so it never runs on the platform's defaults.
 - **The file can tighten, never loosen, what agents and reviewers are held to.** It can add
   protected paths, reviewers, risk classes and requirements, checklist items and blocked commands;
   it cannot remove any of those, re-allow a command the settings took away, move the autonomy dial

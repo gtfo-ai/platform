@@ -90,7 +90,10 @@ describe('the notification band, through a composed instance', () => {
       label: 'notify',
       tickets: TICKETS,
       // Quiet hours off — the shipped default — so everything is immediate.
-      config: { features: { digest: { enabled: true, at: '09:00', quiet_hours: null } } },
+      config: {
+        version: 1,
+        features: { digest: { enabled: true, at: '09:00', quiet_hours: null } },
+      },
     });
     harness = pipeline;
 
@@ -150,6 +153,7 @@ describe('the notification band, through a composed instance', () => {
       label: 'notify-quiet',
       tickets: TICKETS,
       config: {
+        version: 1,
         features: {
           digest: {
             enabled: true,

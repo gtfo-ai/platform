@@ -715,6 +715,8 @@ export const stageOutcomeWordSentence = (word: TaskStageOutcomeWord): string => 
       return 'Escalated: an event about this task could not be processed.';
     case 'repository_config_invalid':
       return 'Escalated: the repository’s .agentic/config.yml does not parse.';
+    case 'settings_config_invalid':
+      return 'Escalated: the project’s stored settings do not parse under this release.';
     case 'context_budget_above_ceiling':
       return 'Escalated: the project’s context budget is above this release’s ceiling.';
     case 'protected_paths_changed':

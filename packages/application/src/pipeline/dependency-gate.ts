@@ -108,9 +108,9 @@ import {
 } from '../ports/dependency-metadata.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
+import { parkForConfigRefusal } from './config-refusal.js';
 import { questionDeadlineRule } from './deadline-rules.js';
 import { coalescedMergeRequestDiff, MAX_CONFLICT_FILES } from './diff-coalescer.js';
-
 import { integrationsForProject, noRunScopedSecrets } from './integrations.js';
 import { enqueueOutbound, enqueueStage, type PipelineOutboundData } from './jobs.js';
 import type { RebaseJobOptions } from './rebase.js';
@@ -296,6 +296,16 @@ export const runDependencyGate = async (
   }
 
   const settings = await options.settings.forProject(stored.task.projectId);
+  if (settings.configRefusal !== undefined) {
+    // WP-106 review round 1: the gate's three endings (pass, a question, a return) are a policy,
+    // and the policy is the unreadable document's. Parked by name, decided again on resume.
+    await parkForConfigRefusal(options, {
+      taskId,
+      refusal: settings.configRefusal,
+      what: 'the dependency policy for its changes',
+    });
+    return;
+  }
   const config = settings.config.policies?.dependency_policy as DependencyPolicyConfig | undefined;
 
   // Outside every transaction (WP-15d), and outside a run, so the call's scope holds no minted
@@ -881,6 +891,16 @@ export const runDependencyGateResume = async (
   }
   // Read outside every transaction, like the gate's own read (WP-56's deadline).
   const settings = await options.settings.forProject(pending.task.projectId);
+  if (settings.configRefusal !== undefined) {
+    // WP-106 review round 1: the deferred decision returns the task or asks with a deadline, and
+    // both read the unreadable document. Parked by name instead.
+    await parkForConfigRefusal(options, {
+      taskId,
+      refusal: settings.configRefusal,
+      what: 'the deferred dependency decision',
+    });
+    return;
+  }
   const deadlineFrom = questionDeadlineRule(options.calendar, settings);
 
   const outcome = await inTaskTransaction(

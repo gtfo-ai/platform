@@ -147,6 +147,18 @@ const EXPECTED_OWNERSHIP: Readonly<Record<string, readonly string[]>> = {
     // the rebase gate's settlement reads both before it lets a task into Ready.
     'ci_head_sha',
     'ci_excused_paths',
+    // `refreezeSettings` — the frozen limits and dial of a task created under a `configRefusal`,
+    // taken again from the parsed document before its first admitted run, and the mark that says
+    // so (WP-106, migration 0066). One caller: the stage executor's admission. The insert writes
+    // all three at creation, which this census does not read.
+    'iteration_limits',
+    'pipeline_dial',
+    'settings_refreeze_pending',
+    // Review round 2: the template routed again at `intake` (id and snapshot), and intake's routing
+    // inputs, cleared in the same statement.
+    'template',
+    'template_snapshot',
+    'refreeze_routing',
     // `saveRequester` — the column's first `update` (WP-79, backlog 243): the reporter a stage's
     // ticket re-read resolved through `user_identities`, filled only while the row holds `null`.
     // The other writer is the **insert** (discovery, a shadow batch, a bootstrap's chunk tasks and,

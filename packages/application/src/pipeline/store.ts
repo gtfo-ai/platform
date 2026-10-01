@@ -53,7 +53,7 @@ import type {
   TokenUsage,
   WorkpadRef,
 } from '@platform/contracts';
-import type { Approval, Question, QueuedTask, Task } from '@platform/domain';
+import type { Approval, IterationLimits, Question, QueuedTask, Task } from '@platform/domain';
 import type { ConcurrencyConflict } from '../events/concurrency.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { RunSettingsSnapshot } from './settings-snapshot.js';
@@ -84,6 +84,12 @@ export interface SupersededMergeRequest {
   readonly supersededAt: IsoDateTime;
 }
 
+/** Intake's routing inputs, as {@link StoredTask.refreezeRouting} keeps them (WP-106). */
+export interface RefreezeRouting {
+  readonly issueType: string | null;
+  readonly canCreateTickets: boolean;
+}
+
 /** A task as the pipeline holds it: the aggregate plus the row's own columns. */
 export interface StoredTask {
   readonly task: Task;
@@ -99,6 +105,25 @@ export interface StoredTask {
    * written before the column existed — and compiles the template exactly as before WP-62.
    */
   readonly pipelineDial: TaskPipelineDial | null;
+  /**
+   * **This task's frozen limits and dial were taken under a `configRefusal`** (WP-106, migration
+   * 0066, PROGRESS backlogs 311 and 354): the project's stored configuration could not be read
+   * when the task was created, so `task.limits` and {@link StoredTask.pipelineDial} are the
+   * platform's defaults rather than the document's. Every run of such a project is refused at
+   * admission until the document parses, and the first run admitted after that takes both again
+   * from the parsed document ({@link TaskRepository.refreezeSettings}) — so the task never runs on
+   * the defaults it was created with. An intake-created task's **template** is routed again too,
+   * but only while it is still at `intake` ({@link StoredTask.refreezeRouting}, review round 2). Set by the insert, cleared only by `refreezeSettings`.
+   * Absent reads as `false`.
+   */
+  readonly settingsRefreezePending?: boolean;
+  /**
+   * What intake routed the ticket on, kept while {@link StoredTask.settingsRefreezePending} is set
+   * on an intake-created task (WP-106 review round 2, migration 0066): the template was chosen with
+   * the refused document's spike and epic-split switches read as off, so the re-take routes again
+   * on the parsed document from these inputs. Absent or `null` for every other task.
+   */
+  readonly refreezeRouting?: RefreezeRouting | null;
   /** Normalised by the task-management adapter — lower is more urgent (`QueuedTask`). */
   readonly priorityRank: number;
   readonly createdAt: IsoDateTime;
@@ -487,6 +512,29 @@ export interface TaskRepository {
    * @throws when the task does not exist, like `save` and the other narrow writes.
    */
   saveReadyHead(tx: Transaction, taskId: Id, headSha: string | null): Promise<void>;
+  /**
+   * Writes **only** `template`, `template_snapshot`, `iteration_limits`, `pipeline_dial`,
+   * `settings_refreeze_pending = false` and `refreeze_routing = null`,
+   * in one statement (WP-106, migration 0066): the frozen values of a task created under a
+   * `configRefusal`, taken again from the parsed document — the template routed again while the
+   * task is still at `intake`. Two callers: the stage-completion handler at `intake` (in the
+   * handler's transaction) and the stage executor's admission as the backstop (in its own). No
+   * version bump: `save` names none of these columns, so a whole-row write cannot put the defaults
+   * back.
+   *
+   * @throws when the task does not exist.
+   */
+  refreezeSettings(
+    tx: Transaction,
+    taskId: Id,
+    frozen: {
+      readonly limits: IterationLimits;
+      readonly pipelineDial: TaskPipelineDial | null;
+      /** The template id and its snapshot, routed again (round 2); the same ones when unchanged. */
+      readonly templateId: string;
+      readonly template: PipelineTemplate;
+    },
+  ): Promise<void>;
   /**
    * Writes **only** `ci_head_sha` and `ci_excused_paths`, in one statement — the head a CI gate
    * settlement passed (`null` for a failed one, WP-79 review round 2) and the protected paths it

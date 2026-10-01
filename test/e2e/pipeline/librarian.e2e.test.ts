@@ -182,7 +182,7 @@ const startMerged = async (
     label,
     tickets: TICKETS,
     agent: 'real-over-fake-cli',
-    config: { policies: { knowledge_apply: { auto_apply: true } } },
+    config: { version: 1, policies: { knowledge_apply: { auto_apply: true } } },
     jobs: options.jobs === undefined ? hold : (jobs) => hold(options.jobs?.(jobs) ?? jobs),
     env: {
       // A one-second recovery interval: the same number is the gap between passes **and** the age a

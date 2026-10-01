@@ -202,7 +202,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
       });
 
       it('round-trips the dial the insert froze, and a whole-row save never moves it (WP-62)', async () => {
-        // `tasks.pipeline_dial` has one writer, the insert (migration 0049): every later compile of
+        // `tasks.pipeline_dial` is written by the insert and by `refreezeSettings` (WP-106) only: every later compile of
         // this task reads the copy, so a save that carried the caller's value would let a dial
         // moved mid-task move the task after all.
         const dial = {
@@ -308,6 +308,59 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(cleared?.ciExcusedPaths).toEqual([]);
         await expect(
           store.tasks.saveCiSettlement(tx, nextId(), { headSha: HEAD, excusedPaths: [] }),
+        ).rejects.toThrow();
+      });
+
+      it('re-takes a refused configuration’s frozen limits and dial narrowly, and clears the mark (WP-106)', async () => {
+        const stored = task(
+          {
+            settingsRefreezePending: true,
+            refreezeRouting: { issueType: 'Spike', canCreateTickets: false },
+          },
+          'ACME-REFREEZE',
+        );
+        await store.tasks.insert(tx, stored);
+        const born = await store.tasks.load(tx, stored.task.id);
+        expect(born?.settingsRefreezePending).toBe(true);
+        expect(born?.refreezeRouting).toEqual({ issueType: 'Spike', canCreateTickets: false });
+        const dial = {
+          level: 'supervised',
+          preset_version: 1,
+          business_review: true,
+          stop_after_stage: null,
+        } as const;
+        const limits = { ...stored.task.limits, code_review: 1, human_rounds: 1 };
+        const spike = { ...stored.template, stages: stored.template.stages.slice(0, 1) };
+        await store.tasks.refreezeSettings(tx, stored.task.id, {
+          limits,
+          pipelineDial: dial,
+          templateId: 'spike',
+          template: spike,
+        });
+        const loaded = await store.tasks.load(tx, stored.task.id);
+        expect(loaded?.settingsRefreezePending).toBe(false);
+        expect(loaded?.refreezeRouting ?? null).toBeNull();
+        expect(loaded?.task.template).toBe('spike');
+        expect(loaded?.template).toEqual(spike);
+        expect(loaded?.task.limits).toEqual(limits);
+        expect(loaded?.pipelineDial).toEqual(dial);
+        // No version bump, and a whole-row save carrying the old values moves none of the three.
+        expect(loaded?.version).toBe(stored.version);
+        await store.tasks.save(tx, { ...stored, settingsRefreezePending: true });
+        const saved = await store.tasks.load(tx, stored.task.id);
+        expect(saved?.settingsRefreezePending).toBe(false);
+        expect(saved?.pipelineDial).toEqual(dial);
+        // A task created from a readable configuration is born unmarked.
+        const plain = task({}, 'ACME-PLAIN');
+        await store.tasks.insert(tx, plain);
+        expect((await store.tasks.load(tx, plain.task.id))?.settingsRefreezePending).toBe(false);
+        await expect(
+          store.tasks.refreezeSettings(tx, nextId(), {
+            limits,
+            pipelineDial: null,
+            templateId: 'feature',
+            template: stored.template,
+          }),
         ).rejects.toThrow();
       });
 

@@ -11,6 +11,7 @@ import {
   autonomyPresetFor,
   commandBaselineFor,
   pipelineDialFor,
+  settingsAdmission,
   silentLogger,
   TransactionOpenError,
   withOpenTransaction,
@@ -92,7 +93,7 @@ describe('the project settings port', () => {
 
   it('reads the effective configuration off the project row', async () => {
     const settings = await createProjectSettingsPort(
-      poolOf([{ config: { status_mapping: { refinement: 'In Progress' } } }]),
+      poolOf([{ config: { version: 1, status_mapping: { refinement: 'In Progress' } } }]),
     ).forProject('00000000-0000-4000-8000-0000000000b1' as never);
     expect(settings.config.status_mapping).toEqual({ refinement: 'In Progress' });
     // The shipped seven since WP-35 added `history_bootstrap` beside WP-25's `ticket_lint`,
@@ -152,19 +153,25 @@ describe('the project settings port', () => {
       maxTasksInPipeline: 5,
       maxParallelRuns: 4,
     });
-    expect(await read({ pipeline: { wip: { max_parallel_tasks: 1 } } })).toMatchObject({
+    expect(await read({ version: 1, pipeline: { wip: { max_parallel_tasks: 1 } } })).toMatchObject({
       maxParallelTasks: 1,
       maxTasksInPipeline: 5,
     });
     expect(
       await read(
-        { pipeline: { wip: { max_parallel_tasks: 4 } } },
+        { version: 1, pipeline: { wip: { max_parallel_tasks: 4 } } },
         { pipeline: { wip: { max_parallel_tasks: 3 } } },
       ),
     ).toMatchObject({ maxParallelTasks: 3 });
-    await expect(read({}, { pipeline: { wip: { max_parallel_tasks: 0 } } })).rejects.toThrow(
-      /organizations\.settings does not parse \(pipeline\.wip\.max_parallel_tasks: 0\)/,
-    );
+    // A maximum that does not parse is not read as none: it is the read's named refusal, which
+    // every run's admission refuses on (WP-106, backlog 354 — answered rather than thrown).
+    expect(
+      (
+        await createProjectSettingsPort(
+          poolOf([{ config: {}, org_settings: { pipeline: { wip: { max_parallel_tasks: 0 } } } }]),
+        ).forProject(project)
+      ).configRefusal,
+    ).toMatch(/organizations\.settings does not parse \(pipeline\.wip\.max_parallel_tasks: 0\)/);
   });
 
   /**
@@ -182,7 +189,12 @@ describe('the project settings port', () => {
     const project = '00000000-0000-4000-8000-0000000000b1' as never;
     const read = async (org_settings: unknown) =>
       createProjectSettingsPort(
-        poolOf([{ config: { commands: { allow: ['git push *', 'git status'] } }, org_settings }]),
+        poolOf([
+          {
+            config: { version: 1, commands: { allow: ['git push *', 'git status'] } },
+            org_settings,
+          },
+        ]),
       ).forProject(project);
     const policyOf = (settings: Awaited<ReturnType<typeof read>>) =>
       runCommandPolicy(
@@ -241,10 +253,50 @@ describe('the project settings port', () => {
     // Observe, though the project chose Supervised").
     expect((await read({ autonomy: { maximum: 'observe' } })).autonomy?.level).toBe('observe');
 
-    // A document that does not parse — an unknown key — refuses the read, naming it.
-    await expect(read({ autonomy: { maximum: 'assist' }, quiet: true })).rejects.toThrow(
+    // A document that does not parse — an unknown key — is the read's named refusal (WP-106).
+    expect((await read({ autonomy: { maximum: 'assist' }, quiet: true })).configRefusal).toMatch(
       /organizations\.settings does not parse \(\(root\) \(Unrecognized key: "quiet"\)\)/,
     );
+  });
+
+  /**
+   * WP-106 (PROGRESS backlogs 311 and 354): `projects.config` is **parsed**, never cast. A stored
+   * `pipeline.wip` the schema refuses (above its 50) used to reach admission as 500 parallel tasks.
+   * It is now the read's **named refusal** (`configRefusal`: the key path, the value and the `PUT`
+   * that fixes it, a pasted credential redacted out), which every run's admission refuses on; the
+   * layer contributes nothing, so no reader acts on the 500, and nothing throws, so no reader loses
+   * a ticket or a notification over it (rule 20).
+   */
+  it('answers a stored pipeline.wip the schema refuses as a named refusal, never as the value', async () => {
+    const project = '00000000-0000-4000-8000-0000000000b1' as never;
+    const read = async (config: unknown) =>
+      createProjectSettingsPort(poolOf([{ config, org_settings: {} }])).forProject(project);
+
+    const refused = await read({ version: 1, pipeline: { wip: { max_parallel_tasks: 500 } } });
+    expect(refused.configRefusal).toMatch(/pipeline\.wip\.max_parallel_tasks: 500/);
+    expect(refused.configRefusal).toMatch(
+      /PUT \/api\/projects\/00000000-0000-4000-8000-0000000000b1\/config/,
+    );
+    expect(refused.config).toEqual({});
+    // The schema's floor, never BD-010's defaults (2 and 5): no valid document could allow fewer.
+    expect(refused.wip).toMatchObject({ maxParallelTasks: 1, maxTasksInPipeline: 1 });
+    expect(settingsAdmission(refused)).toMatchObject({
+      kind: 'refused',
+      word: 'settings_config_invalid',
+    });
+
+    // A secret-shaped value in an unknown key is replaced before it is quoted.
+    const token = 'glpat-FAKE-wp106-not-a-real-token';
+    const planted = await read({ version: 1, notes: token });
+    expect(planted.configRefusal).toMatch(/notes/);
+    expect(planted.configRefusal).not.toContain(token);
+
+    // Both sides of the boundary (rule 42): the schema's own maximum reads, and `{}` is the
+    // never-configured project, which composes exactly what it did before.
+    const admitted = await read({ version: 1, pipeline: { wip: { max_parallel_tasks: 50 } } });
+    expect(admitted.wip).toMatchObject({ maxParallelTasks: 50 });
+    expect(admitted.configRefusal).toBeUndefined();
+    expect((await read({})).config).toEqual({});
   });
 
   it('refuses a project that has no row instead of settling defaults for a task it cannot place', async () => {

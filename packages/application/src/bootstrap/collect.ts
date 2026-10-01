@@ -336,6 +336,9 @@ export const collectHistory = async (
         template: template as PipelineTemplate,
         // WP-62: no dial — the platform's own one-stage mining task, not a picked-up ticket.
         pipelineDial: null,
+        // WP-106 (migration 0066): the batch was started under a readable configuration, but a
+        // chunk collected after it broke freezes the defaults' limits; its first run re-takes them.
+        settingsRefreezePending: settings.configRefusal !== undefined,
         // Behind a delivery, ahead of nothing: onboarding blocks nobody's merge request, and a
         // bootstrap that jumped the queue would delay the work the project is actually for.
         priorityRank: 3,

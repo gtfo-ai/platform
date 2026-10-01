@@ -89,6 +89,7 @@ import type { TicketDraft, TicketRefInput } from '../ports/integrations/task-man
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
+import { parkForConfigRefusal } from './config-refusal.js';
 import { integrationsForProject, noRunScopedSecrets, ticketWrites } from './integrations.js';
 import { enqueueOutbound, type PipelineOutboundData } from './jobs.js';
 import type { PipelineSagaOptions } from './saga.js';
@@ -833,6 +834,16 @@ export const runBreakdownCreate = async (
   }
 
   const settings = await options.settings.forProject(stored.task.projectId);
+  if (settings.configRefusal !== undefined) {
+    // WP-106 review round 1: the children are filed with the document's child issue type, and
+    // filing is a write into somebody else's backlog. Parked by name, filed on resume.
+    await parkForConfigRefusal(options, {
+      taskId,
+      refusal: settings.configRefusal,
+      what: 'how to file the accepted child tickets',
+    });
+    return;
+  }
   const feature = resolveEpicSplitSettings(settings);
   const integrations = await integrationsForProject(
     options.integrations,

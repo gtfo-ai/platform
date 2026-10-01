@@ -740,6 +740,53 @@ describe('the plan-approval gate reads the materialised dial (BD-027, WP-30)', (
     expect(stopped.types()).toContain('task.approval.requested');
   });
 
+  /**
+   * WP-106 review round 1, the reviewer's measurement. An Autonomous project with
+   * `plan_approval: 'always'` on architecture stops at `waiting_approval`; with the document
+   * unreadable to the stage-completion handler, the gate used to read the defaults and the task
+   * reached `ready_for_merge` with no approval. Now the completion is not decided at all: the task
+   * is parked by name, and after the fix a retried architecture asks for the approval again.
+   */
+  it('parks a completed stage by name rather than deciding its approval gate on the defaults (WP-106)', async () => {
+    const overrides = {
+      version: 1,
+      pipeline: {
+        template_overrides: { feature: { stages: { architecture: { plan_approval: 'always' } } } },
+      },
+    };
+    let broken = true;
+    let harness: PipelineHarness | undefined;
+    harness = dialled('autonomous', {
+      // The document breaks once the architecture run has started — a release narrowing a key
+      // while the stage runs — and only the event handlers read it broken; the jobs read the valid
+      // one, so the completion is what meets the refusal (the reviewer's trigger).
+      storedSettings: ({ job }) =>
+        broken && job === null && (harness?.specs.length ?? 0) >= 2
+          ? { version: 1, pipeline: { wip: { max_parallel_tasks: 500 } } }
+          : overrides,
+    });
+    await harness.publish([ticketMatched()]);
+    expect(harness.specs.map((spec) => spec.stage)).toEqual(['refinement', 'architecture']);
+    expect(harness.types()).not.toContain('task.approval.requested');
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    expect(taskOf(harness).task.currentStage).toBe('architecture');
+    const brief = harness.events().find((event) => event.type === 'task.escalated') as
+      | { payload: { blocker_brief?: string } }
+      | undefined;
+    expect(brief?.payload.blocker_brief).toContain('pipeline.wip.max_parallel_tasks: 500');
+    // The completed attempt keeps its verdict (`approve`); the refusal is named by the brief.
+
+    broken = false;
+    await retryStageCommand(harness.humanCommands, {
+      taskId: taskOf(harness).task.id,
+      userId: '00000000-0000-4000-8000-0000000000c1',
+      stage: 'architecture' as Slug,
+    });
+    await harness.drain();
+    expect(harness.types()).toContain('task.approval.requested');
+    expect(taskOf(harness).task.state).toBe('waiting_approval');
+  });
+
   it('lets a per-stage template override decide the mode, in both directions', async () => {
     // The override is finer grained than the dial, so it wins over `planApproval` — and only over
     // that field. It is **not** a switch for probation: `policies.probation_tasks` is, and a key
