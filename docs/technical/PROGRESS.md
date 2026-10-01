@@ -11992,6 +11992,342 @@ a domain property asserts it for any base list, and a unit case plants the eight
 
 **Done.** Needs measurement first (rule 27: measure before prescribing the fix). Take `EXPLAIN (ANALYZE, BUFFERS)` on a seeded database at two stream sizes (for example 10³ and 10⁵ project events, 10² traces), record which index is chosen and the rows read, and paste the plans here. Then either state it bounded with the numbers at the docblock, or add the narrowest fix the plan justifies: a partial expression index on `(stream_id, (payload -> 'ticket' ->> 'key'))` `where type = 'ticket.bug.traced'` (a new numbered migration, per TD-011), or a guard in the handler that skips a ticket with no prior `ticket.bug.traced` through something cheaper. Either way the docblock's *"indexed read"* clause is corrected. **Depends on** WP-90. Related: **192**.
 
+**WP-115 measurement (session 11) — the plan, before and after migration 0071.** Machine: Apple M3 Max (14 cores, 36 GB), PostgreSQL 18 in the integration harness's Testcontainers container (`fsync=off`), warm cache, one-minute load 4–8 at every run. Seeded with set-based SQL (`generate_series`) in a throwaway integration test that is **deleted** (its seeding is kept, in the same shape, by `test/integration/db/payload-lookup-indexes.integration.test.ts`); `analyze events` after each size; each query run once to warm, then `EXPLAIN (ANALYZE, BUFFERS)`. The query is the store's, byte for byte. Sizes, cumulative in one database, spread over the last 90 days (four monthly partitions populated, seven attached):
+
+| size | the project's events | `ticket.bug.traced` in the installation | events in total |
+|---|---|---|---|
+| A | 10³ (100 of them traces) | 1 000 (ten projects × 100) | 10 000 |
+| B | 10⁵ (100 traces) | 1 100 | 110 000 |
+| C | 10⁵ (the B project) | 10 100 (ninety more projects × 100) | 200 000 |
+
+Before 0071, three plans and none of them about the ticket: A, a `BitmapAnd` of `events_*_type_occurred_at_idx` and the stream index per partition (127 buffers, 0.12–0.17 ms); B, the **installation's** traces through the type index alone, one heap page each, filtered by stream and payload afterwards (1 112 buffers, 0.36–0.45 ms); C, a `BitmapAnd` again, now over 10⁵ stream entries (1 258–1 285 buffers, 2.9–3.6 ms; the never-traced A project at C 212 buffers, 0.57 ms). A never-traced ticket (`PROJ-123`, the non-bug case) costs the same as a traced one at every size — the plan is not about the ticket. **What grows it is history, whichever of the two the planner prefers: the project's stream or the installation's traces.** Corrections to this entry, re-derived (rule 81): path (b) *is* what the planner took at B, and path (a) alone was never chosen — the costly shape at C is their intersection, which reads both. The *"one indexed read"* clause is no longer in the tree (`postgres-pipeline-store.ts`'s docblock had already been narrowed to *"not a bounded indexed read … unmeasured"*); that sentence is replaced by the measured one, and the handler's docblock (`delivery-measures.ts`) now names the non-bug case and its per-edit cost.
+
+After 0071 (`events_bug_trace_ticket_idx (stream_id, ((payload->'ticket')->>'key')) where type = 'ticket.bug.traced'`, taken from the migration, not from a hand-made index): one index scan per partition at every size, 6–7 buffers and 0.02–0.05 ms, traced and never-traced alike. Index size 488 KiB for 10 100 traces over seven partitions; dropping and building it over size C took 38 ms. The planner's choice is held by `test/integration/db/payload-lookup-indexes.integration.test.ts` › "serves the re-trace lookup at 10^5 project events, for a traced and a never-traced ticket" (`EXPLAIN` without `ANALYZE`, the partition index names, and neither old index); canaried by changing the index predicate in the migration (fails with the message `the plan uses no partition of events_bug_trace_ticket_idx`), md5 restored.
+
+Plans — six of the eleven taken; the five omitted (A never-traced, B traced, C never-traced, C's A project, and each of their "after") have the shape of the one shown beside them:
+
+before 0071 — 307 A — traced ticket BUG-7:
+
+```
+Limit  (cost=404.68..404.69 rows=1 width=81) (actual time=0.150..0.152 rows=1.00 loops=1)
+  Buffers: shared hit=127
+  ->  Sort  (cost=404.68..404.70 rows=7 width=81) (actual time=0.150..0.151 rows=1.00 loops=1)
+        Sort Key: (((e.payload ->> 'outcome'::text) = 'linked'::text)) DESC, e.occurred_at DESC, e."position" DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=127
+        ->  Append  (cost=34.29..404.65 rows=7 width=81) (actual time=0.049..0.149 rows=1.00 loops=1)
+              Buffers: shared hit=127
+              ->  Bitmap Heap Scan on events_2026_07 e_1  (cost=34.29..127.53 rows=1 width=81) (actual time=0.049..0.059 rows=1.00 loops=1)
+                    Recheck Cond: ((type = 'ticket.bug.traced'::text) AND (stream_type = 'project'::text) AND (stream_id = '8cc7752a-cff9-4b84-b082-5a8fa46d0341'::uuid))
+                    Filter: ((((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'BUG-7'::text))
+                    Rows Removed by Filter: 30
+                    Heap Blocks: exact=31
+                    Buffers: shared hit=40
+                    ->  BitmapAnd  (cost=34.29..34.29 rows=31 width=0) (actual time=0.038..0.038 rows=0.00 loops=1)
+                          Buffers: shared hit=9
+                          ->  Bitmap Index Scan on events_2026_07_type_occurred_at_idx  (cost=0.00..14.60 rows=310 width=0) (actual time=0.017..0.017 rows=310.00 loops=1)
+                                Index Cond: (type = 'ticket.bug.traced'::text)
+                                Index Searches: 1
+                                Buffers: shared hit=4
+                          ->  Bitmap Index Scan on events_2026_07_stream_type_stream_id_stream_seq_idx  (cost=0.00..19.43 rows=315 width=0) (actual time=0.008..0.008 rows=315.00 loops=1)
+                                Index Cond: ((stream_type = 'project'::text) AND (stream_id = '8cc7752a-cff9-4b84-b082-5a8fa46d0341'::uuid))
+                                Index Searches: 1
+                                Buffers: shared hit=5
+              ->  Bitmap Heap Scan on events_2026_08 e_2  (cost=34.92..140.18 rows=1 width=81) (actual time=0.049..0.049 rows=0.00 loops=1)
+                    Recheck Cond: ((type = 'ticket.bug.traced'::text) AND (stream_type = 'project'::text) AND (stream_id = '8cc7752a-cff9-4b84-b082-5a8fa46d0341'::uuid))
+                    Filter: ((((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'BUG-7'::text))
+                    Rows Removed by Filter: 35
+                    Heap Blocks: exact=35
+                    Buffers: shared hit=44
+                    ->  BitmapAnd  (cost=34.92..34.92 rows=35 width=0) (actual time=0.036..0.036 rows=0.00 loops=1)
+                          Buffers: shared hit=9
+                          ->  Bitmap Index Scan on events_2026_08_type_occurred_at_idx  (cost=0.00..14.90 rows=350 width=0) (actual time=0.020..0.020 rows=350.00 loops=1)
+                                Index Cond: (type = 'ticket.bug.traced'::text)
+                                Index Searches: 1
+                                Buffers: shared hit=4
+                          ->  Bitmap Index Scan on events_2026_08_stream_type_stream_id_stream_seq_idx  (cost=0.00..19.76 rows=348 width=0) (actual time=0.010..0.010 rows=348.00 loops=1)
+                                Index Cond: ((stream_type = 'project'::text) AND (stream_id = '8cc7752a-cff9-4b84-b082-5a8fa46d0341'::uuid))
+                                Index Searches: 1
+                                Buffers: shared hit=5
+              ->  Bitmap Heap Scan on events_2026_09 e_3  (cost=34.73..136.87 rows=1 width=81) (actual time=0.038..0.038 rows=0.00 loops=1)
+                    Recheck Cond: ((type = 'ticket.bug.traced'::text) AND (stream_type = 'project'::text) AND (stream_id = '8cc7752a-cff9-4b84-b082-5a8fa46d0341'::uuid))
+                    Filter: ((((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'BUG-7'::text))
+                    Rows Removed by Filter: 34
+                    Heap Blocks: exact=34
+                    Buffers: shared hit=43
+                    ->  BitmapAnd  (cost=34.73..34.73 rows=34 width=0) (actual time=0.026..0.026 rows=0.00 loops=1)
+                          Buffers: shared hit=9
+                          ->  Bitmap Index Scan on events_2026_09_type_occurred_at_idx  (cost=0.00..14.83 rows=340 width=0) (actual time=0.014..0.014 rows=340.00 loops=1)
+                                Index Cond: (type = 'ticket.bug.traced'::text)
+                                Index Searches: 1
+                                Buffers: shared hit=4
+                          ->  Bitmap Index Scan on events_2026_09_stream_type_stream_id_stream_seq_idx  (cost=0.00..19.65 rows=337 width=0) (actual time=0.007..0.007 rows=337.00 loops=1)
+                                Index Cond: ((stream_type = 'project'::text) AND (stream_id = '8cc7752a-cff9-4b84-b082-5a8fa46d0341'::uuid))
+                                Index Searches: 1
+                                Buffers: shared hit=5
+              ->  Seq Scan on events_2026_10 e_4  (cost=0.00..0.01 rows=1 width=81) (actual time=0.001..0.001 rows=0.00 loops=1)
+                    Filter: ((type = 'ticket.bug.traced'::text) AND (stream_type = 'project'::text) AND (stream_id = '8cc7752a-cff9-4b84-b082-5a8fa46d0341'::uuid) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'BUG-7'::text))
+              ->  Seq Scan on events_2026_11 e_5  (cost=0.00..0.01 rows=1 width=81) (actual time=0.000..0.000 rows=0.00 loops=1)
+                    Filter: ((type = 'ticket.bug.traced'::text) AND (stream_type = 'project'::text) AND (stream_id = '8cc7752a-cff9-4b84-b082-5a8fa46d0341'::uuid) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'BUG-7'::text))
+              ->  Seq Scan on events_2026_12 e_6  (cost=0.00..0.01 rows=1 width=81) (actual time=0.000..0.000 rows=0.00 loops=1)
+                    Filter: ((type = 'ticket.bug.traced'::text) AND (stream_type = 'project'::text) AND (stream_id = '8cc7752a-cff9-4b84-b082-5a8fa46d0341'::uuid) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'BUG-7'::text))
+              ->  Seq Scan on events_2027_01 e_7  (cost=0.00..0.01 rows=1 width=81) (actual time=0.000..0.000 rows=0.00 loops=1)
+                    Filter: ((type = 'ticket.bug.traced'::text) AND (stream_type = 'project'::text) AND (stream_id = '8cc7752a-cff9-4b84-b082-5a8fa46d0341'::uuid) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'BUG-7'::text))
+Planning:
+  Buffers: shared hit=34
+Planning Time: 0.213 ms
+Execution Time: 0.172 ms
+```
+
+before 0071 — 307 B — non-bug ticket PROJ-123:
+
+```
+Limit  (cost=3299.48..3299.48 rows=1 width=81) (actual time=0.346..0.346 rows=0.00 loops=1)
+  Buffers: shared hit=1112
+  ->  Sort  (cost=3299.48..3299.50 rows=7 width=81) (actual time=0.346..0.346 rows=0.00 loops=1)
+        Sort Key: (((e.payload ->> 'outcome'::text) = 'linked'::text)) DESC, e.occurred_at DESC, e."position" DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=1112
+        ->  Append  (cost=14.82..3299.45 rows=7 width=81) (actual time=0.345..0.345 rows=0.00 loops=1)
+              Buffers: shared hit=1112
+              ->  Bitmap Heap Scan on events_2026_07 e_1  (cost=14.82..979.20 rows=1 width=81) (actual time=0.109..0.110 rows=0.00 loops=1)
+                    Recheck Cond: (type = 'ticket.bug.traced'::text)
+                    Filter: ((stream_type = 'project'::text) AND (stream_id = '841c974c-59a9-424a-bc42-666ed8d165d3'::uuid) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'PROJ-123'::text))
+                    Rows Removed by Filter: 341
+                    Heap Blocks: exact=341
+                    Buffers: shared hit=346
+                    ->  Bitmap Index Scan on events_2026_07_type_occurred_at_idx  (cost=0.00..14.82 rows=321 width=0) (actual time=0.014..0.014 rows=341.00 loops=1)
+                          Index Cond: (type = 'ticket.bug.traced'::text)
+                          Index Searches: 1
+                          Buffers: shared hit=5
+              ->  Bitmap Heap Scan on events_2026_08 e_2  (cost=19.33..1169.63 rows=1 width=81) (actual time=0.118..0.118 rows=0.00 loops=1)
+                    Recheck Cond: (type = 'ticket.bug.traced'::text)
+                    Filter: ((stream_type = 'project'::text) AND (stream_id = '841c974c-59a9-424a-bc42-666ed8d165d3'::uuid) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'PROJ-123'::text))
+                    Rows Removed by Filter: 385
+                    Heap Blocks: exact=383
+                    Buffers: shared hit=389
+                    ->  Bitmap Index Scan on events_2026_08_type_occurred_at_idx  (cost=0.00..19.33 rows=389 width=0) (actual time=0.013..0.014 rows=385.00 loops=1)
+                          Index Cond: (type = 'ticket.bug.traced'::text)
+                          Index Searches: 1
+                          Buffers: shared hit=6
+              ->  Bitmap Heap Scan on events_2026_09 e_3  (cost=19.30..1150.54 rows=1 width=81) (actual time=0.115..0.115 rows=0.00 loops=1)
+                    Recheck Cond: (type = 'ticket.bug.traced'::text)
+                    Filter: ((stream_type = 'project'::text) AND (stream_id = '841c974c-59a9-424a-bc42-666ed8d165d3'::uuid) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'PROJ-123'::text))
+                    Rows Removed by Filter: 374
+                    Heap Blocks: exact=371
+                    Buffers: shared hit=377
+                    ->  Bitmap Index Scan on events_2026_09_type_occurred_at_idx  (cost=0.00..19.29 rows=384 width=0) (actual time=0.013..0.013 rows=374.00 loops=1)
+                          Index Cond: (type = 'ticket.bug.traced'::text)
+                          Index Searches: 1
+                          Buffers: shared hit=6
+              ->  Seq Scan on events_2026_10 e_4  (cost=0.00..0.01 rows=1 width=81) (actual time=0.001..0.001 rows=0.00 loops=1)
+                    Filter: ((type = 'ticket.bug.traced'::text) AND (stream_type = 'project'::text) AND (stream_id = '841c974c-59a9-424a-bc42-666ed8d165d3'::uuid) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'PROJ-123'::text))
+              ->  Seq Scan on events_2026_11 e_5  (cost=0.00..0.01 rows=1 width=81) (actual time=0.000..0.000 rows=0.00 loops=1)
+                    Filter: ((type = 'ticket.bug.traced'::text) AND (stream_type = 'project'::text) AND (stream_id = '841c974c-59a9-424a-bc42-666ed8d165d3'::uuid) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'PROJ-123'::text))
+              ->  Seq Scan on events_2026_12 e_6  (cost=0.00..0.01 rows=1 width=81) (actual time=0.000..0.000 rows=0.00 loops=1)
+                    Filter: ((type = 'ticket.bug.traced'::text) AND (stream_type = 'project'::text) AND (stream_id = '841c974c-59a9-424a-bc42-666ed8d165d3'::uuid) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'PROJ-123'::text))
+              ->  Seq Scan on events_2027_01 e_7  (cost=0.00..0.01 rows=1 width=81) (actual time=0.000..0.000 rows=0.00 loops=1)
+                    Filter: ((type = 'ticket.bug.traced'::text) AND (stream_type = 'project'::text) AND (stream_id = '841c974c-59a9-424a-bc42-666ed8d165d3'::uuid) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'PROJ-123'::text))
+Planning:
+  Buffers: shared hit=34
+Planning Time: 0.187 ms
+Execution Time: 0.359 ms
+```
+
+before 0071 — 307 C (B project) — traced:
+
+```
+Limit  (cost=17286.85..17286.85 rows=1 width=81) (actual time=3.607..3.609 rows=1.00 loops=1)
+  Buffers: shared hit=1258 read=27 written=27
+  ->  Sort  (cost=17286.85..17286.87 rows=7 width=81) (actual time=3.606..3.608 rows=1.00 loops=1)
+        Sort Key: (((e.payload ->> 'outcome'::text) = 'linked'::text)) DESC, e.occurred_at DESC, e."position" DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=1258 read=27 written=27
+        ->  Append  (cost=1725.26..17286.82 rows=7 width=81) (actual time=1.257..3.605 rows=1.00 loops=1)
+              Buffers: shared hit=1258 read=27 written=27
+              ->  Bitmap Heap Scan on events_2026_07 e_1  (cost=1725.26..5383.41 rows=1 width=81) (actual time=1.257..1.277 rows=1.00 loops=1)
+                    Recheck Cond: ((type = 'ticket.bug.traced'::text) AND (stream_type = 'project'::text) AND (stream_id = '841c974c-59a9-424a-bc42-666ed8d165d3'::uuid))
+                    Filter: ((((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'BUG-7'::text))
+                    Rows Removed by Filter: 30
+                    Heap Blocks: exact=31
+                    Buffers: shared hit=377 read=27 written=27
+                    ->  BitmapAnd  (cost=1725.26..1725.26 rows=1566 width=0) (actual time=1.239..1.239 rows=0.00 loops=1)
+                          Buffers: shared hit=346 read=27 written=27
+                          ->  Bitmap Index Scan on events_2026_07_type_occurred_at_idx  (cost=0.00..100.09 rows=3157 width=0) (actual time=0.208..0.208 rows=3131.00 loops=1)
+                                Index Cond: (type = 'ticket.bug.traced'::text)
+                                Index Searches: 1
+                                Buffers: shared hit=28 read=1 written=1
+                          ->  Bitmap Index Scan on events_2026_07_stream_type_stream_id_stream_seq_idx  (cost=0.00..1624.91 rows=31250 width=0) (actual time=0.947..0.947 rows=31516.00 loops=1)
+                                Index Cond: ((stream_type = 'project'::text) AND (stream_id = '841c974c-59a9-424a-bc42-666ed8d165d3'::uuid))
+                                Index Searches: 1
+                                Buffers: shared hit=318 read=26 written=26
+              ->  Bitmap Heap Scan on events_2026_08 e_2  (cost=1914.62..6015.28 rows=1 width=81) (actual time=1.234..1.234 rows=0.00 loops=1)
+                    Recheck Cond: ((type = 'ticket.bug.traced'::text) AND (stream_type = 'project'::text) AND (stream_id = '841c974c-59a9-424a-bc42-666ed8d165d3'::uuid))
+                    Filter: ((((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'BUG-7'::text))
+                    Rows Removed by Filter: 35
+                    Heap Blocks: exact=35
+                    Buffers: shared hit=448
+                    ->  BitmapAnd  (cost=1914.62..1914.62 rows=1769 width=0) (actual time=1.193..1.193 rows=0.00 loops=1)
+                          Buffers: shared hit=413
+                          ->  Bitmap Index Scan on events_2026_08_type_occurred_at_idx  (cost=0.00..115.05 rows=3551 width=0) (actual time=0.238..0.238 rows=3535.00 loops=1)
+                                Index Cond: (type = 'ticket.bug.traced'::text)
+                                Index Searches: 1
+                                Buffers: shared hit=32
+                          ->  Bitmap Index Scan on events_2026_08_stream_type_stream_id_stream_seq_idx  (cost=0.00..1799.32 rows=34690 width=0) (actual time=0.849..0.849 rows=34831.00 loops=1)
+                                Index Cond: ((stream_type = 'project'::text) AND (stream_id = '841c974c-59a9-424a-bc42-666ed8d165d3'::uuid))
+                                Index Searches: 1
+                                Buffers: shared hit=381
+              ->  Bitmap Heap Scan on events_2026_09 e_3  (cost=1860.51..5888.05 rows=1 width=81) (actual time=1.084..1.085 rows=0.00 loops=1)
+                    Recheck Cond: ((type = 'ticket.bug.traced'::text) AND (stream_type = 'project'::text) AND (stream_id = '841c974c-59a9-424a-bc42-666ed8d165d3'::uuid))
+                    Filter: ((((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'BUG-7'::text))
+                    Rows Removed by Filter: 34
+                    Heap Blocks: exact=34
+                    Buffers: shared hit=433
+                    ->  BitmapAnd  (cost=1860.51..1860.51 rows=1752 width=0) (actual time=1.062..1.062 rows=0.00 loops=1)
+                          Buffers: shared hit=399
+                          ->  Bitmap Index Scan on events_2026_09_type_occurred_at_idx  (cost=0.00..110.67 rows=3500 width=0) (actual time=0.185..0.185 rows=3434.00 loops=1)
+                                Index Cond: (type = 'ticket.bug.traced'::text)
+                                Index Searches: 1
+                                Buffers: shared hit=31
+                          ->  Bitmap Index Scan on events_2026_09_stream_type_stream_id_stream_seq_idx  (cost=0.00..1749.59 rows=33717 width=0) (actual time=0.787..0.787 rows=33653.00 loops=1)
+                                Index Cond: ((stream_type = 'project'::text) AND (stream_id = '841c974c-59a9-424a-bc42-666ed8d165d3'::uuid))
+                                Index Searches: 1
+                                Buffers: shared hit=368
+              ->  Seq Scan on events_2026_10 e_4  (cost=0.00..0.01 rows=1 width=81) (actual time=0.006..0.006 rows=0.00 loops=1)
+                    Filter: ((type = 'ticket.bug.traced'::text) AND (stream_type = 'project'::text) AND (stream_id = '841c974c-59a9-424a-bc42-666ed8d165d3'::uuid) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'BUG-7'::text))
+              ->  Seq Scan on events_2026_11 e_5  (cost=0.00..0.01 rows=1 width=81) (actual time=0.001..0.001 rows=0.00 loops=1)
+                    Filter: ((type = 'ticket.bug.traced'::text) AND (stream_type = 'project'::text) AND (stream_id = '841c974c-59a9-424a-bc42-666ed8d165d3'::uuid) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'BUG-7'::text))
+              ->  Seq Scan on events_2026_12 e_6  (cost=0.00..0.01 rows=1 width=81) (actual time=0.001..0.001 rows=0.00 loops=1)
+                    Filter: ((type = 'ticket.bug.traced'::text) AND (stream_type = 'project'::text) AND (stream_id = '841c974c-59a9-424a-bc42-666ed8d165d3'::uuid) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'BUG-7'::text))
+              ->  Seq Scan on events_2027_01 e_7  (cost=0.00..0.01 rows=1 width=81) (actual time=0.001..0.001 rows=0.00 loops=1)
+                    Filter: ((type = 'ticket.bug.traced'::text) AND (stream_type = 'project'::text) AND (stream_id = '841c974c-59a9-424a-bc42-666ed8d165d3'::uuid) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'BUG-7'::text))
+Planning:
+  Buffers: shared hit=34
+Planning Time: 0.334 ms
+Execution Time: 3.636 ms
+```
+
+after 0071 — 307 A — traced ticket BUG-7:
+
+```
+Limit  (cost=25.05..25.05 rows=1 width=81) (actual time=0.027..0.028 rows=1.00 loops=1)
+  Buffers: shared hit=7
+  ->  Sort  (cost=25.05..25.07 rows=7 width=81) (actual time=0.027..0.027 rows=1.00 loops=1)
+        Sort Key: (((e.payload ->> 'outcome'::text) = 'linked'::text)) DESC, e.occurred_at DESC, e."position" DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=7
+        ->  Append  (cost=0.27..25.01 rows=7 width=81) (actual time=0.012..0.024 rows=1.00 loops=1)
+              Buffers: shared hit=7
+              ->  Index Scan using events_2026_07_stream_id_expr_idx on events_2026_07 e_1  (cost=0.27..8.31 rows=1 width=81) (actual time=0.012..0.012 rows=1.00 loops=1)
+                    Index Cond: ((stream_id = '021fd612-6f8c-4011-9c69-206960354327'::uuid) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'BUG-7'::text))
+                    Filter: ((stream_type = 'project'::text) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text))
+                    Index Searches: 1
+                    Buffers: shared hit=3
+              ->  Index Scan using events_2026_08_stream_id_expr_idx on events_2026_08 e_2  (cost=0.27..8.31 rows=1 width=81) (actual time=0.003..0.003 rows=0.00 loops=1)
+                    Index Cond: ((stream_id = '021fd612-6f8c-4011-9c69-206960354327'::uuid) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'BUG-7'::text))
+                    Filter: ((stream_type = 'project'::text) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text))
+                    Index Searches: 1
+                    Buffers: shared hit=2
+              ->  Index Scan using events_2026_09_stream_id_expr_idx on events_2026_09 e_3  (cost=0.27..8.31 rows=1 width=81) (actual time=0.002..0.002 rows=0.00 loops=1)
+                    Index Cond: ((stream_id = '021fd612-6f8c-4011-9c69-206960354327'::uuid) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'BUG-7'::text))
+                    Filter: ((stream_type = 'project'::text) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text))
+                    Index Searches: 1
+                    Buffers: shared hit=2
+              ->  Seq Scan on events_2026_10 e_4  (cost=0.00..0.01 rows=1 width=81) (actual time=0.004..0.004 rows=0.00 loops=1)
+                    Filter: ((type = 'ticket.bug.traced'::text) AND (stream_type = 'project'::text) AND (stream_id = '021fd612-6f8c-4011-9c69-206960354327'::uuid) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'BUG-7'::text))
+              ->  Seq Scan on events_2026_11 e_5  (cost=0.00..0.01 rows=1 width=81) (actual time=0.001..0.001 rows=0.00 loops=1)
+                    Filter: ((type = 'ticket.bug.traced'::text) AND (stream_type = 'project'::text) AND (stream_id = '021fd612-6f8c-4011-9c69-206960354327'::uuid) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'BUG-7'::text))
+              ->  Seq Scan on events_2026_12 e_6  (cost=0.00..0.01 rows=1 width=81) (actual time=0.001..0.001 rows=0.00 loops=1)
+                    Filter: ((type = 'ticket.bug.traced'::text) AND (stream_type = 'project'::text) AND (stream_id = '021fd612-6f8c-4011-9c69-206960354327'::uuid) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'BUG-7'::text))
+              ->  Seq Scan on events_2027_01 e_7  (cost=0.00..0.01 rows=1 width=81) (actual time=0.001..0.001 rows=0.00 loops=1)
+                    Filter: ((type = 'ticket.bug.traced'::text) AND (stream_type = 'project'::text) AND (stream_id = '021fd612-6f8c-4011-9c69-206960354327'::uuid) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'BUG-7'::text))
+Planning:
+  Buffers: shared hit=38
+Planning Time: 0.323 ms
+Execution Time: 0.051 ms
+```
+
+after 0071 — 307 B — non-bug ticket PROJ-123:
+
+```
+Limit  (cost=30.40..30.40 rows=1 width=81) (actual time=0.011..0.012 rows=0.00 loops=1)
+  Buffers: shared hit=6
+  ->  Sort  (cost=30.40..30.41 rows=7 width=81) (actual time=0.011..0.012 rows=0.00 loops=1)
+        Sort Key: (((e.payload ->> 'outcome'::text) = 'linked'::text)) DESC, e.occurred_at DESC, e."position" DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=6
+        ->  Append  (cost=0.27..30.36 rows=7 width=81) (actual time=0.010..0.010 rows=0.00 loops=1)
+              Buffers: shared hit=6
+              ->  Index Scan using events_2026_07_stream_id_expr_idx on events_2026_07 e_1  (cost=0.27..10.10 rows=1 width=81) (actual time=0.003..0.003 rows=0.00 loops=1)
+                    Index Cond: ((stream_id = 'dfe9369c-2dc7-4d80-88de-2baf0e8a9529'::uuid) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'PROJ-123'::text))
+                    Filter: ((stream_type = 'project'::text) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text))
+                    Index Searches: 1
+                    Buffers: shared hit=2
+              ->  Index Scan using events_2026_08_stream_id_expr_idx on events_2026_08 e_2  (cost=0.27..10.10 rows=1 width=81) (actual time=0.001..0.001 rows=0.00 loops=1)
+                    Index Cond: ((stream_id = 'dfe9369c-2dc7-4d80-88de-2baf0e8a9529'::uuid) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'PROJ-123'::text))
+                    Filter: ((stream_type = 'project'::text) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text))
+                    Index Searches: 1
+                    Buffers: shared hit=2
+              ->  Index Scan using events_2026_09_stream_id_expr_idx on events_2026_09 e_3  (cost=0.27..10.10 rows=1 width=81) (actual time=0.001..0.001 rows=0.00 loops=1)
+                    Index Cond: ((stream_id = 'dfe9369c-2dc7-4d80-88de-2baf0e8a9529'::uuid) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'PROJ-123'::text))
+                    Filter: ((stream_type = 'project'::text) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text))
+                    Index Searches: 1
+                    Buffers: shared hit=2
+              ->  Seq Scan on events_2026_10 e_4  (cost=0.00..0.01 rows=1 width=81) (actual time=0.002..0.002 rows=0.00 loops=1)
+                    Filter: ((type = 'ticket.bug.traced'::text) AND (stream_type = 'project'::text) AND (stream_id = 'dfe9369c-2dc7-4d80-88de-2baf0e8a9529'::uuid) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'PROJ-123'::text))
+              ->  Seq Scan on events_2026_11 e_5  (cost=0.00..0.01 rows=1 width=81) (actual time=0.001..0.001 rows=0.00 loops=1)
+                    Filter: ((type = 'ticket.bug.traced'::text) AND (stream_type = 'project'::text) AND (stream_id = 'dfe9369c-2dc7-4d80-88de-2baf0e8a9529'::uuid) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'PROJ-123'::text))
+              ->  Seq Scan on events_2026_12 e_6  (cost=0.00..0.01 rows=1 width=81) (actual time=0.000..0.000 rows=0.00 loops=1)
+                    Filter: ((type = 'ticket.bug.traced'::text) AND (stream_type = 'project'::text) AND (stream_id = 'dfe9369c-2dc7-4d80-88de-2baf0e8a9529'::uuid) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'PROJ-123'::text))
+              ->  Seq Scan on events_2027_01 e_7  (cost=0.00..0.01 rows=1 width=81) (actual time=0.000..0.000 rows=0.00 loops=1)
+                    Filter: ((type = 'ticket.bug.traced'::text) AND (stream_type = 'project'::text) AND (stream_id = 'dfe9369c-2dc7-4d80-88de-2baf0e8a9529'::uuid) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'PROJ-123'::text))
+Planning:
+  Buffers: shared hit=38
+Planning Time: 0.282 ms
+Execution Time: 0.028 ms
+```
+
+after 0071 — 307 C (B project) — traced:
+
+```
+Limit  (cost=110.66..110.66 rows=1 width=81) (actual time=0.022..0.022 rows=1.00 loops=1)
+  Buffers: shared hit=7
+  ->  Sort  (cost=110.66..110.68 rows=7 width=81) (actual time=0.021..0.022 rows=1.00 loops=1)
+        Sort Key: (((e.payload ->> 'outcome'::text) = 'linked'::text)) DESC, e.occurred_at DESC, e."position" DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=7
+        ->  Append  (cost=0.28..110.63 rows=7 width=81) (actual time=0.010..0.019 rows=1.00 loops=1)
+              Buffers: shared hit=7
+              ->  Index Scan using events_2026_07_stream_id_expr_idx on events_2026_07 e_1  (cost=0.28..34.35 rows=1 width=81) (actual time=0.010..0.010 rows=1.00 loops=1)
+                    Index Cond: ((stream_id = 'dfe9369c-2dc7-4d80-88de-2baf0e8a9529'::uuid) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'BUG-7'::text))
+                    Filter: ((stream_type = 'project'::text) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text))
+                    Index Searches: 1
+                    Buffers: shared hit=3
+              ->  Index Scan using events_2026_08_stream_id_expr_idx on events_2026_08 e_2  (cost=0.28..38.12 rows=1 width=81) (actual time=0.003..0.003 rows=0.00 loops=1)
+                    Index Cond: ((stream_id = 'dfe9369c-2dc7-4d80-88de-2baf0e8a9529'::uuid) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'BUG-7'::text))
+                    Filter: ((stream_type = 'project'::text) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text))
+                    Index Searches: 1
+                    Buffers: shared hit=2
+              ->  Index Scan using events_2026_09_stream_id_expr_idx on events_2026_09 e_3  (cost=0.28..38.08 rows=1 width=81) (actual time=0.002..0.002 rows=0.00 loops=1)
+                    Index Cond: ((stream_id = 'dfe9369c-2dc7-4d80-88de-2baf0e8a9529'::uuid) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'BUG-7'::text))
+                    Filter: ((stream_type = 'project'::text) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text))
+                    Index Searches: 1
+                    Buffers: shared hit=2
+              ->  Seq Scan on events_2026_10 e_4  (cost=0.00..0.01 rows=1 width=81) (actual time=0.002..0.002 rows=0.00 loops=1)
+                    Filter: ((type = 'ticket.bug.traced'::text) AND (stream_type = 'project'::text) AND (stream_id = 'dfe9369c-2dc7-4d80-88de-2baf0e8a9529'::uuid) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'BUG-7'::text))
+              ->  Seq Scan on events_2026_11 e_5  (cost=0.00..0.01 rows=1 width=81) (actual time=0.000..0.000 rows=0.00 loops=1)
+                    Filter: ((type = 'ticket.bug.traced'::text) AND (stream_type = 'project'::text) AND (stream_id = 'dfe9369c-2dc7-4d80-88de-2baf0e8a9529'::uuid) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'BUG-7'::text))
+              ->  Seq Scan on events_2026_12 e_6  (cost=0.00..0.01 rows=1 width=81) (actual time=0.000..0.000 rows=0.00 loops=1)
+                    Filter: ((type = 'ticket.bug.traced'::text) AND (stream_type = 'project'::text) AND (stream_id = 'dfe9369c-2dc7-4d80-88de-2baf0e8a9529'::uuid) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'BUG-7'::text))
+              ->  Seq Scan on events_2027_01 e_7  (cost=0.00..0.01 rows=1 width=81) (actual time=0.000..0.000 rows=0.00 loops=1)
+                    Filter: ((type = 'ticket.bug.traced'::text) AND (stream_type = 'project'::text) AND (stream_id = 'dfe9369c-2dc7-4d80-88de-2baf0e8a9529'::uuid) AND (((payload -> 'ticket'::text) ->> 'provider'::text) = 'jira-cloud'::text) AND (((payload -> 'ticket'::text) ->> 'key'::text) = 'BUG-7'::text))
+Planning:
+  Buffers: shared hit=38
+Planning Time: 0.287 ms
+Execution Time: 0.040 ms
+```
+
+
 ### 308. **First-pass acceptance matches a human comment to a task through its author's review window, not through the merge request, so a reviewer who comments on another merge request of the project during that window makes the task not first-pass: stated residual, no defect** (TODO, **nit — a stated residual, filed so it has a number**. It is stated at the predicate and in the caveat the metric publishes. **Live** on every project with reviewers who work on two merge requests at once. **Stated by the implementer, read off the tree by the refiner**; **no owner needed**; found by WP-90, session 9)
 > **M6 (architect, session 9): declined for 0.1 — a stated one-way under-count, published with its caveat.**
 
@@ -12069,6 +12405,131 @@ a domain property asserts it for any base list, and a unit case plants the eight
 
 **What.** The predicate is `action = 'project.config.export' and params->>'project_id' = $1`, ordered by `created_at desc`, `limit 10` (`apps/server/src/queries/project-queries.ts:446`, query at `:457-467`). `listProjectAudit` uses the same payload predicate (`:410`). The one index on the table is `(task_id, created_at desc)` (`packages/infrastructure/src/db/migrations/0004_pipeline.sql:219`), which a project-scoped export row cannot use. The export lookup is called from `GET …/config` (`apps/server/src/routes/projects.ts:501`) and from the export command (`apps/server/src/app.ts:513`). The implementer's words: *"Not measured."* **Done.** An `EXPLAIN (ANALYZE, BUFFERS)` at two table sizes pasted here, then either a stated bound or a new numbered migration with a partial expression index on `(params->>'project_id', created_at desc)` (serving both reads) or a `project_id` column. **Depends on** WP-91. Related: **307** (the same unmeasured-payload-predicate shape on `events`), **52**.
 
+**WP-115 measurement (session 11) — the plans, before and after migration 0071.** Same machine, container, load (4–8) and method as backlog 307's measurement. `human_actions` seeded set-based at **10⁴** and then to **10⁶** rows over 365 days: 95 % task commands (`params` names a task), 4 % settings writes and 1 % exports over 50 projects; the measured project has 12 rows (2 exports) at 10⁴ and 1 200 (200 exports) at 10⁶. The measured SQL was written out in drizzle's shape for the two functions; the planner test below explains the SQL captured from the real `findLastConfigExport` and `listProjectAudit` instead, so the shipped text is what is held.
+
+Before 0071: a sequential scan of the whole table for both reads at both sizes — 167 buffers and 0.31–0.41 ms at 10⁴, **16 667–16 683 buffers and 22–27 ms** at 10⁶ (a parallel scan with two workers), the same for a project that never exported. Linear in the installation's audit, whatever the project. After 0071 (`human_actions_project_idx ((params->>'project_id'), created_at desc) where (params->>'project_id') is not null`): one index range stopped by the limit — export 62 buffers / 0.03 ms, audit 53 / 0.045 ms, a project with nothing 3 / 0.006 ms at 10⁶; at 10⁴, 14 buffers / 0.03–0.04 ms. **Its bound is the project's own settings rows**: the export read filters the action on them newest first, so a project with 1 000 settings rows and no export walks all of them (1 011 buffers, 0.2 ms, from the pre-migration probe of the same index). An expression index rather than a `project_id` column: no insert site changes, nothing to backfill, and a task command's row would hold a null there anyway. Index 3.3 MiB for 50 000 project rows; dropping and building it over 10⁶ rows took 71 ms. Held by `test/integration/db/payload-lookup-indexes.integration.test.ts` › "serves findLastConfigExport and listProjectAudit at 10^6 rows" (the SQL captured from the real functions through a drizzle logger, then `EXPLAIN`); canaried by narrowing the index predicate (fails with the message `the plan does not use human_actions_project_idx`), md5 restored.
+
+Plans:
+
+before 0071 — 312 A — findLastConfigExport:
+
+```
+Limit  (cost=342.01..342.01 rows=1 width=72) (actual time=0.313..0.313 rows=2.00 loops=1)
+  Buffers: shared hit=167
+  ->  Sort  (cost=342.01..342.01 rows=1 width=72) (actual time=0.313..0.313 rows=2.00 loops=1)
+        Sort Key: created_at DESC
+        Sort Method: quicksort  Memory: 26kB
+        Buffers: shared hit=167
+        ->  Seq Scan on human_actions  (cost=0.00..342.00 rows=1 width=72) (actual time=0.021..0.312 rows=2.00 loops=1)
+              Filter: ((action = 'project.config.export'::text) AND ((params ->> 'project_id'::text) = 'c8317262-6d2b-4030-bcff-af4aad43c1a8'::text))
+              Rows Removed by Filter: 9998
+              Buffers: shared hit=167
+Planning Time: 0.012 ms
+Execution Time: 0.317 ms
+```
+
+before 0071 — 312 B — findLastConfigExport:
+
+```
+Limit  (cost=24964.38..24964.41 rows=10 width=72) (actual time=18.445..22.412 rows=10.00 loops=1)
+  Buffers: shared hit=16124 read=543 written=121
+  ->  Sort  (cost=24964.38..24964.50 rows=47 width=72) (actual time=18.444..22.411 rows=10.00 loops=1)
+        Sort Key: created_at DESC
+        Sort Method: top-N heapsort  Memory: 35kB
+        Buffers: shared hit=16124 read=543 written=121
+        ->  Gather  (cost=1000.00..24963.37 rows=47 width=72) (actual time=0.461..22.368 rows=200.00 loops=1)
+              Workers Planned: 2
+              Workers Launched: 2
+              Buffers: shared hit=16124 read=543 written=121
+              ->  Parallel Seq Scan on human_actions  (cost=0.00..23958.67 rows=20 width=72) (actual time=0.460..17.068 rows=66.67 loops=3)
+                    Filter: ((action = 'project.config.export'::text) AND ((params ->> 'project_id'::text) = 'c8317262-6d2b-4030-bcff-af4aad43c1a8'::text))
+                    Rows Removed by Filter: 333267
+                    Buffers: shared hit=16124 read=543 written=121
+Planning Time: 0.051 ms
+Execution Time: 22.425 ms
+```
+
+before 0071 — 312 B — listProjectAudit:
+
+```
+Limit  (cost=24009.34..24015.16 rows=50 width=147) (actual time=22.495..26.492 rows=50.00 loops=1)
+  Buffers: shared hit=16136 read=547 written=104
+  ->  Gather Merge  (cost=24009.34..24591.55 rows=4999 width=147) (actual time=22.494..26.486 rows=50.00 loops=1)
+        Workers Planned: 2
+        Workers Launched: 2
+        Buffers: shared hit=16136 read=547 written=104
+        ->  Sort  (cost=23009.31..23014.52 rows=2083 width=147) (actual time=21.047..21.050 rows=39.00 loops=3)
+              Sort Key: human_actions.created_at DESC
+              Sort Method: top-N heapsort  Memory: 76kB
+              Buffers: shared hit=16136 read=547 written=104
+              Worker 0:  Sort Method: top-N heapsort  Memory: 76kB
+              Worker 1:  Sort Method: top-N heapsort  Memory: 76kB
+              ->  Hash Left Join  (cost=17.65..22940.12 rows=2083 width=147) (actual time=0.077..20.942 rows=400.00 loops=3)
+                    Hash Cond: (human_actions.user_id = users.id)
+                    Buffers: shared hit=16120 read=547 written=104
+                    ->  Parallel Seq Scan on human_actions  (cost=0.00..22917.00 rows=2083 width=115) (actual time=0.070..20.887 rows=400.00 loops=3)
+                          Filter: ((params ->> 'project_id'::text) = 'c8317262-6d2b-4030-bcff-af4aad43c1a8'::text)
+                          Rows Removed by Filter: 332933
+                          Buffers: shared hit=16120 read=547 written=104
+                    ->  Hash  (cost=13.40..13.40 rows=340 width=48) (actual time=0.003..0.003 rows=0.00 loops=3)
+                          Buckets: 1024  Batches: 1  Memory Usage: 8kB
+                          ->  Seq Scan on users  (cost=0.00..13.40 rows=340 width=48) (actual time=0.002..0.002 rows=0.00 loops=3)
+Planning:
+  Buffers: shared hit=2
+Planning Time: 0.081 ms
+Execution Time: 26.527 ms
+```
+
+after 0071 — 312 B — findLastConfigExport:
+
+```
+Limit  (cost=0.41..3620.00 rows=10 width=72) (actual time=0.009..0.023 rows=10.00 loops=1)
+  Buffers: shared hit=62
+  ->  Index Scan using human_actions_project_idx on human_actions  (cost=0.41..17736.39 rows=49 width=72) (actual time=0.009..0.023 rows=10.00 loops=1)
+        Index Cond: ((params ->> 'project_id'::text) = '4dd4c3e8-2959-4fad-8276-91a7e078099d'::text)
+        Filter: (action = 'project.config.export'::text)
+        Rows Removed by Filter: 49
+        Index Searches: 1
+        Buffers: shared hit=62
+Planning Time: 0.032 ms
+Execution Time: 0.030 ms
+```
+
+after 0071 — 312 B — listProjectAudit:
+
+```
+Limit  (cost=0.56..186.49 rows=50 width=147) (actual time=0.013..0.038 rows=50.00 loops=1)
+  Buffers: shared hit=53
+  ->  Nested Loop Left Join  (cost=0.56..18592.92 rows=5000 width=147) (actual time=0.012..0.035 rows=50.00 loops=1)
+        Buffers: shared hit=53
+        ->  Index Scan using human_actions_project_idx on human_actions  (cost=0.41..17723.89 rows=5000 width=115) (actual time=0.005..0.019 rows=50.00 loops=1)
+              Index Cond: ((params ->> 'project_id'::text) = '4dd4c3e8-2959-4fad-8276-91a7e078099d'::text)
+              Index Searches: 1
+              Buffers: shared hit=53
+        ->  Index Scan using users_pkey on users  (cost=0.15..0.17 rows=1 width=48) (actual time=0.000..0.000 rows=0.00 loops=50)
+              Index Cond: (id = human_actions.user_id)
+              Index Searches: 0
+Planning:
+  Buffers: shared hit=2
+Planning Time: 0.050 ms
+Execution Time: 0.045 ms
+```
+
+after 0071 — 312 B — export, project with none:
+
+```
+Limit  (cost=0.41..3620.00 rows=10 width=72) (actual time=0.003..0.003 rows=0.00 loops=1)
+  Buffers: shared hit=3
+  ->  Index Scan using human_actions_project_idx on human_actions  (cost=0.41..17736.39 rows=49 width=72) (actual time=0.003..0.003 rows=0.00 loops=1)
+        Index Cond: ((params ->> 'project_id'::text) = '69e70276-07d8-460b-8a48-387a09d8d643'::text)
+        Filter: (action = 'project.config.export'::text)
+        Index Searches: 1
+        Buffers: shared hit=3
+Planning Time: 0.016 ms
+Execution Time: 0.006 ms
+```
+
+
 ### 313. **An open export merge request carrying an older configuration blocks a newer export until someone merges or closes it: stated residual, no defect** (TODO, **nit — decided and stated, filed so it has a number**. It is stated at the code, in the answer the operator receives and in the user guide. **Live** on every project that exports twice without merging. **Stated by the implementer, read by the refiner**; **no owner needed** unless operators find it clumsy; found by WP-91, session 9)
 > **M6 (architect, session 9): declined for 0.1 — decided and stated; pushing onto the open export branch is a larger change nobody has asked for.**
 
@@ -12078,6 +12539,20 @@ a domain property asserts it for any base list, and a unit case plants the eight
 > **M6 (architect, session 9): folded into **WP-115**.**
 
 **What.** `tasks.counts` runs `pg_advisory_xact_lock(hashtextextended('task_admission/' || $1, 0))` before counting (`packages/infrastructure/src/pipeline/postgres-pipeline-store.ts:834-838`). The lock is released at commit, so it is held for the rest of the calling handler's transaction, not just the count. The callers are the intake handler (`packages/application/src/pipeline/saga.ts:534`, after the task insert, then the queue or admit writes and event appends) and `pipeline.scheduler` on `task.completed`/`cancelled`/`escalated`/`paused` (`:1592`, then a queue read and the promotions). The implementer's words: *"a project's intakes and scheduler ticks now serialise on the lock. They were already short transactions, and this was not measured under load."* **The part to measure, not asserted here:** each waiting dispatch holds a connection from the dispatcher's `2 × concurrency + 1` floor. N simultaneous intakes for one project could therefore occupy N of them while one works, delaying other projects' dispatch. **Done.** A measurement at the e2e tier: M intakes for one project delivered at once, at dispatcher concurrency above one, with an intake for a second project alongside. Record the wall time to admit all M, the second project's intake latency against the same run with the lock removed, and the pool's waiting count. Paste the numbers here, then state the bound at the port's docblock or narrow the lock's span. **Depends on** WP-91. Related: **224**, **307**.
+
+**WP-115 measurement (session 11).** **The cause in this entry, re-derived first (rule 81), is half right.** The intake's admission does **not** run in the dispatcher: since WP-15d the intake handler only enqueues, and `tasks.counts` is called from `runIntakeCheck`'s write transaction inside a `pipeline.outbound` job (`saga.ts`, the `intake_check` duty), whose worker runs at concurrency **1 per process** (`pipeline/runtime.ts`). So one process never has two intakes waiting on each other; intakes contend only **across processes** (TD-028's topology: every `worker`/`all` process runs an outbound worker). The dispatcher half is the **scheduler** (`pipeline.scheduler`, on `task.completed`/`cancelled`/`escalated`/`paused`), which runs at up to `APP_DISPATCH_MAX_CONCURRENCY` per process and does take the lock in its dispatch. And a waiter cannot starve another project's pool: the outbound worker's one connection and each dispatch's two are already reserved in the floor (`POOL_RESERVATIONS.pipeline`, `2 × concurrency + 1`).
+
+**Measured** at the e2e tier in a throwaway file (**deleted**): three whole `apps/server` processes on one database — one `ROLE=all`, two `ROLE=worker`, all `agent: 'none'` so nothing but admission runs — at `APP_DISPATCH_MAX_CONCURRENCY=4`, `APP_DB_POOL_MAX` = each role's floor at that concurrency + 1 (31, 29, 29), the harness's `APP_JOBS_POLL_INTERVAL_SECONDS=0.5`; project B a second project of the same organisation with the same two bindings; WIP at BD-010's defaults (2 active, 5 in pipeline). **Phase 1**: M `ticket.matched` for A and one for B appended in one transaction, the B event last; sampled every 5 ms (task rows per project, each process's `pool.waitingCount`/`totalCount`, `pg_stat_activity` advisory waits). **Phase 2**: M `task.paused` for A's tasks and one for B's task, each on its own stream, so up to four scheduler dispatches per process run at once. **Lock waits of 1 ms or more are counted by the server**: `log_lock_waits = on` with `deadlock_timeout = 1ms` (`alter system`, reloaded, in the throwaway container), read off `docker logs`, and the instrument proved each run by a deliberate 30 ms advisory wait from two harness connections (logged as `acquired … after 29.6–31.6 ms` every time). *Without the lock* is the same tree with the `pg_advisory_xact_lock` statement replaced by `select $1::text` (copied, mutated, run, restored, md5 matched). Machine: Apple M3 Max, one-minute load 3.9–7.0 at the start of every run.
+
+| lock | M | runs | phase 1: all M of A admitted | phase 1: B admitted | phase 2: all M passes | phase 2: B's pass | advisory waits ≥ 1 ms (log) | pool waiting, max per process |
+|---|---|---|---|---|---|---|---|---|
+| on | 20 | 9 (phase 2 in 4, log in 5) | 3 434–3 467 ms | 3 498–3 514 ms, after all of A | 79–92 ms | 79–97 ms | **0** in 5 of 5 | **0, 0, 0** in every run |
+| off | 20 | 6 (phase 2 and log in 3) | 3 435–3 454 ms | 3 488–3 504 ms, after all of A | 99–156 ms | 105–162 ms | — | 0, 0, 0 |
+| on | 60 | 1 | 9 998 ms | 10 288 ms | 202 ms | 208 ms | **0** | 0, 0, 0 |
+| off | 60 | 1 | 10 000 ms | 10 300 ms | 266 ms | 272 ms | — | 0, 0, 0 |
+
+No process's pool held more than 16 connections with the lock (18 without it), against a maximum of 29–31. Every phase-1 run admitted 2 of A and queued the rest; the intakes split 7/7/7 across the three processes (the fake git provider's per-process call log). **Reading it:** the lock never waited a millisecond, nobody waited for a pool connection, and B's latency is the same with and without the lock — at M = 20 and at M = 60. What sets B's latency is the outbound **queue**: B's job was enqueued after A's twenty and is taken in order, and each outbound worker takes **one job per polling interval** (21 jobs ÷ 3 workers × 0.5 s = 3.5 s, exactly the measured wall time) — pg-boss 12 re-polls immediately only for a full batch (`burstWhenBatchFull` with `batchSize > 1`, or `burstWhenReadyExceeds`), and the adapter fixes `batchSize: 1`. That is not this entry's lock and is filed as discovered work under WP-115. **Bound stated at the port** (`TaskRepository.counts`, `packages/application/src/pipeline/store.ts`) with these numbers; the lock's span is not narrowed, because nothing measured waits on it. **What the measurement did not cover**: the shipped polling default (2 s) spaces intakes further apart, so it can only lower contention; a scheduler pass that *admits* holds the lock through `step` (a few more statements), and phase 2's passes found the WIP full and returned — at M = 20 the 2 active tasks meant every pass was a count and a return.
+
 
 ### 315. **A project's prompt files are invisible until a run has used them: `GET …/config` publishes neither which files the last reading holds nor which a stage would be given, and a maintainer who merges an edit to `.agentic/prompts/` has no screen, API field or guide sentence saying it takes effect only at the next repository reading** **RESOLVED** at `065ae99`, WP-113, session 11 — (TODO, **small — stored, not shown; no wrong value anywhere**. Two symptoms, one cause: the reading's prompt half has no read surface. The lag itself is **working as designed** and already documented for the configuration file (technical/12:142, :270; backlog **227**, resolved by recording it rather than removing it); what is missing is that anyone can *see* it. **Live** on every project with a prompt file since WP-92. **Stated by the implementer, read off the tree by the refiner (grep, not run)**; **owner: WP-95** (the screens row) is the nearest, though its five surfaces do not include this one and the contracts half has no row; found by WP-92, session 9)
 > **M6 (architect, session 9): folded into **WP-113** — (a) to (c) of *Done*; product/13:118's diff against defaults is out of M6.**
@@ -13053,6 +13528,33 @@ The route and the retire each get one case. **Depends on** WP-114. Related: Q103
 ### 391. **The command-API e2e's cancel of a running run once never reached its ending and its charge within 92 s — unexplained** (TODO, **minor — an e2e failure seen once in an untouched file, mechanism not measured**: in the orchestrator's `verify:e2e` on WP-114's tree (session 11, started at load 6.7), `test/e2e/server/command-api.e2e.test.ts` › "cancels a run that is running, and retries a finished one on another model" timed out on its wait for the stopped run to end and be charged, with the task paused at refinement; the next full tier and three runs of the file alone at load 9–10 passed. WP-114's reviewer read that nothing in that row can delay it (the suite composes no launcher). **Unowned — for the next architect pass**; found by the orchestrator, session 11)
 
 **What is known.** The cancel is recorded for the run's lease holder (WP-101, TD-028 decision 11), applied at the latest on the next lease heartbeat, and the run's ledger row is written by the cost handler after `run.cancelled`/`run.finished`; the wait reads both `runs.status` and `cost_entries`. Candidates, none measured: a heartbeat interval stretched by load past the wait, a lost `pg_notify` with the heartbeat as the only path, or the ledger handler waiting behind another dispatch. **Done**: reproduce (a delayed heartbeat or a dropped notify on a copy, rule 76), then fix the cause or the wait, and record which it was — never a longer timeout alone.
+
+### 392. **Every job worker takes one job per polling interval even with a backlog, so a burst on `pipeline.outbound` drains at one job per 2 s per process at the shipped default, and every other project's outbound duty queues behind it** (TODO, **minor — live, a latency defect with one possible correctness knock-on (a hypothesis, below)**. **Live** on the shipped runtime for every queue the adapter serves; **urgent when** a bulk edit, a shadow batch or a poll pass matches tens of tickets at once. **The 0.5 s spacing is measured; the 2 s figure is extrapolated, not measured.** **Unowned — for the next architect pass.** Found by WP-115, session 11)
+
+**What is wrong.** `packages/infrastructure/src/jobs/pg-boss-jobs.ts:329-337` registers every worker with `batchSize: 1`, `pollingIntervalSeconds` (default 2, `APP_JOBS_POLL_INTERVAL_SECONDS`, `packages/infrastructure/src/jobs/config.ts:70`) and `localConcurrency`, and sets no burst trigger. In the pinned **pg-boss 12.30.0** (`packages/infrastructure/package.json:28`), `node_modules/.pnpm/pg-boss@12.30.0/node_modules/pg-boss/dist/types.d.ts:561-608` (`JobPollingOptions`) gives the worker three delays, burst → notify → base. Burst needs a trigger. `burstWhenBatchFull` is *"Ignored when `batchSize` is 1"*. `burstWhenReadyExceeds` reads a *"cached `readyCount`"* whose latency is *"bounded by the instance-level stats pipeline (… all default 60s)"*. Notify needs a queue created with `notify: true` and the instance's `useListenNotify`, and the adapter sets neither (grep of `pg-boss-jobs.ts` and `packages/application/src/ports/job-queues.ts`: no hit). So the worker always waits the base interval between fetches. `pipeline.outbound` runs at `concurrency: 1` per process (`packages/application/src/pipeline/runtime.ts`, the `pipelineOutbound` registration), so one process drains it at one job per interval.
+
+**Evidence** (WP-115's notes, quoted): *"Measured: 21 intake jobs over three workers at the harness's 0.5 s took 3.45 s — exactly 7 × 0.5 s. At the shipped `APP_JOBS_POLL_INTERVAL_SECONDS` default of 2 s, a burst of N intakes on one process takes about 2N seconds (a 50-ticket bulk edit, ~100 s), and every other outbound duty (status mapping, workpad, notifications) of every project queues behind it. Extrapolated from the measured spacing, not measured at 2 s."* The harness is the one described under **314** (three `apps/server` processes, `APP_DISPATCH_MAX_CONCURRENCY=4`, Apple M3 Max, load 3.9–7.0).
+
+**What it costs to leave.** Latency first: at 2 s and one process, a 50-ticket burst admits its last ticket after ~100 s (extrapolated), and a second project's status mapping, workpad and chat notification wait behind it. **Hypothesis, read not run — does anything time out:** the intake reconciler's grace equals its interval, `APP_INTAKE_RECONCILE_INTERVAL_MS=60000` (`.env.example:412`; the reasoning is at `packages/application/src/pipeline/intake-reconcile.ts:41-46`). A match still queued after 60 s then looks stranded, so the reconciler would append a second `ticket.matched` for it. That costs a second `intake_check` on the same backed-up queue. Intake's one-task-per-ticket rule would make it a no-op, and the reconciler acts once per ticket. A queued job does not expire (`expireInSeconds` applies to an active job), so nothing is lost. The cost is wasted provider reads plus a longer queue. Needs measurement.
+
+**Needs measurement first.** Measure at the shipped 2 s: one `ROLE=all` process, N = 20 and 50 `ticket.matched` for one project plus one for a second project. Record the wall time to admit all N, the second project's latency, and whether the reconciler re-emitted any match (count `ticket.matched` rows stamped with its actor). The harness under **314** is the template.
+
+**Done.** Pick one and state the reason at `pg-boss-jobs.ts:332`:
+- (a) `burstWhenReadyExceeds`. It keeps `batchSize: 1` and the one-job-per-handler contract. Its reaction latency is the stats cache's, so say whether `persistQueueStats: false` (`pg-boss-jobs.ts:195`) leaves that cache populated. **Not checked.**
+- (b) Per-queue notify (`notify: true` plus `useListenNotify`). This costs a dedicated connection, which is one more in `requiredPoolConnections`.
+- (c) A shorter per-queue `pollingIntervalSeconds` for `pipeline.outbound`.
+
+Then re-take the measurement and paste it here, with a case that holds the chosen option on the registration. **Then re-take 314's measurement.** 314 was taken at the harness's 0.5 s, not at the shipped 2 s. Its own text says the slower default *"can only lower contention"*. A burst fix removes exactly that spacing, so the per-project admission lock's wait and the pool's waiting count must be measured again **after** this fix, at the fixed cadence. **Depends on** nothing. Related: **314** (whose measurement found this).
+
+### 393. **The operator guide's upgrade section says to stop serving before migrating, but its commands migrate while the old `app` still serves, so an index migration such as 0071 blocks writes to the indexed tables for its build time** (TODO, **nit — a documentation inconsistency; the stall is short at measured sizes**. **Live** for any operator who follows the command block. **Read off the guide and the migration, not run.** **Unowned — for the next architect pass.** Found by WP-115, session 11; graded by the refiner)
+
+**What is wrong.** `docs/operator-guide.md:598-599` says: *"stop serving on the old code, migrate, start the new code."* The block under it (`:611-618`) runs `docker compose run --rm migrate` and then `docker compose up -d`, with no stop, so the old `app` is still serving while `migrate` runs. So the sentence does **not** make the finding moot. Migration 0071 (`packages/infrastructure/src/db/migrations/0071_payload_lookup_indexes.sql`) uses plain `create index`, which blocks writes to the table. It cannot be `concurrently`: each migration runs in its own transaction, and `events` is partitioned.
+
+**Evidence.** WP-115 measured *"dropping and building it over size C took 38 ms"* (`events_bug_trace_ticket_idx`, 10⁴ installation traces) and *"dropping and building it over 10⁶ rows took 71 ms"* (`human_actions_project_idx`). Both are in this file under **307** and **312**. No `statement_timeout` or `lock_timeout` is set anywhere in `packages/infrastructure/src` (grep). So a blocked writer waits rather than fails. A large install would wait longer. **Not measured** past 10⁶ rows.
+
+**What it costs to leave.** A write stall of the build's duration on every index migration, this one and future ones. Nothing is lost. The real cost is a guide whose prose and commands disagree.
+
+**Done.** Fix the guide so the two agree: either the block stops `app`, `runner` and `launcher` before `migrate`, or the sentence says the old code may keep serving and that an index migration briefly blocks writes. Check whether `docker compose up -d --build` (`:620-621`) stops the old `app` before `migrate` runs. **Depends on** nothing.
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -38946,3 +39448,46 @@ Runs: `pnpm run -s verify` PASS. `verify:ui` PASS. `verify:integration` PASS (73
 - **(nit)** A failed *Show older* also sets `isError` in TanStack Query v5, so the dead-letter and failed-jobs screens showed "could not be loaded" above a list that had loaded; the top notice now excludes `isFetchNextPageError`.
 - **(nit)** technical/08's missing "and".
 - The reviewer read that nothing in WP-114 can delay a cancelled run's ending or its cost row (the command-API suite composes no launcher, so no minter). The orchestrator's one `verify:e2e` failure on this tree — `test/e2e/server/command-api.e2e.test.ts` › "cancels a run that is running, and retries a finished one on another model", its wait for the stopped run to end and be charged timing out after 92 s with the task paused at refinement — passed in the next full tier and 3/3 alone at load 9–10. **Unexplained**, filed rather than guessed (WP-52's backlog-132 precedent).
+
+#### WP-115
+
+**Three query costs measured, then bounded or indexed.** Folds backlog **307**, **312** and **314**. The plans and the tables are pasted under each entry; this section is the decisions.
+
+Decisions and assumptions (each is also stated at the code):
+
+- **307 → an index (migration 0071, `events_bug_trace_ticket_idx`).** At the criterion's sizes the read was cheap in time (0.12–0.45 ms) but it was never about the ticket, and the plan grew with history: the installation's traces at 10⁵ project events, the intersection of those and the project's stream once the installation held 10⁴ traces (2.9–3.6 ms, 1 285 buffers), per `ticket.updated`, bug or not, inside the dispatcher's transaction. A partial index on the one event type costs only trace rows (488 KiB for 10 100) and made it 6–7 buffers at every size. A size C (10⁴ installation traces) beyond the criterion's two was added because the B plan showed the installation's traces, not the project's stream, were what it read.
+- **312 → an index (same migration, `human_actions_project_idx`)**, an expression index partial on rows that carry the key, rather than a `project_id` column: no writer changes and no backfill. 22–27 ms and a whole-table scan at 10⁶ rows became 0.03–0.05 ms. Its bound (the project's own settings rows) is stated at `findLastConfigExport`.
+- **314 → the bound stated at the port, the lock not narrowed.** The entry's cause was re-derived first: the intake's admission runs in a `pipeline.outbound` job (one worker per process), not in a dispatch; only the scheduler takes the lock in the dispatcher; every connection a waiter holds is already in the pool floor. Measured, nothing waited on the lock for 1 ms or more, no pool ever had a waiter, and the second project's latency was the same with the lock and without. The bound is at `TaskRepository.counts` (`packages/application/src/pipeline/store.ts`).
+- **Measurement harnesses: both deleted.** The integration one (307, 312) is reproduced in shape by the planner test, which seeds the same rows at the larger size. The e2e one (314) is described under backlog 314 in enough detail to rebuild; it asserted nothing and would have been an e2e file whose only output is a time.
+- **The planner test seeds `events` with the triggers off** (`session_replication_role = replica`, one transaction): 53 s with `events`' two row triggers on, 1.6 s with them off. Which of the two triggers costs what was not separated, and the docblock says so.
+- **Wall-clock numbers are this machine's** (Apple M3 Max; load stated at each table); the buffer counts are the plan's. No test asserts a time.
+- **technical/03** names both indexes on the `events` and `human_actions` lines.
+
+Tests:
+- Integration, new: `test/integration/db/payload-lookup-indexes.integration.test.ts` › "serves the re-trace lookup at 10^5 project events, for a traced and a never-traced ticket" and › "serves findLastConfigExport and listProjectAudit at 10^6 rows". `EXPLAIN` without `ANALYZE`, no planner setting changed, the SQL captured from the shipped code (the store's `bugTraces.latest` through a recording client; the two drizzle reads through a query logger), an index name asserted and the old paths refused. 1.6 s and 4.3 s.
+- Canaries (migration copied, mutated, run, restored, md5 matched): both index predicates narrowed so they no longer serve the reads — both cases fail by name (with the message `the plan uses no partition of events_bug_trace_ticket_idx`, with the message `the plan does not use human_actions_project_idx`). With the indexes removed outright, the 312 case failed by name and the 307 case by a `regclass` error; the lookup now uses `to_regclass` and a named assertion (with the message `events_bug_trace_ticket_idx has no partition index`).
+
+Sentences falsified (grep of `docs/`, `apps/`, `packages/`, `CLAUDE.md`):
+- `one indexed read`: `ticket-poll.ts:625` (the cursor read, unrelated, true); plan row 295 (the row's own statement of the gap — the orchestrator's); the PROGRESS hits are backlog 307's history, now followed by the measurement. The clause the entry quotes was already gone from `postgres-pipeline-store.ts`; its successor, *"not a bounded indexed read … unmeasured"*, is **replaced** with the measured docblock.
+- `no index`: every hit outside plan row 295 is about another table or the knowledge index (unrelated, true).
+- `params->>'project_id'`: `project-queries.ts:411`/`:469` (still true: no column) — the two docblocks now also state the index and its numbers; `technical/08:232`, `api.ts:1602`/`:2367`, `ask/store.ts:18`, `postgres-ask-store.ts:18`, `task-detail.tsx:909` are about which rows the predicate *matches*, not its cost (true); technical/03 updated.
+- `admission lock`: no hit outside the plan row.
+- `needs measurement`: no hit names 307, 312 or 314 (TODO.md:228, OPEN-QUESTIONS Q82/Q87, the research/TD-028 hits and plan lines 43, 109, 130, 147, 183, 205 are other entries).
+- Also corrected without a grep hit: `delivery-measures.ts`'s re-trace handler docblock now says it asks for every `ticket.updated`, bug or not, and what that costs.
+
+Verification on the final tree (load stated before each, gated below 12):
+- `pnpm run -s verify`: PASS (load 4.9).
+- `pnpm run -s verify:integration`: PASS, 752 tests (load 6.6).
+- `pnpm run -s verify:e2e`: PASS, 263 tests (load 8.7) — run because the migration applies to every instance the tier starts.
+- `scripts/citations.test.ts`: green. No ledger-cited test was renamed.
+- Docker afterwards: no test container left; volumes 123 → 123.
+
+**Discovered work.**
+- **Each `pipeline.outbound` worker takes one job per polling interval, even with a backlog.** pg-boss 12's worker re-polls at once only after a *full* batch with burst enabled (`burstWhenBatchFull` with `batchSize > 1`, or `burstWhenReadyExceeds`), and `pg-boss-jobs.ts` fixes `batchSize: 1` without either. Measured: 21 intake jobs over three workers at the harness's 0.5 s took 3.45 s — exactly 7 × 0.5 s. At the shipped `APP_JOBS_POLL_INTERVAL_SECONDS` default of 2 s, a burst of N intakes on one process takes about 2N seconds (a 50-ticket bulk edit, ~100 s), and every other outbound duty (status mapping, workpad, notifications) of every project queues behind it. Extrapolated from the measured spacing, not measured at 2 s. Every queue the adapter serves has the same shape. For a refiner: measure at the shipped default, then decide between `burstWhenReadyExceeds` (keeps `batchSize: 1` and its one-job-per-handler contract) and a per-queue interval.
+
+#### WP-115 — review round 1 (REQUEST CHANGES), fixed by the orchestrator
+
+- **(major) The 307 test did not assert the ticket key is in the index condition**, only that some partition of `events_bug_trace_ticket_idx` is in the plan — so an index whose key expression is broken but whose stream column and `where` still match could be chosen and read every trace of the project, the cost 307 exists to remove. `test/integration/db/payload-lookup-indexes.integration.test.ts` › "serves the re-trace lookup at 10^5 project events, for a traced and a never-traced ticket" now also asserts `Index Cond: … ->> 'key'::text) = …` on each plan. **Measured, not assumed**: the canary (0071's key expression changed to `(payload ->> 'key')`, restored from a copy, md5 identical) is dead — but by the existing assertion, because at this size the planner abandoned the broken index altogether; the new assertion is the guard for the case where it does not. The file alone 2/2 green.
+- **(minor)** The seeding's `set local session_replication_role = replica` needs a superuser: stated at `seedStream` (the Testcontainers server runs as one; a `TEST_DATABASE_URL` whose user is not would fail).
+- **(nit)** 0071's comment said 0.02–0.03 ms where the store docblock and the entry say 0.02–0.05 ms; aligned.
+- Round 1 confirmed: both expressions match their callers exactly, partitions created later inherit the index (`partition of`), the migration runs in a transaction under the advisory lock, 314's cause (the `pipeline.outbound` worker at concurrency 1, not the dispatcher) is right per the code, and the lock-wait method sees a planted 30 ms wait.

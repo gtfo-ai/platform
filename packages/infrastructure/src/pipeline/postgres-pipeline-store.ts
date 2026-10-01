@@ -878,7 +878,8 @@ export const createPostgresPipelineStore = (
      * fresh snapshot per statement — counts the task the first admitted. Without it two intakes in
      * one instant both counted `0` and both admitted under `max_parallel_tasks: 1` (the residual
      * standing rule 89 named). The key is namespaced (`task_admission/`) so it cannot collide
-     * with another advisory lock the platform takes on a project id.
+     * with another advisory lock the platform takes on a project id. Its contention is bounded and
+     * measured at the port's docblock (`TaskRepository.counts`, WP-115, PROGRESS backlog 314).
      */
     counts: async (tx, projectId) => {
       await sqlOf(tx).query(
@@ -1687,13 +1688,17 @@ export const createPostgresPipelineStore = (
  * the newest — so the handler that decides whether to re-trace and the figure it re-traces for
  * cannot disagree about which trace is the ticket's.
  *
- * **Its cost, stated:** every trace is on its project's stream, so the read is bounded by that
- * stream's `ticket.bug.traced` rows; `events` has no index on a payload field, so which of the
- * `(type, occurred_at)` and stream indexes the planner takes decides whether the rows scanned are
- * the organisation's traces or the project's events — measured neither way here. It is asked once
- * per `ticket.updated`. It is **not** a bounded indexed read: no index covers the payload
- * predicate and nothing bounds `occurred_at`, so it probes every monthly partition — unmeasured,
- * PROGRESS backlog 307.
+ * **Its cost, measured** (WP-115, PROGRESS backlog 307). It is asked on **every** `ticket.updated`
+ * of a bound project — bug or not, because the handler asks before it knows the ticket type and
+ * `null` is a non-bug's answer — and again when the `bug_trace` job fires. Before migration 0071
+ * every plan the planner had read rows unrelated to the ticket: the installation's
+ * `ticket.bug.traced` rows, or a `BitmapAnd` of those and the project's whole stream (1 112–1 285
+ * buffers and 0.4–3.6 ms at 10^5 project events, growing with history). It is now an index range
+ * on `events_bug_trace_ticket_idx` — `(stream_id, payload->'ticket'->>'key')`, partial on this
+ * event type — per monthly partition: 6–7 buffers, 0.02–0.05 ms at every size measured, a traced
+ * ticket and a never-traced one alike. Nothing bounds `occurred_at`, so it still probes every
+ * partition, one index descent each. `test/integration/db/payload-lookup-indexes.integration.test.ts`
+ * holds the planner to the index.
  */
 const postgresBugTraces: BugTraceRepository = {
   latest: async (tx, ticket) => {

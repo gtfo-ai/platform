@@ -201,6 +201,11 @@ const bugTraceHandler = (options: PipelineSagaOptions): EventHandler => ({
  * enqueues only for `no_link` or `unreadable`: a ticket never traced is not known to be a bug, and a
  * `linked` one is final. The filing instant rides from the trace, never from this event, so the
  * bug keeps its day.
+ *
+ * The question is asked for **every** `ticket.updated` of the project, bug or not — the handler
+ * cannot know the type before it asks, and `null` is the non-bug's answer — so its cost is paid per
+ * edit, not per bug. The PostgreSQL read is held to an index on the ticket (migration 0071, WP-115:
+ * a few buffers per monthly partition whatever the project's history; PROGRESS backlog 307).
  */
 const bugRetraceHandler = (options: PipelineSagaOptions): EventHandler => ({
   name: 'pipeline.bug.retrace',

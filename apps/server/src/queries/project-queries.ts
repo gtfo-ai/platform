@@ -412,6 +412,12 @@ const samePolicies = (left: AutonomyPolicies, right: AutonomyPolicies): boolean 
  * settings**, not every action ever taken on its tasks, which name a task instead.
  *
  * Newest first and bounded by the caller: this is a page on a settings screen, not an export.
+ *
+ * **Indexed** (migration 0071, WP-115, PROGRESS backlog 312): `human_actions_project_idx` is
+ * `(params->>'project_id', created_at desc)`, partial on rows that carry the key, so this is one
+ * index range of the project's rows stopped by the limit — 53 buffers and 0.04 ms at 10^6 rows,
+ * where it was a sequential scan of the whole installation's audit (16 700 buffers, 26 ms).
+ * `test/integration/db/payload-lookup-indexes.integration.test.ts` holds the planner to it.
  */
 export const listProjectAudit = async (
   database: Database,
@@ -464,6 +470,11 @@ const recordedExportParamsSchema = z.object({
  * `listProjectAudit`'s, above, for the same reason. A row whose params do not parse is **skipped
  * to the next** rather than read as "never exported": an older release's row that lacks a field is
  * not evidence that no export happened, and the newest row that does parse is. The scan is bounded.
+ * It reads `listProjectAudit`'s index (migration 0071) and filters the action on the project's rows
+ * newest first: 62 buffers and 0.03 ms at 10^6 rows (a project with 1 200 settings rows), where it
+ * was a sequential scan of the installation (16 700 buffers, 22 ms) — PROGRESS backlog 312. Its
+ * bound is the project's own settings rows, not the installation: a project that never exported
+ * walks all of them (1 011 buffers, 0.2 ms for 1 000 rows).
  */
 export const findLastConfigExport = async (
   database: Database,

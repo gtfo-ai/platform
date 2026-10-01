@@ -760,6 +760,20 @@ export interface TaskRepository {
    * fact — standing rule 89). The SQL adapter takes a transaction-scoped advisory lock; the
    * in-memory store is single-threaded and needs none. `pipeline-store-concurrency-suite.ts` holds
    * both to it.
+   *
+   * **What the serialisation costs, bounded** (WP-115, PROGRESS backlog 314). Two callers take it:
+   * `intake_check`, inside a `pipeline.outbound` job (one worker per process, so a process never
+   * has two intakes waiting on each other), and `pipeline.scheduler`, inside a dispatch (up to
+   * `APP_DISPATCH_MAX_CONCURRENCY` at once). A waiter holds only connections the pool floor already
+   * reserves for it — the outbound worker's one, or the dispatch's two — so it cannot make another
+   * project's work wait for the pool; and the lock is held from the count to the caller's commit,
+   * a handful of statements. Measured at the e2e tier (three `apps/server` processes, dispatcher
+   * concurrency 4, M = 20 and 60 intakes for one project beside one for another, then the same
+   * number of scheduler passes; Apple M3 Max, load 4–7): **no** wait on this lock of 1 ms or more
+   * in any run (server-logged with `log_lock_waits` at `deadlock_timeout = 1ms`, the instrument
+   * proved by a deliberate 30 ms wait), every pool's waiting count **0**, and the second project's
+   * latency the same with the lock and without it (3.50 s at M = 20, set by the outbound queue's
+   * order, not by the lock). The numbers are in PROGRESS under backlog 314.
    */
   counts(
     tx: Transaction,
