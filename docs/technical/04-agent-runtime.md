@@ -158,8 +158,9 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 >   instruction. A key's value is `prompts/<name>.md` or `.agentic/prompts/<name>.md`; any other
 >   value is reported in `not_applied` and read as nothing.
 > - **Bounded and redacted.** At most 64 files of at most 16 KiB each are read (an oversized file is
->   recorded and never buffered), every text is redacted with TD-012 step 2's pattern rules before it
->   is stored (`project_repository_config.prompts`, migration 0063), and the assembler cuts each block
+>   recorded and never buffered), every text is redacted with TD-012 step 2's pattern rules — and, since WP-107, step 1's exact
+>   values of the project's decrypted binding credentials (a binding that cannot be decrypted
+>   withholds every prompt text, `prompts_withheld`) — before it is stored (`project_repository_config.prompts`, migration 0063), and the assembler cuts each block
 >   at 8 000 characters (`MAX_PROJECT_PROMPT_CHARS`), announced as `truncated="true"` in the marker.
 >   That is 4 000–12 000 estimated tokens per stage, **additive to the pack budget**, not taken from
 >   it: `MAX_CONTEXT_BUDGET_TOKENS` is the pack's half of the window, and the other half already holds

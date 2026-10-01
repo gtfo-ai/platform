@@ -24,6 +24,8 @@ import {
   effectiveConfigResponseOf,
   encodeTaskCursor,
   MAX_STORED_VALUE_CHARS,
+  PROMPTED_STAGE_IDS,
+  repositoryReadingOf,
   riskClassProposalOf,
 } from './projects.js';
 
@@ -308,6 +310,7 @@ describe('the effective configuration’s layers (WP-63)', () => {
     repo_not_applied: [],
     repo_detail: detail,
     repo_read_at: READ_AT,
+    repo_prompts: null,
   });
   const SETTINGS = {
     version: 1,
@@ -548,5 +551,141 @@ describe('the effective configuration’s layers (WP-63)', () => {
     );
     expect(response.effective.policies?.autonomy).toBe('autonomous');
     expect(response.sources['policies.autonomy']).toBe('project');
+  });
+});
+
+/**
+ * WP-113 (PROGRESS backlog 315 (a)): the prompt half of the reading and the per-stage resolution,
+ * on the document `GET …/config` answers — parsed with the published schema, so a field the strict
+ * DTO does not know, or one it requires and this module forgot, fails here.
+ */
+describe('the project prompt files the configuration read publishes (WP-113)', () => {
+  const SHA = '89abcdef0123456789abcdef0123456789abcdef';
+  const READ_AT = new Date('2026-10-01T09:00:00.000Z');
+  const SECRET_TEXT = 'Always run pnpm lint before you push — the house rule.';
+  const row = (config: Record<string, unknown>) => ({
+    config,
+    configSource: {},
+    configHash: 'h1',
+    updatedAt: READ_AT,
+    proposedRiskClasses: null,
+  });
+  const layers = (prompts: unknown) => ({
+    orgSettings: {},
+    repo_status: 'absent',
+    repo_commit_sha: SHA,
+    repo_config: null,
+    repo_not_applied: [],
+    repo_detail: null,
+    repo_read_at: READ_AT,
+    repo_prompts: prompts,
+  });
+  const STORED = {
+    files: {
+      '.agentic/prompts/implementation.md': {
+        kind: 'file',
+        text: SECRET_TEXT,
+        blobSha: 'b'.repeat(40),
+      },
+      '.agentic/prompts/review.md': {
+        kind: 'file',
+        text: 'r'.repeat(8_001),
+        blobSha: 'c'.repeat(40),
+      },
+      '.agentic/prompts/big.md': { kind: 'oversized', bytes: 20_480 },
+    },
+    truncated: false,
+  };
+  const answer = (config: Record<string, unknown>, prompts: unknown) =>
+    effectiveConfigResponseSchema.parse(
+      effectiveConfigResponseOf({
+        projectId: ID,
+        row: row(config),
+        layers: layers(prompts),
+        redactText,
+      }),
+    );
+
+  it('publishes each stored file’s path, status, length and cut at the reading’s commit — never its text', () => {
+    const response = answer({ version: 1 }, STORED);
+    expect(response.repository.commit_sha).toBe(SHA);
+    expect(response.repository.prompts).toEqual({
+      directory: '.agentic/prompts',
+      cut_at_chars: 8_000,
+      truncated: false,
+      files: [
+        {
+          path: '.agentic/prompts/big.md',
+          status: 'oversized',
+          chars: null,
+          bytes: 20_480,
+          cut: false,
+        },
+        {
+          path: '.agentic/prompts/implementation.md',
+          status: 'file',
+          chars: SECRET_TEXT.length,
+          bytes: null,
+          cut: false,
+        },
+        {
+          path: '.agentic/prompts/review.md',
+          status: 'file',
+          chars: 8_001,
+          bytes: null,
+          cut: true,
+        },
+      ],
+    });
+    expect(JSON.stringify(response)).not.toContain('house rule');
+  });
+
+  it('resolves both keys of every agent stage the way the planner would, the declared file included', () => {
+    const response = answer(
+      { version: 1, stages: { code_review: { prompt: 'prompts/review.md' } } },
+      STORED,
+    );
+    expect(new Set(response.stage_prompts.map((entry) => entry.stage))).toEqual(
+      new Set(PROMPTED_STAGE_IDS),
+    );
+    expect(response.stage_prompts).toHaveLength(PROMPTED_STAGE_IDS.length * 2);
+    expect(PROMPTED_STAGE_IDS).toContain('implementation');
+    expect(PROMPTED_STAGE_IDS).not.toContain('ci_gate');
+    const given = response.stage_prompts.filter((entry) => entry.given);
+    expect(given).toEqual([
+      {
+        stage: 'code_review',
+        key: 'prompt',
+        path: '.agentic/prompts/review.md',
+        declared: true,
+        status: 'read',
+        given: true,
+        cut: true,
+      },
+      {
+        stage: 'implementation',
+        key: 'prompt',
+        path: '.agentic/prompts/implementation.md',
+        declared: false,
+        status: 'read',
+        given: true,
+        cut: false,
+      },
+    ]);
+  });
+
+  it('publishes no prompt half for a reading that holds no directory, and says a declared file is unread', () => {
+    const response = answer(
+      { version: 1, stages: { implementation: { prompt_append: 'prompts/extra.md' } } },
+      null,
+    );
+    expect(response.repository.prompts).toBeNull();
+    expect(
+      response.stage_prompts.filter((entry) => entry.stage === 'implementation'),
+    ).toMatchObject([
+      { key: 'prompt', status: 'unread', declared: false, given: false },
+      { key: 'prompt_append', status: 'unread', declared: true, given: true },
+    ]);
+    expect(repositoryReadingOf(null).prompts).toBeNull();
   });
 });

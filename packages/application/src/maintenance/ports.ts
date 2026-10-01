@@ -14,6 +14,7 @@
 import type { Id, IsoDateTime } from '@platform/contracts';
 import type { CapSpend } from '../cost/pending.js';
 import type { Transaction } from '../ports/transaction.js';
+import type { MaintenanceBlocker } from './scheduler.js';
 
 /**
  * This project's spend on chores **the maintenance scheduler created**, since an instant.
@@ -82,4 +83,29 @@ export interface MaintenanceStore extends MaintenanceSpendReader {
     projectId: Id,
     options: { readonly unreleasedSince: IsoDateTime; readonly limit: number },
   ): Promise<readonly StaleDependency[]>;
+}
+
+/**
+ * The blocker the last maintenance pass recorded for a project — WP-113, Q111 (c),
+ * `projects.maintenance_last_blocker` (migration 0069).
+ *
+ * The scheduler's **only write**, and a separate port from {@link MaintenanceStore} because that one
+ * is three reads of tables other features own and says so. Q111 (c) asks for one digest line when a
+ * pause at Observe begins and one when it ends: a transition, so the pass must know the previous
+ * pass's answer, and this is where it is kept.
+ */
+export interface MaintenanceBlockerStore {
+  /** The stored blocker, or `null` when the last pass found none or no pass has recorded one. */
+  lastBlocker(tx: Transaction, projectId: Id): Promise<MaintenanceBlocker | null>;
+  /**
+   * A compare-and-set: writes `next` only where the stored value is still `expected`, and answers
+   * whether it wrote. A pass that lost the race (a second pass recorded first) writes nothing and
+   * announces nothing more; the winner already did.
+   */
+  recordBlocker(
+    tx: Transaction,
+    projectId: Id,
+    expected: MaintenanceBlocker | null,
+    next: MaintenanceBlocker | null,
+  ): Promise<boolean>;
 }

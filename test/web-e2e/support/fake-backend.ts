@@ -504,6 +504,8 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
         settings: fixtures.orgSettings.settings,
         changed: Object.keys(parsed.data),
         performed: true,
+        // WP-113 (backlog 318): the fake caps nobody — it holds no project dial to lower.
+        capped_projects: [],
       });
       return;
     }

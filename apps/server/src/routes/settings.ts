@@ -50,6 +50,7 @@ import type {
   AutonomyLevel,
   AutonomyResponse,
   BudgetRecord,
+  CappedProject,
   JsonObject,
   MaterialisedAutonomy,
   OrganisationSettings,
@@ -75,6 +76,7 @@ import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
 import { organisationSettingsForRequest } from '../config-layers.js';
 import { HttpError, NotFoundError } from '../errors.js';
+import { cappedProjectsOf, type OrgCapProject } from '../org-caps.js';
 import type { WriteBudgetResult } from '../queries/cost-queries.js';
 import type { HumanActionInput } from '../queries/onboarding-queries.js';
 import {
@@ -125,10 +127,18 @@ export interface SettingsQueries {
     readonly settings: unknown;
     readonly updatedAt: Date;
   } | null>;
-  /** Replace the document with `next(stored)` under the row's lock; a throw writes nothing. */
+  /**
+   * Replace the document with `next(stored)` under the row's lock; a throw writes nothing. Also
+   * answers the organisation's projects **as read in that transaction** (WP-113, backlog 318), which
+   * is what `capped_projects` is computed from.
+   */
   replaceOrganisationSettings(
     next: (stored: unknown) => Promise<OrganisationSettings> | OrganisationSettings,
-  ): Promise<{ readonly before: unknown; readonly after: OrganisationSettings }>;
+  ): Promise<{
+    readonly before: unknown;
+    readonly after: OrganisationSettings;
+    readonly projects: readonly OrgCapProject[];
+  }>;
   /** Whether an integration id names a communication account (Q103 (c)'s pointer). */
   isCommunicationAccount(id: string): Promise<boolean>;
 }
@@ -594,7 +604,9 @@ export const registerSettingsRoutes = async (
    * project's dial at the new autonomy maximum, the next admission counts against the new WIP
    * bound — and a task's frozen dial (`tasks.pipeline_dial`, migration 0049) is not moved, nor is
    * any project's stored choice, so raising the maximum again restores it. Stated, not decided per
-   * case.
+   * case. **Since WP-113 the answer says which projects that is** (`capped_projects`, backlog 318):
+   * every project whose autonomy level or WIP limit in force fell, before and after, computed from
+   * the project rows the write's own transaction read (`org-caps.ts`).
    */
   typed.patch(
     '/api/org',
@@ -603,7 +615,7 @@ export const registerSettingsRoutes = async (
       schema: {
         summary: 'Replace or remove sections of the organisation settings document',
         description:
-          'Each top-level section present **replaces** the stored one; `null` removes it; an absent section is kept. The merged document is validated by the same strict schema every reader parses with, so a value a reader would refuse is refused here. `notifications.organisation_default` must name a communication account (`409 organisation_default_not_communication`): with two or more accounts that each name a channel, that one speaks for the organisation (Q103 (c)). A lowered maximum applies **at the next read** — the next run, the next settings read, the next admission — and never moves a task’s frozen dial or a project’s stored choice. Admin only; audited; `Idempotency-Key` optional and honoured.',
+          'Each top-level section present **replaces** the stored one; `null` removes it; an absent section is kept. The merged document is validated by the same strict schema every reader parses with, so a value a reader would refuse is refused here. `notifications.organisation_default` must name a communication account (`409 organisation_default_not_communication`): with two or more accounts that each name a channel, that one speaks for the organisation (Q103 (c)). A lowered maximum applies **at the next read** — the next run, the next settings read, the next admission — and never moves a task’s frozen dial or a project’s stored choice; `capped_projects` names every project whose autonomy level or WIP limit in force this write lowered, before and after, computed in the write’s own transaction (empty when nothing fell, `null` on a replay). Admin only; audited; `Idempotency-Key` optional and honoured.',
         tags: ['org'],
         body: patchOrgSettingsRequestSchema,
         response: {
@@ -636,12 +648,16 @@ export const registerSettingsRoutes = async (
           readonly before: unknown;
           readonly after: OrganisationSettings;
           readonly changed: readonly OrganisationSettingsSection[];
+          readonly capped: readonly CappedProject[];
         }) => ({
           changed: [...result.changed],
           // product/18:5 — what changed, before and after, section by section. Redacted: a command
           // list is free text an administrator typed (TD-012, BD-022).
           before: options.redactor.redactJson(sectionsOf(result.before, result.changed)).value,
           after: options.redactor.redactJson(sectionsOf(result.after, result.changed)).value,
+          // WP-113: which projects the write capped, so the audit row says what the answer said.
+          // Platform values only (ids, keys, levels, counts) — nothing to redact.
+          capped_projects: result.capped.map((entry) => ({ ...entry })),
         }),
         perform: async () => {
           let changed: readonly OrganisationSettingsSection[] = [];
@@ -650,13 +666,21 @@ export const registerSettingsRoutes = async (
             changed = merged.changed;
             return merged.next;
           });
-          return { ...written, changed };
+          return {
+            before: written.before,
+            after: written.after,
+            changed,
+            // WP-113 (backlog 318): from the projects the write's own transaction read.
+            capped: cappedProjectsOf(written),
+          };
         },
         answer: async ({ performed, result }) => ({
-          // A replay performed nothing now: it answers the document as it stands.
+          // A replay performed nothing now: it answers the document as it stands, and computes no
+          // capped list — `null`, never `[]`, which would say the original write capped nobody.
           settings: result?.after ?? (await organisationDocument()).settings,
           changed: [...(result?.changed ?? [])],
           performed,
+          capped_projects: result === null ? null : [...result.capped],
         }),
       })) as z.output<typeof patchOrgSettingsResponseSchema>;
     },

@@ -139,6 +139,14 @@ export const projects = pgTable('projects', {
    * has been proposed, and acceptance is the configuration write a human makes.
    */
   proposedRiskClasses: jsonb('proposed_risk_classes').$type<Record<string, JsonObject>>(),
+  /**
+   * The blocker the last maintenance pass recorded — migration 0069, WP-113, Q111 (c). `null` is
+   * "nothing blocked it, or no pass has recorded one". One writer, the compare-and-set of
+   * `MaintenanceBlockerStore.recordBlocker`; the pass turns a change into one digest line.
+   */
+  maintenanceLastBlocker: text('maintenance_last_blocker').$type<
+    'feature_disabled' | 'paused_at_observe' | 'no_chore_types' | 'no_chore_template'
+  >(),
   status: projectStatusEnum('status').notNull().default('active'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

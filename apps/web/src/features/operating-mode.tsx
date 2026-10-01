@@ -594,7 +594,8 @@ export const FeatureToggles = ({ projectId }: { readonly projectId: string }): R
             features.maintenance?.enabled === true ? (
               <p className="text-xs text-warning">
                 Paused at Observe: the autonomy dial is at Observe, so the nightly pass creates no
-                chore until the dial moves past it.
+                chore until the dial moves past it. The daily digest says so once when the pause
+                begins and once when it ends.
               </p>
             ) : null}
           </Card>

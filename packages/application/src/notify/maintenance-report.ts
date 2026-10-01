@@ -35,9 +35,21 @@
  *    period) is news, gets a new identity, and is reported.
  *
  * For a daily schedule the period is the day, so the report is daily — and so is the pass's work.
+ *
+ * ## A pause at Observe: one line when it begins, one when it ends (Q111 (c), WP-113)
+ *
+ * A project skipped before any chore type was considered has no period and no news, and is
+ * `nothing_to_report` — every day it is skipped. The one skip that is reported is a **change** in the
+ * pause at Observe, which the pass works out from the blocker it recorded last time
+ * (`maintenanceTransitionOf`, `projects.maintenance_last_blocker`): a row of its own, in the digest,
+ * when the pause begins and when it ends, and nothing on the days between
+ * ({@link maintenanceTransitionDetail}). The founder's answer to Q111, reversible.
  */
 import type { Id, IsoDateTime } from '@platform/contracts';
-import type { ProjectMaintenanceReport } from '../maintenance/scheduler.js';
+import {
+  MAINTENANCE_BLOCKED_DETAIL,
+  type ProjectMaintenanceReport,
+} from '../maintenance/scheduler.js';
 import { integrationsForProject, noRunScopedSecrets } from '../pipeline/integrations.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
@@ -50,7 +62,10 @@ export type MaintenanceReportPublication =
   | 'recorded'
   /** This period's report with the same news is already recorded. */
   | 'already_reported'
-  /** Nothing to say: the project was skipped before any chore type was considered. */
+  /**
+   * Nothing to say: the project was skipped before any chore type was considered, and the pass
+   * neither began nor ended a pause at Observe (WP-113).
+   */
   | 'nothing_to_report'
   /** The project's digest is off or it has no chat binding — nobody would read the row. */
   | 'no_reader';
@@ -150,6 +165,29 @@ export const maintenanceReportDetail = (report: ProjectMaintenanceReport): strin
   return parts.length === 0 ? null : `Period ${report.period ?? 'none'}. ${parts.join(' ')}`;
 };
 
+/**
+ * Q111 (c), WP-113: the one digest line a pause at Observe gets when it **begins**, and the one it
+ * gets when it **ends** — platform text throughout; `null` for a pass that changed neither.
+ *
+ * Its own row, not a sentence inside the period's report: the period report's identity is its period
+ * and its news (`newsOf`), and a pause has no period (`period: null` while paused), so a transition
+ * folded into it would either have no identity to land on or change the one the report has. The
+ * pause is the project's **level in force**, which the organisation's maximum can lower too
+ * (WP-93) — so the line names both causes, because the maintainer reading it may not be the person
+ * who moved either.
+ */
+export const maintenanceTransitionDetail = (report: ProjectMaintenanceReport): string | null => {
+  if (report.transition === 'pause_began') {
+    return 'Maintenance is paused at Observe: the autonomy level in force for this project is Observe — its own dial, or an organisation maximum of Observe — and Observe means no agent merge requests, so the nightly pass creates no chore. This is said once; the next line is when the pause ends.';
+  }
+  if (report.transition === 'pause_ended') {
+    return report.blocker === null
+      ? 'Maintenance is no longer paused at Observe: the nightly pass schedules this project’s chores again.'
+      : `Maintenance is no longer paused at Observe, and the nightly pass still schedules nothing: ${MAINTENANCE_BLOCKED_DETAIL[report.blocker]}.`;
+  }
+  return null;
+};
+
 /** What the sink needs — the notify band's collaborators the scheduler's composition also holds. */
 export type MaintenanceReportSinkOptions = Pick<
   NotifyOptions,
@@ -161,8 +199,10 @@ export const createMaintenanceReportSink = (
 ): MaintenanceReportSink => ({
   publish: async (report) => {
     const logger: Logger = options.logger ?? silentLogger;
-    const detail = maintenanceReportDetail(report);
-    if (detail === null || report.period === null) {
+    const periodDetail = maintenanceReportDetail(report);
+    const detail = report.period === null ? null : periodDetail;
+    const transition = maintenanceTransitionDetail(report);
+    if (detail === null && transition === null) {
       return 'nothing_to_report';
     }
     const settings = await options.settings.forProject(report.projectId);
@@ -193,32 +233,53 @@ export const createMaintenanceReportSink = (
     if (chat === null) {
       return 'no_reader';
     }
-    const redacted = chat.redactor.redactText(detail);
-    const draft = notificationDraft({
-      notificationClass: 'maintenance_report',
-      subject: { name: 'this project', url: null },
-      detail: redacted.value,
-    });
-    const recorded = await options.unitOfWork.transaction(async (scope) =>
-      options.notifications.record(scope.tx, {
-        id: options.ids.next(),
-        projectId: report.projectId,
-        taskId: null,
+    const record = async (text: string, identity: string): Promise<boolean> => {
+      const redacted = chat.redactor.redactText(text);
+      const draft = notificationDraft({
         notificationClass: 'maintenance_report',
-        causeEventId: nameDerivedId(
-          `maintenance-report:${report.projectId}:${report.period}:${newsOf(report)}`,
-        ),
-        title: draft.title,
-        detail: draft.detail,
-        url: null,
-        urgent: false,
-        // Always the digest: the report is the pass's, and the digest is the surface at its grain.
-        plannedDelivery: 'digest',
-        mode: 'normal',
-        createdAt: options.clock.now() as IsoDateTime,
-        redactionCount: redacted.count,
-      }),
-    );
-    return recorded ? 'recorded' : 'already_reported';
+        subject: { name: 'this project', url: null },
+        detail: redacted.value,
+      });
+      return options.unitOfWork.transaction(async (scope) =>
+        options.notifications.record(scope.tx, {
+          id: options.ids.next(),
+          projectId: report.projectId,
+          taskId: null,
+          notificationClass: 'maintenance_report',
+          causeEventId: nameDerivedId(identity),
+          title: draft.title,
+          detail: draft.detail,
+          url: null,
+          urgent: false,
+          // Always the digest: the report is the pass's, and the digest is the surface at its grain.
+          plannedDelivery: 'digest',
+          mode: 'normal',
+          createdAt: options.clock.now() as IsoDateTime,
+          redactionCount: redacted.count,
+        }),
+      );
+    };
+    /**
+     * The period report first and the transition second, so a failure in either leaves the
+     * recorded blocker unmoved (the scheduler writes it only after a publication that did not
+     * throw) and the next pass announces the transition again. The transition's identity is the
+     * project, the transition, the blocker it moved to and the **day**, so a second announcement
+     * the same day lands on the same row (`already_reported`) rather than a second line.
+     */
+    const periodRecorded =
+      detail === null
+        ? null
+        : await record(
+            detail,
+            `maintenance-report:${report.projectId}:${report.period}:${newsOf(report)}`,
+          );
+    const transitionRecorded =
+      transition === null
+        ? null
+        : await record(
+            transition,
+            `maintenance-transition:${report.projectId}:${report.transition}:${report.blocker ?? 'none'}:${options.clock.now().slice(0, 10)}`,
+          );
+    return periodRecorded === true || transitionRecorded === true ? 'recorded' : 'already_reported';
   },
 });

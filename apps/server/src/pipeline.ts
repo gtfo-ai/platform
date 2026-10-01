@@ -1544,6 +1544,9 @@ export const composePipeline = async (
     unitOfWork: options.eventing.unitOfWork,
     store,
     maintenance: maintenanceStore,
+    // WP-113, Q111 (c): the last blocker per project, so a pause at Observe is announced when it
+    // begins and when it ends, and not on the days between.
+    blockers: new maintenanceAdapters.PostgresMaintenanceBlockerStore(),
     settings,
     jobs,
     ids,

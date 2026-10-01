@@ -15,7 +15,7 @@
  * command lists, an account's name — is rendered through `ui/untrusted.tsx` (BD-022), and the
  * textareas hold it as a value, never as markup.
  */
-import type { OrganisationSettings } from '@platform/contracts';
+import type { CappedProject, OrganisationSettings } from '@platform/contracts';
 import { type ReactElement, useState } from 'react';
 import { useIntegrations, useOrgSettings, useSettingsCommands } from '../app/queries.js';
 import {
@@ -77,6 +77,9 @@ export const OrganisationSettingsPanel = (): ReactElement => {
             pending={patch.isPending}
             onSave={(body) => commands.patchOrgSettings.mutate(body)}
           />
+          {patch.isSuccess && patch.data.capped_projects !== null ? (
+            <CappedProjects capped={patch.data.capped_projects} />
+          ) : null}
           {patch.error === null || patch.error === undefined ? null : (
             <ErrorNotice
               title="The organisation settings were not saved."
@@ -90,6 +93,38 @@ export const OrganisationSettingsPanel = (): ReactElement => {
 };
 
 type Patch = Parameters<ReturnType<typeof useSettingsCommands>['patchOrgSettings']['mutate']>[0];
+
+/** The setting a capped row names, in the screen's words. */
+const CAPPED_SETTING_LABEL: Readonly<Record<CappedProject['setting'], string>> = {
+  autonomy: 'autonomy level',
+  'pipeline.wip.max_parallel_tasks': 'parallel tasks',
+  'pipeline.wip.max_tasks_in_pipeline': 'tasks in the pipeline',
+};
+
+/**
+ * What the save just capped — `PATCH /api/org`'s `capped_projects` (WP-113, PROGRESS backlog 318):
+ * every project whose autonomy level or WIP limit in force fell, before and after. The project's own
+ * choice is kept, so raising the maximum again restores it; the list says so.
+ */
+const CappedProjects = ({ capped }: { readonly capped: readonly CappedProject[] }): ReactElement =>
+  capped.length === 0 ? (
+    <p className="text-xs text-fg-muted">This change lowers no project’s value in force.</p>
+  ) : (
+    <div className="flex flex-col gap-1 text-xs">
+      <p>
+        This change caps {capped.length === 1 ? 'one value' : `${capped.length} values`} in force —
+        each project’s own choice is kept, and raising the maximum again restores it:
+      </p>
+      <ul aria-label="Projects this change caps" className="flex flex-col gap-0.5">
+        {capped.map((entry) => (
+          <li key={`${entry.project_id}:${entry.setting}`}>
+            <UntrustedText value={entry.project_key} /> — {CAPPED_SETTING_LABEL[entry.setting]}{' '}
+            {String(entry.before)} → {String(entry.after)}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 
 const SettingsForm = ({
   settings,

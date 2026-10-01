@@ -11,13 +11,15 @@
  * once must both land. Without the lock the second write would put back the first one's section as
  * it was before — the lost update `tasks.version` exists to refuse elsewhere.
  */
-import type { JsonObject, OrganisationSettings } from '@platform/contracts';
+import type { Id, JsonObject, OrganisationSettings } from '@platform/contracts';
 import { db as dbAdapters } from '@platform/infrastructure';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
+import { projectSettingsFrom, repositorySnapshotFrom } from '../config-layers.js';
+import { chosenAutonomyLevelOf, type OrgCapProject, statedWipOf } from '../org-caps.js';
 import type { Database } from './identity-queries.js';
 import { ensureOrganisation } from './onboarding-queries.js';
 
-const { integrations, organizations } = dbAdapters.schema;
+const { integrations, organizations, projectRepositoryConfig, projects } = dbAdapters.schema;
 
 /** The column as stored, **unparsed**, and when it last changed — or `null` with no organisation. */
 export interface StoredOrganisationSettings {
@@ -48,7 +50,11 @@ export const findOrganisationSettings = async (
 export const replaceOrganisationSettings = async (
   database: Database,
   next: (stored: unknown) => Promise<OrganisationSettings> | OrganisationSettings,
-): Promise<{ readonly before: unknown; readonly after: OrganisationSettings }> => {
+): Promise<{
+  readonly before: unknown;
+  readonly after: OrganisationSettings;
+  readonly projects: readonly OrgCapProject[];
+}> => {
   const orgId = await ensureOrganisation(database);
   return database.transaction(async (tx) => {
     const locked = await tx
@@ -62,7 +68,41 @@ export const replaceOrganisationSettings = async (
       .update(organizations)
       .set({ settings: after as JsonObject, updatedAt: sql`now()` })
       .where(eq(organizations.id, orgId));
-    return { before, after };
+    // WP-113 (backlog 318): the organisation's projects, read **in this transaction** and under the
+    // organisation row's lock, so the list of projects this write caps is computed from the rows as
+    // the write found them (`org-caps.ts`). Every column the two in-force values are derived from:
+    // the dial (column and materialised document), the settings layer and the repository reading.
+    const rows = await tx
+      .select({
+        id: projects.id,
+        key: projects.key,
+        autonomyLevel: projects.autonomyLevel,
+        autonomyPolicies: projects.autonomyPolicies,
+        config: projects.config,
+        repo_status: projectRepositoryConfig.status,
+        repo_commit_sha: projectRepositoryConfig.commitSha,
+        repo_config: projectRepositoryConfig.config,
+        repo_not_applied: projectRepositoryConfig.notApplied,
+        repo_detail: projectRepositoryConfig.detail,
+        repo_read_at: projectRepositoryConfig.readAt,
+      })
+      .from(projects)
+      .leftJoin(projectRepositoryConfig, eq(projectRepositoryConfig.projectId, projects.id))
+      .where(eq(projects.orgId, orgId))
+      .orderBy(asc(projects.key));
+    return {
+      before,
+      after,
+      projects: rows.map((row) => ({
+        id: row.id,
+        key: row.key,
+        level: chosenAutonomyLevelOf(row.autonomyPolicies, row.autonomyLevel),
+        wip: statedWipOf(
+          () => projectSettingsFrom(row.id as Id, row.config),
+          repositorySnapshotFrom(row),
+        ),
+      })),
+    };
   });
 };
 

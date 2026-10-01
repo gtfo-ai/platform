@@ -30,10 +30,13 @@ import type {
 } from '@platform/application';
 import {
   ignoredProjectAllow,
+  PROJECT_PROMPTS_DIR,
   ProjectSettingsInvalidError,
+  projectPromptReadingSummary,
   projectSettingsLayerFrom,
   REPOSITORY_CONFIG_PATH,
   settingsNotApplied,
+  stagePromptResolutions,
   tightenRepositoryLayer,
 } from '@platform/application';
 import {
@@ -60,10 +63,12 @@ import {
 } from '@platform/contracts';
 import {
   type ConfigValues,
+  MAX_PROJECT_PROMPT_CHARS,
   mergeProjectConfig,
   PROPOSED_REVIEW_CHECKLISTS,
   PROPOSED_RISK_CLASSES,
   resolveWipLimits,
+  SHIPPED_TEMPLATES,
 } from '@platform/domain';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -369,6 +374,9 @@ export const effectiveConfigResponseOf = (input: {
       })),
     ],
     last_export: input.lastExport ?? null,
+    // WP-113 (backlog 315 (a)): which prompt file each stage would be given, by the planner's own
+    // resolution over the layers it reads (the settings with the repository file merged over them).
+    stage_prompts: stagePromptsOf(effectiveValues, snapshot),
     // WP-54: what the project declared and no role's baseline grants — dropped, never widened
     // (BD-025), and published here rather than dropped in silence. Since WP-63 it is judged after
     // the organisation maximum, and the repository file's entries after the settings' — so a file
@@ -394,7 +402,12 @@ export const lastExportOf = (
         exported_at: recorded.exportedAt,
       };
 
-/** The reading as the DTO publishes it (`repositoryConfigReadingSchema`). */
+/**
+ * The reading as the DTO publishes it (`repositoryConfigReadingSchema`) — since WP-113 with its
+ * prompt half: per file the path, status, pre-cut length and whether the cut applies, **never the
+ * text** (backlog 315 (a); the text a run got is that run's `/prompt`). `null` when the reading holds
+ * no prompt directory, for any of the three reasons the schema names.
+ */
 export const repositoryReadingOf = (
   snapshot: RepositoryConfigSnapshot | null,
   /** What the tighten-only merge kept from the settings over the file (WP-63 review round 1). */
@@ -406,7 +419,41 @@ export const repositoryReadingOf = (
   read_at: snapshot?.readAt ?? null,
   detail: snapshot?.status === 'invalid' ? snapshot.detail : null,
   not_applied: snapshot?.status === 'valid' ? [...snapshot.notApplied, ...merged] : [],
+  prompts:
+    snapshot?.prompts === undefined
+      ? null
+      : {
+          directory: PROJECT_PROMPTS_DIR,
+          cut_at_chars: MAX_PROJECT_PROMPT_CHARS,
+          truncated: snapshot.prompts.truncated,
+          files: projectPromptReadingSummary(snapshot.prompts).map((file) => ({ ...file })),
+        },
 });
+
+/**
+ * Every agent stage id of the shipped templates, sorted — the stages a run is planned for, and so
+ * the stages whose prompt resolution `GET …/config` publishes (WP-113). A `stages.<id>` key naming
+ * anything else is given to no run, so publishing a resolution for it would describe a prompt
+ * nobody assembles.
+ */
+export const PROMPTED_STAGE_IDS: readonly string[] = [
+  ...new Set(
+    Object.values(SHIPPED_TEMPLATES).flatMap((template) =>
+      template.stages.filter((stage) => stage.kind === 'agent').map((stage) => stage.id),
+    ),
+  ),
+].sort();
+
+/** `stage_prompts`: both keys of every prompted stage, as the planner would resolve them now. */
+export const stagePromptsOf = (
+  values: ConfigValues,
+  snapshot: RepositoryConfigSnapshot | null,
+): EffectiveConfigResponse['stage_prompts'] =>
+  PROMPTED_STAGE_IDS.flatMap((stage) =>
+    stagePromptResolutions(stage, values, snapshot?.prompts ?? null).map((entry) => ({
+      ...entry,
+    })),
+  );
 
 export const registerProjectRoutes = async (
   app: FastifyInstance,

@@ -93,7 +93,7 @@ import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import { isoDateOf, zonedParts } from '../scheduling/zoned-time.js';
-import type { MaintenanceStore } from './ports.js';
+import type { MaintenanceBlockerStore, MaintenanceStore } from './ports.js';
 
 /** The queue TD-004's *"maintenance schedules"* family gets for this feature. */
 export const MAINTENANCE_SCHEDULE_QUEUE = JOB_QUEUES.maintenanceSchedule;
@@ -170,12 +170,38 @@ export const MAINTENANCE_BLOCKED_DETAIL: Readonly<Record<MaintenanceBlocker, str
     'this project’s settings define no "chore" template, so there is no pipeline for a maintenance chore to run on',
 };
 
+/**
+ * A change in whether a project's maintenance is paused at Observe, between the last pass that
+ * recorded a blocker and this one — Q111 (c), WP-113. `null` when nothing changed, which is what
+ * every pass between a pause's beginning and its end answers.
+ */
+export type MaintenanceTransition = 'pause_began' | 'pause_ended';
+
+/**
+ * Q111 (c) as a function: a pause **begins** when this pass is paused at Observe and the recorded
+ * blocker is anything else (none included), and **ends** when the recorded one was the pause and this
+ * pass's is not. Every other pair — paused twice, or two blockers that are not the pause — is no news.
+ */
+export const maintenanceTransitionOf = (
+  previous: MaintenanceBlocker | null,
+  current: MaintenanceBlocker | null,
+): MaintenanceTransition | null => {
+  const was = previous === 'paused_at_observe';
+  const is = current === 'paused_at_observe';
+  return is && !was ? 'pause_began' : was && !is ? 'pause_ended' : null;
+};
+
 export interface ProjectMaintenanceReport {
   readonly projectId: Id;
   readonly period: string | null;
   readonly blocker: MaintenanceBlocker | null;
   readonly chores: readonly ChoreResult[];
+  /** Whether this pass began or ended a pause at Observe (Q111 (c), WP-113); `null` for neither. */
+  readonly transition: MaintenanceTransition | null;
 }
+
+/** What one project's scheduling decided, before the pass compares it with the recorded blocker. */
+type ScheduledProject = Omit<ProjectMaintenanceReport, 'transition'>;
 
 export interface MaintenancePassReport {
   readonly projects: number;
@@ -188,6 +214,12 @@ export interface MaintenanceOptions {
   readonly unitOfWork: UnitOfWork;
   readonly store: PipelineStore;
   readonly maintenance: MaintenanceStore;
+  /**
+   * The blocker each project's last pass recorded (`projects.maintenance_last_blocker`, WP-113,
+   * Q111 (c)) — required (standing rule 31): without it a pause at Observe is never announced, which
+   * is the silence Q111 was asked about.
+   */
+  readonly blockers: MaintenanceBlockerStore;
   readonly settings: ProjectSettingsPort;
   readonly jobs: Jobs;
   readonly ids: { next(): Id };
@@ -292,8 +324,33 @@ export const runMaintenancePass = async (
       : [input.projectId];
   const results: ProjectMaintenanceReport[] = [];
   for (const projectId of projects) {
-    const result = await scheduleProject(options, projectId);
-    await reportProject(options, result);
+    const scheduled = await scheduleProject(options, projectId);
+    /**
+     * Q111 (c), WP-113: the previous pass's blocker, compared with this one's. Read before the
+     * report is published and written after it, by a compare-and-set. The direction is
+     * **at-least-once**, never silence: a publication that threw leaves the old value for the next
+     * pass to announce from, and so does a `recordBlocker` transaction that fails **after** the
+     * transition row committed — the next night's pass announces it again under a new day, so a new
+     * identity and a second line (WP-113 review round 1). A pass that lost the compare-and-set to a
+     * concurrent one announced what the winner also announced; that is bounded by the cron's
+     * `exclusive` (one pass at a time) and by the transition row's identity, the same for both on
+     * one UTC day. The day is the **UTC** date, not the organisation's timezone, so a pause that
+     * begins, ends and begins again within one UTC day (a manual pass) announces the second *began*
+     * as the first — stated, not built around.
+     */
+    const previous = await options.unitOfWork.transaction(async (scope) =>
+      options.blockers.lastBlocker(scope.tx, projectId),
+    );
+    const result: ProjectMaintenanceReport = {
+      ...scheduled,
+      transition: maintenanceTransitionOf(previous, scheduled.blocker),
+    };
+    const publication = await reportProject(options, result);
+    if (publication !== 'failed' && previous !== scheduled.blocker) {
+      await options.unitOfWork.transaction(async (scope) =>
+        options.blockers.recordBlocker(scope.tx, projectId, previous, scheduled.blocker),
+      );
+    }
     results.push(result);
   }
   const chores = results.flatMap((result) => result.chores);
@@ -318,7 +375,7 @@ export const runMaintenancePass = async (
 const scheduleProject = async (
   options: MaintenanceOptions,
   projectId: Id,
-): Promise<ProjectMaintenanceReport> => {
+): Promise<ScheduledProject> => {
   const logger = options.logger ?? silentLogger;
   const settings = await options.settings.forProject(projectId);
   const config: MaintenanceConfig = maintenanceConfigOf(settings.config);
@@ -342,7 +399,10 @@ const scheduleProject = async (
    * fail-closed park, `chore` has no `architecture` stage) — a switch that does nothing.
    *
    * The skip is said on every pass at `info`, by name: the maintenance card shows the same state
-   * (*paused at Observe*), so the log line is the audit, not the only place it is said.
+   * (*paused at Observe*), so the log line is the audit, not the only place it is said. And since
+   * WP-113 (Q111 (c)) the project's digest says it **twice**: one line on the pass the pause begins
+   * and one on the pass it ends, from the blocker the pass records (`runMaintenancePass`), and
+   * nothing on the days between.
    */
   if (settings.autonomy?.level === 'observe') {
     logger.info(
@@ -579,7 +639,7 @@ const scheduleProject = async (
 const reportProject = async (
   options: MaintenanceOptions,
   report: ProjectMaintenanceReport,
-): Promise<void> => {
+): Promise<MaintenanceReportPublication | 'failed'> => {
   const logger = options.logger ?? silentLogger;
   let publication: MaintenanceReportPublication | 'failed';
   try {
@@ -610,6 +670,7 @@ const reportProject = async (
       logger.warn(fields, message);
     }
   }
+  return publication;
 };
 
 /**

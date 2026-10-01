@@ -188,6 +188,8 @@ const fetchFor = (readiness: 'recorded' | 'absent') =>
           read_at: null,
           detail: null,
           not_applied: [],
+          // WP-113: no reading holds a prompt directory yet.
+          prompts: null,
         },
         sources: { '*': 'project' },
         hash: 'deadbeef',
@@ -196,6 +198,8 @@ const fetchFor = (readiness: 'recorded' | 'absent') =>
         last_export: null,
         // WP-54: nothing the project declared is outside every role's command baseline.
         ignored_allow_commands: [],
+        // WP-113: which prompt file each stage would be given — none.
+        stage_prompts: [],
         // WP-37: what the server offers for `policies.risk_classes`. The project has **none** and
         // the offer is not empty, which is the whole shape of "proposed, not applied".
         risk_class_proposal: {

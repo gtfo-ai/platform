@@ -135,6 +135,21 @@ describe('response DTOs', () => {
         read_at: AT,
         detail: null,
         not_applied: [{ key: 'policies.autonomy', reason: 'the dial is moved in the platform' }],
+        // WP-113: the prompt half of the same reading — path, status, length, cut; never the text.
+        prompts: {
+          directory: '.agentic/prompts' as const,
+          cut_at_chars: 8_000,
+          truncated: false,
+          files: [
+            {
+              path: '.agentic/prompts/implementation.md',
+              status: 'file' as const,
+              chars: 8_001,
+              bytes: null,
+              cut: true,
+            },
+          ],
+        },
       },
       hash: 'sha256:abc',
       computed_at: AT,
@@ -154,6 +169,18 @@ describe('response DTOs', () => {
       },
       // WP-54: a declared `allow` entry no role's baseline grants, published rather than dropped.
       ignored_allow_commands: ['curl https://example.test'],
+      // WP-113: which prompt file each stage would be given, and in what state.
+      stage_prompts: [
+        {
+          stage: 'implementation',
+          key: 'prompt' as const,
+          path: '.agentic/prompts/implementation.md',
+          declared: false,
+          status: 'read' as const,
+          given: true,
+          cut: true,
+        },
+      ],
       // WP-37: what the wizard is offered for `policies.risk_classes`, which is **not** what the
       // project has — the field above is empty and this one is not, which is the whole shape of
       // "proposed, not applied" (product/18:52).
@@ -198,6 +225,25 @@ describe('response DTOs', () => {
         repository: { ...response.repository, path: '.agentic/pipeline.yml' },
       }).success,
     ).toBe(false);
+    // WP-113: a prompt file's text has no field to travel in — a strict object refuses it.
+    expect(
+      effectiveConfigResponseSchema.safeParse({
+        ...response,
+        repository: {
+          ...response.repository,
+          prompts: {
+            ...response.repository.prompts,
+            files: [{ ...response.repository.prompts.files[0], text: 'the instructions' }],
+          },
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      effectiveConfigResponseSchema.safeParse({
+        ...response,
+        repository: { ...response.repository, prompts: null },
+      }).success,
+    ).toBe(true);
   });
 
   it('answers an export with the merge request it opened, and refuses an unknown key (WP-63)', () => {

@@ -991,6 +991,8 @@ export const effectiveConfig = effectiveConfigResponseSchema.parse({
     read_at: null,
     detail: null,
     not_applied: [],
+    // WP-113: no reading holds a prompt directory yet.
+    prompts: null,
   },
   sources: { version: 'default' },
   hash: 'fakehash1',
@@ -999,6 +1001,8 @@ export const effectiveConfig = effectiveConfigResponseSchema.parse({
   last_export: null,
   // WP-54: the project declares no `commands.allow`, so nothing is ignored.
   ignored_allow_commands: [],
+  // WP-113: which prompt file each stage would be given — none.
+  stage_prompts: [],
   // WP-37: the platform's own suggestion, because no discovery run has proposed one here. The
   // project's `policies.risk_classes` is absent above — proposed is not applied.
   risk_class_proposal: {

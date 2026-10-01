@@ -296,3 +296,42 @@ describe('the packages a deps chore is briefed from', () => {
     });
   });
 });
+
+/**
+ * WP-113, Q111 (c): `projects.maintenance_last_blocker` (migration 0069) — the scheduler's one
+ * write, a compare-and-set the unit tier drives through a double.
+ */
+describe('the blocker the last maintenance pass recorded', () => {
+  const blockers = new maintenanceAdapters.PostgresMaintenanceBlockerStore();
+
+  it('reads null before any pass, writes only over the value it expected, and reads it back', async () => {
+    const id = projectId as Id;
+    expect(await withTx((tx) => blockers.lastBlocker(tx, id))).toBeNull();
+
+    // The pause begins: null → paused, written.
+    expect(await withTx((tx) => blockers.recordBlocker(tx, id, null, 'paused_at_observe'))).toBe(
+      true,
+    );
+    expect(await withTx((tx) => blockers.lastBlocker(tx, id))).toBe('paused_at_observe');
+
+    // A pass that read the old value loses the compare-and-set and writes nothing.
+    expect(await withTx((tx) => blockers.recordBlocker(tx, id, null, 'feature_disabled'))).toBe(
+      false,
+    );
+    expect(await withTx((tx) => blockers.lastBlocker(tx, id))).toBe('paused_at_observe');
+
+    // The pause ends: back to null, compared through `is not distinct from`.
+    expect(await withTx((tx) => blockers.recordBlocker(tx, id, 'paused_at_observe', null))).toBe(
+      true,
+    );
+    expect(await withTx((tx) => blockers.lastBlocker(tx, id))).toBeNull();
+  });
+
+  it('refuses a value the platform does not know, at the column', async () => {
+    await expect(
+      pool.query("update projects set maintenance_last_blocker = 'paused_forever' where id = $1", [
+        projectId,
+      ]),
+    ).rejects.toThrow(/projects_maintenance_last_blocker_known/);
+  });
+});

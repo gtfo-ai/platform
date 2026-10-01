@@ -193,7 +193,8 @@ marks the two that set nothing by themselves: `review_only` (the Review-only car
 **The dial and the maintenance pipeline.** The dial's *level* applies to scheduled maintenance chores
 and its per-stage policies do not. At **Observe** the nightly pass creates no chore — Observe means no
 agent merge requests — and the Maintenance card says *Paused at Observe* while the feature is on
-(the level in force counts, so an organisation maximum of Observe pauses it too). At **Assist**,
+(the level in force counts, so an organisation maximum of Observe pauses it too); the project's daily
+digest says so once when the pause begins and once when it ends. At **Assist**,
 **Supervised** and **Autonomous** each chore runs to a merge request a human reviews, with no dial of
 its own: Assist's stop after architecture would otherwise park every chore before it ran.
 
@@ -265,6 +266,19 @@ screen shows which layer every key came from. Two things to know:
 - **The file is plain YAML.** An explicit tag — `!custom`, `!!js/function`, even `!!str` — a
   duplicated key or a `__proto__` key makes the file invalid, with its position or
   key path named.
+
+**Project prompt files.** A stage can be given your own standing instructions, beside its role
+prompt and never instead of it. They live in the repository under `.agentic/prompts/` on the default
+branch: `<stage>.md` and `<stage>.append.md` (for example `implementation.md` and
+`implementation.append.md`) are read by name, or a stage's `prompt` / `prompt_append` key names
+another file in that directory (`prompts/review.md`). Each file may be at most 16 KiB, and a stage
+gets at most its first **8 000 characters**. **An edit applies at the next reading, not at the
+merge**: the platform reads the files with `.agentic/config.yml`, after the next knowledge index run
+or when you press **Re-read now**, so a stage that starts between your merge and that reading still
+gets the previous text. The project's **Settings** page has a *Project prompt files* card that shows
+the commit the last reading was taken at, every file it holds with its length and whether the cut
+applies (never its text — a run's **Prompt** tab shows what that run was given), and which file each
+stage would be given now.
 
 ## 2. Dashboard
 
@@ -526,7 +540,9 @@ Two messages come from the platform rather than from a task:
 - **The nightly maintenance pass's report** — which chores it created, which it could not perform and
   why, whether the maintenance budget stopped it — is a line in the project's **daily digest**, once
   per chore period, and again only when something new happened. A project with the digest off or no
-  chat binding gets no report line; the server log says it instead.
+  chat binding gets no report line; the server log says it instead. **A pause at Observe** is said
+  twice: one line on the night the pause begins (the project's dial, or the organisation's maximum,
+  is at Observe) and one on the night it ends, and nothing on the nights between.
 
 ## 7. Knowledge
 
@@ -619,7 +635,10 @@ administrator saves each section on its own:
   threshold at night waits for the morning digest, and a spent budget is still posted at once — and,
   with two chat accounts, the **default chat account** that speaks for the organisation.
 
-A lowered maximum applies from the next run or task; nothing already running is moved. The provider
+A lowered maximum applies from the next run or task; nothing already running is moved. When you
+save one, the page lists every project the change caps — whose autonomy level or WIP limit in force
+fell — with the value before and after. Each project's own choice is kept, so raising the maximum
+again restores it. The provider
 mode (an environment setting) and feature flags (a project's own) are not organisation settings. A
 project's features are switched on its own settings page.
 

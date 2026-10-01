@@ -173,6 +173,14 @@ describe('the organisation settings document over HTTP', () => {
       changed: ['commands', 'pipeline'],
       performed: true,
     });
+    // WP-113 (backlog 318): the write names the project it caps, read in its own transaction.
+    expect(written.body.capped_projects).toContainEqual(
+      expect.objectContaining({
+        project_id: pipeline.projectId,
+        setting: 'pipeline.wip.max_parallel_tasks',
+        after: 1,
+      }),
+    );
     // Stored as written, read back through the parse, and audited once.
     expect((await admin.json<{ settings: unknown }>('/api/org')).body.settings).toEqual(maximum);
     const audited = await pipeline.query<{ params: Record<string, unknown> }>(
@@ -225,6 +233,21 @@ describe('the organisation settings document over HTTP', () => {
     // The organisation lowers its maximum to Assist while ACME-1 waits.
     const lowered = await send(admin, 'PATCH', '/api/org', { autonomy: { maximum: 'assist' } });
     expect(lowered.status, JSON.stringify(lowered.body)).toBe(200);
+    // WP-113 (backlog 318): the answer names the project the maximum now caps — the dial read off
+    // the materialised document the real row holds, in the write's own transaction.
+    const [project] = await pipeline.query<{ key: string }>(
+      'select key from projects where id = $1',
+      [pipeline.projectId],
+    );
+    expect(lowered.body.capped_projects).toEqual([
+      {
+        project_id: pipeline.projectId,
+        project_key: project?.key,
+        setting: 'autonomy',
+        before: 'supervised',
+        after: 'assist',
+      },
+    ]);
 
     // The dial read says what the project chose and what is in force; selecting above is refused.
     const read = await admin.json<AutonomyResponse>(dial);

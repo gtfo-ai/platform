@@ -21,6 +21,7 @@ import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { toApiError } from '../errors.js';
+import type { OrgCapProject } from '../org-caps.js';
 import { memoryAttemptRecords } from './idempotency-memory.js';
 import type { SettingsQueries } from './settings.js';
 import {
@@ -80,6 +81,8 @@ interface World {
   orgStored: unknown;
   /** The organisation's autonomy maximum the dial read publishes (WP-93). */
   organisationMaximum: AutonomyResponse['organisation_maximum'];
+  /** The projects the write's transaction reads (WP-113), as the real query answers them. */
+  projects: OrgCapProject[];
 }
 
 const build = async (overrides: Partial<SettingsQueries> = {}): Promise<World> => {
@@ -96,6 +99,7 @@ const build = async (overrides: Partial<SettingsQueries> = {}): Promise<World> =
     projectFound: true,
     orgStored: undefined,
     organisationMaximum: null,
+    projects: [],
   } as unknown as World;
 
   const app = fastify();
@@ -165,7 +169,7 @@ const build = async (overrides: Partial<SettingsQueries> = {}): Promise<World> =
         const after = await next(before);
         calls.push({ name: 'replaceOrganisationSettings', input: after });
         world.orgStored = after;
-        return { before, after };
+        return { before, after, projects: world.projects };
       },
       isCommunicationAccount: async (id) => id === CHAT_ACCOUNT,
       ...memoryAttemptRecords(attempts),
@@ -556,7 +560,12 @@ describe('the organisation settings document (WP-93)', () => {
     world.role = 'admin';
     const accepted = await patch(body);
     expect(accepted.statusCode).toBe(200);
-    expect(accepted.json()).toEqual({ settings: body, changed: ['commands'], performed: true });
+    expect(accepted.json()).toEqual({
+      settings: body,
+      changed: ['commands'],
+      performed: true,
+      capped_projects: [],
+    });
     expect(world.orgStored).toEqual(body);
     expect(world.actions).toHaveLength(1);
     expect(world.actions[0]).toMatchObject({
@@ -659,11 +668,135 @@ describe('the organisation settings document (WP-93)', () => {
     expect((await patch(body, headers)).json()).toMatchObject({ performed: true });
     const replay = await patch(body, headers);
     expect(replay.statusCode).toBe(200);
-    expect(replay.json()).toEqual({ settings: body, changed: [], performed: false });
+    // A replay computes nothing: `null`, never an empty list that would say nobody was capped.
+    expect(replay.json()).toEqual({
+      settings: body,
+      changed: [],
+      performed: false,
+      capped_projects: null,
+    });
     expect(world.actions).toHaveLength(1);
     expect(world.calls.filter((call) => call.name === 'replaceOrganisationSettings')).toHaveLength(
       1,
     );
+  });
+});
+
+/**
+ * WP-113 (PROGRESS backlog 318): the write says which projects it caps. The rows are what the real
+ * query reads in the write's transaction (`replaceOrganisationSettings`); the computation is the
+ * route's (`org-caps.ts`), and so is what lands in the answer and the audit row.
+ */
+describe('the projects a lowered organisation maximum caps (WP-113)', () => {
+  const patch = (body: unknown) =>
+    world.app.inject({ method: 'PATCH', url: '/api/org', payload: body as object });
+  const ALPHA = '00000000-0000-4000-8000-0000000000a1';
+  const BETA = '00000000-0000-4000-8000-0000000000a2';
+  const GAMMA = '00000000-0000-4000-8000-0000000000a3';
+  const cappedOf = (response: { json: () => unknown }) =>
+    (response.json() as { capped_projects: unknown }).capped_projects;
+
+  beforeEach(() => {
+    world.projects = [
+      { id: ALPHA, key: 'ALPHA', level: 'autonomous', wip: undefined },
+      { id: BETA, key: 'BETA', level: 'supervised', wip: { max_parallel_tasks: 2 } },
+      { id: GAMMA, key: 'GAMMA', level: 'observe', wip: 'refused' },
+    ];
+  });
+
+  it('lists every project whose level in force falls, with before and after — and none on raising it', async () => {
+    const lowered = await patch({ autonomy: { maximum: 'assist' } });
+    expect(lowered.statusCode).toBe(200);
+    expect(cappedOf(lowered)).toEqual([
+      {
+        project_id: ALPHA,
+        project_key: 'ALPHA',
+        setting: 'autonomy',
+        before: 'autonomous',
+        after: 'assist',
+      },
+      {
+        project_id: BETA,
+        project_key: 'BETA',
+        setting: 'autonomy',
+        before: 'supervised',
+        after: 'assist',
+      },
+    ]);
+    // The audit row says what the answer said.
+    expect(world.actions.at(-1)?.params.capped_projects).toEqual(cappedOf(lowered));
+
+    // Lower again: only what falls *further* is news; a project already at the old cap is listed
+    // with the old cap as its before.
+    const further = await patch({ autonomy: { maximum: 'observe' } });
+    expect(cappedOf(further)).toEqual([
+      {
+        project_id: ALPHA,
+        project_key: 'ALPHA',
+        setting: 'autonomy',
+        before: 'assist',
+        after: 'observe',
+      },
+      {
+        project_id: BETA,
+        project_key: 'BETA',
+        setting: 'autonomy',
+        before: 'assist',
+        after: 'observe',
+      },
+    ]);
+
+    // Raising restores the projects' own choices and caps nobody.
+    const raised = await patch({ autonomy: { maximum: 'supervised' } });
+    expect(raised.statusCode).toBe(200);
+    expect(cappedOf(raised)).toEqual([]);
+    const removed = await patch({ autonomy: null });
+    expect(cappedOf(removed)).toEqual([]);
+  });
+
+  it('lists the WIP limits a lowered maximum bounds, and skips a project whose settings do not parse', async () => {
+    const lowered = await patch({
+      pipeline: { wip: { max_parallel_tasks: 1, max_tasks_in_pipeline: 4 } },
+    });
+    expect(lowered.statusCode).toBe(200);
+    // BD-010's defaults are 2 and 5: ALPHA states nothing, BETA states 2 parallel tasks.
+    expect(cappedOf(lowered)).toEqual([
+      {
+        project_id: ALPHA,
+        project_key: 'ALPHA',
+        setting: 'pipeline.wip.max_parallel_tasks',
+        before: 2,
+        after: 1,
+      },
+      {
+        project_id: ALPHA,
+        project_key: 'ALPHA',
+        setting: 'pipeline.wip.max_tasks_in_pipeline',
+        before: 5,
+        after: 4,
+      },
+      {
+        project_id: BETA,
+        project_key: 'BETA',
+        setting: 'pipeline.wip.max_parallel_tasks',
+        before: 2,
+        after: 1,
+      },
+      {
+        project_id: BETA,
+        project_key: 'BETA',
+        setting: 'pipeline.wip.max_tasks_in_pipeline',
+        before: 5,
+        after: 4,
+      },
+    ]);
+    const raised = await patch({ pipeline: { wip: { max_parallel_tasks: 3 } } });
+    expect(cappedOf(raised)).toEqual([]);
+  });
+
+  it('answers an empty list for a write that touches no maximum', async () => {
+    const response = await patch({ commands: { allow: ['git status'] } });
+    expect(cappedOf(response)).toEqual([]);
   });
 });
 

@@ -176,6 +176,8 @@ const fetchFor = (
           read_at: null,
           detail: null,
           not_applied: [],
+          // WP-113: no reading holds a prompt directory yet.
+          prompts: null,
         },
         sources: { '*': 'project' },
         hash: 'deadbeef',
@@ -184,6 +186,8 @@ const fetchFor = (
         last_export: null,
         // WP-54: nothing the project declared is outside every role's command baseline.
         ignored_allow_commands: [],
+        // WP-113: which prompt file each stage would be given — none.
+        stage_prompts: [],
         risk_class_proposal: { source: 'platform', classes: {}, checklists: [] },
         ...options.config,
       });
@@ -268,6 +272,7 @@ describe('the repository configuration card', () => {
                       read_at: '2026-09-13T04:00:00.000Z',
                       detail: 'stages.refinement.max_turns (expected number)',
                       not_applied: [],
+                      prompts: null,
                     },
                   })
                 : undefined,
@@ -393,6 +398,132 @@ describe('the configuration the server reports (WP-91)', () => {
     expect(document.body.textContent).toContain(
       'pipeline.template_overrides.feature.stages.business_review.enabled',
     );
+  });
+});
+
+/**
+ * WP-113 (PROGRESS backlog 315 (b)): the project's prompt files are visible before a run — what the
+ * last reading holds (never the text), at which commit, what each stage would be given, and a
+ * *Re-read now* on the existing refresh.
+ */
+describe('the project prompt files card (WP-113)', () => {
+  const SHA = 'f00dfeed'.repeat(5);
+  const READING = {
+    path: '.agentic/config.yml',
+    status: 'absent',
+    commit_sha: SHA,
+    read_at: '2026-10-01T09:00:00.000Z',
+    detail: null,
+    not_applied: [],
+    prompts: {
+      directory: '.agentic/prompts',
+      cut_at_chars: 8_000,
+      truncated: false,
+      files: [
+        {
+          path: '.agentic/prompts/big.md',
+          status: 'oversized',
+          chars: null,
+          bytes: 20_480,
+          cut: false,
+        },
+        {
+          path: '.agentic/prompts/implementation.md',
+          status: 'file',
+          chars: 9_120,
+          bytes: null,
+          cut: true,
+        },
+      ],
+    },
+  };
+  const STAGES = [
+    {
+      stage: 'implementation',
+      key: 'prompt',
+      path: '.agentic/prompts/implementation.md',
+      declared: false,
+      status: 'read',
+      given: true,
+      cut: true,
+    },
+    {
+      stage: 'implementation',
+      key: 'prompt_append',
+      path: '.agentic/prompts/implementation.append.md',
+      declared: false,
+      status: 'absent',
+      given: false,
+      cut: false,
+    },
+    {
+      stage: 'refinement',
+      key: 'prompt',
+      path: '.agentic/prompts/pm.md',
+      declared: true,
+      status: 'absent',
+      given: true,
+      cut: false,
+    },
+  ];
+
+  it('shows the reading’s commit, each file’s length and cut, what each stage is given, and re-reads on the existing refresh', async () => {
+    const posts: { url: string; key: string | null }[] = [];
+    render(
+      createApp({
+        fetchImpl: fetchFor(
+          {},
+          {
+            config: { repository: READING, stage_prompts: STAGES },
+            onPost: (url, _body, headers) => {
+              if (!url.endsWith('/config/refresh')) return undefined;
+              posts.push({ url, key: headers.get('idempotency-key') });
+              return json({
+                repository: { ...READING, prompts: null },
+                prompts_withheld:
+                  'the credentials of integration GitLab cannot be decrypted, so the prompt files cannot be redacted against them',
+              });
+            },
+          },
+        ),
+        realtime: false,
+      }).element,
+    );
+    expect(await screen.findByText('Project prompt files')).toBeTruthy();
+    const files = await screen.findByRole('list', { name: 'Prompt files in the last reading' });
+    expect(files.textContent).toContain('.agentic/prompts/implementation.md');
+    expect(files.textContent).toContain('9,120 characters — a stage gets the first 8,000');
+    expect(files.textContent).toContain('20,480 bytes — over 16 KiB, not read');
+    expect(document.body.textContent).toContain('Last reading at f00dfeedf00d');
+    expect(document.body.textContent).toContain('never at the merge');
+
+    // Given or named only: the convention append file nobody wrote is not listed.
+    const stages = screen.getByRole('list', { name: 'What each stage is given' });
+    expect(stages.textContent).toContain('.agentic/prompts/implementation.md');
+    expect(stages.textContent).toContain('by its conventional name — given');
+    expect(stages.textContent).toContain(
+      'named by the configuration — named, and not on the default branch — the stage runs without it',
+    );
+    expect(stages.textContent).not.toContain('implementation.append.md');
+
+    await userEvent.click(screen.getByText('Re-read now'));
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('the prompt files were not');
+    });
+    expect(document.body.textContent).toContain('integration GitLab cannot be decrypted');
+    expect(posts).toHaveLength(1);
+    expect(posts[0]?.url).toContain(`/api/projects/${PROJECT}/config/refresh`);
+  });
+
+  it('says a reading that holds no prompt directory holds none, rather than showing an empty list as a fact', async () => {
+    render(createApp({ fetchImpl: fetchFor({}), realtime: false }).element);
+    expect(await screen.findByText('Project prompt files')).toBeTruthy();
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('This reading holds no prompt files');
+    });
+    expect(document.body.textContent).toContain('The repository has not been read yet.');
+    expect(document.body.textContent).toContain('No stage is given a project prompt file.');
+    expect(screen.queryByRole('list', { name: 'Prompt files in the last reading' })).toBeNull();
   });
 });
 

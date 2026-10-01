@@ -35,6 +35,8 @@ apps/web/src/
 | Inbox | pending questions/approvals | `org` | answer/approve |
 | Knowledge | documents tree, document, proposals, health | `project:*` | approve/reject/edit proposal, edit doc (creates commit/MR) |
 | Pipeline settings | effective config with sources; templates | — | save (validated), export to repo |
+| Project settings | the wizard's mirror (product/18:55); **WP-113**: the *Project prompt files* card — the last reading's commit, its files under `.agentic/prompts/` (length and cut, never the text) and what each stage is given (`stage_prompts`) | — | re-read now (`POST …/config/refresh`) |
+| Organisation settings | `GET /api/org`; **WP-113**: after a save, the projects it capped (`capped_projects`, before → after) | — | save a section (`PATCH /api/org`) |
 | Statistics | rollups by day/week/month | — | CSV export |
 | Wizard | project draft, discovery status, readiness | `project:*` | step save |
 

@@ -12956,6 +12956,35 @@ The task screen has no link to the export. `DownloadLink` (`apps/web/src/ui/untr
 
 **Done.** The decision is written down. The recommendation is to **keep `null`** (the export must not be a way around a narrower read) and to state in product/09 that the export's audit half needs the audit read's role. If the product owner decides otherwise, the change is to `task.export` or to `org.audit.read`, a decision record first. **Depends on** nothing.
 
+### 383. **`projects` has no whole-table column-ownership census like the one `tasks` has, so a new writer of a `projects` column, or a whole-row `update projects`, would be a line somebody adds rather than a decision somebody makes. WP-113's census holds only the column it added** (TODO, **minor — latent**: every write site the refiner found is narrow today, so no lost update is known. **Read off the tree** (a grep by WP-113 and by the refiner, **not run**). **Unowned — for the next architect pass.** Found by WP-113, session 11)
+
+**Evidence.** The `tasks` census is WP-15e's:
+`packages/infrastructure/src/pipeline/tasks-column-ownership.test.ts` › "gives every column exactly one writing statement"
+For `projects`, WP-113 added `packages/infrastructure/src/maintenance/maintenance-blocker-writers.test.ts`. It holds **one** column, `maintenance_last_blocker`, and allows exactly one hit: the compare-and-set at `packages/infrastructure/src/maintenance/postgres-maintenance-blocker-store.ts:51`. WP-113's note says that `readiness_level`, `proposed_risk_classes`, `autonomy_*` and `config` *"each have writers nobody counts."* The refiner grepped the tracked non-test `.ts` sources under `apps/` and `packages/` for `update(projects)`, `update projects`, `insert(projects)` and `insert into projects`. It found six write sites:
+- `apps/server/src/queries/onboarding-queries.ts:207` — the insert;
+- `:937` — `config`, `config_source`, `config_hash`;
+- `:1005` — `autonomy_level`, `autonomy_policies`;
+- `packages/infrastructure/src/knowledge/postgres-readiness-store.ts:114` — `readiness_level`;
+- `:133` — `proposed_risk_classes`;
+- the blocker store above.
+
+The grep is not exhaustive: a multi-line raw SQL string, or a spelling the census's calibration would catch, may be missing. The case for narrowness is already argued in prose at `packages/application/src/onboarding/ports.ts:46-49`, which says that *"a whole-row `update projects set …` from here would put back a name, a config or an autonomy dial that a wizard step changed a moment ago."* That is the same lost-update class WP-15e measured on `tasks` (0.40 USD of recorded spend). `projects`, though, has no `version` column, so nothing would refuse such a write.
+
+**What it costs to leave.** Nothing today. The trigger is the next writer of a `projects` column, most likely a job that runs beside a wizard or settings write (a re-read, a rediscovery, a maintenance pass). That writer passes review with no census to update, and a lost update on `config` or the autonomy dial would be silent.
+
+**Done.** A whole-table census for `projects`, shaped like the `tasks` one. It reads every non-test `.ts`/`.sql` file git knows about, tracked and untracked (`scripts/census-files.mjs`), through the shared comment stripper. It recognises the spellings WP-113's census recognises (assignment, Drizzle key, `insert into projects (…)`) plus raw `update projects set`. It partitions the columns by writer, with every column naming its writing statements, and it fails on a column with no declared owner or on a whole-row writer. It has a calibration case like the one in WP-113's census. WP-113's single-column census is folded into it or kept as its stricter half; either way it is stated. Whether `projects` also needs WP-15e's `version` is **a decision for the architect**, not part of this entry. **Depends on** nothing. Related: WP-15e, WP-113.
+
+### 384. **WP-113's `capped_projects` has two stated limits. Graded: neither weakens a cap. One is working as designed; the other over-reports `before` in the response and the audit row** (TODO, **nit — report accuracy only; not a fail-open** (rule 20 holds on the enforcement path). **Read off the tree by the refiner, not run.** **Unowned — for the next architect pass.** Found by WP-113, session 11)
+
+**Evidence.** Both limits are stated in the docblock of `apps/server/src/org-caps.ts:26-33`.
+- **(a) A project whose settings layer does not parse is left out of the WIP half** (`org-caps.ts:122`, `if (project.wip === 'refused') continue;`). **Working as designed.** The run path gives such a project the schema's floor, `REFUSED_CONFIGURATION_WIP_LIMITS` (1 and 1), at `apps/server/src/pipeline.ts:741-743`, and admission refuses every agent run by name. No organisation maximum can lower a floor of 1, so there is nothing to list. Its autonomy half is still answered.
+- **(b) A replaced organisation document that did not parse is read as stating no maximum** (`organisationOrNone`, `org-caps.ts:84-91`, which returns `{}`). **This is not a fail-open on a cap.** The enforcement path never reads it that way: `readOrganisationLayer` (`apps/server/src/pipeline.ts:792-803`) also yields `{}`, but it carries the refusal. At `pipeline.ts:724-743` that refusal refuses every run and sets WIP to the 1/1 floor, and the Librarian's read throws (`apps/server/src/knowledge.ts:438-441`). The residual is only in what the write *reports*. `before` is computed as if the broken document had allowed `autonomous` and BD-010's or the project's WIP. In fact every agent run was refused and admission counted 1/1. So a `PATCH /api/org` that *repairs* a broken document and also sets a maximum can list projects as capped (for example `before: 3, after: 2`) when the write actually loosened them. The docblock's claim at `org-caps.ts:15-17` (*"the list cannot disagree with what the next read answers"*) holds for `after` but not for `before` in this case. The case pinning the current behaviour:
+  `apps/server/src/org-caps.test.ts` › "reads a replaced document that did not parse as stating no maximum"
+
+**What it costs to leave.** One overstated list, in the response and in the audit row, on the single write that repairs a broken organisation document. That state can only arise from a row written outside the strict `PATCH` (a migration, a manual edit or an older build). No run is affected.
+
+**Done.** Either (i) the docblock's rule-41 sentence is qualified to say that `before` is the document's *stated* values and not the refused state in force, or (ii) a refused `before` answers `capped_projects` with a marker (for example `before_refused: true`, or no list at all, with the reason in the audit row) rather than a computed `before`. The recommendation is **(i)**: it costs one sentence, the case is rare, and the direction is over-listing. **Depends on** WP-113.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -38660,3 +38689,115 @@ Verification, each started gated on a one-minute load reading under 12:
 - **(nit)** `runName` in `apps/web/src/features/run-settings.tsx` printed `null (attempt n)` for a run with no stage (an ask or discovery run); it now names it as such.
 - **(nit, recorded)** Events keep the oldest 1 000 and audit rows the newest 1 000; the cut direction is stated in technical/08, not in the response.
 - The orchestrator applied the implementer's CLAUDE.md read-API sentence (the export is the one route no screen calls, asserted by hand in the census) and product/09:45's export line.
+
+#### WP-113
+
+**Settings nobody can see until a run has spent money.** Folds backlog **315** ((a)–(c) of its *Done*; product/13:118's *diff against defaults* is out) and **318**, and builds **Q111** per its founder-confirmed answer **(c)**. Migration **0069**.
+
+Decisions and assumptions (each is also stated at the code):
+
+- **315 (a) — the prompt half is published, never the text.** `repositoryConfigReadingSchema.prompts` (`packages/contracts/src/api.ts`) is `{ directory, cut_at_chars, truncated, files[] }` or `null`; each file is `{ path, status: file|not_a_file|oversized, chars, bytes, cut }`. `chars` is the **stored** text's length in UTF-16 code units — after redaction, before the cut, the unit `MAX_PROJECT_PROMPT_CHARS` counts. `bytes` is the size an `oversized` file was refused at. The effective view gains `stage_prompts`: both keys of every agent stage of the shipped templates (`PROMPTED_STAGE_IDS` in `apps/server/src/routes/projects.ts`; a `stages.<id>` naming any other id is given to no run, so it is not listed), each with path, `declared`, the status the planner would render and `given`. Both are computed by the **planner's own resolution**: `project-prompts.ts` now has one `resolve` that `projectPromptsForStage` and the new `stagePromptResolutions`/`projectPromptReadingSummary` both read (rule 41), and the unit cases assert the two agree case by case.
+- **`null` has three causes and the DTO says so.** Nothing has read the repository, the reading predates WP-92, or WP-107 withheld the prompt texts. The stored reading does not record which (backlog **363**); the refresh answer's `prompts_withheld` names it, and the card says *"a re-read says which"*. No migration was added for it: the ruling did not ask for one.
+- **A real defect found on the way, fixed (rule 1).** `findConfigLayers` (`apps/server/src/queries/identity-queries.ts`), the read `GET …/config` and the refresh's replay use, selected every column of the reading **except `prompts`**. So the published prompt half would have been `null` in production while every unit case (which hand the columns in) was green. It now selects `repo_prompts`; the e2e below reads it back through the real driver.
+- **315 (b) — the card.** `apps/web/src/features/project-prompts.tsx`, rendered on the project settings page below the repository card: the reading's commit and time, each file (length, cut badge, oversized/not-a-file), the stages that are given a file or whose configuration names one (a convention file nobody wrote is not listed), and **Re-read now** on the existing `POST …/config/refresh`. `prompts_withheld` from that answer is shown as a notice. Every server string goes through `UntrustedText` (rule 48); nothing is a link.
+- **315 (c) — the user guide paragraph** is under §1 Step 5, after the repository file's rules: where the files live, the two default names, the 16 KiB bound, the 8 000-character cut, and that an edit applies at the next index run or **Re-read now**, not at the merge.
+- **318 — `capped_projects`, computed in the write's transaction.** `replaceOrganisationSettings` (`apps/server/src/queries/org-settings-queries.ts`) reads the organisation's projects **after its `update`, under the organisation row's lock**, with every column the two in-force values come from (the dial column and materialised document, the settings layer, the repository reading). `cappedProjectsOf` (`apps/server/src/org-caps.ts`) lists a project when its **level in force** (`capAutonomy(chosen, maximum)`, as `GET …/autonomy`'s `level_in_force`) or one of its two WIP limits (`resolveWipLimits`, what admission counts) **fell**: *fell*, not *differs*, so raising a maximum lists none, and a project already held at the old cap and held at the same value by the new one is not news. A discriminated union on `setting` (`autonomy` with levels, the two WIP keys with integers), each entry `project_id`, `project_key`, `before`, `after`. `null` on an `Idempotency-Key` replay, which performs and computes nothing — never `[]`, which would say the original write capped nobody. The list also lands in the audit row.
+- **Two stated limits of 318:** a project whose settings layer does not parse (WP-106) is left out of the WIP half, because it runs no layer at all and every run is refused by name; and a replaced organisation document that did not parse counts as stating no maximum (`before`). Both are at `org-caps.ts`'s docblock. The organisation settings screen shows the list after a save (`CappedProjects` in `apps/web/src/features/org-settings.tsx`) — not a criterion, but the ledger's own words were *"the administrator learns it per project, afterwards"*, and an answer no screen reads would leave that true.
+- **Q111 (c) — a stored last blocker and a transition.** `projects.maintenance_last_blocker` (migration 0069; `text`, nullable, a check constraint holding the four `MaintenanceBlocker` codes; Drizzle in `packages/infrastructure/src/db/schema/identity.ts`). New port `MaintenanceBlockerStore` (`lastBlocker`, `recordBlocker` — a compare-and-set, `is not distinct from`) beside `MaintenanceStore`, which stays three reads; `PostgresMaintenanceBlockerStore` is the adapter and `MaintenanceOptions.blockers` is **required** (rule 31). `runMaintenancePass` reads the previous blocker, computes `maintenanceTransitionOf(previous, current)` (`pause_began` / `pause_ended` / `null`), publishes, and writes the new blocker **only after a publication that did not throw**, so a failed publication is announced by the next pass. A project with no reader (digest off, no chat binding) records the blocker without a line, so a reader added later is not told a stale *began*.
+- **The line is its own row.** `maintenanceTransitionDetail` (`packages/application/src/notify/maintenance-report.ts`): *began* names both causes (the project's dial, or an organisation maximum of Observe); *ended* says chores are scheduled again, or names the blocker that remains. It is not folded into the period report, because a paused pass has no period and the period report's identity is its period and its news. Its identity is project + transition + blocker + **day**, so a same-day re-announcement lands on the same row. Class `maintenance_report`, planned for the digest, redacted through the chat binding's redactor like the period report.
+- **The column's one writer is held by a census.** `projects` has no column-ownership census. `packages/infrastructure/src/maintenance/maintenance-blocker-writers.test.ts` holds this column only. It reads every non-test `.ts`/`.sql` git knows about, through the shared comment stripper, and finds three spellings: an assignment, Drizzle's key other than the schema definition, and an `insert into projects (…)` naming it. Exactly one hit is allowed, the store's compare-and-set. Test files are out of scope, because the integration case writes an unknown value to prove the constraint refuses it.
+- **`pnpm run -s schemas`: "22 documents already up to date"** — `schemas/` generates no API DTO (WP-112 recorded the same), so criterion 1's regeneration changes nothing.
+- **Coverage ratchet:** server lines earned 65 (measured 67.19) and was re-pinned 64 → 65 in `vitest.config.ts` and technical/10's table.
+
+Tests (criteria):
+- **Criterion 1 (contract and server):**
+  - `packages/contracts/src/api.test.ts` › "reports the effective config with a source per key (technical/12)" — the new fields round-trip, a file carrying `text` is refused by the strict object, and `prompts: null` parses.
+  - `packages/application/src/config/project-prompts.test.ts` › "lists both keys of a stage, says which the planner gives, and never carries the text".
+  - › "says the cut applies one character past 8 000, and not at exactly 8 000 (rule 42)".
+  - › "marks an append naming the prompt file as not given — it is given once, under prompt".
+  - › "publishes path, status, pre-cut length and the cut per file, sorted, never the text" (both sides of the cut).
+  - Seven parameterised cases › "gives exactly what the planner gives: %s".
+  - `apps/server/src/routes/projects.test.ts` › "publishes each stored file’s path, status, length and cut at the reading’s commit — never its text".
+  - › "resolves both keys of every agent stage the way the planner would, the declared file included".
+  - › "publishes no prompt half for a reading that holds no directory, and says a declared file is unread".
+  - Real pipeline: `test/e2e/pipeline/project-prompts.e2e.test.ts` › "reach the run inside a data block, redacted, and move the recorded prompt version". It now asserts the refresh's prompt half, then `GET …/config` read back through the real driver: the same half, the two given stages, and no fixture text in either body.
+- **Criterion 2 (`test:ui`):**
+  - `apps/web/src/features/project-settings.test.tsx` › "shows the reading’s commit, each file’s length and cut, what each stage is given, and re-reads on the existing refresh".
+  - › "says a reading that holds no prompt directory holds none, rather than showing an empty list as a fact".
+- **Criterion 3:** `docs/user-guide.md` §1 Step 5, the *Project prompt files* paragraph.
+- **Criterion 4 (318):**
+  - `apps/server/src/routes/settings.test.ts` › "lists every project whose level in force falls, with before and after — and none on raising it".
+  - › "lists the WIP limits a lowered maximum bounds, and skips a project whose settings do not parse".
+  - › "answers an empty list for a write that touches no maximum".
+  - › "honours Idempotency-Key: a replay performs nothing and writes no second audit row" now pins `capped_projects: null`.
+  - `apps/server/src/org-caps.test.ts` › "reads a replaced document that did not parse as stating no maximum".
+  - UI: `apps/web/src/features/org-settings.test.tsx` › "says which projects a lowered maximum caps, before and after, with the key as text (WP-113)".
+  - Real database: `test/e2e/server/org-settings.e2e.test.ts` › "caps the dial at the next task and never moves a running task’s frozen dial (criterion 2)" asserts the exact `capped_projects` entry for the materialised Supervised dial lowered to Assist. › "lets an admin set the command and WIP maximums, refuses a member, and the next run is held to them (criteria 1 and 6)" asserts the WIP entry.
+- **Criterion 5 (Q111):**
+  - `packages/application/src/maintenance/scheduler.test.ts` › "is one line when the pause begins, none on the next pass, and one when it ends" — rows and recorded writes over three passes.
+  - › "says nothing for a project that is never paused, and records no blocker".
+  - › "records nothing and announces again next pass when the publication failed".
+  - › "records the blocker without a line when the project has no reader, so a later reader is not told a stale beginning".
+  - › "names what still blocks the project when the pause ends into another blocker".
+  - The transition table, seven cases (› "reads %s → %s as %s").
+  - Real SQL: `test/integration/maintenance/maintenance-store.integration.test.ts` › "reads null before any pass, writes only over the value it expected, and reads it back" and › "refuses a value the platform does not know, at the column".
+  - Census: `packages/infrastructure/src/maintenance/maintenance-blocker-writers.test.ts` › "is written by the blocker store’s compare-and-set and by nothing else", calibrated by › "sees every spelling of a write, and not a comment, a read or the schema’s definition".
+  - The schema-parity integration test covers the Drizzle column generically.
+
+Canaries (scripted replace on a copy-backed file, one test file, restore, md5 confirmed each time — rules 3, 77, 88):
+- `cappedProjectsOf` listing on `!==` instead of `<` → the 318 route case dies.
+- Recording the blocker after a **failed** publication → "records nothing and announces again…" dies.
+- `pause_began` without the `!was` → the three-pass case and the table both die.
+- `stagePromptResolutions`' cut at `>=` → its boundary case dies.
+- The summary's cut at `>=` **survived** at first, because the summary case had no 8 000-character file. A file at exactly 8 000 was added, and the mutant now dies.
+- `given` without the "given once" check → two cases die.
+- The replay answering `[]` → the idempotency case dies.
+- `repositoryReadingOf` always `null` → the projects case dies.
+- The card listing every stage → the UI case dies.
+- **Not killable in the unit tier, by construction:** `findConfigLayers` without `repo_prompts`. The unit cases hand the columns in; the e2e case above is its executioner (not run as a canary: one Docker tier, not mutated).
+
+**Sentences falsified** (grep of `prompt`, `next reading`, `capped_projects`, `paused at Observe`, `nothing_to_report`, `digest` and `no read surface` over `docs/`, `apps/`, `packages/`, `CLAUDE.md`; `prompt` and `digest` narrowed to the prompt-file, maintenance and Observe sentences):
+- Rewritten:
+  - technical/08's Org row (`capped_projects`) and its Projects row (`repository.prompts`, `stage_prompts`, and the refresh reading `.agentic/prompts/` too).
+  - technical/03's `projects` row (the new column, its writer, its meaning).
+  - technical/02's MaintenanceScheduler line (Q111 (c)).
+  - technical/12's prompt-file paragraph (*"Since WP-113 both are visible before a run"*).
+  - technical/09's screen table: two rows, *Project settings* and *Organisation settings*.
+  - The user guide: the dial-and-maintenance paragraph, §6's maintenance report bullet, §11's organisation settings, and the new prompt-files paragraph.
+  - The maintenance card's *Paused at Observe* sentence (`apps/web/src/features/operating-mode.tsx`).
+  - The docblocks of `maintenance-report.ts`, `scheduler.ts` (the Observe skip), `settings.ts` (`PATCH /api/org`, docblock and OpenAPI description) and `project-settings.tsx`.
+  - Q111's record in `docs/OPEN-QUESTIONS.md`.
+- Left, judged:
+  - technical/12:236's *"a new or changed file applies at the next reading"* is true, and is now also visible.
+  - `MAINTENANCE_BLOCKED_DETAIL.paused_at_observe` says *"the project’s autonomy dial is at Observe"*. That is true of the dial in force, which the composition root caps, and the log line it feeds is unchanged.
+  - The `nothing_to_report` hits are the sink's own vocabulary, now documented with the transition exception.
+  - The Q111 body and the plan row are history.
+  - No `no read surface` hit remains outside the ledger and the plan row.
+- **Found stale, not mine, not edited:** technical/04:160-161 (*"every text is redacted with TD-012 step 2's pattern rules before it is stored"*) predates WP-107's step-1 pass. technical/12:233 already says it right. Filed below.
+- **For the orchestrator — product/18:30 (rule 83, not edited).** Replace *"the nightly pass reports what it did in the project's daily digest (WP-65)"* with: *"the nightly pass reports what it did in the project's daily digest (WP-65), and a pause at Observe there once when it begins and once when it ends, never on the days between (Q111 (c), WP-113)"*.
+
+Verification, each started gated on a one-minute load reading under 12:
+- `pnpm run -s verify` **PASS** (9650 passed, 14 skipped). An earlier run failed `typecheck` on a nullable `detail` in a new test, and the next failed `coverage:ratchet` only, which asked for the server lines re-pin above.
+- `verify:ui` **PASS** (466) at 8.76.
+- `verify:web-e2e` **PASS** (51) at 10.54.
+- `verify:integration` **PASS** (740) at 8.00.
+- `verify:e2e` **PASS** (262) at 11.53.
+- One wait is stated: the load read 20.29 at one point, and nothing was started until a reading came back under 12.
+- Docker afterwards: 29 containers and 122 volumes, the same as before the Docker tiers. The brief's baseline was 123; 122 was read before the tiers.
+- `scripts/citations.test.ts` is green over these notes.
+
+**Discovered work** (for the refiner; no numbers claimed):
+- `projects` has no whole-table column-ownership census (the `tasks` one is WP-15e's). WP-113's census holds its one column. `readiness_level`, `proposed_risk_classes`, `autonomy_*` and `config` each have writers nobody counts. Read off the tree (grep), not run.
+- technical/04:160-161 states the prompt files' redaction as step 2 only; WP-107 added step 1. A docs line.
+- The stored reading still does not record that its prompts were withheld (backlog 363). The new card says *"a re-read says which"* because a `GET` cannot.
+- product/13:118's *diff against defaults* is unbuilt and out of this row by ruling.
+
+#### WP-113 — review round 1 (APPROVE with nits), fixed by the orchestrator
+
+- **(minor)** A pause transition can be announced **twice, never zero times**, and nothing said so: if the transition row commits and the `recordBlocker` transaction then fails, the stored blocker stays and the next night's pass announces again under a new day's identity. The direction (at-least-once) is now stated at the pass in `packages/application/src/maintenance/scheduler.ts`, and `0069_maintenance_last_blocker.sql`'s comment no longer claims the compare-and-set stops two announcements — the transition row's same-day identity does, and the compare-and-set runs after publication. The migration is unapplied (never committed), so its comment was edited in place.
+- **(nit)** The transition identity's day is the **UTC** date (`packages/application/src/notify/maintenance-report.ts`), so a pause that begins, ends and begins again within one UTC day announces the second *began* as the first — stated at the pass, not built around.
+- **(nit)** `postgres-maintenance-blocker-store.ts`'s comment claimed an unknown stored value announces "once more"; it would announce *began* every night (the compare-and-set never matches a non-null value). Reworded, with why it cannot happen (`assertSchemaIsKnown` refuses an older process).
+- **(nit)** `capped_projects` is unbounded by design (at most three entries per project) — stated in technical/08.
+- **(nit)** Dropping `repo_prompts` from `findConfigLayers` again is killed by the **type check** (`ConfigLayerColumns`, TS2322), not only by the e2e — recorded here, correcting the implementer's note.
+- The orchestrator fixed technical/04's prompt-file redaction line (step 1's exact values since WP-107, and `prompts_withheld`) and applied the implementer's product/18:30 sentence.
+- Canary (f) — a prompt path rendered through a markup sink — is held by the census `apps/web/src/no-html.test.ts`, not by the card's own test.

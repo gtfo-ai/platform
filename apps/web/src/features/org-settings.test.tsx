@@ -6,7 +6,7 @@
  * time through `PATCH /api/org` with an `Idempotency-Key`, shows the server's refusal, and renders
  * the stored command lists and an account's name as text (BD-022).
  */
-import type { IntegrationSummary, OrganisationSettings } from '@platform/contracts';
+import type { CappedProject, IntegrationSummary, OrganisationSettings } from '@platform/contracts';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -37,6 +37,8 @@ const json = (body: unknown, status = 200): Response =>
 const fetchFor = (options: {
   settings?: OrganisationSettings;
   onPatch?: (body: unknown, headers: Headers) => Response | undefined;
+  /** WP-113: what the write answers it capped. */
+  capped?: readonly CappedProject[];
 }) => {
   let stored: OrganisationSettings = options.settings ?? {};
   return (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -52,7 +54,12 @@ const fetchFor = (options: {
         else next[key] = value;
       }
       stored = next as OrganisationSettings;
-      return json({ settings: stored, changed: Object.keys(body), performed: true });
+      return json({
+        settings: stored,
+        changed: Object.keys(body),
+        performed: true,
+        capped_projects: options.capped ?? [],
+      });
     }
     if (url.endsWith('/api/org')) {
       return json({ settings: stored, updated_at: '2026-09-29T08:00:00.000Z' });
@@ -129,6 +136,58 @@ describe('the organisation settings document on the settings page', () => {
       expect(patched).toEqual([{ autonomy: { maximum: 'assist' } }]);
     });
     expect(keys[0]).toMatch(/.+/);
+  });
+
+  it('says which projects a lowered maximum caps, before and after, with the key as text (WP-113)', async () => {
+    render(
+      createApp({
+        fetchImpl: fetchFor({
+          capped: [
+            {
+              project_id: '00000000-0000-4000-8000-0000000000a1',
+              project_key: '<b>alpha</b>',
+              setting: 'autonomy',
+              before: 'supervised',
+              after: 'assist',
+            },
+            {
+              project_id: '00000000-0000-4000-8000-0000000000a1',
+              project_key: '<b>alpha</b>',
+              setting: 'pipeline.wip.max_parallel_tasks',
+              before: 2,
+              after: 1,
+            },
+          ],
+        }),
+        realtime: false,
+      }).element,
+    );
+    const user = userEvent.setup();
+    await user.selectOptions(
+      await screen.findByLabelText('Organisation autonomy maximum'),
+      'assist',
+    );
+    await user.click(screen.getByRole('button', { name: 'Save autonomy maximum' }));
+    const list = await screen.findByRole('list', { name: 'Projects this change caps' });
+    expect(list.textContent).toContain('<b>alpha</b> — autonomy level supervised → assist');
+    expect(list.textContent).toContain('parallel tasks 2 → 1');
+    expect(list.querySelector('b')).toBeNull();
+    expect(document.body.textContent).toContain('raising the maximum again restores it');
+  });
+
+  it('says a change that lowers nothing caps nobody (WP-113)', async () => {
+    render(createApp({ fetchImpl: fetchFor({}), realtime: false }).element);
+    const user = userEvent.setup();
+    await user.selectOptions(
+      await screen.findByLabelText('Organisation autonomy maximum'),
+      'supervised',
+    );
+    await user.click(screen.getByRole('button', { name: 'Save autonomy maximum' }));
+    await waitFor(() => {
+      expect(document.body.textContent).toContain(
+        'This change lowers no project’s value in force.',
+      );
+    });
   });
 
   it('saves quiet hours and flags the default chat account, whose name renders as text', async () => {

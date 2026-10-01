@@ -13,8 +13,10 @@ import {
   MAX_PROJECT_PROMPT_FILES,
   type ProjectPromptReading,
   projectPromptPathOf,
+  projectPromptReadingSummary,
   projectPromptsForStage,
   projectPromptValueNotApplied,
+  stagePromptResolutions,
 } from './project-prompts.js';
 import type { RepositoryFileEntry } from './repository-config.js';
 
@@ -211,5 +213,135 @@ describe('projectPromptValueNotApplied', () => {
       },
     ]);
     expect(projectPromptValueNotApplied({})).toEqual([]);
+  });
+});
+
+/**
+ * WP-113 (backlog 315 (a)): the read surface's two halves. The resolution is the planner's own, so
+ * every case is asserted against `projectPromptsForStage` too — the screen and the prompt agree by
+ * construction, and these cases are what would notice if they stopped sharing it.
+ */
+describe('stagePromptResolutions', () => {
+  const given = (stage: string, config: ConfigValues, at: ProjectPromptReading | null) =>
+    stagePromptResolutions(stage, config, at)
+      .filter((entry) => entry.given)
+      .map((entry) => ({ key: entry.key, status: entry.status, path: entry.path }));
+  const planned = (stage: string, config: ConfigValues, at: ProjectPromptReading | null) =>
+    projectPromptsForStage(stage, config, at).map((block) => ({
+      key: block.key,
+      status: block.status,
+      path: block.path,
+    }));
+
+  it('lists both keys of a stage, says which the planner gives, and never carries the text', () => {
+    const at = reading({ '.agentic/prompts/implementation.md': file('Use pnpm.') });
+    const resolved = stagePromptResolutions('implementation', {}, at);
+    expect(resolved).toEqual([
+      {
+        stage: 'implementation',
+        key: 'prompt',
+        path: '.agentic/prompts/implementation.md',
+        declared: false,
+        status: 'read',
+        given: true,
+        cut: false,
+      },
+      {
+        stage: 'implementation',
+        key: 'prompt_append',
+        path: '.agentic/prompts/implementation.append.md',
+        declared: false,
+        status: 'absent',
+        given: false,
+        cut: false,
+      },
+    ]);
+    expect(JSON.stringify(resolved)).not.toContain('Use pnpm.');
+    expect(given('implementation', {}, at)).toEqual(planned('implementation', {}, at));
+  });
+
+  it('says the cut applies one character past 8 000, and not at exactly 8 000 (rule 42)', () => {
+    const at = (chars: number) =>
+      reading({ '.agentic/prompts/review.md': file('x'.repeat(chars)) });
+    const config: ConfigValues = { stages: { code_review: { prompt: 'prompts/review.md' } } };
+    expect(stagePromptResolutions('code_review', config, at(8_000))[0]?.cut).toBe(false);
+    expect(stagePromptResolutions('code_review', config, at(8_001))[0]).toMatchObject({
+      declared: true,
+      status: 'read',
+      given: true,
+      cut: true,
+    });
+  });
+
+  it.each([
+    ['no reading', {}, null],
+    ['a declared file no reading has read', { stages: { x: { prompt: 'prompts/dev.md' } } }, null],
+    ['a declared absent file', { stages: { x: { prompt: 'prompts/dev.md' } } }, reading({})],
+    ['a truncated directory', {}, reading({}, true)],
+    ['a value outside the directory', { stages: { x: { prompt_append: '../o.md' } } }, reading({})],
+    [
+      'both keys naming one file',
+      { stages: { x: { prompt: 'prompts/a.md', prompt_append: 'prompts/a.md' } } },
+      reading({ '.agentic/prompts/a.md': file('a') }),
+    ],
+    [
+      'an oversized convention file',
+      {},
+      reading({ '.agentic/prompts/x.md': { kind: 'oversized', bytes: 17_000 } }),
+    ],
+  ] as const)('gives exactly what the planner gives: %s', (_name, config, at) => {
+    expect(given('x', config as ConfigValues, at)).toEqual(
+      planned('x', config as ConfigValues, at),
+    );
+  });
+
+  it('marks an append naming the prompt file as not given — it is given once, under prompt', () => {
+    const config: ConfigValues = {
+      stages: { x: { prompt: 'prompts/a.md', prompt_append: 'prompts/a.md' } },
+    };
+    const resolved = stagePromptResolutions(
+      'x',
+      config,
+      reading({ '.agentic/prompts/a.md': file('a') }),
+    );
+    expect(resolved.map((entry) => [entry.key, entry.status, entry.given])).toEqual([
+      ['prompt', 'read', true],
+      ['prompt_append', 'read', false],
+    ]);
+  });
+});
+
+describe('projectPromptReadingSummary', () => {
+  it('publishes path, status, pre-cut length and the cut per file, sorted, never the text', () => {
+    const summary = projectPromptReadingSummary(
+      reading({
+        '.agentic/prompts/z.md': file('y'.repeat(8_001)),
+        '.agentic/prompts/m.md': file('m'.repeat(8_000)),
+        '.agentic/prompts/a.md': file('Short instruction.'),
+        '.agentic/prompts/big.md': { kind: 'oversized', bytes: 20_000 },
+        '.agentic/prompts/link.md': { kind: 'not_a_file', mode: '120000' },
+      }),
+    );
+    expect(summary).toEqual([
+      { path: '.agentic/prompts/a.md', status: 'file', chars: 18, bytes: null, cut: false },
+      {
+        path: '.agentic/prompts/big.md',
+        status: 'oversized',
+        chars: null,
+        bytes: 20_000,
+        cut: false,
+      },
+      {
+        path: '.agentic/prompts/link.md',
+        status: 'not_a_file',
+        chars: null,
+        bytes: null,
+        cut: false,
+      },
+      // Both sides of the cut (rule 42): exactly 8 000 is given whole, one more is cut.
+      { path: '.agentic/prompts/m.md', status: 'file', chars: 8_000, bytes: null, cut: false },
+      { path: '.agentic/prompts/z.md', status: 'file', chars: 8_001, bytes: null, cut: true },
+    ]);
+    expect(JSON.stringify(summary)).not.toContain('Short instruction.');
   });
 });

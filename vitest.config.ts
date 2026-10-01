@@ -275,7 +275,7 @@ export const COVERAGE_RINGS: Readonly<
   },
   server: {
     glob: 'apps/server/src/**/*.ts',
-    thresholds: { lines: 64, branches: 57, functions: 54, statements: 64 },
+    thresholds: { lines: 65, branches: 57, functions: 54, statements: 64 },
     owes: 'branches: 1118 uncovered (WP-97) — `queries/*.ts` 476, `routes/*` 310, `runtime.ts` 116, `knowledge.ts` 44, `pipeline.ts` 40: SQL and composition the integration and e2e tiers drive, uncounted',
   },
   launcher: {

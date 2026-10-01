@@ -233,7 +233,10 @@ each at most 16 KiB (a larger one is recorded `oversized` and never read) — re
 the decrypted credentials of the project's bindings and then step 2's pattern rules (WP-107; until then
 step 2 only) and stored beside the reading (`project_repository_config.prompts`, migration 0063). A settings
 edit that names another file in the directory applies at the next run; a new or changed **file** applies at
-the next reading, like this file itself. A file a key names that the platform cannot read — absent, a
+the next reading, like this file itself. **Since WP-113 both are visible before a run**: `GET …/config` publishes
+the reading's prompt half (per file the path, status, pre-cut length and whether the 8 000-character cut applies,
+never the text) and each agent stage's resolution (`stage_prompts`), and the project settings page shows both
+with the reading's commit and a *Re-read now*. A file a key names that the platform cannot read — absent, a
 symlink, oversized, outside the directory, or no reading yet — does **not** refuse the run: the run proceeds
 without it, its block carries the reason as `status` with an empty body, and the planner logs it.
 

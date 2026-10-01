@@ -21,7 +21,9 @@
  *
  * **The repository's own `.agentic/config.yml`** (WP-63, Q94) has a card of its own: the reading the
  * platform last took of it on the default branch, a button that proposes these settings to it as a
- * merge request, and a button that re-reads it.
+ * merge request, and a button that re-reads it. **The project's prompt files** (WP-113) have the card
+ * beside it (`project-prompts.tsx`): what that same reading holds under `.agentic/prompts/`, what
+ * each stage would be given, and *Re-read now*.
  *
  * product/10:21 also lists **WIP limits** and **policies** on this page. They are read-only here and
  * say so: the WIP limits are `pipeline.wip` (WP-91, BD-010's defaults when nothing sets them),
@@ -57,6 +59,7 @@ import { ExternalLink, UntrustedText } from '../ui/untrusted.js';
 import { BusinessInterview } from './business-interview.js';
 import { HistoryBootstrap } from './history-bootstrap.js';
 import { bindingConfigOf, OperatingMode } from './operating-mode.js';
+import { ProjectPromptFiles } from './project-prompts.js';
 import { Rediscovery } from './rediscovery.js';
 
 /**
@@ -412,6 +415,9 @@ export const ProjectSettingsScreen = ({
           />
         ) : null}
       </Card>
+
+      {/* WP-113 (backlog 315 (b)): which prompt files the last reading holds, and what each stage gets. */}
+      <ProjectPromptFiles projectId={project.id} />
 
       <Card className="flex flex-col gap-1">
         <SectionHeading>Knowledge</SectionHeading>

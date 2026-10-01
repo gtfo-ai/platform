@@ -298,6 +298,74 @@ export const repositoryConfigReadingSchema = z.strictObject({
   /** The key paths an `invalid` file failed on — redacted, bounded, platform-worded. */
   detail: z.string().nullable(),
   not_applied: z.array(configNotAppliedSchema),
+  /**
+   * The prompt half of the same reading (WP-113, PROGRESS backlog 315 (a)) — `.agentic/prompts/` at
+   * `commit_sha`, read in the same pass as the configuration file (WP-92).
+   *
+   * `null` is *"this reading holds no prompt directory"*, which has three causes and one meaning for
+   * a run (a file a configuration names is `unread`, a convention file is not given): nothing has
+   * read the repository yet, the reading was taken before WP-92, or the reading **withheld** the
+   * prompt texts because one of the project's integration credentials would not decrypt (WP-107) —
+   * the refresh that withheld them says so in its `prompts_withheld`, and the stored reading does
+   * not record which of the three it was (PROGRESS backlog 363).
+   *
+   * **Never the text**: path, status, length and whether the cut applies (standing rules 13/37). The
+   * text a run was given is that run's own `GET /api/runs/:id/prompt`.
+   */
+  prompts: z
+    .strictObject({
+      directory: z.literal('.agentic/prompts'),
+      /** Characters of one file a stage is given (`MAX_PROJECT_PROMPT_CHARS`, 8 000). */
+      cut_at_chars: z.int().positive(),
+      /** More than 64 files matched; the ones past the bound (by path) were not listed. */
+      truncated: z.boolean(),
+      files: z
+        .array(
+          z.strictObject({
+            path: nonEmptyStringSchema,
+            /** `file` was read; `not_a_file` (a symlink, a directory, a submodule) and `oversized` (over 16 KiB) were refused unread. */
+            status: z.enum(['file', 'not_a_file', 'oversized']),
+            /** The stored text's length before the cut, after redaction; `null` unless `file`. */
+            chars: z.int().nonnegative().nullable(),
+            /** The blob size it was refused at; `null` unless `oversized`. */
+            bytes: z.int().nonnegative().nullable(),
+            /** Whether a stage given this file gets only its first `cut_at_chars` characters. */
+            cut: z.boolean(),
+          }),
+        )
+        .max(64),
+    })
+    .nullable(),
+});
+
+/**
+ * Which project prompt file one key of one agent stage resolves to, and the status the planner
+ * would render now (WP-113, PROGRESS backlog 315 (a)) — computed by the planner's own resolution
+ * (`stagePromptResolutions`), over the effective configuration and the stored reading.
+ */
+export const stagePromptResolutionSchema = z.strictObject({
+  stage: nonEmptyStringSchema,
+  key: z.enum(['prompt', 'prompt_append']),
+  /** The repository path — or, for `outside_directory`, the key's value as written. */
+  path: nonEmptyStringSchema,
+  /** The configuration names this file; `false` is the convention name `<stage>.md` / `<stage>.append.md`. */
+  declared: z.boolean(),
+  status: z.enum([
+    'read',
+    'absent',
+    'not_a_file',
+    'oversized',
+    'unread',
+    'outside_directory',
+    'not_listed',
+  ]),
+  /**
+   * Whether the stage's prompt carries a block for this key. `false` for a convention file the
+   * project never wrote, and for a `prompt_append` naming the same file as `prompt` (given once).
+   */
+  given: z.boolean(),
+  /** The file is longer than the cut, so the stage gets its first 8 000 characters. */
+  cut: z.boolean(),
 });
 
 /**
@@ -350,6 +418,13 @@ export const effectiveConfigResponseSchema = z.strictObject({
   not_applied: z.array(configNotAppliedSchema),
   /** The last configuration export, or `null` when this project was never exported (backlog 225). */
   last_export: lastConfigExportSchema.nullable(),
+  /**
+   * Per agent stage of the shipped templates, which project prompt file each of `prompt` and
+   * `prompt_append` resolves to and the status the planner would render (WP-113, backlog 315 (a)):
+   * both keys of every stage, sorted by stage. An edit to a file applies at the **next reading**
+   * (`repository.commit_sha`), never at the merge.
+   */
+  stage_prompts: z.array(stagePromptResolutionSchema),
   /**
    * `commands.allow` entries this project declares that **no run of any role** is granted — the
    * reader `ignoredAllow` did not have until WP-54 (PROGRESS backlog 49).
@@ -2178,11 +2253,43 @@ export const patchOrgSettingsRequestSchema = z
     message: 'name at least one section to replace or remove',
   });
 
+/**
+ * One project whose value **in force** this write lowered (WP-113, PROGRESS backlog 318): its
+ * autonomy level in force, or one of its two WIP limits, before and after the new maximum. A
+ * project's own choice is never rewritten (raising the maximum again restores it), so `after` is
+ * what its next read answers, not a stored value.
+ */
+export const cappedProjectSchema = z.discriminatedUnion('setting', [
+  z.strictObject({
+    project_id: idSchema,
+    project_key: nonEmptyStringSchema,
+    setting: z.literal('autonomy'),
+    before: autonomyLevelSchema,
+    after: autonomyLevelSchema,
+  }),
+  z.strictObject({
+    project_id: idSchema,
+    project_key: nonEmptyStringSchema,
+    setting: z.enum(['pipeline.wip.max_parallel_tasks', 'pipeline.wip.max_tasks_in_pipeline']),
+    before: z.int().positive(),
+    after: z.int().positive(),
+  }),
+]);
+
 export const patchOrgSettingsResponseSchema = z.strictObject({
   settings: organisationSettingsSchema,
   /** The top-level sections this request replaced or removed. */
   changed: z.array(z.enum(['commands', 'autonomy', 'pipeline', 'notifications'])),
   performed: z.boolean(),
+  /**
+   * The projects this write caps — whose autonomy level or WIP limit **in force** fell — with the
+   * value before and after, computed from the project rows read **in the write's own transaction**,
+   * under the organisation row's lock (WP-113, backlog 318). Empty when nothing fell, which is what
+   * raising a maximum always answers. `null` on an `Idempotency-Key` replay, which performed nothing
+   * now and computes nothing — never an empty list, which would claim the original write capped
+   * nobody.
+   */
+  capped_projects: z.array(cappedProjectSchema).nullable(),
 });
 
 /**
@@ -2372,6 +2479,7 @@ export type PatchIntegrationRequest = z.infer<typeof patchIntegrationRequestSche
 export type EffectiveConfigResponse = z.infer<typeof effectiveConfigResponseSchema>;
 export type UpdateProjectConfigRequest = z.infer<typeof updateProjectConfigRequestSchema>;
 export type RepositoryConfigReading = z.infer<typeof repositoryConfigReadingSchema>;
+export type StagePromptResolutionDto = z.infer<typeof stagePromptResolutionSchema>;
 export type ExportProjectConfigRequest = z.infer<typeof exportProjectConfigRequestSchema>;
 export type ExportProjectConfigResponse = z.infer<typeof exportProjectConfigResponseSchema>;
 export type UpdateProjectConfigResponse = z.infer<typeof updateProjectConfigResponseSchema>;
@@ -2469,6 +2577,7 @@ export type PutBudgetsRequest = z.infer<typeof putBudgetsRequestSchema>;
 export type OrgSettingsResponse = z.infer<typeof orgSettingsResponseSchema>;
 export type PatchOrgSettingsRequest = z.infer<typeof patchOrgSettingsRequestSchema>;
 export type PatchOrgSettingsResponse = z.infer<typeof patchOrgSettingsResponseSchema>;
+export type CappedProject = z.infer<typeof cappedProjectSchema>;
 export type ProjectAuditEntry = z.infer<typeof projectAuditEntrySchema>;
 export type ProjectAuditResponse = z.infer<typeof projectAuditResponseSchema>;
 export type StartShadowBatchRequest = z.infer<typeof startShadowBatchRequestSchema>;

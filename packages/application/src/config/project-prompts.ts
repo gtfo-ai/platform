@@ -47,6 +47,7 @@
  * with no prompt files keeps exactly the prompt it had.
  */
 import type { ConfigValues, PromptProjectInstruction } from '@platform/domain';
+import { MAX_PROJECT_PROMPT_CHARS } from '@platform/domain';
 import type { RepositoryConfigNotApplied, RepositoryFileEntry } from './repository-config.js';
 
 /** The one directory outside the indexed vault whose files the reader lists (WP-92). */
@@ -151,28 +152,54 @@ const wantedFor = (
   return { key, path: resolved ?? value, resolved: resolved !== null, declared: true };
 };
 
+/**
+ * What the planner makes of one wanted file: the status it would render, whether it renders a block
+ * at all, and the body (empty unless `read`). One function for the planner and the read surface
+ * ({@link stagePromptResolutions}), so the screen and the prompt cannot disagree (standing rule 41).
+ */
+const resolve = (
+  wanted: WantedPrompt,
+  reading: ProjectPromptReading | null,
+): {
+  readonly status: PromptProjectInstruction['status'];
+  readonly given: boolean;
+  readonly body: string;
+} => {
+  const stated = (status: PromptProjectInstruction['status'], given: boolean) => ({
+    status,
+    given,
+    body: '',
+  });
+  if (!wanted.resolved) return stated('outside_directory', true);
+  if (reading === null) return stated('unread', wanted.declared);
+  const entry = Object.hasOwn(reading.files, wanted.path) ? reading.files[wanted.path] : undefined;
+  if (entry === undefined || entry.kind === 'absent') {
+    if (reading.truncated) return stated('not_listed', true);
+    return stated('absent', wanted.declared);
+  }
+  if (entry.kind === 'file') {
+    return { status: 'read', given: true, body: entry.text };
+  }
+  return stated(entry.kind, true);
+};
+
 /** The block a wanted file becomes, or `null` for a convention file the project never wrote. */
 const instructionOf = (
   wanted: WantedPrompt,
   reading: ProjectPromptReading | null,
 ): PromptProjectInstruction | null => {
-  const withStatus = (status: PromptProjectInstruction['status']): PromptProjectInstruction => ({
-    key: wanted.key,
-    status,
-    path: wanted.path,
-    body: '',
-  });
-  if (!wanted.resolved) return withStatus('outside_directory');
-  if (reading === null) return wanted.declared ? withStatus('unread') : null;
-  const entry = Object.hasOwn(reading.files, wanted.path) ? reading.files[wanted.path] : undefined;
-  if (entry === undefined || entry.kind === 'absent') {
-    if (reading.truncated) return withStatus('not_listed');
-    return wanted.declared ? withStatus('absent') : null;
-  }
-  if (entry.kind === 'file') {
-    return { key: wanted.key, status: 'read', path: wanted.path, body: entry.text };
-  }
-  return withStatus(entry.kind);
+  const resolved = resolve(wanted, reading);
+  return resolved.given
+    ? { key: wanted.key, status: resolved.status, path: wanted.path, body: resolved.body }
+    : null;
+};
+
+/** The files one stage asks for: `prompt` first, and `prompt_append` unless it names the same file. */
+const wantedForStage = (stage: string, config: ConfigValues): readonly WantedPrompt[] => {
+  const settings = config.stages?.[stage];
+  const main = wantedFor(stage, 'prompt', settings?.prompt);
+  const append = wantedFor(stage, 'prompt_append', settings?.prompt_append);
+  return append.path === main.path ? [main] : [main, append];
 };
 
 /**
@@ -187,13 +214,107 @@ export const projectPromptsForStage = (
   stage: string,
   config: ConfigValues,
   reading: ProjectPromptReading | null,
-): readonly PromptProjectInstruction[] => {
-  const settings = config.stages?.[stage];
-  const main = wantedFor(stage, 'prompt', settings?.prompt);
-  const append = wantedFor(stage, 'prompt_append', settings?.prompt_append);
-  const wanted = append.path === main.path ? [main] : [main, append];
-  return wanted.flatMap((entry) => {
+): readonly PromptProjectInstruction[] =>
+  wantedForStage(stage, config).flatMap((entry) => {
     const instruction = instructionOf(entry, reading);
     return instruction === null ? [] : [instruction];
   });
+
+/**
+ * One key of one stage as the planner would resolve it now — WP-113, PROGRESS backlog 315 (a).
+ *
+ * The read surface's answer to *"which file would this stage be given, and in what state?"*, built
+ * by the planner's own resolution ({@link projectPromptsForStage} reads the same `resolve`), so a
+ * screen that shows it cannot disagree with the next prompt. **Never the text**: the length and
+ * whether the {@link MAX_PROJECT_PROMPT_CHARS} cut would apply are what a reader needs to know
+ * before a run, and the text a run actually got is the run's own `/prompt` (standing rules 13/37).
+ */
+export interface StagePromptResolution {
+  readonly stage: string;
+  readonly key: 'prompt' | 'prompt_append';
+  /** The repository path — or, for `outside_directory`, the key's value as written. */
+  readonly path: string;
+  /** The configuration names the file; `false` is the convention name `<stage>.md`/`.append.md`. */
+  readonly declared: boolean;
+  readonly status: PromptProjectInstruction['status'];
+  /**
+   * Whether the stage's prompt carries a block for it. `false` for a convention file the project
+   * never wrote (no declaration, no block — WP-92's rule) and for a `prompt_append` that names the
+   * same file as `prompt`, which is given once, under `prompt`.
+   */
+  readonly given: boolean;
+  /** The stored (redacted) text is longer than the cut, so a run gets its first 8 000 characters. */
+  readonly cut: boolean;
+}
+
+/** Every key of one stage, `prompt` then `prompt_append`, both always listed. */
+export const stagePromptResolutions = (
+  stage: string,
+  config: ConfigValues,
+  reading: ProjectPromptReading | null,
+): readonly StagePromptResolution[] => {
+  const given = wantedForStage(stage, config);
+  const settings = config.stages?.[stage];
+  return (['prompt', 'prompt_append'] as const).map((key) => {
+    const wanted = wantedFor(stage, key, settings?.[key]);
+    const resolved = resolve(wanted, reading);
+    const isGiven = given.some((entry) => entry.key === key) && resolved.given;
+    return {
+      stage,
+      key,
+      path: wanted.path,
+      declared: wanted.declared,
+      status: resolved.status,
+      given: isGiven,
+      cut: resolved.status === 'read' && resolved.body.length > MAX_PROJECT_PROMPT_CHARS,
+    };
+  });
 };
+
+/** One file of the stored reading as the read surface publishes it — never its text. */
+export interface ProjectPromptFileSummary {
+  readonly path: string;
+  readonly status: 'file' | 'not_a_file' | 'oversized';
+  /**
+   * The stored text's length in UTF-16 code units — the unit `MAX_PROJECT_PROMPT_CHARS` counts — so
+   * **after** redaction and **before** the cut; `null` unless `file`.
+   */
+  readonly chars: number | null;
+  /** The blob size the reader refused it at; `null` unless `oversized`. */
+  readonly bytes: number | null;
+  /** Whether a stage given this file gets only its first {@link MAX_PROJECT_PROMPT_CHARS}. */
+  readonly cut: boolean;
+}
+
+/**
+ * The prompt half of a stored reading, for `GET …/config` and `POST …/config/refresh` (WP-113,
+ * backlog 315 (a)): per file the path, the status, the pre-cut length and whether the cut applies,
+ * sorted by path. Bounded by the reading itself ({@link MAX_PROJECT_PROMPT_FILES} entries).
+ */
+export const projectPromptReadingSummary = (
+  reading: ProjectPromptReading,
+): readonly ProjectPromptFileSummary[] =>
+  Object.entries(reading.files)
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .flatMap(([path, entry]): ProjectPromptFileSummary[] => {
+      if (entry.kind === 'file') {
+        return [
+          {
+            path,
+            status: 'file',
+            chars: entry.text.length,
+            bytes: null,
+            cut: entry.text.length > MAX_PROJECT_PROMPT_CHARS,
+          },
+        ];
+      }
+      if (entry.kind === 'oversized') {
+        return [{ path, status: 'oversized', chars: null, bytes: entry.bytes, cut: false }];
+      }
+      if (entry.kind === 'not_a_file') {
+        return [{ path, status: 'not_a_file', chars: null, bytes: null, cut: false }];
+      }
+      // `absent` is never stored (the reading lists what it found); a row that holds one says
+      // nothing worth publishing.
+      return [];
+    });

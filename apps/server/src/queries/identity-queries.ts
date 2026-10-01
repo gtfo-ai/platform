@@ -178,6 +178,12 @@ export interface ConfigLayerColumns {
   readonly repo_not_applied: unknown;
   readonly repo_detail: string | null;
   readonly repo_read_at: Date | null;
+  /**
+   * Migration 0063 (WP-92): the prompt directory the reading recorded. Selected since WP-113, when
+   * `GET …/config` began publishing the reading's prompt half — before it, this read named every
+   * column of the reading but this one, so the effective view could not have said what it held.
+   */
+  readonly repo_prompts: unknown;
 }
 
 export const findConfigLayers = async (
@@ -193,6 +199,7 @@ export const findConfigLayers = async (
       repo_not_applied: projectRepositoryConfig.notApplied,
       repo_detail: projectRepositoryConfig.detail,
       repo_read_at: projectRepositoryConfig.readAt,
+      repo_prompts: projectRepositoryConfig.prompts,
     })
     .from(projects)
     .innerJoin(organizations, eq(organizations.id, projects.orgId))

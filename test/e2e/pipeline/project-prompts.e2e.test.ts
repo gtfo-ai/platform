@@ -19,7 +19,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type { RunSpec } from '@platform/application';
-import type { RefreshProjectConfigResponse } from '@platform/contracts';
+import {
+  type EffectiveConfigResponse,
+  effectiveConfigResponseSchema,
+  type RefreshProjectConfigResponse,
+} from '@platform/contracts';
 import { DATA_BLOCK_TAG, readDataBlocks } from '@platform/domain';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD, Client } from '../support/instance.js';
@@ -159,6 +163,42 @@ describe('a project’s own prompt files (WP-92)', () => {
     expect(JSON.stringify(files)).not.toContain(PLANTED);
     expect(JSON.stringify(files)).not.toContain(TICKET_BINDING_TOKEN);
     expect(files['.agentic/prompts/pm.md']?.text).toContain('[REDACTED:integration:');
+
+    // ── WP-113 (backlog 315 (a)): the reading's prompt half, on both reads ────
+    // The refresh answers it, and `GET …/config` reads the same stored row back through the real
+    // driver — path, status, length and cut per file, and never a byte of the text.
+    const promptHalf = refreshed.body.repository.prompts;
+    expect(promptHalf).toMatchObject({ directory: '.agentic/prompts', cut_at_chars: 8_000 });
+    expect(promptHalf?.truncated).toBe(false);
+    expect(promptHalf?.files.map((file) => [file.path, file.status, file.cut])).toEqual([
+      ['.agentic/prompts/implementation.append.md', 'file', false],
+      ['.agentic/prompts/pm.md', 'file', false],
+    ]);
+    expect(promptHalf?.files[1]?.chars).toBe(files['.agentic/prompts/pm.md']?.text?.length);
+    expect(JSON.stringify(refreshed.body)).not.toContain('WP92-FIXTURE');
+    const effective = await client.json<EffectiveConfigResponse>(
+      `/api/projects/${pipeline.projectId}/config`,
+    );
+    expect(effective.status, JSON.stringify(effective.body)).toBe(200);
+    const view = effectiveConfigResponseSchema.parse(effective.body);
+    expect(view.repository.commit_sha).toBe(refreshed.body.repository.commit_sha);
+    expect(view.repository.prompts).toEqual(promptHalf);
+    expect(
+      view.stage_prompts
+        .filter((entry) => entry.given)
+        .map((entry) => [entry.stage, entry.key, entry.path, entry.declared, entry.status]),
+    ).toEqual([
+      [
+        'implementation',
+        'prompt_append',
+        '.agentic/prompts/implementation.append.md',
+        false,
+        'read',
+      ],
+      ['refinement', 'prompt', '.agentic/prompts/pm.md', true, 'read'],
+    ]);
+    expect(JSON.stringify(effective.body)).not.toContain('WP92-FIXTURE');
+
     await pipeline.query('update projects set repo_url = $1 where id = $2', [
       seeded?.repo_url,
       pipeline.projectId,

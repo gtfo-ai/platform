@@ -18,16 +18,24 @@ import {
   type MaintenanceReportSink,
 } from '../notify/maintenance-report.js';
 import { PLATFORM_TICKET_PROVIDER, staticPipelineIntegrations } from '../pipeline/integrations.js';
+import type { ProjectSettings } from '../pipeline/settings.js';
 import { staticProjectSettings } from '../pipeline/settings.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type { Logger } from '../ports/logger.js';
 import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
-import type { KbHygieneReport, MaintenanceStore, StaleDependency } from './ports.js';
+import type {
+  KbHygieneReport,
+  MaintenanceBlockerStore,
+  MaintenanceStore,
+  StaleDependency,
+} from './ports.js';
 import {
   DEPENDENCY_UNRELEASED_DAYS,
   MAINTENANCE_SCHEDULE_CRON,
   MAINTENANCE_SCHEDULE_QUEUE,
+  type MaintenanceBlocker,
   maintenanceChorePeriod,
+  maintenanceTransitionOf,
   registerMaintenanceSchedule,
   runMaintenancePass,
 } from './scheduler.js';
@@ -80,6 +88,34 @@ const storeDouble = (options: DoubleOptions = {}): MaintenanceStore & { spendCal
     },
     latestKbHygiene: async () => options.hygiene ?? null,
     staleDependencies: async () => options.stale ?? [],
+  };
+};
+
+/**
+ * `projects.maintenance_last_blocker` as a double (WP-113, Q111 (c)): the compare-and-set the real
+ * store makes (`postgres-maintenance-blocker-store.ts`, asserted against PostgreSQL in
+ * `test/integration/maintenance/maintenance-store.integration.test.ts`), and every write it accepted.
+ */
+const blockerDouble = (
+  initial: MaintenanceBlocker | null = null,
+): MaintenanceBlockerStore & {
+  readonly stored: MaintenanceBlocker | null;
+  readonly writes: (MaintenanceBlocker | null)[];
+} => {
+  let stored = initial;
+  const writes: (MaintenanceBlocker | null)[] = [];
+  return {
+    get stored() {
+      return stored;
+    },
+    writes,
+    lastBlocker: async () => stored,
+    recordBlocker: async (_tx, _projectId, expected, next) => {
+      if (stored !== expected) return false;
+      stored = next;
+      writes.push(next);
+      return true;
+    },
   };
 };
 
@@ -157,13 +193,19 @@ const sinkOf = (harness: PipelineHarness, logger?: Logger): MaintenanceReportSin
 const pass = async (
   harness: PipelineHarness,
   store: MaintenanceStore,
-  overrides: { readonly timezone?: string; readonly logger?: Logger } = {},
+  overrides: {
+    readonly timezone?: string;
+    readonly logger?: Logger;
+    readonly blockers?: MaintenanceBlockerStore;
+    readonly settings?: () => ProjectSettings;
+  } = {},
 ) =>
   runMaintenancePass({
     unitOfWork: harness.memory,
     store: harness.store,
     maintenance: store,
-    settings: staticProjectSettings(() => harness.settings),
+    blockers: overrides.blockers ?? blockerDouble(),
+    settings: staticProjectSettings(overrides.settings ?? (() => harness.settings)),
     jobs: harness.jobs,
     ids: harness.ids,
     clock: { now: () => harness.clock.now() as IsoDateTime },
@@ -482,6 +524,7 @@ describe('one maintenance pass', () => {
       unitOfWork: harness.memory,
       store: harness.store,
       maintenance: storeDouble({ hygiene: HYGIENE }),
+      blockers: blockerDouble(),
       settings: staticProjectSettings(() => harness.settings),
       jobs: harness.jobs,
       ids: harness.ids,
@@ -711,6 +754,7 @@ describe('the schedule itself', () => {
       unitOfWork: harness.memory,
       store: harness.store,
       maintenance: storeDouble(),
+      blockers: blockerDouble(),
       settings: staticProjectSettings(() => harness.settings),
       jobs: harness.jobs,
       ids: harness.ids,
@@ -839,10 +883,12 @@ describe('the pass’s report', () => {
   it('never stops the pass when publishing fails — the refusal is logged at warn instead', async () => {
     const harness = harnessWith(STOCK, { chat: true });
     const logger = recordingLogger();
+    const blockers = blockerDouble();
     const report = await runMaintenancePass({
       unitOfWork: harness.memory,
       store: harness.store,
       maintenance: storeDouble({ stale: STALE }),
+      blockers,
       settings: staticProjectSettings(() => harness.settings),
       jobs: harness.jobs,
       ids: harness.ids,
@@ -867,5 +913,143 @@ describe('the pass’s report', () => {
         .filter((line) => line.message.includes('cannot perform it'))
         .every((line) => line.level === 'warn' && line.fields.report === 'failed'),
     ).toBe(true);
+  });
+});
+
+/**
+ * **Q111 (c), WP-113: a pause at Observe is said in the digest when it begins and when it ends, and
+ * not on the days between.** Asserted on notification **rows** (rule 79), over consecutive passes of
+ * one project whose dial in force moves — and on the blocker the pass recorded, which is what makes
+ * the second pass silent.
+ */
+describe('a pause at Observe in the digest (Q111 (c))', () => {
+  const CONFIG = {
+    features: {
+      maintenance: { enabled: true, schedule: 'weekly', chores: ['kb'] },
+      digest: { enabled: true, at: '09:00', quiet_hours: null },
+    },
+  };
+  const dial = (level: 'observe' | 'supervised') =>
+    materialiseAutonomy({ level, at: '2026-06-01T09:00:00.000Z' as IsoDateTime, appliedBy: null });
+  const transitionRows = (harness: PipelineHarness) =>
+    harness.notifications.rows.filter(
+      (row) =>
+        row.notificationClass === 'maintenance_report' &&
+        (row.detail ?? '').includes('paused at Observe'),
+    );
+
+  it('is one line when the pause begins, none on the next pass, and one when it ends', async () => {
+    const harness = harnessWith(CONFIG, { chat: true });
+    const blockers = blockerDouble();
+    let level: 'observe' | 'supervised' = 'observe';
+    const settings = (): ProjectSettings => ({ ...harness.settings, autonomy: dial(level) });
+    const store = storeDouble({ hygiene: HYGIENE });
+
+    // The pause begins: one line, and the blocker is recorded.
+    const began = await pass(harness, store, { blockers, settings });
+    expect(began.results[0]).toMatchObject({
+      blocker: 'paused_at_observe',
+      transition: 'pause_began',
+    });
+    expect(transitionRows(harness)).toHaveLength(1);
+    expect(transitionRows(harness)[0]?.detail).toContain('Maintenance is paused at Observe');
+    expect(transitionRows(harness)[0]?.plannedDelivery).toBe('digest');
+    expect(blockers.stored).toBe('paused_at_observe');
+
+    // No change — the next day, still paused: no line, nothing written.
+    harness.clock.advance(24 * 60 * 60 * 1000);
+    const still = await pass(harness, store, { blockers, settings });
+    expect(still.results[0]?.transition).toBeNull();
+    expect(transitionRows(harness)).toHaveLength(1);
+    expect(blockers.writes).toEqual(['paused_at_observe']);
+
+    // The pause ends: one line, and the pass schedules again.
+    harness.clock.advance(24 * 60 * 60 * 1000);
+    level = 'supervised';
+    const ended = await pass(harness, store, { blockers, settings });
+    expect(ended.results[0]).toMatchObject({ blocker: null, transition: 'pause_ended' });
+    expect(ended.created).toBe(1);
+    const rows = transitionRows(harness);
+    expect(rows).toHaveLength(2);
+    expect(rows[1]?.detail).toContain('no longer paused at Observe');
+    expect(rows[1]?.detail).toContain('schedules this project’s chores again');
+    expect(blockers.stored).toBeNull();
+    expect(blockers.writes).toEqual(['paused_at_observe', null]);
+  });
+
+  it('says nothing for a project that is never paused, and records no blocker', async () => {
+    const harness = harnessWith(CONFIG, { chat: true, dial: 'supervised' });
+    const blockers = blockerDouble();
+    await pass(harness, storeDouble({ hygiene: HYGIENE }), { blockers });
+    await pass(harness, storeDouble({ hygiene: HYGIENE }), { blockers });
+    expect(transitionRows(harness)).toEqual([]);
+    expect(blockers.writes).toEqual([]);
+  });
+
+  it('records nothing and announces again next pass when the publication failed', async () => {
+    const harness = harnessWith(CONFIG, { chat: true, dial: 'observe' });
+    const blockers = blockerDouble();
+    const failing = await runMaintenancePass({
+      unitOfWork: harness.memory,
+      store: harness.store,
+      maintenance: storeDouble({ hygiene: HYGIENE }),
+      blockers,
+      settings: staticProjectSettings(() => harness.settings),
+      jobs: harness.jobs,
+      ids: harness.ids,
+      clock: { now: () => harness.clock.now() as IsoDateTime },
+      projects: async () => [PROJECT],
+      timezone: 'UTC',
+      baseUrl: 'https://app.example.test',
+      redactor: countingRedactor,
+      report: {
+        publish: async () => {
+          throw new Error('outbox unavailable');
+        },
+      },
+    });
+    expect(failing.results[0]?.transition).toBe('pause_began');
+    expect(blockers.writes).toEqual([]);
+    // The next pass, with a working sink, is the one that announces it — once.
+    await pass(harness, storeDouble({ hygiene: HYGIENE }), { blockers });
+    expect(transitionRows(harness)).toHaveLength(1);
+    expect(blockers.stored).toBe('paused_at_observe');
+  });
+
+  it('records the blocker without a line when the project has no reader, so a later reader is not told a stale beginning', async () => {
+    const harness = harnessWith(CONFIG, { dial: 'observe' });
+    const blockers = blockerDouble();
+    await pass(harness, storeDouble({ hygiene: HYGIENE }), { blockers });
+    expect(harness.notifications.rows).toEqual([]);
+    expect(blockers.stored).toBe('paused_at_observe');
+  });
+
+  it('names what still blocks the project when the pause ends into another blocker', async () => {
+    const harness = harnessWith(
+      { features: { ...CONFIG.features, maintenance: { enabled: true, chores: [] } } },
+      { chat: true, dial: 'supervised' },
+    );
+    const blockers = blockerDouble('paused_at_observe');
+    const report = await pass(harness, storeDouble(), { blockers });
+    expect(report.results[0]).toMatchObject({
+      blocker: 'no_chore_types',
+      transition: 'pause_ended',
+    });
+    const [row] = transitionRows(harness);
+    expect(row?.detail).toContain('still schedules nothing');
+    expect(row?.detail).toContain('features.maintenance.chores is an empty list');
+    expect(blockers.stored).toBe('no_chore_types');
+  });
+
+  it.each([
+    [null, 'paused_at_observe', 'pause_began'],
+    ['feature_disabled', 'paused_at_observe', 'pause_began'],
+    ['paused_at_observe', 'paused_at_observe', null],
+    ['paused_at_observe', null, 'pause_ended'],
+    ['paused_at_observe', 'feature_disabled', 'pause_ended'],
+    [null, null, null],
+    ['no_chore_types', 'feature_disabled', null],
+  ] as const)('reads %s → %s as %s', (previous, current, expected) => {
+    expect(maintenanceTransitionOf(previous, current)).toBe(expected);
   });
 });
