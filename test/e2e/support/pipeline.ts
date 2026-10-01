@@ -282,6 +282,8 @@ export interface PipelineE2E {
   readonly tickets: ReturnType<typeof createFakeTaskManagement>;
   /** The chat provider the notification band posts through (WP-32). */
   readonly chat: ReturnType<typeof createFakeCommunication>;
+  /** The error tracker's double (WP-89), empty unless `observability.errors` seeded it. */
+  readonly errors: ReturnType<typeof createFakeObservabilityErrors>;
   readonly projectId: Id;
   readonly userId: Id;
   readonly specs: readonly RunSpec[];
@@ -724,6 +726,12 @@ export interface StartPipelineOptions {
 /** The fake observability world a test asks for (WP-89). */
 export interface ObservabilitySeed {
   readonly errors?: readonly FakeIssueSeed[];
+  /**
+   * WP-111: set `resolve_on_merge` on the errors **binding** (`bindings.config`), the way an operator
+   * would — the account carries nothing, so the loader's overlay is what turns it on. Absent is a
+   * binding that sets nothing.
+   */
+  readonly resolveOnMerge?: boolean;
   readonly logs?: {
     readonly streams: readonly FakeLogStreamSeed[];
     readonly excerptSelector?: string;
@@ -794,6 +802,8 @@ export const seedIntegrations = async (
     name: string,
     integrationConfig: JsonObject,
     token: string | Readonly<Record<string, string>>,
+    /** WP-111: the binding's own config, overlaid on the account's by the loader. */
+    bindingConfig: JsonObject = {},
   ): Promise<void> => {
     // One sealed document per field; a fake binding has one (`token`), Slack has three (WP-43).
     const fields = typeof token === 'string' ? { token } : token;
@@ -815,10 +825,10 @@ export const seedIntegrations = async (
       [integrationId, orgId, type, provider, name, JSON.stringify(integrationConfig), secretIds],
     );
     if (!skipBindings) {
-      await pool.query('insert into bindings (project_id, integration_id) values ($1, $2)', [
-        projectId,
-        integrationId,
-      ]);
+      await pool.query(
+        'insert into bindings (project_id, integration_id, config) values ($1, $2, $3::jsonb)',
+        [projectId, integrationId, JSON.stringify(bindingConfig)],
+      );
     }
   };
 
@@ -854,6 +864,9 @@ export const seedIntegrations = async (
       'acme fake errors',
       {},
       ERRORS_BINDING_TOKEN,
+      observability.resolveOnMerge === undefined
+        ? {}
+        : { resolve_on_merge: observability.resolveOnMerge },
     );
   }
   if (observability?.logs !== undefined) {
@@ -1327,6 +1340,7 @@ export const startPipeline = async (options: StartPipelineOptions): Promise<Pipe
     git,
     tickets,
     chat,
+    errors: errorTracker,
     projectId,
     userId,
     specs,

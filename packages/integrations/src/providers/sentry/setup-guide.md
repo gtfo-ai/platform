@@ -7,7 +7,9 @@ nothing, this guide says so rather than guessing.
 The platform uses Sentry in exactly two places (product/08, Q16):
 
 1. it **pre-fetches** the linked issue's latest event into a bug task's Investigation context, and
-2. it **can resolve** the issue — the adapter implements `resolve` — but **nothing in the pipeline calls it yet**: a merged fix does not resolve its Sentry issue on this build (PROGRESS backlog 302).
+2. **only where the binding sets `resolve_on_merge`** (off by default), it **resolves** the issues
+   a bug task's ticket links once that task's merge request merges (§ 5). Without the flag a merged
+   fix does not resolve its Sentry issue; the vendor's `Fixes <SHORT-ID>` route (§ 4) still does.
 
 Everything else Sentry can do is out of scope for this binding.
 
@@ -37,6 +39,7 @@ never merges issues and never changes project settings.
 | `organization` | yes | The organization **slug**, as it appears in a `sentry.io/<org>/<project>/` URL. |
 | `auth_token` | yes | Secret. The token from step 1. |
 | `request_timeout_ms` | no (30 000) | Per-request timeout. |
+| `resolve_on_merge` | no (`false`) | Resolve the issues a bug task's ticket links when its merge request merges (§ 5). Set it on the **binding** — whether a merge closes issues is the project's decision; set on the account, every binding of it inherits it unless the binding says `false`. Needs `event:write`. |
 
 The platform **does not follow redirects** (since WP-59), not even Sentry's own: its API
 301-redirects a path without a trailing slash, and every path the platform builds carries one, so
@@ -93,7 +96,7 @@ them is a comment, a note or a code link (open question **Q43**).
 
 | Port method | Status | The supported route instead |
 |---|---|---|
-| `comment(issue, text)` | refuses | The fix is announced on the **ticket** and on the **merge request**; resolving the Sentry issue is the state change that matters, and it is **not yet wired to a merge** (backlog 302). |
+| `comment(issue, text)` | refuses | The fix is announced on the **ticket** and on the **merge request**; resolving the Sentry issue is the state change that matters, and it happens on merge only where the binding sets `resolve_on_merge` (§ 5) — no comment is ever posted. |
 | `linkMergeRequest(issue, url)` | refuses | Sentry associates code with an issue through its **source-code integration**: install the GitHub/GitLab integration in Sentry, and put `Fixes <SHORT-ID>` (for example `Fixes API-7B`) in the merge commit message. Sentry then links — and can auto-resolve — the issue itself. |
 
 If you need the comment, say so on Q43: the alternative is an undocumented endpoint, and an adapter
@@ -101,18 +104,50 @@ that calls one is an adapter that breaks without a changelog entry.
 
 ## 5. Resolving on merge
 
-*Not wired yet (PROGRESS backlog 302): the adapter below works, and no pipeline step calls it when a fix merges.*
+**Off unless the binding sets `resolve_on_merge: true`** (step 2). product/08 calls the resolve
+*optional*, and it is a write to your Sentry, so a binding that says nothing resolves nothing.
 
-`resolve(issue)` sends `{"status": "resolved"}`. `resolve(issue, {inRelease})` sends
-`{"status": "resolved", "statusDetails": {"inRelease": "<version>"}}`, which asks Sentry to
-regress the issue only if it recurs **after** that release.
+When the flag is set, this is what happens when a merge request the platform made **merges**:
 
-Two notes worth knowing before you read the audit log:
+1. the task must be a **bug** task (the `bug` template — the project's `templates` map routes the
+   ticket's issue type to it). Any other task's merge resolves nothing;
+2. the platform scans the task's **stored ticket text** — title, description and the comments it
+   kept — for links to issues of **this binding's** host and organisation (the same scan the
+   Investigation pre-fetch uses: `https://<org>.sentry.io/issues/<id>/`,
+   `…/organizations/<org>/issues/<id>/` and `…/<org>/<project>/issues/<id>/`, at most 20 issues,
+   each once). A link to another host or organisation is ignored, and a short id such as `API-7B`
+   is not followed;
+3. it **resolves** each linked issue: `{"status": "resolved"}`, with **no release** — the platform
+   knows that the fix merged, not which release will carry it. Each resolve is one call through the
+   platform's action executor: one row in the audit log (`integration_actions`, action
+   `resolve_issue`), against this binding, rate-limited on its budget, and a `would_have` row with
+   no call for a task running in shadow mode;
+4. each resolve is **keyed on the task and the issue**, so a second merge event for the same task
+   — a redelivery, a poll and a webhook reporting the same merge, a merge request reopened and
+   merged again — **replays** (a `replayed` audit row, no request) and resolves nothing twice.
 
-- the adapter issues the `PUT` and then **re-reads** the issue. Sentry's "Update an Issue" page
-  publishes no response body, so the state the platform records comes from a read of the resource
-  rather than from a shape nobody documents. Two requests per resolve is expected;
-- a second `resolve` of an already-resolved issue succeeds and changes nothing.
+What it does **not** do: it posts no comment on the issue and links no merge request to it (§ 4,
+Q43 — Sentry documents neither); it never un-resolves, ignores or assigns anything. An issue
+Sentry refuses (deleted, or outside the token's reach) is logged and left as a `failed` audit row
+while the other linked issues are still resolved; a refusal a retry may cure (a rate limit, Sentry
+unavailable) retries the whole step, and the issues already resolved replay.
+
+> **What the flag hands to anyone who can comment on the ticket.** Which issues are resolved is
+> chosen by the ticket's text — its title, its description **and its newest twenty comments that the
+> platform did not mark as its own** — within this binding's organisation only, never another host or credential. On a
+> flagged binding, anyone who can edit or comment on a bug ticket that the platform takes to a merge
+> can have it resolve any issue of that organisation by linking it there. That is why the flag is
+> off by default; Sentry re-opens a resolved issue as a regression when it recurs.
+
+What the adapter does when it is called, worth knowing before you read the audit log:
+
+- it issues the `PUT` and then **re-reads** the issue. Sentry's "Update an Issue" page publishes no
+  response body, so the state the platform records comes from a read of the resource rather than
+  from a shape nobody documents. Two requests per resolve is expected (one audit row);
+- a second `resolve` of an already-resolved issue succeeds and changes nothing;
+- `resolve(issue, {inRelease})` — `{"status": "resolved", "statusDetails": {"inRelease":
+  "<version>"}}`, which asks Sentry to regress the issue only if it recurs **after** that release —
+  exists on the adapter, and the on-merge step does not use it.
 
 ## 6. Agent tooling — nothing is mounted, and why
 

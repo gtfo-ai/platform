@@ -147,6 +147,22 @@ describe('the fake observability registrations (WP-89)', () => {
     expect(errors.create(input({ token: TOKEN }))).toBeDefined();
   });
 
+  it('answers resolve-on-merge from the binding’s config, off unless it is set (WP-111)', () => {
+    const errors = fakeErrorsRegistration({
+      // The prebuilt fake says `true`; the binding's config is what must win, both ways.
+      port: createFakeObservabilityErrors({ integrationId: INTEGRATION_ID, resolveOnMerge: true }),
+      token: TOKEN,
+    });
+    const flagOf = (config: Record<string, unknown>) =>
+      (errors.create(input(config)) as { resolveOnMerge(): boolean }).resolveOnMerge();
+    expect(flagOf({ token: TOKEN })).toBe(false);
+    expect(flagOf({ token: TOKEN, resolve_on_merge: false })).toBe(false);
+    expect(flagOf({ token: TOKEN, resolve_on_merge: true })).toBe(true);
+    expect(errors.configSchema.safeParse({ token: TOKEN, resolve_on_merge: 'yes' }).success).toBe(
+      false,
+    );
+  });
+
   it('answers the excerpt selector from the binding’s config, and refuses one the fake cannot parse', () => {
     const logs = fakeLogsRegistration({
       port: createFakeObservabilityLogs({ integrationId: INTEGRATION_ID }),

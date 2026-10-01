@@ -316,6 +316,18 @@ describe('a comment page whose total is hostile or missing', () => {
     expect((await readWith(7, 2)).comment_total).toBe(7);
     expect((await readWith(7, 90)).comment_total).toBe(90);
   });
+
+  it('answers "possibly more" for a full page whose total is the page’s own length (backlog 377)', async () => {
+    // The swagger calls `total` "The number of items returned": a full page with `total` 50 cannot
+    // say the thread is fifty long, so it must not stop the snapshot declaring `truncated` (290).
+    expect(
+      (await readWith(READ_TICKET_COMMENT_PAGE, READ_TICKET_COMMENT_PAGE)).comment_total,
+    ).toBeNull();
+    expect((await readWith(READ_TICKET_COMMENT_PAGE, 3)).comment_total).toBeNull();
+    expect(
+      (await readWith(READ_TICKET_COMMENT_PAGE, READ_TICKET_COMMENT_PAGE + 1)).comment_total,
+    ).toBe(READ_TICKET_COMMENT_PAGE + 1);
+  });
 });
 
 // ── GitLab: one getMergeRequest ──────────────────────────────────────────────

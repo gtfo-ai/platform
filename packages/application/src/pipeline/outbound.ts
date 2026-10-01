@@ -64,6 +64,7 @@ import {
 import { runBreakdownCreate, runSpikeReport } from './epic-split.js';
 import type { OutboundJobData } from './jobs.js';
 import { runReadyHeadCheck } from './ready-head.js';
+import { runResolveOnMerge } from './resolve-on-merge.js';
 import { runReviewOnlyCheck, runReviewOnlyObservation, runReviewOnlyPost } from './review-only.js';
 import { runReviewThreadsRefresh } from './review-threads-refresh.js';
 import { type RiskRoutingOptions, runRiskRouting } from './risk-routing.js';
@@ -190,6 +191,9 @@ export const pipelineOutboundHandler = (
         return;
       case 'review_threads_refresh':
         await runReviewThreadsRefresh(options, data);
+        return;
+      case 'resolve_on_merge':
+        await runResolveOnMerge(options, data);
         return;
       default:
         logger.warn(

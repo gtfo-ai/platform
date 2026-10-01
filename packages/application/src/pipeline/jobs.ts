@@ -223,7 +223,12 @@ export interface PipelineOutboundData {
      * **only** the count — enqueued by a signal that a thread was resolved (or re-opened) without a
      * comment that would open BD-007's window. Never the return decision (`review-threads-refresh.ts`).
      */
-    | 'review_threads_refresh';
+    | 'review_threads_refresh'
+    /**
+     * WP-111, PROGRESS backlog 302: on a bug task's merge, resolve the issues its ticket links —
+     * only on an errors binding that sets `resolve_on_merge` (`resolve-on-merge.ts`).
+     */
+    | 'resolve_on_merge';
   readonly project_id: string;
   /** Absent for `intake_check`, which runs before there is a task. */
   readonly task_id?: string;

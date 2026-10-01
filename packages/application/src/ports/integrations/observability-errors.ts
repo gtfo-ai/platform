@@ -3,8 +3,16 @@
  * "Observability — errors".
  *
  * Sentry is the first provider (WP-11). The platform uses it in two places: it pre-fetches the
- * linked issue's latest event into a bug task's Investigation context (WP-89), and its adapter can
- * resolve the issue — which no pipeline step calls on merge yet (PROGRESS backlog 302).
+ * linked issue's latest event into a bug task's Investigation context (WP-89), and — **only on a
+ * binding that sets `resolve_on_merge`**, off by default (WP-111, PROGRESS backlog 302) — it
+ * resolves the issues a bug task's ticket links when that task's merge request merges. The second
+ * is the `resolve_on_merge` duty (`pipeline/resolve-on-merge.ts`): on `mr.merged` for a task on
+ * the `bug` template, {@link ObservabilityErrorsPort.linkedIssues} over the task's stored ticket
+ * snapshot, then {@link ObservabilityErrorsPort.resolve} once per linked issue — each through
+ * `IntegrationActionExecutor`, audited against the binding, refused for a shadow task, and keyed
+ * so a second merge event for the same task resolves nothing twice. It sends no release: the
+ * platform does not know which release will carry the merge. `comment` and `linkMergeRequest`
+ * are **not** called — Sentry documents neither (Q43), so the adapter refuses both.
  *
  * Everything an event carries — stack frames, breadcrumbs, tag values, the culprit — is attacker-
  * influenced text (BD-022). A crash report is one of the easiest places to plant an instruction,
@@ -124,6 +132,19 @@ export interface ObservabilityErrorsPort extends IntegrationPort<ObservabilityEr
    */
   readonly linkedIssues: (text: string) => readonly { readonly id: string }[];
 
+  /**
+   * Whether this binding asked the platform to **resolve on merge** — the binding's
+   * `resolve_on_merge` flag, `false` unless an operator set it (WP-111, PROGRESS backlog 302;
+   * product/08 calls the resolve *"optional"*). Pure: the binding's own configuration, read where
+   * the adapter was built, the shape `ObservabilityLogsPort.excerptSelector()` has.
+   *
+   * When it answers `true`, the `resolve_on_merge` duty calls {@link resolve} with no release for
+   * every issue {@link linkedIssues} finds in a **bug** task's ticket snapshot, once the task's
+   * merge request merges: one executor call, one `integration_actions` row, per linked issue. When
+   * it answers `false`, a merge reads the binding and calls nothing.
+   */
+  readonly resolveOnMerge: () => boolean;
+
   readonly getIssue: (ref: { readonly id: string }) => Promise<Issue>;
   /** The latest event of an issue, or `null` when the retention window has dropped them all. */
   readonly getLatestEvent: (ref: { readonly id: string }) => Promise<ErrorEvent | null>;
@@ -141,7 +162,10 @@ export interface ObservabilityErrorsPort extends IntegrationPort<ObservabilityEr
     ref: { readonly id: string },
     text: string,
   ) => Promise<{ readonly id: string }>;
-  /** Idempotent: resolving an already-resolved issue succeeds and changes nothing. */
+  /**
+   * Idempotent: resolving an already-resolved issue succeeds and changes nothing. Called on merge
+   * for a bug task when {@link resolveOnMerge} answers `true` (WP-111), never otherwise.
+   */
   readonly resolve: (
     ref: { readonly id: string },
     options?: { readonly inRelease?: string | null },

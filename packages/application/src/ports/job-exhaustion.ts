@@ -18,8 +18,9 @@
  *    nothing does.
  *
  * **The decision this census made** (WP-108, criterion 3): the second kind is the majority, and its
- * largest member — `pipeline.outbound`, twenty-six duties, most of them provider writes — cannot
- * take `stage.execute`'s bound-and-escalate shape one duty at a time without rewriting the band. So
+ * largest member — `pipeline.outbound`, twenty-seven `PipelineOutboundData` duties since WP-111
+ * (twenty-nine with `notify_organisation` and `ready_head_check`), most of them provider writes —
+ * cannot take `stage.execute`'s bound-and-escalate shape one duty at a time without rewriting the band. So
  * an **admin read of pg-boss's failed jobs** sits beside the dead-letter list
  * (`GET /api/org/failed-jobs`): queue, attempts, the last error redacted and bounded, and this
  * table's row, **never the payload**. It has no re-queue: TD-004 says every job re-validates on fire,
@@ -63,7 +64,7 @@ export const JOB_EXHAUSTION: Readonly<Record<string, JobExhaustion>> = {
   },
   [JOB_QUEUES.pipelineOutbound]: {
     kind: 'relies_on_retries',
-    loss: 'one provider call the pipeline decided on — a ticket status, a workpad, a comment, a notification, a merge request close, a credential revoke',
+    loss: 'one provider call the pipeline decided on — a ticket status, a workpad, a comment, a notification, a merge request close, a credential revoke, a Sentry issue resolved on merge',
     recoveredBy:
       'notification_repost (notify), superseded_mr (close_superseded_mr), run_credential (revoke_run_credential), deferred_dependency (dependency_gate_resume), intake reconcile (intake_check); the other duties are not recovered',
   },

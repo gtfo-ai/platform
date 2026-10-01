@@ -262,22 +262,36 @@ export const FAKE_LOGS_PROVIDER_ID = 'fake-logs';
  * binding through the loader like every other binding, so the e2e tier's Sentry double goes in the
  * same door — the rows, the decryption, the strict config parse and the redactor composition are
  * production code, and only the far side of the HTTP call is a double.
+ *
+ * `resolve_on_merge` is **binding** configuration, as it is for Sentry (WP-111), so the port
+ * answers `resolveOnMerge()` from the binding's config rather than from the prebuilt fake — the
+ * shape the log store's `excerptSelector()` has below — off unless the binding sets it.
  */
 export const fakeErrorsRegistration = (
   options: FakeRegistrationOptions<ObservabilityErrorsPort>,
-): AnyProviderRegistration => ({
-  id: FAKE_ERRORS_PROVIDER_ID,
-  type: 'errors',
-  displayName: 'Fake error tracker (in-memory)',
-  configSchema: z.strictObject({ token: z.string().min(1) }),
-  secretFields: ['token'],
-  setupGuidePath: 'packages/integrations/src/errors/fake.ts',
-  agentTooling: null,
-  create: ({ secrets }) => {
-    refuseWrongToken(FAKE_ERRORS_PROVIDER_ID, options.token, secrets.token);
-    return options.port;
-  },
-});
+): AnyProviderRegistration => {
+  const configSchema = z.strictObject({
+    token: z.string().min(1),
+    resolve_on_merge: z.boolean().default(false),
+  });
+  return {
+    id: FAKE_ERRORS_PROVIDER_ID,
+    type: 'errors',
+    displayName: 'Fake error tracker (in-memory)',
+    configSchema,
+    secretFields: ['token'],
+    setupGuidePath: 'packages/integrations/src/errors/fake.ts',
+    agentTooling: null,
+    create: ({ config, secrets }) => {
+      refuseWrongToken(FAKE_ERRORS_PROVIDER_ID, options.token, secrets.token);
+      const resolveOnMerge = configSchema.parse(config).resolve_on_merge;
+      return new Proxy(options.port, {
+        get: (target, key, receiver) =>
+          key === 'resolveOnMerge' ? () => resolveOnMerge : Reflect.get(target, key, receiver),
+      });
+    },
+  };
+};
 
 /**
  * The log-store fake, as a registration (WP-89). `excerpt_selector` is **binding** configuration,

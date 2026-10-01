@@ -158,13 +158,70 @@ const FIELDS_FOR_MATCH = 'issuetype,status,priority,labels,updated,parent,issuel
  */
 const MATCH_PAGE_MAX = 100;
 /**
- * How many comments the **marker search** asks for, oldest first — `maxResults`, a page-size
- * *request*. The search emits nothing (it looks for this binding's own marked comment and returns
- * a reference), so a larger page than asked is iterated rather than cut: cutting it could hide the
- * workpad and make `upsertWorkpad` post a second one. The workpad is written early in a ticket's
- * life, which is why this page is the oldest one.
+ * How many comments one page of the **marker search** asks for, oldest first — `maxResults`, a
+ * page-size *request* (the swagger's default for this endpoint is 100 and it publishes no maximum;
+ * the response's own `maxResults` is *"the maximum number of items that could be returned"*, so a
+ * site may answer fewer). The search emits nothing (it looks for this binding's own marked comment
+ * and returns a reference), so a larger page than asked is iterated rather than cut: cutting it
+ * could hide the workpad and make `upsertWorkpad` post a second one. The next page starts where
+ * the comments **actually returned** end, never at `startAt + MARKER_SEARCH_PAGE`, so a site that
+ * caps the page lower skips nothing.
  */
 const MARKER_SEARCH_PAGE = 100;
+
+/**
+ * **The marker search's page bound: twenty-one pages** — WP-111, PROGRESS backlog 288.
+ *
+ * Until WP-111 the search read one page, the oldest hundred, on the assumption that *"the workpad
+ * is written early in a ticket's life"*. That is an assumption about the ticket, not a bound: on a
+ * ticket that already had a hundred comments when the workpad was first written, the search never
+ * found it again, `upsertWorkpad` posted a new workpad on every stage transition and a retried
+ * marked question was posted twice. The search now pages by `startAt` until it finds the marker or
+ * reads an **empty page**, and **at most this many pages**.
+ *
+ * **Only an empty page ends it** (WP-111 review round 1, backlog 377). The swagger describes
+ * `PageOfComments.total` as *"The number of items returned"*, which read literally is the page's own
+ * length; stopping at `startAt + returned >= total` then ends every search after its first page and
+ * brings 288 back (reproduced by the reviewer). So `total` is never a reason to stop — it is only a
+ * reason to **refuse**: a page that comes back empty while a usable `total` claims more comments
+ * than were read fails by name. The cost is one extra `GET` per search, the empty page.
+ *
+ * **The arithmetic.** The final empty page counts against the bound, so the bound is twenty pages
+ * of comments plus that one: a thread of at most 20 × {@link MARKER_SEARCH_PAGE} = 2 000 comments
+ * is read to its end on a site that answers full pages (20 × 50 = 1 000 on one that answers fifty).
+ *
+ * **At the bound it fails** ({@link JiraMarkerSearchBoundError}): answering `null` there is the
+ * answer that *posts* (standing rule 20 — fail closed on a mutation). A ticket past the bound
+ * therefore gets no workpad update and no marked comment, loudly, rather than a duplicate per stage
+ * transition.
+ */
+export const MARKER_SEARCH_MAX_PAGES = 21;
+
+/**
+ * The marker search could not establish that the marked comment is absent — it read
+ * {@link MARKER_SEARCH_MAX_PAGES} pages without reaching an empty page, or an empty page came back
+ * while the thread's `total` claimed more comments than were read. `conflict` because the ticket's own state (its thread) is what prevents the
+ * write, and it is **not retryable**: the next attempt reads the same thread.
+ */
+export class JiraMarkerSearchBoundError extends IntegrationError {
+  constructor(action: string, detail: string) {
+    super(
+      'conflict',
+      PROVIDER_ID,
+      `the marker search ${detail}; refusing to answer "not found", which would post a second comment`,
+      { action },
+    );
+  }
+}
+
+/**
+ * The page's `total`, when it is a usable count — the thread's size as Jira states it. Anything
+ * else (absent, negative, fractional, past `Number.MAX_SAFE_INTEGER`, not a number) is "no usable
+ * total". The search never stops on `total` either way (only an empty page ends it); a usable one is
+ * only compared at that empty page, to refuse a thread that claims more than was read.
+ */
+const usableTotal = (total: unknown): number | null =>
+  typeof total === 'number' && Number.isSafeInteger(total) && total >= 0 ? total : null;
 
 /**
  * **The comment page one `readTicket` emits: the newest fifty, and never more** — WP-83, Q54's third
@@ -200,7 +257,9 @@ export const READ_TICKET_COMMENT_PAGE = 50;
  * The thread's size for `Ticket.comment_total`, from the page's `total` — WP-83 review round 2.
  *
  * - **A usable `total`** (a non-negative safe integer) is the answer, floored at what was mapped:
- *   a provider that under-counts must not make a page look whole.
+ *   a provider that under-counts must not make a page look whole — **except** for a full page
+ *   whose `total` does not exceed it, which is `null` (backlog 377: `total` may be the page's own
+ *   length, so it cannot say the page was the thread).
  * - **No usable `total`, and the page came back short of what was asked** — the provider returned
  *   fewer than `READ_TICKET_COMMENT_PAGE` — means the page *is* the thread, so its length is known
  *   and is the answer.
@@ -216,6 +275,13 @@ export const READ_TICKET_COMMENT_PAGE = 50;
 export const commentTotalOf = (total: unknown, returned: number): number | null => {
   const shown = Math.min(returned, READ_TICKET_COMMENT_PAGE);
   if (typeof total === 'number' && Number.isSafeInteger(total) && total >= 0) {
+    // A **full** page whose `total` does not exceed it cannot tell "the thread is exactly this
+    // long" from "`total` is the page's own length" — which is what the swagger's words say it is
+    // (*"The number of items returned"*, backlog 377). So it is "possibly more", never a count; it
+    // over-declares only a thread of exactly one page (WP-111 review round 1).
+    if (returned >= READ_TICKET_COMMENT_PAGE && total <= shown) {
+      return null;
+    }
     return Math.max(total, shown);
   }
   return returned < READ_TICKET_COMMENT_PAGE ? shown : null;
@@ -404,14 +470,23 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
   const fetchCommentPage = async (
     key: string,
     action: string,
-    page: { readonly size: number; readonly orderBy: 'created' | '-created' },
+    page: {
+      readonly size: number;
+      readonly orderBy: 'created' | '-created';
+      /** The page offset; omitted for the first page, so `readTicket`'s request is unchanged. */
+      readonly startAt?: number;
+    },
   ) =>
     parse(
       jiraCommentPageSchema,
       await client.send({
         method: 'GET',
         path: `issue/${encodeURIComponent(key)}/comment`,
-        query: { maxResults: page.size, orderBy: page.orderBy },
+        query: {
+          ...(page.startAt === undefined || page.startAt === 0 ? {} : { startAt: page.startAt }),
+          maxResults: page.size,
+          orderBy: page.orderBy,
+        },
         action,
       }),
       action,
@@ -476,25 +551,52 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     return selfAccountId;
   };
 
-  /** The comment carrying `markerId` **and written by this binding's own account** (see docblock). */
+  /**
+   * The comment carrying `markerId` **and written by this binding's own account** (see docblock),
+   * searched oldest first, page by page, until a page comes back **empty** — and at most
+   * {@link MARKER_SEARCH_MAX_PAGES} pages, the empty one included, past which it **fails** rather
+   * than answering `null` (WP-111, backlog 288). `null` is returned only after an empty page whose
+   * offset is not short of a usable `total`; `total` alone never ends the search (backlog 377).
+   *
+   * **Residual, stated:** offsets are positions in a list that can move under the search. A comment
+   * written meanwhile is appended at the end and moves nothing; a comment **deleted** from a page
+   * already read shifts every later one back by one, so the comment at the next page's first offset
+   * is skipped once. A retry reads the thread again.
+   */
   const findMarkedComment = async (
     key: string,
     markerId: string,
     action: string,
   ): Promise<JiraComment | null> => {
-    const [comments, accountId] = await Promise.all([
-      fetchCommentPage(key, action, { size: MARKER_SEARCH_PAGE, orderBy: 'created' }).then(
-        (page) => page.comments,
-      ),
-      requireSelfAccountId(action),
-    ]);
-    for (const comment of comments) {
-      const marked = markerId === markerIdOfComment(comment);
-      if (marked && comment.author?.accountId === accountId) {
-        return comment;
+    const accountIdRead = requireSelfAccountId(action);
+    let startAt = 0;
+    for (let pages = 0; pages < MARKER_SEARCH_MAX_PAGES; pages += 1) {
+      const [page, accountId] = await Promise.all([
+        fetchCommentPage(key, action, { size: MARKER_SEARCH_PAGE, orderBy: 'created', startAt }),
+        accountIdRead,
+      ]);
+      for (const comment of page.comments) {
+        const marked = markerId === markerIdOfComment(comment);
+        if (marked && comment.author?.accountId === accountId) {
+          return comment;
+        }
       }
+      if (page.comments.length === 0) {
+        const total = usableTotal(page.total);
+        if (total !== null && startAt < total) {
+          throw new JiraMarkerSearchBoundError(
+            action,
+            `read an empty page at offset ${startAt} of a thread Jira counts as ${total} comments`,
+          );
+        }
+        return null;
+      }
+      startAt += page.comments.length;
     }
-    return null;
+    throw new JiraMarkerSearchBoundError(
+      action,
+      `read ${MARKER_SEARCH_MAX_PAGES} pages (the bound, MARKER_SEARCH_MAX_PAGES) and ${startAt} comments without reaching an empty page`,
+    );
   };
 
   const commentRefOf = (

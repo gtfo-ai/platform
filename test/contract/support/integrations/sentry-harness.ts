@@ -60,6 +60,8 @@ export interface SentryHarnessOverrides {
   readonly maxBreadcrumbs?: number;
   readonly maxTags?: number;
   readonly maxFieldBytes?: number;
+  /** The binding's `resolve_on_merge` flag (WP-111); omitted is the schema's default. */
+  readonly resolveOnMerge?: boolean;
   /** Interactions the test wrote itself, queued before the first request. */
   readonly script?: readonly ReplayInteraction[];
 }
@@ -123,6 +125,9 @@ export const sentryReplayContext = (
       ...(overrides.maxFieldBytes === undefined
         ? {}
         : { max_field_bytes: overrides.maxFieldBytes }),
+      ...(overrides.resolveOnMerge === undefined
+        ? {}
+        : { resolve_on_merge: overrides.resolveOnMerge }),
     },
     secrets: overrides.token === null ? {} : { auth_token: overrides.token ?? SENTRY_FAKE_TOKEN },
     // Required, never defaulted (standing rule 31): see the Loki harness for why the no-op is
@@ -140,6 +145,7 @@ export const sentryReplayContext = (
     issueWithoutEventsId: SENTRY_ISSUE_WITHOUT_EVENTS_ID,
     missingIssueId: SENTRY_MISSING_ISSUE_ID,
     titleFragment: 'totals',
+    withResolveOnMerge: () => sentryReplayContext({ ...overrides, resolveOnMerge: true }).port,
     cleanup: async () => {},
   };
 };

@@ -7,7 +7,8 @@
  * pg-boss job whose handler threw on every attempt its queue allows — stayed invisible: no list, no
  * count, no audit row. WP-108's census (`@platform/application`'s `job-exhaustion.ts`) classified
  * every registered queue and found most of them rely on pg-boss's retries, the largest
- * (`pipeline.outbound`) with twenty-six duties, most of them provider writes. Giving each the
+ * (`pipeline.outbound`) with twenty-seven `PipelineOutboundData` duties since WP-111 (twenty-nine
+ * with the two that carry payloads of their own), most of them provider writes. Giving each the
  * stage executor's bound-and-escalate shape is a rewrite of that band, so the census chose this read
  * instead: what failed, how often it was tried, why, and — from the census — what that cost and
  * what (if anything) recovers it.

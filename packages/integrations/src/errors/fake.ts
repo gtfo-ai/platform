@@ -3,8 +3,10 @@
  * suite and the bug template's Investigation pre-fetch (technical/06, product/08).
  *
  * The port's whole reason to exist is one flow: a bug ticket links a Sentry issue, the platform
- * fetches its latest event into the context pack, and on merge it comments on (and optionally
- * resolves) the issue. This fake implements exactly that flow plus search, and it deliberately
+ * fetches its latest event into the context pack (WP-89), and on merge — where the binding sets
+ * `resolve_on_merge` (WP-111) — it resolves the issue. The platform never comments on or links an
+ * issue (Q43: Sentry documents neither), although this fake can. It implements that flow plus
+ * search, and it deliberately
  * seeds an event whose stack trace contains instruction-shaped text, so the untrusted-data rule
  * (BD-022) is exercised by whatever consumes it rather than assumed.
  *
@@ -34,6 +36,9 @@
  *     all three on each (standing rule 23), so the fake cannot find a link the adapter would not.
  *     An id is taken only if an issue with it could exist here — the fake does not check that it
  *     was *seeded*, because Sentry's adapter cannot either (the scan makes no request).
+ *  7. **The same as Sentry — `resolveOnMerge()` answers the binding's flag, `false` by default**
+ *     (WP-111). Built here from the `resolveOnMerge` option; behind the loader the fake's
+ *     registration answers it from the binding's `resolve_on_merge`, as Sentry's adapter does.
  */
 import {
   type AgentTooling,
@@ -83,6 +88,8 @@ export interface FakeErrorsOptions {
   readonly baseUrl?: string;
   readonly issues?: readonly FakeIssueSeed[];
   readonly capabilities?: Partial<ObservabilityErrorsCapabilities>;
+  /** The binding's `resolve_on_merge` flag (WP-111, divergence 7). Off unless a test sets it. */
+  readonly resolveOnMerge?: boolean;
 }
 
 interface StoredIssue {
@@ -272,6 +279,7 @@ export const createFakeObservabilityErrors = (
     ref,
     capabilities: () => ({ ...capabilities }),
     linkedIssues,
+    resolveOnMerge: () => options.resolveOnMerge ?? false,
     testConnection: async (): Promise<HealthProbe> => {
       core.enter('test_connection');
       return {

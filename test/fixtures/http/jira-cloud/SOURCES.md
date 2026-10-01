@@ -99,3 +99,19 @@ a label and pointing the URL at a domain that does not exist changed no test at 
    while the rendered page's prose says only *"Accepts `created`"*. `readTicket` asks for
    `-created` with `maxResults=50` since WP-83 (the newest page, cut to its size), and the replay
    honours both parameters; no fixture changed, because the envelope is the same document.
+6. **`PageOfComments.total` is described as *"The number of items returned"*** in the OpenAPI
+   description (https://developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json, `info.version`
+   `1001.0.0-SNAPSHOT-d8285b35…`, re-read 2026-10-01 for WP-111), which read literally is the page's
+   length, while Atlassian's own response example (`comments-acme-1.json`) and WP-83's reading treat
+   it as the thread's size. The same document gives `startAt` (default 0, *"the page offset"*) and
+   `maxResults` (default 100) and **no maximum** for the request, and describes the response's
+   `maxResults` as *"the maximum number of items that could be returned"*. The marker search
+   (WP-111, backlog 288) therefore depends on **neither** reading: it pages by `startAt`, steps by
+   what a page actually returned, and stops **only on an empty page**; `total` is read only there,
+   to **fail** rather than answer "not found" when a usable `total` claims more comments than were
+   read. WP-111's first version stopped at `startAt + returned >= total`, and under the first
+   reading that ended every search after one page and posted a second workpad (review round 1,
+   backlog 377 — reproduced against the replay with `total` rewritten to the page's length). The
+   reading is still not measured, because there is no Jira site. The replay honours `startAt` and
+   caps a page at fifty (its divergence 8); no fixture changed, because the envelope is the same
+   document.

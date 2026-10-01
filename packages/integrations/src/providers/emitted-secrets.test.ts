@@ -428,6 +428,19 @@ const stubFetch = (script: Script, calls: { method: string; path: string; body: 
     const path = url.pathname.replace('/api/v4', '').replace('/rest/api/3', '');
     const body = request.method === 'GET' ? '' : await request.clone().text();
     calls.push({ method: request.method, path, body });
+    // Jira's comment page past its offset is empty (WP-111 review round 1): the marker search now
+    // reads until an empty page, so a stub that answered every offset with the same page would
+    // never let it end.
+    if (
+      request.method === 'GET' &&
+      path.endsWith('/comment') &&
+      Number(url.searchParams.get('startAt') ?? '0') > 0
+    ) {
+      return new Response(JSON.stringify({ comments: [], total: 1 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
     const scripted = script[`${request.method} ${path}`];
     if (scripted === undefined) {
       return new Response(JSON.stringify({ message: 'not scripted' }), {

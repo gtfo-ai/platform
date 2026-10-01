@@ -33,6 +33,9 @@
  *  7. **Different — the site has three accounts and one project.** `GET /user/search` answers from
  *     that directory, and — as Atlassian's own example response does — returns no `emailAddress`,
  *     which is the GDPR default for a Cloud site.
+ *  8. **Stricter — a comment page holds at most {@link REPLAY_COMMENT_PAGE_CAP} comments** (WP-111),
+ *     whatever `maxResults` asked, and its `total` is the thread's size. So the marker search's
+ *     paging by `startAt` is exercised across short pages on every thread longer than the cap.
  */
 import { readFileSync } from 'node:fs';
 import type { WebhookDelivery } from '@platform/application';
@@ -87,6 +90,14 @@ export interface JiraReplay {
   /** The issue as the double holds it, for assertions the port does not expose. */
   peekIssue(key: string): Record<string, unknown> | undefined;
   commentCount(key: string): number;
+  /** The thread's comment ids, oldest first — where a comment sits is a position in this list. */
+  commentIds(key: string): readonly string[];
+  /**
+   * Appends `count` comments a **human** wrote (the directory's first account, no marker), oldest
+   * first after whatever the thread holds — the long thread backlog 288 is about (WP-111). The body
+   * is the seeded fixture comment's; only the id, the author and the instant differ.
+   */
+  appendHumanComments(key: string, count: number): void;
   /**
    * Makes a comment look as though a **human** wrote it and typed the platform's marker.
    *
@@ -138,6 +149,16 @@ const clone = <T>(value: T): T => structuredClone(value);
  * the swagger's own words (*"API may return fewer items per page"*); the real figure is not measured.
  */
 export const REPLAY_SEARCH_PAGE_CAP = 20;
+
+/**
+ * The replay's largest comment page (WP-111, divergence 8): smaller than the marker search's
+ * hundred, so a thread of more than fifty comments is read across short pages that are **not** the
+ * last — the case a search that stepped by what it asked for, rather than by what came back, would
+ * get wrong. The swagger publishes no maximum for this endpoint and describes the response's
+ * `maxResults` as *"the maximum number of items that could be returned"*; the real figure is not
+ * measured. Fifty is also `readTicket`'s own page, so its request is answered in full.
+ */
+export const REPLAY_COMMENT_PAGE_CAP = 50;
 
 const JQL_CLAUSE = /^\(?(labels|status|parent) = "((?:[^"\\]|\\.)*)"/;
 /** WP-110: the live tasks' read, `key in ("ACME-1", "ACME-2")` — every key a JQL string literal. */
@@ -382,12 +403,16 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
         // Honoured, not ignored (standing rule 1): `readTicket` asks for the newest page since
         // WP-83, and a replay that answered the oldest one in ascending order would hand the
         // adapter's re-ordering the opposite of what Jira sends. Stored in creation order.
+        //
+        // `startAt` (default 0, the page offset) is honoured too since WP-111, and the page is
+        // **capped** at {@link REPLAY_COMMENT_PAGE_CAP} whatever was asked — divergence 8.
         const stored = comments.get(key) ?? [];
-        const maxResults = Number(query.maxResults ?? '100');
+        const maxResults = Math.min(Number(query.maxResults ?? '100'), REPLAY_COMMENT_PAGE_CAP);
+        const startAt = Number(query.startAt ?? '0');
         const ordered = query.orderBy === '-created' ? [...stored].reverse() : stored;
         return jsonResponse(200, {
-          comments: ordered.slice(0, maxResults).map(clone),
-          startAt: 0,
+          comments: ordered.slice(startAt, startAt + maxResults).map(clone),
+          startAt,
           maxResults,
           total: stored.length,
         });
@@ -496,6 +521,23 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
     script: (fixtureName) => scripted.push(fixtureName),
     peekIssue: (key) => issues.get(key),
     commentCount: (key) => (comments.get(key) ?? []).length,
+    commentIds: (key) => (comments.get(key) ?? []).map((comment) => comment.id),
+    appendHumanComments: (key, count) => {
+      const template = (bodyOf('comments-acme-1.json') as { comments: StoredComment[] })
+        .comments[0] as StoredComment;
+      const thread = comments.get(key) ?? [];
+      for (let index = 0; index < count; index += 1) {
+        nextId += 1;
+        thread.push({
+          ...clone(template),
+          self: `${JIRA_REPLAY_SITE}/rest/api/3/issue/${key}/comment/${nextId}`,
+          id: String(nextId),
+          author: directory[0],
+          updateAuthor: directory[0],
+        });
+      }
+      comments.set(key, thread);
+    },
     reattributeComment: (key, commentId, markerId) => {
       const comment = (comments.get(key) ?? []).find((entry) => entry.id === commentId);
       if (comment === undefined) {

@@ -398,6 +398,8 @@ describe('Sentry: every emitted field is bounded by a named cap (standing rule 3
     linked: port.linkedIssues(
       `${HOSTILE} https://sentry.example.test/organizations/acme-example/issues/4242/ ${HOSTILE}`,
     ),
+    // WP-111's member: the binding's own boolean, which emits no string at all.
+    resolve_on_merge: port.resolveOnMerge(),
     unmapped_reports: unmapped,
   });
 

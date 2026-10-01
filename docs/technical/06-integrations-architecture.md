@@ -12,7 +12,7 @@ readTicket(ref) -> Ticket {key, url, type, title, description, comments[], label
 matchTickets(rule) -> TicketRef[]                   # the ticket poller's read, oldest first (WP-87); rule `keys` = the tickets named, whatever the pick-up rule (WP-110)
 pollPlan() -> {rule, interval_seconds} | null        # WP-87: the binding's own switch, rule and interval
 transition(ref, targetStatusName, fields?) -> {changed, from, to}   # resolves at runtime; already there = {changed:false}; unknown target fails loudly
-upsertWorkpad(ref, markerId, markdown) -> CommentRef # edit in place (BD-023)
+upsertWorkpad(ref, markerId, markdown) -> CommentRef # edit in place (BD-023); Jira finds it by paging the thread (WP-111)
 addComment(ref, markdown) -> CommentRef              # questions, linter output
 setLabels(ref, add[], remove[])
 linkMergeRequest(ref, mrUrl)
@@ -118,6 +118,8 @@ An answer or an approval is emitted **only** for an author who maps to a platfor
 getIssue(ref) ; getLatestEvent(ref) -> {stackTrace, breadcrumbs, tags, release, firstSeen, lastSeen, count}
 searchIssues(project, query, since)
 linkMergeRequest(issue, mrUrl) ; comment(issue, text) ; resolve(issue, inRelease?)
+linkedIssues(text) -> {id}[]   # WP-89, pure
+resolveOnMerge() -> boolean    # WP-111, pure: the binding's `resolve_on_merge`, false by default
 agentTooling() -> {mcp?: McpServerSpec, cli?: CliSpec, skill: SkillRef, env: EnvSpec}
 ```
 No inbound normaliser in v1: product/08 lists `error.issue.created` as optional and technical/02's catalogue has no such event, so a normaliser would have nothing legal to emit.
@@ -174,6 +176,21 @@ No inbound normaliser in v1: product/08 lists `error.issue.created` as optional 
 > "tell the tracker the fix shipped" is discharged by the documented `resolve(issue, {inRelease})`
 > and by Sentry's own `Fixes <SHORT-ID>` commit-message convention. Whether the port should keep
 > the two methods at all is **Q43**.
+
+> **As built at WP-111 (PROGRESS backlog 302, option (b)): resolve on merge, opt-in per binding.**
+> `resolveOnMerge()` answers the binding's `resolve_on_merge` (Sentry's config, `false` unless set;
+> set on the binding, or on the account as every binding's default). A handler on `mr.merged`
+> (`pipeline.errors.resolve_on_merge`, TD-005 priority 120) enqueues the `resolve_on_merge`
+> `pipeline.outbound` duty for a task on the `bug` template; the duty
+> (`packages/application/src/pipeline/resolve-on-merge.ts`) re-validates the task, resolves the
+> errors binding through `observabilityForProject` (none → nothing; one that will not load → the
+> job fails), stops when the flag is off, runs `linkedIssues` over the task's stored ticket snapshot,
+> and calls `resolve(issue)` — **no release** — once per linked issue through
+> `IntegrationActionExecutor` (`errorWrites`, action `resolve_issue`): one audit row per issue,
+> `would_have` for a shadow task, and an `IdempotencyPlan` keyed on the task and the issue, so a
+> second `mr.merged` for the task replays rather than resolving twice. `comment` and
+> `linkMergeRequest` are not called (Q43). product/08's *"resolve-in-next-release"* — Sentry's
+> `resolvedInNextRelease` status — is not what is sent; that is filed under WP-111.
 
 ### ObservabilityLogs
 ```

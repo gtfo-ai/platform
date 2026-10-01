@@ -65,6 +65,11 @@ runObservabilityErrorsContract({
       issueWithoutEventsId: 'issue-2',
       missingIssueId: 'issue-404',
       titleFragment: 'totals',
+      withResolveOnMerge: () =>
+        createFakeObservabilityErrors({
+          integrationId: ERRORS_INTEGRATION_ID,
+          resolveOnMerge: true,
+        }),
       cleanup: async () => {},
     };
   },

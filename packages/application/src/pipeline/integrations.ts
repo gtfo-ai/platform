@@ -505,7 +505,7 @@ const read = async <T>(
  * mode on the way here cannot post a real comment on a real ticket.
  */
 const mutate = async <T>(
-  integrations: PipelineIntegrations,
+  integrations: { readonly executor: IntegrationActionExecutor },
   ref: IntegrationRef,
   action: string,
   payload: JsonObject,
@@ -881,6 +881,44 @@ export const errorReads = (binding: ObservabilityBinding<ObservabilityErrorsPort
   latestEvent: async (id: string, context: CallContext): Promise<ErrorEvent | null> =>
     read(binding, binding.ref, 'get_latest_event', { issue_id: id }, context, async () =>
       binding.port.getLatestEvent({ id }),
+    ),
+});
+
+/** What the platform keeps of a resolve: the issue and the status Sentry answered, or `null` in shadow. */
+export interface ResolvedIssue {
+  readonly issue_id: string;
+  /** The issue's status after the call; `null` when shadow mode made no call. */
+  readonly status: Issue['status'] | null;
+}
+
+/**
+ * The one write the pipeline makes to an errors binding — WP-111, PROGRESS backlog 302: resolving
+ * an issue a bug task's ticket links, once that task's merge request merged, on a binding that sets
+ * `resolve_on_merge` (`resolve-on-merge.ts` decides; this only calls).
+ *
+ * A **mutation** through the executor like every ticket write: refused for a shadow task and
+ * recorded as `would_have`, audited against the binding's own `integrations.id`, rate-limited on
+ * its budget, refused inside a transaction. It carries an `IdempotencyPlan` because it runs from an
+ * at-least-once job, and the key is the caller's: it must identify *the task and the issue*, so a
+ * second merge event for the same task replays rather than resolving again. No release is sent —
+ * the platform does not know which release will carry the merge, and a wrong `inRelease` would
+ * tell Sentry the fix shipped somewhere it did not.
+ */
+export const errorWrites = (binding: ObservabilityBinding<ObservabilityErrorsPort>) => ({
+  resolve: async (
+    id: string,
+    context: CallContext & { readonly mode: TaskMode; readonly idempotencyKey: string },
+  ): Promise<ResolvedIssue> =>
+    mutate<ResolvedIssue>(
+      binding,
+      binding.ref,
+      'resolve_issue',
+      { issue_id: id },
+      context,
+      async () => ({ issue_id: id, status: (await binding.port.resolve({ id })).status }),
+      () => ({ issue_id: id, status: null }),
+      (result) => ({ issue_id: result.issue_id, status: result.status }),
+      replayable<ResolvedIssue>(context.idempotencyKey),
     ),
 });
 

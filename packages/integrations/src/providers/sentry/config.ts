@@ -53,6 +53,17 @@ export const sentryConfigSchema = z.strictObject({
   auth_token: z.string().nullish(),
   /** Per-request timeout in milliseconds; 0 disables it (the replay harness has no network). */
   request_timeout_ms: z.int().nonnegative().max(600_000).default(30_000),
+  /**
+   * **Resolve on merge** (WP-111, PROGRESS backlog 302) — off unless an operator turns it on,
+   * because product/08 calls the resolve *"optional"* and it is a write to somebody's Sentry.
+   *
+   * Set on the **binding** (`bindings.config`): whether a merge in *this* project closes issues is
+   * the project's decision, and one Sentry account serves many. Set on the account, it is the
+   * default every binding of it inherits unless the binding says `false` — the loader merges the
+   * binding over the account (`overlayBindingConfig`). When it is `true`, a bug task's merge
+   * resolves every issue of this organisation the task's ticket links (setup guide § 5).
+   */
+  resolve_on_merge: z.boolean().default(false),
 
   // ── Caps (BD-022, and WP-16's token budget) ────────────────────────────────
 

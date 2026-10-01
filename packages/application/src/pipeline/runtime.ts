@@ -72,6 +72,7 @@ import {
 } from './jobs.js';
 import { type PipelineOutboundOptions, pipelineOutboundHandler } from './outbound.js';
 import { providerSignalHandlers } from './provider-signals.js';
+import { resolveOnMergeHandler } from './resolve-on-merge.js';
 import { reviewOnlyHandlers } from './review-only.js';
 import { reviewThreadsRefreshHandlers } from './review-threads-refresh.js';
 import { riskRoutingHandlers } from './risk-routing.js';
@@ -340,6 +341,9 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
       // WP-61: the size of a merge the platform made, and the defect trace of a bug ticket — two
       // measurements the delivery metrics need and no event carried (PROGRESS backlog 179, 114).
       ...deliveryMeasureHandlers(options),
+      // WP-111 (backlog 302): a bug task's merge resolves the issues its ticket links, on an
+      // errors binding that sets `resolve_on_merge` — the decision here, the call in the duty.
+      resolveOnMergeHandler(options),
       // WP-90 (backlog 210): a thread resolved without a comment re-counts the review threads.
       ...reviewThreadsRefreshHandlers(options),
     ],

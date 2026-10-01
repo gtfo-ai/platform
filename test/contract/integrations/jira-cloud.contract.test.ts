@@ -20,6 +20,7 @@
  *     states.
  */
 import { exactSecretRedactor, IntegrationError, noSecretsRedactor } from '@platform/application';
+import { JiraMarkerSearchBoundError, MARKER_SEARCH_MAX_PAGES } from '@platform/integrations';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   createJiraBinding,
@@ -29,7 +30,12 @@ import {
   JIRA_TICKET,
   type JiraBinding,
 } from '../support/integrations/jira-cloud-harness.js';
-import { createJiraReplay, JIRA_REPLAY_TOKEN } from '../support/integrations/jira-cloud-replay.js';
+import {
+  createJiraReplay,
+  JIRA_REPLAY_TOKEN,
+  type JiraReplay,
+  REPLAY_COMMENT_PAGE_CAP,
+} from '../support/integrations/jira-cloud-replay.js';
 import {
   runTaskManagementContract,
   type TaskManagementContractContext,
@@ -639,6 +645,247 @@ describe('jira-cloud — reaching the provider', () => {
       const again = await binding.port.transition(JIRA_TICKET, 'In Progress');
       expect(again).toEqual({ changed: false, from: 'In Progress', to: 'In Progress' });
       expect(binding.replay.requests.filter((request) => request.method === 'POST')).toEqual([]);
+    });
+  });
+
+  /**
+   * WP-111, PROGRESS backlog 288: the marker search pages by `startAt` until an **empty** page,
+   * under {@link MARKER_SEARCH_MAX_PAGES} (the empty page included), and fails by name at the bound
+   * rather than answering "not found" — the answer that posts. `total` never ends it (review
+   * round 1, backlog 377): it only refuses an empty page that comes short of it. The replay caps a comment page at
+   * {@link REPLAY_COMMENT_PAGE_CAP} (its divergence 8), so a 150-comment thread is three pages.
+   */
+  describe('the marker search reads the whole thread (WP-111)', () => {
+    const commentReads = (replay: JiraReplay) =>
+      replay.requests.filter(
+        (request) => request.method === 'GET' && request.path === 'issue/ACME-1/comment',
+      );
+    const writes = (replay: JiraReplay) =>
+      replay.requests.filter((request) => request.method !== 'GET');
+
+    it('finds the workpad at position 120 of a 150-comment thread and PUTs it', async () => {
+      // One seeded comment, then 118 a human wrote: the workpad is the 120th comment.
+      binding.replay.appendHumanComments('ACME-1', 118);
+      const first = await binding.port.upsertWorkpad(JIRA_TICKET, 'agentic:workpad', '# One');
+      const ids = binding.replay.commentIds('ACME-1');
+      expect(ids.indexOf(first.comment_id), 'the workpad is the 120th comment').toBe(119);
+      binding.replay.appendHumanComments('ACME-1', 30);
+      expect(binding.replay.commentCount('ACME-1')).toBe(150);
+      binding.replay.resetRequests();
+
+      const second = await binding.port.upsertWorkpad(JIRA_TICKET, 'agentic:workpad', '# Two');
+
+      expect(second.comment_id, 'the same workpad, found past the first page').toBe(
+        first.comment_id,
+      );
+      expect(
+        writes(binding.replay).map((request) => `${request.method} ${request.path}`),
+        'one PUT of that comment and no POST',
+      ).toEqual([`PUT issue/ACME-1/comment/${first.comment_id}`]);
+      expect(binding.replay.commentCount('ACME-1'), 'no second workpad').toBe(150);
+      expect(
+        commentReads(binding.replay).map((request) => request.query.startAt ?? '0'),
+        'paged by what came back, and stopped at the page that held it',
+      ).toEqual(['0', String(REPLAY_COMMENT_PAGE_CAP), String(2 * REPLAY_COMMENT_PAGE_CAP)]);
+    });
+
+    it('does not post a marked question twice when it sits past the first page', async () => {
+      binding.replay.appendHumanComments('ACME-1', 118);
+      const asked = await binding.port.addComment(JIRA_TICKET, 'Which currency?', {
+        markerId: 'agentic:question:7',
+      });
+      binding.replay.appendHumanComments('ACME-1', 30);
+      binding.replay.resetRequests();
+
+      const again = await binding.port.addComment(JIRA_TICKET, 'Which currency?', {
+        markerId: 'agentic:question:7',
+      });
+
+      expect(again.comment_id).toBe(asked.comment_id);
+      expect(writes(binding.replay), 'nothing was posted').toEqual([]);
+    });
+
+    it('reads every page, and the empty one after them, before it posts a first workpad', async () => {
+      binding.replay.appendHumanComments('ACME-1', 149);
+      binding.replay.resetRequests();
+
+      await binding.port.upsertWorkpad(JIRA_TICKET, 'agentic:workpad', '# First');
+
+      expect(
+        commentReads(binding.replay).map((request) => request.query.startAt ?? '0'),
+        'three pages of comments, then the empty page that ends the search',
+      ).toEqual(['0', '50', '100', '150']);
+      expect(writes(binding.replay).map((request) => request.method)).toEqual(['POST']);
+      expect(binding.replay.commentCount('ACME-1')).toBe(151);
+    });
+
+    it('fails by name at the page bound, and posts nothing', async () => {
+      // One comment past what the bound can read at the replay's page size.
+      binding.replay.appendHumanComments(
+        'ACME-1',
+        MARKER_SEARCH_MAX_PAGES * REPLAY_COMMENT_PAGE_CAP,
+      );
+      binding.replay.resetRequests();
+
+      const attempt = binding.port.upsertWorkpad(JIRA_TICKET, 'agentic:workpad', '# Mine');
+
+      await expect(attempt).rejects.toBeInstanceOf(JiraMarkerSearchBoundError);
+      await expect(attempt).rejects.toMatchObject({
+        code: 'conflict',
+        retryable: false,
+        message: expect.stringContaining(`read ${MARKER_SEARCH_MAX_PAGES} pages (the bound`),
+      });
+      expect(commentReads(binding.replay)).toHaveLength(MARKER_SEARCH_MAX_PAGES);
+      expect(binding.replay.commentCount('ACME-1'), 'nothing was posted').toBe(
+        1 + MARKER_SEARCH_MAX_PAGES * REPLAY_COMMENT_PAGE_CAP,
+      );
+      expect(writes(binding.replay), 'a search that could not finish posts nothing').toEqual([]);
+      expect(
+        binding.audit.entriesFor('read_workpad').map((entry) => entry.status),
+        'the refusal is on the record',
+      ).toEqual(['failed']);
+
+      // The marked comment's search is the same search, and refuses the same way.
+      await expect(
+        binding.port.addComment(JIRA_TICKET, 'Which currency?', { markerId: 'agentic:question:8' }),
+      ).rejects.toBeInstanceOf(JiraMarkerSearchBoundError);
+      expect(writes(binding.replay)).toEqual([]);
+    });
+
+    /** The same replayed site, with the comment page's `total` rewritten by `patch`. */
+    const withCommentTotal = (
+      replay: JiraReplay,
+      patch: (body: Record<string, unknown>) => void,
+    ): typeof globalThis.fetch => {
+      return async (input, init) => {
+        const response = await replay.fetch(input, init);
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        const method = init?.method ?? (input instanceof Request ? input.method : 'GET');
+        if (method.toUpperCase() !== 'GET' || !url.pathname.endsWith('/comment')) {
+          return response;
+        }
+        const body = (await response.json()) as Record<string, unknown>;
+        patch(body);
+        return new Response(JSON.stringify(body), {
+          status: response.status,
+          headers: { 'content-type': 'application/json' },
+        });
+      };
+    };
+
+    /**
+     * Backlog 377, the reviewer's reproduction: the swagger calls `total` *"The number of items
+     * returned"*. Read that way it is the page's own length, and a search that stopped at
+     * `startAt + returned >= total` ended after the first page and posted a second workpad.
+     */
+    it('finds the workpad at position 120 when total is the page’s own length (review round 1)', async () => {
+      const replay = createJiraReplay();
+      const site = createJiraBinding({
+        fetch: withCommentTotal(replay, (body) => {
+          body.total = (body.comments as unknown[]).length;
+        }),
+      });
+      replay.appendHumanComments('ACME-1', 118);
+      const first = await site.port.upsertWorkpad(JIRA_TICKET, 'agentic:workpad', '# One');
+      expect(replay.commentIds('ACME-1').indexOf(first.comment_id)).toBe(119);
+      replay.appendHumanComments('ACME-1', 30);
+      replay.resetRequests();
+
+      const second = await site.port.upsertWorkpad(JIRA_TICKET, 'agentic:workpad', '# Two');
+
+      expect(second.comment_id, 'the same workpad').toBe(first.comment_id);
+      expect(
+        replay.requests
+          .filter((request) => request.method !== 'GET')
+          .map((request) => `${request.method} ${request.path}`),
+      ).toEqual([`PUT issue/ACME-1/comment/${first.comment_id}`]);
+      expect(replay.commentCount('ACME-1'), 'no second workpad').toBe(150);
+    });
+
+    it('reads a thread one page short of the bound to its end without failing (the arithmetic)', async () => {
+      // One seeded comment plus these fill bound − 1 pages exactly; the empty page is the bound's last.
+      binding.replay.appendHumanComments(
+        'ACME-1',
+        (MARKER_SEARCH_MAX_PAGES - 1) * REPLAY_COMMENT_PAGE_CAP - 1,
+      );
+      binding.replay.resetRequests();
+
+      await binding.port.upsertWorkpad(JIRA_TICKET, 'agentic:workpad', '# First');
+
+      expect(commentReads(binding.replay)).toHaveLength(MARKER_SEARCH_MAX_PAGES);
+      expect(writes(binding.replay).map((request) => request.method)).toEqual(['POST']);
+    });
+
+    /**
+     * WP-111 review round 2 (orchestrator): the bound's arithmetic in literals, not in the constant
+     * it checks — twenty full pages of fifty and the empty page that ends them are 21 reads, so a
+     * bound of 20 (the empty page forgotten) fails this thread of exactly a thousand comments.
+     */
+    it('reads a thousand comments — twenty full pages and the empty one — in 21 reads, and posts', async () => {
+      expect(REPLAY_COMMENT_PAGE_CAP).toBe(50);
+      binding.replay.appendHumanComments('ACME-1', 999);
+      binding.replay.resetRequests();
+
+      await binding.port.upsertWorkpad(JIRA_TICKET, 'agentic:workpad', '# First');
+
+      expect(commentReads(binding.replay)).toHaveLength(21);
+      expect(writes(binding.replay).map((request) => request.method)).toEqual(['POST']);
+      expect(binding.replay.commentCount('ACME-1')).toBe(1001);
+    });
+
+    it('answers no workpad on an empty first page, and posts one (review round 2)', async () => {
+      const replay = createJiraReplay();
+      const site = createJiraBinding({
+        fetch: withCommentTotal(replay, (body) => {
+          body.comments = [];
+          body.total = 0;
+        }),
+      });
+      replay.resetRequests();
+
+      await site.port.upsertWorkpad(JIRA_TICKET, 'agentic:workpad', '# First');
+
+      expect(
+        replay.requests
+          .filter((request) => request.path.endsWith('/comment'))
+          .map((request) => `${request.method} ${request.query.startAt ?? '0'}`),
+        'one empty page of comments, then the post',
+      ).toEqual(['GET 0', 'POST 0']);
+    });
+
+    it('fails by name when a page comes back empty before the total', async () => {
+      const replay = createJiraReplay();
+      const site = createJiraBinding({
+        fetch: withCommentTotal(replay, (body) => {
+          body.total = (body.total as number) + 10;
+        }),
+      });
+
+      await expect(
+        site.port.upsertWorkpad(JIRA_TICKET, 'agentic:workpad', '# Mine'),
+      ).rejects.toMatchObject({
+        name: 'JiraMarkerSearchBoundError',
+        message: expect.stringContaining('read an empty page at offset 1'),
+      });
+      expect(replay.commentCount('ACME-1'), 'nothing was posted').toBe(1);
+    });
+
+    it('with no usable total, reads until an empty page — and still finds the workpad', async () => {
+      const replay = createJiraReplay();
+      const site = createJiraBinding({
+        fetch: withCommentTotal(replay, (body) => {
+          delete body.total;
+        }),
+      });
+      replay.appendHumanComments('ACME-1', 60);
+      const first = await site.port.upsertWorkpad(JIRA_TICKET, 'agentic:workpad', '# One');
+      expect(replay.commentCount('ACME-1')).toBe(62);
+      replay.appendHumanComments('ACME-1', 10);
+
+      const second = await site.port.upsertWorkpad(JIRA_TICKET, 'agentic:workpad', '# Two');
+
+      expect(second.comment_id).toBe(first.comment_id);
+      expect(replay.commentCount('ACME-1'), 'no second workpad').toBe(72);
     });
   });
 

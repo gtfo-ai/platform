@@ -459,6 +459,9 @@ export const createSentryProvider = (options: SentryProviderOptions): SentryProv
     linkedIssues: (text) =>
       sentryLinkedIssues(text, { baseUrl: config.base_url, organization: config.organization }),
 
+    // WP-111: no request — the binding's own flag, which the `resolve_on_merge` duty reads.
+    resolveOnMerge: () => config.resolve_on_merge,
+
     testConnection: async (): Promise<HealthProbe> => {
       const checkedAt: IsoDateTime = options.clock.now();
       if (!isUsableToken(token)) {

@@ -16,6 +16,14 @@
 In **shadow mode** it does none of the writes: they are recorded as `would_have` and you can read
 them in the audit before you trust the platform with the real thing.
 
+The workpad and each question are found again by a marker the platform writes into its own
+comment, so before it edits or posts one it **reads the ticket's comments**, oldest first, a page
+at a time, to the end of the thread. It reads at most **twenty pages** of comments plus the empty
+page that ends the read (2 000 comments at the page size it asks for, fewer if your site answers
+shorter pages). On a ticket longer than that the
+workpad update and any marked comment **fail, and say so in the audit log**, rather than post a
+second copy: the platform will not answer "not there" about a thread it did not finish reading.
+
 ## 1. Create an API token
 
 1. Sign in as the account the platform should act as. A dedicated account (`agentic-bot@your-domain`)

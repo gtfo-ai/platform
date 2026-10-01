@@ -38,6 +38,12 @@ export interface ObservabilityErrorsContractContext {
   readonly missingIssueId: string;
   /** A substring of the seeded issue's title. */
   readonly titleFragment: string;
+  /**
+   * The same binding built with `resolve_on_merge` set (WP-111) — through the provider's own
+   * configuration, never a port the harness edited, so the suite asserts what the configuration
+   * does rather than what the harness says.
+   */
+  withResolveOnMerge(): ObservabilityErrorsPort;
   cleanup(): Promise<void>;
 }
 
@@ -176,6 +182,16 @@ export const runObservabilityErrorsContract = (
         { id: `${context.issueId}02` },
         { id: `${context.issueId}01` },
       ]);
+    });
+
+    /**
+     * WP-111 (PROGRESS backlog 302): the `resolve_on_merge` duty acts only when the binding says so,
+     * and product/08 calls the resolve *"optional"* — so *off unless set* is a port obligation, held
+     * on the fake and on every adapter (standing rule 23), both ways.
+     */
+    it('resolves on merge only when its binding says so — off by default (WP-111)', () => {
+      expect(port.resolveOnMerge(), 'a binding that sets nothing').toBe(false);
+      expect(context.withResolveOnMerge().resolveOnMerge(), 'a binding that sets it').toBe(true);
     });
 
     it('declares agent tooling by name only', () => {
