@@ -688,6 +688,22 @@ describe('the client’s endpoint list against the server’s router', () => {
     }
   });
 
+  it('serves the failed-jobs read WP-108 added, the client calls it, and it refuses an anonymous caller', async () => {
+    // PROGRESS backlog 325: a job pg-boss gave up on had no list. Named positively (standing rule
+    // 10), and asked with an invalid limit so a guard that slipped to `preHandler` answers 400.
+    const paths = clientPaths(
+      webSourceFiles().map((path) => ({
+        path,
+        source: readSource(path),
+      })),
+    );
+    expect(paths).toContain('/api/org/failed-jobs');
+    expect((await probe('/api/org/failed-jobs')).served).toBe(true);
+    const response = await app.inject({ method: 'GET', url: '/api/org/failed-jobs?limit=0' });
+    const body = response.json() as ApiErrorBody;
+    expect(`${response.statusCode} ${body.error?.code ?? ''}`).toBe('401 unauthenticated');
+  });
+
   it('refuses an anonymous caller on every served path that is not deliberately public', async () => {
     const paths = clientPaths(
       webSourceFiles().map((path) => ({

@@ -6,6 +6,7 @@
  * each other by `test/contract/support/jobs-contract-suite.ts`.
  */
 export * from './config.js';
+export * from './failed-jobs.js';
 export * from './in-memory-jobs.js';
 export * from './maintenance.js';
 export * from './pg-boss-jobs.js';

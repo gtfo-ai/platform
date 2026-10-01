@@ -564,6 +564,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           liveRuns,
           stageConcurrency: 1,
           intakeReconcileIntervalMs: config.intakeReconcileIntervalMs,
+          jobsSchema: config.jobs.schema,
           ticketPollSweepIntervalMs: config.ticketPollSweepIntervalMs,
           // Non-null on this branch by construction: `capabilities.worker` is what got us here and
           // it is one of the two conditions the stack is built under.
@@ -1092,6 +1093,13 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
             unitOfWork: eventing.unitOfWork,
             store: new eventingAdapters.PostgresDeadLetterStore(database.pool),
           })
+        : null,
+      /**
+       * WP-108, backlog 325: the jobs pg-boss moved to `failed`, read from its own table — the
+       * schema `migrate` installed, which every API process can read as the queue gauge does.
+       */
+      failedJobs: capabilities.api
+        ? async (query) => jobsAdapters.readFailedJobs(database.pool, config.jobs.schema, query)
         : null,
       /**
        * The browser application (WP-15j): the operator's directory, or the one the image carries.

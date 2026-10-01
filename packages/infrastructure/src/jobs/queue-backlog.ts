@@ -50,9 +50,10 @@ export interface QueueBacklog {
 /**
  * `schema` is interpolated, so it is held to a bare identifier here although `loadJobsConfig` admits
  * only `pgboss` since WP-106: this reader takes a string, and the check is what keeps that true of
- * every caller.
+ * every caller — including the two readers outside this module that interpolate it too (WP-108:
+ * the stranded-stage recovery store and the failed-jobs read).
  */
-const assertSchema = (schema: string): string => {
+export const assertPgBossSchema = (schema: string): string => {
   if (!/^[a-z_][a-z0-9_]*$/.test(schema)) {
     throw new Error(`invalid pg-boss schema name ${JSON.stringify(schema)}`);
   }
@@ -68,7 +69,7 @@ export const readQueueBacklog = async (
   sql: SqlExecutor,
   schema: string,
 ): Promise<readonly QueueBacklog[]> => {
-  const s = assertSchema(schema);
+  const s = assertPgBossSchema(schema);
   const { rows } = await sql.query<{
     queue: string;
     queued: number;
@@ -101,7 +102,7 @@ export const readAgentRunService = async (
   schema: string,
   unservedAfterSeconds: number = AGENT_RUNS_UNSERVED_AFTER_SECONDS,
 ): Promise<AgentRunService> => {
-  const s = assertSchema(schema);
+  const s = assertPgBossSchema(schema);
   const { rows } = await sql.query<{ waiting: boolean; claimed: boolean }>(
     `select exists (
               select 1 from ${s}.job

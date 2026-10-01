@@ -99,6 +99,12 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
  * `requested_by_user_id`'s fill) are narrow statements `save` does not name, held by
  * `tasks-column-ownership.test.ts` instead of here. The resume and hand-back into Ready now write
  * nothing but the hand-back's event, so `commands.ts` keeps its four.
+ *
+ * `recovery/stranded-stage.ts` joined them at **WP-108** with **one** site: the ending of a task
+ * left at an agent or gate stage nothing ever ran (backlog 320), escalated from the recovery pass in
+ * a transaction it owns, under `retryOnTaskConflict`. Its ending when the bound is spent is the
+ * fifth shape: logged, and left to the next pass — the task is still stranded and still marked, so
+ * the next pass finds it again, which `run-lease.ts` cannot rely on (its run is terminal by then).
  */
 const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
   ['packages/application/src/pipeline/commands.ts', 4],
@@ -124,6 +130,10 @@ const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
   // transaction under `retryOnTaskConflict`; a spent bound escapes to the job's retry, and a
   // finished task is logged, as `shadow/report.ts` logs one).
   ['packages/application/src/pipeline/config-refusal.ts', 1],
+  // WP-108 (PROGRESS backlog 320): the stranded-stage recovery's ending escalates a task left at a
+  // stage nothing ever ran, in a transaction it owns, under `retryOnTaskConflict`; a spent bound is
+  // logged and the next pass ends it, because the task is still stranded and still marked.
+  ['packages/application/src/recovery/stranded-stage.ts', 1],
 ]);
 
 /** Tracked *and* committable-but-untracked, which is the tree the pre-push hook sees (rule 85). */
@@ -159,7 +169,7 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     );
   });
 
-  it('counts thirty-four, which is the number the change states', () => {
+  it('counts thirty-five, which is the number the change states', () => {
     // Twenty-one inherited from WP-15d (`saga.ts` 11, `transitions.ts` 5, `stage-executor.ts` 5 —
     // backlog 18 counted twenty before `stage-executor.ts` gained its fifth) plus the one
     // `escalateTaskAfterConflict` adds, which is the ending for the other twenty-one; plus four
@@ -193,8 +203,9 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     // `retryOnTaskConflict` as its retry and `IllegalTransitionError` logged as its ending.
     // **Plus one at WP-106 review round 1**: `config-refusal.ts`'s parking of a task whose
     // configuration cannot be read, with the handler's ending or the job's, by caller.
+    // **Plus one at WP-108**: the stranded-stage recovery's escalation (backlog 320).
     const total = [...census().values()].reduce((sum, count) => sum + count, 0);
-    expect(total).toBe(34);
+    expect(total).toBe(35);
     expect([...EXPECTED_SITES.values()].reduce((sum, count) => sum + count, 0)).toBe(total);
   });
 

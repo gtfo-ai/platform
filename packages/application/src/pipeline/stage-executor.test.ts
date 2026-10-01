@@ -626,7 +626,7 @@ describe('the task budget', () => {
  * pipeline is the day a real ticket meets it. Before this branch existed, the throw escaped both of
  * the executor's endings: transaction 1 had already written the `runs` row and emitted
  * `run.created`/`run.started`, so the run stayed `running` for ever, the task sat at its stage, and
- * the `stage.execute` job retried into pg-boss where no screen shows it.
+ * the `stage.execute` job retried into pg-boss where no screen showed it (until WP-108).
  *
  * The answer is **no new task state**: `escalated` already means *a human must act*, and it is what
  * the executor does for every other run that ends without a usable result.

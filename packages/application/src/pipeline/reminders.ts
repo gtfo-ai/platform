@@ -41,8 +41,11 @@
  *  - `reminders_sent` counts reminders the platform **raised**. Delivering one is the notify band's:
  *    a project with no chat binding is told nothing, as for every notification, and the count still
  *    reads 1 — the task page shows the question either way.
- *  - A reminder timer whose arming was lost is not recovered: `recovery/deadline.ts` recovers the
- *    **expiry** (the loss that strands a task), and a lost reminder costs one message.
+ *  - A reminder timer whose arming was lost **is** recovered since WP-108 (PROGRESS backlog 291):
+ *    the fourth row of `recovery/deadline.ts` finds a never-reminded row whose reminder instant
+ *    passed a grace ago and whose deadline has not, and calls this function for it — so a late
+ *    timer and the pass meet in one place, and the count and the notification's cause id decide
+ *    between them. A row already past its deadline is the expiry's and is not reminded.
  *  - The notify duty re-checks the aggregate once more when it fires (`notify/duty.ts`), so a
  *    question answered in the minutes between is not reminded about; one answered after the post is.
  */

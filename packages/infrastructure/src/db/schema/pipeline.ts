@@ -108,6 +108,11 @@ export const tasks = pgTable('tasks', {
   dependencyRecoveryAttemptedAt: timestamp('dependency_recovery_attempted_at', {
     withTimezone: true,
   }),
+  /**
+   * WP-108, migration 0067 (backlog 320): the stranded-stage recovery's one attempt per stage entry;
+   * only the recovery store writes it.
+   */
+  stageRecoveryAttemptedAt: timestamp('stage_recovery_attempted_at', { withTimezone: true }),
   /** WP-24, migration 0020: the human merge request a review-only task reviews. */
   reviewSubject: jsonb('review_subject').$type<MergeRequestSnapshot>(),
   /** WP-35, migration 0030: the mined history one bootstrap run reads, bounded and redacted. */

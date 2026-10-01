@@ -1678,6 +1678,62 @@ export const requeueDeadLetterResponseSchema = z.strictObject({
   requeued_at: isoDateTimeSchema,
 });
 
+// ── Failed jobs (WP-108, PROGRESS backlog 325) ──────────────────────────────
+
+/** The most failed jobs one read of `GET /api/org/failed-jobs` returns. */
+export const MAX_FAILED_JOBS_PAGE = 100;
+
+/** Longest `error` a failed job is published with, **after** redaction — the dead letter's bound. */
+export const MAX_FAILED_JOB_ERROR_CHARS = MAX_DEAD_LETTER_ERROR_CHARS;
+
+/**
+ * Whether a queue's handler ends its own failures or relies on pg-boss's retries — the census in
+ * `@platform/application`'s `job-exhaustion.ts` (WP-108).
+ */
+export const jobExhaustionKindSchema = z.enum(['bounds_itself', 'relies_on_retries']);
+
+/**
+ * One job pg-boss moved to `failed` after its last retry (WP-108, backlog 325).
+ *
+ * `queue` is a **string**, not an enum: a job of a queue this build no longer declares is one way to
+ * be listed here, and `exhaustion` is then `null`. `attempts` is the first run plus every retry.
+ * `error` is the failure's message, **redacted and then bounded** (`error_truncated` says whether the
+ * bound cut it) and rendered as text (BD-022). The job's **payload is never published**: nothing an
+ * operator decides here needs it, and it can carry provider text. There is no re-queue: what a lost
+ * job left is the recovery pass's or a human's, named by `recovered_by`.
+ */
+export const failedJobSchema = z.strictObject({
+  id: nonEmptyStringSchema,
+  queue: nonEmptyStringSchema,
+  attempts: z.int().positive(),
+  retry_limit: z.int().nonnegative(),
+  created_at: isoDateTimeSchema,
+  failed_at: isoDateTimeSchema,
+  error: z.string().max(MAX_FAILED_JOB_ERROR_CHARS).nullable(),
+  error_truncated: z.boolean(),
+  exhaustion: z
+    .strictObject({
+      kind: jobExhaustionKindSchema,
+      loss: nonEmptyStringSchema,
+      recovered_by: nonEmptyStringSchema.nullable(),
+    })
+    .nullable(),
+});
+
+/**
+ * `GET /api/org/failed-jobs` — newest failure first, at most `limit`. `total` is every failed job
+ * pg-boss still keeps (its retention, not the platform's), so a page is never read as the whole
+ * (standing rule 16).
+ */
+export const failedJobsResponseSchema = z.strictObject({
+  items: z.array(failedJobSchema),
+  total: z.int().nonnegative(),
+});
+
+export const failedJobsQuerySchema = z.strictObject({
+  limit: z.coerce.number().int().min(1).max(MAX_FAILED_JOBS_PAGE).optional(),
+});
+
 export const takeOverResponseSchema = z.strictObject({
   task_id: idSchema,
   state: taskStateSchema,
@@ -2300,6 +2356,8 @@ export type WebhookAcceptedResponse = z.infer<typeof webhookAcceptedResponseSche
 export type SetupGuideResponse = z.infer<typeof setupGuideResponseSchema>;
 export type DeadLetter = z.infer<typeof deadLetterSchema>;
 export type DeadLettersResponse = z.infer<typeof deadLettersResponseSchema>;
+export type FailedJob = z.infer<typeof failedJobSchema>;
+export type FailedJobsResponse = z.infer<typeof failedJobsResponseSchema>;
 export type RequeueDeadLetterResponse = z.infer<typeof requeueDeadLetterResponseSchema>;
 export type BudgetsResponse = z.infer<typeof budgetsResponseSchema>;
 export type SetAutonomyRequest = z.infer<typeof setAutonomyRequestSchema>;

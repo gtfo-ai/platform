@@ -341,6 +341,8 @@ export const createRediscoveryGate =
         store: pipelineAdapters.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES }),
         settings: createProjectSettingsPort(options.pool),
         readiness: knowledgeAdapters.createPostgresReadinessStore(options.pool),
+        // The wall clock: "started 12 minutes ago" is a sentence for the person reading the gate now.
+        clock: { now: () => new Date().toISOString() },
       },
       projectId as Id,
     );

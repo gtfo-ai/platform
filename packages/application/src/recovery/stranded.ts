@@ -11,7 +11,7 @@
  * a `task_asks` row `pending` for ever. Nothing re-emits it, nothing retries it, and nothing logs
  * it — `EventBus` logs only the case where a callback *threw*.
  *
- * ## Ten sites, eight of them here, and the other two named rather than silently absent
+ * ## Twelve sites, ten of them here, and the other two named rather than silently absent
  *
  * | site | entry | what is lost | where the recovery is |
  * |---|---|---|---|
@@ -22,6 +22,8 @@
  * | a run nothing is driving | **109** | the run's row *and its budget reservation*, for ever | **here** — `run_lease`, in `./run-lease.ts` |
  * | intake, a matched ticket | **20** | one task never starts | `pipeline/intake-reconcile.ts`, and it stays there |
  * | a deadline's timer (WP-56) | **161** | a question, approval or take-over waits for ever | **here** — `deadline`, in `./deadline.ts`, which also backfills the rows **162** names |
+ * | a stage's `stage.execute` job (every `enqueueStage` site — WP-108 read all eighteen) | **320** | a task at an agent or gate stage with no job and no run, `active` for ever; a discovery task also blocks every re-evaluation | **here** — `stranded_stage`, in `./stranded-stage.ts`, which also finds a `stage.execute` job that spent every pg-boss retry (**325**) |
+ * | a reminder's timer (WP-84) | **291** | BD-006's one reminder before the escalation | **here** — `deadline_reminder`, the fourth row of `./deadline.ts` (WP-108), which also reminds a backfilled row and one open before reminders existed |
  * | a rework's close (WP-59) | **178** | a rejected merge request stays open, detached from every task | **here** — `superseded_mr`, in `./superseded-mr.ts` |
  * | a deferred dependency-gate ending (WP-67) | **240** | a question nobody asks, or a block nobody applies, on an `active` task | **here** — `deferred_dependency`, in `./deferred-dependency.ts` (WP-84) |
  * | a create answer the runner never received (WP-103) | **286** | a run container, sidecar, network and control directory nobody holds a handle for | `./orphan-workspaces.ts`, on **the runner's own timer** at this pass's interval — it needs the launcher client, which only a process configured to run agents holds, while this pass rides a job any worker takes |
@@ -131,6 +133,7 @@ import { waitingAggregateOfRow } from '../notify/waiting.js';
 import {
   enqueueOrganisationOutbound,
   enqueueOutbound,
+  enqueueStage,
   type PipelineOutboundData,
 } from '../pipeline/jobs.js';
 import type { Jobs } from '../ports/jobs.js';
@@ -152,6 +155,12 @@ import {
 } from './run-credential.js';
 import type { RunLeaseSweepOptions } from './run-lease.js';
 import { sweepExpiredRunLeases } from './run-lease.js';
+import {
+  endStrandedStage,
+  type StrandedStage,
+  type StrandedStageRecoverySite,
+  strandedStagesIn,
+} from './stranded-stage.js';
 import {
   type StrandedSupersededMergeRequest,
   type SupersededMergeRequestRecoverySite,
@@ -376,6 +385,15 @@ export interface StrandedRecoveryOptions {
    * nothing else happened. Optional for the reason `credentials` is.
    */
   readonly notifications?: NotificationRepostSite;
+  /**
+   * The stranded-stage site (WP-108, PROGRESS backlog **320**, `./stranded-stage.ts`): a task at an
+   * agent or gate stage with no `stage.execute` job and no run.
+   *
+   * **Absent is "a lost stage wake-up is never recovered"** — every build before WP-108, where such
+   * a task read `active` for ever. Optional for the reason `runs` is: its ending escalates through
+   * the pipeline store, so a composition with no pipeline has nothing to give it.
+   */
+  readonly stages?: StrandedStageRecoverySite;
   readonly logger?: Logger;
 }
 
@@ -520,10 +538,12 @@ export const runStrandedRecovery = async (
   const supersededSite = options.supersededMergeRequests;
   const deferredSite = options.deferredDependencies;
   const repostSite = options.notifications;
+  const stageSite = options.stages;
   // The re-post bound is the gauge's own, not the grace: a row younger than the job's retry window
   // still has an attempt of its own left (`./notification-repost.ts`).
   const repostBefore = new Date(at - IMMEDIATE_UNDELIVERED_AFTER_MS).toISOString() as IsoDateTime;
   const found = await options.unitOfWork.transaction(async (scope) => ({
+    stages: stageSite === undefined ? [] : await strandedStagesIn(stageSite, scope.tx, query),
     deferred:
       deferredSite === undefined
         ? []
@@ -804,6 +824,9 @@ export const runStrandedRecovery = async (
   if (deferredSite !== undefined) {
     sites.push(await recoverDeferredDependencies(options, deferredSite, found.deferred, now));
   }
+  if (stageSite !== undefined) {
+    sites.push(await recoverStrandedStages(options, stageSite, found.stages, now));
+  }
   if (repostSite !== undefined) {
     let reposted = 0;
     let withheld = 0;
@@ -954,6 +977,14 @@ export const runStrandedRecovery = async (
       reEnqueued: deadlines.backfilled,
       ended: deadlines.expired,
     });
+    // The fourth row of `./deadline.ts` (WP-108, backlog 291) reports apart from the expiry: a
+    // reminder neither re-arms nor ends anything, it raises one notification.
+    sites.push({
+      site: 'deadline_reminder',
+      found: deadlines.reminderFound,
+      reEnqueued: deadlines.reminded,
+      ended: 0,
+    });
   }
 
   if (options.runs !== undefined) {
@@ -1001,6 +1032,82 @@ const recoverDeferredDependencies = async (
     );
   }
   return { site: 'deferred_dependency', found: rows.length, reEnqueued: rows.length, ended: 0 };
+};
+
+/**
+ * The stranded-stage row (`./stranded-stage.ts`): mark, then wake, once per stage entry; then the
+ * escalation.
+ *
+ * Not {@link runAttemptOrEndSite}, for one difference that matters to the count: both halves here
+ * are **conditional** — the mark writes only while the entry is still stranded, and the ending
+ * re-asks the predicate in its own transaction — so a row the live path reached first is neither
+ * woken nor ended, and the report says so rather than counting it. The ordering is that helper's:
+ * the mark commits before the enqueue.
+ */
+const recoverStrandedStages = async (
+  options: StrandedRecoveryOptions,
+  site: StrandedStageRecoverySite,
+  rows: readonly StrandedStage[],
+  now: IsoDateTime,
+): Promise<StrandedSiteReport> => {
+  const logger = options.logger ?? silentLogger;
+  let reEnqueued = 0;
+  let ended = 0;
+  for (const row of rows) {
+    const fields = {
+      project_id: row.projectId,
+      task_id: row.taskId,
+      stage: row.stage,
+      attempt: row.attempt,
+      entered_at: row.enteredAt,
+    };
+    // An attempt whose run already ended is never woken again (WP-108 review round 1): that would
+    // be a fresh paid run of a stage a person cancelled, or one whose run failed. It is escalated.
+    if (row.recoveryAttemptedAt === null && row.endedRun === null) {
+      const marked = await options.unitOfWork.transaction(async (scope) =>
+        site.store.markStageAttempt(scope.tx, { row, at: now }),
+      );
+      if (!marked) {
+        continue;
+      }
+      // The entry's own wake-up, as `transitions.ts`'s `enter` scheduled it; it re-validates on fire.
+      await enqueueStage(options.jobs, {
+        taskId: row.taskId,
+        projectId: row.projectId,
+        stage: row.stage,
+        attempt: row.attempt,
+      });
+      reEnqueued += 1;
+      logger.warn(
+        fields,
+        'a task sat at an agent or gate stage with no job queued for it and no run, so its stage was enqueued again — once for this entry, and the task is escalated if that does not take (PROGRESS backlog 320)',
+      );
+      continue;
+    }
+    const escalated = await endStrandedStage(
+      {
+        unitOfWork: options.unitOfWork,
+        site,
+        ...(options.logger === undefined ? {} : { logger: options.logger }),
+      },
+      row,
+      row.recoveryAttemptedAt,
+    );
+    if (escalated) {
+      ended += 1;
+      logger.warn(
+        {
+          ...fields,
+          attempted_at: row.recoveryAttemptedAt,
+          ended_run_status: row.endedRun?.status ?? null,
+        },
+        row.endedRun === null
+          ? 'a stage nothing ran did not start after its one recovery attempt, so the task was escalated to needs_human with a brief rather than left active for ever (PROGRESS backlog 320)'
+          : 'a task sat at a stage whose run had already ended (cancelled, failed or swept) with nothing to move it, so it was escalated to needs_human with a brief rather than run again (PROGRESS backlog 320, WP-108 review round 1)',
+      );
+    }
+  }
+  return { site: 'stranded_stage', found: rows.length, reEnqueued, ended };
 };
 
 /**

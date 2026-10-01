@@ -1005,6 +1005,16 @@ export const createPostgresPipelineStore = (
       );
     },
 
+    stageAttemptState: async (tx, taskId, stage, attempt) => {
+      const { rows } = await sqlOf(tx).query<{ open: boolean }>(
+        `select (state = 'running' and exited_at is null) as open from task_stages
+          where task_id = $1 and stage = $2 and attempt = $3`,
+        [taskId, stage, attempt],
+      );
+      const row = rows[0];
+      return row === undefined ? 'absent' : row.open ? 'open' : 'closed';
+    },
+
     recentStageSignatures: async (tx, taskId, stage, limit) => {
       const { rows } = await sqlOf(tx).query<{ signature: string }>(
         `select signature from task_stages

@@ -129,6 +129,7 @@ import { registerBreakdownRoutes } from './routes/breakdown.js';
 import { registerCommandRoutes } from './routes/commands.js';
 import { registerDeadLetterRoutes } from './routes/dead-letters.js';
 import { registerDownloadRoutes } from './routes/downloads.js';
+import { type FailedJobsReader, registerFailedJobRoutes } from './routes/failed-jobs.js';
 import { registerIntegrationRoutes } from './routes/integrations.js';
 import { registerKbRoutes } from './routes/kb.js';
 import { registerOnboardingRoutes } from './routes/onboarding.js';
@@ -225,6 +226,11 @@ export interface BuildAppOptions {
    * name — behind their admin guard, which is what the census probes.
    */
   readonly deadLetters?: DeadLetterCommands | null;
+  /**
+   * The failed-jobs read (WP-108, PROGRESS backlog 325), or `null`/absent for a process that reads
+   * no job queue. Optional like `deadLetters`, for the same reason; the route answers `503` by name.
+   */
+  readonly failedJobs?: FailedJobsReader | null;
   /**
    * Whether a project may start a shadow batch — the same predicate the command refuses with.
    *
@@ -516,6 +522,13 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       projectRole: async (projectId, userId) =>
         findProjectRole(options.database, projectId, userId),
       // TD-012 step 2, the platform's patterns: a handler's error may quote a credential.
+      redactor: redactionAdapters.patternRedactor(),
+    });
+    // WP-108, backlog 325: beside it, the jobs pg-boss gave up on — a read, never a re-queue.
+    await registerFailedJobRoutes(app, {
+      read: options.failedJobs ?? null,
+      projectRole: async (projectId, userId) =>
+        findProjectRole(options.database, projectId, userId),
       redactor: redactionAdapters.patternRedactor(),
     });
     await registerIntegrationRoutes(app, {

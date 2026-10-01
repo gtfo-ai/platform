@@ -233,4 +233,47 @@ describe('the deadline recovery store (WP-56, backlog 161 and 162)', () => {
     expect(row?.takenAt).toBe('2026-06-05T09:00:00.000Z');
     expect(row?.lastActivityAt).toBe('2026-06-10T11:00:00.000Z');
   });
+
+  it('finds the never-reminded rows whose deadline is ahead, and nothing reminded, overdue or finished (WP-108, backlog 291)', async () => {
+    const waiting = await seedTask('waiting_answers');
+    const due = await seedQuestion(waiting, 'open', '2026-06-08T16:00:00Z');
+    const reminded = await seedQuestion(waiting, 'open', '2026-06-08T16:00:00Z');
+    await client.query('update questions set reminders_sent = 1 where id = $1', [reminded]);
+    // Past its deadline at the read: the expiry's row, never the reminder's.
+    await seedQuestion(waiting, 'open', '2026-06-08T11:00:00Z');
+    await seedQuestion(waiting, 'answered', '2026-06-08T16:00:00Z');
+    await seedQuestion(waiting, 'open', null);
+    const cancelled = await seedTask('cancelled');
+    await seedQuestion(cancelled, 'open', '2026-06-08T16:00:00Z');
+    const approving = await seedTask('waiting_approval');
+    const approval = await seedApproval(approving, '2026-06-08T16:00:00Z');
+
+    const found = await store.unreminded(tx, {
+      deadlineAfter: '2026-06-08T12:01:00.001Z',
+      sinceBefore: '2026-06-08T12:00:00.001Z',
+      limit: 50,
+    });
+    expect(found.map((row) => [row.aggregate, row.id]).sort()).toEqual(
+      [
+        ['approval', approval],
+        ['question', due],
+      ].sort(),
+    );
+    expect(found.find((row) => row.id === due)).toEqual({
+      aggregate: 'question',
+      id: due,
+      projectId,
+      taskId: waiting,
+      since: '2026-06-05T16:00:00.000Z',
+      deadlineAt: '2026-06-08T16:00:00.000Z',
+    });
+    // A row asked after the bound has no reminder time behind it yet.
+    expect(
+      await store.unreminded(tx, {
+        deadlineAfter: '2026-06-08T12:01:00.001Z',
+        sinceBefore: '2026-06-05T16:00:00.000Z',
+        limit: 50,
+      }),
+    ).toEqual([]);
+  });
 });

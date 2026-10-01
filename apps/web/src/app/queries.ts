@@ -517,6 +517,19 @@ export const useDeadLetters = () => {
   });
 };
 
+/**
+ * `GET /api/org/failed-jobs` (WP-108, PROGRESS backlog 325): the jobs pg-boss gave up on. Admin-only
+ * like the dead letters beside it, and not retried for the same reason.
+ */
+export const useFailedJobs = () => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: [...queryKeys.failedJobs],
+    queryFn: () => endpoints.failedJobs(),
+    retry: false,
+  });
+};
+
 /** One integration's refused or ignored deliveries, fetched when a reader opens them (WP-44). */
 export const useRefusedDeliveries = (integrationId: string, enabled: boolean) => {
   const { endpoints } = useServices();

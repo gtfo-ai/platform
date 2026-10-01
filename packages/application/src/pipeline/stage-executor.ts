@@ -612,6 +612,34 @@ const revalidate = (
   return { kind: 'ok', stored, stage, role: stage.role };
 };
 
+/**
+ * {@link revalidate}, plus the one question it cannot ask of the aggregate (WP-108 review round 1,
+ * PROGRESS backlog 365): **is this attempt's `task_stages` row still open?**
+ *
+ * A run that completed closes its attempt's row in transaction 2, and the task stays at the same
+ * stage on the same attempt until the saga dispatches `task.stage.completed` and enters the next
+ * one. A duplicate or late `stage.execute` for that attempt — a redelivery, a recovery re-enqueue
+ * that met a slow live path — passed `revalidate` in that window and started a **second paid run**
+ * of a stage that had already decided. A closed row is now a skip. A row that is **absent** (a task
+ * entered before every entry opened one) is treated as open: nothing could have closed it.
+ */
+const revalidateOpen = async (
+  store: PipelineStore,
+  tx: Transaction,
+  job: StageExecutionJob,
+): Promise<ReturnType<typeof revalidate>> => {
+  const valid = revalidate(await store.tasks.load(tx, job.taskId), job);
+  if (valid.kind === 'skipped') return valid;
+  const row = await store.tasks.stageAttemptState(tx, job.taskId, job.stage, job.attempt);
+  if (row === 'closed') {
+    return {
+      kind: 'skipped',
+      reason: `attempt ${job.attempt} of "${job.stage}" has already ended (its stage row is closed); a late wake-up starts no second run`,
+    };
+  }
+  return valid;
+};
+
 export { REFREEZE_PENDING_SENTENCE, refrozen } from './refreeze.js';
 
 export const createStageExecutor = (options: StageExecutorOptions): StageExecutor => {
@@ -649,7 +677,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
   /** Transaction 1a: may this job run at all, and what does the planner need to plan it? */
   const admit = async (job: StageExecutionJob, read: ProjectSettings): Promise<Admission> =>
     writing(job.taskId, 'admitting a stage run', async (scope): Promise<Admission> => {
-      const valid = revalidate(await store.tasks.load(scope.tx, job.taskId), job);
+      const valid = await revalidateOpen(store, scope.tx, job);
       if (valid.kind === 'skipped') return valid;
       const loaded = valid.stored;
       const { task } = loaded;
@@ -885,7 +913,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
     settings: ProjectSettings,
   ): Promise<Prepared> =>
     unitOfWork.transaction(async (scope): Promise<Prepared> => {
-      const valid = revalidate(await store.tasks.load(scope.tx, job.taskId), job);
+      const valid = await revalidateOpen(store, scope.tx, job);
       if (valid.kind === 'skipped') return valid;
       const { spec } = plan;
       const { stored } = valid;
@@ -1033,7 +1061,8 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
    * The ending for a write that lost every race (WP-15e, criterion 4).
    *
    * The executor has no outer retry that would re-read for it — `stage.execute` re-fires into
-   * pg-boss's own limit, whose exhaustion is a dead letter no screen shows — so the bound ends
+   * pg-boss's own limit, whose exhaustion is a failed job only an administrator's list shows
+   * (Settings → Failed jobs since WP-108) and which tells nobody about the task — so the bound ends
    * here, in the state whose whole meaning is *a human must act*. Never a silent drop: what was
    * lost is a run's recorded result, which is the platform's own record of spend.
    */
@@ -1102,7 +1131,8 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
       // Transaction 1 has already created the `runs` row and emitted `run.created`/`run.started`,
       // so an error thrown by `start` — or a rejection of `handle.outcome` — left a run `running`
       // for ever, a task sitting at a stage nothing would move, and a `stage.execute` job that
-      // exhausted its retries into pg-boss where no screen shows it. Nothing told a human.
+      // exhausted its retries into pg-boss where no screen showed it (an administrator's list does
+      // since WP-108, and the stranded-stage recovery finds the task). Nothing told a human.
       //
       // It was not hypothetical from the day a webhook could reach the pipeline, and WP-53 narrowed
       // it twice: the transport exists now (TD-028), and a process that is *not* configured to run

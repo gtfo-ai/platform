@@ -854,6 +854,18 @@ export interface TaskRepository {
       readonly signature: string;
     },
   ): Promise<void>;
+  /**
+   * Whether `stage`'s attempt `attempt` has a `task_stages` row, and whether it is still open
+   * (`running`, never exited) — WP-108 review round 1, PROGRESS backlog 365. `absent` for a task
+   * written before every entry opened a row: the executor treats it as open, the fail-open
+   * direction for a row nothing could have closed.
+   */
+  stageAttemptState(
+    tx: Transaction,
+    taskId: Id,
+    stage: Slug,
+    attempt: number,
+  ): Promise<'open' | 'closed' | 'absent'>;
   /** The last `limit` signatures at `stage`, oldest first — the order `hasIdenticalFailureStreak` wants. */
   recentStageSignatures(
     tx: Transaction,

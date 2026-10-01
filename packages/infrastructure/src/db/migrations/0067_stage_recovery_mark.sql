@@ -1,0 +1,22 @@
+-- 0067 — the mark of the stranded-stage recovery (WP-108, PROGRESS backlog 320).
+--
+-- Every entry into an agent or gate stage commits the task at that stage and enqueues its
+-- `stage.execute` job on the next line, after the commit, because `Jobs.enqueue` does not join a
+-- transaction (TD-004). A process that dies in that window — or a `stage.execute` job that spent
+-- every pg-boss retry — leaves the task at its stage with no job and no run: `active` for ever, and
+-- for a discovery task a re-evaluation refused for ever (`discovery_in_flight`). WP-108 measured
+-- every `enqueueStage` call site (eighteen, listed under backlog 320) and found the loss at every
+-- one of them, so the recovery is one row for the class rather than one for discovery:
+-- `packages/application/src/recovery/stranded-stage.ts`, a row of `recovery/stranded.ts`'s table.
+--
+-- ## `tasks.stage_recovery_attempted_at`
+--
+-- The instant the pass re-enqueued the stage, committed **before** the enqueue (the order
+-- `stranded.ts`'s `runAttemptOrEndSite` argues for). Read against the open `task_stages` row's
+-- `entered_at`: a mark older than the entry belongs to an earlier entry and the row is attempted
+-- afresh — one attempt per stage entry — while a mark at or after the entry that is older than the
+-- pass's ending window is the ending: the task is escalated to `needs_human` with a brief.
+-- Nullable, because the ordinary life of a task is never to need it. Its one writer is the recovery
+-- store (`postgres-stranded-stage-store.ts`), which the `tasks` column census pins.
+
+alter table tasks add column stage_recovery_attempted_at timestamptz;

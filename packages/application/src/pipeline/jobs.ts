@@ -698,7 +698,8 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
        * The executor failed the `runs` row and left the task exactly where it was, so this is the
        * wake-up that owes it another attempt. It is an `enqueue` and not a `throw`: throwing would
        * hand the job to pg-boss's own retry policy, whose count this payload cannot see and whose
-       * exhaustion is a dead letter no screen shows — which is the failure WP-15c closed. The bound
+       * exhaustion is a failed job that tells nobody about the task (only an administrator's list
+       * shows it, since WP-108) — which is the failure WP-15c closed. The bound
        * travels in the payload, and the escalation at the end of it is the executor's.
        *
        * `stately` frees the queued slot the moment this job starts, so this enqueue is admitted;
@@ -712,7 +713,13 @@ export const stageExecuteHandler = (options: PipelineJobOptions): JobHandler<Sta
         });
       }
       logger.info(
-        { task_id: request.taskId, stage: request.stage, outcome: outcome.kind },
+        {
+          task_id: request.taskId,
+          stage: request.stage,
+          outcome: outcome.kind,
+          // WP-108 review round 2: a skip says why (a closed attempt row among them, backlog 365).
+          ...(outcome.kind === 'skipped' ? { reason: outcome.reason } : {}),
+        },
         'stage executed',
       );
       return;

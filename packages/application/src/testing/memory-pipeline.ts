@@ -72,7 +72,12 @@ import {
   TAKE_OVER_BOUNDARY_EVENTS,
   TaskConcurrentModificationError,
 } from '../pipeline/store.js';
-import type { DeadlineRecoveryStore, HeldTask, WaitingAggregate } from '../recovery/deadline.js';
+import type {
+  DeadlineRecoveryStore,
+  HeldTask,
+  UnremindedAggregate,
+  WaitingAggregate,
+} from '../recovery/deadline.js';
 import type { SupersededMergeRequestRecoveryStore } from '../recovery/superseded-mr.js';
 
 export class PipelineStoreError extends Error {
@@ -708,6 +713,14 @@ export const createMemoryPipelineStore = (
       }
       row.signature = entry.signature;
     },
+    stageAttemptState: async (_tx, taskId, stage, attempt) => {
+      const row = stages.find(
+        (candidate) =>
+          candidate.taskId === taskId && candidate.stage === stage && candidate.attempt === attempt,
+      );
+      if (row === undefined) return 'absent';
+      return row.state === 'running' && row.exitedAt === null ? 'open' : 'closed';
+    },
     recentStageSignatures: async (_tx, taskId, stage, limit) =>
       stages
         .filter((row) => row.taskId === taskId && row.stage === stage && row.signature !== null)
@@ -1274,6 +1287,54 @@ export const createMemoryPipelineStore = (
         .filter((row) => row.deadlineAt === null)
         .slice(0, query.limit * 2)
         .map(strip),
+    unreminded: async (_tx, query) => {
+      const rows: UnremindedAggregate[] = [];
+      for (const question of questions.values()) {
+        if (
+          question.status === 'open' &&
+          question.remindersSent === 0 &&
+          unfinished(question.taskId) &&
+          question.deadlineAt !== null &&
+          question.deadlineAt > query.deadlineAfter &&
+          question.askedAt < query.sinceBefore
+        ) {
+          rows.push({
+            aggregate: 'question',
+            id: question.id,
+            projectId: question.projectId,
+            taskId: question.taskId,
+            since: question.askedAt,
+            deadlineAt: question.deadlineAt,
+          });
+        }
+      }
+      for (const { approval } of approvals.values()) {
+        if (
+          approval.status === 'pending' &&
+          approval.remindersSent === 0 &&
+          unfinished(approval.taskId) &&
+          approval.deadlineAt !== null &&
+          approval.deadlineAt > query.deadlineAfter &&
+          approval.requestedAt < query.sinceBefore
+        ) {
+          rows.push({
+            aggregate: 'approval',
+            id: approval.id,
+            projectId: approval.projectId,
+            taskId: approval.taskId,
+            since: approval.requestedAt,
+            deadlineAt: approval.deadlineAt,
+          });
+        }
+      }
+      // Nearest deadline first, `limit` of each kind — the PostgreSQL store's order, no kinder.
+      const nearest = (kind: 'question' | 'approval') =>
+        rows
+          .filter((row) => row.aggregate === kind)
+          .sort((a, b) => a.deadlineAt.localeCompare(b.deadlineAt) || a.id.localeCompare(b.id))
+          .slice(0, query.limit);
+      return [...nearest('question'), ...nearest('approval')];
+    },
     backfillDeadline: async (_tx, input) => {
       if (input.aggregate === 'question') {
         const question = questions.get(input.id);

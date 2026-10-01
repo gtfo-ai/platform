@@ -134,7 +134,33 @@ export interface RediscoveryReadOptions {
   readonly store: PipelineStore;
   readonly settings: StartDiscoveryOptions['settings'];
   readonly readiness: Pick<ReadinessStore, 'latest'>;
+  /** What "how long ago the live discovery task started" is measured against (WP-108). */
+  readonly clock: StartDiscoveryOptions['clock'];
 }
+
+/**
+ * "12 minutes", "3 hours", "2 days" — whole units, rounded down, never below one minute.
+ *
+ * Platform text built from two instants the platform wrote, so it may sit in a refusal's detail.
+ */
+export const elapsedSince = (from: string, now: string): string => {
+  const minutes = Math.max(0, Math.floor((Date.parse(now) - Date.parse(from)) / 60_000));
+  if (minutes < 1) return 'less than a minute';
+  if (minutes < 120) return `${String(minutes)} minute${minutes === 1 ? '' : 's'}`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${String(hours)} hours`;
+  return `${String(Math.floor(hours / 24))} days`;
+};
+
+/**
+ * The *active* sentence (WP-108, PROGRESS backlog 320): how long ago the task started, and the way
+ * out. Before WP-108 it said only *"follow it"*, which is the wrong advice for a task whose stage
+ * job was lost — nothing runs, so there is nothing to follow. The recovery pass now re-enqueues such
+ * a stage once and then escalates it, but a maintainer reading the gate should not have to know
+ * that to leave: cancel is a maintainer's command (`task.cancel`) and it ends the in-flight claim.
+ */
+export const discoveryInFlightDetail = (live: StoredTask, now: string): string =>
+  `discovery task ${live.task.id} started ${elapsedSince(live.createdAt, now)} ago (at ${live.createdAt}) and has not finished; follow it on its task page, or — if its run never started or is no longer wanted — cancel it there (POST /api/tasks/${live.task.id}/cancel), which frees the project for a new evaluation`;
 
 /** States in which a discovery task is over: it holds nothing and blocks nothing. */
 const ENDED: readonly TaskState[] = ['done', 'cancelled'];
@@ -156,6 +182,7 @@ const decide = async (
     readonly projectId: Id;
     readonly settings: ProjectSettings;
     readonly basis: Id | null;
+    readonly now: string;
   },
 ): Promise<Omit<RediscoveryGate, 'ceilingUsd'>> => {
   const { projectId } = input;
@@ -204,7 +231,7 @@ const decide = async (
         detail:
           live.task.state === 'needs_human'
             ? `discovery task ${live.task.id} is parked for a human; resolve or cancel it before running discovery again`
-            : `discovery task ${live.task.id} has not finished; follow it rather than starting a second run`,
+            : discoveryInFlightDetail(live, input.now),
       },
       ticketKey: null,
     };
@@ -246,7 +273,12 @@ export const readRediscoveryGate = async (
   const settings = await options.settings.forProject(projectId);
   const latest = await options.readiness.latest(projectId);
   const decided = await options.unitOfWork.transaction(async (scope) =>
-    decide(options.store, scope.tx, { projectId, settings, basis: latest?.id ?? null }),
+    decide(options.store, scope.tx, {
+      projectId,
+      settings,
+      basis: latest?.id ?? null,
+      now: options.clock.now(),
+    }),
   );
   return { ceilingUsd: runBudgetUsd(settings, DISCOVERY_STAGE), ...decided };
 };
@@ -287,6 +319,7 @@ export const startProjectRediscovery = async (
       projectId,
       settings,
       basis: latest?.id ?? null,
+      now: options.clock.now(),
     });
     if (decided.blocker !== null || decided.ticketKey === null) {
       return { blocker: decided.blocker, taskId: null, work: null };

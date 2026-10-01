@@ -77,6 +77,8 @@ describe('every client command has a control', () => {
     expect(hooks).toContain('useRediscoveryGate');
     expect(hooks).toContain('useDeadLetters');
     expect(hooks).toContain('useKbHealth');
+    // WP-108's: the failed-jobs read beside the dead letters (backlog 325).
+    expect(hooks).toContain('useFailedJobs');
   });
 
   it('fires every mutation `app/queries.ts` declares from somewhere outside it', () => {

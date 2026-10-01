@@ -12,6 +12,8 @@ export * from './postgres-notification-repost-store.js';
 export * from './postgres-orphan-workspace-store.js';
 /** The run-credential recovery's two reads — PROGRESS backlog 155 (WP-77). */
 export * from './postgres-run-credential-store.js';
+/** The stranded-stage recovery's read, mark and re-check — PROGRESS backlog 320 (WP-108). */
+export * from './postgres-stranded-stage-store.js';
 export * from './postgres-stranded-store.js';
 /** The superseded-merge-request recovery's read and two writes — PROGRESS backlog 178 (WP-59). */
 export * from './postgres-superseded-mr-store.js';

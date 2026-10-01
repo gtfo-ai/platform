@@ -228,21 +228,17 @@ export const openDiscoveryTask = async (
  *
  * Idempotent on the project: a second call returns the existing task with `already_started`.
  *
- * ## The residual: a lost enqueue is not recovered, and the retry cannot tell
+ * ## A lost enqueue, and what recovers it (WP-108)
  *
- * `enqueueStage` runs **after** the transaction commits, because `Jobs.enqueue` does not join it
- * (TD-004). A process that dies in that window leaves a discovery task `active` at a stage no job
- * will ever run — and because the command is idempotent on `(project_id, ticket_key, mode)`, every
- * later call answers `already_started` with that task's id **for ever**. The wizard shows a run
- * that never finishes and offers no way out; nothing escalates, because nothing has failed.
- *
- * It is the shape PROGRESS backlog **20** describes for a matched ticket, and the fix has the same
- * shape as that one's: a pass that finds a task sitting at its first stage with no `runs` row and
- * re-enqueues it, bounded to one attempt by the system actor it stamps
- * (`pipeline/intake-reconcile.ts` is the worked example, down to why the recovery is task-shaped
- * rather than a replay). It is **not** built here — one more reconciler is a maintenance schedule
- * with its own queue, interval and pool reservation — and it is in `PROGRESS.md` under Discovered
- * work so it can be scheduled rather than remembered.
+ * The stage's wake-up is enqueued **after** the transaction commits, because `Jobs.enqueue` does
+ * not join it (TD-004) — by the saga, once intake's completion is dispatched. A process that dies in
+ * that window leaves a discovery task `active` at a stage no job will run, and because the command
+ * is idempotent on `(project_id, ticket_key, mode)`, every later call answers `already_started`
+ * with that task's id. Until WP-108 that was for ever (PROGRESS backlog **320**). Since WP-108 the
+ * recovery pass's `stranded_stage` row (`recovery/stranded-stage.ts`) finds the task — no
+ * `stage.execute` job and no run at an agent stage — re-enqueues the stage once, and escalates the
+ * task to `needs_human` with a brief if that does not take. It is a row for every `enqueueStage`
+ * site, not for this one: WP-108 found the same loss at all eighteen.
  */
 export const startProjectDiscovery = async (
   options: StartDiscoveryOptions,

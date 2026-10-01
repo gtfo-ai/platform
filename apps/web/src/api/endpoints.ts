@@ -52,6 +52,7 @@ import {
   effectiveConfigResponseSchema,
   exportProjectConfigRequestSchema,
   exportProjectConfigResponseSchema,
+  failedJobsResponseSchema,
   handBackRequestSchema,
   historyBootstrapsResponseSchema,
   identityCandidateListSchema,
@@ -151,6 +152,12 @@ export interface Endpoints {
   readonly deadLetters: (query: {
     readonly cursor?: string;
   }) => Promise<z.output<typeof deadLettersResponseSchema>>;
+  /**
+   * `GET /api/org/failed-jobs` — the jobs pg-boss gave up on after their last retry (WP-108,
+   * backlog 325). Admin only; `error` arrives redacted and bounded, and is rendered as text. A read,
+   * never a re-queue.
+   */
+  readonly failedJobs: () => Promise<z.output<typeof failedJobsResponseSchema>>;
   /**
    * `POST /api/org/dead-letters/:position/requeue` — serve one dead-lettered event again. Carries
    * an `Idempotency-Key`, so a double-clicked Re-queue is one re-queue and one audit row.
@@ -532,6 +539,7 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
         schema: deadLettersResponseSchema,
         query: { ...query },
       }),
+    failedJobs: () => client.get('/api/org/failed-jobs', { schema: failedJobsResponseSchema }),
     requeueDeadLetter: (position, idempotencyKey) =>
       client.command(`/api/org/dead-letters/${seg(String(position))}/requeue`, {
         schema: requeueDeadLetterResponseSchema,

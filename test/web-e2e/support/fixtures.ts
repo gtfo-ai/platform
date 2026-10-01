@@ -29,6 +29,7 @@ import {
   contextPackRecordSchema,
   deadLettersResponseSchema,
   effectiveConfigResponseSchema,
+  failedJobsResponseSchema,
   identityMappingListSchema,
   inboxResponseSchema,
   integrationProvidersResponseSchema,
@@ -1080,6 +1081,32 @@ export const deadLetters = deadLettersResponseSchema.parse({
   ],
   total: 1,
   next_cursor: null,
+});
+
+/**
+ * `GET /api/org/failed-jobs` (WP-108, PROGRESS backlog 325): one job pg-boss gave up on, so the
+ * bundle draws the section's success branch rather than the fake's 404 (backlog 326's lesson).
+ */
+export const failedJobs = failedJobsResponseSchema.parse({
+  items: [
+    {
+      id: id(62),
+      queue: 'pipeline.outbound',
+      attempts: 3,
+      retry_limit: 2,
+      created_at: now,
+      failed_at: now,
+      // Handler text is untrusted: it is shown as characters.
+      error: `outbound ${HOSTILE.script}`,
+      error_truncated: false,
+      exhaustion: {
+        kind: 'relies_on_retries',
+        loss: 'one provider call the pipeline decided on',
+        recovered_by: null,
+      },
+    },
+  ],
+  total: 1,
 });
 
 export const kbHealth = kbHealthResponseSchema.parse({

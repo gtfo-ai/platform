@@ -627,6 +627,8 @@ export const createFakeBackend = async (port = 0): Promise<FakeBackend> => {
         // WP-96 (backlog 326): the two reads WP-95 gave a screen.
         [`/api/projects/${fixtures.IDS.project}/kb/health`]: fixtures.kbHealth,
         '/api/org/dead-letters': fixtures.deadLetters,
+        // WP-108 (backlog 325): the failed-jobs read beside it.
+        '/api/org/failed-jobs': fixtures.failedJobs,
         [`/api/integrations/${fixtures.IDS.integration}/setup-guide`]: fixtures.setupGuide,
         [`/api/tasks/${fixtures.IDS.taskFeature}`]: withAnswers,
         [`/api/tasks/${fixtures.IDS.taskBug}`]: fixtures.bugTaskDetail,

@@ -1534,21 +1534,45 @@ describe('the recovery row: a lost arm, and a row older than deadlines (backlog 
 
     moveTo(harness, MONDAY_1600);
     await harness.drain();
-    expect(await pass(harness)).toEqual({ found: 0, expired: 0, backfilled: 0 });
+    expect(await pass(harness)).toEqual({
+      found: 0,
+      expired: 0,
+      backfilled: 0,
+      reminderFound: 0,
+      reminded: 0,
+    });
     expect((await harness.store.questions.load({} as never, question.id))?.status).toBe('open');
     // Inside the grace, where the armed job and this pass would race if the grace were ignored.
     moveTo(harness, '2026-06-08T16:00:30.000Z');
-    expect(await pass(harness)).toEqual({ found: 0, expired: 0, backfilled: 0 });
+    expect(await pass(harness)).toEqual({
+      found: 0,
+      expired: 0,
+      backfilled: 0,
+      reminderFound: 0,
+      reminded: 0,
+    });
     expect((await harness.store.questions.load({} as never, question.id))?.status).toBe('open');
 
     moveTo(harness, '2026-06-08T16:01:00.001Z');
-    expect(await pass(harness)).toEqual({ found: 1, expired: 1, backfilled: 0 });
+    expect(await pass(harness)).toEqual({
+      found: 1,
+      expired: 1,
+      backfilled: 0,
+      reminderFound: 0,
+      reminded: 0,
+    });
     expect((await harness.store.questions.load({} as never, question.id))?.status).toBe(
       'escalated',
     );
     expect(taskOf(harness).task.state).toBe('needs_human');
     // Nothing left for the next pass: the expiry moved the row out of the query.
-    expect(await pass(harness)).toEqual({ found: 0, expired: 0, backfilled: 0 });
+    expect(await pass(harness)).toEqual({
+      found: 0,
+      expired: 0,
+      backfilled: 0,
+      reminderFound: 0,
+      reminded: 0,
+    });
     expect(eventsOf(harness, 'task.escalated')).toHaveLength(1);
   });
 
@@ -1595,7 +1619,13 @@ describe('the recovery row: a lost arm, and a row older than deadlines (backlog 
     await harness.drain();
     expect(eventsOf(harness, 'task.question.expired')).toHaveLength(1);
     moveTo(harness, '2026-06-08T16:01:00.001Z');
-    expect(await pass(harness)).toEqual({ found: 0, expired: 0, backfilled: 0 });
+    expect(await pass(harness)).toEqual({
+      found: 0,
+      expired: 0,
+      backfilled: 0,
+      reminderFound: 0,
+      reminded: 0,
+    });
     expect(eventsOf(harness, 'task.question.expired')).toHaveLength(1);
     expect(eventsOf(harness, 'task.escalated')).toHaveLength(1);
   });
@@ -1615,7 +1645,13 @@ describe('the recovery row: a lost arm, and a row older than deadlines (backlog 
     moveTo(harness, '2026-06-12T16:00:30.000Z');
     expect((await pass(harness)).found).toBe(0);
     moveTo(harness, '2026-06-12T16:01:00.001Z');
-    expect(await pass(harness)).toEqual({ found: 1, expired: 1, backfilled: 0 });
+    expect(await pass(harness)).toEqual({
+      found: 1,
+      expired: 1,
+      backfilled: 0,
+      reminderFound: 0,
+      reminded: 0,
+    });
     expect(taskOf(harness).task.state).toBe('needs_human');
   });
 
@@ -1631,15 +1667,30 @@ describe('the recovery row: a lost arm, and a row older than deadlines (backlog 
     // Wednesday: counted from `asked_at` (Friday) the question would be two days overdue.
     const WEDNESDAY_1000 = '2026-06-10T10:00:00.000Z';
     moveTo(harness, WEDNESDAY_1000);
-    expect(await pass(harness)).toEqual({ found: 1, expired: 0, backfilled: 1 });
+    expect(await pass(harness)).toEqual({
+      found: 1,
+      expired: 0,
+      backfilled: 1,
+      reminderFound: 0,
+      reminded: 0,
+    });
     const backfilled = await harness.store.questions.load({} as never, question.id);
     expect(backfilled?.status).toBe('open');
     expect(backfilled?.deadlineAt).toBe('2026-06-11T10:00:00.000Z');
     const armed = deadlineJobs(harness);
     expect(armed).toHaveLength(1);
     expect(armed[0]?.startAfter?.toISOString()).toBe('2026-06-11T10:00:00.000Z');
-    // Once: the column is no longer null.
-    expect(await pass(harness)).toEqual({ found: 0, expired: 0, backfilled: 0 });
+    // Once: the column is no longer null. The next pass reminds it (WP-108, backlog 291): halfway
+    // through the working time between Friday's question and Thursday's backfilled deadline is
+    // Tuesday 13:00, already past — one reminder before the escalation, on the next pass.
+    expect(await pass(harness)).toEqual({
+      found: 0,
+      expired: 0,
+      backfilled: 0,
+      reminderFound: 1,
+      reminded: 1,
+    });
+    expect((await harness.store.questions.load({} as never, question.id))?.remindersSent).toBe(1);
 
     moveTo(harness, '2026-06-11T10:00:00.000Z');
     await harness.drain();
@@ -1664,9 +1715,212 @@ describe('the recovery row: a lost arm, and a row older than deadlines (backlog 
       approval: { ...withoutDeadline.approval, deadlineAt: null },
     });
     moveTo(harness, '2026-06-10T10:00:00.000Z');
-    expect(await pass(harness)).toEqual({ found: 1, expired: 0, backfilled: 1 });
+    expect(await pass(harness)).toEqual({
+      found: 1,
+      expired: 0,
+      backfilled: 1,
+      reminderFound: 0,
+      reminded: 0,
+    });
     expect((await harness.store.approvals.load({} as never, id))?.approval.deadlineAt).toBe(
       '2026-06-11T10:00:00.000Z',
     );
+  });
+});
+
+describe('the fourth deadline row: a reminder whose arm was lost (WP-108, PROGRESS backlog 291)', () => {
+  const GRACE_MS = 60_000;
+  const WITH_CHAT: HarnessOptions = { communication: {} };
+  /** Halfway through the working time between Friday 16:00 and Monday 16:00, plus the grace. */
+  const PAST_REMINDER_AND_GRACE = '2026-06-08T12:01:00.001Z';
+  const siteOf = (harness: PipelineHarness) => ({
+    store: harness.store.deadlineRecovery,
+    settings: staticProjectSettings(() => harness.settings),
+    sweep: {
+      unitOfWork: harness.memory,
+      store: harness.store,
+      jobs: harness.jobs,
+      calendar: harness.calendar,
+      ids: harness.ids,
+      redactor: exactSecretRedactor([]),
+    },
+  });
+  const pass = async (harness: PipelineHarness) => {
+    const report = await recoverDeadlines(siteOf(harness), {
+      now: harness.clock.now(),
+      graceMs: GRACE_MS,
+      limit: 50,
+      clock: harness.clock,
+    });
+    await harness.drain();
+    return report;
+  };
+  const dropTimers = (harness: PipelineHarness) => harness.jobs.take(JOB_QUEUES.deadlineSweep);
+  const reminderMessages = (harness: PipelineHarness) =>
+    (harness.communication?.messages ?? []).filter((message) =>
+      message.markdown.includes('is still waiting for a person'),
+    );
+  const none = async () => [];
+  const strandedPass = (harness: PipelineHarness) =>
+    runStrandedRecovery({
+      store: {
+        strandedBootstraps: none,
+        markBootstrapAttempt: async () => {},
+        endBootstrap: async () => {},
+        strandedAsks: none,
+        markAskAttempt: async () => {},
+        endAsk: async () => {},
+        strandedHistoryRecords: none,
+        markHistoryRecordAttempt: async () => {},
+        endHistoryRecord: async () => {},
+        strandedCurations: none,
+        markCurationAttempt: async () => {},
+        endCuration: async () => {},
+        asksWithEndedRun: none,
+      },
+      unitOfWork: harness.memory,
+      jobs: harness.jobs,
+      clock: harness.clock,
+      graceMs: GRACE_MS,
+      deadlines: siteOf(harness),
+    });
+
+  it('reminds a question whose reminder arm was lost, once, after its reminder time and the grace', async () => {
+    const { harness, question } = await askedOnFriday(WITH_CHAT);
+    expect(dropTimers(harness), 'the expiry and the reminder arm, both lost').toHaveLength(2);
+
+    // Inside the grace after Monday 12:00, where a live timer would still be firing.
+    moveTo(harness, '2026-06-08T12:00:30.000Z');
+    expect(await pass(harness)).toMatchObject({ reminderFound: 0, reminded: 0 });
+    expect(reminderMessages(harness)).toHaveLength(0);
+
+    moveTo(harness, PAST_REMINDER_AND_GRACE);
+    expect(await pass(harness)).toEqual({
+      found: 0,
+      expired: 0,
+      backfilled: 0,
+      reminderFound: 1,
+      reminded: 1,
+    });
+    const posted = reminderMessages(harness);
+    expect(
+      posted,
+      'the fourth deadline row (backlog 291) did not remind the question whose reminder arm was lost',
+    ).toHaveLength(1);
+    expect(posted[0]?.markdown).toContain('Still unanswered: Which currency?');
+    expect((await harness.store.questions.load({} as never, question.id))?.remindersSent).toBe(1);
+    expect(taskOf(harness).task.state).toBe('waiting_answers');
+
+    // Once: the count moved the row out of the read.
+    expect(await pass(harness)).toMatchObject({ reminderFound: 0, reminded: 0 });
+    expect(reminderMessages(harness)).toHaveLength(1);
+  });
+
+  it('reminds a pending approval whose reminder arm was lost, once', async () => {
+    const { harness } = harnessWith({
+      ...WITH_CHAT,
+      runs: { ...happyRuns(), architecture: completedRun(PLAN('XL')) },
+    });
+    moveTo(harness, FRIDAY_1600);
+    await harness.publish([ticketMatched()]);
+    expect(dropTimers(harness)).toHaveLength(2);
+    const [requested] = eventsOf(harness, 'task.approval.requested');
+    const id = requested?.payload.approval.id as Id;
+
+    moveTo(harness, PAST_REMINDER_AND_GRACE);
+    expect(await pass(harness)).toMatchObject({ reminderFound: 1, reminded: 1 });
+    expect(reminderMessages(harness)).toHaveLength(1);
+    expect((await harness.store.approvals.load({} as never, id))?.approval.remindersSent).toBe(1);
+    expect(await pass(harness)).toMatchObject({ reminderFound: 0, reminded: 0 });
+    expect(reminderMessages(harness)).toHaveLength(1);
+  });
+
+  it('reminds nobody about a question past its deadline: that row is the expiry’s', async () => {
+    const { harness, question } = await askedOnFriday(WITH_CHAT);
+    dropTimers(harness);
+    // Past the deadline but inside the grace: the expiry has not happened yet either, and a
+    // "still unanswered" line now would be followed by the escalation a minute later.
+    moveTo(harness, '2026-06-08T16:00:30.000Z');
+    expect(await pass(harness)).toMatchObject({ reminderFound: 0, reminded: 0 });
+    moveTo(harness, '2026-06-08T16:01:00.001Z');
+    expect(await pass(harness)).toMatchObject({ expired: 1, reminderFound: 0, reminded: 0 });
+    expect(reminderMessages(harness)).toHaveLength(0);
+    expect((await harness.store.questions.load({} as never, question.id))?.remindersSent).toBe(0);
+  });
+
+  it('reminds nobody past its deadline even when the store answers such a row (review round 1)', async () => {
+    const { harness, question } = await askedOnFriday(WITH_CHAT);
+    dropTimers(harness);
+    moveTo(harness, '2026-06-08T16:00:30.000Z');
+    // A store kinder than its contract: it answers the row whose deadline has passed. The pass
+    // asks the deadline again and must not remind it.
+    const site = siteOf(harness);
+    const kinder = {
+      ...site,
+      store: {
+        ...site.store,
+        unreminded: async () => [
+          {
+            aggregate: 'question' as const,
+            id: question.id,
+            projectId: harness.projectId,
+            taskId: taskOf(harness).task.id,
+            since: FRIDAY_1600 as IsoDateTime,
+            deadlineAt: MONDAY_1600 as IsoDateTime,
+          },
+        ],
+      },
+    };
+    const report = await recoverDeadlines(kinder, {
+      now: harness.clock.now(),
+      graceMs: GRACE_MS,
+      limit: 50,
+      clock: harness.clock,
+    });
+    await harness.drain();
+    expect(report).toMatchObject({ reminderFound: 0, reminded: 0 });
+    expect(reminderMessages(harness)).toHaveLength(0);
+    expect((await harness.store.questions.load({} as never, question.id))?.remindersSent).toBe(0);
+  });
+
+  it('reminds nobody whose reminder already went out on time', async () => {
+    const { harness } = await askedOnFriday(WITH_CHAT);
+    moveTo(harness, MONDAY_1200);
+    await harness.drain();
+    expect(reminderMessages(harness)).toHaveLength(1);
+    moveTo(harness, PAST_REMINDER_AND_GRACE);
+    expect(await pass(harness)).toMatchObject({ reminderFound: 0, reminded: 0 });
+    expect(reminderMessages(harness)).toHaveLength(1);
+  });
+
+  it('posts one reminder and counts one when a late timer and the pass race (standing rule 9)', async () => {
+    const { harness, question } = await askedOnFriday(WITH_CHAT);
+    // The timer is armed and has not fired: a worker that was down past the grace.
+    moveTo(harness, PAST_REMINDER_AND_GRACE);
+    await Promise.all([
+      recoverDeadlines(siteOf(harness), {
+        now: harness.clock.now(),
+        graceMs: GRACE_MS,
+        limit: 50,
+        clock: harness.clock,
+      }),
+      fireNow(harness, { aggregate: 'question', id: question.id, kind: 'question_reminder' }),
+    ]);
+    await harness.drain();
+    expect(reminderMessages(harness)).toHaveLength(1);
+    expect((await harness.store.questions.load({} as never, question.id))?.remindersSent).toBe(1);
+  });
+
+  it('rides the stranded pass as its `deadline_reminder` site', async () => {
+    const { harness } = await askedOnFriday(WITH_CHAT);
+    dropTimers(harness);
+    moveTo(harness, PAST_REMINDER_AND_GRACE);
+    const report = await strandedPass(harness);
+    expect(
+      report.find((site) => site.site === 'deadline_reminder'),
+      'the stranded pass reports no deadline_reminder site (backlog 291)',
+    ).toEqual({ site: 'deadline_reminder', found: 1, reEnqueued: 1, ended: 0 });
+    await harness.drain();
+    expect(reminderMessages(harness)).toHaveLength(1);
   });
 });

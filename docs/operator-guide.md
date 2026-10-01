@@ -606,6 +606,13 @@ calendar — so nothing that was waiting on the day of the upgrade expires at on
 has nowhere to store such a deadline, so one held for more than five working days on the day of the
 upgrade moves to needing a human on the first pass; the workpad keeps its branch and resume command.
 
+**Upgrading past the build that recovers lost reminders (WP-108).** A question or approval open on
+the day of the upgrade that was never reminded about — open before reminders existed, given its
+first deadline by the pass above, or whose reminder timer was lost — is reminded **once** on the
+first pass after its halfway point, as long as its deadline has not passed; one already past its
+deadline is not reminded, it is escalated as before. So a project with old open questions may post
+a burst of *"still unanswered"* reminders shortly after the upgrade.
+
 ### What a failed migration looks like
 
 The `migrate` service writes one JSON object per line and exits non-zero:
@@ -853,6 +860,21 @@ If the handler still fails, the event is dead-lettered again after the same numb
 
 This replaces the hand-typed `update event_dispatch …` statement earlier builds documented, which
 left no audit row.
+
+### Failed jobs: a job the job queue stopped retrying
+
+The job queue (pg-boss) retries a job whose handler throws up to its queue's retry limit and then
+marks it **failed**. **Settings → Failed jobs** (admin only; `GET /api/org/failed-jobs`, WP-108)
+lists them, newest first: the queue, how many times it was tried, the retry limit, when it failed and
+the failure's message (redacted by the platform's patterns and cut at 2 000 characters; the job's
+payload is never shown). Beside each one is the platform's own census of that queue — whether it
+ends its own failures or relies on the retries, what a failed job of it drops, and what recovers it:
+a row of the recovery pass (for example a lost stage is re-enqueued once and then escalated, a lost
+reminder is sent), the queue's next scheduled run, or **nothing**, which is the case to act on by
+hand (a ticket status, a workpad or a comment the pipeline decided on and never wrote, a knowledge
+commit, a day's digest). There is **no re-queue**: not every queue's handler is shown to re-check its
+state when it fires again. pg-boss keeps a failed job for its retention window, days rather than for
+ever, so the list is not an archive; the log has every failure.
 
 ## 10. Known limits of this build
 

@@ -22,6 +22,7 @@ import {
 } from './discovery.js';
 import type { ReadinessEvaluation } from './ports.js';
 import {
+  elapsedSince,
   isRediscoveryTicketKey,
   MAX_REDISCOVERY_ATTEMPTS,
   readRediscoveryGate,
@@ -160,6 +161,25 @@ describe('startProjectRediscovery', () => {
     expect(harness.store.snapshot()).toHaveLength(1);
   });
 
+  it('says how long ago the live discovery task started, and names cancel as the way out (WP-108, backlog 320)', async () => {
+    const { harness, discovery, rediscovery, gate, projectId } = setup();
+    const first = await startProjectDiscovery(discovery, { projectId, requestedByUserId: USER });
+    const taskId = first.status === 'started' ? first.taskId : 'none';
+    // The stage job never runs: nothing settles, and three hours pass.
+    harness.clock.advance(3 * 60 * 60_000 + 59_000);
+    const again = await startProjectRediscovery(rediscovery, {
+      projectId,
+      requestedByUserId: USER,
+    });
+    expect(again.status).toBe('in_flight');
+    expect(again.detail).toContain(`discovery task ${taskId} started 3 hours ago`);
+    expect(again.detail).toContain(`cancel it there (POST /api/tasks/${taskId}/cancel)`);
+    expect(again.detail).not.toContain('follow it rather than starting a second run');
+    // The read gate says the same sentence, so the screen shows it on the disabled button.
+    const read = await readRediscoveryGate(gate, projectId);
+    expect(read.blocker).toMatchObject({ code: 'discovery_in_flight', detail: again.detail });
+  });
+
   it('is blocked by a parked discovery task, and names it', async () => {
     const { harness, discovery, rediscovery, projectId } = setup({ failing: true });
     await startProjectDiscovery(discovery, { projectId, requestedByUserId: USER });
@@ -274,5 +294,18 @@ describe('readRediscoveryGate', () => {
     expect(read.blocker?.code).toBe('discovery_in_flight');
     expect(command.status).toBe('in_flight');
     expect(read.blocker?.detail).toBe(command.detail);
+  });
+});
+
+describe('elapsedSince (WP-108)', () => {
+  it.each([
+    ['2026-09-20T10:00:30.000Z', 'less than a minute'],
+    ['2026-09-20T10:01:00.000Z', '1 minute'],
+    ['2026-09-20T11:59:59.000Z', '119 minutes'],
+    ['2026-09-20T12:00:00.000Z', '2 hours'],
+    ['2026-09-22T09:59:59.000Z', '47 hours'],
+    ['2026-09-22T10:00:00.000Z', '2 days'],
+  ])('reads %s as %s after 10:00', (now, phrase) => {
+    expect(elapsedSince('2026-09-20T10:00:00.000Z', now)).toBe(phrase);
   });
 });

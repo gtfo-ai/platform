@@ -7,7 +7,7 @@
  * back.
  */
 import { expect, test } from '@playwright/test';
-import { IDS, PROJECT_KEY } from './support/fixtures.js';
+import { failedJobs, IDS, PROJECT_KEY } from './support/fixtures.js';
 import { commandLog, resetBackend, signIn } from './support/harness.js';
 
 test.beforeEach(async ({ page, request }) => {
@@ -209,6 +209,20 @@ test('org settings lists a dead letter with its re-queue control (WP-96, backlog
   await expect(letter.getByText('boom <script>window.__pwned = true;</script>')).toBeVisible();
   await expect(letter.getByRole('button', { name: 'Re-queue' })).toBeVisible();
   await expect(page.getByText('The dead letters could not be loaded.')).toHaveCount(0);
+});
+
+test('org settings lists a failed job beside the dead letters, with no re-queue (WP-108, backlog 325)', async ({
+  page,
+}) => {
+  await page.goto('/settings');
+  const job = page.locator(`[data-failed-job="${failedJobs.items[0]?.id ?? 'missing'}"]`);
+  await expect(job).toBeVisible();
+  await expect(job.getByText('pipeline.outbound')).toBeVisible();
+  // Handler text is untrusted: its markup is on the screen as characters.
+  await expect(job.getByText('outbound <script>window.__pwned = true;</script>')).toBeVisible();
+  await expect(job.getByText('Nothing recovers it automatically', { exact: false })).toBeVisible();
+  await expect(job.getByRole('button')).toHaveCount(0);
+  await expect(page.getByText('The failed jobs could not be loaded.')).toHaveCount(0);
 });
 
 test('the project settings page mirrors every wizard step', async ({ page }) => {

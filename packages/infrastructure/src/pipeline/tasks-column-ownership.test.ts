@@ -102,6 +102,12 @@ const EXPECTED_OWNERSHIP: Readonly<Record<string, readonly string[]>> = {
     // of the recovery's own on the task's row, the shape migration 0032 gave the other marks.
     'dependency_recovery_attempted_at',
   ],
+  'packages/infrastructure/src/recovery/postgres-stranded-stage-store.ts': [
+    // `markStageAttempt` — the recovery pass's one attempt per stage entry for a task left at an
+    // agent or gate stage with no job and no run (WP-108, migration 0067, backlog 320); the same
+    // shape as the mark above, written only while the entry is still stranded.
+    'stage_recovery_attempted_at',
+  ],
   'packages/infrastructure/src/pipeline/postgres-pipeline-store.ts': [
     // `saveTicketSnapshot`
     'ticket_snapshot',

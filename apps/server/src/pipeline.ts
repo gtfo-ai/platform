@@ -102,6 +102,7 @@ import {
   repositoryConfigStateOf,
   runCredentialRecoveryHorizonMs,
   runLimitsDefaults,
+  STRANDED_STAGE_COMPONENT,
   silentLogger,
   startIntakeReconciliation,
   startTicketPoller,
@@ -336,6 +337,11 @@ export interface ComposePipelineOptions {
    * re-emitted (`APP_INTAKE_RECONCILE_INTERVAL_MS`). `0` starts no pass at all.
    */
   readonly intakeReconcileIntervalMs: number;
+  /**
+   * pg-boss's schema (`config.jobs.schema`) — the stranded-stage recovery asks pg-boss's own table
+   * whether a `stage.execute` job is still owed to a task (WP-108, PROGRESS backlog 320).
+   */
+  readonly jobsSchema: string;
   /**
    * How often the ticket poller's sweep re-arms a polling binding whose chain was lost
    * (`APP_TICKET_POLL_SWEEP_INTERVAL_MS`, WP-87) — the bound on a lost poll, and how soon a binding
@@ -1481,6 +1487,25 @@ export const composePipeline = async (
       notifications: {
         store: recoveryAdapters.createPostgresNotificationRepostStore(),
       },
+      /**
+       * WP-108, backlog **320**: a task at an agent or gate stage with no `stage.execute` job and
+       * no run — the commit-then-enqueue loss every `enqueueStage` site shares, and a job that spent
+       * every pg-boss retry. Re-enqueued once per stage entry, then escalated with a brief;
+       * `packages/application/src/recovery/stranded-stage.ts`.
+       */
+      stages: {
+        store: recoveryAdapters.createPostgresStrandedStageStore({
+          jobsSchema: options.jobsSchema,
+        }),
+        pipeline: store,
+        context: (correlationId) => ({
+          ids,
+          actor: { kind: 'system', component: STRANDED_STAGE_COMPONENT },
+          clock: { now: nowIso },
+          correlationId,
+          causeEventId: null,
+        }),
+      },
       deadlines: {
         store: recoveryAdapters.createPostgresDeadlineRecoveryStore(),
         settings,
@@ -1501,7 +1526,7 @@ export const composePipeline = async (
   if (reconciler === null) {
     options.logger.warn(
       { setting: 'APP_INTAKE_RECONCILE_INTERVAL_MS=0' },
-      'the recovery pass is switched off: a matched ticket whose intake enqueue is lost is never started (PROGRESS backlog 20), a stranded history bootstrap (101) or pending ask (84) is never recovered, a run whose process died stays "running" for ever, holding its stage budget against every future window (109), a run credential whose revoke never happened stays live to its expiry (155), a question, approval or take-over whose timer was lost — or that predates deadlines — waits for ever (161, 162), a merge request a rework superseded whose close was lost stays open (178), a deferred dependency-gate decision whose resume wake-up was lost waits for the next resume (240), and a notification whose job spent every attempt is never re-posted (236)',
+      'the recovery pass is switched off: a matched ticket whose intake enqueue is lost is never started (PROGRESS backlog 20), a stranded history bootstrap (101) or pending ask (84) is never recovered, a run whose process died stays "running" for ever, holding its stage budget against every future window (109), a run credential whose revoke never happened stays live to its expiry (155), a question, approval or take-over whose timer was lost — or that predates deadlines — waits for ever (161, 162), a merge request a rework superseded whose close was lost stays open (178), a deferred dependency-gate decision whose resume wake-up was lost waits for the next resume (240), a notification whose job spent every attempt is never re-posted (236), a question or approval whose reminder was lost gets none (291), and a task left at a stage with no job and no run stays active for ever (320)',
     );
   }
 

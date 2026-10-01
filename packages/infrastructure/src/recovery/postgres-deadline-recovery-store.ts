@@ -11,6 +11,7 @@ import {
   type DeadlineRecoveryStore,
   TAKE_OVER_BOUNDARY_EVENTS,
   type Transaction,
+  type UnremindedAggregate,
   type WaitingAggregate,
 } from '@platform/application';
 import type { Id, IsoDateTime } from '@platform/contracts';
@@ -87,6 +88,42 @@ export const createPostgresDeadlineRecoveryStore = (): DeadlineRecoveryStore => 
       [query.limit],
     );
     return rows.map(toWaiting);
+  },
+  /**
+   * The fourth row's read (WP-108, backlog 291): never reminded, still waiting, deadline ahead. The
+   * reminder instant itself is the working calendar's and is asked by the caller.
+   */
+  unreminded: async (tx, query) => {
+    const { rows } = await sqlOf(tx).query<{
+      aggregate: 'question' | 'approval';
+      id: string;
+      project_id: string;
+      task_id: string;
+      since: Date | string;
+      deadline_at: Date | string;
+    }>(
+      `(select 'question' as aggregate, q.id, t.project_id, q.task_id, q.asked_at as since,
+               q.deadline_at
+          from questions q join tasks t on t.id = q.task_id
+         where q.status = 'open' and q.reminders_sent = 0 and t.state not in ('done', 'cancelled')
+           and q.deadline_at > $1 and q.asked_at < $2
+         order by q.deadline_at, q.id limit $3)
+       union all
+       (select 'approval' as aggregate, a.id, t.project_id, a.task_id, a.requested_at as since,
+               a.deadline_at
+          from approvals a join tasks t on t.id = a.task_id
+         where a.status = 'pending' and a.reminders_sent = 0 and t.state not in ('done', 'cancelled')
+           and a.deadline_at > $1 and a.requested_at < $2
+         order by a.deadline_at, a.id limit $3)`,
+      [query.deadlineAfter, query.sinceBefore, query.limit],
+    );
+    return rows.map(
+      (row): UnremindedAggregate => ({
+        ...toWaiting(row),
+        since: new Date(row.since).toISOString() as IsoDateTime,
+        deadlineAt: new Date(row.deadline_at).toISOString() as IsoDateTime,
+      }),
+    );
   },
   backfillDeadline: async (tx, input) => {
     // Conditional on the row still waiting and still undated: that predicate is the whole of what

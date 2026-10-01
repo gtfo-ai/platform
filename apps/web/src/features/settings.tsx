@@ -41,6 +41,7 @@ import {
 import { useTheme } from '../ui/theme.js';
 import { UntrustedText } from '../ui/untrusted.js';
 import { DeadLetters } from './dead-letters.js';
+import { FailedJobs } from './failed-jobs.js';
 import { IdentityMappings } from './identities.js';
 import { Budgets } from './operating-mode.js';
 import { OrganisationSettingsPanel } from './org-settings.js';
@@ -131,6 +132,10 @@ export const SettingsScreen = (): ReactElement => {
       {/* WP-95, backlog 126: the events the dispatcher gave up on, and the re-queue that serves one
           again — the operator guide's hand-typed `update`, made a product action. Admin only. */}
       <DeadLetters />
+
+      {/* WP-108, backlog 325: beside them, the jobs pg-boss gave up on — a read, with what each
+          queue's failure costs and what recovers it. Admin only. */}
+      <FailedJobs />
 
       <section>
         <SectionHeading>Instance</SectionHeading>
