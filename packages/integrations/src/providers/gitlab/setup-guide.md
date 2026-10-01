@@ -41,6 +41,8 @@ tokens, and **Developer** for everything else.
 | `webhook_tolerance_seconds` | no (300) | How old a signed delivery may be before it is treated as a replay. |
 | `mint_credentials` | no (off) | Whether the platform may mint short-lived project access tokens. **Required for any stage that writes**, and for a private repository. See step 5. |
 | `read_access_level` / `push_access_level` | no (20 / 30) | Role given to a minted credential: 20 Reporter, 30 Developer, 40 Maintainer. |
+| `poll_enabled` | no (off) | Poll GitLab for this project's merge requests instead of (or beside) the webhook — step 3a. Needs `project`. |
+| `poll_interval_seconds` | no (60) | Seconds between two polls of this binding; 30 to 86400. |
 | `token_prefix` | no (`glpat-`) | The prefix your instance puts on every token. Change it only if an administrator changed the **Personal access token prefix** (Admin → Settings → General → Account and limit); project access tokens inherit it. See step 5. |
 
 Environment names for the bundled `glab` CLI follow TD-020: `GITLAB_HOST`, `GITLAB_TOKEN`.
@@ -88,10 +90,38 @@ Leave **Enable SSL verification** on.
 > With neither token configured the platform rejects every delivery. That is deliberate: an
 > endpoint that accepts unverified webhooks looks exactly like one that works.
 
-The webhook is **required**: this build has no poller for these events. The CI gate asks GitLab
-about the merge request's pipeline itself, but a review comment, an approval, a merge and a
-default-branch move reach the platform only as deliveries. The instance must be reachable from
-GitLab at `APP_BASE_URL`.
+The webhook is the **recommended** way in, and the only way for some events: a review comment, an
+approval, a finished pipeline and a default-branch move reach the platform only as deliveries. If
+GitLab cannot reach the instance at `APP_BASE_URL`, switch polling on (step 3a) for the merge-request
+events — and know what you give up.
+
+## 3a. Poll merge requests when GitLab cannot reach you
+
+**Polling** (`poll_enabled: true`, WP-110) asks GitLab every `poll_interval_seconds` for this
+project's merge requests updated since the last poll — *List project merge requests* with
+`updated_after`, `order_by=updated_at` and `sort=asc`, every state. Each merge request it finds is
+turned into what a webhook would have said: `mr.opened` for a new one (or a reopened one),
+`mr.updated` with GitLab's own `updated_at` for an open one, `mr.merged` and `mr.closed` when it
+merged or closed. So review-only mode starts from a poll, and a task waiting for its merge request
+learns that it merged.
+
+You can have both. A merge the webhook reported and a poll lists again is **one** merge: the platform
+appends a merge request's open, merge or close only when its log does not already say so, whichever
+of the two saw it first.
+
+What polling does not see, so you can choose knowingly:
+
+- **Approvals, review comments, finished pipelines and default-branch moves.** A list of merge
+  requests says what each one *is*, not what happened inside it, so these stay webhook-only. The CI
+  gate does not need the pipeline event (it asks GitLab for the head's pipeline itself); review
+  feedback, approval time and the conflict re-check on a default-branch move do.
+- **Merge requests that changed before you switched it on.** The first poll reads the last interval
+  only. A merge request opened last month and edited today is an update, not a new one, so it does
+  not start a review.
+- **A merge request opened and closed between two polls** is seen closed, never open.
+- **More than a thousand merge requests updated within a few minutes.** A poll reads up to a
+  thousand at once; past that it cannot move on, and says so in the server log on every poll
+  (*"the merge-request poll is stalled"*).
 
 ## 4. Protect the default branch
 

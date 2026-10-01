@@ -574,51 +574,85 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     }));
   };
 
+  /** One search, following `nextPageToken` up to `limit` (WP-87 review round 2). */
+  const searchUpTo = async (jql: string, limit: number): Promise<TicketMatch[]> => {
+    const action = 'match_tickets';
+    /**
+     * Up to `limit` matches, **following `nextPageToken`** (WP-87 review round 2): the poller widens
+     * a page to reach past a bulk edit (`TICKET_POLL_MAX_LIMIT`), and Jira may return fewer issues
+     * per page than `maxResults` asks for ({@link MATCH_PAGE_MAX}), so one request is not "up to
+     * `limit`". Each request asks for at most
+     * {@link MATCH_PAGE_MAX}; the loop ends at `limit`, at `isLast`, at a page with no token, or at
+     * an empty page — never on a token alone, so a provider that kept answering one cannot spin it.
+     */
+    const found: TicketMatch[] = [];
+    let pageToken: string | null = null;
+    for (;;) {
+      const result: z.infer<typeof jiraSearchResultSchema> = parse(
+        jiraSearchResultSchema,
+        await client.send({
+          method: 'GET',
+          path: 'search/jql',
+          query: {
+            jql,
+            fields: FIELDS_FOR_MATCH,
+            maxResults: Math.min(limit - found.length, MATCH_PAGE_MAX),
+            ...(pageToken === null ? {} : { nextPageToken: pageToken }),
+          },
+          action,
+        }),
+        action,
+      );
+      found.push(...result.issues.map((issue) => toTicketMatch(issue, siteUrl)));
+      const next: string | null = result.nextPageToken ?? null;
+      if (
+        found.length >= limit ||
+        result.isLast === true ||
+        next === null ||
+        result.issues.length === 0
+      ) {
+        return found.slice(0, limit);
+      }
+      pageToken = next;
+    }
+  };
+
   const matchTickets = async (
     rule: TicketMatchRule,
     matchOptions?: { readonly since?: string | null; readonly limit?: number },
   ): Promise<readonly TicketMatch[]> => {
     const limit = matchOptions?.limit ?? 50;
-    const jql = buildJql(rule, matchOptions?.since ?? null, options.clock.now());
+    const since = matchOptions?.since ?? null;
+    const jql = buildJql(rule, since, options.clock.now());
     return read('match_tickets', jsonPayload({ jql, limit }), async () => {
-      const action = 'match_tickets';
-      /**
-       * Up to `limit` matches, **following `nextPageToken`** (WP-87 review round 2): the poller widens
-       * a page to reach past a bulk edit (`TICKET_POLL_MAX_LIMIT`), and Jira may return fewer issues
-       * per page than `maxResults` asks for ({@link MATCH_PAGE_MAX}), so one request is not "up to
-       * `limit`". Each request asks for at most
-       * {@link MATCH_PAGE_MAX}; the loop ends at `limit`, at `isLast`, at a page with no token, or at
-       * an empty page — never on a token alone, so a provider that kept answering one cannot spin it.
-       */
-      const found: TicketMatch[] = [];
-      let pageToken: string | null = null;
-      for (;;) {
-        const result: z.infer<typeof jiraSearchResultSchema> = parse(
-          jiraSearchResultSchema,
-          await client.send({
-            method: 'GET',
-            path: 'search/jql',
-            query: {
-              jql,
-              fields: FIELDS_FOR_MATCH,
-              maxResults: Math.min(limit - found.length, MATCH_PAGE_MAX),
-              ...(pageToken === null ? {} : { nextPageToken: pageToken }),
-            },
-            action,
-          }),
-          action,
-        );
-        found.push(...result.issues.map((issue) => toTicketMatch(issue, siteUrl)));
-        const next: string | null = result.nextPageToken ?? null;
-        if (
-          found.length >= limit ||
-          result.isLast === true ||
-          next === null ||
-          result.issues.length === 0
-        ) {
-          return found.slice(0, limit);
+      let current = rule;
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          return await searchUpTo(buildJql(current, since, options.clock.now()), limit);
+        } catch (error) {
+          // WP-110 review round 1: a `keys` rule naming a ticket that no longer exists. Atlassian
+          // documents that search *"responds HTTP 400 'Bad Request' if the JQL query makes explicit
+          // reference to inexistent entities, like a specific Issue Key"*, with the message *"An
+          // issue with key 'KANBAN-123456789' does not exist for field 'key'."*
+          // (https://support.atlassian.com/jira/kb/how-to-handle-http-400-bad-request-errors-on-jira-search-rest-api-endpoint/,
+          // retrieved 2026-10-01 — a Data Center `/rest/api/2/search` article; that Cloud's
+          // `search/jql` answers the same is **inferred**, stated in the fixture). One deleted ticket
+          // of a live task would otherwise fail every live read of the binding: the keys the error
+          // names are dropped and the search asked again, at most {@link MISSING_KEY_RETRIES} times
+          // (the error text is cut at 300 characters, so one error names a handful of keys).
+          if (current.kind !== 'keys' || attempt >= MISSING_KEY_RETRIES) {
+            throw error;
+          }
+          const missing = missingIssueKeysIn(error, current.keys);
+          if (missing.length === 0) {
+            throw error;
+          }
+          const remaining = current.keys.filter((key) => !missing.includes(key));
+          if (remaining.length === 0) {
+            return [];
+          }
+          current = { kind: 'keys', keys: remaining };
         }
-        pageToken = next;
       }
     });
   };
@@ -1074,6 +1108,31 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
 
 // ── Pure helpers, exported for their own tests ───────────────────────────────
 
+/**
+ * How many times a `keys` search drops the keys Jira said do not exist and asks again (WP-110 review
+ * round 1). Each refusal names at most a handful of keys (the error text is cut at 300 characters),
+ * so three retries reach past roughly a dozen deleted tickets in one read; past that the read fails
+ * and the poller fails it open, as before.
+ */
+export const MISSING_KEY_RETRIES = 3;
+
+/**
+ * The keys of `asked` that a `400` names as missing — *"An issue with key 'X' does not exist for
+ * field 'key'."* — and nothing else: a key the error mentions that was not asked for is ignored, so
+ * provider text can only ever narrow the platform's own list.
+ */
+export const missingIssueKeysIn = (error: unknown, asked: readonly string[]): string[] => {
+  if (!(error instanceof IntegrationError) || error.code !== 'invalid_request') {
+    return [];
+  }
+  const named = new Set(
+    [...error.message.matchAll(/An issue with key '([^']+)' does not exist/g)].map(
+      (match) => match[1] ?? '',
+    ),
+  );
+  return asked.filter((key) => named.has(key));
+};
+
 /** A single-quoted-free JQL string literal: `"` and `\` are escaped, per JQL's own rules. */
 export const jqlLiteral = (value: string): string =>
   `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
@@ -1099,6 +1158,10 @@ export const buildJql = (rule: TicketMatchRule, since: string | null, now: strin
         return `parent = ${jqlLiteral(rule.epic_key)}`;
       case 'query':
         return `(${rule.query})`;
+      case 'keys':
+        // WP-110 (backlog 298): the live tasks' tickets, whatever the pick-up rule says. Each key
+        // is a JQL string literal, so a key is never JQL (`key in (…)`, the JQL fields reference).
+        return `key in (${rule.keys.map(jqlLiteral).join(', ')})`;
     }
   })();
   if (since === null) {

@@ -61,6 +61,7 @@ import type {
   GitProviderPort,
   MergedMergeRequest,
   MergeRequest,
+  MergeRequestListing,
   MergeRequestRefInput,
   MintedCredential,
   MintedRunCredential,
@@ -549,6 +550,33 @@ const addressed = (git: GitBinding, ref: MergeRequestRefInput): MergeRequestRefI
 });
 
 export const gitReads = (integrations: PipelineIntegrations) => ({
+  /**
+   * The bound repository's merge requests updated since an instant, oldest first — the
+   * merge-request poller's read (WP-110, PROGRESS backlog 297). A **read**, so it happens in every
+   * mode and is audited, rate-limited and refused inside a transaction like every other.
+   */
+  mergeRequests: async (
+    options: { readonly updatedAfter: string; readonly limit: number },
+    context: CallContext,
+  ): Promise<readonly MergeRequestListing[] | null> => {
+    const git = integrations.git;
+    if (git === null) {
+      return null;
+    }
+    return read(
+      integrations,
+      git.ref,
+      'list_merge_requests',
+      { project: git.project, updated_after: options.updatedAfter, limit: options.limit },
+      context,
+      async () =>
+        git.port.listMergeRequests(git.project, {
+          updatedAfter: options.updatedAfter,
+          limit: options.limit,
+        }),
+    );
+  },
+
   mergeRequest: async (
     ref: MergeRequestRefInput,
     context: CallContext,
@@ -880,7 +908,9 @@ export const ticketReads = (integrations: PipelineIntegrations) => ({
    * Tickets a rule matches, since an instant — two callers, one read.
    *
    * The **ticket poller** (WP-87, `ticket-poll.ts`) asks it for the binding's pick-up rule since the
-   * binding's cursor, which is how a binding with no webhook starts tickets; the **history
+   * binding's cursor, which is how a binding with no webhook starts tickets — and, since WP-110, a
+   * second time with a `keys` rule for its live tasks' tickets, so an edit to a ticket the rule no
+   * longer matches is still recorded (backlog 298); the **history
    * bootstrap** (WP-35's closed-ticket half) asks it a different question with its own rule,
    * because what "closed" means is the project's own status mapping and not a platform constant
    * (`shadow/batch.ts` states why the platform has no definition of its own). Both go through this

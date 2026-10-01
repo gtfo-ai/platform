@@ -105,6 +105,7 @@ import {
   STRANDED_STAGE_COMPONENT,
   silentLogger,
   startIntakeReconciliation,
+  startMergeRequestPoller,
   startTicketPoller,
   statsHandlers,
 } from '@platform/application';
@@ -343,9 +344,9 @@ export interface ComposePipelineOptions {
    */
   readonly jobsSchema: string;
   /**
-   * How often the ticket poller's sweep re-arms a polling binding whose chain was lost
-   * (`APP_TICKET_POLL_SWEEP_INTERVAL_MS`, WP-87) — the bound on a lost poll, and how soon a binding
-   * switched on through the API is first polled.
+   * How often the ticket poller's sweep — and, since WP-110, the merge-request poller's — re-arms a
+   * polling binding whose chain was lost (`APP_TICKET_POLL_SWEEP_INTERVAL_MS`, WP-87) — the bound on
+   * a lost poll, and how soon a binding switched on through the API is first polled.
    */
   readonly ticketPollSweepIntervalMs: number;
   /** Built once per process by {@link composeIntegrationStack}; the ingress shares it. */
@@ -616,6 +617,8 @@ export const composeWebhookIngress = (options: ComposeWebhookIngressOptions): We
     }),
     unitOfWork: options.eventing.unitOfWork,
     eventStore: options.eventing.store,
+    // WP-110: a merge seen by the webhook and by the merge-request poller is one `mr.merged`.
+    mergeRequests: integrationAdapters.createPostgresMergeRequestLifecycle({ sql: options.pool }),
     ids: { next: (): Id => randomUUID() as Id },
     clock: { now: nowIso },
     timer: { now: () => Date.now() },
@@ -1588,6 +1591,33 @@ export const composePipeline = async (
       inbox: integrationAdapters.createPostgresInboxStore({ sql: options.pool }),
       unitOfWork: options.eventing.unitOfWork,
       eventStore: options.eventing.store,
+      mergeRequests: integrationAdapters.createPostgresMergeRequestLifecycle({ sql: options.pool }),
+      ids,
+      clock: { now: nowIso },
+    },
+    clock: { now: nowIso },
+    sweepIntervalMs: options.ticketPollSweepIntervalMs,
+    logger: options.logger,
+  });
+
+  /**
+   * The merge-request poller (WP-110, PROGRESS backlog 297): WP-87's shape for a git binding — a
+   * binding that switches polling on is asked for its repository's merge requests at its own
+   * interval, and each listing becomes the `mr.*` events a webhook would have produced, recorded by
+   * the same recorder. The sweep interval is the ticket poller's (one variable governs both).
+   * `packages/application/src/pipeline/mr-poll.ts` carries what a listing can and cannot say.
+   *
+   * One more pooled connection, counted in `POOL_RESERVATIONS.pipeline`.
+   */
+  const mergeRequestPoller = await startMergeRequestPoller({
+    jobs,
+    store: pipelineAdapters.createPostgresMergeRequestPollStore({ sql: options.pool }),
+    integrations,
+    recorder: {
+      inbox: integrationAdapters.createPostgresInboxStore({ sql: options.pool }),
+      unitOfWork: options.eventing.unitOfWork,
+      eventStore: options.eventing.store,
+      mergeRequests: integrationAdapters.createPostgresMergeRequestLifecycle({ sql: options.pool }),
       ids,
       clock: { now: nowIso },
     },
@@ -1609,6 +1639,7 @@ export const composePipeline = async (
         await reconciler.stop();
       }
       await ticketPoller.stop();
+      await mergeRequestPoller.stop();
       await maintenance.stop();
       await runtime.stop();
     },

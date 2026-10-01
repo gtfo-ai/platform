@@ -185,6 +185,8 @@ export const bindings = pgTable('bindings', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   /** The ticket poller's cursor — the provider's newest `updated_at` recorded (migration 0061, WP-87). */
   pollCursor: timestamp('poll_cursor', { withTimezone: true }),
+  /** The merge-request poller's cursor, the git half of `pollCursor` (migration 0068, WP-110). */
+  mrPollCursor: timestamp('mr_poll_cursor', { withTimezone: true }),
 });
 
 /**

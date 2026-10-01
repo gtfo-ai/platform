@@ -440,6 +440,34 @@ export const escalateTask = (
 };
 
 /**
+ * Add to the brief of a task **already** in `Needs human` (WP-110 review round 1).
+ *
+ * `needs_human → needs_human` is not an edge, so {@link escalateTask} refuses a second escalation —
+ * and a provider fact that arrives while the task waits (its merge request closed) would otherwise
+ * reach only a log line, where the person handling the task never looks. This emits
+ * `task.escalated` again with the new brief and **leaves the state alone**: the notification, the
+ * workpad and every other reader of the brief see it, and nothing moves. Refused for any other
+ * state, which must escalate instead.
+ */
+export const amendEscalation = (
+  task: Task,
+  input: { readonly reason: string; readonly blockerBrief: string },
+  context: CommandContext,
+): TaskDecision => {
+  if (task.state !== 'needs_human') {
+    throw new IllegalTransitionError('Task', task.state, 'needs_human (amended brief)');
+  }
+  const recorder = recorderFor(task, context);
+  recorder.emit('task.escalated', {
+    project_id: task.projectId,
+    task_id: task.id,
+    reason: input.reason,
+    blocker_brief: input.blockerBrief,
+  });
+  return { aggregate: { ...task, sequence: recorder.sequence }, events: recorder.events };
+};
+
+/**
  * The branch a task's work lives on — BD-025's `agentic/*` namespace, from the ticket's own key.
  *
  * product/19 §19 writes the resume instruction as `git fetch && git checkout agentic/PROJ-123`, so

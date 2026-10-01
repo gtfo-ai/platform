@@ -42,6 +42,25 @@ import {
   type WebhookRateLimit,
 } from './inbound.js';
 import type { InboundDecisionApplier, InboundDecisionOutcome } from './inbound-decisions.js';
+import {
+  createStreamMergeRequestLifecycle,
+  type MergeRequestLifecycleReader,
+} from './merge-request-lifecycle.js';
+
+/** WP-110's dedup over what this harness appended — the production reader over a stream read. */
+const lifecycleOver = (
+  appended: readonly { type: string; payload: unknown; stream_id: string }[],
+): MergeRequestLifecycleReader =>
+  createStreamMergeRequestLifecycle({
+    readStream: async (_type, id) =>
+      appended
+        .filter((event) => event.stream_id === id)
+        .map((event, index) => ({
+          position: index + 1,
+          causeEventPosition: null,
+          event: event as never,
+        })),
+  });
 
 const INTEGRATION = '00000000-0000-4000-8000-0000000000c1' as Id;
 const PROJECT = '00000000-0000-4000-8000-0000000000b1' as Id;
@@ -325,6 +344,7 @@ const build = (options: {
         return 7;
       },
     },
+    mergeRequests: lifecycleOver(options.appended),
     ids: {
       next: () => {
         nextId += 1;
@@ -667,6 +687,98 @@ describe('a replayed delivery', () => {
     const outcomes = [first.kind, second.kind].sort();
     expect(outcomes).toEqual(['accepted', 'duplicate']);
     expect(harness.appended).toHaveLength(1);
+  });
+});
+
+/**
+ * WP-110: a merge request's transition reaches the platform through the webhook **and** the
+ * merge-request poller, under two delivery ids no key can make equal — so the recorder drops a
+ * lifecycle draft that repeats the newest one the log holds, whichever door it came through.
+ */
+describe('a merge-request transition the log already holds (WP-110)', () => {
+  const mrDraft = (type: 'mr.opened' | 'mr.merged' | 'mr.closed', projectId: Id) => ({
+    type,
+    payload: {
+      project_id: projectId,
+      task_id: null,
+      mr: {
+        provider: 'fake',
+        project_path: 'acme/api',
+        iid: 7,
+        url: 'https://git.example.test/acme/api/-/merge_requests/7',
+        branch: 'feature',
+        head_sha: 'a'.repeat(40),
+      },
+      draft: false,
+      head_sha: 'a'.repeat(40),
+      diff_stats: null,
+      ...(type === 'mr.merged' ? { merge_commit_sha: null } : {}),
+    },
+    actor: { kind: 'integration' as const, integration_id: INTEGRATION, provider: 'fake' },
+  });
+  /** A normaliser whose key is the delivery's own header, and whose events are the body's types. */
+  const lifecycleResolved = (): ResolvedInboundIntegration => {
+    const inbound: InboundNormaliser = {
+      verify: () => true,
+      deliveryKey: (delivery) => String(delivery.headers['x-delivery']),
+      normalise: async (delivery, context) => ({
+        events: (
+          JSON.parse(delivery.body) as { types: ('mr.opened' | 'mr.merged' | 'mr.closed')[] }
+        ).types.map((type) => mrDraft(type, context.projectId)),
+        ignored: [],
+      }),
+    };
+    return {
+      ...resolvedWith(),
+      inbound,
+      bindings: [{ bindingId: PROJECT, projectId: PROJECT, inbound }],
+    };
+  };
+  const delivery = (id: string, ...types: string[]): WebhookDelivery => ({
+    headers: { 'x-delivery': id },
+    body: JSON.stringify({ types }),
+  });
+
+  it('records a second door’s merge and appends nothing for it', async () => {
+    const harness = harnessFor(lifecycleResolved());
+
+    expect(await harness.deliver(delivery('webhook:1', 'mr.merged'))).toMatchObject({
+      kind: 'accepted',
+      events: 1,
+    });
+    // The poller's view of the same merge: another delivery id, so another inbox row — and no event.
+    expect(await harness.deliver(delivery('poll:1', 'mr.merged'))).toMatchObject({
+      kind: 'accepted',
+      events: 0,
+    });
+    expect(harness.inbox.rows.size).toBe(2);
+    expect(harness.appended.map((event) => event.type)).toEqual(['mr.merged']);
+  });
+
+  it('keeps a reopen and a close after it, and drops a close after a merge', async () => {
+    const harness = harnessFor(lifecycleResolved());
+
+    await harness.deliver(delivery('d-1', 'mr.opened'));
+    await harness.deliver(delivery('d-2', 'mr.closed'));
+    await harness.deliver(delivery('d-3', 'mr.opened'));
+    await harness.deliver(delivery('d-4', 'mr.merged'));
+    await harness.deliver(delivery('d-5', 'mr.closed'));
+    await harness.deliver(delivery('d-6', 'mr.opened'));
+
+    expect(harness.appended.map((event) => event.type)).toEqual([
+      'mr.opened',
+      'mr.closed',
+      'mr.opened',
+      'mr.merged',
+    ]);
+  });
+
+  it('drops a repeat inside one delivery too, because the decision is made per draft', async () => {
+    const harness = harnessFor(lifecycleResolved());
+
+    await harness.deliver(delivery('d-1', 'mr.opened', 'mr.opened', 'mr.merged', 'mr.merged'));
+
+    expect(harness.appended.map((event) => event.type)).toEqual(['mr.opened', 'mr.merged']);
   });
 });
 
@@ -1094,6 +1206,7 @@ describe('the webhook door’s rate limit (Q60)', () => {
         },
       } as never,
       eventStore: { nextStreamSequence: async () => 1 },
+      mergeRequests: lifecycleOver([]),
       ids: { next: () => '00000000-0000-4000-9000-000000000001' as Id },
       clock: { now: () => NOW },
       timer: { now: () => clock.ms },

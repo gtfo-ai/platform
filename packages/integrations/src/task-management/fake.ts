@@ -63,8 +63,12 @@
  * 10. **Different — the poll plan comes from an option, or from the registration** (WP-87). Built
  *     directly, `pollPlan()` answers the `poll` option (`null` when absent, as every real provider
  *     defaults to off); resolved through `fakeTaskManagementRegistration`, the binding's config
- *     decides it (`poll_enabled`, `poll_interval_seconds`, `pickup_label`) — a **label** rule only,
- *     where Jira also polls a status rule. `matchTickets` answers oldest first, as the port requires.
+ *     decides it (`poll_enabled`, `poll_interval_seconds`, `pickup_label`, and since WP-110
+ *     `pickup_status`, which wins over the label as Jira's does). `matchTickets` answers oldest
+ *     first, as the port requires, and answers a `keys` rule (WP-110) with exactly the named
+ *     tickets, ignoring a named key it does not hold — where Jira refuses the whole search with a
+ *     `400` naming it, which the Jira adapter answers by dropping that key and asking again (WP-110
+ *     review round 1), so the port's answer is the same.
  * 11. **Stricter — `since` is minute-grained** (WP-87 review round 2). Jira's JQL window is a
  *     relative `-Nm` with the minutes rounded up, so it starts up to a minute before the instant
  *     asked for; the fake starts it at the minute boundary at or before it. A caller that relied on
@@ -493,6 +497,9 @@ export const createFakeTaskManagement = (
         return ticket.epic?.key === rule.epic_key;
       case 'query':
         return matches(ticket, parseQuery(rule.query));
+      case 'keys':
+        // WP-110: the tickets named, whatever their labels or status.
+        return rule.keys.includes(ticket.key);
     }
   };
 

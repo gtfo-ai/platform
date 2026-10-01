@@ -151,6 +151,18 @@ export interface GitLabClient {
     project: string,
     iid: number,
   ): Promise<z.output<typeof gitlabDiffStatsSummaryResponseSchema>>;
+  /**
+   * § "List project merge requests", for the merge-request poller (WP-110): `updated_after`,
+   * `order_by=updated_at`, `sort=asc`, every state (the documented default `all`), at most `pages`
+   * pages of `perPage`. Its own method so the audit action is `list_merge_requests` and the history
+   * bootstrap's read keeps its own.
+   */
+  pollMergeRequests(
+    project: string,
+    query: { readonly updated_after: string },
+    perPage: number,
+    pages: number,
+  ): Promise<z.output<typeof gitlabMergeRequestSchema>[]>;
   /** § "List project merge requests". */
   listMergeRequests(
     project: string,
@@ -392,6 +404,22 @@ export const createGitLabClient = (http: GitLabHttp): GitLabClient => {
           path: mrPath(project, iid),
           action: 'get_merge_request',
         }),
+      ),
+
+    pollMergeRequests: async (project, query, perPage, pages) =>
+      parse(
+        z.array(gitlabMergeRequestSchema),
+        await http.paginate(
+          {
+            method: 'GET',
+            path: `/projects/${encodeProjectId(project)}/merge_requests`,
+            query: { ...query, order_by: 'updated_at', sort: 'asc' },
+            action: 'list_merge_requests',
+          },
+          perPage,
+          pages,
+        ),
+        'list_merge_requests',
       ),
 
     listMergeRequests: async (project, query) =>

@@ -86,6 +86,13 @@ export const JOB_EXHAUSTION: Readonly<Record<string, JobExhaustion>> = {
     residual:
       'retryLimit 0: a poll that throws has already re-armed itself, and the sweep re-arms a chain that was lost',
   },
+  [JOB_QUEUES.mrPoll]: {
+    kind: 'bounds_itself',
+    loss: 'one merge-request poll of one git binding',
+    recoveredBy: 'next_tick',
+    residual:
+      'retryLimit 0: a poll that throws has already re-armed itself, and the sweep re-arms a chain that was lost (WP-110)',
+  },
   [JOB_QUEUES.taskAsk]: {
     kind: 'relies_on_retries',
     loss: 'one ask-the-task question’s run',

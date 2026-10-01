@@ -112,12 +112,29 @@ export const commentRefSchema = workpadRefSchema.extend({
   marker_id: nonEmptyStringSchema.nullish(),
 });
 
-/** The pick-up rules of product/08: label, mapped status, epic membership, or a provider query. */
+/**
+ * The most ticket keys one `keys` rule names (WP-110) — one provider page at Jira's 100
+ * (`MATCH_PAGE_MAX` in the Jira adapter), so the read a `keys` rule costs is one request.
+ */
+export const MAX_TICKET_MATCH_KEYS = 100;
+
+/**
+ * The pick-up rules of product/08 — label, mapped status, epic membership, or a provider query —
+ * and one rule that is **not** a pick-up rule: `keys`, the tickets named, whatever their state
+ * (WP-110, PROGRESS backlog 298). The ticket poller asks it for the tickets of a binding's **live
+ * tasks**, because a status rule stops matching a ticket the moment the platform's own status
+ * mapping moves it on, and its edits would otherwise reach a running task only by webhook. No
+ * configuration produces a `keys` rule: a binding's `pollPlan()` answers a pick-up rule.
+ */
 export const ticketMatchRuleSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('label'), label: nonEmptyStringSchema }),
   z.strictObject({ kind: z.literal('status'), status: nonEmptyStringSchema }),
   z.strictObject({ kind: z.literal('epic'), epic_key: nonEmptyStringSchema }),
   z.strictObject({ kind: z.literal('query'), query: nonEmptyStringSchema }),
+  z.strictObject({
+    kind: z.literal('keys'),
+    keys: z.array(nonEmptyStringSchema).min(1).max(MAX_TICKET_MATCH_KEYS),
+  }),
 ]);
 
 /** Just enough of a match to build `ticket.matched` (technical/02) without a second read. */

@@ -207,6 +207,33 @@ export const runTaskManagementContract = (harness: TaskManagementContractHarness
           instants.toSorted((left, right) => left - right),
         );
       });
+
+      /**
+       * WP-110 (backlog 298): the poller re-reads its live tasks' tickets with a `keys` rule, which
+       * ignores the pick-up rule — a status rule stops matching a ticket the platform moved on. An
+       * obligation of every provider (rule 23): one that answered tickets it was not named, or
+       * missed the one it was, would record edits to the wrong ticket or none.
+       */
+      it('finds exactly the tickets a keys rule names (WP-110)', async () => {
+        const matches = await port.matchTickets({ kind: 'keys', keys: [context.ticket.key] });
+        expect(matches.map((match) => match.ref.key)).toEqual([context.ticket.key]);
+      });
+
+      /**
+       * WP-110 review round 1: a live task's ticket that has since been deleted. Jira refuses the
+       * whole search (400, documented for Data Center, inferred for Cloud); the port's answer is the
+       * tickets that do exist — one deleted ticket must not hide every other live task's edits.
+       */
+      it('answers the existing tickets when a keys rule also names one that does not exist (WP-110)', async () => {
+        const matches = await port.matchTickets({
+          kind: 'keys',
+          keys: [context.missingTicketKey, context.ticket.key],
+        });
+        expect(matches.map((match) => match.ref.key)).toEqual([context.ticket.key]);
+        expect(await port.matchTickets({ kind: 'keys', keys: [context.missingTicketKey] })).toEqual(
+          [],
+        );
+      });
     });
 
     describe('transition (idempotent by contract)', () => {

@@ -83,7 +83,7 @@ export type DatabaseConfig = z.infer<typeof databaseConfigSchema>;
 export const DATABASE_CONFIG_DEFAULTS = {
   appRole: 'platform_app',
   /**
-   * 23 at WP-87 (`ticket.poll`), from 22 at WP-56 (`deadline.sweep`), 21 (WP-36), 19 (WP-31), 13 (WP-15b) and 10 before that.
+   * 24 at WP-110 (`mr.poll`), from 23 at WP-87 (`ticket.poll`), from 22 at WP-56 (`deadline.sweep`), 21 (WP-36), 19 (WP-31), 13 (WP-15b) and 10 before that.
    *
    * **The floor is not restated here** — it is `apps/server`'s `requiredPoolConnections`, computed
    * from `POOL_RESERVATIONS`, and this ring may not import it (`biome.json`: `infrastructure` may
@@ -104,7 +104,7 @@ export const DATABASE_CONFIG_DEFAULTS = {
    * `requiredPoolConnections` at the defaults and `.env.example`'s to one above it — so a worker
    * added to the pool fails a test until both move.
    */
-  poolMax: 23,
+  poolMax: 24,
   connectionTimeoutMs: 10_000,
   partitionMonthsAhead: 3,
 } as const;

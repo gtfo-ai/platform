@@ -152,6 +152,18 @@ runGitProviderContract({
       // Divergence 14: the fake records the target branch's head when a merge request is opened, so
       // the one it opened above has a merge base and the suite may demand a sha.
       mergeBaseIid: existing.ref.iid,
+      // WP-110: every merge request above was opened or merged on the fake's own clock, which
+      // starts at `FAKE_EPOCH`; nothing it holds is newer than the far future.
+      listing: {
+        since: '2000-01-01T00:00:00.000Z',
+        emptySince: '2099-01-01T00:00:00.000Z',
+        openIid: existing.ref.iid,
+        mergedIid: merged.ref.iid,
+      },
+      polling: {
+        port: createFakeGitProvider({ integrationId: INTEGRATION_ID, pollIntervalSeconds: 90 }),
+        intervalSeconds: 90,
+      },
       commits: {
         since: '2000-01-01T00:00:00.000Z',
         emptySince: '2026-09-20T00:00:00.000Z',

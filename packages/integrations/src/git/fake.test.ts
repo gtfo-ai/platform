@@ -716,3 +716,77 @@ describe('FakeGitProvider commits', () => {
     ).toBe('# index\n');
   });
 });
+
+describe('FakeGitProvider merge-request listing (WP-110, divergence 21)', () => {
+  const open = (port: ReturnType<typeof build>, branch: string) =>
+    port.openMergeRequest({
+      project: PROJECT,
+      branch,
+      target: 'main',
+      title: `Change ${branch}`,
+      description: '',
+      draft: false,
+      labels: [],
+      reviewers: [],
+      remove_source_branch: true,
+    });
+
+  it('lists every state, oldest update first, from the instant asked, up to the limit', async () => {
+    const port = build();
+    const first = await open(port, 'one');
+    const second = await open(port, 'two');
+    // A merge moves the first merge request's `updated_at` past the second's.
+    port.emitMergeRequestEvent({ event: 'mr.merged', project: PROJECT, iid: first.ref.iid });
+
+    const all = await port.listMergeRequests(PROJECT, {
+      updatedAfter: '2000-01-01T00:00:00.000Z',
+      limit: 10,
+    });
+    expect(all.map((entry) => [entry.ref.iid, entry.state])).toEqual([
+      [second.ref.iid, 'opened'],
+      [first.ref.iid, 'merged'],
+    ]);
+    const merged = all[1];
+    expect(merged?.merged_at).toBe(merged?.updated_at);
+    expect(merged?.merge_commit_sha).toMatch(/^[0-9a-f]{40}$/);
+
+    const later = await port.listMergeRequests(PROJECT, {
+      updatedAfter: merged?.updated_at as string,
+      limit: 10,
+    });
+    expect(later.map((entry) => entry.ref.iid)).toEqual([first.ref.iid]);
+    expect(
+      await port.listMergeRequests(PROJECT, { updatedAfter: '2000-01-01T00:00:00.000Z', limit: 1 }),
+    ).toHaveLength(1);
+  });
+
+  it('records a close and a reopen with their instants', async () => {
+    const port = build();
+    const mr = await open(port, 'one');
+    port.emitMergeRequestEvent({ event: 'mr.closed', project: PROJECT, iid: mr.ref.iid });
+    const [closed] = await port.listMergeRequests(PROJECT, {
+      updatedAfter: '2000-01-01T00:00:00.000Z',
+      limit: 1,
+    });
+    expect(closed).toMatchObject({ state: 'closed', closed_at: closed?.updated_at });
+
+    port.emitMergeRequestEvent({ event: 'mr.opened', project: PROJECT, iid: mr.ref.iid });
+    const [reopened] = await port.listMergeRequests(PROJECT, {
+      updatedAfter: '2000-01-01T00:00:00.000Z',
+      limit: 1,
+    });
+    expect(reopened).toMatchObject({ state: 'opened', closed_at: null });
+    expect(Date.parse(reopened?.updated_at ?? '')).toBeGreaterThan(
+      Date.parse(closed?.updated_at ?? ''),
+    );
+  });
+
+  it('refuses a listing it cannot window, and polls only when it was built to', async () => {
+    const port = build();
+    await expect(
+      port.listMergeRequests(PROJECT, { updatedAfter: 'yesterday', limit: 1 }),
+    ).rejects.toMatchObject({ code: 'invalid_request' });
+    expect(port.pollPlan()).toBeNull();
+    expect(build({ pollIntervalSeconds: 90 }).pollPlan()).toEqual({ interval_seconds: 90 });
+  });
+});

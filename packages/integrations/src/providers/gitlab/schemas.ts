@@ -118,6 +118,10 @@ export const gitlabMergeRequestSchema = z.object({
   reviewers: z.array(gitlabUserSchema).nullish(),
   merged_at: z.string().nullish(),
   updated_at: z.string().nullish(),
+  /** WP-110: the listing's other two transition instants and the merge commit (the poller's read). */
+  created_at: z.string().nullish(),
+  closed_at: z.string().nullish(),
+  merge_commit_sha: z.string().nullish(),
   changes_count: z.string().nullish(),
   user_notes_count: z.int().nullish(),
   web_url: z.string(),

@@ -2858,6 +2858,39 @@ describe('when the merge request is closed instead of merged', () => {
     ]);
     expect(taskOf(harness).task.state).toBe('needs_human');
   });
+
+  it('leaves a task already waiting for a human where it is when a second close arrives, and adds the close to its brief (WP-110)', async () => {
+    // Two **distinct** `mr.closed` events, not one redelivered — a redelivery of one event is
+    // answered by its `handler_executions` claim and never reaches the handler twice. What this
+    // simulates is a second close the log genuinely holds (a reopen and a close again, or a close
+    // beside an earlier, unrelated escalation): `needs_human → needs_human` is not an edge, so it
+    // used to throw on every dispatch attempt, and since review round 1 it amends the brief.
+    const harness = harnessWith();
+    await harness.publish([ticketMatched()]);
+    const closed = () =>
+      event('mr.closed', {
+        project_id: PROJECT,
+        task_id: null,
+        mr: mergeRequest(false).ref,
+        draft: false,
+        head_sha: 'b'.repeat(40),
+        diff_stats: null,
+      });
+    await harness.publish([closed()]);
+    await harness.publish([closed()]);
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    // Review round 1: the second close reaches the brief — one more `task.escalated`, no new state.
+    const escalations = harness
+      .events()
+      .filter((entry) => entry.type === 'task.escalated') as Extract<
+      DomainEvent,
+      { type: 'task.escalated' }
+    >[];
+    expect(escalations).toHaveLength(2);
+    expect(escalations[1]?.payload.blocker_brief).toContain(
+      'closed without being merged while the task was waiting for a human',
+    );
+  });
 });
 
 /**

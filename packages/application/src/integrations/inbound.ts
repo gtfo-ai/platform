@@ -95,6 +95,14 @@ import {
   type InboundDecisionRefusal,
   isInboundDecisionType,
 } from './inbound-decisions.js';
+import {
+  isMergeRequestLifecycleEvent,
+  lifecycleKeyOf,
+  lifecycleKeyText,
+  type MergeRequestLifecycleEvent,
+  type MergeRequestLifecycleReader,
+  repeatsLifecycle,
+} from './merge-request-lifecycle.js';
 import { createRateLimiter, type RateLimiter, type RateLimitPolicy } from './rate-limiter.js';
 
 /**
@@ -215,6 +223,8 @@ export interface WebhookIngressOptions {
   readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
   readonly ids: { next(): Id };
   readonly clock: { now(): IsoDateTime };
+  /** WP-110: the merge-request lifecycle dedup both doors meet. Required (rule 31). */
+  readonly mergeRequests: MergeRequestLifecycleReader;
   /** Milliseconds, for the audit row's duration. Only differences are meaningful. */
   readonly timer: { now(): number };
   readonly logger?: Logger;
@@ -369,6 +379,12 @@ export interface InboundRecorderOptions {
   readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
   readonly ids: { next(): Id };
   readonly clock: { now(): IsoDateTime };
+  /**
+   * The newest lifecycle event the log holds per merge request (WP-110): a draft that would repeat
+   * it is dropped, so a merge seen by the webhook and by the poller is one `mr.merged`
+   * (`merge-request-lifecycle.ts`). Required (standing rule 31): without it both doors append.
+   */
+  readonly mergeRequests: MergeRequestLifecycleReader;
   readonly logger?: Logger;
   readonly maxSequenceAttempts?: number;
 }
@@ -394,6 +410,8 @@ export type NormalisedDeliveryRecordOutcome =
       readonly kind: 'recorded';
       readonly events: number;
       readonly refused: number;
+      /** Merge-request lifecycle drafts dropped as repeats of what the log already says (WP-110). */
+      readonly repeated: number;
       readonly failure: { readonly text: string | null; readonly count: number };
     }
   | { readonly kind: 'duplicate' };
@@ -445,14 +463,30 @@ export const recordNormalisedDelivery = async (
         await options.eventStore.nextStreamSequence('project', group.projectId),
       );
     }
+    // **After** the sequences (WP-110): a competitor that appends the same transition later moves
+    // the stream past them, so this attempt is refused and its retry reads the competitor's event
+    // (`merge-request-lifecycle.ts` has the argument).
+    const lifecycle = await latestLifecycles(options.mergeRequests, record.byProject);
 
     try {
       return await options.unitOfWork.transaction(async (scope) => {
         const events: DomainEvent[] = [];
         const refusals: DecisionRefusalLine[] = [];
+        let repeated = 0;
         for (const group of record.byProject) {
           let seq = sequences.get(group.projectId) ?? 1;
           for (const draft of group.drafts) {
+            const key = isMergeRequestLifecycleEvent(draft.type)
+              ? lifecycleKeyOf(group.projectId, draft.payload)
+              : null;
+            if (key !== null && isMergeRequestLifecycleEvent(draft.type)) {
+              const text = lifecycleKeyText(key);
+              if (repeatsLifecycle(lifecycle.get(text) ?? null, draft.type)) {
+                repeated += 1;
+                continue;
+              }
+              lifecycle.set(text, draft.type);
+            }
             /**
              * A human decision is the aggregate's to make (WP-43, `inbound-decisions.ts`): it
              * lands on the approval's or the question's own stream, decided by `can()`, or it
@@ -500,11 +534,18 @@ export const recordNormalisedDelivery = async (
         if (events.length > 0) {
           await scope.events.append(events);
         }
+        if (repeated > 0) {
+          logger.info(
+            { integration_id: record.integrationId, repeated },
+            'a merge-request transition the log already holds was not appended again',
+          );
+        }
         return {
           kind: 'recorded' as const,
           failure,
           events: events.length,
           refused: refusals.length,
+          repeated,
         };
       });
     } catch (error) {
@@ -520,6 +561,25 @@ export const recordNormalisedDelivery = async (
       );
     }
   }
+};
+
+/** The newest lifecycle event per merge request the drafts name, keyed by `lifecycleKeyText`. */
+const latestLifecycles = async (
+  reader: MergeRequestLifecycleReader,
+  groups: readonly InboundProjectEvents[],
+): Promise<Map<string, MergeRequestLifecycleEvent | null>> => {
+  const found = new Map<string, MergeRequestLifecycleEvent | null>();
+  for (const group of groups) {
+    for (const draft of group.drafts) {
+      const key = isMergeRequestLifecycleEvent(draft.type)
+        ? lifecycleKeyOf(group.projectId, draft.payload)
+        : null;
+      if (key !== null && !found.has(lifecycleKeyText(key))) {
+        found.set(lifecycleKeyText(key), await reader.latest(key));
+      }
+    }
+  }
+  return found;
 };
 
 /** The per-integration buckets of the HTTP door, created on first use (WP-87, Q60). */
@@ -813,6 +873,7 @@ export const createWebhookIngress = (options: WebhookIngressOptions): WebhookIng
           eventStore: options.eventStore,
           ids: options.ids,
           clock: options.clock,
+          mergeRequests: options.mergeRequests,
           logger,
           maxSequenceAttempts: maxAttempts,
         },

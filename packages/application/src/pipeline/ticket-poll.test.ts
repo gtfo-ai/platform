@@ -29,6 +29,7 @@ import {
   type PolledBinding,
   pollTicketBinding,
   runTicketPollSweep,
+  TICKET_POLL_LIVE_KEYS_LIMIT,
   TICKET_POLL_MAX_LIMIT,
   TICKET_POLL_SWEEP_KEY,
   type TicketPollerOptions,
@@ -62,6 +63,12 @@ interface World {
   failNext: Error | null;
   /** Keys the provider's search has not indexed yet — Jira's lag, modelled (review round 1). */
   unindexed: Set<string>;
+  /** WP-110: tickets the pick-up rule no longer matches — reachable by a `keys` rule only. */
+  others: TicketMatch[];
+  /** WP-110: the binding's live tasks' ticket keys, as the store answers them. */
+  live: string[];
+  /** WP-110: the `keys` read throws this, once. */
+  failKeys: Error | null;
 }
 
 const portFor = (world: World): TaskManagementPort =>
@@ -75,6 +82,11 @@ const portFor = (world: World): TaskManagementPort =>
     pollPlan: () => world.plan,
     matchTickets: (async (rule, options) => {
       world.asked.push({ rule, since: options?.since, limit: options?.limit });
+      if (rule.kind === 'keys' && world.failKeys !== null) {
+        const error = world.failKeys;
+        world.failKeys = null;
+        throw error;
+      }
       if (world.failNext !== null) {
         const error = world.failNext;
         world.failNext = null;
@@ -87,7 +99,11 @@ const portFor = (world: World): TaskManagementPort =>
         asked === null
           ? null
           : new Date(Math.floor(Date.parse(asked) / 60_000) * 60_000).toISOString();
-      return world.matches
+      const searched =
+        rule.kind === 'keys'
+          ? [...world.matches, ...world.others].filter((entry) => rule.keys.includes(entry.ref.key))
+          : world.matches;
+      return searched
         .filter((entry) => !world.unindexed.has(entry.ref.key))
         .filter((entry) => since === null || Date.parse(entry.updated_at) >= Date.parse(since))
         .slice(0, options?.limit ?? 50);
@@ -137,6 +153,9 @@ const harnessFor = (
     asked: [],
     failNext: null,
     unindexed: new Set(),
+    others: [],
+    live: [],
+    failKeys: null,
   };
   const rows = new Map<string, InboxDelivery>();
   const recordFailure: { after: number | null } = { after: null };
@@ -177,6 +196,7 @@ const harnessFor = (
         cursor.value = to;
       }
     },
+    liveTicketKeys: async (_binding, _provider, limit) => world.live.slice(0, limit),
   };
   const jobs: Jobs = {
     defineQueue: async () => {},
@@ -200,6 +220,12 @@ const harnessFor = (
       inbox,
       unitOfWork,
       eventStore: { nextStreamSequence: async () => events.length + 1 },
+      // Ticket deliveries carry no merge-request lifecycle event; the reader is never asked.
+      mergeRequests: {
+        latest: async () => {
+          throw new Error('a ticket poll asked the merge-request lifecycle');
+        },
+      },
       ids: {
         next: () => {
           nextId += 1;
@@ -436,6 +462,100 @@ describe('a poll of one binding', () => {
   });
 });
 
+/**
+ * WP-110, PROGRESS backlog 298: a status rule stops matching a ticket the moment the platform's
+ * status mapping moves it on, so the poll also re-reads the binding's live tasks' tickets — and a
+ * ticket found that way is an edit, never a pick-up.
+ */
+describe('the live tasks’ tickets, whatever the rule says (WP-110)', () => {
+  const STATUS_PLAN: TicketPollPlan = {
+    rule: { kind: 'status', status: 'Ready for agent' },
+    interval_seconds: 60,
+  };
+
+  it('records an edit to a ticket that left the rule as ticket.updated only', async () => {
+    const harness = harnessFor();
+    harness.world.plan = STATUS_PLAN;
+    harness.cursor.value = '2026-06-01T09:58:00.000Z' as IsoDateTime;
+    // The platform moved ACME-1 to In Progress: the rule finds nothing; a human then edited it.
+    harness.world.others = [match('ACME-1', '2026-06-01T09:59:30.000Z')];
+    harness.world.live = ['ACME-1'];
+
+    const report = await pollTicketBinding(harness.options, BINDING);
+
+    expect(harness.world.asked.map((entry) => entry.rule)).toEqual([
+      STATUS_PLAN.rule,
+      { kind: 'keys', keys: ['ACME-1'] },
+    ]);
+    // The same window as the rule's read, and a limit of the key count: a search answers each
+    // ticket once, so it is never a cut.
+    expect(harness.world.asked[1]).toMatchObject({ since: '2026-06-01T09:53:00.000Z', limit: 1 });
+    expect(harness.events.map((event) => event.type)).toEqual(['ticket.updated']);
+    expect(harness.events[0]?.payload).toMatchObject({
+      ticket: { key: 'ACME-1' },
+      updated_at: '2026-06-01T09:59:30.000Z',
+    });
+    expect([...harness.rows.values()].map((row) => row.deliveryId)).toEqual([
+      `jira-cloud:poll:${PROJECT}:ACME-1@2026-06-01T09:59:30.000Z`,
+    ]);
+    expect(report).toMatchObject({
+      kind: 'polled',
+      matched: 0,
+      live: { asked: 1, omitted: 0, matched: 1, recorded: 1, failed: false },
+    });
+    // The cursor is the rule read's alone: a live ticket must not move the window past rule
+    // matches not read yet.
+    expect(harness.cursor.value).toBe('2026-06-01T09:58:00.000Z');
+  });
+
+  it('records a ticket both reads return once — by the rule read, as the pair', async () => {
+    const harness = harnessFor();
+    harness.world.matches = [match('ACME-1', '2026-06-01T09:59:30.000Z')];
+    harness.world.live = ['ACME-1'];
+
+    const report = await pollTicketBinding(harness.options, BINDING);
+
+    expect(harness.events.map((event) => event.type)).toEqual(['ticket.matched', 'ticket.updated']);
+    expect(report).toMatchObject({ live: { matched: 1, recorded: 0, duplicates: 1 } });
+  });
+
+  it('asks nothing more when the binding has no live task', async () => {
+    const harness = harnessFor();
+    harness.world.matches = [match('ACME-1', '2026-06-01T09:59:30.000Z')];
+
+    const report = await pollTicketBinding(harness.options, BINDING);
+
+    expect(harness.world.asked).toHaveLength(1);
+    expect(report).toMatchObject({ live: { asked: 0, matched: 0, failed: false } });
+  });
+
+  it('reads at most a hundred live tickets, one request, and says how many it left out', async () => {
+    const harness = harnessFor();
+    harness.world.live = Array.from({ length: 101 }, (_, index) => `ACME-${index + 1}`);
+
+    const report = await pollTicketBinding(harness.options, BINDING);
+
+    const keysRead = harness.world.asked.filter((entry) => entry.rule.kind === 'keys');
+    expect(keysRead).toHaveLength(1);
+    const rule = keysRead[0]?.rule;
+    expect(rule?.kind === 'keys' ? rule.keys : []).toHaveLength(TICKET_POLL_LIVE_KEYS_LIMIT);
+    expect(report).toMatchObject({ live: { asked: 100, omitted: 1 } });
+  });
+
+  it('fails open: a refused live read leaves the rule half recorded and the cursor moved (rule 20)', async () => {
+    const harness = harnessFor();
+    harness.world.matches = [match('ACME-2', '2026-06-01T09:59:30.000Z')];
+    harness.world.live = ['ACME-1'];
+    harness.world.failKeys = new Error('An issue with key ACME-1 does not exist');
+
+    const report = await pollTicketBinding(harness.options, BINDING);
+
+    expect(harness.events.map((event) => event.type)).toEqual(['ticket.matched', 'ticket.updated']);
+    expect(harness.cursor.value).toBe('2026-06-01T09:59:30.000Z');
+    expect(report).toMatchObject({ live: { asked: 1, failed: true } });
+  });
+});
+
 describe('the ticket.poll queue', () => {
   it('re-arms a binding’s poll at its own interval', async () => {
     const harness = harnessFor();
@@ -515,5 +635,9 @@ describe('the rule a polled match names', () => {
     );
     expect(ticketMatchRuleText({ kind: 'epic', epic_key: 'ACME-100' })).toBe('epic = "ACME-100"');
     expect(ticketMatchRuleText({ kind: 'query', query: 'project = ACME' })).toBe('project = ACME');
+    // WP-110: the live tasks' read, which no webhook announces — spelled so the inbox row says it.
+    expect(ticketMatchRuleText({ kind: 'keys', keys: ['ACME-1', 'ACME-2'] })).toBe(
+      'key in ("ACME-1", "ACME-2")',
+    );
   });
 });

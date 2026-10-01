@@ -117,15 +117,23 @@ What polling does not see, so you can choose knowingly:
 - **Tickets that already matched before you switched it on.** The first poll reads the last
   interval only, so a ticket labelled last month is not started by switching polling on today;
   touch it (any edit) and the next poll finds it.
-- **Edits to a ticket that no longer matches.** A poll asks for the pick-up rule, so with a
-  **status** rule, a ticket the platform has moved on to *In Progress* is no longer in the answer,
-  and an edit to it reaches the running task only by webhook. With a **label** rule the label stays
-  and edits are seen (the running task is shown the new text at its next agent stage).
 - **Comments and new-ticket linting.** Both are webhook-only.
 - **A bulk edit of more than a thousand labelled tickets within a few minutes.** A poll reads up to
   a thousand tickets at once; past that it cannot get beyond the edit, and says so in the server log
   on every poll (*"the ticket poll is stalled"*). Use the webhook for a site that bulk-edits on that
   scale.
+
+**Edits to a ticket that left the rule are still seen** (WP-110). Each poll also re-reads the tickets
+of this binding's running tasks, whatever the pick-up rule says — so with a **status** rule, a ticket
+the platform has moved on to *In Progress* is still read, and an edit to it reaches the running task
+at its next agent stage, as it does with a label rule. That second read is one more request per poll
+and names at most a hundred tickets (the hundred whose tasks moved last; the server log says when
+there are more). It never starts a ticket: what it finds is an edit, never a pick-up. The platform's
+own writes — the status it sets, the workpad it updates — are edits too, so the next agent stage may
+re-read the ticket once more than it strictly needs to. A running task whose ticket was deleted does
+not break the read: Jira refuses a search naming a key that does not exist (`400`, *"An issue with key
+'…' does not exist"*), and the platform drops the keys it names and asks again. If the read still
+fails, the poll records the rule's matches, logs a warning, and tries again next time.
 
 ## 6. Map your statuses
 

@@ -10,7 +10,12 @@
  * Secret fields carry no value here. The registry resolves them from the secret store and hands
  * them to `create` in `ProviderCreateInput.secrets`, keyed by these field names (BD-002).
  */
-import { MINTED_CREDENTIAL_PREFIX_PATTERN } from '@platform/application';
+import {
+  DEFAULT_TICKET_POLL_INTERVAL_SECONDS,
+  MAX_TICKET_POLL_INTERVAL_SECONDS,
+  MIN_TICKET_POLL_INTERVAL_SECONDS,
+  MINTED_CREDENTIAL_PREFIX_PATTERN,
+} from '@platform/application';
 import { httpUrlSchema } from '@platform/contracts';
 import * as z from 'zod';
 
@@ -96,6 +101,20 @@ export const gitlabConfigSchema = z.strictObject({
   max_pages: z.int().positive().max(100).default(10),
   /** Largest CODEOWNERS file the adapter will read, in bytes (BD-022: attacker-controlled). */
   max_codeowners_bytes: z.int().positive().max(4_194_304).default(262_144),
+  /**
+   * Whether this binding **polls** its merge requests (WP-110, technical/06 § "Inbound: webhooks
+   * and polling") — off by default, and the switch an operator whose instance GitLab cannot reach
+   * turns on instead of the webhook, or beside it as a safety net: a merge seen by both is one
+   * `mr.merged`. The key names are the platform's (`TICKET_POLL_CONFIG_KEYS`), because the poll
+   * sweep reads them without building this adapter. A binding with no `project` cannot poll.
+   */
+  poll_enabled: z.boolean().default(false),
+  /** Seconds between two polls of this binding; product/08's 60 by default. */
+  poll_interval_seconds: z
+    .int()
+    .min(MIN_TICKET_POLL_INTERVAL_SECONDS)
+    .max(MAX_TICKET_POLL_INTERVAL_SECONDS)
+    .default(DEFAULT_TICKET_POLL_INTERVAL_SECONDS),
 });
 
 export type GitLabConfig = z.output<typeof gitlabConfigSchema>;

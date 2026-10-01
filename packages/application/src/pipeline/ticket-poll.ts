@@ -67,14 +67,32 @@
  * *running* takes the queued slot, so that binding polls once more straight after — one extra read,
  * never a lost one.
  *
- * ## What a poll cannot see
+ * ## The live tasks' tickets, read whatever the rule says (WP-110, backlog 298)
  *
- * A poll asks for the tickets its pick-up rule matches, so an edit to a ticket that **no longer
- * matches** is not seen — a status rule whose ticket the platform's own status mapping moved on, in
- * particular. Such a binding's live tasks get `ticket.updated` only by webhook; technical/06 says so.
- * A polled edit also carries no changed-field names (`changed_fields: []`, the shape an update
- * with no changelog already had), and the poll emits no `ticket.created`, so the ticket readiness
- * linter is a webhook-only feature.
+ * A poll that asked only for the pick-up rule missed every edit to a ticket that **no longer
+ * matches** it — a status rule whose ticket the platform's own status mapping moved on, in
+ * particular — so a running task kept the ticket text it read at intake. So each poll also asks for
+ * the tickets of the binding's **live tasks** (`state not in ('done', 'cancelled')`, the set WP-60's
+ * ticket signal stamps) changed since the same window, with a `keys` rule that ignores the pick-up
+ * rule, and records each as **`ticket.updated` only** — never `ticket.matched`, because a ticket
+ * that has left the rule must not read as a pick-up. The bound is one more provider read per poll,
+ * naming at most {@link TICKET_POLL_LIVE_KEYS_LIMIT} (100) tickets: one Jira page, and a binding
+ * with more live tasks than that reads the hundred most recently touched and says so in a warn
+ * line. The key is the rule read's, `<provider>:poll:<project>:<ticket>@<updated_at>`, so a ticket
+ * both reads return in one state is recorded once — by whichever read saw it first. The cost of
+ * sharing it is stated: a state the live read recorded first is never recorded as a `ticket.matched`
+ * afterwards, which loses nothing, because a ticket with a live task is never started again (intake's
+ * one task per ticket). A deleted live ticket does not break the read: the Jira adapter drops the
+ * keys a `400` names as missing and asks again (WP-110 review round 1). The live read **fails
+ * open** (rule 20) past that: a provider error is logged and the
+ * poll's rule half stands, and the cursor is the rule read's alone — a live ticket newer than every
+ * rule match must not move the window past rule matches not yet read.
+ *
+ * ## What a poll still cannot see
+ *
+ * A polled edit carries no changed-field names (`changed_fields: []`, the shape an update with no
+ * changelog already had), and the poll emits no `ticket.created`, so the ticket readiness linter is
+ * a webhook-only feature; nor does it carry comments.
  */
 import type { Actor, Id, IsoDateTime, JsonObject } from '@platform/contracts';
 import { idSchema } from '@platform/contracts';
@@ -82,6 +100,7 @@ import * as z from 'zod';
 import { type InboundRecorderOptions, recordNormalisedDelivery } from '../integrations/inbound.js';
 import type { NormalisedDelivery, NormalisedEvent } from '../ports/integrations/common.js';
 import {
+  MAX_TICKET_MATCH_KEYS,
   type TicketMatch,
   type TicketMatchRule,
   type TicketPollPlan,
@@ -95,6 +114,7 @@ import { silentLogger } from '../ports/logger.js';
 import {
   integrationsForProject,
   noRunScopedSecrets,
+  type PipelineIntegrations,
   type PipelineIntegrationsPort,
   type TaskManagementBinding,
   ticketReads,
@@ -121,6 +141,16 @@ export interface TicketPollStore {
   cursorOf(binding: PolledBinding): Promise<IsoDateTime | null>;
   /** Moves the cursor to `to` **only forward**; a binding that no longer exists is a no-op. */
   advanceCursor(binding: PolledBinding, to: IsoDateTime): Promise<void>;
+  /**
+   * The ticket keys of the binding's project's **live** tasks (`state not in ('done', 'cancelled')`)
+   * whose ticket is `provider`'s, distinct, the most recently updated task first, at most `limit`
+   * (WP-110, backlog 298).
+   */
+  liveTicketKeys(
+    binding: PolledBinding,
+    provider: string,
+    limit: number,
+  ): Promise<readonly string[]>;
 }
 
 /**
@@ -164,6 +194,13 @@ export const DEFAULT_TICKET_POLL_LIMIT = 50;
  */
 export const TICKET_POLL_MAX_LIMIT = 1000;
 
+/**
+ * The most live tasks' tickets one poll re-reads (WP-110, backlog 298) — {@link MAX_TICKET_MATCH_KEYS},
+ * one provider page, so the extra read is **one request per poll**. A binding with more live tasks
+ * reads the hundred whose task was touched last, and a warn line names how many it left out.
+ */
+export const TICKET_POLL_LIVE_KEYS_LIMIT = MAX_TICKET_MATCH_KEYS;
+
 /** Bindings one sweep re-arms at most. */
 export const DEFAULT_TICKET_POLL_SWEEP_LIMIT = 500;
 
@@ -196,6 +233,8 @@ export const ticketMatchRuleText = (rule: TicketMatchRule): string => {
       return `epic = ${JSON.stringify(rule.epic_key)}`;
     case 'query':
       return rule.query;
+    case 'keys':
+      return `key in (${rule.keys.map((key) => JSON.stringify(key)).join(', ')})`;
   }
 };
 
@@ -214,6 +253,33 @@ export const polledDeliveryKey = (
     `${binding.ref.provider}:poll:${projectId}:${match.ref.key}@${match.updated_at}`,
   ).value;
 
+const integrationActor = (integrationId: Id, match: TicketMatch): Actor => ({
+  kind: 'integration',
+  integration_id: integrationId,
+  provider: match.ref.provider,
+});
+
+/**
+ * A polled edit — `ticket.updated` with no changed-field names, because a search result carries no
+ * changelog: the empty list an update with none already has, never an invented one
+ * (`ticketUpdatedEvent`'s docblock). The live tasks' read records this alone (WP-110).
+ */
+export const polledUpdateDraft = (
+  projectId: Id,
+  integrationId: Id,
+  match: TicketMatch,
+): NormalisedEvent<'ticket.updated'> => ({
+  type: 'ticket.updated',
+  payload: {
+    project_id: projectId,
+    ticket: match.ref,
+    updated_at: match.updated_at,
+    changed_fields: [],
+    truncated: false,
+  },
+  actor: integrationActor(integrationId, match),
+});
+
 /**
  * The two events a polled match is, in the order a Jira `jira:issue_updated` puts them: the match
  * first, the edit last (`webhook.ts`). The actor is the integration, as a webhook's match is.
@@ -223,45 +289,26 @@ export const polledMatchDrafts = (
   integrationId: Id,
   rule: string,
   match: TicketMatch,
-): NormalisedEvent<'ticket.matched' | 'ticket.updated'>[] => {
-  const actor: Actor = {
-    kind: 'integration',
-    integration_id: integrationId,
-    provider: match.ref.provider,
-  };
-  return [
-    {
-      type: 'ticket.matched',
-      payload: {
-        project_id: projectId,
-        ticket: match.ref,
-        rule,
-        priority: match.priority ?? null,
-        issue_type: match.issue_type,
-        epic: match.epic ?? null,
-        links: match.links.map((link) => ({
-          kind: link.kind,
-          key: link.key,
-          url: link.url ?? null,
-        })),
-      },
-      actor,
+): NormalisedEvent<'ticket.matched' | 'ticket.updated'>[] => [
+  {
+    type: 'ticket.matched',
+    payload: {
+      project_id: projectId,
+      ticket: match.ref,
+      rule,
+      priority: match.priority ?? null,
+      issue_type: match.issue_type,
+      epic: match.epic ?? null,
+      links: match.links.map((link) => ({
+        kind: link.kind,
+        key: link.key,
+        url: link.url ?? null,
+      })),
     },
-    {
-      type: 'ticket.updated',
-      payload: {
-        project_id: projectId,
-        ticket: match.ref,
-        updated_at: match.updated_at,
-        // A search result carries no changelog: the empty list an update with none already has,
-        // never an invented one (`ticketUpdatedEvent`'s docblock).
-        changed_fields: [],
-        truncated: false,
-      },
-      actor,
-    },
-  ];
-};
+    actor: integrationActor(integrationId, match),
+  },
+  polledUpdateDraft(projectId, integrationId, match),
+];
 
 /** Polled drafts are never human decisions; asked to decide one, the recorder has found a defect. */
 const refusingDecisions: InboundRecorderOptions['decisions'] = {
@@ -301,9 +348,13 @@ export type TicketPollReport =
       /** The widest page held nothing newer than the cursor ({@link TICKET_POLL_MAX_LIMIT}). */
       readonly stalled: boolean;
       readonly cursor: IsoDateTime | null;
+      /** The live tasks' tickets, re-read whatever the rule says (WP-110, backlog 298). */
+      readonly live: LiveTicketPollReport;
     };
 
-const newest = (matches: readonly TicketMatch[]): IsoDateTime | null => {
+export const newestUpdatedAt = (
+  matches: readonly { readonly updated_at: string }[],
+): IsoDateTime | null => {
   let latest: string | null = null;
   for (const match of matches) {
     // An instant nobody can read never becomes the cursor (a provider defect must not wedge it).
@@ -328,15 +379,15 @@ const newest = (matches: readonly TicketMatch[]): IsoDateTime | null => {
  * nothing more is needed. `stalled` is the one case left: the widest page is full and nothing in it
  * is newer than the cursor.
  */
-export const pollWindow = async (
-  read: (sinceMs: number, limit: number) => Promise<readonly TicketMatch[] | null>,
+export const pollWindow = async <TItem extends { readonly updated_at: string }>(
+  read: (sinceMs: number, limit: number) => Promise<readonly TItem[] | null>,
   input: { readonly edge: number; readonly cursorKnown: boolean; readonly limit: number },
 ): Promise<{
-  readonly matches: readonly TicketMatch[];
+  readonly matches: readonly TItem[];
   readonly limit: number;
   readonly stalled: boolean;
 }> => {
-  const stuck = (page: readonly TicketMatch[], limit: number): boolean =>
+  const stuck = (page: readonly TItem[], limit: number): boolean =>
     input.cursorKnown &&
     page.length >= limit &&
     !page.some((match) => Date.parse(match.updated_at) > input.edge);
@@ -408,14 +459,147 @@ export const pollTicketBinding = async (
   }
 
   const rule = ticketMatchRuleText(plan.rule);
+  const ruled = await recordPolledMatches(options, binding, taskManagement, {
+    matches,
+    rule,
+    drafts: (document, match) =>
+      polledMatchDrafts(binding.projectId, binding.integrationId, document.rule, match),
+  });
+
+  const latest = newestUpdatedAt(matches);
+  if (latest !== null) {
+    await options.store.advanceCursor(binding, latest);
+  }
+  const live = await pollLiveTickets(options, binding, integrations, edge);
+  return {
+    kind: 'polled',
+    plan,
+    matched: matches.length,
+    recorded: ruled.recorded,
+    duplicates: ruled.duplicates,
+    skipped: ruled.skipped,
+    stalled: window.stalled,
+    cursor: latest ?? cursor,
+    live,
+  };
+};
+
+/** What the live tasks' read did (WP-110) — `failed` when the provider refused it (rule 20). */
+export interface LiveTicketPollReport {
+  /** Live tasks' tickets asked for (at most {@link TICKET_POLL_LIVE_KEYS_LIMIT}). */
+  readonly asked: number;
+  /** Live tasks' tickets left out because the binding has more than the limit. */
+  readonly omitted: number;
+  readonly matched: number;
+  readonly recorded: number;
+  readonly duplicates: number;
+  readonly skipped: number;
+  readonly failed: boolean;
+}
+
+/**
+ * The live tasks' tickets changed since the window's start, each recorded as `ticket.updated` only
+ * (WP-110, backlog 298; the module docblock has the reasoning and the bound).
+ */
+const pollLiveTickets = async (
+  options: TicketPollerOptions,
+  binding: PolledBinding,
+  integrations: PipelineIntegrations,
+  edge: number,
+): Promise<LiveTicketPollReport> => {
+  const logger = options.logger ?? silentLogger;
+  const taskManagement = integrations.taskManagement as TaskManagementBinding;
+  const listed = await options.store.liveTicketKeys(
+    binding,
+    taskManagement.ref.provider,
+    TICKET_POLL_LIVE_KEYS_LIMIT + 1,
+  );
+  const keys = listed.slice(0, TICKET_POLL_LIVE_KEYS_LIMIT);
+  const omitted = listed.length - keys.length;
+  const nothing = {
+    asked: keys.length,
+    omitted,
+    matched: 0,
+    recorded: 0,
+    duplicates: 0,
+    skipped: 0,
+  };
+  if (omitted > 0) {
+    logger.warn(
+      {
+        project_id: binding.projectId,
+        integration_id: binding.integrationId,
+        limit: TICKET_POLL_LIVE_KEYS_LIMIT,
+      },
+      'the binding has more live tasks than one poll re-reads; edits to the tickets of the tasks touched least recently reach them only by webhook (TICKET_POLL_LIVE_KEYS_LIMIT)',
+    );
+  }
+  if (keys.length === 0) {
+    return { ...nothing, failed: false };
+  }
+  const rule: TicketMatchRule = { kind: 'keys', keys: [...keys] };
+  let matches: readonly TicketMatch[];
+  try {
+    matches =
+      (await ticketReads(integrations).matches(
+        rule,
+        // A search answers each ticket at most once, so a limit of the key count is never a cut.
+        { since: new Date(edge - TICKET_POLL_OVERLAP_MS).toISOString(), limit: keys.length },
+        { projectId: binding.projectId, taskId: null },
+      )) ?? [];
+  } catch (error) {
+    // Rule 20: an inbound read that failed is retried by the next poll; the rule half stands.
+    logger.warn(
+      {
+        project_id: binding.projectId,
+        integration_id: binding.integrationId,
+        asked: keys.length,
+        error: error instanceof Error ? error.name : 'unknown',
+      },
+      'the ticket poll could not re-read the live tasks’ tickets; their edits wait for the next poll',
+    );
+    return { ...nothing, failed: true };
+  }
+  const recorded = await recordPolledMatches(options, binding, taskManagement, {
+    matches,
+    rule: ticketMatchRuleText(rule),
+    drafts: (_document, match) => [
+      polledUpdateDraft(binding.projectId, binding.integrationId, match),
+    ],
+  });
+  return { ...nothing, matched: matches.length, ...recorded, failed: false };
+};
+
+/**
+ * Records each match through the webhook's own recorder, redacted before anything is built from it
+ * (the rule read's half and the live read's share it — WP-110).
+ */
+const recordPolledMatches = async (
+  options: TicketPollerOptions,
+  binding: PolledBinding,
+  taskManagement: TaskManagementBinding,
+  input: {
+    readonly matches: readonly TicketMatch[];
+    readonly rule: string;
+    readonly drafts: (
+      document: { readonly rule: string },
+      match: TicketMatch,
+    ) => NormalisedEvent<'ticket.matched' | 'ticket.updated'>[];
+  },
+): Promise<{
+  readonly recorded: number;
+  readonly duplicates: number;
+  readonly skipped: number;
+}> => {
+  const logger = options.logger ?? silentLogger;
   let recorded = 0;
   let duplicates = 0;
   let skipped = 0;
-  for (const raw of matches) {
+  for (const raw of input.matches) {
     // Redacted **before** anything is built from it — the key, the row and the events alike — as a
     // webhook delivery is redacted before its normaliser reads it (BD-003: events are append-only).
     const redacted = taskManagement.redactor.redactJson({
-      rule,
+      rule: input.rule,
       match: raw as unknown as JsonObject,
     });
     const document = redacted.value as { rule: string; match: unknown };
@@ -443,12 +627,7 @@ export const pollTicketBinding = async (
       duplicates += 1;
       continue;
     }
-    const drafts = polledMatchDrafts(
-      binding.projectId,
-      binding.integrationId,
-      document.rule,
-      match,
-    );
+    const drafts = input.drafts(document, match);
     const normalised: NormalisedDelivery[] = [{ events: [...drafts], ignored: [] }];
     const outcome = await recordNormalisedDelivery(
       { ...options.recorder, decisions: refusingDecisions, logger },
@@ -473,21 +652,7 @@ export const pollTicketBinding = async (
       recorded += 1;
     }
   }
-
-  const latest = newest(matches);
-  if (latest !== null) {
-    await options.store.advanceCursor(binding, latest);
-  }
-  return {
-    kind: 'polled',
-    plan,
-    matched: matches.length,
-    recorded,
-    duplicates,
-    skipped,
-    stalled: window.stalled,
-    cursor: latest ?? cursor,
-  };
+  return { recorded, duplicates, skipped };
 };
 
 export const enqueueTicketPoll = async (

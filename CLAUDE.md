@@ -218,7 +218,11 @@ the CLI and a real `claude` never reached the sidecar (measured, backlog 342).
   signal and writes a redacted row to the same `inbox` table under its own `<provider>:poll:…@<updated_at>` key
   (its payload shape is the match's, not a webhook's), so a
   repeat poll starts nothing, and a poll against a webhook is deduplicated by intake's one-task-per-ticket
-  rule. The door itself is **rate-limited per `integrations.id`** (Q60): past the bucket a delivery answers
+  rule. **A git binding may poll its merge requests too** (WP-110, `pipeline/mr-poll.ts`,
+  `bindings.mr_poll_cursor`, migration 0068): a merge-request open, merge or close the project's log already
+  holds is dropped by `recordNormalisedDelivery` whichever door brought it
+  (`integrations/merge-request-lifecycle.ts`), and each ticket poll also re-reads its live tasks' tickets (a
+  `keys` rule, at most 100 per poll), recording `ticket.updated` only, never `ticket.matched`. The door itself is **rate-limited per `integrations.id`** (Q60): past the bucket a delivery answers
   `429` with `Retry-After`, reaches no signature check and writes no `inbox` row.
 - **A run's prompt and its tools** (WP-17): `packages/domain/src/prompt/` is the assembler and the
   data-block contract, `packages/prompts/roles/<role>/prompt.md` are the shipped role prompts, and

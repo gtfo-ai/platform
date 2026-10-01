@@ -118,6 +118,7 @@ const pollerOptions = (): TicketPollerOptions => ({
     inbox: integrationAdapters.createPostgresInboxStore({ sql: pool }),
     unitOfWork: eventing.unitOfWork,
     eventStore: eventing.store,
+    mergeRequests: integrationAdapters.createPostgresMergeRequestLifecycle({ sql: pool }),
     ids: { next: () => randomUUID() as Id },
     clock: { now: () => new Date().toISOString() as IsoDateTime },
   },
@@ -298,5 +299,59 @@ describe('a poll over the fake provider', () => {
       'ticket.updated',
     ]);
     expect(await inboxRows()).toHaveLength(2);
+  });
+});
+
+/**
+ * WP-110, PROGRESS backlog 298: a **status** pick-up rule stops matching a ticket the moment the
+ * platform's status mapping moves it on. The poll re-reads the binding's live tasks' tickets — the
+ * `tasks` rows the store's `liveTicketKeys` answers — and records an edit to one as
+ * `ticket.updated` only. That the stamp then lands on the live task is the e2e tier's
+ * (`test/e2e/pipeline/ticket-poll.e2e.test.ts`), because it needs the dispatcher.
+ */
+describe('a status-rule binding’s live tasks (WP-110, backlog 298)', () => {
+  it('records an edit to a ticket the rule no longer matches as ticket.updated, never ticket.matched', async () => {
+    const binding = { projectId, integrationId };
+    await pool.query(
+      `update bindings
+          set config = config || '{"pickup_status": "Ready for agent"}'::jsonb
+        where project_id = $1 and integration_id = $2`,
+      [projectId, integrationId],
+    );
+    try {
+      // The platform already moved ACME-7 on: it is In Progress, so the status rule finds nothing.
+      tickets.seedTicket({ key: 'ACME-7', title: 'Moved on', status: 'In Progress' });
+      await pool.query(
+        `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state, current_stage)
+           values ($1, $2, 'ACME-7', 'https://tickets.example.test/browse/ACME-7', 'feature', 'active', 'implementation')`,
+        [projectId, FAKE_TASK_MANAGEMENT_PROVIDER_ID],
+      );
+      // A human edits the ticket.
+      tickets.emitTicketUpdated({ ticketKey: 'ACME-7', description: 'Now with criteria.' });
+
+      const report = await pollTicketBinding(pollerOptions(), binding);
+
+      expect(report).toMatchObject({
+        kind: 'polled',
+        matched: 0,
+        live: { asked: 1, matched: 1, recorded: 1, failed: false },
+      });
+      expect(await eventTypes()).toEqual(['ticket.updated']);
+      const [row] = await inboxRows();
+      expect(row?.delivery_id).toMatch(
+        new RegExp(`^${FAKE_TASK_MANAGEMENT_PROVIDER_ID}:poll:${projectId}:ACME-7@`),
+      );
+
+      // The next poll: nothing changed, nothing appended.
+      await pollTicketBinding(pollerOptions(), binding);
+      expect(await eventTypes()).toEqual(['ticket.updated']);
+    } finally {
+      await pool.query(`delete from tasks where project_id = $1`, [projectId]);
+      await pool.query(
+        `update bindings set config = config - 'pickup_status'
+          where project_id = $1 and integration_id = $2`,
+        [projectId, integrationId],
+      );
+    }
   });
 });

@@ -79,6 +79,7 @@ export * from './integrations/egress.js';
 export * from './integrations/inbound.js';
 export * from './integrations/inbound-connections.js';
 export * from './integrations/inbound-decisions.js';
+export * from './integrations/merge-request-lifecycle.js';
 export * from './integrations/rate-limiter.js';
 export * from './integrations/redaction.js';
 // The knowledge base (WP-16): indexer, context packs, `kb_search`, code map
@@ -131,6 +132,7 @@ export * from './pipeline/integrations.js';
 export * from './pipeline/jobs.js';
 export * from './pipeline/lease.js';
 export * from './pipeline/live-runs.js';
+export * from './pipeline/mr-poll.js';
 export * from './pipeline/observability-prefetch.js';
 export * from './pipeline/outbound.js';
 export * from './pipeline/planner.js';

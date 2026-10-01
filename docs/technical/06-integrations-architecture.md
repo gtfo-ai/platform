@@ -9,7 +9,7 @@ Each integration **type** is a TypeScript/Python interface pair: an *outbound po
 ### TaskManagement
 ```
 readTicket(ref) -> Ticket {key, url, type, title, description, comments[], labels, priority, links[{type, key, state}], epic?: {key, title, description}, siblings?: [{key, title, state}], attachmentsText[]}
-matchTickets(rule) -> TicketRef[]                   # the ticket poller's read, oldest first (WP-87)
+matchTickets(rule) -> TicketRef[]                   # the ticket poller's read, oldest first (WP-87); rule `keys` = the tickets named, whatever the pick-up rule (WP-110)
 pollPlan() -> {rule, interval_seconds} | null        # WP-87: the binding's own switch, rule and interval
 transition(ref, targetStatusName, fields?) -> {changed, from, to}   # resolves at runtime; already there = {changed:false}; unknown target fails loudly
 upsertWorkpad(ref, markerId, markdown) -> CommentRef # edit in place (BD-023)
@@ -73,6 +73,8 @@ getDefaultBranchHead(project) -> sha
 readCodeowners(project, ref) -> Rules
 listMergedMergeRequests(project, since, limit) -> [{ref, author, mergedAt, title, diffStats?, discussionCount}]   # history bootstrap, shadow comparison
 listCommits(project, {since, limit}) -> [{sha, message, author, committedAt, url?}]   # history bootstrap's commit messages (WP-35)
+listMergeRequests(project, {updatedAfter, limit}) -> [{ref, state, draft, headSha?, createdAt, updatedAt, mergedAt?, closedAt?, mergeCommitSha?}]   # the merge-request poller's read, every state, oldest update first (WP-110)
+pollPlan() -> {interval_seconds} | null             # WP-110: the binding's own switch and interval; null without a single project
 revokeCredential({revokeId})                          # by address (WP-77): when the workspace is destroyed, and by the recovery pass for a run whose revoke never happened
 inbound: InboundNormaliser -> mr.* | ci.pipeline.finished | default_branch.moved
 capabilities() -> {webhooks, projectTokens, groupTokens, codeowners, coverageArtifacts, draftPipelines, discussionResolution, credentialMinting}
@@ -449,7 +451,8 @@ the existing suite (BD-017).
     With neither token configured, `verify` is `false` — an endpoint that accepts unverified
     deliveries because nothing was configured looks exactly like one that works.
 - **Polling fallback** per binding when the instance has no public URL, or as a safety net: Jira `search/jql` with `updated >= -Nm`, GitLab MR/pipeline listing since last cursor; same normaliser; dedup makes both paths safe together.
-  > **As built at WP-87 (PROGRESS backlog 187): a ticket poller; still no merge-request poller.** A
+  > **As built at WP-87 (PROGRESS backlog 187): a ticket poller** (the merge-request half is WP-110's,
+  > below). A
   > task-management binding whose configuration sets `poll_enabled` (the platform's key,
   > `TICKET_POLL_CONFIG_KEYS`; interval `poll_interval_seconds`, 30–86400, default 60) is polled by one
   > `ticket.poll` job per binding (`packages/application/src/pipeline/ticket-poll.ts`), which asks
@@ -485,17 +488,59 @@ the existing suite (BD-017).
   > read for a live task.
   >
   > **A polled edit emits `ticket.updated`** (criterion 2), with `changed_fields: []` — a search result
-  > carries no changelog. **What a poll cannot see**: an edit to a ticket that no longer matches the
-  > pick-up rule (with a **status** rule, a ticket the platform's status mapping moved on), which
-  > reaches a live task only by webhook; comments and `ticket.created` (so the ticket linter is
+  > carries no changelog. **Since WP-110 a poll also re-reads its live tasks' tickets** (PROGRESS
+  > backlog 298): a second `matchTickets` per poll with a `keys` rule — the tickets of the binding's
+  > tasks in any state but `done`/`cancelled`, whatever the pick-up rule says, at most
+  > `TICKET_POLL_LIVE_KEYS_LIMIT` (100, one Jira page, so the bound is **one request per poll**) —
+  > recorded as `ticket.updated` **only**, never `ticket.matched`, on the same key; so an edit to a
+  > ticket a **status** rule no longer matches (the platform's status mapping moved it on) reaches its
+  > live task. A key Jira says does not exist (`400`, a deleted ticket — documented for Data Center
+  > search, inferred for Cloud) is dropped and the search asked again (`MISSING_KEY_RETRIES`, 3);
+  > a read that still fails fails open (a warning; the rule half stands). It never moves the cursor.
+  > **What a poll cannot see**: comments and `ticket.created` (so the ticket linter is
   > webhook-only); and tickets that matched before polling was switched on, because a binding's first
   > poll reads its last interval only — a first read of every ticket ever labelled would start closed
   > ones. **A lost poll is recovered**: a poll re-arms itself in a `finally`, and a sweep job
   > (`APP_TICKET_POLL_SWEEP_INTERVAL_MS`, default a minute) enqueues a poll for every polling binding,
   > which `stately` collapses onto a live chain's queued job and which restarts a lost one — so the
-  > bound on a lost chain is one sweep. **Not built**: a GitLab merge-request poller (the CI gate still
-  > reads a merge request's pipeline itself, `gates.ts`), and the webhook URL is still built from
-  > `APP_BASE_URL` (`APP_WEBHOOK_PUBLIC_URL` was removed, backlog 127).
+  > bound on a lost chain is one sweep. The webhook URL is still built from `APP_BASE_URL`
+  > (`APP_WEBHOOK_PUBLIC_URL` was removed, backlog 127).
+  >
+  > **As built at WP-110 (PROGRESS backlog 297): the merge-request poller.** A git binding whose
+  > configuration sets `poll_enabled` (the same platform keys; GitLab's `pollPlan()` also needs a
+  > `project`) is polled by one `mr.poll` job per binding (`packages/application/src/pipeline/mr-poll.ts`)
+  > — WP-87's shape: a cursor on the binding (`bindings.mr_poll_cursor`, migration 0068), the same
+  > overlap and widening window (`pollWindow`), the same sweep and re-arm, the read
+  > (`GitProviderPort.listMergeRequests`: GitLab's *List project merge requests* with `updated_after`,
+  > `order_by=updated_at`, `sort=asc`, every state) through the executor outside every transaction,
+  > and each listed merge request redacted and recorded by `recordNormalisedDelivery` on the key
+  > `<provider>:poll:<project>:<path>!<iid>@<updated_at>`. A listing is a **state**, so it becomes the
+  > transition the log does not have yet: `mr.opened` for a merge request created inside the window
+  > (or reopened after the log's `mr.closed`), `mr.updated` with the provider's `updated_at` for an
+  > open one, `mr.merged` / `mr.closed` when it merged or closed — for a merge request the log has
+  > never heard of, only when that instant is inside the window, so an old merge request touched
+  > today is not announced as new. **"Dedup makes both paths safe together", for merge requests,
+  > is the log's**: a poll's key can never equal a webhook's delivery id, and several consumers of a
+  > merge request's lifecycle are not one-per-merge-request (the merge measurement counts per event;
+  > a second close met `needs_human → needs_human`), so `recordNormalisedDelivery` drops an
+  > `mr.opened`/`mr.merged`/`mr.closed` draft that repeats the newest lifecycle event the project's
+  > log holds for that merge request (`integrations/merge-request-lifecycle.ts`), for **both** doors;
+  > the read is served by `events_mr_lifecycle_idx` (migration 0068) and is race-free because it is
+  > taken after the stream sequence the append is guarded by. A listing can be **overtaken** between
+  > the list and the record (a webhook records a close; the stale `opened` listing would read as a
+  > reopen), so a listing whose transition goes against the log of a merge request the log already
+  > knows is **confirmed by one more read of that merge request** and records nothing if the provider
+  > no longer says its state — one read per transition the poll finds, never per listing. (WP-110
+  > review round 1 compared the listing's `updated_at` with the platform's `occurred_at` instead; two
+  > clocks, and on a poll-only binding it lost a merge GitLab stamped before the platform recorded
+  > the open — closed at review round 2.) The saga's `mr.closed` branch also amends the brief of a
+  > task already at `needs_human` rather than escalating it again (`amendEscalation`). **What a merge-request poll cannot see**:
+  > approvals (`mr.approved`), review comments (`mr.review.comment`), finished pipelines
+  > (`ci.pipeline.finished` — the CI gate reads the head's pipeline itself, `gates.ts`) and
+  > default-branch moves (`default_branch.moved`) stay webhook-only; a merge request opened and
+  > closed between two polls is one `mr.closed`; `blocking_threads_resolved` is never sent. Two
+  > `mr.updated` for one push can still land (one per door); the head handler orders them by the
+  > provider's instant.
 - **Slack** uses Socket Mode (research/03): a long-lived connection in the API process (or a dedicated `slack` process when scaling), emitting the same domain events.
   > **As built at WP-43.** The connection is held by **the process that serves `/webhooks/*`** —
   > `ROLE=all` or `ROLE=api` — and by construction rather than by a flag: `startRuntime` hands the

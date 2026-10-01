@@ -67,31 +67,34 @@ export const gitlabReplayContext = (
   const replay = createGitLabReplay(
     replayFixtureNames().flatMap((name) => loadReplayFixture(name)),
   );
-  const port = createGitLabProvider({
-    integrationId: GITLAB_INTEGRATION_ID,
-    config: gitlabConfigSchema.parse({
-      base_url: GITLAB_HOST,
-      project: GITLAB_PROJECT,
-      mint_credentials: overrides.mintCredentials ?? true,
-      // No network, so no timeout timer either: a wall-clock timer in a replay run is a hardware
-      // dependency with nothing to guard.
-      request_timeout_ms: 0,
-    }),
-    secrets: {
-      token: FAKE_BINDING_TOKEN,
-      webhook_secret_token: FAKE_SECRET_TOKEN,
-      webhook_signing_token: FAKE_SIGNING_TOKEN,
-    },
-    fetchImpl: replay.fetchImpl,
-    clock: fixedClock(CLOCK_AT),
-    // Required since WP-11 (standing rule 31): the binding's own credentials are what this suite
-    // is about, and the composition root is where they become a redactor.
-    redactor: exactSecretRedactor([
-      { name: 'gitlab_token', value: FAKE_BINDING_TOKEN },
-      { name: 'gitlab_webhook_secret_token', value: FAKE_SECRET_TOKEN },
-      { name: 'gitlab_webhook_signing_token', value: FAKE_SIGNING_TOKEN },
-    ]),
-  });
+  const build = (config: Readonly<Record<string, unknown>> = {}) =>
+    createGitLabProvider({
+      integrationId: GITLAB_INTEGRATION_ID,
+      config: gitlabConfigSchema.parse({
+        base_url: GITLAB_HOST,
+        project: GITLAB_PROJECT,
+        mint_credentials: overrides.mintCredentials ?? true,
+        // No network, so no timeout timer either: a wall-clock timer in a replay run is a hardware
+        // dependency with nothing to guard.
+        request_timeout_ms: 0,
+        ...config,
+      }),
+      secrets: {
+        token: FAKE_BINDING_TOKEN,
+        webhook_secret_token: FAKE_SECRET_TOKEN,
+        webhook_signing_token: FAKE_SIGNING_TOKEN,
+      },
+      fetchImpl: replay.fetchImpl,
+      clock: fixedClock(CLOCK_AT),
+      // Required since WP-11 (standing rule 31): the binding's own credentials are what this suite
+      // is about, and the composition root is where they become a redactor.
+      redactor: exactSecretRedactor([
+        { name: 'gitlab_token', value: FAKE_BINDING_TOKEN },
+        { name: 'gitlab_webhook_secret_token', value: FAKE_SECRET_TOKEN },
+        { name: 'gitlab_webhook_signing_token', value: FAKE_SIGNING_TOKEN },
+      ]),
+    });
+  const port = build();
 
   return {
     replay,
@@ -120,6 +123,19 @@ export const gitlabReplayContext = (
     // WP-35: `commits.json` records the list at two windows — a wide one carrying two commits of
     // this corpus's own repository, and one after both of them answering `[]`. The narrow case is
     // what an adapter that dropped `since` fails.
+    // WP-110: `merge-request-poll.json` records the poller's listing at two windows — merge request
+    // 31 open and 32 merged, oldest update first, and an empty list for a window after both.
+    listing: {
+      since: '2000-01-01T00:00:00.000Z',
+      emptySince: '2099-01-01T00:00:00.000Z',
+      openIid: 31,
+      mergedIid: 32,
+    },
+    // The binding switched merge-request polling on, at an interval of its own.
+    polling: {
+      port: build({ poll_enabled: true, poll_interval_seconds: 90 }),
+      intervalSeconds: 90,
+    },
     commits: {
       since: '2000-01-01T00:00:00.000Z',
       emptySince: '2026-09-20T00:00:00.000Z',

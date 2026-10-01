@@ -46,6 +46,7 @@ import type {
   PipelineSignal,
 } from '@platform/domain';
 import {
+  amendEscalation,
   compilePipeline,
   createApproval,
   createTask,
@@ -1470,6 +1471,25 @@ const mergeRequestHandler = (options: PipelineSagaOptions): EventHandler => ({
     };
     if (event.type === 'mr.closed') {
       if (stored.task.state === 'done' || stored.task.state === 'cancelled') {
+        return;
+      }
+      if (stored.task.state === 'needs_human') {
+        // `needs_human → needs_human` is not an edge, and the task already waits for a person
+        // (WP-110). The close is added to the brief instead (review round 1): the notification and
+        // the workpad re-read `task.escalated`, so the person handling the task learns of it. A
+        // repeat of the same close never reaches here — the inbound lifecycle dedup drops it.
+        const amended = amendEscalation(
+          stored.task,
+          {
+            reason: 'the merge request was closed',
+            blockerBrief:
+              `The merge request for ${stored.task.ticket.key} was closed without being merged while the task was waiting for a human. ` +
+              'Deal with the earlier escalation knowing it: hand the task back at Architecture if the approach was wrong, or cancel it if the work is not wanted.',
+          },
+          contextFor(options, stored.task.id, event.id),
+        );
+        await options.store.tasks.save(context.scope.tx, { ...stored, task: amended.aggregate });
+        await context.emit(amended.events);
         return;
       }
       // product/04 S7: "MR close/decline → `Needs human` with reason".

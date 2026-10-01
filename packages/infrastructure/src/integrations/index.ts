@@ -11,3 +11,4 @@ export * from './postgres-audit-log.js';
 export * from './postgres-held-connection-liveness.js';
 export * from './postgres-idempotency-store.js';
 export * from './postgres-inbox.js';
+export * from './postgres-merge-request-lifecycle.js';

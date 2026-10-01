@@ -53,8 +53,9 @@ lives instead:
 - `APP_WEBHOOK_PUBLIC_URL` — the webhook URL an integration's setup guide publishes is built from
   **`APP_BASE_URL`** (`<APP_BASE_URL>/webhooks/<provider>/<integration_id>`, the operator guide's
   § The webhook URL). A task-management binding with no webhook starts tickets only if it **polls**
-  (`poll_enabled` in its configuration, WP-87, PROGRESS backlog 187); the poller's sweep interval is
-  `APP_TICKET_POLL_SWEEP_INTERVAL_MS`.
+  (`poll_enabled` in its configuration, WP-87, PROGRESS backlog 187), and a GitLab binding with no
+  webhook hears about its merge requests only if it polls them (the same keys, WP-110, backlog 297);
+  both pollers' sweep interval is `APP_TICKET_POLL_SWEEP_INTERVAL_MS`.
 - `APP_DISABLE_TELEMETRY` — this build sends nothing anywhere, so there is nothing to disable.
 - `APP_FEATURE_*` (five flags) — **decided at WP-73: deleted rather than built.** The file said the
   instance value was a ceiling on what a project may enable; no code enforced it, and a project's own

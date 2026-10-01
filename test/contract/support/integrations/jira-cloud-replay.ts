@@ -140,6 +140,9 @@ const clone = <T>(value: T): T => structuredClone(value);
 export const REPLAY_SEARCH_PAGE_CAP = 20;
 
 const JQL_CLAUSE = /^\(?(labels|status|parent) = "((?:[^"\\]|\\.)*)"/;
+/** WP-110: the live tasks' read, `key in ("ACME-1", "ACME-2")` — every key a JQL string literal. */
+const JQL_KEYS = /^key in \(((?:"(?:[^"\\]|\\.)*"(?:, )?)+)\)/;
+const JQL_KEY_LITERAL = /"((?:[^"\\]|\\.)*)"/g;
 const JQL_KEY_EXCLUSION = /AND key != "([^"]+)"/;
 const JQL_WINDOW = /AND updated >= "-(\d+)m"/;
 
@@ -207,8 +210,26 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
 
   const notFound = (): Response => jsonResponse(404, bodyOf('error-not-found.json'));
 
+  const namedKeysOf = (jql: string): string[] => {
+    const keysClause = JQL_KEYS.exec(jql);
+    return keysClause === null
+      ? []
+      : [...(keysClause[1] ?? '').matchAll(JQL_KEY_LITERAL)].map((literal) =>
+          (literal[1] ?? '').replace(/\\"/g, '"').replace(/\\\\/g, '\\'),
+        );
+  };
+
   const searchIssues = (jql: string): Record<string, unknown>[] => {
-    const clause = JQL_CLAUSE.exec(jql) as RegExpExecArray;
+    const keysClause = JQL_KEYS.exec(jql);
+    const named =
+      keysClause === null
+        ? null
+        : new Set(
+            [...(keysClause[1] ?? '').matchAll(JQL_KEY_LITERAL)].map((literal) =>
+              (literal[1] ?? '').replace(/\\"/g, '"').replace(/\\\\/g, '\\'),
+            ),
+          );
+    const clause = (JQL_CLAUSE.exec(jql) ?? ['', 'labels', '']) as RegExpExecArray;
     const field = clause[1] as 'labels' | 'status' | 'parent';
     const value = (clause[2] ?? '').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
     const excluded = JQL_KEY_EXCLUSION.exec(jql)?.[1] ?? null;
@@ -228,6 +249,9 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
         }
         if (cutoff !== null && Date.parse(String(fields.updated ?? '')) < cutoff) {
           return false;
+        }
+        if (named !== null) {
+          return named.has(key);
         }
         if (field === 'labels') {
           return ((fields.labels as string[] | undefined) ?? []).includes(value);
@@ -270,8 +294,20 @@ export const createJiraReplay = (options: { readonly now?: string } = {}): JiraR
     }
     if (method === 'GET' && path === 'search/jql') {
       const jql = query.jql ?? '';
-      if (!JQL_CLAUSE.test(jql)) {
+      if (!JQL_CLAUSE.test(jql) && !JQL_KEYS.test(jql)) {
         return harnessError(`jira replay: unsupported JQL "${jql}"`);
+      }
+      // WP-110 review round 1: a `key in (…)` naming a key that does not exist is refused whole,
+      // as Atlassian documents for search (`error-issue-key-does-not-exist.json`, `inferred`).
+      const absent = namedKeysOf(jql).filter((key) => !issues.has(key));
+      if (absent.length > 0) {
+        const refusal = loadJiraFixture('error-issue-key-does-not-exist.json').response;
+        const body = refusal?.body as { errorMessages?: string[] } | undefined;
+        const template = body?.errorMessages?.[0] ?? '';
+        return jsonResponse(refusal?.status ?? 400, {
+          errorMessages: absent.map((key) => template.replace("'ACME-404'", `'${key}'`)),
+          errors: {},
+        });
       }
       const found = searchIssues(jql);
       const limit = Number(query.maxResults ?? '50');

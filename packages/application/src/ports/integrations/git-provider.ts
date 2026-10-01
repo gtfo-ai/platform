@@ -25,6 +25,10 @@ import {
 import * as z from 'zod';
 import type { MintedCredentialShape } from '../../integrations/credential-shape.js';
 import { externalIdentitySchema, type InboundNormaliser, type IntegrationPort } from './common.js';
+import {
+  MAX_TICKET_POLL_INTERVAL_SECONDS,
+  MIN_TICKET_POLL_INTERVAL_SECONDS,
+} from './task-management.js';
 
 // ── Data ─────────────────────────────────────────────────────────────────────
 
@@ -181,6 +185,47 @@ export const mergedMergeRequestSchema = z.strictObject({
 });
 
 /**
+ * One merge request as a **listing** answers it — the merge-request poller's read (WP-110, PROGRESS
+ * backlog 297).
+ *
+ * Just enough to turn a listed merge request into the catalogue's `mr.*` events without a second
+ * read: the state the provider holds now, the head, and the instants of the three transitions a
+ * poll can see (created, merged, closed) beside the `updated_at` the poller's cursor is made of.
+ * GitLab's *"List project merge requests"* example publishes every field here
+ * (`test/fixtures/http/gitlab/SOURCES.md`). A listing is a **state**, not a change: a poll that
+ * finds a merge request `merged` cannot tell whether it merged a second ago or a month ago except by
+ * `merged_at`, which is why the transition instants are required where the state implies one.
+ *
+ * `head_sha` is nullable because GitLab's `sha` is; a listing with none cannot become an `mr.*`
+ * event (the catalogue requires a head) and the poller drops it by name rather than inventing one.
+ */
+export const mergeRequestListingSchema = z.strictObject({
+  ref: mergeRequestRefSchema,
+  state: mergeRequestStateSchema,
+  draft: z.boolean(),
+  head_sha: shaSchema.nullish(),
+  created_at: isoDateTimeSchema,
+  updated_at: isoDateTimeSchema,
+  merged_at: isoDateTimeSchema.nullish(),
+  closed_at: isoDateTimeSchema.nullish(),
+  merge_commit_sha: shaSchema.nullish(),
+});
+
+/**
+ * Whether a git binding polls its merge requests, and how often (WP-110) — the git half of WP-87's
+ * `TicketPollPlan`. The interval's bounds are the ticket poller's
+ * ({@link MIN_TICKET_POLL_INTERVAL_SECONDS} … {@link MAX_TICKET_POLL_INTERVAL_SECONDS}), and the
+ * switch is read under the same platform key names (`TICKET_POLL_CONFIG_KEYS`), because the sweep
+ * reads both kinds of binding with one shape of query.
+ */
+export const mergeRequestPollPlanSchema = z.strictObject({
+  interval_seconds: z
+    .int()
+    .min(MIN_TICKET_POLL_INTERVAL_SECONDS)
+    .max(MAX_TICKET_POLL_INTERVAL_SECONDS),
+});
+
+/**
  * One commit of the repository's own history — product/19 §18's *"commit messages"* (WP-35).
  *
  * Read for the **history bootstrap** and for nothing else on this build: the delivery pipeline
@@ -304,6 +349,8 @@ export type PipelineStatus = z.infer<typeof pipelineStatusSchema>;
 export type PipelineStatusValue = z.infer<typeof pipelineStatusValueSchema>;
 export type CodeownersRules = z.infer<typeof codeownersRulesSchema>;
 export type MergedMergeRequest = z.infer<typeof mergedMergeRequestSchema>;
+export type MergeRequestListing = z.infer<typeof mergeRequestListingSchema>;
+export type MergeRequestPollPlan = z.infer<typeof mergeRequestPollPlanSchema>;
 export type RepositoryCommit = z.infer<typeof repositoryCommitSchema>;
 export type MergeRequestDraft = z.infer<typeof mergeRequestDraftSchema>;
 export type MergeRequestUpdate = z.infer<typeof mergeRequestUpdateSchema>;
@@ -708,6 +755,33 @@ export interface GitProviderPort extends IntegrationPort<GitProviderCapabilities
     since: string,
     limit: number,
   ) => Promise<readonly MergedMergeRequest[]>;
+
+  /**
+   * The merge requests of `project` updated at or after `updatedAfter`, **every state**, ordered by
+   * `updated_at`, **oldest first**, at most `limit` — the merge-request poller's read (WP-110,
+   * PROGRESS backlog 297).
+   *
+   * The order is an obligation for the reason it is one on `TaskManagementPort.matchTickets`: the
+   * poller advances its cursor to the newest `updated_at` a page returned, and a page cut by `limit`
+   * from any other order would move the cursor past merge requests it never read. `updatedAfter` is
+   * an instant; a provider whose filter is coarser **widens** the window, never narrows it.
+   *
+   * It is a **read**, so it happens in every mode. A merge request whose instants the provider does
+   * not publish is the adapter's to drop (rule 16: an instant is never invented), never the
+   * caller's to guess.
+   */
+  readonly listMergeRequests: (
+    project: string,
+    options: { readonly updatedAfter: string; readonly limit: number },
+  ) => Promise<readonly MergeRequestListing[]>;
+
+  /**
+   * Whether this binding polls its merge requests, and how often (WP-110) — `null` when it does
+   * not. Off unless the binding's configuration switches it on (`poll_enabled`, the platform's key);
+   * `null` too for a binding that names no single project, because a poll lists one project's merge
+   * requests. Pure: it reads the configuration the adapter was built with and calls nobody.
+   */
+  readonly pollPlan: () => MergeRequestPollPlan | null;
 
   /**
    * The repository's commits on the default branch since an instant, newest first (WP-35).

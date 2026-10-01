@@ -105,9 +105,9 @@ through the processes rather than reasoned about.
 
 | `ROLE` | Serves the API, SSE and `/webhooks/*` | Runs the dispatcher and the job workers | Smallest `APP_DB_POOL_MAX` (concurrency 1) |
 |---|---|---|---|
-| `all` | yes | yes | 23 |
+| `all` | yes | yes | 24 |
 | `api` | yes | no — it only **enqueues** | 4 |
-| `worker`, `runner`, `indexer` | no | yes | 21 |
+| `worker`, `runner`, `indexer` | no | yes | 22 |
 
 Each process refuses to start below its own number and names it, listing what the number is made of. The table is held to the code by a test (`apps/server/src/config.test.ts`), so it moves when a workload is added. `runner` and `indexer` are workers
 named for what you deploy them for; whether a worker runs agents is its launcher configuration,
@@ -559,10 +559,19 @@ bucket is generous (a burst of 120, then 10 a second) and per `app` process.
 **No public URL?** A task-management binding can **poll** instead (WP-87): set `poll_enabled: true`
 (and, if 60 seconds is not right, `poll_interval_seconds`) in the binding's configuration. The
 platform then asks the provider for the binding's pick-up rule on that interval, and each ticket it
-finds is treated exactly as a webhook's match. A binding can have both — a ticket seen by the
-webhook and by a poll is started once. What a poll does not carry (comments, the ticket linter's
-*created* event, edits to a ticket that has left the pick-up rule) is listed in the Jira setup
-guide's step 5. GitLab merge-request events have no poller: the GitLab webhook stays required.
+finds is treated exactly as a webhook's match; each poll also re-reads the tickets of the binding's
+running tasks, so an edit to a ticket the status mapping has moved off a **status** pick-up rule
+still reaches its task (WP-110). A binding can have both — a ticket seen by the webhook and by a
+poll is started once. What a poll does not carry (comments, the ticket linter's *created* event) is
+listed in the Jira setup guide's step 5.
+
+A **GitLab** binding can poll its merge requests the same way (WP-110): the same two keys in its
+configuration, and a `project` to list. A poll turns each merge request into the events a webhook
+would have sent — a new or reopened one, an update, a merge, a close — so review-only mode starts
+and a task learns that its merge request merged. A merge seen by the webhook and by a poll is one
+merge. Approvals, review comments, finished pipelines and default-branch moves are **not** in a
+merge-request listing and stay webhook-only; the GitLab setup guide's step 3a lists what that costs.
+One setting, `APP_TICKET_POLL_SWEEP_INTERVAL_MS`, bounds how long a lost poll of either kind waits.
 
 ## 5. Upgrade
 
@@ -612,6 +621,15 @@ first deadline by the pass above, or whose reminder timer was lost — is remind
 first pass after its halfway point, as long as its deadline has not passed; one already past its
 deadline is not reminded, it is escalated as before. So a project with old open questions may post
 a burst of *"still unanswered"* reminders shortly after the upgrade.
+
+**Upgrading past the build that polls merge requests (WP-110).** The smallest `APP_DB_POOL_MAX` rose
+by one — **24** for `ROLE=all` (from 23) and **22** for `worker`, `runner` and `indexer` (from 21) —
+because the merge-request poller is one more job worker. A process below its number refuses to start
+and names it (the `ROLE` table in §1), and once `migrate` has applied 0068 the old image is no help, so check
+the value **before** you upgrade: a stock `.env` (`25` since this build, `24` before) already meets it;
+an installation that set `APP_DB_POOL_MAX` to exactly the old minimum must raise it by one. The same
+holds for every later build that adds a job worker: the floor table above moves with the code, so read
+it against your `.env` on each upgrade (PROGRESS backlog 371).
 
 ### What a failed migration looks like
 

@@ -156,3 +156,74 @@ describe('the ticket poller', () => {
     expect(await pipeline.taskCount()).toBe(1);
   }, 240_000);
 });
+
+/**
+ * **WP-110 criterion 4, PROGRESS backlog 298: a status-rule binding sees an edit to a ticket the
+ * platform has moved on.** The pick-up rule is a **status** (`pickup_status`), and the project's
+ * status mapping moves the ticket to *In Progress* at refinement — after which the rule no longer
+ * matches it. The poll's second read, the live tasks' tickets whatever the rule says, is what
+ * records the human's edit; it records it as `ticket.updated` only, and WP-60's ticket signal
+ * stamps the live task.
+ */
+describe('the ticket poller, on a status-rule binding (WP-110)', () => {
+  it('stamps the live task’s ticket signal for an edit made after the status mapping moved the ticket on', async () => {
+    const pipeline = await startPipeline({
+      scenarios: featureScenarios,
+      label: 'poll-status-rule',
+      tickets: [{ ...(LABELLED[0] as (typeof LABELLED)[number]), status: 'Ready for agent' }],
+      config: {
+        version: 1,
+        status_mapping: { refinement: 'In Progress', ready_for_merge: 'In Review' },
+      },
+      env: { APP_TICKET_POLL_SWEEP_INTERVAL_MS: '500' },
+    });
+    harness = pipeline;
+    pool = createTestPool(pipeline.database.connectionString, { max: 2 });
+    const sql = pool;
+    await sql.query(
+      `update bindings
+          set config = config || '{"poll_enabled": true, "poll_interval_seconds": 30, "pickup_status": "Ready for agent"}'::jsonb,
+              poll_cursor = $3::timestamptz
+        where project_id = $1 and integration_id = $2`,
+      [pipeline.projectId, TICKETS_INTEGRATION_ID, FAKE_EPOCH],
+    );
+
+    await pipeline.settle('the task a poll started', (task) => task.id.length > 0);
+    await pipeline.waitFor(
+      'the status mapping moved the ticket off the pick-up status',
+      async () => pipeline.tickets.peek('ACME-1')?.status === 'In Progress',
+    );
+    const matchedBefore = (await pipeline.events()).filter(
+      (event) => event.type === 'ticket.matched',
+    ).length;
+
+    // A human edits the ticket. This binding has no webhook, and its rule no longer matches.
+    const editedAt = Date.now();
+    pipeline.tickets.emitTicketUpdated({
+      ticketKey: 'ACME-1',
+      description: 'Now with acceptance criteria.',
+    });
+    const edited = Date.parse(pipeline.tickets.peek('ACME-1')?.updated_at ?? '');
+
+    await pipeline.waitFor('the live task’s ticket signal stamped after the edit', async () => {
+      const { rows } = await sql.query<{ ticket_signal_at: Date | null }>(
+        'select ticket_signal_at from tasks',
+      );
+      const at = rows[0]?.ticket_signal_at ?? null;
+      return rows.length === 1 && at !== null && at.getTime() >= editedAt;
+    });
+    // The signal came from a polled `ticket.updated` carrying the edit's own instant …
+    expect(
+      (await pipeline.events()).some(
+        (event) =>
+          event.type === 'ticket.updated' &&
+          Date.parse((event.payload as { updated_at: string }).updated_at) >= edited,
+      ),
+    ).toBe(true);
+    // … and never from a pick-up: no `ticket.matched` since the ticket left the rule.
+    expect(
+      (await pipeline.events()).filter((event) => event.type === 'ticket.matched'),
+    ).toHaveLength(matchedBefore);
+    expect(await pipeline.taskCount()).toBe(1);
+  }, 240_000);
+});

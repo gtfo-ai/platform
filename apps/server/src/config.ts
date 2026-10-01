@@ -178,7 +178,8 @@ const serverConfigFields = z.strictObject({
 
   /**
    * How often the ticket poller's sweep lists the polling bindings and re-arms any whose chain was
-   * lost (WP-87, `pipeline/ticket-poll.ts`) — the bound on a lost poll, and how soon a binding
+   * lost (WP-87, `pipeline/ticket-poll.ts`) — and the merge-request poller's sweep too (WP-110,
+   * `pipeline/mr-poll.ts`): one setting for both — the bound on a lost poll, and how soon a binding
    * switched on through the API is first polled. **No `0`**: polling is switched per binding, in its
    * configuration, and a process-wide off switch would be a second answer to the same question. The
    * sweep is one query over `bindings`, so the floor is about queue churn, not cost.
@@ -610,7 +611,9 @@ export const POOL_RESERVATIONS = {
    * product/18:31's chore tasks (WP-36). **Nine since WP-87**, which added `ticket.poll` — the ticket
    * poller, composed by `apps/server/src/pipeline.ts` for the same reason, one worker for every
    * polling binding (each binding is a key on the one queue, not a worker of its own), and started
-   * whether or not any binding polls. All three are counted **unconditionally**, including when
+   * whether or not any binding polls. **Ten since WP-110**, which added `mr.poll` — the
+   * merge-request poller, composed beside the ticket poller for the same reason, one worker for
+   * every git binding that polls. All of them are counted **unconditionally**, including when
    * `APP_INTAKE_RECONCILE_INTERVAL_MS=0` starts no reconciler at all: a reservation that shrank
    * with a setting would be a floor an operator could lower by accident.
    *
@@ -621,7 +624,7 @@ export const POOL_RESERVATIONS = {
    * started from any of them therefore *replaces* the worker's connection rather than nesting
    * inside it.
    */
-  pipeline: 9,
+  pipeline: 10,
   /**
    * The knowledge workers — **one connection each, four of them** (WP-18a, recounted at WP-18b).
    *

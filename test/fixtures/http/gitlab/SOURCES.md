@@ -267,3 +267,27 @@ reader repeating the search.
   threads before merging the value is always `true`, never changes, and never appears in
   `changes`: the refresh this signal drives exists only on projects with that setting. Read off
   `master` on that date; a GitLab release may change it, and no real instance was measured.
+
+## Pages read for WP-110 — `merge-request-poll.json`
+
+- `https://docs.gitlab.com/api/merge_requests/` § "List project merge requests" (re-read
+  **2026-10-01**) — the merge-request poller's read: `updated_after` (*"Returns merge requests
+  updated on or after the given date and time. Expected in ISO 8601 format"*), `order_by`
+  (*"`created_at`, `updated_at`, `merged_at` … Default is `created_at`"*), `sort` (*"`asc` or
+  `desc` … Default is `desc`"*) and `state` (*"Defaults to `all`"*, which is why the adapter sends
+  none: a poll that listed only open merge requests would never see a merge). The page's example
+  response carries every field the port's listing reads — `created_at`, `updated_at`, `merged_at`,
+  `closed_at`, `merge_commit_sha`, `sha`, `draft`, `state`, `source_branch`, `web_url`.
+  `merge-request-poll.json` records two interactions:
+  - the window from 2000 — **`documented-adapted`**: the shape is the page's example object, and this
+    corpus added a second entry, changed the states (one `opened`, one `merged`), the instants and
+    the shas, and ordered the two oldest update first as `sort=asc` asks;
+  - the window from 2099 — **`inferred`**: the page publishes no example of a list with nothing in
+    its window, so the empty array is inferred from the endpoint answering a list.
+
+  No fixture here is `composed` or `invented`. What the corpus **cannot** say, stated so a reader
+  does not assume it: whether `updated_after` is compared with the instant or with a rounded one, how
+  far GitLab's list lags its own writes, and which actions move a merge request's `updated_at` (a
+  comment, a label and an approval are believed to; nothing here measured it). The poller is written
+  for all three — its window starts five minutes behind the cursor, and a listing whose transition
+  the log already holds appends nothing (`packages/application/src/pipeline/mr-poll.ts`).

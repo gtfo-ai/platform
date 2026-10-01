@@ -162,6 +162,8 @@ describe('the webhook route at its integration’s rate limit (Q60)', () => {
         },
       } as never,
       eventStore: { nextStreamSequence: async () => 1 },
+      // No delivery here reaches the recorder (the bucket refuses first), so nothing is asked.
+      mergeRequests: { latest: async () => null },
       ids: { next: () => INTEGRATION },
       clock: { now: () => '2026-09-28T09:00:00.000Z' as IsoDateTime },
       // A frozen clock: the bucket never refills inside a test.

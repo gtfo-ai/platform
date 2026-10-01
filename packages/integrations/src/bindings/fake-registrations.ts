@@ -25,6 +25,7 @@ import {
   type GitProviderPort,
   type InboundNormaliser,
   MAX_TICKET_POLL_INTERVAL_SECONDS,
+  type MergeRequestPollPlan,
   MIN_TICKET_POLL_INTERVAL_SECONDS,
   type ObservabilityErrorsPort,
   type ObservabilityLogsPort,
@@ -104,16 +105,41 @@ const refuseWrongToken = (providerId: string, expected: string, actual: unknown)
   }
 };
 
+/**
+ * The fake git provider's binding config: the project, the credential, and — since WP-110 — the
+ * merge-request polling switch under the platform's key names, so a tier that polls through this
+ * registration switches it on in `bindings.config` the way an operator switches GitLab's on.
+ */
+const fakeGitConfigSchema = z.strictObject({
+  project: z.string().regex(/^[^/\s]+(\/[^/\s]+)+$/, 'expected a namespace/project path'),
+  token: z.string().min(1),
+  [TICKET_POLL_CONFIG_KEYS.enabled]: z.boolean().default(false),
+  [TICKET_POLL_CONFIG_KEYS.intervalSeconds]: z
+    .int()
+    .min(MIN_TICKET_POLL_INTERVAL_SECONDS)
+    .max(MAX_TICKET_POLL_INTERVAL_SECONDS)
+    .default(DEFAULT_TICKET_POLL_INTERVAL_SECONDS),
+});
+
+/** The prebuilt git port, answering `pollPlan()` from **this binding's** config (WP-110). */
+const withGitPollPlan = (port: GitProviderPort, config: unknown): GitProviderPort => {
+  const parsed = fakeGitConfigSchema.parse(config);
+  const plan: MergeRequestPollPlan | null = parsed.poll_enabled
+    ? { interval_seconds: parsed.poll_interval_seconds }
+    : null;
+  return new Proxy(port, {
+    get: (target, key, receiver) =>
+      key === 'pollPlan' ? () => plan : Reflect.get(target, key, receiver),
+  });
+};
+
 export const fakeGitRegistration = (
   options: FakeRegistrationOptions<GitProviderPort>,
 ): AnyProviderRegistration => ({
   id: FAKE_GIT_PROVIDER_ID,
   type: 'git',
   displayName: 'Fake git provider (in-memory)',
-  configSchema: z.strictObject({
-    project: z.string().regex(/^[^/\s]+(\/[^/\s]+)+$/, 'expected a namespace/project path'),
-    token: z.string().min(1),
-  }),
+  configSchema: fakeGitConfigSchema,
   secretFields: ['token'],
   setupGuidePath: 'packages/integrations/src/git/fake.ts',
   agentTooling: null,
@@ -131,9 +157,9 @@ export const fakeGitRegistration = (
       shape: 'fake git: the fake declares its prefix as `credentialPrefix`',
     },
   },
-  create: ({ secrets, redactor }) => {
+  create: ({ config, secrets, redactor }) => {
     refuseWrongToken(FAKE_GIT_PROVIDER_ID, options.token, secrets.token);
-    return withInboundRedactor(options.port, redactor);
+    return withGitPollPlan(withInboundRedactor(options.port, redactor), config);
   },
 });
 
@@ -183,17 +209,26 @@ const fakeTaskManagementConfigSchema = z.strictObject({
     .max(MAX_TICKET_POLL_INTERVAL_SECONDS)
     .default(DEFAULT_TICKET_POLL_INTERVAL_SECONDS),
   pickup_label: z.string().min(1).default('agentic'),
+  /**
+   * WP-110 (backlog 298): a **status** pick-up rule, which wins over the label as Jira's does
+   * (`pickupRuleOf`) — so a tier can poll the rule a status mapping moves a ticket out of.
+   */
+  pickup_status: z.string().min(1).nullish(),
 });
 
 /** The plan the binding's config states — `null` unless it switched polling on. */
 const fakePollPlanOf = (config: unknown): TicketPollPlan | null => {
   const parsed = fakeTaskManagementConfigSchema.parse(config);
-  return parsed.poll_enabled
-    ? {
-        rule: { kind: 'label', label: parsed.pickup_label },
-        interval_seconds: parsed.poll_interval_seconds,
-      }
-    : null;
+  if (!parsed.poll_enabled) {
+    return null;
+  }
+  return {
+    rule:
+      typeof parsed.pickup_status === 'string'
+        ? { kind: 'status', status: parsed.pickup_status }
+        : { kind: 'label', label: parsed.pickup_label },
+    interval_seconds: parsed.poll_interval_seconds,
+  };
 };
 
 /** The prebuilt port, answering `pollPlan()` from **this binding's** config rather than its own. */

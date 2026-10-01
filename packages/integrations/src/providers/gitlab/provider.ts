@@ -87,9 +87,12 @@ import {
   type MergedMergeRequest,
   type MergeRequest,
   type MergeRequestDraft,
+  type MergeRequestListing,
+  type MergeRequestPollPlan,
   type MergeRequestRefInput,
   type MergeRequestUpdate,
   type MintedRunCredential,
+  mergeRequestListingSchema,
   mergeRequestSchema,
   type NormalisedDelivery,
   type PipelineStatus,
@@ -334,6 +337,45 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
       }
       return id;
     });
+
+  /**
+   * One listed merge request as the port's listing (WP-110), or `null` when GitLab published no
+   * instant to order it by or no head to name it with — never an invented one (rule 16).
+   */
+  const toListing = (project: string, source: GitLabMergeRequest): MergeRequestListing | null => {
+    const instant = (value: string | null | undefined): string | null => {
+      try {
+        return toIsoDateTimeOrNull(value, 'list_merge_requests');
+      } catch {
+        return null;
+      }
+    };
+    const createdAt = instant(source.created_at);
+    const updatedAt = instant(source.updated_at);
+    const headSha = source.sha ?? null;
+    if (createdAt === null || updatedAt === null || headSha === null) {
+      return null;
+    }
+    const parsed = mergeRequestListingSchema.safeParse({
+      ref: {
+        provider: GITLAB_PROVIDER_ID,
+        project_path: project,
+        iid: source.iid,
+        url: source.web_url,
+        branch: source.source_branch,
+        head_sha: headSha,
+      },
+      state: mapMergeRequestState(source.state),
+      draft: source.draft ?? source.work_in_progress ?? isDraftTitle(source.title),
+      head_sha: headSha,
+      created_at: createdAt,
+      updated_at: updatedAt,
+      merged_at: instant(source.merged_at),
+      closed_at: instant(source.closed_at),
+      merge_commit_sha: source.merge_commit_sha ?? null,
+    });
+    return parsed.success ? parsed.data : null;
+  };
 
   const toMergeRequest = (project: string, source: GitLabMergeRequest): MergeRequest => {
     const mergeability = mapMergeability({
@@ -963,6 +1005,50 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
       }
       return null;
     },
+
+    /**
+     * `GET /projects/:id/merge_requests` with `updated_after`, `order_by=updated_at` and `sort=asc`
+     * — the merge-request poller's read (WP-110), every state (the documented default `all`).
+     *
+     * At most `limit` merge requests, in pages of up to a hundred and never more pages than the
+     * limit needs (nor than `max_pages`). A listing whose `created_at` or `updated_at` GitLab does
+     * not publish, or whose head is unknown, is **dropped** rather than given an instant (rule 16):
+     * the poller orders and windows by those instants. The answer is re-sorted by `updated_at`,
+     * stably, so the port's oldest-first obligation holds even for an instance that ignored
+     * `sort`.
+     */
+    listMergeRequests: async (project, listOptions): Promise<readonly MergeRequestListing[]> => {
+      if (!Number.isInteger(listOptions.limit) || listOptions.limit <= 0) {
+        throw invalidRequest('list_merge_requests', 'limit must be a positive integer');
+      }
+      const sinceMs = Date.parse(listOptions.updatedAfter);
+      if (Number.isNaN(sinceMs)) {
+        throw invalidRequest('list_merge_requests', 'updatedAfter must be an ISO-8601 instant');
+      }
+      const perPage = Math.min(listOptions.limit, 100);
+      const listed = await client.pollMergeRequests(
+        project,
+        { updated_after: new Date(sinceMs).toISOString() },
+        perPage,
+        Math.ceil(listOptions.limit / perPage),
+      );
+      const listings: MergeRequestListing[] = [];
+      for (const mr of listed) {
+        const listing = toListing(project, mr);
+        if (listing !== null) {
+          listings.push(listing);
+        }
+      }
+      return listings
+        .toSorted((left, right) => Date.parse(left.updated_at) - Date.parse(right.updated_at))
+        .slice(0, listOptions.limit);
+    },
+
+    /** WP-110: on when the binding says so **and** names one project, which is what a poll lists. */
+    pollPlan: (): MergeRequestPollPlan | null =>
+      config.poll_enabled && config.project !== null && config.project !== undefined
+        ? { interval_seconds: config.poll_interval_seconds }
+        : null,
 
     listMergedMergeRequests: async (
       project,

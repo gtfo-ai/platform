@@ -489,6 +489,28 @@ describe('jira-cloud — reaching the provider', () => {
       );
     });
 
+    it('drops the keys a 400 names as missing and asks once more (WP-110 review round 1)', async () => {
+      const matches = await binding.port.matchTickets({
+        kind: 'keys',
+        keys: ['ACME-404', 'ACME-1'],
+      });
+      expect(matches.map((match) => match.ref.key)).toEqual(['ACME-1']);
+      expect(binding.replay.requests.map((request) => request.query.jql)).toEqual([
+        'key in ("ACME-404", "ACME-1") ORDER BY updated ASC',
+        'key in ("ACME-1") ORDER BY updated ASC',
+      ]);
+    });
+
+    it('names the live tasks’ tickets as JQL string literals, so a key is never JQL (WP-110)', async () => {
+      await binding.port.matchTickets(
+        { kind: 'keys', keys: ['ACME-1', 'ACME-2" OR project = "OTHER'] },
+        { since: '2026-09-02T11:50:00.000Z' },
+      );
+      expect(binding.replay.requests[0]?.query.jql).toBe(
+        'key in ("ACME-1", "ACME-2\\" OR project = \\"OTHER") AND updated >= "-15m" ORDER BY updated ASC',
+      );
+    });
+
     it('pages through nextPageToken up to the limit, oldest first (WP-87 review round 2)', async () => {
       // A bulk: more labelled tickets than one replay page (REPLAY_SEARCH_PAGE_CAP).
       for (let index = 0; index < 45; index += 1) {

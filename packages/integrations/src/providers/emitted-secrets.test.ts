@@ -344,7 +344,9 @@ const gitlabScript = (): Script => ({
     },
   },
   [`GET /projects/${P}/merge_requests`]: {
-    body: [gitlabMr({ merged_at: NOW, state: 'merged' })],
+    // WP-110: the two instants the merge-request poller's listing requires, so `listMergeRequests`
+    // answers the planted object rather than dropping it for a missing instant.
+    body: [gitlabMr({ merged_at: NOW, state: 'merged', created_at: NOW, updated_at: NOW })],
   },
   [`GET /projects/${P}/merge_requests/7/discussions`]: { body: [gitlabDiscussion()] },
   // Planted in the patch text: a diff is somebody's source code, and a developer who committed a
@@ -484,6 +486,8 @@ const GITLAB_SCENARIOS: Readonly<Record<string, string>> = {
   read_codeowners: 'readCodeowners',
   resolve_user_id: 'resolveUserId',
   list_merged_merge_requests: 'listMergedMergeRequests',
+  list_merge_requests: 'listMergeRequests',
+  poll_plan: 'pollPlan',
   list_commits: 'listCommits',
   is_branch_protected: 'isBranchProtected',
   branch_protection: 'branchProtection',
@@ -592,6 +596,12 @@ describe('gitlab emits no string carrying its own credentials (rules 31, 35)', (
       '2026-01-01T00:00:00.000Z',
       5,
     );
+    // WP-110: the merge-request poller's listing, the same planted object as the history read.
+    emitted.list_merge_requests = await port.listMergeRequests(PROJECT, {
+      updatedAfter: '2026-01-01T00:00:00.000Z',
+      limit: 5,
+    });
+    emitted.poll_plan = port.pollPlan();
     emitted.list_commits = await port.listCommits(PROJECT, {
       since: '2026-01-01T00:00:00.000Z',
       limit: 5,

@@ -1,0 +1,111 @@
+{
+  "interactions": [
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests?updated_after=2000-01-01T00%3A00%3A00.000Z&order_by=updated_at&sort=asc&per_page=20&page=1",
+      "status": 200,
+      "body": [
+        {
+          "id": 155016031,
+          "iid": 31,
+          "project_id": 15513260,
+          "title": "Show the totals in the footer",
+          "description": "",
+          "state": "opened",
+          "imported": false,
+          "created_at": "2026-06-02T08:10:00.000Z",
+          "updated_at": "2026-06-02T08:10:00.000Z",
+          "merged_at": null,
+          "target_branch": "main",
+          "source_branch": "feature/change-31",
+          "author": {
+            "id": 77,
+            "username": "dana.reviewer",
+            "name": "Dana Reviewer",
+            "state": "active",
+            "web_url": "https://gitlab.example.test/dana.reviewer",
+            "avatar_url": null
+          },
+          "assignees": [],
+          "reviewers": [],
+          "labels": ["backend"],
+          "draft": false,
+          "work_in_progress": false,
+          "merge_status": "can_be_merged",
+          "detailed_merge_status": "mergeable",
+          "sha": "3333333333333333333333333333333333333333",
+          "merge_commit_sha": null,
+          "squash_commit_sha": null,
+          "user_notes_count": 1,
+          "changes_count": "3",
+          "has_conflicts": false,
+          "blocking_discussions_resolved": true,
+          "web_url": "https://gitlab.example.test/acme/api/-/merge_requests/31",
+          "user": {
+            "can_merge": true
+          },
+          "closed_at": null
+        },
+        {
+          "id": 155016032,
+          "iid": 32,
+          "project_id": 15513260,
+          "title": "Round once, at the boundary",
+          "description": "",
+          "state": "merged",
+          "imported": false,
+          "created_at": "2026-06-01T07:00:00.000Z",
+          "updated_at": "2026-06-02T09:45:12.000Z",
+          "merged_at": "2026-06-02T09:45:12.000Z",
+          "target_branch": "main",
+          "source_branch": "feature/change-32",
+          "author": {
+            "id": 77,
+            "username": "dana.reviewer",
+            "name": "Dana Reviewer",
+            "state": "active",
+            "web_url": "https://gitlab.example.test/dana.reviewer",
+            "avatar_url": null
+          },
+          "assignees": [],
+          "reviewers": [],
+          "labels": ["backend"],
+          "draft": false,
+          "work_in_progress": false,
+          "merge_status": "can_be_merged",
+          "detailed_merge_status": "not_open",
+          "sha": "5555555555555555555555555555555555555555",
+          "merge_commit_sha": "6666666666666666666666666666666666666666",
+          "squash_commit_sha": null,
+          "user_notes_count": 1,
+          "changes_count": "3",
+          "has_conflicts": false,
+          "blocking_discussions_resolved": true,
+          "web_url": "https://gitlab.example.test/acme/api/-/merge_requests/32",
+          "user": {
+            "can_merge": true
+          },
+          "closed_at": null
+        }
+      ],
+      "source": {
+        "url": "https://docs.gitlab.com/api/merge_requests/",
+        "retrieved": "2026-10-01",
+        "kind": "documented-adapted",
+        "note": "\"List project merge requests\" with the documented updated_after, order_by=updated_at and sort=asc attributes and no state (the documented default `all`), the merge-request poller's read (WP-110). The object is the page's example response with values replaced by fake ones and members the adapter never reads removed; this corpus adds a **second** entry and changes the states, so one is open and one merged, and orders them oldest update first as `sort=asc` asks. `created_at`, `updated_at`, `merged_at`, `closed_at` and `merge_commit_sha` are all in the page's example (re-read 2026-10-01); their values here are this corpus's own."
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/projects/acme%2Fapi/merge_requests?updated_after=2099-01-01T00%3A00%3A00.000Z&order_by=updated_at&sort=asc&per_page=20&page=1",
+      "status": 200,
+      "body": [],
+      "source": {
+        "url": "https://docs.gitlab.com/api/merge_requests/",
+        "retrieved": "2026-10-01",
+        "kind": "inferred",
+        "note": "The page publishes no example of a list with nothing in its window. An empty JSON array is inferred from the endpoint answering a list; it is what the contract suite's negative window case reads, and the adapter treats it as a list like any other."
+      }
+    }
+  ]
+}

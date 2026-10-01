@@ -115,7 +115,9 @@ const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
   // 12 since WP-60 review round 2: the CI handler's streak escalation left the handler for the
   // gate settlement both paths share (`jobs.ts` § `ciConvergence`), which writes through
   // `applyDecision` rather than a `save` of its own.
-  ['packages/application/src/pipeline/saga.ts', 12],
+  // 13 since WP-110 review round 1: the merge-request close on a task already at `needs_human`
+  // amends its brief (`amendEscalation`) inside the handler, with the handler's ending.
+  ['packages/application/src/pipeline/saga.ts', 13],
   // 6 since WP-63: the admission refusal of a run whose repository `.agentic/config.yml` does not
   // parse, inside the executor's own admission transaction and under its `retryOnTaskConflict`.
   ['packages/application/src/pipeline/stage-executor.ts', 6],
@@ -169,7 +171,7 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     );
   });
 
-  it('counts thirty-five, which is the number the change states', () => {
+  it('counts thirty-six, which is the number the change states', () => {
     // Twenty-one inherited from WP-15d (`saga.ts` 11, `transitions.ts` 5, `stage-executor.ts` 5 —
     // backlog 18 counted twenty before `stage-executor.ts` gained its fifth) plus the one
     // `escalateTaskAfterConflict` adds, which is the ending for the other twenty-one; plus four
@@ -204,8 +206,10 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     // **Plus one at WP-106 review round 1**: `config-refusal.ts`'s parking of a task whose
     // configuration cannot be read, with the handler's ending or the job's, by caller.
     // **Plus one at WP-108**: the stranded-stage recovery's escalation (backlog 320).
+    // **Plus one at WP-110 review round 1**: the saga's close of a merge request whose task already
+    // waits for a human writes the amended brief (`amendEscalation`), with the handler's ending.
     const total = [...census().values()].reduce((sum, count) => sum + count, 0);
-    expect(total).toBe(35);
+    expect(total).toBe(36);
     expect([...EXPECTED_SITES.values()].reduce((sum, count) => sum + count, 0)).toBe(total);
   });
 

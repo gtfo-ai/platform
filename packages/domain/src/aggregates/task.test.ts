@@ -10,6 +10,7 @@ import type { CommandContext } from '../events.js';
 import { sequentialIds } from '../ids.js';
 import { resolveIterationLimits } from '../policies/iteration-limits.js';
 import {
+  amendEscalation,
   askQuestion,
   assertMutatingActionAllowed,
   cancelTask,
@@ -331,6 +332,28 @@ describe('pause, escalate, take over, hand back', () => {
     );
     expect(aggregate.state).toBe('needs_human');
     expect(types(events)).toEqual(['task.escalated']);
+  });
+
+  it('amends the brief of a task already waiting for a human, and refuses any other state (WP-110)', () => {
+    const parked = escalateTask(
+      activeTask(),
+      { reason: 'ambiguous spec', blockerBrief: 'confirm the export format' },
+      context(),
+    ).aggregate;
+    const amended = amendEscalation(
+      parked,
+      { reason: 'the merge request was closed', blockerBrief: 'the merge request was closed too' },
+      context(),
+    );
+    expect(amended.aggregate.state).toBe('needs_human');
+    expect(types(amended.events)).toEqual(['task.escalated']);
+    expect(amended.events[0]?.payload).toMatchObject({
+      blocker_brief: 'the merge request was closed too',
+    });
+    expect(amended.aggregate.sequence).toBe(parked.sequence + 1);
+    expect(() =>
+      amendEscalation(activeTask(), { reason: 'r', blockerBrief: 'b' }, context()),
+    ).toThrow(IllegalTransitionError);
   });
 
   it('pauses on take-over and announces the hand-back without moving the task', () => {

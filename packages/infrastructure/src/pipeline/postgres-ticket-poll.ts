@@ -1,6 +1,6 @@
 /**
- * The ticket poller's rows (WP-87, migration 0061): which bindings poll, and where each one's next
- * window starts.
+ * The ticket poller's rows (WP-87, migration 0061) and the merge-request poller's (WP-110,
+ * migration 0068): which bindings poll, and where each one's next window starts.
  *
  * `listPolling` reads the switch out of the **merged** configuration — `bindings.config` over
  * `integrations.config`, the overlay `createPostgresBindingRepository` applies — without decrypting
@@ -15,6 +15,7 @@
  * that raced — which `stately` makes rare, not impossible — cannot move the cursor back.
  */
 import {
+  type MergeRequestPollStore,
   type PolledBinding,
   TICKET_POLL_CONFIG_KEYS,
   type TicketPollStore,
@@ -28,22 +29,29 @@ interface PollingRow extends Record<string, unknown> {
 }
 
 interface CursorRow extends Record<string, unknown> {
-  readonly poll_cursor: Date | null;
+  readonly cursor: Date | null;
 }
 
 export interface PostgresTicketPollStoreOptions {
   readonly sql: SqlExecutor;
 }
 
-export const createPostgresTicketPollStore = (
-  options: PostgresTicketPollStoreOptions,
-): TicketPollStore => ({
+/**
+ * The three statements both pollers share, over a binding type and a cursor column that are
+ * **constants of this file** — never caller text, so interpolating them is not a query built from
+ * input (WP-110: the merge-request poller reads git bindings and `mr_poll_cursor`).
+ */
+const bindingPollStatements = (
+  sql: SqlExecutor,
+  type: 'task_management' | 'git',
+  column: 'poll_cursor' | 'mr_poll_cursor',
+): MergeRequestPollStore => ({
   listPolling: async (limit) => {
-    const { rows } = await options.sql.query<PollingRow>(
+    const { rows } = await sql.query<PollingRow>(
       `select b.project_id, b.integration_id
          from bindings b
          join integrations i on i.id = b.integration_id
-        where i.type = 'task_management'
+        where i.type = '${type}'
           and coalesce(b.config -> $1::text, i.config -> $1::text) = 'true'::jsonb
         order by b.created_at, b.id
         limit $2`,
@@ -57,19 +65,47 @@ export const createPostgresTicketPollStore = (
     );
   },
   cursorOf: async (binding) => {
-    const { rows } = await options.sql.query<CursorRow>(
-      `select poll_cursor from bindings where project_id = $1 and integration_id = $2`,
+    const { rows } = await sql.query<CursorRow>(
+      `select ${column} as cursor from bindings where project_id = $1 and integration_id = $2`,
       [binding.projectId, binding.integrationId],
     );
-    const cursor = rows[0]?.poll_cursor ?? null;
+    const cursor = rows[0]?.cursor ?? null;
     return cursor === null ? null : (cursor.toISOString() as IsoDateTime);
   },
   advanceCursor: async (binding, to) => {
-    await options.sql.query(
+    await sql.query(
       `update bindings
-          set poll_cursor = greatest(coalesce(poll_cursor, $3::timestamptz), $3::timestamptz)
+          set ${column} = greatest(coalesce(${column}, $3::timestamptz), $3::timestamptz)
         where project_id = $1 and integration_id = $2`,
       [binding.projectId, binding.integrationId, to],
     );
   },
 });
+
+export const createPostgresTicketPollStore = (
+  options: PostgresTicketPollStoreOptions,
+): TicketPollStore => ({
+  ...bindingPollStatements(options.sql, 'task_management', 'poll_cursor'),
+  /**
+   * WP-110 (backlog 298): the live tasks' ticket keys, the set `recordTicketSignal` stamps
+   * (`state not in ('done', 'cancelled')`), most recently touched first — served by
+   * `tasks (project_id, state)`.
+   */
+  liveTicketKeys: async (binding, provider, limit) => {
+    const { rows } = await options.sql.query<{ ticket_key: string }>(
+      `select ticket_key
+         from tasks
+        where project_id = $1 and ticket_provider = $2 and state not in ('done', 'cancelled')
+        group by ticket_key
+        order by max(updated_at) desc, ticket_key
+        limit $3`,
+      [binding.projectId, provider, limit],
+    );
+    return rows.map((row) => row.ticket_key);
+  },
+});
+
+/** The merge-request poller's rows (WP-110, migration 0068): git bindings, `mr_poll_cursor`. */
+export const createPostgresMergeRequestPollStore = (
+  options: PostgresTicketPollStoreOptions,
+): MergeRequestPollStore => bindingPollStatements(options.sql, 'git', 'mr_poll_cursor');

@@ -564,6 +564,8 @@ export interface StartPipelineOptions {
     /** WP-25: the linter skips a ticket that already carries the project's agent label. */
     readonly labels?: readonly string[];
     readonly description?: string;
+    /** WP-110: the ticket's workflow status, for a binding whose pick-up rule is a status. */
+    readonly status?: string;
   }[];
   /** `projects.config` — technical/12's effective configuration, as the settings port reads it. */
   readonly config?: JsonObject;

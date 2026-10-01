@@ -105,6 +105,13 @@ export const JOB_QUEUE_DEFINITIONS: readonly JobQueueDefinition[] = [
     expireInSeconds: 5 * 60,
   },
   {
+    name: JOB_QUEUES.mrPoll,
+    // WP-110: `ticket.poll`'s policy, for its reasons (`pipeline/mr-poll.ts` re-arms in a `finally`).
+    policy: 'stately',
+    retryLimit: 0,
+    expireInSeconds: 5 * 60,
+  },
+  {
     name: JOB_QUEUES.taskAsk,
     // `stately` per `ask:<id>` — see the queue's own docblock for why the key is the ask and not
     // the task.

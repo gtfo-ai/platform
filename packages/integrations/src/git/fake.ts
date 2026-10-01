@@ -178,6 +178,14 @@
  *     treat the flag's **absence** as "no signal" — as the refresh handler does — and never wait
  *     for it; one that waited would pass here and never fire on a project with the setting off.
  *     Absent from the request, it is absent from the delivery and from the normalised event.
+ * 21. **Kinder — `listMergeRequests` sees every change at once, and only this fake's own** (WP-110).
+ *     A merge request's `updated_at` moves when this fake changes it — opened, updated, a head
+ *     moved, merged, closed, reopened — and the listing answers it immediately, oldest first. GitLab
+ *     also moves `updated_at` for things this fake does not model (a comment, a label, an approval),
+ *     and its list may lag its writes; the poller's overlap and its window rule are written for
+ *     both, and a test that wants the second kind of change makes it with `emitMergeRequestEvent`.
+ *     `pollPlan()` answers `null` unless the fake was built with `pollIntervalSeconds`; resolved
+ *     through `fakeGitRegistration` it is the **binding's** config that decides, as for GitLab.
  */
 import {
   type CodeownersRules,
@@ -197,6 +205,8 @@ import {
   type MergedMergeRequest,
   type MergeRequest,
   type MergeRequestDraft,
+  type MergeRequestListing,
+  type MergeRequestPollPlan,
   type MergeRequestRefInput,
   type MergeRequestState,
   type MergeRequestUpdate,
@@ -268,6 +278,8 @@ export interface FakeGitOptions {
    * two-process e2e mints under a prefix that no gitleaks rule knows, the case backlog 259 is about.
    */
   readonly credentialPrefix?: string;
+  /** What `pollPlan()` answers (WP-110): `null`, the default, is a fake that does not poll. */
+  readonly pollIntervalSeconds?: number | null;
 }
 
 interface StoredProject {
@@ -333,6 +345,11 @@ interface StoredMergeRequest {
   labels: string[];
   reviewers: string[];
   merged_at: string | null;
+  /** Divergence 21 (WP-110): the instants `listMergeRequests` answers, moved by this fake alone. */
+  created_at: string;
+  updated_at: string;
+  closed_at: string | null;
+  merge_commit_sha: string | null;
   /** Divergence 14: the target branch's head when the merge request was created. */
   base_sha: string | null;
   /** Divergence 10: what `getMergeRequestDiff` answers, seeded by `setDiff`. */
@@ -737,6 +754,33 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
 
   const mrUrl = (mr: StoredMergeRequest): string =>
     `${baseUrl}/${mr.project}/-/merge_requests/${mr.iid}`;
+
+  const createdNow = (): Pick<
+    StoredMergeRequest,
+    'created_at' | 'updated_at' | 'closed_at' | 'merge_commit_sha'
+  > => {
+    const at = core.clock.now();
+    return { created_at: at, updated_at: at, closed_at: null, merge_commit_sha: null };
+  };
+
+  const toListing = (mr: StoredMergeRequest): MergeRequestListing => ({
+    ref: {
+      provider: PROVIDER,
+      project_path: mr.project,
+      iid: mr.iid,
+      url: mrUrl(mr),
+      branch: mr.source_branch,
+      head_sha: mr.head_sha,
+    },
+    state: mr.state,
+    draft: mr.draft,
+    head_sha: mr.head_sha,
+    created_at: mr.created_at,
+    updated_at: mr.updated_at,
+    merged_at: mr.merged_at,
+    closed_at: mr.closed_at,
+    merge_commit_sha: mr.merge_commit_sha,
+  });
 
   const toMergeRequest = (mr: StoredMergeRequest): MergeRequest =>
     mergeRequestSchema.parse({
@@ -1237,6 +1281,7 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
         labels: [...draft.labels],
         reviewers: [...draft.reviewers],
         merged_at: null,
+        ...createdNow(),
         // Divergence 14: no commit graph, so the target branch's head now *is* the merge base.
         base_sha: branchOf(draft.project, draft.target)?.head ?? project.head,
         files: [],
@@ -1264,6 +1309,7 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       if (update.reviewers != null) {
         mr.reviewers = [...update.reviewers];
       }
+      mr.updated_at = core.clock.now();
       return toMergeRequest(mr);
     },
 
@@ -1284,7 +1330,11 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
         );
       }
       // Idempotent: an already-closed merge request is answered as it stands.
-      mr.state = 'closed';
+      if (mr.state !== 'closed') {
+        mr.state = 'closed';
+        mr.closed_at = core.clock.now();
+        mr.updated_at = mr.closed_at;
+      }
       return toMergeRequest(mr);
     },
 
@@ -1505,6 +1555,30 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
         }));
     },
 
+    listMergeRequests: async (project, listOptions): Promise<readonly MergeRequestListing[]> => {
+      core.enter('list_merge_requests');
+      requireProject('list_merge_requests', project);
+      const since = Date.parse(listOptions.updatedAfter);
+      if (Number.isNaN(since) || !Number.isInteger(listOptions.limit) || listOptions.limit <= 0) {
+        // Stricter (rule 1): GitLab would answer a malformed `updated_after` with a 400.
+        throw invalidRequest(
+          PROVIDER,
+          'list_merge_requests',
+          'updatedAfter and limit are required',
+        );
+      }
+      return mergeRequests
+        .filter((mr) => mr.project === project && Date.parse(mr.updated_at) >= since)
+        .toSorted((left, right) => Date.parse(left.updated_at) - Date.parse(right.updated_at))
+        .slice(0, listOptions.limit)
+        .map(toListing);
+    },
+
+    pollPlan: (): MergeRequestPollPlan | null =>
+      options.pollIntervalSeconds === undefined || options.pollIntervalSeconds === null
+        ? null
+        : { interval_seconds: options.pollIntervalSeconds },
+
     listCommits: async (project, options): Promise<readonly RepositoryCommit[]> => {
       core.enter('list_commits');
       requireProject('list_commits', project);
@@ -1628,6 +1702,10 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
         labels: [],
         reviewers: [],
         merged_at: input.mergedAt,
+        created_at: input.mergedAt,
+        updated_at: input.mergedAt,
+        closed_at: null,
+        merge_commit_sha: nextSha(),
         base_sha: input.baseSha === undefined ? project.head : input.baseSha,
         files: (input.files ?? []).map((file) => ({
           new_path: file.path,
@@ -1702,12 +1780,23 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
       if (mr === undefined) {
         throw notFound(PROVIDER, 'emit', `merge request ${input.iid}`);
       }
+      // Every delivery is a change of the merge request, and its instant is the listing's
+      // `updated_at` (divergence 21) — one clock read, so the delivery and the listing agree.
+      const at = core.clock.now();
+      mr.updated_at = at;
       if (input.event === 'mr.merged') {
         mr.state = 'merged';
-        mr.merged_at = core.clock.now();
+        mr.merged_at = at;
+        mr.merge_commit_sha = nextSha();
       }
       if (input.event === 'mr.closed') {
         mr.state = 'closed';
+        mr.closed_at = at;
+      }
+      if (input.event === 'mr.opened' && mr.state === 'closed') {
+        // A reopen: GitLab's `reopen` action, which the catalogue spells `mr.opened`.
+        mr.state = 'opened';
+        mr.closed_at = null;
       }
       if (input.headSha !== undefined) {
         if (input.event !== 'mr.updated') {
@@ -1732,7 +1821,7 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
           event: input.event,
           project: input.project,
           iid: input.iid,
-          ...(input.event === 'mr.updated' ? { updated_at: core.clock.now() } : {}),
+          ...(input.event === 'mr.updated' ? { updated_at: at } : {}),
           ...(input.blockingThreadsResolved === undefined
             ? {}
             : { blocking_threads_resolved: input.blockingThreadsResolved }),

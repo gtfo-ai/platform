@@ -257,7 +257,11 @@ export interface GitLabHttp {
   /** `text/plain` request, for the job trace and the raw file endpoints. */
   requestText(spec: GitLabRequestSpec): Promise<GitLabResponse<string> | null>;
   /** Follows `x-next-page` up to `maxPages`, concatenating JSON arrays. */
-  paginate<TItem>(spec: GitLabRequestSpec, perPage: number): Promise<TItem[]>;
+  /**
+   * Every page of a list, up to the binding's `max_pages` — or up to `pages` when the caller asks
+   * for fewer (WP-110: the merge-request poller reads only as many pages as its limit needs).
+   */
+  paginate<TItem>(spec: GitLabRequestSpec, perPage: number, pages?: number): Promise<TItem[]>;
   readonly maxPages: number;
 }
 
@@ -406,10 +410,15 @@ export const createGitLabHttp = (options: GitLabHttpOptions): GitLabHttp => {
     };
   };
 
-  const paginate = async <TItem>(spec: GitLabRequestSpec, perPage: number): Promise<TItem[]> => {
+  const paginate = async <TItem>(
+    spec: GitLabRequestSpec,
+    perPage: number,
+    pages?: number,
+  ): Promise<TItem[]> => {
     const items: TItem[] = [];
+    const bound = Math.min(options.maxPages, pages ?? options.maxPages);
     let page: string | undefined = '1';
-    for (let visited = 0; visited < options.maxPages && page !== undefined && page !== ''; ) {
+    for (let visited = 0; visited < bound && page !== undefined && page !== ''; ) {
       const response: GitLabResponse<TItem[]> | null = await request<TItem[]>({
         ...spec,
         query: { ...spec.query, per_page: perPage, page },

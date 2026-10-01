@@ -14,10 +14,12 @@ import { describe, expect, it } from 'vitest';
 import { createFakeObservabilityErrors } from '../errors/fake.js';
 import { createFakeGitProvider } from '../git/fake.js';
 import { createFakeObservabilityLogs } from '../logs/fake.js';
+import { createFakeTaskManagement } from '../task-management/fake.js';
 import {
   fakeErrorsRegistration,
   fakeGitRegistration,
   fakeLogsRegistration,
+  fakeTaskManagementRegistration,
 } from './fake-registrations.js';
 
 const INTEGRATION_ID = '00000000-0000-4000-8000-0000000000f7' as Id;
@@ -85,6 +87,45 @@ describe('the fake git registration (backlog 260)', () => {
   it('leaves the fake built directly as it was, so the redaction is the registration’s', async () => {
     const { fake, delivery } = await setUp();
     expect(textOf(await fake.inbound.normalise(delivery, context))).toContain(PLANTED);
+  });
+});
+
+/**
+ * WP-110: the binding's config decides whether a fake polls, as GitLab's and Jira's do — so a tier
+ * switches polling on in `bindings.config` and the sweep's query over that column is on the path.
+ */
+describe('the fake registrations’ poll plans (WP-110)', () => {
+  it('answers the git poll plan from the binding’s config, off by default', async () => {
+    const { fake } = await setUp();
+    const create = (config: Record<string, unknown>) =>
+      fakeGitRegistration({ port: fake, token: TOKEN }).create({
+        integrationId: INTEGRATION_ID,
+        config: { project: 'acme/api', token: TOKEN, ...config },
+        secrets: { token: TOKEN },
+        redactor: noSecretsRedactor(),
+      }) as typeof fake;
+    expect(create({}).pollPlan()).toBeNull();
+    expect(create({ poll_enabled: true }).pollPlan()).toEqual({ interval_seconds: 60 });
+    expect(create({ poll_enabled: true, poll_interval_seconds: 30 }).pollPlan()).toEqual({
+      interval_seconds: 30,
+    });
+    expect(() => create({ poll_enabled: true, poll_interval_seconds: 5 })).toThrow();
+  });
+
+  it('polls a status rule when the binding names one, as Jira’s status wins over its label', () => {
+    const tickets = createFakeTaskManagement({ integrationId: INTEGRATION_ID });
+    const create = (config: Record<string, unknown>) =>
+      fakeTaskManagementRegistration({ port: tickets, token: TOKEN }).create({
+        integrationId: INTEGRATION_ID,
+        config: { token: TOKEN, poll_enabled: true, ...config },
+        secrets: { token: TOKEN },
+        redactor: noSecretsRedactor(),
+      }) as typeof tickets;
+    expect(create({}).pollPlan()?.rule).toEqual({ kind: 'label', label: 'agentic' });
+    expect(create({ pickup_status: 'Ready for agent' }).pollPlan()?.rule).toEqual({
+      kind: 'status',
+      status: 'Ready for agent',
+    });
   });
 });
 

@@ -17,7 +17,11 @@ import type {
   InboundContext,
   WebhookDelivery,
 } from '@platform/application';
-import { mergeRequestSchema } from '@platform/application';
+import {
+  mergeRequestListingSchema,
+  mergeRequestPollPlanSchema,
+  mergeRequestSchema,
+} from '@platform/application';
 import type { Id } from '@platform/contracts';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { expectCatalogueEvent, expectIntegrationError } from './shared.js';
@@ -137,6 +141,26 @@ export interface GitProviderContractContext {
       readonly deletions: number;
     };
   };
+  /**
+   * What `listMergeRequests` must answer for this harness (WP-110, PROGRESS backlog 297).
+   *
+   * `since` is a window both named merge requests are inside and `emptySince` one every merge
+   * request is outside, so the suite asserts the window is honoured both ways (rule 42). One is open
+   * and one merged, because a poll that listed only open merge requests would never see a merge.
+   */
+  readonly listing: {
+    readonly since: string;
+    readonly emptySince: string;
+    readonly openIid: number;
+    readonly mergedIid: number;
+  };
+  /**
+   * The same provider built with merge-request polling **switched on** in its binding
+   * configuration, and the interval that configuration states (WP-110) — an obligation of the
+   * contract (rule 23): the merge-request poller asks `pollPlan()`, and a provider that answered a
+   * plan for a binding that never asked would read a provider nobody asked it to.
+   */
+  readonly polling: { readonly port: GitProviderPort; readonly intervalSeconds: number };
   /** Head sha of a pipeline the harness seeded, with one failing job that has a log. */
   readonly pipelineSha: string;
   readonly failingJobName: string;
@@ -833,6 +857,46 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
           limit: 20,
         });
         expect(commits.map((commit) => commit.sha)).not.toContain(context.commits.sha);
+      });
+
+      /**
+       * WP-110: the merge-request poller's read. Every state, oldest update first (the poller's
+       * cursor is the newest `updated_at` of a page, so any other order moves it past merge requests
+       * it never read), and the window honoured both ways.
+       */
+      it('lists merge requests of every state updated since an instant, oldest first (WP-110)', async () => {
+        const listed = await port.listMergeRequests(context.project, {
+          updatedAfter: context.listing.since,
+          limit: 20,
+        });
+        for (const entry of listed) {
+          mergeRequestListingSchema.parse(entry);
+          expect(Date.parse(entry.updated_at)).toBeGreaterThanOrEqual(
+            Date.parse(context.listing.since),
+          );
+        }
+        const instants = listed.map((entry) => Date.parse(entry.updated_at));
+        expect(instants, 'oldest first').toEqual(instants.toSorted((left, right) => left - right));
+        const byIid = new Map(listed.map((entry) => [entry.ref.iid, entry]));
+        expect(byIid.get(context.listing.openIid)?.state).toBe('opened');
+        const merged = byIid.get(context.listing.mergedIid);
+        expect(merged?.state).toBe('merged');
+        expect(Number.isNaN(Date.parse(merged?.merged_at ?? ''))).toBe(false);
+      });
+
+      it('answers without a merge request older than the window it was asked for (WP-110)', async () => {
+        const listed = await port.listMergeRequests(context.project, {
+          updatedAfter: context.listing.emptySince,
+          limit: 20,
+        });
+        expect(listed.map((entry) => entry.ref.iid)).not.toContain(context.listing.openIid);
+        expect(listed.map((entry) => entry.ref.iid)).not.toContain(context.listing.mergedIid);
+      });
+
+      it('polls its merge requests only when the binding switched polling on (WP-110)', () => {
+        expect(port.pollPlan()).toBeNull();
+        const plan = mergeRequestPollPlanSchema.parse(context.polling.port.pollPlan());
+        expect(plan.interval_seconds).toBe(context.polling.intervalSeconds);
       });
 
       it('lists merged merge requests since an instant', async () => {

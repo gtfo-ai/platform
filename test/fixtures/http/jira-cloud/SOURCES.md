@@ -11,6 +11,7 @@ from it.
 | `documented` | Atlassian's own published example, with values replaced by obviously fake ones (BD-002) and members the adapter never reads removed. Nothing about the shape is ours. |
 | `documented-adapted` | The **shape** is Atlassian's published example; the **content** is this repository's scenario (the workflow of product/19 §6, the ticket the contract suite reads). A field that is present is a field Atlassian's example has. |
 | `composed` | Atlassian documents each part but publishes no complete example of this combination — the webhook envelope plus a comment, for instance. The file is the documented parts assembled, and the `note` says which sentence licenses each part. |
+| `inferred` | The shape is Atlassian's, but that **this** endpoint answers it is a reasoned guess the `note` states — WP-110's `error-issue-key-does-not-exist.json`, a Data Center knowledge-base answer assumed of Cloud's `search/jql`. |
 | `invented` | Nothing in the documentation states this shape. **There are no such files**, and adding one should be argued for in review rather than done quietly. |
 
 ## The `source` blocks are checked, and here is exactly how far
@@ -54,6 +55,15 @@ a label and pointing the URL at a domain that does not exist changed no test at 
 - `https://support.atlassian.com/jira-software-cloud/docs/jql-fields/` — the JQL fields the polling
   fallback uses (`labels`, `status`, `parent`, `updated`), their operators, and the warning that an
   absolute date literal is read "relative to your configured time zone". Retrieved 2026-09-10.
+
+- `https://support.atlassian.com/jira/kb/how-to-handle-http-400-bad-request-errors-on-jira-search-rest-api-endpoint/`
+  — retrieved 2026-10-01 (WP-110 review round 1): search answers **400** when JQL names an issue key
+  that does not exist, with *"An issue with key '…' does not exist for field 'key'."* in
+  `errorMessages`. The article is scoped to Jira Data Center/Server and `/rest/api/2/search`; the
+  Cloud swagger's `search/jql` documents a 400 without naming this case, so
+  `error-issue-key-does-not-exist.json` is labelled `inferred`. The adapter drops the keys such an
+  error names and asks again (`MISSING_KEY_RETRIES`); the replay answers it for a `key in (…)` naming
+  a key it does not hold.
 
 ## What is deliberately **not** in a fixture
 

@@ -1,0 +1,19 @@
+{
+  "source": {
+    "url": "https://support.atlassian.com/jira/kb/how-to-handle-http-400-bad-request-errors-on-jira-search-rest-api-endpoint/",
+    "operation": "GET /rest/api/3/search/jql with `key in (…)` naming a key that does not exist → 400 (ErrorCollection)",
+    "retrieved": "2026-10-01",
+    "evidence": "inferred",
+    "note": "Atlassian's knowledge-base article states that search 'responds HTTP 400 \"Bad Request\" if the JQL query makes explicit reference to inexistent entities, like a specific Issue Key' and quotes the message \"An issue with key 'KANBAN-123456789' does not exist for field 'key'.\" in an ErrorCollection. The article's scope is Jira Data Center/Server and `/rest/api/2/search`; that Jira Cloud's `/rest/api/3/search/jql` answers the same is inferred, not documented — the Cloud swagger (retrieved 2026-10-01) documents a 400 for that operation without naming this case. The key is this corpus's (WP-110 review round 1)."
+  },
+  "response": {
+    "status": 400,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "errorMessages": ["An issue with key 'ACME-404' does not exist for field 'key'."],
+      "errors": {}
+    }
+  }
+}

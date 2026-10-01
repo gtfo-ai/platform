@@ -54,18 +54,20 @@ export const readFailedJobs = async (
     created_on: Date | string;
     completed_on: Date | string | null;
     message: string | null;
+    total: number;
   }>(
+    // One statement, so the page and its `total` are one snapshot (session 11, found on WP-110's
+    // tree: as two statements a job that failed between them answered `total: 1` beside no items).
+    // A page with no rows means no failed job at all (`limit` is at least 1), so `total` is 0.
     `select id::text as id, name as queue, retry_count + 1 as attempts, retry_limit,
             created_on, completed_on,
-            left(coalesce(output ->> 'message', output -> 'value' ->> 'message'), $2) as message
+            left(coalesce(output ->> 'message', output -> 'value' ->> 'message'), $2) as message,
+            (select count(*)::int from ${s}.job where state = 'failed') as total
        from ${s}.job
       where state = 'failed'
       order by completed_on desc nulls last, id
       limit $1`,
     [query.limit, READ_MESSAGE_CHARS],
-  );
-  const counted = await sql.query<{ total: number }>(
-    `select count(*)::int as total from ${s}.job where state = 'failed'`,
   );
   return {
     items: rows.map((row) => ({
@@ -79,6 +81,6 @@ export const readFailedJobs = async (
       failedAt: new Date(row.completed_on ?? row.created_on).toISOString(),
       error: row.message,
     })),
-    total: Number(counted.rows[0]?.total ?? 0),
+    total: Number(rows[0]?.total ?? 0),
   };
 };

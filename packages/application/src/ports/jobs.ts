@@ -303,7 +303,8 @@ export const coalescingSlotStart = (at: Date, windowSeconds: number): number =>
 /**
  * Queue names TD-004 enumerates. Later work packages own the handlers; the names live here so two
  * packages cannot spell the same queue differently. TD-004's `poll.<provider>` (cron) is **not**
- * one of them: the ticket poller is one queue keyed per binding, `ticket.poll` (WP-87), and the
+ * one of them: the ticket poller is one queue keyed per binding, `ticket.poll` (WP-87), the
+ * merge-request poller another, `mr.poll` (WP-110), and the
  * `pollQueueName` helper that built the per-provider names — which nothing ever enqueued — is gone.
  *
  * There is deliberately **no `dispatch` queue**, and adding one is a mistake a test guards against.
@@ -410,6 +411,15 @@ export const JOB_QUEUES = {
    * collapses onto the one already queued. `pipeline/ticket-poll.ts` carries the argument.
    */
   ticketPoll: 'ticket.poll',
+  /**
+   * **The merge-request poller** (WP-110, PROGRESS backlog 297) — WP-87's shape for a git binding:
+   * one job per git binding that switched polling on, keyed `binding:<project>:<integration>`, each
+   * re-arming itself at the binding's interval, plus one `sweep` job keyed `sweep`. A queue of its
+   * own rather than a second kind on `ticket.poll`, so the two pollers' chains never contend for one
+   * key, and one more worker — one more pooled connection, counted in `POOL_RESERVATIONS.pipeline`.
+   * `pipeline/mr-poll.ts` carries the argument.
+   */
+  mrPoll: 'mr.poll',
   /** Budget window rollover (cron). */
   budgetWindowReset: 'budget.window.reset',
   /** Knowledge-base index rebuild; singleton per project. */
