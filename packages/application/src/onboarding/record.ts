@@ -83,6 +83,7 @@ import type {
   KnowledgeStore,
   StoredKnowledgeProposal,
 } from '../knowledge/ports.js';
+import { appendOnProjectWithRetry } from '../pipeline/project-stream.js';
 import type { EventStore } from '../ports/event-store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import { jobQueueDefinition } from '../ports/job-queues.js';
@@ -90,6 +91,7 @@ import type { JobHandler, Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
+import type { Transaction } from '../ports/transaction.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import { evaluateReadiness } from './evaluate-readiness.js';
 import type { PlatformReadinessProbe, ReadinessStore } from './ports.js';
@@ -203,6 +205,11 @@ export interface DiscoveryRecordReport {
    * maintainer, and a row per dropped page would be the unbounded write the cap exists to stop.
    */
   readonly overCap: number;
+  /**
+   * Older **undecided** `bootstrap` proposals for a page this run drafted again, marked `discarded`
+   * with a platform reason naming this run's task (WP-109, PROGRESS backlog 319, option (a)).
+   */
+  readonly superseded: number;
 }
 
 const EMPTY: DiscoveryRecordReport = {
@@ -215,6 +222,7 @@ const EMPTY: DiscoveryRecordReport = {
   riskClasses: 0,
   businessRefused: 0,
   overCap: 0,
+  superseded: 0,
 };
 
 /**
@@ -354,6 +362,61 @@ const rowFor = (
 });
 
 /**
+ * The platform's reason on an older draft this run superseded — the first evidence line of the row,
+ * where the history bootstrap puts a refused citation's reason (`bootstrap/record.ts`), so the queue
+ * card that shows the row `discarded` shows why beside it. Platform text only: two ids.
+ */
+export const supersededDraftReason = (taskId: Id): string =>
+  `superseded by the platform: a newer discovery draft of this page is queued from task ${taskId}`;
+
+/**
+ * Discards the older **undecided** discovery drafts of the pages this run queued again (WP-109,
+ * PROGRESS backlog 319, option (a) as ruled).
+ *
+ * A re-evaluation (WP-94) drafts its pages again, and before this the curator — which dedupes against
+ * the **index** — gave a page still in the queue a second `bootstrap` proposal beside the first,
+ * with nothing on either saying so. Three limits, each a decision:
+ *
+ *  - **Undecided rows only** (`queued`, no `decided_at`). A draft a maintainer has already approved
+ *    is a human's decision on its way to a commit, and a re-evaluation does not overrule it.
+ *  - **`bootstrap` rows only.** The newer draft supersedes an earlier discovery's draft of the same
+ *    page; a Librarian's, a history run's or an interviewee's proposal is a different author's claim
+ *    with its own evidence, and a model's re-draft is no reason to discard it.
+ *  - **This run's queued rows only** name a path. A row the curator refused (`discarded`, no
+ *    repository path) supersedes nothing.
+ *
+ * In the recorder's transaction, after this run's rows are inserted and excluding them by id, so a
+ * rolled-back attempt discards nothing and the newest draft is the one left pending. **Two recorders
+ * racing on one project are serialised by the project stream itself**: both append to it in the
+ * same transaction as this update, so the one that loses the sequence re-runs its whole transaction
+ * — this read of the queue included — after the winner has committed, and sees the winner's rows.
+ * The second to commit has always seen the first's rows (read, and driven in memory by
+ * `record.test.ts`'s concurrent case; the PostgreSQL interleaving is not separately measured).
+ */
+const supersedeOlderDrafts = async (
+  options: DiscoveryRecordOptions,
+  tx: Transaction,
+  input: {
+    readonly projectId: Id;
+    readonly taskId: Id;
+    readonly rows: readonly StoredKnowledgeProposal[];
+  },
+): Promise<number> => {
+  const queued = input.rows.filter((row) => row.status === 'queued');
+  if (queued.length === 0) {
+    return 0;
+  }
+  const discarded = await options.proposals.supersedeQueued(tx, {
+    projectId: input.projectId,
+    source: 'bootstrap',
+    paths: [...new Set(queued.map((row) => row.targetPath))],
+    keep: input.rows.map((row) => row.id),
+    reason: supersededDraftReason(input.taskId),
+  });
+  return discarded.length;
+};
+
+/**
  * Records one discovery run's findings.
  *
  * Exported separately from the handler so a test can drive it and read the report, the shape
@@ -428,7 +491,6 @@ export const recordDiscoveryFindings = async (
     }),
   );
 
-  const streamSeq = await options.eventStore.nextStreamSequence('project', projectId);
   /**
    * **This transaction is not idempotent, and a pg-boss retry after it commits duplicates it.**
    *
@@ -439,62 +501,81 @@ export const recordDiscoveryFindings = async (
    * same shape `librarian.ts` has for its own curation and is not a regression introduced here.
    * What would close it is an idempotency key on the **artifact**: a unique index on
    * `kb_proposals (project_id, task_id, target_path)` for a `bootstrap` proposal, or an `insert …
-   * on conflict do nothing` keyed by the artifact id, either of which needs a migration.
+   * on conflict do nothing` keyed by the artifact id, either of which needs a migration. Since
+   * WP-109 the duplicate is at least not left **pending**: the supersede below discards the first
+   * delivery's rows when the second records, because they are older queued `bootstrap` rows for the
+   * same paths — what is left is a pair of `discarded` rows in the queue's history, not two drafts
+   * to decide.
+   *
+   * **Through the shared retry** (WP-109, backlog 357): the signal read and the index read above are
+   * held, and a lost sequence race re-runs only this transaction — before it, the job failed and
+   * pg-boss's retry asked the git provider again (R9's probe). The supersede re-runs with it, and it
+   * reads the queue **inside** the transaction, so a re-run decides against what is queued then.
    */
-  await options.unitOfWork.transaction(async (scope) => {
-    await options.readiness.record(scope.tx, evaluation);
-    // WP-37: a **proposal**, so it goes on the project row and not into `policies.risk_classes`.
-    // Written only when the agent proposed something the platform recognises — an empty write would
-    // replace an earlier run's proposal with "nothing", which is a different claim from silence.
-    if (Object.keys(proposedClasses).length > 0) {
-      await options.readiness.saveRiskClassProposal(scope.tx, projectId, proposedClasses);
-    }
-    if (rows.length > 0) {
-      await options.proposals.insert(scope.tx, rows);
-    }
-    await scope.events.append([
-      // One per recorded row, in the row's own transaction (backlog 228), ahead of the proposals.
-      readinessEvaluatedEventFor({
-        id: options.ids.next(),
-        evaluation,
-        streamSeq,
-        component: 'discovery',
-        occurredAt: createdAt,
-      }),
-      ...rows.map((row, index) =>
-        knowledgeProposalCreatedEvent.parse({
+  const superseded = await appendOnProjectWithRetry(
+    options,
+    { projectId, writer: 'discovery_record' },
+    async (scope, streamSeq) => {
+      await options.readiness.record(scope.tx, evaluation);
+      // WP-37: a **proposal**, so it goes on the project row and not into `policies.risk_classes`.
+      // Written only when the agent proposed something the platform recognises — an empty write would
+      // replace an earlier run's proposal with "nothing", which is a different claim from silence.
+      if (Object.keys(proposedClasses).length > 0) {
+        await options.readiness.saveRiskClassProposal(scope.tx, projectId, proposedClasses);
+      }
+      if (rows.length > 0) {
+        await options.proposals.insert(scope.tx, rows);
+      }
+      const discardedOlder = await supersedeOlderDrafts(options, scope.tx, {
+        projectId,
+        taskId,
+        rows,
+      });
+      await scope.events.append([
+        // One per recorded row, in the row's own transaction (backlog 228), ahead of the proposals.
+        readinessEvaluatedEventFor({
           id: options.ids.next(),
-          stream_type: 'project',
-          stream_id: projectId,
-          stream_seq: streamSeq + 1 + index,
-          actor: { kind: 'system', component: 'discovery' },
-          occurred_at: createdAt,
-          type: 'knowledge.proposal.created',
-          payload: {
-            project_id: projectId,
-            proposal: knowledgeProposalRecordSchema.parse({
-              id: row.id,
-              project_id: row.projectId,
-              task_id: row.taskId,
-              run_id: row.runId,
-              source: row.source,
-              kind: row.kind,
-              type: row.type,
-              target_path: row.targetPath,
-              delta: row.delta,
-              evidence: [...row.evidence],
-              significance: row.significance,
-              status: row.status,
-              decided_by_user_id: null,
-              decided_at: null,
-              applied_commit_sha: null,
-              created_at: row.createdAt,
-            }),
-          },
+          evaluation,
+          streamSeq,
+          component: 'discovery',
+          occurredAt: createdAt,
         }),
-      ),
-    ]);
-  });
+        ...rows.map((row, index) =>
+          knowledgeProposalCreatedEvent.parse({
+            id: options.ids.next(),
+            stream_type: 'project',
+            stream_id: projectId,
+            stream_seq: streamSeq + 1 + index,
+            actor: { kind: 'system', component: 'discovery' },
+            occurred_at: createdAt,
+            type: 'knowledge.proposal.created',
+            payload: {
+              project_id: projectId,
+              proposal: knowledgeProposalRecordSchema.parse({
+                id: row.id,
+                project_id: row.projectId,
+                task_id: row.taskId,
+                run_id: row.runId,
+                source: row.source,
+                kind: row.kind,
+                type: row.type,
+                target_path: row.targetPath,
+                delta: row.delta,
+                evidence: [...row.evidence],
+                significance: row.significance,
+                status: row.status,
+                decided_by_user_id: null,
+                decided_at: null,
+                applied_commit_sha: null,
+                created_at: row.createdAt,
+              }),
+            },
+          }),
+        ),
+      ]);
+      return discardedOlder;
+    },
+  );
 
   return {
     status: 'recorded',
@@ -502,6 +583,7 @@ export const recordDiscoveryFindings = async (
     level: evaluation.level,
     queued: rows.filter((row) => row.status === 'queued').length,
     discarded: rows.filter((row) => row.status === 'discarded').length,
+    superseded,
     redactions: tally.count,
     riskClasses: Object.keys(proposedClasses).length,
     businessRefused: pages.businessRefused,
@@ -525,6 +607,7 @@ export const discoveryRecordHandler =
       risk_classes: report.riskClasses,
       business_refused: report.businessRefused,
       pages_over_cap: report.overCap,
+      superseded: report.superseded,
       redactions: report.redactions,
       reason: report.reason,
     };

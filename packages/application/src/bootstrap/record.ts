@@ -54,6 +54,7 @@ import type {
   KnowledgeStore,
   StoredKnowledgeProposal,
 } from '../knowledge/ports.js';
+import { appendOnProjectWithRetry } from '../pipeline/project-stream.js';
 import type { EventStore } from '../ports/event-store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type { Jobs } from '../ports/jobs.js';
@@ -101,7 +102,7 @@ export interface HistoryRecordOptions {
   readonly bootstrap: HistoryBootstrapStore;
   readonly proposals: KnowledgeProposalStore;
   readonly knowledge: KnowledgeStore;
-  readonly eventStore: EventStore;
+  readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
   /** The project's row — `knowledge_dir` is what a vault-relative path is joined onto (BD-025). */
   readonly project: (projectId: Id) => Promise<{ readonly knowledgeDir: string } | null>;
   readonly artifact: (query: {
@@ -330,61 +331,66 @@ export const recordHistoryFindings = async (
   ];
 
   const mergeRequestsRead = boundCoverageClaim(findings.merge_requests_read, chunk.mergeRequests);
-  const streamSeq = await options.eventStore.nextStreamSequence('project', projectId);
-  const outcome = await options.unitOfWork.transaction(async (scope) => {
-    // The claim that makes the whole transaction idempotent: `recorded_at is null` is in the
-    // predicate, so a redelivery that raced this one writes nothing and appends no event. The run's
-    // own coverage claim rides in the same call — it is part of the same report, and a second
-    // writer of the chunk is what standing rule 79 forbids.
-    const claimed = await options.bootstrap.markChunkRecorded(scope.tx, chunk.id, {
-      at: createdAt,
-      proposals: rows.filter((row) => row.status === 'queued').length,
-      refusedProposals: rows.filter((row) => row.status !== 'queued').length,
-      mergeRequestsRead,
-    });
-    if (!claimed) {
-      return { written: false, completed: false };
-    }
-    if (rows.length > 0) {
-      await options.proposals.insert(scope.tx, rows);
-    }
-    await scope.events.append(
-      rows.map((row, index) =>
-        knowledgeProposalCreatedEvent.parse({
-          id: options.ids.next(),
-          stream_type: 'project',
-          stream_id: projectId,
-          stream_seq: streamSeq + index,
-          actor: { kind: 'system', component: 'history_bootstrap' },
-          occurred_at: createdAt,
-          type: 'knowledge.proposal.created',
-          payload: {
-            project_id: projectId,
-            proposal: knowledgeProposalRecordSchema.parse({
-              id: row.id,
-              project_id: row.projectId,
-              task_id: row.taskId,
-              run_id: row.runId,
-              source: row.source,
-              kind: row.kind,
-              type: row.type,
-              target_path: row.targetPath,
-              delta: row.delta,
-              evidence: [...row.evidence],
-              significance: row.significance,
-              status: row.status,
-              decided_by_user_id: null,
-              decided_at: null,
-              applied_commit_sha: null,
-              created_at: row.createdAt,
-            }) as JsonValue,
-          },
-        }),
-      ),
-    );
-    const completed = await options.bootstrap.completeIfDone(scope.tx, chunk.batchId, createdAt);
-    return { written: true, completed };
-  });
+  // The run's findings are held: a lost sequence race re-runs this transaction — the chunk's claim
+  // with it, which rolled back — and nothing above it (WP-109, the sweep of backlog 357).
+  const outcome = await appendOnProjectWithRetry(
+    options,
+    { projectId, writer: 'history_record' },
+    async (scope, streamSeq) => {
+      // The claim that makes the whole transaction idempotent: `recorded_at is null` is in the
+      // predicate, so a redelivery that raced this one writes nothing and appends no event. The run's
+      // own coverage claim rides in the same call — it is part of the same report, and a second
+      // writer of the chunk is what standing rule 79 forbids.
+      const claimed = await options.bootstrap.markChunkRecorded(scope.tx, chunk.id, {
+        at: createdAt,
+        proposals: rows.filter((row) => row.status === 'queued').length,
+        refusedProposals: rows.filter((row) => row.status !== 'queued').length,
+        mergeRequestsRead,
+      });
+      if (!claimed) {
+        return { written: false, completed: false };
+      }
+      if (rows.length > 0) {
+        await options.proposals.insert(scope.tx, rows);
+      }
+      await scope.events.append(
+        rows.map((row, index) =>
+          knowledgeProposalCreatedEvent.parse({
+            id: options.ids.next(),
+            stream_type: 'project',
+            stream_id: projectId,
+            stream_seq: streamSeq + index,
+            actor: { kind: 'system', component: 'history_bootstrap' },
+            occurred_at: createdAt,
+            type: 'knowledge.proposal.created',
+            payload: {
+              project_id: projectId,
+              proposal: knowledgeProposalRecordSchema.parse({
+                id: row.id,
+                project_id: row.projectId,
+                task_id: row.taskId,
+                run_id: row.runId,
+                source: row.source,
+                kind: row.kind,
+                type: row.type,
+                target_path: row.targetPath,
+                delta: row.delta,
+                evidence: [...row.evidence],
+                significance: row.significance,
+                status: row.status,
+                decided_by_user_id: null,
+                decided_at: null,
+                applied_commit_sha: null,
+                created_at: row.createdAt,
+              }) as JsonValue,
+            },
+          }),
+        ),
+      );
+      const completed = await options.bootstrap.completeIfDone(scope.tx, chunk.batchId, createdAt);
+      return { written: true, completed };
+    },
+  );
 
   if (!outcome.written) {
     return { ...EMPTY, reason: 'another delivery recorded this chunk first' };

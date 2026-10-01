@@ -60,6 +60,7 @@ import type {
   KnowledgeStore,
   StoredKnowledgeProposal,
 } from '../knowledge/ports.js';
+import { appendOnProjectWithRetry } from '../pipeline/project-stream.js';
 import type { EventStore } from '../ports/event-store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type { Transaction } from '../ports/transaction.js';
@@ -176,6 +177,49 @@ const proposalOf = (
 });
 
 /**
+ * The platform's reason on an earlier interview answer a newer submission replaced — the first
+ * evidence line of the row, the place `onboarding/record.ts` puts a superseded discovery draft's.
+ * Platform text only: an id and an instant.
+ */
+export const supersededAnswerReason = (userId: Id, createdAt: IsoDateTime): string =>
+  `superseded by the platform: a newer business interview answer for this page was submitted by user ${userId} at ${createdAt}`;
+
+/**
+ * Discards the **undecided** pages an earlier interview queued for the sections this one answered
+ * again (WP-109 review round 1, PROGRESS backlog 370) — backlog 319's option (a), for the interview.
+ *
+ * Re-submitting step 3 (or the settings page's *Business context*) queued every page a second time
+ * beside the first submission's, with nothing saying which was current. The limits are the
+ * discovery recorder's, for the same reasons: `queued` rows nobody has decided, and only `human`
+ * rows — the interview is the only `human` writer, and a Librarian's or a discovery draft for a
+ * `business/` path is another author's claim (discovery refuses `business/` paths in any case).
+ * In the interview's own transaction, after its rows are inserted and excluding them by id, so a
+ * rolled-back attempt discards nothing.
+ */
+const supersedeEarlierAnswers = async (
+  options: BusinessInterviewOptions,
+  tx: Transaction,
+  input: {
+    readonly projectId: Id;
+    readonly userId: Id;
+    readonly createdAt: IsoDateTime;
+    readonly rows: readonly StoredKnowledgeProposal[];
+  },
+): Promise<void> => {
+  const queued = input.rows.filter((row) => row.status === 'queued');
+  if (queued.length === 0) {
+    return;
+  }
+  await options.proposals.supersedeQueued(tx, {
+    projectId: input.projectId,
+    source: 'human',
+    paths: [...new Set(queued.map((row) => row.targetPath))],
+    keep: input.rows.map((row) => row.id),
+    reason: supersededAnswerReason(input.userId, input.createdAt),
+  });
+};
+
+/**
  * Records one interview. Every answered or not-applicable section becomes one queued proposal; a
  * section absent from `answers` is a skip and writes nothing.
  */
@@ -191,7 +235,10 @@ export const recordBusinessInterview = async (
      * proposals** (WP-64 review round 1). Answering `false` means the attempt is already recorded:
      * the transaction rolls back and nothing is queued twice. The server serialises on the key and
      * re-checks inside it, so a crash between the proposals and the audit row cannot leave one
-     * without the other, and a double submit cannot queue the pages twice.
+     * without the other, and a double submit cannot queue the pages twice. **Called once per
+     * attempt** since WP-109: a lost project-stream race re-runs the whole transaction, so the claim
+     * must be a write on `tx` that rolls back with it — which the server's is — and never a write
+     * of its own.
      */
     readonly claim?: (tx: Transaction, recorded: RecordedInterview) => Promise<boolean>;
   },
@@ -249,51 +296,67 @@ export const recordBusinessInterview = async (
   };
   const claim = input.claim;
   try {
-    const streamSeq = await options.eventStore.nextStreamSequence('project', input.projectId);
-    await options.unitOfWork.transaction(async (scope) => {
-      // First, so a refused claim writes nothing at all.
-      if (claim !== undefined && !(await claim(scope.tx, recorded))) {
-        throw new InterviewAlreadyRecorded();
-      }
-      if (rows.length === 0) {
-        return;
-      }
-      await options.proposals.insert(scope.tx, rows);
-      await scope.events.append(
-        rows.map((row, index) =>
-          knowledgeProposalCreatedEvent.parse({
-            id: options.ids.next(),
-            stream_type: 'project',
-            stream_id: input.projectId,
-            stream_seq: streamSeq + index,
-            actor: { kind: 'user', user_id: input.userId },
-            occurred_at: createdAt,
-            type: 'knowledge.proposal.created',
-            payload: {
-              project_id: input.projectId,
-              proposal: knowledgeProposalRecordSchema.parse({
-                id: row.id,
-                project_id: row.projectId,
-                task_id: null,
-                run_id: null,
-                source: row.source,
-                kind: row.kind,
-                type: row.type,
-                target_path: row.targetPath,
-                delta: row.delta,
-                evidence: [...row.evidence],
-                significance: row.significance,
-                status: row.status,
-                decided_by_user_id: null,
-                decided_at: null,
-                applied_commit_sha: null,
-                created_at: row.createdAt,
-              }),
-            },
-          }),
-        ),
-      );
-    });
+    /**
+     * Through the shared retry (WP-109, backlog 357): another project-stream write between the
+     * sequence read and the commit — a discovery record, an index run, a re-check — used to answer
+     * the wizard's step 3 with `500 internal_error`. A lost race re-runs the whole transaction, the
+     * claim **first** as before: the lost attempt's claim rolled back with its proposals, so a retried
+     * attempt still writes exactly one `command_idempotency` row.
+     */
+    await appendOnProjectWithRetry(
+      options,
+      { projectId: input.projectId, writer: 'business_interview' },
+      async (scope, streamSeq) => {
+        // First, so a refused claim writes nothing at all.
+        if (claim !== undefined && !(await claim(scope.tx, recorded))) {
+          throw new InterviewAlreadyRecorded();
+        }
+        if (rows.length === 0) {
+          return;
+        }
+        await options.proposals.insert(scope.tx, rows);
+        await supersedeEarlierAnswers(options, scope.tx, {
+          projectId: input.projectId,
+          userId: input.userId,
+          createdAt,
+          rows,
+        });
+        await scope.events.append(
+          rows.map((row, index) =>
+            knowledgeProposalCreatedEvent.parse({
+              id: options.ids.next(),
+              stream_type: 'project',
+              stream_id: input.projectId,
+              stream_seq: streamSeq + index,
+              actor: { kind: 'user', user_id: input.userId },
+              occurred_at: createdAt,
+              type: 'knowledge.proposal.created',
+              payload: {
+                project_id: input.projectId,
+                proposal: knowledgeProposalRecordSchema.parse({
+                  id: row.id,
+                  project_id: row.projectId,
+                  task_id: null,
+                  run_id: null,
+                  source: row.source,
+                  kind: row.kind,
+                  type: row.type,
+                  target_path: row.targetPath,
+                  delta: row.delta,
+                  evidence: [...row.evidence],
+                  significance: row.significance,
+                  status: row.status,
+                  decided_by_user_id: null,
+                  decided_at: null,
+                  applied_commit_sha: null,
+                  created_at: row.createdAt,
+                }),
+              },
+            }),
+          ),
+        );
+      },
+    );
   } catch (error) {
     if (error instanceof InterviewAlreadyRecorded) {
       return { status: 'replayed' };

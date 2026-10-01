@@ -58,6 +58,7 @@ import {
   knowledgeApplyThresholds,
 } from '@platform/domain';
 import type { EventHandler } from '../events/handler.js';
+import { appendOnProjectWithRetry } from '../pipeline/project-stream.js';
 import { ProjectSettingsInvalidError } from '../pipeline/settings.js';
 import type { EventStore } from '../ports/event-store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
@@ -330,60 +331,65 @@ export const recordLibrarianProposals = async (
     }),
   );
 
-  const streamSeq = await options.eventStore.nextStreamSequence('project', projectId);
-  const claimed = await options.unitOfWork.transaction(async (scope) => {
-    /**
-     * The claim that makes the whole transaction idempotent (WP-48) — `record.ts`'s
-     * `markChunkRecorded` one feature across. `curated_at is null` is in the predicate, so a second
-     * delivery of this wake-up — which the recovery pass deliberately creates — writes no second
-     * set of proposals and appends no second event.
-     */
-    if (
-      !(await options.proposals.markCurated(scope.tx, {
-        artifactId: data.artifact_id as Id,
-        at: createdAt,
-        proposals: rows.length,
-      }))
-    ) {
-      return false;
-    }
-    await options.proposals.insert(scope.tx, rows);
-    await scope.events.append(
-      rows.map((row, index) =>
-        knowledgeProposalCreatedEvent.parse({
-          id: options.ids.next(),
-          stream_type: 'project',
-          stream_id: projectId,
-          stream_seq: streamSeq + index,
-          actor: { kind: 'system', component: 'librarian' },
-          occurred_at: createdAt,
-          type: 'knowledge.proposal.created',
-          payload: {
-            project_id: projectId,
-            proposal: knowledgeProposalRecordSchema.parse({
-              id: row.id,
-              project_id: row.projectId,
-              task_id: row.taskId,
-              run_id: row.runId,
-              source: row.source,
-              kind: row.kind,
-              type: row.type,
-              target_path: row.targetPath,
-              delta: row.delta,
-              evidence: [...row.evidence],
-              significance: row.significance,
-              status: row.status,
-              decided_by_user_id: null,
-              decided_at: null,
-              applied_commit_sha: null,
-              created_at: row.createdAt,
-            }),
-          },
-        }),
-      ),
-    );
-    return true;
-  });
+  // A lost sequence race re-runs this transaction — the claim with it, which rolled back — and
+  // nothing above it (WP-109, backlog 333).
+  const claimed = await appendOnProjectWithRetry(
+    options,
+    { projectId, writer: 'knowledge_curation' },
+    async (scope, streamSeq) => {
+      /**
+       * The claim that makes the whole transaction idempotent (WP-48) — `record.ts`'s
+       * `markChunkRecorded` one feature across. `curated_at is null` is in the predicate, so a second
+       * delivery of this wake-up — which the recovery pass deliberately creates — writes no second
+       * set of proposals and appends no second event.
+       */
+      if (
+        !(await options.proposals.markCurated(scope.tx, {
+          artifactId: data.artifact_id as Id,
+          at: createdAt,
+          proposals: rows.length,
+        }))
+      ) {
+        return false;
+      }
+      await options.proposals.insert(scope.tx, rows);
+      await scope.events.append(
+        rows.map((row, index) =>
+          knowledgeProposalCreatedEvent.parse({
+            id: options.ids.next(),
+            stream_type: 'project',
+            stream_id: projectId,
+            stream_seq: streamSeq + index,
+            actor: { kind: 'system', component: 'librarian' },
+            occurred_at: createdAt,
+            type: 'knowledge.proposal.created',
+            payload: {
+              project_id: projectId,
+              proposal: knowledgeProposalRecordSchema.parse({
+                id: row.id,
+                project_id: row.projectId,
+                task_id: row.taskId,
+                run_id: row.runId,
+                source: row.source,
+                kind: row.kind,
+                type: row.type,
+                target_path: row.targetPath,
+                delta: row.delta,
+                evidence: [...row.evidence],
+                significance: row.significance,
+                status: row.status,
+                decided_by_user_id: null,
+                decided_at: null,
+                applied_commit_sha: null,
+                created_at: row.createdAt,
+              }),
+            },
+          }),
+        ),
+      );
+      return true;
+    },
+  );
 
   if (!claimed) {
     return { ...EMPTY_REPORT, reason: 'another delivery curated this artifact first' };

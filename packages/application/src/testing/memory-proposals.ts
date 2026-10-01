@@ -7,7 +7,7 @@
  *
  * | # | Divergence | Direction | Why it is safe |
  * |---|---|---|---|
- * | 1 | **Writes are not transactional.** The maps mutate immediately; the `Transaction` handle is accepted and unused. | **Kinder** | Nothing here can demonstrate a rollback. `test/integration/knowledge/postgres-knowledge-store.integration.test.ts` runs the same contract suite against PostgreSQL, where a failed transaction really does undo the insert. |
+ * | 1 | **Writes are not transactional** unless the store is built with `rollback` (WP-109). Without it the maps mutate immediately and the `Transaction` handle is accepted and unused; with `MemoryEventing.onRollback` passed in, every write registers its undo on the transaction it was made in, and a transaction that throws undoes it — which is what lets a unit test re-run a lost sequence race in place without the first attempt's claim answering the second. Visibility is still immediate: a concurrent reader sees a row its writer has not committed. | **Kinder** without `rollback`; *different* with it | `test/integration/knowledge/postgres-knowledge-store.integration.test.ts` runs the same contract suite against PostgreSQL, where a failed transaction really does undo the insert. |
  * | 2 | **`decide` compares the status in JavaScript** where the adapter does it in the `where` clause of one statement. | *Different* | The adapter's version is atomic against a concurrent decider and this one is not, so a **lost-update** race cannot be reproduced here. The contract suite asserts the observable both share — a second decision on a decided row answers `false` — and the atomicity is the adapter's to keep. |
  * | 3 | **Ordering is insertion order reversed**, not `(created_at, id) desc`. | *Different* | For a batch written in id order — which is what `recordLibrarianProposals` does — the two agree, and the contract suite pages through a same-timestamp batch to hold them to it. A test that inserted out of id order would see the two disagree, so no test may assert an ordering from this double and claim it of PostgreSQL. |
  * | 4 | **`readHealthInputs` answers what it was seeded with.** It holds no index of its own, so a test decides what the pass sees. | *Different* | The real one reads `kb_documents` and `kb_links`. A test that asserted "the pass found the expired page the indexer wrote" would be asserting this seam rather than the query, which is why the postgres half of the contract suite seeds rows and asks the adapter. |
@@ -42,7 +42,16 @@ const EMPTY_INPUTS: KbHealthInputs = {
   pathWitnesses: null,
 };
 
-export const memoryProposalStore = (): MemoryProposalStore => {
+/**
+ * Registers an undo on the transaction a write was made in — `MemoryEventing.onRollback`, passed
+ * by a test that needs divergence 1 closed.
+ */
+export type MemoryRollback = (tx: Transaction, undo: () => void) => void;
+
+export const memoryProposalStore = (
+  options: { readonly rollback?: MemoryRollback } = {},
+): MemoryProposalStore => {
+  const undoOnRollback: MemoryRollback = options.rollback ?? (() => {});
   const rows: StoredKnowledgeProposal[] = [];
   const reports: KbHealthReportWrite[] = [];
   /** `knowledge_curations`, as much of it as this double needs: the claim and what it produced. */
@@ -51,6 +60,11 @@ export const memoryProposalStore = (): MemoryProposalStore => {
 
   const replace = (index: number, next: StoredKnowledgeProposal): void => {
     rows.splice(index, 1, next);
+  };
+  /** Puts a row back as it was before a rolled-back write. */
+  const restore = (previous: StoredKnowledgeProposal): void => {
+    const index = rows.findIndex((row) => row.id === previous.id);
+    if (index >= 0) replace(index, previous);
   };
 
   return {
@@ -64,16 +78,26 @@ export const memoryProposalStore = (): MemoryProposalStore => {
       health.set(projectId, inputs);
     },
 
-    insert: async (_tx: Transaction, proposals) => {
+    insert: async (tx: Transaction, proposals) => {
       rows.push(...proposals);
+      undoOnRollback(tx, () => {
+        const ids = new Set(proposals.map((proposal) => proposal.id));
+        for (let index = rows.length - 1; index >= 0; index -= 1) {
+          if (ids.has((rows[index] as StoredKnowledgeProposal).id)) rows.splice(index, 1);
+        }
+      });
     },
 
-    markCurated: async (_tx: Transaction, input) => {
+    markCurated: async (tx: Transaction, input) => {
       const existing = curations.get(input.artifactId);
       if (existing?.curatedAt != null) {
         return false;
       }
       curations.set(input.artifactId, { curatedAt: input.at, proposals: input.proposals });
+      undoOnRollback(tx, () => {
+        if (existing === undefined) curations.delete(input.artifactId);
+        else curations.set(input.artifactId, existing);
+      });
       return true;
     },
 
@@ -96,7 +120,7 @@ export const memoryProposalStore = (): MemoryProposalStore => {
         .reverse()
         .slice(0, query.limit),
 
-    decide: async (_tx: Transaction, decision: KnowledgeProposalDecision) => {
+    decide: async (tx: Transaction, decision: KnowledgeProposalDecision) => {
       const index = rows.findIndex((row) => row.id === decision.id);
       const row = rows[index];
       if (row === undefined || (row.status !== 'queued' && row.status !== 'scored')) {
@@ -109,15 +133,41 @@ export const memoryProposalStore = (): MemoryProposalStore => {
         decidedAt: decision.decidedAt,
         ...(decision.delta === undefined ? {} : { delta: decision.delta }),
       });
+      undoOnRollback(tx, () => restore(row));
       return true;
     },
 
-    markApplied: async (_tx: Transaction, input) => {
+    supersedeQueued: async (tx: Transaction, input) => {
+      const discarded: Id[] = [];
+      rows.forEach((row, index) => {
+        if (
+          row.projectId === input.projectId &&
+          row.source === input.source &&
+          row.status === 'queued' &&
+          row.decidedAt === null &&
+          row.appliedCommitSha === null &&
+          input.paths.includes(row.targetPath) &&
+          !input.keep.includes(row.id)
+        ) {
+          replace(index, {
+            ...row,
+            status: 'discarded',
+            evidence: [input.reason, ...row.evidence],
+          });
+          undoOnRollback(tx, () => restore(row));
+          discarded.push(row.id);
+        }
+      });
+      return discarded;
+    },
+
+    markApplied: async (tx: Transaction, input) => {
       for (const id of input.ids) {
         const index = rows.findIndex((row) => row.id === id);
         const row = rows[index];
         if (row === undefined || !isAwaitingApply(row)) continue;
         replace(index, { ...row, status: 'applied', appliedCommitSha: input.commitSha });
+        undoOnRollback(tx, () => restore(row));
       }
     },
 

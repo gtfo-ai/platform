@@ -134,6 +134,7 @@ export * from './pipeline/live-runs.js';
 export * from './pipeline/observability-prefetch.js';
 export * from './pipeline/outbound.js';
 export * from './pipeline/planner.js';
+export * from './pipeline/project-stream.js';
 export * from './pipeline/run-commands.js';
 export * from './pipeline/run-redaction.js';
 export * from './pipeline/runtime.js';
@@ -217,5 +218,6 @@ export * from './testing/memory-proposals.js';
 export * from './testing/memory-readiness.js';
 export * from './testing/memory-shadow.js';
 export * from './testing/memory-stats.js';
+export * from './testing/project-stream-race.js';
 
 export const packageId = '@platform/application' as const;

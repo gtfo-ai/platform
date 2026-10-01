@@ -113,77 +113,30 @@ const dropFirstCuration = (dropped: string[]) => (jobs: Jobs) => ({
 });
 
 /**
- * **Every curation and apply pass waits until the merge has been measured** (WP-97 pre-review,
- * standing rule 87's second question).
+ * A feature ticket, merged, with `auto_apply` on — BD-018's band then commits without a human.
  *
- * The merge's `task.mr.measured` (`pipeline/delivery-measures.ts`, a `pipeline.outbound` duty woken
- * by `mr.merged`) is appended to the **project** stream — the stream the curation writes
- * `knowledge.proposal.created` to and every apply pass writes `knowledge.proposal.applied` to. All
- * three read the stream's next sequence outside their transaction; the measure retries a lost race
- * in place (WP-90), the two knowledge writers do not, so a knowledge pass that loses fails its job
- * with `StreamConflictError` and pg-boss runs it again `60 × (1 + random)` seconds later
- * (`retryDelaySeconds: 60`, `retryBackoff`) — past this harness's 90-second wait about half the
- * time. Measured on a copy: the measure landed **after** both apply passes, within a second of the
- * re-delivered one; forcing the collision there left the job in `retry` naming
- * `StreamConflictError`, and the next attempt ran 79 s later. That is how *"the pipeline never
- * reached the re-delivered apply to finish the row again"* failed a full-tier run at a load of ~12.
+ * **No hold on the knowledge queues** (WP-109, PROGRESS backlog **333**).
  *
- * So the order is made rather than hoped for: the knowledge queues' handlers are held until the
- * measure is on the stream, which is the last project-stream write the merge causes. The product
- * behaviour — a knowledge pass that loses the race waits a retry rather than re-reading the
- * sequence — is the product's to change (reported with WP-97), not this file's to race.
+ * The merge's `task.mr.measured`, the curation's `knowledge.proposal.created` and every apply
+ * pass's `knowledge.proposal.applied` all land on the **project** stream, each with a sequence read
+ * outside its transaction. Until WP-109 only the measure retried a lost race in place; a knowledge
+ * pass that lost failed its job and pg-boss ran it again `60 × (1 + random)` seconds later (measured
+ * 79 s), past this harness's 90-second wait about half the time — so WP-97's pre-review held both
+ * knowledge queues here until the measure was on the stream. Every project-stream writer now goes
+ * through `appendOnProjectWithRetry` (`packages/application/src/pipeline/project-stream.ts`), so
+ * the cases run in whatever order the queues give them, which is the order production gets.
  */
-const KNOWLEDGE_QUEUES: ReadonlySet<string> = new Set([
-  JOB_QUEUES.knowledgeProposals,
-  JOB_QUEUES.knowledgeApply,
-]);
-
-const holdUntilMeasured =
-  (measured: () => Promise<void>) =>
-  (jobs: Jobs): Jobs => ({
-    ...jobs,
-    work: async (request) =>
-      jobs.work({
-        ...request,
-        handler: KNOWLEDGE_QUEUES.has(request.queue)
-          ? async (job) => {
-              await measured();
-              await request.handler(job);
-            }
-          : request.handler,
-      }),
-  });
-
-const MERGE_MEASURED = `select count(*)::int as n from events
-   where stream_type = 'project' and stream_id = $1 and type = 'task.mr.measured'`;
-
-/** A feature ticket, merged, with `auto_apply` on — BD-018's band then commits without a human. */
 const startMerged = async (
   label: string,
   options: { readonly jobs?: (jobs: Jobs) => Jobs; readonly waitForProposals?: boolean } = {},
 ): Promise<PipelineE2E> => {
-  // Set once `startPipeline` returns; no knowledge job can run before the merge published below.
-  let started: PipelineE2E | undefined;
-  let measured: Promise<void> | undefined;
-  const whenMeasured = (): Promise<void> => {
-    const pipeline = started;
-    if (pipeline === undefined) {
-      return Promise.reject(new Error('a knowledge job ran before the pipeline had started'));
-    }
-    measured ??= pipeline.waitFor('the merge to be measured on the project stream', async () => {
-      const rows = await pipeline.query<{ n: number }>(MERGE_MEASURED, [pipeline.projectId]);
-      return (rows[0]?.n ?? 0) > 0;
-    });
-    return measured;
-  };
-  const hold = holdUntilMeasured(whenMeasured);
   const pipeline = await startPipeline({
     scenarios: featureScenarios,
     label,
     tickets: TICKETS,
     agent: 'real-over-fake-cli',
     config: { version: 1, policies: { knowledge_apply: { auto_apply: true } } },
-    jobs: options.jobs === undefined ? hold : (jobs) => hold(options.jobs?.(jobs) ?? jobs),
+    ...(options.jobs === undefined ? {} : { jobs: options.jobs }),
     env: {
       // A one-second recovery interval: the same number is the gap between passes **and** the age a
       // stranded row must reach (`intake-reconcile.ts`'s one knob). The default 60 s is longer than
@@ -192,7 +145,6 @@ const startMerged = async (
     },
   });
   harness = pipeline;
-  started = pipeline;
   await pipeline.publish([ticketMatched(pipeline)]);
   await pipeline.settle('ready_for_merge', (task) => task.state === 'ready_for_merge');
   await pipeline.publish([merged(pipeline)]);
@@ -320,16 +272,36 @@ describe('the librarian stage, over a merged ticket', () => {
     expect(JSON.stringify(commitAction?.payload)).toContain(AUTO_APPLIED_PATH);
     expect(JSON.stringify(commitAction?.payload)).not.toContain('Sum the invoice model');
 
-    // ── the order `startMerged` makes: the merge's measure precedes every knowledge write ─────
-    const projectStream = await pipeline.query<{ type: string }>(
-      `select type from events where stream_type = 'project' and stream_id = $1 order by stream_seq`,
+    // ── the project stream, written by three writers in no order anyone made (WP-109) ────────
+    //
+    // The merge's measure, the curation and the apply pass race for the project stream's next
+    // sequence, and since WP-109 a loser re-reads it in place rather than failing its job. What is
+    // asserted is what that guarantees: once the measure — the merge's last project-stream write —
+    // is on the stream, every writer's event is there exactly once, at sequences with no gap.
+    await pipeline.waitFor(
+      'the merge to be measured on the project stream',
+      async () =>
+        (
+          await pipeline.query<{ type: string }>(
+            `select type from events where stream_type = 'project' and stream_id = $1 and type = 'task.mr.measured'`,
+            [pipeline.projectId],
+          )
+        ).length > 0,
+    );
+    const projectStream = await pipeline.query<{ type: string; stream_seq: string }>(
+      `select type, stream_seq::text from events where stream_type = 'project' and stream_id = $1 order by stream_seq`,
       [pipeline.projectId],
     );
-    const measureAt = projectStream.findIndex((event) => event.type === 'task.mr.measured');
-    expect(measureAt).toBeGreaterThanOrEqual(0);
-    expect(
-      projectStream.slice(0, measureAt).filter((event) => event.type.startsWith('knowledge.')),
-    ).toEqual([]);
+    expect(projectStream.map((event) => Number(event.stream_seq))).toEqual(
+      projectStream.map((_, index) => Number(projectStream[0]?.stream_seq) + index),
+    );
+    const counts = new Map<string, number>();
+    for (const event of projectStream) {
+      counts.set(event.type, (counts.get(event.type) ?? 0) + 1);
+    }
+    expect(counts.get('task.mr.measured')).toBe(1);
+    expect(counts.get('knowledge.proposal.created')).toBe(4);
+    expect(counts.get('knowledge.proposal.applied')).toBe(1);
 
     // ── a redelivered `knowledge.apply` commits nothing twice (WP-96, backlog 7 bullet 2) ────
     //

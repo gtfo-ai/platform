@@ -292,6 +292,22 @@ Inputs: task text (ticket + spec), touched paths (from plan/diff when available)
 > mutations are recorded, never performed). And "below `discard_below` → dropped (audit only)" is
 > implemented as a `kb_proposals` row with status `discarded`: technical/02's state machine has that
 > state, and a drop nobody can see afterwards is not an audit.
+>
+> **A newer discovery draft supersedes an older undecided one** (WP-109, PROGRESS backlog 319,
+> option (a)). The curator dedupes against the **index**, so a re-evaluation used to queue a second
+> `bootstrap` proposal beside a page still waiting from the first discovery. The discovery recorder
+> now marks the older row `discarded` in the same transaction, with the platform's reason — naming
+> the newer row's task — as its first evidence line (`KnowledgeProposalStore.supersedeQueued`). Only
+> `queued` rows nobody has decided, and only `bootstrap` ones: an approved draft, or a Librarian's,
+> a history run's or an interviewee's proposal for the same path, is left alone. What it does not
+> close: an older draft already **approved** and committed on a knowledge branch whose merge request
+> has not merged, beside a newer draft a maintainer then approves — the index holds neither, so both
+> merge requests `create` the file (measured against the fake git provider at WP-109; the fake has no
+> merge, so the second one's conflict on a real provider is inferred).
+>
+> The business interview does the same for its own `human` rows (WP-109 review round 1, backlog
+> 370): a re-submission discards the earlier submission's undecided page for each section it
+> answers again, with the platform's reason naming the submitting user and instant.
 
 ## History bootstrap (product/18)
 Job: list merged MRs (`listMergedMergeRequests`, N default 200) → fetch discussions → a Sonnet 5 run per batch of ~20 MRs extracting recurring reviewer requests, conventions and pitfalls into proposals with MR links as evidence → curator → proposal queue. Budget-capped; progress in the UI.

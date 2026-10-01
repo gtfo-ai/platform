@@ -10,14 +10,19 @@ import type { Id } from '@platform/contracts';
 import { MAX_INTERVIEW_ANSWER_CHARS, MAX_INTERVIEW_REASON_CHARS } from '@platform/contracts';
 import { fixedClock, sequentialIds } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
+import { StreamConflictError } from '../errors.js';
 import { exactSecretRedactor } from '../integrations/redaction.js';
+import type { StoredKnowledgeProposal } from '../knowledge/ports.js';
+import { PROJECT_STREAM_APPEND_ATTEMPTS } from '../pipeline/project-stream.js';
 import { MemoryEventing } from '../testing/memory-eventing.js';
 import { memoryKnowledgeStore } from '../testing/memory-knowledge.js';
 import { memoryProposalStore } from '../testing/memory-proposals.js';
+import { racingProjectStream } from '../testing/project-stream-race.js';
 import {
   type BusinessInterviewAnswers,
   type BusinessInterviewOptions,
   recordBusinessInterview,
+  supersededAnswerReason,
 } from './interview.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000f1' as Id;
@@ -29,14 +34,19 @@ const harness = (
   options: {
     readonly indexedPaths?: readonly string[];
     readonly project?: { readonly knowledgeDir: string } | null;
+    /** WP-109: how many project-stream races a rival wins; the store then rolls back with the fake. */
+    readonly losses?: number;
   } = {},
 ) => {
-  const proposals = memoryProposalStore();
   const eventing = new MemoryEventing();
+  const proposals = memoryProposalStore(
+    options.losses === undefined ? {} : { rollback: (tx, undo) => eventing.onRollback(tx, undo) },
+  );
+  const race = racingProjectStream(eventing, options.losses ?? 0);
   const knowledge = memoryKnowledgeStore();
   const interview: BusinessInterviewOptions = {
     unitOfWork: eventing,
-    eventStore: eventing.store,
+    eventStore: { ...eventing.store, nextStreamSequence: race.eventStore.nextStreamSequence },
     proposals,
     knowledge: {
       ...knowledge,
@@ -205,5 +215,185 @@ describe('the claim inside the transaction', () => {
     expect(result.status).toBe('replayed');
     expect(proposals.rows).toHaveLength(0);
     expect(await eventing.store.readStream('project', PROJECT)).toEqual([]);
+  });
+});
+
+/**
+ * WP-109, PROGRESS backlog **357**: another project-stream write between the sequence read and the
+ * commit used to answer the wizard's step 3 with `500 internal_error`. The re-run repeats the claim
+ * — modelled here as `command_idempotency`, a key set whose insert rolls back with the transaction —
+ * so a retried attempt still claims exactly once.
+ */
+describe('an interview that loses the project stream’s sequence', () => {
+  const claims = (eventing: MemoryEventing) => {
+    const keys = new Set<string>();
+    let calls = 0;
+    return {
+      keys,
+      calls: () => calls,
+      claimFor:
+        (key: string): NonNullable<Parameters<typeof recordBusinessInterview>[1]['claim']> =>
+        async (tx) => {
+          calls += 1;
+          if (keys.has(key)) return false;
+          keys.add(key);
+          eventing.onRollback(tx, () => keys.delete(key));
+          return true;
+        },
+    };
+  };
+  const answers: BusinessInterviewAnswers = {
+    glossary: { status: 'answered', text: 'Ledger.' },
+    users: { status: 'answered', text: 'Accountants.' },
+  };
+  const created = async (eventing: MemoryEventing) =>
+    (await eventing.store.readStream('project', PROJECT)).filter(
+      (entry) => entry.event.type === 'knowledge.proposal.created',
+    );
+
+  it('records through three lost races, claiming once', async () => {
+    const { proposals, eventing, interview } = harness({
+      losses: PROJECT_STREAM_APPEND_ATTEMPTS - 1,
+    });
+    const claim = claims(eventing);
+    const result = await recordBusinessInterview(interview, {
+      projectId: PROJECT,
+      userId: USER,
+      answers,
+      claim: claim.claimFor('key-1'),
+    });
+    expect(result.status).toBe('recorded');
+    expect(claim.calls()).toBe(PROJECT_STREAM_APPEND_ATTEMPTS);
+    expect([...claim.keys]).toEqual(['key-1']);
+    expect(proposals.rows).toHaveLength(2);
+    expect(await created(eventing)).toHaveLength(2);
+  });
+
+  it('throws on the fourth with nothing claimed, so the same key performs on a resend', async () => {
+    const { proposals, eventing, interview } = harness({ losses: PROJECT_STREAM_APPEND_ATTEMPTS });
+    const claim = claims(eventing);
+    await expect(
+      recordBusinessInterview(interview, {
+        projectId: PROJECT,
+        userId: USER,
+        answers,
+        claim: claim.claimFor('key-1'),
+      }),
+    ).rejects.toBeInstanceOf(StreamConflictError);
+    expect(claim.keys.size).toBe(0);
+    expect(proposals.rows).toEqual([]);
+    expect(await created(eventing)).toEqual([]);
+  });
+
+  it('records two interviews submitted at once, both', async () => {
+    const { proposals, eventing, interview } = harness({ losses: 0 });
+    const claim = claims(eventing);
+    const results = await Promise.all(
+      ['key-1', 'key-2'].map((key) =>
+        recordBusinessInterview(interview, {
+          projectId: PROJECT,
+          userId: USER,
+          answers,
+          claim: claim.claimFor(key),
+        }),
+      ),
+    );
+    expect(results.map((result) => result.status)).toEqual(['recorded', 'recorded']);
+    expect([...claim.keys].sort()).toEqual(['key-1', 'key-2']);
+    expect(proposals.rows).toHaveLength(4);
+    expect(await created(eventing)).toHaveLength(4);
+    // Both landed, and the second to commit superseded the first's pages (backlog 370).
+    assertOnePendingPerPath(proposals.rows);
+  });
+});
+
+/**
+ * The invariant backlog 370 asks for, as a check that names what it found (the canary below asserts
+ * the failure by its words, standing rule 3).
+ */
+const assertOnePendingPerPath = (rows: readonly StoredKnowledgeProposal[]): void => {
+  const pending = new Map<string, number>();
+  for (const row of rows) {
+    if (row.status === 'queued' && row.decidedAt === null) {
+      pending.set(row.targetPath, (pending.get(row.targetPath) ?? 0) + 1);
+    }
+  }
+  for (const [path, count] of pending) {
+    if (count > 1) throw new Error(`${count} pending proposals for ${path}`);
+  }
+};
+
+/**
+ * WP-109 review round 1, PROGRESS backlog **370**: re-submitting the interview queued every
+ * `business/` page a second time beside the first submission's. The newer answer now discards the
+ * earlier undecided page for the same section, with the platform's reason as its first evidence.
+ */
+describe('an interview submitted again', () => {
+  const GLOSSARY = '.agentic/knowledge/business/glossary.md';
+  const submit = (interview: BusinessInterviewOptions, text: string) =>
+    record(interview, { glossary: { status: 'answered', text } });
+
+  it('leaves one pending page per section, and the earlier one discarded with its reason', async () => {
+    const { proposals, interview } = harness();
+    await submit(interview, 'Ledger: the book of record.');
+    await submit(interview, 'Ledger: the book of record, per currency.');
+
+    const glossary = proposals.rows.filter((row) => row.targetPath === GLOSSARY);
+    expect(glossary.map((row) => row.status)).toEqual(['discarded', 'queued']);
+    const [earlier, newer] = glossary;
+    expect(earlier?.evidence[0]).toBe(supersededAnswerReason(USER, earlier?.createdAt as never));
+    expect(earlier?.evidence[0]).toContain(USER);
+    expect(earlier?.evidence.slice(1)).toEqual(newer?.evidence);
+    assertOnePendingPerPath(proposals.rows);
+  });
+
+  it('leaves an earlier answer a maintainer already approved, and another section, alone', async () => {
+    const { proposals, interview } = harness();
+    await record(interview, {
+      glossary: { status: 'answered', text: 'Ledger.' },
+      users: { status: 'answered', text: 'Accountants.' },
+    });
+    const approved = proposals.rows.find((row) => row.targetPath === GLOSSARY);
+    await proposals.decide({} as never, {
+      id: approved?.id as Id,
+      status: 'queued',
+      decidedByUserId: USER,
+      decidedAt: '2026-09-27T05:00:00.000Z' as StoredKnowledgeProposal['createdAt'],
+    });
+    await submit(interview, 'Ledger, again.');
+    expect(proposals.rows.find((row) => row.id === approved?.id)?.status).toBe('queued');
+    // The personas page was not answered again, so it is not superseded.
+    expect(proposals.rows.find((row) => row.targetPath.endsWith('/personas.md'))?.status).toBe(
+      'queued',
+    );
+  });
+
+  it('leaves another source’s queued page for the same path alone (WP-109 review round 2)', async () => {
+    const { proposals, interview } = harness();
+    await submit(interview, 'Ledger: the book of record.');
+    // The near miss: a queued page at the same path whose author is not the interview.
+    const rows = proposals.rows as StoredKnowledgeProposal[];
+    const index = rows.findIndex((row) => row.targetPath === GLOSSARY);
+    rows[index] = { ...(rows[index] as StoredKnowledgeProposal), source: 'bootstrap' };
+    await submit(interview, 'Ledger: the book of record, per currency.');
+
+    const glossary = proposals.rows.filter((row) => row.targetPath === GLOSSARY);
+    expect(glossary.map((row) => [row.source, row.status])).toEqual([
+      ['bootstrap', 'queued'],
+      ['human', 'queued'],
+    ]);
+  });
+
+  it('fails by name when the queue read is disarmed (the canary)', async () => {
+    const { proposals, interview } = harness();
+    const disarmed: BusinessInterviewOptions = {
+      ...interview,
+      proposals: { ...proposals, supersedeQueued: async () => [] },
+    };
+    await submit(disarmed, 'Ledger.');
+    await submit(disarmed, 'Ledger, again.');
+    expect(() => assertOnePendingPerPath(proposals.rows)).toThrow(
+      `2 pending proposals for ${GLOSSARY}`,
+    );
   });
 });

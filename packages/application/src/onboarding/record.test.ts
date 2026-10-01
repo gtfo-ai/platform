@@ -11,15 +11,20 @@ import type { DiscoveryDraftData, DomainEvent, Id } from '@platform/contracts';
 import { MAX_PROPOSAL_DELTA_BYTES } from '@platform/contracts';
 import { fixedClock, MAX_PROPOSALS_PER_RUN, sequentialIds } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
+import { StreamConflictError } from '../errors.js';
 import type { HandlerContext } from '../events/handler.js';
 import { exactSecretRedactor } from '../integrations/redaction.js';
+import type { StoredKnowledgeProposal } from '../knowledge/ports.js';
+import { PROJECT_STREAM_APPEND_ATTEMPTS } from '../pipeline/project-stream.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import { silentLogger } from '../ports/logger.js';
+import type { Transaction } from '../ports/transaction.js';
 import { MemoryEventing } from '../testing/memory-eventing.js';
 import { memoryKnowledgeStore } from '../testing/memory-knowledge.js';
 import { memoryProposalStore } from '../testing/memory-proposals.js';
 import { memoryReadinessStore } from '../testing/memory-readiness.js';
 import { recordingJobs } from '../testing/pipeline-harness.js';
+import { racingProjectStream } from '../testing/project-stream-race.js';
 import { DISCOVERY_TICKET_KEY } from './discovery.js';
 import type { PlatformReadinessSignals } from './ports.js';
 import {
@@ -29,6 +34,7 @@ import {
   isBusinessDraftPath,
   MAX_DISCOVERY_DOCUMENTS,
   recordDiscoveryFindings,
+  supersededDraftReason,
 } from './record.js';
 import { REDISCOVERY_SOURCE, rediscoveryTicketKeyFor } from './rediscovery.js';
 
@@ -62,6 +68,8 @@ interface Harness {
   readonly proposals: ReturnType<typeof memoryProposalStore>;
   readonly jobs: ReturnType<typeof recordingJobs>;
   readonly eventing: MemoryEventing;
+  /** How many times the platform's readiness signals were read — the git-provider half (R9). */
+  readonly signalReads: () => number;
 }
 
 const harness = (
@@ -77,21 +85,33 @@ const harness = (
       readonly ticketKey: string;
     } | null;
     readonly ticketKey?: string;
+    /**
+     * WP-109: how many project-stream races a rival wins. Set (even to 0), the stores roll back
+     * with the fake, which a re-run transaction and two concurrent recorders both need.
+     */
+    readonly losses?: number;
   } = {},
 ): Harness => {
-  const readiness = memoryReadinessStore();
-  const proposals = memoryProposalStore();
-  const jobs = recordingJobs();
   const eventing = new MemoryEventing();
+  const rollback =
+    options.losses === undefined
+      ? {}
+      : { rollback: (tx: Transaction, undo: () => void) => eventing.onRollback(tx, undo) };
+  const readiness = memoryReadinessStore(rollback);
+  const proposals = memoryProposalStore(rollback);
+  const race = racingProjectStream(eventing, options.losses ?? 0);
+  const jobs = recordingJobs();
   const knowledge = memoryKnowledgeStore();
+  let signalReads = 0;
   return {
     readiness,
     proposals,
     jobs,
     eventing,
+    signalReads: () => signalReads,
     options: {
       unitOfWork: eventing,
-      eventStore: eventing.store,
+      eventStore: { ...eventing.store, nextStreamSequence: race.eventStore.nextStreamSequence },
       readiness,
       proposals,
       knowledge: {
@@ -100,12 +120,15 @@ const harness = (
           new Map((options.indexedPaths ?? []).map((path) => [path, 'blob'])),
       },
       signals: {
-        read: async () => ({
-          defaultBranchProtected: null,
-          boundIntegrationTypes: [],
-          indexedKnowledgePaths: [],
-          ...options.signals,
-        }),
+        read: async () => {
+          signalReads += 1;
+          return {
+            defaultBranchProtected: null,
+            boundIntegrationTypes: [],
+            indexedKnowledgePaths: [],
+            ...options.signals,
+          };
+        },
       },
       clock: fixedClock('2026-09-13T04:00:00.000Z'),
       ids: sequentialIds(900),
@@ -492,5 +515,162 @@ describe('recordDiscoveryFindings', () => {
     expect(report.status).toBe('recorded');
     expect(report.level).toBe(0);
     expect(readiness.rows).toHaveLength(1);
+  });
+});
+
+const TASK_B = '00000000-0000-4000-8000-0000000000b5' as Id;
+const ARTIFACT_B = '00000000-0000-4000-8000-0000000000b6' as Id;
+const OVERVIEW = '.agentic/knowledge/technical/overview.md';
+const jobB: DiscoveryRecordData = { project_id: PROJECT, task_id: TASK_B, artifact_id: ARTIFACT_B };
+
+/**
+ * The invariant backlog 319 asks for, as a check that **names** what it found: at most one
+ * undecided `queued` proposal per page. Throwing rather than returning a boolean so the canary below
+ * can assert the failure by its words (standing rule 3).
+ */
+const assertOnePendingPerPath = (rows: readonly StoredKnowledgeProposal[]): void => {
+  const pending = new Map<string, number>();
+  for (const row of rows) {
+    if (row.status === 'queued' && row.decidedAt === null) {
+      pending.set(row.targetPath, (pending.get(row.targetPath) ?? 0) + 1);
+    }
+  }
+  for (const [path, count] of pending) {
+    if (count > 1) throw new Error(`${count} pending proposals for ${path}`);
+  }
+};
+
+/**
+ * WP-109, PROGRESS backlog **357**: the recorder read the sequence outside its transaction and
+ * never retried, so a lost race failed the job and pg-boss's retry asked the git provider again.
+ */
+describe('a discovery record that loses the project stream’s sequence', () => {
+  it('records through three lost races, reading the signals once', async () => {
+    const built = harness({ losses: PROJECT_STREAM_APPEND_ATTEMPTS - 1 });
+    const report = await recordDiscoveryFindings(built.options, job);
+    expect(report.status).toBe('recorded');
+    expect(built.signalReads()).toBe(1);
+    expect(built.readiness.rows).toHaveLength(1);
+    expect(built.proposals.rows).toHaveLength(1);
+    const own = (await built.eventing.store.readStream('project', PROJECT)).filter(
+      (entry) => entry.event.type !== 'knowledge.index.rebuilt',
+    );
+    expect(own.map((entry) => entry.event.type)).toEqual([
+      'readiness.evaluated',
+      'knowledge.proposal.created',
+    ]);
+  });
+
+  it('throws on the fourth with nothing recorded, still with one signal read', async () => {
+    const built = harness({ losses: PROJECT_STREAM_APPEND_ATTEMPTS });
+    await expect(recordDiscoveryFindings(built.options, job)).rejects.toBeInstanceOf(
+      StreamConflictError,
+    );
+    expect(built.signalReads()).toBe(1);
+    expect(built.readiness.rows).toEqual([]);
+    expect(built.proposals.rows).toEqual([]);
+  });
+
+  it('records two discoveries of one project at once, both — and leaves one draft pending', async () => {
+    const built = harness({ losses: 0 });
+    const reports = await Promise.all([
+      recordDiscoveryFindings(built.options, job),
+      recordDiscoveryFindings(built.options, jobB),
+    ]);
+    expect(reports.map((report) => report.status)).toEqual(['recorded', 'recorded']);
+    expect(built.readiness.rows).toHaveLength(2);
+    const overview = built.proposals.rows.filter((row) => row.targetPath === OVERVIEW);
+    expect(overview.map((row) => row.status).sort()).toEqual(['discarded', 'queued']);
+    assertOnePendingPerPath(built.proposals.rows);
+  });
+});
+
+/**
+ * WP-109, PROGRESS backlog **319**, option (a) as ruled: a re-evaluation that drafts a page still
+ * queued from an earlier discovery discards the older, undecided draft with a platform reason that
+ * names the newer row's task.
+ */
+describe('a re-evaluation that drafts a page still in the queue', () => {
+  it('leaves one pending proposal and one discarded with its reason', async () => {
+    const { options, proposals } = harness();
+    await recordDiscoveryFindings(options, job);
+    const report = await recordDiscoveryFindings(options, jobB);
+
+    expect(report.superseded).toBe(1);
+    const [older, newer] = proposals.rows.filter((row) => row.targetPath === OVERVIEW);
+    expect(newer?.taskId).toBe(TASK_B);
+    expect(newer?.status).toBe('queued');
+    expect(older?.taskId).toBe(TASK);
+    expect(older?.status).toBe('discarded');
+    expect(older?.evidence[0]).toBe(supersededDraftReason(TASK_B));
+    expect(older?.evidence[0]).toContain(TASK_B);
+    // The draft's own evidence is kept behind the reason, not replaced by it.
+    expect(older?.evidence.slice(1)).toEqual(newer?.evidence);
+    assertOnePendingPerPath(proposals.rows);
+  });
+
+  it('leaves a draft a maintainer already approved alone', async () => {
+    const { options, proposals } = harness();
+    await recordDiscoveryFindings(options, job);
+    const approved = proposals.rows[0] as StoredKnowledgeProposal;
+    await proposals.decide({} as never, {
+      id: approved.id,
+      status: 'queued',
+      decidedByUserId: '00000000-0000-4000-8000-0000000000b7' as Id,
+      decidedAt: '2026-09-13T05:00:00.000Z' as StoredKnowledgeProposal['createdAt'],
+    });
+    const report = await recordDiscoveryFindings(options, jobB);
+    // A human's decision on its way to a commit is not overruled by a model's re-draft.
+    expect(report.superseded).toBe(0);
+    const after = proposals.rows.find((row) => row.id === approved.id);
+    expect(after?.status).toBe('queued');
+    expect(after?.decidedAt).not.toBeNull();
+    expect(after?.evidence).toEqual(approved.evidence);
+  });
+
+  it('leaves another author’s proposal for the same page alone', async () => {
+    const { options, proposals } = harness();
+    await proposals.insert({} as never, [
+      {
+        id: '00000000-0000-4000-8000-0000000000b8' as Id,
+        projectId: PROJECT,
+        taskId: null,
+        runId: null,
+        source: 'task',
+        kind: 'technical',
+        type: 'doc-update',
+        targetPath: OVERVIEW,
+        delta: '# a Librarian page\n',
+        evidence: ['from a retrospective'],
+        significance: 0.5,
+        status: 'queued',
+        decidedByUserId: null,
+        decidedAt: null,
+        appliedCommitSha: null,
+        createdAt: '2026-09-12T04:00:00.000Z' as StoredKnowledgeProposal['createdAt'],
+      },
+    ]);
+    const report = await recordDiscoveryFindings(options, job);
+    expect(report.superseded).toBe(0);
+    expect(proposals.rows[0]?.status).toBe('queued');
+  });
+
+  /**
+   * The canary (standing rule 3): with the queue read disarmed — `supersedeQueued` answering
+   * nothing and touching nothing, which is what the recorder did before WP-109 — the same two
+   * records leave two pending drafts of one page, and the check says so by name.
+   */
+  it('fails by name when the queue read is disarmed', async () => {
+    const { options, proposals } = harness();
+    const disarmed: DiscoveryRecordOptions = {
+      ...options,
+      proposals: { ...proposals, supersedeQueued: async () => [] },
+    };
+    await recordDiscoveryFindings(disarmed, job);
+    const report = await recordDiscoveryFindings(disarmed, jobB);
+    expect(report.superseded).toBe(0);
+    expect(() => assertOnePendingPerPath(proposals.rows)).toThrow(
+      `2 pending proposals for ${OVERVIEW}`,
+    );
   });
 });

@@ -73,7 +73,7 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
-import { HttpError, NotFoundError } from '../errors.js';
+import { HttpError, NotFoundError, projectStreamContention } from '../errors.js';
 import type { KnowledgeCommands } from '../knowledge.js';
 import type { Database } from '../queries/identity-queries.js';
 import { findProjectRole } from '../queries/identity-queries.js';
@@ -329,14 +329,18 @@ export const registerKbRoutes = async (
         // because the user id below is not optional and a 500 here would be the wrong answer.
         throw new HttpError(401, 'unauthenticated', 'this endpoint needs an authenticated session');
       }
-      const result = await commands().decide({
-        projectId: request.params.project_id as never,
-        proposalId: request.params.proposal_id as never,
-        decision,
-        userId: actor.userId as never,
-        ...(request.body.reason === undefined ? {} : { reason: request.body.reason }),
-        ...(request.body.delta === undefined ? {} : { delta: request.body.delta }),
-      });
+      const result = await commands()
+        .decide({
+          projectId: request.params.project_id as never,
+          proposalId: request.params.proposal_id as never,
+          decision,
+          userId: actor.userId as never,
+          ...(request.body.reason === undefined ? {} : { reason: request.body.reason }),
+          ...(request.body.delta === undefined ? {} : { delta: request.body.delta }),
+        })
+        .catch((error: unknown) => {
+          throw projectStreamContention(error) ?? error;
+        });
       switch (result.status) {
         case 'decided':
           return toRecord(result.proposal);

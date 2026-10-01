@@ -69,7 +69,6 @@
 import type { DomainEvent, Id, MergeRequestRef } from '@platform/contracts';
 import { ticketRefSchema } from '@platform/contracts';
 import { buildEvent } from '@platform/domain';
-import { StreamConflictError } from '../errors.js';
 import type { EventHandler, HandlerContext } from '../events/handler.js';
 import type { EventStore } from '../ports/event-store.js';
 import type { TicketRefInput } from '../ports/integrations/task-management.js';
@@ -84,6 +83,7 @@ import {
   ticketReads,
 } from './integrations.js';
 import { enqueueOutbound, type PipelineOutboundData } from './jobs.js';
+import { appendOnProjectWithRetry, PROJECT_STREAM_APPEND_ATTEMPTS } from './project-stream.js';
 import type { PipelineSagaOptions } from './saga.js';
 import type { ProjectSettings } from './settings.js';
 import { PIPELINE_ACTOR } from './store.js';
@@ -248,15 +248,14 @@ export const deliveryMeasureHandlers = (options: PipelineSagaOptions): readonly 
 
 /**
  * How many times an append on the project stream is tried before its `StreamConflictError` fails
- * the job — the inbound audit log's bound (`DEFAULT_INBOUND_SEQUENCE_ATTEMPTS`), for the same reason:
- * the race is another writer taking the sequence in the milliseconds between the read and the
- * append, and four consecutive losses on one stream is contention nothing here should retry through.
+ * the job. Since WP-109 it **is** the shared bound ({@link PROJECT_STREAM_APPEND_ATTEMPTS}) rather
+ * than a number beside it: one loop, one bound, five callers.
  */
-export const DELIVERY_MEASURE_APPEND_ATTEMPTS = 4;
+export const DELIVERY_MEASURE_APPEND_ATTEMPTS = PROJECT_STREAM_APPEND_ATTEMPTS;
 
 /**
  * Appends one event on the project's stream, in a transaction of its own, retrying a lost sequence
- * race (WP-90, PROGRESS backlog 193).
+ * race (WP-90, PROGRESS backlog 193) — through `appendOnProjectWithRetry` since WP-109.
  *
  * `build` is called once per attempt with the freshly read sequence and closes over the provider's
  * answer, which was read **once**, before this function, and is never read again here — so a lost
@@ -272,23 +271,13 @@ const appendOnProject = async (
   projectId: Id,
   build: (streamSeq: number) => DomainEvent,
 ): Promise<void> => {
-  for (let attempt = 1; ; attempt += 1) {
-    const streamSeq = await options.eventStore.nextStreamSequence('project', projectId);
-    try {
-      await options.unitOfWork.transaction(async (scope) => {
-        await scope.events.append([build(streamSeq)]);
-      });
-      return;
-    } catch (error) {
-      if (!(error instanceof StreamConflictError) || attempt >= DELIVERY_MEASURE_APPEND_ATTEMPTS) {
-        throw error;
-      }
-      options.logger?.debug(
-        { project_id: projectId, attempt, stream_seq: streamSeq },
-        'delivery measure: another writer took the project stream’s sequence; appending again with the answer already read',
-      );
-    }
-  }
+  await appendOnProjectWithRetry(
+    options,
+    { projectId, writer: 'delivery_measure' },
+    async (scope, streamSeq) => {
+      await scope.events.append([build(streamSeq)]);
+    },
+  );
 };
 
 const commandContext = (options: DeliveryMeasuresOptions, correlationId: Id, causeEventId: Id) => ({

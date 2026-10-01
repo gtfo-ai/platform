@@ -1,4 +1,8 @@
-import { StageNotCurrentError, UnknownAggregateError } from '@platform/application';
+import {
+  StageNotCurrentError,
+  StreamConflictError,
+  UnknownAggregateError,
+} from '@platform/application';
 import { apiErrorSchema } from '@platform/contracts';
 import {
   IllegalTransitionError,
@@ -13,6 +17,7 @@ import {
   ForbiddenError,
   HttpError,
   NotFoundError,
+  projectStreamContention,
   TooManyRequestsError,
   toApiError,
   UnauthorizedError,
@@ -159,5 +164,19 @@ describe('commandRefusal', () => {
     expect(commandRefusal(new Error('connect ECONNREFUSED'))).toBeNull();
     expect(commandRefusal(new NotFoundError('task x'))).toBeNull();
     expect(commandRefusal(undefined)).toBeNull();
+  });
+});
+
+describe('projectStreamContention', () => {
+  it('answers a lost project-stream race with a retryable 409, and nothing else', () => {
+    // WP-109 (backlog 357): the interview and a rejection retry in place; only the bound's last
+    // loss reaches the route, and it is contention rather than an internal error.
+    expect(projectStreamContention(new StreamConflictError('project', 'p-1', 4))).toMatchObject({
+      statusCode: 409,
+      code: 'project_stream_contended',
+    });
+    // The other side (rule 42): a conflict on a task stream, or any other failure, stays a 500.
+    expect(projectStreamContention(new StreamConflictError('task', 't-1', 4))).toBeNull();
+    expect(projectStreamContention(new Error('connect ECONNREFUSED'))).toBeNull();
   });
 });

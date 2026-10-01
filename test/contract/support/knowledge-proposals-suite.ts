@@ -285,6 +285,67 @@ export const runKnowledgeProposalsContract = (harness: KnowledgeProposalsHarness
       expect(await store.listAwaitingApply(context.projectId, 50)).toEqual([]);
     });
 
+    /**
+     * WP-109, PROGRESS backlog **319** (option (a)): a newer discovery draft discards the older
+     * **undecided** `bootstrap` drafts of the same page, and nothing else. Every near-miss is seeded
+     * — another path, another source, another project, a decided row, an applied row, the kept row
+     * itself — because a store that discarded every `queued` row passes the positive half alone.
+     */
+    it('supersedes only undecided queued rows of the source, for the paths, outside `keep`', async () => {
+      const page = '.agentic/knowledge/architecture/overview.md';
+      const older = proposal({ id: id(60), source: 'bootstrap', targetPath: page });
+      const rows: readonly StoredKnowledgeProposal[] = [
+        older,
+        proposal({ id: id(61), source: 'bootstrap', targetPath: page }),
+        // The near-misses.
+        proposal({ id: id(62), source: 'bootstrap', targetPath: '.agentic/knowledge/x.md' }),
+        proposal({ id: id(63), source: 'task', targetPath: page }),
+        proposal({
+          id: id(64),
+          source: 'bootstrap',
+          targetPath: page,
+          decidedAt: AT,
+          decidedByUserId: context.userId,
+        }),
+        proposal({ id: id(65), source: 'bootstrap', targetPath: page, status: 'auto_applied' }),
+        proposal({ id: id(66), source: 'bootstrap', targetPath: page, status: 'scored' }),
+        proposal({
+          id: id(67),
+          source: 'bootstrap',
+          targetPath: page,
+          projectId: context.otherProjectId,
+        }),
+      ];
+      await store.insert(context.tx, rows);
+
+      const discarded = await store.supersedeQueued(context.tx, {
+        projectId: context.projectId,
+        source: 'bootstrap',
+        paths: [page],
+        keep: [id(61)],
+        reason: 'superseded: a newer draft',
+      });
+      expect(discarded).toEqual([id(60)]);
+      const loaded = await store.load(context.projectId, id(60));
+      expect(loaded?.status).toBe('discarded');
+      expect(loaded?.evidence).toEqual(['superseded: a newer draft', ...older.evidence]);
+      for (const untouched of rows.slice(1)) {
+        const now = await store.load(untouched.projectId, untouched.id);
+        expect(now?.status, untouched.id).toBe(untouched.status);
+        expect(now?.evidence, untouched.id).toEqual(untouched.evidence);
+      }
+      // …and a second call finds nothing left to discard.
+      expect(
+        await store.supersedeQueued(context.tx, {
+          projectId: context.projectId,
+          source: 'bootstrap',
+          paths: [page],
+          keep: [id(61)],
+          reason: 'superseded: a newer draft',
+        }),
+      ).toEqual([]);
+    });
+
     it('reports the health inputs the nightly pass reads', async () => {
       const inputs: KbHealthInputs = {
         commitSha: 'c0ffee1',

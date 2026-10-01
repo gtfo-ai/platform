@@ -1,6 +1,8 @@
 import type { Id } from '@platform/contracts';
 import { fixedClock, sequentialIds } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
+import { StreamConflictError } from '../errors.js';
+import { PROJECT_STREAM_APPEND_ATTEMPTS } from '../pipeline/project-stream.js';
 import { silentLogger } from '../ports/logger.js';
 import {
   FIXTURE_INVALID_PATH,
@@ -16,6 +18,7 @@ import {
   memoryVaultSource,
   vaultSnapshotOf,
 } from '../testing/memory-knowledge.js';
+import { RIVAL_COMPONENT, racingProjectStream } from '../testing/project-stream-race.js';
 import {
   boundedRefusalReason,
   createKnowledgeIndexer,
@@ -30,16 +33,20 @@ const PROJECT = '00000000-0000-4000-8000-0000000000a1' as Id;
 const indexerOver = (
   vault: ReturnType<typeof memoryVaultSource>,
   store = memoryKnowledgeStore(),
+  /** WP-109: how many project-stream races a rival wins. */
+  losses = 0,
 ) => {
   const eventing = new MemoryEventing();
+  const race = racingProjectStream(eventing, losses);
   return {
     store,
     eventing,
+    race,
     indexer: createKnowledgeIndexer({
       vault,
       store,
       unitOfWork: eventing,
-      eventStore: eventing.store,
+      eventStore: race.eventStore,
       clock: fixedClock('2026-09-11T09:00:00.000Z'),
       ids: sequentialIds(500),
       logger: silentLogger,
@@ -192,6 +199,55 @@ describe('KnowledgeIndexer — the three statuses are three different facts', ()
       chunks: report.chunks,
       tokens: report.tokens,
     });
+  });
+
+  /**
+   * WP-109, PROGRESS backlog **333**: a lost race re-runs the index write and the event, never the
+   * repository read. The bound from both sides. (The in-memory store does not roll back, so the
+   * fourth-loss half asserts the event and the read, not the index rows — the integration tier
+   * owns the rollback of `KnowledgeStore.write`.)
+   */
+  it('indexes through three lost races with one repository read, and throws on the fourth', async () => {
+    const snapshot = vaultSnapshotOf(FIXTURE_VAULT, {
+      commitSha: 'f1c7ea4',
+      knowledgeDir: FIXTURE_KNOWLEDGE_DIR,
+      repoPaths: FIXTURE_REPO_PATHS,
+    });
+    const counted = () => {
+      let reads = 0;
+      return {
+        reads: () => reads,
+        vault: memoryVaultSource(() => {
+          reads += 1;
+          return { status: 'ok', snapshot };
+        }),
+      };
+    };
+    const own = async (eventing: MemoryEventing) =>
+      (await eventing.store.readStream('project', PROJECT)).filter(
+        (entry) =>
+          entry.event.actor.kind === 'system' && entry.event.actor.component !== RIVAL_COMPONENT,
+      );
+
+    const inside = counted();
+    const landed = indexerOver(
+      inside.vault,
+      memoryKnowledgeStore(),
+      PROJECT_STREAM_APPEND_ATTEMPTS - 1,
+    );
+    const report = await landed.indexer.index(request);
+    expect(report.status).toBe('indexed');
+    expect(inside.reads()).toBe(1);
+    expect(landed.race.lost()).toBe(PROJECT_STREAM_APPEND_ATTEMPTS - 1);
+    expect((await own(landed.eventing)).map((entry) => entry.event.type)).toEqual([
+      'knowledge.index.rebuilt',
+    ]);
+
+    const past = counted();
+    const lost = indexerOver(past.vault, memoryKnowledgeStore(), PROJECT_STREAM_APPEND_ATTEMPTS);
+    await expect(lost.indexer.index(request)).rejects.toBeInstanceOf(StreamConflictError);
+    expect(past.reads()).toBe(1);
+    expect(await own(lost.eventing)).toEqual([]);
   });
 
   it('reports `unchanged` on a second run and writes nothing', async () => {

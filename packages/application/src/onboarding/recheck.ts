@@ -57,6 +57,7 @@ import {
   secretScanningReadiness,
 } from '@platform/domain';
 import type { RepositoryFileEntry, RepositoryFileSource } from '../config/repository-config.js';
+import { appendOnProjectWithRetry } from '../pipeline/project-stream.js';
 import type { EventStore } from '../ports/event-store.js';
 import type { Jobs } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
@@ -195,33 +196,51 @@ export const recheckProjectReadiness = async (
     );
   }
 
-  const evaluation = recheckReadiness({
-    id: options.ids.next(),
-    projectId,
-    evaluatedAt: now,
-    previous,
-    signals,
-    observations,
-  });
-  const streamSeq = await options.eventStore.nextStreamSequence('project', projectId);
-  await options.unitOfWork.transaction(async (scope) => {
-    await options.readiness.record(scope.tx, evaluation);
-    // One event per recorded row, in the row's transaction (backlog 228, `readiness-event.ts`).
-    await scope.events.append([
-      readinessEvaluatedEventFor({
-        id: options.ids.next(),
-        evaluation,
-        streamSeq,
-        component: 'readiness_recheck',
-        occurredAt: now,
-      }),
-    ]);
-  });
+  const evaluationId = options.ids.next();
+  /**
+   * The reads above (the provider's R9 answer, the files, the pipelines) are held: a lost sequence
+   * race re-runs only this transaction (WP-109, the sweep of backlog 357).
+   *
+   * **The evaluation it carries from is not held** (WP-109 review round 1, standing rule 79). The
+   * likeliest writer to win the race is a discovery record, and what it wrote is a *newer*
+   * evaluation; carrying from the one read before the race would record criteria the newer row had
+   * already re-answered and move `projects.readiness_level` back with them. So each attempt reads
+   * `latest` again and recomputes — `recheckReadiness` is pure. The read is over the pool, and that
+   * is enough here: a writer that commits after this read and before this append takes the
+   * sequence, so this attempt loses and the next one reads after that commit.
+   */
+  const recorded = await appendOnProjectWithRetry(
+    options,
+    { projectId, writer: 'readiness_recheck' },
+    async (scope, streamSeq) => {
+      const current = (await options.readiness.latest(projectId)) ?? previous;
+      const evaluation = recheckReadiness({
+        id: evaluationId,
+        projectId,
+        evaluatedAt: now,
+        previous: current,
+        signals,
+        observations,
+      });
+      await options.readiness.record(scope.tx, evaluation);
+      // One event per recorded row, in the row's transaction (backlog 228, `readiness-event.ts`).
+      await scope.events.append([
+        readinessEvaluatedEventFor({
+          id: options.ids.next(),
+          evaluation,
+          streamSeq,
+          component: 'readiness_recheck',
+          occurredAt: now,
+        }),
+      ]);
+      return { previousLevel: current.level, level: evaluation.level };
+    },
+  );
   return {
     status: 'recorded',
     reason: null,
-    previousLevel: previous.level,
-    level: evaluation.level,
+    previousLevel: recorded.previousLevel,
+    level: recorded.level,
   };
 };
 

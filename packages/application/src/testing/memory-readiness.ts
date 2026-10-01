@@ -15,8 +15,11 @@
  * 2. **No level constraint.** `readiness_evaluations_level_range` refuses a level outside 0…5; this
  *    double stores what it is handed. Nothing in the platform produces one —
  *    `readinessLevelFor` returns 0…4 by construction — so the check has no caller to catch.
- * 3. **No transaction.** `record` ignores the handle, so a rollback leaves the row here. The suite
- *    does not test rollback; the integration tier does, against the real adapter.
+ * 3. **No transaction** unless built with `rollback` (WP-109). Without it `record` ignores the
+ *    handle, so a rollback leaves the row here; with `MemoryEventing.onRollback` passed in, both
+ *    writes register their undo on the transaction, which is what a unit test that re-runs a lost
+ *    sequence race needs. The suite does not test rollback; the integration tier does, against the
+ *    real adapter.
  * 4. **Ordering ties.** `latest` sorts by `(evaluatedAt, id)` descending, which is the adapter's
  *    `order by`. Two evaluations at the *same* instant with the same id cannot be told apart by
  *    either store, so the suite only ever asserts `latest` on distinct instants. The first draft of
@@ -31,6 +34,7 @@
 import type { Id, RiskClass } from '@platform/contracts';
 import type { ReadinessEvaluation, ReadinessStore } from '../onboarding/ports.js';
 import type { Transaction } from '../ports/transaction.js';
+import type { MemoryRollback } from './memory-proposals.js';
 
 export interface MemoryReadinessStore extends ReadinessStore {
   /** Every evaluation written, oldest first — what a test asserts on. */
@@ -41,25 +45,42 @@ export interface MemoryReadinessStore extends ReadinessStore {
   readonly proposals: ReadonlyMap<Id, Readonly<Record<string, RiskClass>>>;
 }
 
-export const memoryReadinessStore = (): MemoryReadinessStore => {
+export const memoryReadinessStore = (
+  options: { readonly rollback?: MemoryRollback } = {},
+): MemoryReadinessStore => {
   const rows: ReadinessEvaluation[] = [];
   const levels = new Map<Id, number>();
   const proposals = new Map<Id, Readonly<Record<string, RiskClass>>>();
+  const undoOnRollback: MemoryRollback = options.rollback ?? (() => {});
+  /** Sets `key`, and registers the undo that puts its previous value (or its absence) back. */
+  const setUndoable = <V>(tx: Transaction, map: Map<Id, V>, key: Id, value: V): void => {
+    const had = map.has(key);
+    const previous = map.get(key);
+    map.set(key, value);
+    undoOnRollback(tx, () => {
+      if (had) map.set(key, previous as V);
+      else map.delete(key);
+    });
+  };
   return {
     rows,
     levels,
     proposals,
-    record: async (_tx: Transaction, evaluation: ReadinessEvaluation) => {
+    record: async (tx: Transaction, evaluation: ReadinessEvaluation) => {
       rows.push(evaluation);
+      undoOnRollback(tx, () => {
+        const index = rows.indexOf(evaluation);
+        if (index >= 0) rows.splice(index, 1);
+      });
       // The pair is one write for the same reason it is one method on the port: a build that wrote
       // the row without the projection would show a level no evaluation supports.
-      levels.set(evaluation.projectId, evaluation.level);
+      setUndoable(tx, levels, evaluation.projectId, evaluation.level);
     },
-    saveRiskClassProposal: async (_tx, projectId, classes) => {
+    saveRiskClassProposal: async (tx, projectId, classes) => {
       // Divergence 5 (WP-37): the column is `jsonb` and the adapter stores what it is handed, so
       // this double does too — the *filtering* that makes a proposal safe is `record.ts`'s, on the
       // way in, and a double that re-applied it would hide a caller that stopped calling it.
-      proposals.set(projectId, classes);
+      setUndoable(tx, proposals, projectId, classes);
     },
     latest: async (projectId: Id) =>
       [...rows]

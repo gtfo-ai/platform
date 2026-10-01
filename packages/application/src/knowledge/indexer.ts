@@ -42,6 +42,7 @@
  */
 import { type Id, knowledgeIndexRebuiltEvent } from '@platform/contracts';
 import { type Clock, type IdSource, parseKbDocument } from '@platform/domain';
+import { appendOnProjectWithRetry } from '../pipeline/project-stream.js';
 import type { EventStore } from '../ports/event-store.js';
 import type { Logger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
@@ -103,7 +104,7 @@ export interface KnowledgeIndexerDependencies {
   readonly vault: VaultSource;
   readonly store: KnowledgeStore;
   readonly unitOfWork: UnitOfWork;
-  readonly eventStore: EventStore;
+  readonly eventStore: Pick<EventStore, 'nextStreamSequence'>;
   readonly clock: Clock;
   readonly ids: IdSource;
   readonly logger: Logger;
@@ -192,43 +193,46 @@ export const createKnowledgeIndexer = (
     const chunks = documents.reduce((total, entry) => total + entry.document.chunks.length, 0);
     const tokens = documents.reduce((total, entry) => total + entry.document.tokens, 0);
 
-    const streamSeq = await dependencies.eventStore.nextStreamSequence(
-      'project',
-      request.projectId,
-    );
     const occurredAt = dependencies.clock.now();
 
-    await dependencies.unitOfWork.transaction(async (scope) => {
-      await dependencies.store.write(scope.tx, {
-        projectId: request.projectId,
-        commitSha: snapshot.commitSha,
-        documents,
-        removedPaths: removed,
-        repoPaths: snapshot.repoPaths,
-        refused: invalid.map((refusal) => ({
-          ...refusal,
-          reason: boundedRefusalReason(refusal.reason),
-        })),
-      });
-      await scope.events.append([
-        knowledgeIndexRebuiltEvent.parse({
-          id: dependencies.ids.next(),
-          stream_type: 'project',
-          stream_id: request.projectId,
-          stream_seq: streamSeq,
-          actor: { kind: 'system', component: 'knowledge-indexer' },
-          occurred_at: occurredAt,
-          type: 'knowledge.index.rebuilt',
-          payload: {
-            project_id: request.projectId,
-            commit_sha: snapshot.commitSha,
-            documents: documents.length,
-            chunks,
-            tokens,
-          },
-        }),
-      ]);
-    });
+    // The snapshot above is held: a lost sequence race re-runs the index write and the event, never
+    // the repository read (WP-109, backlog 333). The write is the whole index for one commit, so a
+    // rolled-back attempt leaves nothing for the next one to collide with.
+    await appendOnProjectWithRetry(
+      dependencies,
+      { projectId: request.projectId, writer: 'knowledge_index' },
+      async (scope, streamSeq) => {
+        await dependencies.store.write(scope.tx, {
+          projectId: request.projectId,
+          commitSha: snapshot.commitSha,
+          documents,
+          removedPaths: removed,
+          repoPaths: snapshot.repoPaths,
+          refused: invalid.map((refusal) => ({
+            ...refusal,
+            reason: boundedRefusalReason(refusal.reason),
+          })),
+        });
+        await scope.events.append([
+          knowledgeIndexRebuiltEvent.parse({
+            id: dependencies.ids.next(),
+            stream_type: 'project',
+            stream_id: request.projectId,
+            stream_seq: streamSeq,
+            actor: { kind: 'system', component: 'knowledge-indexer' },
+            occurred_at: occurredAt,
+            type: 'knowledge.index.rebuilt',
+            payload: {
+              project_id: request.projectId,
+              commit_sha: snapshot.commitSha,
+              documents: documents.length,
+              chunks,
+              tokens,
+            },
+          }),
+        ]);
+      },
+    );
 
     if (invalid.length > 0) {
       dependencies.logger.warn(

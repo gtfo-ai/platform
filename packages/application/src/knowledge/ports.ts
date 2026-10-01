@@ -460,6 +460,27 @@ export interface KnowledgeProposalStore {
   ): Promise<readonly StoredKnowledgeProposal[]>;
   /** Records a maintainer's decision. Returns `false` when the row was not in a decidable state. */
   decide(tx: Transaction, decision: KnowledgeProposalDecision): Promise<boolean>;
+  /**
+   * Marks the project's **undecided** `queued` proposals of one `source` for these paths
+   * `discarded`, with `reason` prepended as their first evidence line, except the rows in `keep`;
+   * answers the ids it discarded (WP-109, PROGRESS backlog 319).
+   *
+   * One statement with the whole predicate in its `where` — `status = 'queued' and decided_at is
+   * null` — so a row a maintainer decides concurrently is either decided or discarded, never both,
+   * the same atomicity `decide` keeps. Its one caller is the discovery recorder, which passes its own
+   * fresh rows as `keep` so the newest draft of a page is the one left pending.
+   */
+  supersedeQueued(
+    tx: Transaction,
+    input: {
+      readonly projectId: Id;
+      readonly source: KnowledgeProposalSource;
+      readonly paths: readonly string[];
+      readonly keep: readonly Id[];
+      /** Platform text: it is stored as the row's first evidence line and shown on its card. */
+      readonly reason: string;
+    },
+  ): Promise<readonly Id[]>;
   /** Marks a batch applied by one commit. */
   markApplied(
     tx: Transaction,

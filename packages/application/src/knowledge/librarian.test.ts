@@ -16,8 +16,10 @@ import {
   sequentialIds,
 } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
+import { StreamConflictError } from '../errors.js';
 import type { HandlerContext } from '../events/handler.js';
 import { exactSecretRedactor } from '../integrations/redaction.js';
+import { PROJECT_STREAM_APPEND_ATTEMPTS } from '../pipeline/project-stream.js';
 import { ProjectSettingsInvalidError } from '../pipeline/settings.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import { silentLogger } from '../ports/logger.js';
@@ -25,6 +27,7 @@ import { MemoryEventing } from '../testing/memory-eventing.js';
 import { memoryKnowledgeStore } from '../testing/memory-knowledge.js';
 import { memoryProposalStore } from '../testing/memory-proposals.js';
 import { recordingJobs } from '../testing/pipeline-harness.js';
+import { RIVAL_COMPONENT, racingProjectStream } from '../testing/project-stream-race.js';
 import {
   type KnowledgeProposalsData,
   type LibrarianArtifact,
@@ -78,11 +81,16 @@ const harness = (
     readonly indexedPaths?: readonly string[];
     readonly artifact?: LibrarianArtifact | null;
     readonly knowledgeDir?: string;
+    /** WP-109: how many project-stream races a rival wins; the store then rolls back with the fake. */
+    readonly losses?: number;
   } = {},
 ): Harness => {
-  const proposalsStore = memoryProposalStore();
-  const jobs = recordingJobs();
   const eventing = new MemoryEventing();
+  const proposalsStore = memoryProposalStore(
+    options.losses === undefined ? {} : { rollback: (tx, undo) => eventing.onRollback(tx, undo) },
+  );
+  const race = racingProjectStream(eventing, options.losses ?? 0);
+  const jobs = recordingJobs();
   const knowledge = memoryKnowledgeStore();
   return {
     proposals: proposalsStore,
@@ -90,7 +98,7 @@ const harness = (
     eventing,
     options: {
       unitOfWork: eventing,
-      eventStore: eventing.store,
+      eventStore: { ...eventing.store, nextStreamSequence: race.eventStore.nextStreamSequence },
       proposals: proposalsStore,
       knowledge: {
         ...knowledge,
@@ -386,6 +394,41 @@ describe('recording a librarian artifact', () => {
       const stream = await eventing.store.readStream('project', PROJECT);
       expect(stream).toHaveLength(1);
     });
+  });
+});
+
+/**
+ * WP-109, PROGRESS backlog **333**: the curation retries a lost project-stream race in place — the
+ * claim re-made in the re-run transaction, the artifact read once — and gives up at the bound.
+ */
+describe('a curation that loses the project stream’s sequence', () => {
+  const own = async (eventing: MemoryEventing) =>
+    (await eventing.store.readStream('project', PROJECT)).filter(
+      (entry) =>
+        entry.event.actor.kind === 'system' && entry.event.actor.component !== RIVAL_COMPONENT,
+    );
+
+  it('records the proposals through three lost races, claim and event once', async () => {
+    const { options, proposals, eventing } = harness({
+      losses: PROJECT_STREAM_APPEND_ATTEMPTS - 1,
+    });
+    const report = await recordLibrarianProposals(options, job);
+    expect(report.status).toBe('recorded');
+    expect(proposals.rows).toHaveLength(1);
+    expect(proposals.curationOf(ARTIFACT)).toEqual({ proposals: 1 });
+    expect((await own(eventing)).map((entry) => entry.event.type)).toEqual([
+      'knowledge.proposal.created',
+    ]);
+  });
+
+  it('throws the conflict on the fourth, leaving no row and no claim for the retry to trip on', async () => {
+    const { options, proposals, eventing } = harness({ losses: PROJECT_STREAM_APPEND_ATTEMPTS });
+    await expect(recordLibrarianProposals(options, job)).rejects.toBeInstanceOf(
+      StreamConflictError,
+    );
+    expect(proposals.rows).toEqual([]);
+    expect(proposals.curationOf(ARTIFACT)).toBeNull();
+    expect(await own(eventing)).toEqual([]);
   });
 });
 

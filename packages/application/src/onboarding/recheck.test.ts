@@ -16,14 +16,18 @@ import {
 } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import type { RepositoryFileRequest, RepositoryFilesResult } from '../config/repository-config.js';
+import { StreamConflictError } from '../errors.js';
 import { noSecretsRedactor } from '../integrations/redaction.js';
+import { PROJECT_STREAM_APPEND_ATTEMPTS } from '../pipeline/project-stream.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import { silentLogger } from '../ports/logger.js';
 import { MemoryEventing } from '../testing/memory-eventing.js';
 import { memoryReadinessStore } from '../testing/memory-readiness.js';
 import { recordingJobs } from '../testing/pipeline-harness.js';
+import { racingProjectStream } from '../testing/project-stream-race.js';
 import { evaluateReadiness } from './evaluate-readiness.js';
 import type { PlatformReadinessSignals } from './ports.js';
+import { readinessEvaluatedEventFor } from './readiness-event.js';
 import {
   enqueueReadinessRecheck,
   type ReadinessRecheckData,
@@ -54,15 +58,20 @@ const harness = (
     readonly files?: RepositoryFilesResult;
     readonly pipelines?: number;
     readonly project?: { readonly knowledgeDir: string } | null;
+    /** WP-109: how many project-stream races a rival wins; the store then rolls back with the fake. */
+    readonly losses?: number;
   } = {},
 ) => {
-  const readiness = memoryReadinessStore();
+  const eventing = new MemoryEventing();
+  const readiness = memoryReadinessStore(
+    options.losses === undefined ? {} : { rollback: (tx, undo) => eventing.onRollback(tx, undo) },
+  );
+  const race = racingProjectStream(eventing, options.losses ?? 0);
   const reads: RepositoryFileRequest[] = [];
   const windows: IsoDateTime[] = [];
-  const eventing = new MemoryEventing();
   const recheck: ReadinessRecheckOptions = {
     unitOfWork: eventing,
-    eventStore: eventing.store,
+    eventStore: race.eventStore,
     readiness,
     signals: { read: async () => signals },
     files: {
@@ -100,7 +109,11 @@ const harness = (
 };
 
 /** The discovery evaluation a re-check starts from: nothing but R1 and R3 claimed. */
-const seedDiscovery = async (readiness: ReturnType<typeof memoryReadinessStore>) => {
+const seedDiscovery = async (
+  readiness: ReturnType<typeof memoryReadinessStore>,
+  /** A store built with `rollback` takes writes only inside one of the fake's transactions. */
+  eventing?: MemoryEventing,
+) => {
   const { evaluation } = evaluateReadiness({
     id: '00000000-0000-4000-8000-0000000000e2' as Id,
     projectId: PROJECT,
@@ -113,7 +126,11 @@ const seedDiscovery = async (readiness: ReturnType<typeof memoryReadinessStore>)
     signals,
     redactor: noSecretsRedactor(),
   });
-  await readiness.record({} as never, evaluation);
+  if (eventing === undefined) {
+    await readiness.record({} as never, evaluation);
+  } else {
+    await eventing.transaction(async (scope) => readiness.record(scope.tx, evaluation));
+  }
   return evaluation;
 };
 
@@ -253,6 +270,119 @@ describe('recheckProjectReadiness', () => {
   it('logs rather than throws on a skip, so pg-boss spends no retry on it', async () => {
     const { recheck } = harness();
     await expect(runReadinessRecheck(recheck, data)).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * WP-109, the sweep of backlog 357: the re-check is an onboarding writer of the same shape, so it
+ * retries a lost race in place too — the provider, file and pipeline reads held.
+ */
+describe('a re-check that loses the project stream’s sequence', () => {
+  it('records through three lost races with one read of each source, and throws on the fourth', async () => {
+    const inside = harness({ losses: PROJECT_STREAM_APPEND_ATTEMPTS - 1 });
+    await seedDiscovery(inside.readiness, inside.eventing);
+    const report = await recheckProjectReadiness(inside.recheck, data);
+    expect(report.status).toBe('recorded');
+    expect(inside.reads).toHaveLength(1);
+    expect(inside.windows).toHaveLength(1);
+    expect(inside.readiness.rows).toHaveLength(2);
+
+    const past = harness({ losses: PROJECT_STREAM_APPEND_ATTEMPTS });
+    await seedDiscovery(past.readiness, past.eventing);
+    await expect(recheckProjectReadiness(past.recheck, data)).rejects.toBeInstanceOf(
+      StreamConflictError,
+    );
+    expect(past.reads).toHaveLength(1);
+    expect(past.readiness.rows).toHaveLength(1);
+  });
+});
+
+/**
+ * WP-109 review round 1 (standing rule 79): the retry must not reuse the evaluation it read before
+ * the race. A discovery record is the likeliest winner, and it writes a **newer** evaluation; the
+ * re-check that lost to it carries from that one, not from the one it read first.
+ */
+describe('a re-check that loses the race to a newer evaluation', () => {
+  const newerFrom = (id: string) =>
+    evaluateReadiness({
+      id: id as Id,
+      projectId: PROJECT,
+      evaluatedAt: '2026-09-20T04:00:00.000Z' as IsoDateTime,
+      source: 'rediscovery',
+      agentClaims: [{ id: 'R1', passed: false, evidence: 'rival discovery: the suite fails' }],
+      signals,
+      redactor: noSecretsRedactor(),
+    }).evaluation;
+
+  /** The rival records a newer evaluation and its event at the sequence the re-check just read. */
+  const losingTo = (built: ReturnType<typeof harness>, disarmReread: boolean) => {
+    let raced = false;
+    const recheck: ReadinessRecheckOptions = {
+      ...built.recheck,
+      readiness: disarmReread
+        ? {
+            ...built.readiness,
+            // The canary: `latest` answers the first read for ever, which is the pre-fix shape —
+            // an evaluation read once, before the race, and reused by every attempt.
+            latest: (() => {
+              let first: ReturnType<typeof built.readiness.latest> | undefined;
+              return (projectId: Id) => {
+                first ??= built.readiness.latest(projectId);
+                return first;
+              };
+            })(),
+          }
+        : built.readiness,
+      eventStore: {
+        nextStreamSequence: async (streamType, streamId) => {
+          const seq = await built.eventing.store.nextStreamSequence(streamType, streamId);
+          if (!raced) {
+            raced = true;
+            const newer = newerFrom('00000000-0000-4000-8000-0000000000e9');
+            await built.eventing.transaction(async (scope) => {
+              await built.readiness.record(scope.tx, newer);
+              await scope.events.append([
+                readinessEvaluatedEventFor({
+                  id: '00000000-0000-4000-8000-0000000000ea' as Id,
+                  evaluation: newer,
+                  streamSeq: seq,
+                  component: 'discovery',
+                  occurredAt: newer.evaluatedAt,
+                }),
+              ]);
+            });
+          }
+          return seq;
+        },
+      },
+    };
+    return recheck;
+  };
+  const recordedR1 = (built: ReturnType<typeof harness>) =>
+    built.readiness.rows.at(-1)?.criteria.find((criterion) => criterion.id === 'R1');
+
+  it('carries from the evaluation the winner wrote, not the one it read first', async () => {
+    const built = harness({ losses: 0 });
+    await seedDiscovery(built.readiness, built.eventing);
+    const report = await recheckProjectReadiness(losingTo(built, false), data);
+    expect(report.status).toBe('recorded');
+    expect(built.readiness.rows.map((row) => row.source)).toEqual([
+      'discovery',
+      'rediscovery',
+      'recheck',
+    ]);
+    // R1 needs a run, so a re-check carries it — from the newer row, which failed it.
+    expect(recordedR1(built)?.passed).toBe(false);
+    expect(recordedR1(built)?.evidence).toContain('rival discovery');
+    expect(report).toMatchObject({ previousLevel: built.readiness.rows[1]?.level });
+  });
+
+  it('fails when every attempt reuses the first read (the canary)', async () => {
+    const built = harness({ losses: 0 });
+    await seedDiscovery(built.readiness, built.eventing);
+    await recheckProjectReadiness(losingTo(built, true), data);
+    expect(recordedR1(built)?.passed).toBe(true);
+    expect(recordedR1(built)?.evidence).not.toContain('rival discovery');
   });
 });
 

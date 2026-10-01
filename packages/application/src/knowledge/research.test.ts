@@ -9,14 +9,17 @@
 import type { DomainEvent, Id, ResearchReportData } from '@platform/contracts';
 import { fixedClock, knowledgeApplyThresholds, sequentialIds } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
+import { StreamConflictError } from '../errors.js';
 import type { HandlerContext } from '../events/handler.js';
 import { exactSecretRedactor } from '../integrations/redaction.js';
+import { PROJECT_STREAM_APPEND_ATTEMPTS } from '../pipeline/project-stream.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import { silentLogger } from '../ports/logger.js';
 import { MemoryEventing } from '../testing/memory-eventing.js';
 import { memoryKnowledgeStore } from '../testing/memory-knowledge.js';
 import { memoryProposalStore } from '../testing/memory-proposals.js';
 import { recordingJobs } from '../testing/pipeline-harness.js';
+import { RIVAL_COMPONENT, racingProjectStream } from '../testing/project-stream-race.js';
 import type { LibrarianArtifact, LibrarianJobOptions } from './librarian.js';
 import { recordResearchPage, researchPageJobHandler, researchTriggerHandlers } from './research.js';
 
@@ -51,11 +54,16 @@ const harness = (
     readonly ticketKey?: string;
     readonly indexedPaths?: readonly string[];
     readonly artifact?: LibrarianArtifact | null;
+    /** WP-109: how many project-stream races a rival wins; the store then rolls back with the fake. */
+    readonly losses?: number;
   } = {},
 ) => {
-  const proposals = memoryProposalStore();
-  const jobs = recordingJobs();
   const eventing = new MemoryEventing();
+  const proposals = memoryProposalStore(
+    options.losses === undefined ? {} : { rollback: (tx, undo) => eventing.onRollback(tx, undo) },
+  );
+  const race = racingProjectStream(eventing, options.losses ?? 0);
+  const jobs = recordingJobs();
   const knowledge = memoryKnowledgeStore();
   return {
     proposals,
@@ -63,7 +71,7 @@ const harness = (
     eventing,
     options: {
       unitOfWork: eventing,
-      eventStore: eventing.store,
+      eventStore: { ...eventing.store, nextStreamSequence: race.eventStore.nextStreamSequence },
       proposals,
       knowledge: {
         ...knowledge,
@@ -177,6 +185,36 @@ describe('recordResearchPage', () => {
     // The curator's own dedupe, reached because the path is the platform's and therefore stable.
     expect(built.proposals.rows[0]?.status).toBe('queued');
     expect(built.proposals.rows[0]?.targetPath).toBe('.agentic/knowledge/research/ACME-7.md');
+  });
+});
+
+/** WP-109, PROGRESS backlog **333**: the bound from both sides, the claim re-made per attempt. */
+describe('a research page that loses the project stream’s sequence', () => {
+  const own = async (eventing: MemoryEventing) =>
+    (await eventing.store.readStream('project', PROJECT)).filter(
+      (entry) =>
+        entry.event.actor.kind === 'system' && entry.event.actor.component !== RIVAL_COMPONENT,
+    );
+
+  it('queues the page through three lost races, once', async () => {
+    const built = harness({ losses: PROJECT_STREAM_APPEND_ATTEMPTS - 1 });
+    const report = await recordResearchPage(built.options, DATA);
+    expect(report.status).toBe('recorded');
+    expect(built.proposals.rows).toHaveLength(1);
+    expect(built.proposals.curationOf(ARTIFACT)).toEqual({ proposals: 1 });
+    expect((await own(built.eventing)).map((entry) => entry.event.type)).toEqual([
+      'knowledge.proposal.created',
+    ]);
+  });
+
+  it('throws the conflict on the fourth, with nothing left behind', async () => {
+    const built = harness({ losses: PROJECT_STREAM_APPEND_ATTEMPTS });
+    await expect(recordResearchPage(built.options, DATA)).rejects.toBeInstanceOf(
+      StreamConflictError,
+    );
+    expect(built.proposals.rows).toEqual([]);
+    expect(built.proposals.curationOf(ARTIFACT)).toBeNull();
+    expect(await own(built.eventing)).toEqual([]);
   });
 });
 

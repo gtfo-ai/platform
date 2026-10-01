@@ -42,6 +42,7 @@ import type { KnowledgeApplyThresholds } from '@platform/domain';
 import { curateProposals } from '@platform/domain';
 import type { EventHandler } from '../events/handler.js';
 import { renderResearchReport, researchPagePath } from '../pipeline/epic-split.js';
+import { appendOnProjectWithRetry } from '../pipeline/project-stream.js';
 import type { Jobs } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
@@ -194,55 +195,60 @@ export const recordResearchPage = async (
     createdAt,
   };
 
-  const streamSeq = await options.eventStore.nextStreamSequence('project', projectId);
-  const claimed = await options.unitOfWork.transaction(async (scope) => {
-    // The same claim the Librarian's curation makes (WP-48): one `knowledge_curations` row per
-    // artifact, written in the transaction that writes the proposal, so a redelivered wake-up —
-    // including the one the lost-wake-up recovery enqueues — writes no second page.
-    if (
-      !(await options.proposals.markCurated(scope.tx, {
-        artifactId: data.artifact_id as Id,
-        at: createdAt,
-        proposals: 1,
-      }))
-    ) {
-      return false;
-    }
-    await options.proposals.insert(scope.tx, [row]);
-    await scope.events.append([
-      knowledgeProposalCreatedEvent.parse({
-        id: options.ids.next(),
-        stream_type: 'project',
-        stream_id: projectId,
-        stream_seq: streamSeq,
-        actor: { kind: 'system', component: 'spike' },
-        occurred_at: createdAt,
-        type: 'knowledge.proposal.created',
-        payload: {
-          project_id: projectId,
-          proposal: knowledgeProposalRecordSchema.parse({
-            id: row.id,
-            project_id: row.projectId,
-            task_id: row.taskId,
-            run_id: row.runId,
-            source: row.source,
-            kind: row.kind,
-            type: row.type,
-            target_path: row.targetPath,
-            delta: row.delta,
-            evidence: [...row.evidence],
-            significance: row.significance,
-            status: row.status,
-            decided_by_user_id: null,
-            decided_at: null,
-            applied_commit_sha: null,
-            created_at: row.createdAt,
-          }),
-        },
-      }),
-    ]);
-    return true;
-  });
+  // A lost sequence race re-runs this transaction — the claim with it, which rolled back — and
+  // nothing above it (WP-109, backlog 333).
+  const claimed = await appendOnProjectWithRetry(
+    options,
+    { projectId, writer: 'knowledge_research' },
+    async (scope, streamSeq) => {
+      // The same claim the Librarian's curation makes (WP-48): one `knowledge_curations` row per
+      // artifact, written in the transaction that writes the proposal, so a redelivered wake-up —
+      // including the one the lost-wake-up recovery enqueues — writes no second page.
+      if (
+        !(await options.proposals.markCurated(scope.tx, {
+          artifactId: data.artifact_id as Id,
+          at: createdAt,
+          proposals: 1,
+        }))
+      ) {
+        return false;
+      }
+      await options.proposals.insert(scope.tx, [row]);
+      await scope.events.append([
+        knowledgeProposalCreatedEvent.parse({
+          id: options.ids.next(),
+          stream_type: 'project',
+          stream_id: projectId,
+          stream_seq: streamSeq,
+          actor: { kind: 'system', component: 'spike' },
+          occurred_at: createdAt,
+          type: 'knowledge.proposal.created',
+          payload: {
+            project_id: projectId,
+            proposal: knowledgeProposalRecordSchema.parse({
+              id: row.id,
+              project_id: row.projectId,
+              task_id: row.taskId,
+              run_id: row.runId,
+              source: row.source,
+              kind: row.kind,
+              type: row.type,
+              target_path: row.targetPath,
+              delta: row.delta,
+              evidence: [...row.evidence],
+              significance: row.significance,
+              status: row.status,
+              decided_by_user_id: null,
+              decided_at: null,
+              applied_commit_sha: null,
+              created_at: row.createdAt,
+            }),
+          },
+        }),
+      ]);
+      return true;
+    },
+  );
 
   if (!claimed) {
     return { ...EMPTY, path: row.targetPath, reason: 'another delivery queued this page first' };

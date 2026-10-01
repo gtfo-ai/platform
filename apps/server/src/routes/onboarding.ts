@@ -101,7 +101,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
 import { organisationSettingsForRequest } from '../config-layers.js';
-import { HttpError, NotFoundError } from '../errors.js';
+import { HttpError, NotFoundError, projectStreamContention } from '../errors.js';
 import type { OnboardingCommands } from '../onboarding.js';
 import { OnboardingUnavailableError } from '../onboarding.js';
 import { claimCommandAttempt, releaseCommandAttempt } from '../queries/idempotency-queries.js';
@@ -916,17 +916,22 @@ export const registerOnboardingRoutes = async (
       if ((await findProjectById(options.database, projectId)) === null) {
         throw new NotFoundError(`project ${projectId}`);
       }
-      const result = await commands().recordInterview({
-        projectId: projectId as never,
-        userId: actor.userId as never,
-        answers: request.body.answers,
-        // Written in the proposals' own transaction, never after it (WP-64 review round 1).
-        audit: {
-          action,
-          key,
-          params: { project_id: projectId, idempotency_key: key, body_digest: replay.digest },
-        },
-      });
+      const result = await commands()
+        .recordInterview({
+          projectId: projectId as never,
+          userId: actor.userId as never,
+          answers: request.body.answers,
+          // Written in the proposals' own transaction, never after it (WP-64 review round 1).
+          audit: {
+            action,
+            key,
+            params: { project_id: projectId, idempotency_key: key, body_digest: replay.digest },
+          },
+        })
+        // WP-109 (backlog 357): a lost race is retried in place; four in a row is a retryable 409.
+        .catch((error: unknown) => {
+          throw projectStreamContention(error) ?? error;
+        });
       if (result.status === 'not_found') {
         throw new NotFoundError(`project ${projectId}`);
       }

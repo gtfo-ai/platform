@@ -108,7 +108,10 @@ reads, so a miss keeps the previous answer. R1, R2, R4, R5, R6, R7 and R14 need 
 the latest discovery's answer. **To have them answered again, press *Re-evaluate readiness*** on the
 project settings page (maintainers): it runs the Discovery agent again as a new task, with the same
 budget cap, cost accounting and transcript as the first run, and records its evaluation as a
-*re-evaluation* beside the earlier ones. The button shows the run's budget cap (a ceiling, not a
+*re-evaluation* beside the earlier ones. The pages it drafts again replace the earlier discovery's
+drafts of the same pages that are still waiting in the knowledge queue: the older card turns
+*discarded*, and its first evidence line names the task whose newer draft replaced it. A draft you
+already approved is left alone. The button shows the run's budget cap (a ceiling, not a
 prediction) and what the last discovery cost; it is off, with the reason, while a discovery is
 running or parked, before the first discovery, and after three re-evaluations in a row recorded
 nothing. A project that was never evaluated is not re-checked: the readiness panel keeps saying
@@ -126,7 +129,9 @@ under `business/` in the knowledge proposal queue, where a maintainer edits and 
 approving it opens a merge request like any other proposal. Nothing is committed from the form. The
 page is your own words under the platform's headings — no agent rewrites them. Answers are cut at
 12 000 characters (a not-applicable reason at 1 000), credential-shaped strings are redacted before
-anything is stored, and a cut is announced in the page.
+anything is stored, and a cut is announced in the page. Submitting again replaces the earlier
+submission's pages for the sections you answered again, as long as nobody has approved them yet:
+the earlier card turns *discarded*, and its first evidence line says a newer answer replaced it.
 
 Seven of the eight pages are knowledge-completeness sections, so once they are merged the score
 moves by 7/10 (communication is not scored); with at least one technical page — which discovery

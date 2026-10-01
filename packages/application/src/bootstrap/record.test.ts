@@ -16,12 +16,16 @@
  */
 import type { HistoryFindingsData, HistorySample, Id, IsoDateTime } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
+import { StreamConflictError } from '../errors.js';
+import { PROJECT_STREAM_APPEND_ATTEMPTS } from '../pipeline/project-stream.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type { LogFields, Logger } from '../ports/logger.js';
+import type { Transaction } from '../ports/transaction.js';
 import { createMemoryHistoryBootstrapStore } from '../testing/memory-bootstrap.js';
 import { MemoryEventing } from '../testing/memory-eventing.js';
 import { memoryKnowledgeStore } from '../testing/memory-knowledge.js';
 import { memoryProposalStore } from '../testing/memory-proposals.js';
+import { racingProjectStream } from '../testing/project-stream-race.js';
 import { boundCoverageClaim, recordHistoryFindings } from './record.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000c1' as Id;
@@ -81,11 +85,18 @@ const setup = async (
     /** How many merge requests the platform put in this run's prompt — the chunk's own count. */
     readonly shown?: number;
     readonly logger?: Logger;
+    /** WP-109: how many project-stream races a rival wins; the stores then roll back with the fake. */
+    readonly losses?: number;
   } = {},
 ) => {
   const eventing = new MemoryEventing();
-  const bootstrap = createMemoryHistoryBootstrapStore({ now: () => AT });
-  const proposals = memoryProposalStore();
+  const rollback =
+    options.losses === undefined
+      ? {}
+      : { rollback: (tx: Transaction, undo: () => void) => eventing.onRollback(tx, undo) };
+  const bootstrap = createMemoryHistoryBootstrapStore({ now: () => AT }, rollback);
+  const proposals = memoryProposalStore(rollback);
+  const race = racingProjectStream(eventing, options.losses ?? 0);
   const knowledge = memoryKnowledgeStore();
   await eventing.transaction(async (scope) => {
     await bootstrap.createBatch(scope.tx, {
@@ -118,7 +129,7 @@ const setup = async (
         bootstrap,
         proposals,
         knowledge,
-        eventStore: eventing.store,
+        eventStore: race.eventStore,
         project: async () => ({ knowledgeDir: '.agentic/knowledge' }),
         artifact: async () => ({
           data: options.data ?? findings(),
@@ -142,6 +153,28 @@ const setup = async (
     );
   return { bootstrap, proposals, eventing, record };
 };
+
+/**
+ * WP-109, the sweep of backlog 357: the history recorder writes knowledge proposals on the project
+ * stream with the same shape, so it retries a lost race in place — the chunk's claim re-made in the
+ * re-run transaction — and gives up at the bound.
+ */
+describe('a mining record that loses the project stream’s sequence', () => {
+  it('records through three lost races, once, and throws on the fourth leaving the chunk open', async () => {
+    const inside = await setup({ losses: PROJECT_STREAM_APPEND_ATTEMPTS - 1 });
+    const report = await inside.record();
+    expect(report.status).toBe('recorded');
+    expect(inside.proposals.rows).toHaveLength(1);
+    expect(inside.bootstrap.chunksOf(BATCH)[0]?.recordedAt).toBe(AT);
+    expect(inside.bootstrap.batches[0]?.status).toBe('completed');
+
+    const past = await setup({ losses: PROJECT_STREAM_APPEND_ATTEMPTS });
+    await expect(past.record()).rejects.toBeInstanceOf(StreamConflictError);
+    expect(past.proposals.rows).toEqual([]);
+    expect(past.bootstrap.chunksOf(BATCH)[0]?.recordedAt).toBeNull();
+    expect(past.bootstrap.batches[0]?.completedAt).toBeNull();
+  });
+});
 
 describe('recording a mining run’s findings', () => {
   it('queues an evidenced proposal with source history, carrying the citations', async () => {

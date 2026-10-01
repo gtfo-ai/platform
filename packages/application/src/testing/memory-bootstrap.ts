@@ -17,8 +17,12 @@
  *    **race** the index exists for (two commands that both read no live batch before either
  *    inserts): there is no concurrency here, so the refusal is reachable only by calling
  *    `createBatch` directly. That case is the integration tier's.
- * 3. **No transaction.** Every method ignores the handle, so a rollback leaves the write here. The
- *    integration tier is where rollback is tested, against the real adapter.
+ * 3. **No transaction**, except for the recorder's two writes when built with `rollback` (WP-109):
+ *    `markChunkRecorded` and `completeIfDone` then register their undo on the transaction through
+ *    `MemoryEventing.onRollback`, which a unit test that re-runs a lost sequence race needs (the
+ *    first attempt's claim must not answer the second). Every other method ignores the handle, so
+ *    a rollback leaves the write here. The integration tier is where rollback is tested, against
+ *    the real adapter.
  * 4. **`spendOfBatch` and `capForTask` sum what a test seeded**, because this double holds no
  *    `cost_entries`: {@link MemoryHistoryBootstrapStore.seedSpend} is the seam. It is **stricter**
  *    in one way that matters — the seeded number is used exactly, where the adapter sums a
@@ -48,6 +52,7 @@ import type {
 } from '../bootstrap/ports.js';
 import { LiveHistoryBootstrapError } from '../bootstrap/ports.js';
 import type { Transaction } from '../ports/transaction.js';
+import type { MemoryRollback } from './memory-proposals.js';
 
 export interface MemoryHistoryBootstrapStore extends HistoryBootstrapStore {
   /** Every batch created, oldest first. */
@@ -68,7 +73,9 @@ export interface MemoryHistoryBootstrapStore extends HistoryBootstrapStore {
 
 export const createMemoryHistoryBootstrapStore = (
   clock: { now(): string } = { now: () => new Date().toISOString() },
+  options: { readonly rollback?: MemoryRollback } = {},
 ): MemoryHistoryBootstrapStore => {
+  const undoOnRollback: MemoryRollback = options.rollback ?? (() => {});
   const batches: HistoryBootstrapBatchRow[] = [];
   const chunks: HistoryBootstrapChunkRow[] = [];
   const spend = new Map<Id, number>();
@@ -148,7 +155,7 @@ export const createMemoryHistoryBootstrapStore = (
       });
     },
 
-    markChunkRecorded: async (_tx, chunkId, outcome) => {
+    markChunkRecorded: async (tx, chunkId, outcome) => {
       const chunk = chunks.find((row) => row.id === chunkId);
       // Divergence 6's order: the idempotency predicate first, then the bound — the adapter's
       // `where` excludes the row before the check constraint could be evaluated.
@@ -172,6 +179,7 @@ export const createMemoryHistoryBootstrapStore = (
         refusedProposals: outcome.refusedProposals,
         mergeRequestsRead: outcome.mergeRequestsRead,
       });
+      undoOnRollback(tx, () => replaceChunk(chunk));
       return true;
     },
 
@@ -198,7 +206,7 @@ export const createMemoryHistoryBootstrapStore = (
       }
     },
 
-    completeIfDone: async (_tx, batchId, at) => {
+    completeIfDone: async (tx, batchId, at) => {
       const batch = batches.find((row) => row.id === batchId);
       if (batch === undefined || batch.completedAt !== null) {
         return false;
@@ -213,6 +221,7 @@ export const createMemoryHistoryBootstrapStore = (
         return false;
       }
       replace({ ...batch, status: 'completed', completedAt: at });
+      undoOnRollback(tx, () => replace(batch));
       return true;
     },
 

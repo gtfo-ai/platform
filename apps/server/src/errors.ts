@@ -26,6 +26,7 @@ import {
   StageNotCurrentError,
   StageNotInTemplateError,
   SteerWindowClosedError,
+  StreamConflictError,
   TaskConflictExhaustedError,
   UnknownAggregateError,
 } from '@platform/application';
@@ -190,6 +191,26 @@ export const commandRefusal = (error: unknown): HttpError | null => {
   }
   return null;
 };
+
+/**
+ * A project-stream race the in-place retry could not win, as the answer it is to the caller of an
+ * operator command that appends to the project stream (WP-109, PROGRESS backlog 357).
+ *
+ * The business interview and a knowledge rejection go through `appendOnProjectWithRetry`, so a lost
+ * race is re-run in place and never reaches here; only four consecutive losses do. That is
+ * contention, not a bug and not the caller's mistake, and the transaction rolled back with its
+ * idempotency claim — so it is the family's 409 with a code a client can retry on, never the 500
+ * that used to answer the first loss. Narrow on purpose, like {@link commandRefusal}: a conflict on
+ * any other stream, or from any other route, stays a 500.
+ */
+export const projectStreamContention = (error: unknown): HttpError | null =>
+  error instanceof StreamConflictError && error.streamType === 'project'
+    ? new HttpError(
+        409,
+        'project_stream_contended',
+        'other writes on this project kept taking its event sequence, and nothing was recorded; the same request can be sent again',
+      )
+    : null;
 
 export interface MappedError {
   readonly statusCode: number;

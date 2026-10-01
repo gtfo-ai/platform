@@ -38,6 +38,7 @@ import type { Id } from '@platform/contracts';
 import { knowledgeProposalRejectedEvent, MAX_PROPOSAL_DELTA_BYTES } from '@platform/contracts';
 import type { Clock, IdSource } from '@platform/domain';
 import { utf8ByteLength } from '@platform/domain';
+import { appendOnProjectWithRetry } from '../pipeline/project-stream.js';
 import type { EventStore } from '../ports/event-store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type { Jobs } from '../ports/jobs.js';
@@ -132,39 +133,49 @@ export const decideKnowledgeProposal = async (
   const redactedReason =
     input.reason === undefined ? undefined : options.redactor.redactText(input.reason).value;
 
-  const decided = await options.unitOfWork.transaction(async (scope) => {
-    const applied = await options.proposals.decide(scope.tx, {
-      id: input.proposalId,
-      status,
-      decidedByUserId: input.userId,
-      decidedAt,
-      ...(redactedDelta === undefined ? {} : { delta: redactedDelta }),
-    });
-    if (!applied) {
-      return false;
-    }
-    if (input.decision === 'reject') {
-      const streamSeq = await options.eventStore.nextStreamSequence('project', input.projectId);
-      await scope.events.append([
-        knowledgeProposalRejectedEvent.parse({
-          id: options.ids.next(),
-          stream_type: 'project',
-          stream_id: input.projectId,
-          stream_seq: streamSeq,
-          actor: { kind: 'user', user_id: input.userId },
-          occurred_at: decidedAt,
-          type: 'knowledge.proposal.rejected',
-          payload: {
-            project_id: input.projectId,
-            proposal_id: input.proposalId,
-            reason: redactedReason ?? null,
-            decided_by_user_id: input.userId,
-          },
-        }),
-      ]);
-    }
-    return true;
-  });
+  /**
+   * Through the shared retry (WP-109, backlog 357): the sequence used to be read **inside** this
+   * callback, but over the pool, so it saw nothing the transaction held and locked nothing — a
+   * concurrent project-stream writer still failed the rejection, and the route answered 500. A
+   * lost race now re-runs the decision with the sequence read again; the decision rolled back with
+   * it, so `decide` answers on the second attempt exactly as on the first.
+   */
+  const decided = await appendOnProjectWithRetry(
+    options,
+    { projectId: input.projectId, writer: 'knowledge_decision' },
+    async (scope, streamSeq) => {
+      const applied = await options.proposals.decide(scope.tx, {
+        id: input.proposalId,
+        status,
+        decidedByUserId: input.userId,
+        decidedAt,
+        ...(redactedDelta === undefined ? {} : { delta: redactedDelta }),
+      });
+      if (!applied) {
+        return false;
+      }
+      if (input.decision === 'reject') {
+        await scope.events.append([
+          knowledgeProposalRejectedEvent.parse({
+            id: options.ids.next(),
+            stream_type: 'project',
+            stream_id: input.projectId,
+            stream_seq: streamSeq,
+            actor: { kind: 'user', user_id: input.userId },
+            occurred_at: decidedAt,
+            type: 'knowledge.proposal.rejected',
+            payload: {
+              project_id: input.projectId,
+              proposal_id: input.proposalId,
+              reason: redactedReason ?? null,
+              decided_by_user_id: input.userId,
+            },
+          }),
+        ]);
+      }
+      return true;
+    },
+  );
 
   if (!decided) {
     // Another writer moved the row between the read and the write. Re-read rather than guess.

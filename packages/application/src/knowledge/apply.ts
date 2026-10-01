@@ -47,6 +47,7 @@ import {
   noRunScopedSecrets,
   type PipelineIntegrationsPort,
 } from '../pipeline/integrations.js';
+import { appendOnProjectWithRetry } from '../pipeline/project-stream.js';
 import type { EventStore } from '../ports/event-store.js';
 import type { CommitAction } from '../ports/integrations/git-provider.js';
 import { jobQueueDefinition } from '../ports/job-queues.js';
@@ -352,32 +353,38 @@ export const applyKnowledgeProposals = async (
     callContext,
   );
 
-  const streamSeq = await options.eventStore.nextStreamSequence('project', projectId);
-  await options.unitOfWork.transaction(async (scope) => {
-    await options.proposals.markApplied(scope.tx, {
-      ids: batch.map((proposal) => proposal.id),
-      commitSha: commit.sha,
-    });
-    await scope.events.append(
-      batch.map((proposal, index) =>
-        knowledgeProposalAppliedEvent.parse({
-          id: options.ids.next(),
-          stream_type: 'project',
-          stream_id: projectId,
-          stream_seq: streamSeq + index,
-          actor: { kind: 'system', component: 'librarian' },
-          occurred_at: at,
-          type: 'knowledge.proposal.applied',
-          payload: {
-            project_id: projectId,
-            proposal_id: proposal.id,
-            commit_sha: commit.sha,
-            decided_by_user_id: proposal.decidedByUserId,
-          },
-        }),
-      ),
-    );
-  });
+  // The commit and the merge request above are **held**: a lost sequence race re-runs only this
+  // transaction (WP-109, backlog 333), never the two provider calls — which before it were repeated
+  // by pg-boss's retry a minute later and answered, if at all, by the executor's idempotency record.
+  await appendOnProjectWithRetry(
+    options,
+    { projectId, writer: 'knowledge_apply' },
+    async (scope, streamSeq) => {
+      await options.proposals.markApplied(scope.tx, {
+        ids: batch.map((proposal) => proposal.id),
+        commitSha: commit.sha,
+      });
+      await scope.events.append(
+        batch.map((proposal, index) =>
+          knowledgeProposalAppliedEvent.parse({
+            id: options.ids.next(),
+            stream_type: 'project',
+            stream_id: projectId,
+            stream_seq: streamSeq + index,
+            actor: { kind: 'system', component: 'librarian' },
+            occurred_at: at,
+            type: 'knowledge.proposal.applied',
+            payload: {
+              project_id: projectId,
+              proposal_id: proposal.id,
+              commit_sha: commit.sha,
+              decided_by_user_id: proposal.decidedByUserId,
+            },
+          }),
+        ),
+      );
+    },
+  );
 
   return {
     status: 'applied',

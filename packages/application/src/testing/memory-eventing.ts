@@ -17,10 +17,21 @@
  * 4. **Crashes.** `MemoryFaults` can kill a transaction just before or just after its commit,
  *    which is the only interesting window: the one where the effect and the bookkeeping could
  *    disagree.
+ * 5. **Rollback of another double's writes** (WP-109). `onRollback(tx, undo)` registers an undo on
+ *    a live transaction, run newest first if it rolls back, so an in-memory store built with
+ *    `rollback` (`memoryProposalStore`, `memoryReadinessStore`, `createMemoryHistoryBootstrapStore`)
+ *    takes part in behaviour 1 — which a lost sequence race re-run in place needs.
  *
  * It is not a database. There is no MVCC: a transaction reads committed state plus its own
  * uncommitted writes, and contention is reported immediately instead of blocking, because a fake
  * that blocks in a single-threaded test just deadlocks it.
+ *
+ * ## Divergence register (standing rule 1)
+ *
+ * | # | Divergence | Direction | Why it is safe |
+ * |---|---|---|---|
+ * | 1 | **No MVCC, no blocking** (above): contention is reported at once, not after a wait. | *Different* | The loser's outcome — `StreamConflictError`, or `busy` on a claim — is the one PostgreSQL gives after the wait. |
+ * | 2 | **A store's writes made through `onRollback` are visible before commit.** The undo is a per-row snapshot taken at the write, so another transaction reads the uncommitted row in the meantime, and when two interleaved transactions write **one row**, the first one's rollback puts back the value it saw and wipes the second one's write. | **Stricter** than PostgreSQL, which would have blocked the second writer on the row lock until the first ended | A test that interleaves two writers on one row sees a lost write rather than a hidden one. WP-109's concurrent cases write distinct rows (one proposal or evaluation per writer). The one cross-writer write is the supersede in `onboarding/record.ts`: here it can see the other recorder's **uncommitted** rows, which PostgreSQL would not show it, and the concurrent case in `record.test.ts` holds either way — the loser's rollback undoes its own inserts and its own discards, and its re-run sees the winner's committed rows. |
  */
 import type { DomainEvent, Id, StreamType } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
@@ -157,6 +168,8 @@ export class MemoryEventing implements UnitOfWork {
   readonly #queueLocks = new Map<number, MemoryTransaction>();
   readonly #executionLocks = new Map<string, MemoryTransaction>();
   readonly #streamLocks = new Map<string, MemoryTransaction>();
+  /** The live transaction behind each handle, for {@link MemoryEventing.onRollback}. */
+  readonly #byHandle = new WeakMap<Transaction, MemoryTransaction>();
   readonly #listeners = new Map<BroadcastListener, ReadonlySet<string>>();
   readonly #faults: MemoryFaults;
   readonly #now: () => number;
@@ -172,6 +185,7 @@ export class MemoryEventing implements UnitOfWork {
 
   async transaction<T>(fn: (scope: TransactionScope) => Promise<T>): Promise<T> {
     const tx = new MemoryTransaction(this);
+    this.#byHandle.set(tx.scope.tx, tx);
     let result: T;
     try {
       result = await fn(tx.scope);
@@ -190,6 +204,23 @@ export class MemoryEventing implements UnitOfWork {
       throw new SimulatedCrashError('after-commit', this.#commits);
     }
     return result;
+  }
+
+  /**
+   * Registers `undo` to run if the transaction behind `handle` rolls back (WP-109).
+   *
+   * The seam a non-transactional in-memory store uses to take part in this fake's atomic commit
+   * (`memoryProposalStore({ rollback })` and its siblings): without it a write made in an attempt
+   * that lost a sequence race survives the rollback, and the retry's claim answers "already done".
+   * Undos run newest first. A handle this fake did not issue, or one already ended, is refused
+   * rather than ignored — an undo nobody will run is a rollback the test would only believe in.
+   */
+  onRollback(handle: Transaction, undo: () => void): void {
+    const tx = this.#byHandle.get(handle);
+    if (tx === undefined || tx.ended) {
+      throw new Error('onRollback: the handle is not a live transaction of this MemoryEventing');
+    }
+    tx.undos.push(undo);
   }
 
   // ── Read side (EventStore + HandlerExecutionReader) ────────────────────────
@@ -498,6 +529,9 @@ class MemoryTransaction {
   readonly queueWrites = new Map<number, QueueRow>();
   readonly executionWrites = new Map<string, ExecutionRow>();
   readonly broadcasts: BroadcastMessage[] = [];
+  /** Registered through {@link MemoryEventing.onRollback}; run newest first on a rollback. */
+  readonly undos: (() => void)[] = [];
+  ended = false;
   readonly scope: TransactionScope;
   readonly #owner: MemoryEventing;
 
@@ -518,10 +552,15 @@ class MemoryTransaction {
   }
 
   commit(): void {
+    this.ended = true;
     this.#owner._commit(this);
   }
 
   rollback(): void {
+    this.ended = true;
+    for (const undo of [...this.undos].reverse()) {
+      undo();
+    }
     this.#owner._release(this);
   }
 

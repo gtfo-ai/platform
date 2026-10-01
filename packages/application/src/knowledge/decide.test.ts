@@ -9,12 +9,15 @@ import type { Id, IsoDateTime } from '@platform/contracts';
 import { decideKbProposalRequestSchema, MAX_PROPOSAL_DELTA_BYTES } from '@platform/contracts';
 import { fixedClock, sequentialIds } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
+import { StreamConflictError } from '../errors.js';
 import { exactSecretRedactor, noSecretsRedactor } from '../integrations/redaction.js';
+import { PROJECT_STREAM_APPEND_ATTEMPTS } from '../pipeline/project-stream.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import { silentLogger } from '../ports/logger.js';
 import { MemoryEventing } from '../testing/memory-eventing.js';
 import { memoryProposalStore } from '../testing/memory-proposals.js';
 import { recordingJobs } from '../testing/pipeline-harness.js';
+import { racingProjectStream } from '../testing/project-stream-race.js';
 import { type DecideProposalOptions, decideKnowledgeProposal } from './decide.js';
 import type { StoredKnowledgeProposal } from './ports.js';
 import { isAwaitingApply } from './ports.js';
@@ -45,13 +48,23 @@ const row = (overrides: Partial<StoredKnowledgeProposal> = {}): StoredKnowledgeP
   ...overrides,
 });
 
-const harness = (options: { readonly jobs?: boolean; readonly redact?: boolean } = {}) => {
-  const proposals = memoryProposalStore();
-  const jobs = recordingJobs();
+const harness = (
+  options: {
+    readonly jobs?: boolean;
+    readonly redact?: boolean;
+    /** WP-109: how many project-stream races a rival wins; the store then rolls back with the fake. */
+    readonly losses?: number;
+  } = {},
+) => {
   const eventing = new MemoryEventing();
+  const proposals = memoryProposalStore(
+    options.losses === undefined ? {} : { rollback: (tx, undo) => eventing.onRollback(tx, undo) },
+  );
+  const race = racingProjectStream(eventing, options.losses ?? 0);
+  const jobs = recordingJobs();
   const decideOptions: DecideProposalOptions = {
     unitOfWork: eventing,
-    eventStore: eventing.store,
+    eventStore: { ...eventing.store, nextStreamSequence: race.eventStore.nextStreamSequence },
     proposals,
     clock: fixedClock(AT),
     ids: sequentialIds(950),
@@ -260,5 +273,62 @@ describe('deciding a knowledge proposal', () => {
     expect(result.status).toBe('decided');
     expect(isAwaitingApply(proposals.rows[0] as StoredKnowledgeProposal)).toBe(true);
     expect(await proposals.projectsAwaitingApply(10)).toEqual([PROJECT]);
+  });
+
+  /**
+   * WP-109, PROGRESS backlog **357**: the rejection's sequence was read inside the transaction but
+   * over the pool, so a concurrent project-stream writer failed it and the route answered 500. The
+   * bound from both sides, and two maintainers rejecting two pages at once.
+   */
+  describe('a rejection that loses the project stream’s sequence', () => {
+    const reject = (options: DecideProposalOptions, proposalId: Id = PROPOSAL) =>
+      decideKnowledgeProposal(options, {
+        projectId: PROJECT,
+        proposalId,
+        decision: 'reject',
+        userId: USER,
+        reason: 'not true',
+      });
+    const rejections = async (eventing: MemoryEventing) =>
+      (await eventing.store.readStream('project', PROJECT)).filter(
+        (entry) => entry.event.type === 'knowledge.proposal.rejected',
+      );
+
+    it('lands through three lost races, decided once', async () => {
+      const { proposals, eventing, decideOptions } = harness({
+        losses: PROJECT_STREAM_APPEND_ATTEMPTS - 1,
+      });
+      await eventing.transaction(async (scope) => proposals.insert(scope.tx, [row()]));
+      const result = await reject(decideOptions);
+      expect(result.status).toBe('decided');
+      expect(proposals.rows[0]?.status).toBe('rejected');
+      expect(await rejections(eventing)).toHaveLength(1);
+    });
+
+    it('throws on the fourth and leaves the proposal decidable', async () => {
+      const { proposals, eventing, decideOptions } = harness({
+        losses: PROJECT_STREAM_APPEND_ATTEMPTS,
+      });
+      await eventing.transaction(async (scope) => proposals.insert(scope.tx, [row()]));
+      await expect(reject(decideOptions)).rejects.toBeInstanceOf(StreamConflictError);
+      expect(proposals.rows[0]?.status).toBe('queued');
+      expect(proposals.rows[0]?.decidedAt).toBeNull();
+      expect(await rejections(eventing)).toEqual([]);
+    });
+
+    it('lands two concurrent rejections on one project, both', async () => {
+      const second = '00000000-0000-4000-8000-0000000000f9' as Id;
+      const { proposals, eventing, decideOptions } = harness({ losses: 0 });
+      await eventing.transaction(async (scope) =>
+        proposals.insert(scope.tx, [
+          row(),
+          row({ id: second, targetPath: '.agentic/knowledge/lessons/L-2.md' }),
+        ]),
+      );
+      const results = await Promise.all([reject(decideOptions), reject(decideOptions, second)]);
+      expect(results.map((result) => result.status)).toEqual(['decided', 'decided']);
+      expect(proposals.rows.map((stored) => stored.status)).toEqual(['rejected', 'rejected']);
+      expect(await rejections(eventing)).toHaveLength(2);
+    });
   });
 });

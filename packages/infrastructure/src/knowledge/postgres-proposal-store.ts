@@ -236,6 +236,39 @@ export class PostgresProposalStore implements KnowledgeProposalStore {
     return (rowCount ?? 0) > 0;
   }
 
+  async supersedeQueued(
+    tx: Transaction,
+    input: {
+      readonly projectId: Id;
+      readonly source: KnowledgeProposalSource;
+      readonly paths: readonly string[];
+      readonly keep: readonly Id[];
+      readonly reason: string;
+    },
+  ): Promise<readonly Id[]> {
+    if (input.paths.length === 0) return [];
+    const sql = sqlOf(tx);
+    // The whole predicate in one statement, as `decide` keeps it: a row a maintainer decided in the
+    // meantime has `decided_at` set and is left alone, and a row this statement discarded is no
+    // longer `queued` for `decide` to take. The reason goes first in `evidence`, where the history
+    // bootstrap puts a refused citation's reason.
+    const { rows } = await sql.query<{ id: string }>(
+      `update kb_proposals
+          set status = 'discarded',
+              evidence = jsonb_build_array($5::text) || evidence
+        where project_id = $1
+          and source = $2::knowledge_proposal_source
+          and status = 'queued'
+          and decided_at is null
+          and applied_commit_sha is null
+          and target_path = any($3::text[])
+          and not (id = any($4::uuid[]))
+        returning id`,
+      [input.projectId, input.source, [...input.paths], [...input.keep], input.reason],
+    );
+    return rows.map((row) => row.id as Id);
+  }
+
   async markApplied(
     tx: Transaction,
     input: { readonly ids: readonly Id[]; readonly commitSha: string },

@@ -10,15 +10,18 @@
 import type { Id } from '@platform/contracts';
 import { fixedClock, sequentialIds } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
+import { StreamConflictError } from '../errors.js';
 import { TransactionOpenError, withOpenTransaction } from '../events/open-transaction.js';
 import { exactSecretRedactor } from '../integrations/redaction.js';
 import type { PipelineIntegrations } from '../pipeline/integrations.js';
 import { staticPipelineIntegrations } from '../pipeline/integrations.js';
+import { PROJECT_STREAM_APPEND_ATTEMPTS } from '../pipeline/project-stream.js';
 import type { CommitFilesRequest, CommitRef } from '../ports/integrations/git-provider.js';
 import { silentLogger } from '../ports/logger.js';
 import { MemoryEventing } from '../testing/memory-eventing.js';
 import { memoryProposalStore } from '../testing/memory-proposals.js';
 import { recordingJobs } from '../testing/pipeline-harness.js';
+import { RIVAL_COMPONENT, racingProjectStream } from '../testing/project-stream-race.js';
 import {
   applyKnowledgeProposals,
   type KnowledgeApplyOptions,
@@ -76,12 +79,17 @@ const harness = (
     readonly indexedPaths?: readonly string[];
     readonly onCommit?: () => void;
     readonly ticketKey?: string;
+    /** WP-109: how many project-stream races a rival wins; the stores then roll back with the fake. */
+    readonly losses?: number;
   } = {},
 ) => {
   const calls: Calls = { commits: [], mergeRequests: [] };
-  const proposals = memoryProposalStore();
-  const jobs = recordingJobs();
   const eventing = new MemoryEventing();
+  const proposals = memoryProposalStore(
+    options.losses === undefined ? {} : { rollback: (tx, undo) => eventing.onRollback(tx, undo) },
+  );
+  const race = racingProjectStream(eventing, options.losses ?? 0);
+  const jobs = recordingJobs();
   const port = {
     commitFiles: async (request: CommitFilesRequest): Promise<CommitRef> => {
       options.onCommit?.();
@@ -127,7 +135,7 @@ const harness = (
   };
   const applyOptions: KnowledgeApplyOptions = {
     unitOfWork: eventing,
-    eventStore: eventing.store,
+    eventStore: { ...eventing.store, nextStreamSequence: race.eventStore.nextStreamSequence },
     proposals,
     knowledge: {
       readIndexedBlobs: async () =>
@@ -141,7 +149,7 @@ const harness = (
     ticketKeys: async () => new Map([[TASK, options.ticketKey ?? 'ACME-1']]),
     logger: silentLogger,
   };
-  return { calls, proposals, jobs, eventing, applyOptions };
+  return { calls, proposals, jobs, eventing, applyOptions, race };
 };
 
 const data = { project_id: PROJECT, reason: 'auto_apply' as const };
@@ -354,6 +362,51 @@ describe('applying knowledge proposals', () => {
     ]);
     const report = await applyKnowledgeProposals(applyOptions, data);
     expect(report.status).toBe('unavailable');
+    expect(proposals.rows[0]?.status).toBe('auto_applied');
+  });
+
+  /**
+   * WP-109, PROGRESS backlog **333**: a lost project-stream race re-runs the transaction, never the
+   * commit or the merge request. Before it the job failed and pg-boss re-ran the whole pass a minute
+   * later, provider calls included. The bound from both sides (rule 42).
+   */
+  it('lands the pass through three lost races with one commit and one merge request', async () => {
+    const { applyOptions, calls, proposals, eventing, race } = harness({
+      losses: PROJECT_STREAM_APPEND_ATTEMPTS - 1,
+    });
+    await eventing.transaction(async (scope) => {
+      await proposals.insert(scope.tx, [
+        proposal({ id: '00000000-0000-4000-8000-00000000ab21' as Id }),
+      ]);
+    });
+    const report = await applyKnowledgeProposals(applyOptions, data);
+    expect(report.status).toBe('applied');
+    expect(race.lost()).toBe(PROJECT_STREAM_APPEND_ATTEMPTS - 1);
+    expect(calls.commits).toHaveLength(1);
+    expect(calls.mergeRequests).toHaveLength(1);
+    expect(proposals.rows[0]?.status).toBe('applied');
+    const own = (await applyOptions.eventStore.readStream('project', PROJECT)).filter(
+      (entry) =>
+        entry.event.actor.kind === 'system' && entry.event.actor.component !== RIVAL_COMPONENT,
+    );
+    expect(own.map((entry) => entry.event.type)).toEqual(['knowledge.proposal.applied']);
+  });
+
+  it('throws the conflict on the fourth lost race, still with one commit, and applies nothing', async () => {
+    const { applyOptions, calls, proposals, eventing } = harness({
+      losses: PROJECT_STREAM_APPEND_ATTEMPTS,
+    });
+    await eventing.transaction(async (scope) => {
+      await proposals.insert(scope.tx, [
+        proposal({ id: '00000000-0000-4000-8000-00000000ab22' as Id }),
+      ]);
+    });
+    await expect(applyKnowledgeProposals(applyOptions, data)).rejects.toBeInstanceOf(
+      StreamConflictError,
+    );
+    expect(calls.commits).toHaveLength(1);
+    expect(calls.mergeRequests).toHaveLength(1);
+    // Rolled back with the transaction, so the job's pg-boss retry finds it still waiting.
     expect(proposals.rows[0]?.status).toBe('auto_applied');
   });
 
