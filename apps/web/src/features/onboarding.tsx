@@ -199,32 +199,36 @@ export const OnboardingScreen = (): ReactElement => {
               <UntrustedText value={project.name} /> — <UntrustedText value={project.repo_url} />
             </p>
             <div className="flex flex-col gap-1">
-              {(integrations.data?.items ?? []).map((integration) => (
-                <label key={integration.id} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={selected.includes(integration.id)}
-                    onChange={(event) =>
-                      setSelected(
-                        event.target.checked
-                          ? [...selected, integration.id]
-                          : selected.filter((id) => id !== integration.id),
-                      )
-                    }
-                  />
-                  <UntrustedText value={integration.name} />
-                  <Badge>{integration.type}</Badge>
-                  <Button
-                    type="button"
-                    tone="ghost"
-                    onClick={() => commands.testIntegration.mutate(integration.id)}
-                  >
-                    Test connection
-                  </Button>
-                </label>
-              ))}
+              {/* A retired integration (WP-114) cannot be bound: the server refuses it. */}
+              {(integrations.data?.items ?? [])
+                .filter((integration) => integration.retired_at === null)
+                .map((integration) => (
+                  <label key={integration.id} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={selected.includes(integration.id)}
+                      onChange={(event) =>
+                        setSelected(
+                          event.target.checked
+                            ? [...selected, integration.id]
+                            : selected.filter((id) => id !== integration.id),
+                        )
+                      }
+                    />
+                    <UntrustedText value={integration.name} />
+                    <Badge>{integration.type}</Badge>
+                    <Button
+                      type="button"
+                      tone="ghost"
+                      onClick={() => commands.testIntegration.mutate(integration.id)}
+                    >
+                      Test connection
+                    </Button>
+                  </label>
+                ))}
             </div>
-            {integrations.isSuccess && integrations.data.items.length === 0 ? (
+            {integrations.isSuccess &&
+            integrations.data.items.every((integration) => integration.retired_at !== null) ? (
               <EmptyState
                 title="No integrations yet"
                 hint="Add one from the Integrations screen, then come back — the wizard binds what exists rather than creating credentials here."

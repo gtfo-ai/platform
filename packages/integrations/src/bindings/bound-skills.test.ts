@@ -25,6 +25,7 @@ const binding = (type: IntegrationType, provider: string): ProjectBinding => ({
   name: provider,
   config: {},
   secretIds: [],
+  retired: false,
 });
 
 const repositoryOf = (

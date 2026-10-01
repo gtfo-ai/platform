@@ -151,5 +151,85 @@ describe('dead letters on the settings page', () => {
     const { container } = render(createApp({ fetchImpl, realtime: false }).element);
     expect(await screen.findByText('The dead letters could not be loaded.')).toBeTruthy();
     expect(container.textContent).not.toContain('No dead letters');
+    expect(container.textContent).toContain('Reading them needs the admin role.');
+  });
+
+  /**
+   * WP-114, PROGRESS backlog 327: a `503 dead_letters_unavailable` — a process that composed no
+   * eventing — is shown to the administrator as what it is, never as a permission problem.
+   */
+  it('does not name a 503 a permission problem', async () => {
+    const { fetchImpl: base } = fetchFor('forbidden');
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) =>
+      String(input).includes('/api/org/dead-letters')
+        ? json(
+            {
+              error: {
+                code: 'dead_letters_unavailable',
+                message: 'this process composed no event dispatch, so it cannot read dead letters',
+              },
+            },
+            503,
+          )
+        : base(input, init)) as typeof fetch;
+    const { container } = render(createApp({ fetchImpl, realtime: false }).element);
+    expect(await screen.findByText('The dead letters could not be loaded.')).toBeTruthy();
+    expect(container.textContent).not.toContain('Reading them needs the admin role.');
+    expect(container.textContent).toContain('composed no event dispatch');
+  });
+
+  /**
+   * WP-114, PROGRESS backlog 324: a total above one page reaches its last row — *Show older* sends
+   * the server's `next_cursor` back unchanged until it answers `null`.
+   */
+  it('reaches the last row of a total above one page through Show older', async () => {
+    const asked: string[] = [];
+    const pages: Record<string, DeadLettersResponse> = {
+      '(first)': {
+        items: [letter({ position: 4103 }), letter({ position: 4102 })],
+        total: 4,
+        next_cursor: '4102',
+      },
+      '4102': {
+        items: [letter({ position: 4101 })],
+        total: 4,
+        next_cursor: '4101',
+      },
+      '4101': { items: [letter({ position: 4100 })], total: 4, next_cursor: null },
+    };
+    const { fetchImpl: base } = fetchFor('forbidden');
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), 'https://agentic.example.test');
+      if (url.pathname === '/api/org/dead-letters') {
+        const cursor = url.searchParams.get('cursor') ?? '(first)';
+        asked.push(cursor);
+        return json(pages[cursor]);
+      }
+      return base(input, init);
+    }) as typeof fetch;
+    const { container } = render(createApp({ fetchImpl, realtime: false }).element);
+    await waitFor(() => {
+      expect(container.querySelector('[data-dead-letter-count]')?.textContent).toBe(
+        'The newest 2 of 4 dead-lettered events.',
+      );
+    });
+    const user = userEvent.setup();
+    const showOlder = () =>
+      screen
+        .queryAllByRole('button', { name: 'Show older' })
+        .filter((button) => button.closest('section')?.textContent?.includes('Dead letters'));
+    for (const position of [4101, 4100]) {
+      const [button] = showOlder();
+      expect(button, `Show older before ${position}`).toBeDefined();
+      await user.click(button as HTMLElement);
+      await waitFor(() => {
+        expect(container.querySelector(`[data-dead-letter="${position}"]`)).not.toBeNull();
+      });
+    }
+    expect(asked).toEqual(['(first)', '4102', '4101']);
+    expect(container.querySelector('[data-dead-letter-count]')?.textContent).toBe(
+      '4 dead-lettered events.',
+    );
+    expect(showOlder()).toHaveLength(0);
   });
 });

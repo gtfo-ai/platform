@@ -43,6 +43,7 @@ const INTEGRATIONS: IntegrationsResponse = {
       config: { base_url: 'https://acme.atlassian.net' },
       health: { status: 'unknown', checked_at: null, detail: null },
       config_refusal: null,
+      retired_at: null,
     },
   ],
 };
@@ -100,6 +101,20 @@ const recorder = () => {
       });
       if (url.includes('/test')) {
         return json({ ok: true, checks: [{ name: 'auth', ok: true, detail: 'reachable' }] });
+      }
+      if (url.endsWith('/secrets')) {
+        return json({
+          integration: INTEGRATIONS.items[0],
+          sealed_fields: ['api_token'],
+          performed: true,
+        });
+      }
+      if (method === 'DELETE') {
+        return json({
+          integration: { ...INTEGRATIONS.items[0], retired_at: '2026-10-01T09:00:00.000Z' },
+          destroyed_secrets: 1,
+          performed: true,
+        });
       }
       return json({ id: INTEGRATION, provider: 'jira-cloud', name: 'ACME Jira' });
     }
@@ -312,6 +327,7 @@ describe('the integrations screen', () => {
         message: `integration ${INTEGRATION} has configuration that provider "sentry"'s schema refuses at: organisation, organization. Correct it with PATCH /api/integrations/${INTEGRATION}`,
         paths: ['organisation', 'organization'],
       },
+      retired_at: null,
     };
     const { sent, fetchImpl: base } = recorder();
     const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -392,5 +408,187 @@ describe('the integrations screen', () => {
       expect(container.querySelector('[data-webhook-url="none"]')).not.toBeNull();
     });
     expect(container.querySelector('[data-copyable-url]')).toBeNull();
+  });
+
+  /**
+   * WP-114, PROGRESS backlog 332: an optional field is offered with a control of its declared type,
+   * and the value it sends is typed — a boolean as a boolean, a number as a number, a list as a list
+   * — while an optional field left alone is not sent at all.
+   */
+  it('offers an optional boolean as a typed control and sends a boolean', async () => {
+    const { sent, fetchImpl } = recorder();
+    render(createApp({ fetchImpl, realtime: false }).element);
+    await screen.findByText('Add an integration');
+    await fillCreateForm();
+    const poll = screen.getByLabelText('poll_enabled');
+    expect(poll.tagName).toBe('SELECT');
+    expect(poll.getAttribute('data-config-kind')).toBe('boolean');
+    expect([...(poll as HTMLSelectElement).options].map((option) => option.value)).toEqual([
+      '',
+      'true',
+      'false',
+    ]);
+    fireEvent.change(poll, { target: { value: 'true' } });
+    fireEvent.change(screen.getByLabelText('poll_interval_seconds'), { target: { value: '120' } });
+    fireEvent.change(screen.getByLabelText('project_keys'), { target: { value: 'ACME, OPS ,' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add integration' }));
+
+    await waitFor(() => {
+      expect(sent.some((entry) => entry.url.endsWith('/api/integrations'))).toBe(true);
+    });
+    const body = sent.find((entry) => entry.url.endsWith('/api/integrations'))?.body as {
+      config: Record<string, unknown>;
+    };
+    expect(body.config).toEqual({
+      site_url: 'https://acme.atlassian.example.test',
+      user_email: 'ops@example.test',
+      poll_enabled: true,
+      poll_interval_seconds: 120,
+      project_keys: ['ACME', 'OPS'],
+    });
+    // The typed document is one the provider's own schema accepts.
+    const jira = findShippedProvider('jira-cloud') as ProviderCatalogueEntry;
+    expect(configIssuesOf(jira, body.config as never)).toEqual([]);
+  });
+
+  it('changes an optional boolean through Edit configuration and sends only what changed', async () => {
+    const { sent, fetchImpl: base } = recorder();
+    const jira: IntegrationSummary = {
+      ...(INTEGRATIONS.items[0] as IntegrationSummary),
+      config: {
+        site_url: 'https://acme.atlassian.example.test',
+        user_email: 'ops@example.test',
+        pickup_label: 'agentic',
+      },
+    };
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if ((init?.method ?? 'GET') === 'GET' && String(input).endsWith('/api/integrations')) {
+        return json({ items: [jira] });
+      }
+      if (init?.method === 'PATCH') {
+        await base(input, init);
+        return json(jira);
+      }
+      return base(input, init);
+    }) as typeof fetch;
+    render(createApp({ fetchImpl, realtime: false }).element);
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit configuration' }));
+    const form = await screen.findByRole('form', { name: 'Configuration of ACME Jira' });
+    const poll = form.querySelector('select[aria-label="poll_enabled"]') as HTMLSelectElement;
+    fireEvent.change(poll, { target: { value: 'false' } });
+    const label = form.querySelector('input[data-config-kind="string"][value="agentic"]');
+    expect(label).not.toBeNull();
+    fireEvent.change(label as HTMLInputElement, { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save configuration' }));
+    await waitFor(() => {
+      expect(sent.some((each) => each.method === 'PATCH')).toBe(true);
+    });
+    expect(sent.find((each) => each.method === 'PATCH')?.body).toEqual({
+      config: {
+        site_url: 'https://acme.atlassian.example.test',
+        user_email: 'ops@example.test',
+        poll_enabled: false,
+      },
+      // A stored optional value the operator cleared is removed; untouched ones are not sent.
+      remove: ['pickup_label'],
+    });
+  });
+
+  /** WP-114, PROGRESS backlog 331: the two commands, from the card. */
+  it('re-seals a credential by naming a new environment variable, with an Idempotency-Key', async () => {
+    const { sent, fetchImpl } = recorder();
+    render(createApp({ fetchImpl, realtime: false }).element);
+    fireEvent.click(await screen.findByRole('button', { name: 'Replace credentials' }));
+    fireEvent.change(await screen.findByLabelText('New environment variable for api_token'), {
+      target: { value: 'JIRA_API_TOKEN_2026_10' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Re-seal credentials' }));
+    await waitFor(() => {
+      expect(sent.some((each) => each.url.endsWith('/secrets'))).toBe(true);
+    });
+    const reseal = sent.find((each) => each.url.endsWith('/secrets'));
+    expect(reseal?.url).toMatch(new RegExp(`/api/integrations/${INTEGRATION}/secrets$`));
+    expect(reseal?.method).toBe('POST');
+    expect(reseal?.body).toEqual({ secret_refs: { api_token: 'JIRA_API_TOKEN_2026_10' } });
+    expect(reseal?.key).toMatch(/^[A-Za-z0-9._:-]+$/);
+    expect(await screen.findByText(/Re-sealed api_token/)).toBeTruthy();
+  });
+
+  it('retires after a confirmation, and shows the server’s refusal as it is', async () => {
+    const { sent, fetchImpl: base } = recorder();
+    let refuse = true;
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'DELETE' && refuse) {
+        refuse = false;
+        return json(
+          {
+            error: {
+              code: 'integration_bound',
+              message: `integration ${INTEGRATION} is bound to project acme; remove it from each project's bindings first`,
+            },
+          },
+          409,
+        );
+      }
+      return base(input, init);
+    }) as typeof fetch;
+    render(createApp({ fetchImpl, realtime: false }).element);
+    fireEvent.click(await screen.findByRole('button', { name: 'Retire' }));
+    // Nothing is sent by the first press: it only asks.
+    expect(sent.filter((each) => each.method === 'DELETE')).toHaveLength(0);
+    fireEvent.click(await screen.findByRole('button', { name: 'Retire integration' }));
+    expect(await screen.findByText('The integration was not retired.')).toBeTruthy();
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('is bound to project acme');
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Retire integration' }));
+    await waitFor(() => {
+      expect(sent.filter((each) => each.method === 'DELETE')).toHaveLength(1);
+    });
+    expect(sent.find((each) => each.method === 'DELETE')?.url).toMatch(
+      new RegExp(`/api/integrations/${INTEGRATION}$`),
+    );
+  });
+
+  it('lists a retired integration as retired, with no control that writes', async () => {
+    const { fetchImpl: base } = recorder();
+    const retired: IntegrationSummary = {
+      ...(INTEGRATIONS.items[0] as IntegrationSummary),
+      retired_at: '2026-10-01T09:00:00.000Z',
+    };
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) =>
+      (init?.method ?? 'GET') === 'GET' && String(input).endsWith('/api/integrations')
+        ? json({ items: [retired] })
+        : base(input, init)) as typeof fetch;
+    const { container } = render(createApp({ fetchImpl, realtime: false }).element);
+    await waitFor(() => {
+      expect(container.querySelector(`[data-integration-retired="${INTEGRATION}"]`)).not.toBeNull();
+    });
+    for (const name of [
+      'Test connection',
+      'Edit configuration',
+      'Replace credentials',
+      'Retire',
+      'Setup guide',
+    ]) {
+      expect(screen.queryByRole('button', { name }), name).toBeNull();
+    }
+    expect(container.textContent).toContain('retired');
+  });
+
+  /** WP-114, backlog 327's reading on this screen: only a 403 is the maintainer role. */
+  it('does not name a 503 a permission problem', async () => {
+    const { fetchImpl: base } = recorder();
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) =>
+      (init?.method ?? 'GET') === 'GET' && String(input).endsWith('/api/integrations')
+        ? json({ error: { code: 'unavailable', message: 'the database is not answering' } }, 503)
+        : base(input, init)) as typeof fetch;
+    const { container } = render(createApp({ fetchImpl, realtime: false }).element);
+    // The app retries a failed read once (`app.tsx`), so the notice arrives after that retry.
+    expect(
+      await screen.findByText('Integrations could not be loaded.', {}, { timeout: 5_000 }),
+    ).toBeTruthy();
+    expect(container.textContent).not.toContain('needs the maintainer role');
+    expect(container.textContent).toContain('the database is not answering');
   });
 });

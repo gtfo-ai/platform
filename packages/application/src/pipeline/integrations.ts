@@ -2089,7 +2089,36 @@ const describeRevokeFailure = (error: unknown, value: string): string => {
   return exactSecretRedactor([{ name: 'refused_run_credential', value }]).redactText(text).value;
 };
 
-export const runCredentialWrites = (integrations: PipelineIntegrations) => ({
+/**
+ * Whether an integration has been **retired** (`integrations.retired_at`, WP-114) — asked by the mint
+ * **after** its audit row has committed (PROGRESS backlog 386).
+ *
+ * Why after, and why that is enough: `DELETE /api/integrations/:id` holds the integration's row
+ * `for update` while it refuses on any recorded, unexpired, unconfirmed mint, and the mint's audit
+ * insert takes the same row `for key share` through `integration_actions.integration_id`'s foreign
+ * key. So either the record commits first — and the retire, reading after the lock, sees it and
+ * refuses — or the retire commits first, and this read, made after the record, sees `retired_at`.
+ * There is no third order. A mint whose provider call was in flight across an unbind and a retire
+ * is therefore always caught here, while the adapter that minted it is still in hand.
+ */
+export interface MintingIntegrationLiveness {
+  readonly isRetired: (integrationId: Id) => Promise<boolean>;
+}
+
+export class RunCredentialMintRetiredError extends Error {
+  override readonly name = 'RunCredentialMintRetiredError';
+  readonly integrationId: Id;
+  constructor(integrationId: Id, message: string) {
+    super(message);
+    this.integrationId = integrationId;
+  }
+}
+
+export const runCredentialWrites = (
+  integrations: PipelineIntegrations,
+  /** Required, never defaulted (standing rule 31): an absent check is backlog 386's defect. */
+  liveness: MintingIntegrationLiveness,
+) => ({
   mint: async (request: RunCredentialRequest): Promise<RunCredentialMint> => {
     const git = integrations.git;
     if (git === null) {
@@ -2148,22 +2177,35 @@ export const runCredentialWrites = (integrations: PipelineIntegrations) => ({
         reason: `a shadow task is never given a ${request.scope} credential (Q98 (a) admits only a read-scoped one)`,
       };
     }
-    const refusal = mintRefusal(minted, request, git.mintingHints);
-    if (refusal !== null) {
-      // **Revoked before the refusal is thrown** (WP-76 review round 1): the provider has already
-      // created the token, and a refusal that left it would leave a live credential nothing holds,
-      // in no redaction registry, until its expiry. The revocation runs through the binding that
-      // just minted, and a revocation that fails is named in the refusal.
+    /**
+     * **Revoked before a refusal is thrown** (WP-76 review round 1): the provider has already
+     * created the token, and a refusal that left it would leave a live credential nothing holds, in
+     * no redaction registry, until its expiry. The revocation runs through the adapter that just
+     * minted — which still holds the account's decrypted credential even when the integration's
+     * `secrets` rows are gone (WP-114, backlog 386) — and a revocation that fails is named.
+     */
+    const revokeInHand = async (afterFailure: string): Promise<string> => {
       const minting = mintingIntegrationOf(integrations) as MintingIntegration;
-      const revocation = await runCredentialRevocations(minting)
+      return runCredentialRevocations(minting)
         .revoke(runCredentialHandle(minted, git.ref), request)
         .then(
           () => 'it was revoked',
           (error: unknown) =>
-            `its revocation failed (${describeRevokeFailure(error, minted.value)}), so it is live until the recovery pass revokes it from the audit row (PROGRESS backlog 155) or it expires at ${minted.expiresAt}`,
+            `its revocation failed (${describeRevokeFailure(error, minted.value)}), so it is live until ${afterFailure}`,
         );
+    };
+    const refusal = mintRefusal(minted, request, git.mintingHints);
+    if (refusal !== null) {
       throw new Error(
-        `the git binding ${git.ref.integrationId} minted a credential this platform will not use: ${refusal}; ${revocation}`,
+        `the git binding ${git.ref.integrationId} minted a credential this platform will not use: ${refusal}; ${await revokeInHand(`the recovery pass revokes it from the audit row (PROGRESS backlog 155) or it expires at ${minted.expiresAt}`)}`,
+      );
+    }
+    // WP-114, backlog 386: the integration was retired while the mint's call was open. Read after
+    // the record committed ({@link MintingIntegrationLiveness} says why that order is sound).
+    if (await liveness.isRetired(git.ref.integrationId)) {
+      throw new RunCredentialMintRetiredError(
+        git.ref.integrationId,
+        `the git integration ${git.ref.integrationId} was retired while run ${request.runId}'s credential was being minted, so the run is not started and the credential is not used; ${await revokeInHand(`it expires at ${minted.expiresAt}, because a retired integration has no credential left to revoke it with — delete it at the provider`)}`,
       );
     }
     return {

@@ -5,6 +5,8 @@
  *   POST /api/integrations                      step 1
  *   POST /api/integrations/:integration_id/test step 1, "the platform validates access"
  *   PATCH /api/integrations/:integration_id     the repair of a refused configuration (WP-100)
+ *   POST /api/integrations/:integration_id/secrets  re-seal the credentials (WP-114)
+ *   DELETE /api/integrations/:integration_id    retire: credentials destroyed, row kept (WP-114)
  *   GET  /api/projects/:project_id/bindings     step 1
  *   PUT  /api/projects/:project_id/bindings     step 1
  *   POST /api/projects/:project_id/discovery    step 2, "technical discovery"
@@ -88,6 +90,9 @@ import {
   projectBindingsResponseSchema,
   projectRecordSchema,
   putProjectBindingsRequestSchema,
+  resealIntegrationSecretsRequestSchema,
+  resealIntegrationSecretsResponseSchema,
+  retireIntegrationResponseSchema,
   startDiscoveryResponseSchema,
   testIntegrationResponseSchema,
   updateProjectConfigRequestSchema,
@@ -113,6 +118,7 @@ import {
   toIntegrationSummary,
 } from '../queries/integration-queries.js';
 import {
+  assertNotRetired,
   createIntegration,
   createProject,
   ensureOrganisation,
@@ -124,6 +130,8 @@ import {
   MissingSecretError,
   recordHumanAction,
   replaceProjectBindings,
+  resealIntegrationSecrets,
+  retireIntegration,
   updateIntegrationConfig,
   writeIntegrationHealth,
   writeProjectConfig,
@@ -353,7 +361,7 @@ export const registerOnboardingRoutes = async (
       schema: {
         summary: 'Create an integration from credentials already in the process environment',
         description:
-          '`secret_refs` maps a provider credential **field** to the name of an environment variable (or its `_FILE` companion, TD-020); the value is read by the server and sealed into `secrets`. No credential crosses this API and none is written to the audit. The name must be one the operator declared in `APP_INTEGRATION_SECRET_ENV` — otherwise 403 `secret_name_not_permitted`, because the name is caller-chosen and the platform’s own variables must never be readable this way. Every URL in `config` — and every URL the provider defaults a left-out field to, such as Sentry’s and Slack’s `base_url` — must name a host the operator declared in `APP_INTEGRATION_HOSTS` and must be `http`/`https` — otherwise 403 `integration_host_not_permitted`, naming the host and the setting, because the host is caller-chosen too and the credential this binding is built with would go there. `config` is then parsed with the provider’s own schema (WP-100): a document it refuses — a required field missing, a key it does not declare, a value of the wrong shape — is 400 `invalid_integration_config` naming each key path, and no row is written. `GET /api/integrations/providers` lists each provider’s fields. Idempotent on `(type, name)`.',
+          '`secret_refs` maps a provider credential **field** to the name of an environment variable (or its `_FILE` companion, TD-020); the value is read by the server and sealed into `secrets`. No credential crosses this API and none is written to the audit. The name must be one the operator declared in `APP_INTEGRATION_SECRET_ENV` — otherwise 403 `secret_name_not_permitted`, because the name is caller-chosen and the platform’s own variables must never be readable this way. Every URL in `config` — and every URL the provider defaults a left-out field to, such as Sentry’s and Slack’s `base_url` — must name a host the operator declared in `APP_INTEGRATION_HOSTS` and must be `http`/`https` — otherwise 403 `integration_host_not_permitted`, naming the host and the setting, because the host is caller-chosen too and the credential this binding is built with would go there. `config` is then parsed with the provider’s own schema (WP-100): a document it refuses — a required field missing, a key it does not declare, a value of the wrong shape — is 400 `invalid_integration_config` naming each key path, and no row is written. `GET /api/integrations/providers` lists each provider’s fields. Idempotent on `(type, name)`; a name held by a **retired** integration is `409 integration_name_retired` (WP-114).',
         tags: ['org'],
         body: createIntegrationRequestSchema,
         response: {
@@ -460,7 +468,7 @@ export const registerOnboardingRoutes = async (
       schema: {
         summary: 'Ask the provider whether this integration’s credential works',
         description:
-          'The provider’s own read-only probe (`testConnection`), through `IntegrationActionExecutor` like every other outbound call — so it is audited (BD-003) and takes the account’s rate limit. `ok: false` is a **successful test** reporting a failed connection, not a server error. `detail` is provider text through the integration’s own redactor (TD-012): render it, never execute it. The verdict is stored in `integrations.health`, which is what `GET /api/integrations` publishes. A stored configuration the provider’s schema refuses answers `409 invalid_integration_config` naming the key paths and the `PATCH /api/integrations/:id` that repairs them, before any provider call. A probe still queued behind the account’s budget after ten seconds answers `429 probe_busy` with `Retry-After`; the call is not cancelled, so its verdict lands in `integrations.health` regardless.',
+          'The provider’s own read-only probe (`testConnection`), through `IntegrationActionExecutor` like every other outbound call — so it is audited (BD-003) and takes the account’s rate limit. `ok: false` is a **successful test** reporting a failed connection, not a server error. `detail` is provider text through the integration’s own redactor (TD-012): render it, never execute it. The verdict is stored in `integrations.health`, which is what `GET /api/integrations` publishes. A stored configuration the provider’s schema refuses answers `409 invalid_integration_config` naming the key paths and the `PATCH /api/integrations/:id` that repairs them, before any provider call. A probe still queued behind the account’s budget after ten seconds answers `429 probe_busy` with `Retry-After`; the call is not cancelled, so its verdict lands in `integrations.health` regardless. A retired integration is `409 integration_retired` (WP-114).',
         tags: ['org'],
         params: integrationParamsSchema,
         response: {
@@ -485,6 +493,8 @@ export const registerOnboardingRoutes = async (
       if (stored === undefined) {
         throw new NotFoundError(`integration ${integrationId}`);
       }
+      // A retired integration has no credential to probe with and is never loaded (WP-114).
+      assertNotRetired(integrationId, stored.retiredAt);
       const refusal = storedConfigRefusal(
         integrationId,
         stored.config,
@@ -569,7 +579,7 @@ export const registerOnboardingRoutes = async (
       schema: {
         summary: 'Change an integration’s non-secret configuration',
         description:
-          '`config` sets keys and `remove` deletes them; a key named in neither is kept. The merged document goes through every check the create makes: a credential field in `config` is `400 credential_in_config`; a URL on a host outside `APP_INTEGRATION_HOSTS` is `403 integration_host_not_permitted`; a document the provider’s schema refuses is `400 invalid_integration_config` naming the key paths. The stored `health` is reset to `unknown`, because it was a verdict about the configuration this replaced. Credentials are not changed here. Admin only; audited.',
+          '`config` sets keys and `remove` deletes them; a key named in neither is kept. The merged document goes through every check the create makes: a credential field in `config` is `400 credential_in_config`; a URL on a host outside `APP_INTEGRATION_HOSTS` is `403 integration_host_not_permitted`; a document the provider’s schema refuses is `400 invalid_integration_config` naming the key paths. The stored `health` is reset to `unknown`, because it was a verdict about the configuration this replaced. Credentials are not changed here — `POST /api/integrations/:id/secrets` re-seals them (WP-114). A retired integration is `409 integration_retired`. Admin only; audited.',
         tags: ['org'],
         params: integrationParamsSchema,
         body: patchIntegrationRequestSchema,
@@ -607,6 +617,160 @@ export const registerOnboardingRoutes = async (
     },
   );
 
+  /** The summary a re-seal or a retire answers with, read after the write committed. */
+  const summaryOf = async (integrationId: string) => {
+    const row = await findIntegrationRow(options.database, integrationId);
+    if (row === undefined) {
+      throw new NotFoundError(`integration ${integrationId}`);
+    }
+    return toIntegrationSummary(row, findShippedProvider(row.provider));
+  };
+
+  /**
+   * `POST /api/integrations/:id/secrets` — re-seal the credentials (WP-114, PROGRESS backlog 331).
+   *
+   * The create's rules for `secret_refs` exactly — names of environment variables on the
+   * operator-declared allow-list, read and sealed by the server — and `integration.write` (admin),
+   * like the create: a credential decides what the account can do. **`Idempotency-Key` required**:
+   * the effect re-reads the environment and replaces rows, so a retry must be a replay, never a
+   * second seal. The claim is taken **with the effect** (`resealIntegrationSecrets`); a request
+   * under a key this caller already performed answers from the current row with `performed: false`,
+   * and a different body under it is `409 idempotency_key_reused`.
+   */
+  typed.post(
+    '/api/integrations/:integration_id/secrets',
+    {
+      preValidation: requirePermission(guard, 'integration.write'),
+      schema: {
+        summary: 'Re-seal an integration’s credentials from the process environment',
+        description:
+          '`secret_refs` maps a credential **field** to the name of an environment variable (or its `_FILE` companion, TD-020), exactly as on the create: the server reads the value and seals it into `secrets`, and no credential crosses this API or reaches the audit. The name must be on `APP_INTEGRATION_SECRET_ENV` — otherwise 403 `secret_name_not_permitted`; an unset variable is 400 `missing_secret`; a field the provider does not declare is 400. Each named field’s old sealed row is **deleted** and replaced; a field not named keeps its own, and a stored row that cannot be opened is deleted too (it already failed every load). `health` is reset to `unknown`. `Idempotency-Key` is required: a replay re-reads and re-seals nothing and answers `performed: false`. A retired integration is 409 `integration_retired`. Admin only; one `human_actions` row naming the fields, never the values (WP-114).',
+        tags: ['org'],
+        params: integrationParamsSchema,
+        body: resealIntegrationSecretsRequestSchema,
+        response: {
+          200: resealIntegrationSecretsResponseSchema,
+          400: apiErrorSchema,
+          403: apiErrorSchema,
+          404: apiErrorSchema,
+          409: apiErrorSchema,
+        },
+      },
+    },
+    async (request) => {
+      const key = requireIdempotencyKey(request);
+      const actor = actorOf(request);
+      const integrationId = request.params.integration_id;
+      const action = 'integration.secrets.write';
+      // The digest is over the path's integration and the body: the same refs for another
+      // integration under one key is a different request.
+      const canonical = { integration_id: integrationId, ...request.body };
+      const findAttempt = (query: { userId: string; action: string; key: string }) =>
+        findIdempotentAttempt(options.database, query);
+      const first = await idempotentReplay(findAttempt, {
+        userId: actor.userId,
+        action,
+        key,
+        request: canonical,
+      });
+      const replay = async () => ({
+        integration: await summaryOf(integrationId),
+        sealed_fields: Object.keys(request.body.secret_refs).sort(),
+        performed: false,
+      });
+      if (first.replayed) {
+        return replay();
+      }
+      const digest = first.digest ?? configHashOf(canonical);
+      let result: Awaited<ReturnType<typeof resealIntegrationSecrets>>;
+      try {
+        result = await resealIntegrationSecrets(options.database, {
+          integrationId,
+          secretRefs: request.body.secret_refs as Readonly<Record<string, string>>,
+          secretSource,
+          secretKey: secretAdapters.deriveSecretKey(options.secretKey),
+          newId: () => randomUUID(),
+          idempotency: { key, digest },
+          audit: { userId: actor.userId, action, params: { integration_id: integrationId } },
+        });
+      } catch (error) {
+        if (error instanceof ForbiddenSecretNameError) {
+          throw new HttpError(403, 'secret_name_not_permitted', error.message);
+        }
+        if (error instanceof MissingSecretError) {
+          throw new HttpError(400, 'missing_secret', error.message);
+        }
+        throw error;
+      }
+      if (result.status === 'not_found') {
+        throw new NotFoundError(`integration ${integrationId}`);
+      }
+      if (result.status === 'replayed') {
+        // A concurrent request under the same key performed first; its digest decides the answer
+        // (`409 idempotency_key_reused` for a different body), and nothing was sealed here.
+        await idempotentReplay(findAttempt, {
+          userId: actor.userId,
+          action,
+          key,
+          request: canonical,
+        });
+        return replay();
+      }
+      return {
+        integration: await summaryOf(integrationId),
+        sealed_fields: [...result.sealedFields],
+        performed: true,
+      };
+    },
+  );
+
+  /**
+   * `DELETE /api/integrations/:id` — retire the integration (WP-114, PROGRESS backlog 331).
+   *
+   * Keeps the row (the audit names it), deletes its credentials, and refuses while a binding names
+   * it or an unexpired, unconfirmed minted credential of it exists — `retireIntegration` carries the
+   * argument and the lock. No `Idempotency-Key`: a `DELETE` is idempotent by itself, and a repeat on
+   * a retired row answers `performed: false` and writes nothing.
+   */
+  typed.delete(
+    '/api/integrations/:integration_id',
+    {
+      preValidation: requirePermission(guard, 'integration.write'),
+      schema: {
+        summary: 'Retire an integration: destroy its credentials and keep the row for the audit',
+        description:
+          'Deletes the integration’s sealed credentials and marks it `retired_at`; the row stays, because `integration_actions` names it for every call it made (BD-003). A retired integration is never loaded, is listed as retired by `GET /api/integrations`, and refuses every write (`409 integration_retired`); its name stays taken. Refused `409 integration_bound` while a project binds it (naming the projects) and `409 integration_has_live_credential` while a run credential it minted is unexpired and not confirmed revoked, because that integration is where the revoke is sent (TD-028 decision 10). A repeat on a retired integration answers `performed: false` and changes nothing. Admin only; one `human_actions` row (WP-114).',
+        tags: ['org'],
+        params: integrationParamsSchema,
+        response: {
+          200: retireIntegrationResponseSchema,
+          404: apiErrorSchema,
+          409: apiErrorSchema,
+        },
+      },
+    },
+    async (request) => {
+      const actor = actorOf(request);
+      const integrationId = request.params.integration_id;
+      const result = await retireIntegration(options.database, {
+        integrationId,
+        audit: {
+          userId: actor.userId,
+          action: 'integration.retire',
+          params: { integration_id: integrationId },
+        },
+      });
+      if (result.status === 'not_found') {
+        throw new NotFoundError(`integration ${integrationId}`);
+      }
+      return {
+        integration: await summaryOf(integrationId),
+        destroyed_secrets: result.status === 'retired' ? result.destroyedSecrets : 0,
+        performed: result.status === 'retired',
+      };
+    },
+  );
+
   typed.get(
     '/api/projects/:project_id/bindings',
     {
@@ -636,7 +800,7 @@ export const registerOnboardingRoutes = async (
       schema: {
         summary: 'Replace this project’s integration bindings',
         description:
-          'The **whole** set: a binding missing from the request is removed. That is what makes the wizard’s step 1 re-submittable and what lets a mistake be corrected without a second endpoint. One transaction, so a project is never left with no bindings at all. Each binding of a shipped provider is checked like an integration’s own configuration (WP-100): a credential field is `400 credential_in_config`, a URL outside `APP_INTEGRATION_HOSTS` is `403 integration_host_not_permitted`, an account whose own configuration no longer parses is `409 invalid_integration_config`, and an account-plus-overlay document the provider’s schema refuses is `400 invalid_binding_config`. The answer publishes no credential field.',
+          'The **whole** set: a binding missing from the request is removed. That is what makes the wizard’s step 1 re-submittable and what lets a mistake be corrected without a second endpoint. One transaction, so a project is never left with no bindings at all. Each binding of a shipped provider is checked like an integration’s own configuration (WP-100): a credential field is `400 credential_in_config`, a URL outside `APP_INTEGRATION_HOSTS` is `403 integration_host_not_permitted`, an account whose own configuration no longer parses is `409 invalid_integration_config`, and an account-plus-overlay document the provider’s schema refuses is `400 invalid_binding_config`. A retired integration is `409 integration_retired` (WP-114). The answer publishes no credential field.',
         tags: ['projects'],
         params: projectParamsSchema,
         body: putProjectBindingsRequestSchema,

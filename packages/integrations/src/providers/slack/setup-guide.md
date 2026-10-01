@@ -94,10 +94,14 @@ Subscriptions* the request URL `https://<your instance>/webhooks/slack/<integrat
 - **A changed integration is re-opened without a restart.** The minute re-read compares each
   held account's configuration and the ids of its sealed credentials with what it opened, and
   closes and re-opens one that moved — which is also how an integration whose credentials could
-  not be read is picked up once they are fixed. This build has no command that replaces a sealed
-  credential in place, so rotating the app-level token means sealing it anew (a new integration,
-  or a new secret row the integration names); a value overwritten inside the same secret row is
-  not noticed until the API process restarts.
+  not be read is picked up once they are fixed. To rotate the app-level token (or the bot token,
+  or the signing secret), put the new value in a new environment variable on the operator-declared
+  `APP_INTEGRATION_SECRET_ENV` list and press **Replace credentials** on the integration's card —
+  `POST /api/integrations/<id>/secrets` with `{"secret_refs": {"app_token": "<VARIABLE>"}}` and an
+  `Idempotency-Key`. The server seals the value into a new secret row and deletes the old one, so
+  the re-read sees new ids and re-opens the connection. Nothing overwrites a sealed value in place.
+  An integration you no longer use is **retired** with `DELETE /api/integrations/<id>` once no
+  project binds it: its credentials are deleted and the row stays for the audit.
 - **`APP_INTEGRATION_HOSTS` must name `slack.com`.** Opening the connection is a call like any
   other the platform makes for a binding, and a host nobody declared is refused before it is made.
 

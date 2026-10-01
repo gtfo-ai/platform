@@ -41,6 +41,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import type { AgentTooling } from '@platform/application';
 import type {
+  IntegrationConfigFieldKind,
   IntegrationProvider,
   IntegrationType,
   JsonObject,
@@ -55,6 +56,19 @@ import {
 import { lokiProviderRegistration } from './providers/loki/index.js';
 import { sentryProviderRegistration } from './providers/sentry/index.js';
 import { slackProviderRegistration } from './providers/slack/index.js';
+
+/**
+ * One non-credential configuration field: its name, whether the schema requires it, and what its
+ * value is (WP-114, PROGRESS backlog 332) — `kind` and `choices` are read off the field's own zod
+ * schema by {@link fieldKindOf}, so a form renders a typed control without a copy of the schema.
+ */
+export interface ConfigFieldEntry {
+  readonly name: string;
+  readonly required: boolean;
+  readonly kind: IntegrationConfigFieldKind;
+  /** The accepted values of a `choice` field, in the schema's order; `[]` otherwise. */
+  readonly choices: readonly (string | number)[];
+}
 
 /** The half of a {@link ProviderRegistration} that is true without an adapter. */
 export interface ProviderCatalogueEntry {
@@ -105,7 +119,7 @@ export interface ProviderCatalogueEntry {
    * the schema in the SPA (WP-100, PROGRESS backlog 328). A field is required when its own schema
    * refuses `undefined`: Sentry's `organization`, GitLab's `base_url`.
    */
-  readonly configFields: readonly { readonly name: string; readonly required: boolean }[];
+  readonly configFields: readonly ConfigFieldEntry[];
   /**
    * The provider's schema **without its credential fields** — what `integrations.config` must
    * parse as (WP-100). Credentials are sealed into `secrets` and merged in at load, so the account's
@@ -130,16 +144,86 @@ const configDefaultsOf = (schema: z.ZodObject): JsonObject => {
   return defaults;
 };
 
-/** Each non-credential field of the schema, and whether it is required (no default, not optional). */
-const configFieldsOf = (
-  schema: z.ZodObject,
-  secretFields: readonly string[],
-): { readonly name: string; readonly required: boolean }[] =>
+/**
+ * The part of a zod v4 schema definition {@link fieldKindOf} reads. `_zod.def` is zod's public
+ * introspection surface (the same object `z.toJSONSchema` walks); only the members named here are
+ * read, and anything else answers `other`.
+ */
+interface SchemaDefinition {
+  readonly type: string;
+  readonly innerType?: { readonly _zod: { readonly def: SchemaDefinition } };
+  readonly element?: { readonly _zod: { readonly def: SchemaDefinition } };
+  readonly options?: readonly { readonly _zod: { readonly def: SchemaDefinition } }[];
+  readonly values?: readonly unknown[];
+  readonly entries?: Readonly<Record<string, string | number>>;
+  readonly format?: string;
+  readonly checks?: readonly { readonly _zod: { readonly def: { readonly format?: string } } }[];
+}
+
+const definitionOf = (schema: unknown): SchemaDefinition =>
+  (schema as { readonly _zod: { readonly def: SchemaDefinition } })._zod.def;
+
+/** The wrappers that say *whether* a value must be present, never *what* it is. */
+const PRESENCE_WRAPPERS = new Set(['default', 'optional', 'nullable', 'prefault', 'readonly']);
+
+const isIntegerFormat = (definition: SchemaDefinition): boolean =>
+  /int/.test(definition.format ?? '') ||
+  (definition.checks ?? []).some((check) => /int/.test(check._zod.def.format ?? ''));
+
+/**
+ * What a field's value is: the type under its `.default()`/`.optional()`/`.nullable()` wrappers
+ * (WP-114, PROGRESS backlog 332). A union of literals and an `enum` are a `choice` with their
+ * values (GitLab's access levels, Loki's `auth_mode`); a refined string — a URL, an email, a slug
+ * — is still a `string`, because the refinement is the server's to judge. A shape this does not
+ * name is `other`, which a form leaves to the `PATCH` rather than guessing a control for.
+ */
+export const fieldKindOf = (
+  schema: unknown,
+): {
+  readonly kind: IntegrationConfigFieldKind;
+  readonly choices: readonly (string | number)[];
+} => {
+  let definition = definitionOf(schema);
+  while (PRESENCE_WRAPPERS.has(definition.type) && definition.innerType !== undefined) {
+    definition = definition.innerType._zod.def;
+  }
+  const none = { choices: [] as const };
+  switch (definition.type) {
+    case 'string':
+      return { kind: 'string', ...none };
+    case 'boolean':
+      return { kind: 'boolean', ...none };
+    case 'number':
+      return { kind: isIntegerFormat(definition) ? 'integer' : 'number', ...none };
+    case 'array':
+      return definition.element !== undefined &&
+        fieldKindOf(definition.element as unknown).kind === 'string'
+        ? { kind: 'string_list', ...none }
+        : { kind: 'other', ...none };
+    case 'enum':
+      return { kind: 'choice', choices: Object.values(definition.entries ?? {}) };
+    case 'union': {
+      const literals = (definition.options ?? []).map((option) => option._zod.def);
+      const values = literals.flatMap((literal) =>
+        literal.type === 'literal' ? [...(literal.values ?? [])] : [Symbol.for('not a literal')],
+      );
+      return values.every((value) => typeof value === 'string' || typeof value === 'number')
+        ? { kind: 'choice', choices: values as (string | number)[] }
+        : { kind: 'other', ...none };
+    }
+    default:
+      return { kind: 'other', ...none };
+  }
+};
+
+/** Each non-credential field of the schema, whether it is required (no default, not optional), and its kind. */
+const configFieldsOf = (schema: z.ZodObject, secretFields: readonly string[]): ConfigFieldEntry[] =>
   Object.entries(schema.shape)
     .filter(([field]) => !secretFields.includes(field))
     .map(([field, fieldSchema]) => ({
       name: field,
       required: !(fieldSchema as z.ZodType).safeParse(undefined).success,
+      ...fieldKindOf(fieldSchema),
     }));
 
 /**
@@ -271,6 +355,8 @@ export const toIntegrationProvider = (entry: ProviderCatalogueEntry): Integratio
     name: field.name,
     required: field.required,
     account_only: entry.accountOnlyFields.includes(field.name),
+    kind: field.kind,
+    choices: [...field.choices],
   })),
 });
 

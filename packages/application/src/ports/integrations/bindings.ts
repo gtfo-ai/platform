@@ -33,6 +33,13 @@ export interface ProjectBinding {
   /** `integrations.config` with `bindings.config` merged over it. */
   readonly config: JsonObject;
   readonly secretIds: readonly Id[];
+  /**
+   * The integration was retired (`integrations.retired_at`, WP-114). Its credentials are destroyed
+   * and `DELETE /api/integrations/:id` refuses while a binding names it, so a row like this was
+   * written past that refusal (a restore, a hand edit) — and the loader **refuses** it by name
+   * rather than reading it as absent (standing rule 20). Required, never defaulted (rule 31).
+   */
+  readonly retired: boolean;
 }
 
 /** One project's use of an integration, as the *integration* side sees it. */
@@ -72,6 +79,11 @@ export interface IntegrationAccount {
 export interface BindingRepository {
   /** Every binding of a project, in a stable order (type, then provider, then name). */
   readonly forProject: (projectId: Id) => Promise<readonly ProjectBinding[]>;
-  /** The account and its bindings, or `null` when no integration has that id. */
+  /**
+   * The account and its bindings, or `null` when no **live** integration has that id — a retired
+   * one (`integrations.retired_at`, WP-114) answers `null` too: it is never loaded, so the webhook
+   * door answers it like an unknown id, no held connection is opened for it, and a minted
+   * credential's revoke reports it unreachable rather than building an adapter with no credential.
+   */
   readonly forIntegration: (integrationId: Id) => Promise<IntegrationAccount | null>;
 }

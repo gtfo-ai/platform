@@ -177,6 +177,12 @@ export const integrationSummarySchema = z.strictObject({
       paths: z.array(nonEmptyStringSchema),
     })
     .nullable(),
+  /**
+   * When `DELETE /api/integrations/:id` retired it, or `null` while it is live (WP-114, PROGRESS
+   * backlog 331). A retired integration's credentials are destroyed, it is never loaded and it
+   * refuses every write; the row stays because the audit names the credential each call used.
+   */
+  retired_at: isoDateTimeSchema.nullable(),
 });
 
 /**
@@ -186,12 +192,30 @@ export const integrationSummarySchema = z.strictObject({
  * the SPA. Credential fields are **not** here: they are `secret_fields` and are configured as
  * environment-variable names (`secret_refs`, TD-020).
  */
+/**
+ * What a configuration field's value is, read off the provider's own schema (WP-114, PROGRESS
+ * backlog 332) — so a form renders a typed control and sends a typed value. `other` is a shape the
+ * catalogue does not name: a form offers no control for it and leaves it to the `PATCH`.
+ */
+export const integrationConfigFieldKindSchema = z.enum([
+  'string',
+  'integer',
+  'number',
+  'boolean',
+  'string_list',
+  'choice',
+  'other',
+]);
+
 export const integrationProviderConfigFieldSchema = z.strictObject({
   name: nonEmptyStringSchema,
   /** The schema refuses a document without it and supplies no default. */
   required: z.boolean(),
   /** Set on the account only, never on a project's binding (`accountOnlyFields`). */
   account_only: z.boolean(),
+  kind: integrationConfigFieldKindSchema,
+  /** The values a `choice` field accepts, in the schema's order; `[]` for every other kind. */
+  choices: z.array(z.union([z.string(), z.number()])),
 });
 
 export const integrationProviderSchema = z.strictObject({
@@ -256,6 +280,38 @@ export const createIntegrationRequestSchema = z.strictObject({
    * the binding loader will never merge.
    */
   secret_refs: z.record(nonEmptyStringSchema, nonEmptyStringSchema).optional(),
+});
+
+/**
+ * `POST /api/integrations/:id/secrets` — re-seal an integration's credentials (WP-114, PROGRESS
+ * backlog 331). The shape of the create's `secret_refs`: credential **field** → the name of the
+ * environment variable the server reads the new value from (TD-020), on the operator-declared
+ * `APP_INTEGRATION_SECRET_ENV` allow-list. Never a value. A field the request names replaces that
+ * field's sealed row; a field it does not name keeps its own.
+ */
+export const resealIntegrationSecretsRequestSchema = z.strictObject({
+  secret_refs: z
+    .record(nonEmptyStringSchema, nonEmptyStringSchema)
+    .refine((refs) => Object.keys(refs).length > 0, {
+      message: 'name at least one credential field',
+    }),
+});
+
+export const resealIntegrationSecretsResponseSchema = z.strictObject({
+  integration: integrationSummarySchema,
+  /** The credential fields this request re-sealed — names, never values. */
+  sealed_fields: z.array(nonEmptyStringSchema),
+  /** `false` when the `Idempotency-Key` had already performed this re-seal: nothing was read again. */
+  performed: z.boolean(),
+});
+
+/** `DELETE /api/integrations/:id` — retire an integration (WP-114, PROGRESS backlog 331). */
+export const retireIntegrationResponseSchema = z.strictObject({
+  integration: integrationSummarySchema,
+  /** How many sealed credentials this request destroyed; `0` on a repeat. */
+  destroyed_secrets: z.int().nonnegative(),
+  /** `false` when the integration was already retired: nothing changed. */
+  performed: z.boolean(),
 });
 
 export const testIntegrationResponseSchema = z.strictObject({
@@ -1803,10 +1859,17 @@ export const failedJobSchema = z.strictObject({
 export const failedJobsResponseSchema = z.strictObject({
   items: z.array(failedJobSchema),
   total: z.int().nonnegative(),
+  /**
+   * The next, older page — **opaque**, send it back unchanged as `cursor` — or `null` when this
+   * page reached the oldest failed job (WP-114, PROGRESS backlog 324). A keyset over the instant
+   * the job failed and its id, so a job failing between two reads does not shift a page.
+   */
+  next_cursor: nonEmptyStringSchema.nullable(),
 });
 
 export const failedJobsQuerySchema = z.strictObject({
   limit: z.coerce.number().int().min(1).max(MAX_FAILED_JOBS_PAGE).optional(),
+  cursor: nonEmptyStringSchema.optional(),
 });
 
 export const takeOverResponseSchema = z.strictObject({
@@ -2476,6 +2539,12 @@ export type IntegrationProviderConfigField = z.infer<typeof integrationProviderC
 export type IntegrationProvider = z.infer<typeof integrationProviderSchema>;
 export type IntegrationProvidersResponse = z.infer<typeof integrationProvidersResponseSchema>;
 export type PatchIntegrationRequest = z.infer<typeof patchIntegrationRequestSchema>;
+export type IntegrationConfigFieldKind = z.infer<typeof integrationConfigFieldKindSchema>;
+export type ResealIntegrationSecretsRequest = z.infer<typeof resealIntegrationSecretsRequestSchema>;
+export type ResealIntegrationSecretsResponse = z.infer<
+  typeof resealIntegrationSecretsResponseSchema
+>;
+export type RetireIntegrationResponse = z.infer<typeof retireIntegrationResponseSchema>;
 export type EffectiveConfigResponse = z.infer<typeof effectiveConfigResponseSchema>;
 export type UpdateProjectConfigRequest = z.infer<typeof updateProjectConfigRequestSchema>;
 export type RepositoryConfigReading = z.infer<typeof repositoryConfigReadingSchema>;

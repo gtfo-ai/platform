@@ -101,7 +101,7 @@ export const createOrganisationIntegrationsLoader = (
         throw new BindingLoadError(
           null,
           null,
-          `the organisation settings flag ${flagged} as the organisation's chat account (notifications.organisation_default), and no communication account has that id; set it to an existing account or remove it (PATCH /api/org)`,
+          `the organisation settings flag ${flagged} as the organisation's chat account (notifications.organisation_default), and no live communication account has that id — it does not exist, or it was retired; set it to a live account or remove it (PATCH /api/org)`,
         );
       }
       for (const account of accounts) {

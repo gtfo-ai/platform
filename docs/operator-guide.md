@@ -480,7 +480,25 @@ answers `400` with the code `invalid_integration_config` and names each key path
 An integration created before WP-100 whose configuration would not load shows the refusal on its card
 (and `/test` answers `409 invalid_integration_config`); **Edit configuration** repairs it, which is
 `PATCH /api/integrations/<id>` with `config` (keys to set) and `remove` (keys to delete), checked the
-same way as the create.
+same way as the create. Both forms offer the provider's **optional** fields too, each with a control
+of its type — a true/false choice, a number, a comma-separated list, a list of values — and an
+optional field left empty is not sent, so the provider's default applies (WP-114).
+
+**Rotating a credential.** Put the new value in a **new** environment variable on
+`APP_INTEGRATION_SECRET_ENV`, restart the process so it reads it, and press **Replace credentials** on
+the integration's card — `POST /api/integrations/<id>/secrets` with `{"secret_refs": {"<field>":
+"<VARIABLE>"}}` and an `Idempotency-Key`. The server reads and seals the value exactly as the create
+does, **deletes** the old sealed row, keeps the fields you did not name, and resets the health to
+*unknown*; press **Test connection** afterwards. A retry under the same key re-seals nothing.
+
+**Retiring an integration.** **Retire** on the card — `DELETE /api/integrations/<id>` — deletes the
+integration's sealed credentials and keeps the row, marked retired, because the audit names it for
+every call it made. It is refused while a project binds it (`409 integration_bound`, naming the
+projects — unbind it first) and while a run credential it minted has not expired and was not
+confirmed revoked (`409 integration_has_live_credential`; wait for the revoke or the expiry), and
+while it is the organisation's chat account (`409 integration_is_organisation_default`; change
+*Organisation settings* first). A
+retired integration is never loaded and refuses every change; its name stays taken.
 
 The API is still there, and it is what a script uses:
 
@@ -557,7 +575,9 @@ its signature is checked, stored nowhere, and counted on `webhook_deliveries_rat
 bucket is generous (a burst of 120, then 10 a second) and per `app` process.
 
 **No public URL?** A task-management binding can **poll** instead (WP-87): set `poll_enabled: true`
-(and, if 60 seconds is not right, `poll_interval_seconds`) in the binding's configuration. The
+(and, if 60 seconds is not right, `poll_interval_seconds`) in the binding's configuration — or, for
+every project the account serves, on the integration itself, where **Edit configuration** offers both
+as typed controls (WP-114). The
 platform then asks the provider for the binding's pick-up rule on that interval, and each ticket it
 finds is treated exactly as a webhook's match; each poll also re-reads the tickets of the binding's
 running tasks, so an edit to a ticket the status mapping has moved off a **status** pick-up rule
@@ -866,7 +886,8 @@ the event and the handler. `event_dispatch_dead_lettered` (§3) counts them. **S
 letters** (admin only; `GET /api/org/dead-letters`) lists each one: its position, event type, stream,
 the handler that failed, how many times, the last error (redacted by the platform's patterns and cut
 at 2 000 characters — the full text is in the log), and the task it escalated, if any. An event that
-names no task has no brief anywhere else, so this list is where it shows up.
+names no task has no brief anywhere else, so this list is where it shows up. The newest fifty come
+first and **Show older** pages back to the oldest (WP-114).
 
 Once the handler is fixed — usually a new build, sometimes a provider permission — press
 **Re-queue** (`POST /api/org/dead-letters/:position/requeue`). It puts the **same** event back in the
@@ -883,7 +904,7 @@ left no audit row.
 
 The job queue (pg-boss) retries a job whose handler throws up to its queue's retry limit and then
 marks it **failed**. **Settings → Failed jobs** (admin only; `GET /api/org/failed-jobs`, WP-108)
-lists them, newest first: the queue, how many times it was tried, the retry limit, when it failed and
+lists them, newest first (**Show older** pages back to the oldest, WP-114): the queue, how many times it was tried, the retry limit, when it failed and
 the failure's message (redacted by the platform's patterns and cut at 2 000 characters; the job's
 payload is never shown). Beside each one is the platform's own census of that queue — whether it
 ends its own failures or relies on the retries, what a failed job of it drops, and what recovers it:

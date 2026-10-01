@@ -44,6 +44,7 @@ interface BindingRow extends Record<string, unknown> {
   readonly integration_config: unknown;
   readonly binding_config: unknown;
   readonly secret_ids: string[] | null;
+  readonly retired: boolean;
 }
 
 interface AccountRow extends Record<string, unknown> {
@@ -102,7 +103,8 @@ export const createPostgresBindingRepository = (
               i.name          as name,
               i.config        as integration_config,
               b.config        as binding_config,
-              i.secret_ids    as secret_ids
+              i.secret_ids    as secret_ids,
+              i.retired_at is not null as retired
          from bindings b
          join integrations i on i.id = b.integration_id
         where b.project_id = $1
@@ -122,6 +124,10 @@ export const createPostgresBindingRepository = (
         accountOnlyFields(row.provider),
       ),
       secretIds: (row.secret_ids ?? []) as Id[],
+      // Kept and flagged rather than filtered (WP-114): a binding of a retired integration is a
+      // row written past the retire's refusal, and the loader refuses it by name — dropping it
+      // here would make the project read as having no such binding (standing rule 20).
+      retired: row.retired === true,
     }));
   },
 
@@ -135,6 +141,8 @@ export const createPostgresBindingRepository = (
    * an unbound account look like a forged URL.
    *
    * Ordered by `project_id` so two calls agree, for the same reason `forProject` orders its rows.
+   *
+   * A **retired** integration (WP-114) answers `null`, the port's docblock says why.
    */
   forIntegration: async (integrationId: Id): Promise<IntegrationAccount | null> => {
     const { rows } = await sql.query<AccountRow>(
@@ -149,6 +157,7 @@ export const createPostgresBindingRepository = (
          from integrations i
          left join bindings b on b.integration_id = i.id
         where i.id = $1
+          and i.retired_at is null
         order by b.project_id`,
       [integrationId],
     );
@@ -186,7 +195,8 @@ export const createPostgresBindingRepository = (
  */
 export const listIntegrationIds = async (sql: SqlExecutor): Promise<readonly Id[]> => {
   const { rows } = await sql.query<{ id: string }>(
-    'select id from integrations order by created_at, id',
+    // A retired integration (WP-114) holds no connection: its credentials are gone.
+    'select id from integrations where retired_at is null order by created_at, id',
   );
   return rows.map((row) => row.id as Id);
 };
@@ -219,6 +229,7 @@ export const listCommunicationAccounts = async (
     `select id, provider, name, config, secret_ids
        from integrations
       where type = 'communication'
+        and retired_at is null
       order by created_at, id`,
   );
   return rows.map((row) => ({

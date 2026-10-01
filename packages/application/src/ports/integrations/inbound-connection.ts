@@ -67,8 +67,10 @@ export interface BrokenHeldConnectionAccount {
  * supervisor compares it at every re-list and re-opens an account whose fingerprint moved, so a
  * changed configuration, a re-sealed credential under a new secret id, or a broken account an
  * operator fixed is picked up without restarting the process. A value rotated **in place** under
- * the same secret id does not move it; this build has no such write (`secrets` rows are sealed at
- * the integration's creation and never updated), which is why the ids are enough.
+ * the same secret id does not move it; this build has no such write (a credential is sealed into a
+ * **new** `secrets` row at the integration's creation and at a re-seal — `POST
+ * /api/integrations/:id/secrets`, WP-114 — and a row's value is never overwritten), which is why the
+ * ids are enough.
  */
 export type HeldConnectionFingerprint = string;
 

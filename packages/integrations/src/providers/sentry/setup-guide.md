@@ -29,7 +29,9 @@ never merges issues and never changes project settings.
 
 > Create the token on a bot identity rather than on a person's account. Sentry publishes no expiry
 > for an auth token, so the health panel shows `token_expires_at` as **unknown** rather than
-> "never" — put a calendar reminder on rotation.
+> "never" — put a calendar reminder on rotation. To rotate, put the new token in a new environment
+> variable on `APP_INTEGRATION_SECRET_ENV` and press **Replace credentials** on the integration's card
+> (`POST /api/integrations/<id>/secrets`); the old sealed token is deleted.
 
 ## 2. Configure the binding
 

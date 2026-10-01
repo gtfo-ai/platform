@@ -143,72 +143,90 @@ export const createRunGitCredentialMinter = (options: {
   readonly pool: pg.Pool;
   readonly integrations: PipelineIntegrationsPort;
   readonly runSecrets: RunScopedSecrets;
-}): launcherAdapters.RunGitCredentialMinter => ({
-  mint: async ({ spec, project, scope, ttlSeconds }) => {
-    const { rows } = await options.pool.query<{ mode: string }>(
-      'select mode from tasks where id = $1',
-      [spec.taskId],
+}): launcherAdapters.RunGitCredentialMinter => {
+  /** `integrations.retired_at` as text, or `null` for a live (or absent) row — WP-114. */
+  const retiredAtOf = async (integrationId: string): Promise<string | null> => {
+    const { rows } = await options.pool.query<{ retired_at: Date | null }>(
+      'select retired_at from integrations where id = $1',
+      [integrationId],
     );
-    if (rows[0] === undefined) {
-      throw new Error(
-        `task ${spec.taskId} has no row, so run ${spec.runId}'s credential cannot be minted under its mode`,
+    const at = rows[0]?.retired_at ?? null;
+    return at === null ? null : new Date(at).toISOString();
+  };
+  return {
+    mint: async ({ spec, project, scope, ttlSeconds }) => {
+      const { rows } = await options.pool.query<{ mode: string }>(
+        'select mode from tasks where id = $1',
+        [spec.taskId],
       );
-    }
-    const mode = taskModeSchema.parse(rows[0].mode);
-    const context = {
-      runId: spec.runId,
-      taskId: spec.taskId,
-      projectId: spec.projectId,
-      mode,
-    };
-    const minted = await runCredentialWrites(
-      await integrationsForProject(options.integrations, spec.projectId, noRunScopedSecrets()),
-    ).mint({
-      ...context,
-      scope: mode === 'shadow' ? 'read' : scope,
-      branchPatterns: project.branchPatterns,
-      ttlSeconds,
-    });
-    if (minted.kind === 'unavailable') {
-      return minted;
-    }
-    const { credential, handle } = minted;
-    const revoke = async (): Promise<void> => {
-      // TD-028 decision 10 (WP-80): through the integration that **minted**, bound or not — a
-      // project unbound or re-bound while the run was live still has the token revoked on the host
-      // that issued it. The value itself is the call's run-scoped secret, not a registry lookup: the
-      // revocation's own scope must name the token whatever the registry holds by then (WP-76
-      // review round 2).
-      const minting = await mintingIntegrationFor(options.integrations, handle.integrationId, {
-        runScopedSecrets: [
-          { name: runGitCredentialSecretName(spec.runId), value: credential.value },
-        ],
-      });
-      if (minting === null) {
+      if (rows[0] === undefined) {
         throw new Error(
-          `the integration ${handle.integrationId} that minted run ${spec.runId}'s credential no longer exists, so there is no host its address may be sent to; it lives until ${credential.expiresAt} (TD-028 decision 10, PROGRESS backlog 156)`,
+          `task ${spec.taskId} has no row, so run ${spec.runId}'s credential cannot be minted under its mode`,
         );
       }
-      await runCredentialRevocations(minting).revoke(handle, context);
-    };
-    // Before anything else can see it: from this line every redactor over the registry replaces it.
-    // It cannot refuse here: the registry's one refusal is a value shorter than `MIN_SECRET_LENGTH`,
-    // and `runCredentialWrites.mint` has already refused — and revoked — such a value before
-    // returning (review round 2 deleted an untested revoke that this line could never reach).
-    options.runSecrets.add(spec.runId, credential.value, credential.expiresAt);
-    return {
-      kind: 'minted',
-      credential: {
-        // GitLab: "any non-blank value as a username"; a provider that names none gets one.
-        username: credential.username ?? 'agentic',
-        password: credential.value,
-        scope: credential.scope,
-        expiresAt: credential.expiresAt,
-        revoke,
-      },
-    };
-  },
-});
+      const mode = taskModeSchema.parse(rows[0].mode);
+      const context = {
+        runId: spec.runId,
+        taskId: spec.taskId,
+        projectId: spec.projectId,
+        mode,
+      };
+      const minted = await runCredentialWrites(
+        await integrationsForProject(options.integrations, spec.projectId, noRunScopedSecrets()),
+        // WP-114, backlog 386: read after the mint's audit row committed, on the pool (no open
+        // transaction), so a retire that committed first is seen and the token is revoked in hand.
+        { isRetired: async (integrationId) => (await retiredAtOf(integrationId)) !== null },
+      ).mint({
+        ...context,
+        scope: mode === 'shadow' ? 'read' : scope,
+        branchPatterns: project.branchPatterns,
+        ttlSeconds,
+      });
+      if (minted.kind === 'unavailable') {
+        return minted;
+      }
+      const { credential, handle } = minted;
+      const revoke = async (): Promise<void> => {
+        // TD-028 decision 10 (WP-80): through the integration that **minted**, bound or not — a
+        // project unbound or re-bound while the run was live still has the token revoked on the host
+        // that issued it. The value itself is the call's run-scoped secret, not a registry lookup: the
+        // revocation's own scope must name the token whatever the registry holds by then (WP-76
+        // review round 2).
+        const minting = await mintingIntegrationFor(options.integrations, handle.integrationId, {
+          runScopedSecrets: [
+            { name: runGitCredentialSecretName(spec.runId), value: credential.value },
+          ],
+        });
+        if (minting === null) {
+          // A retired integration is answered `null` too (WP-114); say which it is (backlog 386).
+          const retiredAt = await retiredAtOf(handle.integrationId);
+          throw new Error(
+            retiredAt === null
+              ? `the integration ${handle.integrationId} that minted run ${spec.runId}'s credential no longer exists, so there is no host its address may be sent to; it lives until ${credential.expiresAt} (TD-028 decision 10, PROGRESS backlog 156)`
+              : `the integration ${handle.integrationId} that minted run ${spec.runId}'s credential was retired at ${retiredAt} and its credentials are deleted, so nothing can revoke it; it lives until ${credential.expiresAt} (delete it at the provider; PROGRESS backlog 386)`,
+          );
+        }
+        await runCredentialRevocations(minting).revoke(handle, context);
+      };
+      // Before anything else can see it: from this line every redactor over the registry replaces it.
+      // It cannot refuse here: the registry's one refusal is a value shorter than `MIN_SECRET_LENGTH`,
+      // and `runCredentialWrites.mint` has already refused — and revoked — such a value before
+      // returning (review round 2 deleted an untested revoke that this line could never reach).
+      options.runSecrets.add(spec.runId, credential.value, credential.expiresAt);
+      return {
+        kind: 'minted',
+        credential: {
+          // GitLab: "any non-blank value as a username"; a provider that names none gets one.
+          username: credential.username ?? 'agentic',
+          password: credential.value,
+          scope: credential.scope,
+          expiresAt: credential.expiresAt,
+          revoke,
+        },
+      };
+    },
+  };
+};
 
 export interface ComposeRunWorkspacesOptions {
   readonly pool: pg.Pool;

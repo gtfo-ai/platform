@@ -53,7 +53,7 @@ import { DEFAULT_AUTONOMY_LEVEL, materialiseAutonomy } from '@platform/domain';
 import { db as dbAdapters, secrets as secretAdapters } from '@platform/infrastructure';
 import type { ProviderCatalogueEntry } from '@platform/integrations';
 import { configIssuesOf, findShippedProvider } from '@platform/integrations';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { HttpError } from '../errors.js';
 import { completeCommandAttempt, findCommandAttempt } from './idempotency-queries.js';
 import type { Database } from './identity-queries.js';
@@ -63,8 +63,15 @@ import {
   storedConfigRefusal,
 } from './integration-queries.js';
 
-const { bindings, humanActions, integrations, organizations, projects, secrets } =
-  dbAdapters.schema;
+const {
+  bindings,
+  commandIdempotency,
+  humanActions,
+  integrations,
+  organizations,
+  projects,
+  secrets,
+} = dbAdapters.schema;
 
 /** The organisation this deployment is (product/01: a self-hosted instance has one). */
 export const findOrganisationId = async (database: Database): Promise<string | null> => {
@@ -348,7 +355,7 @@ export const environmentSecretSource = (
       const value = env[name];
       if (value === undefined || value.length === 0) {
         throw new MissingSecretError(
-          `no value for ${name}: set it (or ${name}_FILE) in the environment of this process, then create the integration again`,
+          `no value for ${name}: set it (or ${name}_FILE) in the environment of this process, then create the integration again — or, for an existing one, re-seal it (\`POST /api/integrations/:id/secrets\`)`,
         );
       }
       return value;
@@ -563,7 +570,11 @@ export const updateIntegrationConfig = async (
   }
   return database.transaction(async (tx) => {
     const rows = await tx
-      .select({ provider: integrations.provider, config: integrations.config })
+      .select({
+        provider: integrations.provider,
+        config: integrations.config,
+        retiredAt: integrations.retiredAt,
+      })
       .from(integrations)
       .where(eq(integrations.id, input.integrationId))
       .for('update');
@@ -571,6 +582,7 @@ export const updateIntegrationConfig = async (
     if (row === undefined) {
       return { status: 'not_found' } as const;
     }
+    assertNotRetired(input.integrationId, row.retiredAt);
     const provider = findShippedProvider(row.provider);
     if (provider === undefined) {
       // No schema to parse the merged document with, and no field list to tell a credential from a
@@ -602,6 +614,385 @@ export const updateIntegrationConfig = async (
     });
     return { status: 'written', changed } as const;
   });
+};
+
+/**
+ * Refuses a write to a **retired** integration (WP-114, PROGRESS backlog 331): its credentials are
+ * destroyed, it is never loaded, and a configuration, a credential, a binding or a probe of it would
+ * be a write to a row nothing reads. One refusal, one code, so a client can branch on it.
+ */
+export const assertNotRetired = (integrationId: string, retiredAt: Date | null): void => {
+  if (retiredAt !== null) {
+    throw new HttpError(
+      409,
+      'integration_retired',
+      `integration ${integrationId} was retired at ${retiredAt.toISOString()}: its credentials are destroyed and it refuses every write. Create a new integration instead`,
+    );
+  }
+};
+
+/**
+ * How far back the retire looks for a minted credential of the integration — a partition-pruning
+ * bound only, the mint's own recorded `expires_at` is the precise cut. A week, the run-credential
+ * recovery's own re-validation lookback (`postgres-run-credential-store.ts`), against the 48 hours a
+ * credential this build mints can live.
+ */
+export const LIVE_MINT_LOOKBACK = '7 days';
+
+/**
+ * The minted credentials of an integration nothing has **confirmed** revoked and whose expiry has
+ * not passed (WP-114) — TD-028 decision 10 revokes a minted credential through the integration that
+ * minted it, so retiring that integration (and destroying its credential) would leave the token
+ * live until it expires. The predicate is the run-credential recovery's
+ * (`packages/infrastructure/src/recovery/postgres-run-credential-store.ts`) asked from the
+ * integration's side and without the run: a `mint_credential` row that is `ok` and carries a
+ * `revoke_id`, an `expires_at` still in the future (or one that is not an instant, treated as live),
+ * and no `revoke_credential` row for that `revoke_id` that is `ok` with `revoked: true`. A recovery
+ * attempt answered `not_found` is recorded `revoked: false` — **unconfirmed** — and still counts here:
+ * "no such token" from an adapter cannot be told from "already gone".
+ */
+const liveMintsOf = async (
+  tx: Pick<Database, 'execute'>,
+  integrationId: string,
+): Promise<{ readonly count: number; readonly latestExpiry: string | null }> => {
+  const { rows } = await tx.execute<{ count: number; latest_expiry: string | null }>(sql`
+    select count(*)::int as count, max(m.result ->> 'expires_at') as latest_expiry
+      from integration_actions m
+     where m.integration_id = ${integrationId}
+       and m.created_at > now() - ${LIVE_MINT_LOOKBACK}::interval
+       and m.action = 'mint_credential'
+       and m.status = 'ok'
+       and m.result ->> 'revoke_id' is not null
+       and case
+             when m.result ->> 'expires_at' ~ '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$'
+             then (m.result ->> 'expires_at')::timestamptz > now()
+             else true
+           end
+       and not exists (
+         select 1
+           from integration_actions v
+          where v.integration_id = m.integration_id
+            and v.created_at > now() - ${LIVE_MINT_LOOKBACK}::interval
+            and v.action = 'revoke_credential'
+            and v.payload ->> 'revoke_id' = m.result ->> 'revoke_id'
+            and v.status = 'ok'
+            and v.result ->> 'revoked' = 'true'
+       )`);
+  const row = rows[0];
+  return { count: Number(row?.count ?? 0), latestExpiry: row?.latest_expiry ?? null };
+};
+
+export type RetireIntegrationResult =
+  | { readonly status: 'not_found' }
+  | { readonly status: 'already_retired' }
+  | { readonly status: 'retired'; readonly destroyedSecrets: number };
+
+/**
+ * `DELETE /api/integrations/:id` — **retires** the integration (WP-114, PROGRESS backlog 331).
+ *
+ * The row is **kept**: `integration_actions.integration_id` is a `NOT NULL` foreign key and the audit
+ * must keep naming the credential each call was made with (BD-003). What goes is the credential —
+ * the integration's `secrets` rows are **deleted** — and the row is marked `retired_at`, its
+ * `secret_ids` emptied and its `health` reset. From then on it is never loaded (the binding
+ * repository answers no account for it and the loader refuses a binding of it), it is listed as
+ * retired, and every write refuses it ({@link assertNotRetired}).
+ *
+ * Refused, each by name, while
+ *
+ *  - a **binding** names it — `409 integration_bound`, naming the projects: a bound integration is
+ *    one a project's pipeline loads, and retiring it would turn the project's next call into a
+ *    `BindingLoadError`;
+ *  - it is the organisation's flagged chat account (`notifications.organisation_default`) — `409
+ *    integration_is_organisation_default` (backlog 387): every organisation alarm would fail;
+ *  - an **unexpired, unconfirmed minted credential** of it exists — `409
+ *    integration_has_live_credential` ({@link liveMintsOf}): the integration is where TD-028 decision
+ *    10 revokes it, and destroying its credential would leave the token live until it expires.
+ *
+ * ## The lock (standing rule 9)
+ *
+ * The check and the retire are one transaction under the **`integrations` row lock**: this takes it
+ * `for update`, a bindings `PUT` takes it `for share` before it inserts ({@link replaceProjectBindings}),
+ * and a mint's audit row takes it `for key share` through `integration_actions.integration_id`'s
+ * foreign key when the executor records the mint. Each conflicts with `for update`, so whichever
+ * commits first decides: a bind or a mint recorded first is seen here and refuses the retire; a
+ * retire committed first is read by the bind, which refuses.
+ *
+ * **A mint whose call is in flight across the retire** (backlog 386, closed in WP-114's pre-review
+ * round). No transaction is open across a provider call, so the lock covers the mint's **record**,
+ * not its call: a mint in flight while its project is unbound and the integration retired is
+ * recorded after the retire, on a retired row. The mint therefore reads `retired_at` **after** its
+ * record committed and, finding it set, revokes through the adapter it already holds — which kept
+ * the account's decrypted credential — and refuses the run start
+ * (`MintingIntegrationLiveness` in `packages/application/src/pipeline/integrations.ts`). The order
+ * is sound because the record's `for key share` and this `for update` conflict: a record that
+ * commits first is seen here; a retire that commits first is seen by the mint's read. What is left
+ * is a revoke that fails at the provider, named in the refusal.
+ */
+export const retireIntegration = async (
+  database: Database,
+  input: { readonly integrationId: string; readonly audit: HumanActionInput },
+): Promise<RetireIntegrationResult> =>
+  database.transaction(async (tx) => {
+    const rows = await tx
+      .select({ secretIds: integrations.secretIds, retiredAt: integrations.retiredAt })
+      .from(integrations)
+      .where(eq(integrations.id, input.integrationId))
+      .for('update');
+    const row = rows[0];
+    if (row === undefined) {
+      return { status: 'not_found' } as const;
+    }
+    if (row.retiredAt !== null) {
+      return { status: 'already_retired' } as const;
+    }
+    const bound = await tx
+      .select({ key: projects.key })
+      .from(bindings)
+      .innerJoin(projects, eq(projects.id, bindings.projectId))
+      .where(eq(bindings.integrationId, input.integrationId))
+      .orderBy(projects.key);
+    if (bound.length > 0) {
+      throw new HttpError(
+        409,
+        'integration_bound',
+        `integration ${input.integrationId} is bound to project${bound.length === 1 ? '' : 's'} ${bound
+          .map((binding) => binding.key)
+          .join(
+            ', ',
+          )}; remove it from each project's bindings (PUT /api/projects/:id/bindings) before retiring it`,
+      );
+    }
+    // WP-114 pre-review, backlog 387: the organisation's flagged chat account. Read after this
+    // row's `for update`, so a `PATCH /api/org` that flagged it and committed first is seen, and one
+    // still writing holds this row `for share` until it commits (`replaceOrganisationSettings`).
+    const flagged = await tx.execute<{ flagged: string | null }>(sql`
+      select o.settings -> 'notifications' ->> 'organisation_default' as flagged
+        from organizations o
+        join integrations i on i.org_id = o.id
+       where i.id = ${input.integrationId}`);
+    if (flagged.rows[0]?.flagged === input.integrationId) {
+      throw new HttpError(
+        409,
+        'integration_is_organisation_default',
+        `integration ${input.integrationId} is the organisation's chat account (notifications.organisation_default); name another account or remove the setting with PATCH /api/org before retiring it`,
+      );
+    }
+    const live = await liveMintsOf(tx, input.integrationId);
+    if (live.count > 0) {
+      throw new HttpError(
+        409,
+        'integration_has_live_credential',
+        `integration ${input.integrationId} minted ${live.count} run credential${live.count === 1 ? '' : 's'} that nothing has confirmed revoked and that ${live.count === 1 ? 'has' : 'have'} not expired (the latest expires ${live.latestExpiry ?? 'at an unreadable instant'}); it is where a revoke is sent (TD-028 decision 10), so it cannot be retired until ${live.count === 1 ? 'that credential is' : 'they are'} revoked or expired`,
+      );
+    }
+    const destroyed =
+      row.secretIds.length === 0
+        ? []
+        : await tx
+            .delete(secrets)
+            .where(inArray(secrets.id, row.secretIds))
+            .returning({ id: secrets.id });
+    await tx
+      .update(integrations)
+      .set({ retiredAt: sql`now()`, secretIds: [], health: {}, updatedAt: sql`now()` })
+      .where(eq(integrations.id, input.integrationId));
+    await insertHumanAction(tx, {
+      ...input.audit,
+      params: { ...input.audit.params, destroyed_secrets: destroyed.length },
+    });
+    return { status: 'retired', destroyedSecrets: destroyed.length } as const;
+  });
+
+export type ResealIntegrationSecretsResult =
+  | { readonly status: 'not_found' }
+  /** This caller's key already performed a re-seal: nothing was sealed. */
+  | { readonly status: 'replayed' }
+  | {
+      readonly status: 'resealed';
+      readonly sealedFields: readonly string[];
+      /** Sealed rows this request destroyed: the named fields' old rows and any unreadable row. */
+      readonly destroyedSecrets: number;
+    };
+
+/**
+ * `POST /api/integrations/:id/secrets` — **re-seals** an integration's credentials (WP-114, PROGRESS
+ * backlog 331). The create's rules exactly: `secret_refs` is credential **field** → the **name** of
+ * an environment variable, on the operator-declared `APP_INTEGRATION_SECRET_ENV` allow-list
+ * (`input.secretSource`, which refuses any other name), read by the server and sealed — a credential
+ * never crosses the API (BD-002, TD-020). A field the provider does not declare is refused.
+ *
+ * **A named field replaces that field's sealed row; an unnamed field keeps its own.** The field a
+ * row holds travels inside its plaintext (`{field, value}`), so the existing rows are opened to tell
+ * which to replace. A row that **cannot be opened** — sealed under another key, corrupt — is
+ * destroyed too: it already made every load of the integration fail, and keeping it would keep the
+ * integration broken after a re-seal meant to repair it (the audit row counts it). The old rows are
+ * **deleted**, not kept beside the new ones: a rotated token that leaked must leave the database.
+ *
+ * `health` is reset to `{}` (published `unknown`): the stored verdict was about the old credential.
+ *
+ * ## Idempotency: the claim is taken with the effect
+ *
+ * `Idempotency-Key` is required (technical/08: a client may retry). This function holds the
+ * effect's transaction, so the key's `command_idempotency` row is inserted **inside** it — the
+ * ordering `routes/idempotency.ts` calls *claim with the effect*: a second request under the same
+ * key blocks on the first's uncommitted row (and on the row lock before it), meets it once the first
+ * commits, and is answered `replayed` without reading the environment into a seal or writing
+ * anything. The values are read and sealed **before** the transaction opens, for the create's
+ * reason (a `_FILE` read is I/O a held connection must not wait on); on a replay those ciphertexts
+ * are simply dropped.
+ *
+ * Under the `integrations` row lock (`for update`), so a retire and a re-seal of one integration
+ * serialise, and a retired integration refuses ({@link assertNotRetired}).
+ */
+export const resealIntegrationSecrets = async (
+  database: Database,
+  input: {
+    readonly integrationId: string;
+    readonly secretRefs: Readonly<Record<string, string>>;
+    readonly secretSource: SecretSource;
+    readonly secretKey: secretAdapters.SecretKey;
+    readonly newId: () => string;
+    /** The caller's key and the request's digest — the claim's identity. */
+    readonly idempotency: { readonly key: string; readonly digest: string };
+    readonly audit: HumanActionInput;
+  },
+): Promise<ResealIntegrationSecretsResult> => {
+  const current = await database
+    .select({ provider: integrations.provider, retiredAt: integrations.retiredAt })
+    .from(integrations)
+    .where(eq(integrations.id, input.integrationId))
+    .limit(1);
+  const found = current[0];
+  if (found === undefined) {
+    return { status: 'not_found' };
+  }
+  assertNotRetired(input.integrationId, found.retiredAt);
+  const provider = findShippedProvider(found.provider);
+  if (provider === undefined) {
+    throw new HttpError(
+      409,
+      'provider_not_shipped',
+      `integration ${input.integrationId} names provider "${found.provider}", which this build does not ship, so its credential fields are unknown here`,
+    );
+  }
+  const declared = new Set(provider.secretFields);
+  const fields = Object.keys(input.secretRefs).sort();
+  const unknown = fields.filter((field) => !declared.has(field));
+  if (unknown.length > 0) {
+    throw new HttpError(
+      400,
+      'invalid_request',
+      `provider "${provider.id}" declares no credential field named ${unknown.join(', ')}; it declares ${[...declared].join(', ') || 'none'}`,
+    );
+  }
+
+  // Read and sealed before the transaction, for `createIntegration`'s reason.
+  const sealed: { readonly id: string; readonly ciphertext: Buffer }[] = [];
+  for (const field of fields) {
+    const value = await input.secretSource.read(input.secretRefs[field] as string);
+    const secretId = input.newId();
+    sealed.push({
+      id: secretId,
+      ciphertext: secretAdapters.sealSecret(
+        input.secretKey,
+        secretAdapters.secretDocument(field, value),
+        secretId,
+      ),
+    });
+  }
+
+  return database.transaction(async (tx) => {
+    const rows = await tx
+      .select({ secretIds: integrations.secretIds, retiredAt: integrations.retiredAt })
+      .from(integrations)
+      .where(eq(integrations.id, input.integrationId))
+      .for('update');
+    const row = rows[0];
+    if (row === undefined) {
+      return { status: 'not_found' } as const;
+    }
+    assertNotRetired(input.integrationId, row.retiredAt);
+    const claimed = await tx
+      .insert(commandIdempotency)
+      .values({
+        userId: input.audit.userId,
+        action: input.audit.action,
+        idempotencyKey: input.idempotency.key,
+        bodyDigest: input.idempotency.digest,
+      })
+      .onConflictDoNothing()
+      .returning({ claimedAt: commandIdempotency.claimedAt });
+    if (claimed[0] === undefined) {
+      return { status: 'replayed' } as const;
+    }
+
+    const stored =
+      row.secretIds.length === 0
+        ? []
+        : await tx
+            .select({ id: secrets.id, ciphertext: secrets.ciphertext })
+            .from(secrets)
+            .where(inArray(secrets.id, row.secretIds));
+    const named = new Set(fields);
+    const replaced: string[] = [];
+    let unreadable = 0;
+    for (const secret of stored) {
+      const field = fieldOfSealedRow(input.secretKey, secret.id, secret.ciphertext);
+      if (field === null) {
+        unreadable += 1;
+        replaced.push(secret.id);
+      } else if (named.has(field)) {
+        replaced.push(secret.id);
+      }
+    }
+    for (const secret of sealed) {
+      await tx
+        .insert(secrets)
+        .values({ id: secret.id, ciphertext: secret.ciphertext, keyId: input.secretKey.keyId });
+    }
+    if (replaced.length > 0) {
+      await tx.delete(secrets).where(inArray(secrets.id, replaced));
+    }
+    // A referenced id with no row (a hand edit) is dropped as well: it can only fail a load.
+    const present = new Set(stored.map((secret) => secret.id));
+    const kept = row.secretIds.filter((id) => present.has(id) && !replaced.includes(id));
+    // Assembled here rather than spread inside `.set(`: the `integrations.config` writer census
+    // counts any statement it cannot rule out, and this one names `secret_ids` and `health` only.
+    const secretIds = kept.concat(sealed.map((secret) => secret.id));
+    await tx
+      .update(integrations)
+      .set({ secretIds, health: {}, updatedAt: sql`now()` })
+      .where(eq(integrations.id, input.integrationId));
+    await insertHumanAction(tx, {
+      ...input.audit,
+      params: {
+        ...input.audit.params,
+        // Field names, never values — what was re-sealed, never what with.
+        secret_fields: fields,
+        destroyed_secrets: replaced.length,
+        unreadable_destroyed: unreadable,
+        idempotency_key: input.idempotency.key,
+        body_digest: input.idempotency.digest,
+      },
+    });
+    return { status: 'resealed', sealedFields: fields, destroyedSecrets: replaced.length } as const;
+  });
+};
+
+/** The credential field a sealed row holds, or `null` when it cannot be opened under this key. */
+const fieldOfSealedRow = (
+  key: secretAdapters.SecretKey,
+  secretId: string,
+  ciphertext: Buffer,
+): string | null => {
+  try {
+    return secretAdapters.secretDocumentSchema.parse(
+      JSON.parse(secretAdapters.openSecret(key, ciphertext, secretId)),
+    ).field;
+  } catch {
+    // Never the plaintext and never the error's text into a response: the row is counted.
+    return null;
+  }
 };
 
 /**
@@ -663,6 +1054,7 @@ export const createIntegration = async (
       type: integrations.type,
       provider: integrations.provider,
       name: integrations.name,
+      retiredAt: integrations.retiredAt,
     })
     .from(integrations)
     .where(
@@ -675,9 +1067,20 @@ export const createIntegration = async (
     .limit(1);
   const found = existing[0];
   if (found !== undefined) {
+    if (found.retiredAt !== null) {
+      // WP-114: the name still belongs to the retired row — `(org_id, type, name)` is unique and the
+      // row is kept for the audit — and answering a create with a retired integration would hand
+      // the caller something that refuses every write. Named, so the operator picks another name.
+      throw new HttpError(
+        409,
+        'integration_name_retired',
+        `the ${found.type} integration named "${found.name}" (${found.id}) was retired; a retired integration keeps its name for the audit, so give the new one another name`,
+      );
+    }
     // Idempotent on `(org_id, type, name)`. Nothing is re-sealed and no secret row is orphaned:
     // re-reading the environment here would write a second `secrets` row nothing points at.
-    return { status: 'exists', integration: found as IntegrationRow };
+    const { retiredAt: _live, ...row } = found;
+    return { status: 'exists', integration: row as IntegrationRow };
   }
 
   /**
@@ -862,14 +1265,25 @@ export const replaceProjectBindings = async (
   const ids = items.map((item) => item.integrationId);
   await database.transaction(async (tx) => {
     if (ids.length > 0) {
+      /**
+       * **`for share`, in id order — the lock a retire also takes** (WP-114, standing rule 9). A
+       * retire holds the row `for update` while it checks that no binding names it; this share lock
+       * conflicts with that, so a bind and a retire of one integration serialise: a bind that waits
+       * behind a retire reads the committed `retired_at` and is refused below, and a retire that
+       * waits behind a bind sees the binding it committed and is refused. Id order, so two binds
+       * naming the same integrations cannot deadlock each other.
+       */
       const known = await tx
         .select({
           id: integrations.id,
           provider: integrations.provider,
           config: integrations.config,
+          retiredAt: integrations.retiredAt,
         })
         .from(integrations)
-        .where(inArray(integrations.id, ids));
+        .where(inArray(integrations.id, ids))
+        .orderBy(integrations.id)
+        .for('share');
       const missing = ids.filter((id) => !known.some((row) => row.id === id));
       if (missing.length > 0) {
         throw new HttpError(
@@ -877,6 +1291,9 @@ export const replaceProjectBindings = async (
           'invalid_request',
           `no integration with id ${missing.join(', ')}; create the integration before binding it`,
         );
+      }
+      for (const row of known) {
+        assertNotRetired(row.id, row.retiredAt);
       }
       assertNoAccountOnlyFields(items, known);
       assertBindingConfigsParse(items, known, options.egress);
@@ -1034,7 +1451,8 @@ export const writeIntegrationHealth = async (
         detail: probe.detail,
       },
     })
-    .where(eq(integrations.id, integrationId));
+    // A probe that raced a retire must not put a verdict back on a row whose credential is gone.
+    .where(and(eq(integrations.id, integrationId), isNull(integrations.retiredAt)));
 };
 
 /**

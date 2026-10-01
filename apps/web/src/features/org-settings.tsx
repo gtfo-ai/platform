@@ -137,7 +137,8 @@ const SettingsForm = ({
 }): ReactElement => {
   const integrations = useIntegrations();
   const chatAccounts = (integrations.data?.items ?? []).filter(
-    (integration) => integration.type === 'communication',
+    // A retired account (WP-114) posts nowhere: its credential is destroyed.
+    (integration) => integration.type === 'communication' && integration.retired_at === null,
   );
   const [lists, setLists] = useState<Record<(typeof LIST_KINDS)[number], string>>({
     allow: (settings.commands?.allow ?? []).join('\n'),

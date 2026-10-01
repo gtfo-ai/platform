@@ -210,10 +210,12 @@ interface Probe {
  * *sibling's* answer and this census could not have told a missing PUT from a present one.
  * `PATCH` was added at WP-100 for the first command path with **no** sibling on any other method,
  * `PATCH /api/integrations/:id`: without it the path read as missing however it was registered.
+ * `DELETE` was added at WP-114 with the first `DELETE` route, the retire on that same path — which
+ * the probe met on its `PATCH` sibling, so the method is asked positively in its own case below.
  */
 const probe = async (path: string): Promise<Probe> => {
   const url = probeUrl(path);
-  for (const method of ['GET', 'POST', 'PUT', 'PATCH'] as const) {
+  for (const method of ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const) {
     const response = await app.inject({ method, url });
     const body = response.json() as { error?: { code?: string } };
     const code = body.error?.code ?? null;
@@ -366,6 +368,26 @@ describe('the client’s endpoint list against the server’s router', () => {
     for (const [method, path] of [
       ['GET', '/api/integrations/providers'],
       ['PATCH', '/api/integrations/{}'],
+    ] as const) {
+      const response = await app.inject({ method, url: probeUrl(path) });
+      const body = response.json() as ApiErrorBody;
+      expect(`${method} ${path} -> ${response.statusCode} ${body.error?.code ?? ''}`).toBe(
+        `${method} ${path} -> 401 unauthenticated`,
+      );
+    }
+  });
+
+  it('serves the re-seal and the retire WP-114 added, and refuses an anonymous caller on each', async () => {
+    // Named positively (standing rule 10), each by its own method with no body: the re-seal takes a
+    // body, so a guard that slipped back to `preHandler` would answer 400 here, not 401.
+    expect((await probe('/api/integrations/{}/secrets')).served).toBe(true);
+    const paths = clientPaths(webSourceFiles().map((path) => ({ path, source: readSource(path) })));
+    expect(paths).toEqual(
+      expect.arrayContaining(['/api/integrations/{}/secrets', '/api/integrations/{}']),
+    );
+    for (const [method, path] of [
+      ['POST', '/api/integrations/{}/secrets'],
+      ['DELETE', '/api/integrations/{}'],
     ] as const) {
       const response = await app.inject({ method, url: probeUrl(path) });
       const body = response.json() as ApiErrorBody;

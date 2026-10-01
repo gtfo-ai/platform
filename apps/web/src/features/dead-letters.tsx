@@ -19,11 +19,16 @@
  * server and rendered through `UntrustedText` (BD-022); the event type and handler are the
  * platform's own names but are rendered the same way, because a type this build no longer knows
  * is exactly what may be listed. Admin only on the server (`org.dead_letters.manage`); a non-admin
- * sees the refusal named rather than an empty list that would read as "nothing is poisoned".
+ * sees the refusal named rather than an empty list that would read as "nothing is poisoned" — and
+ * since WP-114 (backlog 327) only a 403 is named so: a 503 or a 500 is shown as what it is.
+ *
+ * The list is newest first, a page at a time, and *Show older* follows the server's `next_cursor`
+ * to the oldest (WP-114, backlog 324); the count says *the newest N of total* until it gets there.
  */
 import type { DeadLetter } from '@platform/contracts';
 import { Link } from '@tanstack/react-router';
 import type { ReactElement } from 'react';
+import { readErrorDetail } from '../api/read-error.js';
 import { useDeadLetters, useSettingsCommands } from '../app/queries.js';
 import {
   Badge,
@@ -106,7 +111,10 @@ const DeadLetterCard = ({
 export const DeadLetters = (): ReactElement => {
   const letters = useDeadLetters();
   const commands = useSettingsCommands();
-  const items = letters.data?.items ?? [];
+  const pages = letters.data?.pages ?? [];
+  const items = pages.flatMap((page) => page.items);
+  // The newest page's count: every page answers it, and the newest is the latest reading.
+  const total = pages.at(-1)?.total ?? 0;
   return (
     <section>
       <SectionHeading>Dead letters</SectionHeading>
@@ -117,10 +125,12 @@ export const DeadLetters = (): ReactElement => {
         again it is dead-lettered again after the same number of attempts.
       </p>
       {letters.isPending ? <Loading label="Loading dead letters…" /> : null}
-      {letters.isError ? (
+      {/* A failed *Show older* also sets `isError` (TanStack Query v5): the page above it did load. */}
+      {letters.isError && !letters.isFetchNextPageError ? (
         <ErrorNotice
           title="The dead letters could not be loaded."
-          detail="Reading them needs the admin role."
+          // WP-114, backlog 327: only a 403 is the role; a 503 or a 500 is shown as itself.
+          detail={readErrorDetail(letters.error, 'Reading them needs the admin role.')}
         />
       ) : null}
       {letters.isSuccess && items.length === 0 ? (
@@ -131,9 +141,9 @@ export const DeadLetters = (): ReactElement => {
       ) : null}
       {letters.isSuccess && items.length > 0 ? (
         <p className="pb-2 text-xs" data-dead-letter-count="true">
-          {items.length === letters.data.total
-            ? `${formatInteger(letters.data.total)} dead-lettered event${letters.data.total === 1 ? '' : 's'}.`
-            : `The newest ${formatInteger(items.length)} of ${formatInteger(letters.data.total)} dead-lettered events.`}
+          {items.length >= total && !letters.hasNextPage
+            ? `${formatInteger(total)} dead-lettered event${total === 1 ? '' : 's'}.`
+            : `The newest ${formatInteger(items.length)} of ${formatInteger(total)} dead-lettered events.`}
         </p>
       ) : null}
       {commands.requeueDeadLetter.isError ? (
@@ -160,6 +170,25 @@ export const DeadLetters = (): ReactElement => {
           </div>
         ))}
       </div>
+      {/* WP-114, backlog 324: the oldest dead letters are the likeliest to be a failure nobody has looked at. */}
+      {letters.hasNextPage ? (
+        <div className="pt-2">
+          <Button
+            disabled={letters.isFetchingNextPage}
+            onClick={() => {
+              void letters.fetchNextPage();
+            }}
+          >
+            {letters.isFetchingNextPage ? 'Loading older…' : 'Show older'}
+          </Button>
+        </div>
+      ) : null}
+      {letters.isFetchNextPageError ? (
+        <ErrorNotice
+          title="The older dead letters could not be loaded."
+          detail={readErrorDetail(letters.error, 'Reading them needs the admin role.')}
+        />
+      ) : null}
     </section>
   );
 };

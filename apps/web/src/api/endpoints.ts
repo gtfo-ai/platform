@@ -85,7 +85,10 @@ import {
   refreshProjectConfigResponseSchema,
   refusedDeliveriesResponseSchema,
   requeueDeadLetterResponseSchema,
+  resealIntegrationSecretsRequestSchema,
+  resealIntegrationSecretsResponseSchema,
   resumeTaskRequestSchema,
+  retireIntegrationResponseSchema,
   retryRunRequestSchema,
   retryStageRequestSchema,
   returnToStageRequestSchema,
@@ -158,7 +161,10 @@ export interface Endpoints {
    * backlog 325). Admin only; `error` arrives redacted and bounded, and is rendered as text. A read,
    * never a re-queue.
    */
-  readonly failedJobs: () => Promise<z.output<typeof failedJobsResponseSchema>>;
+  readonly failedJobs: (query: {
+    /** The `next_cursor` of the previous page (WP-114, PROGRESS backlog 324); omitted, the newest. */
+    readonly cursor?: string;
+  }) => Promise<z.output<typeof failedJobsResponseSchema>>;
   /**
    * `POST /api/org/dead-letters/:position/requeue` — serve one dead-lettered event again. Carries
    * an `Idempotency-Key`, so a double-clicked Re-queue is one re-queue and one audit row.
@@ -307,6 +313,22 @@ export interface Endpoints {
     integrationId: string,
     body: z.input<typeof patchIntegrationRequestSchema>,
   ) => Promise<z.output<typeof integrationSummarySchema>>;
+  /**
+   * `POST /api/integrations/:id/secrets` — re-seal credentials from environment variables the
+   * server reads (WP-114, PROGRESS backlog 331). Names, never values; `Idempotency-Key` per intent.
+   */
+  readonly resealIntegrationSecrets: (
+    integrationId: string,
+    body: z.input<typeof resealIntegrationSecretsRequestSchema>,
+    idempotencyKey?: string,
+  ) => Promise<z.output<typeof resealIntegrationSecretsResponseSchema>>;
+  /**
+   * `DELETE /api/integrations/:id` — retire: the credentials are destroyed and the row is kept for
+   * the audit (WP-114). Idempotent by itself: a repeat answers `performed: false`.
+   */
+  readonly retireIntegration: (
+    integrationId: string,
+  ) => Promise<z.output<typeof retireIntegrationResponseSchema>>;
   readonly putProjectBindings: (
     projectId: string,
     body: z.input<typeof putProjectBindingsRequestSchema>,
@@ -545,7 +567,11 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
         schema: deadLettersResponseSchema,
         query: { ...query },
       }),
-    failedJobs: () => client.get('/api/org/failed-jobs', { schema: failedJobsResponseSchema }),
+    failedJobs: (query) =>
+      client.get('/api/org/failed-jobs', {
+        schema: failedJobsResponseSchema,
+        query: { ...query },
+      }),
     requeueDeadLetter: (position, idempotencyKey) =>
       client.command(`/api/org/dead-letters/${seg(String(position))}/requeue`, {
         schema: requeueDeadLetterResponseSchema,
@@ -684,6 +710,18 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
         method: 'PATCH',
         schema: integrationSummarySchema,
         body: patchIntegrationRequestSchema.parse(body),
+      }),
+    resealIntegrationSecrets: (integrationId, body, idempotencyKey) =>
+      client.command(`/api/integrations/${seg(integrationId)}/secrets`, {
+        schema: resealIntegrationSecretsResponseSchema,
+        body: resealIntegrationSecretsRequestSchema.parse(body),
+        idempotent: true,
+        ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+      }),
+    retireIntegration: (integrationId) =>
+      client.command(`/api/integrations/${seg(integrationId)}`, {
+        method: 'DELETE',
+        schema: retireIntegrationResponseSchema,
       }),
     putProjectBindings: (projectId, body) =>
       client.command(`/api/projects/${seg(projectId)}/bindings`, {

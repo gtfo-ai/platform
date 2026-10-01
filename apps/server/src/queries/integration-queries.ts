@@ -4,9 +4,9 @@
  *
  * ## The row is the operator's, not the platform's
  *
- * The row's writers are the operator's commands — `POST /api/integrations` (WP-21) and
- * `PATCH /api/integrations/:id` (WP-100), both in `queries/onboarding-queries.ts` — and provisioning
- * with `psql`. So unlike every other read in this directory, this one is not a projection of
+ * The row's writers are the operator's commands — `POST /api/integrations` (WP-21),
+ * `PATCH /api/integrations/:id` (WP-100), and the re-seal and the retire (WP-114), all in
+ * `queries/onboarding-queries.ts` — and provisioning with `psql`. So unlike every other read in this directory, this one is not a projection of
  * something the pipeline produced — it is a projection of configuration the platform *consumes*, on
  * every webhook delivery and every binding load.
  *
@@ -34,6 +34,12 @@
  * credential**, so it publishes no configuration at all and says which row it did that to. Fail
  * closed: the alternative is a guess about a field list nobody here has.
  *
+ * ## A retired integration is listed, and says so (WP-114)
+ *
+ * `DELETE /api/integrations/:id` keeps the row for the audit and destroys its credential; the list
+ * still serves it, with `retired_at`, because an operator reading the audit of an old call needs
+ * the name it was made under — and a row that vanished from the list would read as deleted.
+ *
  * ## `integrations.health` has a writer since WP-21, and `unknown` is still not an invention
  *
  * `POST /api/integrations/:id/test` writes it (`queries/onboarding-queries.ts`), so a row somebody
@@ -48,6 +54,7 @@ import type {
   Id,
   IntegrationSummary,
   IntegrationType,
+  IsoDateTime,
   JsonObject,
   RefusedDelivery,
 } from '@platform/contracts';
@@ -70,6 +77,8 @@ export interface IntegrationRow {
   readonly name: string;
   readonly config: JsonObject;
   readonly health: JsonObject;
+  /** `DELETE /api/integrations/:id` (WP-114); `null` while live. */
+  readonly retiredAt: Date | null;
 }
 
 const columns = {
@@ -79,6 +88,7 @@ const columns = {
   name: integrations.name,
   config: integrations.config,
   health: integrations.health,
+  retiredAt: integrations.retiredAt,
 } as const;
 
 export const listIntegrationRows = async (database: Database): Promise<IntegrationRow[]> =>
@@ -197,7 +207,10 @@ export const toIntegrationSummary = (
   name: row.name,
   config: publishableConfig(row.config, provider),
   health: healthOf(row),
-  config_refusal: storedConfigRefusal(row.id, row.config, provider),
+  // A retired row (WP-114) is never loaded and refuses the `PATCH` the refusal would point at, so
+  // it has nothing to repair: `null`, and `retired_at` is what the card says instead.
+  config_refusal: row.retiredAt === null ? storedConfigRefusal(row.id, row.config, provider) : null,
+  retired_at: row.retiredAt === null ? null : (row.retiredAt.toISOString() as IsoDateTime),
 });
 
 /**

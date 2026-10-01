@@ -44,6 +44,7 @@ const binding = (overrides: Partial<ProjectBinding> = {}): ProjectBinding => ({
   name: 'the repository',
   config: { base_url: 'https://git.example.test' },
   secretIds: [SECRET],
+  retired: false,
   ...overrides,
 });
 

@@ -7,7 +7,7 @@
  * the total (standing rule 16), offers no re-queue, and names a refusal by its status.
  */
 import type { FailedJob, FailedJobsResponse } from '@platform/contracts';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app/app.js';
 import type { SessionResponse } from '../auth/session.js';
@@ -103,6 +103,7 @@ describe('failed jobs on the settings page (WP-108)', () => {
         job({ id: '00000000-0000-4000-8000-0000000000a3', queue: 'gone.queue', exhaustion: null }),
       ],
       total: 3,
+      next_cursor: null,
     });
     const { container } = render(createApp({ fetchImpl, realtime: false }).element);
     await waitFor(() => {
@@ -136,13 +137,61 @@ describe('failed jobs on the settings page (WP-108)', () => {
   });
 
   it('states a page as the newest N of the total, never as the total', async () => {
-    const fetchImpl = fetchFor({ items: [job({})], total: 140 });
+    const fetchImpl = fetchFor({ items: [job({})], total: 140, next_cursor: 'older-page' });
     const { container } = render(createApp({ fetchImpl, realtime: false }).element);
     await waitFor(() => {
       expect(container.querySelector('[data-failed-job-count]')?.textContent).toBe(
         'The newest 1 of 140 failed jobs.',
       );
     });
+  });
+
+  /**
+   * WP-114, PROGRESS backlog 324: a total above one page reaches its last row through *Show older*,
+   * which sends back the server's opaque `next_cursor` unchanged.
+   */
+  it('reaches the last row of a total above one page through Show older', async () => {
+    const asked: string[] = [];
+    const ids = ['a1', 'a2', 'a3'].map((suffix) => `00000000-0000-4000-8000-0000000000${suffix}`);
+    const base = fetchFor(403);
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), 'https://agentic.example.test');
+      if (url.pathname === '/api/org/failed-jobs') {
+        const cursor = url.searchParams.get('cursor');
+        asked.push(cursor ?? '(first)');
+        return cursor === null
+          ? json({
+              items: [job({ id: ids[0] as string }), job({ id: ids[1] as string })],
+              total: 3,
+              next_cursor: '2026-09-30T08:48:00.000001Z_page-2',
+            })
+          : json({ items: [job({ id: ids[2] as string })], total: 3, next_cursor: null });
+      }
+      return base(input, init);
+    }) as typeof fetch;
+    const { container } = render(createApp({ fetchImpl, realtime: false }).element);
+    await waitFor(() => {
+      expect(container.querySelector('[data-failed-job-count]')?.textContent).toBe(
+        'The newest 2 of 3 failed jobs.',
+      );
+    });
+    expect(container.querySelector(`[data-failed-job="${ids[2]}"]`)).toBeNull();
+    const older = (await screen.findAllByRole('button', { name: 'Show older' })).find((button) =>
+      button.closest('section')?.textContent?.includes('Failed jobs'),
+    );
+    expect(older).toBeDefined();
+    fireEvent.click(older as HTMLElement);
+    await waitFor(() => {
+      expect(container.querySelector(`[data-failed-job="${ids[2]}"]`)).not.toBeNull();
+    });
+    expect(asked).toEqual(['(first)', '2026-09-30T08:48:00.000001Z_page-2']);
+    expect(container.querySelector('[data-failed-job-count]')?.textContent).toBe('3 failed jobs.');
+    // The last page offers nothing older.
+    expect(
+      screen
+        .queryAllByRole('button', { name: 'Show older' })
+        .filter((button) => button.closest('section')?.textContent?.includes('Failed jobs')),
+    ).toHaveLength(0);
   });
 
   it('names a non-admin’s refusal as the role, and a 503 as what it is', async () => {

@@ -1,0 +1,22 @@
+-- 0070 — an integration can be retired (WP-114, PROGRESS backlog 331).
+--
+-- ## `integrations.retired_at`
+--
+-- Until WP-114 no product path removed an integration: rotating a token meant creating a second one
+-- and re-pointing every binding, and the old row kept its sealed credential for ever. A row cannot
+-- simply be deleted, because `integration_actions.integration_id` is a `NOT NULL` foreign key with
+-- no cascade (migration 0007) and the audit must keep naming the credential a call was made with
+-- (BD-003). So `DELETE /api/integrations/:id` **retires** the row: it destroys the integration's
+-- `secrets` rows, empties `secret_ids` and `health`, and sets this column.
+--
+-- **Nullable, no default**: `null` is "live" — every row before this migration. A retired row is
+-- never loaded (the binding repository answers no account for it and refuses a binding of it), is
+-- listed by `GET /api/integrations` with this instant, and refuses every write; its
+-- `(org_id, type, name)` stays taken, so a new integration needs a new name.
+--
+-- **One writer**: `retireIntegration` (`apps/server/src/queries/onboarding-queries.ts`), which sets
+-- it once under the row's `for update` lock, in the transaction that checks no binding names the
+-- row and no unexpired, unconfirmed minted credential of it exists (TD-028 decision 10 revokes a
+-- minted credential through the integration that minted it).
+
+alter table integrations add column retired_at timestamptz;

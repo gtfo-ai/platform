@@ -7,8 +7,9 @@
  *
  *   GET /api/integrations/providers           the shipped providers and their fields (WP-100)
  *
- * The three commands on that row — `POST /api/integrations`, `POST …/:id/test` and, since WP-100,
- * `PATCH …/:id` — are served by `routes/onboarding.ts`, with the audit row a read does not have.
+ * The commands on that row — `POST /api/integrations`, `POST …/:id/test`, since WP-100
+ * `PATCH …/:id`, and since WP-114 `POST …/:id/secrets` (re-seal) and `DELETE …/:id` (retire) — are
+ * served by `routes/onboarding.ts`, with the audit row a read does not have.
  * `routes/client-census.test.ts` carries what the client calls and this server does not serve.
  *
  * ## `…/providers` is the catalogue, never a constructed provider
@@ -100,7 +101,7 @@ export const registerIntegrationRoutes = async (
       schema: {
         summary: 'The organisation’s integrations',
         description:
-          'Non-secret configuration only: the provider’s declared credential fields are removed here, and an integration whose provider this build does not ship publishes an empty `config` because the platform cannot tell its configuration from its credentials. `health.status` is `unknown` for a row nothing has probed; `POST /api/integrations/:id/test` (WP-21) is what writes `integrations.health`, so a tested integration publishes `ok` or `down` with the instant it was checked. `config_refusal` names the key paths of a stored configuration the provider’s schema refuses (a row written before WP-100 made the create parse it), with the `PATCH /api/integrations/:id` that repairs it; `null` when it parses.',
+          'Non-secret configuration only: the provider’s declared credential fields are removed here, and an integration whose provider this build does not ship publishes an empty `config` because the platform cannot tell its configuration from its credentials. `health.status` is `unknown` for a row nothing has probed; `POST /api/integrations/:id/test` (WP-21) is what writes `integrations.health`, so a tested integration publishes `ok` or `down` with the instant it was checked. `config_refusal` names the key paths of a stored configuration the provider’s schema refuses (a row written before WP-100 made the create parse it), with the `PATCH /api/integrations/:id` that repairs it; `null` when it parses. `retired_at` is when `DELETE /api/integrations/:id` retired it (its credentials destroyed, kept for the audit), `null` while live (WP-114).',
         tags: ['org'],
         response: { 200: integrationsResponseSchema },
       },
@@ -131,7 +132,7 @@ export const registerIntegrationRoutes = async (
       schema: {
         summary: 'The providers this build ships, and the configuration each one asks for',
         description:
-          'Read off each provider’s own schema (WP-100): `config_fields` are the non-credential fields, `required` when the schema supplies no default, and `secret_fields` are the credentials — configured by naming an environment variable in `secret_refs`, never by value (TD-020). The create parses `config` with the same schema, so a form that sends every `required` field sends a document the provider accepts.',
+          'Read off each provider’s own schema (WP-100): `config_fields` are the non-credential fields, `required` when the schema supplies no default, with the `kind` of value each takes (`string`, `integer`, `number`, `boolean`, `string_list`, `choice` with its `choices`, or `other`) so a form renders a typed control (WP-114), and `secret_fields` are the credentials — configured by naming an environment variable in `secret_refs`, never by value (TD-020). The create parses `config` with the same schema, so a form that sends every `required` field sends a document the provider accepts.',
         tags: ['org'],
         response: { 200: integrationProvidersResponseSchema },
       },

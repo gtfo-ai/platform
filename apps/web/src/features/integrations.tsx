@@ -27,17 +27,31 @@
  * its credential fields, read off the provider's own schema by the server — and renders one input
  * per field. A schema copied into the SPA would be a second list to keep true, and importing
  * `@platform/integrations` into the browser bundle would pull every adapter past TD-013's budget.
- * Every value is sent as text: the five shipped providers' required fields are all strings, and a
- * future non-string one is refused by the server by path rather than guessed at here.
+ *
+ * **Optional fields are offered too, each with a control of its declared type** (WP-114, PROGRESS
+ * backlog 332): the catalogue publishes every field's `kind` read off the provider's schema, so a
+ * boolean is a true/false choice and is sent as a boolean, a number as a number, a list as a list,
+ * a choice as one of its values. An optional field left empty is not sent — the provider's default
+ * applies. A value the control cannot type (a number that is not one) is sent as typed text, and
+ * the server refuses it by path rather than this form guessing. A field of a kind the catalogue
+ * calls `other` has no control and stays reachable through the `PATCH`.
+ *
+ * ## Re-seal and retire (WP-114, PROGRESS backlog 331)
+ *
+ * *Replace credentials* names new environment variables for the fields to rotate (the server reads
+ * and seals them, exactly as the create does), and *Retire* destroys the credentials and keeps the
+ * row, which the list then shows as retired with no controls: it refuses every write.
  *
  * ## A stored configuration that would not load says so, and can be repaired here
  *
  * `config_refusal` is the server's reading of a row written before the create parsed (criterion 4):
  * the card shows its message and *Edit configuration* sends the `PATCH` it names — the required
- * fields, and the removal of every key the provider does not declare.
+ * fields, any optional field the operator changed, and the removal of every key the provider does
+ * not declare (or that the operator cleared).
  */
 import type { IntegrationProvider, IntegrationSummary } from '@platform/contracts';
 import { type ReactElement, useState } from 'react';
+import { readErrorDetail } from '../api/read-error.js';
 import {
   useIntegrationProviders,
   useIntegrations,
@@ -66,9 +80,7 @@ const HEALTH_TONE: Record<string, BadgeTone> = {
   unknown: 'neutral',
 };
 
-/** The provider's required non-credential fields, in the schema's own order. */
-const requiredFieldsOf = (provider: IntegrationProvider): string[] =>
-  provider.config_fields.filter((field) => field.required).map((field) => field.name);
+type ConfigField = IntegrationProvider['config_fields'][number];
 
 /** The non-empty values, trimmed — an empty input is a field left out, which the server names. */
 const filled = (values: Readonly<Record<string, string>>, names: readonly string[]) =>
@@ -78,13 +90,131 @@ const filled = (values: Readonly<Record<string, string>>, names: readonly string
       .filter(([, value]) => value !== ''),
   );
 
+/** The optional fields this form offers a control for — every kind but `other` (WP-114). */
+const optionalFieldsOf = (provider: IntegrationProvider): ConfigField[] =>
+  provider.config_fields.filter((field) => !field.required && field.kind !== 'other');
+
+/** A stored value as the text its control holds; `''` is "not set". */
+const textOf = (stored: unknown): string => {
+  if (typeof stored === 'string') {
+    return stored;
+  }
+  if (typeof stored === 'number' || typeof stored === 'boolean') {
+    return String(stored);
+  }
+  if (Array.isArray(stored)) {
+    return stored.filter((entry) => typeof entry === 'string').join(', ');
+  }
+  return '';
+};
+
 /**
- * *Edit configuration* — the `PATCH /api/integrations/:id` a `config_refusal` names (WP-100).
+ * The typed value a control's text stands for, or `undefined` for an empty control (WP-114, backlog
+ * 332). A text the kind cannot read is sent as itself, so the server refuses it **by path** — a
+ * guess here (a `NaN` sent as `null`, an unknown choice dropped) would be a value nobody typed.
+ */
+const typedValueOf = (field: ConfigField, text: string): unknown => {
+  const trimmed = text.trim();
+  if (trimmed === '') {
+    return undefined;
+  }
+  switch (field.kind) {
+    case 'boolean':
+      return trimmed === 'true' ? true : trimmed === 'false' ? false : trimmed;
+    case 'integer':
+    case 'number': {
+      const number = Number(trimmed);
+      return Number.isFinite(number) ? number : trimmed;
+    }
+    case 'string_list':
+      return trimmed
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter((entry) => entry !== '');
+    case 'choice':
+      return field.choices.find((choice) => String(choice) === trimmed) ?? trimmed;
+    default:
+      return trimmed;
+  }
+};
+
+/** The typed values of every non-empty control among `fields`. */
+const typedValues = (
+  values: Readonly<Record<string, string>>,
+  fields: readonly ConfigField[],
+): Record<string, unknown> =>
+  Object.fromEntries(
+    fields.flatMap((field) => {
+      const value = typedValueOf(field, values[field.name] ?? '');
+      return value === undefined ? [] : [[field.name, value] as const];
+    }),
+  );
+
+/**
+ * One configuration field's control, by its declared kind (WP-114, backlog 332): a select for a
+ * boolean and a choice — whose first option, for an optional field, is the provider's default — a
+ * number input for a number, and text otherwise. Labelled by the field's own name.
+ */
+const ConfigFieldControl = ({
+  field,
+  provider,
+  value,
+  onChange,
+}: {
+  readonly field: ConfigField;
+  readonly provider: IntegrationProvider;
+  readonly value: string;
+  readonly onChange: (value: string) => void;
+}): ReactElement => {
+  const hint = field.required
+    ? `Required by ${provider.display_name}.`
+    : `Optional — left empty, ${provider.display_name}'s default applies.`;
+  if (field.kind === 'boolean' || field.kind === 'choice') {
+    const options = field.kind === 'boolean' ? ['true', 'false'] : field.choices.map(String);
+    return (
+      <label className="flex flex-col gap-1 text-sm">
+        <span className="font-medium">{field.name}</span>
+        <select
+          aria-label={field.name}
+          data-config-kind={field.kind}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          className="rounded-md border border-line bg-surface px-2 py-1 text-sm"
+        >
+          <option value="">{field.required ? 'Choose a value' : 'Provider default'}</option>
+          {options.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+        <span className="text-xs text-fg-muted">{hint}</span>
+      </label>
+    );
+  }
+  return (
+    <Field
+      label={field.name}
+      hint={field.kind === 'string_list' ? `${hint} Comma-separated.` : hint}
+      data-config-kind={field.kind}
+      {...(field.kind === 'integer' || field.kind === 'number'
+        ? { type: 'number', step: field.kind === 'integer' ? '1' : 'any' }
+        : {})}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  );
+};
+
+/**
+ * *Edit configuration* — the `PATCH /api/integrations/:id` a `config_refusal` names (WP-100), and
+ * since WP-114 every optional field with its typed control.
  *
- * It sets the provider's required fields, prefilled with what the row holds, and **removes** every
- * stored key the provider does not declare — the operator guide's old `host` for GitLab, the
- * British `organisation` for Sentry — so the repair of a row the old form or the old guide wrote is
- * one press. Optional fields keep their stored values: a key the form does not name is kept.
+ * It sets the provider's required fields, prefilled with what the row holds; an optional field is
+ * sent only when the operator **changed** it (a field cleared that held a value is removed), so a
+ * stored value nobody touched is never rewritten; and every stored key the provider does not
+ * declare is **removed** — the operator guide's old `host` for GitLab, the British `organisation`
+ * for Sentry — so the repair of a row the old form or the old guide wrote is one press.
  */
 const ConfigEditor = ({
   integration,
@@ -94,17 +224,18 @@ const ConfigEditor = ({
   readonly provider: IntegrationProvider;
 }): ReactElement => {
   const commands = useOnboardingCommands();
-  const required = requiredFieldsOf(provider);
+  const required = provider.config_fields.filter((field) => field.required);
+  const optional = optionalFieldsOf(provider);
   const declared = new Set(provider.config_fields.map((field) => field.name));
   const undeclared = Object.keys(integration.config).filter((key) => !declared.has(key));
-  const [values, setValues] = useState<Record<string, string>>(() =>
-    Object.fromEntries(
-      required.map((name) => {
-        const stored = integration.config[name];
-        return [name, typeof stored === 'string' ? stored : ''];
-      }),
-    ),
+  const stored = Object.fromEntries(
+    [...required, ...optional].map((field) => [field.name, textOf(integration.config[field.name])]),
   );
+  const [values, setValues] = useState<Record<string, string>>(() => ({ ...stored }));
+  const changed = optional.filter((field) => (values[field.name] ?? '') !== stored[field.name]);
+  const cleared = changed
+    .filter((field) => (values[field.name] ?? '').trim() === '' && field.name in integration.config)
+    .map((field) => field.name);
   return (
     <form
       className="flex flex-col gap-2"
@@ -113,18 +244,18 @@ const ConfigEditor = ({
         event.preventDefault();
         commands.patchIntegration.mutate({
           integrationId: integration.id,
-          config: filled(values, required),
-          remove: undeclared,
+          config: { ...typedValues(values, required), ...typedValues(values, changed) },
+          remove: [...undeclared, ...cleared],
         });
       }}
     >
-      {required.map((name) => (
-        <Field
-          key={name}
-          label={name}
-          hint={`Required by ${provider.display_name}.`}
-          value={values[name] ?? ''}
-          onChange={(event) => setValues({ ...values, [name]: event.target.value })}
+      {[...required, ...optional].map((field) => (
+        <ConfigFieldControl
+          key={field.name}
+          field={field}
+          provider={provider}
+          value={values[field.name] ?? ''}
+          onChange={(value) => setValues({ ...values, [field.name]: value })}
         />
       ))}
       {undeclared.length === 0 ? null : (
@@ -149,6 +280,134 @@ const ConfigEditor = ({
 };
 
 /**
+ * *Replace credentials* — `POST /api/integrations/:id/secrets` (WP-114, PROGRESS backlog 331). One
+ * input per credential field, each taking the **name** of the environment variable the server reads
+ * the new value from (TD-020, BD-002); a field left empty keeps its sealed value.
+ */
+const CredentialResealer = ({
+  integration,
+  provider,
+}: {
+  readonly integration: IntegrationSummary;
+  readonly provider: IntegrationProvider;
+}): ReactElement => {
+  const commands = useOnboardingCommands();
+  const [names, setNames] = useState<Record<string, string>>({});
+  const secretRefs = Object.fromEntries(
+    provider.secret_fields
+      .map((field) => [field, (names[field] ?? '').trim()] as const)
+      .filter(([, name]) => name !== ''),
+  );
+  return (
+    <form
+      className="flex flex-col gap-2"
+      aria-label={`Credentials of ${integration.name}`}
+      onSubmit={(event) => {
+        event.preventDefault();
+        commands.resealIntegrationSecrets.mutate({ integrationId: integration.id, secretRefs });
+      }}
+    >
+      <p className="text-xs text-fg-muted">
+        Name the environment variable the server should read each new value from; a field left empty
+        keeps its current credential. The old sealed value is deleted.
+      </p>
+      {provider.secret_fields.map((field) => (
+        <Field
+          key={field}
+          label={`New environment variable for ${field}`}
+          hint="The variable's name only, never its value. It must be on APP_INTEGRATION_SECRET_ENV."
+          value={names[field] ?? ''}
+          onChange={(event) => setNames({ ...names, [field]: event.target.value })}
+        />
+      ))}
+      <div>
+        <Button
+          type="submit"
+          tone="primary"
+          disabled={
+            Object.keys(secretRefs).length === 0 || commands.resealIntegrationSecrets.isPending
+          }
+        >
+          Re-seal credentials
+        </Button>
+      </div>
+      {commands.resealIntegrationSecrets.isError ? (
+        <ErrorNotice
+          title="The credentials were not replaced."
+          detail={String(commands.resealIntegrationSecrets.error)}
+        />
+      ) : null}
+      {commands.resealIntegrationSecrets.isSuccess ? (
+        <p className="text-xs" role="status">
+          {`Re-sealed ${commands.resealIntegrationSecrets.data.sealed_fields.join(', ')}. Test the connection to check the new value.`}
+        </p>
+      ) : null}
+    </form>
+  );
+};
+
+/**
+ * *Retire* — `DELETE /api/integrations/:id` (WP-114). Two presses, because it destroys the
+ * credentials; the server's own refusal (still bound, a live minted credential) is shown as it is.
+ */
+const RetireControl = ({
+  integration,
+}: {
+  readonly integration: IntegrationSummary;
+}): ReactElement => {
+  const commands = useOnboardingCommands();
+  const [confirming, setConfirming] = useState(false);
+  return (
+    <div className="flex flex-col gap-1">
+      {confirming ? (
+        <div className="flex flex-col gap-1 text-xs" data-retire-confirm>
+          <p>
+            Retiring deletes this integration's credentials. The row stays, listed as retired, so
+            the audit can still name it; nothing can load or change it again.
+          </p>
+          <div className="flex gap-2">
+            <Button
+              tone="danger"
+              disabled={commands.retireIntegration.isPending}
+              onClick={() => {
+                commands.retireIntegration.mutate(integration.id);
+              }}
+            >
+              Retire integration
+            </Button>
+            <Button
+              tone="ghost"
+              onClick={() => {
+                setConfirming(false);
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div>
+          <Button
+            tone="ghost"
+            onClick={() => {
+              setConfirming(true);
+            }}
+          >
+            Retire
+          </Button>
+        </div>
+      )}
+      {commands.retireIntegration.isError ? (
+        <ErrorNotice
+          title="The integration was not retired."
+          detail={String(commands.retireIntegration.error)}
+        />
+      ) : null}
+    </div>
+  );
+};
+
+/**
  * *Add an integration* — one input per field the chosen provider asks for (WP-100, backlog 328).
  *
  * The credential is still never typed here: each credential field takes the **name** of the
@@ -168,7 +427,13 @@ const CreateIntegrationForm = ({
     secretEnv: Record<string, string>;
   }>({ providerId: '', name: '', config: {}, secretEnv: {} });
   const provider = providers.find((entry) => entry.id === draft.providerId);
-  const required = provider === undefined ? [] : requiredFieldsOf(provider);
+  const fields =
+    provider === undefined
+      ? []
+      : [
+          ...provider.config_fields.filter((field) => field.required),
+          ...optionalFieldsOf(provider),
+        ];
   return (
     <form
       className="flex flex-col gap-2"
@@ -181,7 +446,7 @@ const CreateIntegrationForm = ({
           type: provider.type,
           provider: provider.id,
           name: draft.name.trim(),
-          config: filled(draft.config, required),
+          config: typedValues(draft.config, fields),
           secret_refs: filled(draft.secretEnv, provider.secret_fields),
         });
       }}
@@ -213,14 +478,14 @@ const CreateIntegrationForm = ({
       />
       {provider === undefined
         ? null
-        : required.map((name) => (
-            <Field
-              key={name}
-              label={name}
-              hint={`Required by ${provider.display_name}.`}
-              value={draft.config[name] ?? ''}
-              onChange={(event) =>
-                setDraft({ ...draft, config: { ...draft.config, [name]: event.target.value } })
+        : fields.map((field) => (
+            <ConfigFieldControl
+              key={field.name}
+              field={field}
+              provider={provider}
+              value={draft.config[field.name] ?? ''}
+              onChange={(value) =>
+                setDraft({ ...draft, config: { ...draft.config, [field.name]: value } })
               }
             />
           ))}
@@ -344,6 +609,7 @@ export const IntegrationsScreen = (): ReactElement => {
   const [guideError, setGuideError] = useState(false);
   const providers = useIntegrationProviders();
   const [editing, setEditing] = useState<string | null>(null);
+  const [resealing, setResealing] = useState<string | null>(null);
   /** The catalogue entry for this row, or `undefined` for a provider this build does not ship. */
   const providerOf = (integration: IntegrationSummary): IntegrationProvider | undefined =>
     providers.data?.items.find((entry) => entry.id === integration.provider);
@@ -355,7 +621,11 @@ export const IntegrationsScreen = (): ReactElement => {
       {integrations.isError ? (
         <ErrorNotice
           title="Integrations could not be loaded."
-          detail="Reading integration configuration needs the maintainer role (Q36)."
+          // Only a 403 is the role (WP-114, backlog 327's reading, `readErrorDetail`).
+          detail={readErrorDetail(
+            integrations.error,
+            'Reading integration configuration needs the maintainer role (Q36).',
+          )}
         />
       ) : null}
       {integrations.isSuccess && integrations.data.items.length === 0 ? (
@@ -374,10 +644,20 @@ export const IntegrationsScreen = (): ReactElement => {
               </span>
               <Badge tone="accent">{integration.type}</Badge>
               <Badge>{integration.provider}</Badge>
-              <Badge tone={HEALTH_TONE[integration.health.status] ?? 'neutral'}>
-                {integration.health.status}
-              </Badge>
+              {integration.retired_at === null ? (
+                <Badge tone={HEALTH_TONE[integration.health.status] ?? 'neutral'}>
+                  {integration.health.status}
+                </Badge>
+              ) : (
+                <Badge tone="neutral">retired</Badge>
+              )}
             </div>
+            {integration.retired_at === null ? null : (
+              <p className="text-xs text-fg-muted" data-integration-retired={integration.id}>
+                Retired {formatDateTime(integration.retired_at)}: its credentials are deleted and
+                nothing loads or changes it. It stays listed because the audit names it.
+              </p>
+            )}
             {integration.health.checked_at === null ? null : (
               <p className="text-xs text-fg-muted">
                 checked {formatDateTime(integration.health.checked_at)}
@@ -394,53 +674,76 @@ export const IntegrationsScreen = (): ReactElement => {
                 detail={integration.config_refusal.message}
               />
             )}
-            <div className="flex flex-wrap gap-2">
-              <Button
-                tone="primary"
-                disabled={commands.testIntegration.isPending}
-                onClick={() => {
-                  commands.testIntegration.mutate(integration.id);
-                }}
-              >
-                Test connection
-              </Button>
-              <Button
-                onClick={() => {
-                  setGuideError(false);
-                  void endpoints
-                    .integrationSetupGuide(integration.id)
-                    .then((response) => {
-                      setGuide({
-                        id: integration.id,
-                        markdown: response.markdown,
-                        title: response.title,
-                        webhookUrl: response.webhook_url,
-                      });
-                    })
-                    .catch(() => {
-                      setGuideError(true);
-                    });
-                }}
-              >
-                Setup guide
-              </Button>
-              {providerOf(integration) !== undefined ? (
+            {integration.retired_at !== null ? null : (
+              <div className="flex flex-wrap gap-2">
                 <Button
-                  tone="ghost"
+                  tone="primary"
+                  disabled={commands.testIntegration.isPending}
                   onClick={() => {
-                    setEditing(editing === integration.id ? null : integration.id);
+                    commands.testIntegration.mutate(integration.id);
                   }}
                 >
-                  {editing === integration.id ? 'Close configuration' : 'Edit configuration'}
+                  Test connection
                 </Button>
-              ) : null}
-            </div>
+                <Button
+                  onClick={() => {
+                    setGuideError(false);
+                    void endpoints
+                      .integrationSetupGuide(integration.id)
+                      .then((response) => {
+                        setGuide({
+                          id: integration.id,
+                          markdown: response.markdown,
+                          title: response.title,
+                          webhookUrl: response.webhook_url,
+                        });
+                      })
+                      .catch(() => {
+                        setGuideError(true);
+                      });
+                  }}
+                >
+                  Setup guide
+                </Button>
+                {providerOf(integration) !== undefined ? (
+                  <Button
+                    tone="ghost"
+                    onClick={() => {
+                      setEditing(editing === integration.id ? null : integration.id);
+                    }}
+                  >
+                    {editing === integration.id ? 'Close configuration' : 'Edit configuration'}
+                  </Button>
+                ) : null}
+                {providerOf(integration) !== undefined ? (
+                  <Button
+                    tone="ghost"
+                    onClick={() => {
+                      setResealing(resealing === integration.id ? null : integration.id);
+                    }}
+                  >
+                    {resealing === integration.id ? 'Close credentials' : 'Replace credentials'}
+                  </Button>
+                ) : null}
+              </div>
+            )}
             {(() => {
               const provider = providerOf(integration);
-              return editing !== integration.id || provider === undefined ? null : (
+              return editing !== integration.id ||
+                provider === undefined ||
+                integration.retired_at !== null ? null : (
                 <ConfigEditor integration={integration} provider={provider} />
               );
             })()}
+            {(() => {
+              const provider = providerOf(integration);
+              return resealing !== integration.id ||
+                provider === undefined ||
+                integration.retired_at !== null ? null : (
+                <CredentialResealer integration={integration} provider={provider} />
+              );
+            })()}
+            {integration.retired_at === null ? <RetireControl integration={integration} /> : null}
             <RefusedDeliveries integrationId={integration.id} />
           </Card>
         ))}

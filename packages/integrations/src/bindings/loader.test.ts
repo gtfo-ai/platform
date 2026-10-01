@@ -59,6 +59,7 @@ const gitBinding = (overrides: Partial<ProjectBinding> = {}): ProjectBinding => 
   name: 'acme gitlab',
   config: { base_url: 'https://git.example.test', project: 'acme/api' },
   secretIds: ['00000000-0000-4000-8000-00000000e001' as Id],
+  retired: false,
   ...overrides,
 });
 
@@ -165,6 +166,28 @@ describe('a binding that cannot be built', () => {
     await expect(loader.forProject(PROJECT, outsideARun)).rejects.toThrow(
       /has credentials that cannot be read: secret … is sealed under key/,
     );
+  });
+
+  it('refuses a binding of a retired integration by name, never reading it as absent (WP-114)', async () => {
+    let resolved = 0;
+    const loader = createPipelineIntegrationsLoader({
+      repository: repositoryOf([gitBinding({ retired: true })]),
+      secrets: {
+        resolve: async () => {
+          resolved += 1;
+          return { token: BINDING_TOKEN };
+        },
+      },
+      registry: createIntegrationRegistry([]),
+      executor: executor(),
+      gitProjectPath: async () => 'acme/api',
+    });
+    const error = await loader.forProject(PROJECT, outsideARun).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(BindingLoadError);
+    expect((error as BindingLoadError).integrationId).toBe(GIT_INTEGRATION);
+    expect((error as Error).message).toMatch(/which is retired: its credentials are destroyed/);
+    // Refused before anything is resolved or looked up: a retired row has no credential to read.
+    expect(resolved).toBe(0);
   });
 
   it('refuses two bindings of one type rather than choosing by sort order', async () => {
@@ -297,6 +320,7 @@ describe('a task-management binding that loads', () => {
             user_email: 'bot@example.test',
           },
           secretIds: [],
+          retired: false,
         },
       ],
       secrets: { api_token: 'FAKE-jira-token-0001' },
@@ -350,6 +374,7 @@ describe('a task-management binding that loads', () => {
             user_email: 'bot@example.test',
           },
           secretIds: [],
+          retired: false,
         },
       ],
       secrets: { api_token: 'FAKE-jira-token-0001' },
@@ -386,6 +411,7 @@ describe('a task-management binding that loads', () => {
             user_email: 'bot@example.test',
           },
           secretIds: [],
+          retired: false,
         },
       ],
       secrets: { api_token: 'FAKE-jira-token-0001' },
@@ -600,6 +626,7 @@ describe('an observability binding (WP-89)', () => {
     name: 'acme sentry',
     config: { base_url: 'https://sentry.example.test', organization: 'acme' },
     secretIds: ['00000000-0000-4000-8000-00000000e0e1' as Id],
+    retired: false,
     ...overrides,
   });
   const lokiBinding = (config: Record<string, string> = {}): ProjectBinding => ({
@@ -610,6 +637,7 @@ describe('an observability binding (WP-89)', () => {
     name: 'acme loki',
     config: { base_url: 'https://loki.example.test', ...config },
     secretIds: ['00000000-0000-4000-8000-00000000e0f1' as Id],
+    retired: false,
   });
 
   it('answers null for a project with none, and never touches the git binding', async () => {
@@ -707,6 +735,7 @@ describe('a project’s binding credentials, for a reading (WP-107)', () => {
     name: 'acme jira',
     config: {},
     secretIds: ['00000000-0000-4000-8000-00000000e107' as Id],
+    retired: false,
   };
   const resolving: SecretStore = {
     resolve: async (ids): Promise<Readonly<Record<string, string>>> =>

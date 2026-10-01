@@ -1816,12 +1816,15 @@ describe('a minted run credential against a credentialled git server (WP-76)', (
       timer: createVirtualTimer({ autoAdvance: true }),
       clock: fixedClock('2026-06-01T09:00:00.000Z', 1000),
     });
-    const writes = runCredentialWrites({
-      executor,
-      git: { port, ref: git.ref, project: 'acme/api', redactor: noSecretsRedactor() },
-      taskManagement: null,
-      communication: null,
-    });
+    const writes = runCredentialWrites(
+      {
+        executor,
+        git: { port, ref: git.ref, project: 'acme/api', redactor: noSecretsRedactor() },
+        taskManagement: null,
+        communication: null,
+      },
+      { isRetired: async () => false },
+    );
     // WP-80 (TD-028 decision 10): revoked through the integration that minted.
     const revocations = runCredentialRevocations({
       executor,

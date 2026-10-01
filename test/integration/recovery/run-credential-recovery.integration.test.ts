@@ -193,7 +193,9 @@ const mint = async (
   mode: TaskMode,
   scope: 'push' | 'read',
 ) => {
-  const writes = runCredentialWrites(await port.forProject(projectId, undefined as never));
+  const writes = runCredentialWrites(await port.forProject(projectId, undefined as never), {
+    isRetired: async () => false,
+  });
   const answer = await writes.mint({
     runId: ids.runId,
     taskId: ids.taskId,

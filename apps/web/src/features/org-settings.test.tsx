@@ -29,6 +29,7 @@ const CHAT_ACCOUNT: IntegrationSummary = {
   config: {},
   health: { status: 'unknown', checked_at: null, detail: null },
   config_refusal: null,
+  retired_at: null,
 };
 
 const json = (body: unknown, status = 200): Response =>

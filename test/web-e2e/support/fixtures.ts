@@ -833,6 +833,7 @@ export const integrations = {
       },
       health: { status: 'ok', checked_at: now, detail: null },
       config_refusal: null,
+      retired_at: null,
     }),
   ],
 };
@@ -1112,6 +1113,7 @@ export const failedJobs = failedJobsResponseSchema.parse({
     },
   ],
   total: 1,
+  next_cursor: null,
 });
 
 export const kbHealth = kbHealthResponseSchema.parse({

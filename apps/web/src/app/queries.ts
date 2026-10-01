@@ -7,7 +7,13 @@
  * notice and worst to debug. If the stream is down, the connection badge in the header says so.
  */
 import type { BusinessInterviewRequest } from '@platform/contracts';
-import { type UseQueryResult, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  type UseQueryResult,
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import { ApiError } from '../api/http.js';
 import { queryKeys } from '../api/keys.js';
 import type { SessionResponse } from '../auth/session.js';
@@ -519,28 +525,37 @@ export const useIdentityCandidates = (enabled: boolean) => {
 };
 
 /**
- * `GET /api/org/dead-letters` (WP-95, PROGRESS backlog 126): the newest page. Admin-only on the
- * server, so a non-admin's 403 is an answer the section names — not retried, and not drawn as an
- * empty list that would read as "nothing is poisoned".
+ * `GET /api/org/dead-letters` (WP-95, PROGRESS backlog 126): newest first, a page at a time — since
+ * WP-114 (backlog 324) an infinite query that follows `next_cursor`, so *Show older* reaches the
+ * oldest dead letter rather than stopping at the newest fifty. Admin-only on the server, so a
+ * non-admin's 403 is an answer the section names — not retried, and not drawn as an empty list that
+ * would read as "nothing is poisoned".
  */
 export const useDeadLetters = () => {
   const { endpoints } = useServices();
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: [...queryKeys.deadLetters],
-    queryFn: () => endpoints.deadLetters({}),
+    queryFn: ({ pageParam }) =>
+      endpoints.deadLetters(pageParam === null ? {} : { cursor: pageParam }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
     retry: false,
   });
 };
 
 /**
- * `GET /api/org/failed-jobs` (WP-108, PROGRESS backlog 325): the jobs pg-boss gave up on. Admin-only
- * like the dead letters beside it, and not retried for the same reason.
+ * `GET /api/org/failed-jobs` (WP-108, PROGRESS backlog 325): the jobs pg-boss gave up on, a page at
+ * a time with *Show older* following `next_cursor` (WP-114, backlog 324). Admin-only like the dead
+ * letters beside it, and not retried for the same reason.
  */
 export const useFailedJobs = () => {
   const { endpoints } = useServices();
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: [...queryKeys.failedJobs],
-    queryFn: () => endpoints.failedJobs(),
+    queryFn: ({ pageParam }) =>
+      endpoints.failedJobs(pageParam === null ? {} : { cursor: pageParam }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
     retry: false,
   });
 };
@@ -932,6 +947,27 @@ export const useOnboardingCommands = (mint?: MintKey) => {
           config: input.config,
           ...(input.remove.length === 0 ? {} : { remove: [...input.remove] }),
         }),
+      onSuccess: () => queryClient.invalidateQueries({ queryKey: [...queryKeys.integrations] }),
+    }),
+    /**
+     * Re-seal credentials (WP-114): field → the **name** of an environment variable the server
+     * reads, never a value. One `Idempotency-Key` per intent, so a double-click is one re-seal.
+     */
+    resealIntegrationSecrets: useMutation({
+      mutationFn: (input: { integrationId: string; secretRefs: Record<string, string> }) =>
+        endpoints.resealIntegrationSecrets(
+          input.integrationId,
+          { secret_refs: input.secretRefs },
+          intents.keyFor(['integration.secrets.write', input]),
+        ),
+      onSuccess: async (_result, input) => {
+        intents.release(['integration.secrets.write', input]);
+        await queryClient.invalidateQueries({ queryKey: [...queryKeys.integrations] });
+      },
+    }),
+    /** Retire (WP-114): credentials destroyed, row kept and listed as retired. */
+    retireIntegration: useMutation({
+      mutationFn: (integrationId: string) => endpoints.retireIntegration(integrationId),
       onSuccess: () => queryClient.invalidateQueries({ queryKey: [...queryKeys.integrations] }),
     }),
     /**

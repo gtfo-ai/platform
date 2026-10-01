@@ -23,8 +23,10 @@ import type { IntegrationActionExecutor } from '@platform/application';
 import { noSecretsRedactor } from '@platform/application';
 import type { Id } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
+import * as z from 'zod';
 import {
   configIssuesOf,
+  fieldKindOf,
   findShippedProvider,
   type ProviderCatalogueEntry,
   readSetupGuide,
@@ -287,11 +289,65 @@ describe('a provider’s configuration fields and its account-config check', () 
       name: 'socket_mode',
       required: false,
       account_only: true,
+      kind: 'boolean',
+      choices: [],
     });
     expect(slack.config_fields.find((field) => field.name === 'channel')).toEqual({
       name: 'channel',
       required: true,
       account_only: false,
+      kind: 'string',
+      choices: [],
     });
+  });
+});
+
+/**
+ * WP-114, PROGRESS backlog 332: the form's typed controls come from each field's declared type, read
+ * off the provider's own schema. Named per field (standing rule 10), so a reader that answered
+ * `string` for everything would fail here rather than agree with itself.
+ */
+describe('a configuration field’s declared kind', () => {
+  const kindOf = (provider: string, field: string) =>
+    findShippedProvider(provider)?.configFields.find((entry) => entry.name === field);
+
+  it('reads the type under the default, optional and nullable wrappers', () => {
+    expect(kindOf('jira-cloud', 'poll_enabled')).toMatchObject({ kind: 'boolean', choices: [] });
+    expect(kindOf('jira-cloud', 'project_keys')).toMatchObject({ kind: 'string_list' });
+    expect(kindOf('jira-cloud', 'pickup_label')).toMatchObject({ kind: 'string' });
+    expect(kindOf('jira-cloud', 'site_url')).toMatchObject({ kind: 'string', required: true });
+    expect(kindOf('gitlab', 'project')).toMatchObject({ kind: 'string', required: false });
+    expect(kindOf('gitlab', 'request_timeout_ms')).toMatchObject({ kind: 'integer' });
+    expect(kindOf('slack', 'team_id')).toMatchObject({ kind: 'string', required: false });
+  });
+
+  it('lists a choice’s values in the schema’s order, numbers as numbers', () => {
+    expect(kindOf('gitlab', 'read_access_level')).toMatchObject({
+      kind: 'choice',
+      choices: [10, 15, 20, 25, 30, 40, 50],
+    });
+    expect(kindOf('loki', 'auth_mode')).toMatchObject({
+      kind: 'choice',
+      choices: ['none', 'bearer', 'basic'],
+    });
+  });
+
+  it('names every shipped field, so a new shape is noticed here rather than rendered as text', () => {
+    for (const entry of SHIPPED_PROVIDERS) {
+      expect(
+        entry.configFields.filter((field) => field.kind === 'other').map((field) => field.name),
+        entry.id,
+      ).toEqual([]);
+    }
+  });
+
+  it('answers `other` for a shape it does not name, and `number` for a non-integer', () => {
+    expect(fieldKindOf(z.record(z.string(), z.string()))).toEqual({ kind: 'other', choices: [] });
+    expect(fieldKindOf(z.array(z.int()))).toEqual({ kind: 'other', choices: [] });
+    expect(fieldKindOf(z.union([z.literal('a'), z.string()]))).toEqual({
+      kind: 'other',
+      choices: [],
+    });
+    expect(fieldKindOf(z.number().optional())).toEqual({ kind: 'number', choices: [] });
   });
 });

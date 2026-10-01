@@ -14,14 +14,17 @@
  * Everything shown is text: the error is a handler's message, redacted and bounded by the server and
  * rendered through `UntrustedText` (BD-022); the queue name is rendered the same way, because a queue
  * this build no longer declares is exactly what may be listed. Admin only on the server; a non-admin
- * sees the refusal named rather than an empty list that would read as "nothing failed".
+ * sees the refusal named rather than an empty list that would read as "nothing failed" (and only a
+ * 403 is named so). Newest first, a page at a time; *Show older* follows the server's keyset
+ * `next_cursor` to the oldest (WP-114, PROGRESS backlog 324).
  */
 import type { FailedJob } from '@platform/contracts';
 import type { ReactElement } from 'react';
-import { ApiError } from '../api/http.js';
+import { readErrorDetail } from '../api/read-error.js';
 import { useFailedJobs } from '../app/queries.js';
 import {
   Badge,
+  Button,
   Card,
   EmptyState,
   ErrorNotice,
@@ -85,7 +88,9 @@ const FailedJobCard = ({ job }: { readonly job: FailedJob }): ReactElement => (
 
 export const FailedJobs = (): ReactElement => {
   const jobs = useFailedJobs();
-  const items = jobs.data?.items ?? [];
+  const pages = jobs.data?.pages ?? [];
+  const items = pages.flatMap((page) => page.items);
+  const total = pages.at(-1)?.total ?? 0;
   return (
     <section>
       <SectionHeading>Failed jobs</SectionHeading>
@@ -95,15 +100,12 @@ export const FailedJobs = (): ReactElement => {
         rather than for ever.
       </p>
       {jobs.isPending ? <Loading label="Loading failed jobs…" /> : null}
-      {jobs.isError ? (
+      {/* A failed *Show older* also sets `isError` (TanStack Query v5): the page above it did load. */}
+      {jobs.isError && !jobs.isFetchNextPageError ? (
         <ErrorNotice
           title="The failed jobs could not be loaded."
-          detail={
-            // Only a 403 is the role (the dead-letter section's sentence is backlog 327's defect).
-            jobs.error instanceof ApiError && jobs.error.status === 403
-              ? 'Reading them needs the admin role.'
-              : String(jobs.error)
-          }
+          // Only a 403 is the role (backlog 327, `readErrorDetail`).
+          detail={readErrorDetail(jobs.error, 'Reading them needs the admin role.')}
         />
       ) : null}
       {jobs.isSuccess && items.length === 0 ? (
@@ -114,9 +116,9 @@ export const FailedJobs = (): ReactElement => {
       ) : null}
       {jobs.isSuccess && items.length > 0 ? (
         <p className="pb-2 text-xs" data-failed-job-count="true">
-          {items.length === jobs.data.total
-            ? `${formatInteger(jobs.data.total)} failed job${jobs.data.total === 1 ? '' : 's'}.`
-            : `The newest ${formatInteger(items.length)} of ${formatInteger(jobs.data.total)} failed jobs.`}
+          {items.length >= total && !jobs.hasNextPage
+            ? `${formatInteger(total)} failed job${total === 1 ? '' : 's'}.`
+            : `The newest ${formatInteger(items.length)} of ${formatInteger(total)} failed jobs.`}
         </p>
       ) : null}
       <div className="flex flex-col gap-2">
@@ -126,6 +128,25 @@ export const FailedJobs = (): ReactElement => {
           </div>
         ))}
       </div>
+      {/* WP-114, backlog 324: the server pages with a keyset cursor, so the list reaches its oldest. */}
+      {jobs.hasNextPage ? (
+        <div className="pt-2">
+          <Button
+            disabled={jobs.isFetchingNextPage}
+            onClick={() => {
+              void jobs.fetchNextPage();
+            }}
+          >
+            {jobs.isFetchingNextPage ? 'Loading older…' : 'Show older'}
+          </Button>
+        </div>
+      ) : null}
+      {jobs.isFetchNextPageError ? (
+        <ErrorNotice
+          title="The older failed jobs could not be loaded."
+          detail={readErrorDetail(jobs.error, 'Reading them needs the admin role.')}
+        />
+      ) : null}
     </section>
   );
 };

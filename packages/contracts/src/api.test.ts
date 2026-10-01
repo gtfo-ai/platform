@@ -445,11 +445,20 @@ describe('the list envelopes and the KB health report', () => {
       config: { base_url: 'https://gitlab.example.test' },
       health: { status: 'unknown' as const, checked_at: null, detail: null },
       config_refusal: null,
+      retired_at: null,
     };
     expect(integrationsResponseSchema.parse({ items: [integration] })).toBeTruthy();
     // WP-100: the refusal is required-nullable, so a server that forgot it is caught here.
     const { config_refusal: _dropped, ...withoutRefusal } = integration;
     expect(integrationsResponseSchema.safeParse({ items: [withoutRefusal] }).success).toBe(false);
+    // WP-114: so is `retired_at` — a server that forgot it would publish a retired row as live.
+    const { retired_at: _forgotten, ...withoutRetired } = integration;
+    expect(integrationsResponseSchema.safeParse({ items: [withoutRetired] }).success).toBe(false);
+    expect(
+      integrationsResponseSchema.safeParse({
+        items: [{ ...integration, retired_at: '2026-10-01T09:00:00.000Z' }],
+      }).success,
+    ).toBe(true);
     expect(
       integrationsResponseSchema.safeParse({
         items: [{ ...integration, health: { status: 'fine', checked_at: null, detail: null } }],

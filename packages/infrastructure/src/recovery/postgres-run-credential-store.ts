@@ -105,12 +105,20 @@ const fromAndPredicate = (integration: 'present' | 'gone'): string => `
 const INTEGRATION_CLAUSE = {
   present: `join integrations i
      on i.id = m.integration_id
-    and i.type = 'git'`,
+    and i.type = 'git'
+    and i.retired_at is null`,
   gone: '',
 } as const;
 
+/**
+ * A **retired** integration (WP-114) counts as gone: its credentials are destroyed, so no adapter
+ * can be built to revoke through it, and the binding repository answers no account for it. The
+ * retire is refused while an unexpired, unconfirmed mint of it exists, so a row here is a mint
+ * whose provider call was in flight across the retire — reported, never called.
+ */
 const GONE_PREDICATE = `
-    and not exists (select 1 from integrations i where i.id = m.integration_id)`;
+    and not exists (
+      select 1 from integrations i where i.id = m.integration_id and i.retired_at is null)`;
 
 const FROM_AND_PREDICATE = fromAndPredicate('present');
 

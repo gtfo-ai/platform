@@ -601,9 +601,19 @@ guide, §4). The form never takes a credential. The server checks the configurat
 provider's own schema before it stores anything, so a create can be refused for a reason outside the
 form, and the server's own message — naming the field — is shown.
 
+The form also offers the provider's optional settings, each as a control of its type (a yes/no
+choice, a number, a comma-separated list); leave one empty and the provider's default applies.
+
 An integration whose stored configuration would not load (one created before the form asked for
 these fields) says so on its card, naming the fields. **Edit configuration** fixes it: it asks for
-the required fields again and removes the keys the provider does not declare.
+the required fields again, lets you change the optional ones, and removes the keys the provider does
+not declare.
+
+**Replace credentials** (admin) rotates a token: name the new environment variable for each
+credential you are replacing, and the server seals the new value and deletes the old one. **Retire**
+(admin) removes an integration you no longer use: its credentials are deleted and its card stays,
+marked *retired*, with no controls, because the audit still names it. A project that binds it, or a
+run credential it minted that is still live, refuses the retire, and the card says which.
 
 ## 10. Audit log
 
@@ -620,7 +630,9 @@ The signed-in session, the theme, the instance version, the user list with roles
 identities** — which Slack, Jira or GitLab account is which person, without which a decision made in
 those tools is refused as unmapped — and, for an administrator, the **dead letters**: events the
 platform stopped retrying after their handler failed every attempt, each with a **Re-queue** button
-for once the fault is fixed (the operator guide's §9 says what a re-queue does and does not do).
+for once the fault is fixed (the operator guide's §9 says what a re-queue does and does not do). The
+newest come first, and **Show older** reaches the rest; the failed-jobs list beside it pages the
+same way.
 
 **Organisation settings** (since WP-93) are the maximums every project is held to, and an
 administrator saves each section on its own:

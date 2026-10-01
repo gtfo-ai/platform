@@ -153,23 +153,26 @@ export const ProjectSettingsScreen = ({
         </p>
         <div className="flex flex-col gap-1">
           <p className="text-xs font-semibold">Which integrations this project uses</p>
-          {(integrations.data?.items ?? []).map((integration) => (
-            <label key={integration.id} className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={(selected ?? []).includes(integration.id)}
-                onChange={(event) =>
-                  setSelected(
-                    event.target.checked
-                      ? [...(selected ?? []), integration.id]
-                      : (selected ?? []).filter((id) => id !== integration.id),
-                  )
-                }
-              />
-              <UntrustedText value={integration.name} />
-              <Badge>{integration.type}</Badge>
-            </label>
-          ))}
+          {/* A retired integration (WP-114) cannot be bound: the server refuses it. */}
+          {(integrations.data?.items ?? [])
+            .filter((integration) => integration.retired_at === null)
+            .map((integration) => (
+              <label key={integration.id} className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={(selected ?? []).includes(integration.id)}
+                  onChange={(event) =>
+                    setSelected(
+                      event.target.checked
+                        ? [...(selected ?? []), integration.id]
+                        : (selected ?? []).filter((id) => id !== integration.id),
+                    )
+                  }
+                />
+                <UntrustedText value={integration.name} />
+                <Badge>{integration.type}</Badge>
+              </label>
+            ))}
         </div>
         <div>
           <Button

@@ -33,6 +33,7 @@ const row = (overrides: Partial<IntegrationRow> = {}): IntegrationRow => ({
   name: 'acme gitlab',
   config: {},
   health: {},
+  retiredAt: null,
   ...overrides,
 });
 

@@ -32,6 +32,7 @@ const record = (overrides: Partial<FailedJobRecord> = {}): FailedJobRecord => ({
   createdAt: '2026-09-30T08:00:00.000Z',
   failedAt: '2026-09-30T08:48:00.000Z',
   error: `provider answered 401 for token ${FAKE_TOKEN}`,
+  position: { at: '2026-09-30T08:48:00.000000Z', id: '00000000-0000-4000-8000-000000000f01' },
   ...overrides,
 });
 
@@ -44,7 +45,7 @@ interface World {
 
 let app: FastifyInstance;
 let world: World;
-let asked: { limit: number }[];
+let asked: { limit: number; before?: { at: string; id: string } }[];
 
 const build = async (composed = true): Promise<void> => {
   asked = [];
@@ -70,8 +71,11 @@ const build = async (composed = true): Promise<void> => {
   await registerFailedJobRoutes(app, {
     read: composed
       ? async (query) => {
-          asked.push({ limit: query.limit });
-          return { items: world.rows, total: world.total };
+          asked.push({
+            limit: query.limit,
+            ...(query.before === undefined ? {} : { before: query.before }),
+          });
+          return { items: world.rows.slice(0, query.limit), total: world.total };
         }
       : null,
     projectRole: async () => null,
@@ -122,7 +126,9 @@ describe('GET /api/org/failed-jobs (WP-108, backlog 325)', () => {
     expect(response.body).not.toContain(FAKE_TOKEN);
     expect(Object.keys(job)).not.toContain('data');
     expect(Object.keys(job)).not.toContain('payload');
-    expect(asked).toEqual([{ limit: DEFAULT_FAILED_JOBS_PAGE }]);
+    // One past the page, so whether an older page exists is read rather than guessed (WP-114).
+    expect(asked).toEqual([{ limit: DEFAULT_FAILED_JOBS_PAGE + 1 }]);
+    expect(body.next_cursor).toBeNull();
   });
 
   it('bounds the error after redacting it, and says the bound cut it', async () => {
@@ -141,8 +147,37 @@ describe('GET /api/org/failed-jobs (WP-108, backlog 325)', () => {
 
   it('passes the caller’s limit and refuses one past the page', async () => {
     await list('?limit=5');
-    expect(asked).toEqual([{ limit: 5 }]);
+    expect(asked).toEqual([{ limit: 6 }]);
     expect((await list('?limit=101')).statusCode).toBe(400);
+  });
+
+  it('pages back to the oldest through an opaque cursor built from the reader’s position (WP-114)', async () => {
+    const at = (minute: number) => `2026-09-30T08:${String(minute).padStart(2, '0')}:00.123456Z`;
+    const id = (n: number) => `00000000-0000-4000-8000-0000000010${String(n).padStart(2, '0')}`;
+    world.rows = [3, 2, 1].map((n) => record({ id: id(n), position: { at: at(n), id: id(n) } }));
+    world.total = 3;
+    const first = (await list('?limit=2')).json();
+    expect(first.items.map((job: { id: string }) => job.id)).toEqual([id(3), id(2)]);
+    // The microseconds survive: the cursor is the database's rendering, never a `Date`'s.
+    expect(first.next_cursor).toBe(`${at(2)}_${id(2)}`);
+    world.rows = [record({ id: id(1), position: { at: at(1), id: id(1) } })];
+    const second = (await list(`?limit=2&cursor=${encodeURIComponent(first.next_cursor)}`)).json();
+    expect(asked.at(-1)).toEqual({ limit: 3, before: { at: at(2), id: id(2) } });
+    expect(second.items.map((job: { id: string }) => job.id)).toEqual([id(1)]);
+    expect(second.next_cursor).toBeNull();
+    expect(second.total).toBe(3);
+  });
+
+  it.each([
+    'not-a-cursor',
+    '2026-09-30T08:00:00.000Z_00000000-0000-4000-8000-000000001001',
+    '2026-13-45T08:00:00.123456Z_00000000-0000-4000-8000-000000001001',
+    "2026-09-30T08:00:00.123456Z_x' or 1=1 --",
+  ])('refuses a cursor it did not hand out (%s), reading nothing', async (cursor) => {
+    const response = await list(`?cursor=${encodeURIComponent(cursor)}`);
+    expect(response.statusCode).toBe(400);
+    expect(codeOf(response.body)).toBe('invalid_cursor');
+    expect(asked).toEqual([]);
   });
 
   it('answers 503 by name on a process that reads no job queue', async () => {

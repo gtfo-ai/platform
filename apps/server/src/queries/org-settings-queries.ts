@@ -15,6 +15,7 @@ import type { Id, JsonObject, OrganisationSettings } from '@platform/contracts';
 import { db as dbAdapters } from '@platform/infrastructure';
 import { and, asc, eq, sql } from 'drizzle-orm';
 import { projectSettingsFrom, repositorySnapshotFrom } from '../config-layers.js';
+import { HttpError } from '../errors.js';
 import { chosenAutonomyLevelOf, type OrgCapProject, statedWipOf } from '../org-caps.js';
 import type { Database } from './identity-queries.js';
 import { ensureOrganisation } from './onboarding-queries.js';
@@ -64,6 +65,30 @@ export const replaceOrganisationSettings = async (
       .for('update');
     const before: unknown = locked[0]?.settings ?? {};
     const after = await next(before);
+    /**
+     * **A retired account is never the organisation's chat account** (WP-114 pre-review, PROGRESS
+     * backlog 387): its credential is deleted and no loader answers it, so every organisation alarm
+     * and digest would fail. Checked here, inside the write's transaction, under the account's row
+     * lock `for share` — the lock `DELETE /api/integrations/:id` takes `for update` — so a retire
+     * that committed first is read here and refuses this write, and a retire that waits behind this
+     * write reads the flag it committed and refuses itself (`retireIntegration`).
+     */
+    const flagged = after.notifications?.organisation_default;
+    if (flagged !== undefined && flagged !== null) {
+      const account = await tx
+        .select({ retiredAt: integrations.retiredAt })
+        .from(integrations)
+        .where(eq(integrations.id, flagged))
+        .for('share');
+      const retiredAt = account[0]?.retiredAt ?? null;
+      if (retiredAt !== null) {
+        throw new HttpError(
+          409,
+          'integration_retired',
+          `notifications.organisation_default names ${flagged}, which was retired at ${retiredAt.toISOString()}: its credentials are deleted and it can post nothing. Name a live communication account, or remove the setting`,
+        );
+      }
+    }
     await tx
       .update(organizations)
       .set({ settings: after as JsonObject, updatedAt: sql`now()` })

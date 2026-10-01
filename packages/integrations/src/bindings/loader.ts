@@ -355,6 +355,14 @@ export const createPipelineIntegrationsLoader = (
         integrationId: binding.integrationId,
         ...(cause === undefined ? {} : { cause }),
       });
+    if (binding.retired) {
+      // WP-114: the integration's credentials were destroyed when it was retired, and the retire is
+      // refused while a binding names it — so this row was written past that refusal. Refused by
+      // name, never read as an absent binding (standing rule 20).
+      throw refusal(
+        `${subject} "${binding.name}" (${binding.provider}) names integration ${binding.integrationId}, which is retired: its credentials are destroyed, so it cannot be loaded. Bind a live integration instead`,
+      );
+    }
     let registration: ReturnType<IntegrationRegistry['get']>;
     try {
       registration = options.registry.get(type, binding.provider);
@@ -463,6 +471,8 @@ export const createPipelineIntegrationsLoader = (
         name: account.name,
         config: account.config,
         secretIds: account.secretIds,
+        // `forIntegration` answers no account for a retired integration, so this one is live.
+        retired: false,
       },
       'git',
       scope,

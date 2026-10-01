@@ -25,8 +25,13 @@
  *
  * There is no re-queue. Backlog 325 made one conditional on the job's handler being shown to
  * re-validate on fire, and nobody has shown that for every queue; what a failed job left is the
- * recovery pass's (where `recovered_by` names a row) or a person's. The list pages no further than
- * its `limit` and says so against `total`.
+ * recovery pass's (where `recovered_by` names a row) or a person's.
+ *
+ * ## Paging (WP-114, PROGRESS backlog 324)
+ *
+ * Newest first, `limit` at a time, with an opaque `next_cursor` that pages back to the oldest — a
+ * keyset over the failed instant (as the database renders it, microseconds) and the job id, so a job
+ * failing between two reads moves no later page. `total` is every failed job, not the page.
  */
 import { jobExhaustionOf, type SecretRedactor } from '@platform/application';
 import {
@@ -40,7 +45,7 @@ import {
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { type PermissionGuardDependencies, requirePermission } from '../auth/rbac.js';
-import { HttpError } from '../errors.js';
+import { BadRequestError, HttpError } from '../errors.js';
 
 /** The page a screen asks for when it names none. */
 export const DEFAULT_FAILED_JOBS_PAGE = 50;
@@ -54,12 +59,45 @@ export interface FailedJobRecord {
   readonly createdAt: string;
   readonly failedAt: string;
   readonly error: string | null;
+  /** The keyset position the next page starts after (`readFailedJobs`, WP-114). */
+  readonly position: FailedJobPosition;
 }
 
-export type FailedJobsReader = (query: { readonly limit: number }) => Promise<{
+/** The ordering instant at microsecond precision, as the database rendered it, and the job id. */
+export interface FailedJobPosition {
+  readonly at: string;
+  readonly id: string;
+}
+
+export type FailedJobsReader = (query: {
+  readonly limit: number;
+  readonly before?: FailedJobPosition;
+}) => Promise<{
   readonly items: readonly FailedJobRecord[];
   readonly total: number;
 }>;
+
+const CURSOR =
+  /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z)_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+
+/** The opaque cursor: the position the reader returned, joined — never re-derived from a `Date`. */
+export const failedJobCursorOf = (position: FailedJobPosition): string =>
+  `${position.at}_${position.id}`;
+
+/**
+ * The position a `cursor` names, or a `400` — anything but what this route handed out is a client
+ * error rather than a malformed timestamp in a query (`parseDeadLetterCursor`'s argument).
+ */
+export const parseFailedJobCursor = (cursor: string): FailedJobPosition => {
+  const match = CURSOR.exec(cursor);
+  if (match === null || Number.isNaN(Date.parse(match[1] as string))) {
+    throw new BadRequestError(
+      'invalid_cursor',
+      'cursor must be the `next_cursor` this endpoint returned',
+    );
+  }
+  return { at: match[1] as string, id: match[2] as string };
+};
 
 export interface FailedJobRoutesOptions {
   /** `null` on a process that reads no job queue; the route then answers 503 by name. */
@@ -104,7 +142,7 @@ export const registerFailedJobRoutes = async (
       schema: {
         summary: 'Jobs pg-boss gave up on after their last retry, newest first',
         description:
-          'The rows of pg-boss’s job table in state `failed`: the queue, the attempts (the first run plus every retry), the retry limit, when it was created and when it failed, and the failure’s message — **redacted by the platform’s patterns and bounded**, with `error_truncated` saying whether the bound cut it. `exhaustion` is the census’s row for the queue (whether it bounds its own failures or relies on retries, what a failed job drops, and what recovers it), `null` for a queue this build does not declare. `total` is every failed job pg-boss still keeps, not the page. The job payload is never published, and there is no re-queue. Admin only (WP-108, PROGRESS backlog 325).',
+          'The rows of pg-boss’s job table in state `failed`, newest first, `limit` at a time: `next_cursor` is **opaque** — send it back unchanged as `cursor` for the next, older page — and `null` on the page that reached the oldest. Each names the queue, the attempts (the first run plus every retry), the retry limit, when it was created and when it failed, and the failure’s message — **redacted by the platform’s patterns and bounded**, with `error_truncated` saying whether the bound cut it. `exhaustion` is the census’s row for the queue (whether it bounds its own failures or relies on retries, what a failed job drops, and what recovers it), `null` for a queue this build does not declare. `total` is every failed job pg-boss still keeps, not the page. The job payload is never published, and there is no re-queue. Admin only (WP-108, PROGRESS backlog 325).',
         tags: ['org'],
         querystring: failedJobsQuerySchema,
         response: { 200: failedJobsResponseSchema, 400: apiErrorSchema, 503: apiErrorSchema },
@@ -118,10 +156,22 @@ export const registerFailedJobRoutes = async (
           'this process reads no job queue, so it cannot list the jobs that failed',
         );
       }
-      const page = await options.read({ limit: request.query.limit ?? DEFAULT_FAILED_JOBS_PAGE });
+      const limit = request.query.limit ?? DEFAULT_FAILED_JOBS_PAGE;
+      // One row past the page, so "is there an older page" is read rather than guessed from a count
+      // that moves (the dead-letter route's shape).
+      const page = await options.read({
+        limit: limit + 1,
+        ...(request.query.cursor === undefined
+          ? {}
+          : { before: parseFailedJobCursor(request.query.cursor) }),
+      });
+      const items = page.items.slice(0, limit);
+      const last = items.at(-1);
       return {
-        items: page.items.map((row) => toWireFailedJob(row, options.redactor)),
+        items: items.map((row) => toWireFailedJob(row, options.redactor)),
         total: page.total,
+        next_cursor:
+          page.items.length > limit && last !== undefined ? failedJobCursorOf(last.position) : null,
       };
     },
   );

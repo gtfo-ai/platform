@@ -182,6 +182,8 @@ export const integrations = pgTable('integrations', {
   health: jsonb('health').$type<JsonObject>().notNull().default({}),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  /** Set once by `DELETE /api/integrations/:id` (migration 0070, WP-114); `null` while live. */
+  retiredAt: timestamp('retired_at', { withTimezone: true }),
 });
 
 export const bindings = pgTable('bindings', {
