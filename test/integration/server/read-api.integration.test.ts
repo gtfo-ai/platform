@@ -43,18 +43,20 @@ import {
   findRun,
   findRunContextPack,
   findRunPrompt,
+  findRunSettings,
   findTaskDetail,
   listInbox,
   listProjectTasks,
   listRunCommands,
   listRunMessages,
   listRunningAgents,
+  listTaskEvents,
 } from '../../../apps/server/src/queries/pipeline-queries.js';
 import {
   findProjectReadiness,
   listProjectSummaries,
 } from '../../../apps/server/src/queries/project-queries.js';
-import { registerRunRoutes } from '../../../apps/server/src/routes/runs.js';
+import { databaseRunQueries, registerRunRoutes } from '../../../apps/server/src/routes/runs.js';
 import { SseHub, type SseTransport } from '../../../apps/server/src/sse/hub.js';
 import { startTranscriptBridge } from '../../../apps/server/src/sse/transcript-bridge.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
@@ -1801,7 +1803,7 @@ describe('the run commands a run screen reads (WP-85)', () => {
         sessionId: 'session-1',
       };
     });
-    await registerRunRoutes(app, { database: drizzled });
+    await registerRunRoutes(app, { queries: databaseRunQueries(drizzled) });
     await app.ready();
     try {
       const allowed = await app.inject({ method: 'GET', url: `/api/runs/${runId}/commands` });
@@ -1813,5 +1815,93 @@ describe('the run commands a run screen reads (WP-85)', () => {
     } finally {
       await app.close();
     }
+  });
+});
+
+describe('the run settings and the task export’s events against PostgreSQL (WP-112)', () => {
+  const ACTOR = '{"kind":"system","component":"pipeline"}';
+
+  it('answers a run’s settings three ways, and the record carries the hash or null', async () => {
+    // `runId` was inserted with neither column: the shape of every run created before WP-91, whose
+    // `settings_snapshot` is the column default `{}` — which must not be served as a document.
+    const before = await pool.query<{ snapshot: unknown }>(
+      'select settings_snapshot as snapshot from runs where id = $1',
+      [runId],
+    );
+    expect(before.rows[0]?.snapshot).toEqual({});
+    expect(await findRunSettings(drizzled, runId)).toEqual({ found: true, recorded: false });
+    expect((await findRun(drizzled, runId))?.settings_hash).toBeNull();
+
+    const hash = 'c3'.repeat(32);
+    const snapshot = { format: 1, effective: { version: 1 }, templates: ['feature'] };
+    await pool.query(
+      'update runs set settings_snapshot = $2::jsonb, settings_hash = $3 where id = $1',
+      [localRunId, JSON.stringify(snapshot), hash],
+    );
+    expect(await findRunSettings(drizzled, localRunId)).toEqual({
+      found: true,
+      recorded: true,
+      settingsHash: hash,
+      snapshot,
+    });
+    expect((await findRun(drizzled, localRunId))?.settings_hash).toBe(hash);
+    expect(
+      (await findTaskDetail(drizzled, taskId))?.runs.find((entry) => entry.id === localRunId)
+        ?.settings_hash,
+    ).toBe(hash);
+
+    expect(await findRunSettings(drizzled, '00000000-0000-4000-8000-0000000000ff')).toEqual({
+      found: false,
+    });
+  });
+
+  it('reads the task’s own stream and every event correlated to it, oldest first, bounded', async () => {
+    const task = await pool.query<{ id: string }>(
+      `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state)
+       values ($1, 'fake-jira', 'ACME-112', 'https://jira.example.test/browse/ACME-112', 'feature',
+               'active') returning id`,
+      [projectId],
+    );
+    const exported = task.rows[0]?.id as string;
+    const runStream = '00000000-0000-4000-8000-000000000112';
+    const unrelated = '00000000-0000-4000-8000-000000000113';
+    const append = async (
+      streamType: string,
+      streamId: string,
+      seq: number,
+      type: string,
+      correlation: string | null,
+    ) =>
+      pool.query(
+        `insert into events (stream_type, stream_id, stream_seq, type, payload, actor, correlation_id)
+         values ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7)`,
+        [streamType, streamId, seq, type, JSON.stringify({ seq, type }), ACTOR, correlation],
+      );
+    await append('task', exported, 1, 'task.created', null);
+    await append('run', runStream, 1, 'run.created', exported);
+    await append('task', exported, 2, 'task.stage.entered', exported);
+    // Neither on the task's stream nor correlated to it: never in its export.
+    await append('task', unrelated, 1, 'task.created', unrelated);
+
+    const all = await listTaskEvents(drizzled, exported, 10);
+    expect(all.map((row) => `${row.streamType}:${row.type}`)).toEqual([
+      'task:task.created',
+      'run:run.created',
+      'task:task.stage.entered',
+    ]);
+    expect(all.map((row) => row.position)).toEqual(
+      [...all.map((row) => row.position)].sort((a, b) => a - b),
+    );
+    expect(all[1]).toMatchObject({
+      streamId: runStream,
+      correlationId: exported,
+      payload: { seq: 1, type: 'run.created' },
+      actor: { kind: 'system', component: 'pipeline' },
+    });
+    expect(all[0]?.occurredAt).toBeInstanceOf(Date);
+
+    // The bound is the caller's, and it keeps the oldest.
+    const two = await listTaskEvents(drizzled, exported, 2);
+    expect(two.map((row) => row.type)).toEqual(['task.created', 'run.created']);
   });
 });

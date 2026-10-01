@@ -230,7 +230,7 @@ describe('the whole check, against this repository’s configuration', () => {
     );
     expect(result).toMatchObject({ code: 1, out: 'FAIL: coverage:ratchet' });
     expect(result.err).toContainEqual(
-      expect.stringMatching(/^server branches: measured .* is below its floor 56/),
+      expect.stringMatching(/^server branches: measured .* is below its floor 57/),
     );
   });
 

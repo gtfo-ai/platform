@@ -274,10 +274,23 @@ describe('records', () => {
       cost: { usd: 1.25, is_estimate: false, price_list_id: null },
       wall_ms: 60_000,
       redaction_count: 2,
+      settings_hash: null,
     };
     expect(runRecordSchema.parse(run)).toEqual(run);
     expect(runRecordSchema.safeParse({ ...run, attempt: 0 }).success).toBe(false);
     expect(runRecordSchema.safeParse({ ...run, redaction_count: -1 }).success).toBe(false);
+    // WP-112, backlog 309: the hash is required on the wire — `null` is a statement ("created
+    // before WP-91"), so a record that omits the field says nothing and is refused — and it is a
+    // sha256 in lowercase hex, never a truncation or a prefixed spelling.
+    const hash = 'a'.repeat(64);
+    expect(runRecordSchema.parse({ ...run, settings_hash: hash }).settings_hash).toBe(hash);
+    const { settings_hash: _omitted, ...withoutHash } = run;
+    expect(runRecordSchema.safeParse(withoutHash).success).toBe(false);
+    for (const wrong of ['a'.repeat(63), 'A'.repeat(64), `sha256:${'a'.repeat(64)}`, '']) {
+      expect(runRecordSchema.safeParse({ ...run, settings_hash: wrong }).success, wrong).toBe(
+        false,
+      );
+    }
   });
 
   it('carries the spend of a budget window alongside its limit', () => {

@@ -31,18 +31,33 @@
  * integration half is blind to a route that ignores the verdict, and this half is blind to a query
  * that reports the wrong one.
  */
-import type { UserRole } from '@platform/contracts';
+import type {
+  RunRecord,
+  TaskAuditEntry,
+  TaskDetailResponse,
+  TaskRecord,
+  UserRole,
+} from '@platform/contracts';
+import {
+  MAX_TASK_EXPORT_EVENTS,
+  MAX_TASK_EXPORT_HUMAN_ACTIONS,
+  taskDetailResponseSchema,
+  taskExportResponseSchema,
+} from '@platform/contracts';
+import { redaction } from '@platform/infrastructure';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { toApiError } from '../errors.js';
-import type { ArtifactBody } from '../queries/pipeline-queries.js';
+import type { ArtifactBody, TaskEventRow } from '../queries/pipeline-queries.js';
 import { registerTaskRoutes, type TaskQueries } from './tasks.js';
 
 const ARTIFACT = '00000000-0000-4000-8000-0000000000a1';
 const TASK = '00000000-0000-4000-8000-0000000000b1';
 const PROJECT = '00000000-0000-4000-8000-0000000000c1';
 const USER = '00000000-0000-4000-8000-0000000000d1';
+const RUN = '00000000-0000-4000-8000-0000000000e1';
+const EXPORTED_AT = '2026-10-01T12:00:00.000Z';
 
 interface World {
   body: ArtifactBody;
@@ -56,6 +71,14 @@ interface World {
   readonly guardedFor: { projectId: string; userId: string }[];
   /** Every task id the *task* scope resolved — empty unless a route was wired to the wrong one. */
   readonly taskScopedFor: string[];
+  /** The caller's organisation role (WP-112); a project membership can only raise it. */
+  orgRole: UserRole;
+  /** What the export's three reads answer (WP-112). */
+  detail: TaskDetailResponse | null;
+  audit: TaskAuditEntry[];
+  events: TaskEventRow[];
+  /** Every `(read, limit)` the export asked for — so "it read nothing" is assertable. */
+  readonly exportReads: string[];
 }
 
 const build = async (): Promise<{ app: FastifyInstance; world: World }> => {
@@ -67,6 +90,11 @@ const build = async (): Promise<{ app: FastifyInstance; world: World }> => {
     scopedFor: [],
     guardedFor: [],
     taskScopedFor: [],
+    orgRole: 'member',
+    detail: null,
+    audit: [],
+    events: [],
+    exportReads: [],
   };
 
   const app = fastify();
@@ -82,14 +110,25 @@ const build = async (): Promise<{ app: FastifyInstance; world: World }> => {
         userId: USER,
         email: 'operator@example.test',
         name: 'Operator',
-        role: 'member',
+        role: world.orgRole,
         sessionId: 'session-1',
       };
     }
   });
 
   const queries: TaskQueries = {
-    taskDetail: async () => null,
+    taskDetail: async (taskId) => {
+      world.exportReads.push(`detail ${taskId}`);
+      return world.detail;
+    },
+    taskAudit: async (taskId, limit) => {
+      world.exportReads.push(`audit ${taskId} ${limit}`);
+      return world.audit.slice(0, limit);
+    },
+    taskEvents: async (taskId, limit) => {
+      world.exportReads.push(`events ${taskId} ${limit}`);
+      return world.events.slice(0, limit);
+    },
     taskProjectId: async (taskId) => {
       world.taskScopedFor.push(taskId);
       return PROJECT;
@@ -107,7 +146,11 @@ const build = async (): Promise<{ app: FastifyInstance; world: World }> => {
       return world.body;
     },
   };
-  await registerTaskRoutes(app, { queries });
+  await registerTaskRoutes(app, {
+    queries,
+    redactor: redaction.patternRedactor(),
+    now: () => new Date(EXPORTED_AT),
+  });
   await app.ready();
   return { app, world };
 };
@@ -217,5 +260,260 @@ describe('GET /api/artifacts/:artifact_id', () => {
     const reply = await app.inject({ method: 'GET', url: '/api/artifacts/not-a-uuid' });
     expect(reply.statusCode).toBe(400);
     expect(world.asked).toEqual([]);
+  });
+});
+
+// ── The task export (WP-112, PROGRESS backlog 310) ───────────────────────────
+
+const AT = '2026-09-30T09:00:00.000Z';
+
+const TASK_RECORD: TaskRecord = {
+  id: TASK,
+  project_id: PROJECT,
+  ticket: { provider: 'jira', key: 'DEMO-1', url: 'https://jira.example.test/browse/DEMO-1' },
+  ticket_title: 'Ship the footer',
+  template: 'feature',
+  mode: 'normal',
+  state: 'active',
+  current_stage: 'implementation',
+  size: null,
+  branch: null,
+  mr_ref: null,
+  workpad_ref: null,
+  iteration_counters: {},
+  risk_classes: [],
+  coverage: null,
+  dependencies: null,
+  required_reviewers: null,
+  review_threads: null,
+  conflict: null,
+  cost_actual_usd: 0.4,
+  cost_estimated_usd: 0,
+  estimate_usd: null,
+  estimate_basis: null,
+  estimate_samples: null,
+  estimate_accuracy: null,
+  requested_by_user_id: null,
+  requested_by_identity: null,
+  created_at: AT,
+  updated_at: AT,
+  completed_at: null,
+} as TaskRecord;
+
+const RUN_RECORD = (settingsHash: string | null): RunRecord => ({
+  id: RUN,
+  task_id: TASK,
+  project_id: PROJECT,
+  stage: 'refinement',
+  role: 'product_manager',
+  mode: 'normal',
+  attempt: 1,
+  session_id: null,
+  model: 'claude-test',
+  effort: 'medium',
+  provider_mode: 'api',
+  prompt_version: 'test@1',
+  status: 'completed',
+  terminal_reason: 'success',
+  started_at: AT,
+  ended_at: AT,
+  last_output_at: AT,
+  num_turns: 1,
+  usage: {
+    input_tokens: 1,
+    output_tokens: 1,
+    cache_write_5m_tokens: 0,
+    cache_write_1h_tokens: 0,
+    cache_read_tokens: 0,
+  },
+  model_usage: [],
+  cost: { usd: 0.4, is_estimate: false, price_list_id: null },
+  wall_ms: 1_000,
+  redaction_count: 0,
+  settings_hash: settingsHash,
+});
+
+const DETAIL: TaskDetailResponse = taskDetailResponseSchema.parse({
+  task: TASK_RECORD,
+  taken_over: null,
+  human_time: {
+    total_minutes: 0,
+    by_kind: { review: 0, question: 0, approval: 0, steer: 0 },
+    by_user: null,
+    entries: 0,
+    withheld: { entries: 0, minutes: 0 },
+  },
+  stages: [
+    {
+      stage: 'refinement',
+      attempt: 1,
+      state: 'completed',
+      entered_at: AT,
+      exited_at: AT,
+      outcome: 'approve',
+    },
+  ],
+  artifacts: [
+    {
+      id: ARTIFACT,
+      artifact_type: 'RefinedSpec',
+      version: 1,
+      url: `/api/artifacts/${ARTIFACT}`,
+    },
+  ],
+  questions: [],
+  approvals: [],
+  runs: [RUN_RECORD('a'.repeat(64)), { ...RUN_RECORD(null), id: TASK.replace('b1', 'e2') }],
+});
+
+const eventRow = (index: number, payload: Record<string, string> = {}): TaskEventRow => ({
+  position: index + 1,
+  id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+  type: 'task.stage.entered',
+  streamType: 'task',
+  streamId: TASK,
+  streamSeq: index + 1,
+  correlationId: TASK,
+  causeEventId: null,
+  actor: { kind: 'system', component: 'pipeline' },
+  occurredAt: new Date(AT),
+  payload: { project_id: PROJECT, task_id: TASK, stage: 'implementation', ...payload },
+});
+
+const auditRow = (index: number): TaskAuditEntry => ({
+  id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+  action: 'task.pause',
+  user_id: USER,
+  params: { task_id: TASK, reason: 'lunch' },
+  created_at: AT,
+});
+
+describe('GET /api/tasks/:task_id/export (WP-112)', () => {
+  let app: FastifyInstance;
+  let world: World;
+  const url = `/api/tasks/${TASK}/export`;
+
+  beforeEach(async () => {
+    ({ app, world } = await build());
+    world.detail = DETAIL;
+    world.events = [eventRow(0), eventRow(1)];
+    world.audit = [auditRow(0)];
+  });
+
+  it('refuses an anonymous caller before it reads anything', async () => {
+    world.signedIn = false;
+    const reply = await app.inject({ method: 'GET', url });
+    expect(reply.statusCode).toBe(401);
+    expect((reply.json() as { error: { code: string } }).error.code).toBe('unauthenticated');
+    expect(world.exportReads).toEqual([]);
+    expect(world.taskScopedFor).toEqual([]);
+  });
+
+  it('refuses a caller whose role is in another project, scoped by the task’s own project', async () => {
+    // An organisation viewer with no membership in the task's project — a member of some other
+    // project, which the guard never consults: the project comes from the task's row.
+    world.orgRole = 'viewer';
+    world.role = null;
+    const reply = await app.inject({ method: 'GET', url });
+    expect(reply.statusCode, reply.body).toBe(403);
+    expect((reply.json() as { error: { code: string } }).error.code).toBe('forbidden');
+    expect(world.taskScopedFor).toEqual([TASK]);
+    expect(world.guardedFor).toEqual([{ projectId: PROJECT, userId: USER }]);
+    expect(world.exportReads).toEqual([]);
+    // …and the same caller holding `member` in that project is served (the branch above is the
+    // project's answer, not a route that refuses everybody).
+    world.role = 'member';
+    const allowed = await app.inject({ method: 'GET', url });
+    expect(allowed.statusCode, allowed.body).toBe(200);
+  });
+
+  it('answers one document the extended schema parses, built from the task read', async () => {
+    world.orgRole = 'viewer';
+    world.role = 'member';
+    const reply = await app.inject({ method: 'GET', url });
+    expect(reply.statusCode, reply.body).toBe(200);
+    const body = taskExportResponseSchema.parse(reply.json());
+    expect(body.format).toBe(1);
+    expect(body.exported_at).toBe(EXPORTED_AT);
+    // Every part of the task read, as the task read publishes it.
+    expect(body.task).toEqual(DETAIL.task);
+    expect(body.stages).toEqual(DETAIL.stages);
+    expect(body.artifacts).toEqual(DETAIL.artifacts);
+    expect(body.runs.map((run) => run.settings_hash)).toEqual(['a'.repeat(64), null]);
+    expect(body.events.items.map((event) => event.position)).toEqual([1, 2]);
+    expect(body.events.items[0]).toMatchObject({
+      type: 'task.stage.entered',
+      stream_type: 'task',
+      stream_id: TASK,
+      occurred_at: AT,
+    });
+    expect(body.events).toMatchObject({ limit: MAX_TASK_EXPORT_EVENTS, truncated: false });
+    // A member may not read the task's audit (`org.audit.read` is maintainer), so the export
+    // says so with `null` — and the audit rows were never read at all.
+    expect(body.human_actions).toBeNull();
+    expect(world.exportReads.some((read) => read.startsWith('audit'))).toBe(false);
+  });
+
+  it('carries the audit rows for a caller who may read the task’s audit', async () => {
+    world.role = 'maintainer';
+    const reply = await app.inject({ method: 'GET', url });
+    expect(reply.statusCode, reply.body).toBe(200);
+    const body = taskExportResponseSchema.parse(reply.json());
+    expect(body.human_actions).toEqual({
+      items: [auditRow(0)],
+      limit: MAX_TASK_EXPORT_HUMAN_ACTIONS,
+      truncated: false,
+    });
+    expect(world.exportReads).toContain(`audit ${TASK} ${MAX_TASK_EXPORT_HUMAN_ACTIONS + 1}`);
+  });
+
+  it('caps the events at the stated count and says it cut — and does not at exactly the cap', async () => {
+    world.events = Array.from({ length: MAX_TASK_EXPORT_EVENTS + 1 }, (_, index) =>
+      eventRow(index),
+    );
+    const over = taskExportResponseSchema.parse((await app.inject({ method: 'GET', url })).json());
+    expect(over.events.items).toHaveLength(MAX_TASK_EXPORT_EVENTS);
+    expect(over.events.truncated).toBe(true);
+    // The oldest are kept: the cut drops the newest row, which is the one past the cap.
+    expect(over.events.items.at(-1)?.position).toBe(MAX_TASK_EXPORT_EVENTS);
+    expect(world.exportReads).toContain(`events ${TASK} ${MAX_TASK_EXPORT_EVENTS + 1}`);
+
+    // Standing rule 42: the same document exactly at the cap is not cut.
+    world.events = world.events.slice(0, MAX_TASK_EXPORT_EVENTS);
+    const at = taskExportResponseSchema.parse((await app.inject({ method: 'GET', url })).json());
+    expect(at.events.items).toHaveLength(MAX_TASK_EXPORT_EVENTS);
+    expect(at.events.truncated).toBe(false);
+  });
+
+  it('caps the audit rows the same way, both sides of the bound', async () => {
+    world.role = 'maintainer';
+    world.audit = Array.from({ length: MAX_TASK_EXPORT_HUMAN_ACTIONS + 1 }, (_, index) =>
+      auditRow(index),
+    );
+    const over = taskExportResponseSchema.parse((await app.inject({ method: 'GET', url })).json());
+    expect(over.human_actions?.items).toHaveLength(MAX_TASK_EXPORT_HUMAN_ACTIONS);
+    expect(over.human_actions?.truncated).toBe(true);
+    world.audit = world.audit.slice(0, MAX_TASK_EXPORT_HUMAN_ACTIONS);
+    const at = taskExportResponseSchema.parse((await app.inject({ method: 'GET', url })).json());
+    expect(at.human_actions?.truncated).toBe(false);
+  });
+
+  it('redacts a credential an event payload carries, and counts it', async () => {
+    const planted = 'glpat-FAKE-wp112-not-a-real-token';
+    world.events = [eventRow(0, { reason: `token ${planted} pasted` }), eventRow(1)];
+    const reply = await app.inject({ method: 'GET', url });
+    expect(reply.statusCode, reply.body).toBe(200);
+    expect(reply.body).not.toContain(planted);
+    const body = taskExportResponseSchema.parse(reply.json());
+    expect(body.events.redaction_count).toBe(1);
+    expect(String(body.events.items[0]?.payload.reason)).toContain('pasted');
+    // A payload with nothing to redact is unchanged, and counted as nothing.
+    expect(body.events.items[1]?.payload).toEqual(eventRow(1).payload);
+  });
+
+  it('answers 404 for a task deleted between the scope and the read, never an empty document', async () => {
+    world.detail = null;
+    const reply = await app.inject({ method: 'GET', url });
+    expect(reply.statusCode, reply.body).toBe(404);
   });
 });

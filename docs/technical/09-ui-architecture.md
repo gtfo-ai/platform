@@ -30,7 +30,7 @@ apps/web/src/
 |---|---|---|---|
 | Board | tasks by project (+ counts) | `project:*` | pause/cancel/return/open |
 | Task detail | task, stages, artifacts, questions, runs, checks | `task:*` | answer, approve, retry, take over, feedback |
-| Run detail | run, transcript page (seq range), context pack, prompt, run commands (WP-85: each steer/take-over stop — and since WP-101 each cancel — *pending*, *applied* or *refused* — re-read while one is pending) | `run:*` | steer (accepted, then applied or refused), cancel (accepted for the process holding the run when its lease is live, ended in place when not — WP-101), retry with model, feedback |
+| Run detail | run, transcript page (seq range), context pack, prompt, run commands (WP-85: each steer/take-over stop — and since WP-101 each cancel — *pending*, *applied* or *refused* — re-read while one is pending), settings (**WP-112**: the record's `settings_hash` under the header, marked when it differs from the task's previous run and stated in words when either run predates WP-91; the snapshot itself in a *Settings* tab, read only when opened, `transcript.read`) | `run:*` | steer (accepted, then applied or refused), cancel (accepted for the process holding the run when its lease is live, ended in place when not — WP-101), retry with model, feedback |
 | Agents | running runs | `org` | cancel |
 | Inbox | pending questions/approvals | `org` | answer/approve |
 | Knowledge | documents tree, document, proposals, health | `project:*` | approve/reject/edit proposal, edit doc (creates commit/MR) |

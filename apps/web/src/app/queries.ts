@@ -410,6 +410,21 @@ export const useRunContextPack = (runId: string, enabled: boolean) => {
   });
 };
 
+/** `GET /api/runs/:id/settings` (WP-112): immutable once written, so read once per run. */
+export const useRunSettings = (runId: string, enabled: boolean) => {
+  const { endpoints } = useServices();
+  return useQuery({
+    queryKey: queryKeys.runSettings(runId),
+    queryFn: () => endpoints.runSettings(runId),
+    enabled,
+    ...FOREVER,
+    // A run created before WP-91 answers `409 settings_not_recorded`, and that is an answer about
+    // the row: asking again cannot change it, and the screen says it in words.
+    retry: (failures, error) =>
+      !(error instanceof ApiError && error.code === 'settings_not_recorded') && failures < 1,
+  });
+};
+
 /** How often the run screen re-reads a command still waiting for the process holding the run. */
 export const PENDING_RUN_COMMAND_POLL_MS = 3_000;
 

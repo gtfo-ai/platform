@@ -110,6 +110,7 @@ import {
   findTaskDetail,
   findTaskPosition,
   listRunMessages,
+  listTaskEvents,
 } from './queries/pipeline-queries.js';
 import {
   findLastConfigExport,
@@ -138,7 +139,7 @@ import { registerOrgRoutes } from './routes/org.js';
 import { registerProjectConfigRoutes } from './routes/project-config.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { type RediscoveryGateReader, registerRediscoveryRoutes } from './routes/rediscovery.js';
-import { registerRunRoutes } from './routes/runs.js';
+import { databaseRunQueries, registerRunRoutes } from './routes/runs.js';
 import { registerSettingsRoutes } from './routes/settings.js';
 import { registerShadowRoutes } from './routes/shadow.js';
 import { registerStatsRoutes } from './routes/stats.js';
@@ -703,7 +704,13 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
         artifactBody: async (artifactId) => findArtifactBody(options.database, artifactId),
         artifactProjectId: async (artifactId) =>
           findArtifactProjectId(options.database, artifactId),
+        // WP-112: the export's audit rows are the ones `GET /api/tasks/:id/audit` serves — the same
+        // function, bound below for the ask routes — never a second reading of `human_actions`.
+        taskAudit: async (taskId, limit) => options.asks.queries.taskAudit(taskId, limit),
+        taskEvents: async (taskId, limit) => listTaskEvents(options.database, taskId, limit),
       },
+      // TD-012 step 2 over the export's event payloads, which no route had published before.
+      redactor: redactionAdapters.patternRedactor(),
     });
     await registerAskRoutes(app, {
       queries: {
@@ -745,7 +752,7 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
       },
       commands: options.commands,
     });
-    await registerRunRoutes(app, { database: options.database });
+    await registerRunRoutes(app, { queries: databaseRunQueries(options.database) });
     // WP-44: the transcript file and the take-over tarball, the two things product/19 §19 hands a
     // person besides the branch. Reads of what exists — `run_messages` and the shared export
     // volume — never a copy (Q93).

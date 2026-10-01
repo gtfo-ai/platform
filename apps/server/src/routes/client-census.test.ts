@@ -72,7 +72,9 @@ const ADMITTED_GAPS: Readonly<Record<string, string>> = {
   // gave it the knowledge screen's health panel. WP-31's `/api/org/identities` pair left it when
   // WP-43 gave it a screen, and WP-27's `take-over`/`hand-back` and WP-40's breakdown pair left it
   // when WP-44 did, so the comparison above now sees all of them. A route added without a caller
-  // is invisible here again, and nothing but a hand-written case would say so.
+  // is invisible here again, and nothing but a hand-written case would say so — which is the case
+  // WP-112's task export is: `GET /api/tasks/:id/export` has no screen, and is asserted by hand
+  // below.
 };
 
 /**
@@ -659,6 +661,45 @@ describe('the client’s endpoint list against the server’s router', () => {
       })),
     );
     expect(paths).toContain('/api/projects/{}/kb/health');
+  });
+
+  it('serves the run settings read WP-112 added, the client calls it, and it refuses an anonymous caller', async () => {
+    // PROGRESS backlog 309: `runs.settings_snapshot` had a writer (WP-91) and no reader. Named in
+    // both directions (standing rule 10): the run screen's Settings tab is the caller, so a screen
+    // that loses the call fails here, and a route that loses its registration or its guard fails
+    // on the probe.
+    const paths = clientPaths(
+      webSourceFiles().map((path) => ({
+        path,
+        source: readSource(path),
+      })),
+    );
+    expect(paths).toContain('/api/runs/{}/settings');
+    const probed = await probe('/api/runs/{}/settings');
+    expect(probed.served).toBe(true);
+    expect(`${probed.status} ${probed.code}`).toBe('401 unauthenticated');
+  });
+
+  it('serves the task export WP-112 added, which no screen calls — asserted by hand', async () => {
+    // PROGRESS backlog 310: technical/08 listed `GET /api/tasks/:id/export` and product/09 promised
+    // it, and nothing served it. **No screen calls it** — it is a document an operator takes away
+    // with a session or an API key — so the comparison above cannot see it, which is exactly the
+    // class this file's gap-list note names. This case is the shape `kb/health`'s was before WP-95
+    // gave that read a screen: served, refusing an anonymous caller, and *absent* from the client's
+    // list. A screen that gains the call fails the last line, and the right edit is then to invert
+    // it, as the `kb/health` case did.
+    const probed = await probe('/api/tasks/{}/export');
+    expect(probed.served).toBe(true);
+    expect(probed.status).toBe(401);
+    expect(probed.code).toBe('unauthenticated');
+
+    const paths = clientPaths(
+      webSourceFiles().map((path) => ({
+        path,
+        source: readSource(path),
+      })),
+    );
+    expect(paths).not.toContain('/api/tasks/{}/export');
   });
 
   it('serves the dead-letter pair WP-95 added, the client calls both, and each refuses an anonymous caller by its own method', async () => {

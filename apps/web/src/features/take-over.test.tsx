@@ -65,6 +65,7 @@ const run = (id: string, startedAt: string): RunRecord => ({
   cost: { usd: 0.5, is_estimate: false, price_list_id: null },
   wall_ms: 1_000,
   redaction_count: 0,
+  settings_hash: null,
 });
 
 const TAKEN_OVER: TakenOver = {

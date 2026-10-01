@@ -84,6 +84,18 @@ export const questionRecordSchema = z.strictObject({
   status: questionStatusSchema,
   asked_at: isoDateTimeSchema,
   deadline_at: isoDateTimeSchema.nullish(),
+  /**
+   * How many reminders the platform **raised** for this question — not how many reached anybody
+   * (WP-84, PROGRESS backlog 293).
+   *
+   * The counter is incremented when the reminder's timer fires and the notify duty is enqueued
+   * (`packages/application/src/pipeline/reminders.ts`), whatever that duty then does. So `1` is
+   * also the answer for a project with no chat binding, a reminder the duty's re-check dropped
+   * because the question was answered in between, and a post whose retries all failed. It is at
+   * most one today (one reminder, halfway to the deadline). Whether a reminder was **delivered**
+   * is the `notifications` row of class `reminder` and its `delivered_at`, which this record does
+   * not carry.
+   */
   reminders_sent: z.int().nonnegative(),
   answer: z.string().nullish(),
   answered_by_user_id: idSchema.nullish(),
@@ -658,6 +670,9 @@ export const taskRecordSchema = z.strictObject({
   completed_at: isoDateTimeSchema.nullish(),
 });
 
+/** A `sha256` digest as lowercase hex — what `runs.settings_hash` stores (WP-91). */
+export const sha256HexSchema = z.string().regex(/^[0-9a-f]{64}$/);
+
 export const runRecordSchema = z.strictObject({
   id: idSchema,
   task_id: idSchema,
@@ -682,6 +697,19 @@ export const runRecordSchema = z.strictObject({
   cost: runCostSchema,
   wall_ms: z.int().nonnegative(),
   redaction_count: z.int().nonnegative(),
+  /**
+   * `runs.settings_hash` — the `sha256` (hex) of the configuration this run was planned with
+   * (WP-91, PROGRESS backlog 309): the canonical JSON of the effective settings document, redacted,
+   * that both run-creation paths freeze onto the row. Two runs with the same hash were planned with
+   * the same configuration; a different hash on a later run of the same task means the settings —
+   * or the repository reading merged into them, whose commit the document names — changed between
+   * the two stages.
+   *
+   * **`null` means the run was created before WP-91** gave the column a writer (technical/03) —
+   * never "no configuration". The document itself is `GET /api/runs/:id/settings`, gated at
+   * `transcript.read` because it carries text an operator typed.
+   */
+  settings_hash: sha256HexSchema.nullable(),
 });
 
 /** Precedence chain for the effective configuration (technical/12). */

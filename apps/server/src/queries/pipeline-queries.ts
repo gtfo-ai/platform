@@ -58,6 +58,7 @@ import type {
   HumanTimeSummary,
   Id,
   InboxResponse,
+  JsonObject,
   ModelUsage,
   PipelineTemplate,
   QuestionRecord,
@@ -88,7 +89,7 @@ import {
   SHIPPED_TEMPLATES,
 } from '@platform/domain';
 import { db as dbAdapters, pipeline as pipelineAdapters } from '@platform/infrastructure';
-import { and, asc, desc, eq, gt, inArray, ne, notInArray, sql, sum } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, ne, notInArray, or, sql, sum } from 'drizzle-orm';
 import { HttpError } from '../errors.js';
 import { APPROVAL_TOUCHED, MACHINE_AUTHORED } from './human-time-predicates.js';
 import { perUserBreakdownEnabled, summariseHumanTime } from './human-time-summary.js';
@@ -164,6 +165,8 @@ interface RunProjectionRow {
   readonly priceListId: string | null;
   readonly wallMs: number;
   readonly redactionCount: number;
+  /** `runs.settings_hash`; null for a run created before WP-91 gave it a writer. */
+  readonly settingsHash: string | null;
 }
 
 const runColumns = {
@@ -195,6 +198,7 @@ const runColumns = {
   priceListId: runs.priceListId,
   wallMs: runs.wallMs,
   redactionCount: runs.redactionCount,
+  settingsHash: runs.settingsHash,
 } as const;
 
 /**
@@ -252,6 +256,10 @@ const toRunRecord = (row: RunProjectionRow, modelUsage: readonly ModelUsage[]): 
     },
     wall_ms: row.wallMs,
     redaction_count: row.redactionCount,
+    // WP-112, backlog 309: read straight off the column WP-91 writes in the run row's own insert.
+    // `null` is published as `null` — the run predates the writer — and never re-derived from the
+    // project's settings today, which would answer "what were the settings?" with what they are now.
+    settings_hash: row.settingsHash,
   };
 };
 
@@ -670,6 +678,97 @@ export const findRunContextPack = async (
   }
   return { found: true, recorded: true, pack: parsed.data };
 };
+
+export type RunSettings =
+  | { readonly found: false }
+  | { readonly found: true; readonly recorded: false }
+  | {
+      readonly found: true;
+      readonly recorded: true;
+      readonly settingsHash: string;
+      readonly snapshot: JsonObject;
+    };
+
+/**
+ * `GET /api/runs/:run_id/settings` — the configuration the run was planned with (WP-112, PROGRESS
+ * backlog 309), and the three answers it has to be able to give, as {@link findRunPrompt} does.
+ *
+ * **The hash decides, not the document.** `runs.settings_snapshot` is `not null default '{}'`
+ * (migration 0004), so an empty object is what every row WP-91's writer never touched carries; the
+ * boundary technical/03 states is `settings_hash is null`. Such a row is reported `recorded: false`
+ * and the route refuses it — serving its `{}` would publish "this run was planned with no
+ * configuration", which is a claim about the run rather than about the row. A hash with an empty
+ * snapshot cannot be written by WP-91's composer (the document always carries `format`), and is
+ * served as stored rather than second-guessed.
+ */
+export const findRunSettings = async (database: Database, runId: string): Promise<RunSettings> => {
+  const rows = await database
+    .select({ settingsHash: runs.settingsHash, snapshot: runs.settingsSnapshot })
+    .from(runs)
+    .where(eq(runs.id, runId))
+    .limit(1);
+  const row = rows[0];
+  if (row === undefined) {
+    return { found: false };
+  }
+  if (row.settingsHash === null) {
+    return { found: true, recorded: false };
+  }
+  return { found: true, recorded: true, settingsHash: row.settingsHash, snapshot: row.snapshot };
+};
+
+/** One row of the event log as the task export reads it — the columns, unparsed (WP-112). */
+export interface TaskEventRow {
+  readonly position: number;
+  readonly id: string;
+  readonly type: string;
+  readonly streamType: string;
+  readonly streamId: string;
+  readonly streamSeq: number;
+  readonly correlationId: string | null;
+  readonly causeEventId: string | null;
+  readonly actor: JsonObject;
+  readonly occurredAt: Date;
+  readonly payload: JsonObject;
+}
+
+/**
+ * The task's events for `GET /api/tasks/:task_id/export` (WP-112, PROGRESS backlog 310): the task's
+ * own stream **and** every event correlated to it — a run's, a question's, a workspace's — oldest
+ * first by `position`, at most `limit` rows. The caller asks for one more than it publishes, which
+ * is how the export knows its cap cut.
+ *
+ * Two indexes answer it (`events_stream_idx` and the partial `events_correlation_id_idx`, migration
+ * 0005), so the read is bounded by the task's own events and not by the log.
+ */
+export const listTaskEvents = async (
+  database: Database,
+  taskId: string,
+  limit: number,
+): Promise<readonly TaskEventRow[]> =>
+  database
+    .select({
+      position: events.position,
+      id: events.id,
+      type: events.type,
+      streamType: events.streamType,
+      streamId: events.streamId,
+      streamSeq: events.streamSeq,
+      correlationId: events.correlationId,
+      causeEventId: events.causeEventId,
+      actor: events.actor,
+      occurredAt: events.occurredAt,
+      payload: events.payload,
+    })
+    .from(events)
+    .where(
+      or(
+        and(eq(events.streamType, 'task'), eq(events.streamId, taskId)),
+        eq(events.correlationId, taskId),
+      ),
+    )
+    .orderBy(asc(events.position))
+    .limit(limit);
 
 /**
  * The human minutes recorded against a task — product/19 §16, product/09:29 (WP-29).

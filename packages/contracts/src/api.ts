@@ -12,7 +12,6 @@ import * as z from 'zod';
 import {
   acceptanceCriterionSchema,
   artifactRefSchema,
-  artifactSchema,
   askAnswerCitationSchema,
   kbHealthReportFindingSchema,
   MAX_BREAKDOWN_CHILDREN,
@@ -67,6 +66,7 @@ import {
   projectRecordSchema,
   questionRecordSchema,
   runRecordSchema,
+  sha256HexSchema,
   taskRecordSchema,
 } from './records.js';
 import { transcriptEventSchema } from './transcript.js';
@@ -1792,11 +1792,87 @@ export const artifactBodyResponseSchema = z.strictObject({
   data: jsonValueSchema,
 });
 
+/** How many events one task export carries at most (WP-112, PROGRESS backlog 310). */
+export const MAX_TASK_EXPORT_EVENTS = 1_000;
+
+/** How many `human_actions` rows one task export carries at most (WP-112). */
+export const MAX_TASK_EXPORT_HUMAN_ACTIONS = 1_000;
+
+/**
+ * One row of the event log as the export publishes it — **as stored**, not parsed against today's
+ * catalogue (WP-112).
+ *
+ * `events` is append-only (TD-005) and holds every event written under every earlier version of
+ * {@link domainEventSchema}: a `task.taken_over` from before WP-73 has no `run_id`, and a strict
+ * parse of such a row would refuse the export of every task older than the schema change it
+ * predates. So `type` is a string and `payload`/`actor` are opaque JSON, and the envelope's
+ * columns are published beside them. `position` is the log's own order.
+ *
+ * `payload` has passed the platform's pattern redaction (TD-012 step 2) **at this read**, because
+ * the log carries no record of what was redacted when the row was written; `events.redaction_count`
+ * counts what this read replaced. Every string in it is untrusted (BD-022) — ticket comments,
+ * review comments and steer messages are provider and human text.
+ */
+export const taskExportEventSchema = z.strictObject({
+  position: z.int().nonnegative(),
+  id: idSchema,
+  type: nonEmptyStringSchema,
+  stream_type: nonEmptyStringSchema,
+  stream_id: idSchema,
+  stream_seq: z.int().nonnegative(),
+  correlation_id: idSchema.nullable(),
+  cause_event_id: idSchema.nullable(),
+  actor: jsonObjectSchema,
+  occurred_at: isoDateTimeSchema,
+  payload: jsonObjectSchema,
+});
+
+/**
+ * `GET /api/tasks/:task_id/export` — product/09:45's *"Export as JSON per task"* (WP-112, PROGRESS
+ * backlog 310), gated at `task.export` and scoped to the task's project.
+ *
+ * **One document built from the read projections that already exist**, never from a second reading
+ * of the tables: everything `GET /api/tasks/:id` publishes (the task, its take-over, its human time,
+ * its stage attempts, its artifacts' **metadata**, its questions, its approvals and its run
+ * records — each run with its `settings_hash`), the task's `human_actions` rows as
+ * `GET /api/tasks/:id/audit` projects them, and the task's events. What it does **not** carry is
+ * stated rather than implied:
+ *
+ *  - **Transcripts** stay on their own download (`GET /api/runs/:id/transcript.jsonl`); a run's
+ *    record names its id.
+ *  - **Artifact bodies** stay on `GET /api/artifacts/:id`, which refuses a body stored before it
+ *    was redacted; each reference carries that path as `url`.
+ *  - **Settings snapshots** stay on `GET /api/runs/:id/settings`; the export carries the hash.
+ *
+ * Two parts grow without bound and are **capped**, with the cap and whether it cut stated:
+ * `events` (the task's own stream and every event correlated to it, oldest first, at most
+ * {@link MAX_TASK_EXPORT_EVENTS}) and `human_actions` (oldest first, at most
+ * {@link MAX_TASK_EXPORT_HUMAN_ACTIONS}). `truncated: true` means rows exist past the cap and are
+ * not in this document.
+ *
+ * **`human_actions` is `null` for a caller who may not read the task's audit** —
+ * `GET /api/tasks/:id/audit` is `org.audit.read` (maintainer) while `task.export` is `member`, and
+ * an export is not a way around the narrower read. `null` is that statement, never "no actions".
+ */
 export const taskExportResponseSchema = z.strictObject({
-  task: taskRecordSchema,
-  events: z.array(domainEventSchema),
-  runs: z.array(runRecordSchema),
-  artifacts: z.array(artifactSchema),
+  /** The document's format; bumped when its shape changes, so a reader can tell. */
+  format: z.literal(1),
+  exported_at: isoDateTimeSchema,
+  ...taskDetailResponseSchema.shape,
+  human_actions: z
+    .strictObject({
+      items: z.array(taskAuditEntrySchema),
+      limit: z.int().positive(),
+      truncated: z.boolean(),
+    })
+    .nullable(),
+  events: z.strictObject({
+    items: z.array(taskExportEventSchema),
+    limit: z.int().positive(),
+    truncated: z.boolean(),
+    /** Replacements the pattern redaction made in this document's event payloads, at this read. */
+    redaction_count: z.int().nonnegative(),
+  }),
 });
 
 // ── Runs and transcripts ─────────────────────────────────────────────────────
@@ -1820,6 +1896,23 @@ export const runPromptResponseSchema = z.strictObject({
 });
 
 export const runContextPackResponseSchema = contextPackRecordSchema;
+
+/**
+ * `GET /api/runs/:run_id/settings` — the configuration a run was planned with (WP-112, PROGRESS
+ * backlog 309), gated at `transcript.read`: the document carries text an operator typed (checklist
+ * items, reviewer handles, status names), which is content rather than metadata.
+ *
+ * `snapshot` is `runs.settings_snapshot` **as stored** — redacted with the run's own TD-012
+ * redactor at the write (WP-91) and opaque here, because its shape is the platform's
+ * `format`-versioned document rather than a published record. A document over 256 KiB was stored
+ * as the marker `{format, truncated: true, bytes}` and is served as that marker: the hash is then
+ * the one record of the full document. A run created before WP-91 has no snapshot and is refused
+ * `409 settings_not_recorded`, never served `{}`.
+ */
+export const runSettingsResponseSchema = z.strictObject({
+  settings_hash: sha256HexSchema,
+  snapshot: jsonObjectSchema,
+});
 
 export const steerRunRequestSchema = z.strictObject({
   message: nonEmptyStringSchema.max(10_000),
@@ -2333,6 +2426,8 @@ export type RunCommandRecord = z.infer<typeof runCommandRecordSchema>;
 export type RunCommandsResponse = z.infer<typeof runCommandsResponseSchema>;
 export type SubmitFeedbackResponse = z.infer<typeof submitFeedbackResponseSchema>;
 export type TaskExportResponse = z.infer<typeof taskExportResponseSchema>;
+export type TaskExportEvent = z.infer<typeof taskExportEventSchema>;
+export type RunSettingsResponse = z.infer<typeof runSettingsResponseSchema>;
 export type ArtifactBodyResponse = z.infer<typeof artifactBodyResponseSchema>;
 export type RunMessagesQuery = z.infer<typeof runMessagesQuerySchema>;
 export type RunMessagesResponse = z.infer<typeof runMessagesResponseSchema>;

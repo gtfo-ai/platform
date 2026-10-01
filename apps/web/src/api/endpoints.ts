@@ -94,6 +94,7 @@ import {
   runMessagesResponseSchema,
   runPromptResponseSchema,
   runRecordSchema,
+  runSettingsResponseSchema,
   setAutonomyRequestSchema,
   setupGuideResponseSchema,
   shadowBatchesResponseSchema,
@@ -254,6 +255,11 @@ export interface Endpoints {
   ) => Promise<z.output<typeof runMessagesResponseSchema>>;
   readonly runPrompt: (runId: string) => Promise<z.output<typeof runPromptResponseSchema>>;
   readonly runContextPack: (runId: string) => Promise<z.output<typeof contextPackRecordSchema>>;
+  /**
+   * The configuration the run was planned with (WP-112): the stored snapshot and its hash, or a
+   * `409 settings_not_recorded` for a run created before WP-91 — which the screen says in words.
+   */
+  readonly runSettings: (runId: string) => Promise<z.output<typeof runSettingsResponseSchema>>;
   /** The run's steer and take-over commands and what became of each (WP-85). */
   readonly runCommandLog: (runId: string) => Promise<z.output<typeof runCommandsResponseSchema>>;
   readonly kbTree: (projectId: string) => Promise<z.output<typeof kbTreeResponseSchema>>;
@@ -628,6 +634,8 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
       client.get(`/api/runs/${seg(runId)}/prompt`, { schema: runPromptResponseSchema }),
     runContextPack: (runId) =>
       client.get(`/api/runs/${seg(runId)}/context-pack`, { schema: contextPackRecordSchema }),
+    runSettings: (runId) =>
+      client.get(`/api/runs/${seg(runId)}/settings`, { schema: runSettingsResponseSchema }),
     runCommandLog: (runId) =>
       client.get(`/api/runs/${seg(runId)}/commands`, { schema: runCommandsResponseSchema }),
 

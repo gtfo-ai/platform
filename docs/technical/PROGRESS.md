@@ -12912,6 +12912,50 @@ The variable is read once (`apps/server/src/config.ts:1010-1013`) and governs bo
 
 **Done**: one e2e case shaped like WP-96's `test/e2e/onboarding/route-sealed-credential.e2e.test.ts`. It uses the **production** Sentry registration over a stub `SentryFetch` on a `*.example.test` host, with `resolve_on_merge: true` set on the **binding** row. A bug task whose ticket links two issues is merged. Expected: two `PUT …/issues/<id>/` with `status: "resolved"` and no `statusDetails`, two re-reads, two `ok` rows. A second `mr.merged` gives two `replayed` rows and no further request. A `404` on one issue leaves the other resolved and a `failed` row. A `429` fails the job after the other is resolved, and its retry replays the success. The wait binds the `resolve_on_merge` duty's `pgboss.job` row reaching `completed` (rule 87). **Depends on** WP-111. Related: **302**, **376**.
 
+### 379. **product/04 promises a manual "Start" in the UI as an intake trigger, and nothing builds it: `POST /api/projects/:id/tasks` has no route and no screen offers it, while the board's empty state tells a user it exists** (TODO, **minor — live, a product promise with no capability under it**; a workaround exists, because a label or a status rule still starts the ticket. **Read off the tree** by WP-112 (a grep of the router) and by the refiner, **not run**. **Unowned — for the next architect pass.** Found by WP-112, session 11)
+
+**Evidence.** The promise is product's, not only technical/08's. `docs/product/04-pipeline.md:29` (S0 Intake) reads *"Trigger: task-management event (label added, status changed, epic membership, JQL match on poll) or manual "Start" in UI."*, and `docs/product/14-mvp-scope-and-roadmap.md` puts *"all stages in product/04"* in the MVP. `docs/technical/08-api-and-realtime.md:17` lists `POST /api/projects/:id/tasks` (*manual start from ticket key*), which WP-112 has now marked **not served**. The second symptom of the same cause is a UI sentence (rule 83). `apps/web/src/features/board.tsx:234`'s empty-board hint reads *"Tasks appear here when a ticket matches this project's intake rules — a label, a component or a manual start from a ticket key."* `docs/user-guide.md`'s *Not built* table (`:638-645`) does not list it, so nothing tells a user that the hint is wrong.
+
+**What it costs to leave.** A user on an empty board is told to do something no screen offers. A ticket that matches no rule cannot be started without editing it in the tracker. That edit is a write the platform's audit never sees as a human action.
+
+**Done.** Two halves; the first does not wait for the second.
+- **Now (docs and one string):** the board hint names only what is built. `docs/user-guide.md`'s *Not built* table gains the manual start. technical/08's row keeps *not served*.
+- **The capability (a work package):** a route that takes a ticket key, reads the ticket through the binding's `readTicket` and appends the same `ticket.matched` intake already consumes, so WIP limits, blocked-ticket checks, classification and intake's one-task-per-ticket rule apply unchanged. It also needs a `human_actions` row, an `Idempotency-Key` through `apps/server/src/routes/idempotency.ts`, a role (**a decision**: member or maintainer; product/11 does not say), a form on the board, and a row in `apps/server/src/routes/client-census.test.ts`. Its refusals must be typed: unknown key, no task-management binding, a task already open for the ticket.
+
+**Depends on** nothing for the first half. The second needs the role decision. Related: **381** (the same census).
+
+### 380. **technical/08 lists `GET /api/tasks/:id/events` and no route serves it; no product page asks for it, and the export now carries the task's events, capped** (TODO, **nit — a technical-doc listing, not a product promise**. **Read off the router by WP-112, not run.** **Unowned — for the next architect pass.** Found by WP-112, session 11)
+
+**Evidence.** `docs/technical/08-api-and-realtime.md:17` now marks it *not served*. The refiner found no product sentence that needs it. The task page's *"timeline of stages and runs"* (`docs/product/03-user-journeys.md:41`) and the *"stage timeline"* (`docs/product/10-ui-ux.md:37`) are served from the stage attempts that `GET /api/tasks/:id` publishes. The org audit's *"filterable event stream"* (`docs/product/10-ui-ux.md:25`) is a different, org-scoped read. Since WP-112, `listTaskEvents` (`apps/server/src/queries/task-export.ts`) gives the export the task's own stream plus every correlated event, oldest first, capped at `MAX_TASK_EXPORT_EVENTS` = 1 000 with `truncated`.
+
+**What it costs to leave.** One line in technical/08 that describes an endpoint nobody calls. A task with more than 1 000 events cannot have its later events read through the API.
+
+**Done.** One of the following:
+- **(a)**, recommended until a screen needs it: strike the endpoint from technical/08 and say that the export carries the events.
+- **(b)**: a keyset-paged read on `events_stream_idx`/`events_correlation_id_idx` that reuses `listTaskEvents`'s query and its at-read pattern redaction, with a caller and a census row.
+
+**Depends on** nothing.
+
+### 381. **The task export has no caller in the SPA, so product/09's "Export as JSON per task" is reachable only with `curl`, and the census asserts it by hand** (TODO, **nit — live, a missing button over a served route**. **Stated by WP-112.** **Unowned — for the next architect pass.** Found by WP-112, session 11)
+
+**Evidence.** WP-112 serves `GET /api/tasks/:task_id/export` (`apps/server/src/routes/tasks.ts:133`). The census exempts it by hand, in this test:
+`apps/server/src/routes/client-census.test.ts` › "serves the task export WP-112 added, which no screen calls — asserted by hand"
+The task screen has no link to the export. `DownloadLink` (`apps/web/src/ui/untrusted.tsx`) is the one sanctioned way to write a URL attribute, and `apps/web/src/features/take-over.tsx` and `apps/web/src/features/run-detail.tsx` already use it for their downloads.
+
+**What it costs to leave.** A user cannot take away the task record without a session cookie and a shell. Each new route of this kind makes the census's hand-asserted list longer, and CLAUDE.md's read-API paragraph (the list of routes no screen calls is *empty*) stays false (WP-112 handed the orchestrator a proposed rewording).
+
+**Done.** The task screen has a *Download JSON* link through `DownloadLink`, shown to a role that holds `task.export`. The export path moves into the client's sweep, the hand assertion above is deleted, and the census's two-way equality covers it. A `test:ui` case renders the link for a member and not for a viewer. **Depends on** WP-112.
+
+### 382. **Whether a `member` sees a task's `human_actions` in the export is decided *no* by an implementer's assumption, against product/09's "every human action"** (TODO, **nit — a decision to confirm, not a defect**: it fails closed, and `null` is documented as *"may not read"*. **Stated by WP-112.** **Unowned — for the orchestrator or the next architect pass.** Found by WP-112, session 11)
+
+**Evidence.** `task.export` is member, but `GET /api/tasks/:id/audit` is maintainer (`org.audit.read`, WP-31's decision; `docs/technical/08-api-and-realtime.md:253`). The export route therefore asks `can(request.effectiveRole, 'org.audit.read')`, reads nothing when the answer is false, and publishes `human_actions: null`. In this test the member's export carries `null` and the audit is never read:
+`apps/server/src/routes/tasks.test.ts` › "answers one document the extended schema parses, built from the task read"
+`docs/product/09-governance-cost-audit.md:40` lists *"every human action (pause, retry, approve, cancel, budget raise)"* in the task record, and `:45` says *"Export as JSON per task."* Neither says who may export.
+
+**What it costs to leave.** Nothing is exposed. A member's export is silently thinner than a maintainer's, and the only sign of it is a `null`.
+
+**Done.** The decision is written down. The recommendation is to **keep `null`** (the export must not be a way around a narrower read) and to state in product/09 that the export's audit half needs the audit read's role. If the product owner decides otherwise, the change is to `task.export` or to `org.audit.read`, a decision record first. **Depends on** nothing.
+
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -38522,3 +38566,97 @@ Verification: `pnpm run -s verify` PASS (the second run was started in the same 
 - **(minor) Canary (c) — `MARKER_SEARCH_MAX_PAGES` set to 20, the empty page forgotten — survived**: the bound tests were written in terms of the constant they check. Added `test/contract/integrations/jira-cloud.contract.test.ts` › "reads a thousand comments — twenty full pages and the empty one — in 21 reads, and posts", in literals (999 appended + the seeded one = twenty full pages of fifty); the canary is dead by it, the file restored from a copy, md5 identical.
 - **(nit)** Added › "answers no workpad on an empty first page, and posts one (review round 2)": a thread with no comments answers `null` after one empty page, and the workpad is posted.
 - Round 2 confirmed by reading that every ending of `findMarkedComment` is right under both readings of `total`, that `commentTotalOf`'s "possibly more" only sets `truncated` (no new untruncated text, backlog 290), and that the `emitted-secrets` stub still tests what it tested.
+
+#### WP-112
+
+**The run and task record product/09 calls exportable.** Folds backlog **310** (option (a)), **309** and **293**. No migration.
+
+Decisions and assumptions (each is also stated at the code):
+
+- **310 — the export is a fold over the existing projections, nothing else.** `GET /api/tasks/:task_id/export` (`apps/server/src/routes/tasks.ts`, `task.export`, scoped to the task's project by `scopeToProject`) answers `assembleTaskExport` (`apps/server/src/queries/task-export.ts`) over three reads: `findTaskDetail` (what `GET /api/tasks/:id` serves — task, take-over, human time, stage attempts, artifact **references**, questions, approvals, run records), the task's `human_actions` through **the same bound function** the audit route uses (`options.asks.queries.taskAudit`, newest first), and the new `listTaskEvents` (the task's own stream **and** every event correlated to it, oldest first, on `events_stream_idx` and `events_correlation_id_idx`). `taskExportResponseSchema` is `{format: 1, exported_at, ...taskDetailResponseSchema.shape, human_actions, events}`. Its old shape (`events: domainEvent[]`, `artifacts: artifactSchema[]`, i.e. bodies) had no producer and no reader, so it was replaced, not extended in place.
+- **The caps:** `MAX_TASK_EXPORT_EVENTS` = `MAX_TASK_EXPORT_HUMAN_ACTIONS` = **1 000**, each read with one row past the cap so `truncated` is a fact, never a guess. Events keep the **oldest** thousand (a task's beginning is short and is the part a reader cannot get elsewhere); audit rows keep the newest thousand, because that is the order the existing projection publishes. Transcripts, artifact bodies and settings snapshots are **not** inlined: each has its own read, and the run records and artifact references name them.
+- **`human_actions` is `null` for a caller without `org.audit.read`** — an assumption the ruling did not state. `GET /api/tasks/:id/audit` is maintainer (`org.audit.read`, WP-31's decision: the same table and question as the project audit), while `task.export` is member. Serving the rows to a member would make the export a way around the narrower read, so the route asks `can(request.effectiveRole, 'org.audit.read')` and, when it is false, **reads nothing** and publishes `null` — stated in the schema's docblock as *"may not read"*, never *"no actions"*. The alternative (raise `task.export` or the audit read) is a decision-record change and is left to the orchestrator.
+- **Events are published as stored, not parsed against today's catalogue.** `taskExportEventSchema` is the envelope's columns plus `type: string` and opaque `payload`/`actor`: `events` is append-only and holds rows written under every earlier schema (a `task.taken_over` from before WP-73 has no `run_id`), and a strict `domainEventSchema` parse would refuse the export of any task older than a schema change.
+- **Event payloads get TD-012 step 2 at the read** (`patternRedactor`, composed in `app.ts`), counted in `events.redaction_count`. Every other part is an existing projection with the redaction its writer applied (rule 13/37: no raw column a projection redacts). The event log is the one part no route had published — the dead-letter list explicitly does not — and its rows carry no redaction record. Cost, stated in the module: the exported payload can differ from the stored row.
+- **309:** `runRecordSchema.settings_hash: sha256HexSchema.nullable()` — **required** on the wire, so a record that omits it is refused and `null` keeps its one meaning (created before WP-91). `toRunRecord` reads `runs.settings_hash`; nothing is re-derived. `GET /api/runs/:run_id/settings` at `transcript.read` answers `{settings_hash, snapshot}` as stored (the over-256 KiB marker is served as the marker) and refuses `409 settings_not_recorded` when the hash is null. The decision is on the **hash**, not on the snapshot: the snapshot column is `not null default '{}'`.
+- **`routes/runs.ts` takes injected queries** (`RunQueries`, `databaseRunQueries`), the seam `tasks.ts` got at WP-52, so the 409 is asserted through the real router in the unit tier. The integration test that built the router over a `Database` now passes `databaseRunQueries(drizzled)`.
+- **The run screen** (`apps/web/src/features/run-settings.tsx`): under the header, the short hash and `settingsChangeOf` against the run immediately before it in the task's runs (creation order). It answers `same`, `changed` (marked with a badge), `first`, `not_recorded`, `previous_not_recorded` (*"cannot be said"*, never *"changed"*) and `not_in_task` (no comparison). A *Settings* tab fetches the snapshot only when opened, renders it through `CodeText`, and says the 409 in words. The query does not retry a `settings_not_recorded`.
+- **293:** a docblock on `questionRecordSchema.reminders_sent` — *raised, not delivered*, at most one, delivery is the `notifications` row's `delivered_at`. `pnpm run -s schemas` was run: **22 documents already up to date**. `schemas/` generates the event, artifact, config and transcript documents and no API DTO, and a JSDoc comment is not a zod description, so nothing regenerates.
+- **Coverage ratchet:** server branches earned 57 (measured 59.11) and was re-pinned 56 → 57 in `vitest.config.ts`, technical/10's table and the floor `scripts/coverage-ratchet.test.ts` pins (WP-109 moved the same line), as the ratchet asks.
+
+Tests (criteria):
+- **Criterion 1 (310), through the real router:**
+  - `apps/server/src/routes/tasks.test.ts` › "refuses a caller whose role is in another project, scoped by the task’s own project" — 403, then 200 once the same caller holds `member` there.
+  - › "answers one document the extended schema parses, built from the task read" — parsed with `taskExportResponseSchema`; `human_actions` is `null` for a member and the audit was not read.
+  - › "carries the audit rows for a caller who may read the task’s audit".
+  - › "caps the events at the stated count and says it cut — and does not at exactly the cap" — both sides of the bound (rule 42).
+  - › "caps the audit rows the same way, both sides of the bound".
+  - › "redacts a credential an event payload carries, and counts it".
+  - › "answers 404 for a task deleted between the scope and the read, never an empty document".
+  - The 401 is the export describe's first case. The census: `apps/server/src/routes/client-census.test.ts` › "serves the task export WP-112 added, which no screen calls — asserted by hand" (served, 401, absent from the client's list).
+- **Criterion 2 (309):**
+  - `apps/server/src/routes/runs.test.ts` › "serves the stored snapshot and its hash to a member of the run’s project".
+  - › "refuses a run created before WP-91 by name, with no document".
+  - › "is gated at transcript.read: a viewer is refused, and the record stays readable to them".
+  - › "publishes a run record’s null hash as null, not as an absent field".
+  - › "serves the over-cap marker as stored, rather than a document it does not have".
+  - UI (`test:ui`): `apps/web/src/features/run-settings.test.tsx` › "shows the hash and marks a run whose settings changed since the task’s previous run"; › "says the same settings, and does not mark a change, when the hash did not move"; › "opens the snapshot as text in the Settings tab"; › "says a run created before WP-91 has no snapshot, in words, when the server refuses"; › "answers every branch, each from the hashes alone"; › "compares with the run immediately before, not with the first".
+- **Criterion 3:** `apps/server/src/routes/client-census.test.ts` › "serves the run settings read WP-112 added, the client calls it, and it refuses an anonymous caller", plus the census's own equality (the path is in the client's sweep and served). `packages/contracts/src/records.test.ts` › "round-trips a run record and rejects a negative counter" also holds `settings_hash` required, 64 lowercase hex.
+- **Real SQL:** `test/integration/server/read-api.integration.test.ts` › "answers a run’s settings three ways, and the record carries the hash or null" and › "reads the task’s own stream and every event correlated to it, oldest first, bounded".
+- **Real pipeline:** `test/e2e/server/run-api.e2e.test.ts` › "serves the run, its transcript, its task — and the live frames — without the run’s secret" now also reads `/settings` (200 and, with the hash nulled by hand, 409), the export (parsed strict over the events this pipeline appended, every run hashed, no planted key), and both new routes' 401.
+
+Canaries (scripted replace, one test file, restore, md5 confirmed each time — rules 3, 77, 88):
+- The audit gate forced open → "answers one document the extended schema parses…" dies.
+- `truncated` as `>=` for events, then for audit rows → the two cap cases die.
+- The payload redaction skipped → the redaction case dies.
+- The events read without the extra row → the event cap case dies.
+- The `/settings` refusal disarmed → "refuses a run created before WP-91…" dies.
+- `/settings` gated at `run.read` → the `transcript.read` case dies.
+- `settingsChangeOf` without the `previous_not_recorded` branch → two UI cases die; comparing with the first run → "compares with the run immediately before…" dies.
+- **`toRunRecord` publishing `settings_hash: null` survives the unit tier.** That is by construction, because the unit tier's queries are plain functions. It is the integration case's to kill, and it does: run alone with the mutant, "answers a run’s settings three ways, and the record carries the hash or null" fails (md5 restored). The e2e reads the hash too.
+
+**Sentences falsified** (grep of `export`, `settings_hash`, `settings_snapshot`, `nothing serves`, `reminders_sent`, `not served`, `/settings` over `docs/`, `apps/`, `packages/`, `CLAUDE.md`):
+- Rewritten:
+  - technical/08's Tasks row: the export is *served since WP-112*, with what it carries.
+  - technical/08's Runs row: `settings_hash` on `GET /api/runs/:id`, and `/settings` added.
+  - technical/09's Run-detail row: the settings line and tab.
+  - technical/03's `runs` row: *read back since WP-112*.
+- **Found false while making the Tasks row true (rule 83), and marked rather than built:**
+  - `POST /api/projects/:id/tasks` (manual start from a ticket key) has no route.
+  - `GET /api/tasks/:id/events` has no route.
+  - Both are now *not served* in the row and filed below.
+- Left, judged:
+  - `store.ts:1132-1139`'s *"Write-only, for the prompt columns' reason"* is about `load`, and stays true: the API projection is the reader, as for the prompts.
+  - `memory-pipeline.ts:849` likewise.
+  - technical/12:326 states the writer only, and is true.
+  - technical/13:292 is the plan row.
+  - The `reminders_sent` hits in reminders.ts, recovery and the stores are writer-side and true.
+  - *not served* / *nothing serves* hits elsewhere are about other routes, or are plan rows.
+- **For the orchestrator — CLAUDE.md's read-API paragraph** says the census's list of routes no screen calls *"is **empty**"* and that `kb/health` was the last. That is false now. Proposed: *"…so is the list of routes no screen calls, except one: `GET /api/tasks/:id/export` (WP-112) is a document an operator takes away rather than a screen's read, and is asserted by hand in the census, as `kb/health` was before WP-95."*
+- **For the orchestrator — product/09 (rule 83, not edited):**
+  - `:45` *"Export as JSON per task."* is true now.
+  - Proposed, to say what it holds: *"Export as JSON per task: the task record, its run records (with their settings hash), its audit rows and its events, the last two capped at 1 000 each; transcripts, prompts, settings snapshots and artifact bodies are their own downloads, which the export names."*
+  - `:39`'s settings-snapshot clause is true as written.
+
+Verification, each started gated on a one-minute load reading under 12:
+- `pnpm run -s verify` **PASS** at 11.00 (9615 tests). An earlier run at 4.71 failed only `coverage:ratchet`, the re-pin above. A run at 10.79 failed the ratchet's own test, which pins the floor, and that was fixed too.
+- `verify:ui` **PASS** (462) at 11.87.
+- `verify:web-e2e` **PASS** (51) at 11.40.
+- `verify:integration` **PASS** (738) at 8.71.
+- `verify:e2e` **PASS** (262) at 9.79.
+- Docker afterwards: no container of this run left, and volumes 122 → 122. The brief's baseline was 123; 122 was read before the Docker tiers.
+- One wait is stated: the load reached 119 at 20:20, from another source. No tier was started until it came back under 12.
+
+**Discovered work** (for the refiner; no numbers claimed):
+- `POST /api/projects/:id/tasks` (technical/08's *manual start from ticket key*) is listed and has no route. `apps/web/src/features/board.tsx:234`'s empty-board hint still offers *"a manual start from a ticket key"*. Read off the router (grep), not run.
+- `GET /api/tasks/:id/events` is listed and has no route. The export now carries the events, capped. A paged event read for the task screen is the unbuilt half.
+- The export has no caller in the SPA. A *Download JSON* link on the task screen (through `DownloadLink`) would give it one, and would invert the census's hand assertion.
+- Whether a `member` should see a task's `human_actions` in the export is decided here as *no* (`null`), following the audit read's gate. If product/09's *"every human action"* is meant for every exporter, the gate on `org.audit.read` or `task.export` is the decision to change.
+
+#### WP-112 — review round 1 (APPROVE with nits), fixed by the orchestrator
+
+- **(minor)** The export's event payloads get the platform's **patterns** only, not WP-107's exact-value layer over the project's binding credentials. No leak today (the inbound events built from raw deliveries sit on the project stream, uncorrelated, so `listTaskEvents` never reads them); a future writer that correlates one to a task is the trigger. Stated in `apps/server/src/queries/task-export.ts`'s docblock and technical/08's Tasks row as a residual.
+- **(minor)** technical/08's *"not a way around the audit read's maintainer gate"* was only partly true: a member learns who did what and why from the exported events (`actor`, reasons), which no route published before; only each command's `params` stays withheld. The sentence now says exactly that. The decision (`human_actions` `null` without `org.audit.read`) stands, as backlog 382 recommends.
+- **(nit)** `runName` in `apps/web/src/features/run-settings.tsx` printed `null (attempt n)` for a run with no stage (an ask or discovery run); it now names it as such.
+- **(nit, recorded)** Events keep the oldest 1 000 and audit rows the newest 1 000; the cut direction is stated in technical/08, not in the response.
+- The orchestrator applied the implementer's CLAUDE.md read-API sentence (the export is the one route no screen calls, asserted by hand in the census) and product/09:45's export line.

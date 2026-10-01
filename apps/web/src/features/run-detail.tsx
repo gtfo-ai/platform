@@ -1,8 +1,9 @@
 /**
  * Run detail — the "click and watch" requirement (product/10 § "Run detail").
  *
- * Header metrics, then three tabs: the live transcript, the exact prompt that produced it, and the
- * context pack that went into it.
+ * Header metrics, then four tabs: the live transcript, the exact prompt that produced it, the
+ * context pack that went into it, and — since WP-112 — the settings it was planned with
+ * (`features/run-settings.tsx`), whose hash the header compares with the task's previous run.
  *
  * **The commands technical/09's screens table gives this screen are all here**: steer (accepted,
  * then applied or refused by the process holding the run — the list under the transcript says
@@ -28,6 +29,7 @@ import {
   useRunContextPack,
   useRunMessages,
   useRunPrompt,
+  useRunSettings,
   useTask,
 } from '../app/queries.js';
 import { useServices } from '../app/services.js';
@@ -48,9 +50,10 @@ import {
 import { CodeText, DownloadLink, UntrustedText } from '../ui/untrusted.js';
 import { FeedbackForm } from './feedback.js';
 import { RunCommandLog } from './run-command-log.js';
+import { RunSettingsLine, RunSettingsPanel } from './run-settings.js';
 import { TakeOverPanel } from './take-over.js';
 
-type Tab = 'transcript' | 'prompt' | 'context';
+type Tab = 'transcript' | 'prompt' | 'context' | 'settings';
 
 /**
  * The documents a run was **shown**: tier 0 and the tier-1 entries recorded `validated: true`
@@ -103,6 +106,7 @@ const TABS: readonly { readonly id: Tab; readonly label: string }[] = [
   { id: 'transcript', label: 'Transcript' },
   { id: 'prompt', label: 'Prompt' },
   { id: 'context', label: 'Context pack' },
+  { id: 'settings', label: 'Settings' },
 ];
 
 export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactElement => {
@@ -121,6 +125,7 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
   const task = useTask(run.data?.task_id ?? '', run.data !== undefined);
   const prompt = useRunPrompt(runId, tab === 'prompt');
   const contextPack = useRunContextPack(runId, tab === 'context');
+  const settings = useRunSettings(runId, tab === 'settings');
 
   // The store is the source of truth for the transcript; `useRunMessages` only feeds it.
   const snapshot = useSyncExternalStore(
@@ -191,6 +196,11 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
             value={formatElapsed(record.started_at, nowMs)}
             definition="Wall-clock time since the run started."
           />
+        </div>
+        {/* WP-112: the hash is on the record, so whether the settings moved between this run and
+            the task's previous one is answered here, before anybody opens the Settings tab. */}
+        <div className="pt-3">
+          <RunSettingsLine run={record} runs={task.data?.runs} />
         </div>
       </Card>
 
@@ -431,6 +441,8 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
           )}
         </div>
       ) : null}
+
+      {tab === 'settings' ? <RunSettingsPanel query={settings} /> : null}
 
       <FeedbackForm
         heading={`Feedback on the ${record.stage} stage`}

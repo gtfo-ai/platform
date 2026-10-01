@@ -21,8 +21,19 @@
  * name). The split is what the run's *content* is: the record is metadata — status, model, cost,
  * token counts — while the transcript and the prompt are the model's own text and the ticket's own
  * words, which is what technical/08 gates at `member`. The context pack is a list of document paths
- * and scores, so it goes with the record.
+ * and scores, so it goes with the record. The settings snapshot (`/settings`, WP-112) goes with the
+ * transcript: it carries text an operator typed — a checklist item, a reviewer handle — while its
+ * hash, which says only *whether* two runs were planned alike, is on the record.
+ *
+ * ## The queries are injected (WP-112)
+ *
+ * Until WP-112 this module took a `Database`, so a refusal it raises — `/prompt`'s 409 — could be
+ * asserted only in the e2e tier. It now takes plain functions, the seam `tasks.ts` gained at WP-52
+ * for the same reason, and `routes/runs.test.ts` drives the real router, guards, schemas and error
+ * handler against them. {@link databaseRunQueries} binds them to the projections in
+ * `queries/pipeline-queries.ts`, and is what `app.ts` composes.
  */
+import type { RunCommandRecord, RunRecord, UserRole } from '@platform/contracts';
 import {
   apiErrorSchema,
   contextPackRecordSchema,
@@ -31,6 +42,7 @@ import {
   runMessagesResponseSchema,
   runPromptResponseSchema,
   runRecordSchema,
+  runSettingsResponseSchema,
 } from '@platform/contracts';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -43,14 +55,44 @@ import {
   findRun,
   findRunContextPack,
   findRunPrompt,
+  findRunSettings,
   listRunCommands,
   listRunMessages,
+  type RunContextPack,
+  type RunMessagePage,
+  type RunMessagesQuery,
+  type RunPrompt,
+  type RunSettings,
 } from '../queries/pipeline-queries.js';
 import { scopedProject, scopeToProject } from './scope.js';
 
-export interface RunRoutesOptions {
-  readonly database: Database;
+/** The eight reads these routes make, as functions — see "The queries are injected" above. */
+export interface RunQueries {
+  readonly runProjectId: (runId: string) => Promise<string | null>;
+  readonly projectRole: (projectId: string, userId: string) => Promise<UserRole | null>;
+  readonly run: (runId: string) => Promise<RunRecord | null>;
+  readonly messages: (runId: string, query: RunMessagesQuery) => Promise<RunMessagePage>;
+  readonly prompt: (runId: string) => Promise<RunPrompt>;
+  readonly commands: (runId: string) => Promise<readonly RunCommandRecord[]>;
+  readonly contextPack: (runId: string) => Promise<RunContextPack>;
+  readonly settings: (runId: string) => Promise<RunSettings>;
 }
+
+export interface RunRoutesOptions {
+  readonly queries: RunQueries;
+}
+
+/** {@link RunQueries} over this process's database — what `app.ts` composes. */
+export const databaseRunQueries = (database: Database): RunQueries => ({
+  runProjectId: async (runId) => findRunProjectId(database, runId),
+  projectRole: async (projectId, userId) => findProjectRole(database, projectId, userId),
+  run: async (runId) => findRun(database, runId),
+  messages: async (runId, query) => listRunMessages(database, runId, query),
+  prompt: async (runId) => findRunPrompt(database, runId),
+  commands: async (runId) => listRunCommands(database, runId),
+  contextPack: async (runId) => findRunContextPack(database, runId),
+  settings: async (runId) => findRunSettings(database, runId),
+});
 
 const runParamsSchema = z.strictObject({ run_id: z.uuid() });
 
@@ -62,16 +104,14 @@ export const registerRunRoutes = async (
   options: RunRoutesOptions,
 ): Promise<void> => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
-  const guard = {
-    // The run's project has already been read by the preHandler; this is the caller's membership
-    // in it, which is the question `effectiveRole` asks.
-    projectRole: async (projectId: string, userId: string) =>
-      findProjectRole(options.database, projectId, userId),
-  };
+  const queries = options.queries;
+  // The run's project has already been read by the preHandler; this is the caller's membership in
+  // it, which is the question `effectiveRole` asks.
+  const guard = { projectRole: queries.projectRole };
   const scope = scopeToProject({
     param: 'run_id',
     what: 'run',
-    projectOf: async (runId) => findRunProjectId(options.database, runId),
+    projectOf: queries.runProjectId,
   });
 
   typed.get(
@@ -86,7 +126,7 @@ export const registerRunRoutes = async (
       },
     },
     async (request) => {
-      const run = await findRun(options.database, request.params.run_id);
+      const run = await queries.run(request.params.run_id);
       if (run === null) {
         // Unreachable through the preHandler, which 404s first; kept because the two reads are
         // separate statements and a run deleted between them must not become a 500.
@@ -111,7 +151,7 @@ export const registerRunRoutes = async (
       },
     },
     async (request) => {
-      const page = await listRunMessages(options.database, request.params.run_id, {
+      const page = await queries.messages(request.params.run_id, {
         limit: request.query.limit ?? DEFAULT_MESSAGE_LIMIT,
         ...(request.query.after === undefined ? {} : { after: request.query.after }),
         partials: request.query.partials !== '0',
@@ -136,7 +176,7 @@ export const registerRunRoutes = async (
       },
     },
     async (request) => {
-      const prompt = await findRunPrompt(options.database, request.params.run_id);
+      const prompt = await queries.prompt(request.params.run_id);
       if (!prompt.found) {
         throw new NotFoundError(`run ${request.params.run_id}`);
       }
@@ -182,7 +222,7 @@ export const registerRunRoutes = async (
       },
     },
     async (request) => ({
-      items: [...(await listRunCommands(options.database, request.params.run_id))],
+      items: [...(await queries.commands(request.params.run_id))],
     }),
   );
 
@@ -200,7 +240,7 @@ export const registerRunRoutes = async (
       },
     },
     async (request) => {
-      const pack = await findRunContextPack(options.database, request.params.run_id);
+      const pack = await queries.contextPack(request.params.run_id);
       if (!pack.found) {
         throw new NotFoundError(`run ${request.params.run_id}`);
       }
@@ -222,6 +262,43 @@ export const registerRunRoutes = async (
         'context_pack_not_recorded',
         `run ${request.params.run_id} has no recorded context pack (${pack.rows} run_context_pack rows and no budget_tokens on the run): it was created before migration 0041 gave the pack a writer, and the budget and total it was assembled against cannot be recovered from rows alone`,
       );
+    },
+  );
+  typed.get(
+    '/api/runs/:run_id/settings',
+    {
+      preHandler: [scope, requirePermission(guard, 'transcript.read', { project: scopedProject })],
+      schema: {
+        summary: 'The configuration a run was planned with',
+        description:
+          'The effective settings document frozen onto the run when it was created (WP-91): redacted with the run’s own redactor at the write, and over 256 KiB stored as the marker `{format, truncated: true, bytes}` with the full document’s hash. `settings_hash` is the same value the run record carries. Gated at `transcript.read`: the document carries text an operator typed. A run created before WP-91 has no snapshot and is refused with 409 `settings_not_recorded`; the settings are never re-derived, because the project’s configuration today is not the one the run was planned with.',
+        tags: ['runs'],
+        params: runParamsSchema,
+        response: { 200: runSettingsResponseSchema, 409: apiErrorSchema },
+      },
+    },
+    async (request) => {
+      const settings = await queries.settings(request.params.run_id);
+      if (!settings.found) {
+        throw new NotFoundError(`run ${request.params.run_id}`);
+      }
+      if (!settings.recorded) {
+        /**
+         * **The refusal is a statement about the row** (WP-112, PROGRESS backlog 309), in
+         * `/prompt`'s shape.
+         *
+         * `runs.settings_snapshot` is `not null default '{}'`, so a run WP-91's writer never
+         * touched carries an empty object — and serving it would read as "this run was planned
+         * with no configuration". Re-reading the project's settings would answer with what they
+         * are now. Neither is the document the run was planned with, and that document is gone.
+         */
+        throw new HttpError(
+          409,
+          'settings_not_recorded',
+          `run ${request.params.run_id} has no recorded settings snapshot: it was created before WP-91 gave runs.settings_snapshot / runs.settings_hash a writer. The settings are not re-derivable — the project's configuration today is not the one this run was planned with`,
+        );
+      }
+      return { settings_hash: settings.settingsHash, snapshot: settings.snapshot };
     },
   );
 };

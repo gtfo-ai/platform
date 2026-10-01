@@ -59,6 +59,7 @@ const RUNNING: RunRecord = {
   cost: { usd: 0, is_estimate: false, price_list_id: null },
   wall_ms: 0,
   redaction_count: 0,
+  settings_hash: null,
 };
 
 const json = (body: unknown, status = 200): Response =>

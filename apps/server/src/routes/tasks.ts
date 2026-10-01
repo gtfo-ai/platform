@@ -1,6 +1,8 @@
 /**
  * `GET /api/tasks/:task_id` — technical/08's "the task, with stages, artifacts and checks" (WP-15h)
- * — and, since WP-52, `GET /api/artifacts/:artifact_id`, which serves one artifact's **body**.
+ * — and, since WP-52, `GET /api/artifacts/:artifact_id`, which serves one artifact's **body**, and
+ * since WP-112 `GET /api/tasks/:task_id/export`, product/09's JSON export of the task record: the
+ * task read above plus the task's audit rows and its events, each capped (`queries/task-export.ts`).
  *
  * One read, and it is the one the task screen is built on: `taskDetailResponseSchema` is a
  * composite, so this route is where the projections of five tables meet the DTO the SPA parses. The
@@ -28,18 +30,25 @@
  * carried since WP-04 with no user. The task route's own comment says the artifacts' *content* is
  * "separately gated", and this is that gate.
  */
-import type { TaskDetailResponse, UserRole } from '@platform/contracts';
+import type { TaskAuditEntry, TaskDetailResponse, UserRole } from '@platform/contracts';
 import {
   apiErrorSchema,
   artifactBodyResponseSchema,
   taskDetailResponseSchema,
+  taskExportResponseSchema,
 } from '@platform/contracts';
+import { can } from '@platform/domain';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import * as z from 'zod';
 import { requirePermission } from '../auth/rbac.js';
 import { HttpError, NotFoundError } from '../errors.js';
-import type { ArtifactBody } from '../queries/pipeline-queries.js';
+import type { ArtifactBody, TaskEventRow } from '../queries/pipeline-queries.js';
+import {
+  assembleTaskExport,
+  type PayloadRedactor,
+  TASK_EXPORT_LIMITS,
+} from '../queries/task-export.js';
 import { scopedProject, scopeToProject } from './scope.js';
 
 /**
@@ -61,10 +70,21 @@ export interface TaskQueries {
   readonly projectRole: (projectId: string, userId: string) => Promise<UserRole | null>;
   readonly artifactBody: (artifactId: string) => Promise<ArtifactBody>;
   readonly artifactProjectId: (artifactId: string) => Promise<string | null>;
+  /**
+   * The task's `human_actions`, newest first, at most `limit` — **the projection
+   * `GET /api/tasks/:id/audit` serves**, bound to the same function in `app.ts` (WP-112).
+   */
+  readonly taskAudit: (taskId: string, limit: number) => Promise<readonly TaskAuditEntry[]>;
+  /** The task's events, oldest first, at most `limit` (`listTaskEvents`, WP-112). */
+  readonly taskEvents: (taskId: string, limit: number) => Promise<readonly TaskEventRow[]>;
 }
 
 export interface TaskRoutesOptions {
   readonly queries: TaskQueries;
+  /** The platform's pattern redaction (TD-012 step 2), applied to the export's event payloads. */
+  readonly redactor: PayloadRedactor;
+  /** The export's `exported_at`; the wall clock unless a test fixes it. */
+  readonly now?: () => Date;
 }
 
 const taskParamsSchema = z.strictObject({ task_id: z.uuid() });
@@ -106,6 +126,49 @@ export const registerTaskRoutes = async (
         throw new NotFoundError(`task ${request.params.task_id}`);
       }
       return detail;
+    },
+  );
+
+  typed.get(
+    '/api/tasks/:task_id/export',
+    {
+      // `task.export` is `member` (technical/08's capability map): the document carries the run
+      // records' steer messages and the questions' answers — the content `transcript.read` (also
+      // `member`) gates — and not only the metadata `task.read` publishes to a viewer.
+      preHandler: [scope, requirePermission(guard, 'task.export', { project: scopedProject })],
+      schema: {
+        summary: 'The whole task record as one JSON document',
+        description:
+          'product/09:45. Everything `GET /api/tasks/:id` publishes — the task, its stage attempts, the artifacts’ metadata, questions, approvals and run records (each with its `settings_hash`) — plus the task’s `human_actions` rows and its events. Transcripts, artifact bodies and settings snapshots stay on their own reads, which every run record and artifact reference names. `events` (the task’s stream and every event correlated to it, oldest first) and `human_actions` (newest first) are each capped at 1 000 rows, with `truncated` saying whether the cap cut. `human_actions` is `null` for a caller who may not read the task’s audit (`org.audit.read`, maintainer). Event payloads are published as stored, after the platform’s pattern redaction at this read (`events.redaction_count`). Every string is untrusted content (BD-022).',
+        tags: ['tasks'],
+        params: taskParamsSchema,
+        response: { 200: taskExportResponseSchema },
+      },
+    },
+    async (request) => {
+      const taskId = request.params.task_id;
+      // The role the guard applied — the higher of the organisation role and a membership in the
+      // task's project — asked the one question the audit route asks of it.
+      const role = request.effectiveRole;
+      const mayReadAudit = role !== undefined && can(role, 'org.audit.read');
+      const [detail, humanActions, events] = await Promise.all([
+        options.queries.taskDetail(taskId),
+        mayReadAudit
+          ? options.queries.taskAudit(taskId, TASK_EXPORT_LIMITS.humanActions + 1)
+          : Promise.resolve(null),
+        options.queries.taskEvents(taskId, TASK_EXPORT_LIMITS.events + 1),
+      ]);
+      if (detail === null) {
+        // The same shape as the task read above: the preHandler already 404s on this question.
+        throw new NotFoundError(`task ${taskId}`);
+      }
+      return assembleTaskExport({
+        detail,
+        humanActions,
+        events,
+        exportedAt: (options.now ?? (() => new Date()))(),
+        redactor: options.redactor,
+      });
     },
   );
 

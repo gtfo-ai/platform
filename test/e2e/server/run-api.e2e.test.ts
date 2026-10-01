@@ -28,13 +28,17 @@ import type {
   ContextPackRecord,
   RunMessagesResponse,
   RunRecord,
+  RunSettingsResponse,
   TaskDetailResponse,
+  TaskExportResponse,
 } from '@platform/contracts';
 import {
   artifactBodyResponseSchema,
   contextPackRecordSchema,
   runMessagesResponseSchema,
   runRecordSchema,
+  runSettingsResponseSchema,
+  taskExportResponseSchema,
 } from '@platform/contracts';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createTestClient } from '../../integration/support/postgres.js';
@@ -113,6 +117,21 @@ const setPackHeader = async (
         pack?.text_search == null ? null : JSON.stringify(pack.text_search),
       ],
     );
+  } finally {
+    await client.end();
+  }
+};
+
+/** Puts a run's settings hash back the way a row from before WP-91 has it, or restores it. */
+const setSettingsHash = async (
+  pipeline: PipelineE2E,
+  runId: string,
+  hash: string | null,
+): Promise<void> => {
+  const client = createTestClient(pipeline.database.connectionString);
+  await client.connect();
+  try {
+    await client.query('update runs set settings_hash = $2 where id = $1', [runId, hash]);
   } finally {
     await client.end();
   }
@@ -334,6 +353,46 @@ describe('the run read API, over a transcript this pipeline wrote', () => {
      * the DDL that made the tier mutate its own schema mid-walk is gone with it.
      */
 
+    // ── the settings a run was planned with, and the task export (WP-112) ─────
+    //
+    // Against rows this pipeline wrote, which is what the unit tier's plain functions cannot say:
+    // the WP-91 writer really fills the hash the record publishes, the snapshot really parses as
+    // the published response, and every event the pipeline appended really fits the export's
+    // envelope (a strict schema over the log as stored).
+    expect(parsed.settings_hash).toMatch(/^[0-9a-f]{64}$/);
+    const settings = await client.json<RunSettingsResponse>(`/api/runs/${runId}/settings`);
+    expect(settings.status, JSON.stringify(settings.body)).toBe(200);
+    const servedSettings = runSettingsResponseSchema.parse(settings.body);
+    expect(servedSettings.settings_hash).toBe(parsed.settings_hash);
+    expect(servedSettings.snapshot.format).toBe(1);
+    // …and a row the WP-91 writer never touched is refused by name, never served as `{}`.
+    await setSettingsHash(pipeline, runId, null);
+    try {
+      const unrecorded = await client.json<{ error: { code: string } }>(
+        `/api/runs/${runId}/settings`,
+      );
+      expect(unrecorded.status, JSON.stringify(unrecorded.body)).toBe(409);
+      expect(unrecorded.body.error.code).toBe('settings_not_recorded');
+    } finally {
+      await setSettingsHash(pipeline, runId, parsed.settings_hash);
+    }
+
+    const exported = await client.json<TaskExportResponse>(`/api/tasks/${waiting.id}/export`);
+    expect(exported.status, JSON.stringify(exported.body).slice(0, 2_000)).toBe(200);
+    const document = taskExportResponseSchema.parse(exported.body);
+    expect(document.task.id).toBe(waiting.id);
+    expect(document.runs.map((entry) => entry.id)).toEqual(task.body.runs.map((entry) => entry.id));
+    expect(document.runs.every((entry) => entry.settings_hash !== null)).toBe(true);
+    expect(document.artifacts).toEqual(task.body.artifacts);
+    const types = document.events.items.map((event) => event.type);
+    expect(types).toContain('task.created');
+    expect(types).toContain('run.started');
+    expect(document.events.truncated).toBe(false);
+    // The bootstrap user is an organisation admin, so the audit rows are carried (an array, not
+    // the `null` a member gets — `routes/tasks.test.ts` asserts that branch).
+    expect(document.human_actions).not.toBeNull();
+    expect(JSON.stringify(document)).not.toContain(PLANTED_MODEL_KEY);
+
     // ── unknown ids are 404, not 500 or an empty document ──
     const unknown = '00000000-0000-4000-8000-0000000000ff';
     expect((await client.json(`/api/runs/${unknown}`)).status).toBe(404);
@@ -346,7 +405,9 @@ describe('the run read API, over a transcript this pipeline wrote', () => {
       `/api/runs/${runId}/messages`,
       `/api/runs/${runId}/prompt`,
       `/api/runs/${runId}/context-pack`,
+      `/api/runs/${runId}/settings`,
       `/api/tasks/${waiting.id}`,
+      `/api/tasks/${waiting.id}/export`,
       // An id that does not exist must answer 401 too: a 404 here would tell an anonymous caller
       // which uuids name a run (standing rule 18 — the absent case must not be the informative one).
       `/api/runs/${unknown}`,
