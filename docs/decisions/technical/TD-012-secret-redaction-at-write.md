@@ -91,7 +91,9 @@ amendment's decision (a shape, never a stored value).
    commit through the transactional broadcast, and every process — every `ROLE` — listens on its own
    channel and re-reads on it; the timer stays as the guarantee (TD-028 decision 9's argument: the
    notification is latency, the poll is the guarantee). After a stated number of consecutive failed
-   refreshes the process reports at `error`.
+   refreshes the process reports at `error`. *As built at WP-107 (session 11):* the number is **12** —
+   one minute at the 5 s cadence — reported once at `error`, later failures at `debug`, and the next
+   success at `info`.
 2. **The repository reading.** Since WP-92 the refresh stores up to 64 files of free text a human wrote
    (`.agentic/prompts/`) under pattern redaction only, and hands it byte-identical to the planner, so a
    binding credential committed there in a shape no rule knows is stored, sent to the model and kept in
@@ -107,3 +109,12 @@ amendment's decision (a shape, never a stored value).
 *Consequences.* No migration. `docs/technical/05`'s WP-80 amendment and redaction section and the stale
 comment on the refresher are corrected by the rows that build them: (1) and (2) by M6 **WP-107**, (3)
 by M6 **WP-104**.
+
+*As built at WP-107 (session 11), part (2):* a binding whose credentials cannot be decrypted never
+keeps a restriction from applying — the reading's configuration half is stored as usual, and only the
+prompt texts fail closed: while any of the project's integrations is unreadable, no prompt text is
+stored (the previous ones are dropped with the row, because they may predate this amendment), and the
+refresh names each such integration (`prompts_withheld`) and logs at `error` (PROGRESS backlog 358,
+found as a regression of the row's first version). The exact-value set is the decrypted `secret_ids` of
+the project's bindings; a credential an operator left in `integrations.config` and an organisation
+account with no binding are outside it (backlog 362, 364).

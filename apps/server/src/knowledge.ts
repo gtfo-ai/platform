@@ -86,7 +86,11 @@ import {
   secrets as secretAdapters,
 } from '@platform/infrastructure';
 import type { IntegrationRegistry } from '@platform/integrations';
-import { accountOnlyFieldsOf, createGitMirrorCredentials } from '@platform/integrations';
+import {
+  accountOnlyFieldsOf,
+  createGitMirrorCredentials,
+  createProjectBindingSecrets,
+} from '@platform/integrations';
 import type pg from 'pg';
 import { injectedSecretRedactorForEnvironment } from './agent.js';
 import {
@@ -332,15 +336,32 @@ export const composeKnowledgeMirror = async (
   };
 };
 
-/** The repository-configuration refresher over this process' mirror (WP-63). */
+/**
+ * The repository-configuration refresher over this process' mirror (WP-63).
+ *
+ * A reading stores two kinds of text: an invalid file's detail (key paths, which a strict schema
+ * fills with typed keys) and, since WP-92, up to 64 files of `.agentic/prompts/` a human wrote. Both
+ * are redacted before they are stored by TD-012's step 1 over the **decrypted credentials of the
+ * project's bindings** (WP-107, TD-012's M6 amendment (2), PROGRESS backlog 316) and then step 2,
+ * the pattern rules with every minted-credential shape. A reading carries no run-scoped credential
+ * (Q55): no run is in scope. The credentials are read through the same binding repository and
+ * secret store the binding loader uses, once per reading, outside any transaction.
+ */
 export const createRepositoryConfigRefresher = (options: {
   readonly pool: pg.Pool;
   readonly files: RepositoryFileSource;
+  /** `APP_SECRET_KEY`, already validated by `config.ts`: the reading decrypts the bindings' credentials. */
+  readonly secretKey: string;
   readonly logger: Logger;
 }) => {
-  // TD-012 step 2: the pattern rules. A reading carries no run-scoped credential (Q55), and the
-  // only text it stores is a refusal's key paths — which a strict schema fills with typed keys.
   const redactor = redactionAdapters.patternRedactor();
+  const bindingSecrets = createProjectBindingSecrets({
+    repository: secretAdapters.createPostgresBindingRepository(options.pool, accountOnlyFieldsOf),
+    secrets: secretAdapters.createPostgresSecretStore({
+      sql: options.pool,
+      key: secretAdapters.deriveSecretKey(options.secretKey),
+    }),
+  });
   return (request: { readonly projectId: Id; readonly commitSha?: string }) =>
     refreshRepositoryConfig(
       {
@@ -348,6 +369,7 @@ export const createRepositoryConfigRefresher = (options: {
         codec: configAdapters.yamlConfigCodec,
         store: configAdapters.createPostgresRepositoryConfigStore(options.pool),
         redactText: (value) => redactor.redactText(value).value,
+        bindingSecrets,
         clock: { now: () => new Date().toISOString() as IsoDateTime },
         logger: options.logger,
       },
@@ -431,6 +453,7 @@ export const composeKnowledgeIndexing = async (
   const refreshConfig = createRepositoryConfigRefresher({
     pool: options.pool,
     files: composedMirror.files,
+    secretKey: options.secretKey,
     logger: options.logger,
   });
 

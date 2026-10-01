@@ -27,6 +27,7 @@
 import type {
   AgentTooling,
   CommunicationPort,
+  CredentialMintingHints,
   GitProviderPort,
   InboundConnection,
   IntegrationRef,
@@ -145,6 +146,14 @@ export interface CommunicationChannelFields {
  */
 export interface CredentialMintingDeclaration {
   readonly shape: 'stable' | 'unstable';
+  /**
+   * The provider's own words for the two refusals a mint can meet (WP-107, PROGRESS backlog 278),
+   * so the application ring, which renders them, names no provider and no provider's setting:
+   * `enable` says how an operator turns minting on for a binding whose port reports it off, and
+   * `shape` how one fixes a minted value that does not have the shape the provider declared.
+   * Carried to `GitBinding.mintingHints` by the binding loader. Refused at registration when blank.
+   */
+  readonly hints: CredentialMintingHints;
 }
 
 /**
@@ -323,6 +332,17 @@ export const createIntegrationRegistry = (
           'declares credential minting without a stable credential shape; a minted value would be ' +
             'redacted by exact value only in the process that minted it and verbatim everywhere else, ' +
             'so minting is refused until the provider declares a stable shape (TD-012, WP-80)',
+        );
+      }
+      // Read as `unknown`: a registration is a JavaScript object a provider author wrote, and a
+      // missing `hints` must be refused by name rather than crash on `.trim` (standing rule 14).
+      const hints = (minting as { hints?: { enable?: unknown; shape?: unknown } }).hints;
+      const blank = (value: unknown): boolean => typeof value !== 'string' || value.trim() === '';
+      if (hints === undefined || blank(hints.enable) || blank(hints.shape)) {
+        throw new ProviderRegistrationError(
+          registration.id,
+          'declares credential minting without both hints (`enable` and `shape`); the mint ' +
+            'refusals would tell an operator nothing about how to fix them (WP-107)',
         );
       }
     }

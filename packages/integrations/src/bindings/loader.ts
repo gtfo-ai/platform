@@ -82,6 +82,7 @@
  */
 import type {
   BindingRepository,
+  CredentialMintingHints,
   GitProviderPort,
   InjectedSecret,
   IntegrationActionExecutor,
@@ -93,6 +94,7 @@ import type {
   PipelineIntegrations,
   PipelineIntegrationsPort,
   ProjectBinding,
+  ProjectBindingSecrets,
   SecretRedactor,
   SecretStore,
 } from '@platform/application';
@@ -109,18 +111,25 @@ export class BindingLoadError extends Error {
   override readonly name = 'BindingLoadError';
   /** `null` for the organisation's own account, which is built with no project (WP-65). */
   readonly projectId: Id | null;
-  /** The binding that could not be built, or `null` when the project's *set* is the problem. */
+  /**
+   * The binding that could not be built, or `null` when the project's *set* is the problem — and
+   * `null` for an **account** built with no binding (the minting integration, WP-80), whose id is
+   * {@link integrationId} instead (WP-107, PROGRESS backlog 278).
+   */
   readonly bindingId: Id | null;
+  /** The integration (account) that could not be built, when the failing site knows it. */
+  readonly integrationId: Id | null;
 
   constructor(
     projectId: Id | null,
     bindingId: Id | null,
     message: string,
-    options: { cause?: unknown } = {},
+    options: { cause?: unknown; integrationId?: Id } = {},
   ) {
-    super(message, options);
+    super(message, options.cause === undefined ? {} : { cause: options.cause });
     this.projectId = projectId;
     this.bindingId = bindingId;
+    this.integrationId = options.integrationId ?? null;
   }
 }
 
@@ -163,6 +172,50 @@ export interface PipelineIntegrationsLoaderOptions {
 const secretName = (binding: ProjectBinding, field: string): string =>
   `${binding.provider}:${binding.integrationId}:${field}`;
 
+/**
+ * The decrypted credentials of **every** binding of a project, named as {@link
+ * createPipelineIntegrationsLoader} names them for a binding's own redactor — WP-107, TD-012's M6
+ * amendment (2), PROGRESS backlog 316.
+ *
+ * The one consumer is the repository reading (`refreshRepositoryConfig`), which stores text a human
+ * committed to `.agentic/prompts/` and composes an exact-value redactor over these before it stores
+ * it. Every type, not only the three the pipeline calls: a Sentry or Loki token committed to a
+ * prompt file is a credential the platform holds as much as a Jira one. Two bindings of one account
+ * resolve to the same names and values and are kept once.
+ *
+ * **A credential that will not decrypt is reported, not thrown** (backlog 358): the integration is
+ * named in `unreadable` with the store's reason, and every other binding's credentials are still
+ * returned, so the reading stores its configuration and withholds only its prompt texts — one
+ * broken Sentry token must not keep a merged restriction from applying (WP-89's *a broken
+ * observability binding stops nothing*). Outside any transaction, like every read of the secret
+ * store; the values leave only in the returned list, never in a reason.
+ */
+export const createProjectBindingSecrets =
+  (options: { readonly repository: BindingRepository; readonly secrets: SecretStore }) =>
+  async (projectId: Id): Promise<ProjectBindingSecrets> => {
+    const named = new Map<string, InjectedSecret>();
+    const unreadable = new Map<Id, { integration: string; reason: string }>();
+    for (const binding of await options.repository.forProject(projectId)) {
+      let resolved: Readonly<Record<string, string>>;
+      try {
+        resolved = await options.secrets.resolve(binding.secretIds);
+      } catch (cause) {
+        unreadable.set(binding.integrationId, {
+          integration: `integration "${binding.name}" (${binding.provider}, ${binding.integrationId})`,
+          reason: cause instanceof Error ? cause.message : String(cause),
+        });
+        continue;
+      }
+      for (const [field, value] of Object.entries(resolved)) {
+        const name = secretName(binding, field);
+        if (!named.has(name)) {
+          named.set(name, { name, value });
+        }
+      }
+    }
+    return { secrets: [...named.values()], unreadable: [...unreadable.values()] };
+  };
+
 /** A built adapter and the redactor it was built with (WP-15f), plus WP-32's channels. */
 interface Built<TType extends IntegrationType> {
   readonly port: IntegrationPortByType[TType];
@@ -177,6 +230,8 @@ interface Built<TType extends IntegrationType> {
    */
   readonly channel: string;
   readonly digestChannel: string;
+  /** The registration's credential-minting hints (WP-107); absent for a provider that mints nothing. */
+  readonly mintingHints?: CredentialMintingHints;
 }
 
 /**
@@ -287,16 +342,26 @@ export const createPipelineIntegrationsLoader = (
     binding: ProjectBinding,
     type: TType,
     scope: IntegrationCallScope,
+    /**
+     * What the row is called in a refusal: a project's **binding**, or an **integration** built
+     * from its account alone (`forMintingIntegration`) — which is not a binding, so it is not
+     * named one and carries no binding id (WP-107, PROGRESS backlog 278).
+     */
+    subject: 'binding' | 'integration' = 'binding',
   ): Promise<Built<TType>> => {
+    const failing = subject === 'binding' ? binding.bindingId : null;
+    const refusal = (message: string, cause?: unknown): BindingLoadError =>
+      new BindingLoadError(projectId, failing, message, {
+        integrationId: binding.integrationId,
+        ...(cause === undefined ? {} : { cause }),
+      });
     let registration: ReturnType<IntegrationRegistry['get']>;
     try {
       registration = options.registry.get(type, binding.provider);
     } catch (cause) {
-      throw new BindingLoadError(
-        projectId,
-        binding.bindingId,
-        `binding "${binding.name}" names provider "${binding.provider}", which this build does not register`,
-        { cause },
+      throw refusal(
+        `${subject} "${binding.name}" names provider "${binding.provider}", which this build does not register`,
+        cause,
       );
     }
 
@@ -304,13 +369,11 @@ export const createPipelineIntegrationsLoader = (
     try {
       secrets = await options.secrets.resolve(binding.secretIds);
     } catch (cause) {
-      throw new BindingLoadError(
-        projectId,
-        binding.bindingId,
-        `binding "${binding.name}" (${binding.provider}) has credentials that cannot be read: ${
+      throw refusal(
+        `${subject} "${binding.name}" (${binding.provider}) has credentials that cannot be read: ${
           (cause as Error).message
         }`,
-        { cause },
+        cause,
       );
     }
 
@@ -330,10 +393,8 @@ export const createPipelineIntegrationsLoader = (
       const paths = parsed.error.issues
         .map((issue) => (issue.path.length === 0 ? '<root>' : issue.path.join('.')))
         .join(', ');
-      throw new BindingLoadError(
-        projectId,
-        binding.bindingId,
-        `binding "${binding.name}" (${binding.provider}) has configuration that fails its schema at: ${paths}`,
+      throw refusal(
+        `${subject} "${binding.name}" (${binding.provider}) has configuration that fails its schema at: ${paths}`,
       );
     }
 
@@ -343,8 +404,10 @@ export const createPipelineIntegrationsLoader = (
         : { channel: '', digestChannel: '' };
 
     try {
+      const mintingHints = registration.credentialMinting?.hints;
       return {
         ...channels,
+        ...(mintingHints === undefined ? {} : { mintingHints }),
         port: declineUndeclaredMinting(
           registration,
           type,
@@ -361,11 +424,9 @@ export const createPipelineIntegrationsLoader = (
         redactor,
       };
     } catch (cause) {
-      throw new BindingLoadError(
-        projectId,
-        binding.bindingId,
-        `binding "${binding.name}" (${binding.provider}) could not be instantiated`,
-        { cause },
+      throw refusal(
+        `${subject} "${binding.name}" (${binding.provider}) could not be instantiated`,
+        cause,
       );
     }
   };
@@ -405,6 +466,7 @@ export const createPipelineIntegrationsLoader = (
       },
       'git',
       scope,
+      'integration',
     );
     return {
       executor: options.executor,
@@ -490,6 +552,11 @@ export const createPipelineIntegrationsLoader = (
                 // WP-24: the same value the adapter was built with, for the two sinks the pipeline
                 // owns itself — `tasks.review_subject` and a finding on its way to a thread.
                 redactor: git.built.redactor,
+                // WP-107 (backlog 278): the provider's words for the mint refusals, so the ring
+                // that renders them names no provider.
+                ...(git.built.mintingHints === undefined
+                  ? {}
+                  : { mintingHints: git.built.mintingHints }),
               },
         taskManagement:
           taskManagement === null

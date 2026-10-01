@@ -384,7 +384,8 @@ describe('the shipped topology: app (ROLE=all, no launcher) beside runner (ROLE=
     // its production minter; `app` never minted — every `mintCredential` the provider saw came from
     // the runner — so no exact-value registry in `app`'s stack ever held one, and the `glpat-` rule
     // cannot match this prefix. What redacts it in `app` is the shape the runner recorded beside the
-    // mint's audit row, compiled into `app`'s rules by its refresh.
+    // mint's audit row, compiled into `app`'s rules by its refresh (on the mint's commit since
+    // WP-107, and on its timer).
     const mints = pipeline.gitCalls().filter((call) => call.method === 'mintCredential');
     expect(mints.length).toBeGreaterThan(0);
     expect(new Set(mints.map((call) => call.process))).toEqual(new Set(['runner']));
@@ -405,7 +406,9 @@ describe('the shipped topology: app (ROLE=all, no launcher) beside runner (ROLE=
       (await pipeline.auditRows()).filter((row) => row.action === 'mint_credential').length,
     ).toBe(mints.length);
     // Rule 87: the shape was recorded at the first mint, long before this line, and a process
-    // refreshes every few seconds; the wait binds the rule being installed rather than a sleep.
+    // re-reads on that commit (WP-107) and every few seconds after; the wait binds the rule being
+    // installed rather than a sleep. Which instance's refresher installed it is not visible here —
+    // the per-`ROLE` census is `test/integration/redaction/shape-refresh-roles.integration.test.ts`.
     // **In this tier the processes share one Node module graph**, so the installed set is shared
     // too: what this proves is that the value reaches no row `app` writes through its exact-value
     // path (its stack never held it) and is caught by a rule compiled from the database's shape

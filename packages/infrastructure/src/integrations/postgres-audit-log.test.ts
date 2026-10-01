@@ -12,7 +12,9 @@
  * a migrated PostgreSQL 18 with the shared port suite.
  */
 import {
+  type BroadcastMessage,
   type IntegrationActionEntry,
+  MINTED_CREDENTIAL_SHAPES_TOPIC,
   StreamConflictError,
   type TransactionScope,
   type UnitOfWork,
@@ -51,6 +53,8 @@ interface Harness {
   readonly committed: readonly { text: string; values: readonly unknown[] }[];
   readonly appended: readonly DomainEvent[];
   readonly sequenceReads: readonly { streamType: StreamType; streamId: Id }[];
+  /** Broadcasts of *committed* transactions only — `pg_notify` is delivered on commit. */
+  readonly published: readonly BroadcastMessage[];
 }
 
 /**
@@ -60,6 +64,7 @@ const harnessWith = (conflicts: number, maxSequenceAttempts?: number): Harness =
   const committed: { text: string; values: readonly unknown[] }[] = [];
   const appended: DomainEvent[] = [];
   const sequenceReads: { streamType: StreamType; streamId: Id }[] = [];
+  const published: BroadcastMessage[] = [];
   let remaining = conflicts;
   let nextSeq = 7;
 
@@ -67,6 +72,7 @@ const harnessWith = (conflicts: number, maxSequenceAttempts?: number): Harness =
     transaction: async (fn) => {
       const pending: { text: string; values: readonly unknown[] }[] = [];
       const pendingEvents: DomainEvent[] = [];
+      const pendingBroadcasts: BroadcastMessage[] = [];
       const sql: SqlExecutor = {
         query: async (text, values = []) => {
           pending.push({ text, values });
@@ -75,6 +81,11 @@ const harnessWith = (conflicts: number, maxSequenceAttempts?: number): Harness =
       };
       const scope = {
         tx: { adapter: 'postgres', client: sql },
+        broadcast: {
+          publish: async (message: BroadcastMessage) => {
+            pendingBroadcasts.push(message);
+          },
+        },
         events: {
           append: async (events: readonly DomainEvent[]) => {
             if (remaining > 0) {
@@ -95,6 +106,7 @@ const harnessWith = (conflicts: number, maxSequenceAttempts?: number): Harness =
       const result = await fn(scope);
       committed.push(...pending);
       appended.push(...pendingEvents);
+      published.push(...pendingBroadcasts);
       return result;
     },
   };
@@ -114,10 +126,35 @@ const harnessWith = (conflicts: number, maxSequenceAttempts?: number): Harness =
     committed,
     appended,
     sequenceReads,
+    published,
   };
 };
 
 describe('createPostgresIntegrationAuditLog', () => {
+  /**
+   * WP-107 (TD-012's M6 amendment (1), PROGRESS backlog 276): the shape's announcement rides the
+   * shape's own transaction, so it reaches the other processes when — and only when — the row is on
+   * record. A retried transaction announces once; an entry that wrote no shape announces nothing.
+   */
+  it('announces a recorded shape on the shape topic, once per committed write and never otherwise', async () => {
+    const shape = {
+      shape: { prefix: 'acmepat-', charset: 'token', length: 30 },
+      expiresAt: '2026-09-13T00:00:00.000Z',
+    } as const;
+    const minted = entry({ action: 'mint_credential', credentialShape: shape });
+
+    const retried = harnessWith(2);
+    await retried.log.record(minted);
+    expect(retried.published).toEqual([{ topic: MINTED_CREDENTIAL_SHAPES_TOPIC, payload: {} }]);
+    expect(retried.committed.some((row) => /minted_credential_shapes/.test(row.text))).toBe(true);
+
+    for (const quiet of [entry(), entry({ ...minted, status: 'would_have' })]) {
+      const harness = harnessWith(0);
+      await harness.log.record(quiet);
+      expect(harness.published).toEqual([]);
+    }
+  });
+
   it('writes the row and the event in one transaction, on the integration stream', async () => {
     const harness = harnessWith(0);
     await harness.log.record(entry());

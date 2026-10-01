@@ -174,9 +174,25 @@ describe('a git provider’s credential-minting declaration (WP-80)', () => {
       credentialMinting,
     }) as AnyProviderRegistration;
 
+  const HINTS = { enable: 'turn minting on here', shape: 'declare the prefix there' };
+
   it('accepts a declaration of a stable shape', () => {
-    const registry = createIntegrationRegistry([minting({ shape: 'stable' })]);
-    expect(registry.get('git', 'fake-minting-git').credentialMinting).toEqual({ shape: 'stable' });
+    const registry = createIntegrationRegistry([minting({ shape: 'stable', hints: HINTS })]);
+    expect(registry.get('git', 'fake-minting-git').credentialMinting).toEqual({
+      shape: 'stable',
+      hints: HINTS,
+    });
+  });
+
+  /** WP-107 (PROGRESS backlog 278): the refusals' fixes are the provider's words, so they must exist. */
+  it.each([
+    ['no hints', { shape: 'stable' }],
+    ['a blank enable hint', { shape: 'stable', hints: { ...HINTS, enable: ' ' } }],
+    ['no shape hint', { shape: 'stable', hints: { enable: HINTS.enable } }],
+  ])('refuses minting declared with %s, naming the provider', (_case, declaration) => {
+    expect(() => createIntegrationRegistry([minting(declaration)])).toThrow(
+      /provider "fake-minting-git": declares credential minting without both hints/,
+    );
   });
 
   it.each([
@@ -201,7 +217,10 @@ describe('a git provider’s credential-minting declaration (WP-80)', () => {
   it('refuses the declaration on a provider that is not a git provider', () => {
     expect(() =>
       createIntegrationRegistry([
-        { ...registration(), credentialMinting: { shape: 'stable' } } as AnyProviderRegistration,
+        {
+          ...registration(),
+          credentialMinting: { shape: 'stable', hints: HINTS },
+        } as AnyProviderRegistration,
       ]),
     ).toThrow(/only a git binding mints run credentials/);
   });
@@ -209,10 +228,10 @@ describe('a git provider’s credential-minting declaration (WP-80)', () => {
   it('is what both git registrations this repository ships declare', async () => {
     const { gitlabProviderRegistration } = await import('./providers/gitlab/index.js');
     const { fakeGitRegistration } = await import('./bindings/fake-registrations.js');
-    expect(gitlabProviderRegistration.credentialMinting).toEqual({ shape: 'stable' });
+    expect(gitlabProviderRegistration.credentialMinting).toMatchObject({ shape: 'stable' });
     expect(
       fakeGitRegistration({ port: null as never, token: 'fake-token-000' }).credentialMinting,
-    ).toEqual({ shape: 'stable' });
+    ).toMatchObject({ shape: 'stable' });
   });
 });
 

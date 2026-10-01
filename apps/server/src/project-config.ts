@@ -34,11 +34,14 @@ export const createProjectConfigCommands = (options: {
   readonly pool: pg.Pool;
   readonly integrations: PipelineIntegrationsPort;
   readonly files: RepositoryFileSource;
+  /** `APP_SECRET_KEY`: the re-read redacts against the project's binding credentials (WP-107). */
+  readonly secretKey: string;
   readonly logger: Logger;
 }): ProjectConfigCommands => {
   const refresh = createRepositoryConfigRefresher({
     pool: options.pool,
     files: options.files,
+    secretKey: options.secretKey,
     logger: options.logger,
   });
   return {

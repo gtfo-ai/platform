@@ -33,9 +33,14 @@ import {
 import type { Id, IsoDateTime } from '@platform/contracts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as z from 'zod';
+import { GITLAB_CREDENTIAL_MINTING_HINTS } from '../providers/gitlab/index.js';
 import type { AnyProviderRegistration } from '../registry.js';
 import { createIntegrationRegistry } from '../registry.js';
-import { BindingLoadError, createPipelineIntegrationsLoader } from './loader.js';
+import {
+  BindingLoadError,
+  createPipelineIntegrationsLoader,
+  createProjectBindingSecrets,
+} from './loader.js';
 import { createPipelineProviderRegistry } from './shipped-registry.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b1' as Id;
@@ -190,6 +195,16 @@ describe('a git binding that loads', () => {
       host: 'git.example.test',
     });
     expect(integrations.git?.project).toBe('acme/api');
+  });
+
+  /**
+   * WP-107 (PROGRESS backlog 278): the mint refusals' hints are the provider's, read off the
+   * registration the binding was built through — the shipped GitLab one here — never a sentence the
+   * application ring keeps.
+   */
+  it('carries the minting hints its provider’s registration declares', async () => {
+    const integrations = await loaderFor().forProject(PROJECT, outsideARun);
+    expect(integrations.git?.mintingHints).toEqual(GITLAB_CREDENTIAL_MINTING_HINTS);
   });
 
   /**
@@ -400,7 +415,14 @@ describe('credential minting a registration did not declare (WP-80)', () => {
     secretFields: ['token'],
     setupGuidePath: 'packages/integrations/src/bindings/loader.test.ts',
     agentTooling: null,
-    ...(declared ? { credentialMinting: { shape: 'stable' as const } } : {}),
+    ...(declared
+      ? {
+          credentialMinting: {
+            shape: 'stable' as const,
+            hints: { enable: 'claiming-git: turn it on', shape: 'claiming-git: fix the prefix' },
+          },
+        }
+      : {}),
     create: ({ integrationId }) =>
       ({
         ref: { integrationId, provider: 'claiming-git', type: 'git', host: null },
@@ -454,7 +476,10 @@ describe('credential minting a registration did not declare (WP-80)', () => {
  * the address. `null` is the one answer for an integration row that is gone.
  */
 describe('the minting integration (WP-80, TD-028 decision 10)', () => {
-  const accountLoader = (account: Awaited<ReturnType<BindingRepository['forIntegration']>>) => {
+  const accountLoader = (
+    account: Awaited<ReturnType<BindingRepository['forIntegration']>>,
+    secrets: Readonly<Record<string, string>> | Error = { token: BINDING_TOKEN },
+  ) => {
     const actions = executor();
     return createPipelineIntegrationsLoader({
       repository: {
@@ -463,7 +488,7 @@ describe('the minting integration (WP-80, TD-028 decision 10)', () => {
         },
         forIntegration: async () => account,
       },
-      secrets: secretsOf({ token: BINDING_TOKEN }),
+      secrets: secretsOf(secrets),
       registry: createPipelineProviderRegistry({
         executor: actions,
         clock: { now: () => '2026-06-01T09:00:00.000Z' as IsoDateTime },
@@ -496,6 +521,50 @@ describe('the minting integration (WP-80, TD-028 decision 10)', () => {
     expect(minting?.redactor.redactText(`quoted ${BINDING_TOKEN}`).value).not.toContain(
       BINDING_TOKEN,
     );
+  });
+
+  /**
+   * WP-107 (PROGRESS backlog 278): the account is not a binding, so its load failure does not call it
+   * one, and carries the integration's id where a binding's would be — never an integration id in
+   * the binding field.
+   */
+  it('says integration, not binding, when the account cannot be built, and carries its id', async () => {
+    const error = await accountLoader(
+      gitlabAccount,
+      new SecretResolutionError('secret … is sealed under key "v1:old"', []),
+    )
+      .forMintingIntegration(GIT_INTEGRATION, outsideARun)
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(BindingLoadError);
+    expect((error as Error).message).toBe(
+      'integration "acme gitlab" (gitlab) has credentials that cannot be read: secret … is sealed under key "v1:old"',
+    );
+    expect(error).toMatchObject({
+      projectId: null,
+      bindingId: null,
+      integrationId: GIT_INTEGRATION,
+    });
+
+    const schema = await accountLoader({ ...gitlabAccount, config: { base_url: 'not a url' } })
+      .forMintingIntegration(GIT_INTEGRATION, outsideARun)
+      .catch((caught: unknown) => caught);
+    expect((schema as Error).message).toMatch(
+      /^integration "acme gitlab" \(gitlab\) has configuration that fails its schema at: base_url/,
+    );
+  });
+
+  it('still says binding for a project’s binding that cannot be built, with both ids', async () => {
+    const error = await loaderFor({
+      secrets: new SecretResolutionError('secret … is sealed under key "v1:old"', []),
+    })
+      .forProject(PROJECT, outsideARun)
+      .catch((caught: unknown) => caught);
+    expect((error as Error).message).toMatch(/^binding "acme gitlab" \(gitlab\) has credentials/);
+    expect(error).toMatchObject({
+      projectId: PROJECT,
+      bindingId: GIT_BINDING,
+      integrationId: GIT_INTEGRATION,
+    });
   });
 
   it('answers null for an integration that no longer exists', async () => {
@@ -621,5 +690,68 @@ describe('an observability binding (WP-89)', () => {
     await expect(two.forObservability(PROJECT, 'errors', outsideARun)).rejects.toThrow(
       /has 2 "errors" bindings/,
     );
+  });
+});
+
+/**
+ * WP-107 (TD-012's M6 amendment (2), PROGRESS backlog 316): the credentials a repository reading is
+ * redacted against — every binding of the project, decrypted, named as the loader names them.
+ */
+describe('a project’s binding credentials, for a reading (WP-107)', () => {
+  const JIRA_TOKEN = 'FAKE-wp107-not-a-real-jira-token-0003';
+  const jiraBinding: ProjectBinding = {
+    bindingId: '00000000-0000-4000-8000-00000000d107' as Id,
+    integrationId: '00000000-0000-4000-8000-00000000a107' as Id,
+    type: 'task_management',
+    provider: 'jira-cloud',
+    name: 'acme jira',
+    config: {},
+    secretIds: ['00000000-0000-4000-8000-00000000e107' as Id],
+  };
+  const resolving: SecretStore = {
+    resolve: async (ids): Promise<Readonly<Record<string, string>>> =>
+      ids[0] === jiraBinding.secretIds[0] ? { api_token: JIRA_TOKEN } : { token: BINDING_TOKEN },
+  };
+
+  it('names every binding’s every credential <provider>:<integration>:<field>, each account once', async () => {
+    const secrets = await createProjectBindingSecrets({
+      // The git binding twice — two bindings of one account resolve to the same names.
+      repository: repositoryOf([gitBinding(), jiraBinding, gitBinding()]),
+      secrets: resolving,
+    })(PROJECT);
+    expect(secrets).toEqual({
+      secrets: [
+        { name: `gitlab:${GIT_INTEGRATION}:token`, value: BINDING_TOKEN },
+        { name: `jira-cloud:${jiraBinding.integrationId}:api_token`, value: JIRA_TOKEN },
+      ],
+      unreadable: [],
+    });
+  });
+
+  /**
+   * PROGRESS backlog 358: one integration that will not decrypt is **named**, and every other
+   * binding's credentials are still answered — a throw here froze the whole reading.
+   */
+  it('names an integration whose credential will not decrypt, and still answers the others', async () => {
+    const answer = await createProjectBindingSecrets({
+      repository: repositoryOf([gitBinding(), jiraBinding]),
+      secrets: {
+        resolve: async (ids): Promise<Readonly<Record<string, string>>> => {
+          if (ids[0] === jiraBinding.secretIds[0]) {
+            throw new SecretResolutionError('secret … is sealed under key "v1:old"', []);
+          }
+          return { token: BINDING_TOKEN };
+        },
+      },
+    })(PROJECT);
+    expect(answer).toEqual({
+      secrets: [{ name: `gitlab:${GIT_INTEGRATION}:token`, value: BINDING_TOKEN }],
+      unreadable: [
+        {
+          integration: `integration "acme jira" (jira-cloud, ${jiraBinding.integrationId})`,
+          reason: 'secret … is sealed under key "v1:old"',
+        },
+      ],
+    });
   });
 });

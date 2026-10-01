@@ -23,7 +23,12 @@ import type { RefreshProjectConfigResponse } from '@platform/contracts';
 import { DATA_BLOCK_TAG, readDataBlocks } from '@platform/domain';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD, Client } from '../support/instance.js';
-import { inboundEvent, type PipelineE2E, startPipeline } from '../support/pipeline.js';
+import {
+  inboundEvent,
+  type PipelineE2E,
+  startPipeline,
+  TICKET_BINDING_TOKEN,
+} from '../support/pipeline.js';
 import { featureScenarios, TICKETS } from '../support/scenarios.js';
 
 const execFileAsync = promisify(execFile);
@@ -75,9 +80,11 @@ beforeAll(async () => {
     path.join(repo, '.agentic/config.yml'),
     'version: 1\nstages:\n  refinement:\n    prompt: prompts/pm.md\n',
   );
+  // WP-107 (backlog 316): the project's ticket binding credential, which no pattern rule knows,
+  // committed by somebody with merge rights. The reading redacts it by its exact value.
   await writeFile(
     path.join(repo, '.agentic/prompts/pm.md'),
-    'Name the WP92-FIXTURE owning team in every acceptance criterion.\n',
+    `Name the WP92-FIXTURE owning team in every acceptance criterion.\nQuote ${TICKET_BINDING_TOKEN} in the footer.\n`,
   );
   await writeFile(
     path.join(repo, '.agentic/prompts/implementation.append.md'),
@@ -147,8 +154,11 @@ describe('a project’s own prompt files (WP-92)', () => {
       '.agentic/prompts/implementation.append.md',
       '.agentic/prompts/pm.md',
     ]);
-    // Redacted at the reading: the planted token never reaches the table.
+    // Redacted at the reading: the planted token never reaches the table — nor, since WP-107, the
+    // ticket binding's credential, which only the exact-value pass over the project's bindings knows.
     expect(JSON.stringify(files)).not.toContain(PLANTED);
+    expect(JSON.stringify(files)).not.toContain(TICKET_BINDING_TOKEN);
+    expect(files['.agentic/prompts/pm.md']?.text).toContain('[REDACTED:integration:');
     await pipeline.query('update projects set repo_url = $1 where id = $2', [
       seeded?.repo_url,
       pipeline.projectId,
@@ -180,10 +190,18 @@ describe('a project’s own prompt files (WP-92)', () => {
     expect(pmBlocks.map((block) => [block.attributes.key, block.attributes.status])).toEqual([
       ['prompt', 'read'],
     ]);
-    expect(pmBlocks[0]?.body).toBe(
-      'Name the WP92-FIXTURE owning team in every acceptance criterion.\n',
+    expect(pmBlocks[0]?.body).toMatch(
+      /^Name the WP92-FIXTURE owning team in every acceptance criterion\.\nQuote \[REDACTED:integration:fake-task-management:[0-9a-f-]+:token\] in the footer\.\n$/,
     );
     expect(refinement.systemPromptAppend).not.toContain('WP92-FIXTURE');
+    // …and the column the run's prompt is served from never held it either (WP-107).
+    const prompts = await pipeline.query<{ user_prompt: string }>(
+      'select user_prompt from runs where task_id is not null and user_prompt is not null',
+    );
+    expect(prompts.length).toBeGreaterThan(0);
+    for (const row of prompts) {
+      expect(row.user_prompt).not.toContain(TICKET_BINDING_TOKEN);
+    }
 
     // Implementation: the convention append file; its spoofed close marker closes nothing.
     const implementation = specFor(pipeline, 'implementation');

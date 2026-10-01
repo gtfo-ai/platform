@@ -49,6 +49,18 @@ export type TranscriptAppendedHint = {
   readonly seq: number;
 };
 
+/**
+ * Topic a recorded minted-credential shape is announced on (WP-107, TD-012's M6 amendment (1)).
+ *
+ * Published inside the transaction that writes the `minted_credential_shapes` row, so it is
+ * delivered only if the shape is on record, and subscribed by **every** process whatever its
+ * `ROLE`: each one re-reads the table on it (`startMintedCredentialShapeRefresh` in
+ * `@platform/infrastructure`). The payload is empty — the shape is read back from the table, never
+ * carried — and the refresher's timer is the guarantee for a notification a reconnecting listener
+ * missed.
+ */
+export const MINTED_CREDENTIAL_SHAPES_TOPIC = 'redaction.minted_credential_shapes';
+
 /** SSE topics of technical/08 (`GET /events?topics=org,project:<id>,task:<id>,run:<id>`). */
 export const ORG_TOPIC = 'org';
 export const projectTopic = (projectId: Id): string => `project:${projectId}`;

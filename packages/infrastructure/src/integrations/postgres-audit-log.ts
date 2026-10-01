@@ -17,7 +17,10 @@
  * **A third write, for one action** (WP-80): an `ok` `mint_credential` entry carries the minted
  * value's non-secret shape, and it is upserted into `minted_credential_shapes` in the same
  * transaction — TD-012's M5 amendment asks for the shape *beside the mint's audit row, in its
- * transaction*, so no process can read a mint on record whose shape is not.
+ * transaction*, so no process can read a mint on record whose shape is not. Since WP-107 (TD-012's
+ * M6 amendment (1)) the same transaction publishes `MINTED_CREDENTIAL_SHAPES_TOPIC` on the
+ * transactional broadcast, so every process re-reads the shapes on the commit rather than at its
+ * next timer read.
  *
  * ## Allocating a stream sequence outside a saga
  *
@@ -55,6 +58,7 @@ import {
   type IntegrationAuditLog,
   integrationActionEventDrafts,
   type Logger,
+  MINTED_CREDENTIAL_SHAPES_TOPIC,
   StreamConflictError,
   silentLogger,
   type UnitOfWork,
@@ -171,6 +175,9 @@ export const createPostgresIntegrationAuditLog = (
           shape.shape.length,
           shape.expiresAt,
         ]);
+        // WP-107 (TD-012's M6 amendment (1)): every process re-reads the shapes on this hint, which
+        // `pg_notify` delivers only if this transaction commits — never a shape that rolled back.
+        await scope.broadcast.publish({ topic: MINTED_CREDENTIAL_SHAPES_TOPIC, payload: {} });
       }
       if (drafts.length > 0) {
         await scope.events.append(

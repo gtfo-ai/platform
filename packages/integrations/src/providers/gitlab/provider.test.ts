@@ -17,6 +17,7 @@ import { fixedClock } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { gitlabConfigSchema } from './config.js';
 import type { GitLabFetch } from './http.js';
+import { gitlabProviderRegistration } from './index.js';
 import { createGitLabProvider, type GitLabProvider } from './provider.js';
 
 const AT = '2026-06-01T08:00:00.000Z';
@@ -306,6 +307,26 @@ describe('credential minting', () => {
       length: token.length,
     });
     expect(hasMintedCredentialShape(credential.shape, credential.value)).toBe(true);
+  });
+
+  /**
+   * WP-107 (PROGRESS backlog 278): GitLab's own words for the two mint refusals, declared on the
+   * registration and rendered verbatim by the application ring, which names no provider. Pinned
+   * here, where they are GitLab's: the setting a disabled mint needs, and the key a custom prefix is
+   * declared under.
+   */
+  it('declares GitLab’s mint refusal hints on its registration, naming mint_credentials and token_prefix', () => {
+    expect(gitlabProviderRegistration.credentialMinting).toEqual({
+      shape: 'stable',
+      hints: {
+        enable:
+          'GitLab: `mint_credentials: true` on the integration, which needs project access tokens: ' +
+          'GitLab Premium on GitLab.com, any self-managed tier',
+        shape:
+          'GitLab: an instance whose administrator changed the personal-access-token prefix ' +
+          'declares it as `token_prefix` on the integration',
+      },
+    });
   });
 
   it('refuses a token_prefix outside the shape alphabet at the config', () => {

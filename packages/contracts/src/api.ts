@@ -468,6 +468,13 @@ export const exportProjectConfigResponseSchema = z.strictObject({
 /** `POST /api/projects/:id/config/refresh` — re-read the default branch's file now (WP-63). */
 export const refreshProjectConfigResponseSchema = z.strictObject({
   repository: repositoryConfigReadingSchema,
+  /**
+   * Present when **this** reading stored the configuration and withheld the prompt files, because
+   * the credentials of one or more of the project's integrations could not be decrypted (WP-107,
+   * PROGRESS backlog 358): names each integration and why. Absent when nothing was withheld, and on
+   * an `Idempotency-Key` replay, which reads again nothing.
+   */
+  prompts_withheld: nonEmptyStringSchema.optional(),
 });
 
 export const projectSummarySchema = projectRecordSchema.extend({

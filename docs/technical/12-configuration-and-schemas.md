@@ -228,8 +228,9 @@ prompt, and **adds to the role prompt and never replaces it** — `prompt` inclu
 suggests (technical/04 § "Prompt assembly" has the assembly rule and the `prompt_version` lane). The files are
 read from the **default branch** with this file, in the same pass and at the same commit: the repository
 reader lists one named directory, `.agentic/prompts/`, and reads its direct `<name>.md` children — at most 64,
-each at most 16 KiB (a larger one is recorded `oversized` and never read) — redacted with TD-012 step 2's
-pattern rules and stored beside the reading (`project_repository_config.prompts`, migration 0063). A settings
+each at most 16 KiB (a larger one is recorded `oversized` and never read) — redacted with TD-012 step 1 over
+the decrypted credentials of the project's bindings and then step 2's pattern rules (WP-107; until then
+step 2 only) and stored beside the reading (`project_repository_config.prompts`, migration 0063). A settings
 edit that names another file in the directory applies at the next run; a new or changed **file** applies at
 the next reading, like this file itself. A file a key names that the platform cannot read — absent, a
 symlink, oversized, outside the directory, or no reading yet — does **not** refuse the run: the run proceeds

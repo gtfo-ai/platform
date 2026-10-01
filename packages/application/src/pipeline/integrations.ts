@@ -115,6 +115,24 @@ export interface GitBinding {
    *    composes the binding's own credentials on top of the run's.
    */
   readonly redactor: SecretRedactor;
+  /**
+   * The provider's words for the two mint refusals, from its registration's credential-minting
+   * declaration (WP-107, PROGRESS backlog 278). Absent for a provider that declares no minting, and
+   * for a binding a test builds by hand; a refusal then names no setting rather than guessing one.
+   */
+  readonly mintingHints?: CredentialMintingHints;
+}
+
+/**
+ * How an operator fixes the two refusals a mint can meet, in the provider's own words — declared on
+ * the provider's registration (`CredentialMintingDeclaration.hints` in `@platform/integrations`) so
+ * this ring renders them and names no provider (WP-107, PROGRESS backlog 278).
+ */
+export interface CredentialMintingHints {
+  /** How minting is turned on, for a binding whose port reports it off. */
+  readonly enable: string;
+  /** How a minted value that does not have the declared shape is fixed. */
+  readonly shape: string;
 }
 
 export interface TaskManagementBinding {
@@ -2017,8 +2035,7 @@ export const runCredentialWrites = (integrations: PipelineIntegrations) => ({
         kind: 'unavailable',
         reason:
           `the git binding ${git.ref.integrationId} (${git.ref.provider}) cannot mint run credentials — ` +
-          'its minting setting is off (GitLab: `mint_credentials: true` on the integration, which needs ' +
-          'project access tokens: GitLab Premium on GitLab.com, any self-managed tier). The binding’s own ' +
+          `its minting setting is off${hintClause(git.mintingHints?.enable)}. The binding’s own ` +
           'token is never sent instead (TD-028, WP-76 amendment decision 6)',
       };
     }
@@ -2063,7 +2080,7 @@ export const runCredentialWrites = (integrations: PipelineIntegrations) => ({
         reason: `a shadow task is never given a ${request.scope} credential (Q98 (a) admits only a read-scoped one)`,
       };
     }
-    const refusal = mintRefusal(minted, request);
+    const refusal = mintRefusal(minted, request, git.mintingHints);
     if (refusal !== null) {
       // **Revoked before the refusal is thrown** (WP-76 review round 1): the provider has already
       // created the token, and a refusal that left it would leave a live credential nothing holds,
@@ -2090,6 +2107,10 @@ export const runCredentialWrites = (integrations: PipelineIntegrations) => ({
   },
 });
 
+/** ` (<hint>)` when the provider declared one, and nothing when it did not (WP-107). */
+const hintClause = (hint: string | undefined): string =>
+  hint === undefined || hint.trim() === '' ? '' : ` (${hint})`;
+
 /**
  * Why a minted value is not used, or `null`.
  *
@@ -2097,10 +2118,15 @@ export const runCredentialWrites = (integrations: PipelineIntegrations) => ({
  * transcript (`exactSecretRedactor` refuses it). A scope the provider changed is a provider defect
  * that would hand a read-only run a push token. And since WP-80 a value that does not have the
  * shape it came with cannot be redacted by any process but this one (TD-012's M5 amendment), so it
- * is refused the same way — the hint names GitLab's setting because that is the one provider that
- * mints, and a custom personal-access-token prefix is the ordinary way to get here.
+ * is refused the same way. How to fix that is the **provider's** sentence (`hints.shape`, declared
+ * on its registration — GitLab's names its `token_prefix`), never this ring's (WP-107, PROGRESS
+ * backlog 278).
  */
-const mintRefusal = (minted: MintedRunCredential, request: RunCredentialRequest): string | null => {
+const mintRefusal = (
+  minted: MintedRunCredential,
+  request: RunCredentialRequest,
+  hints: CredentialMintingHints | undefined,
+): string | null => {
   if (minted.scope !== request.scope) {
     return `asked for ${request.scope}, got ${minted.scope}`;
   }
@@ -2111,8 +2137,7 @@ const mintRefusal = (minted: MintedRunCredential, request: RunCredentialRequest)
     return (
       `its value does not have the shape the provider declared (prefix "${minted.shape.prefix}", ` +
       `${minted.shape.charset} characters, ${minted.shape.length} long), so no process but this one ` +
-      'could redact it (TD-012, WP-80) — GitLab: an instance whose administrator changed the ' +
-      'personal-access-token prefix declares it as `token_prefix` on the integration'
+      `could redact it (TD-012, WP-80)${hints === undefined || hints.shape.trim() === '' ? '' : ` — ${hints.shape}`}`
     );
   }
   return null;

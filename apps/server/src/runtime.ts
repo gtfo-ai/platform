@@ -144,6 +144,14 @@ export interface ServerRuntime {
    * for a socket to be open and calls `relist()` rather than sleeping out the interval.
    */
   readonly heldConnections: InboundConnectionsHandle | null;
+  /**
+   * This process's minted-credential shape refresher (WP-80, WP-107). A **labelled seam** like
+   * `jobs`: the rules it installs are module state, which every instance of one Node process shares,
+   * so the only thing a test can read **per instance** is this refresher's own `status()` — whether
+   * it subscribed the shape topic and how many reads a notification started. The per-`ROLE` census
+   * (`test/integration/redaction/shape-refresh-roles.integration.test.ts`) reads it.
+   */
+  readonly mintedCredentialShapes: Pick<redactionAdapters.MintedCredentialShapeRefresh, 'status'>;
   /** The address the HTTP server is listening on, once `listen()` has run. */
   listen(): Promise<string>;
   stop(): Promise<void>;
@@ -234,25 +242,39 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
      */
     await dbAdapters.assertSchemaIsKnown(database.pool);
 
-    /**
-     * WP-80 (TD-012's M5 amendment, PROGRESS backlog 259): every run credential any process minted
-     * is redacted in **this** one by its recorded shape. Loaded before anything that redacts is
-     * composed — a failed first read fails the start rather than serving with fewer rules than the
-     * database says are needed — and refreshed on a timer; every `patternRedactor()` this process
-     * builds reads the installed rules at call time. Every role, because every role stores text.
-     */
-    const shapes = await redactionAdapters.startMintedCredentialShapeRefresh({
-      sql: database.pool,
-      logger: loggerPort,
-    });
-    stopCallbacks.unshift({ name: 'minted-credential-shapes', stop: shapes.stop });
-
     const eventing = eventingAdapters.createEventing({
       pool: database.pool,
       connectionString: config.database.url,
       config: config.dispatch,
       logger: loggerPort,
     });
+    /**
+     * The broadcast's listening connection is closed by the **last** stop callback, whatever the
+     * role (`close` is idempotent, so the worker's `eventing.stop` and the API's transcript bridge
+     * closing it first are both fine). Registered before anything subscribes, so a start that
+     * fails after a subscription opened the `LISTEN` connection does not leave it behind.
+     */
+    stopCallbacks.unshift({ name: 'broadcast', stop: async () => eventing.broadcast.close() });
+
+    /**
+     * WP-80 (TD-012's M5 amendment, PROGRESS backlog 259): every run credential any process minted
+     * is redacted in **this** one by its recorded shape. Loaded before anything that redacts is
+     * composed — a failed first read fails the start rather than serving with fewer rules than the
+     * database says are needed — and every `patternRedactor()` this process builds reads the
+     * installed rules at call time. Every role, because every role stores text.
+     *
+     * WP-107 (TD-012's M6 amendment (1), backlog 276): re-read on the commit that records a shape,
+     * through this process's own subscription to the broadcast, and on the timer as the guarantee.
+     * It is composed here, before any branch on `capabilities`, so no `ROLE` can start without it;
+     * `mintedCredentialShapes` on the returned runtime is what the per-`ROLE` census in
+     * `test/integration/redaction/shape-refresh-roles.integration.test.ts` reads.
+     */
+    const shapes = await redactionAdapters.startMintedCredentialShapeRefresh({
+      sql: database.pool,
+      broadcast: eventing.broadcast,
+      logger: loggerPort,
+    });
+    stopCallbacks.unshift({ name: 'minted-credential-shapes', stop: shapes.stop });
 
     const metrics = createMetrics({
       ...(capabilities.worker
@@ -895,6 +917,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
                 logger: loggerPort,
               })
             ).files,
+            secretKey: config.secretKey,
             logger: loggerPort,
           })
         : null;
@@ -946,8 +969,10 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
        * deployment therefore works without either half knowing about the other.
        *
        * Its stop callback also closes the broadcast when this process runs no worker: `eventing`
-       * is built for every role but only the worker branch registers `eventing.stop`, so without
-       * this an API-only process would hold a live `LISTEN` connection open through shutdown.
+       * is built for every role but only the worker branch registers `eventing.stop`. Since WP-107
+       * the last stop callback closes it in every role as well (the shape refresher subscribes it
+       * whatever the role); closing it here releases the `LISTEN` connection earlier, beside the
+       * bridge that used it.
        */
       const bridge = await startTranscriptBridge({
         hub,
@@ -1111,6 +1136,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       hub,
       pool: database.pool,
       heldConnections,
+      mintedCredentialShapes: shapes,
       listen: async () => app.listen({ port: config.port, host: config.host }),
       stop: async () => {
         if (shuttingDown) {

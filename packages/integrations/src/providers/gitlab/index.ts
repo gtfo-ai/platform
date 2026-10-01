@@ -72,6 +72,19 @@ export const gitlabRateLimitPolicy: RateLimitPolicy = {
   maxConcurrent: 4,
 };
 
+/**
+ * How an operator fixes the two mint refusals on GitLab (WP-107, PROGRESS backlog 278) — the
+ * sentences the application ring carried, naming GitLab, until they moved to the registration.
+ */
+export const GITLAB_CREDENTIAL_MINTING_HINTS = {
+  enable:
+    'GitLab: `mint_credentials: true` on the integration, which needs project access tokens: ' +
+    'GitLab Premium on GitLab.com, any self-managed tier',
+  shape:
+    'GitLab: an instance whose administrator changed the personal-access-token prefix declares it ' +
+    'as `token_prefix` on the integration',
+} as const;
+
 export const gitlabProviderRegistration: ProviderRegistration<'git'> = {
   id: GITLAB_PROVIDER_ID,
   type: 'git',
@@ -86,7 +99,12 @@ export const gitlabProviderRegistration: ProviderRegistration<'git'> = {
   gitCredential: { passwordField: 'token', username: 'oauth2' },
   // WP-80 (TD-012's M5 amendment): a minted token is `token_prefix` followed by GitLab's random
   // part, so its shape is stable and declared — the registry refuses minting without this.
-  credentialMinting: { shape: 'stable' },
+  credentialMinting: {
+    shape: 'stable',
+    // WP-107 (PROGRESS backlog 278): GitLab's words for the two mint refusals, which the application
+    // ring renders without naming a provider. Pinned in `provider.test.ts`.
+    hints: GITLAB_CREDENTIAL_MINTING_HINTS,
+  },
   create: (input) =>
     createGitLabProvider({
       integrationId: input.integrationId,

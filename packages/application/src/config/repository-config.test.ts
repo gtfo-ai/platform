@@ -15,6 +15,7 @@ import {
   describeRepositoryConfigIssues,
   interpretRepositoryConfig,
   MAX_REPOSITORY_CONFIG_DETAIL_CHARS,
+  type ProjectBindingSecrets,
   REPOSITORY_CONFIG_PATH,
   type RepositoryConfigSnapshot,
   type RepositoryFileEntry,
@@ -42,6 +43,12 @@ const jsonCodec: ConfigDocumentCodec = {
 /** A pattern redactor in miniature: the planted token is what a real rule set would catch. */
 const PLANTED = 'glpat-FAKE-wp63-key-name-credential-000';
 const redactText = (value: string): string => value.replaceAll(PLANTED, '[REDACTED:pattern]');
+
+/** A project with no binding credentials to redact against (WP-107's option, at its empty value). */
+const noBindingSecrets = async (): Promise<ProjectBindingSecrets> => ({
+  secrets: [],
+  unreadable: [],
+});
 
 const file = (text: string): RepositoryFileEntry => ({
   kind: 'file',
@@ -262,6 +269,7 @@ describe('refreshRepositoryConfig', () => {
       codec: jsonCodec,
       store,
       redactText,
+      bindingSecrets: noBindingSecrets,
       clock: { now: () => AT },
     });
     const stale = await refreshRepositoryConfig(options(true), {
@@ -293,6 +301,7 @@ describe('refreshRepositoryConfig', () => {
         codec: jsonCodec,
         store,
         redactText,
+        bindingSecrets: noBindingSecrets,
         clock: { now: () => AT },
       },
       { projectId: PROJECT, commitSha: SHA },
@@ -335,6 +344,7 @@ describe('refreshRepositoryConfig', () => {
         codec: jsonCodec,
         store,
         redactText,
+        bindingSecrets: noBindingSecrets,
         clock: { now: () => AT },
       },
       { projectId: PROJECT },
@@ -389,6 +399,7 @@ describe('refreshRepositoryConfig', () => {
         codec: jsonCodec,
         store,
         redactText,
+        bindingSecrets: noBindingSecrets,
         clock: { now: () => AT },
       },
       { projectId: PROJECT },
@@ -407,6 +418,7 @@ describe('refreshRepositoryConfig', () => {
             codec: jsonCodec,
             store,
             redactText,
+            bindingSecrets: noBindingSecrets,
             clock: { now: () => AT },
           },
           { projectId: PROJECT },

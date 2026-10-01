@@ -146,8 +146,9 @@ never its role (above).
 - **A run's git credential.** The runner that minted it redacts it by exact value. Every other
   process — `app` above all, which stores and posts what quotes it: a webhook, a CI log, a
   merge-request diff — redacts it by its recorded *shape* (the prefix, GitLab's random part, the
-  length), which the runner writes beside the mint's audit row and every process re-reads every few
-  seconds (WP-80). **If your GitLab administrator changed the personal-access-token prefix**, set
+  length), which the runner writes beside the mint's audit row and every process re-reads when that
+  row commits, and every five seconds as the fallback (WP-80, WP-107). A process whose re-reads keep
+  failing logs it once at `error` after a minute of failures and keeps the rules it last read. **If your GitLab administrator changed the personal-access-token prefix**, set
   the GitLab integration's `token_prefix` to it: a minted token that does not start with
   `token_prefix` is revoked and refused rather than used, because no other process could redact it.
   A credential minted through an integration the project has since been unbound from is still

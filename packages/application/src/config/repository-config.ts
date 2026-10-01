@@ -61,6 +61,7 @@ import {
   READINESS_TREE_PATHS,
 } from '@platform/domain';
 import { assertOutsideTransaction } from '../events/open-transaction.js';
+import { bindingSecretRedactor, type InjectedSecret } from '../integrations/redaction.js';
 import type { RepositoryConfigState } from '../pipeline/settings.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
@@ -437,14 +438,55 @@ export interface RepositoryConfigRefreshOptions {
   readonly source: RepositoryFileSource;
   readonly codec: ConfigDocumentCodec;
   readonly store: RepositoryConfigStore;
-  /** TD-012 step 2: the platform's pattern rules (no run-scoped credential is in scope here). */
+  /** TD-012 step 2: the platform's pattern rules. Applied after {@link bindingSecrets}' values. */
   readonly redactText: (value: string) => string;
+  /**
+   * TD-012 step 1 at a reading — WP-107, TD-012's M6 amendment (2), PROGRESS backlog 316: the
+   * **decrypted credentials of the project's bindings**, every type, named
+   * `<provider>:<integrationId>:<field>` like the binding loader names them. Everything the reading
+   * stores — the prompt files' text and an invalid file's detail — is replaced value by value before
+   * the pattern rules run, so a credential the platform holds and no pattern knows, committed to
+   * `.agentic/prompts/`, is not stored, not sent to the model and not kept in `runs.user_prompt`.
+   *
+   * Required (standing rule 31). Read once per reading, after the repository answered and only when
+   * the reading will be stored; the values are held for the length of the call and never logged.
+   *
+   * **A binding whose credentials will not decrypt withholds the prompt texts, never the
+   * configuration** (the orchestrator's ruling on PROGRESS backlog 358). The configuration half is
+   * a set of restrictions — a newly merged `block` or a narrowed `commands.allow` — and a broken
+   * binding must never keep one from applying, so it is stored as usual, redacted against every
+   * credential that did decrypt. The prompt texts are the part this pass protects, so they fail
+   * closed: the reading stores **no** prompt directory (`prompts` absent — *"this reading did not
+   * read the directory"*), which also drops the previous reading's texts, and the refresh answers
+   * {@link RepositoryConfigRefresh}'s `promptsWithheld` naming each integration.
+   */
+  readonly bindingSecrets: (projectId: Id) => Promise<ProjectBindingSecrets>;
   readonly clock: { now(): IsoDateTime };
   readonly logger?: Logger;
 }
 
+/**
+ * The decrypted credentials of a project's bindings, and the integrations whose credentials could
+ * not be decrypted (WP-107, backlog 358) — reported by name rather than thrown, so one broken
+ * binding withholds the prompt texts and nothing else.
+ */
+export interface ProjectBindingSecrets {
+  readonly secrets: readonly InjectedSecret[];
+  /** One per integration that could not be read: its label (name, provider, id) and why. Never a value. */
+  readonly unreadable: readonly { readonly integration: string; readonly reason: string }[];
+}
+
 export type RepositoryConfigRefresh =
-  | { readonly status: 'recorded'; readonly snapshot: RepositoryConfigSnapshot }
+  | {
+      readonly status: 'recorded';
+      readonly snapshot: RepositoryConfigSnapshot;
+      /**
+       * Why this reading stored no prompt texts although the repository has a prompt directory, or
+       * `null` when nothing was withheld (WP-107, backlog 358). Names every integration whose
+       * credentials could not be decrypted.
+       */
+      readonly promptsWithheld: string | null;
+    }
   /** The commit read is older than the one already recorded; the newer reading stands. */
   | { readonly status: 'stale'; readonly snapshot: RepositoryConfigSnapshot }
   | { readonly status: 'unavailable'; readonly reason: string };
@@ -495,18 +537,34 @@ export const refreshRepositoryConfig = async (
     );
     return { status: 'stale', snapshot: recorded };
   }
+  const credentials = await options.bindingSecrets(request.projectId);
+  const exact = bindingSecretRedactor(credentials.secrets);
+  const redactText = (value: string): string => options.redactText(exact.redactText(value).value);
+  const promptsWithheld = withheldReason(credentials);
   const interpreted = interpretRepositoryConfig({
     entry: read.files[REPOSITORY_CONFIG_PATH],
     commitSha: read.commitSha,
     readAt: options.clock.now(),
     codec: options.codec,
-    redactText: options.redactText,
+    redactText,
   });
   const snapshot: RepositoryConfigSnapshot =
-    read.prompts === undefined
+    read.prompts === undefined || promptsWithheld !== null
       ? interpreted
-      : { ...interpreted, prompts: redactedPromptReading(read.prompts, options.redactText) };
+      : { ...interpreted, prompts: redactedPromptReading(read.prompts, redactText) };
   await options.store.record(request.projectId, snapshot);
+  if (promptsWithheld !== null) {
+    // `error`: a credential the platform holds and cannot decrypt is a deployment defect an operator
+    // must fix, and until then every stage of this project runs without its prompt files.
+    logger.error(
+      {
+        project_id: request.projectId,
+        commit_sha: snapshot.commitSha,
+        unreadable_integrations: credentials.unreadable.map((entry) => entry.integration),
+      },
+      `the repository configuration was stored and its prompt files were not: ${promptsWithheld}`,
+    );
+  }
   const fields = {
     project_id: request.projectId,
     commit_sha: snapshot.commitSha,
@@ -530,11 +588,30 @@ export const refreshRepositoryConfig = async (
   } else {
     logger.info(fields, 'repository configuration read');
   }
-  return { status: 'recorded', snapshot };
+  return { status: 'recorded', snapshot, promptsWithheld };
 };
 
 /**
- * The prompt directory as it is stored: every text through the redactor (TD-012 step 2), and the
+ * The sentence a withheld prompt directory is reported with, or `null` (WP-107, backlog 358).
+ *
+ * **None of the previous texts stand either**: the stored reading is one row, replaced whole, and a
+ * previous prompt directory may have been stored before WP-107 under the pattern rules alone
+ * (backlog 359) — keeping it would be the one choice that can carry an unredacted credential into a
+ * prompt. A stage then renders a named file `unread` and a convention file not at all, and runs
+ * (WP-92's rule 20: a prompt file grants nothing, so its absence refuses nothing).
+ */
+const withheldReason = (credentials: ProjectBindingSecrets): string | null =>
+  credentials.unreadable.length === 0
+    ? null
+    : `the credentials of ${credentials.unreadable
+        .map((entry) => `${entry.integration} (${entry.reason})`)
+        .join(
+          '; ',
+        )} cannot be decrypted, so the prompt files cannot be redacted against them and none are stored until they can (TD-012, WP-107)`;
+
+/**
+ * The prompt directory as it is stored: every text through the redactor (TD-012 step 2, and since
+ * WP-107 step 1 over the project's binding credentials before it), and the
  * rest untouched. The cut is the consumer's (`MAX_PROJECT_PROMPT_CHARS`), so redaction happens on
  * the whole text first — an exact-match redactor cannot find a secret a cap has halved.
  */

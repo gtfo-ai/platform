@@ -80,6 +80,7 @@ beforeEach(async () => {
     refresh: {
       status: 'recorded',
       snapshot: { status: 'absent', commitSha: SHA, readAt: '2026-09-26T10:00:00.000Z' as never },
+      promptsWithheld: null,
     },
     stored: null,
   };
@@ -299,6 +300,7 @@ describe('POST …/config/refresh', () => {
         readAt: '2026-09-26T10:00:00.000Z' as never,
         detail: 'stages.refinement.max_turns (expected number)',
       },
+      promptsWithheld: null,
     };
     const response = await post('/config/refresh', {});
     expect(response.statusCode).toBe(200);
@@ -309,6 +311,35 @@ describe('POST …/config/refresh', () => {
     });
     expect(refreshes).toEqual([PROJECT]);
     expect(actions[0]).toMatchObject({ action: CONFIG_REFRESH_ACTION });
+  });
+
+  /**
+   * WP-107 (PROGRESS backlog 358): an integration whose credentials will not decrypt is named on the
+   * answer, which is a 200 carrying the stored configuration — never the default-branch 409 — and a
+   * reading that withheld nothing carries no such field.
+   */
+  it('names the integration whose credentials would not decrypt, on a 200 that carries the configuration', async () => {
+    const reason =
+      'the credentials of integration "acme sentry" (sentry, 00000000-0000-4000-8000-00000000a358) (secret … is sealed under key "v1:old") cannot be decrypted, so the prompt files cannot be redacted against them and none are stored until they can (TD-012, WP-107)';
+    world.refresh = {
+      status: 'recorded',
+      snapshot: {
+        status: 'valid',
+        commitSha: SHA,
+        readAt: '2026-09-26T10:00:00.000Z' as never,
+        values: { commands: { allow: ['pnpm test'] } },
+        notApplied: [],
+      },
+      promptsWithheld: reason,
+    };
+    const response = await post('/config/refresh', {});
+    expect(response.statusCode).toBe(200);
+    expect(response.json().prompts_withheld).toBe(reason);
+    expect(response.json().repository).toMatchObject({ status: 'valid', commit_sha: SHA });
+    expect(actions[0]).toMatchObject({ action: CONFIG_REFRESH_ACTION });
+
+    world.refresh = { ...world.refresh, promptsWithheld: null };
+    expect((await post('/config/refresh', {})).json()).not.toHaveProperty('prompts_withheld');
   });
 
   it('refuses by name when the branch cannot be read, and writes nothing', async () => {

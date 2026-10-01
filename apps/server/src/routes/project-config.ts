@@ -339,7 +339,7 @@ export const registerProjectConfigRoutes = async (
       schema: {
         summary: 'Re-read .agentic/config.yml from the default branch now',
         description:
-          "Reads the repository's own `.agentic/config.yml` from the project's **default branch** (BD-025 §1; never a task or merge-request branch) and records what it means: `absent`, `valid` (merged over the settings, winning where it states a key) or `invalid` with the key paths it failed on — which refuses every run of the project until a later reading parses. The same reading happens after every knowledge index run. `409 repository_unreadable` names why the branch could not be read; the previous reading then stands. An `Idempotency-Key` is optional: a replay answers the stored reading without reading again.",
+          "Reads the repository's own `.agentic/config.yml` from the project's **default branch** (BD-025 §1; never a task or merge-request branch) and records what it means: `absent`, `valid` (merged over the settings, winning where it states a key) or `invalid` with the key paths it failed on — which refuses every run of the project until a later reading parses. The same reading happens after every knowledge index run. `409 repository_unreadable` names why the branch could not be read; the previous reading then stands. When an integration's credentials cannot be decrypted the configuration is still stored and the prompt files are not: `prompts_withheld` names the integration (WP-107). An `Idempotency-Key` is optional: a replay answers the stored reading without reading again.",
         tags: ['projects'],
         params: projectParamsSchema,
         response: {
@@ -388,7 +388,14 @@ export const registerProjectConfigRoutes = async (
             ...(key === null ? {} : { idempotency_key: key, body_digest: replay.digest }),
           },
         });
-        return { repository: repositoryReadingOf(outcome.snapshot) };
+        return {
+          repository: repositoryReadingOf(outcome.snapshot),
+          // WP-107 (backlog 358): the configuration was stored; the prompt files were not, and the
+          // integrations whose credentials would not decrypt are named here, not in a 409.
+          ...(outcome.status === 'recorded' && outcome.promptsWithheld !== null
+            ? { prompts_withheld: options.redactText(outcome.promptsWithheld) }
+            : {}),
+        };
       });
     },
   );

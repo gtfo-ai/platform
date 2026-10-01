@@ -143,8 +143,9 @@ export const MINTED_CREDENTIAL_SHAPE_RULE_ID = 'minted-credential-shape';
  * A run credential is redacted by exact value only in the process that minted it; every other
  * process redacts it by its recorded **shape** (`minted_credential_shapes`), compiled here into one
  * step-2 rule per shape. The set is replaced wholesale by {@link installMintedCredentialShapes},
- * which the composition root's refresher calls at start and on a timer
- * (`./minted-credential-shapes.ts`), and it is read **at call time** by every
+ * which the composition root's refresher calls at start, on the commit of every recorded shape
+ * (its broadcast notification, WP-107) and on a timer (`./minted-credential-shapes.ts`), and it is
+ * read **at call time** by every
  * {@link patternRedactor} built without an explicit rule list — so a redactor constructed at boot,
  * or held in a module constant, still applies a shape recorded after it was built. That is why it
  * is module state rather than an argument: it reaches the twenty-odd places a process builds its

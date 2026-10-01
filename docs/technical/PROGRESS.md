@@ -12636,6 +12636,83 @@ The test covering the refusal:
 
 **Depends on.** Nothing. If WP-109 lands first, (1) is three call sites of its helper. Related: **333** (whose `decide.ts` sentence this corrects), **193**, **319**, **325**.
 
+### 358. **One binding credential that will not decrypt — of any type, a Sentry or Loki token included — now stops every repository reading of the project, so the configuration and prompt files freeze at their last stored value with no field, event or notification saying so, until somebody fixes the binding *and* a later index run or a manual refresh re-reads** (TODO, **minor, and a regression of WP-107 with a silent consequence**. Before WP-107 the reading decrypted nothing and proceeded under the pattern rules. WP-89 had decided that a broken observability binding must stop nothing. WP-107's reading now stops on one, which contradicts that decision. **Latent with a named trigger:** a binding whose `secrets` row will not decrypt, for example a credential sealed under a retired `APP_SECRET_KEY`. A broken git binding already made the reading `unavailable` before WP-107 through the mirror's credentials. The new population is every other type. **Chosen and stated by the implementer as an assumption (fail closed). The consequences were read off the tree by the refiner, not run.** **Owner: WP-107**, as its own consequence; the orchestrator decides whether it goes back to the row or gets one of its own. Found by WP-107, session 11)
+
+**What is wrong.** `refreshRepositoryConfig` asks `readingRedactor` for the project's binding credentials after the repository answered (`packages/application/src/config/repository-config.ts:514`). If `bindingSecrets` throws, it returns `unavailable` and records nothing. The production source is `createProjectBindingSecrets` (`packages/integrations/src/bindings/loader.ts:190`). It walks **every** binding of the project and throws `BindingLoadError` on the first `secrets.resolve` failure, so one broken binding refuses the whole set. The pipeline's own loader deliberately does the opposite for observability. The docblock above `forObservability` (`packages/integrations/src/bindings/loader.ts:478-489`) says a Sentry token that no longer decrypts must stop nothing.
+
+**What the operator sees** (read off the tree):
+- **Index-run path.** `afterIndex` awaits the refresh (`apps/server/src/knowledge.ts:530-532`). An `unavailable` answer is a return, not a throw, so the index job succeeds. The only trace is one `warn` line per index run: *"the repository configuration was read and not stored: the credentials it is redacted against could not be read; the previous reading stands"*.
+- **Manual path.** `POST …/config/refresh` answers `409 repository_unreadable` (`apps/server/src/routes/project-config.ts:376`). The route prefixes the reason with *"the default branch could not be read, so the previous reading stands"*. That prefix is **false** in this case: the branch was read. The reason that follows names the binding. The route's OpenAPI text at `:342` makes the same branch-only claim.
+- **The config DTO** (`repositoryReadingOf`, `apps/server/src/routes/projects.ts:398-409`) shows the old `commit_sha` and `read_at`. No field says that a later attempt failed. No readiness criterion, inbox item or chat notification is raised.
+
+**How long it lasts.** While the binding stays broken, every reading fails. After the binding is fixed, nothing re-reads by itself. The next reading is the next index run, which follows a default-branch move, or a maintainer's manual refresh. **Needs measurement:** whether any scheduled pass re-runs the index for an idle project. The refiner found none in `packages/application/src/knowledge/`, where only hygiene and the Librarian have crons.
+
+**Admission.** A stale reading is **not** refused. `repositoryConfigRefusal` (`packages/application/src/pipeline/settings.ts:168`) refuses only a stored `invalid` reading. So, until a reading succeeds:
+- runs proceed under the last stored configuration, and a `block` or narrowed `commands.allow` merged since does not apply. That is the exact case the docblock above `repositoryConfigRefusal` (`settings.ts:160-167`) gives for refusing an invalid file rather than running on an older one;
+- a project whose last reading was `invalid` stays refused after the fix is merged;
+- a project with no reading yet runs on its settings alone.
+- The stored prompt files keep reaching the model (`apps/server/src/pipeline.ts:742`), and those include a reading stored before WP-107 under pattern redaction only (**359**).
+
+**What it costs to leave.** A configuration change, including a tightening, silently does not take effect on a project with one broken binding of a type that otherwise stops nothing. The person who merged it sees the old `commit_sha` only if they look for it.
+
+**Done** (the orchestrator picks one; the implementer's alternative is the first):
+- **(a) Per-binding fallback.** Redact with every credential that decrypts, store the reading, and name the binding that did not. This stores text redacted against fewer credentials than the project holds, which is why WP-107 declined it. If chosen, it is a TD-012 amendment-(2) sentence first.
+- **(b) Keep fail-closed, but say so.** The reading's failed attempt is recorded beside the reading: a `last_attempt_failed_at` and its reason, or the equivalent on `RepositoryConfigReading`. The config screen and `GET …/config` show it. A named signal (inbox or readiness) is raised while it lasts. And either admission refuses a run while the reading is known to be behind the default branch, with a word such as `repository_config_unread`, or the decision records why it does not.
+- **Either way**, the 409's prefix states the actual cause rather than *"the default branch could not be read"*, and a unit case pins it.
+- A test drives one broken observability binding beside a working ticket binding and asserts the chosen outcome.
+
+**Depends on.** A product call between (a) and (b), small enough for the orchestrator. Related: **316**, whose fix this is a consequence of; **354**, the same shape of freeze for stored settings; **359**.
+
+### 359. **A repository reading stored before WP-107 was redacted by the pattern rules only, and nothing re-reads it at upgrade, so a binding credential it already holds keeps reaching the model and `runs.user_prompt` until the project's next successful reading** (TODO, **small: 316's leak, outliving 316's fix on existing installations**. **Latent with a named trigger:** a project whose `.agentic/prompts/` held one of its binding credentials, in a shape no rule knows, when it was last read before the upgrade. **Hypothesis, read off the tree, not measured.** The refiner found no upgrade-time re-read, and WP-107's notes name none. **Needs measurement:** whether any installation holds such a reading. That means scanning `project_repository_config.prompts` for each project's decrypted binding values, offline and never logged. **Unowned — for the next architect pass.** Found by the refiner from WP-107's notes, session 11)
+
+**What is wrong.** The only callers of `refreshRepositoryConfig` are the index run's `afterIndex` (`apps/server/src/knowledge.ts:532`) and `POST …/config/refresh` (`apps/server/src/project-config.ts:41`). There is no migration and no startup pass. The stored `prompts` are what the planner reads (`apps/server/src/pipeline.ts:742`). Each run's prompt is assembled from them and its prompt is recorded, so the leak recurs on every run of the project until the next default-branch move. Under **358**'s trigger it lasts until the binding is also fixed.
+
+**What it costs to leave.** One more copy of the credential per run, in the model's context and in `runs.user_prompt`. That is the copy WP-107 exists to stop making.
+
+**Done.** One of these:
+- a one-off pass at upgrade (a job enqueued by `migrate` or at first start) that re-reads every project's repository configuration; or
+- the upgrade notes in `docs/operator-guide.md` tell the operator to `POST …/config/refresh` each project.
+
+The first is checkable: an integration case stores a pre-WP-107-shaped reading that quotes a binding credential, starts the runtime, and asserts the reading is replaced.
+
+**Depends on.** **358**: a project with a broken binding cannot be re-read under today's fail-closed rule.
+
+### 360. **The two-process e2e's crossing 6 still cannot tell which `apps/server` instance installed the minted-shape rule, because both instances run in one Node process and the rules are module state, so a shape rule installed by the runner alone passes it** (TODO, **nit: test reach, not a defect**. The per-`ROLE` census WP-107 added covers the composition, which is the half 276's residual asked for. **Stated by WP-107; read off the tree.** **Unowned — for the next architect pass.** Found by WP-107, session 11)
+
+**What is wrong.** At `test/e2e/topology/two-processes.e2e.test.ts:382-432`, crossing 6 waits for the minted shape to be compiled into the redaction rules and then asserts that `app` redacts the quote. `mintedShapeRules` is one module variable (`packages/infrastructure/src/redaction/pattern-redaction.ts`), so whichever instance's refresher installed it, both see it. WP-107's census (`test/integration/redaction/shape-refresh-roles.integration.test.ts`) asserts that every element of `ROLES` subscribes and that an announcement starts a read in that runtime. It reads `ServerRuntime.mintedCredentialShapes.status()`, not the rules, so it proves the call exists per role, not that `app` redacted with a rule it read itself.
+
+**What it costs to leave.** A future change that installs the rule only through the minting process would still pass both the census and crossing 6, if it kept the subscription and its counters while dropping the install.
+
+**Done.** Either the topology tier runs each instance in its own Node process (a child process per `apps/server`, which also discharges the module-state caveat WP-80 states at its assertion), or the TD-028 WP-72 amendment's crossing (6) states that the tier proves the composition and not the per-process behaviour. The second is one sentence.
+
+**Depends on.** Nothing. Related: **276**, whose residual this is the remainder of.
+
+### 361. **The inbound loader and the prober pass the integration id in `BindingLoadError`'s `projectId` slot, and every site outside the project loader leaves `integrationId` null, so WP-107's new field is filled only where WP-107 touched it** (TODO, **nit: no production code reads the error's fields** — the refiner found no `instanceof BindingLoadError` outside tests. **Read off the tree.** **Unowned — for the next architect pass.** Found by WP-107, session 11; the slot misuse found by the refiner)
+
+**What is wrong.** The constructor is `(projectId, bindingId, message, { cause?, integrationId? })` (`packages/integrations/src/bindings/loader.ts:109-133`).
+- The prober passes `integrationId` **first** at all six sites (`packages/integrations/src/bindings/prober.ts:132`, `:144`, `:166`, `:182`, `:194`, `:205`), so `.projectId` holds an integration id.
+- The inbound loader does the same at five sites (`packages/integrations/src/bindings/inbound-loader.ts:114`, `:126`, `:149`, `:163`, `:203`). The last of them pairs that integration id with a real `binding.bindingId`.
+- The organisation loader passes `null, null` everywhere (`packages/integrations/src/bindings/organisation-loader.ts:101-205`). For an account it has loaded it could name `integrationId`.
+- The implementer's note says some inbound messages *say binding for an account*. The refiner could not confirm that. Those messages open `integration "<name>"`, and the one that says *"the binding of project …"* (`inbound-loader.ts:197`, `:205`) is about a binding.
+
+**What it costs to leave.** Nothing today. The first consumer that branches on `.projectId` (a per-project escalation of a webhook-door failure, say) would look up a project by an integration's id.
+
+**Done.** All three loaders pass `projectId` as `null` (or the binding's project), and pass `integrationId` in the options wherever the account is known. One unit case per loader pins the three fields on one refusal.
+
+**Depends on.** Nothing. Related: **278** (closed by WP-107 for the minting path).
+
+
+### 362. **WP-107's exact-value redactor over a project's prompt files reads only the bindings' decrypted `secret_ids`, so a credential an operator left in `integrations.config` is not in it, and a prompt file quoting it is stored and sent to the model** (TODO, **minor — latent with a named trigger**: since WP-100 the create and every overlay refuse credential keys in `config`, so only a row written before WP-100 (or by SQL) can hold one; **read off the tree by WP-107's reviewer, not run**; **unowned — for the next architect pass**; found by WP-107's review round 1, session 11)
+
+`createProjectBindingSecrets` (`packages/integrations/src/bindings/loader.ts`, ~l.195) resolves `secretIds` only; the binding's own redactor merges `{...config, ...secrets}` (CLAUDE.md, the loader merge), so the two sets differ by exactly the credential fields a pre-WP-100 `config` may hold. **Done**: either merge the provider's declared secret fields from `config` into the exact-value set (the catalogue knows them, `packages/integrations/src/catalogue.ts`), or a census that no stored `config` holds a declared secret field, with a unit case planting one in a prompt file.
+
+### 363. **Prompt texts withheld on the automatic refresh (after an index run) are recorded only as an `error` log line: neither the stored reading nor `GET …/config` says so, and a run's convention-append files disappear with nothing on the run naming why** (TODO, **minor — fails closed and is logged, so a stated residual of WP-107 rather than a defect** (backlog 358's fix); the manual refresh answers `prompts_withheld`; **needs a migration** (a column on the stored reading); **unowned — for the next architect pass**; found by WP-107's implementer and graded by its reviewer, session 11)
+
+Named prompt files render `unread`; the convention append files leave no trace. **Done**: the stored reading records the withheld integrations (a column), `GET …/config` and the run's prompt record carry it, with a ui case.
+
+### 364. **Organisation communication accounts have no binding, so their credentials are outside WP-107's exact-value set over prompt files** (TODO, **minor — a stated residual**: an org account's token committed to a project's `.agentic/prompts/` is redacted by pattern rules only; **read off the tree by WP-107's reviewer**; **unowned — for the next architect pass**; found by WP-107's review round 1, session 11)
+
+**Done**: the exact-value set includes the organisation accounts' decrypted credentials (they are in the same `secrets` table), or the residual is stated in technical/05's WP-107 amendment and TD-012's.
 ### 111. **`scripts/citations.ts` says no Markdown citation exists yet, while 56 lines of Markdown carry one — the guard's own docblock calls dormant the half that has been enforcing rule 11 across five documents** (**RESOLVED** at `c6d3f97`, WP-68, session 8 — nit, TODO — **working as designed**, one sentence to correct; **no work package owns it**; noticed by the orchestrator while making this round's PROGRESS citations resolve, session 5)
 > **M4 (architect, session 6): folded into WP-68.**
 
@@ -37778,3 +37855,125 @@ Backlog 354's RESOLVED marker is the orchestrator's.
 - **(nit)** The `refreezeSettings` docblock in `packages/infrastructure/src/pipeline/postgres-pipeline-store.ts` and the header of `0066_task_settings_refreeze.sql` described the round-1 shape (one caller, three columns): both now name the two callers (the intake stage-completion handler and the executor's admission backstop) and the six columns. The migration is unapplied (`git log --all` empty for the file), so its comment was edited in place.
 - **(nit)** `REFREEZE_PENDING_SENTENCE` (the task brief's text) now names the pipeline beside the limits and dial, and says the pipeline is re-taken only at intake; `StoredTask.settingsRefreezePending`'s docblock in `packages/application/src/pipeline/store.ts` says the same.
 - **(nit, recorded, not changed)** `refreeze_routing.issue_type` has no cap of its own: it is a copy of the event payload's value, already redacted on the inbound path, read only by `refrozen`, never by a prompt or a DTO.
+
+#### WP-107
+
+**A credential one process knows and another does not** — backlog 276, 316 and 278, built per TD-012's M6 amendment (1) and (2). Implementer, session 11, on `b10c1e5`. No migration.
+
+Decisions and assumptions (each is also stated at the code):
+
+- **(1) The shape is announced on its own commit.** `createPostgresIntegrationAuditLog` publishes `MINTED_CREDENTIAL_SHAPES_TOPIC` (`redaction.minted_credential_shapes`, a new constant beside the other topics in `packages/application/src/ports/broadcast.ts`) through the transaction's own `scope.broadcast`, right after the shape upsert. `pg_notify` is delivered only on commit, so a rolled-back mint announces nothing. The payload is empty: the shape is read back from the table, never carried.
+- **Every process listens, on its own subscription.** `startMintedCredentialShapeRefresh` now **requires** a `broadcast` (rule 31) and subscribes the topic **before** its first read, so a shape committed while a process starts is either in that read or announced after it. A notification starts a read; reads never overlap, and notifications that arrive during a read ask for exactly one more. The five-second timer stays as the guarantee (TD-028 decision 9's argument). In `runtime.ts` the eventing (and its `PostgresBroadcast`) is now created before the refresher, which takes `eventing.broadcast`. Both sit before any branch on `capabilities`, so no `ROLE` composes without them. A new last stop callback closes the broadcast in every role. `close` is idempotent, so the worker's `eventing.stop` and the API bridge closing it first are both fine.
+- **The per-`ROLE` check reads the refresher, not the rules.** The rules are module state, which the instances of one Node process share, so an assertion on them cannot say which instance installed one. `ServerRuntime.mintedCredentialShapes` is a labelled seam: the refresher's `status()` (subscribed, `notifiedReads`, `timedReads`, `consecutiveFailures`). The census iterates `ROLES` from `@platform/server`, the tuple `config.ts` validates `ROLE` against, so it is not a list kept in the test.
+- **(2) The bound is twelve** (`MINTED_CREDENTIAL_SHAPE_FAILURE_BOUND`, one minute at the default interval). Failures below it `warn` each time. The twelfth logs once at `error`, naming backlog 276 and saying the process keeps the rules it last read. Failures past it go to `debug`, so the `error` line is not buried. The next success logs `info` with the count. A run of failures that stayed below the bound ends with no recovery line.
+- **(3) The reading redacts by the project's binding credentials.** `RepositoryConfigRefreshOptions.bindingSecrets` is **required**: `(projectId) => Promise<InjectedSecret[]>`. `refreshRepositoryConfig` reads it once per reading, after the repository answered and the reading is not stale. It composes `bindingSecretRedactor` (TD-012 step 1, a value under 8 characters skipped as everywhere else) **before** the pattern rules. Both stored texts go through it: the prompt files and an invalid file's detail. The production source is `createProjectBindingSecrets` (`packages/integrations/src/bindings/loader.ts`). It covers every binding of the project, every type, not only the three the pipeline calls. Values are named `<provider>:<integrationId>:<field>` as the loader names a binding's own, and two bindings of one account are kept once. `createRepositoryConfigRefresher` (`apps/server/src/knowledge.ts`) builds it from the same binding repository and secret store the mirror's credentials use. It now takes `secretKey`, and so does `createProjectConfigCommands`. The credentials never cross the API and are never logged.
+- ~~**Assumption: a reading whose credentials cannot be decrypted stores nothing.**~~ **Superseded in the pre-review round below** (backlog 358). It froze the configuration as well as the prompts.
+- **(4) The account says *integration*.** The loader's `build` takes a `subject` (`'binding'` by default). `forMintingIntegration` passes `'integration'`, so its four refusals open `integration "<name>"` and carry `bindingId: null`. `BindingLoadError` gained `integrationId`, filled at every `build` refusal and at `createProjectBindingSecrets`. The other `BindingLoadError` sites (prober, inbound loader, organisation loader) are unchanged and leave it `null`.
+- **Both hints are the provider's.** `CredentialMintingDeclaration` gained a required `hints: { enable, shape }`. The registry refuses a minting declaration without both (non-blank), by name, read as `unknown` so a missing key is refused rather than crashing (rule 14). GitLab declares `GITLAB_CREDENTIAL_MINTING_HINTS`, the two sentences `integrations.ts` used to carry, byte-identical. The fake git registration declares its own. The loader carries them to `GitBinding.mintingHints` (optional on the type, so a hand-built binding in a test needs none). `runCredentialWrites` renders `hints.enable` in the *minting setting is off* answer and `mintRefusal` renders `hints.shape`. With no hint, neither names a provider or a setting.
+
+Tests:
+- Unit, `packages/infrastructure/src/redaction/minted-credential-shapes.test.ts` (new, 5): › "subscribes the shape topic before its first read, and re-reads when a shape is announced"; › "closes its subscription when the first read fails, and fails the start"; › "reports a run of failed reads once at error past the bound, and recovers on a success" (criterion 2: `warn, warn, error, debug, debug`, the rules kept, the `info` recovery line, then `warn` again); › "says nothing about recovering after a failure that stayed below the bound"; › "starts one more read for notifications that arrive during a read, never one per notification".
+- Unit, `packages/infrastructure/src/integrations/postgres-audit-log.test.ts` › "announces a recorded shape on the shape topic, once per committed write and never otherwise" (a retried transaction announces once; a non-mint and a `would_have` mint announce nothing).
+- Integration, `test/integration/redaction/minted-credential-shapes.integration.test.ts` › "installs the shape in a second pool’s process from the mint’s own transaction, long before the timer" (criterion 1). The minting pool records a mint through the real audit adapter. The other pool, with its own `PostgresBroadcast` and a ten-minute timer, holds the rule, with `notifiedReads ≥ 1` and `timedReads = 0`. The three existing cases there pass a silent broadcast. Their pools went from 2 to 4 connections, because eventing's floor at concurrency 1 is 3.
+- Integration, `test/integration/redaction/shape-refresh-roles.integration.test.ts` (new) — the per-`ROLE` census. A whole `startRuntime` per element of `ROLES` (all, api, worker, runner, indexer) asserts `subscribed` and that an announcement starts a read in **that** runtime. › "knows at least the roles the shipped topology deploys" stops the census from passing over an empty tuple.
+- Unit, `packages/application/src/config/prompt-credentials.test.ts` (new, 3; criterion 3): › "is absent from the stored reading and from runs.user_prompt, replaced by its binding’s placeholder". A Jira token shaped like no provider's is planted in `.agentic/prompts/refinement.md`. The pattern redactor is the identity. The stored reading is then driven through the real planner and stage executor of the pipeline harness, and what `runs.insert` is handed is read. › "reaches runs.user_prompt verbatim when the reading is given no credential — the defect, reproduced" (rule 42). A third case, the store-nothing refusal, was replaced in the pre-review round below.
+- e2e, `test/e2e/pipeline/project-prompts.e2e.test.ts` (extended): `pm.md` now quotes the e2e's ticket-binding token. It is asserted absent from `project_repository_config.prompts`, present as `[REDACTED:integration:fake-task-management:…:token]` in the refinement block, and absent from every `runs.user_prompt` the instance wrote. This drives the **production** composition (`createRepositoryConfigRefresher` → `createProjectBindingSecrets` → the sealed `secrets` rows), which the unit case cannot (rule 35).
+- Unit, `packages/integrations/src/bindings/loader.test.ts`: › "carries the minting hints its provider’s registration declares"; › "says integration, not binding, when the account cannot be built, and carries its id" (the exact text, `bindingId: null`, `integrationId` set, and the schema refusal's wording); › "still says binding for a project’s binding that cannot be built, with both ids"; and a new describe for `createProjectBindingSecrets`: › "names every binding’s every credential <provider>:<integration>:<field>, each account once" (its refusal case was replaced in the pre-review round below).
+- Unit, `packages/application/src/pipeline/run-credentials.test.ts` › "renders the provider’s hints in both mint refusals, and names no provider without them" (both texts pinned whole with a hint. Without one, neither says GitLab, `token_prefix` or `mint_credentials`). Two existing cases now pass the harness's hints.
+- Unit, `packages/integrations/src/providers/gitlab/provider.test.ts` › "declares GitLab’s mint refusal hints on its registration, naming mint_credentials and token_prefix" (both GitLab sentences, verbatim).
+- Unit, `packages/integrations/src/registry.test.ts`: the minting declaration refused without both hints (three spellings), and the accepted declaration carries them.
+
+**Canaries** (scripted in-place replace, run, restore, md5 identical every time; rule 88). Each failed by name:
+- `readingRedactor` skipping the exact-value pass: the prompt-credentials case 1, at *"the stored reading carries the binding credential"*.
+- The `knowledge.ts` composition passing `bindingSecrets: async () => []`: the e2e, at `not.toContain(TICKET_BINDING_TOKEN)`. In its first version this canary failed at a **later** assertion (the `[REDACTED:integration:` placeholder), and the `not.toContain` it was meant to fail passed. The prompt line read `Tracker token: <value>`, and a pattern rule redacted the value anyway. Which rule was not traced; the keyword `token` before the value is the likely trigger. The line is now `Quote <value> in the footer.`, and the canary fails at `not.toContain`.
+- The audit adapter's `publish` removed: the integration criterion-1 case (`notifiedReads` 0) and the audit unit case.
+- `runtime.ts` handing the refresher a silent broadcast: the census at `ROLE=worker` (`notifiedReads` 0; one role run with `-t`).
+- `=== failureBound` → `>=`: the criterion-2 case.
+- `forMintingIntegration` dropping `'integration'`: the loader case.
+- `hintClause(undefined)`: two run-credentials cases. `mintRefusal(…, undefined)`: two. The loader not carrying `mintingHints`: one.
+
+**Sentences falsified** (rule 83). The grep covered `docs/`, `apps/`, `packages/`, `test/` and `CLAUDE.md` for `5 s`, `five seconds`, `next refresh`, `refresh`, `warn`, `binding credential`, `prompt file`, `user_prompt`, `token_prefix`, `binding failed to load` and `custom prefix`. Each hit judged:
+- Rewritten:
+  - `apps/server/src/knowledge.ts`, the refresher's comment (*"the only text it stores is a refusal's key paths"*), now a docblock naming both stored texts and both steps.
+  - technical/05 § "Credentials and identity", the WP-80 amendment (*"at start and on a refresh timer"*), now names the commit hint, the timer as the guarantee and the `error` bound.
+  - technical/05 § "Redaction": a WP-107 amendment for (1) and (2).
+  - technical/12:231 and technical/03:21: prompt files were said to be redacted by *"TD-012 step 2"* only; they now say steps 1 and 2.
+  - technical/03:166: the shapes were said to be read *"at start and on a refresh timer"*; the commit is added.
+  - `docs/operator-guide.md`: *"every process re-reads every few seconds"* is now on commit, with five seconds as the fallback and the `error` line.
+  - `minted-credential-shapes.ts`'s docblock: the window, the warning, and *"a notification on commit would narrow it further"*.
+  - `pattern-redaction.ts:146` (*"at start and on a timer"*).
+  - `project-prompts.ts:30` and `domain/src/prompt/assembly.ts:407` (*"TD-012 step 2 … at the reading"*).
+  - `RepositoryConfigRefreshOptions.redactText`'s comment (*"no run-scoped credential is in scope here"*, which read as *nothing* in scope).
+  - `redactedPromptReading`'s docblock.
+  - `runtime.ts`'s WP-80 comment, and the transcript bridge's *"without this an API-only process would hold a live LISTEN"*, which is now true of the last callback too.
+  - `integrations.ts`, `mintRefusal`'s docblock (*"the hint names GitLab's setting"*).
+  - `two-processes.e2e.test.ts`, two comments (*"a process refreshes every few seconds"*), which now also point at the census.
+  - The integration test's *"reached at the next refresh, not before"*: still true of its silent-broadcast case, and now says so.
+- Judged true and left alone:
+  - Every `5 s`/`five seconds` hit outside redaction: the steer limit (technical/08, `commands.ts`, the user guide and the web), vitest's default timeout in test docblocks, and the event-bus retry.
+  - `gitlab/setup-guide.md:135-139`: the refusal still names `token_prefix`, now from the registration.
+  - `operator-guide.md:151-152` and `path-guard.ts:410` (`token_prefix`).
+  - `run-redaction.ts:44-69` (the run's injected-secret redactor knows only `secretEnvNames`): still true, and no longer the only thing between a binding credential in a prompt file and `runs.user_prompt`.
+  - `stage-executor.ts:875-889` (*"minus the secrets this run was given"*): about the column's own redactor, still true.
+  - `pipeline.ts:464`.
+  - Every other `user_prompt` hit (routes, queries, contracts, store).
+  - `binding credential` in the inbound-redaction and emitted-secrets tests, `epic-split.ts:42` and `store.ts:1516`: about other sinks.
+- `binding failed to load` and `next refresh` have no hit outside the plan row and this ledger.
+- **Left for the orchestrator** (ledger and decision records, which this row does not edit):
+  - this file's line under WP-104 (*"up to one interval late (backlog 276, WP-107)"*) and WP-80's residual bullets (*"The window, stated: … ≤ 5 s; a notify on commit … is not built"*), historical notes now superseded;
+  - backlog 276, 316 and 278 to close;
+  - TD-012's M6 amendment says *"after a stated number"*. The number is 12, stated at the constant and in technical/05; the decision record needs no change unless the orchestrator wants the number there.
+
+Verification on this tree:
+- `pnpm run -s verify`: **PASS** (482 files, 9408 passed, 14 skipped). The first run failed typecheck on one test literal in `loader.test.ts` (a `resolve` whose union return type was not a `Record`); fixed.
+- `pnpm run -s verify:integration`: **PASS** (718). `pnpm run -s verify:e2e`, twice: **PASS**, **PASS** (255 each). `verify:ui`: **PASS**. `verify:web-e2e`: **PASS** (50). The UI tiers were run because `apps/web` imports `@platform/integrations`, which changed (rule 80).
+- Every tier started at a one-minute load under 12, between 2.8 and 11.7. Docker afterwards: no container of these runs left except a Testcontainers reaper that exits on its own; volumes 125 → 125.
+- After these runs, the only edit was this note; `scripts/citations.test.ts` was re-run over it.
+
+**Discovered work** (for the refiner; no numbers claimed):
+- ~~**A reading is all-or-nothing on the project's credentials.**~~ Filed as backlog 358 and fixed in the pre-review round below.
+- **`two-processes.e2e`'s crossing 6 still cannot tell which instance installed the rule** (module state). The per-`ROLE` census covers the composition. The topology tier would need a separate Node process per instance to cover the behaviour.
+- **The inbound loader, the prober and the organisation loader** build accounts too and leave `BindingLoadError.integrationId` `null`; some of their messages say *binding* for an account (`inbound-loader.ts`). Not in 278's scope, which named the minting path.
+
+**Residuals.**
+- **A notification is a hint.** A process whose `LISTEN` connection is reconnecting when the mint commits learns the shape at its next timer read: the old window, now only on a reconnect.
+- **The shape still reaches a process after it is recorded.** Text that quotes a minted value and reaches `app` between the commit and `app`'s read (milliseconds) is covered by the `glpat-` rule alone.
+- **The reading cannot un-leak a credential committed to the project's history**, which TD-012's amendment says. It stops the platform making the stored copy, the model's copy and the run's copy.
+
+#### WP-107 — pre-review round (backlog 358), addressed
+
+**The finding.** The first version stored **nothing** when any of the project's binding credentials would not decrypt (`createProjectBindingSecrets` threw on the first one). One broken binding of any type, a Sentry token included, therefore froze the whole repository reading. Runs were not refused, so a newly merged `block` or narrowed `commands.allow` silently did not apply, contradicting WP-89 (*a broken observability binding stops nothing*). The signals were a `warn` line and, on a manual refresh, a 409 whose prefix said the default branch could not be read, which was false. **Correction to 358's text** (the orchestrator marks it RESOLVED): its *"What the operator sees"* describes the first version and is now historical.
+
+**The ruling, as built** (orchestrator: *a broken binding must never keep a restriction from applying*):
+- **Reported, not thrown.** `createProjectBindingSecrets` now answers `ProjectBindingSecrets` (`packages/application/src/config/repository-config.ts`): `{secrets, unreadable}`. Each integration whose `secrets.resolve` fails is named once, as `integration "<name>" (<provider>, <id>)`, with the store's reason (never a value). Every other binding's credentials are still returned.
+- **The configuration half is stored as usual.** The refresh no longer has an `unavailable` exit for credentials. An invalid file's detail is redacted against every credential that did decrypt, then the patterns.
+- **The prompt half fails closed, and none of the previous texts stand.** While `unreadable` is non-empty the stored reading has **no** `prompts` (`null` in the column: *"this reading did not read the directory"*). The row is replaced whole, so the previous reading's texts go too. Reason: a previous directory may have been stored before WP-107 under the pattern rules alone (backlog 359), so keeping it is the one choice that can carry an unredacted credential into a prompt. A stage then renders a named file `unread` and a convention file not at all, and runs (WP-92's rule 20: a prompt file grants nothing).
+- **Named.** `RepositoryConfigRefresh`'s `recorded` branch gained `promptsWithheld: string | null`, naming every unreadable integration and its reason. The refresh logs at **`error`**, with `unreadable_integrations`: a credential the platform holds and cannot decrypt is a defect an operator must fix, and until then every stage runs without its prompt files. `POST …/config/refresh` answers **200** with the stored configuration and `prompts_withheld` (new, optional on `refreshProjectConfigResponseSchema`; absent when nothing was withheld and on an `Idempotency-Key` replay, which reads again nothing). The 409 `repository_unreadable` is again reached only when the branch could not be read, so its prefix is true; its OpenAPI text names the new field.
+- **Not built**: a field on the stored reading or `GET …/config` saying prompts were withheld. That needs a column (a migration) and was not in the ruling. The `error` line on every index run is the persistent signal. Filed below.
+
+Tests:
+- Unit, `packages/application/src/config/prompt-credentials.test.ts` › "stores a merged restriction and withholds every prompt text while an integration’s credentials cannot be decrypted". It sets up a broken Sentry integration beside a readable Jira one and merges `commands.allow: ['pnpm test']`. It asserts: the stored reading is `valid` with that restriction; `prompts` is undefined; the planted Sentry value is in neither the stored reading nor the planned `runs.user_prompt`; `promptsWithheld` and the `error` line name the integration. It replaces the first version's store-nothing case, deleted.
+- Unit, `apps/server/src/routes/project-config.test.ts` › "names the integration whose credentials would not decrypt, on a 200 that carries the configuration" (and no field when nothing was withheld).
+- Unit, `packages/integrations/src/bindings/loader.test.ts` › "names an integration whose credential will not decrypt, and still answers the others". It replaces the first version's refusal case, deleted.
+
+**Canaries, one each way** (scripted replace, md5 restored):
+- Storing the prompts despite `unreadable`: the case above fails at *"the reading stored prompt texts it could not redact"*.
+- Refusing the reading again (`unavailable` before the store): the same case fails at `expected 'unavailable' to be 'recorded'`.
+- The route dropping `prompts_withheld`: the route case fails.
+
+**Sentences** rewritten:
+- technical/05's WP-107 amendment (*"stores nothing and the previous reading stands"*);
+- `RepositoryConfigRefreshOptions.bindingSecrets` and `createProjectBindingSecrets` docblocks;
+- the route's OpenAPI description.
+
+**Verification**: `pnpm run -s verify` **PASS** (9409 passed, 14 skipped). Two earlier runs failed: the first on biome's format of `repository-config.ts`, started at a one-minute load of 14.8 without the gate (a breach of the brief's rule, recorded rather than hidden); the second on the citation guard, because this note's first draft quoted the two deleted test names. Both were fixed, and the passing run started at 8.9 after a gated wait. Docker and UI tiers are left to the orchestrator: `@platform/contracts` changed (an optional response field), so `verify:ui` and `verify:web-e2e` apply; `schemas/` has no API document, and `pnpm schemas` reported it up to date.
+
+**Discovered work**:
+- **The stored reading does not record that its prompts were withheld.** `GET …/config` and the settings screen show the reading's commit with no prompt directory, which reads as *"this reading did not read the directory"*. A `prompts_withheld` column would need a migration.
+
+#### WP-107 — review round 1 (APPROVE with nits), recorded by the orchestrator
+
+- No code change after the review. Canaries: six plus a calibration throw — five dead in the unit tier; *the listener for one `ROLE` only* is held only by `test/integration/redaction/shape-refresh-roles.integration.test.ts` › "ROLE=%s subscribes the shape topic and re-reads the shapes when one is announced", which the orchestrator ran alone (6/6) after its integration tier.
+- The three minors are residuals, filed: **362** (a credential left in `integrations.config` is outside the exact-value set), **363** (withheld prompts on the automatic refresh are recorded only in a log line), **364** (organisation accounts are outside the set). The nit (`toMatchObject` in `packages/integrations/src/registry.test.ts`) is accepted: the hint texts are pinned in the GitLab provider test.
+- The orchestrator amended TD-012's M6 amendment: the error bound is **12** consecutive failed refreshes, and part (2)'s fail-closed shape (configuration always stored, prompt texts withheld and named) as built.
+

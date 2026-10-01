@@ -123,7 +123,14 @@ export const fakeGitRegistration = (
   gitCredential: { passwordField: 'token', username: 'agentic' },
   // WP-80: the fake's minted values have a declared prefix and an alphanumeric tail, as the real git
   // provider's do, so the loader admits its minting on the same declaration production needs.
-  credentialMinting: { shape: 'stable' },
+  credentialMinting: {
+    shape: 'stable',
+    // WP-107: the fake's own words, so a test that reads a refusal reads a provider's sentence.
+    hints: {
+      enable: 'fake git: build the fake with `capabilities.credentialMinting` set',
+      shape: 'fake git: the fake declares its prefix as `credentialPrefix`',
+    },
+  },
   create: ({ secrets, redactor }) => {
     refuseWrongToken(FAKE_GIT_PROVIDER_ID, options.token, secrets.token);
     return withInboundRedactor(options.port, redactor);

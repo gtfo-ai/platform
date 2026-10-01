@@ -23,6 +23,7 @@ import type {
 } from '../ports/integrations/git-provider.js';
 import { createMemoryAuditLog, createVirtualTimer } from '../testing/memory-integrations.js';
 import {
+  type CredentialMintingHints,
   type MintingIntegration,
   mintingIntegrationOf,
   type PipelineIntegrations,
@@ -50,6 +51,12 @@ const TOKEN_SHAPE = {
   length: TOKEN.length,
 } as const;
 
+/** A provider's words for the two mint refusals (WP-107) — this harness's, not any real provider's. */
+const HINTS: CredentialMintingHints = {
+  enable: 'fake-git: turn minting on for the account',
+  shape: 'fake-git: declare the prefix your instance uses',
+};
+
 /** The revocation door, built from the binding that minted — what teardown and recovery use (WP-80). */
 const revocationsOf = (integrations: PipelineIntegrations) =>
   runCredentialRevocations(mintingIntegrationOf(integrations) as MintingIntegration);
@@ -63,6 +70,8 @@ const harness = (
     revokeError?: Error;
     /** The shape the provider declares, when not {@link TOKEN_SHAPE} (WP-80). */
     shape?: MintedRunCredential['shape'];
+    /** The registration's words for the mint refusals (WP-107); absent is none declared. */
+    hints?: CredentialMintingHints;
   } = {},
 ) => {
   const minted: { scope: CredentialScope; branchPatterns: readonly string[] | undefined }[] = [];
@@ -102,7 +111,13 @@ const harness = (
   });
   const integrations: PipelineIntegrations = {
     executor,
-    git: { port, ref: GIT_REF, project: 'acme/api', redactor: noSecretsRedactor() },
+    git: {
+      port,
+      ref: GIT_REF,
+      project: 'acme/api',
+      redactor: noSecretsRedactor(),
+      ...(options.hints === undefined ? {} : { mintingHints: options.hints }),
+    },
     taskManagement: null,
     communication: null,
   };
@@ -184,13 +199,64 @@ describe('runCredentialWrites (WP-76)', () => {
   });
 
   it('answers unavailable, naming the setting, for a binding that cannot mint — and calls nobody', async () => {
-    const { integrations, auditLog, minted } = harness({ minting: false });
+    const { integrations, auditLog, minted } = harness({ minting: false, hints: HINTS });
     const answer = await runCredentialWrites(integrations).mint(request('normal', 'push'));
 
     expect(answer.kind).toBe('unavailable');
-    expect(answer.kind === 'unavailable' ? answer.reason : '').toMatch(/mint_credentials: true/);
+    expect(answer.kind === 'unavailable' ? answer.reason : '').toContain(`(${HINTS.enable})`);
     expect(minted).toEqual([]);
     expect(auditLog.entries).toEqual([]);
+  });
+
+  /**
+   * WP-107 (PROGRESS backlog 278): both mint refusals carry the **provider's** sentence from its
+   * registration, verbatim, and this ring adds no provider's name of its own — with no hint declared
+   * the refusal says what happened and names no setting. The GitLab sentences themselves are pinned
+   * where they are declared (`providers/gitlab/provider.test.ts`).
+   */
+  it('renders the provider’s hints in both mint refusals, and names no provider without them', async () => {
+    const off = await runCredentialWrites(
+      harness({ minting: false, hints: HINTS }).integrations,
+    ).mint(request('normal', 'push'));
+    expect(off).toEqual({
+      kind: 'unavailable',
+      reason:
+        `the git binding ${GIT_REF.integrationId} (fake-git) cannot mint run credentials — its minting ` +
+        `setting is off (${HINTS.enable}). The binding’s own token is never sent instead (TD-028, ` +
+        'WP-76 amendment decision 6)',
+    });
+    const bare = await runCredentialWrites(harness({ minting: false }).integrations).mint(
+      request('normal', 'push'),
+    );
+    expect(bare.kind === 'unavailable' ? bare.reason : '').toContain(
+      'its minting setting is off. The binding',
+    );
+
+    const misshapen = { prefix: 'glpat-', charset: 'token_dotted' as const, length: TOKEN.length };
+    const refused = await runCredentialWrites(
+      harness({ shape: misshapen, hints: HINTS }).integrations,
+    )
+      .mint(request('normal', 'push'))
+      .then(
+        () => '',
+        (error: unknown) => (error as Error).message,
+      );
+    expect(refused).toContain(
+      `its value does not have the shape the provider declared (prefix "glpat-", token_dotted ` +
+        `characters, ${TOKEN.length} long), so no process but this one could redact it ` +
+        `(TD-012, WP-80) — ${HINTS.shape}; it was revoked`,
+    );
+    const unhinted = await runCredentialWrites(harness({ shape: misshapen }).integrations)
+      .mint(request('normal', 'push'))
+      .then(
+        () => '',
+        (error: unknown) => (error as Error).message,
+      );
+    expect(unhinted).toContain('could redact it (TD-012, WP-80); it was revoked');
+    // No provider's setting is spelled by this ring: neither GitLab's key appears without a hint.
+    for (const reason of [bare.kind === 'unavailable' ? bare.reason : '', unhinted]) {
+      expect(reason).not.toMatch(/GitLab|token_prefix|mint_credentials/);
+    }
   });
 
   it('answers unavailable for a project with no git binding', async () => {
@@ -371,9 +437,10 @@ describe('runCredentialWrites (WP-76)', () => {
   it('refuses, and revokes, a value that does not have the shape the provider declared', async () => {
     const { integrations, auditLog, revoked } = harness({
       shape: { prefix: 'glpat-', charset: 'token_dotted', length: TOKEN.length },
+      hints: HINTS,
     });
     await expect(runCredentialWrites(integrations).mint(request('normal', 'push'))).rejects.toThrow(
-      /does not have the shape the provider declared \(prefix "glpat-".*token_prefix.*it was revoked/,
+      /does not have the shape the provider declared \(prefix "glpat-".*declare the prefix.*it was revoked/,
     );
     expect(revoked).toHaveLength(1);
     expect(auditLog.entriesFor('revoke_credential').map((row) => row.status)).toEqual(['ok']);
