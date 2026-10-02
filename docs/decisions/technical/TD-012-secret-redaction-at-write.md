@@ -118,3 +118,27 @@ refresh names each such integration (`prompts_withheld`) and logs at `error` (PR
 found as a regression of the row's first version). The exact-value set is the decrypted `secret_ids` of
 the project's bindings; a credential an operator left in `integrations.config` and an organisation
 account with no binding are outside it (backlog 362, 364).
+
+## Amendment (M7 architect pass, session 11, 2026-10-02) — a reading says how it was redacted, and the exact-value set covers every credential the platform holds
+
+Three gaps were left by amendment (2) of the M6 pass, as built at WP-107 (PROGRESS backlog **359**,
+**362**, **364**, **363**). None of them changes decisions 1–3.
+
+1. **A reading records its redaction.** The stored repository reading gains a mark, `patterns` for
+   every row written before this amendment and `exact` for every new one. At upgrade, a pass in the
+   process that runs the index re-reads each project whose reading is `patterns`, bounded per pass. A
+   `patterns` reading that cannot be re-read serves **no** prompt text to the planner, and records why.
+   This is the direction WP-107 chose for an unreadable binding: a stale copy that may hold a
+   credential is withheld, never served.
+2. **The exact-value set is every credential the platform holds for the project.** That means the
+   bindings' decrypted `secret_ids`, plus each provider's declared secret fields
+   (`packages/integrations/src/catalogue.ts`) found in its `integrations.config`, which only a row
+   written before WP-100 or by SQL can carry. It also includes the decrypted credentials of the
+   organisation's communication accounts, which have no binding but sit in the same `secrets` table.
+3. **A withheld text is recorded, not only logged.** The reading stores the integrations whose
+   credentials could not be read. `GET …/config` and the run's prompt record carry the list, so a run
+   whose convention-append files are missing says why.
+
+*Consequences.* One migration (the mark and the withheld list). Built by M7 **WP-121**, which also
+updates technical/05's WP-107 amendment. The platform still cannot un-leak a credential committed to
+a project's history; it stops making copies of it.

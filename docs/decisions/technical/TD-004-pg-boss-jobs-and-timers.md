@@ -64,3 +64,28 @@ queue: a binding opts in, its interval is binding configuration, and its cursor 
 *Extended at WP-110 (session 11):* `mr.poll` is the same shape for git bindings — one queue keyed per
 binding, its cursor `bindings.mr_poll_cursor` (migration 0068), recovered by the same sweep and its
 variable (whose name now undersells it — PROGRESS backlog 372).
+
+## Amendment (M7 architect pass, session 11, 2026-10-02) — every queue's exhaustion has a declared shape
+
+Since WP-108, a job that spent its retries is listed for an administrator (`GET /api/org/failed-jobs`),
+and `JOB_EXHAUSTION` classifies each queue. For five queues the classification says *nothing recovers
+it*, and one of them drops a change a human accepted (PROGRESS backlog **366**). **Decision:** every
+registered queue declares one of three shapes, and `job-exhaustion.test.ts` holds the declaration for
+every queue:
+- **a recovery row** in `recovery/stranded.ts`'s table, where the lost effect has a database trace
+  (`knowledge.apply`: an approved proposal with no apply; `onboarding.discovery`: a completed discovery
+  run with a stored draft and no evaluation), re-enqueued once under a mark and then made visible;
+- **bound-and-escalate**, `stage.execute`'s shape, where the job carries a task and a human waits on
+  its effect (`mr.comment.debounce`, and the `pipeline.outbound` duties that create, post or report);
+- **notification-shaped**, listed only, where the next transition re-derives the effect or the loss is
+  a notification (rule 20). This covers the workpad and status duties, and `notify.digest`.
+
+There is **no re-queue from the failed-jobs list in 0.1**, because a handler that re-validates on fire
+has not been shown for every queue (backlog 325's condition).
+
+**Polling cadence (backlog 392).** A worker keeps `batchSize: 1`. A burst is drained through
+`burstWhenReadyExceeds` where pg-boss's ready-count cache is populated as shipped, or otherwise through
+a shorter per-queue `pollingIntervalSeconds` for `pipeline.outbound` and `pipeline.intake`. Per-queue
+LISTEN/NOTIFY is not used in 0.1: it holds one more connection per process and moves the pool floor,
+whose upgrade cost backlog 371 measured. Built by M7 **WP-124**, which measures first and states the
+choice at the registration.
