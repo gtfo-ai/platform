@@ -110,7 +110,8 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > branch (a `default_branch.moved` that arrived while the task was paused was dropped: the re-check
 > below is taken only for a task whose state is `ready_for_merge`) nor for a plan a returned round
 > changed without pushing; on a template that does not run `rebase_gate`, `ready_for_merge`
-> directly, with the head recorded again (backlog 338's gap); anything else — a different head, no
+> directly, with the head recorded again (such a template runs no `ci_gate` either since WP-120, so
+> no CI pass excused a path — backlog 338); anything else — a different head, no
 > recorded head, or a head the platform could not read (fail closed on a mutation: *unreadable* is
 > not *unmoved*) — **re-enters `ci_gate`**, the first enabled of `ci_gate` and `rebase_gate`, from
 > which the template's own fall-through runs review and the rebase gate again before Ready. That
@@ -169,10 +170,15 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 >   through WP-79's path, unchanged, and that settlement rewrites both columns. Until WP-102 the
 >   provisional pass recorded no `ci_head_sha`, so the rebase settlement re-entered `ci_gate` and the
 >   template's fall-through ran `code_review` and `business_review` a second time (measured on the
->   fake-Claude e2e: two runs of each; one since). **Residual:** a pipeline that disables
->   `rebase_gate` falls through `business_review` into Ready and nothing compares the recorded
->   paths — latent (nothing on this build disables it: the per-stage `enabled` is read by nothing), older than
->   WP-102, stated rather than closed (PROGRESS backlog 338);
+>   fake-Claude e2e: two runs of each; one since). **A template that would skip that
+>   comparison is refused** (WP-120, PROGRESS backlog 338, ruled option (a)): `assertValidTemplate`
+>   — which `compilePipeline` runs every time a task's template is compiled — refuses a template whose enabled `ci_gate`
+>   has no enabled `rebase_gate` declared after it — disabled (the ruling's case) or, wider than the
+>   ruling and kept as the fail-closed direction, missing or out of order — naming both
+>   stages, so a pipeline cannot fall through `business_review` into Ready with an excuse nobody
+>   confirmed. Until WP-120 that was a stated, latent residual: the per-stage `enabled` is still read
+>   by nothing on this build, and a future reader of `stages.<s>.enabled` (backlog 220) must apply it
+>   to the template *before* `assertValidTemplate`, or the refusal does not see it;
 > - **cannot be decided** — the provider lists **no** changed file (a merge request's diff is
 >   computed asynchronously, so `[]` is *not yet*, never *nothing*), or lists as many files as the
 >   read's bound so the rest are unseen — is never read as *no tamper* (fail closed on a mutation):

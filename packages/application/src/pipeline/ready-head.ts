@@ -49,7 +49,8 @@
  *    paths CI excused without moving the head (backlog 337). The rebase gate's settlement answers
  *    both: one mergeability read, WP-26's conflict warning on its entry, WP-102's confirmation in
  *    its transaction, and Ready only for the head CI passed. A template that does not run
- *    `rebase_gate` still enters Ready directly and records the head (backlog 338 is its gap);
+ *    `rebase_gate` — which since WP-120 runs no `ci_gate` either, so nothing excused a path —
+ *    still enters Ready directly and records the head;
  *  - **anything else** → re-enter `ci_gate`. *Anything else* is a different head, a task with no
  *    recorded head (a row older than migration 0056, or a Ready entered by a template whose gates
  *    are disabled), **and a head the platform could not read** — a provider that refused, a binding
@@ -73,15 +74,18 @@
  * `rebase_gate`, else none. A template that enables neither judges no head at its front door, so
  * its side door enters Ready as it always did.
  *
- * ## What failing closed costs on a template with its gates disabled
+ * ## A template with its gates disabled
  *
- * A Ready reached by **falling through** from an agent or system stage — a project that disabled
- * `rebase_gate` (and so nothing settled a gate on the way in) — records `ready_head_sha` as `null`,
- * because no gate judged a head. Every later resume, retry or hand-back of that task at Ready then
- * reads `null` as *judge again* and re-enters `ci_gate` (or `rebase_gate`, whichever is enabled),
- * so the human pays a CI read and a fresh review round each time, even for an untouched branch.
- * That is the price of rule 20 here, and it is accepted: the alternative is to trust a head nobody
- * judged. Only a template that disables **both** gates skips it, by entering Ready directly.
+ * A Ready reached by **falling through** from an agent or system stage happens only on a template
+ * that does not run `rebase_gate`, and since WP-120 (PROGRESS backlog 338, ruled option (a)) such a
+ * template runs no `ci_gate` either: `assertValidTemplate` refuses `rebase_gate` disabled, missing
+ * or declared before an enabled `ci_gate`, naming both stages, because the rebase settlement is the
+ * only reader of the protected paths CI excused provisionally. So the fall-through records
+ * `ready_head_sha` as `null` — no gate judged a head — and every later resume, retry or hand-back
+ * reads `null` as *judge again*, finds no gate to re-enter ({@link gateToReenter} is none) and
+ * enters Ready directly, as such a template always did. Until WP-120 this paragraph priced a CI
+ * read and a review round per resume on a template with `ci_gate` but no `rebase_gate`; that
+ * template is no longer accepted.
  *
  * ## What it does not close
  *
@@ -100,8 +104,10 @@
  *     gate (1) on every template that runs it, whatever the head; directly only on a template that
  *     runs no rebase gate, where the head the gates judged is recorded again.
  *  3. **A fall-through from an agent or system stage** on a template that disabled `rebase_gate` —
- *     no gate judged anything, so it records `ready_head_sha` as `null` and every later way back in
- *     re-enters `ci_gate` (above). No shipped template produces it (PROGRESS backlog 338).
+ *     no gate judged anything, so it records `ready_head_sha` as `null`. Such a template runs no
+ *     `ci_gate` either (WP-120: `assertValidTemplate` refuses the other shape, PROGRESS backlog
+ *     338), so no CI pass excused a protected path, and every later way back in enters Ready
+ *     directly (above). No shipped template produces it.
  *
  * `return-to-stage` and `rework` into Ready are refused by the state machine, and a human command
  * cannot enter Ready itself (`applyHumanDecisionRecorded`'s census) — so there is no fourth.
@@ -204,8 +210,8 @@ export const REBASE_RECHECK_REASON =
  *    cannot reach Ready on a confirmation that no longer holds (337). The entry is a forward move,
  *    one mergeability read, and no loop;
  *  - the head the gates judged on a template that does **not** run `rebase_gate` → Ready, as
- *    before, with that head recorded — there is no gate to re-read (PROGRESS backlog 338 is that
- *    template's own gap).
+ *    before, with that head recorded — there is no gate to re-read, and since WP-120 such a
+ *    template runs no `ci_gate` either (PROGRESS backlog 338, `assertValidTemplate`).
  */
 export const readyEntryFor = (
   pipeline: CompiledPipeline,

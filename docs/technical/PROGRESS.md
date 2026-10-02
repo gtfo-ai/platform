@@ -10695,6 +10695,7 @@ Related: **100**.
 
 ### 220. **`pipeline.template_overrides.<template>.enabled` and `.stages.<stage>.enabled` parse, are documented with a worked example, and switch nothing — a project that turns a stage off in its configuration still runs it** (**RESOLVED** at `e73daef`, WP-91, session 9 — TODO, **small** — backlog **58**'s unread-key class; **live** for any project whose stored configuration carries either key (the write is accepted and silently has no effect); **read off the tree, not measured**; the documentation half owned by **WP-73**, the reader itself **unowned** (refiner, session 8); found by WP-62, session 8)
 > **M5 (architect, session 8): folded into **WP-91**.**
+> **WP-120 (session 11)**: when the reader of `stages.<s>.enabled` lands, it must call `assertValidTemplate` **at the settings write**, so a template with `rebase_gate` disabled (or missing, or misordered) while `ci_gate` is enabled is refused there, by name — otherwise every task stored under it throws on each `compilePipeline` (backlog 338, closed by WP-120's check).
 > **WP-73d (session 8):** **The sentences** (WP-73d, session 8): technical/12 says which `template_overrides` keys are read (`plan_approval` and `size_threshold`, from the settings layer only) and that `enabled` — stage or template — switches nothing; the `chore` example (a stage `chore` does not have) is replaced by `bug: { architecture: { plan_approval: always } }` and the unread `business_review: { enabled: true }` line removed, with `config.test.ts`'s transcription moved with it. **The reader stays unowned**; this entry stays open.
 
 **What is wrong.** `stageOverrideSchema` and `templateOverrideSchema` both declare `enabled: z.boolean().optional()`
@@ -12909,6 +12910,7 @@ The report's reasoning, kept because it is the decision: a stall is the case whe
 
 ### 338. **A template with `rebase_gate` disabled and `ci_gate` enabled falls through `business_review` into Ready, and nothing compares `tasks.ci_excused_paths` with the Code review's confirmations. A declared change to an existing test or CI file that the review never confirmed can reach the merge** (TODO, **minor (safety): a BD-024 integrity gap, latent, no producer on this build**. **Read off the tree by the refiner, not measured.** Older than WP-102: under WP-81 the provisional pass's null `ci_head_sha` was likewise read only by the rebase settlement. **Unowned — for the orchestrator**: WP-105 owns the rebase gate's settlement and the ready-head path (it folds **337**), but its rulings are about stale judgements, not about a template that has no rebase gate. The natural home is whichever row builds the reader of `stages.<s>.enabled` (backlog **220**, waiting on Q99), and this entry is a prerequisite of that reader. Found by WP-102's reviewer, session 10)
 > **M7 (architect, session 11): folded into **WP-120** — option (a): the template is refused, naming both stages.**
+> **Done at WP-120 (uncommitted, for review):** `assertValidTemplate` refuses an enabled `ci_gate` with no enabled `rebase_gate` declared after it — disabled (the ruling's case), missing or out of order — naming both stages (`unconfirmedCiExcuseIssue`, `packages/domain/src/pipeline/templates.ts`). technical/02, `ready-head.ts` and `tamper-confirmation.ts` corrected.
 
 **What is wrong.** The rebase settlement is the only caller of `confirmExcusedPaths` (`packages/application/src/pipeline/jobs.ts:958-963`, defined at `packages/application/src/pipeline/tamper-confirmation.ts:52`). It runs only when `signal.stage === REBASE_GATE_STAGE`. Two other ways into Ready skip that settlement. The first is a fall-through past a disabled stage (`firstEnabledFrom`, `packages/domain/src/pipeline/interpreter.ts:352-355`). The second is the `ready_head_check` duty. Its docblock covers this case (`packages/application/src/pipeline/ready-head.ts:69-75`). A Ready reached by falling through records `ready_head_sha` as `null`, and a later hand-back re-enters `ci_gate` (`gateToReenter`, `:150-159`). The template's fall-through then passes `business_review` into Ready again, still with no rebase gate. So the recorded paths are compared on neither route. technical/02 already states this as a residual that points here (`docs/technical/02-domain-model-and-events.md:160-162`).
 
@@ -13011,6 +13013,11 @@ So the CLI's environment is the SDK's two keys, the credential and the ten platf
 
 ### 343. **More path-writing flags of the project verbs are not floored, besides the eight WP-104 added: `go test -coverprofile/-cpuprofile/-memprofile/-blockprofile/-mutexprofile/-trace/-outputdir`, `pytest -o cache_dir=…`, a coverage plugin's `--cov-report=xml:<path>`. Each writes a path the write guard never sees** (TODO, **small: 281's shape, stated at the docblock as an enumeration**. **Live** on the `implementation` and `verification` baselines since WP-54. **Read off the tree, not measured**: the flags come from tool documentation, as go's did at WP-104. **Unowned — for the orchestrator**: no M6 row owns the command policy after WP-104. Found by WP-104, session 10)
 > **M7 (architect, session 11): folded into **WP-120** — measure the spellings first, then floor them at `ask` always.**
+> **Spellings recorded (WP-120, 2026-10-02).** Neither go nor pytest is installed on this machine, so the CLIs were **not run**; the accepted spellings were read off the pinned sources, and Python's own `argparse` (3.14.6) was run with pytest's two declarations copied:
+> - **go1.25.0** — `src/cmd/go/internal/cmdflag/flag.go` `ParseOne`: `--` is reduced to `-`, the value is `=`-attached or the next argument, the name is looked up exactly (no prefixes). `src/cmd/go/internal/test/flagdefs.go`: `coverprofile`, `cpuprofile`, `memprofile`, `blockprofile`, `mutexprofile`, `trace` and `outputdir` are all in `passFlagToTest`, so `testflag.go` registers each again as `test.<name>`. Eight spellings per flag: one or two dashes × with or without `test.` × `=` or a space; `-test.<name>` is also what reaches the test binary after `-args`. `-memprofilerate`, `-blockprofilerate` and `-mutexprofilefraction` are separate flags. Source: https://github.com/golang/go/tree/go1.25.0/src/cmd/go/internal (also `go help testflag`'s text at https://pkg.go.dev/cmd/go/internal/test).
+> - **go1.25.0, the test binary's own flags** (WP-120 review round 1). `src/testing/testing.go:479` `test.testlogfile` (`os.Create` at `:2543`, so it truncates), `testing.go:463` `test.gocoverdir` and `src/testing/fuzz.go:26` `test.fuzzcachedir`. They are not declared by `go test`. `src/cmd/go/internal/test/testflag.go:297-321` passes any flag it does not know to the binary, with or without `-args`, and the binary takes them only with the `test.` prefix. That gives eight spellings each: one or two dashes × `=` or a space × before or after `-args`. **Sweep:** `testing.go`, `fuzz.go` and `benchmark.go` are the only files of `src/testing` that register a flag (all twelve files read). Every other flag that names a path (`outputdir`, `coverprofile`, `cpuprofile`, `memprofile`, `blockprofile`, `mutexprofile`, `trace`) is already in the first go list. Source: https://github.com/golang/go/tree/go1.25.0/src/testing.
+> - **pytest 9.0.2** — `src/_pytest/config/argparsing.py`: `argparse` with `allow_abbrev=False` (no prefixes; WP-104 measured `--basete=x` refused on 9.1.1) and `fromfile_prefix_chars="@"`. `src/_pytest/helpconfig.py`: `-o`/`--override-ini` (`action="append"`, help *"e.g. `-o strict_xfail=True -o cache_dir=cache`"*) and `--debug` (`nargs="?"`, `const="pytestdebug.log"`, *"opened with 'w' and truncated"*). `src/_pytest/config/findpaths.py` merges the overrides into the ini configuration before `config/__init__.py` reads `addopts` from it, so `-o addopts=…` re-adds any command-line flag (read in source, not run). Measured with `argparse` and those two declarations: `-o k=v`, `-ok=v`, `-o=k=v`, `--override-ini k=v`, `--override-ini=k=v`, `-qo k=v` and `-qok=v` all set the override; `--override k=v` does not; `--debug tests/` takes `tests/` as the file. Source: https://github.com/pytest-dev/pytest/tree/9.0.2/src/_pytest.
+> - **pytest-cov 7.1.0** — `src/pytest_cov/plugin.py` `validate_report`: annotate, html, xml, json, markdown, markdown-append and lcov *"may be followed by ':DEST'"*; term and term-missing only by `:skip-covered`; one value per option, `=`-attached or the next argument. Source: https://github.com/pytest-dev/pytest-cov/blob/v7.1.0/src/pytest_cov/plugin.py and https://pytest-cov.readthedocs.io/en/latest/config.html.
 > **Widened (WP-104 review, session 10):** `pytest --debug=<path>` writes its debug log to the path it is given, and reads `allow` today (probed by the reviewer); `pytest -o cache_dir=tests` with `--cache-clear` deletes under `tests/`. Same fix, same entry.
 
 **What is wrong.** WP-104 floored `--basetemp`, `--junitxml`/`--junit-xml`, `go -o` and `--target-dir` (the WP-104 notes). The `PROJECT_COMMAND_ALLOW` docblock now says that flags *"nobody enumerated (a coverage or profile output, a cache directory set through an ini override) are not floored either"* (`packages/domain/src/policies/command-policy.ts:242-250`). The WP-104 notes name the list above.
@@ -40294,3 +40301,150 @@ It also covers a task never paused (`null`). **Canary on the SQL** (Edit, md5 `4
 - **(minor) The way out for a task paused before WP-131**: its pause carries no `budget_scope`, so the raise is refused; **resume it first** — the default cap re-admits or pauses it again, now with scope `task`, and the raise is then accepted.
 - Round 3 walked every budget pause in the stage executor and confirmed each records its own scope (task, organization, project, shadow, maintenance, bootstrap, run); the ask executor never pauses a task.
 - The orchestrator amended BD-010 (the strict admission reading, 406) and product/09's threshold line, from the implementer's exact text.
+
+#### WP-120
+
+**What a project command or a template can still walk past** — backlogs 343 and 338. Implementer, session 11.
+
+**Decisions and assumptions.**
+
+- **343: the spellings were read off the sources, not run.** go and pytest are not installed on this machine, and the brief allowed running them only if they were. The sources are go1.25.0, pytest 9.0.2 and pytest-cov 7.1.0, at their tags. Python's own `argparse` (3.14.6) **was** run with pytest's `-o` and `--debug` declarations copied. The spellings and the URLs are recorded under backlog 343 and in the comment above the new entries.
+- **Ten new `HAZARDOUS_ARGUMENTS` entries, floored always.**
+  - **Seven go entries**, one per flag in `GO_PATH_WRITING_TEST_FLAGS`. Each is token-scoped by its exact name: `^--?(?:test\.)?<name>(?:=|$)` on a `go*` binary. It is not a `go* -memprofile*` glob, because that would also floor `-memprofilerate`, `-blockprofilerate` and `-mutexprofilefraction`, which are different flags; go does not match prefixes.
+  - **`-o`/`--override-ini` is floored for every key, not only `cache_dir`.** This is the same reasoning as pnpm's `--config.<key>`. The override sets any ini key, `log_file` writes a path, and `addopts` is read from the overridden configuration (`findpaths.py` merges before `getini("addopts")`). So `-o addopts=--basetemp=tests` re-adds any floored flag, and no whole-line or token match sees it. Over-block: `pytest -o xfail_strict=true` asks.
+  - **The short-option cluster is scanned** (`-qo k=v`, `-vqok=v`). The scan stops at a value-taking short option (`k m c p W r`), because argparse gives such an option the rest of its token. So `-knot_slow` and `-p no:cacheprovider` stay `allow`.
+  - **`pytest* --debug*`** floors even a bare `--debug`. argparse's `nargs="?"` takes the next word, so `--debug tests/conftest.py` truncates that file. A bare `--debug` writes `pytestdebug.log`, and that over-block is stated.
+  - **`--cov-report` is floored only with a `:DEST`**, either `--cov-report=xml:p` or `--cov-report xml:p`, for the seven kinds pytest-cov allows a destination. `term-missing` and a bare `xml` write a configured default path, which is repository content. Over-block: `--cov-report=xml:coverage.xml` asks. The space form is matched by "the flag is present and some positional starts with `<kind>:`", because `splitFlags` keeps no order. That can over-match a test id that looks like `xml:…`, which is the safe direction.
+- **338: the invariant, not only the ruling's one shape.** `unconfirmedCiExcuseIssue` refuses an enabled `ci_gate` that has no enabled `rebase_gate` declared **after** it. That covers three shapes:
+  - disabled, which is the ruling's case;
+  - missing;
+  - declared before `ci_gate`.
+
+  Each is the same unconfirmed fall-through, and the message names both stages and says which shape it is. **Assumption:** this widens (a) only to shapes no build produces today. If the reviewer wants the literal ruling only, the change is the `rebase > ci` test plus one branch of the message. A template with no enabled `ci_gate` passes, because nothing then writes an excuse. The check runs in `assertValidTemplate`, and so at every `compilePipeline`. The dial disables only `business_review` and is applied after the check, which is irrelevant here. The docblock and technical/02 state that a future `stages.<s>.enabled` reader must apply the flag **before** `assertValidTemplate`.
+- **BD-025** already says the floor is "an enumeration of known spellings, not a boundary", but about command strings. Proposed text for the orchestrator to append after "…a spelling nobody enumerated reaches `allow`." in BD-025's WP-54 paragraph: *"The same is true of the floors on flags that write a path the model chose (`--basetemp`, `--junitxml`, `go test -o` and the profile outputs, `cargo --target-dir`, pytest's `-o`, `--debug` and `--cov-report=<kind>:<dest>`; WP-104 and WP-120): they are an enumeration, the known unfloored ones are named at `PROJECT_COMMAND_ALLOW`, and a file of arguments (`pytest @<file>`) is the repository-content route."*
+
+**Tests.**
+- `packages/domain/src/policies/command-policy.test.ts` › "the profile, cache, debug and coverage outputs are floored at ask (backlog 343)". 84 spellings × 2 baselines, each asserting `ask` and the floor's name:
+  - go: 7 flags × 8 spellings, plus `-args -test.coverprofile`;
+  - `-o`: 10 spellings, including `addopts=` and `--cache-clear`;
+  - `--debug`: 3;
+  - `--cov-report`: 7 kinds × 2.
+
+  It also checks that each spelling still matches a `PROJECT_COMMAND_ALLOW` entry. › "leaves the neighbouring flags and the destination-free reports allowed" covers `-memprofilerate`, `-knot_slow`, `-p no:cacheprovider`, `term-missing` and a bare `xml`.
+- `packages/domain/src/pipeline/interpreter.property.test.ts` › "never enters a disabled stage, whichever stages are disabled". It disabled arbitrary subsets and so generated 338's shape, which `compilePipeline` now refuses (3 failures in the first `verify`). The generator now disables `ci_gate` together with `rebase_gate`. The property is unchanged over every template the build accepts.
+- `packages/domain/src/pipeline/templates.test.ts` › "a CI excuse nothing would confirm is refused (WP-120, PROGRESS backlog 338)":
+  - feature, bug and chore with `rebase_gate` disabled are each refused by name;
+  - `compilePipeline` refuses;
+  - missing and out-of-order are refused;
+  - both gates disabled is accepted, and so is every shipped template.
+- `packages/application/src/pipeline/ready-head.test.ts` › "enters Ready directly only on a template that runs no rebase gate (backlog 338’s shape)". The name is kept because WP-105 cites it. The body now asserts that 338's shape is refused and that a template with neither gate enters Ready on both verdicts.
+
+**Canaries** (Edit-tool mutations, reverted with the Edit tool, md5 checked, rule 88).
+- (1) All ten floors disabled: the go `map` emptied, `--debug` renamed, and both pytest predicates' binary renamed. All 168 cases of the 343 `describe` fail, and nothing else fails. md5 back to `52564c97…`.
+- (2) `unconfirmedCiExcuseIssue` forced to `null`. Six cases fail by name: the three per-template cases, the `compilePipeline` case, the missing/out-of-order case and the `ready-head.test.ts` case. md5 back to `532a24d1…`.
+
+**Sentences falsified (rule 83).** I grepped `docs/` (outside the ledger), `packages/`, `apps/` and `CLAUDE.md` for `HAZARDOUS_ARGUMENTS`, `floor`, `enumeration`, `--cov-report`, `cache_dir`, `rebase_gate`/`disabled`, and `stages.<s>.enabled`.
+- **Rewritten:**
+  - `command-policy.ts`: `PROJECT_COMMAND_ALLOW`'s *"Other path-writing flags … (a coverage or profile output, a cache directory set through an ini override) are not floored"*;
+  - technical/04's path-guard bullet (*"any path-writing flag of those verbs nobody enumerated"*);
+  - technical/02, two places: the `ready_head_check` row's *"(backlog 338's gap)"* and the CI-gate **Residual**;
+  - `ready-head.ts`, four places: *"What failing closed costs…"*, the verdict bullet, way-in 3, and `readyEntryFor`'s docblock;
+  - `tamper-confirmation.ts`'s **Residual**, which was not named by the row and was found by the grep.
+- **Left alone, still true:**
+  - `settings-grades.ts:18` (the key is still read by nothing);
+  - technical/04:365 and :405-413 (the command-string floors, unchanged);
+  - BD-025:46-47 (still true; the amendment is proposed above, since decisions are not mine to edit);
+  - `OPEN-QUESTIONS.md` Q37/Q69, which are historical;
+  - the plan rows, which are the orchestrator's;
+  - every other `floor`/`enumeration` hit, which is on other subjects.
+- No test the ledger cites was renamed.
+
+**Discovered work (for a refiner).** *All three were folded into this row at the pre-review round (below).*
+- **`pytest @<file>` walks past every pytest floor** (minor (safety), read in source, not run). pytest's parser has `fromfile_prefix_chars="@"`. A run writes `args.txt` (an unprotected path, allowed by the guard) containing `--basetemp=tests`, then runs `pytest @args.txt`, which matches `pytest *` and no floor. `-c <file>` with an `addopts` line is the same route. It is the "file to read" class the docblock accepts, but unlike `make -f` it bypasses floors this list exists for. A candidate fix is a token floor on a positional starting with `@` for `pytest*`.
+- **Known path writers left unfloored**, named at the docblock:
+  - pytest `--log-file=<path>` (direct, though `-o log_file=` is floored) and `--rootdir=<dir>` (`.pytest_cache` lives under it);
+  - go build flags `-pkgdir`, `-debug-trace`, `-debug-actiongraph` and `-debug-runtime-trace` (go1.25.0 `work/build.go` and `work/init.go` write each).
+
+  All are 343's shape.
+- **The rootdir algorithm** (pytest's documented rules, recalled rather than re-read this session, and not measured): with no ini file anywhere, `pytest tests/` takes the common ancestor of the arguments as rootdir. That would put `.pytest_cache` under `tests/` with an ordinary allowed line. It writes new files only, so WP-81's tamper check (modification or deletion of existing files) is unaffected.
+
+**Runs.**
+- `verify` PASS (496 files, 9905 tests), started at load 9.2 after waiting out 15.2. The citation guard is part of it.
+- `verify:e2e` PASS (60 files, 264 tests), started at load 10.6, exit status 0. `verify:integration` was not run: the change is domain-pure, and the e2e tier compiles the shipped templates through the real stage executor.
+- Docker: 122 volumes before and after, not the brief's 123; other projects' containers were running on the daemon.
+
+**Residuals.**
+- The floors are still an enumeration.
+- The space form of `--cov-report` over-matches a positional that looks like `<kind>:…`.
+- The pytest cluster scan treats a letter pytest does not know as a flag, which can over-match.
+
+#### WP-120 — pre-review round (the file and the rest of the list)
+
+The orchestrator folded the discovered items into this row. Everything is read off the same pinned sources (pytest 9.0.2, go1.25.0), and Python 3.14.6's `argparse` was run where a spelling depended on it. Neither CLI was run.
+
+**1. Arguments and configuration read from a file.**
+- **`@<file>`, floored.** `fromfile_prefix_chars="@"` is set at `src/_pytest/config/argparsing.py:463` (`PytestArgumentParser.__init__`). Run through `argparse`, `@args.txt` holding `--basetemp=tests` set `basetemp`, alone and after `-q`. After `-k` it was expanded too, and became `-k`'s value. After `--` it was expanded into a positional. So the floor matches any dequoted token starting with `@`, flag or positional, on a `pytest*` binary.
+- **`-c`/`--config-file`, floored.** It is declared at `src/_pytest/main.py:251-258` (`dest="inifilename"`), and `config/findpaths.py` `determine_setup` loads the file as the configuration, `addopts` included. These spellings set it: `-c x`, `-cx`, `-c=x`, `--config-file x`, `--config-file=x`, `-qc x` and `-qcx`. `--config x` does not. The short-cluster scan is now one function, `pytestClusterValueOption`, which returns the first value-taking letter (`k m c p o W r`). `-o` floors on `o` and `-c` on `c`.
+- **`--rootdir`, floored, but as a path writer, not a reader.** `determine_setup` locates the ini file from the **arguments** whether or not `--rootdir` is given. `--rootdir` only replaces the rootdir, and `cacheprovider.py:107` resolves `cache_dir` against it. So `--rootdir=tests` writes `.pytest_cache` (README, `.gitignore`, `CACHEDIR.TAG`, `v/…`) under `tests/`.
+- **`--confcutdir`, not floored.** It is `directory_arg`, and it only limits which `conftest.py` files load. It reads no configuration and writes nothing.
+- **The residual, stated at the docblock and technical/04.** `locate_config` searches each argument and its parents for `pytest.toml`, `.pytest.toml`, `pytest.ini`, `.pytest.ini`, `pyproject.toml`, `tox.ini` and `setup.cfg`. So `pytest sub/` reads a `sub/pytest.ini` the agent wrote, `addopts` included. No floor can tell that line from `pytest tests/`. It is the repository-content route, BD-025's accepted residual.
+
+**2. The rest of the list.**
+- **pytest `--log-file`.** Declared at `logging.py:293`. It is opened with `--log-file-mode`, default `w`, so `--log-file=tests/conftest.py` truncates a protected file. Matched by exact name, so `--log-file-level`/`-mode`/`-format` stay `allow`.
+- **`--junitxml`/`--junit-xml`** were already floored by 281 (`junitxml.py:379-380`).
+- **`--resultlog`** (`--result-log`) does not exist in 9.0.2: pytest's own `doc/en/deprecations.rst` at the 9.0.2 tag marks it *removed in 6.0*. Its successor, `--report-log`, belongs to the `pytest-reportlog` plugin and is not floored; it is named here as known and left.
+- **go `-pkgdir`, `-debug-trace`, `-debug-actiongraph`, `-debug-runtime-trace`** (`GO_PATH_WRITING_BUILD_FLAGS`):
+  - registered on `go test` by `work.AddBuildFlags`;
+  - write there: `work/init.go` `os.Create`/`trace.Start`, `work/exec.go`, and `go help build`'s `-pkgdir`;
+  - not in `passFlagToTest`, so there is no `test.` spelling. Four spellings each.
+- **Over-block, stated at the entry:** `pytest -c pytest.ini`, `--log-file=/tmp/x`, `--rootdir=.` and `go test -pkgdir=/tmp/p` ask.
+- **Correction to 343's widening note.** `--cache-clear` does not delete the whole cache directory: `clear_cache` removes `<cache_dir>/d` and `<cache_dir>/v` only. With `-o cache_dir=tests` it deletes `tests/d` and `tests/v`. The `-o` entry's hazard text now says so.
+
+**3. The widened 338 check is kept.** It is stated at `assertValidTemplate`'s docblock and in technical/02 as wider than the ruling and fail-closed.
+
+**4. `.pytest_cache` with no ini file: it cannot land in `tests/` on its own.** I read the source, not a run. `determine_setup` with no ini and no `setup.py` sets rootdir to `get_common_ancestor(invocation_dir, [invocation_dir, ancestor])`, which is the checkout root for any arguments under it. `cd` is not an allowed verb, so a run's pytest is invoked from the checkout. The cache lands under `tests/` only in three cases:
+- a `--rootdir` pointing there (floored now);
+- `-o cache_dir`/`-c` (floored);
+- an ini file located in `tests/` by the arguments.
+
+That last case is either the repository's own configuration or a file the guard judged when it was written. Even then the cache writes only **new** files (`_ensure_cache_dir_and_supporting_files` returns early if the directory exists). It writes its own `*` `.gitignore`, so nothing it writes is committed, and WP-81's tamper check is unaffected. So `-p cacheprovider` is not floored: re-enabling the cache changes nothing above.
+
+**BD-025 text** (for the orchestrator; it replaces the proposal above). Append after *"…a spelling nobody enumerated reaches `allow`."* in BD-025's WP-54 paragraph:
+
+> *The same holds for the floors on flags that write a path the model chose, or read the run's own arguments out of a file (WP-104, WP-120: `--basetemp`, `--junitxml`, `--debug`, `--log-file`, `--rootdir`, `-o`, `-c`, `@<file>`, `--cov-report=<kind>:<dest>`, go's `-o`, profile, trace and `-pkgdir`/`-debug-*` outputs and the test binary's `-test.testlogfile`, `-test.gocoverdir` and `-test.fuzzcachedir`, `cargo --target-dir`). They are an enumeration, a tool's next such flag is not covered, and a configuration file pytest locates from its arguments (`pytest sub/` reading `sub/pytest.ini`) is the repository-content route this decision already accepts.*
+
+**Tests.**
+- `packages/domain/src/policies/command-policy.test.ts` › "the arguments read from a file and the rest of the path writers ask (WP-120)". It has 31 spellings × 2 baselines, each asserting `ask` and the floor's name:
+  - go: 4 flags × 4;
+  - `@`: 4;
+  - `-c`: 7;
+  - `--log-file`: 2;
+  - `--rootdir`: 2.
+
+  › "leaves the same-prefix options and the conftest limit allowed" covers `--log-file-level`, `--log-cli-level`, `--confcutdir`, `-p no:cacheprovider` and `-k config`.
+- **Canary** (Edit, reverted with Edit, md5 `6adabfda…` restored). The new floors were disabled: the go `map` emptied, `@`, the `c` cluster and the three long-flag names renamed. 62/62 cases fail, and nothing outside this `describe` fails. A first pass that left `--config-file` live failed 58, and the four survivors were exactly the long `--config-file` cases. That shows the long and short halves are tested separately.
+
+**Runs.** `verify` PASS (9969 tests), exit status 0, started at load 5.4; the citation guard is part of it. I left `verify:integration`/`verify:e2e` to the orchestrator: other projects' containers are on the daemon, so I do not hold Docker alone. The change is domain-pure, as before.
+
+#### WP-120 — review round 1 (REQUEST CHANGES), addressed
+
+1. **[major] The go test binary's three path-writing flags are floored.** `GO_PATH_WRITING_BINARY_FLAGS` holds `testlogfile`, `gocoverdir` and `fuzzcachedir`.
+   - Each is matched by exact name, **`test.`-prefixed only**: `^--?test\.<name>(?:=|$)` on a `go*` binary. Floors match a flag wherever it sits, so this covers both before and after `-args`.
+   - Sources are at the constant and in backlog 343's list: `testing.go:463/479`, the `os.Create` at `:2543`, `fuzz.go:26`, and `testflag.go:297-321`'s pass-through.
+   - **Sweep:** `testing.go`, `fuzz.go` and `benchmark.go` are the only files in `src/testing` (go1.25.0, twelve non-test files listed) that register a flag. No other flag in them names a path beyond the seven already floored.
+   - `goPathWritingFloor` now takes the prefix rule (`optional` for `passFlagToTest` flags, `none` for build flags, `required` for these).
+   - The BD-025 text above names them.
+   - Tests: `packages/domain/src/policies/command-policy.test.ts` › "the arguments read from a file and the rest of the path writers ask (WP-120)". It gains 3 flags × 8 spellings × 2 baselines, and `go test ./... -args -testlogfile=x` (no prefix, which the binary refuses) stays `allow`.
+   - **Canary** (Edit, reverted with Edit, md5 `392e39d5…` restored): the binary list emptied, and 48/48 cases fail. Each failure names a `test.<flag>` spelling, and nothing else fails.
+2. **[minor]** `pytest -- @args.txt` is a case in the same table, and it asks: `splitFlags` puts it in the positionals and the `@` floor reads them.
+3. **[minor]** `unconfirmedCiExcuseIssue`'s docblock now says that a reader of project template settings must call `assertValidTemplate` **at the write**. Otherwise every task stored under a refused template throws at each `compilePipeline`, which strands the task rather than the setting.
+   - **Line for backlog 220** (for the orchestrator to mark): *"Since WP-120, `assertValidTemplate` refuses an enabled `ci_gate` without an enabled `rebase_gate` after it, and `compilePipeline` runs it on every read of a stored template. The reader that applies `stages.<s>.enabled` must therefore validate the resulting template when the setting is written, and refuse it there, never only at compile."*
+
+**Runs.** `verify` PASS (10019 tests), exit status 0, started at load 6.9. Docker tiers left to the orchestrator.
+
+#### WP-120 — review round 2 (REQUEST CHANGES on one test gap), fixed by the orchestrator
+
+- **(major, test)** The spelling cases are generated from the exported lists the floor reads, so deleting `gocoverdir` from `GO_PATH_WRITING_BINARY_FLAGS` removed its 16 cases with it and nothing failed (611 of 627). Added `packages/domain/src/policies/command-policy.test.ts` › "floors exactly the seven go test flags, the four build flags and the three binary flags" — the three lists pinned as literals; the same canary (`gocoverdir` deleted, restored from a copy, md5 identical) is now dead by it. The file 628/628.
+- Round 2 confirmed every spelling of the three binary flags floored (package list first, combined flags, quoting, after `-args`), a bare `-testlogfile` refused by the binary itself (left `allow`, correctly), and independently re-derived the sweep: go1.25.0's `src/testing` registers exactly ten path-taking flags, all ten floored.
+- The orchestrator applied the implementer's BD-025 text (the floors on path-writing and argument-file flags are an enumeration too) and the line on backlog 220.
+

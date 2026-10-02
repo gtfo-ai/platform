@@ -188,7 +188,11 @@ describe.each(compiled.map((pipeline) => [pipeline.templateId, pipeline] as cons
             fc.subarray(template.stages.map((stage) => stage.id)),
             signalArbitrary(pipeline),
             (disabled, signal) => {
-              const disabledSet = new Set(disabled);
+              // Since WP-120 (backlog 338) a template whose `ci_gate` runs without `rebase_gate`
+              // after it is refused at compile, so disabling the rebase gate disables CI with it.
+              const disabledSet = new Set(
+                disabled.includes('rebase_gate') ? [...disabled, 'ci_gate'] : disabled,
+              );
               const variant = compilePipeline(
                 pipeline.templateId,
                 {

@@ -102,18 +102,22 @@ describe('readyEntryFor', () => {
   });
 
   it('enters Ready directly only on a template that runs no rebase gate (backlog 338’s shape)', () => {
-    const noRebase = compilePipeline('feature', without(FEATURE_TEMPLATE, ['rebase_gate']), null);
-    expect(readyEntryFor(noRebase, ready)).toEqual({
-      stage: 'ready_for_merge',
-      gate: false,
-      reason: null,
-    });
-    expect(readyEntryFor(noRebase, again).stage).toBe('ci_gate');
+    // Since WP-120 the shape 338 named — `ci_gate` enabled, `rebase_gate` not — is refused when the
+    // pipeline is compiled (`assertValidTemplate`), so the only template that runs no rebase gate
+    // is one that runs no CI gate either, and nothing on it excused a path to confirm.
+    expect(() =>
+      compilePipeline('feature', without(FEATURE_TEMPLATE, ['rebase_gate']), null),
+    ).toThrow(/"rebase_gate" is disabled while "ci_gate" is enabled/);
     const neither = compilePipeline(
       'feature',
       without(FEATURE_TEMPLATE, ['ci_gate', 'rebase_gate']),
       null,
     );
+    expect(readyEntryFor(neither, ready)).toEqual({
+      stage: 'ready_for_merge',
+      gate: false,
+      reason: null,
+    });
     expect(readyEntryFor(neither, again)).toEqual({
       stage: 'ready_for_merge',
       gate: false,

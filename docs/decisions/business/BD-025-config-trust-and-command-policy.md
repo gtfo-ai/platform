@@ -46,7 +46,7 @@ spellings that hand a project verb a command the model wrote — a `make` variab
 `--script-shell`, `--node-options` and `--config.<key>` — are floored at `ask` (`HAZARDOUS_ARGUMENTS`;
 TD-027's WP-54 amendment has the list). **That floor is an enumeration of known spellings, not a
 boundary**: WP-54's two review rounds found seven and then five spellings past it, and a spelling
-nobody enumerated reaches `allow`. The boundary for what such a line runs is the sandbox, as for the
+nobody enumerated reaches `allow`. *The same holds for the floors on flags that write a path the model chose, or read the run's own arguments out of a file (WP-104, WP-120: `--basetemp`, `--junitxml`, `--debug`, `--log-file`, `--rootdir`, `-o`, `-c`, `@<file>`, `--cov-report=<kind>:<dest>`, go's `-o`, profile, trace and `-pkgdir`/`-debug-*` outputs and the test binary's `-test.testlogfile`, `-test.gocoverdir` and `-test.fuzzcachedir`, `cargo --target-dir`). They are an enumeration, a tool's next such flag is not covered, and a configuration file pytest locates from its arguments (`pytest sub/` reading `sub/pytest.ini`) is the repository-content route this decision already accepts.* The boundary for what such a line runs is the sandbox, as for the
 script bodies above. A reviewer stage reading a hostile merge request
 is the case this paragraph is written for: §1 keeps the *policy* on the default branch, and the
 sandbox, not the list, bounds what the branch's scripts do.

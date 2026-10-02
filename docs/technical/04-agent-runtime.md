@@ -317,10 +317,18 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 >   run is invisible to the guard. The four test-runner flags WP-99 measured writing a protected path
 >   with no `ask` — `pytest --basetemp`, `pytest --junitxml`/`--junit-xml`, `go test -o` and
 >   `cargo test --target-dir`, in every spelling the CLIs accept — are floored at `ask` since WP-104
->   (`HAZARDOUS_ARGUMENTS`, PROGRESS backlog 281). What still writes one without an `ask` is the
->   **repository-content route**: `make *`, `npm run *`, `pytest` running a `conftest.py`, a
->   lockfile install's lifecycle scripts — whatever the tree says after the agent edits it, which is
->   BD-025's accepted residual — and any path-writing flag of those verbs nobody enumerated. So the
+>   (`HAZARDOUS_ARGUMENTS`, PROGRESS backlog 281), and since WP-120 (backlog 343) so are `go test`'s
+>   `-coverprofile`, `-cpuprofile`, `-memprofile`, `-blockprofile`, `-mutexprofile`, `-trace` and
+>   `-outputdir`, its build flags `-pkgdir`, `-debug-trace`, `-debug-actiongraph` and
+>   `-debug-runtime-trace`, pytest's `-o`/`--override-ini` (every key), `--debug`, `--log-file` and
+>   `--rootdir`, pytest-cov's `--cov-report=<kind>:<dest>`, and the two ways pytest reads arguments
+>   or configuration out of a file the agent can write — `pytest @<file>` and `-c`/`--config-file` —
+>   in the spellings read off the tools' sources (go1.25.0, pytest 9.0.2, pytest-cov 7.1.0; cited at
+>   the entries). What still writes one without an `ask` is the **repository-content route**:
+>   `make *`, `npm run *`, `pytest` running a `conftest.py` or reading a `pytest.ini` it locates from
+>   its arguments (`pytest sub/` reads a `sub/pytest.ini` the agent wrote), a lockfile install's
+>   lifecycle scripts — whatever the tree says after the agent edits it, which is BD-025's accepted
+>   residual — and any path-writing flag not on the list: the floors are an enumeration. So the
 >   guard steers at write time, and the CI gate's tamper check is what enforces the branch.
 > - **`.git` is not repository content** (WP-104, PROGRESS backlog 282). The guard denies a write
 >   whose folded path has a `.git` segment anywhere (`.git/config`, `.GIT/config`,

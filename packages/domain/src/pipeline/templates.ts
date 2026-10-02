@@ -767,6 +767,12 @@ export const SHIPPED_STAGE_IDS: readonly string[] = [
  * still point at a stage that does not exist — and a project template arrives as parsed YAML, so
  * the shape check is not redundant even when TypeScript is satisfied.
  *
+ * A third half follows the graph: {@link unconfirmedCiExcuseIssue}, a template on which a protected
+ * path CI excused provisionally could reach Ready unconfirmed (WP-120, PROGRESS backlog 338). It
+ * refuses an enabled `ci_gate` whose `rebase_gate` is **disabled** — the ruling's case — and, wider
+ * than the ruling and in the fail-closed direction (kept at WP-120's pre-review round), one whose
+ * `rebase_gate` is **missing** or declared **before** it.
+ *
  * @throws {PolicyViolationError} listing every problem found, not just the first.
  */
 export const assertValidTemplate = (id: Slug, template: PipelineTemplate): void => {
@@ -782,4 +788,67 @@ export const assertValidTemplate = (id: Slug, template: PipelineTemplate): void 
     const detail = issues.map((issue) => `${issue.stage}: ${issue.detail}`).join('; ');
     throw new PolicyViolationError('pipeline.template', `template "${id}" is invalid: ${detail}`);
   }
+  const unconfirmed = unconfirmedCiExcuseIssue(template);
+  if (unconfirmed !== null) {
+    throw new PolicyViolationError(
+      'pipeline.template',
+      `template "${id}" is refused: ${unconfirmed}`,
+    );
+  }
+};
+
+/** The gate whose provisional pass excuses a declared protected path (WP-81). */
+const CI_GATE_ID = 'ci_gate';
+/** The gate whose settlement is the only reader of that excuse (WP-102, `tamper-confirmation.ts`). */
+const REBASE_GATE_ID = 'rebase_gate';
+
+/**
+ * Why this template would let a protected path CI excused **provisionally** reach Ready with no
+ * Code review confirming it — or `null` when it would not (WP-120, PROGRESS backlog 338, ruled
+ * option (a)).
+ *
+ * WP-81's CI gate passes a declared protected path the Code review has not judged yet with the
+ * outcome `protected_paths_awaiting_review` and records it in `tasks.ci_excused_paths`; the **only**
+ * reader that compares those paths with the review is the rebase gate's settlement (WP-102). A
+ * template that runs `ci_gate` but not `rebase_gate` after it therefore falls through
+ * `business_review` into Ready with the excuse never confirmed — BD-024's *"a review must confirm
+ * it"* skipped. So an enabled `ci_gate` requires an enabled `rebase_gate` declared after it, and the
+ * refusal names both stages.
+ *
+ * The ruling's case is `rebase_gate` disabled (`enabled: false`) while `ci_gate` is enabled — the
+ * shape a reader of `stages.<s>.enabled` (backlog 220, Q99) could produce. The check is stated as
+ * the invariant rather than as that one shape, so a template that omits `rebase_gate`, or declares
+ * it before `ci_gate`, is refused by the same sentence: each is the same unconfirmed fall-through.
+ * A template with **no** enabled `ci_gate` passes — nothing then writes an excuse to confirm.
+ *
+ * **What it reads, stated:** the template as given. The task's dial is applied after this check
+ * (`compilePipeline`) and disables only `business_review`, which this invariant does not involve;
+ * a future reader of `stages.<s>.enabled` must apply the flag to the template **before** it reaches
+ * this function, or the refusal does not see it.
+ *
+ * **Where that reader must call it: at the write.** `compilePipeline` runs this check on every read
+ * of a stored task's template snapshot, so it is the last line, not the first. A reader that applies
+ * a project's settings to a template (backlog 220) must call `assertValidTemplate` when the settings
+ * are **written** and refuse them there; otherwise every task stored under a refused template throws
+ * here on each compile, which strands the task rather than the setting.
+ */
+export const unconfirmedCiExcuseIssue = (template: PipelineTemplate): string | null => {
+  const enabledAt = (stageId: string): number =>
+    template.stages.findIndex((stage) => stage.id === stageId && stage.enabled !== false);
+  const ci = enabledAt(CI_GATE_ID);
+  if (ci === -1) {
+    return null;
+  }
+  const rebase = enabledAt(REBASE_GATE_ID);
+  if (rebase > ci) {
+    return null;
+  }
+  const declared = template.stages.find((stage) => stage.id === REBASE_GATE_ID);
+  const state =
+    declared === undefined
+      ? 'is not declared'
+      : declared.enabled === false
+        ? 'is disabled'
+        : `is declared before "${CI_GATE_ID}"`;
+  return `"${REBASE_GATE_ID}" ${state} while "${CI_GATE_ID}" is enabled, so a protected path "${CI_GATE_ID}" excuses provisionally would reach Ready with no Code review confirming it (BD-024; the confirmation is read only in "${REBASE_GATE_ID}"'s settlement). Enable "${REBASE_GATE_ID}" after "${CI_GATE_ID}", or disable both`;
 };

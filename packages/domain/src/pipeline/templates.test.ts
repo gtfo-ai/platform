@@ -1,6 +1,8 @@
 import {
+  type PipelineTemplate,
   pipelineFileSchema,
   pipelineGraphIssues,
+  type Stage,
   type TaskPipelineDial,
 } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
@@ -27,6 +29,7 @@ import {
   stageAgentDefaults,
   TICKET_LINT_TEMPLATE,
   TICKET_TEMPLATES,
+  unconfirmedCiExcuseIssue,
 } from './templates.js';
 
 describe('the shipped templates', () => {
@@ -461,5 +464,96 @@ describe('the rebase gate behind every CI gate (WP-81, Q109)', () => {
     }
     const rebase = stages.findIndex((stage) => stage.id === 'rebase_gate' && stage.enabled);
     expect(rebase).toBeGreaterThan(ci);
+  });
+});
+
+/** `template` with each named stage written `enabled: false`, the shape a `stages.<s>.enabled` reader produces. */
+const disabling = (template: PipelineTemplate, ids: readonly string[]): PipelineTemplate => ({
+  ...template,
+  stages: template.stages.map((stage) =>
+    ids.includes(stage.id) ? { ...stage, enabled: false } : stage,
+  ),
+});
+
+const refusalOf = (id: string, template: PipelineTemplate): string => {
+  try {
+    assertValidTemplate(id, template);
+  } catch (error) {
+    expect(error).toBeInstanceOf(PolicyViolationError);
+    return (error as PolicyViolationError).message;
+  }
+  throw new Error(`template "${id}" was accepted`);
+};
+
+describe('a CI excuse nothing would confirm is refused (WP-120, PROGRESS backlog 338)', () => {
+  // WP-81's provisional CI pass records the protected paths it excused, and the rebase gate's
+  // settlement is the only reader that compares them with the Code review (WP-102). A template
+  // that runs `ci_gate` without `rebase_gate` after it falls through into Ready with the excuse
+  // never confirmed, so `assertValidTemplate` refuses it — before a reader of
+  // `stages.<s>.enabled` (backlog 220) can make the shape reachable.
+  it.each(Object.keys(TICKET_TEMPLATES))(
+    'refuses %s with rebase_gate disabled while ci_gate is enabled, naming both stages',
+    (id) => {
+      const message = refusalOf(
+        id,
+        disabling(TICKET_TEMPLATES[id] as PipelineTemplate, ['rebase_gate']),
+      );
+      expect(message).toContain(`template "${id}" is refused`);
+      expect(message).toContain('"rebase_gate" is disabled while "ci_gate" is enabled');
+      expect(message).toContain('no Code review confirming it');
+    },
+  );
+
+  it('refuses it at compilePipeline too, which every reader of a task’s template goes through', () => {
+    expect(() =>
+      compilePipeline('feature', disabling(FEATURE_TEMPLATE, ['rebase_gate']), null),
+    ).toThrow(/"rebase_gate" is disabled while "ci_gate" is enabled/);
+  });
+
+  it('refuses the same fall-through when rebase_gate is missing or declared before ci_gate', () => {
+    const missing: PipelineTemplate = {
+      ...FEATURE_TEMPLATE,
+      stages: FEATURE_TEMPLATE.stages
+        .filter((stage) => stage.id !== 'rebase_gate')
+        .map((stage): Stage => {
+          if (stage.id === 'business_review') {
+            return { ...stage, approve_to: 'ready_for_merge' } as Stage;
+          }
+          if (stage.kind === 'human' && stage.id === 'ready_for_merge') {
+            return { ...stage, on: stage.on.filter((edge) => edge.to !== 'rebase_gate') };
+          }
+          return stage;
+        }),
+    };
+    expect(pipelineGraphIssues(missing)).toEqual([]);
+    expect(refusalOf('feature', missing)).toContain(
+      '"rebase_gate" is not declared while "ci_gate" is enabled',
+    );
+
+    const rebase = FEATURE_TEMPLATE.stages.find((stage) => stage.id === 'rebase_gate') as Stage;
+    const ciIndex = FEATURE_TEMPLATE.stages.findIndex((stage) => stage.id === 'ci_gate');
+    const rest = FEATURE_TEMPLATE.stages.filter((stage) => stage.id !== 'rebase_gate');
+    const before: PipelineTemplate = {
+      ...FEATURE_TEMPLATE,
+      stages: [...rest.slice(0, ciIndex), rebase, ...rest.slice(ciIndex)],
+    };
+    expect(refusalOf('feature', before)).toContain(
+      '"rebase_gate" is declared before "ci_gate" while "ci_gate" is enabled',
+    );
+  });
+
+  it('accepts a template that disables both gates, because nothing then excuses a path', () => {
+    for (const [id, template] of Object.entries(TICKET_TEMPLATES)) {
+      expect(() => {
+        assertValidTemplate(id, disabling(template, ['ci_gate', 'rebase_gate']));
+      }, id).not.toThrow();
+      expect(unconfirmedCiExcuseIssue(disabling(template, ['ci_gate']))).toBeNull();
+    }
+  });
+
+  it('accepts every shipped template as shipped', () => {
+    for (const template of Object.values(SHIPPED_TEMPLATES)) {
+      expect(unconfirmedCiExcuseIssue(template)).toBeNull();
+    }
   });
 });

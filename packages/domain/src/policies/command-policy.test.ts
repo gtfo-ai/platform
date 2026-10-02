@@ -15,6 +15,9 @@ import {
   DEFAULT_VERIFICATION_ALLOW,
   dequoteCommand,
   evaluateCommand,
+  GO_PATH_WRITING_BINARY_FLAGS,
+  GO_PATH_WRITING_BUILD_FLAGS,
+  GO_PATH_WRITING_TEST_FLAGS,
   HAZARDOUS_ARGUMENTS,
   hasOutputRedirection,
   hazardousArgument,
@@ -1211,6 +1214,182 @@ describe('the path-writing test flags are floored at ask (backlog 281)', () => {
 });
 
 /**
+ * PROGRESS backlog 343 (WP-120): the path-writing flags WP-104 named and did not floor. One case per
+ * spelling the tool accepts — read off go1.25.0's `cmdflag.ParseOne` and `passFlagToTest`, pytest
+ * 9.0.2's argparse options (with Python's argparse run on the `-o` and `--debug` declarations) and
+ * pytest-cov 7.1.0's `validate_report`, as the entries' comment cites — on both baselines that
+ * carry `PROJECT_COMMAND_ALLOW`, each naming the floor that caught it.
+ */
+describe('the profile, cache, debug and coverage outputs are floored at ask (backlog 343)', () => {
+  const goSpellings = (flag: string): readonly (readonly [string, string])[] => {
+    const floor = `go -${flag} (one or two dashes, optional test. prefix, = or a space)`;
+    return ['-', '--'].flatMap((dashes) =>
+      ['', 'test.'].flatMap((prefix) => [
+        [`go test ${dashes}${prefix}${flag}=tests/out ./...`, floor] as const,
+        [`go test ${dashes}${prefix}${flag} tests/out ./...`, floor] as const,
+      ]),
+    );
+  };
+  const OVERRIDE_INI = 'pytest -o / --override-ini (any key, any spelling argparse accepts)';
+  const COV_REPORT = 'pytest --cov-report=<kind>:<dest> (either spelling)';
+  const SPELLINGS: readonly (readonly [command: string, floor: string])[] = [
+    ...GO_PATH_WRITING_TEST_FLAGS.flatMap(goSpellings),
+    [
+      'go test ./... -args -test.coverprofile=tests/c.out',
+      goSpellings('coverprofile')[0]?.[1] ?? '',
+    ],
+    ['pytest -o cache_dir=tests', OVERRIDE_INI],
+    ['pytest -ocache_dir=tests', OVERRIDE_INI],
+    ['pytest -o=cache_dir=tests', OVERRIDE_INI],
+    ['pytest --override-ini cache_dir=tests', OVERRIDE_INI],
+    ['pytest --override-ini=cache_dir=tests', OVERRIDE_INI],
+    ['pytest -qo cache_dir=tests', OVERRIDE_INI],
+    ['pytest -vqocache_dir=tests', OVERRIDE_INI],
+    ['pytest -o cache_dir=tests --cache-clear', OVERRIDE_INI],
+    ['pytest -o log_file=tests/run.log', OVERRIDE_INI],
+    ['pytest -o "addopts=--basetemp=tests"', OVERRIDE_INI],
+    ['pytest --debug', 'pytest* --debug*'],
+    ['pytest --debug=tests/conftest.py', 'pytest* --debug*'],
+    ['pytest --debug tests/conftest.py', 'pytest* --debug*'],
+    ...['annotate', 'html', 'xml', 'json', 'markdown', 'markdown-append', 'lcov'].flatMap(
+      (kind) =>
+        [
+          [`pytest --cov=src --cov-report=${kind}:tests/out`, COV_REPORT],
+          [`pytest --cov=src --cov-report ${kind}:tests/out`, COV_REPORT],
+        ] as const,
+    ),
+  ];
+  const BASELINES: Readonly<Record<string, readonly string[]>> = {
+    verification: DEFAULT_VERIFICATION_ALLOW,
+    implementation: DEFAULT_IMPLEMENTATION_ALLOW,
+  };
+
+  for (const [name, allow] of Object.entries(BASELINES)) {
+    it.each(SPELLINGS)(`${name}: %s is ask, floored by %s`, (command, floor) => {
+      expect(verdict(command, { ...DEFAULT_COMMAND_POLICY, allow })).toBe('ask');
+      expect(hazardousArgument(command)?.pattern).toBe(floor);
+    });
+  }
+
+  it('the floor is all that stood between each spelling and allow (the allow entry still matches)', () => {
+    for (const [command] of SPELLINGS) {
+      expect(
+        PROJECT_COMMAND_ALLOW.some((pattern) => matchesCommandPattern(pattern, command)),
+        command,
+      ).toBe(true);
+    }
+  });
+
+  it('leaves the neighbouring flags and the destination-free reports allowed', () => {
+    const policy = { ...DEFAULT_COMMAND_POLICY, allow: DEFAULT_IMPLEMENTATION_ALLOW };
+    for (const command of [
+      // go matches flag names exactly, so these are other flags and write nothing.
+      'go test -memprofilerate=1 ./...',
+      'go test -blockprofilerate=1 ./...',
+      'go test -mutexprofilefraction=1 ./...',
+      'go test -cover -covermode=atomic ./...',
+      // A value-taking short option takes the rest of its token, so no `-o` is reached.
+      "pytest -k 'not slow'",
+      'pytest -knot_slow',
+      'pytest -p no:cacheprovider',
+      'pytest --cov=src --cov-report=term-missing',
+      'pytest --cov=src --cov-report term-missing:skip-covered',
+      'pytest --cov=src --cov-report=xml',
+    ]) {
+      expect(verdict(command, policy), command).toBe('allow');
+    }
+  });
+});
+
+/**
+ * WP-120's pre-review round: the arguments pytest reads from a file the agent can write (`@<file>`,
+ * `-c <file>`), and the path writers backlog 343's first list left — pytest `--log-file` and
+ * `--rootdir`, go's `-pkgdir` and three `-debug-*` build flags — and review round 1's three flags
+ * of the go test binary (`-test.testlogfile`, `-test.gocoverdir`, `-test.fuzzcachedir`). One case per spelling, on both
+ * baselines, each naming its floor.
+ */
+describe('the arguments read from a file and the rest of the path writers ask (WP-120)', () => {
+  const goBuildSpellings = (flag: string): readonly (readonly [string, string])[] => {
+    const floor = `go -${flag} (one or two dashes, = or a space)`;
+    return ['-', '--'].flatMap((dashes) => [
+      [`go test ${dashes}${flag}=tests/out ./...`, floor] as const,
+      [`go test ${dashes}${flag} tests/out ./...`, floor] as const,
+    ]);
+  };
+  // The test binary's own flags (review round 1): `test.` only, one or two dashes, `=` or a space,
+  // before `-args` (cmd/go passes a flag it does not know through) and after it.
+  const goBinarySpellings = (flag: string): readonly (readonly [string, string])[] => {
+    const floor = `go -test.${flag} (one or two dashes, test. prefix only, = or a space)`;
+    return ['-', '--'].flatMap((dashes) =>
+      [`${dashes}test.${flag}=tests/out`, `${dashes}test.${flag} tests/out`].flatMap((spelled) => [
+        [`go test ${spelled} ./...`, floor] as const,
+        [`go test ./... -args ${spelled}`, floor] as const,
+      ]),
+    );
+  };
+  const FROM_FILE = 'pytest @<file> (an argument read from a file)';
+  const CONFIG_FILE = 'pytest -c / --config-file (any spelling argparse accepts)';
+  const LOG_FILE = 'pytest --log-file (exact name, = or a space)';
+  const ROOTDIR = 'pytest --rootdir (exact name, = or a space)';
+  const SPELLINGS: readonly (readonly [command: string, floor: string])[] = [
+    ...GO_PATH_WRITING_BUILD_FLAGS.flatMap(goBuildSpellings),
+    ...GO_PATH_WRITING_BINARY_FLAGS.flatMap(goBinarySpellings),
+    ['pytest @args.txt', FROM_FILE],
+    ['pytest -q @args.txt tests', FROM_FILE],
+    ['pytest -k @args.txt', FROM_FILE],
+    ['pytest "@args.txt"', FROM_FILE],
+    ['pytest -- @args.txt', FROM_FILE],
+    ['pytest -c sub/pytest.ini', CONFIG_FILE],
+    ['pytest -csub/pytest.ini', CONFIG_FILE],
+    ['pytest -c=sub/pytest.ini', CONFIG_FILE],
+    ['pytest --config-file sub/pytest.ini', CONFIG_FILE],
+    ['pytest --config-file=sub/pytest.ini', CONFIG_FILE],
+    ['pytest -qc sub/pytest.ini', CONFIG_FILE],
+    ['pytest -qcsub/pytest.ini', CONFIG_FILE],
+    ['pytest --log-file=tests/conftest.py', LOG_FILE],
+    ['pytest --log-file tests/conftest.py', LOG_FILE],
+    ['pytest --rootdir=tests', ROOTDIR],
+    ['pytest --rootdir tests', ROOTDIR],
+  ];
+  const BASELINES: Readonly<Record<string, readonly string[]>> = {
+    verification: DEFAULT_VERIFICATION_ALLOW,
+    implementation: DEFAULT_IMPLEMENTATION_ALLOW,
+  };
+
+  for (const [name, allow] of Object.entries(BASELINES)) {
+    it.each(SPELLINGS)(`${name}: %s is ask, floored by %s`, (command, floor) => {
+      expect(verdict(command, { ...DEFAULT_COMMAND_POLICY, allow })).toBe('ask');
+      expect(hazardousArgument(command)?.pattern).toBe(floor);
+    });
+  }
+
+  it('each spelling still matches a PROJECT_COMMAND_ALLOW entry, so the floor is what decides it', () => {
+    for (const [command] of SPELLINGS) {
+      expect(
+        PROJECT_COMMAND_ALLOW.some((pattern) => matchesCommandPattern(pattern, command)),
+        command,
+      ).toBe(true);
+    }
+  });
+
+  it('leaves the same-prefix options and the conftest limit allowed', () => {
+    const policy = { ...DEFAULT_COMMAND_POLICY, allow: DEFAULT_IMPLEMENTATION_ALLOW };
+    for (const command of [
+      'pytest --log-file-level=DEBUG',
+      'pytest --log-cli-level=INFO',
+      'pytest --confcutdir=tests',
+      'pytest -p no:cacheprovider',
+      'pytest -k config',
+      'go test -debug ./...',
+      // Without `test.` the binary refuses these, so they write nothing.
+      'go test ./... -args -testlogfile=x',
+    ]) {
+      expect(verdict(command, policy), command).toBe('allow');
+    }
+  });
+});
+
+/**
  * Q97, answered at WP-54 review round 1 (PROGRESS backlog 139): a declared `allow` narrows the
  * project-command class only, over each of the three baselines, with technical/12's own example as
  * the layer.
@@ -1432,5 +1611,33 @@ describe('the workspace setup script', () => {
       { block: ['./.agentic/workspace/setup'] },
     ).policy;
     expect(blocked.allow).not.toContain('./.agentic/workspace/setup');
+  });
+});
+
+/**
+ * WP-120 review round 2 (orchestrator): the spelling cases above are generated from the same exported
+ * lists the floor reads, so deleting a flag from a list deleted its cases too and nothing failed. The
+ * lists are pinned here as literals — the go1.25.0 sources are cited at each constant — so removing
+ * one fails by name.
+ */
+describe('the go path-writing flag lists, as literals (WP-120)', () => {
+  it('floors exactly the seven go test flags, the four build flags and the three binary flags', () => {
+    expect([...GO_PATH_WRITING_TEST_FLAGS].sort()).toEqual(
+      [
+        'blockprofile',
+        'coverprofile',
+        'cpuprofile',
+        'memprofile',
+        'mutexprofile',
+        'outputdir',
+        'trace',
+      ].sort(),
+    );
+    expect([...GO_PATH_WRITING_BUILD_FLAGS].sort()).toEqual(
+      ['debug-actiongraph', 'debug-runtime-trace', 'debug-trace', 'pkgdir'].sort(),
+    );
+    expect([...GO_PATH_WRITING_BINARY_FLAGS].sort()).toEqual(
+      ['fuzzcachedir', 'gocoverdir', 'testlogfile'].sort(),
+    );
   });
 });

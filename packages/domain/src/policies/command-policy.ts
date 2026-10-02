@@ -233,7 +233,14 @@ export const LOCKFILE_INSTALL_ALLOW: readonly string[] = [
  *
  * **Flags that write or delete a path the model chose are floored too** (WP-104, PROGRESS backlog
  * 281): `pytest --basetemp=<dir>` (pytest clears that directory), `pytest --junitxml=<path>`,
- * `go test -o <path>` and `cargo test --target-dir <dir>`, in every spelling the CLIs accept. Until
+ * `go test -o <path>` and `cargo test --target-dir <dir>`, in every spelling the CLIs accept — and
+ * since WP-120 (backlog 343) `go test`'s `-coverprofile`, `-cpuprofile`, `-memprofile`,
+ * `-blockprofile`, `-mutexprofile`, `-trace` and `-outputdir`, pytest's `-o`/`--override-ini` (every
+ * key: `cache_dir`, `log_file` and `addopts` among them), `--debug`, `--log-file` and `--rootdir`,
+ * pytest-cov's `--cov-report=<kind>:<dest>`, go's build flags `-pkgdir`, `-debug-trace`,
+ * `-debug-actiongraph` and `-debug-runtime-trace`, and the test binary's `-test.testlogfile`,
+ * `-test.gocoverdir` and `-test.fuzzcachedir`, each in the spellings read off the tools'
+ * sources at the entries. Until
  * WP-104 this docblock called the first three *"contained by the workspace-only writable mount"*;
  * the mount contains a write to the workspace and nothing else, and the workspace is exactly where
  * BD-024's protected paths live — the path guard judges only the Edit and Write tools, so a test
@@ -243,9 +250,18 @@ export const LOCKFILE_INSTALL_ALLOW: readonly string[] = [
  * verbs at a **file to read** stay `allow`: `npm --userconfig=<file>`, `make -f <file>` and
  * `go test -overlay=<file>` read configuration or a makefile from one — which can set a script
  * shell or node options without any floored flag. They are the same class as the model editing the
- * `Makefile` or `package.json`, which BD-025 already accepts. Other path-writing flags of these
- * verbs that nobody enumerated (a coverage or profile output, a cache directory set through an
- * ini override) are not floored either — this is an enumeration. `make -e`
+ * `Makefile` or `package.json`, which BD-025 already accepts. **pytest is the exception, and is
+ * floored** (WP-120): `pytest @<file>` (argparse's `fromfile_prefix_chars`) and `pytest -c <file>`
+ * read arguments or an `addopts` line out of a file the agent can write in an unprotected
+ * directory, which walks past every pytest floor on this list, so both ask. **What still reads a
+ * written file as pytest configuration, stated:** an ordinary `pytest sub/` — pytest locates its
+ * configuration from the *arguments* upward (`locate_config`: `pytest.toml`, `pytest.ini`,
+ * `pyproject.toml`, `tox.ini`, `setup.cfg`), so a `sub/pytest.ini` the agent wrote is read by a line
+ * no floor can tell from `pytest tests/` — the repository-content route. `--confcutdir` only limits
+ * which `conftest.py` files load and reads no configuration, so it stays `allow`. A `.coveragerc`
+ * that names a report's output path is the same class. **The floors remain an enumeration**
+ * (BD-025): a tool's next path-writing flag, and any not on the list (go's `-modfile` is not
+ * measured), is not covered. `make -e`
  * (`--environment-overrides`) is `allow` in its short spelling although the long one is floored:
  * nothing model-written reaches the environment, because a leading assignment is not peeled for
  * `allow`.
@@ -427,6 +443,128 @@ export interface HazardousArgument {
     readonly positional: readonly string[];
   }) => boolean;
 }
+
+/**
+ * `go test` flags that write a path the command line chose (PROGRESS backlog 343, WP-120): six
+ * profile and trace outputs and the directory they are written into. Each is a string flag of
+ * `go test` and is in go1.25.0's `passFlagToTest`, so it is accepted with a `test.` prefix too.
+ */
+export const GO_PATH_WRITING_TEST_FLAGS: readonly string[] = [
+  'coverprofile',
+  'cpuprofile',
+  'memprofile',
+  'blockprofile',
+  'mutexprofile',
+  'trace',
+  'outputdir',
+];
+
+/**
+ * `go test` **build** flags that write a path the command line chose (WP-120 pre-review): go1.25.0's
+ * `work.AddBuildFlags` registers them on `go test`, and `work/init.go` (`-debug-runtime-trace`:
+ * `os.Create`; `-debug-trace`: `trace.Start`), `work/exec.go` (`-debug-actiongraph`) and `go help
+ * build` (`-pkgdir`: *"use -pkgdir to keep generated packages in a separate location"*) write
+ * there. They are **not** in `passFlagToTest`, so no `test.` spelling exists.
+ */
+export const GO_PATH_WRITING_BUILD_FLAGS: readonly string[] = [
+  'pkgdir',
+  'debug-trace',
+  'debug-actiongraph',
+  'debug-runtime-trace',
+];
+
+/**
+ * Flags of the **test binary** that write a path and that `go test` itself does not declare
+ * (WP-120 review round 1): go1.25.0's `testing.go:463` `test.gocoverdir` (*"write coverage
+ * intermediate files to this directory"*), `testing.go:479` `test.testlogfile` (*"write test action
+ * log to `file`"*, `os.Create` at `testing.go:2543`, so it truncates) and `fuzz.go:26`
+ * `test.fuzzcachedir` (where interesting fuzzing inputs are stored). `cmd/go`'s `testflag.go`
+ * (the `FlagNotDefinedError` branch, `:297-321`) hands any flag it does not know to the binary —
+ * before `-args` as well as after it — and the binary's `flag` package takes them only **with**
+ * the `test.` prefix. The whole flag set of `testing.go`, `fuzz.go` and `benchmark.go` (the only
+ * files of `src/testing` that register a flag) was read: every other flag naming a path is already
+ * in {@link GO_PATH_WRITING_TEST_FLAGS}.
+ */
+export const GO_PATH_WRITING_BINARY_FLAGS: readonly string[] = [
+  'testlogfile',
+  'gocoverdir',
+  'fuzzcachedir',
+];
+
+/** How a go flag may carry the `test.` prefix: `go test` forwards it, never has it, or needs it. */
+type GoTestPrefix = 'optional' | 'none' | 'required';
+
+const GO_TEST_PREFIX: Readonly<Record<GoTestPrefix, string>> = {
+  optional: '(?:test\\.)?',
+  none: '',
+  required: 'test\\.',
+};
+
+const GO_PREFIX_WORDING: Readonly<Record<GoTestPrefix, string>> = {
+  optional: 'optional test. prefix, ',
+  none: '',
+  required: 'test. prefix only, ',
+};
+
+/**
+ * One floor per go flag, by its exact name — never a prefix glob, which would also floor
+ * `-memprofilerate`, `-blockprofilerate` and `-mutexprofilefraction` (go does not match prefixes,
+ * so those are different flags). Matches one or two dashes and `=` or a space, with the `test.`
+ * prefix as the flag's owner accepts it; `go*` as the binary, like the four `go* -o` entries. A flag
+ * is matched wherever it sits, so after `-args` too.
+ */
+const goPathWritingFloor =
+  (prefix: GoTestPrefix) =>
+  (flagName: string): HazardousArgument => {
+    const spelled = new RegExp(`^--?${GO_TEST_PREFIX[prefix]}${flagName}(?:=|$)`);
+    return {
+      pattern: `go -${prefix === 'required' ? 'test.' : ''}${flagName} (one or two dashes, ${GO_PREFIX_WORDING[prefix]}= or a space)`,
+      hazard: `go test -${flagName} writes to a path the command line chose, which the path guard never sees (BD-024)`,
+      tokens: ({ name, flags }) =>
+        name.startsWith('go') && flags.some((flag) => spelled.test(flag)),
+    };
+  };
+
+/**
+ * pytest 9.0.2's short options that take a value (`-k`, `-m`, `-c`, `-p`, `-o`, `-W`, `-r`): in a
+ * short-option cluster argparse hands the first of them the rest of the token.
+ */
+const PYTEST_VALUE_SHORT_OPTIONS: ReadonlySet<string> = new Set([
+  'k',
+  'm',
+  'c',
+  'p',
+  'o',
+  'W',
+  'r',
+]);
+
+/**
+ * The value-taking short option a single-dash token reaches — alone (`-o`, `-ok=v`, `-o=k=v`,
+ * `-cx.ini`) or at the end of a cluster (`-qo`, `-vqok=v`, `-qc x.ini`) — or `null`. Scanning stops
+ * at the first such option, because argparse gives it the rest of the token (`-kfoo` is `-k foo`,
+ * never an `-o`). A letter pytest does not know is scanned past, which can only over-match: pytest
+ * would refuse the token.
+ */
+const pytestClusterValueOption = (flag: string): string | null => {
+  if (!flag.startsWith('-') || flag.startsWith('--')) {
+    return null;
+  }
+  for (const letter of flag.slice(1)) {
+    if (PYTEST_VALUE_SHORT_OPTIONS.has(letter)) {
+      return letter;
+    }
+  }
+  return null;
+};
+
+/** pytest's own long options that write a path, matched by exact name (`allow_abbrev=False`). */
+const pytestLongFlag = (flagName: string): RegExp => new RegExp(`^--${flagName}(?:=|$)`);
+
+/** pytest-cov's report kinds that take `:DEST` (`validate_report`, pytest-cov 7.1.0). */
+const COV_REPORT_DEST_KINDS = 'annotate|html|xml|json|markdown-append|markdown|lcov';
+const COV_REPORT_DEST = new RegExp(`^(?:${COV_REPORT_DEST_KINDS}):`);
+const COV_REPORT_ATTACHED_DEST = new RegExp(`^--cov-report=(?:${COV_REPORT_DEST_KINDS}):`);
 
 /**
  * Arguments that turn an allow-listed verb into something else: the `find … -exec` hazard, gone
@@ -687,6 +825,108 @@ export const HAZARDOUS_ARGUMENTS: readonly HazardousArgument[] = [
     pattern: 'cargo* --target-dir*',
     hazard:
       'cargo test --target-dir writes the whole build tree under any directory the path guard never sees (BD-024), in either `--target-dir x` or `--target-dir=x`',
+  },
+  // ── more of the same: the profile, cache, debug and coverage outputs WP-104 named (WP-120) ──
+  //
+  // PROGRESS backlog 343, ruled: floored **always**, as for 281, with the same over-block —
+  // `go test -coverprofile=cover.out`, `pytest -o xfail_strict=true`, `pytest --debug` and
+  // `pytest --cov-report=xml:coverage.xml` touch no protected path and ask too. **Still an
+  // enumeration** (BD-025): the flags nobody listed are named in `PROJECT_COMMAND_ALLOW`'s
+  // docblock, and a tool's next path-writing flag is not covered.
+  //
+  // Spellings read off the tools' own sources on 2026-10-02 (neither go nor pytest is on this
+  // machine, so nothing below ran the CLI itself):
+  //  - go1.25.0, `src/cmd/go/internal/cmdflag/flag.go` `ParseOne`: `--` is reduced to `-` and the
+  //    value is either `=`-attached or the next argument; no prefix matching (`fs.Lookup` of the
+  //    exact name). `src/cmd/go/internal/test/flagdefs.go`: every flag below is in
+  //    `passFlagToTest`, so `testflag.go` registers it again as `test.<name>` — `-test.trace=x` is
+  //    `-trace=x`, and is also what reaches a test binary after `-args`. So eight spellings each:
+  //    one or two dashes × with or without `test.` × `=` or a space.
+  //  - pytest 9.0.2, `src/_pytest/config/argparsing.py`: an `argparse` parser with
+  //    `allow_abbrev=False` (no prefix — WP-104 measured `--basete=x` refused on 9.1.1);
+  //    `src/_pytest/helpconfig.py`: `-o`/`--override-ini` (`action="append"`, *"e.g. `-o
+  //    strict_xfail=True -o cache_dir=cache`"*) and `--debug` (`nargs="?"`, `const=
+  //    "pytestdebug.log"`, *"opened with 'w' and truncated"*). Python 3.14.6's `argparse`, with
+  //    those two options declared the same way, was run here: it takes `-o k=v`, `-ok=v`,
+  //    `-o=k=v`, `--override-ini k=v`, `--override-ini=k=v` and a short cluster (`-qo k=v`,
+  //    `-qok=v`), refuses `--override`, and gives `--debug tests/` the value `tests/` — a bare
+  //    `--debug` followed by a path writes that path.
+  //  - pytest-cov 7.1.0, `src/pytest_cov/plugin.py` `validate_report`: annotate, html, xml, json,
+  //    markdown, markdown-append and lcov *"may be followed by ':DEST'"*; term and term-missing
+  //    only by `:skip-covered`. One value, `=`-attached or the next argument.
+  //  Sources: https://github.com/golang/go/tree/go1.25.0/src/cmd/go/internal,
+  //  https://github.com/pytest-dev/pytest/tree/9.0.2/src/_pytest,
+  //  https://github.com/pytest-dev/pytest-cov/blob/v7.1.0/src/pytest_cov/plugin.py.
+  ...GO_PATH_WRITING_TEST_FLAGS.map(goPathWritingFloor('optional')),
+  // The test binary's own three (review round 1): `test.`-prefixed only, before or after `-args`.
+  ...GO_PATH_WRITING_BINARY_FLAGS.map(goPathWritingFloor('required')),
+  {
+    pattern: 'pytest -o / --override-ini (any key, any spelling argparse accepts)',
+    hazard:
+      'pytest -o sets any configuration key from the command line: `cache_dir` moves the cache (pytest writes under it, and `--cache-clear` deletes its `d` and `v` subdirectories), `log_file` writes a log, and `addopts` is read from the overridden configuration, so it re-adds any flag floored here — floored for every key, like pnpm --config.<key>',
+    tokens: ({ name, flags }) =>
+      name.startsWith('pytest') &&
+      flags.some(
+        (flag) =>
+          pytestLongFlag('override-ini').test(flag) || pytestClusterValueOption(flag) === 'o',
+      ),
+  },
+  {
+    pattern: 'pytest* --debug*',
+    hazard:
+      'pytest --debug truncates and writes its debug log to the path it is given — `--debug=<path>` or `--debug <path>`, since the value is optional and argparse takes the next word — and the path guard never sees that write (BD-024)',
+  },
+  {
+    pattern: 'pytest --cov-report=<kind>:<dest> (either spelling)',
+    hazard:
+      'pytest-cov writes an annotate, html, xml, json, markdown, markdown-append or lcov report to the destination after the colon, which the path guard never sees (BD-024)',
+    tokens: ({ name, flags, positional }) =>
+      name.startsWith('pytest') &&
+      (flags.some((flag) => COV_REPORT_ATTACHED_DEST.test(flag)) ||
+        (flags.includes('--cov-report') &&
+          positional.some((token) => COV_REPORT_DEST.test(token)))),
+  },
+  // ── the rest of the list, and the arguments read from a file (WP-120 pre-review round) ──
+  //
+  // Floored **always**, as above. Spellings from the same pinned sources, plus Python 3.14.6's
+  // `argparse` run with pytest's `-c`/`--config-file` declaration and `fromfile_prefix_chars="@"`:
+  // `-c x`, `-cx`, `-c=x`, `--config-file x`, `--config-file=x`, `-qc x` and `-qcx` all set the
+  // file, `--config x` does not; `@args.txt` is replaced by the file's lines wherever it sits —
+  // after `-k`, and after `--` too (where the expansion is only a positional). **Over-block,
+  // stated:** `pytest -c pytest.ini`, `pytest --log-file=/tmp/run.log`, `pytest --rootdir=.` and
+  // `go test -pkgdir=/tmp/pkg` ask although they name no protected path.
+  ...GO_PATH_WRITING_BUILD_FLAGS.map(goPathWritingFloor('none')),
+  {
+    pattern: 'pytest @<file> (an argument read from a file)',
+    hazard:
+      'pytest 9.0.2 builds its parser with `fromfile_prefix_chars="@"` (`src/_pytest/config/argparsing.py:463`), so any argument starting with `@` is replaced by the lines of a file the agent may have written — which can carry every flag floored here, and no pattern sees them',
+    tokens: ({ name, flags, positional }) =>
+      name.startsWith('pytest') && [...flags, ...positional].some((token) => token.startsWith('@')),
+  },
+  {
+    pattern: 'pytest -c / --config-file (any spelling argparse accepts)',
+    hazard:
+      'pytest -c <file> loads its configuration — `addopts`, `cache_dir`, `log_file` — from a file the agent may have written, so it re-adds any flag floored here (`src/_pytest/main.py`, `dest="inifilename"`; `config/findpaths.py` `determine_setup` reads it)',
+    tokens: ({ name, flags }) =>
+      name.startsWith('pytest') &&
+      flags.some(
+        (flag) =>
+          pytestLongFlag('config-file').test(flag) || pytestClusterValueOption(flag) === 'c',
+      ),
+  },
+  {
+    pattern: 'pytest --log-file (exact name, = or a space)',
+    hazard:
+      'pytest --log-file writes the run’s log to the path it is given, opened with `--log-file-mode`, whose default `w` truncates it (`src/_pytest/logging.py`) — the path guard never sees that write (BD-024); `--log-file-mode`, `--log-file-level` and the format options are other flags and are not floored',
+    tokens: ({ name, flags }) =>
+      name.startsWith('pytest') && flags.some((flag) => pytestLongFlag('log-file').test(flag)),
+  },
+  {
+    pattern: 'pytest --rootdir (exact name, = or a space)',
+    hazard:
+      'pytest --rootdir decides where the cache is written — `cache_dir` (default `.pytest_cache`) is resolved against it (`src/_pytest/cacheprovider.py`) — so `--rootdir=tests` writes new files under a protected tree the path guard never sees; it does not change which configuration file is read (`determine_setup` locates that from the arguments)',
+    tokens: ({ name, flags }) =>
+      name.startsWith('pytest') && flags.some((flag) => pytestLongFlag('rootdir').test(flag)),
   },
 ];
 

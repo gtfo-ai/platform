@@ -21,12 +21,13 @@
  *    the return `ci_gate` would have made (its `fail_to` and loop, through the interpreter), from
  *    the stage the task is at — and the rebase gate's row is closed `protected_paths_changed`.
  *
- * **Residual, stated (WP-102 review):** a project whose pipeline disables `rebase_gate` falls through
- * `business_review` into Ready, and nothing then compares `ci_excused_paths` — a declared change the
- * review never confirmed can reach the merge. Latent: nothing on this build disables it (the
- * per-stage `enabled` setting is read by nothing, backlog 220). The gap is older than this module (under WP-81 the
- * provisional pass's null `ci_head_sha` was also read only by this settlement); it is filed in
- * PROGRESS's backlog rather than closed here.
+ * **This is the only reader, so a template that skips it is refused** (WP-120, PROGRESS backlog
+ * 338, ruled option (a)). The WP-102 review stated the residual this used to carry: a pipeline that
+ * disables `rebase_gate` falls through `business_review` into Ready and nothing compares
+ * `ci_excused_paths`. `assertValidTemplate` (`packages/domain/src/pipeline/templates.ts`,
+ * `unconfirmedCiExcuseIssue`) now refuses an enabled `ci_gate` with no enabled `rebase_gate` after
+ * it, naming both stages, so that shape cannot be compiled — before a reader of the per-stage
+ * `enabled` setting (backlog 220) could make it reachable.
  *
  * Until WP-102 the provisional pass recorded no `ci_head_sha`, so the rebase settlement re-entered
  * `ci_gate` and the check was made there a second time — after the template's fall-through had run
