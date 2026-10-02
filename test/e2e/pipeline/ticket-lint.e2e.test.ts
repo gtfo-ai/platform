@@ -46,7 +46,12 @@ afterEach(async () => {
   harness = undefined;
 });
 
-/** What the Product Manager returns for a ticket nobody has specified: no criteria, two questions. */
+/**
+ * What the Product Manager returns for a ticket nobody has specified: no criteria, two questions.
+ * Not a copy of `askingScenarios` (`../support/scenarios.ts`, backlog 396): that one is a refinement
+ * parked on one blocking question; this is the linter stage's answer, with a non-blocking question
+ * and a planted credential beside the blocking one.
+ */
 const LINT_SPEC = {
   goal: 'Make the invoice footer add up',
   user_value: 'Finance stops re-checking invoices by hand',

@@ -190,6 +190,15 @@ describe('GET /api/runs/:run_id/settings (WP-112)', () => {
     expect(runRecordSchema.parse(recordReply.json()).settings_hash).toBe(HASH);
   });
 
+  it('publishes a run nobody measured as cost null through the real router, never a zero (WP-119)', async () => {
+    world.run = { ...record(HASH), status: 'stalled', terminal_reason: 'stalled', cost: null };
+    const reply = await app.inject({ method: 'GET', url: `/api/runs/${RUN}` });
+    expect(reply.statusCode, reply.body).toBe(200);
+    expect(Object.hasOwn(reply.json() as object, 'cost')).toBe(true);
+    expect((reply.json() as { cost: unknown }).cost).toBeNull();
+    expect(runRecordSchema.parse(reply.json()).cost).toBeNull();
+  });
+
   it('publishes a run record’s null hash as null, not as an absent field', async () => {
     world.run = record(null);
     const reply = await app.inject({ method: 'GET', url: `/api/runs/${RUN}` });

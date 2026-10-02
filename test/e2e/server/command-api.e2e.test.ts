@@ -34,7 +34,7 @@ import {
   type SeededWorld,
   startPipeline,
 } from '../support/pipeline.js';
-import { featureScenarios, TICKETS } from '../support/scenarios.js';
+import { askingScenarios, featureScenarios, TICKETS } from '../support/scenarios.js';
 
 let harness: PipelineE2E | undefined;
 
@@ -472,21 +472,6 @@ describe('the task command surface, on a task the pipeline drove', () => {
   }, 240_000);
 });
 
-/** `featureScenarios` with a refinement that asks a blocking question instead of proceeding. */
-const askingScenarios = (world: SeededWorld) => {
-  const base = featureScenarios(world);
-  return {
-    ...base,
-    refinement: {
-      structuredOutput: {
-        ...(base.refinement.structuredOutput as Record<string, unknown>),
-        decision: 'ask',
-        questions: [{ id: 'q1', text: 'Which provider should the footer total?', blocking: true }],
-      },
-    },
-  };
-};
-
 /** `featureScenarios` with an **XL** plan, which is what trips the plan approval gate. */
 const approvingScenarios = (world: SeededWorld) => {
   const base = featureScenarios(world);
@@ -504,7 +489,7 @@ const approvingScenarios = (world: SeededWorld) => {
 describe('answering a question and deciding an approval', () => {
   it('answers the question the pipeline asked, and refuses a second answer', async () => {
     const pipeline = await startPipeline({
-      scenarios: askingScenarios,
+      scenarios: askingScenarios(),
       label: 'command-answer',
       tickets: TICKETS,
       agent: 'fake-runner',
@@ -676,9 +661,23 @@ describe('the run command surface', () => {
     expect(cancelled.body.task_state).toBe('paused');
 
     // ── the session is stopped, and the run ends in the process that held it ──
-    // The run was held at its workspace; released, it starts, the pending stop is applied the
-    // moment its handle exists, and the stage executor records the ending with the cost the
-    // interrupted session reported — the last row being the ledger's (rule 87).
+    // The run is held at its workspace. **The stop is applied before the hold is released**
+    // (WP-119, PROGRESS backlog 391): the holder's inbox stamps the row on the `pg_notify` wake-up
+    // and parks the stop on the provisioning handle, so the session is stopped the moment it
+    // starts. Released first, the stop raced the scripted session's whole lifetime: measured on a
+    // copy of this case, a wake-up dropped or delayed by 3 s let the session reach its own result,
+    // the run ended `completed`, the cancel closed `run_ended`, and the wait below timed out at
+    // 90 s with the task paused at refinement — 391's failure exactly — because the heartbeat, the
+    // guarantee behind the notification, beats every `RUN_LEASE_RENEW_MS` (100 s), past the wait.
+    await pipeline.waitFor('the lease holder to apply the cancel', async () => {
+      const rows = await pipeline.query<{ applied: boolean }>(
+        'select applied_at is not null as applied from run_commands where id = $1',
+        [cancelled.body.command_id],
+      );
+      return rows[0]?.applied === true;
+    });
+    // Released, it starts; the parked stop interrupts it, and the stage executor records the ending
+    // with the cost the session reported — the last row being the ledger's (rule 87).
     held.open();
     await pipeline.waitFor('the stopped run to end and be charged', async () => {
       const rows = await pipeline.query<{ status: string }>(

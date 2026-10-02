@@ -1211,7 +1211,8 @@ export interface RunRepository {
    * the lease sweep both end a row with no figure — neither can know one — while the process that
    * is *running* the session knows exactly, and is refused `finish` because it lost the race the
    * conditional predicate arbitrates. Without this the money is simply lost: the ledger's handler
-   * has already seen a `run.finished` carrying zeros and taken its `no_spend` branch.
+   * has already seen a `run.finished` carrying no figure (zero usage, and a `null` cost since
+   * WP-119 — a `{ usd: 0 }` before it) and taken its `no_spend` branch.
    *
    * **Never a whole-row save** (standing rule 79): it writes the usage, the cost, the turns, the
    * wall time and the session id, and nothing about the run's *status* — the terminal status the

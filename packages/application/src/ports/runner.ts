@@ -286,10 +286,13 @@ export interface RunOutcome {
   readonly modelUsage: readonly ModelUsage[];
   readonly cost: RunCost;
   /**
-   * `true` when **nothing measured** this run's spend (WP-101 review round 1): a human's stop whose
-   * interrupted turn sent no `result` within the interrupt grace. `cost` then holds the column's
-   * floor and is not a figure — the stage executor writes `null` to the run row and the ledger no
-   * row (standing rule 16). Absent means the cost was reported.
+   * `true` when **nothing measured** this run's spend (WP-101 review round 1): a stop whose
+   * interrupted turn sent no `result` within the interrupt grace — a human's cancel or take-over,
+   * and since WP-119 a stall or a wall-clock stop (PROGRESS backlog 334), or a crash that ended
+   * the session before its `result` (`failed`/`crash`). `cost` then holds the
+   * column's floor and is not a figure — the stage executor and the ask executor write `null` to the
+   * run row and to the terminal event's `cost`, and the ledger writes no row (standing rule 16).
+   * Absent means the cost was reported.
    */
   readonly costUnmeasured?: boolean;
   readonly wallMs: number;

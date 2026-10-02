@@ -207,6 +207,8 @@ export const runAskStoreContract = (harness: AskStoreHarness): void => {
       const line = runs.find((entry) => entry.runId === runId);
       expect(line).toBeDefined();
       expect(typeof line?.role).toBe('string');
+      // A number for a run somebody measured, `null` for one nobody did — never a `0` for the
+      // second (WP-119). The seeded run carries a figure.
       expect(typeof line?.costUsd).toBe('number');
     });
 

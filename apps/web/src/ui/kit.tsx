@@ -225,6 +225,24 @@ export const Metric = ({
 export const formatUsd = (value: number): string =>
   new Intl.NumberFormat('en', { style: 'currency', currency: 'USD' }).format(value);
 
+/** What a screen prints for a run nobody measured (`RunRecord.cost` is `null`, WP-119). */
+export const NOT_MEASURED = 'not measured';
+
+/**
+ * A run's cost, or {@link NOT_MEASURED} when nothing measured it — never `$0.00`, which reads as a
+ * free run (standing rule 16). `estimate` appends `est.` to a figure the price list produced.
+ */
+export const formatRunCost = (
+  cost: { readonly usd: number; readonly is_estimate: boolean } | null,
+  options: { readonly estimate?: boolean } = {},
+): string => {
+  if (cost === null) {
+    return NOT_MEASURED;
+  }
+  const figure = formatUsd(cost.usd);
+  return options.estimate === true && cost.is_estimate ? `${figure} est.` : figure;
+};
+
 export const formatInteger = (value: number): string => new Intl.NumberFormat('en').format(value);
 
 export const formatDateTime = (iso: string): string => {

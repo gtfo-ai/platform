@@ -67,8 +67,11 @@ export interface RunSpendPayload {
  * Reads the payload of either event into one shape.
  *
  * `run.failed` carries `usage` and `cost` as **nullish** and has no `model_usage`, `num_turns` or
- * `wall_ms` at all. Absent is not zero (standing rule 16): a missing cost becomes `null` and is
- * priced from the table or refused, never recorded as a free run.
+ * `wall_ms` at all; since WP-119 `run.finished`'s `cost` is nullish too, for a stop that measured
+ * nothing. Absent is not zero (standing rule 16): a missing cost becomes `null` and is priced from
+ * the table or refused, never recorded as a free run — and a stop that measured nothing carries no
+ * usage either (`run.finished`'s required `usage` is all zeros then), so it derives **no entry**
+ * (`no_spend`, or `no_usage_and_no_cost` for `run.failed`), as for a run the lease sweep ended.
  */
 const spendOf = (event: DomainEvent): RunSpendPayload | null => {
   if (event.type === 'run.finished') {
@@ -77,8 +80,10 @@ const spendOf = (event: DomainEvent): RunSpendPayload | null => {
       runId: payload.run_id,
       usage: payload.usage,
       modelUsage: payload.model_usage,
-      usd: payload.cost.usd,
-      isEstimate: payload.cost.is_estimate,
+      // `null` since WP-119 for a stop that measured nothing: no figure, and no entry — the same
+      // reading as a lease-swept run's `run.failed` (backlog 334, standing rule 16).
+      usd: payload.cost?.usd ?? null,
+      isEstimate: payload.cost?.is_estimate ?? false,
       numTurns: payload.num_turns,
       wallMs: payload.wall_ms,
     };

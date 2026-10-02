@@ -248,6 +248,101 @@ describe('the run command inbox', () => {
     expect(rowsOf(w)).toMatchObject([{ applied: false, refusedReason: 'register_miss' }]);
   });
 
+  /**
+   * WP-119 (PROGRESS backlog 336, option (a)): a **stop** the heartbeat refuses `register_miss` while
+   * its run still reads `running` and leased to this process is the one refusal that leaves a session
+   * nobody will stop, so it is logged at `error`, once, naming the leak. A steer refused the same way
+   * stays at `warn`, and so does a stop whose run is no longer this process's (the negative halves).
+   */
+  describe('a stop refused register_miss on a live lease (WP-119, backlog 336)', () => {
+    const recordingLogger = () => {
+      const lines: { level: 'warn' | 'error'; fields: Record<string, unknown>; message: string }[] =
+        [];
+      const logger: Logger = {
+        ...silentLogger,
+        warn: (fields, message) => {
+          lines.push({ level: 'warn', fields: { ...fields }, message });
+        },
+        error: (fields, message) => {
+          lines.push({ level: 'error', fields: { ...fields }, message });
+        },
+      };
+      return { lines, logger };
+    };
+
+    it.each(['cancel', 'take_over'] as const)(
+      'logs a refused %s once at error, naming the leak',
+      async (kind) => {
+        const w = await world();
+        const { lines, logger } = recordingLogger();
+        const inbox = inboxOver(w, createLiveRuns(), logger);
+        const id = await record(
+          w,
+          kind === 'cancel'
+            ? { kind: 'cancel' }
+            : {
+                kind: 'take_over',
+                branch: 'agentic/ACME-1',
+                commitMessage: 'wip: hand-over to Ada',
+                tarball: false,
+                keepUntil: '2026-10-12T09:00:00.000Z' as IsoDateTime,
+              },
+        );
+
+        await inbox.drain({ runId: RUN, onMiss: 'refuse' });
+        // A second beat finds nothing pending: the line is not repeated.
+        await inbox.drain({ runId: RUN, onMiss: 'refuse' });
+
+        expect(rowsOf(w)).toMatchObject([{ applied: false, refusedReason: 'register_miss' }]);
+        expect(lines.map((line) => line.level)).toEqual(['error']);
+        expect(lines[0]?.fields).toMatchObject({
+          run_id: RUN,
+          task_id: TASK,
+          command_id: id,
+          kind,
+          lease_owner: OWNER,
+        });
+        expect(lines[0]?.message).toContain('MAX_LIVE_RUNS');
+      },
+    );
+
+    it('keeps a refused steer at warn: no session is left running by refusing it', async () => {
+      const w = await world();
+      const { lines, logger } = recordingLogger();
+      await record(w, steer('nobody home'));
+      await inboxOver(w, createLiveRuns(), logger).drain({ runId: RUN, onMiss: 'refuse' });
+      expect(lines.map((line) => line.level)).toEqual(['warn']);
+    });
+
+    it.each([
+      { moved: 'no longer reads running', change: { status: 'completed' } },
+      { moved: 'is leased to another process', change: { leaseOwner: 'another-process:1' } },
+    ] as const)('keeps a refused stop at warn once the run $moved', async ({ change }) => {
+      const w = await world();
+      const { lines, logger } = recordingLogger();
+      await record(w, { kind: 'cancel' });
+      // The miss is read while the row is pending; the run's row moves before the refusal reads it.
+      const inbox = createRunCommandInbox({
+        unitOfWork: w.eventing,
+        store: {
+          runCommands: {
+            ...w.store.runCommands,
+            lockRun: async (tx, runId, options) => {
+              const locked = await w.store.runCommands.lockRun(tx, runId, options);
+              return locked === null ? null : { ...locked, ...change };
+            },
+          },
+        },
+        liveRuns: createLiveRuns(),
+        owner: OWNER,
+        logger,
+      });
+      await inbox.drain({ runId: RUN, onMiss: 'refuse' });
+      expect(rowsOf(w)).toMatchObject([{ refusedReason: 'register_miss' }]);
+      expect(lines.map((line) => line.level)).toEqual(['warn']);
+    });
+  });
+
   it('applies a command recorded in the start window once the run’s handle is registered', async () => {
     const w = await world();
     const live = createLiveRuns();

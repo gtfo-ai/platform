@@ -624,11 +624,14 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
             // The redactor, because `RunOutcome.error` is the runner's own text about a failure and
             // this string is written to `events.payload` (`run.failed`) and to the ask row.
             error: options.redactor.redactText(outcome.error ?? reason).value,
-            // Not `outcome.usage === null ? {} : …`: `RunOutcome.usage` and `.cost` are required by
-            // the port, so the guard the stage executor writes here would be a branch the type
-            // forbids — and therefore one no test can reach (standing rule 22).
-            usage: outcome.usage,
-            cost: outcome.cost,
+            // `RunOutcome.usage` and `.cost` are required by the port; what may be absent is a
+            // **measurement** of them. A stop that read no interrupted result (a stall or a wall-clock
+            // stop since WP-119, a human's since WP-101) carries `costUnmeasured`, and its zeros are
+            // the runner's floor: the event then carries neither, as the stage executor's does and
+            // as the lease sweep's does (standing rule 16).
+            ...(outcome.costUnmeasured === true
+              ? {}
+              : { usage: outcome.usage, cost: outcome.cost }),
           },
           context,
         );
@@ -639,7 +642,8 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
           sessionId: outcome.sessionId,
           numTurns: outcome.numTurns,
           usage: outcome.usage,
-          cost: outcome.cost,
+          // `null` when nothing measured it, never the floor's `0` (WP-119, backlog 334).
+          cost: outcome.costUnmeasured === true ? null : outcome.cost,
           wallMs: outcome.wallMs,
         });
         if (!owned) {

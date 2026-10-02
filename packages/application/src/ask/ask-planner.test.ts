@@ -198,7 +198,8 @@ describe('the ask run plan', () => {
               model: 'claude-sonnet-5',
               status: 'failed',
               terminalReason: null,
-              costUsd: 0,
+              // Nobody measured it (WP-119): said in words, never a `0` the model reads as free.
+              costUsd: null,
               createdAt: '2026-06-01T08:30:00.000Z' as IsoDateTime,
             },
           ],
@@ -227,6 +228,9 @@ describe('the ask run plan', () => {
     expect(filled[0]?.body).toContain('stage: architecture');
     expect(filled[0]?.body).toContain('(success)');
     expect(filled[0]?.body).toContain('stage: (none)');
+    expect(filled[0]?.body).toContain('cost_usd: 0.42');
+    expect(filled[0]?.body).toContain('cost_usd: not measured');
+    expect(filled[0]?.body).not.toContain('cost_usd: 0\n');
     // A terminal reason the run does not have leaves no empty parenthesis behind.
     expect(filled[0]?.body).not.toContain('()');
     expect(filled[1]?.attributes.rows).toBe('2');

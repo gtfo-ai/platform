@@ -25,11 +25,10 @@ import {
   CHAT_INTEGRATION_ID,
   inboundEvent,
   type PipelineE2E,
-  type SeededWorld,
   type StartPipelineOptions,
   startPipeline,
 } from '../support/pipeline.js';
-import { featureScenarios, TICKETS } from '../support/scenarios.js';
+import { askingScenarios, featureScenarios, TICKETS } from '../support/scenarios.js';
 import {
   blockActionsFor,
   createFakeSlack,
@@ -330,21 +329,6 @@ describe('the Socket Mode connection', () => {
 const QUESTION_TEXT = 'Which currency should the footer total be shown in?';
 const ANSWER_TEXT = 'EUR on every invoice, please';
 
-/** `featureScenarios` with a refinement that parks the task on one blocking question. */
-const askingScenarios = (world: SeededWorld) => {
-  const base = featureScenarios(world);
-  return {
-    ...base,
-    refinement: {
-      structuredOutput: {
-        ...(base.refinement.structuredOutput as Record<string, unknown>),
-        decision: 'ask',
-        questions: [{ id: 'q1', text: QUESTION_TEXT, blocking: true }],
-      },
-    },
-  };
-};
-
 describe('a question answered by a reply in its Slack thread (WP-116, backlog 300)', () => {
   /**
    * WP-88's answer path, one tier up from `slack-thread-reply.integration.test.ts`: there the
@@ -355,7 +339,7 @@ describe('a question answered by a reply in its Slack thread (WP-116, backlog 30
    */
   it('posts the blocking question into the task thread, takes a typed reply over HTTP as its answer, and edits the message', async () => {
     const { pipeline, slack } = await startSlack('slack-question', {
-      scenarios: askingScenarios,
+      scenarios: askingScenarios(QUESTION_TEXT),
       config: undefined,
     });
     await pipeline.publish([

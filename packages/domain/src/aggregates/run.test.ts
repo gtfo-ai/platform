@@ -203,6 +203,24 @@ describe('run lifecycle', () => {
     expect(events[0]?.payload).toMatchObject({ wall_ms: 0 });
   });
 
+  it('carries a stop nothing measured as a null cost, never a zero (WP-119)', () => {
+    const shared = world();
+    const { aggregate, events } = finishRun(
+      runningRun(shared),
+      {
+        status: 'timed_out',
+        terminalReason: 'timed_out',
+        usage,
+        modelUsage: [],
+        cost: null,
+        numTurns: 0,
+      },
+      context(shared),
+    );
+    expect(aggregate.status).toBe('timed_out');
+    expect(events[0]?.payload).toMatchObject({ cost: null });
+  });
+
   it('reports a failure with its error', () => {
     const shared = world();
     const { aggregate, events } = failRun(

@@ -161,8 +161,34 @@ const ZERO_USAGE: TokenUsage = {
 /** Why the platform stopped the run, when it was the platform that stopped it. */
 type StopCause = 'stalled' | 'timed_out' | 'budget_exceeded' | 'cost_unreported' | RunStopReason;
 
-/** A human's stop — the two whose interrupted turn's result is read for its cost (WP-101). */
-const HUMAN_STOPS: ReadonlySet<StopCause> = new Set<StopCause>(['cancelled', 'taken_over']);
+/**
+ * The stops whose interrupted turn's `result` is read for its cost — a human's two (WP-101) and,
+ * since WP-119 (PROGRESS backlog 334, the M7 ruling), the platform's stall and wall-clock stops.
+ *
+ * The decision, per cause, because the backlog entry asked for one each:
+ *
+ *  - `cancelled`, `taken_over` — **read** (WP-101): the session was spending when a human stopped it.
+ *  - `timed_out` — **read**. The wall clock is the most expensive run the platform ends (it ran the
+ *    whole `wallClockMs`), and the session may be streaming normally when the timer fires, so the
+ *    receipt and the interrupted turn's result are as likely as after a human's stop.
+ *  - `stalled` — **read**. A stalled stream is the one least likely to answer, so the read usually
+ *    costs the whole grace and finds nothing; that is the bounded price, because the grace is the one
+ *    the interrupt already had ({@link INTERRUPT_GRACE_MS}) and a stop never waits longer than it did.
+ *  - `budget_exceeded`, `cost_unreported` — not here: both are decided **from** a `result`, so the
+ *    run already has the only one it will get.
+ *
+ * What a stop in this set reads nothing for is **unmeasured** — `RunOutcome.costUnmeasured`, `null`
+ * cost columns, no ledger row and a `null` cost on the terminal event — never a measured zero
+ * (standing rule 16). Whether the real CLI writes the interrupted turn's result after an interrupt on
+ * a stalled or a live stream is **not measured** (WP-33's credential); the fake implements the
+ * documented order (`fake-spawn.ts` divergence 8).
+ */
+const READS_INTERRUPTED_RESULT: ReadonlySet<StopCause> = new Set<StopCause>([
+  'cancelled',
+  'taken_over',
+  'stalled',
+  'timed_out',
+]);
 
 const STOP_STATUS: Record<StopCause, TerminalRunStatus> = {
   stalled: 'stalled',
@@ -521,7 +547,7 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
           deps.clock.setTimer(INTERRUPT_GRACE_MS, () => resolve('grace'));
         });
         await Promise.race([session.interrupt().catch(() => undefined), grace]);
-        if (HUMAN_STOPS.has(stopCause) && result === null && iterator !== null) {
+        if (READS_INTERRUPTED_RESULT.has(stopCause) && result === null && iterator !== null) {
           await readInterruptedResult(iterator, pending, grace);
         }
         abortController.abort();
@@ -556,10 +582,11 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
   };
 
   /**
-   * **The interrupted turn's own result**, read within the same grace the interrupt had (WP-101).
+   * **The interrupted turn's own result**, read within the same grace the interrupt had (WP-101,
+   * widened to the stall and the wall clock at WP-119 — {@link READS_INTERRUPTED_RESULT}).
    *
-   * A human's stop (a cancel, a take-over) interrupts a session that has been spending, and the only
-   * party that knows what it spent is the CLI: the SDK documents that on a clean interrupt the CLI
+   * A stop interrupts a session that has been spending, and the only party that knows what it spent
+   * is the CLI: the SDK documents that on a clean interrupt the CLI
    * writes its receipt and then **the interrupted turn's result** (`interrupt_receipt_v1`, *"on a
    * clean interrupt this receipt is written before the interrupted turn result"* — the installed
    * 0.3.267 `sdk.d.ts`, `SDKControlInterruptResponse`). Until WP-101 the loop broke on the stop and
@@ -570,9 +597,8 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
    * So the messages after the interrupt are handled like any other — the transcript gets them, and
    * a `result` among them sets {@link result}, whose cost the outcome then carries — until that
    * result, the end of the stream, or the grace. Bounded by the **same** timer as the interrupt, so
-   * a stop never waits longer than it did. Only for a human's stop: the platform's own stops
-   * (stalled, timed out, over budget) are the cases where the stream is least likely to answer, and
-   * a budget stop already has its result.
+   * a stop never waits longer than it did. A budget stop is not in the set: it already has its
+   * result. Nothing read inside the grace leaves the outcome **unmeasured**, never a zero.
    */
   const readInterruptedResult = async (
     iterator: AsyncIterator<SDKMessage, void>,
@@ -607,7 +633,9 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
       finished === null ? [] : normaliseModelUsage(finished.modelUsage, usage);
     const cost = {
       // `?? 0` only after the run has already been stopped as `cost_unreported`: the zero is the
-      // column's floor, never a claim that the run was free (see the docblock).
+      // column's floor, never a claim that the run was free (see the docblock). With no result at
+      // all the `0` is a floor too, and the outcome says so with `costUnmeasured` — a stop that
+      // read nothing, and a crash with no result (WP-119).
       usd: finished === null ? 0 : (reportedCostUsd(finished.total_cost_usd) ?? 0),
       // BD-004: in `local` mode the platform prices the run from its own table (WP-19) and labels
       // it an estimate; the number the SDK reports is still carried, so there is something to
@@ -619,8 +647,11 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
     if (stopCause !== null) {
       return {
         runId: spec.runId,
-        // A human's stop that read no interrupted result measured nothing (WP-101 review round 1).
-        ...(finished === null && HUMAN_STOPS.has(stopCause) ? { costUnmeasured: true } : {}),
+        // A stop that read no interrupted result measured nothing (WP-101 review round 1; the stall
+        // and the wall clock since WP-119): `cost` below is the floor, and this flag says so.
+        ...(finished === null && READS_INTERRUPTED_RESULT.has(stopCause)
+          ? { costUnmeasured: true }
+          : {}),
         status: STOP_STATUS[stopCause],
         terminalReason: STOP_REASON[stopCause],
         sessionId,
@@ -638,6 +669,10 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
     if (finished === null) {
       return {
         runId: spec.runId,
+        // A crash with no `result` measured nothing (WP-119 pre-review round, standing rule 16).
+        // There is no earlier figure to fall back on: a stage run is one turn and the CLI writes
+        // exactly one `result` per turn, so a session that never sent one never reported a cost.
+        costUnmeasured: true,
         status: 'failed',
         terminalReason: 'crash',
         sessionId,

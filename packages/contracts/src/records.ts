@@ -694,7 +694,14 @@ export const runRecordSchema = z.strictObject({
   num_turns: z.int().nonnegative(),
   usage: tokenUsageSchema,
   model_usage: z.array(modelUsageSchema),
-  cost: runCostSchema,
+  /**
+   * `null` when **nobody measured this run** — both `runs.usd_reported` and `runs.usd_estimated` are
+   * null (WP-47's third answer): a run the lease sweep ended, a cancel ended in place, or a stop or a
+   * crash that read no `result` (WP-101, WP-119). Never `{ usd: 0 }` for that, which reads as a free
+   * run (standing rule 16); a screen renders it as *not measured*. Nullable, as `run.finished`'s and
+   * `run.failed`'s `cost` are.
+   */
+  cost: runCostSchema.nullable(),
   wall_ms: z.int().nonnegative(),
   redaction_count: z.int().nonnegative(),
   /**

@@ -1285,7 +1285,9 @@ const endCancelledRunInPlace = async (
       terminalReason: 'cancelled',
       usage: run.usage ?? NO_USAGE,
       modelUsage: [],
-      cost: run.cost ?? { usd: 0, is_estimate: true, price_list_id: null },
+      // The row's `null`, carried as it is: `run.finished.cost` is nullable since WP-119 (backlog
+      // 334), and the zero this event used to state was the claim the row refuses above.
+      cost: run.cost,
       numTurns: run.numTurns,
     },
     context,

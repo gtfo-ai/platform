@@ -425,6 +425,10 @@ describe('failures', () => {
     expect(result.status).toBe('failed');
     expect(result.terminalReason).toBe('crash');
     expect(result.error).not.toBeNull();
+    // No `result`, so nothing measured it: unmeasured, never the `0` floor stated as a figure
+    // (WP-119 pre-review round, standing rule 16).
+    expect(result.costUnmeasured).toBe(true);
+    expect(result.modelUsage).toEqual([]);
   });
 
   it('reports a denied tool as `permission_denied`', async () => {
@@ -545,6 +549,24 @@ describe('steering', () => {
   });
 });
 
+/**
+ * Drives a stop the platform has already decided to its end: a stop that reads the interrupted
+ * turn's result (WP-101, and the stall and the wall clock since WP-119) waits up to
+ * {@link INTERRUPT_GRACE_MS} for it, so a script that never sends one is released only by advancing
+ * the manual clock past the grace — never by the wall clock (rule 2).
+ */
+const releaseByGrace = async (harness: Harness): Promise<RunOutcome> => {
+  let settled = false;
+  void harness.outcome.then(() => {
+    settled = true;
+  });
+  for (let round = 0; round < 50 && !settled; round += 1) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    harness.clock.advance(INTERRUPT_GRACE_MS);
+  }
+  return harness.outcome;
+};
+
 describe('the stall detector', () => {
   /**
    * The harness is audited before the assertion: the run must actually reach the state the
@@ -574,7 +596,9 @@ describe('the stall detector', () => {
     expect(settled, 'the run must not end before the stall timeout').toBe(false);
 
     harness.clock.advance(1);
-    const result = await harness.outcome;
+    // Since WP-119 a stall reads the interrupted turn's result within the interrupt's grace, and
+    // this script never sends one, so only the grace releases the stop (rule 2: the manual clock).
+    const result = await releaseByGrace(harness);
     assertGolden('stall', { outcome: result, events: harness.events });
     expect(result.status).toBe('stalled');
     expect(result.terminalReason).toBe('stalled');
@@ -629,7 +653,7 @@ describe('the wall clock', () => {
       },
     });
     harness.clock.advance(60_000);
-    const result = await harness.outcome;
+    const result = await releaseByGrace(harness);
     expect(result.status).toBe('timed_out');
     expect(result.terminalReason).toBe('timed_out');
   });
@@ -762,15 +786,91 @@ describe('cancellation', () => {
     expect(result.costUnmeasured).toBe(true);
     expect(result.modelUsage).toEqual([]);
   });
+});
 
-  it('keeps a platform stop measured as before: a stall is not a human stop (WP-101 review round 1)', async () => {
-    const harness = start('stall');
-    harness.clock.advance(runSpecFixture().limits.stallTimeoutMs);
-    const result = await harness.outcome;
-    expect(result.status).toBe('stalled');
-    // Backlog 334's question, deliberately not answered here.
-    expect(result.costUnmeasured).toBeUndefined();
-  });
+/**
+ * WP-119 (PROGRESS backlog 334, the M7 ruling): the platform's own stops — a stall and the wall
+ * clock — read the interrupted turn's result inside the same grace a human's stop has, and a stop
+ * that reads nothing is **unmeasured**, never the measured zero it was until now (standing rule 16).
+ * The wall clock is the most expensive run the platform ends; before this a timed-out run's spend
+ * reached no ledger row and no cap.
+ */
+describe('the platform’s own stops read the interrupted turn (WP-119)', () => {
+  const stallLimits = {
+    ...runSpecFixture().limits,
+    stallTimeoutMs: 300_000,
+    wallClockMs: 3_600_000,
+  };
+  const wallLimits = { ...runSpecFixture().limits, stallTimeoutMs: 3_600_000, wallClockMs: 60_000 };
+  const cases = [
+    { cause: 'stalled', limits: stallLimits, fireAfterMs: 300_000 },
+    { cause: 'timed_out', limits: wallLimits, fireAfterMs: 60_000 },
+  ] as const;
+
+  /** Lets the script emit what it emits before the clock moves: the state is reached first (rule 4). */
+  const untilQuiet = async (): Promise<void> => {
+    for (let round = 0; round < 20; round += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  };
+
+  it.each(cases)(
+    'carries the interrupted turn’s measured cost into a $cause outcome',
+    async ({ cause, limits, fireAfterMs }) => {
+      const harness = startScript(loadScript('stall'), {
+        spec: { limits },
+        cli: { interruptedResult: { ...INTERRUPTED_RESULT } },
+      });
+      await untilQuiet();
+      harness.clock.advance(fireAfterMs);
+      const result = await releaseByGrace(harness);
+
+      expect(result.status).toBe(cause);
+      expect(result.terminalReason).toBe(cause);
+      expect(result.cost).toEqual({ usd: 0.13, is_estimate: false, price_list_id: null });
+      expect(result.costUnmeasured).toBeUndefined();
+      expect(result.modelUsage.map((entry) => [entry.model, entry.usd])).toEqual([
+        ['claude-opus-5', 0.13],
+      ]);
+      expect(result.usage.input_tokens).toBe(800);
+      // Interrupted, not played out, and the transcript says so in order.
+      expect(harness.cli.interrupts).toBe(1);
+      expect(harness.cli.scriptEnded).toBe(false);
+      const kinds = harness.events.map((event) =>
+        event.kind === 'system' ? `system:${event.subtype}` : event.kind,
+      );
+      expect(kinds.slice(-2)).toEqual(['result', 'system:run_stopped']);
+      expect(harness.events.at(-1)).toMatchObject({ data: { reason: cause } });
+    },
+  );
+
+  it.each(cases)(
+    'reports a $cause stop that read no result as unmeasured, released only by the grace',
+    async ({ cause, limits, fireAfterMs }) => {
+      const harness = startScript(loadScript('stall'), { spec: { limits } });
+      await untilQuiet();
+      harness.clock.advance(fireAfterMs);
+      let settled = false;
+      void harness.outcome.then(() => {
+        settled = true;
+      });
+      await untilQuiet();
+      // Waiting for a result that is not coming: the grace, and nothing else, releases it.
+      expect(settled).toBe(false);
+      const result = await releaseByGrace(harness);
+
+      expect(result.status).toBe(cause);
+      expect(result.costUnmeasured).toBe(true);
+      expect(result.modelUsage).toEqual([]);
+      // The interrupt was sent: the stop asked, and the CLI's silence is what left it unmeasured.
+      const interrupts = harness.cli.stdin.filter(
+        (frame) =>
+          frame['type'] === 'control_request' &&
+          (frame['request'] as { subtype?: string } | undefined)?.subtype === 'interrupt',
+      );
+      expect(interrupts).toHaveLength(1);
+    },
+  );
 });
 
 describe('the failure branches of the transcript writer', () => {

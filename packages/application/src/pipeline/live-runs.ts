@@ -43,6 +43,18 @@
  * 256 is not). It exists so that a leak — an outcome promise that never settles — is bounded rather
  * than unbounded. Eviction is oldest-first and makes both lookups answer `null`, which is the
  * fail-closed direction: a steer is refused rather than delivered to the wrong run.
+ *
+ * **What eviction costs a stop, and how far it reaches** (WP-119, PROGRESS backlog 336, option
+ * (b)). A cancel or a take-over whose run was evicted is refused `register_miss` by the heartbeat
+ * (`./run-commands.ts` decision 3), and the session it was meant to stop runs on — on a paused task,
+ * spending until its own wall clock or budget ends it (BD-010), and then recorded with what it
+ * measured. That refusal is logged at `error` when the run still reads `running` and leased here.
+ * **The reach, read off the tree and not measured:** a handle leaves this register only when its
+ * outcome settles or by this eviction, and nothing calls `forget` outside this module; so a register
+ * miss for a session that is still running needs **more than {@link MAX_LIVE_RUNS} handles whose
+ * outcomes never settled** in one process — a leak 64× a shipped instance's whole capacity. No other
+ * route to a miss on a live session was found. (A session whose outcome settled during the drain
+ * that looked also misses, and has nothing left to stop; the error line names that case too.)
  */
 import type { Id } from '@platform/contracts';
 import type { ClaudeRunner, RunHandle } from '../ports/runner.js';

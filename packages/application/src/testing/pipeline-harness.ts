@@ -223,8 +223,9 @@ export interface ScriptedRun {
   readonly deliberatelyInvalid?: string;
   readonly costUsd?: number;
   /**
-   * The outcome says nothing measured its spend (WP-101 review round 1): a human's stop whose
-   * interrupted turn sent no result. `costUsd` is then ignored and the outcome carries the floor.
+   * The outcome says nothing measured its spend (WP-101 review round 1): a stop whose interrupted
+   * turn sent no result — a human's, and since WP-119 a stall or a wall-clock stop. `costUsd` is then
+   * ignored and the outcome carries the floor.
    */
   readonly costUnmeasured?: boolean;
   readonly error?: string | null;

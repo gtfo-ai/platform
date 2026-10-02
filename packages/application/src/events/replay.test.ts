@@ -55,6 +55,41 @@ const runFinished = (seq: number, usd: number): DomainEvent =>
     },
   }) as DomainEvent;
 
+/**
+ * A `run.finished` exactly as one appended **before WP-119** is stored: `cost` an object, as the
+ * schema then required. Kept as raw JSON rather than built through the schema, so the case reads the
+ * stored shape and not whatever the current schema would produce.
+ */
+const PRE_WP119_RUN_FINISHED = {
+  id: '00000000-0000-4000-9000-000000000119',
+  stream_type: 'run',
+  stream_id: RUN,
+  stream_seq: 1,
+  correlation_id: TASK,
+  cause_event_id: null,
+  actor: { kind: 'system', component: 'runner' },
+  occurred_at: '2026-06-01T09:00:00.000Z',
+  type: 'run.finished',
+  payload: {
+    project_id: PROJECT,
+    task_id: TASK,
+    run_id: RUN,
+    status: 'cancelled',
+    terminal_reason: 'cancelled',
+    usage: {
+      input_tokens: 700,
+      output_tokens: 40,
+      cache_write_5m_tokens: 0,
+      cache_write_1h_tokens: 0,
+      cache_read_tokens: 0,
+    },
+    model_usage: [],
+    cost: { usd: 0.13, is_estimate: false, price_list_id: null },
+    num_turns: 1,
+    wall_ms: 600,
+  },
+} as const;
+
 const ledgerWorld = () => {
   const memory = new MemoryEventing();
   const store = createMemoryCostStore();
@@ -251,6 +286,46 @@ describe('replayEvents — the backfill the outbox sweep made necessary', () => 
     expect(emitted).toContain('budget.threshold.reached');
     expect(emitted).toContain('budget.exhausted');
     expect(await world.memory.store.countPendingDispatch()).toBeGreaterThan(0);
+  });
+});
+
+describe('replayEvents over the nullable run.finished cost (WP-119, backlog 334)', () => {
+  it('parses a run.finished appended before WP-119 unchanged, and charges it beside an unmeasured one it does not', async () => {
+    const parsed = domainEventSchemasByType['run.finished'].parse(
+      structuredClone(PRE_WP119_RUN_FINISHED),
+    );
+    // Unchanged: nothing added, nothing dropped, nothing re-shaped by the widened schema.
+    expect(parsed).toEqual(PRE_WP119_RUN_FINISHED);
+
+    const unmeasured = domainEventSchemasByType['run.finished'].parse({
+      ...structuredClone(PRE_WP119_RUN_FINISHED),
+      id: '00000000-0000-4000-9000-000000000120',
+      stream_seq: 2,
+      payload: {
+        ...structuredClone(PRE_WP119_RUN_FINISHED.payload),
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_write_5m_tokens: 0,
+          cache_write_1h_tokens: 0,
+          cache_read_tokens: 0,
+        },
+        cost: null,
+      },
+    }) as DomainEvent;
+
+    const world = ledgerWorld();
+    await world.memory.transaction(async (scope) =>
+      scope.events.append([parsed as DomainEvent, unmeasured]),
+    );
+    const report = await replayEvents(
+      { store: world.memory.store, unitOfWork: world.memory },
+      { handlers: world.handlers },
+    );
+    expect(report.failures).toEqual([]);
+    expect(report.scanned).toBe(2);
+    // The old event is charged what it said; the unmeasured one owes no entry, never a zero row.
+    expect(world.store.entries.map((entry) => entry.usd)).toEqual([0.13]);
   });
 });
 

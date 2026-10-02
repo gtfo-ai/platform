@@ -42,7 +42,7 @@ import {
   ErrorNotice,
   formatElapsed,
   formatInteger,
-  formatUsd,
+  formatRunCost,
   Loading,
   Metric,
   SectionHeading,
@@ -173,8 +173,8 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
           <Metric
             label="Cost"
-            value={`${formatUsd(record.cost.usd)}${record.cost.is_estimate ? ' est.' : ''}`}
-            definition="Provider-reported cost of this run. Estimated from the price list in local provider mode (BD-011)."
+            value={formatRunCost(record.cost, { estimate: true })}
+            definition="Provider-reported cost of this run. Estimated from the price list in local provider mode (BD-011). Not measured when the run ended with no figure from the provider, which is not the same as free."
           />
           <Metric
             label="Turns"

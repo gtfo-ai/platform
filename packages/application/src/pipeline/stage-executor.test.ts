@@ -1194,3 +1194,60 @@ describe('the platform’s record on a review verdict', () => {
     expect(withPlatformReviewRecord('AcceptanceVerdict', MODEL, [])).toBe(MODEL);
   });
 });
+
+describe('a stop that measured nothing (WP-119, backlog 334)', () => {
+  /**
+   * WP-119 (PROGRESS backlog 334): the event half. A stop that measured nothing — a human's, and
+   * now the platform's stall and wall clock — leaves `null` cost columns, no ledger row **and a
+   * terminal event that says so**: `run.finished.cost` is `null` (it stated `{ usd: 0 }` until now,
+   * while the row said `null`), and a stalled run's `run.failed` carries neither usage nor cost, the
+   * lease sweep's shape. The canary is the event built from `outcome.cost` again. The last row is a
+   * crash with no `result` (WP-119 pre-review round): the same unmeasured ending.
+   */
+  it.each([
+    { status: 'cancelled', terminalReason: 'cancelled', event: 'run.finished' },
+    { status: 'timed_out', terminalReason: 'timed_out', event: 'run.finished' },
+    { status: 'stalled', terminalReason: 'stalled', event: 'run.failed' },
+    { status: 'failed', terminalReason: 'crash', event: 'run.failed' },
+  ] as const)(
+    'records a $status stop that measured nothing as unmeasured on the row, the ledger and the $event event (WP-119)',
+    async ({ status, terminalReason, event }) => {
+      const harness = harnessWith({
+        runs: {
+          refinement: {
+            status,
+            terminalReason,
+            costUnmeasured: true,
+            error: `the platform stopped the run: ${status}`,
+          },
+        },
+        cost: true,
+      });
+      await harness.publish([ticketMatched()]);
+      const ledger = harness.cost;
+      if (ledger === null) {
+        throw new Error('the harness was asked for the ledger and composed none');
+      }
+      const runId = harness.specs.at(-1)?.runId as Id;
+      const run = await harness.memory.transaction(async (scope) =>
+        harness.store.runs.load(scope.tx, runId),
+      );
+      expect(run?.status).toBe(status);
+      expect(run?.cost).toBeNull();
+      expect(ledger.entries).toEqual([]);
+      expect(taskOf(harness).costActualUsd).toBe(0);
+
+      const terminal = harness
+        .events()
+        .filter((entry) => entry.type === 'run.finished' || entry.type === 'run.failed');
+      expect(terminal.map((entry) => entry.type)).toEqual([event]);
+      const payload = terminal[0]?.payload as { cost?: unknown; usage?: unknown };
+      expect(payload.cost).toBeNull();
+      if (event === 'run.failed') {
+        expect(payload.usage).toBeNull();
+      }
+      // The event is the stored contract: it still parses, `null` and all.
+      expect(domainEventSchemasByType[event].safeParse(terminal[0]).success).toBe(true);
+    },
+  );
+});

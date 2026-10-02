@@ -123,7 +123,7 @@ const runsBody = (runs: readonly AskRunLine[]): string =>
             `  attempt: ${run.attempt}`,
             `  model: ${run.model}`,
             `  status: ${run.status}${run.terminalReason === null ? '' : ` (${run.terminalReason})`}`,
-            `  cost_usd: ${run.costUsd}`,
+            `  cost_usd: ${run.costUsd === null ? 'not measured' : run.costUsd}`,
             `  created_at: ${run.createdAt}`,
           ].join('\n'),
         )

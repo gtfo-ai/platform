@@ -18,7 +18,7 @@ import {
   ErrorNotice,
   formatElapsed,
   formatInteger,
-  formatUsd,
+  formatRunCost,
   Loading,
   SectionHeading,
 } from '../ui/kit.js';
@@ -60,7 +60,7 @@ export const AgentsScreen = (): ReactElement => {
             <span className="text-xs text-fg-muted">
               {formatInteger(entry.run.usage.input_tokens + entry.run.usage.output_tokens)} tokens
             </span>
-            <span className="text-xs text-fg-muted">{formatUsd(entry.run.cost.usd)}</span>
+            <span className="text-xs text-fg-muted">{formatRunCost(entry.run.cost)}</span>
             <span className="ml-auto text-xs text-fg-muted">
               elapsed {formatElapsed(entry.run.started_at, nowMs)} · last output{' '}
               {formatElapsed(entry.last_output_at, nowMs)}

@@ -40,8 +40,12 @@ import type { SqlExecutor } from '../events/sql.js';
 
 const sqlOf = (tx: Transaction): SqlExecutor => postgresTransaction(tx).client;
 
-/** `numeric` comes back as a string from `pg`; the same `Number(...)` the pipeline store applies. */
-const usd = (value: string | number | null): number => (value === null ? 0 : Number(value));
+/**
+ * `numeric` comes back as a string from `pg`; `null` stays `null` — nobody measured the run, which
+ * a `0` would state as a free one (WP-119).
+ */
+const usd = (value: string | number | null): number | null =>
+  value === null ? null : Number(value);
 
 const iso = (value: Date | string): IsoDateTime =>
   (value instanceof Date ? value.toISOString() : value) as IsoDateTime;
@@ -224,11 +228,14 @@ export const createPostgresAskStore = (): AskStore => ({
       model: string;
       status: string;
       terminal_reason: string | null;
-      usd_reported: string | null;
+      usd: string | null;
       created_at: Date;
     }>(
+      // The run record's rule (`usd_reported ?? usd_estimated`), and `null` when neither was
+      // written — nobody measured the run (WP-119 pre-review round). Until then this read
+      // `usd_reported` alone and answered `0` for both an unmeasured and a `local`-mode run.
       `select r.id, s.stage, r.role, r.mode, r.attempt, r.model, r.status, r.terminal_reason,
-              r.usd_reported, r.created_at
+              coalesce(r.usd_reported, r.usd_estimated) as usd, r.created_at
          from runs r
          left join task_stages s on s.id = r.task_stage_id
         where r.task_id = $1
@@ -245,7 +252,7 @@ export const createPostgresAskStore = (): AskStore => ({
       model: row.model,
       status: row.status as RunStatus,
       terminalReason: row.terminal_reason,
-      costUsd: usd(row.usd_reported),
+      costUsd: usd(row.usd),
       createdAt: iso(row.created_at),
     }));
   },

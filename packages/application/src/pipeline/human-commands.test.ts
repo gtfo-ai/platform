@@ -1250,6 +1250,11 @@ describe('cancel a run', () => {
     expect(run?.status).toBe('cancelled');
     // Nobody measured it, so nothing is claimed (WP-47): both cost columns stay empty.
     expect(run?.cost).toBeNull();
+    // …and the event says the same (WP-119, backlog 334): it stated `{ usd: 0 }` until now.
+    const finished = harness
+      .events()
+      .filter((entry) => entry.type === 'run.finished' && entry.payload.run_id === runId);
+    expect(finished.map((entry) => (entry.payload as { cost: unknown }).cost)).toEqual([null]);
     expect(harness.store.runCommandRows()).toEqual([]);
     expect(taskOf(harness).task.state).toBe('paused');
   });

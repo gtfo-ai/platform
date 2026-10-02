@@ -1310,6 +1310,46 @@ describe('a run that ended without an answer', () => {
     expect(ask?.refusalReason).toContain('cost_unreported');
   });
 
+  /**
+   * WP-119 (backlog 334), the ask executor's half: a stalled ask whose stop read no interrupted
+   * result measured nothing, so its run row keeps `null` cost columns and its `run.failed` carries
+   * neither usage nor cost — never the runner's `0` floor stated as a figure (standing rule 16).
+   */
+  it('writes no figure for an ask whose stop measured nothing (WP-119)', async () => {
+    const harness = createPipelineHarness({
+      projectId: PROJECT,
+      cost: true,
+      runs: {
+        refinement: {
+          status: 'completed',
+          terminalReason: 'success',
+          structuredOutput: askingRefinedSpec(),
+          costUsd: 0.1,
+        },
+        [`ask:${QUESTION}`]: {
+          status: 'stalled',
+          terminalReason: 'stalled',
+          structuredOutput: null,
+          costUnmeasured: true,
+          stopReason: 'stalled',
+        },
+      },
+    });
+    await seedTask(harness);
+    await askThroughHttp(harness);
+    const askRunId = harness.specs.find((spec) => spec.role === ASK_ROLE)?.runId as Id;
+    const run = await harness.memory.transaction(async (scope) =>
+      harness.store.runs.load(scope.tx, askRunId),
+    );
+    expect(run?.status).toBe('stalled');
+    expect(run?.cost).toBeNull();
+    const failed = harness
+      .events()
+      .find((entry) => entry.type === 'run.failed' && entry.payload.run_id === askRunId);
+    expect(failed?.payload).toMatchObject({ usage: null, cost: null });
+    expect(harness.cost?.entries.filter((entry) => entry.runId === askRunId)).toEqual([]);
+  });
+
   it('names an unrecognisable throw rather than printing an object', async () => {
     const harness = createPipelineHarness({
       projectId: PROJECT,

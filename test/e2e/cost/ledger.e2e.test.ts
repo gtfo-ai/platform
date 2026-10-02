@@ -292,11 +292,14 @@ describe('the per-model usage of a multi-model run', () => {
     expect(subagent?.usd).toBeCloseTo(SUBAGENT_COST_USD, 6);
     expect(subagent?.input_tokens).toBe(200);
     // The per-model numbers sum to what the run reported, which is the ledger's own invariant.
-    expect(sum(run.model_usage.map((usage) => usage.usd))).toBeCloseTo(run.cost.usd, 6);
+    expect(sum(run.model_usage.map((usage) => usage.usd))).toBeCloseTo(
+      run.cost?.usd ?? Number.NaN,
+      6,
+    );
 
     // And the ledger charged both models, with the split totalling the invoice.
     const entries = (await pipeline.costRows()).entries.filter((entry) => entry.run_id === runId);
     expect(entries).toHaveLength(2);
-    expect(sum(entries.map((entry) => entry.usd))).toBeCloseTo(run.cost.usd, 6);
+    expect(sum(entries.map((entry) => entry.usd))).toBeCloseTo(run.cost?.usd ?? Number.NaN, 6);
   });
 });

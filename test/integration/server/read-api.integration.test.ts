@@ -19,7 +19,11 @@
 import { createRequire } from 'node:module';
 import { RUN_TRANSCRIPT_TOPIC, runTopic, type Transaction } from '@platform/application';
 import type { ContextPackRecord, Id, IsoDateTime, TranscriptEvent } from '@platform/contracts';
-import { acceptanceVerdictDataSchema, MAX_RUN_COMMANDS } from '@platform/contracts';
+import {
+  acceptanceVerdictDataSchema,
+  MAX_RUN_COMMANDS,
+  runRecordSchema,
+} from '@platform/contracts';
 import { SHIPPED_TEMPLATES } from '@platform/domain';
 import {
   broadcast as broadcastAdapter,
@@ -254,6 +258,34 @@ describe('the run projection', () => {
         usd: 0.39,
       },
     ]);
+  });
+
+  /**
+   * WP-119 (pre-review round): both cost columns null is *nobody measured this run* — the lease
+   * sweep, a cancel ended in place, a stop or a crash that read no `result` — and the record
+   * publishes it as `null`. Until WP-119 it answered `{ usd: 0, is_estimate: true }`, a free run on
+   * the operator's screen (standing rule 16). The row is inserted and removed here so no other case
+   * sees a third run on the task.
+   */
+  it('publishes a run whose cost columns are both null as cost null, never a zero (WP-119)', async () => {
+    const { rows } = await pool.query<{ id: string }>(
+      `insert into runs (task_id, task_stage_id, project_id, role, model, effort, prompt_version,
+                         status, terminal_reason, started_at, ended_at, num_turns, wall_ms)
+       select $1, ts.id, $2, 'product_manager', 'claude-opus-5', 'medium',
+              'feature@1+product_manager', 'stalled', 'stalled', now(), now(), 0, 300000
+         from task_stages ts where ts.task_id = $1 limit 1
+       returning id`,
+      [taskId, projectId],
+    );
+    const unmeasuredId = rows[0]?.id as string;
+    try {
+      const unmeasured = await findRun(drizzled, unmeasuredId);
+      expect(unmeasured?.status).toBe('stalled');
+      expect(unmeasured?.cost).toBeNull();
+      expect(runRecordSchema.parse(unmeasured).cost).toBeNull();
+    } finally {
+      await pool.query('delete from runs where id = $1', [unmeasuredId]);
+    }
   });
 
   it('is null for a run that does not exist, and refuses one with no stage by name', async () => {

@@ -257,7 +257,8 @@ export interface FinishRunInput {
   readonly terminalReason: RunTerminalReason;
   readonly usage: TokenUsage;
   readonly modelUsage: readonly ModelUsage[];
-  readonly cost: RunCost;
+  /** `null` when nothing measured the run's spend — never `{ usd: 0 }` for that (WP-119, rule 16). */
+  readonly cost: RunCost | null;
   readonly numTurns: number;
 }
 

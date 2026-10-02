@@ -244,16 +244,17 @@ const toRunRecord = (row: RunProjectionRow, modelUsage: readonly ModelUsage[]): 
     model_usage: [...modelUsage],
     // **Both columns may be null since WP-47** (migration 0035), and that is a third answer rather
     // than a spelling of zero: `usd_reported` is the provider's figure, `usd_estimated` is the
-    // platform's own pricing of a `local`-mode run — written since WP-47, so a whole provider mode
-    // stopped reading as free here — and neither means *nobody measured this run*, which is what
-    // the lease sweep leaves behind. The DTO has no spelling for "unknown" (`RunCost.usd` is a
-    // required number), so it reads 0 with `is_estimate` set, exactly as the per-model list one
-    // level up already does and says.
-    cost: {
-      usd: usd(row.usdReported ?? row.usdEstimated),
-      is_estimate: row.usdReported === null,
-      price_list_id: row.priceListId as Id | null,
-    },
+    // platform's own pricing of a `local`-mode run — and neither means *nobody measured this run*:
+    // the lease sweep, a cancel ended in place, a stop or a crash that read no `result`. Published
+    // as `null` since WP-119 (rule 16); until then the DTO had no spelling for it and read `0`.
+    cost:
+      row.usdReported === null && row.usdEstimated === null
+        ? null
+        : {
+            usd: usd(row.usdReported ?? row.usdEstimated),
+            is_estimate: row.usdReported === null,
+            price_list_id: row.priceListId as Id | null,
+          },
     wall_ms: row.wallMs,
     redaction_count: row.redactionCount,
     // WP-112, backlog 309: read straight off the column WP-91 writes in the run row's own insert.

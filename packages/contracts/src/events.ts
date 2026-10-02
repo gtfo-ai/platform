@@ -590,7 +590,13 @@ export const runFinishedEvent = defineEvent('run.finished', {
   terminal_reason: runTerminalReasonSchema,
   usage: tokenUsageSchema,
   model_usage: z.array(modelUsageSchema),
-  cost: runCostSchema,
+  /**
+   * `null` when **nothing measured** the run's spend (WP-119, PROGRESS backlog 334): a stop whose
+   * interrupted turn sent no `result` inside the interrupt grace. Never `{ usd: 0 }` for that case,
+   * which would state a free run (standing rule 16). Nullish rather than nullable, as `run.failed`'s
+   * already is, so every `run.finished` appended before WP-119 still parses unchanged on replay.
+   */
+  cost: runCostSchema.nullish(),
   num_turns: z.int().nonnegative(),
   wall_ms: z.int().nonnegative(),
 });

@@ -456,9 +456,27 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 > writing it after the interrupt's receipt (`interrupt_receipt_v1`) — within the same
 > `INTERRUPT_GRACE_MS` the interrupt already had, so a stop never waits longer than it did. The
 > outcome is still `cancelled`, and its cost and model usage are that result's, so the ledger charges
-> what the session spent, once and not late. Only for a human's stop (cancel, take-over): the
-> platform's own stops (stall, wall clock, budget) are where the stream is least likely to answer.
-> With no result inside the grace the stopped run carries no measured cost, as before.
+> what the session spent, once and not late. With no result inside the grace the stopped run is
+> **unmeasured, not zero** (review round 1): `null` cost columns, no ledger row and, since WP-119, a
+> `null` cost on its `run.finished`.
+>
+> **Widened at WP-119 (PROGRESS backlog 334, the M7 ruling): the stall and the wall clock read it
+> too.** A `stalled` or `timed_out` stop reads the interrupted turn's result inside the same
+> `INTERRUPT_GRACE_MS` — the grace is the bounded price, and the wall-clock stop is the most
+> expensive run the platform ends. Until WP-119 neither read it, so a stalled or timed-out run's
+> outcome carried `usd 0` and no model usage, `runs.finish` wrote the zero as a measured figure and
+> the ledger took `no_spend`: a stop that ran the whole wall clock read as free and reached no cap.
+> Where nothing is read the outcome is **unmeasured, not zero**, exactly as for a human's stop. A
+> budget stop is unchanged (it already has its result), and `cost_unreported` keeps its floor
+> (`claude-runner.ts`). Whether the real CLI writes the interrupted turn's result after an interrupt
+> on a stalled or a live stream is **not measured** — that needs WP-33's credential.
+>
+> **A stop the heartbeat refuses `register_miss`** (WP-119, backlog 336): when the run still reads
+> `running` and leased to this process, the refusal is logged at `error` naming the leak, because
+> the session it was meant to stop runs on, bounded only by its wall clock and budget. It is
+> reachable only past `MAX_LIVE_RUNS` (256 handles whose outcomes never settled in one process,
+> `packages/application/src/pipeline/live-runs.ts`); one benign route reads the same — a session
+> whose outcome settled during the very drain that looked — and the line names it.
 - Heartbeat: last output timestamp; `stalled` after `stallTimeoutMs` → interrupt, mark stalled, pipeline retries once with failure context (research/01 Symphony).
 - Transport: `spawnClaudeCodeProcess` returns a `SpawnedProcess` backed by the run shim's control socket (frames for stdin/stdout/stderr/signal/exit); `stderr` frames go to the SDK `stderr` callback and the run log; the SDK teardown signal maps to `signal{SIGTERM}` and then container stop.
 

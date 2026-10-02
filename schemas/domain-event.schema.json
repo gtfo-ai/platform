@@ -2638,7 +2638,14 @@
               }
             },
             "cost": {
-              "$ref": "#/$defs/RunCost"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RunCost"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "num_turns": {
               "type": "integer",
@@ -2659,7 +2666,6 @@
             "terminal_reason",
             "usage",
             "model_usage",
-            "cost",
             "num_turns",
             "wall_ms"
           ],

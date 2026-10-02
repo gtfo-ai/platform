@@ -11,7 +11,7 @@
  */
 import type { Transaction } from '@platform/application';
 import { ask } from '@platform/infrastructure';
-import { afterAll, beforeAll } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runAskStoreContract } from '../../contract/support/ask-store-suite.js';
 import { createMigratedDatabase, type MigratedDatabase } from '../support/migrated.js';
 import { createTestClient } from '../support/postgres.js';
@@ -92,4 +92,45 @@ runAskStoreContract({
       },
     };
   },
+});
+
+/**
+ * WP-119 (pre-review round): the projection the ask's prompt reads states a run's figure — the
+ * provider's, else the platform's own pricing — and `null` for a run nobody measured. Until then it
+ * read `usd_reported` alone, so both an unmeasured and a `local`-mode run reached the model as
+ * `cost_usd: 0`, a free run (standing rule 16).
+ */
+describe('the ask’s run projection (WP-119)', () => {
+  it('publishes a priced run’s estimate and a run nobody measured as null, never 0', async () => {
+    const client = createTestClient(database.connectionString);
+    await client.connect();
+    await client.query('begin');
+    try {
+      const insert = async (columns: string, values: string): Promise<string> => {
+        const { rows } = await client.query<{ id: string }>(
+          `insert into runs (task_id, project_id, role, mode, model, prompt_version, status
+                             ${columns}, created_at)
+           values ($1, $2, 'developer', 'normal', 'claude-sonnet-5', 'p1+x', 'stalled'
+                   ${values}, now()) returning id`,
+          [taskId, projectId],
+        );
+        return rows[0]?.id as string;
+      };
+      const unmeasured = await insert('', '');
+      const priced = await insert(', usd_estimated', ', 0.07');
+      const lines = await ask
+        .createPostgresAskStore()
+        .runsForTask(
+          { adapter: 'postgres', client } as unknown as Transaction,
+          taskId as never,
+          10,
+        );
+      expect(lines.find((line) => line.runId === unmeasured)?.costUsd).toBeNull();
+      expect(lines.find((line) => line.runId === priced)?.costUsd).toBe(0.07);
+      expect(lines.find((line) => line.runId === runId)?.costUsd).toBe(0.12);
+    } finally {
+      await client.query('rollback');
+      await client.end();
+    }
+  });
 });

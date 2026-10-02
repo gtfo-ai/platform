@@ -5,9 +5,11 @@
  * ## The loss, exactly
  *
  * Two things can end a run that is still executing, and neither of them knows what it cost.
- * `POST /api/runs/:run_id/cancel` writes `{ usd: 0, is_estimate: true }` because an HTTP request
- * has no way to reach the session; the lease sweep (`../recovery/run-lease.ts`) writes no figure at
- * all, because a missing heartbeat says nothing about spend. Either way the run's own terminal
+ * `POST /api/runs/:run_id/cancel` (ending the record in place, when no process holds a live lease)
+ * writes no figure because an HTTP request has no way to reach the session — `{ usd: 0, is_estimate:
+ * true }` until WP-47 on the row, and until WP-119 on its `run.finished`; the lease sweep
+ * (`../recovery/run-lease.ts`) writes no figure at all, because a missing heartbeat says nothing
+ * about spend. Either way the run's own terminal
  * event carries no usage, the ledger takes its `no_spend` / `no_usage_and_no_cost` branch, and
  * **nothing moves** — not `cost_entries`, not `cost_rollup_daily`, not `run_model_usage` and not a
  * single budget window. A run cancelled at 90 % of a daily cap leaves the cap looking untouched.

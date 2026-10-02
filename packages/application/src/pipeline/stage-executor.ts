@@ -49,6 +49,7 @@ import type {
   JsonValue,
   RunCost,
   Slug,
+  TokenUsage,
 } from '@platform/contracts';
 import { stageVerdictSchema } from '@platform/contracts';
 import type {
@@ -1221,8 +1222,10 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
 };
 
 /**
- * What a run cost, as the ledger records it: finite, non-negative, and 0 for a run that reported
- * nothing (`cost_unreported`, which is a fault rather than a free run — BD-011, standing rule 16).
+ * What a run adds to the task's `cost_actual`: finite, non-negative, and 0 for a run that reported
+ * nothing (`cost_unreported`, which is a fault rather than a free run — BD-011, standing rule 16) or
+ * that nothing measured (`costUnmeasured`) — adding nothing, which is not the same as recording a
+ * zero: the run row and the event carry `null` for the second (`rowCostOf`).
  */
 const spendOf = (outcome: RunOutcome): number =>
   outcome.costUnmeasured === true
@@ -1232,14 +1235,26 @@ const spendOf = (outcome: RunOutcome): number =>
       : 0;
 
 /**
- * The cost `runs.finish` writes: the outcome's, or **`null`** when nothing measured it (WP-101
- * review round 1, standing rule 16) — a human's stop whose interrupted turn sent no `result` inside
- * the grace. Both cost columns then stay empty, as for a run the lease sweep ended, and the ledger
- * writes no row (the terminal event carries no usage and no reported figure), rather than a `0`
- * that every later reader would take for a measurement.
+ * The cost `runs.finish` writes **and the terminal event carries**: the outcome's, or **`null`**
+ * when nothing measured it (WP-101 review round 1, standing rule 16) — a stop whose interrupted
+ * turn sent no `result` inside the grace: a human's cancel or take-over, and since WP-119 a stall or
+ * a wall-clock stop (PROGRESS backlog 334). Both cost columns then stay empty, as for a run the
+ * lease sweep ended, `run.finished.cost` is `null` (nullish since WP-119; until then the event said
+ * `{ usd: 0 }` while the row said `null`), and the ledger writes no row, rather than a `0` that every
+ * later reader would take for a measurement.
  */
 const rowCostOf = (outcome: RunOutcome): RunCost | null =>
   outcome.costUnmeasured === true ? null : outcome.cost;
+
+/**
+ * What a `run.failed` carries about the spend — both nullish in the event. A `stalled` run whose
+ * stop read nothing (WP-119) carries **neither**, which is the lease sweep's shape and what the
+ * ledger reads as `no_usage_and_no_cost`; the zeros the outcome holds are the runner's floor.
+ */
+const failedSpendOf = (
+  outcome: RunOutcome,
+): { readonly usage?: TokenUsage; readonly cost?: RunCost } =>
+  outcome.costUnmeasured === true ? {} : { usage: outcome.usage, cost: outcome.cost };
 
 interface RecordInput {
   readonly job: StageExecutionJob;
@@ -1355,7 +1370,7 @@ const record = async (
       terminalReason: outcome.terminalReason,
       usage: outcome.usage,
       modelUsage: outcome.modelUsage,
-      cost: outcome.cost,
+      cost: rowCostOf(outcome),
       numTurns: outcome.numTurns,
     },
     context,
@@ -1613,8 +1628,7 @@ const recordOntoStoppedTask = async (
             status: outcome.status,
             terminalReason: outcome.terminalReason,
             error: outcome.error ?? outcome.terminalReason,
-            usage: outcome.usage,
-            cost: outcome.cost,
+            ...failedSpendOf(outcome),
           },
           context,
         )
@@ -1625,7 +1639,7 @@ const recordOntoStoppedTask = async (
             terminalReason: outcome.terminalReason,
             usage: outcome.usage,
             modelUsage: outcome.modelUsage,
-            cost: outcome.cost,
+            cost: rowCostOf(outcome),
             numTurns: outcome.numTurns,
           },
           context,
@@ -1675,8 +1689,7 @@ const recordUnsuccessful = async (
             status: outcome.status,
             terminalReason: outcome.terminalReason,
             error: outcome.error ?? outcome.terminalReason,
-            usage: outcome.usage,
-            cost: outcome.cost,
+            ...failedSpendOf(outcome),
           },
           context,
         )
@@ -1687,7 +1700,7 @@ const recordUnsuccessful = async (
             terminalReason: outcome.terminalReason,
             usage: outcome.usage,
             modelUsage: outcome.modelUsage,
-            cost: outcome.cost,
+            cost: rowCostOf(outcome),
             numTurns: outcome.numTurns,
           },
           context,

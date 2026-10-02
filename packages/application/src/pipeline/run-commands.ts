@@ -42,7 +42,10 @@
  *     path drains again once the handle exists), and only the **heartbeat** — which beats long after
  *     the start and stops the moment the outcome settles — stamps `register_miss`. A row still
  *     pending when the run ends is closed `run_ended` by the run's own ending
- *     (`RunRepository.finish`), so no row waits for ever.
+ *     (`RunRepository.finish`), so no row waits for ever. A **stop** (cancel, take-over) refused
+ *     `register_miss` while its run still reads `running` and leased here is logged at `error`
+ *     (WP-119, PROGRESS backlog 336): the session it was meant to stop, if it still runs, runs on
+ *     unseen, bounded by its wall clock and budget. The reach is stated at `MAX_LIVE_RUNS`.
  *  4. **One drain at a time per process.** Drains are chained, so two wake-ups cannot interleave
  *     their deliveries out of the order the rows were recorded in, and `stop()` waits for the one in
  *     flight — the composition root closes the pool on the lines after it.
@@ -215,10 +218,47 @@ export const createRunCommandInbox = (deps: RunCommandInboxDependencies): RunCom
       if (onMiss === 'wait') {
         return false;
       }
-      const refused = await deps.unitOfWork.transaction(async (scope) =>
-        deps.store.runCommands.markRefused(scope.tx, { id: row.id, reason: 'register_miss' }),
-      );
-      if (refused) {
+      const { refused, leakedSession } = await deps.unitOfWork.transaction(async (scope) => {
+        // A stop refused here leaves a session nobody will stop, if one still runs (PROGRESS backlog
+        // 336). The run row says whether one may: still `running` and still leased to this process.
+        // Read **first**, under the run's `for share` lock — the order `markApplied` takes and the
+        // one `RunRepository.finish` meets (run row, then its commands), so the refusal and an
+        // ending cannot wait on each other in opposite orders.
+        const run =
+          instruction.kind === 'steer'
+            ? null
+            : await deps.store.runCommands.lockRun(scope.tx, row.runId);
+        const marked = await deps.store.runCommands.markRefused(scope.tx, {
+          id: row.id,
+          reason: 'register_miss',
+        });
+        return {
+          refused: marked,
+          leakedSession: marked && run?.status === 'running' && run.leaseOwner === deps.owner,
+        };
+      });
+      if (leakedSession) {
+        // Option (a) of backlog 336's ruling (M7, WP-119): a register miss on a live lease is a
+        // leaked handle — see `MAX_LIVE_RUNS` for the one route there is to it — and the stop the
+        // human asked for is not delivered, so the session spends until its own wall clock or
+        // budget ends it. Logged once: `markRefused` stamps a pending row exactly once.
+        //
+        // **One benign route reads the same, and the line names it** (read off the tree, not
+        // measured): a beat's drain that read the row pending just before the session's outcome
+        // settled finds the handle already dropped, while the run row still reads `running` —
+        // the stage executor records the ending only after the beat in flight (`stopHeartbeat`).
+        // That session has ended, so nothing leaked; its run ends within the same job.
+        logger.error(
+          {
+            run_id: row.runId,
+            task_id: row.taskId,
+            command_id: row.id,
+            kind: instruction.kind,
+            lease_owner: deps.owner,
+          },
+          'a stop for a run this process still leases and still reads running found no live session in its register and was refused register_miss: the handle leaked (evicted past MAX_LIVE_RUNS) and the session runs on until its own wall clock or budget ends it — unless the session ended during this very drain, in which case the run records its own ending next',
+        );
+      } else if (refused) {
         logger.warn(
           { run_id: row.runId, command_id: row.id, kind: instruction.kind },
           'a command for a run this process holds the lease of found no live session in its register, and was refused register_miss',

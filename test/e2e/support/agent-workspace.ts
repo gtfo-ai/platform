@@ -165,9 +165,10 @@ export const SUBAGENT_MODEL = 'claude-haiku-4-5';
 export const SUBAGENT_COST_USD = 0.05;
 
 /**
- * What a scripted session reports it had spent when a human's stop interrupted it (WP-101) —
- * deliberately different from every scenario's full cost, so a ledger row carrying it can only have
- * come from the interrupted turn and never from a script played to its end.
+ * What a scripted session reports it had spent when a stop interrupted it (WP-101; a stall or the
+ * wall clock too since WP-119) — deliberately different from every scenario's full cost, so a
+ * ledger row carrying it can only have come from the interrupted turn and never from a script played
+ * to its end.
  */
 export const INTERRUPTED_COST_USD = 0.13;
 
@@ -395,7 +396,8 @@ export const scriptedWorkspaces = (
         const workdir = scenario.writes?.workdir ?? scenario.bash?.workdir;
         const cli = runnerAdapters.fakeSpawnClaudeCodeProcess(fakeCliScriptFor(spec, scenario), {
           ...(workdir === undefined ? {} : { workdir }),
-          // A human's stop interrupts the session, and the session answers with what it spent.
+          // A stop interrupts the session — a human's, and since WP-119 a stall or the wall clock —
+          // and the session answers with what it spent.
           interruptedResult: interruptedResultFor(spec),
         });
         runs.push({ stage, spec, cli });

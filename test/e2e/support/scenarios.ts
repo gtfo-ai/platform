@@ -188,6 +188,39 @@ export const bugScenarios = (world: SeededWorld) => ({
   investigation: { structuredOutput: ROOT_CAUSE },
 });
 
+/** The blocking question {@link askingScenarios} asks when its caller names none. */
+export const ASKED_QUESTION_TEXT = 'Which provider should the footer total?';
+
+/**
+ * `featureScenarios` with a refinement that **asks one blocking question** instead of proceeding.
+ *
+ * `stageVerdict` maps `RefinedSpec.decision: 'ask'` onto the `questions` verdict, which is what
+ * makes the executor insert the blocking question and park the task at `waiting_answers` — the
+ * shipped mechanism rather than a row a test wrote. The question has no `options`, so a typed reply
+ * is an answer (what the Slack thread case needs).
+ *
+ * One copy for every file that parks a task this way (PROGRESS backlog 396, WP-119): the command
+ * API, the read API and the Slack thread case each carried their own, differing only in the text,
+ * which is the parameter. `ticket-lint.e2e.test.ts`'s `LINT_SPEC` is **not** a copy: it is the
+ * linter stage's answer for an unspecified ticket (no acceptance criteria, two questions — one not
+ * blocking — and a planted credential), a different scenario rather than this one with a new text.
+ */
+export const askingScenarios =
+  (questionText: string = ASKED_QUESTION_TEXT) =>
+  (world: SeededWorld) => {
+    const base = featureScenarios(world);
+    return {
+      ...base,
+      refinement: {
+        structuredOutput: {
+          ...base.refinement.structuredOutput,
+          decision: 'ask',
+          questions: [{ id: 'q1', text: questionText, blocking: true }],
+        },
+      },
+    };
+  };
+
 /**
  * The tickets the fake provider knows; the workpad is a comment on one of them.
  *

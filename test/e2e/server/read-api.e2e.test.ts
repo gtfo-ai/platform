@@ -62,11 +62,10 @@ import {
   GIT_PROJECT,
   inboundEvent,
   type PipelineE2E,
-  type SeededWorld,
   startPipeline,
   TICKET_BINDING_TOKEN,
 } from '../support/pipeline.js';
-import { featureScenarios, TICKETS } from '../support/scenarios.js';
+import { askingScenarios, featureScenarios, TICKETS } from '../support/scenarios.js';
 
 let harness: PipelineE2E | undefined;
 
@@ -356,31 +355,10 @@ describe('the project, agent and integration reads, over a pipeline that ran', (
 /** The question text the refinement asks; long enough to be unmistakable in a response body. */
 const QUESTION_TEXT = 'Which payment provider should the invoice footer total?';
 
-/**
- * `featureScenarios` with a refinement that **asks** instead of proceeding.
- *
- * `stageVerdict` maps `RefinedSpec.decision: 'ask'` onto the `questions` verdict, which is what
- * makes the executor insert the blocking questions and park the task — so this is the shipped
- * mechanism rather than a row the test wrote.
- */
-const askingScenarios = (world: SeededWorld) => {
-  const base = featureScenarios(world);
-  return {
-    ...base,
-    refinement: {
-      structuredOutput: {
-        ...(base.refinement.structuredOutput as Record<string, unknown>),
-        decision: 'ask',
-        questions: [{ id: 'q1', text: QUESTION_TEXT, blocking: true }],
-      },
-    },
-  };
-};
-
 describe('the inbox, over a question the pipeline asked', () => {
   it('serves the blocking question a parked task is waiting on', async () => {
     const pipeline = await startPipeline({
-      scenarios: askingScenarios,
+      scenarios: askingScenarios(QUESTION_TEXT),
       label: 'read-api-inbox',
       tickets: TICKETS,
       agent: 'real-over-fake-cli',

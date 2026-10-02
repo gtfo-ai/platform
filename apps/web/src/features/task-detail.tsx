@@ -81,6 +81,7 @@ import {
   formatDateTime,
   formatElapsed,
   formatMinutes,
+  formatRunCost,
   formatUsd,
   Loading,
   Metric,
@@ -1435,7 +1436,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
                       <UntrustedText value={run.model} />
                     </span>
                     <span className="ml-auto text-xs text-fg-muted">
-                      {formatUsd(run.cost.usd)} · {formatElapsed(run.started_at, nowMs)}
+                      {formatRunCost(run.cost)} · {formatElapsed(run.started_at, nowMs)}
                     </span>
                   </Card>
                 </li>
