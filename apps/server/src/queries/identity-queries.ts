@@ -184,6 +184,9 @@ export interface ConfigLayerColumns {
    * column of the reading but this one, so the effective view could not have said what it held.
    */
   readonly repo_prompts: unknown;
+  /** Migration 0073 (WP-121): the redaction mark and the withheld record (`snapshotOfRow`). */
+  readonly repo_prompts_redaction: unknown;
+  readonly repo_prompts_withheld: unknown;
 }
 
 export const findConfigLayers = async (
@@ -200,6 +203,8 @@ export const findConfigLayers = async (
       repo_detail: projectRepositoryConfig.detail,
       repo_read_at: projectRepositoryConfig.readAt,
       repo_prompts: projectRepositoryConfig.prompts,
+      repo_prompts_redaction: projectRepositoryConfig.promptsRedaction,
+      repo_prompts_withheld: projectRepositoryConfig.promptsWithheld,
     })
     .from(projects)
     .innerJoin(organizations, eq(organizations.id, projects.orgId))

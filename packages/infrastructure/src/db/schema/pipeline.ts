@@ -306,6 +306,12 @@ export const runs = pgTable('runs', {
    * {@link runs.reserveUsd} and the task totals count it as unmeasured.
    */
   figureIsFloor: boolean('figure_is_floor').notNull().default(false),
+  /**
+   * Why the project's prompt files were withheld from this run's prompt — the repository reading's
+   * record, frozen at the run's insert (migration 0073, WP-121, backlog 363). `null` is *"nothing
+   * was withheld"*, and every run created before 0073.
+   */
+  promptsWithheld: jsonb('prompts_withheld').$type<JsonObject>(),
   priceListId: uuid('price_list_id'),
   wallMs: bigint('wall_ms', { mode: 'number' }).notNull().default(0),
   redactionCount: integer('redaction_count').notNull().default(0),

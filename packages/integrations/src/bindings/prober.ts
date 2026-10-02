@@ -130,10 +130,10 @@ export const createIntegrationProber = (options: IntegrationProberOptions): Inte
         registration = options.registry.get(account.type as IntegrationType, account.provider);
       } catch (cause) {
         throw new BindingLoadError(
-          integrationId,
+          null,
           null,
           `integration "${account.name}" names provider "${account.provider}", which this build does not register`,
-          { cause },
+          { cause, integrationId },
         );
       }
 
@@ -142,12 +142,12 @@ export const createIntegrationProber = (options: IntegrationProberOptions): Inte
         secrets = await options.secrets.resolve(account.secretIds);
       } catch (cause) {
         throw new BindingLoadError(
-          integrationId,
+          null,
           null,
           `integration "${account.name}" (${account.provider}) has credentials that cannot be read: ${
             (cause as Error).message
           }`,
-          { cause },
+          { cause, integrationId },
         );
       }
 
@@ -164,9 +164,10 @@ export const createIntegrationProber = (options: IntegrationProberOptions): Inte
           .map((issue) => (issue.path.length === 0 ? '<root>' : issue.path.join('.')))
           .join(', ');
         throw new BindingLoadError(
-          integrationId,
+          null,
           null,
           `integration "${account.name}" (${account.provider}) has configuration that fails its schema at: ${paths}`,
+          { integrationId },
         );
       }
 
@@ -180,10 +181,10 @@ export const createIntegrationProber = (options: IntegrationProberOptions): Inte
         }) as object;
       } catch (cause) {
         throw new BindingLoadError(
-          integrationId,
+          null,
           null,
           `integration "${account.name}" (${account.provider}) could not be instantiated`,
-          { cause },
+          { cause, integrationId },
         );
       }
 
@@ -192,9 +193,10 @@ export const createIntegrationProber = (options: IntegrationProberOptions): Inte
         // Unreachable while every registration builds an `IntegrationPort`, and asserted rather
         // than assumed because what a new provider gets wrong is the object (standing rule 22).
         throw new BindingLoadError(
-          integrationId,
+          null,
           null,
           `integration "${account.name}" (${account.provider}) built a port with no testConnection`,
+          { integrationId },
         );
       }
       const ref = refOf(port);
@@ -203,9 +205,10 @@ export const createIntegrationProber = (options: IntegrationProberOptions): Inte
         // every registration builds an `IntegrationPort`, which carries `ref`, and a provider that
         // does not is a build defect rather than a call the platform should make ref-less.
         throw new BindingLoadError(
-          integrationId,
+          null,
           null,
           `integration "${account.name}" (${account.provider}) built a port with no ref, so the platform cannot tell which host it would call`,
+          { integrationId },
         );
       }
       const outcome = await options.executor.execute<HealthProbe>({

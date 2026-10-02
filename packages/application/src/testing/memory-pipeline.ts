@@ -898,6 +898,8 @@ export const createMemoryPipelineStore = (
         redactionCount: _r,
         contextPack: _c,
         settings: _g,
+        // WP-121: write-only too — the API projection reads `runs.prompts_withheld`, `load` does not.
+        promptsWithheld: _w,
         reserveUsd,
         ...stored
       } = run;

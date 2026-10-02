@@ -269,6 +269,7 @@ describe('the late cost releases the hold (WP-131)', () => {
         contextPack: null,
         settings: null,
         reserveUsd: 15,
+        promptsWithheld: null,
         status: 'running',
         terminalReason: null,
         sessionId: 'session-1',

@@ -405,7 +405,8 @@ export interface PromptProjectInstruction {
   readonly path: string;
   /**
    * The file's text, **redacted by the caller** (TD-012 steps 1 and 2 at the reading — step 1 over
-   * the project's binding credentials since WP-107) and **cut here** at
+   * the project's binding credentials since WP-107, every credential the platform holds for the
+   * project since WP-121) and **cut here** at
    * {@link MAX_PROJECT_PROMPT_CHARS} with the cut announced in the marker. Emitted byte-identical.
    * Empty unless `read`.
    */

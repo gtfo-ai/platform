@@ -292,6 +292,14 @@ export const findShippedProvider = (id: string): ProviderCatalogueEntry | undefi
 export const accountOnlyFieldsOf = (provider: string): readonly string[] =>
   findShippedProvider(provider)?.accountOnlyFields ?? [];
 
+/**
+ * The provider's declared credential fields — its registration's `secretFields`, `[]` for a
+ * provider this build does not ship. What the repository reading's exact-value set reads out of a
+ * binding's configuration (WP-121, PROGRESS backlog 362), beside the sealed `secret_ids`.
+ */
+export const secretFieldsOf = (provider: string): readonly string[] =>
+  findShippedProvider(provider)?.secretFields ?? [];
+
 /** One key path an account's configuration is refused at, and the schema's reason. */
 export interface ConfigIssue {
   /** Dotted key path; for an undeclared key, the key itself. Never a value. */

@@ -723,6 +723,8 @@ export const runPrompt = runPromptResponseSchema.parse({
   prompt_version: 'developer@1.0.0',
   system_prompt: 'You are the developer agent.',
   user_prompt: `Implement DEMO-1. ${HOSTILE.script}`,
+  // WP-121: nothing of the project's prompt files was withheld from this run.
+  prompts_withheld: null,
 });
 
 /**
@@ -1001,6 +1003,8 @@ export const effectiveConfig = effectiveConfigResponseSchema.parse({
     not_applied: [],
     // WP-113: no reading holds a prompt directory yet.
     prompts: null,
+    // WP-121: and none was withheld.
+    prompts_withheld: null,
   },
   sources: { version: 'default' },
   hash: 'fakehash1',

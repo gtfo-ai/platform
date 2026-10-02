@@ -285,4 +285,11 @@ export const projectRepositoryConfig = pgTable('project_repository_config', {
   readAt: timestamp('read_at', { withTimezone: true }).notNull(),
   /** Migration 0063 (WP-92): `.agentic/prompts/` at the same commit, redacted; `null` = not read. */
   prompts: jsonb('prompts').$type<JsonObject>(),
+  /**
+   * Migration 0073 (WP-121, TD-012's M7 amendment): how the prompt texts were redacted — `patterns`
+   * for every row written before it, `exact` for every row since. No default: every writer states it.
+   */
+  promptsRedaction: text('prompts_redaction').$type<'patterns' | 'exact'>().notNull(),
+  /** Migration 0073: why the reading holds no prompt texts, or `null` when nothing was withheld. */
+  promptsWithheld: jsonb('prompts_withheld').$type<JsonObject>(),
 });

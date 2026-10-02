@@ -55,6 +55,7 @@ import type {
   WorkpadRef,
 } from '@platform/contracts';
 import type { Approval, IterationLimits, Question, QueuedTask, Task } from '@platform/domain';
+import type { PromptsWithheld } from '../config/repository-config.js';
 import type { ConcurrencyConflict } from '../events/concurrency.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { RunSettingsSnapshot } from './settings-snapshot.js';
@@ -1196,6 +1197,13 @@ export type NewRun = StoredRun & {
    * column refuses it. Write-only, for the prompt columns' reason.
    */
   readonly reserveUsd: number | null;
+  /**
+   * Why the project's prompt files were withheld from this run's prompt — `runs.prompts_withheld`
+   * (migration 0073, WP-121, PROGRESS backlog 363): the repository reading's record
+   * (`ProjectSettings.repositoryPromptsWithheld`), frozen at the insert. `null` is *"nothing was
+   * withheld"* — and an ask, which is given no prompt file. Write-only, for the prompt columns' reason.
+   */
+  readonly promptsWithheld: PromptsWithheld | null;
 };
 
 export interface RunRepository {

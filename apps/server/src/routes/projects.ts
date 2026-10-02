@@ -428,6 +428,14 @@ export const repositoryReadingOf = (
           truncated: snapshot.prompts.truncated,
           files: projectPromptReadingSummary(snapshot.prompts).map((file) => ({ ...file })),
         },
+  // WP-121 (backlog 363): the stored reading says why it serves no prompt text.
+  prompts_withheld:
+    snapshot?.promptsWithheld === undefined
+      ? null
+      : {
+          reason: snapshot.promptsWithheld.reason,
+          integrations: snapshot.promptsWithheld.integrations.map((entry) => ({ ...entry })),
+        },
 });
 
 /**

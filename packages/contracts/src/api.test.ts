@@ -150,6 +150,8 @@ describe('response DTOs', () => {
             },
           ],
         },
+        // WP-121: nothing withheld is `null`, never an absent key.
+        prompts_withheld: null,
       },
       hash: 'sha256:abc',
       computed_at: AT,
@@ -244,6 +246,27 @@ describe('response DTOs', () => {
         repository: { ...response.repository, prompts: null },
       }).success,
     ).toBe(true);
+    // WP-121 (backlog 363): what a reading withheld, as the store records it — and nothing else.
+    const withheld = {
+      reason: 'the credentials of integration "s" cannot be decrypted',
+      integrations: [{ integration: 'integration "s" (sentry, 1)', reason: 'old key' }],
+    };
+    expect(
+      effectiveConfigResponseSchema.safeParse({
+        ...response,
+        repository: { ...response.repository, prompts: null, prompts_withheld: withheld },
+      }).success,
+    ).toBe(true);
+    const { prompts_withheld: _absent, ...missing } = response.repository;
+    for (const repository of [
+      missing,
+      { ...response.repository, prompts_withheld: { ...withheld, value: 'x' } },
+      { ...response.repository, prompts_withheld: { reason: '', integrations: [] } },
+    ]) {
+      expect(effectiveConfigResponseSchema.safeParse({ ...response, repository }).success).toBe(
+        false,
+      );
+    }
   });
 
   it('answers an export with the merge request it opened, and refuses an unknown key (WP-63)', () => {

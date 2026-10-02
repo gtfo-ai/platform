@@ -18,6 +18,7 @@
 import type {
   BindingRepository,
   GitProviderPort,
+  IntegrationAccount,
   ProjectBinding,
   SecretRedactor,
   SecretStore,
@@ -30,9 +31,10 @@ import {
   exactSecretRedactor,
   SecretResolutionError,
 } from '@platform/application';
-import type { Id, IsoDateTime } from '@platform/contracts';
+import type { Id, IsoDateTime, JsonObject } from '@platform/contracts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as z from 'zod';
+import { secretFieldsOf } from '../catalogue.js';
 import { GITLAB_CREDENTIAL_MINTING_HINTS } from '../providers/gitlab/index.js';
 import type { AnyProviderRegistration } from '../registry.js';
 import { createIntegrationRegistry } from '../registry.js';
@@ -725,6 +727,31 @@ describe('an observability binding (WP-89)', () => {
  * WP-107 (TD-012's M6 amendment (2), PROGRESS backlog 316): the credentials a repository reading is
  * redacted against — every binding of the project, decrypted, named as the loader names them.
  */
+/**
+ * The repository a reading asks: a project's bindings, and each account's own configuration
+ * (`forIntegration`, WP-121 review round 1) — `{}` unless a case states one.
+ */
+const readingRepositoryOf = (
+  bindings: readonly ProjectBinding[],
+  accountConfigs: Readonly<Record<string, JsonObject>> = {},
+): BindingRepository => ({
+  forProject: async () => bindings,
+  forIntegration: async (integrationId) => {
+    const binding = bindings.find((entry) => entry.integrationId === integrationId);
+    return binding === undefined
+      ? null
+      : {
+          integrationId,
+          type: binding.type,
+          provider: binding.provider,
+          name: binding.name,
+          config: accountConfigs[integrationId] ?? {},
+          secretIds: binding.secretIds,
+          bindings: [],
+        };
+  },
+});
+
 describe('a project’s binding credentials, for a reading (WP-107)', () => {
   const JIRA_TOKEN = 'FAKE-wp107-not-a-real-jira-token-0003';
   const jiraBinding: ProjectBinding = {
@@ -745,8 +772,10 @@ describe('a project’s binding credentials, for a reading (WP-107)', () => {
   it('names every binding’s every credential <provider>:<integration>:<field>, each account once', async () => {
     const secrets = await createProjectBindingSecrets({
       // The git binding twice — two bindings of one account resolve to the same names.
-      repository: repositoryOf([gitBinding(), jiraBinding, gitBinding()]),
+      repository: readingRepositoryOf([gitBinding(), jiraBinding, gitBinding()]),
       secrets: resolving,
+      secretFieldsOf,
+      organisationAccounts: async () => [],
     })(PROJECT);
     expect(secrets).toEqual({
       secrets: [
@@ -763,7 +792,7 @@ describe('a project’s binding credentials, for a reading (WP-107)', () => {
    */
   it('names an integration whose credential will not decrypt, and still answers the others', async () => {
     const answer = await createProjectBindingSecrets({
-      repository: repositoryOf([gitBinding(), jiraBinding]),
+      repository: readingRepositoryOf([gitBinding(), jiraBinding]),
       secrets: {
         resolve: async (ids): Promise<Readonly<Record<string, string>>> => {
           if (ids[0] === jiraBinding.secretIds[0]) {
@@ -772,6 +801,8 @@ describe('a project’s binding credentials, for a reading (WP-107)', () => {
           return { token: BINDING_TOKEN };
         },
       },
+      secretFieldsOf,
+      organisationAccounts: async () => [],
     })(PROJECT);
     expect(answer).toEqual({
       secrets: [{ name: `gitlab:${GIT_INTEGRATION}:token`, value: BINDING_TOKEN }],
@@ -782,5 +813,113 @@ describe('a project’s binding credentials, for a reading (WP-107)', () => {
         },
       ],
     });
+  });
+
+  /**
+   * WP-121 (TD-012's M7 amendment (2), PROGRESS backlog 362): a provider's declared credential
+   * field left in `integrations.config` — which only a row written before WP-100 can carry — is a
+   * credential the platform holds, and the loader would build the adapter with it.
+   */
+  it('adds a declared credential field the configuration still carries, and nothing else of it (WP-121)', async () => {
+    const CONFIG_TOKEN = 'FAKE-wp121-jira-token-left-in-config-0004';
+    const answer = await createProjectBindingSecrets({
+      repository: readingRepositoryOf([
+        gitBinding({ config: { ...gitBinding().config, token: BINDING_TOKEN } }),
+        {
+          ...jiraBinding,
+          config: { site: 'https://acme.example.test', api_token: CONFIG_TOKEN, webhook_secret: 7 },
+        },
+      ]),
+      secrets: resolving,
+      secretFieldsOf,
+      organisationAccounts: async () => [],
+    })(PROJECT);
+    expect(answer.secrets).toEqual([
+      // The same value sealed and in config is kept once.
+      { name: `gitlab:${GIT_INTEGRATION}:token`, value: BINDING_TOKEN },
+      { name: `jira-cloud:${jiraBinding.integrationId}:api_token`, value: JIRA_TOKEN },
+      // A different value under a sealed field's name keeps its own placeholder name.
+      { name: `jira-cloud:${jiraBinding.integrationId}:api_token.config`, value: CONFIG_TOKEN },
+    ]);
+    // `site` is configuration, and a non-string `webhook_secret` is no credential value.
+    expect(JSON.stringify(answer)).not.toContain('acme.example.test');
+  });
+
+  /**
+   * WP-121 review round 1: the binding's config is merged over the account's, so a binding that
+   * sets a credential field hides the account's value of it — both are read.
+   */
+  it('reads the account’s own configuration too, where the binding’s value hides it (WP-121)', async () => {
+    const ACCOUNT_HELD = 'FAKE-wp121-round1-account-held-secret-0006';
+    const BINDING_HELD = 'FAKE-wp121-round1-binding-held-secret-0007';
+    const answer = await createProjectBindingSecrets({
+      repository: readingRepositoryOf(
+        [{ ...jiraBinding, config: { webhook_secret: BINDING_HELD } }],
+        { [jiraBinding.integrationId]: { webhook_secret: ACCOUNT_HELD } },
+      ),
+      secrets: resolving,
+      secretFieldsOf,
+      organisationAccounts: async () => [],
+    })(PROJECT);
+    expect(answer.secrets).toEqual([
+      { name: `jira-cloud:${jiraBinding.integrationId}:api_token`, value: JIRA_TOKEN },
+      { name: `jira-cloud:${jiraBinding.integrationId}:webhook_secret`, value: BINDING_HELD },
+      {
+        name: `jira-cloud:${jiraBinding.integrationId}:webhook_secret.config`,
+        value: ACCOUNT_HELD,
+      },
+    ]);
+  });
+
+  /**
+   * WP-121 (TD-012's M7 amendment (2), PROGRESS backlog 364): the organisation's chat accounts have
+   * no binding but their credentials are in the same `secrets` table.
+   */
+  it('adds the organisation’s communication accounts, and names one that will not decrypt (WP-121)', async () => {
+    const SLACK_TOKEN = 'xoxb-FAKE-wp121-organisation-bot-token-0005';
+    const SIGNING_IN_CONFIG = 'FAKE-wp121-signing-secret-left-in-config';
+    const account = (id: string, secretId: string, name: string): IntegrationAccount => ({
+      integrationId: id as Id,
+      type: 'communication',
+      provider: 'slack',
+      name,
+      config: { default_channel: 'C0FAKE', signing_secret: SIGNING_IN_CONFIG },
+      secretIds: [secretId as Id],
+      bindings: [],
+    });
+    const readable = account(
+      '00000000-0000-4000-8000-00000000a121',
+      '00000000-0000-4000-8000-00000000e121',
+      'acme slack',
+    );
+    const broken = account(
+      '00000000-0000-4000-8000-00000000a122',
+      '00000000-0000-4000-8000-00000000e122',
+      'old slack',
+    );
+    const answer = await createProjectBindingSecrets({
+      repository: readingRepositoryOf([]),
+      secrets: {
+        resolve: async (ids): Promise<Readonly<Record<string, string>>> => {
+          if (ids[0] === broken.secretIds[0]) {
+            throw new SecretResolutionError('secret … is sealed under key "v1:old"', []);
+          }
+          return { bot_token: SLACK_TOKEN };
+        },
+      },
+      secretFieldsOf,
+      organisationAccounts: async () => [readable, broken],
+    })(PROJECT);
+    expect(answer.secrets).toEqual([
+      { name: `slack:${readable.integrationId}:bot_token`, value: SLACK_TOKEN },
+      { name: `slack:${readable.integrationId}:signing_secret`, value: SIGNING_IN_CONFIG },
+      { name: `slack:${broken.integrationId}:signing_secret`, value: SIGNING_IN_CONFIG },
+    ]);
+    expect(answer.unreadable).toEqual([
+      {
+        integration: `integration "old slack" (slack, ${broken.integrationId})`,
+        reason: 'secret … is sealed under key "v1:old"',
+      },
+    ]);
   });
 });

@@ -150,6 +150,13 @@ export interface RepositoryConfigColumns {
   readonly repo_read_at: Date | string | null;
   /** Migration 0063 (WP-92): the prompt directory the reading recorded, or `null`. */
   readonly repo_prompts: unknown;
+  /**
+   * Migration 0073 (WP-121): `patterns` or `exact` — a row the exact-value pass never ran over
+   * serves no prompt text (`snapshotOfRow`). A caller that does not select it reads every row so.
+   */
+  readonly repo_prompts_redaction: unknown;
+  /** Migration 0073 (WP-121): why the reading holds no prompt texts, or `null`. */
+  readonly repo_prompts_withheld: unknown;
 }
 
 /**
@@ -186,9 +193,12 @@ const storedSnapshotFrom = (
         detail: row.repo_detail ?? null,
         read_at: row.repo_read_at,
         prompts: row.repo_prompts ?? null,
+        prompts_redaction: row.repo_prompts_redaction ?? null,
+        prompts_withheld: row.repo_prompts_withheld ?? null,
       });
 
 /** The select list both readers join in, so the two cannot name different columns. */
 export const REPOSITORY_CONFIG_COLUMNS = `r.status as repo_status, r.commit_sha as repo_commit_sha,
   r.config as repo_config, r.not_applied as repo_not_applied, r.detail as repo_detail,
-  r.read_at as repo_read_at, r.prompts as repo_prompts`;
+  r.read_at as repo_read_at, r.prompts as repo_prompts,
+  r.prompts_redaction as repo_prompts_redaction, r.prompts_withheld as repo_prompts_withheld`;

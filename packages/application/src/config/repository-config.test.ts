@@ -200,6 +200,7 @@ const recordingStore = () => {
     store: {
       record: async (_projectId: Id, snapshot: RepositoryConfigSnapshot) => {
         recorded.push(snapshot);
+        return true;
       },
       read: async () => recorded.at(-1) ?? null,
     },

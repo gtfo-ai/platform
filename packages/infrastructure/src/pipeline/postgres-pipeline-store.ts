@@ -1283,12 +1283,13 @@ export const createPostgresPipelineStore = (
                            effort, prompt_version, status, started_at,
                            system_prompt, user_prompt, redaction_count,
                            context_budget_tokens, context_total_tokens, context_kb_commit,
-                           context_text_search, settings_snapshot, settings_hash, reserve_usd)
+                           context_text_search, settings_snapshot, settings_hash, reserve_usd,
+                           prompts_withheld)
          values ($1, $2, $3,
                  (select id from task_stages
                    where task_id = $2 and stage = $11 and attempt = $6),
                  $4, $5, $6, $7, $8, $9, $10, $12, $13, $14, $15, $16, $17, $18, $19::jsonb,
-                 coalesce($20::jsonb, '{}'::jsonb), $21, nullif($22::numeric, 0))`,
+                 coalesce($20::jsonb, '{}'::jsonb), $21, nullif($22::numeric, 0), $23::jsonb)`,
         [
           run.id,
           run.taskId,
@@ -1328,6 +1329,9 @@ export const createPostgresPipelineStore = (
           // that stage's cap is above 0 (the fail-closed side of rule 20), exactly 0 when the
           // asking stage's is 0 too, and a different figure from one admission to the next.
           run.reserveUsd,
+          // WP-121 (migration 0073, backlog 363): why the project's prompt files were withheld
+          // from this run, or null when nothing was.
+          run.promptsWithheld === null ? null : JSON.stringify(run.promptsWithheld),
         ],
       );
       if (run.contextPack !== null) {

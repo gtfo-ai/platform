@@ -204,6 +204,8 @@ export const registerRunRoutes = async (
         prompt_version: prompt.promptVersion,
         system_prompt: prompt.systemPrompt,
         user_prompt: prompt.userPrompt,
+        // WP-121 (backlog 363): why the project's prompt files are missing from it, if they are.
+        prompts_withheld: prompt.promptsWithheld,
       };
     },
   );

@@ -63,6 +63,7 @@ import {
 import { assertOutsideTransaction } from '../events/open-transaction.js';
 import { bindingSecretRedactor, type InjectedSecret } from '../integrations/redaction.js';
 import type { RepositoryConfigState } from '../pipeline/settings.js';
+import type { SecretRedactor } from '../ports/integrations/audit.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import {
@@ -201,7 +202,66 @@ export interface RepositoryConfigNotApplied {
  */
 export type RepositoryConfigSnapshot = RepositoryConfigSnapshotState & {
   readonly prompts?: ProjectPromptReading;
+  /**
+   * **Why this reading serves no prompt text**, or absent when nothing was withheld (WP-121, TD-012's
+   * M7 amendment (1) and (3), PROGRESS backlogs 359 and 363). Present exactly when {@link prompts}
+   * is absent *for a reason*: an integration whose credentials would not decrypt (WP-107's
+   * fail-closed direction), or a reading stored under the pattern rules alone that has not been —
+   * or could not be — read again. A run planned from it carries the same record
+   * (`runs.prompts_withheld`), so a stage whose convention-append file is missing says why.
+   */
+  readonly promptsWithheld?: PromptsWithheld;
 };
+
+/** One integration whose credentials could not be read: its label and why. Never a value. */
+export interface UnreadableIntegration {
+  /** `integration "<name>" (<provider>, <id>)`. */
+  readonly integration: string;
+  /** The secret store's sentence. */
+  readonly reason: string;
+}
+
+/**
+ * Why a reading's prompt texts were withheld (WP-121): one sentence, and the integrations that
+ * caused it — empty when the cause is a reading the exact-value pass never ran over.
+ */
+export interface PromptsWithheld {
+  readonly reason: string;
+  readonly integrations: readonly UnreadableIntegration[];
+}
+
+/**
+ * The record as a run stores it (WP-121): every string through the run's own redactor, because the
+ * labels carry an operator's integration names and the reasons a secret store's sentences. `null`
+ * for nothing withheld (and for `undefined`, a settings port with no repository layer).
+ */
+export const redactedPromptsWithheld = (
+  withheld: PromptsWithheld | null | undefined,
+  redactor: SecretRedactor,
+): PromptsWithheld | null =>
+  withheld === null || withheld === undefined
+    ? null
+    : {
+        reason: redactor.redactText(withheld.reason).value,
+        integrations: withheld.integrations.map((entry) => ({
+          integration: redactor.redactText(entry.integration).value,
+          reason: redactor.redactText(entry.reason).value,
+        })),
+      };
+
+/**
+ * How a stored reading's prompt texts were redacted (`project_repository_config.prompts_redaction`,
+ * migration 0073): `patterns` is TD-012 step 2 alone — every row written before WP-121 — and `exact`
+ * is step 1 over every credential the platform holds for the project, then step 2.
+ */
+export type PromptsRedaction = 'patterns' | 'exact';
+
+/**
+ * The sentence a `patterns` reading is withheld with until it is read again (WP-121, backlog 359).
+ * Platform text: it names no project, path or value.
+ */
+export const PATTERN_READING_WITHHELD_REASON =
+  'this reading was stored before its prompt files were redacted by the exact values of the credentials the platform holds (TD-012, WP-121), so none of its prompt texts are served until the repository is read again — the knowledge index process re-reads it, or POST /api/projects/:project_id/config/refresh does now';
 
 type RepositoryConfigSnapshotState =
   | { readonly status: 'absent'; readonly commitSha: string; readonly readAt: IsoDateTime }
@@ -223,9 +283,46 @@ type RepositoryConfigSnapshotState =
 
 /** Where the last reading of each project's file is kept (`project_repository_config`). */
 export interface RepositoryConfigStore {
-  /** Replaces the project's snapshot. Outside any transaction: one statement. */
-  record(projectId: Id, snapshot: RepositoryConfigSnapshot): Promise<void>;
+  /**
+   * Replaces the project's snapshot. Outside any transaction: one statement.
+   *
+   * The row is marked `exact` (WP-121): the one caller, {@link refreshRepositoryConfig}, has run
+   * both redaction steps over every text the snapshot holds, which is what the mark asserts.
+   *
+   * `overPatternsOnly` (WP-121 review round 1) makes the write **conditional**: it replaces a row
+   * only while that row is still `patterns` (or absent), and answers `false` when it wrote nothing.
+   * The upgrade re-read uses it, because it runs outside the index queue's one-job-per-project
+   * limit: an index run that recorded an `exact` reading at a newer commit between the re-read's
+   * read and its write is the newer truth and is never overwritten. Every other writer replaces.
+   */
+  record(
+    projectId: Id,
+    snapshot: RepositoryConfigSnapshot,
+    condition?: { readonly overPatternsOnly: true },
+  ): Promise<boolean>;
+  /**
+   * The stored reading. A `patterns` row is answered **without** its prompt texts and with
+   * {@link RepositoryConfigSnapshot.promptsWithheld} saying why (WP-121, backlog 359).
+   */
   read(projectId: Id): Promise<RepositoryConfigSnapshot | null>;
+}
+
+/**
+ * The readings the exact-value pass never ran over, for the re-read (WP-121, TD-012's M7
+ * amendment (1)) — the `patterns` rows of `project_repository_config`.
+ */
+export interface PatternReadingStore {
+  /**
+   * Up to `limit` projects whose stored reading is `patterns`, the oldest reading first, none of
+   * `excluding` (the projects this process already failed to re-read).
+   */
+  patternReadings(limit: number, excluding: readonly Id[]): Promise<readonly Id[]>;
+  /**
+   * Drops a `patterns` reading's prompt texts and records why it could not be read again. Leaves
+   * the mark, so the next pass (or an index run, or the refresh) still replaces the row; a no-op on
+   * a row that became `exact` meanwhile.
+   */
+  withholdPatternReading(projectId: Id, withheld: PromptsWithheld): Promise<void>;
 }
 
 /** Longest refusal detail stored — a list of key paths, not a document. */
@@ -373,7 +470,12 @@ export const revalidateRepositorySnapshot = (
   snapshot: RepositoryConfigSnapshot | null,
   redactText: (value: string) => string,
 ): RepositoryConfigSnapshot | null => {
-  const graded = revalidateConfigState(snapshot, redactText);
+  const state = revalidateConfigState(snapshot, redactText);
+  // WP-121: a withheld record survives the re-grading, which rebuilds an `invalid` row from scratch.
+  const graded =
+    state === null || snapshot?.promptsWithheld === undefined
+      ? state
+      : { ...state, promptsWithheld: snapshot.promptsWithheld };
   if (graded === null || snapshot?.prompts === undefined) return graded;
   // WP-92: the prompt directory under this release's rules — a path the reader would no longer
   // list is dropped, so a stored row cannot hand a stage a file the reader refuses today.
@@ -443,7 +545,10 @@ export interface RepositoryConfigRefreshOptions {
   /**
    * TD-012 step 1 at a reading — WP-107, TD-012's M6 amendment (2), PROGRESS backlog 316: the
    * **decrypted credentials of the project's bindings**, every type, named
-   * `<provider>:<integrationId>:<field>` like the binding loader names them. Everything the reading
+   * `<provider>:<integrationId>:<field>` like the binding loader names them — and since WP-121
+   * (TD-012's M7 amendment (2), backlogs 362 and 364) every other credential the platform holds for
+   * the project: a provider's declared secret field left in a binding's `integrations.config`, and
+   * the decrypted credentials of the organisation's communication accounts. Everything the reading
    * stores — the prompt files' text and an invalid file's detail — is replaced value by value before
    * the pattern rules run, so a credential the platform holds and no pattern knows, committed to
    * `.agentic/prompts/`, is not stored, not sent to the model and not kept in `runs.user_prompt`.
@@ -466,14 +571,15 @@ export interface RepositoryConfigRefreshOptions {
 }
 
 /**
- * The decrypted credentials of a project's bindings, and the integrations whose credentials could
- * not be decrypted (WP-107, backlog 358) — reported by name rather than thrown, so one broken
+ * The decrypted credentials of a project's bindings — since WP-121 every credential the platform
+ * holds for the project — and the integrations whose credentials could not be decrypted (WP-107,
+ * backlog 358) — reported by name rather than thrown, so one broken
  * binding withholds the prompt texts and nothing else.
  */
 export interface ProjectBindingSecrets {
   readonly secrets: readonly InjectedSecret[];
   /** One per integration that could not be read: its label (name, provider, id) and why. Never a value. */
-  readonly unreadable: readonly { readonly integration: string; readonly reason: string }[];
+  readonly unreadable: readonly UnreadableIntegration[];
 }
 
 export type RepositoryConfigRefresh =
@@ -489,6 +595,12 @@ export type RepositoryConfigRefresh =
     }
   /** The commit read is older than the one already recorded; the newer reading stands. */
   | { readonly status: 'stale'; readonly snapshot: RepositoryConfigSnapshot }
+  /**
+   * WP-121 review round 1: a conditional (`overPatternsOnly`) reading found the row already
+   * replaced by an `exact` one — another reader (an index run, a refresh) recorded it meanwhile,
+   * and that reading stands. Nothing was written.
+   */
+  | { readonly status: 'superseded' }
   | { readonly status: 'unavailable'; readonly reason: string };
 
 /**
@@ -499,14 +611,23 @@ export type RepositoryConfigRefresh =
  */
 export const refreshRepositoryConfig = async (
   options: RepositoryConfigRefreshOptions,
-  request: { readonly projectId: Id; readonly commitSha?: string },
+  request: {
+    readonly projectId: Id;
+    readonly commitSha?: string;
+    /** Write only over a `patterns` row — the upgrade re-read's condition (WP-121). */
+    readonly overPatternsOnly?: true;
+  },
 ): Promise<RepositoryConfigRefresh> => {
   assertOutsideTransaction('reading the repository configuration from the default branch');
   const logger = options.logger ?? silentLogger;
   // Asked of the store first, so the read can say whether it is older than what is recorded: a
   // pinned wake-up that arrives late (an older `default_branch.moved`) must not replace a newer
   // reading and lose a `block` it added. What bounds the residual — two readings racing between
-  // this read and the write — is the index queue's one job per project (`stately`).
+  // this read and the write — is the index queue's one job per project (`stately`) for the index
+  // run, and for the one reader outside that queue, the upgrade re-read (WP-121), the conditional
+  // write (`overPatternsOnly`): it replaces only a row still `patterns`, which every other writer's
+  // record turns `exact`. `POST …/config/refresh` is outside the queue too and keeps the residual
+  // it has had since WP-63.
   const recorded = await options.store.read(request.projectId);
   const read = await options.source.read({
     projectId: request.projectId,
@@ -540,7 +661,7 @@ export const refreshRepositoryConfig = async (
   const credentials = await options.bindingSecrets(request.projectId);
   const exact = bindingSecretRedactor(credentials.secrets);
   const redactText = (value: string): string => options.redactText(exact.redactText(value).value);
-  const promptsWithheld = withheldReason(credentials);
+  const withheld = withheldPrompts(credentials, redactText);
   const interpreted = interpretRepositoryConfig({
     entry: read.files[REPOSITORY_CONFIG_PATH],
     commitSha: read.commitSha,
@@ -548,11 +669,26 @@ export const refreshRepositoryConfig = async (
     codec: options.codec,
     redactText,
   });
+  // WP-121 (backlog 363): a withheld directory is recorded on the reading, not only logged.
   const snapshot: RepositoryConfigSnapshot =
-    read.prompts === undefined || promptsWithheld !== null
-      ? interpreted
-      : { ...interpreted, prompts: redactedPromptReading(read.prompts, redactText) };
-  await options.store.record(request.projectId, snapshot);
+    withheld !== null
+      ? { ...interpreted, promptsWithheld: withheld }
+      : read.prompts === undefined
+        ? interpreted
+        : { ...interpreted, prompts: redactedPromptReading(read.prompts, redactText) };
+  const written = await options.store.record(
+    request.projectId,
+    snapshot,
+    ...(request.overPatternsOnly === true ? [{ overPatternsOnly: true as const }] : []),
+  );
+  if (!written) {
+    logger.info(
+      { project_id: request.projectId, commit_sha: snapshot.commitSha },
+      'the repository configuration was read again, and a newer reading recorded meanwhile stands',
+    );
+    return { status: 'superseded' };
+  }
+  const promptsWithheld = withheld?.reason ?? null;
   if (promptsWithheld !== null) {
     // `error`: a credential the platform holds and cannot decrypt is a deployment defect an operator
     // must fix, and until then every stage of this project runs without its prompt files.
@@ -592,7 +728,9 @@ export const refreshRepositoryConfig = async (
 };
 
 /**
- * The sentence a withheld prompt directory is reported with, or `null` (WP-107, backlog 358).
+ * What a withheld prompt directory is recorded with, or `null` (WP-107, backlog 358) — since
+ * WP-121 stored on the reading (`prompts_withheld`) and frozen with every run planned from it, as
+ * well as logged (backlog 363).
  *
  * **None of the previous texts stand either**: the stored reading is one row, replaced whole, and a
  * previous prompt directory may have been stored before WP-107 under the pattern rules alone
@@ -600,18 +738,31 @@ export const refreshRepositoryConfig = async (
  * prompt. A stage then renders a named file `unread` and a convention file not at all, and runs
  * (WP-92's rule 20: a prompt file grants nothing, so its absence refuses nothing).
  */
-const withheldReason = (credentials: ProjectBindingSecrets): string | null =>
+const withheldPrompts = (
+  credentials: ProjectBindingSecrets,
+  /** Both steps over the record's strings: it is stored and published (WP-121). */
+  redactText: (value: string) => string,
+): PromptsWithheld | null =>
   credentials.unreadable.length === 0
     ? null
-    : `the credentials of ${credentials.unreadable
-        .map((entry) => `${entry.integration} (${entry.reason})`)
-        .join(
-          '; ',
-        )} cannot be decrypted, so the prompt files cannot be redacted against them and none are stored until they can (TD-012, WP-107)`;
+    : {
+        reason: redactText(
+          `the credentials of ${credentials.unreadable
+            .map((entry) => `${entry.integration} (${entry.reason})`)
+            .join(
+              '; ',
+            )} cannot be decrypted, so the prompt files cannot be redacted against them and none are stored until they can (TD-012, WP-107)`,
+        ),
+        integrations: credentials.unreadable.map((entry) => ({
+          integration: redactText(entry.integration),
+          reason: redactText(entry.reason),
+        })),
+      };
 
 /**
  * The prompt directory as it is stored: every text through the redactor (TD-012 step 2, and since
- * WP-107 step 1 over the project's binding credentials before it), and the
+ * WP-107 step 1 over the project's binding credentials before it — since WP-121 every credential
+ * the platform holds for the project), and the
  * rest untouched. The cut is the consumer's (`MAX_PROJECT_PROMPT_CHARS`), so redaction happens on
  * the whole text first — an exact-match redactor cannot find a secret a cap has halved.
  */

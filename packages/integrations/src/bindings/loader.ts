@@ -85,6 +85,7 @@ import type {
   CredentialMintingHints,
   GitProviderPort,
   InjectedSecret,
+  IntegrationAccount,
   IntegrationActionExecutor,
   IntegrationCallScope,
   MintingIntegration,
@@ -97,6 +98,7 @@ import type {
   ProjectBindingSecrets,
   SecretRedactor,
   SecretStore,
+  UnreadableIntegration,
 } from '@platform/application';
 import {
   bindingSecretRedactor,
@@ -104,12 +106,16 @@ import {
   IntegrationUnsupportedError,
   noSecretsRedactor,
 } from '@platform/application';
-import type { Id, IntegrationType } from '@platform/contracts';
+import type { Id, IntegrationType, JsonObject } from '@platform/contracts';
 import type { IntegrationPortByType, IntegrationRegistry } from '../registry.js';
 
 export class BindingLoadError extends Error {
   override readonly name = 'BindingLoadError';
-  /** `null` for the organisation's own account, which is built with no project (WP-65). */
+  /**
+   * The project whose binding failed, or `null` for an **account** built with no project — the
+   * organisation's own (WP-65), the webhook door's and the prober's (WP-121, PROGRESS backlog 361:
+   * those two put the integration's id here until then). Never an integration's id.
+   */
   readonly projectId: Id | null;
   /**
    * The binding that could not be built, or `null` when the project's *set* is the problem — and
@@ -117,7 +123,11 @@ export class BindingLoadError extends Error {
    * {@link integrationId} instead (WP-107, PROGRESS backlog 278).
    */
   readonly bindingId: Id | null;
-  /** The integration (account) that could not be built, when the failing site knows it. */
+  /**
+   * The integration (account) that could not be built — filled at every site that knows it: every
+   * loader since WP-121. `null` only where no account is in hand (a project's *set* of bindings, an
+   * organisation flag naming no live account).
+   */
   readonly integrationId: Id | null;
 
   constructor(
@@ -173,43 +183,117 @@ const secretName = (binding: ProjectBinding, field: string): string =>
   `${binding.provider}:${binding.integrationId}:${field}`;
 
 /**
- * The decrypted credentials of **every** binding of a project, named as {@link
+ * Every credential the platform holds for a project, named as {@link
  * createPipelineIntegrationsLoader} names them for a binding's own redactor — WP-107, TD-012's M6
- * amendment (2), PROGRESS backlog 316.
+ * amendment (2), PROGRESS backlog 316; widened by WP-121 (TD-012's M7 amendment (2)).
  *
  * The one consumer is the repository reading (`refreshRepositoryConfig`), which stores text a human
  * committed to `.agentic/prompts/` and composes an exact-value redactor over these before it stores
- * it. Every type, not only the three the pipeline calls: a Sentry or Loki token committed to a
- * prompt file is a credential the platform holds as much as a Jira one. Two bindings of one account
- * resolve to the same names and values and are kept once.
+ * it. Three sources, every type:
+ *
+ *  - **each binding's decrypted `secret_ids`** (WP-107) — a Sentry or Loki token committed to a
+ *    prompt file is a credential the platform holds as much as a Jira one;
+ *  - **a provider's declared secret field left in the binding's configuration** (backlog 362) —
+ *    in the merged document (`bindings.config` over `integrations.config`) **and** in the account's
+ *    own `integrations.config` (`forIntegration`), because the merge lets a binding's value hide
+ *    the account's (WP-121 review round 1) — which only a row written before WP-100
+ *    or by SQL can carry, and which the loader merges under the sealed ones (`{...config,
+ *    ...secrets}`), so it is a credential the adapter may be built with. The field list is the
+ *    provider catalogue's ({@link ProjectBindingSecretsOptions.secretFieldsOf});
+ *  - **the organisation's communication accounts** (backlog 364) — they have no binding but sit in
+ *    the same `secrets` table, and their token in a project's prompt file is as much a leak. Both of
+ *    the halves above apply to them.
+ *
+ * Two bindings of one account resolve to the same names and values and are kept once; a project
+ * bound to the organisation's chat account is the same case.
  *
  * **A credential that will not decrypt is reported, not thrown** (backlog 358): the integration is
- * named in `unreadable` with the store's reason, and every other binding's credentials are still
- * returned, so the reading stores its configuration and withholds only its prompt texts — one
- * broken Sentry token must not keep a merged restriction from applying (WP-89's *a broken
- * observability binding stops nothing*). Outside any transaction, like every read of the secret
- * store; the values leave only in the returned list, never in a reason.
+ * named in `unreadable` with the store's reason, and every other credential is still returned, so
+ * the reading stores its configuration and withholds only its prompt texts — one broken Sentry token
+ * must not keep a merged restriction from applying (WP-89's *a broken observability binding stops
+ * nothing*). That includes an organisation account: its credential is in the set, so a broken one
+ * withholds every project's prompt texts until it is repaired, which is the direction WP-107 chose.
+ * Outside any transaction, like every read of the secret store; the values leave only in the
+ * returned list, never in a reason.
  */
+export interface ProjectBindingSecretsOptions {
+  readonly repository: BindingRepository;
+  readonly secrets: SecretStore;
+  /**
+   * The provider's declared credential fields — `secretFieldsOf` in the catalogue, `[]` for a
+   * provider this build does not ship (whose binding the loader refuses anyway). Required (rule 31).
+   */
+  readonly secretFieldsOf: (provider: string) => readonly string[];
+  /** Every live communication account of the organisation (`listCommunicationAccounts`). */
+  readonly organisationAccounts: () => Promise<readonly IntegrationAccount[]>;
+}
+
+/** One account's credentials, whichever list it came from. */
+interface CredentialSource {
+  readonly integrationId: Id;
+  readonly provider: string;
+  readonly name: string;
+  /**
+   * Every configuration layer a credential may sit in — for a binding, the merged document **and**
+   * the account's own (WP-121 review round 1): the merge lets a binding's value hide an account
+   * credential of the same field, which is still a credential the platform holds.
+   */
+  readonly configs: readonly JsonObject[];
+  readonly secretIds: readonly Id[];
+}
+
 export const createProjectBindingSecrets =
-  (options: { readonly repository: BindingRepository; readonly secrets: SecretStore }) =>
+  (options: ProjectBindingSecretsOptions) =>
   async (projectId: Id): Promise<ProjectBindingSecrets> => {
     const named = new Map<string, InjectedSecret>();
-    const unreadable = new Map<Id, { integration: string; reason: string }>();
+    const unreadable = new Map<Id, UnreadableIntegration>();
+    const keep = (name: string, value: string): void => {
+      const held = named.get(name);
+      if (held === undefined) {
+        named.set(name, { name, value });
+      } else if (held.value !== value) {
+        // A config-held copy that differs from the sealed value: both are credentials, and a
+        // placeholder name is an identity (`exactSecretRedactor`), so the copy gets its own.
+        keep(`${name}.config`, value);
+      }
+    };
+    const accountConfigs = new Map<Id, JsonObject>();
+    const sources: CredentialSource[] = [];
     for (const binding of await options.repository.forProject(projectId)) {
-      let resolved: Readonly<Record<string, string>>;
+      if (!accountConfigs.has(binding.integrationId)) {
+        // `null` for a retired account, whose row holds nothing the loader would build with.
+        const account = await options.repository.forIntegration(binding.integrationId);
+        accountConfigs.set(binding.integrationId, account?.config ?? {});
+      }
+      sources.push({
+        ...binding,
+        configs: [binding.config, accountConfigs.get(binding.integrationId) ?? {}],
+      });
+    }
+    for (const account of await options.organisationAccounts()) {
+      sources.push({ ...account, configs: [account.config] });
+    }
+    for (const source of sources) {
+      const prefix = `${source.provider}:${source.integrationId}`;
       try {
-        resolved = await options.secrets.resolve(binding.secretIds);
+        for (const [field, value] of Object.entries(
+          await options.secrets.resolve(source.secretIds),
+        )) {
+          keep(`${prefix}:${field}`, value);
+        }
       } catch (cause) {
-        unreadable.set(binding.integrationId, {
-          integration: `integration "${binding.name}" (${binding.provider}, ${binding.integrationId})`,
+        unreadable.set(source.integrationId, {
+          integration: `integration "${source.name}" (${source.provider}, ${source.integrationId})`,
           reason: cause instanceof Error ? cause.message : String(cause),
         });
-        continue;
       }
-      for (const [field, value] of Object.entries(resolved)) {
-        const name = secretName(binding, field);
-        if (!named.has(name)) {
-          named.set(name, { name, value });
+      // WP-121 (backlog 362): a declared credential field the configuration still carries.
+      for (const config of source.configs) {
+        for (const field of options.secretFieldsOf(source.provider)) {
+          const value = config[field];
+          if (typeof value === 'string' && value.length > 0) {
+            keep(`${prefix}:${field}`, value);
+          }
         }
       }
     }
@@ -254,6 +338,7 @@ const channelsOf = (
       projectId,
       binding.bindingId,
       `binding "${binding.name}" (${binding.provider}) is a communication provider that declares no channel field`,
+      { integrationId: binding.integrationId },
     );
   }
   const values = config as Record<string, unknown>;
@@ -263,6 +348,7 @@ const channelsOf = (
       projectId,
       binding.bindingId,
       `binding "${binding.name}" (${binding.provider}) names no channel in "${fields.channel}"; a notification would be posted nowhere`,
+      { integrationId: binding.integrationId },
     );
   }
   const digest = fields.digestChannel === undefined ? undefined : values[fields.digestChannel];
@@ -459,6 +545,7 @@ export const createPipelineIntegrationsLoader = (
         null,
         null,
         `integration "${account.name}" (${account.provider}) minted a run credential but is a "${account.type}" integration, so no git adapter can revoke it`,
+        { integrationId },
       );
     }
     const built = await build(

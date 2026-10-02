@@ -162,6 +162,7 @@ const fetchWith = (
   runs: RunRecord[],
   settings: () => Response,
   asked: string[],
+  prompt: () => Response = () => json({ error: { code: 'not_found', message: 'none' } }, 404),
 ) =>
   (async (input: RequestInfo | URL): Promise<Response> => {
     const url = String(input);
@@ -171,6 +172,7 @@ const fetchWith = (
     if (path === `/api/runs/${shown.id}/messages`) return json({ items: [], next_seq: null });
     if (path === `/api/runs/${shown.id}/commands`) return json({ items: [] });
     if (path === `/api/runs/${shown.id}/settings`) return settings();
+    if (path === `/api/runs/${shown.id}/prompt`) return prompt();
     if (path === `/api/runs/${shown.id}`) return json(shown);
     if (path === `/api/tasks/${TASK}`) return json(detail(runs));
     if (path === '/api/projects') return json({ items: [] });
@@ -186,11 +188,17 @@ beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
-const open = (shown: RunRecord, runs: RunRecord[], settings: () => Response) => {
+const open = (
+  shown: RunRecord,
+  runs: RunRecord[],
+  settings: () => Response,
+  prompt?: () => Response,
+) => {
   const asked: string[] = [];
   window.history.pushState({}, '', `/runs/${shown.id}`);
   const view = render(
-    createApp({ fetchImpl: fetchWith(shown, runs, settings, asked), realtime: false }).element,
+    createApp({ fetchImpl: fetchWith(shown, runs, settings, asked, prompt), realtime: false })
+      .element,
   );
   return { view, asked };
 };
@@ -271,5 +279,61 @@ describe('the run screen shows the settings hash and marks a change (WP-112)', (
       expect(view.container.textContent).toContain('there is no snapshot to show');
     });
     expect(view.container.textContent).not.toContain('The settings could not be loaded.');
+  });
+});
+
+/**
+ * WP-121 (PROGRESS backlog 363): a run whose project prompt files were withheld says why on its
+ * Prompt tab — the record frozen on the run (`runs.prompts_withheld`), served by `/prompt`.
+ */
+describe('the Prompt tab says why the project prompt files are missing (WP-121)', () => {
+  const promptBody = (withheld: unknown) =>
+    json({
+      prompt_version: 'test@1',
+      system_prompt: 'the role prompt',
+      user_prompt: 'the task block',
+      prompts_withheld: withheld,
+    });
+
+  it('names the reason and each unreadable integration, as text', async () => {
+    const shown = run(SECOND, 'refinement', HASH_A);
+    const { view } = open(
+      shown,
+      [shown],
+      () => json({ settings_hash: HASH_A, snapshot: SNAPSHOT }),
+      () =>
+        promptBody({
+          reason: 'the credentials of the <b>Sentry</b> integration cannot be decrypted',
+          integrations: [
+            { integration: 'integration "acme sentry" (sentry, 0f)', reason: 'old key' },
+          ],
+        }),
+    );
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('tab', { name: 'Prompt' }));
+    await waitFor(() => {
+      expect(view.container.textContent).toContain(
+        'The project’s prompt files were withheld from this prompt.',
+      );
+    });
+    expect(view.container.textContent).toContain('<b>Sentry</b> integration cannot be decrypted');
+    expect(view.container.textContent).toContain('integration "acme sentry" (sentry, 0f): old key');
+    expect(view.container.querySelector('b')).toBeNull();
+  });
+
+  it('says nothing of the kind when nothing was withheld', async () => {
+    const shown = run(SECOND, 'refinement', HASH_A);
+    const { view } = open(
+      shown,
+      [shown],
+      () => json({ settings_hash: HASH_A, snapshot: SNAPSHOT }),
+      () => promptBody(null),
+    );
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('tab', { name: 'Prompt' }));
+    await waitFor(() => {
+      expect(view.container.textContent).toContain('the task block');
+    });
+    expect(view.container.textContent).not.toContain('were withheld');
   });
 });

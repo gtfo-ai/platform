@@ -210,6 +210,18 @@ describe('createIntegrationProber', () => {
     ).rejects.toBeInstanceOf(BindingLoadError);
   });
 
+  /**
+   * WP-121 (PROGRESS backlog 361): an account has no project and no binding, so both slots are
+   * `null` and the account's id is `integrationId` — until then it sat in `projectId`.
+   */
+  it('names the integration in its own slot and no project or binding (WP-121)', async () => {
+    const error = await proberFor(accountOf(), {}, secretsOf(new SecretResolutionError('nope', [])))
+      .test(INTEGRATION)
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(BindingLoadError);
+    expect(error).toMatchObject({ projectId: null, bindingId: null, integrationId: INTEGRATION });
+  });
+
   it('throws when the credential cannot be read', async () => {
     await expect(
       proberFor(accountOf(), {}, secretsOf(new SecretResolutionError('nope', []))).test(

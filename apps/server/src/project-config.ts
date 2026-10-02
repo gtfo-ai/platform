@@ -34,7 +34,10 @@ export const createProjectConfigCommands = (options: {
   readonly pool: pg.Pool;
   readonly integrations: PipelineIntegrationsPort;
   readonly files: RepositoryFileSource;
-  /** `APP_SECRET_KEY`: the re-read redacts against the project's binding credentials (WP-107). */
+  /**
+   * `APP_SECRET_KEY`: the re-read redacts against the project's binding credentials (WP-107) and,
+   * since WP-121, every other credential the platform holds for it.
+   */
   readonly secretKey: string;
   readonly logger: Logger;
 }): ProjectConfigCommands => {

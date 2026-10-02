@@ -112,10 +112,10 @@ export const createInboundIntegrationLoader = (
         registration = options.registry.get(account.type as IntegrationType, account.provider);
       } catch (cause) {
         throw new BindingLoadError(
-          integrationId,
+          null,
           null,
           `integration "${account.name}" names provider "${account.provider}", which this build does not register`,
-          { cause },
+          { cause, integrationId },
         );
       }
 
@@ -124,12 +124,12 @@ export const createInboundIntegrationLoader = (
         secrets = await options.secrets.resolve(account.secretIds);
       } catch (cause) {
         throw new BindingLoadError(
-          integrationId,
+          null,
           null,
           `integration "${account.name}" (${account.provider}) has credentials that cannot be read: ${
             (cause as Error).message
           }`,
-          { cause },
+          { cause, integrationId },
         );
       }
 
@@ -139,7 +139,13 @@ export const createInboundIntegrationLoader = (
       }));
       const redactor = composeSecretRedactors(bindingSecretRedactor(injected), platformRedactor);
 
-      const build = (config: JsonObject, what: string): object => {
+      // WP-121 (backlog 361): the error's slots name what failed — the account (no project, no
+      // binding) or one project's binding of it — and always the integration.
+      const build = (
+        config: JsonObject,
+        what: string,
+        binding: { readonly projectId: Id; readonly bindingId: Id } | null,
+      ): object => {
         const parsed = registration.configSchema.safeParse({ ...config, ...secrets });
         if (!parsed.success) {
           // The paths, never the values: the merged document holds the credential.
@@ -147,9 +153,10 @@ export const createInboundIntegrationLoader = (
             .map((issue) => (issue.path.length === 0 ? '<root>' : issue.path.join('.')))
             .join(', ');
           throw new BindingLoadError(
-            integrationId,
-            null,
+            binding?.projectId ?? null,
+            binding?.bindingId ?? null,
             `${what} of integration "${account.name}" (${account.provider}) has configuration that fails its schema at: ${paths}`,
+            { integrationId },
           );
         }
         try {
@@ -161,15 +168,15 @@ export const createInboundIntegrationLoader = (
           }) as object;
         } catch (cause) {
           throw new BindingLoadError(
-            integrationId,
-            null,
+            binding?.projectId ?? null,
+            binding?.bindingId ?? null,
             `${what} of integration "${account.name}" (${account.provider}) could not be instantiated`,
-            { cause },
+            { cause, integrationId },
           );
         }
       };
 
-      const accountPort = build(account.config, 'the account adapter');
+      const accountPort = build(account.config, 'the account adapter', null);
       const inbound = inboundOf(accountPort);
       const ref = {
         integrationId,
@@ -194,16 +201,17 @@ export const createInboundIntegrationLoader = (
 
       const bindings: InboundBinding[] = [];
       for (const binding of account.bindings) {
-        const port = build(binding.config, `the binding of project ${binding.projectId}`);
+        const port = build(binding.config, `the binding of project ${binding.projectId}`, binding);
         const bound = inboundOf(port);
         if (bound === null) {
           // Unreachable while one registration builds both — the account adapter above already
           // proved this provider has an inbound half — and asserted rather than assumed, because a
           // registration whose `create` branched on config would make it reachable (rule 22).
           throw new BindingLoadError(
-            integrationId,
+            binding.projectId,
             binding.bindingId,
             `the binding of project ${binding.projectId} built a port with no inbound half while the account's has one`,
+            { integrationId },
           );
         }
         bindings.push({

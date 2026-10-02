@@ -231,7 +231,10 @@ read from the **default branch** with this file, in the same pass and at the sam
 reader lists one named directory, `.agentic/prompts/`, and reads its direct `<name>.md` children — at most 64,
 each at most 16 KiB (a larger one is recorded `oversized` and never read) — redacted with TD-012 step 1 over
 the decrypted credentials of the project's bindings and then step 2's pattern rules (WP-107; until then
-step 2 only) and stored beside the reading (`project_repository_config.prompts`, migration 0063). A settings
+step 2 only) and stored beside the reading (`project_repository_config.prompts`, migration 0063). Since WP-121
+step 1 covers every credential the platform holds for the project — also a declared secret field left in an
+integration's configuration and the organisation's chat accounts — and a reading stored before it serves no
+prompt text until the knowledge process reads it again (`prompts_withheld` on `GET …/config` says why). A settings
 edit that names another file in the directory applies at the next run; a new or changed **file** applies at
 the next reading, like this file itself. **Since WP-113 both are visible before a run**: `GET …/config` publishes
 the reading's prompt half (per file the path, status, pre-cut length and whether the 8 000-character cut applies,

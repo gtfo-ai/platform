@@ -239,6 +239,38 @@ describe('an integration whose adapter cannot be built', () => {
       loaderFor(accountOf(), { throwOnCreate: true }).forIntegration(INTEGRATION),
     ).rejects.toThrow(/could not be instantiated/);
   });
+
+  /**
+   * WP-121 (PROGRESS backlog 361): the error's slots say what failed. Until then the integration's
+   * id sat in `projectId`, so a consumer that branched on it would have looked a project up by an
+   * integration's id.
+   */
+  it('names the binding’s project and id and the integration, never the integration as a project (WP-121)', async () => {
+    const bindingId = '00000000-0000-4000-8000-0000000000f1' as Id;
+    const ofBinding = await loaderFor(
+      accountOf({ bindings: [{ bindingId, projectId: PROJECT_A, config: {} }] }),
+    )
+      .forIntegration(INTEGRATION)
+      .catch((error: unknown) => error);
+    expect(ofBinding).toBeInstanceOf(BindingLoadError);
+    expect((ofBinding as Error).message).toMatch(/^the binding of project /);
+    expect(ofBinding).toMatchObject({
+      projectId: PROJECT_A,
+      bindingId,
+      integrationId: INTEGRATION,
+    });
+
+    const ofAccount = await loaderFor(accountOf(), {
+      secrets: secretsOf(new SecretResolutionError('row is missing', [])),
+    })
+      .forIntegration(INTEGRATION)
+      .catch((error: unknown) => error);
+    expect(ofAccount).toMatchObject({
+      projectId: null,
+      bindingId: null,
+      integrationId: INTEGRATION,
+    });
+  });
 });
 
 describe('opening an account before resolving it (WP-87 review round 1, Q60)', () => {

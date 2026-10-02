@@ -370,6 +370,18 @@ export const RunDetailScreen = ({ runId }: { readonly runId: string }): ReactEle
               <p className="font-mono text-xs text-fg-muted">
                 <UntrustedText value={prompt.data.prompt_version} />
               </p>
+              {prompt.data.prompts_withheld === null ? null : (
+                // WP-121 (PROGRESS backlog 363): why the project's prompt files are not below.
+                <ErrorNotice
+                  title="The project’s prompt files were withheld from this prompt."
+                  detail={[
+                    prompt.data.prompts_withheld.reason,
+                    ...prompt.data.prompts_withheld.integrations.map(
+                      (entry) => `${entry.integration}: ${entry.reason}`,
+                    ),
+                  ].join(' — ')}
+                />
+              )}
               <CodeText value={prompt.data.system_prompt} />
               <CodeText value={prompt.data.user_prompt} />
             </>

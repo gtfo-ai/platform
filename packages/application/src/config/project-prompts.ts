@@ -28,7 +28,8 @@
  * Untrusted (BD-022): anyone who can merge writes it. It is bounded before it is read
  * ({@link MAX_PROJECT_PROMPT_FILE_BYTES}, against the size `ls-tree -l` reports, so an oversized blob
  * is never buffered), redacted at the reading — TD-012 step 1 over the decrypted credentials of the
- * project's bindings, then step 2's pattern rules (WP-107, PROGRESS backlog 316; no run-scoped
+ * project's bindings (since WP-121 every credential the platform holds for the project), then step 2's
+ * pattern rules (WP-107, PROGRESS backlog 316; no run-scoped
  * credential is in scope there, Q55) — stored as redacted, and cut at the consumer
  * (`MAX_PROJECT_PROMPT_CHARS`).
  *

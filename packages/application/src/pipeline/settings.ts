@@ -44,6 +44,7 @@ import {
   SPIKE_TEMPLATE_ID,
 } from '@platform/domain';
 import type { ProjectPromptReading } from '../config/project-prompts.js';
+import type { PromptsWithheld } from '../config/repository-config.js';
 import { assertOutsideTransaction } from '../events/open-transaction.js';
 import type { Transaction } from '../ports/transaction.js';
 
@@ -111,6 +112,13 @@ export interface ProjectSettings {
    * names is then rendered `unread`, never assumed absent, and a convention file is not rendered.
    */
   readonly repositoryPrompts?: ProjectPromptReading | null;
+  /**
+   * Why the last reading serves no prompt text, or `null`/absent when nothing was withheld (WP-121,
+   * TD-012's M7 amendment (3), PROGRESS backlog 363): an integration whose credentials would not
+   * decrypt, or a reading stored under the pattern rules alone. The stage executor freezes it on the
+   * run (`runs.prompts_withheld`), so a run whose convention-append files are missing says why.
+   */
+  readonly repositoryPromptsWithheld?: PromptsWithheld | null;
   /**
    * **Why this project's stored configuration cannot be read, or absent when it can** — WP-106,
    * PROGRESS backlogs 311 and 354.

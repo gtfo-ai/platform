@@ -85,6 +85,7 @@ import {
   type RedactedArtifact,
   redactArtifactData,
 } from '../artifacts/redaction.js';
+import { redactedPromptsWithheld } from '../config/repository-config.js';
 import { type BudgetGuard, blockingBudgetDetail, noBudgetGuard } from '../cost/guard.js';
 import { type LateCostRecorder, noLateCostRecorder } from '../cost/late.js';
 import {
@@ -1049,6 +1050,9 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         // WP-131 (migration 0072): the per-run cap this run was admitted at — the figure every cap
         // holds it at if it ends with nobody measuring it.
         reserveUsd: runBudgetUsd(settings, job.stage),
+        // WP-121 (backlog 363): why the plan carried no project prompt file, frozen with the run
+        // through its own redactor — so a missing convention-append file says why on `/prompt`.
+        promptsWithheld: redactedPromptsWithheld(settings.repositoryPromptsWithheld, redactor),
       });
       /**
        * The lease, claimed in the **same transaction as the row** (WP-47).

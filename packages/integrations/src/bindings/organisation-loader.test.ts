@@ -115,6 +115,8 @@ describe('the organisation’s own chat account', () => {
     expect(error).toBeInstanceOf(BindingLoadError);
     expect(error.message).toMatch(/fails its schema/);
     expect(error.message).not.toContain(TOKEN);
+    // WP-121 (PROGRESS backlog 361): no project, no binding, and the account it had loaded named.
+    expect(error).toMatchObject({ projectId: null, bindingId: null, integrationId: CHAT });
   });
 });
 

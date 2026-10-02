@@ -178,6 +178,8 @@ const fetchFor = (
           not_applied: [],
           // WP-113: no reading holds a prompt directory yet.
           prompts: null,
+          // WP-121: and none was withheld.
+          prompts_withheld: null,
         },
         sources: { '*': 'project' },
         hash: 'deadbeef',
@@ -273,6 +275,7 @@ describe('the repository configuration card', () => {
                       detail: 'stages.refinement.max_turns (expected number)',
                       not_applied: [],
                       prompts: null,
+                      prompts_withheld: null,
                     },
                   })
                 : undefined,
@@ -436,6 +439,7 @@ describe('the project prompt files card (WP-113)', () => {
         },
       ],
     },
+    prompts_withheld: null,
   };
   const STAGES = [
     {
@@ -524,6 +528,51 @@ describe('the project prompt files card (WP-113)', () => {
     expect(document.body.textContent).toContain('The repository has not been read yet.');
     expect(document.body.textContent).toContain('No stage is given a project prompt file.');
     expect(screen.queryByRole('list', { name: 'Prompt files in the last reading' })).toBeNull();
+  });
+
+  /**
+   * WP-121 (PROGRESS backlog 363): the stored reading records why it serves no prompt text, so the
+   * screen says so without a re-read — the integrations whose credentials could not be read, each
+   * with the store's reason, every string as text (BD-022).
+   */
+  it('shows the integrations a reading withheld its prompt files for, from the stored reading (WP-121)', async () => {
+    const HOSTILE_NAME =
+      'integration "<img src=x onerror=alert(1)>" (sentry, 00000000-0000-4000-8000-00000000a358)';
+    render(
+      createApp({
+        fetchImpl: fetchFor(
+          {},
+          {
+            config: {
+              repository: {
+                ...READING,
+                prompts: null,
+                prompts_withheld: {
+                  reason:
+                    'the credentials of the Sentry integration cannot be decrypted, so the prompt files cannot be redacted against them',
+                  integrations: [
+                    { integration: HOSTILE_NAME, reason: 'secret … is sealed under key "v1:old"' },
+                  ],
+                },
+              },
+              stage_prompts: [],
+            },
+          },
+        ),
+        realtime: false,
+      }).element,
+    );
+    const note = await screen.findByRole('note', { name: 'Prompt files withheld' });
+    expect(note.textContent).toContain('The prompt files of this reading are withheld.');
+    expect(note.textContent).toContain('the Sentry integration cannot be decrypted');
+    const integrations = screen.getByRole('list', {
+      name: 'Integrations whose credentials could not be read',
+    });
+    expect(integrations.textContent).toContain(HOSTILE_NAME);
+    expect(integrations.textContent).toContain('sealed under key "v1:old"');
+    // Text, never markup.
+    expect(note.querySelector('img')).toBeNull();
+    expect(document.body.textContent).not.toContain('This reading holds no prompt files');
   });
 });
 

@@ -190,6 +190,8 @@ const fetchFor = (readiness: 'recorded' | 'absent') =>
           not_applied: [],
           // WP-113: no reading holds a prompt directory yet.
           prompts: null,
+          // WP-121: and none was withheld.
+          prompts_withheld: null,
         },
         sources: { '*': 'project' },
         hash: 'deadbeef',

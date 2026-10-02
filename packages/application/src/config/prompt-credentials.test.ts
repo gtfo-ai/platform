@@ -58,6 +58,7 @@ const recordingStore = () => {
     read: async () => null,
     record: async (_projectId, snapshot) => {
       recorded.push(snapshot);
+      return true;
     },
   };
   return { recorded, store };
@@ -149,10 +150,16 @@ const ticketMatched = (): DomainEvent =>
   }) as DomainEvent;
 
 /** The refinement run's `runs.insert`, driven from the stored reading by the real planner. */
-const userPromptStoredFrom = async (snapshot: RepositoryConfigSnapshot): Promise<string> => {
+const runStoredFrom = async (
+  snapshot: RepositoryConfigSnapshot,
+): Promise<{ readonly userPrompt: string; readonly run: NewRun }> => {
   const harness: PipelineHarness = createPipelineHarness({
     projectId: PROJECT,
-    settings: { repositoryPrompts: snapshot.prompts ?? null },
+    // What the production settings port hands the planner from a stored reading (`pipeline.ts`).
+    settings: {
+      repositoryPrompts: snapshot.prompts ?? null,
+      repositoryPromptsWithheld: snapshot.promptsWithheld ?? null,
+    },
     runs: {
       refinement: {
         status: 'completed',
@@ -169,12 +176,15 @@ const userPromptStoredFrom = async (snapshot: RepositoryConfigSnapshot): Promise
     await original(tx, run);
   };
   await harness.publish([ticketMatched()]);
-  const userPrompt = rows[0]?.userPrompt;
-  if (typeof userPrompt !== 'string') {
+  const run = rows[0];
+  if (run === undefined || typeof run.userPrompt !== 'string') {
     throw new Error('no run was started, or its prompt was not recorded');
   }
-  return userPrompt;
+  return { userPrompt: run.userPrompt, run };
 };
+
+const userPromptStoredFrom = async (snapshot: RepositoryConfigSnapshot): Promise<string> =>
+  (await runStoredFrom(snapshot)).userPrompt;
 
 describe('a binding credential committed to a project prompt file (WP-107)', () => {
   it('is absent from the stored reading and from runs.user_prompt, replaced by its binding’s placeholder', async () => {
@@ -201,6 +211,47 @@ describe('a binding credential committed to a project prompt file (WP-107)', () 
     const userPrompt = await userPromptStoredFrom(stored as RepositoryConfigSnapshot);
     expect(userPrompt, 'runs.user_prompt carries the binding credential').not.toContain(JIRA_TOKEN);
     expect(userPrompt).toContain(PLACEHOLDER);
+  });
+
+  /**
+   * WP-121 (TD-012's M7 amendment (2), PROGRESS backlogs 362 and 364): the exact-value set is every
+   * credential the platform holds for the project — a declared credential field left in a binding's
+   * `integrations.config`, and the organisation's chat account, which no project binds. Named as
+   * `createProjectBindingSecrets` names them (its own cases in `packages/integrations` pin that it
+   * answers both; `test/integration/config/prompt-reread.integration.test.ts` drives the production
+   * composition); here, what the reading and the run's prompt column do with them.
+   */
+  it('is absent from the stored reading and from runs.user_prompt for a config-held field and an organisation account’s token (WP-121)', async () => {
+    const CONFIG_HELD = 'FAKE-wp121-jira-webhook-secret-in-config-0362';
+    const ORGANISATION = 'FAKE-wp121-organisation-chat-token-0364';
+    const configName = 'jira-cloud:00000000-0000-4000-8000-00000000a107:webhook_secret';
+    const organisationName = 'slack:00000000-0000-4000-8000-00000000a364:bot_token';
+    const { recorded } = await refreshWith(
+      {
+        secrets: [
+          { name: NAME, value: JIRA_TOKEN },
+          { name: configName, value: CONFIG_HELD },
+          { name: organisationName, value: ORGANISATION },
+        ],
+        unreadable: [],
+      },
+      { promptText: `Verify deliveries with ${CONFIG_HELD}; announce as ${ORGANISATION}.` },
+    );
+    const stored = recorded[0] as RepositoryConfigSnapshot;
+    for (const planted of [CONFIG_HELD, ORGANISATION]) {
+      expect(JSON.stringify(stored), 'the stored reading carries a credential').not.toContain(
+        planted,
+      );
+    }
+    const entry = stored.prompts?.files[PROMPT_PATH];
+    expect(entry?.kind === 'file' ? entry.text : null).toBe(
+      `Verify deliveries with [REDACTED:integration:${configName}]; announce as [REDACTED:integration:${organisationName}].`,
+    );
+    const userPrompt = await userPromptStoredFrom(stored);
+    for (const planted of [CONFIG_HELD, ORGANISATION]) {
+      expect(userPrompt, 'runs.user_prompt carries a credential').not.toContain(planted);
+    }
+    expect(userPrompt).toContain(`[REDACTED:integration:${organisationName}]`);
   });
 
   /**
@@ -247,9 +298,26 @@ describe('a binding credential committed to a project prompt file (WP-107)', () 
     const error = lines.find((line) => line.level === 'error');
     expect(error?.fields).toMatchObject({ unreadable_integrations: [BROKEN] });
     expect(error?.message).toContain(BROKEN);
-    // A run planned from this reading proceeds, with no prompt file and no credential.
-    const userPrompt = await userPromptStoredFrom(stored as RepositoryConfigSnapshot);
+    // WP-121 (backlog 363): recorded on the reading itself, not only logged.
+    expect(stored?.promptsWithheld).toEqual({
+      reason: withheld,
+      integrations: [{ integration: BROKEN, reason: 'secret … is sealed under key "v1:old"' }],
+    });
+    // A run planned from this reading proceeds, with no prompt file and no credential — and the
+    // record frozen on its row, so the missing file says why (`runs.prompts_withheld`).
+    const { userPrompt, run } = await runStoredFrom(stored as RepositoryConfigSnapshot);
     expect(userPrompt).not.toContain(SENTRY_TOKEN);
     expect(userPrompt).not.toContain('Ask Sentry');
+    expect(run.promptsWithheld).toEqual(stored?.promptsWithheld);
+  });
+
+  it('records nothing withheld on the run when the reading withheld nothing (WP-121)', async () => {
+    const { recorded } = await refreshWith({
+      secrets: [{ name: NAME, value: JIRA_TOKEN }],
+      unreadable: [],
+    });
+    expect(recorded[0]?.promptsWithheld).toBeUndefined();
+    const { run } = await runStoredFrom(recorded[0] as RepositoryConfigSnapshot);
+    expect(run.promptsWithheld).toBeNull();
   });
 });

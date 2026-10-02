@@ -651,6 +651,21 @@ an installation that set `APP_DB_POOL_MAX` to exactly the old minimum must raise
 holds for every later build that adds a job worker: the floor table above moves with the code, so read
 it against your `.env` on each upgrade (PROGRESS backlog 371).
 
+**Upgrading past the build that re-reads stored repository readings (WP-121).** Before it, the copy of
+a project's `.agentic/prompts/` files the platform stores was redacted by the pattern rules only, so a
+credential the platform holds — committed to a prompt file in a shape no rule knows — could still be in
+it and reach every run of that project. Migration 0073 marks every such stored reading, and from then
+on **no prompt text of a marked reading is given to any run or shown anywhere**. The process that runs
+the knowledge index (`ROLE=all`, `worker` or `indexer`) re-reads every marked project **once, at
+start**, eight at a time in the background — the same read an index run makes, through the knowledge
+mirror — and replaces the reading with one redacted by every credential the platform holds. Expect
+one `pattern-redacted repository readings read again` line per batch. A project whose repository
+cannot be read then (no `APP_KNOWLEDGE_MIRROR_ROOT`, an unreachable remote) keeps **no** prompt text
+until it can: a `warn` line names it, the project's settings page says why under *Project prompt
+files*, and its stages run without their prompt files. Fix the cause and press **Re-read now** (or
+`POST /api/projects/:project_id/config/refresh`); the next index run of the project does the same.
+The platform cannot un-leak a credential already committed to a project's history — rotate it.
+
 ### What a failed migration looks like
 
 The `migrate` service writes one JSON object per line and exits non-zero:

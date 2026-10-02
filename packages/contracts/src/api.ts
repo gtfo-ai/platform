@@ -330,6 +330,20 @@ export const configNotAppliedSchema = z.strictObject({
 });
 
 /**
+ * Why a repository reading serves no prompt text — and why a run planned from it was given none
+ * (WP-121, TD-012's M7 amendment (3), PROGRESS backlog 363). `integrations` names each account whose
+ * credentials could not be decrypted (`integration "<name>" (<provider>, <id>)` and the secret
+ * store's reason, never a value); it is empty when the cause is a reading stored under the pattern
+ * rules alone that has not been, or could not be, read again (backlog 359), which `reason` says.
+ */
+export const promptsWithheldSchema = z.strictObject({
+  reason: nonEmptyStringSchema,
+  integrations: z.array(
+    z.strictObject({ integration: nonEmptyStringSchema, reason: nonEmptyStringSchema }),
+  ),
+});
+
+/**
  * The platform's last reading of a project's own `.agentic/config.yml` on its default branch — the
  * `repo` layer's producer (WP-63, Q94, BD-025 §1).
  *
@@ -361,9 +375,7 @@ export const repositoryConfigReadingSchema = z.strictObject({
    * `null` is *"this reading holds no prompt directory"*, which has three causes and one meaning for
    * a run (a file a configuration names is `unread`, a convention file is not given): nothing has
    * read the repository yet, the reading was taken before WP-92, or the reading **withheld** the
-   * prompt texts because one of the project's integration credentials would not decrypt (WP-107) —
-   * the refresh that withheld them says so in its `prompts_withheld`, and the stored reading does
-   * not record which of the three it was (PROGRESS backlog 363).
+   * prompt texts — and since WP-121 the third is told apart by {@link prompts_withheld}.
    *
    * **Never the text**: path, status, length and whether the cut applies (standing rules 13/37). The
    * text a run was given is that run's own `GET /api/runs/:id/prompt`.
@@ -392,6 +404,12 @@ export const repositoryConfigReadingSchema = z.strictObject({
         .max(64),
     })
     .nullable(),
+  /**
+   * Why this reading serves no prompt text, or `null` when nothing was withheld (WP-121, backlog
+   * 363): an integration whose credentials would not decrypt (WP-107), or a reading stored before
+   * the exact-value redaction that has not been read again (backlog 359). `prompts` is then `null`.
+   */
+  prompts_withheld: promptsWithheldSchema.nullable(),
 });
 
 /**
@@ -2060,6 +2078,13 @@ export const runPromptResponseSchema = z.strictObject({
   prompt_version: nonEmptyStringSchema,
   system_prompt: z.string(),
   user_prompt: z.string(),
+  /**
+   * Why the project's prompt files were withheld from this prompt, frozen when the run was created
+   * (`runs.prompts_withheld`, WP-121, PROGRESS backlog 363) — so a stage whose convention-append
+   * file is missing says why. `null` is *"nothing was withheld"*, and every run created before
+   * migration 0073, which recorded nothing either way.
+   */
+  prompts_withheld: promptsWithheldSchema.nullable(),
 });
 
 export const runContextPackResponseSchema = contextPackRecordSchema;
@@ -2577,6 +2602,7 @@ export type RetireIntegrationResponse = z.infer<typeof retireIntegrationResponse
 export type EffectiveConfigResponse = z.infer<typeof effectiveConfigResponseSchema>;
 export type UpdateProjectConfigRequest = z.infer<typeof updateProjectConfigRequestSchema>;
 export type RepositoryConfigReading = z.infer<typeof repositoryConfigReadingSchema>;
+export type PromptsWithheldRecord = z.infer<typeof promptsWithheldSchema>;
 export type StagePromptResolutionDto = z.infer<typeof stagePromptResolutionSchema>;
 export type ExportProjectConfigRequest = z.infer<typeof exportProjectConfigRequestSchema>;
 export type ExportProjectConfigResponse = z.infer<typeof exportProjectConfigResponseSchema>;

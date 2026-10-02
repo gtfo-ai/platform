@@ -117,7 +117,7 @@ export const createOrganisationIntegrationsLoader = (
             null,
             null,
             `the organisation's communication account "${account.name}" names provider "${account.provider}", which this build does not register`,
-            { cause },
+            { cause, integrationId: account.integrationId },
           );
         }
         const fields = registration.communicationChannels;
@@ -128,6 +128,7 @@ export const createOrganisationIntegrationsLoader = (
               null,
               null,
               `the organisation's flagged chat account "${account.name}" (${account.provider}) names no channel of its own; an organisation-scoped notification has nowhere to go until it does, or until another account is flagged (PATCH /api/org)`,
+              { integrationId: account.integrationId },
             );
           }
           continue;
@@ -166,7 +167,7 @@ export const createOrganisationIntegrationsLoader = (
           `the organisation's communication account "${account.name}" (${account.provider}) has credentials that cannot be read: ${
             (cause as Error).message
           }`,
-          { cause },
+          { cause, integrationId: account.integrationId },
         );
       }
       const injected: InjectedSecret[] = Object.entries(secrets).map(([field, value]) => ({
@@ -188,6 +189,7 @@ export const createOrganisationIntegrationsLoader = (
           null,
           null,
           `the organisation's communication account "${account.name}" (${account.provider}) has configuration that fails its schema at: ${paths}`,
+          { integrationId: account.integrationId },
         );
       }
       let port: ReturnType<typeof registration.create>;
@@ -203,7 +205,7 @@ export const createOrganisationIntegrationsLoader = (
           null,
           null,
           `the organisation's communication account "${account.name}" (${account.provider}) could not be instantiated`,
-          { cause },
+          { cause, integrationId: account.integrationId },
         );
       }
       const communication = port as IntegrationPortByType['communication'];

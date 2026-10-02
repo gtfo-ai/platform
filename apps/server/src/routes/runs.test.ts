@@ -10,12 +10,16 @@
  * database and a row the WP-91 writer never touched.
  */
 import type { RunRecord, UserRole } from '@platform/contracts';
-import { runRecordSchema, runSettingsResponseSchema } from '@platform/contracts';
+import {
+  runPromptResponseSchema,
+  runRecordSchema,
+  runSettingsResponseSchema,
+} from '@platform/contracts';
 import { type FastifyInstance, fastify } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { toApiError } from '../errors.js';
-import type { RunSettings } from '../queries/pipeline-queries.js';
+import type { RunPrompt, RunSettings } from '../queries/pipeline-queries.js';
 import { type RunQueries, registerRunRoutes } from './runs.js';
 
 const RUN = '00000000-0000-4000-8000-0000000000e1';
@@ -31,6 +35,7 @@ interface World {
   role: UserRole | null;
   settings: RunSettings;
   run: RunRecord | null;
+  prompt: RunPrompt;
   /** Every run id a read was asked about, by read. */
   readonly reads: string[];
 }
@@ -84,6 +89,7 @@ const build = async (): Promise<{ app: FastifyInstance; world: World }> => {
     role: 'member',
     settings: { found: true, recorded: true, settingsHash: HASH, snapshot: SNAPSHOT },
     run: record(HASH),
+    prompt: { found: false },
     reads: [],
   };
   const app = fastify();
@@ -119,7 +125,10 @@ const build = async (): Promise<{ app: FastifyInstance; world: World }> => {
       return world.settings;
     },
     messages: unused,
-    prompt: unused,
+    prompt: async (runId) => {
+      world.reads.push(`prompt ${runId}`);
+      return world.prompt;
+    },
     commands: unused,
     contextPack: unused,
   };
@@ -236,5 +245,44 @@ describe('GET /api/runs/:run_id/settings (WP-112)', () => {
     expect(reply.statusCode, reply.body).toBe(200);
     expect(Object.hasOwn(reply.json() as object, 'settings_hash')).toBe(true);
     expect((reply.json() as { settings_hash: unknown }).settings_hash).toBeNull();
+  });
+});
+
+/**
+ * WP-121 (migration 0073, PROGRESS backlog 363): the run's prompt record says why the project's
+ * prompt files are missing from it — through the real router and its response schema.
+ */
+describe('GET /api/runs/:run_id/prompt carries what was withheld (WP-121)', () => {
+  let app: FastifyInstance;
+  let world: World;
+  const url = `/api/runs/${RUN}/prompt`;
+
+  beforeEach(async () => {
+    ({ app, world } = await build());
+    world.role = 'member';
+  });
+
+  it('serves the withheld record the run was created with, and null when nothing was withheld', async () => {
+    const withheld = {
+      reason: 'the credentials of integration "acme sentry" (sentry, 0f) cannot be decrypted',
+      integrations: [{ integration: 'integration "acme sentry" (sentry, 0f)', reason: 'old key' }],
+    };
+    const recorded = {
+      found: true as const,
+      recorded: true as const,
+      promptVersion: 'test@1',
+      systemPrompt: 'the role prompt',
+      userPrompt: 'the task block',
+    };
+    world.prompt = { ...recorded, promptsWithheld: withheld };
+    const reply = await app.inject({ method: 'GET', url });
+    expect(reply.statusCode, reply.body).toBe(200);
+    expect(runPromptResponseSchema.parse(reply.json()).prompts_withheld).toEqual(withheld);
+
+    world.prompt = { ...recorded, promptsWithheld: null };
+    const none = await app.inject({ method: 'GET', url });
+    expect(none.statusCode, none.body).toBe(200);
+    expect(Object.hasOwn(none.json() as object, 'prompts_withheld')).toBe(true);
+    expect(runPromptResponseSchema.parse(none.json()).prompts_withheld).toBeNull();
   });
 });

@@ -60,6 +60,7 @@ import type {
   InboxResponse,
   JsonObject,
   PipelineTemplate,
+  PromptsWithheldRecord,
   QuestionRecord,
   RunCommandRecord,
   RunModelUsageRecord,
@@ -78,6 +79,7 @@ import {
   contextPackRecordSchema,
   MAX_RUN_COMMANDS,
   pausedBudgetScopeSchema,
+  promptsWithheldSchema,
   taskPipelineDialSchema,
   taskStageOutcomeSchema,
   taskStageStateSchema,
@@ -536,6 +538,8 @@ export type RunPrompt =
       readonly promptVersion: string;
       readonly systemPrompt: string;
       readonly userPrompt: string;
+      /** `runs.prompts_withheld` (migration 0073, WP-121), read back through its shape. */
+      readonly promptsWithheld: PromptsWithheldRecord | null;
     };
 
 /**
@@ -551,6 +555,7 @@ export const findRunPrompt = async (database: Database, runId: string): Promise<
       promptVersion: runs.promptVersion,
       systemPrompt: runs.systemPrompt,
       userPrompt: runs.userPrompt,
+      promptsWithheld: runs.promptsWithheld,
     })
     .from(runs)
     .where(eq(runs.id, runId))
@@ -568,7 +573,25 @@ export const findRunPrompt = async (database: Database, runId: string): Promise<
     promptVersion: row.promptVersion,
     systemPrompt: row.systemPrompt,
     userPrompt: row.userPrompt,
+    promptsWithheld: promptsWithheldOfRun(row.promptsWithheld),
   };
+};
+
+/**
+ * `runs.prompts_withheld` as the DTO publishes it (WP-121). A stored document that is not the shape
+ * is published as a sentence saying so rather than as `null`: something was withheld, and a reader
+ * must not be told nothing was (rule 20). The table's check constraint makes that branch a hand edit.
+ */
+const promptsWithheldOfRun = (raw: unknown): PromptsWithheldRecord | null => {
+  if (raw === null || raw === undefined) return null;
+  const parsed = promptsWithheldSchema.safeParse(raw);
+  return parsed.success
+    ? parsed.data
+    : {
+        reason:
+          'the run recorded that its project prompt files were withheld, in a shape this release does not read',
+        integrations: [],
+      };
 };
 
 export type RunContextPack =

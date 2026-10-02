@@ -74,6 +74,7 @@ import {
   projectConfigWithRepository,
   refreshRepositoryConfig,
   shouldRecheckAfterIndex,
+  startPatternReadingReread,
   thresholdsFromConfig,
 } from '@platform/application';
 import type { Id, IsoDateTime, TaskMode } from '@platform/contracts';
@@ -90,6 +91,7 @@ import {
   accountOnlyFieldsOf,
   createGitMirrorCredentials,
   createProjectBindingSecrets,
+  secretFieldsOf,
 } from '@platform/integrations';
 import type pg from 'pg';
 import { injectedSecretRedactorForEnvironment } from './agent.js';
@@ -149,6 +151,11 @@ export interface ComposedKnowledgeIndexing {
    * repository-configuration refresher uses, so one process has one mirror.
    */
   readonly files: RepositoryFileSource;
+  /**
+   * Settles when the one-off re-read of `patterns` readings has nothing left to try (WP-121). A
+   * labelled seam: a test awaits it instead of polling the table; the runtime never waits on it.
+   */
+  readonly patternReread: Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -337,12 +344,31 @@ export const composeKnowledgeMirror = async (
 };
 
 /**
+ * Every credential the platform holds for a project, decrypted — the exact-value set of TD-012
+ * step 1 at a reading (WP-107, WP-121): the bindings' sealed credentials, a declared secret field
+ * left in a binding's or its account's configuration, and the organisation's communication
+ * accounts (backlogs 362, 364). Read once per call, outside any transaction; never logged.
+ */
+export const createProjectCredentials = (pool: pg.Pool, secretKey: string) =>
+  createProjectBindingSecrets({
+    repository: secretAdapters.createPostgresBindingRepository(pool, accountOnlyFieldsOf),
+    secrets: secretAdapters.createPostgresSecretStore({
+      sql: pool,
+      key: secretAdapters.deriveSecretKey(secretKey),
+    }),
+    secretFieldsOf,
+    organisationAccounts: () => secretAdapters.listCommunicationAccounts(pool),
+  });
+
+/**
  * The repository-configuration refresher over this process' mirror (WP-63).
  *
  * A reading stores two kinds of text: an invalid file's detail (key paths, which a strict schema
  * fills with typed keys) and, since WP-92, up to 64 files of `.agentic/prompts/` a human wrote. Both
  * are redacted before they are stored by TD-012's step 1 over the **decrypted credentials of the
- * project's bindings** (WP-107, TD-012's M6 amendment (2), PROGRESS backlog 316) and then step 2,
+ * project's bindings** (WP-107, TD-012's M6 amendment (2), PROGRESS backlog 316) — since WP-121
+ * every credential the platform holds for the project: a declared secret field left in a binding's
+ * configuration and the organisation's communication accounts too (backlogs 362, 364) — and then step 2,
  * the pattern rules with every minted-credential shape. A reading carries no run-scoped credential
  * (Q55): no run is in scope. The credentials are read through the same binding repository and
  * secret store the binding loader uses, once per reading, outside any transaction.
@@ -355,14 +381,12 @@ export const createRepositoryConfigRefresher = (options: {
   readonly logger: Logger;
 }) => {
   const redactor = redactionAdapters.patternRedactor();
-  const bindingSecrets = createProjectBindingSecrets({
-    repository: secretAdapters.createPostgresBindingRepository(options.pool, accountOnlyFieldsOf),
-    secrets: secretAdapters.createPostgresSecretStore({
-      sql: options.pool,
-      key: secretAdapters.deriveSecretKey(options.secretKey),
-    }),
-  });
-  return (request: { readonly projectId: Id; readonly commitSha?: string }) =>
+  const bindingSecrets = createProjectCredentials(options.pool, options.secretKey);
+  return (request: {
+    readonly projectId: Id;
+    readonly commitSha?: string;
+    readonly overPatternsOnly?: true;
+  }) =>
     refreshRepositoryConfig(
       {
         source: options.files,
@@ -543,6 +567,24 @@ export const composeKnowledgeIndexing = async (
 
   await runtime.start();
 
+  /**
+   * **The one-off re-read** (WP-121, TD-012's M7 amendment (1), PROGRESS backlog 359): every
+   * project whose stored reading was redacted by the pattern rules alone (migration 0073 marked them
+   * `patterns`) is read again through the same refresher an index run uses, a bounded batch per
+   * pass, in the background — the process starts serving while it runs, and a `patterns` row serves
+   * no prompt text meanwhile (`snapshotOfRow`). A project that cannot be read again keeps none and
+   * records why. In the process that runs the index, because that is the process with the mirror.
+   */
+  const patternRedactor = redactionAdapters.patternRedactor();
+  const patternReread = startPatternReadingReread({
+    store: configAdapters.createPostgresPatternReadingStore(options.pool),
+    refresh: (request) => refreshConfig(request),
+    // WP-121 review round 1: a failure's cause is published, so it gets step 1 as well.
+    credentials: createProjectCredentials(options.pool, options.secretKey),
+    redactText: (value) => patternRedactor.redactText(value).value,
+    logger: options.logger,
+  });
+
   const clock = { now: () => new Date().toISOString() as IsoDateTime };
   const ids = { next: (): Id => randomUUID() as Id };
   const knowledgeStore = new knowledgeAdapters.PostgresKnowledgeStore(options.pool);
@@ -671,7 +713,9 @@ export const composeKnowledgeIndexing = async (
     handlers: [...runtime.handlers, ...(librarian?.handlers ?? [])],
     missing,
     files: composedMirror.files,
+    patternReread: patternReread.settled,
     stop: async () => {
+      await patternReread.stop();
       await librarian?.stop();
       await runtime.stop();
     },

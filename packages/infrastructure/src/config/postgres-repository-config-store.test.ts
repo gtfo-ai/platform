@@ -4,13 +4,14 @@
  * here: what a stored row *means*, including a row this release did not write.
  */
 
-import { MAX_PROJECT_PROMPT_FILES } from '@platform/application';
+import { MAX_PROJECT_PROMPT_FILES, PATTERN_READING_WITHHELD_REASON } from '@platform/application';
 import type { Id, IsoDateTime } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import type { SqlExecutor } from '../events/sql.js';
 import {
   createPostgresRepositoryConfigStore,
   promptReadingOfColumn,
+  promptsWithheldOfColumn,
   snapshotOfRow,
 } from './postgres-repository-config-store.js';
 
@@ -27,6 +28,7 @@ describe('snapshotOfRow', () => {
         not_applied: [],
         detail: null,
         read_at: AT,
+        prompts_redaction: 'exact',
       }),
     ).toEqual({ status: 'absent', commitSha: SHA, readAt: AT.toISOString() });
     expect(
@@ -79,6 +81,7 @@ describe('the prompt directory a row carries (WP-92)', () => {
     detail: null,
     read_at: AT,
     prompts,
+    prompts_redaction: 'exact',
   });
   const stored = {
     files: {
@@ -133,6 +136,70 @@ describe('the prompt directory a row carries (WP-92)', () => {
   });
 });
 
+/**
+ * WP-121 (migration 0073, TD-012's M7 amendment (1), PROGRESS backlog 359): the one place every
+ * reader of a stored reading passes, so the one place a `patterns` row loses its prompt texts.
+ */
+describe('the redaction mark and the withheld record (WP-121)', () => {
+  const stored = {
+    files: { '.agentic/prompts/review.md': { kind: 'file', text: 'Be terse.', blobSha: 'a1' } },
+    truncated: false,
+  };
+  const row = (mark: unknown, withheld: unknown = null, prompts: unknown = stored) => ({
+    status: 'absent',
+    commit_sha: SHA,
+    config: null,
+    not_applied: [],
+    detail: null,
+    read_at: AT,
+    prompts,
+    prompts_redaction: mark,
+    prompts_withheld: withheld,
+  });
+
+  it.each([
+    ['patterns', 'patterns'],
+    ['a value this release does not know', 'exactish'],
+    ['no mark at all (a caller that did not select it)', undefined],
+  ])('serves no prompt text from a row marked %s, and says why', (_name, mark) => {
+    const snapshot = snapshotOfRow(row(mark));
+    expect(snapshot.prompts).toBeUndefined();
+    expect(snapshot.promptsWithheld).toEqual({
+      reason: PATTERN_READING_WITHHELD_REASON,
+      integrations: [],
+    });
+  });
+
+  it('says what a failed re-read recorded on a patterns row, rather than the standing sentence', () => {
+    const why = { reason: 'could not be read again: no mirror', integrations: [] };
+    expect(snapshotOfRow(row('patterns', why, null)).promptsWithheld).toEqual(why);
+  });
+
+  it('serves an exact row’s prompts, and a withheld record in place of prompts', () => {
+    expect(snapshotOfRow(row('exact')).prompts).toEqual(stored);
+    expect(snapshotOfRow(row('exact')).promptsWithheld).toBeUndefined();
+    const why = {
+      reason: 'the credentials of integration "s" cannot be decrypted',
+      integrations: [{ integration: 'integration "s" (sentry, 1)', reason: 'old key' }],
+    };
+    const withheld = snapshotOfRow(row('exact', why, stored));
+    expect(withheld.promptsWithheld).toEqual(why);
+    expect(withheld.prompts).toBeUndefined();
+  });
+
+  it.each([
+    ['a list', []],
+    ['no reason', { integrations: [] }],
+    ['an entry with no reason', { reason: 'r', integrations: [{ integration: 'i' }] }],
+  ])(
+    'reads a withheld record with %s as withheld, never as nothing withheld (rule 20)',
+    (_n, raw) => {
+      expect(promptsWithheldOfColumn(raw)?.reason).toMatch(/not the shape this release writes/);
+      expect(snapshotOfRow(row('exact', raw)).prompts).toBeUndefined();
+    },
+  );
+});
+
 describe('createPostgresRepositoryConfigStore', () => {
   it('replaces the project’s row, writing values only for a valid reading', async () => {
     const calls: { text: string; values: unknown[] }[] = [];
@@ -159,6 +226,9 @@ describe('createPostgresRepositoryConfigStore', () => {
     ]);
     // WP-92: a reading that did not read the prompt directory stores `null`, never `{}`.
     expect(calls[0]?.values[7]).toBeNull();
+    // WP-121: every recorded reading is marked `exact`, and nothing withheld is `null`.
+    expect(calls[0]?.text).toMatch(/'exact'/);
+    expect(calls[0]?.values[8]).toBeNull();
     expect(await store.read('00000000-0000-4000-8000-0000000000aa' as Id)).toBeNull();
   });
 });

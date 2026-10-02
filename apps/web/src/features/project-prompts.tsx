@@ -13,6 +13,8 @@
  *    *Prompt* tab shows what a run was given).
  *  - **the stages** — `stage_prompts`: the planner's own resolution of each stage's two keys; this
  *    card lists the ones a stage is given or the configuration names.
+ *  - **what was withheld** — `repository.prompts_withheld` (WP-121, backlog 363): why the reading
+ *    serves no prompt text, and the integrations whose credentials could not be read.
  *
  * *Re-read now* is the existing `POST …/config/refresh` (WP-63), the same command as the repository
  * card's button. Every string from the server — paths, a configured value — is rendered as text
@@ -64,6 +66,8 @@ export const ProjectPromptFiles = ({ projectId }: { readonly projectId: string }
   const refresh = commands.refreshConfig;
   const repository = config.data?.repository;
   const prompts = repository?.prompts ?? null;
+  // WP-121 (PROGRESS backlog 363): the stored reading says why it serves no prompt text.
+  const withheld = repository?.prompts_withheld ?? null;
   const stages = (config.data?.stage_prompts ?? []).filter(
     (entry) => entry.given || entry.declared,
   );
@@ -95,12 +99,37 @@ export const ProjectPromptFiles = ({ projectId }: { readonly projectId: string }
           )}
         </p>
       )}
-      {repository === undefined ? null : prompts === null ? (
+      {repository === undefined ? null : withheld !== null ? (
+        <div className="flex flex-col gap-1 text-xs" role="note" aria-label="Prompt files withheld">
+          <p>
+            <strong>The prompt files of this reading are withheld.</strong> No stage is given one,
+            and every run planned meanwhile records why.
+          </p>
+          <p className="text-fg-muted">
+            <UntrustedText value={withheld.reason} />
+          </p>
+          {withheld.integrations.length === 0 ? null : (
+            <ul
+              className="flex flex-col gap-1"
+              aria-label="Integrations whose credentials could not be read"
+            >
+              {withheld.integrations.map((entry) => (
+                <li key={entry.integration} className="flex flex-wrap items-center gap-2">
+                  <Badge tone="warning">unreadable</Badge>
+                  <UntrustedText value={entry.integration} />
+                  <span className="text-fg-muted">
+                    <UntrustedText value={entry.reason} />
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : prompts === null ? (
         <p className="text-xs text-fg-muted">
-          This reading holds no prompt files: nothing has read the repository yet, it was read
-          before prompt files were, or the prompt texts were withheld because an integration’s
-          credentials could not be decrypted (a re-read says which). Until a reading holds them, a
-          stage is given no prompt file, and a file a stage’s key names is reported unread.
+          This reading holds no prompt files: nothing has read the repository yet, or it was read
+          before prompt files were. Until a reading holds them, a stage is given no prompt file, and
+          a file a stage’s key names is reported unread.
         </p>
       ) : prompts.files.length === 0 ? (
         <p className="text-xs text-fg-muted">

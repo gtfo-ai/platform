@@ -690,6 +690,7 @@ describe('the prompt and context-pack reads, and the rows that predate their wri
           contextPack: record,
           settings: null,
           reserveUsd: null,
+          promptsWithheld: null,
         });
       }
       await client.query('commit');
@@ -714,6 +715,85 @@ describe('the prompt and context-pack reads, and the rows that predate their wri
       [written],
     );
     expect(rows.map((row) => [row.run_id, Number(row.count)])).toEqual([[written[0], 4]]);
+  });
+
+  /**
+   * WP-121 (migration 0073, PROGRESS backlog 363): **why the project's prompt files are missing
+   * from a run's prompt is on its prompt record** — written by the production `RunRepository.insert`,
+   * served by the production projection, and `null` for a run that withheld nothing.
+   */
+  it('serves the withheld record the run was created with, and null for a run that withheld nothing (WP-121)', async () => {
+    const store = pipelineAdapters.createPostgresPipelineStore({ templates: SHIPPED_TEMPLATES });
+    const withheld = {
+      reason: 'the credentials of integration "acme sentry" (sentry, 0f) cannot be decrypted',
+      integrations: [{ integration: 'integration "acme sentry" (sentry, 0f)', reason: 'old key' }],
+    };
+    const ids = ['00000000-0000-4000-8000-0000000c1a01', '00000000-0000-4000-8000-0000000c1a02'];
+    const org = await pool.query<{ id: string }>(
+      "insert into organizations (name) values ('withheld') returning id",
+    );
+    const project = await pool.query<{ id: string }>(
+      `insert into projects (org_id, key, name, repo_url)
+       values ($1, 'held', 'Held', 'https://git.example.test/acme/held.git') returning id`,
+      [org.rows[0]?.id],
+    );
+    const task = await pool.query<{ id: string }>(
+      `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, state,
+                          current_stage)
+       values ($1, 'fake-jira', 'ACME-121', 'https://jira.example.test/browse/ACME-121', 'feature',
+               'cancelled', 'refinement') returning id`,
+      [project.rows[0]?.id],
+    );
+    const client = await pool.connect();
+    try {
+      await client.query('begin');
+      const tx = { adapter: 'postgres', client } as unknown as Transaction;
+      for (const [index, record] of [withheld, null].entries()) {
+        await store.runs.insert(tx, {
+          id: ids[index] as Id,
+          taskId: task.rows[0]?.id as Id,
+          projectId: project.rows[0]?.id as Id,
+          stage: null,
+          role: 'product_manager',
+          mode: 'normal',
+          attempt: 1,
+          model: 'claude-opus-5',
+          effort: 'high',
+          promptVersion: 'test',
+          status: 'completed',
+          terminalReason: null,
+          sessionId: null,
+          numTurns: 0,
+          usage: null,
+          cost: null,
+          wallMs: 0,
+          createdAt: AT as IsoDateTime,
+          startedAt: AT as IsoDateTime,
+          systemPrompt: 'the role prompt',
+          userPrompt: 'the task block, with no project prompt file',
+          redactionCount: 0,
+          contextPack: null,
+          settings: null,
+          reserveUsd: null,
+          promptsWithheld: record,
+        });
+      }
+      await client.query('commit');
+    } finally {
+      client.release();
+    }
+    expect(await findRunPrompt(drizzled, ids[0] as string)).toMatchObject({
+      recorded: true,
+      promptsWithheld: withheld,
+    });
+    expect(await findRunPrompt(drizzled, ids[1] as string)).toMatchObject({
+      recorded: true,
+      promptsWithheld: null,
+    });
+    // The column's own check refuses a record no writer produces.
+    await expect(
+      pool.query(`update runs set prompts_withheld = '{"reason": "r"}' where id = $1`, [ids[1]]),
+    ).rejects.toThrow(/runs_prompts_withheld_shape/);
   });
 });
 

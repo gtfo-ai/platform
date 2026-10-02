@@ -10,6 +10,7 @@
  * `created_at` is `now()`, so two tasks created in one transaction share the timestamp exactly, and
  * a cursor of the timestamp alone would silently skip whichever fell after a page boundary.
  */
+import { PATTERN_READING_WITHHELD_REASON } from '@platform/application';
 import {
   agenticConfigSchema,
   effectiveConfigResponseSchema,
@@ -311,6 +312,8 @@ describe('the effective configuration’s layers (WP-63)', () => {
     repo_detail: detail,
     repo_read_at: READ_AT,
     repo_prompts: null,
+    repo_prompts_redaction: 'exact',
+    repo_prompts_withheld: null,
   });
   const SETTINGS = {
     version: 1,
@@ -570,7 +573,10 @@ describe('the project prompt files the configuration read publishes (WP-113)', (
     updatedAt: READ_AT,
     proposedRiskClasses: null,
   });
-  const layers = (prompts: unknown) => ({
+  const layers = (
+    prompts: unknown,
+    mark: { readonly redaction?: string | null; readonly withheld?: unknown } = {},
+  ) => ({
     orgSettings: {},
     repo_status: 'absent',
     repo_commit_sha: SHA,
@@ -579,6 +585,8 @@ describe('the project prompt files the configuration read publishes (WP-113)', (
     repo_detail: null,
     repo_read_at: READ_AT,
     repo_prompts: prompts,
+    repo_prompts_redaction: mark.redaction === undefined ? 'exact' : mark.redaction,
+    repo_prompts_withheld: mark.withheld ?? null,
   });
   const STORED = {
     files: {
@@ -596,12 +604,16 @@ describe('the project prompt files the configuration read publishes (WP-113)', (
     },
     truncated: false,
   };
-  const answer = (config: Record<string, unknown>, prompts: unknown) =>
+  const answer = (
+    config: Record<string, unknown>,
+    prompts: unknown,
+    mark: Parameters<typeof layers>[1] = {},
+  ) =>
     effectiveConfigResponseSchema.parse(
       effectiveConfigResponseOf({
         projectId: ID,
         row: row(config),
-        layers: layers(prompts),
+        layers: layers(prompts, mark),
         redactText,
       }),
     );
@@ -687,5 +699,43 @@ describe('the project prompt files the configuration read publishes (WP-113)', (
       { key: 'prompt_append', status: 'unread', declared: true, given: true },
     ]);
     expect(repositoryReadingOf(null).prompts).toBeNull();
+  });
+
+  it.each([
+    ['patterns', 'patterns'],
+    ['a row whose mark was not selected', null],
+  ])(
+    'serves no prompt text from a reading marked %s, and says why (WP-121)',
+    (_label, redaction) => {
+      const response = answer(
+        { version: 1, stages: { implementation: { prompt: 'prompts/implementation.md' } } },
+        STORED,
+        { redaction },
+      );
+      expect(response.repository.prompts).toBeNull();
+      expect(response.repository.prompts_withheld).toEqual({
+        reason: PATTERN_READING_WITHHELD_REASON,
+        integrations: [],
+      });
+      // The planner's own resolution: the declared file is `unread`, never given.
+      expect(
+        response.stage_prompts.find(
+          (entry) => entry.stage === 'implementation' && entry.key === 'prompt',
+        ),
+      ).toMatchObject({ status: 'unread', declared: true });
+      expect(JSON.stringify(response)).not.toContain(SECRET_TEXT);
+    },
+  );
+
+  it('publishes the integrations an exact reading withheld its prompt texts for (WP-121)', () => {
+    const withheld = {
+      reason: 'the credentials of integration "Sentry" (sentry, 0f) cannot be decrypted',
+      integrations: [{ integration: 'integration "Sentry" (sentry, 0f)', reason: 'wrong key' }],
+    };
+    const response = answer({ version: 1 }, null, { withheld });
+    expect(response.repository.prompts).toBeNull();
+    expect(response.repository.prompts_withheld).toEqual(withheld);
+    // And nothing withheld is `null`, never an empty record.
+    expect(answer({ version: 1 }, STORED).repository.prompts_withheld).toBeNull();
   });
 });

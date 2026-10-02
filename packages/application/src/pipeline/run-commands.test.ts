@@ -66,6 +66,7 @@ const world = async (owner: string | null = OWNER): Promise<World> => {
       contextPack: null,
       settings: null,
       reserveUsd: null,
+      promptsWithheld: null,
       status: 'running',
       terminalReason: null,
       sessionId: null,

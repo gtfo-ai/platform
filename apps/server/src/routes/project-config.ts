@@ -339,7 +339,7 @@ export const registerProjectConfigRoutes = async (
       schema: {
         summary: 'Re-read .agentic/config.yml from the default branch now',
         description:
-          "Reads the repository's own `.agentic/config.yml` from the project's **default branch** (BD-025 §1; never a task or merge-request branch) and records what it means: `absent`, `valid` (merged over the settings, winning where it states a key) or `invalid` with the key paths it failed on — which refuses every run of the project until a later reading parses. The same reading happens after every knowledge index run. `409 repository_unreadable` names why the branch could not be read; the previous reading then stands. When an integration's credentials cannot be decrypted the configuration is still stored and the prompt files are not: `prompts_withheld` names the integration (WP-107). An `Idempotency-Key` is optional: a replay answers the stored reading without reading again.",
+          "Reads the repository's own `.agentic/config.yml` from the project's **default branch** (BD-025 §1; never a task or merge-request branch) and records what it means: `absent`, `valid` (merged over the settings, winning where it states a key) or `invalid` with the key paths it failed on — which refuses every run of the project until a later reading parses. The same reading happens after every knowledge index run. `409 repository_unreadable` names why the branch could not be read; the previous reading then stands. When an integration's credentials cannot be decrypted the configuration is still stored and the prompt files are not: `prompts_withheld` names the integration (WP-107), and since WP-121 the stored reading records it too (`repository.prompts_withheld`, on this answer and on `GET …/config`). An `Idempotency-Key` is optional: a replay answers the stored reading without reading again.",
         tags: ['projects'],
         params: projectParamsSchema,
         response: {
@@ -376,6 +376,11 @@ export const registerProjectConfigRoutes = async (
             'repository_unreadable',
             `the default branch could not be read, so the previous reading stands: ${options.redactText(outcome.reason)}`,
           );
+        }
+        if (outcome.status === 'superseded') {
+          // Only a conditional reading (the upgrade re-read, WP-121) can answer this; this command
+          // writes unconditionally, so reaching it is a defect, not the caller's fault.
+          throw new Error('an unconditional configuration refresh answered superseded');
         }
         effectReturned();
         await options.queries.recordAction({

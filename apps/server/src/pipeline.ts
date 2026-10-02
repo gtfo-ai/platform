@@ -749,6 +749,8 @@ export const createProjectSettingsPort = (
       // WP-92: the prompt directory the same reading recorded (redacted, bounded), or `null` when
       // no reading has read it — a stage's `project_prompt` blocks are built from this.
       repositoryPrompts: snapshot?.prompts ?? null,
+      // WP-121 (backlog 363): why the reading serves none, frozen on the run the stage creates.
+      repositoryPromptsWithheld: snapshot?.promptsWithheld ?? null,
       // Parsed, not cast — this column decides whether a plan waits for a human, and a document
       // that does not match the current schema must not be read as one that does. A row that fails
       // is `null`, which is the *stated* "never materialised" branch the gate names, and it is

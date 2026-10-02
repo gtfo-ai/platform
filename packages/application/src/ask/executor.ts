@@ -542,6 +542,8 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         // WP-131 (migration 0072): the per-question cap it was admitted at, which every cap holds
         // it at if it ends with nobody measuring it — the second insert, standing rule 49.
         reserveUsd: askFeature(verdict.settings).budgetUsd,
+        // WP-121: an ask is given no project prompt file, so nothing of one was withheld from it.
+        promptsWithheld: null,
       });
       /**
        * The lease, claimed in the **same transaction as the row** — the stage executor's rule and
