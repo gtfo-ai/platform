@@ -431,6 +431,22 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 > `SseHub`, and it cannot be a `NOTIFY` payload (broadcasts are capped at 7 000 bytes and carry
 > hints), so the frames a client renders have to be read back from these rows — which is what having
 > rows finally makes possible.
+
+> **Amended at WP-117 (PROGRESS backlog 287) — the `system · init` row's `skills` is the CLI's
+> inventory, not the run's allow-list.** The normaliser copies the CLI's `init` message into the
+> transcript as it arrived, `skills` included (`initEntry` in
+> `packages/infrastructure/src/runner/transcript-normaliser.ts`), and the pinned CLI lists there
+> every skill it *discovered*: its own bundled skills — fifteen of them beside the plugin's
+> `agentic:kb` on `claude` 2.1.267, measured at WP-83, among them `deep-research`, `update-config` and
+> `run`). What a run may use is `Options.skills`, the row above: `skillsFor` in
+> `packages/application/src/pipeline/planner.ts` — the stage role's `SKILLS_BY_ROLE` row, less every
+> provider skill no binding of the project names — qualified as `agentic:<name>`. The primary restriction is
+> the provisioning copy — `WorkspaceSpec.skills`: a skill the role may not use is never written into the
+> workspace; `Options.skills` is the second lane, and the CLI enforces it, not the inventory: the model's own listing carries only the allowed skills and the
+> `Skill` tool refuses the rest with *"Skill update-config is not in this session's skills
+> allowlist"* (measured at WP-83; the three cases are recorded in
+> `packages/infrastructure/src/runner/options.ts`). Nothing in the platform reads the `init` row's
+> list as a capability, and a reader added later must not.
 - **Steer:** the run's input is an async queue; a `run.steered` command pushes an `SDKUserMessage` (author recorded). **Pause/cancel:** `interrupt()`; cancel then ends the run with `cancelled`. **Tighten:** `applyFlagSettings` to reduce permissions after untrusted input if a policy requires (future).
 
 > **As built at WP-101 (TD-028 decision 11): a human's stop keeps what the session measured.** A

@@ -16,8 +16,10 @@
  * So `verify` no longer has a list. It is exactly the concatenation of the groups below, and each
  * group is one CI job's one command. A step can therefore only be added to `verify` by adding it to
  * a group, which is by construction the thing CI runs: the two cannot disagree about a *step*
- * at all. The groups are the split CI already had — static checks, the compiler, the test run —
- * so this changes how the workflow names its steps, not what runs or in how many jobs.
+ * at all. The groups began as the split CI already had — static checks, the compiler, the test
+ * run — so the change renamed the workflow's steps rather than changing what ran or in how many
+ * jobs. There are four now: the bundle budget (WP-20) is a group and a CI job of its own, for the
+ * reason given at `verify:bundle` below.
  *
  * What derivation alone still cannot see is a **new group** that no job runs, and that residue is
  * what `verify.test.ts` closes: it reads this table and the workflow file, and fails when a group

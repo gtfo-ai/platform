@@ -440,15 +440,23 @@ its end, with credentials redacted — beside the job names.
 
 ## 5. Run detail and the transcript
 
-Click a run. Header metrics, then three tabs:
+Click a run. Header metrics, then four tabs:
 
 - **Transcript** — the live stream of the agent's turn: messages, tool calls and their results, as
   they happen. This is the "click and watch" part of the product. Everything in it is rendered as
   **text**; the application has no markdown-to-HTML step anywhere, on purpose, because all of it —
   model output, tool results, file contents — is untrusted
-  ([BD-022](decisions/business/BD-022-external-text-is-untrusted.md)).
+  ([BD-022](decisions/business/BD-022-external-text-is-untrusted.md)). The first row, **system ·
+  init**, is the Claude Code CLI's own start-up message, shown as the CLI sent it. Its `skills` list
+  is everything the CLI found, including its own bundled skills (`deep-research`, `update-config`
+  and others), and it is **not** what this run could use: the run was handed only its role's
+  platform skills (`agentic:kb` and the like) — the only skills written into its workspace — and the
+CLI refuses any other.
 - **Prompt** — the exact system and user prompt that produced this run.
 - **Context pack** — what was retrieved and put in front of the model.
+- **Settings** — the project settings this run was planned with, frozen when the run was created
+  and redacted then. The line under the header says whether they were the same as the task's
+  previous run's.
 
 You can **cancel** the run (member), **retry** it with a different model or effort (member — this
 creates a *new* run rather than changing this one), and leave **feedback** scoped to the stage.
@@ -476,17 +484,21 @@ and reads *cancelled* straight away. If the runner dies after you cancel and bef
 session, the platform ends the run itself a few minutes later and it reads *lease expired* rather
 than *cancelled*, because nothing confirmed the stop.
 
-One tab can answer "not available" rather than showing you a document, and that too is deliberate:
+Three tabs can refuse to show you a document, and that is deliberate: each is the record of what
+this run was given, and none is re-derived after the fact. A run started by this build shows all
+three. A run started before the platform recorded one does not, and never will — **Prompt** and
+**Context pack** say the document *could not be loaded* and give the server's reason, **Settings**
+says the run predates the record:
 
-- **Context pack** — the stored row cannot hold two of the fields the pack requires, and summing what
-  is there would publish "budget equals total" as a fact the screen would then render as true.
-
-**Prompt** used to be the second, and is not any more: the two columns have had a writer since
-migration 0038, so a run started by this build shows the exact prompt it was given — redacted at the
-write, because a prompt carries the credentials the run was handed. A run started *before* that
-migration still answers "not available", and always will: the prompt is not re-derivable, because
-its delimiter is a fresh random value per prompt and its knowledge excerpts are a point-in-time
-read, so re-assembling one would show you a document that run never saw.
+- **Prompt** — recorded since migration 0038, redacted at the write, because a prompt carries the
+  credentials the run was handed. An older prompt is not re-derivable: its delimiter is a fresh
+  random value per prompt and its knowledge excerpts are a point-in-time read, so re-assembling one
+  would show you a document that run never saw.
+- **Context pack** — recorded with the run since migration 0041, budget included. For an older run
+  only the retrieved rows exist, and summing them would publish "budget equals total" as a fact. A
+  pack with nothing in it is shown as an empty pack, not refused.
+- **Settings** — recorded since WP-91. Today's project settings are not shown in an older run's
+  place, because they are not the ones it was planned with.
 
 This is the product's rule about numbers: every one shown has a definition, and one that has none is
 absent rather than invented. It is why the **Agents** screen shows no "tokens per minute" — a rate
@@ -504,8 +516,21 @@ identities**, and only if your role may decide it — the same rule as the butto
 question arrives with a button per option, and a reply *typed* in its Slack thread answers it too,
 under the same mapping rule; once it is answered anywhere, or expires, the Slack message says so and
 its buttons go. A decision taken in Slack appears in the task's audit like one taken here. So the
-inbox links to the task rather than pretending to be the only way in. A
-question is due after the project's question timeout — **1 working day** by default, counted on the
+inbox links to the task rather than pretending to be the only way in.
+
+**Quiet hours are the exception.** When a project has its daily digest on and quiet hours set, a
+question raised inside the window is not posted to the task's Slack thread at all: it waits as a
+line in the next digest, without buttons. A reply typed in the task's thread (one an earlier
+message opened) then does not answer it — unless another question posted in that thread is still
+open, in which case the reply answers **that** one (and with two or more open it is ignored) — and
+otherwise it is recorded as feedback on the task, while a blocking question keeps the task waiting.
+The half-time reminder does not change this: it is stored as a reminder, not a question. So answer
+it here or on the task page. An approval raised in
+quiet hours is the same: a digest line without buttons. A project that wants questions to interrupt
+at night lists `question` among the digest's urgent classes (`features.digest.urgent`, beside the
+default `escalation` and `budget_exhausted`, which the list replaces rather than extends).
+
+A question is due after the project's question timeout — **1 working day** by default, counted on the
 organisation's working calendar, so one asked late on a Friday is due on Monday — and an expired
 question is not silently dropped; it moves the task to needing a human. It also **leaves the
 inbox**, because it can no longer be answered — the inbox says so above the list — and the task page

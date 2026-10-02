@@ -484,11 +484,11 @@ export const readinessReportDataSchema = z.strictObject({
 export const MAX_PROPOSED_CLASS_PATHS = 12;
 
 /**
- * DiscoveryDraft. technical/12 does not list its `data` fields; this shape follows the outputs
- * product/06 § "Step 2 — Technical discovery" names: drafted `technical/*.md` pages with
- * confidence markers, commands marked *verified* only when actually run, documents that are
- * linked rather than copied, and the questions the agent could not answer itself.
- * See docs/OPEN-QUESTIONS.md Q35.
+ * DiscoveryDraft. technical/12 lists its `data` fields since WP-117 — change the two together. The
+ * shape follows the outputs product/06 § "Step 2 — Technical discovery" names: drafted
+ * `technical/*.md` pages with confidence markers, commands marked *verified* only when actually
+ * run, documents that are linked rather than copied, and the questions the agent could not answer
+ * itself. See docs/OPEN-QUESTIONS.md Q35 (Decision log).
  */
 export const discoveryDraftDataSchema = z.strictObject({
   documents: z.array(
