@@ -157,14 +157,14 @@ export class LauncherService {
       throw new WorkspaceError(
         'invalid_spec',
         'a spec with no repository carries no credential: nothing will fetch or push',
-        { runId: spec.runId },
+        { runId: spec.runId, reason: 'run_credential_scope_mismatch' },
       );
     }
     if (spec.repo !== null && !spec.readOnly && credential === null) {
       throw new WorkspaceError(
         'invalid_spec',
         'a spec that writes must carry a run credential (TD-028, WP-76 amendment decision 3)',
-        { runId: spec.runId },
+        { runId: spec.runId, reason: 'run_credential_scope_mismatch' },
       );
     }
     // `hold` refuses a push credential on a read-only spec and a blank one (BD-021, rule 18).

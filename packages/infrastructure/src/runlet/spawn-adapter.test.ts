@@ -50,7 +50,7 @@ interface Harness {
   readonly volume: ControlVolume;
   readonly shim: RunletShim;
   readonly clock: ReturnType<typeof manualClock>;
-  readonly spawn: (options: SpawnOptions) => ReturnType<ReturnType<typeof createRunletSpawn>>;
+  readonly spawn: ReturnType<typeof createRunletSpawn>;
   readonly stderr: string[];
 }
 
@@ -129,6 +129,29 @@ describe('the runner-side SpawnedProcess', () => {
     expect((await stdout).toString()).toBe('echo:hello');
     expect(harness.stderr.join('')).toBe('a warning');
     expect(child.exitCode).toBe(5);
+  });
+
+  it('sends stderr to the sink set on the spawn, which replaces the option (WP-127)', async () => {
+    const harness = await withShim();
+    const set: string[] = [];
+    harness.spawn.setStderrSink((chunk) => set.push(chunk));
+    const child = harness.spawn(
+      spawnOptionsFor("process.stderr.write('to the sink'); process.exit(3);"),
+    );
+    child.stdin.end();
+    expect(await exitOf(child)).toEqual([3, null]);
+    expect(set.join('')).toBe('to the sink');
+    expect(harness.stderr).toEqual([]);
+
+    // A shim serves one child, so the `null` case is a second run's.
+    const second = await withShim();
+    second.spawn.setStderrSink(null);
+    const dropped = second.spawn(
+      spawnOptionsFor("process.stderr.write('nowhere'); process.exit(0);"),
+    );
+    dropped.stdin.end();
+    expect(await exitOf(dropped)).toEqual([0, null]);
+    expect(second.stderr).toEqual([]);
   });
 
   it('carries 16 MiB of stdout through unchanged, against the real shim', async () => {

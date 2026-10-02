@@ -1260,6 +1260,9 @@ describe('the clone’s checkout (WP-105)', () => {
       // Terminal: `classifyProvisionFailure` retries `workspace_failed` and not this.
       code: 'invalid_spec',
       message: new RegExp(`the commit ${BASE} this run must start from is not in the project`),
+      // WP-127 (backlog 351): what the task is told — platform vocabulary, the commit as a sha.
+      reason: 'checkout_commit_missing',
+      commit: BASE,
     });
     expect(runContainerCreates()).toBe(0);
     // The check comes before any checkout, and no line of the script can create a branch.

@@ -152,6 +152,50 @@ describe('the client', () => {
     });
   });
 
+  it('carries the launcher’s reason code and commit across, and drops a commit that is not a sha', async () => {
+    const sha = '0123456789abcdef0123456789abcdef01234567';
+    const answering = (commit: string) =>
+      clientWith(() => ({
+        status: 400,
+        body: JSON.stringify({
+          error: {
+            code: 'invalid_spec',
+            message: 'refused',
+            runId: null,
+            detail: null,
+            reason: 'checkout_commit_missing',
+            commit,
+          },
+        }),
+      })).client;
+    await expect(answering(sha).health()).rejects.toMatchObject({
+      code: 'invalid_spec',
+      reason: 'checkout_commit_missing',
+      commit: sha,
+    });
+    // A body whose `commit` is not a sha is not a refusal this client can read: the status is.
+    await expect(answering('FAKE-not-a-sha').health()).rejects.toMatchObject({
+      code: 'invalid_spec',
+      reason: 'launcher_request_refused',
+      commit: null,
+    });
+  });
+
+  it('names the transport’s own reason when the launcher sent none (WP-127)', async () => {
+    const reasonOf = async (status: number, body: string) =>
+      clientWith(() => ({ status, body }))
+        .client.health()
+        .catch((error: unknown) => (error as { reason: unknown }).reason);
+    expect(await reasonOf(401, errorBody('unauthorized', 'no'))).toBe('launcher_unauthorized');
+    expect(await reasonOf(400, errorBody('bad_request', 'no'))).toBe('launcher_request_refused');
+    expect(await reasonOf(500, errorBody('internal', 'no'))).toBe('launcher_internal_error');
+    expect(await reasonOf(400, errorBody('invalid_spec', 'no'))).toBeNull();
+    const unreachable = await clientWith(() => Promise.reject(new Error('ECONNREFUSED')))
+      .client.health()
+      .catch((error: unknown) => (error as { reason: unknown }).reason);
+    expect(unreachable).toBe('launcher_unreachable');
+  });
+
   it('falls back to the status when the body is not a refusal it can read', async () => {
     // A proxy's own 502 page, a connection reset mid-body, a launcher that died between the header
     // and the payload. "The body did not parse" must not become `internal`, which is terminal-ish

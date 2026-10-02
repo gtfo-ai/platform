@@ -42,7 +42,13 @@ import {
   usdSchema,
 } from '@platform/contracts';
 import * as z from 'zod';
-import { existingProtectedPathsSchema } from './workspace.js';
+import {
+  existingProtectedPathsSchema,
+  WorkspaceError,
+  type WorkspaceErrorCode,
+  type WorkspaceErrorReason,
+  workspaceErrorReasonSchema,
+} from './workspace.js';
 
 // ── Time ─────────────────────────────────────────────────────────────────────
 
@@ -592,19 +598,95 @@ export interface ClaudeRunner {
  * is the fail-closed default: a new failure shape escalates to a human rather than spinning.
  *
  * **The message never reaches stored state.** A runner's error may quote a provider, a URL or a
- * credential and the executor holds no redactor, so only the class name and the retry count are
- * written (`events.payload`, the blocker brief); the message goes to the log line beside them.
+ * credential and the executor holds no redactor, so only the class name, the retry count and the
+ * {@link RunStartDiagnosis} are written (`events.payload`, the blocker brief); the message goes to
+ * the log line beside them. The diagnosis is the part a human can act on (WP-127, PROGRESS backlog
+ * 351): the workspace's error kind and its platform-chosen reason code, both closed vocabularies,
+ * and a commit only through `shaSchema`.
  */
 export class RunStartError extends Error {
   override readonly name = 'RunStartError';
   /** `true` when the same spec could start on a later attempt: a transport fault, not a refusal. */
   readonly retryable: boolean;
+  /** What the platform itself knows about the cause, or `null` when it knows nothing it wrote. */
+  readonly diagnosis: RunStartDiagnosis | null;
 
-  constructor(message: string, options: { readonly retryable: boolean; readonly cause?: unknown }) {
+  constructor(
+    message: string,
+    options: {
+      readonly retryable: boolean;
+      readonly cause?: unknown;
+      readonly diagnosis?: RunStartDiagnosis | null;
+    },
+  ) {
     super(message, options.cause === undefined ? undefined : { cause: options.cause });
     this.retryable = options.retryable;
+    this.diagnosis =
+      options.diagnosis ??
+      (options.cause instanceof WorkspaceError ? diagnosisOfWorkspaceError(options.cause) : null);
   }
 }
+
+/**
+ * The platform-written half of a start failure (WP-127): every field a closed vocabulary or a sha.
+ * Never a message, never a detail — those can quote a daemon, an image reference or a provider.
+ */
+export interface RunStartDiagnosis {
+  readonly kind: WorkspaceErrorCode;
+  readonly reason: WorkspaceErrorReason | null;
+  readonly commit: string | null;
+}
+
+export const diagnosisOfWorkspaceError = (error: WorkspaceError): RunStartDiagnosis => ({
+  kind: error.code,
+  reason: error.reason,
+  commit: error.commit,
+});
+
+const WORKSPACE_ERROR_KINDS: readonly WorkspaceErrorCode[] = [
+  'invalid_spec',
+  'engine_unavailable',
+  'workspace_failed',
+  'not_found',
+];
+
+/**
+ * The sentence a start failure contributes to the run's error and the task's escalation — **platform
+ * text only** (WP-127, PROGRESS backlog 351).
+ *
+ * The class name, then the diagnosis when there is one: `RunStartError: invalid_spec,
+ * checkout_commit_missing, commit 0123abc…`. Each field is re-read through its own schema here rather
+ * than trusted to have been set by the constructor, because a `RunStartError` is an object any
+ * caller can build, and this string is written with no redactor. A field that does not parse is
+ * left out, never quoted.
+ */
+export const describeStartFailure = (error: unknown): string => {
+  if (!(error instanceof Error)) {
+    return 'unknown error';
+  }
+  const diagnosis =
+    error instanceof RunStartError
+      ? error.diagnosis
+      : error instanceof WorkspaceError
+        ? diagnosisOfWorkspaceError(error)
+        : null;
+  if (diagnosis === null) {
+    return error.name;
+  }
+  const parts: string[] = [];
+  if (WORKSPACE_ERROR_KINDS.includes(diagnosis.kind)) {
+    parts.push(diagnosis.kind);
+  }
+  const reason = workspaceErrorReasonSchema.safeParse(diagnosis.reason).data;
+  if (reason !== undefined) {
+    parts.push(reason);
+  }
+  const commit = shaSchema.safeParse(diagnosis.commit).data;
+  if (commit !== undefined) {
+    parts.push(`commit ${commit}`);
+  }
+  return parts.length === 0 ? error.name : `${error.name}: ${parts.join(', ')}`;
+};
 
 /**
  * Is this failure worth another attempt?

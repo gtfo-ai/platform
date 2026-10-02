@@ -543,22 +543,92 @@ export type WorkspaceErrorCode =
   /** `attach`, `kill`, `export` or `destroy` named a run this provider does not have. */
   | 'not_found';
 
+/**
+ * Why a workspace refused or failed, as **platform text** (WP-127, PROGRESS backlog 351).
+ *
+ * A closed vocabulary beside {@link WorkspaceErrorCode}, set only where the platform itself wrote
+ * the refusal and knows what it means. It exists because the error's *message* may not travel: it
+ * can quote an image reference, a path, a daemon's answer or a provider's words, and the stage
+ * executor writes its escalation into `events.payload` and the blocker brief with no redactor
+ * (`stage-executor.ts`). A reason code is a word this file chose, so it can reach the task where the
+ * message cannot; the message stays in the log line beside it. Absent (`null`) means *no
+ * platform-written cause* — the kind alone is then all the task is told.
+ */
+export const WORKSPACE_ERROR_REASONS = [
+  /** The shadow base this run must start from is not in the project's mirror after a fetch (Q82 (a)). */
+  'checkout_commit_missing',
+  /** The project has no mirror to clone from: `updateMirror` did not run, or did not leave one. */
+  'mirror_missing',
+  /** The run image has no executable at the configured CLI path (backlog 34). */
+  'runtime_cli_missing',
+  /** `APP_WORKSPACE_RUNTIME_CLI_PATH` is not an absolute path of plain characters. */
+  'runtime_cli_path_invalid',
+  /** The run image declares no `PATH` (WP-118). */
+  'runtime_image_path_missing',
+  /** The run image declares a `PATH` that is not a list of absolute directories (WP-118). */
+  'runtime_image_path_invalid',
+  /** The runner is not the uid the run shim's `0600` control socket admits (TD-025, Q51). */
+  'runner_uid_mismatch',
+  /** The workspace spec did not validate against `workspaceSpecSchema`. */
+  'spec_invalid',
+  /** A skill named in the spec is not a skill name. */
+  'skill_name_invalid',
+  /** The project's environment names a variable the platform reserves. */
+  'reserved_environment_variable',
+  /** The launcher and the runner mount the control volume at different paths. */
+  'control_root_mismatch',
+  /** A run that writes to its checkout could not be minted a git credential (TD-028, WP-76). */
+  'run_credential_unavailable',
+  /** The run's credential does not fit its spec: a push scope on a read-only run, or one with no repository. */
+  'run_credential_scope_mismatch',
+  /** The egress sidecar is not running after create. */
+  'egress_sidecar_not_running',
+  /** The run shim did not create its control socket in time. */
+  'control_socket_timeout',
+  /** The launcher's control plane could not be reached (TD-028). */
+  'launcher_unreachable',
+  /** The launcher refused the runner's token (TD-028). */
+  'launcher_unauthorized',
+  /** The launcher refused the request as malformed (TD-028). */
+  'launcher_request_refused',
+  /** The launcher failed for a reason it does not publish; its own log has it (TD-028). */
+  'launcher_internal_error',
+] as const;
+export type WorkspaceErrorReason = (typeof WORKSPACE_ERROR_REASONS)[number];
+export const workspaceErrorReasonSchema = z.enum(WORKSPACE_ERROR_REASONS);
+
 export class WorkspaceError extends Error {
   readonly code: WorkspaceErrorCode;
   readonly runId: string | null;
   /** Diagnostics safe to log: never a credential, never a command line that carried one. */
   readonly detail: string | null;
+  /** The platform-written cause, or `null` — {@link WORKSPACE_ERROR_REASONS}. */
+  readonly reason: WorkspaceErrorReason | null;
+  /**
+   * The commit the refusal is about, **only** through `shaSchema` (WP-127): a value that does not
+   * parse is dropped here rather than carried, so nothing but a hexadecimal sha can ride beside
+   * the reason into stored state.
+   */
+  readonly commit: string | null;
 
   constructor(
     code: WorkspaceErrorCode,
     message: string,
-    options: { readonly runId?: string; readonly detail?: string; readonly cause?: unknown } = {},
+    options: {
+      readonly runId?: string;
+      readonly detail?: string;
+      readonly cause?: unknown;
+      readonly reason?: WorkspaceErrorReason | null;
+      readonly commit?: string | null;
+    } = {},
   ) {
     super(message, options.cause === undefined ? undefined : { cause: options.cause });
     this.name = 'WorkspaceError';
     this.code = code;
     this.runId = options.runId ?? null;
     this.detail = options.detail ?? null;
+    this.reason = workspaceErrorReasonSchema.safeParse(options.reason).data ?? null;
+    this.commit = shaSchema.safeParse(options.commit).data ?? null;
   }
 }
 

@@ -33,6 +33,8 @@ let plane: ControlPlane;
 
 /** Flipped by the one case that needs a create to fail; reset in `beforeEach`. */
 let mirrorFails = false;
+/** What the failing mirror throws, when a case needs a particular refusal (WP-127). */
+let mirrorFailure: WorkspaceError | null = null;
 /**
  * Held by the WP-103 cases that need a create to be **in flight** when its request closes: the
  * provider's `create` waits on it, and `started` resolves once it has begun waiting.
@@ -52,7 +54,7 @@ class MirrorFailingProvider extends workspace.FakeWorkspaceProvider {
     input: Parameters<workspace.FakeWorkspaceProvider['updateMirror']>[0],
   ): ReturnType<workspace.FakeWorkspaceProvider['updateMirror']> {
     if (mirrorFails) {
-      throw new WorkspaceError('workspace_failed', 'the mirror fetch failed');
+      throw mirrorFailure ?? new WorkspaceError('workspace_failed', 'the mirror fetch failed');
     }
     return super.updateMirror(input);
   }
@@ -286,6 +288,27 @@ describe('create (TD-028 decision 4: idempotent on the run id)', () => {
       clientFor().createRun({ spec: specFor(runId), credential: credentialRequest }),
     ).resolves.toMatchObject({ replayed: false });
     expect(createdRuns()).toEqual([runId]);
+  });
+
+  it('carries a refusal’s reason code and commit to the runner, so the task can name them (WP-127)', async () => {
+    const sha = '0123456789abcdef0123456789abcdef01234567';
+    mirrorFails = true;
+    mirrorFailure = new WorkspaceError('invalid_spec', 'refused, with words that stay here', {
+      reason: 'checkout_commit_missing',
+      commit: sha,
+    });
+    try {
+      await expect(
+        clientFor().createRun({ spec: specFor(randomUUID()), credential: credentialRequest }),
+      ).rejects.toMatchObject({
+        code: 'invalid_spec',
+        reason: 'checkout_commit_missing',
+        commit: sha,
+      });
+    } finally {
+      mirrorFails = false;
+      mirrorFailure = null;
+    }
   });
 
   it('refuses a spec that does not validate, by name and as a terminal failure', async () => {

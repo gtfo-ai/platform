@@ -71,14 +71,37 @@ export interface RunletSpawnOptions {
   readonly token: string;
   readonly clock: RunnerClock;
   readonly logger?: Logger;
-  /** Where `stderr` frames go. The runner passes the SDK's `stderr` callback, which redacts. */
-  readonly onStderr?: (chunk: string) => void;
+  /**
+   * Where `stderr` frames go **until** {@link RunletSpawn.setStderrSink} replaces it. A test or a
+   * diagnostic script passes one here; production does not, because the spawn is built in the
+   * provisioner before the runner — and its per-run redactor — exists. The runner sets its sink on
+   * the returned spawn instead (WP-127, PROGRESS backlog 344).
+   */
+  readonly onStderr?: RunletStderrSink;
   readonly credentials?: RunletCredentialResponder;
   /** How long the handshake may take before the transport reports an error. */
   readonly connectTimeoutMs?: number;
 }
 
 const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
+
+/** Receives the CLI's stderr, one frame's payload at a time, as UTF-8. */
+export type RunletStderrSink = (chunk: string) => void;
+
+/**
+ * The spawn, and the seam its stderr leaves through (WP-127, PROGRESS backlog 344).
+ *
+ * The SDK attaches its own `stderr` callback only to a process it spawns itself (0.3.267's
+ * `sdk.mjs`: `stderr.on("data", …)` and the exit error's stderr tail are on the local-spawn path),
+ * and the `SpawnedProcess` interface has no stderr stream, so a frame the shim forwards reaches
+ * whatever is set here and nothing else. The runner sets it with its per-run redactor
+ * (`claude-runner.ts`, `createStderrLog`); until it does, frames go to the `onStderr` option, and
+ * with neither they are dropped — the state every containerised run was in before WP-127.
+ */
+export type RunletSpawn = ((spawnOptions: SpawnOptions) => SpawnedProcess) & {
+  /** Replaces the stderr sink for every process this spawn starts from now on; `null` drops. */
+  readonly setStderrSink: (sink: RunletStderrSink | null) => void;
+};
 
 /**
  * An allow-list responder.
@@ -113,13 +136,12 @@ interface TransportState {
   exited: boolean;
 }
 
-export const createRunletSpawn = (
-  options: RunletSpawnOptions,
-): ((spawnOptions: SpawnOptions) => SpawnedProcess) => {
+export const createRunletSpawn = (options: RunletSpawnOptions): RunletSpawn => {
   const logger = options.logger ?? silentLogger;
   const connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
+  let stderrSink: RunletStderrSink | null = options.onStderr ?? null;
 
-  return (spawnOptions: SpawnOptions): SpawnedProcess => {
+  const spawn = (spawnOptions: SpawnOptions): SpawnedProcess => {
     const events = new EventEmitter();
     const state: TransportState = { connection: null, exited: false };
     let exitCode: number | null = null;
@@ -271,7 +293,7 @@ export const createRunletSpawn = (
           return;
         }
         case 'stderr':
-          options.onStderr?.((payload as Buffer).toString('utf8'));
+          stderrSink?.((payload as Buffer).toString('utf8'));
           return;
         case 'exit':
           finish(frame.code, frame.signal as NodeJS.Signals | null);
@@ -383,4 +405,9 @@ export const createRunletSpawn = (
 
     return spawnedProcess();
   };
+  return Object.assign(spawn, {
+    setStderrSink: (sink: RunletStderrSink | null): void => {
+      stderrSink = sink;
+    },
+  });
 };

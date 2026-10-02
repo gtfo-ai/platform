@@ -95,6 +95,20 @@
  *    reach Anthropic. On the pre-fix tree the CLI retried seven times (`api_retry`, `error:
  *    unknown`) until the wall clock stopped it and the sidecar logged **no request at all**.
  *
+ * ## What WP-127 added (PROGRESS backlog 339 and 346)
+ *
+ *  - **A stop during a create, with its exit code and whole log.** The launcher containers are no
+ *    longer `--rm`, and the stop is `docker stop -t 10` — compose's grace — because a bare
+ *    `docker stop` measured 3.1 s on Docker Desktop 29.8.1, which is what WP-103 recorded as
+ *    "about three seconds". Measured: the close waits for the create, the create outlasts ten
+ *    seconds, and the daemon kills the launcher (exit 137) — not a rejected close, not an early
+ *    exit. The record accepts that ending or a drained, answered create, and nothing else.
+ *  - **The image's real `claude` with no route to the model** ({@link measureNoRoute}): the run's
+ *    egress sidecar is stopped before the CLI starts. Measured with both limits past the CLI's own
+ *    give-up: ten `api_retry` entries, the delay doubling from 0.6 s to about 35 s, and the give-up
+ *    about three minutes after the first request. By default the stall is 45 s and the check
+ *    asserts the run ends `stalled`, its error naming the route.
+ *
  * ## Environment
  *
  *     DOCKER_HOST=unix:///var/run/docker.sock node scripts/launcher-control-plane-check.mjs
@@ -129,6 +143,8 @@ const NETWORK_ONLY_RUN_ID = '9f3a1c2e-0000-4000-8000-00000000286f';
 const GIT_CREDENTIAL_RUN_ID = '9f3a1c2e-0000-4000-8000-00000000342b';
 /** WP-118's run of the image's real `claude` (PROGRESS backlog 342, consequence (a)). */
 const REAL_CLI_RUN_ID = '9f3a1c2e-0000-4000-8000-00000000342a';
+/** WP-127's run of the real `claude` whose sidecar is stopped before it starts (backlog 346). */
+const NO_ROUTE_RUN_ID = '9f3a1c2e-0000-4000-8000-00000000346a';
 /** The shortened client bound for 286 (b), below the create's own duration on this machine. */
 const SHORT_CLIENT_TIMEOUT_MS = 1_500;
 const ALL_286_RUN_IDS = [RESTART_STOP_RUN_ID, RESTART_KILL_RUN_ID, ...TIMEOUT_RUN_IDS];
@@ -146,7 +162,7 @@ const BAD_LAUNCHER_NAME = 'agentic-wp53-launcher-badcli';
  * that says whether the product image needs the Agent SDK's per-platform binary package.
  */
 const cliArgs = process.argv.slice(2);
-const FLAGS = ['--runner-image', '--observe-shim-ms'];
+const FLAGS = ['--runner-image', '--observe-shim-ms', '--no-route-stall-ms', '--no-route-wall-ms'];
 const flagValue = (flag) => {
   const index = cliArgs.indexOf(flag);
   return index === -1 ? undefined : (cliArgs[index + 1] ?? null);
@@ -159,6 +175,19 @@ const RUNNER_IMAGE = flagValue('--runner-image') ?? null;
  */
 const observeRaw = flagValue('--observe-shim-ms');
 const OBSERVE_SHIM_MS = observeRaw === undefined ? 120_000 : Number(observeRaw);
+/**
+ * `--no-route-stall-ms <n>` and `--no-route-wall-ms <n>` (WP-127, backlog 346): the stall and the
+ * wall clock of the run whose sidecar is stopped. By default the stall is short and the wall clock
+ * long, so the check asserts the run ends `stalled` across the CLI's retries; the WP-127 notes
+ * record the run with both set past the CLI's own give-up, which is how its retry sequence was
+ * measured.
+ */
+const numberFlag = (flag, fallback) => {
+  const raw = flagValue(flag);
+  return raw === undefined ? fallback : Number(raw);
+};
+const NO_ROUTE_STALL_MS = numberFlag('--no-route-stall-ms', 45_000);
+const NO_ROUTE_WALL_MS = numberFlag('--no-route-wall-ms', 300_000);
 const unknownArgs = cliArgs.filter(
   (arg, index) => !(FLAGS.includes(arg) || (index > 0 && FLAGS.includes(cliArgs[index - 1]))),
 );
@@ -166,10 +195,11 @@ if (
   unknownArgs.length > 0 ||
   flagValue('--runner-image') === null ||
   !Number.isSafeInteger(OBSERVE_SHIM_MS) ||
-  OBSERVE_SHIM_MS < 0
+  OBSERVE_SHIM_MS < 0 ||
+  ![NO_ROUTE_STALL_MS, NO_ROUTE_WALL_MS].every((ms) => Number.isSafeInteger(ms) && ms > 0)
 ) {
   process.stderr.write(
-    `usage: launcher-control-plane-check.mjs [--runner-image <ref>] [--observe-shim-ms <n>] (got ${cliArgs.join(' ')})\n`,
+    `usage: launcher-control-plane-check.mjs [--runner-image <ref>] [--observe-shim-ms <n>] [--no-route-stall-ms <n>] [--no-route-wall-ms <n>] (got ${cliArgs.join(' ')})\n`,
   );
   process.exit(2);
 }
@@ -192,7 +222,8 @@ const record = (name, ok, detail) => {
 const launcherArgs = (name, fixture, extra) => [
   'run',
   '-d',
-  '--rm',
+  // No `--rm` (WP-127, backlog 339): a stopped launcher's exit code and whole log are read before
+  // it is removed by name — every path that takes one down or starts one removes it with `rm -f`.
   '--name',
   name,
   // Root, so the daemon socket is usable and the shim's `0600` control socket (uid 1000, created
@@ -507,21 +538,40 @@ const waitUntilSettled = async (runIds, { quietMs, timeoutMs }) => {
   return null;
 };
 
-/** Stops (`docker stop`, SIGTERM then SIGKILL after 10 s — compose's default) or kills it. */
+/**
+ * Stops (`docker stop -t 10`: SIGTERM, then SIGKILL after ten seconds — compose's default
+ * `stop_grace_period`, and the daemon's documented default) or kills it. The grace is **explicit**
+ * since WP-127: a bare `docker stop` measured 3.1 s on Docker Desktop 29.8.1, which is the
+ * "about three seconds" WP-103 recorded and could not explain (backlog 339).
+ *
+ * WP-127 (backlog 339): the container is no longer `--rm`, so its **exit code** is read off the
+ * daemon after it stops and its **whole** log is kept (`log`); `tail` is the last eight lines, as
+ * WP-103 recorded them.
+ */
 const takeLauncherDown = async (how) => {
-  // Followed from before the signal, because the container is `--rm`: once it exits its log is gone.
-  const following = docker(['logs', '-f', LAUNCHER_NAME], { allowFailure: true });
   const started = Date.now();
-  await docker([how === 'stop' ? 'stop' : 'kill', LAUNCHER_NAME], { allowFailure: true });
+  await docker(how === 'stop' ? ['stop', '-t', '10', LAUNCHER_NAME] : ['kill', LAUNCHER_NAME], {
+    allowFailure: true,
+  });
   const tookMs = Date.now() - started;
-  const logged = await following;
+  const state = await docker(
+    ['container', 'inspect', '-f', '{{.State.ExitCode}} {{.State.OOMKilled}}', LAUNCHER_NAME],
+    { allowFailure: true },
+  );
+  const logged = await docker(['logs', LAUNCHER_NAME], { allowFailure: true });
   await docker(['rm', '-f', LAUNCHER_NAME], { allowFailure: true });
-  const tail = `${logged.stdout}\n${logged.stderr}`
+  const log = `${logged.stdout}\n${logged.stderr}`
     .split('\n')
     .filter((line) => line.trim().length > 0)
-    .slice(-8)
-    .map((line) => line.slice(0, 300));
-  return { tookMs, tail };
+    .map((line) => line.slice(0, 600));
+  const [exitCode, oomKilled] = state.stdout.trim().split(' ');
+  return {
+    tookMs,
+    exitCode: state.ok ? Number(exitCode) : null,
+    oomKilled: oomKilled === 'true',
+    log,
+    tail: log.slice(-8).map((line) => line.slice(0, 300)),
+  };
 };
 
 const bringLauncherUp = async () => {
@@ -538,7 +588,8 @@ const bringLauncherUp = async () => {
  * the way compose restarts it (`docker stop`: SIGTERM, which `startLauncher`'s `close` answers by
  * waiting for in-flight requests, then SIGKILL after ten seconds) or the way a crash or an OOM kill
  * does (`docker kill`). What is recorded is what the runner was told, and what the daemon holds for
- * the run after the launcher is gone and again after it is back.
+ * the run after the launcher is gone and again after it is back — and, since WP-127 (backlog 339),
+ * the launcher's exit code and its whole log.
  */
 const measureRestartDuringCreate = async (runId, how) => {
   const runnerName = `agentic-wp103-runner-${how}`;
@@ -548,7 +599,12 @@ const measureRestartDuringCreate = async (runId, how) => {
     { detach: true, name: runnerName },
   );
   const networkAfterMs = await waitForRunNetwork(runId, 120_000);
-  const { tookMs: downMs, tail: launcherTail } = await takeLauncherDown(how);
+  const {
+    tookMs: downMs,
+    tail: launcherTail,
+    exitCode: launcherExitCode,
+    log: launcherLog,
+  } = await takeLauncherDown(how);
   await docker(['wait', runnerName], { allowFailure: true });
   const told = lastJsonLine(await docker(['logs', runnerName], { allowFailure: true }));
   await docker(['rm', '-f', runnerName], { allowFailure: true });
@@ -557,7 +613,18 @@ const measureRestartDuringCreate = async (runId, how) => {
   const afterDown = await runObjectsFull(runId);
   const restarted = await bringLauncherUp();
   const afterRestart = await runObjectsFull(runId);
-  return { how, networkAfterMs, downMs, launcherTail, told, afterDown, restarted, afterRestart };
+  return {
+    how,
+    networkAfterMs,
+    downMs,
+    launcherExitCode,
+    launcherLog,
+    launcherTail,
+    told,
+    afterDown,
+    restarted,
+    afterRestart,
+  };
 };
 
 /**
@@ -719,6 +786,52 @@ const measureRealCli = async () => {
   return { told, sidecarLog };
 };
 
+/**
+ * WP-127, PROGRESS backlog **346**: the real `claude` with **no route to the model**. The runner
+ * provisions the run and waits; the host stops the run's egress sidecar — the container its
+ * `HTTPS_PROXY` names — and lets the runner start the CLI. What comes back is the CLI's retry
+ * sequence and how the run ended, under {@link NO_ROUTE_STALL_MS} and {@link NO_ROUTE_WALL_MS}.
+ */
+const measureNoRoute = async () => {
+  const runnerName = 'agentic-wp127-runner-no-route';
+  const sidecar = `egress-${NO_ROUTE_RUN_ID}`;
+  await docker(['rm', '-f', runnerName], { allowFailure: true });
+  await runRunner(
+    {
+      CHECK_PHASE: 'no-route',
+      CHECK_NO_ROUTE_RUN_ID: NO_ROUTE_RUN_ID,
+      CHECK_NO_ROUTE_STALL_MS: String(NO_ROUTE_STALL_MS),
+      CHECK_NO_ROUTE_WALL_MS: String(NO_ROUTE_WALL_MS),
+    },
+    { detach: true, name: runnerName },
+  );
+  let stopped = null;
+  for (let attempt = 0; attempt < 240 && stopped === null; attempt += 1) {
+    const logs = await docker(['logs', runnerName], { allowFailure: true });
+    if (logs.stdout.includes('"provisioned"')) {
+      const stop = await docker(['stop', '-t', '1', sidecar], { allowFailure: true });
+      stopped = { ok: stop.ok, detail: (stop.stderr || stop.stdout).trim().slice(0, 200) };
+      await docker(['exec', runnerName, 'touch', '/tmp/sidecar-stopped'], { allowFailure: true });
+      break;
+    }
+    const state = await docker(['container', 'inspect', '-f', '{{.State.Running}}', runnerName], {
+      allowFailure: true,
+    });
+    if (state.ok && state.stdout.trim() !== 'true') {
+      break;
+    }
+    await sleep(500);
+  }
+  // Bounded: the run's own wall clock plus the interrupt's grace and the release.
+  const waited = await Promise.race([
+    docker(['wait', runnerName], { allowFailure: true }).then(() => 'exited'),
+    sleep(NO_ROUTE_WALL_MS + 120_000).then(() => 'timed out'),
+  ]);
+  const told = lastJsonLine(await docker(['logs', runnerName], { allowFailure: true }));
+  await docker(['rm', '-f', runnerName], { allowFailure: true });
+  return { stopped, waited, told };
+};
+
 /** The names the fake CLI reported, and what the check asserts of them (WP-118 criterion 2). */
 const environFindings = (environ) => {
   const names = new Set(environ?.names ?? []);
@@ -739,6 +852,7 @@ const environFindings = (environ) => {
 let fixture;
 let replay = null;
 let realCli = null;
+let noRoute = null;
 let orphans = null;
 let report = null;
 let driven = null;
@@ -937,6 +1051,59 @@ try {
     }),
   );
 
+  // WP-127 (backlog 346): the real CLI with its sidecar stopped. The retry sequence is printed
+  // whole; what is asserted is that the run ended `stalled` naming the route, which is what the
+  // shipped stall does once an `api_retry` is not progress — when the stall is shorter than the
+  // wall clock (the default flags). With both past the CLI's give-up, the ending is the CLI's own.
+  noRoute = await measureNoRoute();
+  process.stdout.write(
+    `--- backlog 346: the real CLI with no route to the model ---\n${JSON.stringify(noRoute, null, 2)}\n`,
+  );
+  record(
+    'backlog 346: the sidecar was stopped before the CLI started, and the CLI retried the model API',
+    noRoute.stopped?.ok === true &&
+      noRoute.told?.gate === 'sidecar stopped' &&
+      (noRoute.told?.retries ?? []).length > 0 &&
+      noRoute.told?.leaked === false,
+    JSON.stringify({
+      stopped: noRoute.stopped,
+      gate: noRoute.told?.gate,
+      retries: (noRoute.told?.retries ?? []).length,
+      last: (noRoute.told?.retries ?? []).at(-1) ?? null,
+      error: noRoute.told?.error,
+    }),
+  );
+  if (NO_ROUTE_STALL_MS < NO_ROUTE_WALL_MS) {
+    record(
+      'backlog 346: the retries did not hold the run open; it ended stalled, naming the route (WP-127)',
+      noRoute.told?.status === 'stalled' &&
+        typeof noRoute.told?.error === 'string' &&
+        noRoute.told.error.includes('no route to the model host') &&
+        noRoute.told.wallMs < NO_ROUTE_WALL_MS,
+      JSON.stringify({
+        status: noRoute.told?.status,
+        error: noRoute.told?.error,
+        wall_ms: noRoute.told?.wallMs,
+        stall_ms: NO_ROUTE_STALL_MS,
+      }),
+    );
+  } else {
+    record(
+      'backlog 346: with no platform stop before its give-up, the CLI gave up and the run’s error names the route (WP-127)',
+      noRoute.told?.status === 'failed' &&
+        typeof noRoute.told?.error === 'string' &&
+        noRoute.told.error.startsWith('the CLI gave up after retrying') &&
+        noRoute.told.error.includes('no route to the model host'),
+      JSON.stringify({
+        status: noRoute.told?.status,
+        terminalReason: noRoute.told?.terminalReason,
+        error: noRoute.told?.error,
+        wall_ms: noRoute.told?.wallMs,
+        stderr: (noRoute.told?.stderr ?? '').slice(-400),
+      }),
+    );
+  }
+
   if (report !== null) {
     record(
       'the runner found no Agent SDK platform binary package for its own platform (backlog 34)',
@@ -1018,19 +1185,58 @@ try {
   for (const how of ['stop', 'kill']) {
     const measured = orphans[how];
     record(
-      `backlog 286 (a): a launcher ${how === 'stop' ? 'stopped' : 'killed'} during a create is not answered, and leaves objects behind (measured)`,
+      how === 'stop'
+        ? 'backlog 286 (a): a launcher stopped during a create answers it or leaves its objects for the reaper (measured; ten-second grace since WP-127)'
+        : 'backlog 286 (a): a launcher killed during a create is not answered, and leaves objects behind (measured)',
       measured.networkAfterMs !== null &&
         measured.restarted &&
-        measured.told?.ok === false &&
-        measured.told?.errorCode === 'engine_unavailable' &&
-        measured.afterDown.networks.length === 1 &&
-        !measured.afterDown.containers.some((line) => line.startsWith('ws-')),
+        // WP-127: a stop now has compose's ten seconds, so the create may get further than under
+        // the bare `docker stop`'s three (even to its run container), or be answered outright.
+        ((how === 'stop' && measured.told?.ok === true) ||
+          (measured.told?.ok === false &&
+            measured.told?.errorCode === 'engine_unavailable' &&
+            measured.afterDown.networks.length === 1 &&
+            (how === 'stop' ||
+              !measured.afterDown.containers.some((line) => line.startsWith('ws-'))))),
       JSON.stringify({
         told: measured.told?.errorCode,
         cause: measured.told?.errorCause,
         down_ms: measured.downMs,
         launcher: measured.launcherTail.filter((line) => line.startsWith('launcher ')).slice(-3),
         after_down: measured.afterDown,
+      }),
+    );
+  }
+  // WP-127, backlog 339 (b): what a stop does to an in-flight create. The close waits for the
+  // create; on Docker Desktop 29.8.1 the create outlasted compose's ten seconds, so the daemon
+  // killed the launcher (exit 137, SIGTERM logged, no close line and no exit line of its own), and
+  // with a 90 s grace the close resolved 12.1 s after the signal and answered the create (the
+  // WP-127 notes). Either ending is the docblock's (`apps/launcher/src/index.ts`): drained and
+  // answered, or killed at the grace. What fails is the third — a rejected close or an early exit.
+  {
+    const log = orphans.stop.launcherLog;
+    const has = (prefix) => log.some((line) => line.startsWith(prefix));
+    const killedAtGrace =
+      orphans.stop.launcherExitCode === 137 &&
+      orphans.stop.downMs >= 9_500 &&
+      !has('launcher closed after') &&
+      !has('launcher exit code');
+    const drained =
+      orphans.stop.launcherExitCode === 0 &&
+      has('launcher closed after') &&
+      orphans.stop.told?.ok === true;
+    record(
+      'backlog 339: a launcher stopped during a create drains it or is killed at the grace, never leaves early (WP-127)',
+      has('launcher signal: SIGTERM') &&
+        !has('launcher close rejected') &&
+        !has('launcher uncaught') &&
+        !has('launcher unhandled') &&
+        (killedAtGrace || drained),
+      JSON.stringify({
+        ending: killedAtGrace ? 'killed at the grace' : drained ? 'drained' : 'neither',
+        exit: orphans.stop.launcherExitCode,
+        down_ms: orphans.stop.downMs,
+        log: log.filter((line) => line.startsWith('launcher ')).slice(-4),
       }),
     );
   }
@@ -1156,6 +1362,7 @@ try {
     BAD_RUN_ID,
     REPLAY_RUN_ID,
     REAL_CLI_RUN_ID,
+    NO_ROUTE_RUN_ID,
     GIT_CREDENTIAL_RUN_ID,
     ...ALL_286_RUN_IDS,
   ]) {

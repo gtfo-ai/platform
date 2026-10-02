@@ -67,9 +67,11 @@
  *    create resolves and each request waiting on it closed its connection before the answer, what it
  *    made is ended with no export. A replay still waiting keeps it. What this cannot reach is a
  *    launcher that stops or dies during the create — a killed process runs nothing, and a stopped one
- *    was measured to exit about three seconds after SIGTERM with the create unfinished and its close
- *    unresolved (why it did not wait is not established) — and a create that resolves in the instant
- *    before its socket's close arrives.
+ *    is killed by the daemon before its close resolves: SIGTERM does wait for the in-flight create
+ *    (`index.ts`), but a create outlasts the stop's grace (measured at WP-127, PROGRESS backlog 339:
+ *    `docker stop -t 10` ended it with exit 137 and the create unanswered; with a 90 s grace the close
+ *    resolved 12.1 s after the signal and the create was answered) — and a create that resolves in
+ *    the instant before its socket's close arrives.
  *  - **The runner reaps what is left** (`packages/application/src/recovery/orphan-workspaces.ts`),
  *    because deciding that a run is over needs `runs` and this process reads no database (TD-021).
  *    It asks the two verbs below: `GET /v1/runs`, the run ids of the containers and networks this
@@ -88,7 +90,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { Logger, WorkspaceSpec } from '@platform/application';
-import { WorkspaceError } from '@platform/application';
+import { WorkspaceError, type WorkspaceErrorReason } from '@platform/application';
 import { launcher as launcherProtocol } from '@platform/infrastructure';
 import * as z from 'zod';
 import type { LauncherService } from './service.js';
@@ -154,17 +156,27 @@ class ControlPlaneError extends Error {
   readonly code: ControlPlaneErrorCode;
   readonly runId: string | null;
   readonly detail: string | null;
+  /** The workspace's platform-written cause, carried across so the runner can name it (WP-127). */
+  readonly reason: WorkspaceErrorReason | null;
+  readonly commit: string | null;
 
   constructor(
     code: ControlPlaneErrorCode,
     message: string,
-    options: { readonly runId?: string | null; readonly detail?: string | null } = {},
+    options: {
+      readonly runId?: string | null;
+      readonly detail?: string | null;
+      readonly reason?: WorkspaceErrorReason | null;
+      readonly commit?: string | null;
+    } = {},
   ) {
     super(message);
     this.name = 'ControlPlaneError';
     this.code = code;
     this.runId = options.runId ?? null;
     this.detail = options.detail ?? null;
+    this.reason = options.reason ?? null;
+    this.commit = options.commit ?? null;
   }
 }
 
@@ -239,6 +251,8 @@ const errorOf = (error: unknown): ControlPlaneError => {
     return new ControlPlaneError(error.code, error.message, {
       runId: error.runId,
       detail: error.detail,
+      reason: error.reason,
+      commit: error.commit,
     });
   }
   // Deliberately **not** the thrown message: an unclassified failure from inside the launcher may
@@ -450,6 +464,8 @@ export const startControlPlane = async (options: ControlPlaneOptions): Promise<C
             message: failure.message,
             runId: failure.runId,
             detail: failure.detail,
+            reason: failure.reason,
+            commit: failure.commit,
           },
         });
       }

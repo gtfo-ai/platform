@@ -222,6 +222,7 @@ export const assertControlSocketUnderRoot = (socketPath: string, controlRoot: st
     throw new WorkspaceError(
       'invalid_spec',
       `the launcher answered with a control socket at ${socketPath}, which is not under this process' control root ${controlRoot}: the two containers mount the ctl volume at different paths (APP_WORKSPACE_CONTROL_ROOT)`,
+      { reason: 'control_root_mismatch' },
     );
   }
 };
@@ -379,7 +380,7 @@ const mintFor = async (input: {
       throw new WorkspaceError(
         'invalid_spec',
         `run ${input.spec.runId} writes to its checkout and no git credential can be minted for it: ${answer.reason}`,
-        { runId: input.spec.runId },
+        { runId: input.spec.runId, reason: 'run_credential_unavailable' },
       );
     }
     input.logger.warn(
@@ -397,7 +398,7 @@ const mintFor = async (input: {
           ? 'the credential was revoked'
           : `the credential's revocation failed, so it is live until the recovery pass revokes it or it expires at ${answer.credential.expiresAt}`
       }`,
-      { runId: input.spec.runId },
+      { runId: input.spec.runId, reason: 'run_credential_scope_mismatch' },
     );
   }
   return answer.credential;

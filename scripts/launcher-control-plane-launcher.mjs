@@ -69,12 +69,35 @@ const runtime = await startLauncher({
 process.stdout.write(`${JSON.stringify({ listening: runtime.controlPlane?.port ?? null })}\n`);
 
 // WP-103: each step of a stop is written down, so 286 (a) can say how the launcher left a create.
+// WP-127 (backlog 339): a rejected close is written too — before, a rejection exited 0 with nothing
+// logged — and so is how the process leaves, whichever way that is.
+let stopStarted = null;
+const since = () =>
+  stopStarted === null ? '' : ` ${String(Date.now() - stopStarted)} ms after the signal`;
+process.on('exit', (code) =>
+  process.stderr.write(`launcher exit code ${String(code)}${since()}\n`),
+);
+process.on('uncaughtException', (error) => {
+  process.stderr.write(`launcher uncaught exception${since()}: ${String(error?.stack ?? error)}\n`);
+  process.exit(70);
+});
+process.on('unhandledRejection', (error) => {
+  process.stderr.write(
+    `launcher unhandled rejection${since()}: ${String(error?.stack ?? error)}\n`,
+  );
+  process.exit(71);
+});
 const stop = (signal) => {
-  const started = Date.now();
+  stopStarted ??= Date.now();
   process.stderr.write(`launcher signal: ${signal}\n`);
   void runtime
     .close()
-    .then(() => process.stderr.write(`launcher closed after ${String(Date.now() - started)} ms\n`))
+    .then(() =>
+      process.stderr.write(`launcher closed after ${String(Date.now() - stopStarted)} ms\n`),
+    )
+    .catch((error) =>
+      process.stderr.write(`launcher close rejected${since()}: ${String(error?.stack ?? error)}\n`),
+    )
     .finally(() => process.exit(0));
 };
 process.on('SIGTERM', () => stop('SIGTERM'));

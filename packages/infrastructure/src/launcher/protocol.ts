@@ -48,9 +48,10 @@ import type {
 import {
   existingProtectedPathsSchema,
   MAX_LABELLED_RUNS,
+  workspaceErrorReasonSchema,
   workspaceSpecSchema,
 } from '@platform/application';
-import { isoDateTimeSchema, nonEmptyStringSchema } from '@platform/contracts';
+import { isoDateTimeSchema, nonEmptyStringSchema, shaSchema } from '@platform/contracts';
 import * as z from 'zod';
 
 /** Every path this surface answers, so a router and a client cannot disagree about one. */
@@ -413,6 +414,13 @@ export const errorResponseSchema = z.strictObject({
     message: z.string().max(2_000),
     runId: nonEmptyStringSchema.max(64).nullable(),
     detail: z.string().max(2_000).nullable(),
+    /**
+     * The workspace's platform-written cause (WP-127, PROGRESS backlog 351): a closed vocabulary and
+     * a sha, so the runner can name the cause on the task where the message may not go. Optional, so
+     * a launcher one build behind still answers in a shape this client reads.
+     */
+    reason: workspaceErrorReasonSchema.nullable().optional(),
+    commit: shaSchema.nullable().optional(),
   }),
 });
 export type ErrorResponse = z.infer<typeof errorResponseSchema>;

@@ -484,6 +484,7 @@ export const assertRunnerUid = (uid: number): void => {
       'invalid_spec',
       `the runner must run as uid ${WORKSPACE_UID} to reach the run shim's 0600 control socket ` +
         `(this process is uid ${uid}) — TD-025, Q51`,
+      { reason: 'runner_uid_mismatch' },
     );
   }
 };
@@ -574,6 +575,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       throw new WorkspaceError(
         'invalid_spec',
         `APP_WORKSPACE_RUNTIME_CLI_PATH must be an absolute path of word characters, dots, dashes and slashes (got ${JSON.stringify(cliPath)})`,
+        { reason: 'runtime_cli_path_invalid' },
       );
     }
     try {
@@ -594,7 +596,11 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
         throw new WorkspaceError(
           'invalid_spec',
           `the run image ${this.#images.runtime} has no executable at ${cliPath}, so every run would exec a path that is not in the container (APP_WORKSPACE_RUNTIME_CLI_PATH)`,
-          { ...(error.detail === null ? {} : { detail: error.detail }), cause: error },
+          {
+            ...(error.detail === null ? {} : { detail: error.detail }),
+            cause: error,
+            reason: 'runtime_cli_missing',
+          },
         );
       }
       throw error;
@@ -629,13 +635,14 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       throw new WorkspaceError(
         'invalid_spec',
         `the run image ${image} declares no PATH in its configuration, so the CLI would start with no command search path (WP-118)`,
+        { reason: 'runtime_image_path_missing' },
       );
     }
     if (!IMAGE_PATH_PATTERN.test(declared) || declared.length > 4_096) {
       throw new WorkspaceError(
         'invalid_spec',
         `the run image ${image} declares a PATH that is not a list of absolute directories (WP-118)`,
-        { detail: declared.slice(0, 200) },
+        { detail: declared.slice(0, 200), reason: 'runtime_image_path_invalid' },
       );
     }
     return declared;
@@ -862,6 +869,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
     const parsed = workspaceSpecSchema.safeParse(rawSpec);
     if (!parsed.success) {
       throw new WorkspaceError('invalid_spec', 'workspace spec did not validate', {
+        reason: 'spec_invalid',
         detail: parsed.error.issues
           .slice(0, 3)
           .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
@@ -994,7 +1002,11 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       'workspace_failed',
       `the egress sidecar is ${state} after create, so the workspace's HTTPS_PROXY points at a ` +
         `container that is not running (image ${this.#images.egress})`,
-      { runId: spec.runId, detail: logs.trim().split('\n').slice(-2).join(' | ').slice(0, 400) },
+      {
+        runId: spec.runId,
+        detail: logs.trim().split('\n').slice(-2).join(' | ').slice(0, 400),
+        reason: 'egress_sidecar_not_running',
+      },
     );
   }
 
@@ -1118,19 +1130,28 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
         throw new WorkspaceError(
           'workspace_failed',
           `the project has no mirror to clone from (${cachePath}); updateMirror runs before create`,
-          { runId: spec.runId },
+          { runId: spec.runId, reason: 'mirror_missing' },
         );
       }
       if (error instanceof WorkspaceError && (error.detail ?? '').includes(NO_COMMIT_SENTINEL)) {
         // **Terminal** (Q59a): the mirror was fetched from the remote immediately before this
         // create (`LauncherService.startRun` runs `updateMirror` first), so a commit it does not
         // hold is one no ref on the remote reaches any more — history rewritten, or a merge
-        // request's refs removed. Another attempt would fetch the same refs and refuse again; the
-        // task escalates with this sentence instead of spending its start retries.
+        // request's refs removed. Another attempt would fetch the same refs and refuse again, so the
+        // task escalates at once instead of spending its start retries. What reaches the task is
+        // the kind and the reason code below, with the commit through `shaSchema` (WP-127, backlog
+        // 351): `the run could not be started (RunStartError: invalid_spec,
+        // checkout_commit_missing, commit <sha>)`. This sentence reaches the launcher's and the
+        // runner's logs, never the task — it is a message, and the escalation carries none.
         throw new WorkspaceError(
           'invalid_spec',
           `the commit ${repo.checkoutCommit ?? ''} this run must start from is not in the project's mirror after a fetch, so the run is refused rather than started on another tree (Q82 (a))`,
-          { runId: spec.runId, detail: NO_COMMIT_SENTINEL },
+          {
+            runId: spec.runId,
+            detail: NO_COMMIT_SENTINEL,
+            reason: 'checkout_commit_missing',
+            commit: repo.checkoutCommit,
+          },
         );
       }
       throw error;
@@ -1182,6 +1203,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
       if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(name)) {
         throw new WorkspaceError('invalid_spec', `${JSON.stringify(name)} is not a skill name`, {
           runId: spec.runId,
+          reason: 'skill_name_invalid',
         });
       }
       const variable = `AGENTIC_SKILL_${String(index)}`;
@@ -1482,7 +1504,7 @@ export class DockerWorkspaceProvider implements WorkspaceProvider {
         throw new WorkspaceError(
           'workspace_failed',
           `the run shim did not create its control socket within ${this.#controlSocketTimeoutMs} ms`,
-          { runId, detail: socketPath },
+          { runId, detail: socketPath, reason: 'control_socket_timeout' },
         );
       }
       await new Promise((resolve) => setTimeout(resolve, CONTROL_SOCKET_POLL_MS));
@@ -2361,6 +2383,7 @@ export const assertProjectEnv = (env: Readonly<Record<string, string>>): void =>
     if (RESERVED_ENV_PREFIXES.some((prefix) => name === prefix || name.startsWith(prefix))) {
       throw new WorkspaceError('invalid_spec', 'project environment names a reserved variable', {
         detail: name,
+        reason: 'reserved_environment_variable',
       });
     }
   }

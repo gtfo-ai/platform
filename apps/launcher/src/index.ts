@@ -46,6 +46,19 @@ const main = async (): Promise<void> => {
    * `create` that had already started a container would be answered by a closed connection, which
    * the runner reads as `engine_unavailable` and retries, leaving the first container behind.
    * `stopping` guards a second signal from re-entering while the first close is in flight.
+   *
+   * **What a stop does to an in-flight create is decided by the daemon, not by this handler**
+   * (WP-127, PROGRESS backlog 339, measured on Docker Desktop 29.8.1 through
+   * `scripts/launcher-control-plane-check.mjs`). The close does wait — no rejection, no early exit:
+   * with a 90 s grace it resolved **12.1 s** after SIGTERM, the create was answered and the process
+   * exited 0. But a create (mirror fetch, clone, sidecar, run container, the shim's socket) takes
+   * longer than the stop's grace, so under `docker stop -t 10` — compose's default
+   * `stop_grace_period` — the daemon SIGKILLs the process (exit **137**) before the close resolves,
+   * and the runner is told `engine_unavailable` (`other side closed`). A bare `docker stop` on Docker
+   * Desktop 29.8.1 measured a **3.1 s** grace, not the documented 10 s, which is what WP-103 saw. So
+   * the drain this handler gives is real and bounded by the grace the operator configured; a create
+   * it cannot finish in time is left to the runner's orphan pass (WP-103), and the retry starts a new
+   * attempt. A drain bounded below ten seconds was not chosen, because the create does not fit in one.
    */
   let stopping = false;
   const stop = (signal: string): void => {

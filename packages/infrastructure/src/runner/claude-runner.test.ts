@@ -23,6 +23,7 @@ import {
   type ClaudeRunnerDependencies,
   createClaudeRunner,
   INTERRUPT_GRACE_MS,
+  retriedWithoutModel,
 } from './claude-runner.js';
 import { manualClock } from './clock.js';
 import {
@@ -642,6 +643,196 @@ describe('the stall detector', () => {
     expect(result.status).toBe('completed');
     expect(sink.events).toHaveLength(7);
     expect(armed.filter((delayMs) => delayMs === 300_000)).toHaveLength(8);
+  });
+});
+
+/**
+ * **A retry is not progress** (WP-127, PROGRESS backlog 346).
+ *
+ * With no route to the model the CLI retries (`api_retry`, measured at WP-118: seven in sixty
+ * seconds, delays doubling from 0.6 s), and each retry used to re-arm the stall, so the run lived
+ * until the wall clock. The fake CLI emits the retries at once, so "does not re-arm" is asserted
+ * the way the re-arm itself is above — by counting arms — and then the stall is reached on the
+ * injected clock and its error names the route in platform words.
+ */
+describe('a run whose CLI only retries the model API', () => {
+  const retry = (attempt: number) => ({
+    step: 'emit' as const,
+    message: {
+      type: 'system',
+      subtype: 'api_retry',
+      attempt,
+      max_retries: 10,
+      retry_delay_ms: 600 * 2 ** (attempt - 1),
+      error_status: null,
+      error: 'unknown',
+      uuid: `00000009-0000-4000-8000-00000000000${String(attempt)}`,
+      session_id: 'fake-session-0001',
+    },
+  });
+  const retryingScript = (retries: number): FakeCliScript => {
+    const stall = loadScript('stall');
+    // init, await_user, then the retries in place of the model's answer, then silence.
+    return [
+      ...stall.slice(0, 2),
+      ...Array.from({ length: retries }, (_, index) => retry(index + 1)),
+      { step: 'stall' },
+    ] as FakeCliScript;
+  };
+
+  const run = (retries: number) => {
+    const clock = manualClock(FIXTURE_CLOCK_START);
+    const armed: number[] = [];
+    const spy: typeof clock = {
+      ...clock,
+      setTimer: (delayMs, callback) => {
+        armed.push(delayMs);
+        return clock.setTimer(delayMs, callback);
+      },
+    };
+    const sink = recordingSink();
+    const cli = fakeSpawnClaudeCodeProcess(retryingScript(retries));
+    const handle = createClaudeRunner({
+      sink,
+      approvals: scriptedApprovals(),
+      tools: recordingTools(),
+      clock: spy,
+      injectedSecretRedactorFor: () => injectedSecretRedactorFixture(),
+      spawnClaudeCodeProcess: cli.spawn,
+    }).start(
+      runSpecFixture({
+        limits: { ...runSpecFixture().limits, stallTimeoutMs: 300_000, wallClockMs: 3_600_000 },
+      }),
+    );
+    return { clock, armed, events: sink.events, cli, outcome: handle.outcome, handle };
+  };
+
+  const settle = async (events: readonly TranscriptEvent[], count: number): Promise<void> => {
+    for (let attempt = 0; attempt < 200 && events.length < count; attempt += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    expect(events).toHaveLength(count);
+  };
+
+  it('transcribes every api_retry and does not re-arm the stall for any of them', async () => {
+    const without = run(0);
+    await settle(without.events, 1);
+    const withRetries = run(4);
+    await settle(withRetries.events, 5);
+
+    expect(
+      withRetries.events.filter(
+        (event) => event.kind === 'system' && event.subtype === 'api_retry',
+      ),
+    ).toHaveLength(4);
+    const stallArms = (armed: number[]) => armed.filter((delayMs) => delayMs === 300_000).length;
+    expect(stallArms(withRetries.armed)).toBe(stallArms(without.armed));
+  });
+
+  it('ends such a run as stalled, naming the route and the retry count in platform text', async () => {
+    const harness = run(3);
+    await settle(harness.events, 4);
+    harness.clock.advance(300_000);
+    const result = await releaseByGrace(harness as unknown as Harness);
+    expect(result.status).toBe('stalled');
+    expect(result.terminalReason).toBe('stalled');
+    expect(result.error).toBe(retriedWithoutModel('stalled', 3, []));
+    expect(result.error).toContain('no route to the model host');
+    expect(result.error).not.toContain('unknown');
+  });
+
+  /**
+   * The CLI's own give-up, as measured on the pinned CLI with its sidecar stopped (WP-127): after
+   * the last retry a synthetic assistant message (`model: "<synthetic>"`, text "Request timed out")
+   * and an `error_during_execution` result. The run's error is the platform's sentence, not the CLI's.
+   */
+  it('names the route when the CLI gives up after retries, rather than quoting the CLI', async () => {
+    const script = retryingScript(2);
+    script.splice(
+      4,
+      1,
+      {
+        step: 'emit',
+        message: {
+          type: 'assistant',
+          message: {
+            id: 'msg_synthetic',
+            type: 'message',
+            role: 'assistant',
+            model: '<synthetic>',
+            content: [{ type: 'text', text: 'Request timed out' }],
+            stop_reason: 'stop_sequence',
+            stop_sequence: '',
+            usage: { input_tokens: 0, output_tokens: 0 },
+          },
+          parent_tool_use_id: null,
+          uuid: '0000000a-0000-4000-8000-000000000001',
+          session_id: 'fake-session-0001',
+        },
+      },
+      {
+        step: 'emit',
+        message: {
+          type: 'result',
+          subtype: 'success',
+          is_error: true,
+          duration_ms: 177_179,
+          duration_api_ms: 0,
+          num_turns: 1,
+          result: 'Request timed out',
+          stop_reason: 'stop_sequence',
+          total_cost_usd: 0,
+          usage: { input_tokens: 0, output_tokens: 0 },
+          modelUsage: {},
+          permission_denials: [],
+          uuid: '0000000a-0000-4000-8000-000000000002',
+          session_id: 'fake-session-0001',
+        },
+      },
+      { step: 'exit', code: 1, signal: null },
+    );
+    const sink = recordingSink();
+    const cli = fakeSpawnClaudeCodeProcess(script as FakeCliScript);
+    const result = await createClaudeRunner({
+      sink,
+      approvals: scriptedApprovals(),
+      tools: recordingTools(),
+      clock: manualClock(FIXTURE_CLOCK_START),
+      injectedSecretRedactorFor: () => injectedSecretRedactorFixture(),
+      spawnClaudeCodeProcess: cli.spawn,
+    }).start(runSpecFixture()).outcome;
+    expect(result.status).toBe('failed');
+    expect(result.error).toBe(retriedWithoutModel('gave_up', 2, []));
+    expect(result.error).not.toContain('Request timed out');
+  });
+
+  it('says the provider answered, with the statuses, when the retries had one', () => {
+    expect(retriedWithoutModel('stalled', 2, [529, 503])).toBe(
+      'the platform stopped the run: stalled — the CLI retried the model API 2 times (api_retry) and the model API answered HTTP 503, 529, so the provider failed or refused the requests',
+    );
+  });
+
+  it('keeps the plain stall message once the model made progress after a retry', async () => {
+    const script = retryingScript(2);
+    const stall = loadScript('stall');
+    // The model's answer after the retries: progress, so the count resets.
+    script.splice(4, 0, stall[2] as FakeCliScript[number]);
+    const sink = recordingSink();
+    const clock = manualClock(FIXTURE_CLOCK_START);
+    const cli = fakeSpawnClaudeCodeProcess(script);
+    const handle = createClaudeRunner({
+      sink,
+      approvals: scriptedApprovals(),
+      tools: recordingTools(),
+      clock,
+      injectedSecretRedactorFor: () => injectedSecretRedactorFixture(),
+      spawnClaudeCodeProcess: cli.spawn,
+    }).start(runSpecFixture({ limits: { ...runSpecFixture().limits, stallTimeoutMs: 300_000 } }));
+    await settle(sink.events, 4);
+    clock.advance(300_000);
+    const result = await releaseByGrace({ clock, outcome: handle.outcome } as unknown as Harness);
+    expect(result.status).toBe('stalled');
+    expect(result.error).toBe('the platform stopped the run: stalled');
   });
 });
 

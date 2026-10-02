@@ -45,7 +45,7 @@
  * shape nobody has classified should tell a human rather than spin (Q59(a);
  * `stage-executor.ts` is what acts on it).
  */
-import type { SpawnedProcess, SpawnOptions } from '@anthropic-ai/claude-agent-sdk';
+
 import type {
   ClaudeRunner,
   ExistingProtectedPaths,
@@ -60,6 +60,7 @@ import type {
   WorkspaceCliEnvironment,
 } from '@platform/application';
 import { RunStartError, silentLogger, WorkspaceError } from '@platform/application';
+import type { ClaudeCodeSpawn } from './claude-runner.js';
 
 /**
  * How a run ended, as the thing that frees the workspace sees it.
@@ -119,8 +120,11 @@ export interface ProvisionedRunWorkspace {
    * environment in one function (`./options.ts`, `cliEnvironment`), and this is one of its inputs.
    */
   readonly cliEnvironment?: WorkspaceCliEnvironment | null;
-  /** `Options.spawnClaudeCodeProcess` for this run — the runlet transport, or a test's fake CLI. */
-  readonly spawn: (options: SpawnOptions) => SpawnedProcess;
+  /**
+   * `Options.spawnClaudeCodeProcess` for this run — the runlet transport, or a test's fake CLI. The
+   * runlet one carries `setStderrSink`, which the runner built over it sets (WP-127).
+   */
+  readonly spawn: ClaudeCodeSpawn;
   /** Called exactly once, whichever way the run ended. Must tolerate being called after a failure. */
   release(ending: RunWorkspaceEnding): Promise<void>;
 }
@@ -150,7 +154,7 @@ export interface WorkspaceClaudeRunnerOptions {
    * secret redactor) and this file must not grow a second opinion about any of them.
    */
   readonly build: (transport: {
-    readonly spawn: (options: SpawnOptions) => SpawnedProcess;
+    readonly spawn: ClaudeCodeSpawn;
     readonly workdir: string;
     /**
      * The launcher's answer for this run, or `undefined` for a workspace that has none. A

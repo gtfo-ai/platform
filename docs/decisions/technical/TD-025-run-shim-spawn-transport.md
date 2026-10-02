@@ -40,3 +40,13 @@ answers with is the one **the runner minted for this run** (TD-028, WP-76), not 
 3. **No secret is added to the frame.** The answered values are paths, an internal proxy URL and a command string. The model credential the frame already carries is unchanged, and the frame is written to no transcript or log (TD-012).
 4. **Rejected**: the shim merging an allow-list of its own environment. That would put the list in the image while its values live in the launcher, renumber git's indices inside the dependency-free shim, and copy from an environment that holds `RUNLET_*`. Also rejected: the runner hard-coding launcher facts it does not know (the sidecar name, the helper command, the image `PATH`).
 5. **Measured before it is built** (a daemon, no model credential). The fake CLI reports the names, never the values, of its `/proc/self/environ` through the launcher control-plane check, and the real CLI started with a fake key shows whether its traffic reaches the sidecar. Owner: **WP-118**, which gates WP-33.
+
+## Amendment (WP-127, 2026-10-03, session 11) — where a `stderr` frame goes
+
+Decision 2's clause that `stderr` frames feed the SDK `stderr` callback and the run log was not true of the
+build: the launcher provisioner built the spawn without one, so a containerised CLI's stderr reached nothing
+(PROGRESS backlog 344). Since WP-127 the spawn exposes a sink the runner sets per run with its TD-012
+redactor (`packages/infrastructure/src/runner/stderr-log.ts`): before the stream's first message the text is
+held, bounded at 64 Ki characters, redacted once as a whole and logged at `warn` if the run ends there; after it, each
+line is redacted and logged at `debug`. No stderr text reaches the run record, the task or an event payload
+(BD-022). `docs/technical/04-agent-runtime.md` carries the same correction.

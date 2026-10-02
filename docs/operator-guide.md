@@ -719,6 +719,40 @@ file declaring `agentic` as an `external` network — must name `agentic_default
 instances on one host still share that one network; only their launchers and the run objects they
 create join it.
 
+**Upgrading past the build that removes orphaned run containers (WP-103).** Since that build the
+runner's recovery pass removes a run container nobody holds — a create a stopped launcher never
+answered, a run whose process died — but it finds them by a label, `com.agentic.instance`, that
+**older builds never wrote**, so an orphan left by an earlier build is never listed and stays on the
+Docker host until you remove it. Once, after the upgrade, list every run container with that label
+beside it:
+
+```bash
+docker ps -a --filter label=com.agentic.run \
+  --format '{{.Label "com.agentic.run"}}  {{.Label "com.agentic.instance"}}  {{.Names}}  {{.Status}}'
+```
+
+A row whose **second column is empty** was made by a build before WP-103. The upgrade restarted the
+runner, so no run of the old build is still being driven: each such run id is an orphan. Remove what
+it left — its run container and egress sidecar, its network and the sidecar's configuration volume:
+
+```bash
+RUN=<run id from the first column>
+docker rm -f $(docker ps -aq --filter "label=com.agentic.run=${RUN:?set RUN first}")
+docker network rm "run-${RUN:?}"
+docker volume rm "egress-${RUN:?}"
+```
+
+Measured against an orphan made by the build before WP-103 (a create its launcher never released,
+then the launcher stopped): it was exactly two containers (`ws-<run>` and `egress-<run>`, both
+running), one network (`run-<run>`), two volumes (`egress-<run>`, `ws-<run>`) and the run's
+directory on the control volume, none of them carrying `com.agentic.instance`; the three commands
+left only `ws-<run>`. Leave that one: it is the run's workspace, kept for its retention window like
+every finished run's and removed by the launcher's retention sweep. The run's control directory
+(its token and sockets) is removed by the same sweep once no container carries the run's label —
+read off the code, not measured here. **If another instance shares this Docker host** and still runs
+a build before WP-103, its live runs look the same in this list: remove only run ids that are not
+live there.
+
 ### What a failed migration looks like
 
 The `migrate` service writes one JSON object per line and exits non-zero:

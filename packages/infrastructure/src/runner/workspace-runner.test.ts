@@ -208,6 +208,28 @@ describe('every ending frees the workspace', () => {
     // would be calling a method on nothing.
     expect(world.released).toEqual([]);
   });
+
+  it('carries the workspace’s kind, reason code and commit to the stage executor (WP-127)', async () => {
+    const sha = '0123456789abcdef0123456789abcdef01234567';
+    const world = harness({
+      provision: async () => {
+        throw new WorkspaceError('invalid_spec', 'FAKE-planted words that stay in the log', {
+          reason: 'checkout_commit_missing',
+          commit: sha,
+        });
+      },
+    });
+    const failure = await world.runner
+      .start(runSpecFixture())
+      .outcome.catch((error: unknown) => error);
+
+    expect((failure as RunStartError).diagnosis).toEqual({
+      kind: 'invalid_spec',
+      reason: 'checkout_commit_missing',
+      commit: sha,
+    });
+    expect((failure as RunStartError).retryable).toBe(false);
+  });
 });
 
 describe('the run is executed in the workspace’s own working directory', () => {

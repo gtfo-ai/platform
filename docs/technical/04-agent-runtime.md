@@ -488,7 +488,17 @@ Static parts first (cache-friendly); `Run.prompt_version` = hash of layers 1–3
 > `packages/application/src/pipeline/live-runs.ts`); one benign route reads the same — a session
 > whose outcome settled during the very drain that looked — and the line names it.
 - Heartbeat: last output timestamp; `stalled` after `stallTimeoutMs` → interrupt, mark stalled, pipeline retries once with failure context (research/01 Symphony).
-- Transport: `spawnClaudeCodeProcess` returns a `SpawnedProcess` backed by the run shim's control socket (frames for stdin/stdout/stderr/signal/exit); `stderr` frames go to the SDK `stderr` callback and the run log; the SDK teardown signal maps to `signal{SIGTERM}` and then container stop.
+- Transport: `spawnClaudeCodeProcess` returns a `SpawnedProcess` backed by the run shim's control socket (frames for stdin/stdout/stderr/signal/exit); `stderr` frames go to the runner's redacting sink and the run log (WP-127, below); the SDK teardown signal maps to `signal{SIGTERM}` and then container stop.
+
+> **WP-127 (PROGRESS backlog 344 and 346).** *stderr:* the SDK attaches its own `stderr` callback
+> only to a process it spawns itself, so until WP-127 a containerised CLI's stderr frames reached
+> nothing. The runlet spawn now exposes `setStderrSink`, and the runner sets it with its per-run
+> redactor (`packages/infrastructure/src/runner/stderr-log.ts`): a run that ends before its first
+> stream message logs what the CLI wrote as one `warn` line, any other run at `debug`. No stderr text
+> reaches the transcript, the run record or the task. *Heartbeat:* "output" is every transcript entry
+> **except** an `api_retry` system entry, which is transcribed and is not progress — with no route to
+> the model the CLI retries instead of failing, and each retry used to re-arm the stall, so such a run
+> lived until the wall clock. It now ends `stalled`, and its error names the route in platform text.
 
 ## Budgets and limits
 

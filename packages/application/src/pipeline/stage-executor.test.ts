@@ -11,7 +11,8 @@ import { materialiseAutonomy, resolveIterationLimits } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
 import { NO_HOLD } from '../cost/pending.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
-import { RunStartError } from '../ports/runner.js';
+import { describeStartFailure, RunStartError } from '../ports/runner.js';
+import { WorkspaceError } from '../ports/workspace.js';
 import { askingRefinedSpec, PROCEEDING_REFINED_SPEC } from '../testing/artifact-fixtures.js';
 import {
   createPipelineHarness,
@@ -796,6 +797,98 @@ describe('a run whose start failed for a transport reason', () => {
     expect(serialised).toContain('RunStartError');
     expect(serialised).not.toContain('FAKE-PLANTED-secret-0123456789');
     expect(serialised).not.toContain('ctl.sock');
+  });
+});
+
+/**
+ * **A start failure says why, in platform words** — WP-127, PROGRESS backlog 351.
+ *
+ * Before WP-127 a terminal `invalid_spec` — since WP-105, a shadow base missing from the mirror —
+ * escalated as *"the run could not be started (RunStartError)"*, and the provider's comment that
+ * the task escalates "with this sentence" was false. The ruling: the escalation carries the
+ * workspace's error **kind** and a platform-chosen **reason code**, the commit only through
+ * `shaSchema`, and the message stays in the log — so a planted secret in the message is absent.
+ */
+describe('a run refused by its workspace names the kind and the reason (WP-127)', () => {
+  const SHA = '0123456789abcdef0123456789abcdef01234567';
+  const PLANTED = 'FAKE-PLANTED-secret-wp127-0123456789';
+  const refusal = (options: { readonly commit?: string } = {}) =>
+    new RunStartError(`the run workspace could not be provisioned: WorkspaceError: ${PLANTED}`, {
+      retryable: false,
+      cause: new WorkspaceError(
+        'invalid_spec',
+        `the commit ${options.commit ?? SHA} this run must start from is not in the project's mirror — ${PLANTED}`,
+        {
+          reason: 'checkout_commit_missing',
+          commit: options.commit ?? SHA,
+          detail: PLANTED,
+        },
+      ),
+    });
+
+  const harnessRefusedWith = (error: Error): PipelineHarness =>
+    harnessWith({
+      runs: {
+        refinement: { status: 'completed', terminalReason: 'success', throwsOnStart: error },
+      },
+    });
+
+  it('escalates a terminal invalid_spec naming its kind, its reason code and the commit', async () => {
+    const harness = harnessRefusedWith(refusal());
+    await harness.publish([ticketMatched()]);
+
+    expect(taskOf(harness).task.state).toBe('needs_human');
+    const escalation = escalationOf(harness);
+    const cause = `RunStartError: invalid_spec, checkout_commit_missing, commit ${SHA}`;
+    expect(escalation?.payload.reason).toBe(
+      `stage "refinement": the run could not be started (${cause})`,
+    );
+    expect(escalation?.payload.blocker_brief).toContain(cause);
+    const failed = harness.events().find((entry) => entry.type === 'run.failed') as
+      | Extract<DomainEvent, { type: 'run.failed' }>
+      | undefined;
+    expect(failed?.payload.error).toBe(`the run could not be started (${cause})`);
+  });
+
+  it('carries no word of the message or the detail, with a secret planted in both', async () => {
+    const harness = harnessRefusedWith(refusal());
+    await harness.publish([ticketMatched()]);
+
+    const serialised = JSON.stringify(harness.events());
+    expect(serialised).toContain('checkout_commit_missing');
+    expect(serialised).not.toContain(PLANTED);
+    expect(serialised).not.toContain('must start from');
+  });
+
+  /**
+   * The canary for the sha rule: a "commit" that is not one is dropped at the constructor, so the
+   * planted text never reaches the escalation even though the reason does.
+   */
+  it('drops a commit that is not a sha rather than carrying it', async () => {
+    const harness = harnessRefusedWith(refusal({ commit: `${PLANTED} ; rm -rf /` }));
+    await harness.publish([ticketMatched()]);
+
+    expect(escalationOf(harness)?.payload.reason).toBe(
+      'stage "refinement": the run could not be started (RunStartError: invalid_spec, checkout_commit_missing)',
+    );
+    expect(JSON.stringify(harness.events())).not.toContain(PLANTED);
+  });
+
+  it('re-reads a forged diagnosis through its schemas, so only closed vocabulary is written', () => {
+    const forged = new RunStartError('x', {
+      retryable: false,
+      diagnosis: {
+        kind: PLANTED as never,
+        reason: PLANTED as never,
+        commit: PLANTED,
+      },
+    });
+    expect(describeStartFailure(forged)).toBe('RunStartError');
+    expect(describeStartFailure(new WorkspaceError('engine_unavailable', PLANTED))).toBe(
+      'WorkspaceError: engine_unavailable',
+    );
+    expect(describeStartFailure(new Error(PLANTED))).toBe('Error');
+    expect(describeStartFailure(PLANTED)).toBe('unknown error');
   });
 });
 

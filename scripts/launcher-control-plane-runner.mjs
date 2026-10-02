@@ -50,12 +50,15 @@ const { launcher: launcherAdapters, runner: runnerAdapters } = await import(
 
 const notes = [];
 /**
- * What the CLI wrote on stderr, as the runner's own `stderr` part logs it (`claude code stderr`,
- * already redacted there). Recorded for the real-CLI leg (WP-118) and, measured there, **empty**:
- * the launcher provisioner's transport passes no `onStderr`, so a containerised CLI's stderr reaches
- * nothing. The CLI's error is read off its transcript instead (`api_retry`).
+ * What the CLI wrote on stderr, as the runner logs it — already redacted there. Recorded for the
+ * real-CLI legs. At WP-118 it was **empty**: the launcher provisioner's transport passed no
+ * `onStderr`, so a containerised CLI's stderr reached nothing (PROGRESS backlog 344). Since WP-127
+ * the runner sets its own sink on the spawn: a run that ends before its first stream message logs
+ * what the CLI wrote as one `warn` line, any other run at `debug` (`runner/stderr-log.ts`).
  */
 const cliStderr = [];
+const STDERR_BEFORE_STREAM =
+  'the CLI wrote on stderr and the run ended before its first stream message';
 const logger = {
   debug: (fields, message) => {
     if (message === 'claude code stderr' && typeof fields?.stderr === 'string') {
@@ -63,7 +66,12 @@ const logger = {
     }
   },
   info: () => undefined,
-  warn: (fields, message) => notes.push(`warn: ${message} ${JSON.stringify(fields)}`),
+  warn: (fields, message) => {
+    if (message === STDERR_BEFORE_STREAM && typeof fields?.stderr === 'string') {
+      cliStderr.push(fields.stderr);
+    }
+    notes.push(`warn: ${message} ${JSON.stringify(fields)}`);
+  },
   error: (fields, message) => notes.push(`error: ${message} ${JSON.stringify(fields)}`),
 };
 
@@ -470,6 +478,105 @@ if (PHASE === 'real-cli') {
   process.exit(0);
 }
 
+/**
+ * WP-127, PROGRESS backlog 346: the image's **real** `claude` with **no route to the model** — its
+ * run's egress sidecar stopped after the workspace is provisioned and before the CLI starts, so its
+ * `HTTPS_PROXY` names a container that is gone. The run allows no model host either, so nothing it
+ * sends could reach Anthropic had the sidecar been up.
+ *
+ * The gate: once provisioned, this prints `{"provisioned": …}` and waits (bounded) for the host to
+ * stop the sidecar and create `/tmp/sidecar-stopped` in this container (`docker exec`). What is
+ * printed is the CLI's retry sequence off the transcript — attempt, delay, status, error and when —
+ * the outcome, and the runner's stderr line, so the check can say how long the CLI retries, what its
+ * backoff caps at and how it gives up, and that the shipped stall now ends the run naming the route.
+ */
+if (PHASE === 'no-route') {
+  const runId = required('CHECK_NO_ROUTE_RUN_ID');
+  const gateMs = Number(process.env['CHECK_NO_ROUTE_GATE_MS'] ?? 120_000);
+  const transcript = [];
+  const phase = { phase: PHASE, ok: false, gate: null, status: null, notes };
+  const started = Date.now();
+  try {
+    const runner = runnerAdapters.createWorkspaceClaudeRunner({
+      provisioner: {
+        provision: async (spec) => {
+          const workspace = await provisioner.provision(spec);
+          process.stdout.write(`${JSON.stringify({ provisioned: spec.runId })}\n`);
+          const deadline = Date.now() + gateMs;
+          const { existsSync } = await import('node:fs');
+          while (!existsSync('/tmp/sidecar-stopped') && Date.now() < deadline) {
+            await new Promise((resolve) => setTimeout(resolve, 200));
+          }
+          phase.gate = existsSync('/tmp/sidecar-stopped') ? 'sidecar stopped' : 'timed out';
+          return workspace;
+        },
+      },
+      logger,
+      build: (transport) =>
+        runnerAdapters.createClaudeRunner({
+          sink: { append: async (event) => transcript.push(event) },
+          approvals: {
+            requestApproval: async () => ({
+              decision: 'deny',
+              reason: 'unattended',
+              questionId: null,
+            }),
+          },
+          tools: runnerAdapters.recordingTools(),
+          clock: runnerAdapters.systemClock,
+          logger,
+          injectedSecretRedactorFor: () => noSecretsRedactor(),
+          spawnClaudeCodeProcess: transport.spawn,
+          ...(transport.cliEnvironment === undefined
+            ? {}
+            : { workspaceEnvironment: transport.cliEnvironment }),
+        }),
+    });
+    const spec = runnerAdapters.runSpecFixture({
+      ...specFor(runId),
+      tools: ['Read'],
+      limits: {
+        ...runnerAdapters.runSpecFixture().limits,
+        wallClockMs: Number(required('CHECK_NO_ROUTE_WALL_MS')),
+        stallTimeoutMs: Number(required('CHECK_NO_ROUTE_STALL_MS')),
+      },
+    });
+    const outcome = await runner.start(spec).outcome;
+    phase.ok = true;
+    phase.status = outcome.status;
+    phase.terminalReason = outcome.terminalReason;
+    phase.error = outcome.error;
+  } catch (error) {
+    phase.error = String(error?.message ?? error).slice(0, 600);
+  }
+  phase.wallMs = Date.now() - started;
+  const redact = (text) => text.split(FAKE_MODEL_KEY).join('[FAKE_MODEL_KEY]');
+  phase.retries = transcript
+    .filter((event) => event.kind === 'system' && event.subtype === 'api_retry')
+    .map((event) => ({
+      at: event.created_at,
+      attempt: event.data?.attempt ?? null,
+      max_retries: event.data?.max_retries ?? null,
+      retry_delay_ms: event.data?.retry_delay_ms ?? null,
+      error_status: event.data?.error_status ?? null,
+      error: event.data?.error ?? null,
+    }));
+  phase.kinds = transcript.map((event) =>
+    event.kind === 'system' ? `system/${event.subtype}` : event.kind,
+  );
+  phase.last = redact(
+    JSON.stringify(
+      transcript
+        .filter((event) => event.kind !== 'system' || event.subtype !== 'api_retry')
+        .slice(-3),
+    ),
+  ).slice(-3_000);
+  phase.stderr = redact(cliStderr.join('')).slice(-2_000);
+  phase.leaked = JSON.stringify(phase).includes(FAKE_MODEL_KEY);
+  process.stdout.write(`${JSON.stringify(phase)}\n`);
+  process.exit(0);
+}
+
 const report = {
   sdkPlatformPackages: sdkPlatformPackages(),
   environ: null,
@@ -553,10 +660,14 @@ try {
         injectedSecretRedactorFor: () => noSecretsRedactor(),
         // The seam this check reads: `SpawnOptions.command` is the string the SDK hands the
         // transport and the shim `exec`s in the container — the bytes the CLI received (rule 82).
-        spawnClaudeCodeProcess: (options) => {
-          report.spawnCommand = options.command;
-          return spawn(options);
-        },
+        // The transport's stderr seam is kept (WP-127), so the wrapper does not hide it.
+        spawnClaudeCodeProcess: Object.assign(
+          (options) => {
+            report.spawnCommand = options.command;
+            return spawn(options);
+          },
+          { setStderrSink: spawn.setStderrSink },
+        ),
         // WP-118: what `apps/server/src/agent.ts` forwards — the launcher's answer.
         ...(cliEnvironment === undefined ? {} : { workspaceEnvironment: cliEnvironment }),
       }),

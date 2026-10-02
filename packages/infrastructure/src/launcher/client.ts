@@ -30,10 +30,16 @@
  * debug line with a body in it is how a credential reaches a log file that outlives the run. What is
  * logged is the path, the status and the run id.
  */
-import { type Logger, silentLogger, WorkspaceError } from '@platform/application';
+import {
+  type Logger,
+  silentLogger,
+  WorkspaceError,
+  type WorkspaceErrorReason,
+} from '@platform/application';
 import * as z from 'zod';
 import {
   CONTROL_PLANE_PATHS,
+  type ControlPlaneErrorCode,
   type CreateRunRequestPayload,
   type CreateRunResponse,
   controlPlaneCodeOfStatus,
@@ -107,6 +113,24 @@ const describe = (error: unknown): string =>
  * `fetch` would send it. The scheme check is the same closed answer `httpUrlSchema` gives the
  * integration hosts (Q49) — `javascript:`, `file:` and `data:` are URLs too.
  */
+/**
+ * The reason code a control-plane failure carries when the launcher sent none (WP-127): the three
+ * codes a *transport* has and a provider does not each name themselves; a provider code with no
+ * reason of its own stays without one, because the kind alone is then all that is known.
+ */
+const transportReasonOf = (code: ControlPlaneErrorCode): WorkspaceErrorReason | null => {
+  switch (code) {
+    case 'unauthorized':
+      return 'launcher_unauthorized';
+    case 'bad_request':
+      return 'launcher_request_refused';
+    case 'internal':
+      return 'launcher_internal_error';
+    default:
+      return null;
+  }
+};
+
 export const parseLauncherBaseUrl = (raw: string): string => {
   let url: URL;
   try {
@@ -172,7 +196,7 @@ export const createLauncherControlClient = (
       throw new WorkspaceError(
         'engine_unavailable',
         `the launcher control plane could not be reached at ${url}: ${describe(cause)}`,
-        { ...(runId === null ? {} : { runId }), cause },
+        { ...(runId === null ? {} : { runId }), cause, reason: 'launcher_unreachable' },
       );
     }
     if (status >= 200 && status < 300) {
@@ -198,6 +222,10 @@ export const createLauncherControlClient = (
     throw new WorkspaceError(workspaceCodeOfControlPlaneCode(code), message, {
       ...(runId === null ? {} : { runId }),
       detail: `${code} (HTTP ${String(status)})`,
+      // WP-127: the launcher's own reason code when it sent one, else the transport's reading of
+      // the control-plane code — both closed vocabularies, so the task can be told which.
+      reason: (failure.success ? failure.data.error.reason : null) ?? transportReasonOf(code),
+      commit: failure.success ? (failure.data.error.commit ?? null) : null,
     });
   };
 

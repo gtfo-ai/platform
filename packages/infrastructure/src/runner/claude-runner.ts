@@ -22,6 +22,18 @@
  * SDK emits keep-alives and control traffic that are not the model doing work, and a stall detector
  * that a keep-alive resets is a stall detector that never fires.
  *
+ * **An `api_retry` entry is transcribed and is not progress** (WP-127, PROGRESS backlog 346). With
+ * no route to the model — the egress sidecar down, the provider unreachable — the CLI retries with a
+ * growing delay instead of failing, and each retry is a `system` message. Before WP-127 each one
+ * re-armed the stall. Now the stall runs across them, and a run that ends with nothing but retries
+ * since its last progress — `stalled` by this timer, or the CLI's own give-up — carries an error that
+ * says so in platform text ({@link retriedWithoutModel}): the retry count this runner counted and the
+ * HTTP statuses the retries reported, as integers, never the CLI's words. Measured on the pinned CLI
+ * with its sidecar stopped (WP-127): ten retries, the delay doubling from 0.6 s to a cap near 35 s,
+ * and the CLI's give-up — a synthetic assistant message and an `error_during_execution` result —
+ * about three minutes after its first request. The synthetic message (`model: "<synthetic>"`) is the
+ * CLI reporting its own failure, so it is neither progress nor a retry.
+ *
  * ## The budget check is a post-`result` relabel, not a mid-turn stop
  *
  * Say exactly what it is, because WP-15 will plan around this paragraph. `maxBudgetUsd` is passed
@@ -106,6 +118,7 @@ import { buildQueryOptions } from './options.js';
 import { buildCanUseTool } from './permission.js';
 import { createPlatformMcpServer } from './platform-mcp.js';
 import { toSdkSessionStore } from './session-mirror.js';
+import { createStderrLog } from './stderr-log.js';
 import { createStreamBlockCoalescer } from './stream-block-coalescer.js';
 import { validateStructuredOutput } from './structured-output.js';
 import {
@@ -119,6 +132,14 @@ import {
 } from './transcript-normaliser.js';
 
 export type QueryFunction = typeof sdkQuery;
+
+/**
+ * `Options.spawnClaudeCodeProcess`, optionally with the seam a transport's stderr leaves through
+ * (WP-127, PROGRESS backlog 344). `runlet/spawn-adapter.ts`'s `RunletSpawn` is one.
+ */
+export type ClaudeCodeSpawn = ((options: SpawnOptions) => SpawnedProcess) & {
+  readonly setStderrSink?: (sink: ((chunk: string) => void) | null) => void;
+};
 
 export interface ClaudeRunnerDependencies {
   readonly sink: RunTranscriptSink;
@@ -138,8 +159,12 @@ export interface ClaudeRunnerDependencies {
    */
   injectedSecretRedactorFor(spec: RunSpec): SecretRedactor;
   readonly sessionMirror?: SessionMirrorPort;
-  /** WP-13's run shim goes here; `fakeSpawnClaudeCodeProcess` goes here in tests (TD-025). */
-  readonly spawnClaudeCodeProcess?: (options: SpawnOptions) => SpawnedProcess;
+  /**
+   * WP-13's run shim goes here; `fakeSpawnClaudeCodeProcess` goes here in tests (TD-025). When it
+   * exposes `setStderrSink` (the runlet transport does, WP-127), the runner sets its own redacting
+   * sink on it: the SDK reads stderr only from a process it spawned itself.
+   */
+  readonly spawnClaudeCodeProcess?: ClaudeCodeSpawn;
   /**
    * The launcher's answer for this run's container (WP-118, TD-025's amendment): the proxy,
    * `HOME`, `CLAUDE_CONFIG_DIR`, the image's `PATH` and the git credential helper, composed into the
@@ -236,6 +261,47 @@ const STOP_MESSAGE: Record<StopCause, string> = {
   taken_over: 'the platform stopped the run: taken_over',
 };
 
+/**
+ * The error of a run that ended with nothing but `api_retry` entries since its last progress
+ * (WP-127, backlog 346): **platform text**, naming the route rather than quoting the CLI, whose
+ * words are producer text. The count is this runner's own and the statuses are integers it checked;
+ * no status at all means no request was answered, which is a missing route, not a refusal.
+ */
+export const retriedWithoutModel = (
+  ending: 'stalled' | 'gave_up',
+  retries: number,
+  statuses: readonly number[],
+): string => {
+  const head =
+    ending === 'stalled'
+      ? 'the platform stopped the run: stalled — the CLI retried'
+      : 'the CLI gave up after retrying';
+  const tried = `${head} the model API ${String(retries)} time${retries === 1 ? '' : 's'} (api_retry)`;
+  return statuses.length === 0
+    ? `${tried} with no response, so the run has no route to the model host: the run's egress ` +
+        'sidecar, its network or the provider is unreachable'
+    : `${tried} and the model API answered HTTP ${[...statuses].sort((a, b) => a - b).join(', ')}, ` +
+        'so the provider failed or refused the requests';
+};
+
+/** What an appended entry is to the stall detector (WP-127). */
+type Progress = 'progress' | 'retry' | 'neutral';
+
+/**
+ * `retry` for an `api_retry`; `neutral` for the CLI's synthetic assistant message — its own report
+ * of a failure, `model: "<synthetic>"`, measured as the message before the give-up's `result`;
+ * `progress` for everything else.
+ */
+const progressOf = (message: SDKMessage): Progress => {
+  if (message.type === 'system' && message.subtype === 'api_retry') {
+    return 'retry';
+  }
+  if (message.type === 'assistant' && message.message.model === '<synthetic>') {
+    return 'neutral';
+  }
+  return 'progress';
+};
+
 const resultStatus = (reason: RunTerminalReason): TerminalRunStatus => {
   if (reason === 'success') {
     return 'completed';
@@ -262,6 +328,10 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
   const coalescer = createStreamBlockCoalescer();
   const stopSignal = deferred<StopCause>();
   const startedAt = deps.clock.now();
+  // WP-127 (backlog 344): the CLI's stderr, redacted with this run's redactor, at `warn` for a run
+  // that ends before its first stream message and at `debug` otherwise — and nowhere else.
+  const stderrLog = createStderrLog({ runId: spec.runId, logger, redactor });
+  deps.spawnClaudeCodeProcess?.setStderrSink?.(stderrLog.accept);
 
   let seq = 0;
   let redactionCount = 0;
@@ -270,6 +340,13 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
   let stopCause: StopCause | null = null;
   let steerProvenance: string | null = null;
   let cancelStall: (() => void) | null = null;
+  /** `api_retry` entries since the last entry that was progress, and their statuses (WP-127). */
+  let retriesSinceProgress = 0;
+  const retryStatuses = new Set<number>();
+  /** The stall's error when it fired across retries only, else `null` (WP-127). */
+  let stallDetail: string | null = null;
+  /** The give-up's error when the CLI's `result` came after retries only, else `null` (WP-127). */
+  let gaveUpDetail: string | null = null;
 
   const requestStop = (cause: StopCause): void => {
     if (stopCause !== null) {
@@ -285,10 +362,36 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
 
   const armStall = (): void => {
     cancelStall?.();
-    cancelStall = deps.clock.setTimer(spec.limits.stallTimeoutMs, () => requestStop('stalled'));
+    cancelStall = deps.clock.setTimer(spec.limits.stallTimeoutMs, () => {
+      if (retriesSinceProgress > 0) {
+        stallDetail = retriedWithoutModel('stalled', retriesSinceProgress, [...retryStatuses]);
+      }
+      requestStop('stalled');
+    });
   };
 
-  const append = async (build: (envelope: TranscriptEnvelope) => TranscriptEvent | null) => {
+  /**
+   * An appended entry re-arms the stall **when it is progress** (WP-127): every entry but an
+   * `api_retry` — the CLI failing to reach the model rather than the model working — and the CLI's
+   * own synthetic report of that failure, which is neither.
+   */
+  const progressed = (progress: Progress): void => {
+    if (progress === 'retry') {
+      retriesSinceProgress += 1;
+      return;
+    }
+    if (progress === 'neutral') {
+      return;
+    }
+    retriesSinceProgress = 0;
+    retryStatuses.clear();
+    armStall();
+  };
+
+  const append = async (
+    build: (envelope: TranscriptEnvelope) => TranscriptEvent | null,
+    progress: Progress = 'progress',
+  ) => {
     const envelope: TranscriptEnvelope = {
       run_id: spec.runId,
       seq,
@@ -330,11 +433,11 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
         model: null,
         data: { entry_kind: built.kind, issues },
       });
-      armStall();
+      progressed(progress);
       return;
     }
     await deps.sink.append(parsed.data);
-    armStall();
+    progressed(progress);
   };
 
   const recordHook = async (record: HookRecord): Promise<void> => {
@@ -417,13 +520,10 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
     ...(deps.workspaceEnvironment === undefined
       ? {}
       : { workspaceEnvironment: deps.workspaceEnvironment }),
-    // stderr from the CLI is untrusted text on its way to a log: redact it (BD-022, TD-012).
-    stderr: (data) => {
-      logger.debug(
-        { run_id: spec.runId, stderr: redactor.redactText(data).value },
-        'claude code stderr',
-      );
-    },
+    // stderr from the CLI is untrusted text on its way to a log: redact it (BD-022, TD-012). The
+    // SDK calls this only for a process it spawned itself; a transport's frames reach the same
+    // sink through `setStderrSink` above.
+    stderr: stderrLog.accept,
   });
 
   // ── message handling ──────────────────────────────────────────────────────
@@ -444,6 +544,7 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
   };
 
   const handle = async (message: SDKMessage): Promise<void> => {
+    stderrLog.streamOpened();
     if (message.type === 'system' && message.subtype === 'init') {
       sessionId = message.session_id;
     }
@@ -451,7 +552,22 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
       await handleStreamEvent(message);
       return;
     }
-    await append((envelope) => normaliseMessage(message, envelope));
+    const progress = progressOf(message);
+    if (progress === 'retry') {
+      const status = (message as { readonly error_status?: unknown }).error_status;
+      if (
+        typeof status === 'number' &&
+        Number.isInteger(status) &&
+        status >= 100 &&
+        status <= 599
+      ) {
+        retryStatuses.add(status);
+      }
+    }
+    if (message.type === 'result' && retriesSinceProgress > 0) {
+      gaveUpDetail = retriedWithoutModel('gave_up', retriesSinceProgress, [...retryStatuses]);
+    }
+    await append((envelope) => normaliseMessage(message, envelope), progress);
     if (message.type === 'result') {
       result = message;
       const cost = reportedCostUsd(message.total_cost_usd);
@@ -576,6 +692,7 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
       // into "the platform hung too". Verified against the installed SDK: with the transport
       // stalled, `interrupt()` resolves and `iterator.return()` does not.
       void session?.return?.().catch(() => undefined);
+      stderrLog.runEnded();
     }
 
     return outcomeOf(failure);
@@ -661,7 +778,7 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
         cost,
         wallMs,
         structuredOutput: null,
-        error: failure ?? STOP_MESSAGE[stopCause],
+        error: failure ?? (stopCause === 'stalled' ? stallDetail : null) ?? STOP_MESSAGE[stopCause],
         redactionCount,
       };
     }
@@ -700,7 +817,7 @@ const startRun = (deps: ClaudeRunnerDependencies, rawSpec: RunSpec): RunHandle =
         cost,
         wallMs,
         structuredOutput: null,
-        error: failure ?? redactor.redactText(errorTextOf(finished)).value,
+        error: failure ?? gaveUpDetail ?? redactor.redactText(errorTextOf(finished)).value,
         redactionCount,
       };
     }

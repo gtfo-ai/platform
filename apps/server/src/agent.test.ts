@@ -14,7 +14,7 @@ import type {
   ToolApprovalRequest,
 } from '@platform/application';
 import * as applicationRunRedaction from '@platform/application';
-import { runner as runnerAdapters } from '@platform/infrastructure';
+import { runlet as runletAdapters, runner as runnerAdapters } from '@platform/infrastructure';
 import type pg from 'pg';
 import { describe, expect, it } from 'vitest';
 import {
@@ -246,6 +246,85 @@ describe('the composed runner hands the launcher’s CLI environment to the spaw
       GIT_CONFIG_KEY_0: 'credential.helper',
       GIT_CONFIG_KEY_1: 'core.fsmonitor',
     });
+  });
+});
+
+/**
+ * **A containerised CLI's stderr reaches the runner's redactor** (WP-127, PROGRESS backlog 344).
+ *
+ * The frame is real: the run shim (`createRunletShim`) runs a child that writes the run's own model
+ * credential on stderr and exits before its first stream message, and the spawn is the production
+ * `createRunletSpawn` the launcher provisioner builds — with no `onStderr`, as there. Only the
+ * command is replaced (the image's `claude` is not on this machine). What is asserted is the one
+ * `warn` line, redacted, and that the stderr text reached neither the outcome nor the transcript.
+ */
+describe('the composed runner logs a containerised CLI’s stderr, redacted (WP-127)', () => {
+  it('writes a CLI that died before its stream at warn, with the credential replaced', async () => {
+    const key = 'FAKE-anthropic-key-not-a-real-secret-000';
+    const { logger, lines } = recordingLogger();
+    const volume = await runletAdapters.createControlVolume();
+    const token = 'run-token-wp127-0000000000000000';
+    const shim = runletAdapters.createRunletShim({
+      controlSocketPath: volume.controlSocketPath,
+      credentialSocketPath: volume.credentialSocketPath,
+      token,
+      clock: runnerAdapters.systemClock,
+    });
+    await shim.start();
+    try {
+      const transport = runletAdapters.createRunletSpawn({
+        socketPath: volume.controlSocketPath,
+        token,
+        clock: runnerAdapters.systemClock,
+      });
+      const script = `process.stderr.write('auth failed for ${key}\\n'); process.exit(1);`;
+      const answering: runnerAdapters.RunWorkspaceProvisioner = {
+        provision: async () => ({
+          workdir: process.cwd(),
+          claudeCodePath: '/usr/local/bin/claude',
+          // The command is the only thing replaced; the sink seam is the transport's own.
+          spawn: Object.assign(
+            (options: Parameters<typeof transport>[0]) =>
+              transport({ ...options, ...runletAdapters.nodeScript(script), cwd: process.cwd() }),
+            { setStderrSink: transport.setStderrSink },
+          ),
+          release: async () => {},
+        }),
+      };
+      const composed = composeAgentRunner({
+        pool,
+        broadcast,
+        provisioner: answering,
+        runSecrets,
+        tools,
+        providerMode: 'api',
+        modelApiKey: key,
+        logger,
+      });
+      if (composed.runner === null) {
+        throw new Error('expected a runner');
+      }
+      const spec = runnerAdapters.runSpecFixture({
+        env: agentRunEnvironment({ providerMode: 'api', modelApiKey: key }).env,
+        secretEnvNames: ['ANTHROPIC_API_KEY'],
+        artifactType: null,
+      });
+      const outcome = await composed.runner.start(spec).outcome;
+
+      const warned = lines.filter((line) =>
+        line.message.includes('before its first stream message'),
+      );
+      expect(warned).toHaveLength(1);
+      expect(String(warned[0]?.fields['stderr'])).toMatch(
+        /^auth failed for \[REDACTED:[^\]]+\]\n$/,
+      );
+      expect(JSON.stringify(lines)).not.toContain(key);
+      expect(outcome.status).toBe('failed');
+      expect(JSON.stringify(outcome)).not.toContain('auth failed');
+    } finally {
+      await shim.close();
+      await volume.cleanup();
+    }
   });
 });
 

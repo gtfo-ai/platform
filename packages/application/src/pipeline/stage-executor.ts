@@ -103,6 +103,7 @@ import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import {
   type ClaudeRunner,
+  describeStartFailure,
   isRetryableStartFailure,
   type RunOutcome,
   type RunSpec,
@@ -1235,11 +1236,14 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
           job,
           run: prepared.run,
           options,
-          // The **class name**, never the message: an error thrown out of a runner may quote a
-          // provider, a URL or a credential, and this string is written to `events.payload`
-          // (`run.failed`) and into the escalation's blocker brief, both of which TD-012 covers
-          // and neither of which passes a redactor here. The message is in the log line above.
-          errorName: error instanceof Error ? error.name : 'unknown error',
+          // The **class name and the platform's own diagnosis**, never the message: an error
+          // thrown out of a runner may quote a provider, a URL or a credential, and this string is
+          // written to `events.payload` (`run.failed`) and into the escalation's blocker brief,
+          // both of which TD-012 covers and neither of which passes a redactor here. So what is
+          // added is closed vocabulary only — the workspace's error kind and its reason code, and
+          // a commit through `shaSchema` (WP-127, backlog 351, `describeStartFailure`). The message
+          // is in the log line above.
+          startFailure: describeStartFailure(error),
           startAttempts,
           retryable,
         }),
@@ -1867,21 +1871,21 @@ const recordUnstarted = async (
     readonly job: StageExecutionJob;
     readonly run: Run;
     readonly options: StageExecutorOptions;
-    readonly errorName: string;
+    readonly startFailure: string;
     readonly startAttempts: number;
     /** `true` leaves the task where it is; the caller re-enqueues the stage. */
     readonly retryable: boolean;
   },
 ): Promise<StageExecutionOutcome> => {
-  const { job, run, options, errorName } = input;
+  const { job, run, options, startFailure } = input;
   const stored = await options.store.tasks.load(scope.tx, job.taskId);
   if (stored === null) {
     return { kind: 'skipped', reason: 'the task was deleted before its run could start' };
   }
   const context = options.context(job.taskId);
   const reason = input.retryable
-    ? `the run could not be started (${errorName}); attempt ${input.startAttempts} of ${MAX_RUN_START_ATTEMPTS}`
-    : `the run could not be started (${errorName})`;
+    ? `the run could not be started (${startFailure}); attempt ${input.startAttempts} of ${MAX_RUN_START_ATTEMPTS}`
+    : `the run could not be started (${startFailure})`;
   const failed = failRun(
     run,
     {
