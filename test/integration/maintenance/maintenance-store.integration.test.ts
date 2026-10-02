@@ -147,6 +147,8 @@ describe('what the dedicated budget counts', () => {
       expect(await store.maintenanceSpendSince(tx, projectId as Id, since, 0)).toEqual({
         spentUsd: 3,
         pendingUsd: 0,
+        heldUsd: 0,
+        heldRuns: 0,
       });
       // The other direction: widen the window and the older chore joins in, which is what makes the
       // figure above a window rather than a coincidence (standing rule 42).
@@ -154,6 +156,8 @@ describe('what the dedicated budget counts', () => {
       expect(await store.maintenanceSpendSince(tx, projectId as Id, wide, 0)).toEqual({
         spentUsd: 10,
         pendingUsd: 0,
+        heldUsd: 0,
+        heldRuns: 0,
       });
     });
 
@@ -176,6 +180,32 @@ describe('what the dedicated budget counts', () => {
       expect(await store.maintenanceSpendSince(tx, projectId as Id, since, 2)).toEqual({
         spentUsd: 3,
         pendingUsd: 2,
+        heldUsd: 0,
+        heldRuns: 0,
+      });
+    });
+
+    /**
+     * WP-131 (PROGRESS backlog 402): a chore run that ended with **nobody measuring it** is held at
+     * its own reservation — and, like the pending term, only a scheduled chore's; the human's chore
+     * ticket and the review task each get one too, and neither may reach this cap.
+     */
+    const endedAt = new Date(now.getTime() - 60_000).toISOString();
+    await pool.query(
+      `insert into runs (task_id, project_id, role, model, prompt_version, status, ended_at,
+                         reserve_usd)
+       values ($1, $2, 'developer', 'claude-opus-5', 'developer@1', 'timed_out', $5, 15),
+              ($3, $2, 'developer', 'claude-opus-5', 'developer@1', 'timed_out', $5, 15),
+              ($4, $2, 'developer', 'claude-opus-5', 'developer@1', 'timed_out', $5, 15)`,
+      [scheduled, projectId, human, review, endedAt],
+    );
+    await withTx(async (tx) => {
+      const since = new Date(now.getTime() - 24 * 60 * 60_000).toISOString() as IsoDateTime;
+      expect(await store.maintenanceSpendSince(tx, projectId as Id, since, 2)).toEqual({
+        spentUsd: 3,
+        pendingUsd: 2,
+        heldUsd: 15,
+        heldRuns: 1,
       });
     });
   });

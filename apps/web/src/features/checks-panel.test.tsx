@@ -97,6 +97,10 @@ const TASK_ROW: TaskRecord = {
     routed_at: '2026-09-13T04:30:00.000Z',
   },
   cost_actual_usd: 1.25,
+  unmeasured_runs: 0,
+  budget_cap_usd: 50,
+  paused_reason: null,
+  paused_budget_scope: null,
   cost_estimated_usd: 0,
   estimate_usd: 2.5,
   estimate_basis: 'project_history',
@@ -112,6 +116,7 @@ const TASK_ROW: TaskRecord = {
 const TASK_DETAIL: TaskDetailResponse = {
   task: TASK_ROW,
   taken_over: null,
+  can_raise_budget: false,
   human_time: {
     total_minutes: 0,
     by_kind: { review: 0, question: 0, approval: 0, steer: 0 },

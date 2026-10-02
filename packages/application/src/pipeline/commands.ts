@@ -346,6 +346,13 @@ export interface HumanCommandDependencies extends TaskCommandDependencies {
    * authority (standing rule 9).
    */
   readonly eventStore: EventStore;
+  /**
+   * The task cap a task with no override of its own is held to — `ProjectSettings.taskBudgetUsd`,
+   * what {@link raiseTaskBudgetCommand} compares a raise against (WP-131 review round 1). Required,
+   * so a composition cannot leave the comparison to a constant the task cap does not read (a
+   * harness at a 20 USD cap was refused a raise to 50 against a hard-coded 50 — measured).
+   */
+  readonly defaultTaskCapUsd: number;
   readonly logger?: Logger;
 }
 
@@ -703,6 +710,86 @@ export const pauseTaskCommand = async (
 };
 
 /**
+ * The cap a raise must exceed: the override in force, or the task cap's default when there is none.
+ * Refused as a 409 by the route (`TaskBudgetNotRaisedError`), because "not above the cap" is a fact
+ * about the task's state rather than a malformed request.
+ */
+export class TaskBudgetNotRaisedError extends Error {
+  override readonly name = 'TaskBudgetNotRaisedError';
+  readonly currentCapUsd: number;
+  readonly requestedCapUsd: number;
+
+  constructor(requestedCapUsd: number, currentCapUsd: number) {
+    super(
+      `this task's cap is ${currentCapUsd} USD, and ${requestedCapUsd} USD is not above it: a ` +
+        "task's cap can only be raised",
+    );
+    this.currentCapUsd = currentCapUsd;
+    this.requestedCapUsd = requestedCapUsd;
+  }
+}
+
+/**
+ * A raise on a task that its **own** cap did not pause (WP-131 review round 2): running, paused by a
+ * person, or paused by another cap. A 409 at the route, naming which.
+ */
+export class TaskNotPausedByItsCapError extends Error {
+  override readonly name = 'TaskNotPausedByItsCapError';
+
+  constructor(taskId: Id, state: string, pausedBy: string | null) {
+    super(
+      state !== 'paused'
+        ? `task ${taskId} is ${state}: its cap is raised only while its own cap has paused it`
+        : pausedBy === null
+          ? `task ${taskId} was not paused by its own cap, so raising it would resume nothing`
+          : `task ${taskId} was paused by the ${pausedBy} cap, which is raised where it is set, not here`,
+    );
+  }
+}
+
+/**
+ * `POST /api/tasks/:task_id/budget` — **raise** this task's cap (WP-131 review round 1, the
+ * orchestrator's ruling on PROGRESS backlog 402's exit).
+ *
+ * A task the cap paused — on spend, or on a run nobody measured that the cap **holds** at its
+ * reservation (`../cost/pending.ts`) — waits for a human to raise the cap, and until this command
+ * nothing could: `ProjectSettings.taskBudgetUsd` is the constant `DEFAULT_TASK_BUDGET_USD`, with no
+ * key, API or screen. The override is stored on the task (`tasks.budget_cap_usd`, one narrow writer)
+ * and read by the task cap in place of the default. It never lowers a cap and never "releases" a
+ * hold: the hold is a bound on money nobody measured, and the human's answer to it is a bigger cap,
+ * named as theirs in `human_actions`.
+ *
+ * The comparison's default is the composition's `defaultTaskCapUsd` — the cap the task cap reads
+ * when a task has no override. It moves no state: the task is resumed by the resume command.
+ */
+export const raiseTaskBudgetCommand = async (
+  deps: HumanCommandDependencies,
+  input: { readonly taskId: Id; readonly userId: Id; readonly capUsd: number },
+): Promise<{ readonly capUsd: number; readonly previousCapUsd: number }> =>
+  deps.unitOfWork.transaction(async (scope) => {
+    const stored = await loadTaskOrThrow(deps, scope.tx, input.taskId);
+    // WP-131 review round 2: only a task **its own cap** paused. A project's, an organisation's or
+    // a feature's cap pausing the task is raised where that cap is set; raising this one for it
+    // would loosen a safety cap for good (nothing lowers it) and resume into the same pause.
+    const pausedBy =
+      stored.task.state === 'paused'
+        ? await deps.store.tasks.pausedBudgetScope(scope.tx, input.taskId)
+        : null;
+    if (pausedBy !== 'task') {
+      throw new TaskNotPausedByItsCapError(input.taskId, stored.task.state, pausedBy);
+    }
+    const written = await deps.store.tasks.raiseBudgetCap(scope.tx, {
+      taskId: input.taskId,
+      capUsd: input.capUsd,
+      defaultCapUsd: deps.defaultTaskCapUsd,
+    });
+    if (!written.raised) {
+      throw new TaskBudgetNotRaisedError(input.capUsd, written.previousCapUsd);
+    }
+    return { capUsd: input.capUsd, previousCapUsd: written.previousCapUsd };
+  });
+
+/**
  * `POST /api/tasks/:task_id/resume` — re-enter the stage the task stopped at.
  *
  * It spends **no** iteration round: the task stood still, it did not go round. That is the same
@@ -785,6 +872,8 @@ export const cancelTaskCommand = async (
         totals: {
           cost_usd: totals.costUsd,
           is_estimate: totals.isEstimate,
+          // WP-131 (backlog 403): what `cost_usd` excludes, so a reader of the total is told.
+          unmeasured_runs: totals.unmeasuredRuns,
           runs: totals.runs,
           wall_ms: totals.wallMs,
         },

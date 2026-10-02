@@ -17,6 +17,7 @@ import type {
   ApprovalRecord,
   ArtifactRef,
   Id,
+  PausedBudgetScope as PausedBudgetScopeWire,
   QuestionRecord,
   RunStatus,
   Slug,
@@ -68,6 +69,8 @@ export type QueueReason = 'wip' | 'budget' | 'dependency' | 'manual';
 
 /** Why a task is paused (`task.paused`). */
 export type PauseReason = 'budget' | 'manual' | 'taken_over';
+/** Which cap paused a task for `budget` — `pausedBudgetScopeSchema` (WP-131 review round 2). */
+export type PausedBudgetScope = PausedBudgetScopeWire;
 
 const recorderFor = (task: Task, context: CommandContext) =>
   eventRecorder({ streamType: 'task', streamId: task.id }, task.sequence, {
@@ -409,7 +412,11 @@ export const requestApproval = (
 
 export const pauseTask = (
   task: Task,
-  input: { readonly reason: PauseReason },
+  input: {
+    readonly reason: PauseReason;
+    /** Which cap, for a `budget` pause (WP-131 review round 2); absent for the other reasons. */
+    readonly budgetScope?: PausedBudgetScope;
+  },
   context: CommandContext,
 ): TaskDecision => {
   const next = withState(task, 'paused');
@@ -418,6 +425,9 @@ export const pauseTask = (
     project_id: task.projectId,
     task_id: task.id,
     reason: input.reason,
+    ...(input.reason === 'budget' && input.budgetScope !== undefined
+      ? { budget_scope: input.budgetScope }
+      : {}),
   });
   return { aggregate: { ...next, sequence: recorder.sequence }, events: recorder.events };
 };

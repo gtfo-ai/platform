@@ -25,7 +25,9 @@ import {
   StageNotCurrentError,
   StageNotInTemplateError,
   SteerWindowClosedError,
+  TaskBudgetNotRaisedError,
   TaskConflictExhaustedError,
+  TaskNotPausedByItsCapError,
   UnknownAggregateError,
 } from '@platform/application';
 import type { JsonObject, UserRole } from '@platform/contracts';
@@ -172,6 +174,16 @@ const build = async (overrides: Partial<CommandQueries> = {}): Promise<World> =>
     commands: {
       pause: record('pause'),
       resume: record('resume'),
+      // WP-131 review round 1: the raise answers the caps for the audit row; the recorder's default
+      // answer carries neither, so a call that set no `world.result` gets the honest pair here.
+      raiseBudget: async (input) => {
+        const recorded = (await record('task-budget')(input)) as unknown;
+        return recorded !== null &&
+          typeof recorded === 'object' &&
+          'previousCapUsd' in (recorded as object)
+          ? (recorded as { capUsd: number; previousCapUsd: number })
+          : { capUsd: input.capUsd, previousCapUsd: 50 };
+      },
       cancel: record('cancel'),
       retryStage: record('retry-stage'),
       returnToStage: record('return-to-stage'),
@@ -248,6 +260,14 @@ const COMMANDS: readonly {
     otherBody: { reason: 'carry on' },
     key: 'optional',
     role: 'member',
+  },
+  {
+    name: 'task-budget',
+    path: `/api/tasks/${TASK}/budget`,
+    body: { cap_usd: 80 },
+    otherBody: { cap_usd: 90 },
+    key: 'required',
+    role: 'maintainer',
   },
   {
     name: 'cancel',
@@ -567,6 +587,18 @@ describe('what each refusal maps to', () => {
       status: 429,
       code: 'rate_limited',
     },
+    {
+      // WP-131 review round 1: a task's cap is only ever raised.
+      error: new TaskBudgetNotRaisedError(40, 50),
+      status: 409,
+      code: 'budget_not_raised',
+    },
+    {
+      // WP-131 review round 2: …and only for a task its own cap paused.
+      error: new TaskNotPausedByItsCapError(TASK as never, 'paused', 'project'),
+      status: 409,
+      code: 'not_paused_by_task_cap',
+    },
   ];
 
   for (const entry of cases) {
@@ -579,6 +611,100 @@ describe('what each refusal maps to', () => {
       expect(world.actions).toEqual([]);
     });
   }
+});
+
+/**
+ * WP-131 review round 1 — the raise, through the real router: the answer, the audit row naming the
+ * cap it replaced, the replay that performs nothing, and the refusal that writes nothing. The
+ * enumerated cases above already hold its 401, its 403 at `member` and its key policy.
+ */
+describe('raising a task’s cap (WP-131)', () => {
+  it('raises once, audits the cap it replaced, and performs nothing on a replay', async () => {
+    world.role = 'maintainer';
+    const first = await post(world, `/api/tasks/${TASK}/budget`, { cap_usd: 80 }, 'raise-1');
+    expect(first.status, JSON.stringify(first.body)).toBe(200);
+    expect(first.body.performed).toBe(true);
+    expect(world.calls.filter((call) => call.name === 'task-budget')).toEqual([
+      { name: 'task-budget', input: { taskId: TASK, userId: world.userId, capUsd: 80 } },
+    ]);
+    expect(world.actions).toHaveLength(1);
+    expect(world.actions[0]).toMatchObject({
+      action: 'task.budget.raise',
+      taskId: TASK,
+      params: { task_id: TASK, cap_usd: 80, before_cap_usd: 50, idempotency_key: 'raise-1' },
+    });
+
+    const replay = await post(world, `/api/tasks/${TASK}/budget`, { cap_usd: 80 }, 'raise-1');
+    expect(replay.status).toBe(200);
+    expect(replay.body.performed).toBe(false);
+    expect(world.calls.filter((call) => call.name === 'task-budget')).toHaveLength(1);
+    expect(world.actions).toHaveLength(1);
+  });
+
+  it('answers 409 budget_not_raised for a figure not above the cap, and audits nothing', async () => {
+    world.role = 'maintainer';
+    world.throws = new TaskBudgetNotRaisedError(50, 50);
+    const reply = await post(world, `/api/tasks/${TASK}/budget`, { cap_usd: 50 }, 'raise-2');
+    expect(reply.status).toBe(409);
+    expect(reply.body.error?.code).toBe('budget_not_raised');
+    expect(world.actions).toEqual([]);
+  });
+
+  /**
+   * WP-131 review round 2 (canary (a) survived round 1): the capability is asked **in the task's
+   * project**. A member of the organisation who maintains a *different* project is refused here, and
+   * the same person maintaining *this* project is admitted — both sides, so a route that dropped the
+   * project scope (asking the organisation role alone) fails the second half.
+   */
+  it('refuses a maintainer of another project, and admits a maintainer of this one', async () => {
+    const OTHER = '00000000-0000-4000-8000-00000000f0f0';
+    let maintains = OTHER;
+    await world.app.close();
+    world = await build({
+      projectRole: async (projectId) => (projectId === maintains ? 'maintainer' : null),
+    });
+    world.role = 'member';
+    const refused = await post(world, `/api/tasks/${TASK}/budget`, { cap_usd: 80 }, 'raise-o1');
+    expect(refused.status).toBe(403);
+    expect(world.calls).toEqual([]);
+    maintains = PROJECT;
+    const admitted = await post(world, `/api/tasks/${TASK}/budget`, { cap_usd: 80 }, 'raise-o2');
+    expect(admitted.status, JSON.stringify(admitted.body)).toBe(200);
+    expect(world.calls.map((call) => call.name)).toEqual(['task-budget']);
+  });
+
+  /**
+   * WP-131 review round 2: `numeric(12,6)` — a figure past its range is a 400 rather than a database
+   * overflow, and a figure with more than six decimals is refused rather than stored as the same cap
+   * and audited as a raise that did not happen.
+   */
+  it.each([
+    { cap_usd: 1_000_000, why: 'past numeric(12,6)' },
+    { cap_usd: 50.0000001, why: 'more than six decimals' },
+  ])('refuses $cap_usd ($why) at the contract, before the command runs', async ({ cap_usd }) => {
+    world.role = 'maintainer';
+    const reply = await post(world, `/api/tasks/${TASK}/budget`, { cap_usd }, `raise-${cap_usd}`);
+    expect(reply.status).toBe(400);
+    expect(world.calls).toEqual([]);
+  });
+
+  it('accepts the largest figure the column holds, at six decimals', async () => {
+    world.role = 'maintainer';
+    const reply = await post(
+      world,
+      `/api/tasks/${TASK}/budget`,
+      { cap_usd: 999_999.999999 },
+      'raise-max',
+    );
+    expect(reply.status, JSON.stringify(reply.body)).toBe(200);
+  });
+
+  it('refuses a cap of zero or below at the contract, before the command runs', async () => {
+    world.role = 'maintainer';
+    const reply = await post(world, `/api/tasks/${TASK}/budget`, { cap_usd: 0 }, 'raise-3');
+    expect(reply.status).toBe(400);
+    expect(world.calls).toEqual([]);
+  });
 });
 
 describe('the routes’ own answers', () => {

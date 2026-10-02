@@ -259,6 +259,10 @@ const baseTask = {
     warned_at: now,
   },
   cost_actual_usd: 4.25,
+  unmeasured_runs: 0,
+  budget_cap_usd: 50,
+  paused_reason: null,
+  paused_budget_scope: null,
   cost_estimated_usd: 6,
   // WP-28: the refinement estimate and its provenance. Deliberately **not** equal to
   // `cost_actual_usd`, so the accuracy the page renders is a ratio a constant could not produce.
@@ -453,6 +457,7 @@ export const taskDetail = taskDetailResponseSchema.parse({
   // WP-27: a task nobody has taken over. `null` rather than absent — the field is required and
   // nullable, so a client can tell "not taken over" from "this build does not report it".
   taken_over: null,
+  can_raise_budget: false,
   /**
    * WP-29's minutes, with the per-user breakdown **on** — which is not this project's default and
    * is exactly why the corpus carries it: `by_user` is the one place the task screen renders a
@@ -518,6 +523,7 @@ export const taskDetail = taskDetailResponseSchema.parse({
 export const bugTaskDetail = taskDetailResponseSchema.parse({
   task: bugTask,
   taken_over: null,
+  can_raise_budget: false,
   // Nothing recorded, and the breakdown off — the shipped default (product/18:32). `by_user: null`
   // and an empty list are different answers, and this is the first.
   human_time: {
@@ -550,6 +556,7 @@ export const takenOverTaskDetail = taskDetailResponseSchema.parse({
     state: 'needs_human',
     current_stage: 'implementation',
   },
+  can_raise_budget: false,
   taken_over: {
     at: now,
     branch: 'agentic/demo-3',

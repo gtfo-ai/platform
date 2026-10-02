@@ -18,6 +18,7 @@
  *    run's, and the pause is `cost/guard.ts` refusing the next admission.
  */
 import type { AutonomyResponse, BudgetsResponse } from '@platform/contracts';
+import { DEFAULT_STAGE_RUN_BUDGET_USD } from '@platform/domain';
 import { afterEach, describe, expect, it } from 'vitest';
 import { BOOTSTRAP_EMAIL, BOOTSTRAP_PASSWORD, Client } from '../support/instance.js';
 import { inboundEvent, type PipelineE2E, startPipeline } from '../support/pipeline.js';
@@ -197,7 +198,7 @@ describe('the autonomy dial over HTTP', () => {
 });
 
 describe('a budget created over HTTP', () => {
-  it('stops the next run and pauses the task, through the admission guard', async () => {
+  it('refuses the first run whose reservation the cap cannot take, and pauses the task, through the admission guard', async () => {
     const pipeline = await startPipeline({
       scenarios: featureScenarios,
       label: 'settings-budget',
@@ -229,41 +230,54 @@ describe('a budget created over HTTP', () => {
       scope: 'project',
     });
 
-    // The first ticket runs and its spend charges the cap the route created. Waited on the **row
-    // the assertion reads** (standing rule 87): the ledger writes `budget_windows` after the run's
-    // own transaction, so a wait on the task's state would be a wait on something earlier.
+    /**
+     * The ticket's first run is refused **at admission**: refinement may spend
+     * `DEFAULT_STAGE_RUN_BUDGET_USD.refinement` (2), and since backlog 406 an org or project budget
+     * counts the admitted run's own reservation — `0 + 2 > 0.01` — so the task is paused before
+     * any run exists, rather than after one has taken the window past the cap a person set (the
+     * looser reading this case was written for). Waited on the **last row the platform writes**
+     * for it (standing rule 87): the `task.paused` event, appended in the pause's own transaction
+     * beside the task's state.
+     */
     await pipeline.publish([ticketMatched(pipeline, 'ACME-1')]);
-    await pipeline.waitFor('the budget window to exceed the cap a person set', async () => {
-      const rows = await pipeline.query<{ spent: string }>(
-        'select spent_usd::text as spent from budget_windows',
+    await pipeline.waitFor('the task to be paused by the budget at admission', async () => {
+      const rows = await pipeline.query<{ id: string }>(
+        `select e.id from events e join tasks t on t.id = e.stream_id
+          where e.type = 'task.paused' and t.ticket_key = 'ACME-1'`,
       );
-      return rows.some((row) => Number(row.spent) > 0.01);
+      return rows.length > 0;
     });
-
-    // The second ticket: `cost/guard.ts` refuses its admission, the executor pauses the task, and
-    // **no run is created** — BD-010's "prevents new runs".
-    await pipeline.publish([ticketMatched(pipeline, 'ACME-2')]);
-    await pipeline.waitFor('the second task to be paused by the budget', async () => {
-      const rows = await pipeline.query<{ state: string }>(
-        "select state from tasks where ticket_key = 'ACME-2'",
-      );
-      return rows[0]?.state === 'paused';
-    });
-    const second = await pipeline.query<{ id: string; cost_actual: string; state: string }>(
-      "select id, cost_actual::text as cost_actual, state from tasks where ticket_key = 'ACME-2'",
+    const task = await pipeline.query<{
+      id: string;
+      cost_actual: string;
+      state: string;
+      current_stage: string;
+    }>(
+      `select id, cost_actual::text as cost_actual, state, current_stage
+         from tasks where ticket_key = 'ACME-1'`,
     );
-    expect(second[0]?.state).toBe('paused');
-    expect(Number(second[0]?.cost_actual)).toBe(0);
-    expect(await pipeline.query('select 1 from runs where task_id = $1', [second[0]?.id])).toEqual(
-      [],
+    expect(task[0]?.state).toBe('paused');
+    expect(task[0]?.current_stage).toBe('refinement');
+    expect(Number(task[0]?.cost_actual)).toBe(0);
+    // The reservation the refusal weighed is the shipped one, and it alone is past the cap.
+    expect(DEFAULT_STAGE_RUN_BUDGET_USD.refinement).toBe(2);
+    // **No run admitted past the cap** — BD-010's "prevents new runs", now before the overshoot.
+    expect(await pipeline.query('select 1 from runs')).toEqual([]);
+    // …and the window's spend is **not above** the cap: nothing was charged at all.
+    const windows = await pipeline.query<{ spent: string }>(
+      'select spent_usd::text as spent from budget_windows',
     );
-    // The pause says *why*, which is what a person needs in order to raise the cap.
+    expect(windows.every((row) => Number(row.spent) <= 0.01)).toBe(true);
+    // The pause says *why* in the event's own vocabulary (`reason: budget`). The sentence naming
+    // the cap and the run's reservation (`blockingBudgetDetail`) is the job's outcome and is
+    // persisted nowhere a test could read it; `packages/application/src/cost/guard.test.ts` holds
+    // its words.
     const paused = await pipeline.query<{ payload: { reason?: string } }>(
       `select payload from events
         where type = 'task.paused' and stream_id = $1`,
-      [second[0]?.id],
+      [task[0]?.id],
     );
-    expect(paused.map((row) => row.payload.reason)).toContain('budget');
+    expect(paused.map((row) => row.payload.reason)).toEqual(['budget']);
 
     // Raising the cap is the same route, and it is an **update** rather than a second row.
     const raised = await write(client, path, { window: 'month', limit_usd: 500 }, 'budget-2');

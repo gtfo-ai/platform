@@ -77,6 +77,8 @@ const totalsOf = async (options: ApplyOptions) => {
   return {
     cost_usd: totals.costUsd,
     is_estimate: totals.isEstimate,
+    // WP-131 (backlog 403): what `cost_usd` excludes, so a reader of the total is told.
+    unmeasured_runs: totals.unmeasuredRuns,
     runs: totals.runs,
     wall_ms: totals.wallMs,
   };

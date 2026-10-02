@@ -37,8 +37,10 @@ import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
 import {
   ACTIVE_RUN_STATUSES_PARAM,
+  type CommittedRunsRow,
+  committedRunsOf,
+  committedRunsSql,
   PENDING_RUN_WINDOW_SQL,
-  pendingRunUsdSql,
   UNLEDGERED_RUN_SQL,
 } from './pending-run-spend.js';
 
@@ -242,13 +244,14 @@ export const createPostgresCostStore = (): CostStore => ({
   pendingSpend: async (tx, budget, since, reserveUsd) => {
     const scope = pendingScopeSql(budget);
     if (scope === null) {
-      return 0;
+      return { pendingUsd: 0, heldUsd: 0, heldRuns: 0 };
     }
-    const { rows } = await sqlOf(tx).query<{ usd: string }>(
-      // What this scope's runs have committed and the ledger has not recorded — see
-      // `./pending-run-spend.ts` for the valuation and `packages/application/src/cost/pending.ts`
-      // for why a cap that reads only the projection is read one run late.
-      `select coalesce(sum(${pendingRunUsdSql('$2', '$3')}), 0)::text as usd
+    const { rows } = await sqlOf(tx).query<CommittedRunsRow>(
+      // What this scope's runs have committed and the ledger has not recorded, and what its runs
+      // nobody measured are held at — see `./pending-run-spend.ts` for the valuation and
+      // `packages/application/src/cost/pending.ts` for why a cap that reads only the projection is
+      // read one run late, and why a run with no figure is held rather than free (WP-131).
+      `select ${committedRunsSql('$2', '$3')}
          from runs r
         where ${scope.text} and ${UNLEDGERED_RUN_SQL} and ${PENDING_RUN_WINDOW_SQL('$1')}`,
       [
@@ -258,7 +261,7 @@ export const createPostgresCostStore = (): CostStore => ({
         ...(scope.needsScopeId ? [budget.scopeId] : []),
       ],
     );
-    return Number(rows[0]?.usd ?? 0);
+    return committedRunsOf(rows[0]);
   },
 
   runContext: async (tx, runId) => {

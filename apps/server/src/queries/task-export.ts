@@ -45,7 +45,7 @@ export interface PayloadRedactor {
 }
 
 export interface TaskExportParts {
-  readonly detail: TaskDetailResponse;
+  readonly detail: Omit<TaskDetailResponse, 'can_raise_budget'>;
   /**
    * The audit rows **as read with one row past the cap**, newest first — or `null` when the caller
    * may not read them, in which case nothing was read.
@@ -78,6 +78,20 @@ const toWireEvent = (row: TaskEventRow, payload: JsonObject): TaskExportEvent =>
 });
 
 /** The export document — see the module note for what each part is and why. */
+/**
+ * The task read without what it says about **the caller** — `can_raise_budget` (WP-131 review
+ * round 2). A document handed to somebody else must not carry the exporter's permissions, and the
+ * export's schema has no such field, so a read that carried one would otherwise fail the document.
+ */
+const withoutCallerFacts = (
+  detail: TaskExportParts['detail'],
+): Omit<TaskDetailResponse, 'can_raise_budget'> => {
+  const { can_raise_budget: _caller, ...rest } = detail as TaskExportParts['detail'] & {
+    readonly can_raise_budget?: boolean;
+  };
+  return rest;
+};
+
 export const assembleTaskExport = (parts: TaskExportParts): TaskExportResponse => {
   const limits = TASK_EXPORT_LIMITS;
   let redactionCount = 0;
@@ -89,7 +103,7 @@ export const assembleTaskExport = (parts: TaskExportParts): TaskExportResponse =
   return {
     format: 1,
     exported_at: parts.exportedAt.toISOString(),
-    ...parts.detail,
+    ...withoutCallerFacts(parts.detail),
     human_actions:
       parts.humanActions === null
         ? null

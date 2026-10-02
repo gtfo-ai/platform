@@ -175,6 +175,9 @@ const EXPECTED_OWNERSHIP: Readonly<Record<string, readonly string[]>> = {
     // executor adds a run's spend from a process that runs beside the stage executor, and the
     // version token cannot arbitrate an increment.
     'cost_actual',
+    // `raiseBudgetCap` — the task's own cap, only ever raised, by a maintainer's command (WP-131
+    // review round 1, migration 0072). Not the aggregate's, and never `save`'s.
+    'budget_cap_usd',
     // `save` — the aggregate's own columns, plus the token that guards them
     'state',
     'current_stage',

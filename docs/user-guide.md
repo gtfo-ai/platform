@@ -607,6 +607,21 @@ total. A cost the provider did not report is priced from a price list and **labe
 model with no price row gets no ledger row at all and a log line, never a zero, because a zero reads
 as a free run.
 
+A run that ended with **nobody measuring it** — the platform stopped it, or it crashed, or a cancel
+or a lost process ended it before it reported — has no cost at all, and is shown as *not measured*.
+Its spend is unknown, so every budget **holds** it at the per-run cap it was started under: a held
+run is never counted as spent and writes no cost entry, but it counts toward the budget exactly as
+spend does when the next run is admitted, and the pause says how much is held apart from what was
+spent.
+The hold ends when the process that ran it reports its cost, or when the budget's window rolls
+over; the per-task cap never rolls over, so a task paused on a hold waits for a maintainer to raise
+the cap. A task paused by **its own** cap shows **Raise this task's cap** on its page, to someone who
+may set budgets in its project: enter a figure above the cap shown, and the task's own cap is raised and the task resumes at the stage it
+stopped at. A cap is only ever raised, and raising it releases no hold — the held runs still count
+against the new cap. A task an organisation, project or feature budget paused is not offered it: that
+cap is raised where it is set. A task's **Cost so far** adds only the measured runs, and says *Excludes N runs nobody
+measured* beneath it when there are any — as does the chat message when a task completes.
+
 ## 9. Integrations
 
 Per-provider cards with health, and each provider's **setup guide** — written for the provider's own

@@ -88,6 +88,8 @@ interface WorldOptions {
   readonly runsMining?: boolean;
   /** Extra git behaviour over the defaults below (WP-59: the diff-stats read). */
   readonly git?: Partial<GitProviderPort>;
+  /** `stages.history_mining.budget_usd` — what a mining run being admitted may spend (WP-131). */
+  readonly miningBudgetUsd?: number;
 }
 
 const world = (options: WorldOptions = {}) => {
@@ -99,6 +101,9 @@ const world = (options: WorldOptions = {}) => {
         features: { history_bootstrap: { enabled: true } },
         status_mapping:
           options.statusMapping === undefined ? { done: 'Done' } : options.statusMapping,
+        ...(options.miningBudgetUsd === undefined
+          ? {}
+          : { stages: { history_mining: { budget_usd: options.miningBudgetUsd } } }),
       },
     },
     runs:
@@ -464,6 +469,31 @@ describe('collecting a project’s merged history', () => {
 
     expect(harness.specs.filter((spec) => spec.stage === 'history_mining')).toEqual([]);
     expect(harness.store.snapshot().map((task) => task.task.state)).toEqual(['paused']);
+  });
+
+  /**
+   * WP-131 (PROGRESS backlog 402): a run of the batch that ended with **nobody measuring it** is
+   * held at the reservation it was admitted at, for the batch's life. Batch cap 20, one such run
+   * held at 15, and a mining run that may spend 10: `0 + 15 + 10 > 20` refuses it, where until
+   * WP-131 the ended run counted 0 and the batch admitted it. The second half is the same batch with
+   * no hold, admitting the same run.
+   */
+  it('stops a mining run on a run of the batch nobody measured, held at its 15 USD reservation (WP-131)', async () => {
+    const harness = world({ merged: 2, runsMining: true, miningBudgetUsd: 10 });
+    const batchId = await seedBatch(harness, { mergeRequests: 2, batchSize: 20, capUsd: 20 });
+    await collect(harness, batchId);
+    harness.bootstrap.seedSpend(batchId, 0);
+    harness.bootstrap.seedHeldRuns(batchId, [15]);
+    await harness.publish([]);
+    expect(harness.specs.filter((spec) => spec.stage === 'history_mining')).toEqual([]);
+    expect(harness.store.snapshot().map((task) => task.task.state)).toEqual(['paused']);
+
+    const free = world({ merged: 2, runsMining: true, miningBudgetUsd: 10 });
+    const freeBatch = await seedBatch(free, { mergeRequests: 2, batchSize: 20, capUsd: 20 });
+    await collect(free, freeBatch);
+    free.bootstrap.seedSpend(freeBatch, 0);
+    await free.publish([]);
+    expect(free.specs.filter((spec) => spec.stage === 'history_mining')).toHaveLength(1);
   });
 
   it('runs one mining stage per chunk, each on its own slice of the history', async () => {

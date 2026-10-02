@@ -45,14 +45,19 @@ describe('PostgresCostStore.pendingSpend', () => {
 
   it('scopes a project budget to the project, and carries the reservation and the live statuses', async () => {
     const calls: Call[] = [];
-    const usd = await store.pendingSpend(
-      recording(calls, [{ usd: '4.500000' }]),
+    const committed = await store.pendingSpend(
+      recording(calls, [{ pending_usd: '4.500000', held_usd: '15.000000', held_runs: 1 }]),
       { scope: 'project', scopeId: SCOPE },
       SINCE,
       2,
     );
-    expect(usd).toBe(4.5);
+    expect(committed).toEqual({ pendingUsd: 4.5, heldUsd: 15, heldRuns: 1 });
     expect(calls[0]?.text).toContain('r.project_id = $4');
+    // WP-131: the hold is asked in the same read, at the run's own reservation and — for a row that
+    // recorded none — at the reservation this caller passed as `$3`. The semantic half (which runs,
+    // which window) is `test/integration/cost/postgres-cost-store.integration.test.ts`'s.
+    expect(calls[0]?.text).toContain('coalesce(r.reserve_usd, $3::numeric)');
+    expect(calls[0]?.text).toContain('r.usd_reported is null and r.usd_estimated is null');
     expect(calls[0]?.values).toEqual([SINCE, ['created', 'starting', 'running'], 2, SCOPE]);
   });
 
@@ -80,12 +85,13 @@ describe('PostgresCostStore.pendingSpend', () => {
    */
   it('asks nothing for a run-scoped budget or a scope row with no id', async () => {
     const calls: Call[] = [];
+    const nothing = { pendingUsd: 0, heldUsd: 0, heldRuns: 0 };
     expect(
       await store.pendingSpend(recording(calls), { scope: 'run', scopeId: SCOPE }, SINCE, 2),
-    ).toBe(0);
+    ).toEqual(nothing);
     expect(
       await store.pendingSpend(recording(calls), { scope: 'project', scopeId: null }, SINCE, 2),
-    ).toBe(0);
+    ).toEqual(nothing);
     expect(calls).toEqual([]);
   });
 
@@ -95,6 +101,6 @@ describe('PostgresCostStore.pendingSpend', () => {
     const calls: Call[] = [];
     expect(
       await store.pendingSpend(recording(calls), { scope: 'project', scopeId: SCOPE }, SINCE, 2),
-    ).toBe(0);
+    ).toEqual({ pendingUsd: 0, heldUsd: 0, heldRuns: 0 });
   });
 });

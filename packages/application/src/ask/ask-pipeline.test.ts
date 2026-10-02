@@ -1275,7 +1275,7 @@ describe('the organisation and project budgets stop a new ask (criterion 1)', ()
     expect(cost.entries).toHaveLength(entriesBefore);
     const [ask] = harness.asks.all();
     expect(ask?.status).toBe('refused');
-    expect(ask?.refusalReason).toContain('budget for this month is exhausted');
+    expect(ask?.refusalReason).toContain('budget for this month cannot take this run');
     expect(ask?.runId).toBeNull();
     // And the **task** is untouched: a budget that stopped a question must not pause a delivery.
     expect(harness.store.snapshot()[0]?.task.state).not.toBe('paused');

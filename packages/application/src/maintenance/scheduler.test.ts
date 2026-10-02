@@ -62,6 +62,8 @@ interface DoubleOptions {
   readonly spentUsd?: number;
   /** What the month's chore runs have committed that the ledger has not recorded yet. */
   readonly pendingUsd?: number;
+  /** The month's chore runs nobody measured, held at their reservations (WP-131). */
+  readonly heldUsd?: number;
 }
 
 /**
@@ -84,7 +86,12 @@ const storeDouble = (options: DoubleOptions = {}): MaintenanceStore & { spendCal
       // — asserted here rather than described, because a non-zero one would value every chore run
       // in flight and stop a batch the cap still has room for (`../cost/pending.ts`).
       expect(reserveUsd).toBe(0);
-      return { spentUsd: options.spentUsd ?? 0, pendingUsd: options.pendingUsd ?? 0 };
+      return {
+        spentUsd: options.spentUsd ?? 0,
+        pendingUsd: options.pendingUsd ?? 0,
+        heldUsd: options.heldUsd ?? 0,
+        heldRuns: (options.heldUsd ?? 0) > 0 ? 1 : 0,
+      };
     },
     latestKbHygiene: async () => options.hygiene ?? null,
     staleDependencies: async () => options.stale ?? [],
@@ -442,6 +449,27 @@ describe('one maintenance pass', () => {
     expect(harness.store.snapshot()).toHaveLength(0);
   });
 
+  /**
+   * WP-131 (PROGRESS backlog 402): a chore run that ended with nobody measuring it is **held** at
+   * its reservation, and the scheduler stops on the hold as it stops on spend — named apart in the
+   * detail, never folded into the spent figure (standing rule 16).
+   */
+  it('stops the batch on a chore run nobody measured, and names the hold apart from the spend (WP-131)', async () => {
+    const harness = harnessWith({
+      features: { maintenance: { enabled: true, budget_usd: 10, chores: ['kb'] } },
+    });
+    const report = await pass(harness, storeDouble({ hygiene: HYGIENE, spentUsd: 2, heldUsd: 8 }));
+    const outcome = report.results[0]?.chores[0]?.outcome;
+    expect(outcome?.status).toBe('over_budget');
+    expect(outcome).toMatchObject({
+      detail: expect.stringContaining('2 of 10 USD'),
+    });
+    expect(outcome).toMatchObject({
+      detail: expect.stringContaining('1 run nobody measured, held at its cap: 8 USD'),
+    });
+    expect(harness.store.snapshot()).toHaveLength(0);
+  });
+
   it('creates the chore one cent under the cap, so the cases above are not vacuous', async () => {
     // Standing rule 42's other direction: without this half, a scheduler that refused every chore
     // would pass the ones above and every refusal case in this file.
@@ -574,7 +602,7 @@ describe('one maintenance pass', () => {
       features: { maintenance: { enabled: true, chores: ['deps'] } },
     });
     const store: MaintenanceStore = {
-      maintenanceSpendSince: async () => ({ spentUsd: 0, pendingUsd: 0 }),
+      maintenanceSpendSince: async () => ({ spentUsd: 0, pendingUsd: 0, heldUsd: 0, heldRuns: 0 }),
       latestKbHygiene: async () => null,
       staleDependencies: async (_tx, _projectId, options) => {
         asked = options.unreleasedSince;
@@ -639,16 +667,27 @@ describe('a chore run’s admission', () => {
     },
   };
 
-  const choreHarness = (spentUsd: number, capUsd: number, pendingRuns = 0): PipelineHarness =>
+  const choreHarness = (
+    spentUsd: number,
+    capUsd: number,
+    pendingRuns = 0,
+    /** WP-131: the month's chore runs nobody measured, and what a refinement may spend. */
+    held: {
+      readonly runs: readonly (number | null)[];
+      readonly refinementUsd: number;
+    } | null = null,
+  ): PipelineHarness =>
     createPipelineHarness({
       projectId: PROJECT,
       settings: {
         config: {
           features: { maintenance: { enabled: true, budget_usd: capUsd, chores: ['kb'] } },
+          ...(held === null ? {} : { stages: { refinement: { budget_usd: held.refinementUsd } } }),
         } as never,
       },
       maintenanceSpentUsd: spentUsd,
       maintenancePendingRuns: pendingRuns,
+      maintenanceHeldRuns: held?.runs ?? [],
       // The merge request the chore's notes name has no head commit yet, so the CI gate waits —
       // which is where the walk stops. Needed since WP-69: the notes carried `mr: null` before,
       // which the real runner refuses, and the gate never read the merge request at all.
@@ -679,6 +718,26 @@ describe('a chore run’s admission', () => {
         ? null
         : ((await harness.store.tasks.load(scope.tx, stored.task.id))?.task.state ?? null);
     });
+
+  /**
+   * WP-131 (PROGRESS backlog 402): a chore run of this month that ended with **nobody measuring
+   * it** is held at the reservation it was admitted at. Cap 20, one such run held at 15, and a
+   * refinement that may spend 10: `0 + 15 + 10 > 20` pauses the chore, where until WP-131 the ended
+   * run counted 0 and the chore ran. The second half is the same month with no hold.
+   */
+  it('pauses the chore on a chore run nobody measured, held at its 15 USD reservation (WP-131)', async () => {
+    const held = choreHarness(0, 20, 0, { runs: [15], refinementUsd: 10 });
+    await pass(held, storeDouble({ hygiene: HYGIENE }));
+    await held.drain();
+    expect(await choreState(held)).toBe('paused');
+    expect(held.specs).toEqual([]);
+
+    const free = choreHarness(0, 20, 0, { runs: [], refinementUsd: 10 });
+    await pass(free, storeDouble({ hygiene: HYGIENE }));
+    await free.drain();
+    expect(await choreState(free)).not.toBe('paused');
+    expect(free.specs.length).toBeGreaterThan(0);
+  });
 
   it('pauses the chore when the month’s maintenance spend has reached the cap', async () => {
     // 9.80 spent of a 10 cap, and `refinement` may spend 2 (`DEFAULT_STAGE_RUN_BUDGET_USD`): the

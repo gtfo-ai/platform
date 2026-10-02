@@ -26,7 +26,9 @@ import type { MaintenanceBlocker } from './scheduler.js';
  * lag (WP-34's assumption (e), taken again for the same reason).
  *
  * `pendingUsd` is the chore runs of that window the ledger has **not** recorded, valued at
- * `reserveUsd` while they are live and at what they reported once they have ended. The ledger is
+ * `reserveUsd` while they are live and at what they reported once they have ended; `heldUsd` /
+ * `heldRuns` are the ones that ended with **nobody measuring them**, held at their own
+ * `reserve_usd` (or `reserveUsd` for a row that recorded none — WP-131). The ledger is
  * written by a handler *after* the run's own transaction, so a cap read from it alone is read one
  * run late: `packages/application/src/cost/pending.ts` has the rule and the measurement. A caller
  * that is not admitting a run passes `0` and gets the two numbers it can know.

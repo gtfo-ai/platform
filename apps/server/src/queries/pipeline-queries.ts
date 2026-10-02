@@ -59,10 +59,10 @@ import type {
   Id,
   InboxResponse,
   JsonObject,
-  ModelUsage,
   PipelineTemplate,
   QuestionRecord,
   RunCommandRecord,
+  RunModelUsageRecord,
   RunRecord,
   RunStatus,
   TaskConflict,
@@ -77,19 +77,22 @@ import {
   artifactBodyPath,
   contextPackRecordSchema,
   MAX_RUN_COMMANDS,
+  pausedBudgetScopeSchema,
   taskPipelineDialSchema,
   taskStageOutcomeSchema,
   taskStageStateSchema,
   transcriptEventSchema,
 } from '@platform/contracts';
 import {
+  ACTIVE_RUN_STATUSES,
   compilePipeline,
+  DEFAULT_TASK_BUDGET_USD,
   estimateAccuracy,
   resumeCommands,
   SHIPPED_TEMPLATES,
 } from '@platform/domain';
 import { db as dbAdapters, pipeline as pipelineAdapters } from '@platform/infrastructure';
-import { and, asc, desc, eq, gt, inArray, ne, notInArray, or, sql, sum } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNull, ne, notInArray, or, sql, sum } from 'drizzle-orm';
 import { HttpError } from '../errors.js';
 import { APPROVAL_TOUCHED, MACHINE_AUTHORED } from './human-time-predicates.js';
 import { perUserBreakdownEnabled, summariseHumanTime } from './human-time-summary.js';
@@ -208,7 +211,10 @@ const runColumns = {
  * holds it: the provider's figure is the truth and the price list is the fallback, so a row with no
  * reported figure is reporting an estimate whatever its value.
  */
-const toRunRecord = (row: RunProjectionRow, modelUsage: readonly ModelUsage[]): RunRecord => {
+const toRunRecord = (
+  row: RunProjectionRow,
+  modelUsage: readonly RunModelUsageRecord[],
+): RunRecord => {
   if (row.stage === null) {
     throw new UnprojectableRowError(
       `run ${row.id}`,
@@ -267,8 +273,8 @@ const toRunRecord = (row: RunProjectionRow, modelUsage: readonly ModelUsage[]): 
 const modelUsageFor = async (
   database: Database,
   runIds: readonly string[],
-): Promise<Map<string, ModelUsage[]>> => {
-  const byRun = new Map<string, ModelUsage[]>();
+): Promise<Map<string, RunModelUsageRecord[]>> => {
+  const byRun = new Map<string, RunModelUsageRecord[]>();
   if (runIds.length === 0) {
     return byRun;
   }
@@ -287,9 +293,15 @@ const modelUsageFor = async (
       cache_write_1h_tokens: row.cacheWrite1h,
       cache_read_tokens: row.cacheRead,
       // The same rule the run-level cost uses (`usd_reported ?? usd_estimated`), one level down —
-      // migration 0017 gave `run_model_usage` the pair. The DTO has no spelling for "unknown", so a
-      // model with neither number reads as 0 here while the row keeps both as null.
-      usd: usd(row.usdReported ?? row.usdEstimated),
+      // migration 0017 gave `run_model_usage` the pair. A model with **neither** (one `price_list`
+      // has no row for, in `local` mode) is published as `null` — *nobody priced it* — never as 0,
+      // which would read as a free model (WP-131, PROGRESS backlog 404, standing rule 16). The
+      // read DTO's own schema carries the `null` (`runModelUsageRecordSchema`); the event and the
+      // transcript keep a number, because every producer of those has one.
+      usd:
+        row.usdReported === null && row.usdEstimated === null
+          ? null
+          : usd(row.usdReported ?? row.usdEstimated),
     });
     byRun.set(row.runId, list);
   }
@@ -915,6 +927,91 @@ const estimatedSpendFor = async (
 };
 
 /**
+ * Why each **paused** task is paused — the newest `task.paused` event's `reason` on its stream
+ * (WP-131 review round 1), `conflictsFor`'s shape: one read per page, over the page's paused tasks
+ * only, through the stream index. A task absent from the map is not paused (or carries no pause
+ * event), which `toTaskRecord` publishes as `null`.
+ */
+const pausedReasonsFor = async (
+  database: Database,
+  taskIds: readonly string[],
+): Promise<ReadonlyMap<string, PausedWhy>> => {
+  if (taskIds.length === 0) {
+    return new Map();
+  }
+  const rows = await database
+    .selectDistinctOn([events.streamId], { streamId: events.streamId, payload: events.payload })
+    .from(events)
+    .where(
+      and(
+        eq(events.streamType, 'task'),
+        eq(events.type, 'task.paused'),
+        inArray(events.streamId, [...taskIds]),
+      ),
+    )
+    .orderBy(events.streamId, desc(events.occurredAt), desc(events.position));
+  const known = new Set(['budget', 'manual', 'taken_over']);
+  return new Map(
+    rows.flatMap((row) => {
+      const payload = row.payload as { readonly reason?: unknown; readonly budget_scope?: unknown };
+      if (typeof payload.reason !== 'string' || !known.has(payload.reason)) {
+        return [];
+      }
+      // `budget_scope` since WP-131 review round 2; an older pause names no cap and reads `null`.
+      const scope = pausedBudgetScopeSchema.safeParse(payload.budget_scope);
+      return [
+        [
+          row.streamId,
+          {
+            reason: payload.reason as NonNullable<TaskRecord['paused_reason']>,
+            scope: payload.reason === 'budget' && scope.success ? scope.data : null,
+          },
+        ] as const,
+      ];
+    }),
+  );
+};
+
+/** Why a paused task is paused, and — for a budget pause — which cap (WP-131 review round 2). */
+interface PausedWhy {
+  readonly reason: NonNullable<TaskRecord['paused_reason']>;
+  readonly scope: TaskRecord['paused_budget_scope'];
+}
+
+/**
+ * How many of each task's runs ended with **nobody measuring them** — terminal, both cost columns
+ * null (WP-131, PROGRESS backlog 403) — for `TaskRecord.unmeasured_runs`.
+ *
+ * The predicate is the caps' own (`unmeasuredEndedRunSql` in
+ * `packages/infrastructure/src/cost/pending-run-spend.ts`, spelled here over Drizzle's columns), so
+ * the page says *"excludes N runs"* about exactly the runs every cap holds. Bounded like
+ * {@link estimatedSpendFor}: only the tasks of one page, through `runs (task_id)`. A task absent
+ * from the map has none, and `0` there is a count, not an absence.
+ */
+const unmeasuredRunsFor = async (
+  database: Database,
+  taskIds: readonly string[],
+): Promise<ReadonlyMap<string, number>> => {
+  if (taskIds.length === 0) {
+    return new Map();
+  }
+  const rows = await database
+    .select({ taskId: runs.taskId, count: sql<number>`count(*)::int` })
+    .from(runs)
+    .where(
+      and(
+        inArray(runs.taskId, [...taskIds]),
+        notInArray(runs.status, [...ACTIVE_RUN_STATUSES]),
+        // Both cost columns null, **or** a figure that is the runner's floor (`figure_is_floor`, a
+        // `cost_unreported` stop — WP-131 review round 1): the caps' predicate, both halves.
+        or(and(isNull(runs.usdReported), isNull(runs.usdEstimated)), eq(runs.figureIsFloor, true)),
+      ),
+    )
+    .groupBy(runs.taskId);
+  return new Map(rows.map((row) => [row.taskId, Number(row.count)]));
+};
+
+/**
  * The title out of `tasks.ticket_snapshot`, or `null` when there is no snapshot.
  *
  * The column is `jsonb` typed by the writer, so the value is checked rather than trusted: a
@@ -933,6 +1030,8 @@ const toTaskRecord = (
   row: typeof tasks.$inferSelect,
   conflict: TaskConflict | null,
   estimatedUsd: number,
+  unmeasuredRuns: number,
+  paused: PausedWhy | undefined,
 ): TaskRecord => ({
   id: row.id as Id,
   project_id: row.projectId as Id,
@@ -979,6 +1078,14 @@ const toTaskRecord = (
   // this task against an overlapping one yet", and the badge's tooltip says so.
   conflict,
   cost_actual_usd: usd(row.costActual),
+  // WP-131, backlog 403: the runs `cost_actual_usd` excludes because nobody measured them — a
+  // projection over `runs`, never a column, so it cannot drift from the rows the caps hold.
+  unmeasured_runs: unmeasuredRuns,
+  // WP-131 review round 1: the cap in force — the task's own override, else the default, which is
+  // the only value `ProjectSettings.taskBudgetUsd` takes in this build — and why a paused task is.
+  budget_cap_usd: row.budgetCapUsd === null ? DEFAULT_TASK_BUDGET_USD : usd(row.budgetCapUsd),
+  paused_reason: row.state === 'paused' ? (paused?.reason ?? null) : null,
+  paused_budget_scope: row.state === 'paused' ? (paused?.scope ?? null) : null,
   // WP-47, backlog **75**: **not** a column. `tasks.cost_estimated` was `not null default 0` from
   // migration 0004 and had no writer anywhere in the tree, so every task the product ever served
   // published `$0.00` of estimated spend — "nobody counted" rendered as "nothing was estimated".
@@ -1230,7 +1337,7 @@ export const handBackStagesOf = (task: {
 export const findTaskDetail = async (
   database: Database,
   taskId: string,
-): Promise<TaskDetailResponse | null> => {
+): Promise<Omit<TaskDetailResponse, 'can_raise_budget'> | null> => {
   const taskRows = await database.select().from(tasks).where(eq(tasks.id, taskId)).limit(1);
   const task = taskRows[0];
   if (task === undefined) {
@@ -1266,21 +1373,30 @@ export const findTaskDetail = async (
       .orderBy(asc(runs.createdAt)),
   ]);
 
-  const [usage, takenOver, humanTime, conflicts, estimated] = await Promise.all([
-    modelUsageFor(
-      database,
-      runRows.map((row) => row.id),
-    ),
-    findTakenOver(database, task),
-    // The project id comes from the task row rather than from the request: the breakdown setting
-    // belongs to the project that owns the task, and a caller cannot name a different one.
-    findHumanTime(database, taskId, task.projectId),
-    conflictsFor(database, [taskId]),
-    estimatedSpendFor(database, [taskId]),
-  ]);
+  const [usage, takenOver, humanTime, conflicts, estimated, unmeasured, pausedReasons] =
+    await Promise.all([
+      modelUsageFor(
+        database,
+        runRows.map((row) => row.id),
+      ),
+      findTakenOver(database, task),
+      // The project id comes from the task row rather than from the request: the breakdown setting
+      // belongs to the project that owns the task, and a caller cannot name a different one.
+      findHumanTime(database, taskId, task.projectId),
+      conflictsFor(database, [taskId]),
+      estimatedSpendFor(database, [taskId]),
+      unmeasuredRunsFor(database, [taskId]),
+      pausedReasonsFor(database, task.state === 'paused' ? [taskId] : []),
+    ]);
 
   return {
-    task: toTaskRecord(task, conflicts.get(task.id) ?? null, estimated.get(task.id) ?? 0),
+    task: toTaskRecord(
+      task,
+      conflicts.get(task.id) ?? null,
+      estimated.get(task.id) ?? 0,
+      unmeasured.get(task.id) ?? 0,
+      pausedReasons.get(task.id),
+    ),
     taken_over: takenOver,
     human_time: humanTime,
     stages: stageRows.map((row) => ({
@@ -1532,7 +1648,7 @@ export const listProjectTasks = async (
   // One extra read per page for the board's conflict badge (backlog 63), over the ids of the page
   // and never over the project: a warning for a task the caller is not being shown is not a row
   // this answer has anywhere to put.
-  const [conflicts, estimated] = await Promise.all([
+  const [conflicts, estimated, unmeasured, pausedReasons] = await Promise.all([
     conflictsFor(
       database,
       page.map((row) => row.task.id),
@@ -1541,10 +1657,24 @@ export const listProjectTasks = async (
       database,
       page.map((row) => row.task.id),
     ),
+    unmeasuredRunsFor(
+      database,
+      page.map((row) => row.task.id),
+    ),
+    pausedReasonsFor(
+      database,
+      page.filter((row) => row.task.state === 'paused').map((row) => row.task.id),
+    ),
   ]);
   return {
     items: page.map((row) =>
-      toTaskRecord(row.task, conflicts.get(row.task.id) ?? null, estimated.get(row.task.id) ?? 0),
+      toTaskRecord(
+        row.task,
+        conflicts.get(row.task.id) ?? null,
+        estimated.get(row.task.id) ?? 0,
+        unmeasured.get(row.task.id) ?? 0,
+        pausedReasons.get(row.task.id),
+      ),
     ),
     ...(rows.length > query.limit && last !== undefined
       ? { next: { createdAt: last.cursorAt, id: last.task.id } }

@@ -40,8 +40,10 @@ import type {
 import type { Id, IsoDateTime, MergeRequestRef, ShadowHumanMrSource } from '@platform/contracts';
 import {
   ACTIVE_RUN_STATUSES_PARAM,
+  type CommittedRunsRow,
+  committedRunsOf,
+  committedRunsSql,
   PENDING_RUN_WINDOW_SQL,
-  pendingRunUsdSql,
   UNLEDGERED_RUN_SQL,
 } from '../cost/pending-run-spend.js';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
@@ -259,29 +261,25 @@ export class PostgresShadowStore implements ShadowStore {
     since: IsoDateTime,
     reserveUsd: number,
   ): Promise<CapSpend> {
-    const { rows } = await sqlOf(tx).query<{ spent_usd: string; pending_usd: string }>(
+    const { rows } = await sqlOf(tx).query<{ spent_usd: string } & CommittedRunsRow>(
       // The ledger's rows, and the shadow runs of this window it has not written yet — the second
-      // number is what keeps the cap from admitting a run per dispatcher lag
-      // (`../cost/pending-run-spend.ts`).
+      // number is what keeps the cap from admitting a run per dispatcher lag, and the third is the
+      // window's runs nobody measured, held at their reservations (`../cost/pending-run-spend.ts`).
       `select coalesce((
                 select sum(c.usd) from cost_entries c
                   join tasks t on t.id = c.task_id
                  where c.project_id = $1 and t.mode = 'shadow' and c.created_at >= $2
               ), 0)::text as spent_usd,
-              coalesce((
-                select sum(${pendingRunUsdSql('$3', '$4')})
-                  from runs r
-                  join tasks t on t.id = r.task_id
-                 where r.project_id = $1 and t.mode = 'shadow'
-                   and ${UNLEDGERED_RUN_SQL} and ${PENDING_RUN_WINDOW_SQL('$2')}
-              ), 0)::text as pending_usd`,
+              p.pending_usd, p.held_usd, p.held_runs
+         from (select ${committedRunsSql('$3', '$4')}
+                 from runs r
+                 join tasks t on t.id = r.task_id
+                where r.project_id = $1 and t.mode = 'shadow'
+                  and ${UNLEDGERED_RUN_SQL} and ${PENDING_RUN_WINDOW_SQL('$2')}) p`,
       [projectId, since, [...ACTIVE_RUN_STATUSES_PARAM], reserveUsd],
     );
     const row = rows[0];
-    return {
-      spentUsd: Number(row?.spent_usd ?? 0),
-      pendingUsd: Number(row?.pending_usd ?? 0),
-    };
+    return { spentUsd: Number(row?.spent_usd ?? 0), ...committedRunsOf(row) };
   }
 
   async checkoutBaseFor(tx: Transaction, taskId: Id): Promise<string | null> {

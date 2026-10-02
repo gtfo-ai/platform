@@ -31,8 +31,9 @@
  *    ({@link MemoryHistoryBootstrapStore.seedPendingRuns}) and is the one place this double is
  *    *kinder* than the adapter (standing rule 1): it holds no `runs`, so it cannot derive the
  *    batch's unledgered runs and answers `0` unless a test says otherwise — where the adapter
- *    finds them. A test that wants the cap's pending term seeds it; the adapter's own derivation
- *    is held by the integration tier.
+ *    finds them. A test that wants the cap's pending term seeds it; the hold (WP-131) is seeded the
+ *    same way ({@link MemoryHistoryBootstrapStore.seedHeldRuns}) and valued by `holdOf`; the
+ *    adapter's own derivation is held by the integration tier.
  * 5. **`markChunkRecorded`, `abandonChunk` and `completeIfDone` answer `true` only on the
  *    transition**, which is the same predicate the adapter puts in its `where`, so the recorder's
  *    idempotency — and the recovery's ending (WP-48) — is exercised here as well as there.
@@ -51,6 +52,7 @@ import type {
   HistoryBootstrapStore,
 } from '../bootstrap/ports.js';
 import { LiveHistoryBootstrapError } from '../bootstrap/ports.js';
+import { holdOf } from '../cost/pending.js';
 import type { Transaction } from '../ports/transaction.js';
 import type { MemoryRollback } from './memory-proposals.js';
 
@@ -69,6 +71,12 @@ export interface MemoryHistoryBootstrapStore extends HistoryBootstrapStore {
    * column this double does not hold.
    */
   seedPendingRuns(batchId: Id, runs: number): void;
+  /**
+   * Divergence 4, the hold (WP-131): the reservations of the batch's runs that ended with **nobody
+   * measuring them**, `null` for one written before migration 0072 — held at the caller's
+   * `reserveUsd`, as the adapter's `coalesce(r.reserve_usd, $reserve)` holds it.
+   */
+  seedHeldRuns(batchId: Id, reserves: readonly (number | null)[]): void;
 }
 
 export const createMemoryHistoryBootstrapStore = (
@@ -80,6 +88,7 @@ export const createMemoryHistoryBootstrapStore = (
   const chunks: HistoryBootstrapChunkRow[] = [];
   const spend = new Map<Id, number>();
   const pendingRuns = new Map<Id, number>();
+  const heldRuns = new Map<Id, readonly (number | null)[]>();
 
   const replace = (batch: HistoryBootstrapBatchRow): void => {
     const index = batches.findIndex((row) => row.id === batch.id);
@@ -105,6 +114,9 @@ export const createMemoryHistoryBootstrapStore = (
       spend.set(batchId, usd);
     },
 
+    seedHeldRuns: (batchId, reserves) => {
+      heldRuns.set(batchId, [...reserves]);
+    },
     seedPendingRuns: (batchId, runs) => {
       pendingRuns.set(batchId, runs);
     },
@@ -239,6 +251,7 @@ export const createMemoryHistoryBootstrapStore = (
             capUsd: batch.capUsd,
             spentUsd: spend.get(batch.id) ?? 0,
             pendingUsd: (pendingRuns.get(batch.id) ?? 0) * reserveUsd,
+            ...holdOf(heldRuns.get(batch.id) ?? [], reserveUsd),
           };
     },
   };

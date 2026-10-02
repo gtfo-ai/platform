@@ -135,7 +135,9 @@ export interface ShadowStore {
    * only one in the platform that groups spend by `tasks.mode`.
    *
    * `pendingUsd` is the shadow runs of that window the ledger has **not** recorded, valued at
-   * `reserveUsd` while they are live and at what they reported once they have ended. Without it the
+   * `reserveUsd` while they are live and at what they reported once they have ended; `heldUsd` /
+   * `heldRuns` are the ones that ended with **nobody measuring them**, held at their own
+   * `reserve_usd` (or `reserveUsd` for a row that recorded none — WP-131). Without them the
    * cap is read from a projection a later handler writes, and a second admission inside that window
    * sees a spend lower than it is — the rule, and the measurement, are in
    * `packages/application/src/cost/pending.ts`.

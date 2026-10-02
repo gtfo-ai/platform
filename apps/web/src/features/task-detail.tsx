@@ -78,6 +78,7 @@ import {
   Card,
   EmptyState,
   ErrorNotice,
+  Field,
   formatDateTime,
   formatElapsed,
   formatMinutes,
@@ -92,6 +93,63 @@ import { AskThread } from './ask-thread.js';
 import { BreakdownPanel } from './breakdown-panel.js';
 import { FeedbackForm } from './feedback.js';
 import { TakeOverPanel } from './take-over.js';
+
+/**
+ * **Raise this task's cap** (WP-131 review round 1) — shown on a task its budget paused, the one way
+ * out of that pause: the cap is raised through `POST /api/tasks/:id/budget`, then the task is
+ * resumed through the existing resume command. Only a figure above the cap in force is offered; the
+ * server refuses the rest (409 `budget_not_raised`) and nothing here lowers a cap.
+ */
+const RaiseTaskCap = ({
+  capUsd,
+  commands,
+}: {
+  readonly capUsd: number;
+  readonly commands: ReturnType<typeof useTaskCommands>;
+}): ReactElement => {
+  const [value, setValue] = useState<number | null>(null);
+  const valid = value !== null && Number.isFinite(value) && value > capUsd;
+  return (
+    <Card className="flex flex-col gap-2">
+      <SectionHeading>Paused for its budget</SectionHeading>
+      <p className="text-xs text-fg-muted">
+        {`This task's cap is ${formatUsd(capUsd)}. Raise it and the task resumes at the stage it stopped at; a run nobody measured stays held at its cap and is never counted as spent.`}
+      </p>
+      <Field
+        label="New cap (USD)"
+        hint={`Above ${formatUsd(capUsd)}.`}
+        type="number"
+        min={capUsd}
+        step="any"
+        value={value ?? ''}
+        onChange={(event) => {
+          const parsed = Number.parseFloat(event.target.value);
+          setValue(Number.isFinite(parsed) ? parsed : null);
+        }}
+      />
+      <div>
+        <Button
+          disabled={!valid || commands.raiseBudget.isPending}
+          onClick={() => {
+            if (valid) {
+              commands.raiseBudget.mutate(value);
+            }
+          }}
+        >
+          Raise this task's cap
+        </Button>
+      </div>
+      {commands.raiseBudget.isError ? <ErrorNotice title="The cap was not raised." /> : null}
+    </Card>
+  );
+};
+
+/**
+ * *"Excludes 1 run nobody measured."* — what `cost_actual_usd` leaves out (WP-131, backlog 403).
+ * Exported for its own test; the words are the notification's, so the two say the same thing.
+ */
+export const unmeasuredRunsText = (count: number): string =>
+  `Excludes ${count} ${count === 1 ? 'run' : 'runs'} nobody measured.`;
 
 /**
  * What the task's estimate rests on, as one sentence — the same four states the workpad prints.
@@ -1199,6 +1257,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
     runs,
     human_time: humanTime,
     taken_over: takenOver,
+    can_raise_budget: canRaiseBudget,
   } = detail.data;
   // The route may be entered without a project key (from the inbox or the agents view), so the
   // link back to the board is resolved from the task's own project rather than from the URL.
@@ -1301,6 +1360,20 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
 
         {commands.pause.isError || commands.resume.isError || commands.cancel.isError ? (
           <ErrorNotice title="That command was refused." />
+        ) : null}
+
+        {/*
+          WP-131 review round 2: only a task **its own cap** paused (`paused_budget_scope: 'task'`),
+          and only for a caller the route would admit (`can_raise_budget`, `budget.write`). A
+          project's or an organisation's pause is raised where that cap is set — raising this one
+          for it would loosen it for good and resume into the same pause — and the route refuses it
+          too (409 `not_paused_by_task_cap`), so this is not the only guard.
+        */}
+        {canRaiseBudget &&
+        task.state === 'paused' &&
+        task.paused_reason === 'budget' &&
+        task.paused_budget_scope === 'task' ? (
+          <RaiseTaskCap capUsd={task.budget_cap_usd} commands={commands} />
         ) : null}
 
         <div>
@@ -1463,8 +1536,19 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
           <Metric
             label="Cost so far"
             value={formatUsd(task.cost_actual_usd)}
-            definition="Provider-reported cost of every run on this task; estimated in local provider mode (BD-011)."
+            definition="Provider-reported cost of every measured run on this task; estimated in local provider mode (BD-011). A run that ended without a figure is left out of the sum, and counted beneath it when there is one."
           />
+          {/*
+            **What the total leaves out** (WP-131, PROGRESS backlog 403). `cost_actual_usd` adds only
+            the runs that have a figure; a run that ended with nobody measuring it adds nothing, and
+            the total alone would read as the whole. The count is the projection's, over the same
+            runs every cap holds at their reservations.
+          */}
+          {task.unmeasured_runs > 0 ? (
+            <p className="-mt-2 text-[11px] text-fg-muted">
+              {unmeasuredRunsText(task.unmeasured_runs)}
+            </p>
+          ) : null}
           {/*
             **The estimate, and the sentence this replaced** (WP-28, standing rule 83).
             This metric used to read `task.cost_estimated_usd` under the definition *"Predicted cost

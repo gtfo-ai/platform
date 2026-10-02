@@ -288,6 +288,10 @@ const TASK_RECORD: TaskRecord = {
   review_threads: null,
   conflict: null,
   cost_actual_usd: 0.4,
+  unmeasured_runs: 0,
+  budget_cap_usd: 50,
+  paused_reason: null,
+  paused_budget_scope: null,
   cost_estimated_usd: 0,
   estimate_usd: null,
   estimate_basis: null,
@@ -336,6 +340,7 @@ const RUN_RECORD = (settingsHash: string | null): RunRecord => ({
 const DETAIL: TaskDetailResponse = taskDetailResponseSchema.parse({
   task: TASK_RECORD,
   taken_over: null,
+  can_raise_budget: false,
   human_time: {
     total_minutes: 0,
     by_kind: { review: 0, question: 0, approval: 0, steer: 0 },
@@ -386,6 +391,40 @@ const auditRow = (index: number): TaskAuditEntry => ({
   user_id: USER,
   params: { task_id: TASK, reason: 'lunch' },
   created_at: AT,
+});
+
+/**
+ * WP-131 review round 3 (orchestrator): `can_raise_budget` is a fact about the **caller** — the
+ * guard's own `budget.write` rule over the effective role in the task's project — and never part of
+ * the export. The page offers the cap raise only where it is true; the command route refuses the
+ * rest regardless.
+ */
+describe('GET /api/tasks/:task_id — can_raise_budget (WP-131)', () => {
+  let app: FastifyInstance;
+  let world: World;
+
+  beforeEach(async () => {
+    ({ app, world } = await build());
+    world.detail = DETAIL;
+  });
+
+  it('answers false to a member and true to a maintainer of the task’s project, and the export carries neither', async () => {
+    world.orgRole = 'viewer';
+    world.role = 'member';
+    const member = await app.inject({ method: 'GET', url: `/api/tasks/${TASK}` });
+    expect(member.statusCode, member.body).toBe(200);
+    expect((member.json() as { can_raise_budget: boolean }).can_raise_budget).toBe(false);
+
+    world.role = 'maintainer';
+    const maintainer = await app.inject({ method: 'GET', url: `/api/tasks/${TASK}` });
+    expect(maintainer.statusCode, maintainer.body).toBe(200);
+    expect((maintainer.json() as { can_raise_budget: boolean }).can_raise_budget).toBe(true);
+    expect(world.guardedFor.every((entry) => entry.projectId === PROJECT)).toBe(true);
+
+    const exported = await app.inject({ method: 'GET', url: `/api/tasks/${TASK}/export` });
+    expect(exported.statusCode, exported.body).toBe(200);
+    expect(Object.hasOwn(exported.json() as object, 'can_raise_budget')).toBe(false);
+  });
 });
 
 describe('GET /api/tasks/:task_id/export (WP-112)', () => {

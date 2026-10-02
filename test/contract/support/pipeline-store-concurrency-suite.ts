@@ -397,6 +397,7 @@ export const runPipelineStoreConcurrencyContract = (
         redactionCount: 0,
         contextPack: null,
         settings: null,
+        reserveUsd: null,
         status: 'running',
         terminalReason: null,
         sessionId: null,

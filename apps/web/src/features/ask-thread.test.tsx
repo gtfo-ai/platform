@@ -68,6 +68,10 @@ const TASK_DETAIL: TaskDetailResponse = {
     review_threads: null,
     conflict: null,
     cost_actual_usd: 1.25,
+    unmeasured_runs: 0,
+    budget_cap_usd: 50,
+    paused_reason: null,
+    paused_budget_scope: null,
     cost_estimated_usd: 0,
     estimate_usd: null,
     estimate_basis: null,
@@ -80,6 +84,7 @@ const TASK_DETAIL: TaskDetailResponse = {
     completed_at: null,
   },
   taken_over: null,
+  can_raise_budget: false,
   // WP-29: required and always present, so a server that forgot to project it fails here rather
   // than rendering a task page with no human-time line.
   human_time: {

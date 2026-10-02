@@ -31,12 +31,13 @@
  * between those two commits the platform has spent money no query can see and a second admission
  * reads a window that is lower than it is. `pendingSpend` is the second number — the runs of the
  * scope the ledger has not recorded, valued at what a live one may still spend and at what an
- * ended one reported. The rule, the measurement (two runs admitted against a cap that allows one,
+ * ended one reported — and, since WP-131, the third: an ended run **nobody measured**, held at the
+ * reservation it was admitted at. The rule, the measurement (two runs admitted against a cap that allows one,
  * three times out of three, with the handler delayed) and the residual are in `./pending.ts`.
  */
 import type { BudgetScope, BudgetWindow, Id, IsoDateTime } from '@platform/contracts';
-import { blockingBudget } from '@platform/domain';
 import type { Transaction } from '../ports/transaction.js';
+import { type Commitment, capIsSpent, holdDetail } from './pending.js';
 import type { CostStore } from './ports.js';
 import { budgetWindowStart, resolveBudgetTimezone } from './window.js';
 
@@ -56,6 +57,15 @@ export interface BlockingBudget {
    * still live has not spent anything yet.
    */
   readonly pendingUsd: number;
+  /**
+   * The window's runs **nobody measured**, held at the reservations they were admitted at, and how
+   * many (WP-131, `./pending.ts`). Apart from both numbers above: it is neither a charge nor a live
+   * run's reservation, and the pause names it in its own words ({@link holdDetail}).
+   */
+  readonly heldUsd: number;
+  readonly heldRuns: number;
+  /** What the run being admitted may spend — counted against the window since WP-131 (406). */
+  readonly reserveUsd: number;
   readonly windowStart: IsoDateTime;
 }
 
@@ -90,6 +100,24 @@ export const noBudgetGuard: BudgetGuard = {
   blockingFor: async () => null,
 };
 
+/** What a scope's runs commit to a window: the pending term and the hold, summed for the decision. */
+const committedUsd = (committed: Commitment | undefined): number =>
+  (committed?.pendingUsd ?? 0) + (committed?.heldUsd ?? 0);
+
+/**
+ * The words a pause or a refusal carries for a {@link BlockingBudget}, with the charge, the pending
+ * reservations and the hold kept apart (`./pending.ts`'s `capSpendDetail`, for a `budgets` row).
+ * One spelling for the stage executor and the ask executor, which both refuse on it.
+ */
+export const blockingBudgetDetail = (blocker: BlockingBudget): string =>
+  `the ${blocker.scope} budget for this ${blocker.window} cannot take this run: ` +
+  `${blocker.spentUsd} spent of ${blocker.limitUsd} USD since ${blocker.windowStart}` +
+  (blocker.pendingUsd > 0
+    ? `, plus ${blocker.pendingUsd} committed by runs the ledger has not recorded yet`
+    : '') +
+  (blocker.heldRuns > 0 ? `, plus ${holdDetail(blocker)}` : '') +
+  `, and this run may spend ${blocker.reserveUsd} more`;
+
 export interface BudgetGuardOptions {
   readonly store: CostStore;
 }
@@ -116,7 +144,7 @@ export const createBudgetGuard = (options: BudgetGuardOptions): BudgetGuard => (
      * into `applicable`, would write a reservation back as spend the next time the ledger charges
      * that window (see the port's docblock).
      */
-    const pending = new Map<Id, number>();
+    const pending = new Map<Id, Commitment>();
     for (const budget of budgets) {
       pending.set(
         budget.id,
@@ -128,36 +156,43 @@ export const createBudgetGuard = (options: BudgetGuardOptions): BudgetGuard => (
         ),
       );
     }
-    const blocker = blockingBudget(
-      budgets.map((budget) => ({
-        id: budget.id,
-        scope: budget.scope,
-        scopeId: budget.scopeId,
-        projectId: budget.projectId,
-        window: budget.window,
-        limitUsd: budget.limitUsd,
-        notifyPct: budget.notifyPct,
-        // The decision is made on spend **and** commitment; the two are taken apart again below,
-        // because what an operator is told has to distinguish them.
-        spentUsd: budget.spentUsd + (pending.get(budget.id) ?? 0),
-        windowStart: budget.windowStart,
-        notifiedPct: budget.notifiedPct,
-        exhaustedNotified: false,
-        sequence: budget.sequence,
-      })),
-    );
-    if (blocker === null) {
+    /**
+     * **The comparison every other cap makes** (WP-131 pre-review round, PROGRESS backlog 406):
+     * the window's charge, what its other runs have committed, what its runs nobody measured are
+     * held at, **and what this run may spend** — refused when the sum is past the limit
+     * (`capIsSpent`, `>`: a run that exactly fills the window is admitted). Until then this guard
+     * refused only a window already used up (`isExhausted`, `spent >= limit`), so one admission at
+     * the edge took the window past its limit by that run's own per-run cap, while the shadow,
+     * maintenance, bootstrap and task caps refused it. A window that **is** used up still refuses
+     * every run, including one that may spend nothing (`reserveUsd` 0 — the scheduler's question).
+     */
+    const blocking = budgets.find((budget) => {
+      const committed = pending.get(budget.id);
+      const admission = {
+        capUsd: budget.limitUsd,
+        spentUsd: budget.spentUsd,
+        pendingUsd: committed?.pendingUsd ?? 0,
+        heldUsd: committed?.heldUsd ?? 0,
+        heldRuns: committed?.heldRuns ?? 0,
+        reserveUsd,
+      };
+      return budget.spentUsd + committedUsd(committed) >= budget.limitUsd || capIsSpent(admission);
+    });
+    if (blocking === undefined) {
       return null;
     }
-    const pendingUsd = pending.get(blocker.id) ?? 0;
+    const committed = pending.get(blocking.id);
     return {
-      id: blocker.id,
-      scope: blocker.scope,
-      window: blocker.window,
-      limitUsd: blocker.limitUsd,
-      spentUsd: blocker.spentUsd - pendingUsd,
-      pendingUsd,
-      windowStart: blocker.windowStart ?? (at as IsoDateTime),
+      id: blocking.id,
+      scope: blocking.scope,
+      window: blocking.window,
+      limitUsd: blocking.limitUsd,
+      spentUsd: blocking.spentUsd,
+      pendingUsd: committed?.pendingUsd ?? 0,
+      heldUsd: committed?.heldUsd ?? 0,
+      heldRuns: committed?.heldRuns ?? 0,
+      reserveUsd,
+      windowStart: blocking.windowStart ?? (at as IsoDateTime),
     };
   },
 });

@@ -5,10 +5,11 @@
  * the harness, against the fake task-management provider they write to.
  */
 
-import { type DomainEvent, domainEventSchemasByType } from '@platform/contracts';
+import { type DomainEvent, domainEventSchemasByType, type Id } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { askingRefinedSpec } from '../testing/artifact-fixtures.js';
 import { createPipelineHarness, type HarnessOptions } from '../testing/pipeline-harness.js';
+import { pauseTaskCommand } from './commands.js';
 import { mappedStatus, renderWorkpad, workpadMarker } from './workpad.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b1';
@@ -224,6 +225,35 @@ describe('the handlers', () => {
     expect(upserts.at(-1)?.markdown).toContain('ACME-1');
     // The comment reference is remembered on the task.
     expect(harness.store.snapshot()[0]?.workpad?.comment_id).toBe('comment-1');
+  });
+
+  /**
+   * WP-131 review round 2 (canary (d) survived round 1): the workpad's cap line reads the task's
+   * **own** cap when a maintainer raised it, not the default — the same cap the task cap enforces.
+   */
+  it('prints the task’s own cap once a maintainer raised it (WP-131)', async () => {
+    const upserts: string[] = [];
+    const harness = harnessFor({
+      taskManagement: {
+        upsertWorkpad: (async (_ref: unknown, _markerId: string, markdown: string) => {
+          upserts.push(markdown);
+          return { provider: 'fake-jira', ticket_key: 'ACME-1', comment_id: 'c-1', url: null };
+        }) as never,
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    expect(upserts.at(-1)).toContain('of 50.00 USD');
+    const taskId = harness.store.snapshot()[0]?.task.id as Id;
+    await harness.memory.transaction(async (scope) =>
+      harness.store.tasks.raiseBudgetCap(scope.tx, { taskId, capUsd: 80, defaultCapUsd: 50 }),
+    );
+    // Any later render — a pause moves the task, and the workpad follows the state.
+    await pauseTaskCommand(harness.humanCommands, {
+      taskId,
+      userId: '00000000-0000-4000-8000-00000000a131' as Id,
+    });
+    await harness.drain();
+    expect(upserts.at(-1)).toContain('of 80.00 USD');
   });
 
   it('transitions the ticket only for a state the project mapped', async () => {

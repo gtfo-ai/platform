@@ -19,7 +19,7 @@ Decisions: [BD-011 cost accounting](../decisions/business/BD-011-cost-accounting
 | Task | total cap (default $50, per template) | task → `Paused: budget`, human can raise |
 | Stage run | per-run cap (see stage defaults) | run stops via SDK budget limit; stage is retried once with a summary of progress if the cap was hit mid-work, otherwise escalate |
 
-- Thresholds: notify at 50% and 80% (configurable), block at 100%.
+- Thresholds: notify at 50% and 80% (configurable), block a new run that could take the window past 100% (*as built at WP-131*: the run's own per-run cap counts toward the window before it is admitted).
 - Windows are in the organisation timezone (setting, default from the container `TZ`, fallback UTC), reset at boundary.
 - **Never kill a run mid-flight for an organisation/project budget** — that wastes the spend already made. Only per-run caps stop a run, and those are known upfront.
 - Budget changes are audited (who, when, from → to).

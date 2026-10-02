@@ -230,7 +230,9 @@ describe('what only the database can answer', () => {
    * Three states of one batch, in order, against a real database: a run that is **live** counts the
    * reservation, a run that has **ended** counts the figure its own transaction wrote, and a run
    * the ledger has **charged** counts its entries and nothing more — which is what makes the term
-   * self-clearing rather than a second total to keep true.
+   * self-clearing rather than a second total to keep true. A fourth since WP-131: a run that ended
+   * with **nobody measuring it** is held at its own reservation, apart from the pending sum, for
+   * the batch's life (PROGRESS backlog 402).
    */
   it('values a batch’s runs the ledger has not recorded, and stops once it has', async () => {
     const batchId = nextId();
@@ -250,13 +252,15 @@ describe('what only the database can answer', () => {
       status: string,
       usdReported: string | null,
       endedAt: string | null,
+      reserveUsd: number | null = null,
     ): Promise<string> => {
       const created = await pool.query<{ id: string }>(
         `insert into runs (task_id, project_id, role, model, prompt_version, status,
-                           usd_reported, ended_at)
-         values ($1, $2, 'developer', 'claude-sonnet-5', 'historian@1', $3::run_status, $4, $5)
+                           usd_reported, ended_at, reserve_usd)
+         values ($1, $2, 'developer', 'claude-sonnet-5', 'historian@1', $3::run_status, $4, $5,
+                 $6)
          returning id`,
-        [taskIds[1], projectId, status, usdReported, endedAt],
+        [taskIds[1], projectId, status, usdReported, endedAt, reserveUsd],
       );
       return created.rows[0]?.id as string;
     };
@@ -268,10 +272,12 @@ describe('what only the database can answer', () => {
       const store = new bootstrapAdapters.PostgresHistoryBootstrapStore();
 
       await insertRun('running', null, null);
+      const NOTHING_HELD = { heldUsd: 0, heldRuns: 0 };
       expect(await store.capForTask(tx, taskIds[1] as Id, 2)).toEqual({
         capUsd: 20,
         spentUsd: 0,
         pendingUsd: 2,
+        ...NOTHING_HELD,
       });
 
       const ended = await insertRun('completed', '0.400000', new Date().toISOString());
@@ -279,6 +285,7 @@ describe('what only the database can answer', () => {
         capUsd: 20,
         spentUsd: 0,
         pendingUsd: 2.4,
+        ...NOTHING_HELD,
       });
 
       await pool.query(
@@ -290,6 +297,17 @@ describe('what only the database can answer', () => {
         capUsd: 20,
         spentUsd: 0.4,
         pendingUsd: 2,
+        ...NOTHING_HELD,
+      });
+
+      // WP-131: an ended run nobody measured, admitted at 15 — held, never pending, never spent.
+      await insertRun('timed_out', null, '2026-01-01T00:00:00.000Z', 15);
+      expect(await store.capForTask(tx, taskIds[1] as Id, 2)).toEqual({
+        capUsd: 20,
+        spentUsd: 0.4,
+        pendingUsd: 2,
+        heldUsd: 15,
+        heldRuns: 1,
       });
     } finally {
       await client.end();
@@ -354,6 +372,8 @@ describe('what only the database can answer', () => {
         capUsd: 20,
         spentUsd: 1.25,
         pendingUsd: 0,
+        heldUsd: 0,
+        heldRuns: 0,
       });
     } finally {
       await client.end();

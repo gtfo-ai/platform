@@ -33,6 +33,13 @@
  * ledger through the ledger's own body ({@link chargeRunSpend}). One transaction, so a row that
  * says "this run cost $2" and a ledger that never heard of it is not a state this can produce.
  *
+ * **And it moves `tasks.cost_actual` in that transaction too** (WP-131, PROGRESS backlog 402). An
+ * unmeasured ended run is **held** by every cap at the reservation it was admitted at
+ * (`./pending.ts`), and this write is what releases the hold — the row stops being unmeasured. The
+ * five ledger-backed caps see the money move from the hold to the ledger's rows here; the task cap
+ * reads `cost_actual`, which no write moved for this run until WP-131, so without
+ * `TaskRepository.addSpend` here the task cap would have lost the money at the release.
+ *
  * ## Labelled, not merged
  *
  * `cost_entries.late` is `true` for every row written here (migration 0035). An operator
@@ -45,9 +52,12 @@
  * sweep exists for — has nobody left to call this, and its spend is **genuinely unknown**: the
  * platform writes no figure and no ledger row rather than a zero (standing rule 16). That is the
  * residual, and it is the honest one: the alternative would be publishing "this run was free".
+ * Since WP-131 it is also not *admitted past*: every cap holds such a run at the reservation it was
+ * admitted at until this module writes a figure, or — for a windowed cap — until its window rolls
+ * over (`./pending.ts`).
  */
 import type { Id, IsoDateTime, ModelUsage, RunCost, TokenUsage } from '@platform/contracts';
-import type { RunRepository } from '../pipeline/store.js';
+import type { RunRepository, TaskRepository } from '../pipeline/store.js';
 import { silentLogger } from '../ports/logger.js';
 import type { TransactionScope } from '../ports/unit-of-work.js';
 import type { ChargeRunResult, CostLedgerOptions } from './ledger.js';
@@ -56,16 +66,30 @@ import { chargeRunSpend } from './ledger.js';
 /** What the process that ran the session measured, in the shape the run's own outcome carries. */
 export interface LateRunSpend {
   readonly runId: Id;
+  /** The run's task, whose `cost_actual` the figure is added to (WP-131). */
+  readonly taskId: Id;
   readonly sessionId: string | null;
   readonly numTurns: number;
   readonly usage: TokenUsage;
   readonly modelUsage: readonly ModelUsage[];
   readonly cost: RunCost;
   readonly wallMs: number;
+  /**
+   * `true` when {@link cost} is the runner's floor — a `cost_unreported` stop (WP-131 review round
+   * 1, backlog 407). The row is written with `figure_is_floor`, so every cap goes on holding the run
+   * at its reservation; `cost_actual` gains the floor's `0`, which is nothing.
+   */
+  readonly costIsFloor?: boolean;
 }
 
 export interface LateCostRecorderOptions extends CostLedgerOptions {
   readonly runs: RunRepository;
+  /**
+   * The task's spend, moved in the **same transaction** as the row and the ledger (WP-131): the
+   * task cap holds an unmeasured run at its reservation until this writes its figure, so a release
+   * that did not also move `cost_actual` would drop the money from the task cap at the release.
+   */
+  readonly tasks: Pick<TaskRepository, 'addSpend'>;
 }
 
 export interface LateCostOutcome {
@@ -102,6 +126,10 @@ export const noLateCostRecorder: LateCostRecorder = {
   record: async () => ({ recorded: false, charge: null }),
 };
 
+/** What a late figure adds to `tasks.cost_actual` — `spendOf`'s rule in the stage executor. */
+const taskSpendOf = (cost: RunCost): number =>
+  Number.isFinite(cost.usd) ? Math.max(0, cost.usd) : 0;
+
 export const createLateCostRecorder = (options: LateCostRecorderOptions): LateCostRecorder => {
   const logger = options.logger ?? silentLogger;
   return {
@@ -113,6 +141,7 @@ export const createLateCostRecorder = (options: LateCostRecorderOptions): LateCo
         usage: spend.usage,
         cost: spend.cost,
         wallMs: spend.wallMs,
+        ...(spend.costIsFloor === true ? { costIsFloor: true } : {}),
       });
       if (!recorded) {
         // Not a failure and not an error: the row already carries a figure, or the ledger has
@@ -124,6 +153,12 @@ export const createLateCostRecorder = (options: LateCostRecorderOptions): LateCo
         );
         return { recorded: false, charge: null };
       }
+      // The task cap's half of the release (WP-131, PROGRESS backlog 402): the row now carries a
+      // figure, so `RunRepository.heldFor` no longer holds it — and the figure is added to the
+      // task's spend here, in the caller's transaction, or the task cap would lose the money at
+      // the very moment it stopped holding the reservation. The stage executor's own `spendOf`
+      // rule: finite and non-negative, nothing else.
+      await options.tasks.addSpend(scope.tx, spend.taskId, taskSpendOf(spend.cost));
       const charge = await chargeRunSpend(options, {
         tx: scope.tx,
         emit: (events) => scope.events.append(events),

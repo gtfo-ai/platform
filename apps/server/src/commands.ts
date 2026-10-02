@@ -48,6 +48,7 @@ import {
   handBackTaskCommand,
   PIPELINE_ACTOR,
   pauseTaskCommand,
+  raiseTaskBudgetCommand,
   resumeTaskCommand,
   retryRunCommand,
   retryStageCommand,
@@ -58,7 +59,7 @@ import {
   takeOverTaskCommand,
 } from '@platform/application';
 import type { AnswerChannel, Effort, Id, IsoDateTime, Slug, UserRole } from '@platform/contracts';
-import { SHIPPED_TEMPLATES } from '@platform/domain';
+import { DEFAULT_TASK_BUDGET_USD, SHIPPED_TEMPLATES } from '@platform/domain';
 import {
   type eventing as eventingAdapters,
   pipeline as pipelineAdapters,
@@ -78,6 +79,15 @@ export interface TaskCommands {
     readonly reason?: string;
   }): Promise<{ readonly reason: string | null }>;
   resume(input: { readonly taskId: string; readonly userId: string }): Promise<void>;
+  /**
+   * Raises the task's own cap (WP-131 review round 1): answers the cap it was raised to and the one
+   * it replaced, for the audit row. A figure not above the cap in force is refused (409).
+   */
+  raiseBudget(input: {
+    readonly taskId: string;
+    readonly userId: string;
+    readonly capUsd: number;
+  }): Promise<{ readonly capUsd: number; readonly previousCapUsd: number }>;
   cancel(input: { readonly taskId: string; readonly userId: string }): Promise<void>;
   retryStage(input: {
     readonly taskId: string;
@@ -224,6 +234,10 @@ export const createTaskCommands = (options: TaskCommandOptions): TaskCommands =>
     jobs: options.jobs,
     eventStore: options.eventing.store,
     redactor: redactionAdapters.patternRedactor(),
+    // What the production settings port answers for every project (`defaultProjectSettings`,
+    // `packages/application/src/pipeline/settings.ts`): the task cap has no configuration key in
+    // this build, so its default is the one figure a raise is compared against (WP-131).
+    defaultTaskCapUsd: DEFAULT_TASK_BUDGET_USD,
     logger: options.logger,
   };
 
@@ -236,6 +250,12 @@ export const createTaskCommands = (options: TaskCommandOptions): TaskCommands =>
       }),
     resume: async (input) =>
       resumeTaskCommand(deps, { taskId: id(input.taskId), userId: id(input.userId) }),
+    raiseBudget: async (input) =>
+      raiseTaskBudgetCommand(deps, {
+        taskId: id(input.taskId),
+        userId: id(input.userId),
+        capUsd: input.capUsd,
+      }),
     cancel: async (input) =>
       cancelTaskCommand(deps, { taskId: id(input.taskId), userId: id(input.userId) }),
     retryStage: async (input) =>

@@ -10,6 +10,8 @@
  * without a database per case.
  */
 import type { Transaction } from '@platform/application';
+import { createBudgetGuard } from '@platform/application';
+import type { IsoDateTime } from '@platform/contracts';
 import { cost } from '@platform/infrastructure';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runCostStoreContract } from '../../contract/support/cost-store-suite.js';
@@ -167,6 +169,16 @@ runCostStoreContract({
             orgId,
           ]);
         },
+        unmeasuredRun: async (input) => {
+          // Terminal, both cost columns null, the reservation it was admitted at (migration 0072).
+          await client.query(
+            `insert into runs (task_id, project_id, role, model, prompt_version, status,
+                               terminal_reason, started_at, ended_at, reserve_usd)
+             values ($1, $2, 'developer', 'claude-opus-5', 'v1', 'failed', 'stalled',
+                     $3::timestamptz, $3::timestamptz, $4)`,
+            [input.taskId, projectId, input.endedAt, input.reserveUsd],
+          );
+        },
       },
       cleanup: async () => {
         await client.query('rollback');
@@ -187,7 +199,8 @@ runCostStoreContract({
  * (`packages/application/src/cost/pending.ts`). Four states of one window, in order: a **live** run
  * counts the caller's reservation, an **ended** one counts the figure its own transaction wrote, a
  * **charged** one counts nothing here because `cost_entries` has it, and a run that ended
- * **reporting nothing** counts nothing at all — the residual that module states.
+ * **with nobody measuring it** is **held** at its reservation, apart from the pending sum — until
+ * WP-131 it counted nothing at all, which was the over-admission PROGRESS backlog 402 names.
  */
 describe('what a budget window counts before the ledger has written it', () => {
   const ORG = { scope: 'org' as const, scopeId: null };
@@ -201,6 +214,9 @@ describe('what a budget window counts before the ledger has written it', () => {
       const store = cost.createPostgresCostStore();
       const since = new Date(Date.now() - 60 * 60_000).toISOString() as never;
       const project = { scope: 'project' as const, scopeId: projectId as never };
+      /** The pending sum alone — the hold is asserted by name where it appears. */
+      const pendingOf = async (scope: typeof project | typeof ORG): Promise<number> =>
+        (await store.pendingSpend(tx, scope, since, 3)).pendingUsd;
 
       const task = await client.query<{ id: string }>(
         `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, mode)
@@ -228,23 +244,23 @@ describe('what a budget window counts before the ledger has written it', () => {
 
       // Nothing at all: a window with no runs has committed nothing, which is the one place a zero
       // is a measurement rather than an invention (standing rule 16's other side).
-      expect(await store.pendingSpend(tx, project, since, 3)).toBe(0);
+      expect(await pendingOf(project)).toBe(0);
 
       await insertRun('running', null, null);
-      expect(await store.pendingSpend(tx, project, since, 3)).toBe(3);
+      expect(await pendingOf(project)).toBe(3);
       // The organisation scope has no `scope_id` (migration 0007: *"exactly one subject"*), so its
       // fragment is every run of the deployment — a different branch, and the same answer here.
-      expect(await store.pendingSpend(tx, ORG, since, 3)).toBe(3);
+      expect(await pendingOf(ORG)).toBe(3);
 
       const ended = await insertRun('completed', '0.400000', new Date().toISOString());
-      expect(await store.pendingSpend(tx, project, since, 3)).toBe(3.4);
+      expect(await pendingOf(project)).toBe(3.4);
 
       await client.query(
         `insert into cost_entries (run_id, task_id, project_id, stage, model, usd)
          values ($1, $2, $3, 'implementation', 'claude-sonnet-5', 0.4)`,
         [ended, taskId, projectId],
       );
-      expect(await store.pendingSpend(tx, project, since, 3)).toBe(3);
+      expect(await pendingOf(project)).toBe(3);
 
       /**
        * **The platform's own figure counts too** — WP-47, PROGRESS backlog **110**.
@@ -258,13 +274,19 @@ describe('what a budget window counts before the ledger has written it', () => {
        * such a run's contribution "nothing" and was true when it was written.
        */
       await insertRun('completed', null, new Date().toISOString(), '0.250000');
-      expect(await store.pendingSpend(tx, project, since, 3)).toBe(3.25);
+      expect(await pendingOf(project)).toBe(3.25);
 
-      // The one run that genuinely commits nothing: **neither** column set, which is what the lease
-      // sweep leaves behind and means "nobody measured this run" rather than "it was free"
-      // (standing rule 16). The ledger writes no row for it either, so nothing ever replaces it.
+      // **Neither** column set — what the lease sweep, a cancel ended in place and a stop or a crash
+      // that read no `result` leave behind: "nobody measured this run", never "it was free"
+      // (standing rule 16). It adds nothing to the pending sum and is **held** apart, at the
+      // caller's 3 because this row recorded no reservation (WP-131). The ledger writes no row.
       await insertRun('failed', null, new Date().toISOString());
-      expect(await store.pendingSpend(tx, project, since, 3)).toBe(3.25);
+      expect(await pendingOf(project)).toBe(3.25);
+      expect(await store.pendingSpend(tx, project, since, 3)).toEqual({
+        pendingUsd: 3.25,
+        heldUsd: 3,
+        heldRuns: 1,
+      });
 
       // …and a run that ended **before** the window opened is not this window's business.
       await insertRun(
@@ -272,7 +294,134 @@ describe('what a budget window counts before the ledger has written it', () => {
         '9.000000',
         new Date(Date.now() - 2 * 60 * 60_000).toISOString(),
       );
-      expect(await store.pendingSpend(tx, project, since, 3)).toBe(3.25);
+      expect(await pendingOf(project)).toBe(3.25);
+    } finally {
+      await client.query('rollback');
+      await client.end();
+    }
+  });
+});
+
+/**
+ * **WP-131 criterion (4)** — the hold of PROGRESS backlog 402, on the project cap, against the real
+ * SQL: the guard the stage executor asks (`createBudgetGuard`) over the adapter that derives the
+ * hold from `runs`, with nothing seeded but rows.
+ *
+ * A project budget of 20 for the month, 5 already charged, and one run that ended **with nobody
+ * measuring it**, admitted at 15. The guard refuses a 10 USD admission: `5 + 15 + 10 > 20` (since
+ * the pre-review round the admission's own reservation counts, backlog 406 — the 5 charged is kept
+ * so the window is not empty). Restoring the old valuation (`0` for that run) reads `5 + 10 <= 20`
+ * and admits it: the canary.
+ *
+ * Then the two edges the ruling names: a row written before migration 0072 (`reserve_usd` null) is
+ * held at the **admitting** reserve, and a hold counts in the window that contains its `ended_at`
+ * and ages out with it — the same runs, asked about the next month, hold nothing.
+ *
+ * And the exclusion the ruling allows, answered: there is none. The one row this build writes for a
+ * run no process ran (`recordUnstarted`) already carries a measured `usd_reported = 0`, so it is
+ * not in the held set at all — asserted here, because it is the row an exclusion would have been for.
+ */
+describe('a run nobody measured is held at its reservation (WP-131)', () => {
+  it('refuses a 10 USD admission to a project budget of 20 holding one unmeasured 15 USD run, holds a pre-0072 row at the admitting reserve, and drops the hold when its month rolls over', async () => {
+    const client = createTestClient(database.connectionString);
+    await client.connect();
+    await client.query('begin');
+    try {
+      const tx = { adapter: 'postgres', client } as unknown as Transaction;
+      const store = cost.createPostgresCostStore();
+      const guard = createBudgetGuard({ store });
+      const JUNE = '2026-06-01T00:00:00.000Z' as IsoDateTime;
+      const IN_JUNE = '2026-06-15T12:00:00.000Z' as IsoDateTime;
+      const IN_JULY = '2026-07-02T12:00:00.000Z' as IsoDateTime;
+      // The organisation's zone decides the window; UTC so the month starts where the case says.
+      await client.query('update organizations set timezone = $1 where id = $2', ['UTC', orgId]);
+
+      const task = await client.query<{ id: string }>(
+        `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, mode)
+         values ($1, 'fake-jira', 'HELD-1', 'https://jira.example.test/x', 'feature', 'normal')
+         returning id`,
+        [projectId],
+      );
+      const taskId = task.rows[0]?.id as string;
+      const budget = await client.query<{ id: string }>(
+        `insert into budgets (scope, scope_id, "window", limit_usd)
+         values ('project', $1, 'month', 20) returning id`,
+        [projectId],
+      );
+      await client.query(
+        `insert into budget_windows (budget_id, window_start, spent_usd) values ($1, $2, 5)`,
+        [budget.rows[0]?.id, JUNE],
+      );
+      const endedRun = async (
+        reserveUsd: number | null,
+        usdReported: number | null = null,
+      ): Promise<string> => {
+        const created = await client.query<{ id: string }>(
+          `insert into runs (task_id, project_id, role, model, prompt_version, status,
+                             terminal_reason, started_at, ended_at, reserve_usd, usd_reported)
+           values ($1, $2, 'developer', 'claude-opus-5', 'v1', 'timed_out', 'timed_out',
+                   '2026-06-10T08:00:00Z', '2026-06-10T09:00:00Z', $3, $4)
+           returning id`,
+          [taskId, projectId, reserveUsd, usdReported],
+        );
+        return created.rows[0]?.id as string;
+      };
+
+      // Nothing ended unmeasured yet: 5 of 20, and the 10 USD run is admitted.
+      expect(await guard.blockingFor(tx, projectId as never, IN_JUNE, 10)).toBeNull();
+
+      const held = await endedRun(15);
+      const refused = await guard.blockingFor(tx, projectId as never, IN_JUNE, 10);
+      expect(refused).toMatchObject({
+        scope: 'project',
+        limitUsd: 20,
+        spentUsd: 5,
+        pendingUsd: 0,
+        heldUsd: 15,
+        heldRuns: 1,
+      });
+
+      // The canary, as data: the same row given the pre-WP-131 valuation — a figure of 0 on the
+      // row, which is what "counts 0" meant — and the window reads 5 of 20 again and admits it.
+      await client.query('update runs set usd_reported = 0 where id = $1', [held]);
+      expect(await guard.blockingFor(tx, projectId as never, IN_JUNE, 10)).toBeNull();
+      await client.query('update runs set usd_reported = null where id = $1', [held]);
+
+      // A row written before migration 0072 recorded no reservation: held at the admitting one.
+      await endedRun(null);
+      expect(
+        await store.pendingSpend(tx, { scope: 'project', scopeId: projectId as never }, JUNE, 10),
+      ).toEqual({
+        pendingUsd: 0,
+        heldUsd: 25,
+        heldRuns: 2,
+      });
+
+      // No exclusion: a run no process ran is written with a measured 0 and is not held.
+      await endedRun(15, 0);
+      expect(
+        (await store.pendingSpend(tx, { scope: 'project', scopeId: projectId as never }, JUNE, 10))
+          .heldRuns,
+      ).toBe(2);
+
+      // Backlog 407: a `cost_unreported` stop's row carries the floor `usd_reported = 0` with
+      // `figure_is_floor` set — held at its reservation, not read as a measured zero.
+      const floor = await endedRun(15, 0);
+      await client.query('update runs set figure_is_floor = true where id = $1', [floor]);
+      expect(
+        await store.pendingSpend(tx, { scope: 'project', scopeId: projectId as never }, JUNE, 10),
+      ).toEqual({ pendingUsd: 0, heldUsd: 40, heldRuns: 3 });
+
+      // The rollover: in July the June window and the holds in it are gone, and the run is admitted.
+      expect(
+        await store.pendingSpend(
+          tx,
+          { scope: 'project', scopeId: projectId as never },
+          '2026-07-01T00:00:00.000Z' as IsoDateTime,
+          10,
+        ),
+      ).toEqual({ pendingUsd: 0, heldUsd: 0, heldRuns: 0 });
+      expect(await guard.blockingFor(tx, projectId as never, IN_JULY, 10)).toBeNull();
     } finally {
       await client.query('rollback');
       await client.end();

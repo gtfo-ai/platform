@@ -28,6 +28,7 @@ import type {
 } from '@platform/contracts';
 import type { CostLedgerEntry, PriceRates, RollupDelta, TaskCostSample } from '@platform/domain';
 import type { Transaction } from '../ports/transaction.js';
+import type { Commitment } from './pending.js';
 
 /** The run row a `run.finished` payload does not carry: its model, its stage and its lineage. */
 export interface RunCostRow {
@@ -226,7 +227,8 @@ export interface CostStore {
    * else: the projection is written by the ledger *handler*, after the run's own transaction, so a
    * budget read from it alone is read one run late. The rule, the measurement and the residual are
    * in `./pending.ts`; a live run is valued at `reserveUsd`, an ended one at the figure its own
-   * transaction wrote.
+   * transaction wrote, and an ended one **nobody measured** is answered apart as {@link Commitment.heldUsd}
+   * (its own `runs.reserve_usd`, or `reserveUsd` for a row written before migration 0072 — WP-131).
    *
    * It is **not** folded into {@link BudgetRepository.applicable}, deliberately: that answer is
    * also what the ledger's `recordSpend` adds to and writes back, so a reservation inside it would
@@ -237,7 +239,7 @@ export interface CostStore {
     budget: { readonly scope: BudgetScope; readonly scopeId: Id | null },
     since: IsoDateTime,
     reserveUsd: number,
-  ): Promise<number>;
+  ): Promise<Commitment>;
 
   readonly budgets: BudgetRepository;
 }

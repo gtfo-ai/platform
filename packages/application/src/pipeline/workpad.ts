@@ -387,17 +387,22 @@ export const runWorkpadRender = async (
     const task = await options.store.tasks.load(scope.tx, taskId);
     return task === null
       ? null
-      : { stored: task, takenOver: await options.store.tasks.takenOver(scope.tx, taskId) };
+      : {
+          stored: task,
+          takenOver: await options.store.tasks.takenOver(scope.tx, taskId),
+          // The task's own cap when a maintainer raised it (WP-131 review round 1).
+          capUsd: await options.store.tasks.budgetCap(scope.tx, taskId),
+        };
   });
   if (read === null) {
     return;
   }
-  const { stored, takenOver } = read;
+  const { stored, takenOver, capUsd } = read;
   const settings = await options.settings.forProject(stored.task.projectId);
   const markdown = renderWorkpad(
     viewOf(
       stored,
-      settings.taskBudgetUsd,
+      capUsd ?? settings.taskBudgetUsd,
       data.blocker_brief ?? null,
       takenOver === null ? null : { branch: takenOver.branch, sessionId: takenOver.sessionId },
     ),

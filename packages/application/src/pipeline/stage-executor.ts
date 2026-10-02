@@ -54,6 +54,7 @@ import type {
 import { stageVerdictSchema } from '@platform/contracts';
 import type {
   CommandContext,
+  PausedBudgetScope,
   PipelineStage,
   PromptObservabilityExcerpt,
   Run,
@@ -84,9 +85,15 @@ import {
   type RedactedArtifact,
   redactArtifactData,
 } from '../artifacts/redaction.js';
-import { type BudgetGuard, noBudgetGuard } from '../cost/guard.js';
+import { type BudgetGuard, blockingBudgetDetail, noBudgetGuard } from '../cost/guard.js';
 import { type LateCostRecorder, noLateCostRecorder } from '../cost/late.js';
-import { type CapSpend, capIsSpent, capSpendDetail } from '../cost/pending.js';
+import {
+  type CapSpend,
+  capIsSpent,
+  capSpendDetail,
+  type Hold,
+  holdDetail,
+} from '../cost/pending.js';
 import { composeSecretRedactors } from '../integrations/redaction.js';
 import { redactTextSearchTerms } from '../knowledge/text-search-record.js';
 import type { MaintenanceSpendReader } from '../maintenance/ports.js';
@@ -513,6 +520,16 @@ export const runBudgetUsd = (settings: ProjectSettings, stage: Slug): number =>
  * `tasks.cost_actual`, which `record`'s own transaction increments beside `runs.finish` and
  * `run.finished`, so it cannot lag the run the way the ledger's projections do.
  *
+ * **It does need the hold** (WP-131, PROGRESS backlog 402). A run nobody measured moves
+ * `cost_actual` by nothing, ever — `spendOf` adds `0` for it, rightly, because a zero there would be
+ * published as money spent — so until WP-131 a task whose runs kept ending unmeasured (a stall, the
+ * wall clock, a crash, a cancel or a sweep that read no `result`) was admitted retry after retry at
+ * `0 + reserve`, and only a human's re-try after the escalation braked it. `held` is the task's ended
+ * runs nobody measured, each at the reservation it was admitted at (`RunRepository.heldFor`),
+ * compared beside the spend and **never** written into `cost_actual`. It ends when `cost/late.ts`
+ * writes the run's figure (which moves `cost_actual` in the same transaction); it never rolls over,
+ * so the task stays paused until a human raises the cap.
+ *
  * The comparison adds what *this* run may spend to what the task has already spent, because a
  * budget checked only against past spend is a budget discovered one run too late.
  */
@@ -520,7 +537,31 @@ export const taskBudgetExhausted = (
   stored: StoredTask,
   settings: ProjectSettings,
   stage: Slug,
-): boolean => stored.costActualUsd + runBudgetUsd(settings, stage) > settings.taskBudgetUsd;
+  held: Hold,
+): boolean =>
+  stored.costActualUsd + held.heldUsd + runBudgetUsd(settings, stage) > settings.taskBudgetUsd;
+
+/**
+ * The settings with the task's **own** cap in place of the default, when a maintainer raised it —
+ * `tasks.budget_cap_usd`, `POST /api/tasks/:id/budget` (WP-131 review round 1). `null` is "the
+ * default applies"; the settings are then returned as they are.
+ */
+export const withTaskCap = (settings: ProjectSettings, capUsd: number | null): ProjectSettings =>
+  capUsd === null ? settings : { ...settings, taskBudgetUsd: capUsd };
+
+/**
+ * The task cap's pause, with the spend and the hold apart (standing rule 16): *"the task has spent
+ * 0 USD of its 20 USD cap, with 1 run nobody measured, held at its cap: 15 USD, and …"*.
+ */
+export const taskBudgetDetail = (
+  stored: StoredTask,
+  settings: ProjectSettings,
+  stage: Slug,
+  held: Hold,
+): string =>
+  `the task has spent ${stored.costActualUsd} USD of its ${settings.taskBudgetUsd} USD cap` +
+  (held.heldRuns > 0 ? `, with ${holdDetail(held)},` : '') +
+  ` and "${stage}" may spend ${runBudgetUsd(settings, stage)} more`;
 
 type Prepared =
   | { readonly kind: 'skipped'; readonly reason: string }
@@ -668,8 +709,14 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
     scope: TransactionScope,
     stored: StoredTask,
     reason: string,
+    /** Which cap refused the run — recorded on `task.paused` (WP-131 review round 2). */
+    budgetScope: PausedBudgetScope,
   ): Promise<Admission> => {
-    const decision = pauseTask(stored.task, { reason: 'budget' }, options.context(stored.task.id));
+    const decision = pauseTask(
+      stored.task,
+      { reason: 'budget', budgetScope },
+      options.context(stored.task.id),
+    );
     await store.tasks.save(scope.tx, { ...stored, task: decision.aggregate });
     await scope.events.append(decision.events);
     return { kind: 'paused', reason };
@@ -722,13 +769,11 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         );
       }
 
-      if (taskBudgetExhausted(stored, settings, job.stage)) {
-        return pause(
-          scope,
-          stored,
-          `the task has spent ${stored.costActualUsd} USD of its ${settings.taskBudgetUsd} USD cap ` +
-            `and "${job.stage}" may spend ${runBudgetUsd(settings, job.stage)} more`,
-        );
+      const held = await store.runs.heldFor(scope.tx, task.id, runBudgetUsd(settings, job.stage));
+      // The task's own cap when a maintainer raised it (WP-131 review round 1), else the default.
+      const capped = withTaskCap(settings, await store.tasks.budgetCap(scope.tx, task.id));
+      if (taskBudgetExhausted(stored, capped, job.stage, held)) {
+        return pause(scope, stored, taskBudgetDetail(stored, capped, job.stage, held), 'task');
       }
 
       /**
@@ -750,11 +795,8 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         return pause(
           scope,
           stored,
-          `the ${blocker.scope} budget for this ${blocker.window} is exhausted: ` +
-            `${blocker.spentUsd} of ${blocker.limitUsd} USD since ${blocker.windowStart}` +
-            (blocker.pendingUsd > 0
-              ? `, plus ${blocker.pendingUsd} committed by runs the ledger has not recorded yet`
-              : ''),
+          blockingBudgetDetail(blocker),
+          blocker.scope === 'org' ? 'organization' : 'project',
         );
       }
 
@@ -791,6 +833,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
             stored,
             `this project’s shadow budget for the month since ${since} is spent: ` +
               capSpendDetail(admission, job.stage),
+            'shadow',
           );
         }
       }
@@ -829,6 +872,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
               stored,
               `this project’s maintenance budget for the month since ${since} is spent: ` +
                 capSpendDetail(admission, job.stage),
+              'maintenance',
             );
           }
         }
@@ -866,6 +910,7 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
             stored,
             `this history bootstrap’s budget is spent: ` +
               `${capSpendDetail({ ...cap, reserveUsd }, job.stage)}`,
+            'bootstrap',
           );
         }
       }
@@ -995,7 +1040,15 @@ export const createStageExecutor = (options: StageExecutorOptions): StageExecuto
         contextPack,
         // WP-91 (backlog 227): the settings this plan was made from — the ones `prepare` read and
         // handed the planner — frozen with the run, through the run's own redactor.
-        settings: runSettingsSnapshot(settings, redactor),
+        // WP-131 review round 2: with the task's **own** cap in it when a maintainer raised it, so
+        // the run records the cap it ran under, not the default it did not.
+        settings: runSettingsSnapshot(
+          withTaskCap(settings, await store.tasks.budgetCap(scope.tx, task.id)),
+          redactor,
+        ),
+        // WP-131 (migration 0072): the per-run cap this run was admitted at — the figure every cap
+        // holds it at if it ends with nobody measuring it.
+        reserveUsd: runBudgetUsd(settings, job.stage),
       });
       /**
        * The lease, claimed in the **same transaction as the row** (WP-47).
@@ -1247,6 +1300,15 @@ const rowCostOf = (outcome: RunOutcome): RunCost | null =>
   outcome.costUnmeasured === true ? null : outcome.cost;
 
 /**
+ * Is the outcome's cost the runner's **floor** — a `cost_unreported` stop (WP-131 pre-review round,
+ * PROGRESS backlog 407)? WP-119 kept the floor in the cost column and this does not change it; it
+ * tells `runs.finish` so, and the caps then hold the run at its reservation and the totals count it
+ * as unmeasured, rather than reading a measured `0`.
+ */
+const costIsFloorOf = (input: { readonly stopReason: string | null }): boolean =>
+  input.stopReason === COST_UNREPORTED;
+
+/**
  * What a `run.failed` carries about the spend — both nullish in the event. A `stalled` run whose
  * stop read nothing (WP-119) carries **neither**, which is the lease sweep's shape and what the
  * ledger reads as `no_usage_and_no_cost`; the zeros the outcome holds are the runner's floor.
@@ -1384,6 +1446,7 @@ const record = async (
     usage: outcome.usage,
     cost: rowCostOf(outcome),
     wallMs: outcome.wallMs,
+    costIsFloor: costIsFloorOf(input),
   });
   if (!owned) {
     return lostTheRun({ ...input, scope });
@@ -1568,13 +1631,17 @@ const record = async (
  *
  * The residual is one line down from where it used to be, and it is real: a run whose process
  * **died** has nobody left to make this call, so its spend is genuinely unknown and the platform
- * writes no figure and no ledger row rather than a zero (standing rule 16).
+ * writes no figure and no ledger row rather than a zero (standing rule 16) — and, since WP-131,
+ * every cap holds it at the reservation it was admitted at, so the unknown is not admitted past
+ * (`../cost/pending.ts`). This call is what releases that hold, and it moves `cost_actual` with it.
  */
 const lostTheRun = async (input: {
   readonly run: Run;
   readonly outcome?: RunOutcome;
   readonly options: StageExecutorOptions;
   readonly scope: TransactionScope;
+  /** The transcript's stop reason — a `cost_unreported` outcome's cost is a floor (407). */
+  readonly stopReason?: string | null;
 }): Promise<StageExecutionOutcome> => {
   const { run, outcome, options } = input;
   const reason = `run ${run.id} was ended by another writer while it was in flight, so its outcome was discarded`;
@@ -1593,12 +1660,16 @@ const lostTheRun = async (input: {
     input.scope,
     {
       runId: run.id,
+      taskId: run.taskId,
       sessionId: outcome.sessionId,
       numTurns: outcome.numTurns,
       usage: outcome.usage,
       modelUsage: outcome.modelUsage,
       cost: outcome.cost,
       wallMs: outcome.wallMs,
+      // WP-131 review round 1: a `cost_unreported` outcome's `usd: 0` is the runner's floor, and the
+      // late write must say so, or the row would read as a measured free run and release the hold.
+      costIsFloor: costIsFloorOf({ stopReason: input.stopReason ?? null }),
     },
     options.context(run.taskId).clock.now(),
   );
@@ -1653,6 +1724,7 @@ const recordOntoStoppedTask = async (
     usage: outcome.usage,
     cost: rowCostOf(outcome),
     wallMs: outcome.wallMs,
+    costIsFloor: costIsFloorOf(input),
   });
   if (!owned) {
     return lostTheRun({ ...input, scope });
@@ -1715,6 +1787,7 @@ const recordUnsuccessful = async (
     usage: outcome.usage,
     cost: rowCostOf(outcome),
     wallMs: outcome.wallMs,
+    costIsFloor: costIsFloorOf(input),
   });
   if (!owned) {
     return lostTheRun({ ...input, scope });
@@ -1723,7 +1796,7 @@ const recordUnsuccessful = async (
 
   if (overspent) {
     // BD-010: a task budget pauses the task; a human may raise the cap and resume it.
-    const paused = pauseTask(stored.task, { reason: 'budget' }, context);
+    const paused = pauseTask(stored.task, { reason: 'budget', budgetScope: 'run' }, context);
     await store.tasks.save(scope.tx, { ...stored, task: paused.aggregate });
     await scope.events.append([...decision.events, ...paused.events]);
     return {

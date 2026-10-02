@@ -199,6 +199,37 @@ describe('GET /api/runs/:run_id/settings (WP-112)', () => {
     expect(runRecordSchema.parse(reply.json()).cost).toBeNull();
   });
 
+  /**
+   * WP-131 (PROGRESS backlog 404): a `run_model_usage` row with **neither** figure — a model
+   * `price_list` has no row for, in `local` mode — is published as `usd: null`, never `0`, and the
+   * route's response schema (`runRecordSchema`, whose `model_usage` is the read DTO's own
+   * `runModelUsageRecordSchema`) serialises it rather than refusing it. The projection that writes
+   * the `null` is held by `test/integration/server/read-api.integration.test.ts`.
+   */
+  it('publishes a model nobody priced with usd null through the real router, never a zero (WP-131)', async () => {
+    world.run = {
+      ...record(HASH),
+      model_usage: [
+        {
+          model: 'claude-unpriced',
+          input_tokens: 10,
+          output_tokens: 5,
+          cache_write_5m_tokens: 0,
+          cache_write_1h_tokens: 0,
+          cache_read_tokens: 0,
+          usd: null,
+        },
+      ],
+    };
+    const reply = await app.inject({ method: 'GET', url: `/api/runs/${RUN}` });
+    expect(reply.statusCode, reply.body).toBe(200);
+    const usage = (reply.json() as { model_usage: { usd: unknown }[] }).model_usage;
+    expect(usage).toHaveLength(1);
+    expect(Object.hasOwn(usage[0] as object, 'usd')).toBe(true);
+    expect(usage[0]?.usd).toBeNull();
+    expect(runRecordSchema.parse(reply.json()).model_usage[0]?.usd).toBeNull();
+  });
+
   it('publishes a run record’s null hash as null, not as an absent field', async () => {
     world.run = record(null);
     const reply = await app.inject({ method: 'GET', url: `/api/runs/${RUN}` });

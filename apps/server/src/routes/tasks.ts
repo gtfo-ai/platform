@@ -65,7 +65,9 @@ import { scopedProject, scopeToProject } from './scope.js';
  * pipeline really produced.
  */
 export interface TaskQueries {
-  readonly taskDetail: (taskId: string) => Promise<TaskDetailResponse | null>;
+  readonly taskDetail: (
+    taskId: string,
+  ) => Promise<Omit<TaskDetailResponse, 'can_raise_budget'> | null>;
   readonly taskProjectId: (taskId: string) => Promise<string | null>;
   readonly projectRole: (projectId: string, userId: string) => Promise<UserRole | null>;
   readonly artifactBody: (artifactId: string) => Promise<ArtifactBody>;
@@ -125,7 +127,11 @@ export const registerTaskRoutes = async (
         // two reads are separate statements and a task deleted between them is a 404, not a 500.
         throw new NotFoundError(`task ${request.params.task_id}`);
       }
-      return detail;
+      // WP-131 review round 2: whether **this caller** may raise the task's cap — the guard's own
+      // rule over the effective role the guard resolved (`budget.write`, maintainer), so the page
+      // offers the control only to someone the route would admit. The route refuses the rest.
+      const role = request.effectiveRole;
+      return { ...detail, can_raise_budget: role !== undefined && can(role, 'budget.write') };
     },
   );
 

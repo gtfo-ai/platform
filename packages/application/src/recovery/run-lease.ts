@@ -44,13 +44,15 @@
  * is the stage executor's own ending for a run that produced no result — no new task state, no
  * automatic retry of a stage that may still be executing somewhere.
  *
- * And it releases the reservation **with whatever the run reported**, which for a run nobody
- * measured is *nothing*: `finish` is given `cost: null`, both cost columns stay null, the pending
- * term's `coalesce(usd_reported, usd_estimated, 0)` values the ended row at 0, and the ledger's
- * `run.failed` carries no usage and no cost so it writes **no row at all** rather than a zero
- * (standing rule 16). If the run's own process is still alive it will finish, find the row terminal
- * and write the real figure through `runs.recordCost` (`../cost/late.ts`) — which is the only path
- * by which that money can ever be known.
+ * And it ends the live reservation **with whatever the run reported**, which for a run nobody
+ * measured is *nothing*: `finish` is given `cost: null`, both cost columns stay null, and the
+ * ledger's `run.failed` carries no usage and no cost so it writes **no row at all** rather than a
+ * zero (standing rule 16). Every cap then **holds** the ended row at the reservation it was
+ * admitted at (`runs.reserve_usd`, WP-131, `../cost/pending.ts`) — until WP-131 the pending term
+ * valued it at 0, which admitted past the cap by the run's unknown spend (PROGRESS backlog 402). If
+ * the run's own process is still alive it will finish, find the row terminal and write the real
+ * figure through `runs.recordCost` (`../cost/late.ts`) — the only path by which that money can ever
+ * be known, and the one that releases the hold.
  *
  * ## The bound is both, and which is primary
  *

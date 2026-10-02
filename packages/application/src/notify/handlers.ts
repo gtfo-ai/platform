@@ -82,6 +82,26 @@ export const APPROVAL_DETAIL: Readonly<Record<ApprovalKind, string>> = {
 const money = (usd: number): string => `$${usd.toFixed(2)}`;
 
 /**
+ * `task.completed`'s line: *"merged — $2.40, 5 runs."*, and — when some of those runs ended with
+ * nobody measuring them — *"merged — $2.40, 5 runs; excludes 1 run nobody measured."* (WP-131,
+ * PROGRESS backlog 403). The total is the sum of the runs that have a figure, so stating it alone
+ * would present a lower bound as the whole (standing rule 16's neighbour). An event appended before
+ * WP-131 carries no count and reads as before.
+ */
+const completedDetail = (payload: TaskCompletedPayload): string => {
+  const { totals } = payload;
+  const unmeasured = totals.unmeasured_runs ?? 0;
+  return (
+    `${payload.outcome} — ${money(totals.cost_usd)}, ${totals.runs} run${totals.runs === 1 ? '' : 's'}` +
+    (unmeasured > 0
+      ? `; excludes ${unmeasured} run${unmeasured === 1 ? '' : 's'} nobody measured.`
+      : '.')
+  );
+};
+
+type TaskCompletedPayload = Extract<DomainEvent, { type: 'task.completed' }>['payload'];
+
+/**
  * What this event would say, or `null` for an event this build does not notify about.
  *
  * Exported for its own unit test: the mapping from an event to a class is the half a reviewer
@@ -150,9 +170,7 @@ export const decideNotification = (event: DomainEvent): Decided | null => {
         projectId: event.payload.project_id,
         taskId: event.payload.task_id,
         subject: null,
-        detail: `${event.payload.outcome} — ${money(event.payload.totals.cost_usd)}, ${
-          event.payload.totals.runs
-        } run${event.payload.totals.runs === 1 ? '' : 's'}.`,
+        detail: completedDetail(event.payload),
       };
     case 'task.cancelled':
       return {

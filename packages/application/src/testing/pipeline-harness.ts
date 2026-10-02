@@ -40,6 +40,7 @@ import type * as z from 'zod';
 import { type AskRunPlanner, createAskRunPlanner } from '../ask/planner.js';
 import { createBudgetGuard } from '../cost/guard.js';
 import { createLateCostRecorder } from '../cost/late.js';
+import { holdOf } from '../cost/pending.js';
 import { costHandlers } from '../cost/runtime.js';
 import { EventBus } from '../events/event-bus.js';
 import { createIntegrationActionExecutor } from '../integrations/action-executor.js';
@@ -571,6 +572,12 @@ export interface HarnessOptions {
    * dispatcher lag. Defaults to **0**: nothing is in flight in a fresh harness.
    */
   readonly maintenancePendingRuns?: number;
+  /**
+   * The reservations of this project's chore runs that ended with **nobody measuring them**
+   * (WP-131), `null` for one written before migration 0072 — held by the maintenance cap through
+   * `holdOf`, the adapter's valuation. Defaults to none.
+   */
+  readonly maintenanceHeldRuns?: readonly (number | null)[];
   readonly git?: Partial<GitProviderPort> | null;
   /**
    * The package-registry client the dependency gate asks for a licence (WP-38, Q84).
@@ -1385,6 +1392,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
       maintenanceSpendSince: async (_tx, _projectId, _since, reserveUsd) => ({
         spentUsd: options.maintenanceSpentUsd ?? 0,
         pendingUsd: (options.maintenancePendingRuns ?? 0) * reserveUsd,
+        ...holdOf(options.maintenanceHeldRuns ?? [], reserveUsd),
       }),
     },
     settings: {
@@ -1514,6 +1522,7 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
             lateCost: createLateCostRecorder({
               store: cost,
               runs: store.runs,
+              tasks: store.tasks,
               context: (correlationId, causeEventId) => ({
                 ids,
                 actor: { kind: 'system', component: 'cost-ledger' },
@@ -1674,6 +1683,8 @@ export const createPipelineHarness = (options: HarnessOptions = {}): PipelineHar
     ...commands,
     jobs,
     eventStore: memory.store,
+    // The cap this harness's task cap reads, so a raise is compared against the same figure.
+    defaultTaskCapUsd: settings.taskBudgetUsd,
     logger: silentLogger,
   };
 

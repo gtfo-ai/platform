@@ -4,9 +4,10 @@
  * Three things can only be shown here, and each of them is one of the work package's criteria.
  *
  * **(1) The row moving is not the reservation moving.** A stranded run costs money through
- * `pendingSpend`, which is SQL — `coalesce(usd_reported, usd_estimated, 0)` over the runs the
- * ledger has not charged — so a test that read back only `runs.status` would be green on a sweep
- * that ended the row and left the cap exactly as high as it was. Both are read, before and after.
+ * `pendingSpend`, which is SQL over the runs the ledger has not charged — so a test that read back
+ * only `runs.status` would be green on a sweep that ended the row and left the cap exactly as it
+ * was. Both are read, before and after: the live reservation becomes a **hold** at the same figure
+ * (WP-131, PROGRESS backlog 402), because nobody measured what the swept run spent.
  *
  * **(2) The negative case, which is a lock rather than a re-read.** A heartbeat committing between
  * the pass's read and the ending's transaction must stop the ending, and the mechanism that makes
@@ -17,9 +18,10 @@
  * **(7) The figure rule 39 asks for.** `DEFAULT_STAGE_RUN_BUDGET_USD.implementation` is **15**, and
  * that is what one stranded implementation run reserved against every future window of its project
  * and its organisation before this change. The number is taken from the shipped default rather than
- * typed in, and the assertion is `15` before the sweep and `0` after it.
+ * typed in. The assertion was `15` before the sweep and `0` after it until WP-131, which holds the
+ * swept run at its reservation instead: `15` pending before, `15` held after, `0` spent throughout.
  */
-import type { ExpiredRunQuery, Transaction } from '@platform/application';
+import type { Commitment, ExpiredRunQuery, Transaction } from '@platform/application';
 import { runStrandedRecovery, sweepExpiredRunLeases } from '@platform/application';
 import type { Id, IsoDateTime } from '@platform/contracts';
 import {
@@ -109,8 +111,12 @@ const seedRun = async (run: SeededRun = {}): Promise<string> => {
   return inserted.rows[0]?.id as string;
 };
 
-/** What this project's runs have committed to a window the ledger has not recorded yet. */
-const pendingUsd = (reserveUsd: number): Promise<number> =>
+/**
+ * What this project's runs have committed to a window the ledger has not recorded yet — the live
+ * reservations and the ended figures (`pendingUsd`), and the runs nobody measured, held at their
+ * reservations (`heldUsd`, `heldRuns` — WP-131).
+ */
+const pendingUsd = (reserveUsd: number): Promise<Commitment> =>
   withTx(async (tx) =>
     costStore.pendingSpend(
       tx,
@@ -229,7 +235,7 @@ describe('the expired-run query', () => {
 });
 
 describe('the sweep', () => {
-  it('ends the run, escalates the task, and releases the $15 reservation it was holding', async () => {
+  it('ends the run, escalates the task, and holds the run at its $15 reservation rather than at 0', async () => {
     const runId = await seedRun();
     const reserve = DEFAULT_STAGE_RUN_BUDGET_USD.implementation ?? 0;
 
@@ -241,7 +247,7 @@ describe('the sweep', () => {
      * the window — there is no rollover that could retire it.
      */
     expect(reserve).toBe(15);
-    expect(await pendingUsd(reserve)).toBe(15);
+    expect(await pendingUsd(reserve)).toEqual({ pendingUsd: 15, heldUsd: 0, heldRuns: 0 });
 
     const first = await sweep();
     expect(first).toEqual({ found: 1, ended: 1, skipped: 0 });
@@ -266,13 +272,19 @@ describe('the sweep', () => {
     ]);
     expect(task.rows[0]?.state).toBe('needs_human');
 
-    // The half the row alone would not say: the reservation is **released**, not merely re-labelled.
-    expect(await pendingUsd(reserve)).toBe(0);
+    // The half the row alone would not say. Until WP-131 the reservation was **released** here —
+    // the swept run counted 0 to every cap from its ending on, though nobody knew what it had
+    // spent (PROGRESS backlog 402). It is now **held**: no longer a live reservation, a run nobody
+    // measured, at the cap it was admitted at — this row recorded none (`reserve_usd` null), so the
+    // admitting reserve stands in. Held, never spent: the ledger still has no row for it.
+    expect(await pendingUsd(reserve)).toEqual({ pendingUsd: 0, heldUsd: 15, heldRuns: 1 });
+    const entries = await pool.query('select 1 from cost_entries where run_id = $1', [runId]);
+    expect(entries.rowCount).toBe(0);
 
     // A second pass is a no-op: the run is terminal, so the query cannot see it again. That is the
     // bound this site has instead of the attempt mark the other two rows of the table carry.
     expect(await sweep()).toEqual({ found: 0, ended: 0, skipped: 0 });
-    expect(await pendingUsd(reserve)).toBe(0);
+    expect(await pendingUsd(reserve)).toEqual({ pendingUsd: 0, heldUsd: 15, heldRuns: 1 });
   });
 
   /**

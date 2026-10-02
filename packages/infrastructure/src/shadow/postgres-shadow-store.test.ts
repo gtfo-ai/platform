@@ -207,17 +207,21 @@ describe('PostgresShadowStore — the two answers idempotency rests on', () => {
     expect(await store.checkoutBaseFor(scripted([]), TASK as never)).toBeNull();
     expect(
       await store.shadowSpendSince(
-        scripted([{ spent_usd: '12.500000', pending_usd: '5.000000' }]),
+        scripted([
+          { spent_usd: '12.500000', pending_usd: '5.000000', held_usd: '15.000000', held_runs: 1 },
+        ]),
         PROJECT as never,
         '' as never,
         5,
       ),
-    ).toEqual({ spentUsd: 12.5, pendingUsd: 5 });
+    ).toEqual({ spentUsd: 12.5, pendingUsd: 5, heldUsd: 15, heldRuns: 1 });
     // No row at all is a project that has spent nothing and has nothing in flight — the one place
     // a zero is the answer rather than an invention (standing rule 16's other side).
     expect(await store.shadowSpendSince(scripted([]), PROJECT as never, '' as never, 5)).toEqual({
       spentUsd: 0,
       pendingUsd: 0,
+      heldUsd: 0,
+      heldRuns: 0,
     });
   });
 

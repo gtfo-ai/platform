@@ -44,7 +44,9 @@ import { LiveHistoryBootstrapError } from '@platform/application';
 import type { Id, IsoDateTime } from '@platform/contracts';
 import {
   ACTIVE_RUN_STATUSES_PARAM,
-  pendingRunUsdSql,
+  type CommittedRunsRow,
+  committedRunsOf,
+  committedRunsSql,
   UNLEDGERED_RUN_SQL,
 } from '../cost/pending-run-spend.js';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
@@ -375,18 +377,18 @@ export class PostgresHistoryBootstrapStore implements HistoryBootstrapStore {
     taskId: Id,
     reserveUsd: number,
   ): Promise<({ readonly capUsd: number } & CapSpend) | null> {
-    const { rows } = await sqlOf(tx).query<{
-      cap_usd: string;
-      spent_usd: string;
-      pending_usd: string;
-    }>(
+    const { rows } = await sqlOf(tx).query<
+      { cap_usd: string; spent_usd: string } & CommittedRunsRow
+    >(
       /**
-       * One query, three numbers: the cap the batch recorded, what the ledger has charged its
-       * chunks, and what its runs have committed that the ledger has not recorded yet.
+       * One query, five numbers: the cap the batch recorded, what the ledger has charged its
+       * chunks, what its runs have committed that the ledger has not recorded yet, and what its
+       * runs nobody measured are held at, with how many (WP-131).
        *
-       * No window on the pending term — the batch **is** the window (see
-       * `pending-run-spend.ts`), and a mining run of a batch that finished months ago without ever
-       * reaching the ledger is a run that really did cost what it reported.
+       * No window on the pending term or the hold — the batch **is** the window (see
+       * `pending-run-spend.ts`): a mining run of a batch that finished months ago without ever
+       * reaching the ledger is a run that really did cost what it reported, and one nobody measured
+       * is held for the batch's life.
        */
       `select b.cap_usd,
               coalesce((
@@ -394,14 +396,15 @@ export class PostgresHistoryBootstrapStore implements HistoryBootstrapStore {
                   join history_bootstrap_chunks k2 on k2.task_id = c.task_id
                  where k2.batch_id = b.id
               ), 0)::text as spent_usd,
-              coalesce((
-                select sum(${pendingRunUsdSql('$2', '$3')})
-                  from runs r
-                  join history_bootstrap_chunks k3 on k3.task_id = r.task_id
-                 where k3.batch_id = b.id and ${UNLEDGERED_RUN_SQL}
-              ), 0)::text as pending_usd
+              p.pending_usd, p.held_usd, p.held_runs
          from history_bootstrap_chunks k
          join history_bootstrap_batches b on b.id = k.batch_id
+        cross join lateral (
+               select ${committedRunsSql('$2', '$3')}
+                 from runs r
+                 join history_bootstrap_chunks k3 on k3.task_id = r.task_id
+                where k3.batch_id = b.id and ${UNLEDGERED_RUN_SQL}
+             ) p
         where k.task_id = $1
         limit 1`,
       [taskId, [...ACTIVE_RUN_STATUSES_PARAM], reserveUsd],
@@ -412,7 +415,7 @@ export class PostgresHistoryBootstrapStore implements HistoryBootstrapStore {
       : {
           capUsd: Number(row.cap_usd),
           spentUsd: Number(row.spent_usd),
-          pendingUsd: Number(row.pending_usd),
+          ...committedRunsOf(row),
         };
   }
 }

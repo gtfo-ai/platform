@@ -18,10 +18,11 @@
  * an operator the batch had spent something other than what it was charged.
  *
  * **What this screen does not show is what the cap also counts**: the batch's runs the ledger has
- * not recorded yet (`capForTask.pendingUsd`, and
+ * not recorded yet, and since WP-131 its runs nobody measured, held at their reservations
+ * (`capForTask.pendingUsd`/`heldUsd`, and
  * `packages/application/src/cost/pending.ts` for why a cap that ignored them admits one run too
  * many). So an operator can see a batch pause with `spent_usd` still under the cap — which is
- * correct, and the pause reason names the committed figure apart from the spent one. Publishing the
+ * correct, and the pause reason names the committed and the held figures apart from the spent one. Publishing the
  * pending term here would mean publishing a **reservation** as spend on a screen whose column says
  * *"spent"*; it is a reader that does not exist yet rather than a number folded into one that
  * means something else.

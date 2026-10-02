@@ -9,6 +9,7 @@ import type { DomainEvent, Id, IsoDateTime, Slug } from '@platform/contracts';
 import { domainEventSchemasByType, MAX_CONTEXT_BUDGET_TOKENS } from '@platform/contracts';
 import { materialiseAutonomy, resolveIterationLimits } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
+import { NO_HOLD } from '../cost/pending.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import { RunStartError } from '../ports/runner.js';
 import { askingRefinedSpec, PROCEEDING_REFINED_SPEC } from '../testing/artifact-fixtures.js';
@@ -17,13 +18,20 @@ import {
   type HarnessOptions,
   type PipelineHarness,
 } from '../testing/pipeline-harness.js';
-import { retryStageCommand } from './commands.js';
+import {
+  raiseTaskBudgetCommand,
+  resumeTaskCommand,
+  retryStageCommand,
+  TaskBudgetNotRaisedError,
+  TaskNotPausedByItsCapError,
+} from './commands.js';
 import { RUN_START_RETRY_MS } from './jobs.js';
 import {
   COST_UNREPORTED,
   MAX_RUN_START_ATTEMPTS,
   REFREEZE_PENDING_SENTENCE,
   runBudgetUsd,
+  taskBudgetDetail,
   taskBudgetExhausted,
   withPlatformReviewRecord,
 } from './stage-executor.js';
@@ -602,8 +610,10 @@ describe('the task budget', () => {
     const settings = { config: {}, taskBudgetUsd: 10 } as never;
     const stored = { costActualUsd: 9 } as never;
     // 9 spent + refinement's 2 USD cap is over 10, even though 9 is under it.
-    expect(taskBudgetExhausted(stored, settings, 'refinement')).toBe(true);
-    expect(taskBudgetExhausted({ costActualUsd: 7 } as never, settings, 'refinement')).toBe(false);
+    expect(taskBudgetExhausted(stored, settings, 'refinement', NO_HOLD)).toBe(true);
+    expect(
+      taskBudgetExhausted({ costActualUsd: 7 } as never, settings, 'refinement', NO_HOLD),
+    ).toBe(false);
   });
 
   it('takes the per-run cap from the project when it sets one', () => {
@@ -1152,6 +1162,60 @@ describe('a task a human stopped while its stage was running', () => {
     expect(run?.cost).toBeNull();
   });
 
+  /**
+   * WP-131 review round 1 (backlog 407 on the late path): a run another writer ended, whose own stop
+   * was `cost_unreported`, carries the runner's floor `usd: 0`. Written late as a plain measured
+   * zero it would read as a free run, and the task cap would release the hold for it. The late write
+   * says it is a floor, so the row keeps the WP-119 figure and the hold stands. Canary: the
+   * `costIsFloor` argument dropped from `lostTheRun` releases the hold (`{0, 0}`).
+   */
+  it('keeps the hold on a run ended by another writer whose own stop was cost_unreported (WP-131)', async () => {
+    const zeroUsage = {
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_write_5m_tokens: 0,
+      cache_write_1h_tokens: 0,
+      cache_read_tokens: 0,
+    };
+    const harness = harnessThatStopsMidRun(
+      async (instance, tx, runId) => {
+        await instance.store.runs.finish(tx, {
+          runId,
+          status: 'cancelled',
+          terminalReason: 'cancelled',
+          sessionId: null,
+          numTurns: 0,
+          usage: zeroUsage,
+          cost: null,
+          wallMs: 0,
+        });
+      },
+      {
+        cost: true,
+        outcome: {
+          status: 'budget_exceeded',
+          terminalReason: 'error_max_budget_usd',
+          costUsd: 0,
+          stopReason: COST_UNREPORTED,
+          error: 'the platform stopped the run: cost_unreported — …',
+        },
+      },
+    );
+    await harness.publish([ticketMatched()]);
+    const runId = harness.specs.at(-1)?.runId as Id;
+    const run = await harness.memory.transaction(async (scope) =>
+      harness.store.runs.load(scope.tx, runId),
+    );
+    // The late write happened — the row now carries the floor, as WP-119 writes it…
+    expect(run?.cost?.usd).toBe(0);
+    // …and the run is still held at the reservation it was admitted at (refinement's 2).
+    const held = await harness.memory.transaction(async (scope) =>
+      harness.store.runs.heldFor(scope.tx, run?.taskId as Id, 99),
+    );
+    expect(held).toEqual({ heldUsd: 2, heldRuns: 1 });
+    expect(taskOf(harness).costActualUsd).toBe(0);
+  });
+
   it('claims a lease on the run it starts, so a sweep can tell it apart from one nobody is driving', async () => {
     let started: string | null = null;
     const harness = harnessThatStopsMidRun(async (_instance, _tx, runId) => {
@@ -1192,6 +1256,240 @@ describe('the platform’s record on a review verdict', () => {
 
   it('leaves every other artifact type exactly as the model wrote it', () => {
     expect(withPlatformReviewRecord('AcceptanceVerdict', MODEL, [])).toBe(MODEL);
+  });
+});
+
+describe('the task budget holds a run nobody measured (WP-131, backlog 402)', () => {
+  const USER = '00000000-0000-4000-8000-00000000a131' as Id;
+  /** A 20 USD task whose refinement stage may spend 15 — the row's figures. */
+  const settings = {
+    taskBudgetUsd: 20,
+    config: { stages: { refinement: { budget_usd: 15 } } },
+  } as HarnessOptions['settings'];
+
+  /**
+   * Criterion (3): `cost_actual` 0, one ended refinement run nobody measured (a wall-clock stop that
+   * read no `result`, WP-119) admitted at 15, a cap of 20, and the next 15 USD stage. Until WP-131
+   * the cap read `0 + 15 <= 20` and admitted every retry; the hold reads `0 + 15 + 15 > 20`.
+   *
+   * The hold is read off the **store's own rows** (`RunRepository.heldFor` over the run the harness
+   * really inserted, with the `reserve_usd` the executor really wrote) — never seeded — so the case
+   * holds the insert, the predicate and the comparison together.
+   */
+  it('pauses the next 15 USD stage of a task at cost_actual 0 that holds one unmeasured 15 USD run against a cap of 20', async () => {
+    const harness = harnessWith({
+      settings,
+      runs: {
+        refinement: {
+          status: 'timed_out',
+          terminalReason: 'timed_out',
+          costUnmeasured: true,
+          error: 'the platform stopped the run: timed_out',
+        },
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    const first = taskOf(harness);
+    expect(harness.specs).toHaveLength(1);
+    expect(first.costActualUsd).toBe(0);
+    const held = await harness.memory.transaction(async (scope) =>
+      harness.store.runs.heldFor(scope.tx, first.task.id, 2),
+    );
+    // Its **own** reservation (15), not the 2 the caller offered for a row that recorded none.
+    expect(held).toEqual({ heldUsd: 15, heldRuns: 1 });
+
+    await retryStageCommand(harness.humanCommands, {
+      taskId: first.task.id,
+      userId: USER,
+      stage: 'refinement' as Slug,
+    });
+    await harness.drain();
+
+    // Refused before a second run: no new spec, the task paused for a human to raise the cap.
+    expect(harness.specs).toHaveLength(1);
+    const paused = taskOf(harness);
+    expect(paused.task.state).toBe('paused');
+    expect(harness.types()).toContain('task.paused');
+    // **Held, never spent**: the reservation is not written into `cost_actual` (standing rule 16).
+    expect(paused.costActualUsd).toBe(0);
+  });
+
+  /**
+   * WP-131 review round 1 (the orchestrator's ruling): the way out of a hold is a **bigger cap**, set
+   * by a person. The task above, paused at 0 spent + 15 held + 15 reserve > 20, is raised to 40 and
+   * resumed: `0 + 15 + 15 <= 40` admits the stage, the hold still counted (it is never released),
+   * and `cost_actual` still 0. Canary: the executor reading the default instead of the override
+   * leaves the task paused.
+   */
+  it('admits the held task after a maintainer raises its cap, without releasing the hold (WP-131)', async () => {
+    const harness = harnessWith({
+      settings,
+      runs: {
+        refinement: {
+          status: 'timed_out',
+          terminalReason: 'timed_out',
+          costUnmeasured: true,
+          error: 'the platform stopped the run: timed_out',
+        },
+      },
+    });
+    // The settings snapshot each run is inserted with (write-only on the row, so read at the door).
+    const snapshots: unknown[] = [];
+    const repository = harness.store.runs as { insert: typeof harness.store.runs.insert };
+    const real = repository.insert.bind(harness.store.runs);
+    repository.insert = async (tx, run) => {
+      snapshots.push(run.settings?.snapshot);
+      await real(tx, run);
+    };
+    await harness.publish([ticketMatched()]);
+    const taskId = taskOf(harness).task.id;
+    await retryStageCommand(harness.humanCommands, {
+      taskId,
+      userId: USER,
+      stage: 'refinement' as Slug,
+    });
+    await harness.drain();
+    expect(taskOf(harness).task.state).toBe('paused');
+    expect(harness.specs).toHaveLength(1);
+    // The pause names its cap (WP-131 review round 2): this one is the task's own.
+    expect(
+      harness
+        .events()
+        .filter((event) => event.type === 'task.paused')
+        .map((event) => (event.payload as { budget_scope?: string }).budget_scope),
+    ).toEqual(['task']);
+
+    // A figure not above the cap in force (20, this task's default) is refused and moves nothing…
+    await expect(
+      raiseTaskBudgetCommand(harness.humanCommands, { taskId, userId: USER, capUsd: 20 }),
+    ).rejects.toBeInstanceOf(TaskBudgetNotRaisedError);
+    // …a raise answers the cap it replaced…
+    await expect(
+      raiseTaskBudgetCommand(harness.humanCommands, { taskId, userId: USER, capUsd: 40 }),
+    ).resolves.toEqual({ capUsd: 40, previousCapUsd: 20 });
+    // …and the next one is compared against the raised cap, not the default: nothing lowers it.
+    await expect(
+      raiseTaskBudgetCommand(harness.humanCommands, { taskId, userId: USER, capUsd: 30 }),
+    ).rejects.toBeInstanceOf(TaskBudgetNotRaisedError);
+
+    await resumeTaskCommand(harness.humanCommands, { taskId, userId: USER });
+    await harness.drain();
+    // Admitted: a second refinement run was started under the raised cap…
+    expect(harness.specs).toHaveLength(2);
+    // …and it **records** that cap, not the default (review round 2); the first ran under 20.
+    expect(
+      snapshots.map((snapshot) => (snapshot as { task_budget_usd?: number }).task_budget_usd),
+    ).toEqual([20, 40]);
+    // …and the task is not paused by its cap any more, so a further raise is refused (round 2):
+    // a raise is for a task its own cap paused, and only that.
+    await expect(
+      raiseTaskBudgetCommand(harness.humanCommands, { taskId, userId: USER, capUsd: 90 }),
+    ).rejects.toBeInstanceOf(TaskNotPausedByItsCapError);
+    const held = await harness.memory.transaction(async (scope) =>
+      harness.store.runs.heldFor(scope.tx, taskId, 2),
+    );
+    // Both runs ended unmeasured and both are held: the raise released nothing.
+    expect(held).toEqual({ heldUsd: 30, heldRuns: 2 });
+    expect(taskOf(harness).costActualUsd).toBe(0);
+  });
+
+  /**
+   * Backlog 407 (the pre-review round): a `cost_unreported` stop is written with the runner's
+   * **floor** — `usd_reported = 0`, which WP-119 kept and this does not change — and until now the
+   * task cap read that floor as a measured zero and admitted every retry. It is held at its
+   * reservation like a run nobody measured. Canary: `costIsFloorOf` answering `false` leaves the
+   * run unheld, and the retry is admitted.
+   */
+  it('holds a cost_unreported run at its reservation and pauses the next 15 USD stage, though its row reads 0 (407)', async () => {
+    const harness = harnessWith({
+      settings,
+      runs: {
+        refinement: {
+          status: 'budget_exceeded',
+          terminalReason: 'error_max_budget_usd',
+          costUsd: 0,
+          stopReason: COST_UNREPORTED,
+          error: 'the platform stopped the run: cost_unreported — …',
+        },
+      },
+    });
+    await harness.publish([ticketMatched()]);
+    const first = taskOf(harness);
+    expect(first.task.state).toBe('needs_human');
+    const runId = harness.specs.at(-1)?.runId as Id;
+    const row = await harness.memory.transaction(async (scope) =>
+      harness.store.runs.load(scope.tx, runId),
+    );
+    // The row is what WP-119 writes: the floor, as a figure.
+    expect(row?.cost?.usd).toBe(0);
+    const held = await harness.memory.transaction(async (scope) =>
+      harness.store.runs.heldFor(scope.tx, first.task.id, 2),
+    );
+    expect(held).toEqual({ heldUsd: 15, heldRuns: 1 });
+
+    await retryStageCommand(harness.humanCommands, {
+      taskId: first.task.id,
+      userId: USER,
+      stage: 'refinement' as Slug,
+    });
+    await harness.drain();
+    expect(harness.specs).toHaveLength(1);
+    expect(taskOf(harness).task.state).toBe('paused');
+    expect(taskOf(harness).costActualUsd).toBe(0);
+  });
+
+  /**
+   * WP-131 review round 1 (canary (e)): the hold is counted **once**. A cap of 35, one run held at 15
+   * and a 15 USD stage: `0 + 15 + 15 = 30 <= 35` admits, where a comparison that added the hold
+   * twice would read `45 > 35` and refuse — both sides, so either mistake fails here.
+   */
+  it('counts the hold once: a cap of 35 holding 15 admits the next 15 USD stage (WP-131)', () => {
+    const at35 = { ...(settings as object), taskBudgetUsd: 35 } as never;
+    const held = { heldUsd: 15, heldRuns: 1 };
+    expect(taskBudgetExhausted({ costActualUsd: 0 } as never, at35, 'refinement', held)).toBe(
+      false,
+    );
+    // …and one more held run is past it: the hold is a sum over the runs, not a flag.
+    expect(
+      taskBudgetExhausted({ costActualUsd: 0 } as never, at35, 'refinement', {
+        heldUsd: 30,
+        heldRuns: 2,
+      }),
+    ).toBe(true);
+  });
+
+  it('names the hold apart from the spend in the pause', () => {
+    const detail = taskBudgetDetail(
+      { costActualUsd: 0 } as never,
+      settings as never,
+      'refinement' as Slug,
+      { heldUsd: 15, heldRuns: 1 },
+    );
+    expect(detail).toBe(
+      'the task has spent 0 USD of its 20 USD cap, with 1 run nobody measured, held at its cap: ' +
+        '15 USD, and "refinement" may spend 15 more',
+    );
+    expect(
+      taskBudgetDetail(
+        { costActualUsd: 4 } as never,
+        settings as never,
+        'refinement' as Slug,
+        NO_HOLD,
+      ),
+    ).toBe('the task has spent 4 USD of its 20 USD cap and "refinement" may spend 15 more');
+  });
+
+  it('admits the same stage when the hold is absent, so the pause is the hold’s', () => {
+    // The canary in arithmetic: 0 + 15 <= 20 admits, 0 + 15 + 15 > 20 refuses.
+    expect(
+      taskBudgetExhausted({ costActualUsd: 0 } as never, settings as never, 'refinement', NO_HOLD),
+    ).toBe(false);
+    expect(
+      taskBudgetExhausted({ costActualUsd: 0 } as never, settings as never, 'refinement', {
+        heldUsd: 15,
+        heldRuns: 1,
+      }),
+    ).toBe(true);
   });
 });
 

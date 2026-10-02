@@ -660,6 +660,17 @@ export const useTaskCommands = (taskId: string) => {
       mutationFn: (reason: string) => endpoints.cancelTask(taskId, { reason }),
       onSuccess: invalidate,
     }),
+    /**
+     * WP-131 review round 1: raise this task's cap, then resume it through the existing resume
+     * command — the raise moves no state, and a task paused for its budget waits for both.
+     */
+    raiseBudget: useMutation({
+      mutationFn: async (capUsd: number) => {
+        await endpoints.raiseTaskBudget(taskId, { cap_usd: capUsd });
+        await endpoints.resumeTask(taskId, { reason: 'resumed after raising its cap' });
+      },
+      onSuccess: invalidate,
+    }),
     answer: useMutation({
       mutationFn: (input: { questionId: string; answer: string }) =>
         endpoints.answerQuestion(taskId, input.questionId, { answer: input.answer }),

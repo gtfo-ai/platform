@@ -400,6 +400,46 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         expect(loaded?.task.currentStage).toBe(stored.task.currentStage);
       });
 
+      /**
+       * WP-131 review round 1: a task's own cap — absent until a maintainer raises it, only ever
+       * raised, compared against the default while there is no override, and never touched by
+       * `save` (the version is not moved and a whole-row write leaves it standing).
+       */
+      it('raises a task’s own cap, refuses a figure not above the one in force, and keeps it through save (WP-131)', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        expect(await store.tasks.budgetCap(tx, stored.task.id)).toBeNull();
+        expect(
+          await store.tasks.raiseBudgetCap(tx, {
+            taskId: stored.task.id,
+            capUsd: 50,
+            defaultCapUsd: 50,
+          }),
+        ).toEqual({ raised: false, previousCapUsd: 50 });
+        expect(await store.tasks.budgetCap(tx, stored.task.id)).toBeNull();
+        expect(
+          await store.tasks.raiseBudgetCap(tx, {
+            taskId: stored.task.id,
+            capUsd: 80,
+            defaultCapUsd: 50,
+          }),
+        ).toEqual({ raised: true, previousCapUsd: 50 });
+        expect(await store.tasks.budgetCap(tx, stored.task.id)).toBe(80);
+        // Compared against the override now, not the default: nothing lowers it.
+        expect(
+          await store.tasks.raiseBudgetCap(tx, {
+            taskId: stored.task.id,
+            capUsd: 60,
+            defaultCapUsd: 50,
+          }),
+        ).toEqual({ raised: false, previousCapUsd: 80 });
+        const loaded = await store.tasks.load(tx, stored.task.id);
+        if (loaded === null) throw new Error('the task vanished');
+        await store.tasks.save(tx, loaded);
+        expect(await store.tasks.budgetCap(tx, stored.task.id)).toBe(80);
+        await expect(store.tasks.budgetCap(tx, nextId())).rejects.toThrow();
+      });
+
       it('refuses a spend that is not a finite, non-negative number', async () => {
         // Money only ever goes one way here; a caller that computed a negative has a defect the
         // ledger must not absorb (standing rule 20). Both stores refuse with the same sentence.
@@ -1552,6 +1592,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
             redactionCount: 0,
             contextPack: null,
             settings: null,
+            reserveUsd: null,
             status: 'running',
             terminalReason: null,
             sessionId: null,
@@ -1828,6 +1869,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           redactionCount: 0,
           contextPack: null,
           settings: null,
+          reserveUsd: null,
           status: 'running',
           terminalReason: null,
           sessionId: null,
@@ -1911,6 +1953,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           redactionCount: 0,
           contextPack: null,
           settings: null,
+          reserveUsd: null,
           status: 'running',
           terminalReason: null,
           sessionId: null,
@@ -1961,6 +2004,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           redactionCount: 0,
           contextPack: null,
           settings: null,
+          reserveUsd: null,
           status: 'running',
           terminalReason: null,
           sessionId: null,
@@ -2030,6 +2074,7 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
           redactionCount: 0,
           contextPack: null,
           settings: null,
+          reserveUsd: null,
           status: 'running',
           terminalReason: null,
           sessionId: null,
@@ -2176,6 +2221,157 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
 
       it('refuses to record a cost for a run it has never seen', async () => {
         await expect(store.runs.recordCost(tx, { runId: nextId(), ...MEASURED })).rejects.toThrow();
+      });
+
+      /**
+       * WP-131 (PROGRESS backlogs 402 and 403): the task's runs **nobody measured** — terminal, no
+       * figure — held at the reservations they were admitted at, and counted apart in the totals.
+       *
+       * One task, five runs: a live one (not held — it is live), one measured, one the platform
+       * priced, and two unmeasured — one admitted at 15, one whose row recorded no reservation (held
+       * at the caller's 2). Then a late figure for the 15 releases it. `reserve_usd` is write-only on
+       * `NewRun`, so this is the only place both stores are asked to keep it.
+       */
+      it('holds the task’s runs nobody measured at their reservations, and counts them apart in the totals (WP-131)', async () => {
+        const stored = task();
+        await store.tasks.insert(tx, stored);
+        const runOf = async (attempt: number, reserveUsd: number | null): Promise<Id> => {
+          await store.tasks.recordStageEntered(tx, {
+            taskId: stored.task.id,
+            stage: 'implementation' as Slug,
+            attempt,
+            causedByEventId: null,
+          });
+          const runId = nextId();
+          await store.runs.insert(tx, {
+            id: runId,
+            taskId: stored.task.id,
+            projectId,
+            stage: 'implementation' as Slug,
+            role: 'developer',
+            mode: 'normal',
+            attempt,
+            model: 'claude-opus-5',
+            effort: 'high',
+            promptVersion: 'feature@1+developer',
+            systemPrompt: null,
+            userPrompt: null,
+            redactionCount: 0,
+            contextPack: null,
+            settings: null,
+            reserveUsd,
+            status: 'running',
+            terminalReason: null,
+            sessionId: null,
+            numTurns: 0,
+            usage: null,
+            cost: null,
+            wallMs: 0,
+            createdAt: '2026-06-01T09:00:00.000Z',
+            startedAt: '2026-06-01T09:00:01.000Z',
+          });
+          return runId;
+        };
+        const end = async (runId: Id, cost: { usd: number; is_estimate: boolean } | null) =>
+          store.runs.finish(tx, {
+            runId,
+            status: cost === null ? 'timed_out' : 'completed',
+            terminalReason: cost === null ? 'timed_out' : 'success',
+            sessionId: null,
+            numTurns: 1,
+            usage: MEASURED.usage,
+            cost: cost === null ? null : { ...cost, price_list_id: null },
+            wallMs: 10,
+          });
+
+        await runOf(1, 15); // live: neither held nor unmeasured
+        await end(await runOf(2, 15), { usd: 2, is_estimate: false });
+        await end(await runOf(3, 15), { usd: 3, is_estimate: true });
+        const unmeasured = await runOf(4, 15);
+        await end(unmeasured, null);
+        await end(await runOf(5, null), null);
+
+        expect(await store.runs.heldFor(tx, stored.task.id, 2)).toEqual({
+          heldUsd: 17,
+          heldRuns: 2,
+        });
+        const totals = await store.runs.totalsFor(tx, stored.task.id);
+        expect(totals.runs).toBe(5);
+        expect(totals.costUsd).toBeCloseTo(5, 6);
+        expect(totals.unmeasuredRuns).toBe(2);
+        // An estimate because one run was **priced** — not because two were never measured.
+        expect(totals.isEstimate).toBe(true);
+
+        // A late figure releases its run from the hold, and from the unmeasured count.
+        expect(await store.runs.recordCost(tx, { runId: unmeasured, ...MEASURED })).toBe(true);
+        expect(await store.runs.heldFor(tx, stored.task.id, 2)).toEqual({
+          heldUsd: 2,
+          heldRuns: 1,
+        });
+        expect((await store.runs.totalsFor(tx, stored.task.id)).unmeasuredRuns).toBe(1);
+      });
+
+      /**
+       * Backlog 407 (WP-131 pre-review round): a run whose cost is the runner's **floor** — a
+       * `cost_unreported` stop, its `0` written as WP-119 writes it — is held and counted as
+       * unmeasured, and its `local`-mode `0` estimate does not make the total an estimate. The same
+       * `0` without the flag is a measured zero, neither held nor counted (the canary in the data).
+       */
+      it('holds a run whose cost is a floor and counts it as unmeasured, but not a measured zero (407)', async () => {
+        const floor = await liveRun();
+        await store.runs.finish(tx, {
+          runId: floor,
+          status: 'budget_exceeded',
+          terminalReason: 'error_max_budget_usd',
+          sessionId: null,
+          numTurns: 1,
+          usage: MEASURED.usage,
+          cost: { usd: 0, is_estimate: true, price_list_id: null },
+          wallMs: 10,
+          costIsFloor: true,
+        });
+        const floorTask = (await store.runs.load(tx, floor))?.taskId as Id;
+        // The row keeps the floor as WP-119 writes it.
+        expect((await store.runs.load(tx, floor))?.cost?.usd).toBe(0);
+        expect(await store.runs.heldFor(tx, floorTask, 2)).toEqual({ heldUsd: 2, heldRuns: 1 });
+        expect(await store.runs.totalsFor(tx, floorTask)).toMatchObject({
+          costUsd: 0,
+          isEstimate: false,
+          unmeasuredRuns: 1,
+        });
+
+        const zero = await liveRun();
+        await store.runs.finish(tx, {
+          runId: zero,
+          status: 'completed',
+          terminalReason: 'success',
+          sessionId: null,
+          numTurns: 1,
+          usage: MEASURED.usage,
+          cost: { usd: 0, is_estimate: false, price_list_id: null },
+          wallMs: 10,
+        });
+        const zeroTask = (await store.runs.load(tx, zero))?.taskId as Id;
+        expect(await store.runs.heldFor(tx, zeroTask, 2)).toEqual({ heldUsd: 0, heldRuns: 0 });
+        expect((await store.runs.totalsFor(tx, zeroTask)).unmeasuredRuns).toBe(0);
+      });
+
+      /** 403's other half: unmeasured runs alone are not an estimate (the old `usd_reported is null`). */
+      it('does not call a total an estimate because a run was never measured (WP-131)', async () => {
+        const runId = await liveRun();
+        await store.runs.finish(tx, {
+          runId,
+          status: 'cancelled',
+          terminalReason: 'cancelled',
+          sessionId: null,
+          numTurns: 0,
+          usage: MEASURED.usage,
+          cost: null,
+          wallMs: 10,
+        });
+        const taskId = (await store.runs.load(tx, runId))?.taskId as Id;
+        const totals = await store.runs.totalsFor(tx, taskId);
+        expect(totals).toMatchObject({ runs: 1, costUsd: 0, isEstimate: false, unmeasuredRuns: 1 });
       });
 
       it('claims a lease, lets its owner renew it, and refuses a stranger and a finished run', async () => {
@@ -2666,6 +2862,51 @@ export const runPipelineStoreContract = (harness: PipelineStoreHarness): void =>
         }
         return { taskId: stored.task.id, ids };
       };
+
+      /**
+       * WP-131 review round 2's residual, closed: which cap paused a task — the read behind
+       * `raiseTaskBudgetCommand`'s `409 not_paused_by_task_cap` — over the stream itself. The task
+       * cap's pause answers `task` (the raise is admitted); a project's answers `project` and one
+       * appended before `budget_scope` existed names nothing (both refused); and it is the
+       * **newest** pause that decides, so an older task-cap pause under a newer person's pause is
+       * refused too.
+       */
+      it('reads which cap paused a task off its newest pause, and nothing for an older pause (WP-131)', async () => {
+        const pausedWith = async (...payloads: Readonly<Record<string, unknown>>[]) => {
+          const stored = task();
+          await store.tasks.insert(tx, stored);
+          for (const [index, extra] of payloads.entries()) {
+            await appendTaskEvent({
+              id: nextId(),
+              taskId: stored.task.id,
+              seq: index + 1,
+              type: 'task.paused',
+              payload: { project_id: projectId, task_id: stored.task.id, ...extra },
+              occurredAt: `2026-06-05T10:00:0${index}.000Z` as IsoDateTime,
+            });
+          }
+          return stored.task.id;
+        };
+        const byTask = await pausedWith({ reason: 'budget', budget_scope: 'task' });
+        const byProject = await pausedWith({ reason: 'budget', budget_scope: 'project' });
+        const unscoped = await pausedWith({ reason: 'budget' });
+        const newerManual = await pausedWith(
+          { reason: 'budget', budget_scope: 'task' },
+          { reason: 'manual' },
+        );
+        const newerTask = await pausedWith(
+          { reason: 'budget', budget_scope: 'project' },
+          { reason: 'budget', budget_scope: 'task' },
+        );
+        expect(await store.tasks.pausedBudgetScope(tx, byTask)).toBe('task');
+        expect(await store.tasks.pausedBudgetScope(tx, byProject)).toBe('project');
+        expect(await store.tasks.pausedBudgetScope(tx, unscoped)).toBeNull();
+        expect(await store.tasks.pausedBudgetScope(tx, newerManual)).toBeNull();
+        expect(await store.tasks.pausedBudgetScope(tx, newerTask)).toBe('task');
+        const never = task();
+        await store.tasks.insert(tx, never);
+        expect(await store.tasks.pausedBudgetScope(tx, never.task.id)).toBeNull();
+      });
 
       it('answers null for a task nobody took over', async () => {
         const { taskId } = await streamOf('task.created', 'task.stage.entered');

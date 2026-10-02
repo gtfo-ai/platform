@@ -237,7 +237,9 @@ describe('the runs declared unable to start', () => {
     'packages/application/src/pipeline/delivery-measures.test.ts': 1,
     'packages/application/src/pipeline/dependency-gate.test.ts': 1,
     'packages/application/src/pipeline/epic-split.test.ts': 1,
-    'packages/application/src/shadow/batch.test.ts': 6,
+    // 7 since WP-131: the shadow cap's held-run case admits its second world's run, which is
+    // what it asserts, and stops there exactly as the cap's existing "other direction" case does.
+    'packages/application/src/shadow/batch.test.ts': 7,
   };
 
   it('are exactly the declared list, in both directions', () => {

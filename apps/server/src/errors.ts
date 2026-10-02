@@ -27,7 +27,9 @@ import {
   StageNotInTemplateError,
   SteerWindowClosedError,
   StreamConflictError,
+  TaskBudgetNotRaisedError,
   TaskConflictExhaustedError,
+  TaskNotPausedByItsCapError,
   UnknownAggregateError,
 } from '@platform/application';
 import type { ApiError } from '@platform/contracts';
@@ -173,6 +175,15 @@ export const commandRefusal = (error: unknown): HttpError | null => {
   }
   if (error instanceof TaskConflictExhaustedError) {
     return new HttpError(409, 'task_conflict', error.message);
+  }
+  if (error instanceof TaskNotPausedByItsCapError) {
+    // WP-131 review round 2: the raise is for a task its **own** cap paused, and only that.
+    return new HttpError(409, 'not_paused_by_task_cap', error.message);
+  }
+  if (error instanceof TaskBudgetNotRaisedError) {
+    // WP-131 review round 1: a task's cap is only ever raised, so a figure not above the one in
+    // force is "not to this, not now" — the family's 409, naming the cap in force.
+    return new HttpError(409, 'budget_not_raised', error.message);
   }
   if (error instanceof BreakdownRefusedError) {
     // WP-40: the task is not an epic split, or nothing the caller named is still waiting — both are

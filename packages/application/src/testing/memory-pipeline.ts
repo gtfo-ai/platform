@@ -47,6 +47,7 @@ import {
   isActiveRunStatus,
   isTerminalTaskState,
 } from '@platform/domain';
+import { holdOf } from '../cost/pending.js';
 import type {
   ApprovalRepository,
   ArtifactRepository,
@@ -102,6 +103,13 @@ interface StageRow {
 }
 
 const clone = <T>(value: T): T => structuredClone(value);
+
+/**
+ * An ended run nobody measured — the SQL adapter's `unmeasuredEndedRunSql` over this store's rows:
+ * terminal, and no figure (`cost` null is both columns null, `finish` writing one or the other).
+ */
+const endedUnmeasured = (run: StoredRun, floors: ReadonlySet<Id>): boolean =>
+  !isActiveRunStatus(run.status) && (run.cost === null || floors.has(run.id));
 
 export interface MemoryPipelineStore extends PipelineStore {
   /** Every task, for a test that wants to look without a transaction. */
@@ -226,6 +234,12 @@ export const createMemoryPipelineStore = (
   const stages: StageRow[] = [];
   const artifacts: StoredArtifact[] = [];
   const runs = new Map<Id, StoredRun>();
+  /** `tasks.budget_cap_usd` (WP-131 review round 1): not on `StoredTask`, as `save` never names it. */
+  const budgetCaps = new Map<Id, number>();
+  /** `runs.reserve_usd` (WP-131): write-only on `NewRun`, so kept beside the row, as the SQL keeps it. */
+  const reserves = new Map<Id, number | null>();
+  /** `runs.figure_is_floor` (WP-131 pre-review round, backlog 407): the runs whose cost is a floor. */
+  const floors = new Set<Id>();
   const questions = new Map<Id, Question>();
   const approvals = new Map<Id, StoredApproval>();
   const breakdown = new Map<Id, StoredBreakdownItem>();
@@ -571,6 +585,37 @@ export const createMemoryPipelineStore = (
         clone({ ...current, reviewThreads: taskReviewThreadsSchema.parse(threads) }),
       );
     },
+    /** The SQL store's read over the harness's log: the newest `task.paused` decides. */
+    pausedBudgetScope: async (_tx, taskId) => {
+      const newest = (options.taskEvents?.(taskId) ?? [])
+        .filter((event) => event.type === 'task.paused')
+        .at(-1);
+      if (
+        newest === undefined ||
+        newest.type !== 'task.paused' ||
+        newest.payload.reason !== 'budget'
+      ) {
+        return null;
+      }
+      return newest.payload.budget_scope ?? null;
+    },
+    budgetCap: async (_tx, taskId) => {
+      if (!tasks.has(taskId)) {
+        throw new PipelineStoreError(`task ${taskId} does not exist`);
+      }
+      return budgetCaps.get(taskId) ?? null;
+    },
+    raiseBudgetCap: async (_tx, input) => {
+      if (!tasks.has(input.taskId)) {
+        throw new PipelineStoreError(`task ${input.taskId} does not exist`);
+      }
+      const previousCapUsd = budgetCaps.get(input.taskId) ?? input.defaultCapUsd;
+      if (!(input.capUsd > previousCapUsd)) {
+        return { raised: false, previousCapUsd };
+      }
+      budgetCaps.set(input.taskId, input.capUsd);
+      return { raised: true, previousCapUsd };
+    },
     addSpend: async (_tx, taskId, usd) => {
       const current = tasks.get(taskId);
       if (current === undefined) {
@@ -853,9 +898,13 @@ export const createMemoryPipelineStore = (
         redactionCount: _r,
         contextPack: _c,
         settings: _g,
+        reserveUsd,
         ...stored
       } = run;
       runs.set(run.id, clone({ ...stored, stage: linked ? run.stage : null }));
+      // The SQL adapter's `nullif(…, 0)`: the column refuses a zero, so a stage admitted at no cap
+      // records none, and is held at the admitting reserve (WP-131).
+      reserves.set(run.id, reserveUsd === null || reserveUsd === 0 ? null : reserveUsd);
     },
     /** Conditional on the run still being live, exactly as the SQL adapter's `where` clause is. */
     finish: async (_tx, outcome) => {
@@ -876,6 +925,9 @@ export const createMemoryPipelineStore = (
         cost: outcome.cost,
         wallMs: outcome.wallMs,
       });
+      if (outcome.costIsFloor === true) {
+        floors.add(outcome.runId);
+      }
       // The winner closes the run's pending commands, as the SQL adapter does in the same
       // transaction (WP-85).
       for (const row of runCommandRows.values()) {
@@ -910,6 +962,9 @@ export const createMemoryPipelineStore = (
         cost: late.cost,
         wallMs: Math.max(run.wallMs, late.wallMs),
       });
+      if (late.costIsFloor === true) {
+        floors.add(late.runId);
+      }
       return true;
     },
     /** Conditional on the run being live and on the lease being unheld or this owner's. */
@@ -934,10 +989,19 @@ export const createMemoryPipelineStore = (
       return {
         runs: owned.length,
         costUsd: owned.reduce((total, run) => total + (run.cost?.usd ?? 0), 0),
-        isEstimate: owned.some((run) => run.cost?.is_estimate === true),
+        isEstimate: owned.some((run) => run.cost?.is_estimate === true && !floors.has(run.id)),
+        unmeasuredRuns: owned.filter((run) => endedUnmeasured(run, floors)).length,
         wallMs: owned.reduce((total, run) => total + run.wallMs, 0),
       };
     },
+    /** The task cap's hold (WP-131), over this store's rows with the SQL adapter's predicate. */
+    heldFor: async (_tx, taskId, admittingReserveUsd) =>
+      holdOf(
+        [...runs.values()]
+          .filter((run) => run.taskId === taskId && endedUnmeasured(run, floors))
+          .map((run) => reserves.get(run.id) ?? null),
+        admittingReserveUsd,
+      ),
   };
 
   const lockedRunOf = (run: StoredRun) => ({

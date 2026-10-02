@@ -14,12 +14,13 @@
  * | 3 | No row locking, so two concurrent folds of one budget window would both read the same `spent_usd`. | **kinder** | The PostgreSQL adapter ensures the window row exists and takes `for update` in `applicable`, which is what serialises them. Nothing in this file is concurrent, so a test cannot observe the difference — which is why the property is asserted in the integration tier instead. |
  * | 4 | `saveEstimate` throws when the task is unknown; the SQL `update` would touch zero rows. | **same** | The SQL adapter checks `rowCount` and throws the same error: a projection that silently stops being written is the defect this prevents (standing rule 18's shape). |
  * | 5 | Everything is returned by structural clone. | **stricter** | A caller mutating what it read cannot change the store, which PostgreSQL also does not allow. |
- * | 7 | `pendingSpend` answers a **seeded** run count × the caller's `reserveUsd`; the adapter derives it from `runs` that have no `cost_entries` row, valuing a live one at `reserveUsd` and an ended one at `runs.usd_reported`. | **kinder** | This store holds no `runs` rows with a status or a reported figure — `RunCostRow` is a lineage lookup — so there is nothing to derive from. {@link MemoryCostStore.seedPendingRuns} is the seam, the guard's unit tier drives both answers through it, and the derivation itself is held by the integration tier against PostgreSQL. |
+ * | 7 | `pendingSpend` answers a **seeded** run count × the caller's `reserveUsd`, and a **seeded** hold valued by `holdOf` (WP-131); the adapter derives both from `runs` that have no `cost_entries` row, valuing a live one at `reserveUsd`, an ended one at `runs.usd_reported`/`usd_estimated`, and an ended one nobody measured at `coalesce(reserve_usd, reserveUsd)`. | **kinder** | This store holds no `runs` rows with a status or a reported figure — `RunCostRow` is a lineage lookup — so there is nothing to derive from. {@link MemoryCostStore.seedPendingRuns} and {@link MemoryCostStore.seedHeldRuns} are the seams, the guard's unit tier drives the answers through them, and the derivation itself is held by the integration tier against PostgreSQL. |
  * | 6 | `StoredBudget.sequence` is **re-derived** from what a fold must have emitted (one event per newly notified threshold, plus one for the first crossing of the limit); the SQL adapter reads `max(stream_seq) + 1` off the `events` table. | **different** | The fake cannot see the log, and a sequence that did not advance makes the *second* fold of one budget fail its append with a stream conflict — so the alternative is a fake that cannot charge a budget twice. Both answers are the same number for every sequence of folds the ledger performs, which is what `memory-cost.test.ts` asserts against `MemoryEventing`'s own log. |
  */
 import type { BudgetWindow, EstimateBasis, Id, IsoDateTime, Size } from '@platform/contracts';
 import type { CostLedgerEntry, PriceRates, RollupDelta, TaskCostSample } from '@platform/domain';
 import { roundUsd } from '@platform/domain';
+import { holdOf } from '../cost/pending.js';
 import type {
   BudgetSubject,
   CostStore,
@@ -62,6 +63,12 @@ export interface MemoryCostStore extends CostStore {
    * migration 0007's design (*"exactly one subject"*).
    */
   seedPendingRuns(scopeId: Id | null, runs: number): void;
+  /**
+   * Divergence 7, the hold (WP-131): the reservations of the scope's runs that ended with **nobody
+   * measuring them** (`null` for one written before migration 0072, held at the caller's
+   * `reserveUsd` as the adapter holds it). `null` scope is the organisation's.
+   */
+  seedHeldRuns(scopeId: Id | null, reserves: readonly (number | null)[]): void;
   seedPrice(price: SeededPrice): void;
   seedBudget(budget: SeededBudget): void;
   seedTask(task: { readonly id: Id; readonly projectId: Id }): void;
@@ -132,6 +139,7 @@ export interface MemoryCostStoreOptions {
 export const createMemoryCostStore = (options: MemoryCostStoreOptions = {}): MemoryCostStore => {
   const runs = new Map<Id, RunCostRow>();
   const pendingRuns = new Map<Id | typeof ORG_SCOPE, number>();
+  const heldRuns = new Map<Id | typeof ORG_SCOPE, readonly (number | null)[]>();
   const prices: SeededPrice[] = [];
   const budgets: SeededBudget[] = [];
   const tasks = new Map<Id, { projectId: Id }>();
@@ -195,8 +203,13 @@ export const createMemoryCostStore = (options: MemoryCostStoreOptions = {}): Mem
     seedPendingRuns: (scopeId, count) => {
       pendingRuns.set(scopeId ?? ORG_SCOPE, count);
     },
-    pendingSpend: async (_tx, budget, _since, reserveUsd) =>
-      (pendingRuns.get(budget.scopeId ?? ORG_SCOPE) ?? 0) * reserveUsd,
+    seedHeldRuns: (scopeId, reserves) => {
+      heldRuns.set(scopeId ?? ORG_SCOPE, [...reserves]);
+    },
+    pendingSpend: async (_tx, budget, _since, reserveUsd) => ({
+      pendingUsd: (pendingRuns.get(budget.scopeId ?? ORG_SCOPE) ?? 0) * reserveUsd,
+      ...holdOf(heldRuns.get(budget.scopeId ?? ORG_SCOPE) ?? [], reserveUsd),
+    }),
     seedPrice: (price) => {
       prices.push(price);
     },

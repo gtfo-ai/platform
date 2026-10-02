@@ -66,6 +66,7 @@ import type {
 import {
   acceptanceCriterionSchema,
   artifactTypeSchema,
+  pausedBudgetScopeSchema,
   taskCoverageSchema,
   taskDependenciesSchema,
   taskPipelineDialSchema,
@@ -79,6 +80,7 @@ import {
 import type { Approval, IterationCounters, IterationLimits, Question } from '@platform/domain';
 import { ACTIVE_RUN_STATUSES, resolveIterationLimits } from '@platform/domain';
 import * as z from 'zod';
+import { unmeasuredEndedRunSql } from '../cost/pending-run-spend.js';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
 import type { SqlExecutor } from '../events/sql.js';
 import {
@@ -498,6 +500,59 @@ export const createPostgresPipelineStore = (
       if (result.rowCount === 0) {
         throw new PipelineRowMissingError(`task ${taskId} does not exist`);
       }
+    },
+    /** One indexed read of the task's stream (WP-131 review round 2), `takenOver`'s shape. */
+    pausedBudgetScope: async (tx, taskId) => {
+      const { rows } = await sqlOf(tx).query<{ reason: string | null; scope: string | null }>(
+        `select e.payload ->> 'reason' as reason, e.payload ->> 'budget_scope' as scope
+           from events e
+          where e.stream_type = 'task' and e.stream_id = $1 and e.type = 'task.paused'
+          order by e.stream_seq desc
+          limit 1`,
+        [taskId],
+      );
+      const row = rows[0];
+      if (row === undefined || row.reason !== 'budget') {
+        return null;
+      }
+      const scope = pausedBudgetScopeSchema.safeParse(row.scope);
+      return scope.success ? scope.data : null;
+    },
+    budgetCap: async (tx, taskId) => {
+      const { rows } = await sqlOf(tx).query<{ cap: string | null }>(
+        'select budget_cap_usd::text as cap from tasks where id = $1',
+        [taskId],
+      );
+      const row = rows[0];
+      if (row === undefined) {
+        throw new PipelineRowMissingError(`task ${taskId} does not exist`);
+      }
+      return row.cap === null ? null : Number(row.cap);
+    },
+    /**
+     * Read under `for update`, compared, written — the port's docblock has the contract. The
+     * comparison is made here rather than in the `where` so the refusal can name the cap in force.
+     */
+    raiseBudgetCap: async (tx, input) => {
+      const sql = sqlOf(tx);
+      const { rows } = await sql.query<{ cap: string }>(
+        `select coalesce(budget_cap_usd, $2::numeric)::text as cap
+           from tasks where id = $1 for update`,
+        [input.taskId, input.defaultCapUsd],
+      );
+      const row = rows[0];
+      if (row === undefined) {
+        throw new PipelineRowMissingError(`task ${input.taskId} does not exist`);
+      }
+      const previousCapUsd = Number(row.cap);
+      if (!(input.capUsd > previousCapUsd)) {
+        return { raised: false, previousCapUsd };
+      }
+      await sql.query('update tasks set budget_cap_usd = $2, updated_at = now() where id = $1', [
+        input.taskId,
+        input.capUsd,
+      ]);
+      return { raised: true, previousCapUsd };
     },
     saveTicketSnapshot: async (tx, taskId, snapshot, readAt) => {
       // Two columns, for the reason `saveWorkpad` is one: the backfill runs in the `stage.execute`
@@ -1228,12 +1283,12 @@ export const createPostgresPipelineStore = (
                            effort, prompt_version, status, started_at,
                            system_prompt, user_prompt, redaction_count,
                            context_budget_tokens, context_total_tokens, context_kb_commit,
-                           context_text_search, settings_snapshot, settings_hash)
+                           context_text_search, settings_snapshot, settings_hash, reserve_usd)
          values ($1, $2, $3,
                  (select id from task_stages
                    where task_id = $2 and stage = $11 and attempt = $6),
                  $4, $5, $6, $7, $8, $9, $10, $12, $13, $14, $15, $16, $17, $18, $19::jsonb,
-                 coalesce($20::jsonb, '{}'::jsonb), $21)`,
+                 coalesce($20::jsonb, '{}'::jsonb), $21, nullif($22::numeric, 0))`,
         [
           run.id,
           run.taskId,
@@ -1266,6 +1321,13 @@ export const createPostgresPipelineStore = (
           // (the column is `not null`), and `settings_hash is null` is what says "none recorded".
           run.settings === null ? null : JSON.stringify(run.settings.snapshot),
           run.settings?.hash ?? null,
+          // WP-131 (migration 0072): the reservation every cap holds the run at if nobody measures
+          // it. `nullif(…, 0)`: a stage configured at a cap of 0 is admitted (`usdSchema` allows
+          // it) and the column refuses it (`reserve_usd > 0`), so it is stored as "none recorded"
+          // and held at the reservation of **whatever stage asks next** — more than its own 0 when
+          // that stage's cap is above 0 (the fail-closed side of rule 20), exactly 0 when the
+          // asking stage's is 0 too, and a different figure from one admission to the next.
+          run.reserveUsd,
         ],
       );
       if (run.contextPack !== null) {
@@ -1283,7 +1345,7 @@ export const createPostgresPipelineStore = (
             set status = $2, terminal_reason = $3, session_id = $4, num_turns = $5,
                 input_tokens = $6, output_tokens = $7, cache_write_5m_tokens = $8,
                 cache_write_1h_tokens = $9, cache_read_tokens = $10, usd_reported = $11,
-                usd_estimated = $12, wall_ms = $13, ended_at = now()
+                usd_estimated = $12, wall_ms = $13, ended_at = now(), figure_is_floor = $15
           where id = $1 and status = any($14::run_status[])`,
         [
           outcome.runId,
@@ -1300,6 +1362,8 @@ export const createPostgresPipelineStore = (
           estimatedUsd(outcome.cost),
           outcome.wallMs,
           [...ACTIVE_RUN_STATUSES],
+          // WP-131 pre-review round (backlog 407): the cost above is a floor, not a figure.
+          outcome.costIsFloor === true,
         ],
       );
       if (result.rowCount !== 0) {
@@ -1339,7 +1403,8 @@ export const createPostgresPipelineStore = (
             set session_id = coalesce(session_id, $2), num_turns = greatest(num_turns, $3),
                 input_tokens = $4, output_tokens = $5, cache_write_5m_tokens = $6,
                 cache_write_1h_tokens = $7, cache_read_tokens = $8,
-                usd_reported = $9, usd_estimated = $10, wall_ms = greatest(wall_ms, $11)
+                usd_reported = $9, usd_estimated = $10, wall_ms = greatest(wall_ms, $11),
+                figure_is_floor = $13
           where id = $1
             and not (status = any($12::run_status[]))
             and usd_reported is null and usd_estimated is null
@@ -1357,6 +1422,7 @@ export const createPostgresPipelineStore = (
           estimatedUsd(late.cost),
           late.wallMs,
           [...ACTIVE_RUN_STATUSES],
+          late.costIsFloor === true,
         ],
       );
       if (result.rowCount !== 0) {
@@ -1402,26 +1468,55 @@ export const createPostgresPipelineStore = (
       const row = rows[0];
       return row === undefined ? null : toStoredRun(row);
     },
+    /**
+     * `estimated` counts only the runs the platform **priced** (`usd_estimated` set) — until WP-131
+     * it was `usd_reported is null`, which also counted a run nobody measured and published the
+     * exclusion as *"an estimate"* (PROGRESS backlog 403). The runs nobody measured are counted by
+     * the same predicate the caps hold (`unmeasuredEndedRunSql`), so the total and the hold agree
+     * about which runs a figure is missing for.
+     */
     totalsFor: async (tx, taskId) => {
       const { rows } = await sqlOf(tx).query<{
         runs: string;
         cost: string | null;
         estimated: string;
+        unmeasured: string;
         wall_ms: string | null;
       }>(
         `select count(*) as runs,
-                coalesce(sum(coalesce(usd_reported, usd_estimated)), 0) as cost,
-                count(*) filter (where usd_reported is null) as estimated,
-                coalesce(sum(wall_ms), 0) as wall_ms
-           from runs where task_id = $1`,
-        [taskId],
+                coalesce(sum(coalesce(r.usd_reported, r.usd_estimated)), 0) as cost,
+                count(*) filter (where r.usd_estimated is not null and not r.figure_is_floor)
+                  as estimated,
+                count(*) filter (where ${unmeasuredEndedRunSql('$2')}) as unmeasured,
+                coalesce(sum(r.wall_ms), 0) as wall_ms
+           from runs r where r.task_id = $1`,
+        [taskId, [...ACTIVE_RUN_STATUSES]],
       );
       const row = rows[0];
       return {
         runs: Number(row?.runs ?? 0),
         costUsd: usd(row?.cost ?? null),
         isEstimate: Number(row?.estimated ?? 0) > 0,
+        unmeasuredRuns: Number(row?.unmeasured ?? 0),
         wallMs: Number(row?.wall_ms ?? 0),
+      };
+    },
+    /**
+     * The task cap's hold (WP-131) — the port's docblock has the reasoning. The predicate is the
+     * five ledger-backed caps' own (`../cost/pending-run-spend.ts`), and a row written before
+     * migration 0072 is held at the admitting reserve, as theirs is.
+     */
+    heldFor: async (tx, taskId, admittingReserveUsd) => {
+      const { rows } = await sqlOf(tx).query<{ held_usd: string; held_runs: number }>(
+        `select coalesce(sum(coalesce(r.reserve_usd, $3::numeric)), 0)::text as held_usd,
+                count(*)::int as held_runs
+           from runs r
+          where r.task_id = $1 and ${unmeasuredEndedRunSql('$2')}`,
+        [taskId, [...ACTIVE_RUN_STATUSES], admittingReserveUsd],
+      );
+      return {
+        heldUsd: Number(rows[0]?.held_usd ?? 0),
+        heldRuns: Number(rows[0]?.held_runs ?? 0),
       };
     },
   };

@@ -1298,6 +1298,8 @@ export const composePipeline = async (
       lateCost: createLateCostRecorder({
         store: costStore,
         runs: store.runs,
+        // WP-131: the release of a hold moves the task's spend in the same transaction.
+        tasks: store.tasks,
         context: (correlationId, causeEventId) => ({
           ids,
           actor: { kind: 'system', component: 'cost-ledger' },

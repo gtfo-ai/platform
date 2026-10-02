@@ -34,6 +34,7 @@ import type {
   JsonValue,
   MergeRequestRef,
   MergeRequestSnapshot,
+  PausedBudgetScope,
   PipelineTemplate,
   RunCost,
   RunStatus,
@@ -130,7 +131,11 @@ export interface StoredTask {
   readonly branch: string | null;
   readonly mr: MergeRequestRef | null;
   readonly workpad: WorkpadRef | null;
-  /** Sum of the runs' reported cost, in USD (`tasks.cost_actual`). */
+  /**
+   * Sum of the runs' measured cost, in USD (`tasks.cost_actual`). A run nobody measured adds
+   * nothing here — its spend is unknown, not zero — and the task cap holds it beside this figure
+   * instead (`RunRepository.heldFor`, WP-131).
+   */
   readonly costActualUsd: number;
   readonly estimateUsd: number | null;
   /**
@@ -751,6 +756,35 @@ export interface TaskRepository {
    */
   addSpend(tx: Transaction, taskId: Id, usd: number): Promise<void>;
   /**
+   * The task's own cap, when a maintainer raised it — `tasks.budget_cap_usd` (migration 0072, WP-131
+   * review round 1) — or `null` when the default applies. Read by the task cap at admission (the
+   * stage executor and the ask executor) in place of `ProjectSettings.taskBudgetUsd`.
+   *
+   * @throws when the task does not exist.
+   */
+  budgetCap(tx: Transaction, taskId: Id): Promise<number | null>;
+  /**
+   * The cap behind the task's **newest** `task.paused` — its `budget_scope` (WP-131 review round 2)
+   * — or `null` when the newest pause was not for budget, named no cap (an event appended before the
+   * field existed), or there is none. `raiseTaskBudgetCommand` raises only a task the **task** cap
+   * paused: raising it for a project's or an organisation's pause would loosen a cap for good and
+   * resume into the same pause.
+   */
+  pausedBudgetScope(tx: Transaction, taskId: Id): Promise<PausedBudgetScope | null>;
+  /**
+   * **Raises** the task's cap to `capUsd`, and only raises it: answers `raised: false` with the cap
+   * in force when `capUsd` is not above it (`defaultCapUsd` when the task has no override), and
+   * writes nothing then. The one writer of `tasks.budget_cap_usd`, narrow like `addSpend` (standing
+   * rule 79) — `save` never names the column — and it takes the row lock (`for update`) so two
+   * raises in one instant compare against each other rather than against the same stale figure.
+   *
+   * @throws when the task does not exist.
+   */
+  raiseBudgetCap(
+    tx: Transaction,
+    input: { readonly taskId: Id; readonly capUsd: number; readonly defaultCapUsd: number },
+  ): Promise<{ readonly raised: boolean; readonly previousCapUsd: number }>;
+  /**
    * WIP counting (BD-010); `countsAsActive` / `countsInPipeline` decide which states count.
    *
    * **It serialises admission per project for the rest of `tx`** (WP-91): an implementation makes
@@ -1153,6 +1187,15 @@ export type NewRun = StoredRun & {
    * before WP-91 reads as. Write-only, for the prompt columns' reason.
    */
   readonly settings: RunSettingsSnapshot | null;
+  /**
+   * The reservation the run was admitted at — its per-run cap, `runs.reserve_usd` (migration 0072,
+   * WP-131): `runBudgetUsd` for a stage run, `features.ask.budget_usd` for an ask. It is what every
+   * cap **holds** the run at if it ends with nobody measuring it ({@link RunRepository.heldFor},
+   * `../cost/pending.ts`). `null` is *"no reservation was recorded"*, which no production path
+   * produces; a figure of `0` (a stage configured at no cap) is stored as `null` too, because the
+   * column refuses it. Write-only, for the prompt columns' reason.
+   */
+  readonly reserveUsd: number | null;
 };
 
 export interface RunRepository {
@@ -1193,14 +1236,22 @@ export interface RunRepository {
        *
        * `null` since WP-47, for the lease sweep: it ends a run whose process vanished and has no
        * figure of its own to write, and `{ usd: 0 }` there would publish "this run was free" — the
-       * exact reading standing rule 16 exists to refuse. Both cost columns are left unset, so the
-       * pending term values the ended row at 0 (nothing committed) rather than at a measurement.
+       * exact reading standing rule 16 exists to refuse. Both cost columns are left unset, so every
+       * cap **holds** the ended row at the reservation it was admitted at (`reserve_usd`, WP-131)
+       * rather than counting a measurement — never spend, and never a free run.
        *
        * The two are written apart: `is_estimate: false` fills `usd_reported`, `true` fills
        * `usd_estimated` (WP-47, migration 0035), and the other one is `null`.
        */
       readonly cost: RunCost | null;
       readonly wallMs: number;
+      /**
+       * `true` when {@link cost} is the runner's **floor** rather than a measurement — a
+       * `cost_unreported` stop (`runs.figure_is_floor`, WP-131 pre-review round, backlog 407). The
+       * cost is written as given (WP-119 kept the floor); the caps hold the run at its reservation
+       * and the totals count it as unmeasured. Absent is `false`.
+       */
+      readonly costIsFloor?: boolean;
     },
   ): Promise<boolean>;
   /**
@@ -1234,6 +1285,8 @@ export interface RunRepository {
       readonly usage: TokenUsage;
       readonly cost: RunCost;
       readonly wallMs: number;
+      /** The cost is the runner's floor (`runs.figure_is_floor`, WP-131 review round 1). */
+      readonly costIsFloor?: boolean;
     },
   ): Promise<boolean>;
   /**
@@ -1262,9 +1315,11 @@ export interface RunRepository {
   /**
    * What the task's runs add up to — the `totals` of `task.completed` / `task.cancelled`.
    *
-   * `is_estimate` is true when **any** run's cost was an estimate rather than a provider-reported
-   * figure (BD-011): a total that mixes the two is an estimate, and reporting it as measured is
-   * the direction that misleads.
+   * `is_estimate` is true when **any** run's cost was priced by the platform (`usd_estimated`)
+   * rather than reported by the provider (BD-011): a total that mixes the two is an estimate, and
+   * reporting it as measured is the direction that misleads. A run **nobody measured** is not an
+   * estimate — it is absent from `costUsd` — and is counted by `unmeasuredRuns` instead, so the
+   * total can say what it excludes (WP-131, PROGRESS backlog 403). `runs` still counts it.
    */
   totalsFor(
     tx: Transaction,
@@ -1273,8 +1328,25 @@ export interface RunRepository {
     readonly runs: number;
     readonly costUsd: number;
     readonly isEstimate: boolean;
+    readonly unmeasuredRuns: number;
     readonly wallMs: number;
   }>;
+  /**
+   * The task's ended runs **nobody measured**, held at the reservations they were admitted at —
+   * what the task cap adds beside `tasks.cost_actual` (WP-131, PROGRESS backlog 402;
+   * `../cost/pending.ts`).
+   *
+   * An ended run with both cost columns null moves `cost_actual` by nothing, ever, so without this
+   * a task whose runs kept ending unmeasured was admitted retry after retry under its cap. Each is
+   * held at its own `runs.reserve_usd`, or at `admittingReserveUsd` when the row recorded none
+   * (written before migration 0072). It is **never** written into `cost_actual`, which is spend
+   * (standing rule 16), and it does not roll over: it ends when `recordCost` writes the run's figure.
+   */
+  heldFor(
+    tx: Transaction,
+    taskId: Id,
+    admittingReserveUsd: number,
+  ): Promise<{ readonly heldUsd: number; readonly heldRuns: number }>;
 }
 
 /**

@@ -65,6 +65,7 @@ import {
   maintenanceConfigOf,
   renderChoreBrief,
 } from '@platform/domain';
+import { holdDetail } from '../cost/pending.js';
 import type {
   MaintenanceReportPublication,
   MaintenanceReportSink,
@@ -491,6 +492,12 @@ const scheduleProject = async (
          * exactly what this side can know: the chore runs that have **ended** and whose cost the
          * ledger has not written yet, which without it would make a scheduler running beside a
          * finishing chore create one more (`../cost/pending.ts`).
+         *
+         * The **hold** counts too (WP-131): a chore run that ended with nobody measuring it is
+         * held at its own `reserve_usd`. A run written before migration 0072 recorded none and is
+         * held at this caller's reserve, which is `0` — so a pre-0072 unmeasured chore run holds
+         * nothing here and its own reservation at the executor's admission, the side that admits
+         * a run.
          */
         const spend = await options.maintenance.maintenanceSpendSince(
           scope.tx,
@@ -499,10 +506,12 @@ const scheduleProject = async (
           0,
         );
         const spent = spend.spentUsd + spend.pendingUsd;
-        if (spent >= config.budgetUsd) {
+        if (spent + spend.heldUsd >= config.budgetUsd) {
           return {
             status: 'over_budget',
-            detail: `this project’s maintenance budget for the month is spent: ${spent} of ${config.budgetUsd} USD since ${since}`,
+            detail:
+              `this project’s maintenance budget for the month is spent: ${spent} of ${config.budgetUsd} USD since ${since}` +
+              (spend.heldRuns > 0 ? `, with ${holdDetail(spend)}` : ''),
           } satisfies ChoreOutcome;
         }
       }

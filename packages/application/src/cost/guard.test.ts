@@ -9,9 +9,15 @@
 import type { DomainEvent, Id, IsoDateTime } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
+import { raiseTaskBudgetCommand, TaskNotPausedByItsCapError } from '../pipeline/commands.js';
 import { createMemoryCostStore } from '../testing/memory-cost.js';
 import { createPipelineHarness, type PipelineHarness } from '../testing/pipeline-harness.js';
-import { createBudgetGuard, noBudgetGuard } from './guard.js';
+import {
+  type BlockingBudget,
+  blockingBudgetDetail,
+  createBudgetGuard,
+  noBudgetGuard,
+} from './guard.js';
 
 const PROJECT = '00000000-0000-4000-8000-0000000000b1' as Id;
 const BUDGET = '00000000-0000-4000-8000-0000000000f1' as Id;
@@ -117,6 +123,91 @@ describe('createBudgetGuard (BD-010: an org or project budget stops *new* runs)'
       scope: 'org',
       spentUsd: 4,
       pendingUsd: 1,
+    });
+  });
+
+  /**
+   * WP-131 (PROGRESS backlog 402), criterion (2) for the two `budgets` scopes: a run of the window
+   * that ended with **nobody measuring it** is held at the reservation it was admitted at, and the
+   * answer keeps the hold apart from the charge and from the live reservations.
+   *
+   * The row's figures exactly — a 20 USD cap, one unmeasured run held at 15, a 10 USD admission,
+   * nothing charged — because since the pre-review round (backlog 406) this guard makes the
+   * comparison the other caps make: `0 + 15 + 10 > 20`. The canary is the same window with no hold,
+   * which admits the same run (`0 + 10 <= 20`).
+   */
+  it.each([
+    { scope: 'project' as const, seed: PROJECT },
+    { scope: 'org' as const, seed: null },
+  ])(
+    'refuses a 10 USD admission to a $scope budget of 20 holding one unmeasured run at 15, and names the hold (WP-131)',
+    async ({ scope, seed }) => {
+      const { store } = storeWith(20, 0, scope);
+      store.seedHeldRuns(seed, [15]);
+      const blocker = await createBudgetGuard({ store }).blockingFor(TX, PROJECT, NOW, 10);
+      expect(blocker).toMatchObject({
+        scope,
+        limitUsd: 20,
+        spentUsd: 0,
+        pendingUsd: 0,
+        heldUsd: 15,
+        heldRuns: 1,
+        reserveUsd: 10,
+      });
+      expect(blockingBudgetDetail(blocker as BlockingBudget)).toBe(
+        `the ${scope} budget for this month cannot take this run: 0 spent of 20 USD since ` +
+          '2026-06-01T00:00:00.000Z, plus 1 run nobody measured, held at its cap: 15 USD, and ' +
+          'this run may spend 10 more',
+      );
+
+      // The canary in the fixture: the same window with no hold admits the same run.
+      const { store: free } = storeWith(20, 0, scope);
+      expect(await createBudgetGuard({ store: free }).blockingFor(TX, PROJECT, NOW, 10)).toBeNull();
+    },
+  );
+
+  /**
+   * A row written before migration 0072 recorded no reservation, and is held at the **admitting**
+   * reserve — the only figure an admission has for it, in the fail-closed direction: one such run
+   * at a 5 USD admission is `5 + 5 <= 20`, at a 10 USD admission `10 + 10 <= 20` (exactly full), at
+   * an 11 USD one `11 + 11 > 20`.
+   */
+  it('holds a run that recorded no reservation at the admitting reserve (WP-131)', async () => {
+    const { store } = storeWith(20, 0, 'project');
+    store.seedHeldRuns(PROJECT, [null]);
+    expect(await createBudgetGuard({ store }).blockingFor(TX, PROJECT, NOW, 10)).toBeNull();
+    expect(await createBudgetGuard({ store }).blockingFor(TX, PROJECT, NOW, 11)).toMatchObject({
+      heldUsd: 11,
+      heldRuns: 1,
+    });
+  });
+
+  /**
+   * Backlog 406 (the pre-review round's ruling): the admitting run's own reservation counts, as it
+   * does for every other cap — both sides of the boundary (standing rule 42). 10 charged of 20: a
+   * run that may spend exactly the remaining 10 is admitted, one that may spend a cent more is not,
+   * and before the ruling both were admitted (the window was not yet used up).
+   */
+  it('admits a run that exactly fills the window, and refuses one a cent over it (406)', async () => {
+    const { store } = storeWith(20, 0, 'project');
+    await charge(store, 10);
+    const guard = createBudgetGuard({ store });
+    expect(await guard.blockingFor(TX, PROJECT, NOW, 10)).toBeNull();
+    const blocker = await guard.blockingFor(TX, PROJECT, NOW, 10.01);
+    expect(blocker).toMatchObject({ scope: 'project', spentUsd: 10, reserveUsd: 10.01 });
+    // The words must be true for a window that is not used up: no "exhausted" at 10 of 20.
+    expect(blockingBudgetDetail(blocker as BlockingBudget)).not.toContain('exhausted');
+    expect(blockingBudgetDetail(blocker as BlockingBudget)).toContain(
+      'this run may spend 10.01 more',
+    );
+  });
+
+  /** A window that **is** used up refuses even a run that may spend nothing. */
+  it('refuses any run once the window is used up, whatever it may spend (406)', async () => {
+    const { store } = storeWith(20, 0, 'project');
+    await charge(store, 20);
+    expect(await createBudgetGuard({ store }).blockingFor(TX, PROJECT, NOW, 0)).toMatchObject({
+      spentUsd: 20,
     });
   });
 
@@ -272,8 +363,38 @@ describe('a project budget, through the whole pipeline', () => {
     expect(harness.types()).toContain('task.paused');
   });
 
+  /**
+   * WP-131 review round 2: the pause names **which** cap — `project` here — and the task's own cap
+   * may not be raised for it. Raising it would loosen the task's safety cap for good and resume
+   * straight into the project's pause again. The other side is the stage executor's case, where
+   * the task cap paused it and the raise is accepted.
+   */
+  it('names the project cap on the pause, and refuses to raise the task’s own cap for it (WP-131)', async () => {
+    const harness = await pipelineWithBudget(10, 10);
+    await harness.publish([ticketMatched(PROJECT)]);
+    const paused = harness.events().filter((event) => event.type === 'task.paused');
+    expect(
+      paused.map((event) => (event.payload as { budget_scope?: string }).budget_scope),
+    ).toEqual(['project']);
+    const taskId = taskOf(harness).task.id;
+    await expect(
+      raiseTaskBudgetCommand(harness.humanCommands, {
+        taskId,
+        userId: '00000000-0000-4000-8000-00000000a131' as Id,
+        capUsd: 500,
+      }),
+    ).rejects.toBeInstanceOf(TaskNotPausedByItsCapError);
+    expect(
+      await harness.memory.transaction(async (scope) =>
+        harness.store.tasks.budgetCap(scope.tx, taskId),
+      ),
+    ).toBeNull();
+  });
+
   it('runs the stage below the limit, with the same guard composed', async () => {
-    const harness = await pipelineWithBudget(10, 9.999999);
+    // 8 of 10 charged and refinement may spend 2: the run exactly fills the window, which is
+    // admitted (`capIsSpent` is `>`); since backlog 406 the 2 counts, so 9.999999 would refuse.
+    const harness = await pipelineWithBudget(10, 8);
     expect(harness.cost).not.toBeNull();
     await harness.publish([ticketMatched(PROJECT)]);
     expect(harness.specs.map((spec) => spec.stage)).toEqual(['refinement']);

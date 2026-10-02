@@ -80,6 +80,7 @@ import {
   projectsResponseSchema,
   putBudgetsRequestSchema,
   putProjectBindingsRequestSchema,
+  raiseTaskBudgetRequestSchema,
   readinessResponseSchema,
   rediscoveryGateResponseSchema,
   refreshProjectConfigResponseSchema,
@@ -433,6 +434,11 @@ export interface Endpoints {
   readonly cancelTask: (
     taskId: string,
     body: z.input<typeof cancelTaskRequestSchema>,
+  ) => Promise<void>;
+  /** WP-131 review round 1: raise this task's own cap; idempotent, it is a decision made once. */
+  readonly raiseTaskBudget: (
+    taskId: string,
+    body: z.input<typeof raiseTaskBudgetRequestSchema>,
   ) => Promise<void>;
   readonly answerQuestion: (
     taskId: string,
@@ -816,6 +822,8 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
       command(`/api/tasks/${seg(taskId)}/resume`, resumeTaskRequestSchema, body),
     cancelTask: (taskId, body) =>
       command(`/api/tasks/${seg(taskId)}/cancel`, cancelTaskRequestSchema, body),
+    raiseTaskBudget: (taskId, body) =>
+      command(`/api/tasks/${seg(taskId)}/budget`, raiseTaskBudgetRequestSchema, body, true),
     answerQuestion: (taskId, questionId, body) =>
       command(
         `/api/tasks/${seg(taskId)}/questions/${seg(questionId)}/answer`,

@@ -37,8 +37,10 @@ import type {
 import type { Id, IsoDateTime } from '@platform/contracts';
 import {
   ACTIVE_RUN_STATUSES_PARAM,
+  type CommittedRunsRow,
+  committedRunsOf,
+  committedRunsSql,
   PENDING_RUN_WINDOW_SQL,
-  pendingRunUsdSql,
   UNLEDGERED_RUN_SQL,
 } from '../cost/pending-run-spend.js';
 import { postgresTransaction } from '../events/postgres-unit-of-work.js';
@@ -74,28 +76,25 @@ export class PostgresMaintenanceStore implements MaintenanceStore {
     since: IsoDateTime,
     reserveUsd: number,
   ): Promise<CapSpend> {
-    const { rows } = await sqlOf(tx).query<{ spent_usd: string; pending_usd: string }>(
-      // Two numbers for one cap: what the ledger has charged this month's chores, and what their
-      // runs have committed that the ledger has not written yet (`../cost/pending-run-spend.ts`).
+    const { rows } = await sqlOf(tx).query<{ spent_usd: string } & CommittedRunsRow>(
+      // Three numbers for one cap: what the ledger has charged this month's chores, what their
+      // runs have committed that the ledger has not written yet, and what the runs nobody measured
+      // are held at (`../cost/pending-run-spend.ts`, WP-131).
       `select coalesce((
                 select sum(c.usd) from cost_entries c
                   join tasks t on t.id = c.task_id
                  where c.project_id = $1 and ${MAINTENANCE_TASK_PREDICATE} and c.created_at >= $2
               ), 0)::text as spent_usd,
-              coalesce((
-                select sum(${pendingRunUsdSql('$3', '$4')})
-                  from runs r
-                  join tasks t on t.id = r.task_id
-                 where r.project_id = $1 and ${MAINTENANCE_TASK_PREDICATE}
-                   and ${UNLEDGERED_RUN_SQL} and ${PENDING_RUN_WINDOW_SQL('$2')}
-              ), 0)::text as pending_usd`,
+              p.pending_usd, p.held_usd, p.held_runs
+         from (select ${committedRunsSql('$3', '$4')}
+                 from runs r
+                 join tasks t on t.id = r.task_id
+                where r.project_id = $1 and ${MAINTENANCE_TASK_PREDICATE}
+                  and ${UNLEDGERED_RUN_SQL} and ${PENDING_RUN_WINDOW_SQL('$2')}) p`,
       [projectId, since, [...ACTIVE_RUN_STATUSES_PARAM], reserveUsd],
     );
     const row = rows[0];
-    return {
-      spentUsd: Number(row?.spent_usd ?? 0),
-      pendingUsd: Number(row?.pending_usd ?? 0),
-    };
+    return { spentUsd: Number(row?.spent_usd ?? 0), ...committedRunsOf(row) };
   }
 
   async latestKbHygiene(tx: Transaction, projectId: Id): Promise<KbHygieneReport | null> {

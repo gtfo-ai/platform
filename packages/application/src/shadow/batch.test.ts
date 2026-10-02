@@ -94,6 +94,8 @@ interface WorldOptions {
   readonly level?: 'observe' | 'assist' | 'supervised' | 'autonomous';
   readonly enabled?: boolean;
   readonly budgetUsd?: number;
+  /** `stages.refinement.budget_usd` — what the shadow run being admitted may spend (WP-131). */
+  readonly refinementBudgetUsd?: number;
   readonly baseSha?: string | null;
   readonly knownTickets?: readonly string[];
   readonly merged?: readonly MergedMergeRequest[];
@@ -111,6 +113,9 @@ const world = (options: WorldOptions = {}) => {
             ...(options.budgetUsd === undefined ? {} : { budget_usd: options.budgetUsd }),
           },
         },
+        ...(options.refinementBudgetUsd === undefined
+          ? {}
+          : { stages: { refinement: { budget_usd: options.refinementBudgetUsd } } }),
       },
       autonomy: materialiseAutonomy({
         level: options.level ?? 'observe',
@@ -443,6 +448,31 @@ describe('the separate shadow budget', () => {
     await harness.drain();
     expect(await taskState(harness)).toBe('paused');
     expect(harness.specs).toEqual([]);
+  });
+
+  /**
+   * WP-131 (PROGRESS backlog 402): a shadow run of this month that ended with **nobody measuring
+   * it** is held at the reservation it was admitted at. Cap 20, one such run held at 15, and a
+   * refinement that may spend 10: `0 + 15 + 10 > 20`, so the run is refused — where until WP-131 the
+   * ended run counted 0 and `0 + 10 <= 20` admitted it. The second half is the canary in the
+   * fixture: the same month with no hold admits the same run.
+   */
+  it('stops a shadow run on a run of the month nobody measured, held at its 15 USD reservation (WP-131)', async () => {
+    const held = world({ budgetUsd: 20, refinementBudgetUsd: 10 });
+    held.shadow.seedShadowSpend(PROJECT, 0);
+    held.shadow.seedHeldShadowRuns(PROJECT, [15]);
+    await run(held, ['ACME-1']);
+    await held.drain();
+    expect(await taskState(held)).toBe('paused');
+    expect(held.specs).toEqual([]);
+
+    const free = world({ budgetUsd: 20, refinementBudgetUsd: 10 });
+    free.script('refinement', cannotStart(FIRST_STAGE_ONLY));
+    free.shadow.seedShadowSpend(PROJECT, 0);
+    await run(free, ['ACME-1']);
+    await free.drain();
+    expect(await taskState(free)).not.toBe('paused');
+    expect(free.specs.length).toBeGreaterThan(0);
   });
 
   it('lets the same run start when the cap is not reached — the other direction', async () => {

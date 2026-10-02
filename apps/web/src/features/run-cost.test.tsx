@@ -67,7 +67,7 @@ const run = (id: string, stage: string, settingsHash: string | null): RunRecord 
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
-const detail = (runs: RunRecord[]): TaskDetailResponse =>
+const detail = (runs: RunRecord[], unmeasuredRuns = 0): TaskDetailResponse =>
   ({
     task: {
       id: TASK,
@@ -89,7 +89,11 @@ const detail = (runs: RunRecord[]): TaskDetailResponse =>
       required_reviewers: null,
       review_threads: null,
       conflict: null,
-      cost_actual_usd: 0,
+      cost_actual_usd: 0.4,
+      unmeasured_runs: unmeasuredRuns,
+      budget_cap_usd: 50,
+      paused_reason: null,
+      paused_budget_scope: null,
       cost_estimated_usd: 0,
       estimate_usd: null,
       estimate_basis: null,
@@ -102,6 +106,7 @@ const detail = (runs: RunRecord[]): TaskDetailResponse =>
       completed_at: null,
     },
     taken_over: null,
+    can_raise_budget: false,
     human_time: {
       total_minutes: 0,
       by_kind: { review: 0, question: 0, approval: 0, steer: 0 },
@@ -121,6 +126,7 @@ const fetchWith = (
   runs: RunRecord[],
   settings: () => Response,
   asked: string[],
+  unmeasuredRuns = 0,
 ) =>
   (async (input: RequestInfo | URL): Promise<Response> => {
     const url = String(input);
@@ -131,7 +137,7 @@ const fetchWith = (
     if (path === `/api/runs/${shown.id}/commands`) return json({ items: [] });
     if (path === `/api/runs/${shown.id}/settings`) return settings();
     if (path === `/api/runs/${shown.id}`) return json(shown);
-    if (path === `/api/tasks/${TASK}`) return json(detail(runs));
+    if (path === `/api/tasks/${TASK}`) return json(detail(runs, unmeasuredRuns));
     if (path === '/api/projects') return json({ items: [] });
     if (path.startsWith(`/api/tasks/${TASK}/`)) return json({ items: [], next_cursor: null });
     return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
@@ -151,11 +157,15 @@ const open = (
   runs: RunRecord[],
   settings: () => Response,
   at = `/runs/${shown.id}`,
+  unmeasuredRuns = 0,
 ) => {
   const asked: string[] = [];
   window.history.pushState({}, '', at);
   const view = render(
-    createApp({ fetchImpl: fetchWith(shown, runs, settings, asked), realtime: false }).element,
+    createApp({
+      fetchImpl: fetchWith(shown, runs, settings, asked, unmeasuredRuns),
+      realtime: false,
+    }).element,
   );
   return { view, asked };
 };
@@ -201,5 +211,39 @@ describe('a run nobody measured, on screen (WP-119)', () => {
     });
     expect(view.container.textContent).toContain(NOT_MEASURED);
     expect(view.container.textContent).not.toContain('$0.00 ·');
+  });
+});
+
+/**
+ * WP-131 (PROGRESS backlog 403): the task's **Cost so far** is the sum of its measured runs, so the
+ * page says what it leaves out — read through the real `taskDetailResponseSchema`, with the count
+ * the projection publishes. The other direction is asserted too (standing rule 42): a task whose
+ * runs were all measured shows no such line.
+ */
+describe('what the task’s cost leaves out (WP-131)', () => {
+  it('says the total excludes the runs nobody measured', async () => {
+    const measured = {
+      ...run(FIRST, 'refinement', HASH_A),
+      cost: { usd: 0.4, is_estimate: false, price_list_id: null },
+    };
+    const shown = unmeasured(SECOND, 'implementation');
+    const { view } = open(shown, [measured, shown], noSettings, `/tasks/${TASK}`, 1);
+    await waitFor(() => {
+      expect(view.container.textContent).toContain('Excludes 1 run nobody measured.');
+    });
+    expect(view.container.textContent).toContain('$0.40');
+  });
+
+  it('says nothing of the kind when every run was measured', async () => {
+    const measured = {
+      ...run(FIRST, 'refinement', HASH_A),
+      cost: { usd: 0.4, is_estimate: false, price_list_id: null },
+    };
+    const { view } = open(measured, [measured], noSettings, `/tasks/${TASK}`, 0);
+    await waitFor(() => {
+      expect(view.container.textContent).toContain('$0.40');
+    });
+    expect(view.container.textContent).not.toContain('Excludes');
+    expect(view.container.textContent).not.toContain('nobody measured');
   });
 });

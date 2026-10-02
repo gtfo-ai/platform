@@ -46,6 +46,16 @@ export interface CostStoreSeed {
   /** The newest `RefinedSpec` of a task carries this size, or nothing parsable when `null`. */
   refinedSize(taskId: Id, size: Size | null): Promise<void>;
   timezone(value: string): Promise<void>;
+  /**
+   * A run of the suite's project that **ended with nobody measuring it** — terminal, both cost
+   * columns null — admitted at `reserveUsd` (`runs.reserve_usd`; `null` is a row written before
+   * migration 0072), ending at `endedAt` (WP-131).
+   */
+  unmeasuredRun(input: {
+    readonly taskId: Id;
+    readonly reserveUsd: number | null;
+    readonly endedAt: IsoDateTime;
+  }): Promise<void>;
 }
 
 export interface CostStoreHarness {
@@ -314,31 +324,57 @@ export const runCostStoreContract = (harness: CostStoreHarness): void => {
        * `pendingSpend` — what the guard adds to the window because the ledger writes it later
        * (`packages/application/src/cost/pending.ts`).
        *
-       * Both implementations owe the two answers a *shared* case can make: a scope with no runs
-       * commits nothing, and a run that has **ended reporting nothing** commits nothing either —
-       * the seeder's run is `completed` with no `usd_reported`, which is the residual that module
-       * states. The **derivation** (a live run at the reservation, an ended one at its reported
-       * figure) is the adapter's and is asserted in `test/integration/cost/`, because the
-       * in-memory store holds no run status at all (its divergence 7).
+       * Both implementations owe the answers a *shared* case can make: a scope with no runs commits
+       * nothing, and a run that ended **with nobody measuring it** is **held** at the reservation it
+       * was admitted at, apart from the pending sum (WP-131, PROGRESS backlog 402) — a row that
+       * recorded none at the caller's reservation. Until WP-131 this case asserted that such a run
+       * committed **nothing**, which was the over-admission 402 names, pinned. The live and
+       * reported halves of the **derivation** are the adapter's and are asserted in
+       * `test/integration/cost/`, because the in-memory store holds no run status at all (its
+       * divergence 7).
        *
-       * The second half is what makes this more than a smoke test (standing rule 43): an adapter
-       * that valued *every* unledgered run at the reservation would pass the first and fail here,
-       * and it would charge a window for a run that cost nothing.
+       * The held run is answered apart from `pendingUsd` (standing rule 16: a hold is not spend and
+       * not a live reservation either): an adapter that folded it into the pending sum would pass
+       * a total and fail here.
        */
-      it('commits nothing for a scope with no runs, and nothing for a run that reported nothing', async () => {
+      it('commits nothing for a scope with no runs, and holds a run nobody measured at its reservation (WP-131)', async () => {
         const project = { scope: 'project' as const, scopeId: projectId };
-        expect(await store.pendingSpend(tx, project, MONTH, 5)).toBe(0);
+        expect(await store.pendingSpend(tx, project, MONTH, 5)).toEqual({
+          pendingUsd: 0,
+          heldUsd: 0,
+          heldRuns: 0,
+        });
 
         const taskId = nextId();
         await seed.task({ id: taskId });
-        await seed.run({
-          runId: nextId(),
+        await seed.unmeasuredRun({
           taskId,
-          stage: 'refinement',
-          model: 'claude-sonnet-5',
-          startedAt: MONTH,
+          reserveUsd: 15,
+          endedAt: '2026-06-10T08:00:00.000Z' as IsoDateTime,
         });
-        expect(await store.pendingSpend(tx, project, MONTH, 5)).toBe(0);
+        expect(await store.pendingSpend(tx, project, MONTH, 5)).toEqual({
+          pendingUsd: 0,
+          heldUsd: 15,
+          heldRuns: 1,
+        });
+
+        // A run written before migration 0072 recorded no reservation: held at the caller's.
+        await seed.unmeasuredRun({
+          taskId,
+          reserveUsd: null,
+          endedAt: '2026-06-10T09:00:00.000Z' as IsoDateTime,
+        });
+        expect(await store.pendingSpend(tx, project, MONTH, 5)).toEqual({
+          pendingUsd: 0,
+          heldUsd: 20,
+          heldRuns: 2,
+        });
+        // The organisation scope has no `scope_id` and sees every run of the deployment.
+        expect(await store.pendingSpend(tx, { scope: 'org', scopeId: null }, MONTH, 5)).toEqual({
+          pendingUsd: 0,
+          heldUsd: 20,
+          heldRuns: 2,
+        });
       });
     });
 

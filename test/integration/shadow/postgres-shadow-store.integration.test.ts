@@ -158,6 +158,8 @@ describe('what only the database can answer', () => {
       expect(await store.shadowSpendSince(tx, projectId as Id, since as never, 5)).toEqual({
         spentUsd: 3,
         pendingUsd: 0,
+        heldUsd: 0,
+        heldRuns: 0,
       });
       // The other direction: widen the window and the older shadow entry joins in — which is what
       // makes the figure above a *window* rather than a coincidence.
@@ -165,6 +167,8 @@ describe('what only the database can answer', () => {
       expect(await store.shadowSpendSince(tx, projectId as Id, wide as never, 5)).toEqual({
         spentUsd: 53,
         pendingUsd: 0,
+        heldUsd: 0,
+        heldRuns: 0,
       });
 
       /**
@@ -183,6 +187,29 @@ describe('what only the database can answer', () => {
       expect(await store.shadowSpendSince(tx, projectId as Id, since as never, 5)).toEqual({
         spentUsd: 3,
         pendingUsd: 5,
+        heldUsd: 0,
+        heldRuns: 0,
+      });
+
+      /**
+       * WP-131 (PROGRESS backlog 402): a shadow run that ended with **nobody measuring it** is held
+       * at its own reservation, under the same `tasks.mode` predicate; a pre-0072 row (no
+       * reservation) at the caller's 5; and one that ended before the window is not this window's.
+       */
+      await pool.query(
+        `insert into runs (task_id, project_id, role, model, prompt_version, status, ended_at,
+                           reserve_usd)
+         values ($1, $2, 'developer', 'claude-opus-5', 'developer@1', 'timed_out', $4, 15),
+                ($1, $2, 'developer', 'claude-opus-5', 'developer@1', 'timed_out', $4, null),
+                ($1, $2, 'developer', 'claude-opus-5', 'developer@1', 'timed_out', $5, 15),
+                ($3, $2, 'developer', 'claude-opus-5', 'developer@1', 'timed_out', $4, 15)`,
+        [taskIds[0], projectId, normalTask, recent, older],
+      );
+      expect(await store.shadowSpendSince(tx, projectId as Id, since as never, 5)).toEqual({
+        spentUsd: 3,
+        pendingUsd: 5,
+        heldUsd: 20,
+        heldRuns: 2,
       });
     } finally {
       await client.end();

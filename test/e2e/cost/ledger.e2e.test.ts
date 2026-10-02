@@ -292,7 +292,9 @@ describe('the per-model usage of a multi-model run', () => {
     expect(subagent?.usd).toBeCloseTo(SUBAGENT_COST_USD, 6);
     expect(subagent?.input_tokens).toBe(200);
     // The per-model numbers sum to what the run reported, which is the ledger's own invariant.
-    expect(sum(run.model_usage.map((usage) => usage.usd))).toBeCloseTo(
+    // Both models are priced here, so neither `usd` is the `null` an unpriced model publishes
+    // (WP-131, backlog 404); a `null` would fail the sum rather than read as 0.
+    expect(sum(run.model_usage.map((usage) => usage.usd ?? Number.NaN))).toBeCloseTo(
       run.cost?.usd ?? Number.NaN,
       6,
     );

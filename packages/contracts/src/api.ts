@@ -1242,6 +1242,12 @@ export const humanTimeSummarySchema = z.strictObject({
 
 export const taskDetailResponseSchema = z.strictObject({
   task: taskRecordSchema,
+  /**
+   * Whether the **caller** may raise this task's cap — `budget.write` over their effective role in
+   * the task's project (WP-131 review round 2). The page offers *Raise this task's cap* only then;
+   * the route refuses everyone else regardless.
+   */
+  can_raise_budget: z.boolean(),
   /** The take-over in force, or `null` — see {@link takenOverSchema}. */
   taken_over: takenOverSchema.nullable(),
   /** Human minutes derived from events by the WP-29 projector; never summed with the USD. */
@@ -1393,6 +1399,27 @@ const requiredCommandTextSchema = nonEmptyStringSchema.max(MAX_COMMAND_TEXT_CHAR
 export const pauseTaskRequestSchema = z.strictObject({ reason: commandTextSchema.optional() });
 export const resumeTaskRequestSchema = z.strictObject({ reason: commandTextSchema.optional() });
 export const cancelTaskRequestSchema = z.strictObject({ reason: commandTextSchema.optional() });
+/** The largest figure `numeric(12,6)` holds — the ceiling of a task's own cap (WP-131). */
+export const MAX_TASK_CAP_USD = 999_999.999999;
+
+/**
+ * `POST /api/tasks/:id/budget` — raise this task's own cap (WP-131 review round 1). Above zero, and
+ * above the cap in force (the command's 409 otherwise); there is no field that lowers it.
+ */
+export const raiseTaskBudgetRequestSchema = z.strictObject({
+  /**
+   * `tasks.budget_cap_usd` is `numeric(12,6)`: at most 999 999.999999 and six decimals (WP-131
+   * review round 2). Past the range is a 400 rather than a database overflow; a seventh decimal is
+   * refused rather than rounded into the same cap and audited as a raise that did not happen.
+   */
+  cap_usd: z
+    .number()
+    .positive()
+    .max(MAX_TASK_CAP_USD)
+    .refine((value) => Number(value.toFixed(6)) === value, {
+      message: 'at most six decimal places (the column is numeric(12,6))',
+    }),
+});
 export const retryStageRequestSchema = z.strictObject({
   stage: stageIdSchema,
   reason: commandTextSchema.optional(),
@@ -1996,7 +2023,9 @@ export const taskExportResponseSchema = z.strictObject({
   /** The document's format; bumped when its shape changes, so a reader can tell. */
   format: z.literal(1),
   exported_at: isoDateTimeSchema,
-  ...taskDetailResponseSchema.shape,
+  // Not `can_raise_budget`: that is a fact about the **caller** (WP-131 review round 2), and a
+  // document handed to someone else must not carry the exporter's permissions.
+  ...taskDetailResponseSchema.omit({ can_raise_budget: true }).shape,
   human_actions: z
     .strictObject({
       items: z.array(taskAuditEntrySchema),

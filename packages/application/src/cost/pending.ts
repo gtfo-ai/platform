@@ -25,19 +25,23 @@
  * > ledger has not recorded is counted at what it may still spend — the stage's per-run cap, the
  * > same figure the admission already adds for the run it is about to start — while it is live,
  * > and at the figure its **own** transaction wrote (`runs.usd_reported`, or `runs.usd_estimated`
- * > when the platform priced it — WP-47) once it has ended.
+ * > when the platform priced it — WP-47) once it has ended — or, when nothing wrote one, **held** at
+ * > the reservation it was admitted at (WP-131, below).
  *
  * The two halves are what make the term self-clearing rather than a second running total to keep
  * true: a live run's reservation disappears the moment it ends, an ended run's reported figure is
  * replaced by the ledger's rows the moment they exist (the entries sum to the provider's run
  * total, BD-011, so the number does not move), and a run that never reaches the ledger at all is
- * counted at what it really cost rather than at a reservation nobody can retire.
+ * counted at what it really cost rather than at a reservation nobody can retire. A run with **no**
+ * figure is the one exception, and its hold has two retirements of its own (a late figure, the
+ * window) — see *"held at its reservation"* below.
  *
- * **The task cap needs none of this**, and that is the argument for the shape rather than an
- * exception to it: `taskBudgetExhausted` reads `tasks.cost_actual`, which `record`'s own
- * transaction increments together with `runs.finish` and `run.finished`. A cap read from a column
- * the run's transaction moves cannot lag the run; a cap read from a projection a later handler
- * writes always can.
+ * **The task cap needs no pending term, and since WP-131 it needs the hold.** `taskBudgetExhausted`
+ * reads `tasks.cost_actual`, which `record`'s own transaction increments together with `runs.finish`
+ * and `run.finished` — a cap read from a column the run's transaction moves cannot lag the run, so
+ * the *lag* half of this module is not its problem. The *unmeasured* half is: a run nobody measured
+ * moves `cost_actual` by nothing, ever, so the task cap reads the same hold the other five do
+ * (`RunRepository.heldFor`, below), and never writes it into `cost_actual`, which is spend.
  *
  * ## The residual, **closed at WP-47**
  *
@@ -54,9 +58,38 @@
  * `coalesce(usd_reported, usd_estimated, 0)` here. Pricing **at admission** is still refused for the
  * reason it always was: a price table is the ledger's to read, not an admission's.
  *
- * What remains is the honest absence: a run **nobody measured** — the one the lease sweep ends —
- * has neither column set and counts 0, with no ledger row ever written for it either (standing
- * rule 16). That is not a gap in the term; it is the term saying that nothing is known.
+ * ## A run nobody measured is **held** at its reservation — WP-131
+ *
+ * A run whose ending carried no figure — both cost columns null: the lease sweep's ending, a cancel
+ * ended in place, a stop or a crash that read no `result` (WP-47, WP-101, WP-119) — used to count
+ * **0** here once it had ended, and this paragraph called that *"the term saying that nothing is
+ * known"*. It was over-admission stated as a decision (PROGRESS backlog **402**): the reservation the
+ * run held while live disappeared at its ending and nothing replaced it, so a scope whose runs kept
+ * ending unmeasured admitted past its cap by up to one per-run cap per run, and the task cap — which
+ * never counted earlier runs at all — admitted every retry of a task whose runs timed out unmeasured.
+ *
+ * The ruling on 402 (option (a), BD-010's *"predictable worst case comes from per-run caps"*):
+ *
+ * > **An ended run nobody measured is held at the reservation it was admitted at** —
+ * > `runs.reserve_usd` (migration 0072), written by both run inserts; a row written before it is
+ * > held at the admitting stage's reserve. Every cap counts the hold: the five ledger-backed caps
+ * > through the pending query, the task cap through `RunRepository.heldFor`.
+ *
+ * - **Held, never spent** (standing rule 16). No ledger row, no rollup and no `cost_actual` is
+ *   written from a hold; {@link Hold} is its own pair of numbers, and {@link capSpendDetail} names it
+ *   apart from the spend and from the pending reservations — *"N runs nobody measured, held at their
+ *   caps"*.
+ * - **Released by a figure.** The hold ends when `cost/late.ts`'s `recordCost` writes the run's cost,
+ *   which then moves `cost_actual` in the same transaction (it did not before WP-131, so the task cap
+ *   would have lost the money at the release).
+ * - **Or by the window.** A windowed cap counts the hold in the window that contains the run's
+ *   `ended_at`, and it ages out with that window; a batch-scoped cap (the history bootstrap) holds it
+ *   for the batch's life. **The task cap never rolls over**: the task stays paused until a human
+ *   raises the cap.
+ * - **No exclusion.** A run counts `0` only when its row proves no CLI process was spawned, and the
+ *   one row this build writes that way — a run that could not be started — already carries a
+ *   measured `usd_reported = 0`; a run swept or cancelled before its process spawned is
+ *   indistinguishable on the row from one that ran, and is held (`pending-run-spend.ts`).
  *
  * The other direction is stated too: a **live** run is counted at the admitting stage's per-run
  * cap, which is exact when the scope is one kind of work (a bootstrap batch mines with one stage)
@@ -92,12 +125,29 @@
  */
 import type { Slug } from '@platform/contracts';
 
+/**
+ * The runs of a scope **nobody measured**, held at the reservations they were admitted at (WP-131).
+ *
+ * Never spend: it is a bound on what the scope may already have spent and nobody knows, kept apart
+ * from {@link CapSpend.spentUsd} and from {@link Commitment.pendingUsd} so a pause can say which is
+ * which.
+ */
+export interface Hold {
+  readonly heldUsd: number;
+  /** How many runs {@link Hold.heldUsd} is for — the *N* of *"N runs nobody measured"*. */
+  readonly heldRuns: number;
+}
+
+/** What the runs of a scope have committed that the ledger has not recorded: the pending term and the hold. */
+export interface Commitment extends Hold {
+  /** Live runs at their reservation, ended ones at their own figure; see this module's docblock. */
+  readonly pendingUsd: number;
+}
+
 /** What a cap is measured against: the ledger's rows, and the runs it cannot see yet. */
-export interface CapSpend {
+export interface CapSpend extends Commitment {
   /** Recorded in `cost_entries` — the ledger, and the platform's record of money spent. */
   readonly spentUsd: number;
-  /** Committed by runs the ledger has not recorded; see this module's docblock for the valuation. */
-  readonly pendingUsd: number;
 }
 
 /** A cap, what it has been charged, and what the run being admitted may add to it. */
@@ -107,28 +157,60 @@ export interface CapAdmission extends CapSpend {
   readonly reserveUsd: number;
 }
 
+/** No hold — a scope with no unmeasured run, or a store that has none to report. */
+export const NO_HOLD: Hold = { heldUsd: 0, heldRuns: 0 };
+
+/**
+ * The hold over a set of runs nobody measured, from the reservations they were admitted at.
+ *
+ * `null` — a run written before migration 0072 recorded none — is held at `admittingReserveUsd`,
+ * which is what `pending-run-spend.ts`'s `coalesce(r.reserve_usd, $reserve)` does; this is that
+ * valuation for the in-memory stores, which hold rows rather than a query.
+ */
+export const holdOf = (
+  reserves: readonly (number | null)[],
+  admittingReserveUsd: number,
+): Hold => ({
+  heldUsd: reserves.reduce<number>((total, reserve) => total + (reserve ?? admittingReserveUsd), 0),
+  heldRuns: reserves.length,
+});
+
 /**
  * Would admitting this run take the scope past its cap?
  *
  * `>` rather than `>=`: a run that exactly fills the cap is admitted, which is the comparison
  * `taskBudgetExhausted` has always made and the one the shipped figures are derived from
- * (`features.history_bootstrap.budget_usd` = 20 is ten $2 runs, not nine).
+ * (`features.history_bootstrap.budget_usd` = 20 is ten $2 runs, not nine). The hold is counted
+ * beside the spend and the pending term (WP-131).
  */
 export const capIsSpent = (admission: CapAdmission): boolean =>
-  admission.spentUsd + admission.pendingUsd + admission.reserveUsd > admission.capUsd;
+  admission.spentUsd + admission.pendingUsd + admission.heldUsd + admission.reserveUsd >
+  admission.capUsd;
 
 /**
- * The words a pause carries, with the two numbers kept apart.
+ * The hold in words, or `''` when there is none: *"N runs nobody measured, held at their caps: X
+ * USD"* — never folded into a spent figure (standing rule 16).
+ */
+export const holdDetail = (hold: Hold): string =>
+  hold.heldRuns > 0
+    ? `${hold.heldRuns} ${hold.heldRuns === 1 ? 'run' : 'runs'} nobody measured, held at ` +
+      `${hold.heldRuns === 1 ? 'its cap' : 'their caps'}: ${hold.heldUsd} USD`
+    : '';
+
+/**
+ * The words a pause carries, with the three numbers kept apart.
  *
  * An operator raising a cap has to be able to tell a charge from a reservation: *"0.4 spent"* is a
- * fact about money, *"2 committed"* is a fact about a run that has not been charged yet, and a
- * single summed figure would present the second as the first — which is the same reason the
- * pending term is a separate column of the port's answer rather than folded into the spend
- * (standing rule 16's neighbour: a number whose meaning is guessed at is worse than two numbers).
+ * fact about money, *"2 committed"* is a fact about a run that has not been charged yet, and *"1 run
+ * nobody measured, held at its cap: 15"* is a bound on money nobody knows the amount of — a single
+ * summed figure would present the second and third as the first (standing rule 16's neighbour: a
+ * number whose meaning is guessed at is worse than three numbers).
  */
 export const capSpendDetail = (admission: CapAdmission, stage: Slug): string =>
   `${admission.spentUsd} spent` +
   (admission.pendingUsd > 0
     ? ` and ${admission.pendingUsd} committed by runs the ledger has not recorded yet`
     : '') +
-  ` of ${admission.capUsd} USD, and "${stage}" may spend ${admission.reserveUsd} more`;
+  ` of ${admission.capUsd} USD` +
+  (admission.heldRuns > 0 ? `, with ${holdDetail(admission)}` : '') +
+  `, and "${stage}" may spend ${admission.reserveUsd} more`;

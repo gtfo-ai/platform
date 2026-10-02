@@ -288,6 +288,73 @@ describe('the run projection', () => {
     }
   });
 
+  /**
+   * WP-131 (PROGRESS backlogs 403 and 404), the two projections over the same unmeasured run:
+   * the task's `unmeasured_runs` counts it (the measured total excludes it), and a `run_model_usage`
+   * row with **neither** figure — a model `price_list` has no row for — is published as `usd: null`
+   * rather than the `0` the read published until WP-131. Canary: either projection's `null`/count
+   * branch removed fails here by name, which `runs.test.ts`'s stubbed projection cannot.
+   */
+  it('counts a run nobody measured on its task and publishes an unpriced model as usd null (WP-131)', async () => {
+    const before = (await listProjectTasks(drizzled, projectId, { limit: 50 }))?.items.find(
+      (item) => item.id === taskId,
+    );
+    const { rows } = await pool.query<{ id: string }>(
+      `insert into runs (task_id, task_stage_id, project_id, role, model, effort, prompt_version,
+                         status, terminal_reason, started_at, ended_at, num_turns, wall_ms)
+       select $1, ts.id, $2, 'product_manager', 'claude-opus-5', 'medium',
+              'feature@1+product_manager', 'timed_out', 'timed_out', now(), now(), 0, 300000
+         from task_stages ts where ts.task_id = $1 limit 1
+       returning id`,
+      [taskId, projectId],
+    );
+    const unmeasuredId = rows[0]?.id as string;
+    const unmeasuredIds: string[] = [unmeasuredId];
+    try {
+      await pool.query(
+        `insert into run_model_usage (run_id, model, input_tokens, usd_reported, usd_estimated)
+         values ($1, 'claude-unpriced', 10, null, null)`,
+        [unmeasuredId],
+      );
+      const run = await findRun(drizzled, unmeasuredId);
+      expect(run?.model_usage).toHaveLength(1);
+      expect(run?.model_usage[0]?.usd).toBeNull();
+      expect(runRecordSchema.parse(run).model_usage[0]?.usd).toBeNull();
+
+      const after = (await listProjectTasks(drizzled, projectId, { limit: 50 }))?.items.find(
+        (item) => item.id === taskId,
+      );
+      expect(after?.unmeasured_runs).toBe((before?.unmeasured_runs ?? Number.NaN) + 1);
+      // The measured total is not moved by a run that has no figure.
+      expect(after?.cost_actual_usd).toBe(before?.cost_actual_usd);
+
+      // WP-131 review round 1: a `cost_unreported` stop's row carries the runner's floor
+      // (`usd_reported = 0`) with `figure_is_floor` — it is counted too, never shown as a
+      // measured $0 with no "Excludes" line. A measured 0 without the flag is not.
+      const floors = await pool.query<{ id: string }>(
+        `insert into runs (task_id, task_stage_id, project_id, role, model, effort, prompt_version,
+                           status, terminal_reason, started_at, ended_at, num_turns, wall_ms,
+                           usd_reported, figure_is_floor)
+         select $1, ts.id, $2, 'product_manager', 'claude-opus-5', 'medium',
+                'feature@1+product_manager', s.status::run_status, s.reason::run_terminal_reason,
+                now(), now(), 0, 1000, 0, s.floor
+           from task_stages ts,
+                (values ('budget_exceeded', 'error_max_budget_usd', true),
+                        ('completed', 'success', false)) as s(status, reason, floor)
+          where ts.task_id = $1 and ts.id = (select id from task_stages where task_id = $1 limit 1)
+         returning id`,
+        [taskId, projectId],
+      );
+      unmeasuredIds.push(...floors.rows.map((row) => row.id));
+      const withFloor = (await listProjectTasks(drizzled, projectId, { limit: 50 }))?.items.find(
+        (item) => item.id === taskId,
+      );
+      expect(withFloor?.unmeasured_runs).toBe((before?.unmeasured_runs ?? Number.NaN) + 2);
+    } finally {
+      await pool.query('delete from runs where id = any($1::uuid[])', [unmeasuredIds]);
+    }
+  });
+
   it('is null for a run that does not exist, and refuses one with no stage by name', async () => {
     expect(await findRun(drizzled, '00000000-0000-4000-8000-00000000dead')).toBeNull();
     await expect(findRun(drizzled, unlinkedRunId)).rejects.toThrow(/is not linked to a stage/);
@@ -622,6 +689,7 @@ describe('the prompt and context-pack reads, and the rows that predate their wri
           redactionCount: 0,
           contextPack: record,
           settings: null,
+          reserveUsd: null,
         });
       }
       await client.query('commit');

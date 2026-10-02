@@ -54,6 +54,7 @@ import {
   feedbackRecordSchema,
   jsonObjectSchema,
   knowledgeProposalRecordSchema,
+  pausedBudgetScopeSchema,
   questionRecordSchema,
   taskTotalsSchema,
   workspaceRecordSchema,
@@ -295,6 +296,12 @@ export const taskEscalatedEvent = defineEvent('task.escalated', {
 export const taskPausedEvent = defineEvent('task.paused', {
   ...taskScoped,
   reason: z.enum(['budget', 'manual', 'taken_over']),
+  /**
+   * The cap behind a `budget` pause (WP-131 review round 2), and nothing for the other two reasons.
+   * **Optional**, so a `task.paused` appended before it still parses; such a pause names no cap, and
+   * the task page offers no raise for it.
+   */
+  budget_scope: pausedBudgetScopeSchema.optional(),
 });
 
 export const taskResumedEvent = defineEvent('task.resumed', {

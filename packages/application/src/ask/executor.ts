@@ -57,7 +57,8 @@ import {
   ArtifactIdentifierSecretError,
   findArtifactIdentifierSecret,
 } from '../artifacts/redaction.js';
-import { type BudgetGuard, noBudgetGuard } from '../cost/guard.js';
+import { type BudgetGuard, blockingBudgetDetail, noBudgetGuard } from '../cost/guard.js';
+import { type Hold, holdDetail } from '../cost/pending.js';
 import { composeSecretRedactors } from '../integrations/redaction.js';
 import { redactTextSearchTerms } from '../knowledge/text-search-record.js';
 import {
@@ -69,6 +70,7 @@ import {
 import { injectedSecretRedactorFor } from '../pipeline/run-redaction.js';
 import { type ProjectSettings, settingsAdmission } from '../pipeline/settings.js';
 import { runSettingsSnapshot } from '../pipeline/settings-snapshot.js';
+import { COST_UNREPORTED, withTaskCap } from '../pipeline/stage-executor.js';
 import type { RunStopReasons } from '../pipeline/stop-reasons.js';
 import type { PipelineStore, StoredTask } from '../pipeline/store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
@@ -166,12 +168,17 @@ export interface AskExecutor {
  * checked only against past spend is a cap discovered one run too late — with the ask's own
  * per-question figure as the "about to spend" term. Exported so criterion 9's *"at the cap and one
  * unit under it"* can be asserted directly rather than through a run.
+ *
+ * `held` is the task's ended runs nobody measured, at their reservations — the hold
+ * `taskBudgetExhausted` counts since WP-131 (PROGRESS backlog 402), asked here too because an ask
+ * is the second reader of the same cap (standing rule 68).
  */
 export const askBudgetExhausted = (
   stored: StoredTask,
   settings: ProjectSettings,
   askBudgetUsd: number,
-): boolean => stored.costActualUsd + askBudgetUsd > settings.taskBudgetUsd;
+  held: Hold,
+): boolean => stored.costActualUsd + held.heldUsd + askBudgetUsd > settings.taskBudgetUsd;
 
 /**
  * Citations that resolve **inside this task**, and how many did not (product/11:30, criterion 6).
@@ -344,12 +351,21 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         reason: 'this project has turned ask-the-task off (`features.ask.enabled`)',
       };
     }
-    if (askBudgetExhausted(task, settings, feature.budgetUsd)) {
+    const held = await options.store.runs.heldFor(scope.tx, task.task.id, feature.budgetUsd);
+    // The task's own cap when a maintainer raised it (WP-131 review round 1) — the same cap the
+    // stage executor reads, and the way out of a hold this executor cannot release itself: it has
+    // no late recorder, so an ask run the lease sweep ended stays held on the task cap until then.
+    const capped = withTaskCap(
+      settings,
+      await options.store.tasks.budgetCap(scope.tx, task.task.id),
+    );
+    if (askBudgetExhausted(task, capped, feature.budgetUsd, held)) {
       return {
         kind: 'refused',
         reason:
-          `the task has spent ${task.costActualUsd} USD of its ${settings.taskBudgetUsd} USD cap ` +
-          `and one question may spend ${feature.budgetUsd} more`,
+          `the task has spent ${task.costActualUsd} USD of its ${capped.taskBudgetUsd} USD cap` +
+          (held.heldRuns > 0 ? `, with ${holdDetail(held)},` : '') +
+          ` and one question may spend ${feature.budgetUsd} more`,
       };
     }
     /**
@@ -370,15 +386,7 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
       feature.budgetUsd,
     );
     if (blocker !== null) {
-      return {
-        kind: 'refused',
-        reason:
-          `the ${blocker.scope} budget for this ${blocker.window} is exhausted: ` +
-          `${blocker.spentUsd} of ${blocker.limitUsd} USD since ${blocker.windowStart}` +
-          (blocker.pendingUsd > 0
-            ? `, plus ${blocker.pendingUsd} committed by runs the ledger has not recorded yet`
-            : ''),
-      };
+      return { kind: 'refused', reason: blockingBudgetDetail(blocker) };
     }
     return { kind: 'ok', ask, task, settings };
   };
@@ -526,7 +534,14 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         // WP-57: the second `runs.insert` call site stores its pack the same way (standing rule 49).
         contextPack,
         // WP-91: and its settings snapshot, from the settings the ask was planned with.
-        settings: runSettingsSnapshot(settings, runRedactor),
+        // WP-131 review round 2: the task's own cap when raised, which is the cap this ask ran under.
+        settings: runSettingsSnapshot(
+          withTaskCap(settings, await options.store.tasks.budgetCap(scope.tx, ask.taskId)),
+          runRedactor,
+        ),
+        // WP-131 (migration 0072): the per-question cap it was admitted at, which every cap holds
+        // it at if it ends with nobody measuring it — the second insert, standing rule 49.
+        reserveUsd: askFeature(verdict.settings).budgetUsd,
       });
       /**
        * The lease, claimed in the **same transaction as the row** — the stage executor's rule and
@@ -645,6 +660,8 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
           // `null` when nothing measured it, never the floor's `0` (WP-119, backlog 334).
           cost: outcome.costUnmeasured === true ? null : outcome.cost,
           wallMs: outcome.wallMs,
+          // WP-131 pre-review round (backlog 407): a `cost_unreported` stop's cost is a floor.
+          costIsFloor: input.stopReason === COST_UNREPORTED,
         });
         if (!owned) {
           return { kind: 'skipped' as const, reason: 'another writer ended this run first' };
@@ -684,6 +701,7 @@ export const createAskExecutor = (options: AskExecutorOptions): AskExecutor => {
         usage: outcome.usage,
         cost: outcome.cost,
         wallMs: outcome.wallMs,
+        costIsFloor: input.stopReason === COST_UNREPORTED,
       });
       if (!owned) {
         return { kind: 'skipped' as const, reason: 'another writer ended this run first' };

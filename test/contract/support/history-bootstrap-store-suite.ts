@@ -450,6 +450,9 @@ export const runHistoryBootstrapStoreContract = (options: {
        * side may answer `undefined` for a number the executor adds.
        */
       expect(cap?.pendingUsd).toBe(0);
+      // …and nothing held (WP-131): no run of the batch ended with nobody measuring it.
+      expect(cap?.heldUsd).toBe(0);
+      expect(cap?.heldRuns).toBe(0);
       expect(
         await run(context, (tx) =>
           context.store.capForTask(tx, '00000000-0000-4000-8000-0000000fffff' as Id, 2),

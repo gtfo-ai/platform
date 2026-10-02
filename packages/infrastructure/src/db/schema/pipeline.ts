@@ -145,6 +145,11 @@ export const tasks = pgTable('tasks', {
     .notNull()
     .default({}),
   costActual: numeric('cost_actual', { precision: 12, scale: 6 }).notNull().default('0'),
+  /**
+   * The task's own cap, when a maintainer raised it (migration 0072, WP-131 review round 1); `null`
+   * is "the default applies". One writer, `TaskRepository.raiseBudgetCap`, and never `save`.
+   */
+  budgetCapUsd: numeric('budget_cap_usd', { precision: 12, scale: 6 }),
   // `cost_estimated` was dropped by migration 0035 (WP-47, backlog 75): a `not null default 0`
   // column with no writer, published as the task's estimated spend. `cost_estimated_usd` is now a
   // projection over `cost_entries where is_estimate` (`apps/server/src/queries/pipeline-queries.ts`).
@@ -288,6 +293,19 @@ export const runs = pgTable('runs', {
    * `run_model_usage` has carried since migration 0017.
    */
   usdEstimated: numeric('usd_estimated', { precision: 12, scale: 6 }),
+  /**
+   * The reservation the run was admitted at — the per-run cap — written by both inserts since
+   * migration 0072 (WP-131, PROGRESS backlog 402). A terminal run with both cost columns null is
+   * **held** at it by every cap; `null` is *"no reservation was recorded"* (every earlier run), which
+   * the caps read at the admitting stage's reserve. Never spend: no ledger row is written from it.
+   */
+  reserveUsd: numeric('reserve_usd', { precision: 12, scale: 6 }),
+  /**
+   * The cost columns hold the runner's **floor**, not a measurement — a `cost_unreported` stop
+   * (migration 0072, WP-131 pre-review round, backlog 407). The caps hold such a run at
+   * {@link runs.reserveUsd} and the task totals count it as unmeasured.
+   */
+  figureIsFloor: boolean('figure_is_floor').notNull().default(false),
   priceListId: uuid('price_list_id'),
   wallMs: bigint('wall_ms', { mode: 'number' }).notNull().default(0),
   redactionCount: integer('redaction_count').notNull().default(0),

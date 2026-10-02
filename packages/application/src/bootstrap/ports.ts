@@ -223,8 +223,9 @@ export interface HistoryBootstrapStore {
    * template, so an ordinary delivery pays nothing for it.
    *
    * `spentUsd` is the ledger's; `pendingUsd` is the batch's runs the ledger has not recorded,
-   * valued at `reserveUsd` while they are live and at what they reported once they have ended.
-   * The rule and the measurement that earned it are in `packages/application/src/cost/pending.ts`;
+   * valued at `reserveUsd` while they are live and at what they reported once they have ended, and
+   * `heldUsd`/`heldRuns` the ones nobody measured, held at their own `reserve_usd` (or `reserveUsd`
+   * for a row that recorded none) for the batch's life — WP-131. The rule and the measurement that earned it are in `packages/application/src/cost/pending.ts`;
    * without the second number two chunks admitted inside the ledger's window both run.
    */
   capForTask(

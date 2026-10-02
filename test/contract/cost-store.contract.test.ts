@@ -17,6 +17,8 @@ runCostStoreContract({
   create: async () => {
     const store = createMemoryCostStore();
     const history: { size: 'S' | 'M' | 'L' | 'XL'; costUsd: number }[] = [];
+    // The project's held runs, which are also the organisation's (its scope is every run).
+    const held: (number | null)[] = [];
     return {
       store,
       tx: { adapter: 'memory' } as never,
@@ -61,6 +63,11 @@ runCostStoreContract({
         },
         timezone: async (value) => {
           store.seedTimezone(PROJECT, value);
+        },
+        unmeasuredRun: async (input) => {
+          held.push(input.reserveUsd);
+          store.seedHeldRuns(PROJECT, [...held]);
+          store.seedHeldRuns(null, [...held]);
         },
       },
       cleanup: async () => {},

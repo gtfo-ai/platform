@@ -3,6 +3,7 @@
  * WP-15i, three from WP-27.
  *
  *   POST /api/tasks/:task_id/pause | resume | cancel
+ *   POST /api/tasks/:task_id/budget                           (WP-131: raise this task's cap)
  *   POST /api/tasks/:task_id/retry-stage | return-to-stage | rework | feedback
  *   POST /api/tasks/:task_id/questions/:question_id/answer
  *   POST /api/tasks/:task_id/approvals/:approval_id/decide
@@ -95,6 +96,7 @@ import {
   handBackRequestSchema,
   type JsonObject,
   pauseTaskRequestSchema,
+  raiseTaskBudgetRequestSchema,
   resumeTaskRequestSchema,
   retryRunRequestSchema,
   retryStageRequestSchema,
@@ -509,6 +511,32 @@ export const registerCommandRoutes = async (
       'Re-enters the current stage and enqueues it; no iteration round is spent, because the task stood still rather than going round. A task paused at `ready_for_merge` is not moved by the request: the answer reads `paused`, and the `ready_head_check` duty then compares the branch head with the one the gates judged — the same head re-enters `rebase_gate`, which re-reads the target branch and the Code review’s confirmation of any protected path CI excused before it lets the task wait for the merge again (WP-105), and a different or unreadable head re-enters `ci_gate` (WP-79); neither spends a loop. A template that runs no rebase gate waits for the merge again directly on the same head. A state the task cannot leave for that stage answers 409 naming the transition.',
     params: () => ({}),
     perform: async ({ deps, taskId, userId }) => deps.resume({ taskId, userId }),
+  });
+
+  /**
+   * **Raise this task's cap** (WP-131 review round 1, the orchestrator's ruling on backlog 402's
+   * exit). A task the cap paused — on spend, or on a run nobody measured that the cap holds at its
+   * reservation — had no way out: the cap is a constant with no key, API or screen. `budget.write`
+   * (maintainer), the capability the project and organisation budget writes already ask for. The key
+   * is **required**: a raise is a decision a person made once, and a repeat under a used key must
+   * perform nothing. It only raises (a figure not above the cap in force answers 409
+   * `budget_not_raised`), moves no state — the resume command resumes — and never "releases" a hold.
+   */
+  taskCommand({
+    path: '/api/tasks/:task_id/budget',
+    action: 'budget.write',
+    name: 'task.budget.raise',
+    key: 'required',
+    body: raiseTaskBudgetRequestSchema,
+    summary: 'Raise this task’s own cap',
+    description:
+      'The task cap (product/09, BD-010: "a human can raise it") for this task alone, stored on the task and read by every later admission in place of the default. A figure not above the cap in force answers 409 `budget_not_raised`; nothing lowers a cap. The task is not moved: a task paused for its budget is resumed through `POST /api/tasks/:id/resume`. The audit row names the cap it replaced.',
+    params: (body) => ({ cap_usd: body.cap_usd }),
+    auditResult: (result: { readonly capUsd: number; readonly previousCapUsd: number }) => ({
+      before_cap_usd: result.previousCapUsd,
+    }),
+    perform: async ({ deps, body, taskId, userId }) =>
+      deps.raiseBudget({ taskId, userId, capUsd: body.cap_usd }),
   });
 
   taskCommand({

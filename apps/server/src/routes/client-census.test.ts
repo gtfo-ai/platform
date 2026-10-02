@@ -557,6 +557,18 @@ describe('the client’s endpoint list against the server’s router', () => {
     }
   });
 
+  /**
+   * WP-131 review round 1: *Raise this task's cap* — the client's half is the task page's control
+   * (`endpoints.raiseTaskBudget`), and the equality in both directions above is what holds that the
+   * client calls it and the server registers it. Named positively here, with the guard's position.
+   */
+  it('serves the task cap raise, and refuses an anonymous caller before validating the body (WP-131)', async () => {
+    expect((await probe('/api/tasks/{}/budget')).served).toBe(true);
+    const response = await app.inject({ method: 'POST', url: probeUrl('/api/tasks/{}/budget') });
+    const body = response.json() as { error?: { code?: string } };
+    expect(`${response.statusCode} ${body.error?.code ?? ''}`).toBe('401 unauthenticated');
+  });
+
   it('serves the steer command WP-27 took off the gap list — the last entry on it', async () => {
     // The twelfth command, and the one that needed a different work package rather than a later
     // iteration: it pushes a user turn into a **live session**, which is why WP-15i left it here.

@@ -252,10 +252,38 @@ export const diffStatsSchema = z.strictObject({
 /** Terminal CI outcome as normalised by the git adapter. */
 export const ciStatusSchema = z.enum(['success', 'failed', 'canceled', 'skipped']);
 
-/** Cost and effort totals attached to `task.completed` / `task.cancelled`. */
+/**
+ * Which cap paused a task for `budget` (WP-131 review round 2): the task's own cap, a `budgets` row's
+ * scope (`organization`, `project`), a feature cap (`shadow`, `maintenance`, `bootstrap`) or the run's
+ * own cap (`run`, a run that stopped at its per-run budget). Only the `task` cap can be raised from
+ * the task (`POST /api/tasks/:id/budget`); every other one is raised where it is set.
+ */
+export const pausedBudgetScopeSchema = z.enum([
+  'task',
+  'organization',
+  'project',
+  'shadow',
+  'maintenance',
+  'bootstrap',
+  'run',
+]);
+
+export type PausedBudgetScope = z.infer<typeof pausedBudgetScopeSchema>;
+
+/**
+ * Cost and effort totals attached to `task.completed` / `task.cancelled`.
+ *
+ * `cost_usd` is the sum over the runs that **have** a figure; `is_estimate` says some of them were
+ * priced by the platform rather than reported (BD-011). `unmeasured_runs` (WP-131, PROGRESS backlog
+ * 403) counts the runs that have **none** — ended with nobody measuring them — which `cost_usd`
+ * therefore excludes; `runs` counts every run. Until WP-131 such a run was visible only as
+ * `is_estimate: true`, which said something else. **Optional**, so an event appended before WP-131
+ * still parses (the replay shape WP-119 established); every producer writes it.
+ */
 export const taskTotalsSchema = z.strictObject({
   cost_usd: usdSchema,
   is_estimate: z.boolean(),
+  unmeasured_runs: z.int().nonnegative().optional(),
   runs: z.int().nonnegative(),
   wall_ms: z.int().nonnegative(),
 });
@@ -622,6 +650,32 @@ export const taskRecordSchema = z.strictObject({
   conflict: taskConflictSchema.nullable(),
   cost_actual_usd: usdSchema,
   /**
+   * How many of the task's runs ended with **nobody measuring them** (WP-131, PROGRESS backlog 403)
+   * — a stop or a crash that read no `result`, a cancel ended in place, a run the lease sweep ended.
+   * `cost_actual_usd` **excludes** them (it is the measured spend), so a reader shown the total is
+   * told what it leaves out: the task page says *"excludes N runs nobody measured"* when this is
+   * above zero. Their spend is unknown, never zero; the caps hold each at its reservation.
+   */
+  unmeasured_runs: z.int().nonnegative(),
+  /**
+   * The task cap in force — the task's own override when a maintainer raised it
+   * (`POST /api/tasks/:id/budget`, WP-131 review round 1), else the default. What *Raise this
+   * task's cap* must exceed.
+   */
+  budget_cap_usd: usdSchema,
+  /**
+   * Why a **paused** task is paused — `task.paused`'s own `reason` (`budget`, `manual`,
+   * `taken_over`), read off the task's newest pause event — and `null` for a task that is not
+   * paused. The page offers *Raise this task's cap* on `budget` (WP-131 review round 1).
+   */
+  paused_reason: z.enum(['budget', 'manual', 'taken_over']).nullable(),
+  /**
+   * Which cap paused it, for a `budget` pause — `task.paused`'s `budget_scope` (WP-131 review
+   * round 2); `null` otherwise, and for a pause appended before the field existed. Only `task` is
+   * raised from the task page (`POST /api/tasks/:id/budget`).
+   */
+  paused_budget_scope: pausedBudgetScopeSchema.nullable(),
+  /**
    * The part of what the task has already spent that was **priced** rather than reported — a
    * **projection** over `cost_entries where is_estimate`, not a column (WP-47, PROGRESS backlog
    * **75**).
@@ -673,6 +727,20 @@ export const taskRecordSchema = z.strictObject({
 /** A `sha256` digest as lowercase hex — what `runs.settings_hash` stores (WP-91). */
 export const sha256HexSchema = z.string().regex(/^[0-9a-f]{64}$/);
 
+/**
+ * One model's share of a run **as `GET /api/runs/:id` publishes it** (WP-131, PROGRESS backlog 404).
+ *
+ * `modelUsageSchema` with a nullable `usd`: a `run_model_usage` row whose model `price_list` has no
+ * row for (in `local` mode) carries **neither** figure, and the read publishes `null` — *nobody
+ * priced it* — rather than the `0` it published until WP-131, which read as a free model (standing
+ * rule 16). Read DTO only: `run.finished` and the transcript keep `modelUsageSchema`, because every
+ * producer of those writes a number, and widening a stored event's field is a wider change than this
+ * projection needs.
+ */
+export const runModelUsageRecordSchema = modelUsageSchema.extend({
+  usd: usdSchema.nullable(),
+});
+
 export const runRecordSchema = z.strictObject({
   id: idSchema,
   task_id: idSchema,
@@ -693,7 +761,7 @@ export const runRecordSchema = z.strictObject({
   last_output_at: isoDateTimeSchema.nullish(),
   num_turns: z.int().nonnegative(),
   usage: tokenUsageSchema,
-  model_usage: z.array(modelUsageSchema),
+  model_usage: z.array(runModelUsageRecordSchema),
   /**
    * `null` when **nobody measured this run** — both `runs.usd_reported` and `runs.usd_estimated` are
    * null (WP-47's third answer): a run the lease sweep ended, a cancel ended in place, or a stop or a
@@ -761,6 +829,7 @@ export type ContextPackTextOutcome = z.infer<typeof contextPackTextOutcomeSchema
 export type DiffStats = z.infer<typeof diffStatsSchema>;
 export type CiStatus = z.infer<typeof ciStatusSchema>;
 export type TaskTotals = z.infer<typeof taskTotalsSchema>;
+export type RunModelUsageRecord = z.infer<typeof runModelUsageRecordSchema>;
 export type BudgetScope = z.infer<typeof budgetScopeSchema>;
 export type BudgetWindow = z.infer<typeof budgetWindowSchema>;
 export type BudgetRecord = z.infer<typeof budgetRecordSchema>;

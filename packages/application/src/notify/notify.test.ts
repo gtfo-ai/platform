@@ -218,6 +218,48 @@ describe('what an event would say', () => {
     });
   });
 
+  /**
+   * WP-131 (PROGRESS backlog 403): `totals.cost_usd` sums the runs that have a figure, so a total
+   * that leaves runs out says so — and an event appended before the count existed reads as before.
+   */
+  it.each([
+    { unmeasured: 1, detail: 'merged — $2.40, 3 runs; excludes 1 run nobody measured.' },
+    { unmeasured: 2, detail: 'merged — $2.40, 3 runs; excludes 2 runs nobody measured.' },
+    { unmeasured: 0, detail: 'merged — $2.40, 3 runs.' },
+    { unmeasured: undefined, detail: 'merged — $2.40, 3 runs.' },
+  ])(
+    'says what a completed task’s total excludes: $unmeasured unmeasured runs (WP-131)',
+    ({ unmeasured, detail }) => {
+      const completed = domainEventSchemasByType['task.completed'].parse({
+        id: '00000000-0000-4000-9000-00000000dd03',
+        stream_type: 'task',
+        stream_id: '00000000-0000-4000-8000-0000000000c1',
+        stream_seq: 9,
+        correlation_id: null,
+        cause_event_id: null,
+        actor: { kind: 'system', component: 'pipeline' },
+        occurred_at: '2026-06-01T09:00:00.000Z',
+        type: 'task.completed',
+        payload: {
+          project_id: PROJECT,
+          task_id: '00000000-0000-4000-8000-0000000000c1',
+          outcome: 'merged',
+          totals: {
+            cost_usd: 2.4,
+            is_estimate: false,
+            ...(unmeasured === undefined ? {} : { unmeasured_runs: unmeasured }),
+            runs: 3,
+            wall_ms: 1000,
+          },
+        },
+      }) as DomainEvent;
+      expect(decideNotification(completed)).toMatchObject({
+        notificationClass: 'task_completed',
+        detail,
+      });
+    },
+  );
+
   it('renders a body out of platform text and bounds every untrusted field', () => {
     const draft = notificationDraft({
       notificationClass: 'escalation',

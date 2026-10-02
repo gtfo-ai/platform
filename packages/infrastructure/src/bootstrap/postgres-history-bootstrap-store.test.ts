@@ -266,11 +266,19 @@ describe('PostgresHistoryBootstrapStore — the spend the cap is compared agains
   it('answers the cap, the spend and what is in flight from one read', async () => {
     expect(
       await store.capForTask(
-        scripted([{ cap_usd: '20.000000', spent_usd: '18.400000', pending_usd: '2.000000' }]),
+        scripted([
+          {
+            cap_usd: '20.000000',
+            spent_usd: '18.400000',
+            pending_usd: '2.000000',
+            held_usd: '15.000000',
+            held_runs: 1,
+          },
+        ]),
         TASK as never,
         2,
       ),
-    ).toEqual({ capUsd: 20, spentUsd: 18.4, pendingUsd: 2 });
+    ).toEqual({ capUsd: 20, spentUsd: 18.4, pendingUsd: 2, heldUsd: 15, heldRuns: 1 });
   });
 
   /**
@@ -292,6 +300,9 @@ describe('PostgresHistoryBootstrapStore — the spend the cap is compared agains
     await store.capForTask(recording, TASK as never, 2.5);
     expect(calls[0]?.values).toEqual([TASK, ['created', 'starting', 'running'], 2.5]);
     expect(calls[0]?.text).toContain('pending_usd');
+    // WP-131: and the batch's runs nobody measured, held at their own reservation or this one.
+    expect(calls[0]?.text).toContain('coalesce(r.reserve_usd, $3::numeric)');
+    expect(calls[0]?.text).toContain('held_runs');
   });
 });
 
