@@ -20,6 +20,10 @@
  * button is disabled and the server's sentence is shown as text (`ui/untrusted.tsx` — platform text
  * today, and the rule is about the sink). The capability is the server's to check: a member who
  * presses it is refused `403` and the screen shows that refusal as it came.
+ *
+ * Since WP-124 (PROGRESS backlog 366) the read also says when the **last** discovery's findings were
+ * never recorded — the recovery pass re-asked for the recording once and gave up — because this is
+ * the button that runs it again.
  */
 import type { ReactElement } from 'react';
 import { useOnboardingCommands, useRediscoveryGate } from '../app/queries.js';
@@ -60,6 +64,14 @@ export const Rediscovery = ({ projectId }: { readonly projectId: string }): Reac
         {last === null ? '' : `; the last discovery cost ${formatUsd(last.cost_usd)}`}. Maintainers
         only.
       </p>
+      {last?.findings_unrecorded == null ? null : (
+        // WP-124, backlog 366: the last discovery was paid for and its findings were never recorded;
+        // the recovery pass re-asked once and gave up. Platform text, rendered as text all the same.
+        <p className="text-xs text-warning" data-findings-unrecorded="true">
+          The last discovery’s findings were never recorded:{' '}
+          <UntrustedText value={last.findings_unrecorded.reason} />. Re-evaluating runs it again.
+        </p>
+      )}
       {blocker === null ? null : (
         <p className="text-xs text-warning">
           <UntrustedText value={blocker.detail} />

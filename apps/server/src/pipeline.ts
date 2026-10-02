@@ -1514,6 +1514,27 @@ export const composePipeline = async (
           causeEventId: null,
         }),
       },
+      /**
+       * WP-124, backlog **366**: an approved knowledge proposal no commit carries and no apply job
+       * is working on — one apply per project under a mark, then `apply_failed` with a reason on
+       * the proposal queue; `packages/application/src/recovery/knowledge-apply.ts`.
+       */
+      applies: {
+        store: recoveryAdapters.createPostgresKnowledgeApplyRecoveryStore({
+          jobsSchema: options.jobsSchema,
+        }),
+      },
+      /**
+       * WP-124, backlog **366**: a discovery run's draft no evaluation was recorded from — the
+       * recording job once more under a mark, then the discovery task escalates with a brief;
+       * `packages/application/src/recovery/discovery-record.ts`.
+       */
+      discoveryRecords: {
+        store: recoveryAdapters.createPostgresDiscoveryRecordRecoveryStore({
+          jobsSchema: options.jobsSchema,
+        }),
+        escalation: { store, ids, clock: { now: nowIso } },
+      },
       deadlines: {
         store: recoveryAdapters.createPostgresDeadlineRecoveryStore(),
         settings,
@@ -1534,7 +1555,7 @@ export const composePipeline = async (
   if (reconciler === null) {
     options.logger.warn(
       { setting: 'APP_INTAKE_RECONCILE_INTERVAL_MS=0' },
-      'the recovery pass is switched off: a matched ticket whose intake enqueue is lost is never started (PROGRESS backlog 20), a stranded history bootstrap (101) or pending ask (84) is never recovered, a run whose process died stays "running" for ever, holding its stage budget against every future window (109), a run credential whose revoke never happened stays live to its expiry (155), a question, approval or take-over whose timer was lost — or that predates deadlines — waits for ever (161, 162), a merge request a rework superseded whose close was lost stays open (178), a deferred dependency-gate decision whose resume wake-up was lost waits for the next resume (240), a notification whose job spent every attempt is never re-posted (236), a question or approval whose reminder was lost gets none (291), and a task left at a stage with no job and no run stays active for ever (320)',
+      'the recovery pass is switched off: a matched ticket whose intake enqueue is lost is never started (PROGRESS backlog 20), a stranded history bootstrap (101) or pending ask (84) is never recovered, a run whose process died stays "running" for ever, holding its stage budget against every future window (109), a run credential whose revoke never happened stays live to its expiry (155), a question, approval or take-over whose timer was lost — or that predates deadlines — waits for ever (161, 162), a merge request a rework superseded whose close was lost stays open (178), a deferred dependency-gate decision whose resume wake-up was lost waits for the next resume (240), a notification whose job spent every attempt is never re-posted (236), a question or approval whose reminder was lost gets none (291), a task left at a stage with no job and no run stays active for ever (320), and an approved knowledge change whose apply failed, or a discovery run whose findings were never recorded, is never retried or reported (366)',
     );
   }
 

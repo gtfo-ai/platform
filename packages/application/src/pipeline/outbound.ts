@@ -37,13 +37,16 @@
  *  - nothing here holds a transaction while it calls. `integrations.forProject` and the executor
  *    both refuse if a later change tries (`events/open-transaction.ts`).
  */
+import type { Id } from '@platform/contracts';
 import { type AskMirrorOptions, runAskMirror } from '../ask/mirror.js';
 import { runApprovalSettled } from '../notify/approval-settled.js';
 import { runNotification } from '../notify/duty.js';
 import type { NotifyOptions } from '../notify/options.js';
 import { runOrganisationNotification } from '../notify/organisation.js';
 import { runQuestionSettled } from '../notify/question-settled.js';
-import type { JobHandler } from '../ports/jobs.js';
+import { outboundDutyExhaustionOf } from '../ports/job-exhaustion.js';
+import type { JobContext, JobHandler } from '../ports/jobs.js';
+import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
 import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
@@ -62,6 +65,7 @@ import {
   runDependencyGateResume,
 } from './dependency-gate.js';
 import { runBreakdownCreate, runSpikeReport } from './epic-split.js';
+import { type ExhaustedJob, escalatingOnLastTry } from './job-escalation.js';
 import type { OutboundJobData } from './jobs.js';
 import { runReadyHeadCheck } from './ready-head.js';
 import { runResolveOnMerge } from './resolve-on-merge.js';
@@ -88,6 +92,70 @@ export interface PipelineOutboundOptions
 }
 
 /**
+ * What each **bound-and-escalate** duty was for, and what a person can do once it has spent its
+ * tries — the two clauses of the brief `job-escalation.ts` writes (WP-124, PROGRESS backlog 366).
+ * Platform text only. Keyed by the duties `OUTBOUND_DUTY_EXHAUSTION` declares `bound_and_escalate`,
+ * and held to that set by `outbound.test.ts`.
+ */
+export const OUTBOUND_ESCALATION_TEXT: Readonly<
+  Record<string, { readonly what: string; readonly remedy: string }>
+> = {
+  review_only_post: {
+    what: 'post the review on the merge request',
+    remedy:
+      'The review is stored on this task; read it here, and post what matters on the merge request yourself.',
+  },
+  ticket_lint_post: {
+    what: 'post the readiness lint on the ticket',
+    remedy: 'The lint is stored on this task; read it here, and comment on the ticket yourself.',
+  },
+  spike_report: {
+    what: 'attach the research report to the ticket',
+    remedy:
+      'The report is stored on this task; attach it to the ticket yourself, then hand the task back.',
+  },
+  breakdown_create: {
+    what: 'file the child tickets that were accepted',
+    remedy:
+      'The accepted children with no ticket yet are listed on this task; file them by hand, or decide the breakdown again once the tracker is reachable.',
+  },
+  dependency_gate: {
+    what: 'check the dependencies this change adds against the project’s policy',
+    remedy:
+      'Nothing was allowed, asked about or blocked: review the merge request’s manifests yourself, then hand the task back at the stage it should resume from.',
+  },
+  ready_head_check: {
+    what: 'judge the branch head for the resume, hand-back or retry a person asked for',
+    remedy:
+      'The task did not move; check the merge request, then resume or hand the task back again.',
+  },
+};
+
+/** The brief's description of one outbound job, or `null` when this job does not escalate. */
+const exhaustedOutbound = (
+  job: JobContext<OutboundJobData>,
+): Omit<ExhaustedJob, 'tries'> | null => {
+  const { data } = job;
+  const declared = outboundDutyExhaustionOf(String(data.duty));
+  const text = OUTBOUND_ESCALATION_TEXT[String(data.duty)];
+  if (declared?.shape !== 'bound_and_escalate' || text === undefined) {
+    return null;
+  }
+  if (data.duty === 'notify_organisation' || data.task_id === undefined) {
+    return null;
+  }
+  return {
+    taskId: data.task_id as Id,
+    projectId: data.project_id as Id,
+    queue: JOB_QUEUES.pipelineOutbound,
+    duty: data.duty,
+    causeEventId: (data.cause_event_id ?? null) as Id | null,
+    what: text.what,
+    remedy: text.remedy,
+  };
+};
+
+/**
  * One job, one duty.
  *
  * The `default` branch **logs and returns** rather than throwing: a duty name this build does not
@@ -100,7 +168,14 @@ export const pipelineOutboundHandler = (
   options: PipelineOutboundOptions,
 ): JobHandler<OutboundJobData> => {
   const logger: Logger = options.logger ?? silentLogger;
-  return async (job) => {
+  // WP-124: a duty declared `bound_and_escalate` escalates its task on its last try before the
+  // throw ends the job; every other duty's throw reaches the retry policy untouched.
+  return escalatingOnLastTry(options, dispatchOutbound(options, logger), exhaustedOutbound);
+};
+
+const dispatchOutbound =
+  (options: PipelineOutboundOptions, logger: Logger): JobHandler<OutboundJobData> =>
+  async (job) => {
     const { data } = job;
     if (data.duty === 'notify_organisation') {
       // The one duty with no project (WP-65): narrowed here, before anything reads `project_id`.
@@ -202,4 +277,3 @@ export const pipelineOutboundHandler = (
         );
     }
   };
-};

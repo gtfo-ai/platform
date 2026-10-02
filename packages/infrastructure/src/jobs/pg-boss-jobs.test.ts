@@ -338,7 +338,11 @@ describe('work', () => {
 
     expect(lastCall(state, 'work')).toEqual([
       'stage.execute',
-      { batchSize: 1, pollingIntervalSeconds: 5 },
+      {
+        batchSize: 1,
+        pollingIntervalSeconds: 5,
+        includeMetadata: true,
+      },
     ]);
 
     const controller = new AbortController();
@@ -385,8 +389,48 @@ describe('work', () => {
     expect(lastCall(state, 'work')[1]).toEqual({
       batchSize: 1,
       pollingIntervalSeconds: 0.5,
+      includeMetadata: true,
       localConcurrency: 4,
     });
+  });
+
+  /**
+   * WP-124: every worker is registered through `pgBossWorkOptions`, so one fetch is one job and the
+   * handler is told its try. No burst trigger and never the notify path — the burst was measured
+   * to change nothing at the shipped cache cadence (PROGRESS backlog 392), and notify would hold a
+   * connection per process (TD-004's M7 amendment). The drain option itself, a shorter interval
+   * for `pipeline.outbound`, is held on that queue's registration in `pipeline/outbound.test.ts`.
+   */
+  it('registers every worker with one job per fetch and the try metadata, and no burst or notify', async () => {
+    const state = recorder();
+    const runtime = createPgBossJobs({ pgBoss: state.boss });
+    for (const queue of ['pipeline.outbound', 'stage.execute', 'knowledge.apply']) {
+      await runtime.jobs.work({ queue, handler: async () => {} });
+      const options = lastCall(state, 'work')[1] as Record<string, unknown>;
+      expect(options.batchSize, queue).toBe(1);
+      expect(options.includeMetadata, queue).toBe(true);
+      expect(options, queue).not.toHaveProperty('notifyPollingIntervalSeconds');
+      expect(options, queue).not.toHaveProperty('burstWhenReadyExceeds');
+      expect(options, queue).not.toHaveProperty('burstWhenBatchFull');
+    }
+  });
+
+  it('tells the handler which try it is running when pg-boss says so, and nothing when it does not', async () => {
+    const state = recorder();
+    const runtime = createPgBossJobs({ pgBoss: state.boss });
+    const seen: unknown[] = [];
+    await runtime.jobs.work({
+      queue: 'stage.execute',
+      handler: async (job) => {
+        seen.push(job.retries ?? null);
+      },
+    });
+    const signal = new AbortController().signal;
+    await state.workers.get('stage.execute')?.([
+      { id: 'j1', name: 'stage.execute', data: {}, signal, retryCount: 2, retryLimit: 2 },
+      { id: 'j2', name: 'stage.execute', data: {}, signal },
+    ]);
+    expect(seen).toEqual([{ count: 2, limit: 2 }, null]);
   });
 
   it('rejects a bad queue name before subscribing', async () => {

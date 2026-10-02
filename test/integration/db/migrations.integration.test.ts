@@ -34,6 +34,8 @@ const EXPECTED_TABLES = [
   'config_audit',
   'cost_entries',
   'cost_rollup_daily',
+  // WP-124, migration 0075: the discovery recorder's recovery mark and ending (backlog 366).
+  'discovery_record_recoveries',
   // WP-04: the dispatch queue TD-005's outbox needs (migration 0010).
   'event_dispatch',
   'event_streams',
@@ -217,6 +219,8 @@ describe('migrate on an empty PostgreSQL 18', () => {
       row('command_idempotency', 'read_write', null),
       row('config_audit', 'append_only', 'created_at'),
       row('cost_entries', 'append_only', 'created_at'),
+      // WP-124 (migration 0075): written with its mark, updated once by its ending.
+      row('discovery_record_recoveries', 'read_write', null),
       // Registered read_write on purpose: the dispatcher claims, defers and deletes its own queue
       // rows. `handler_executions` is unregistered and therefore read_write too — technical/03
       // does not list it among the append-only tables, because the dispatcher updates a row's

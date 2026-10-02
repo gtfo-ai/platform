@@ -92,9 +92,35 @@ describe('deciding a knowledge proposal', () => {
 
     expect(result.status).toBe('decided');
     const stored = proposals.rows[0] as StoredKnowledgeProposal;
-    // "Approved" is `queued` + a decision — there is no sixth status (see the module docblock).
+    // "Approved" is `queued` + a decision — not a status of its own (see the module docblock).
     expect(stored.status).toBe('queued');
     expect(stored.decidedByUserId).toBe(USER);
+    expect(stored.decidedAt).toBe(AT);
+    expect(isAwaitingApply(stored)).toBe(true);
+    expect(jobs.take(JOB_QUEUES.knowledgeApply)).toHaveLength(1);
+  });
+
+  it('approves an apply_failed proposal again: the failure clears, it awaits apply and an apply is asked for (WP-124)', async () => {
+    const { proposals, jobs, decideOptions } = harness();
+    await proposals.insert({} as never, [
+      row({
+        status: 'apply_failed',
+        decidedAt: '2026-09-11T10:00:00.000Z' as IsoDateTime,
+        applyFailureReason: 'the platform could not commit this approved change',
+      }),
+    ]);
+
+    const result = await decideKnowledgeProposal(decideOptions, {
+      projectId: PROJECT,
+      proposalId: PROPOSAL,
+      decision: 'approve',
+      userId: USER,
+    });
+
+    expect(result.status).toBe('decided');
+    const stored = proposals.rows[0] as StoredKnowledgeProposal;
+    expect(stored.status).toBe('queued');
+    expect(stored.applyFailureReason).toBeUndefined();
     expect(stored.decidedAt).toBe(AT);
     expect(isAwaitingApply(stored)).toBe(true);
     expect(jobs.take(JOB_QUEUES.knowledgeApply)).toHaveLength(1);

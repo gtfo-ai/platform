@@ -343,6 +343,22 @@ export const createRediscoveryGate =
         readiness: knowledgeAdapters.createPostgresReadinessStore(options.pool),
         // The wall clock: "started 12 minutes ago" is a sentence for the person reading the gate now.
         clock: { now: () => new Date().toISOString() },
+        // WP-124, backlog 366: the recovery pass's ending for a task whose findings were lost.
+        findingsUnrecorded: async (taskId) => {
+          const { rows } = await options.pool.query<{ ended_at: Date; detail: string }>(
+            `select r.ended_at, r.detail
+               from discovery_record_recoveries r
+               join artifacts a on a.id = r.artifact_id
+              where a.task_id = $1 and r.ended_at is not null
+              order by r.ended_at desc
+              limit 1`,
+            [taskId],
+          );
+          const row = rows[0];
+          return row === undefined
+            ? null
+            : { at: new Date(row.ended_at).toISOString() as IsoDateTime, reason: row.detail };
+        },
       },
       projectId as Id,
     );

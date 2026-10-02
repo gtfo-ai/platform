@@ -61,7 +61,7 @@
  * reach the proposal queue as `bootstrap` proposals (a page the index already holds becomes an
  * update), never a commit.
  */
-import type { Id, PipelineTemplate, TaskState } from '@platform/contracts';
+import type { Id, IsoDateTime, PipelineTemplate, TaskState } from '@platform/contracts';
 import { DISCOVERY_TEMPLATE_ID } from '@platform/domain';
 import { enqueueStage } from '../pipeline/jobs.js';
 import type { ProjectSettings } from '../pipeline/settings.js';
@@ -123,6 +123,12 @@ export interface RediscoveryGate {
     readonly taskId: Id;
     readonly state: TaskState;
     readonly costUsd: number;
+    /**
+     * Why this task's findings were never recorded, when the recovery pass gave up on them (WP-124,
+     * PROGRESS backlog 366, `recovery/discovery-record.ts`) — platform text and its instant. Absent
+     * or `null` when nothing was lost.
+     */
+    readonly findingsUnrecorded?: { readonly at: IsoDateTime; readonly reason: string } | null;
   } | null;
   readonly blocker: RediscoveryBlocker | null;
   /** The key the next re-evaluation would take; `null` exactly when {@link blocker} is set. */
@@ -136,6 +142,13 @@ export interface RediscoveryReadOptions {
   readonly readiness: Pick<ReadinessStore, 'latest'>;
   /** What "how long ago the live discovery task started" is measured against (WP-108). */
   readonly clock: StartDiscoveryOptions['clock'];
+  /**
+   * The recovery pass's ending for a discovery task whose findings were never recorded (WP-124),
+   * or `null`. Optional: a composition without it publishes `null`, which is every build before.
+   */
+  readonly findingsUnrecorded?: (
+    taskId: Id,
+  ) => Promise<{ readonly at: IsoDateTime; readonly reason: string } | null>;
 }
 
 /**
@@ -280,7 +293,16 @@ export const readRediscoveryGate = async (
       now: options.clock.now(),
     }),
   );
-  return { ceilingUsd: runBudgetUsd(settings, DISCOVERY_STAGE), ...decided };
+  const last = decided.lastDiscovery;
+  const lost =
+    last === null || options.findingsUnrecorded === undefined
+      ? null
+      : await options.findingsUnrecorded(last.taskId);
+  return {
+    ceilingUsd: runBudgetUsd(settings, DISCOVERY_STAGE),
+    ...decided,
+    lastDiscovery: last === null ? null : { ...last, findingsUnrecorded: lost },
+  };
 };
 
 export type StartRediscoveryResult =

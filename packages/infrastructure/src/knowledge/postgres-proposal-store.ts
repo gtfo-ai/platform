@@ -50,7 +50,7 @@ const sqlOf = (tx: Transaction): SqlExecutor => postgresTransaction(tx).client;
 
 const PROPOSAL_COLUMNS =
   'id, project_id, task_id, run_id, source, kind, type, target_path, delta, evidence, ' +
-  'significance, status, decided_by, decided_at, applied_commit_sha, created_at';
+  'significance, status, decided_by, decided_at, applied_commit_sha, created_at, apply_failure_reason';
 
 interface ProposalRow extends Record<string, unknown> {
   readonly id: string;
@@ -69,6 +69,7 @@ interface ProposalRow extends Record<string, unknown> {
   readonly decided_at: Date | null;
   readonly applied_commit_sha: string | null;
   readonly created_at: Date;
+  readonly apply_failure_reason: string | null;
 }
 
 const at = (value: Date | null): IsoDateTime | null =>
@@ -95,10 +96,12 @@ const toProposal = (row: ProposalRow): StoredKnowledgeProposal => ({
   decidedAt: at(row.decided_at),
   appliedCommitSha: row.applied_commit_sha,
   createdAt: at(row.created_at) as IsoDateTime,
+  // Present only on an `apply_failed` row (WP-124), so a row with none reads as it did before.
+  ...(row.apply_failure_reason === null ? {} : { applyFailureReason: row.apply_failure_reason }),
 });
 
 /** `isAwaitingApply`, as a `where` clause. Held to the predicate by the contract suite. */
-const AWAITING_APPLY =
+export const AWAITING_APPLY =
   "applied_commit_sha is null and (status = 'auto_applied' or (status = 'queued' and decided_at is not null))";
 
 export class PostgresProposalStore implements KnowledgeProposalStore {
@@ -219,12 +222,16 @@ export class PostgresProposalStore implements KnowledgeProposalStore {
   async decide(tx: Transaction, decision: KnowledgeProposalDecision): Promise<boolean> {
     const sql = sqlOf(tx);
     const { rowCount } = await sql.query(
+      // `apply_failed` is decidable again (WP-124): the decision clears the recovery's mark and
+      // reason in the same statement, so a re-approved proposal gets one more recovery attempt.
       `update kb_proposals
           set status = $2::knowledge_proposal_status,
               decided_by = $3,
               decided_at = $4,
-              delta = coalesce($5, delta)
-        where id = $1 and status in ('scored', 'queued')`,
+              delta = coalesce($5, delta),
+              apply_recovery_attempted_at = null,
+              apply_failure_reason = null
+        where id = $1 and status in ('scored', 'queued', 'apply_failed')`,
       [
         decision.id,
         decision.status,

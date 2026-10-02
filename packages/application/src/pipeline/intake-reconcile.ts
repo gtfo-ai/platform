@@ -47,6 +47,7 @@
  */
 import type { Actor, DomainEvent, Id, IsoDateTime } from '@platform/contracts';
 import { domainEventSchemasByType } from '@platform/contracts';
+import { StreamConflictError } from '../errors.js';
 import type { EventStore } from '../ports/event-store.js';
 import { jobQueueDefinition } from '../ports/job-queues.js';
 import type { JobHandler, Jobs, JobWorker } from '../ports/jobs.js';
@@ -56,6 +57,7 @@ import { silentLogger } from '../ports/logger.js';
 import type { UnitOfWork } from '../ports/unit-of-work.js';
 import type { StrandedRecoveryOptions } from '../recovery/stranded.js';
 import { runStrandedRecovery } from '../recovery/stranded.js';
+import { appendOnProjectWithRetry, PROJECT_STREAM_APPEND_ATTEMPTS } from './project-stream.js';
 
 /** `Actor.component` on a re-emitted `ticket.matched`, and the mark the next pass reads. */
 export const INTAKE_RECONCILER_COMPONENT = 'pipeline.intake.reconcile';
@@ -112,11 +114,26 @@ export const DEFAULT_INTAKE_RECONCILE_LIMIT = 50;
 export interface IntakeReconciliationReport {
   readonly found: number;
   readonly reEmitted: number;
+  /**
+   * Matches whose append lost the project stream's sequence on every one of
+   * {@link PROJECT_STREAM_APPEND_ATTEMPTS} tries (WP-124, PROGRESS backlog 368). Each is skipped,
+   * not thrown: its append rolled back, so the next pass finds it again, and the rest of this pass
+   * still runs.
+   */
+  readonly contended: number;
 }
 
 /**
- * One pass. Each ticket is re-emitted in a transaction of its own, so one ticket whose stream lost
- * a sequence race does not roll back the others.
+ * One pass. Each ticket is re-emitted in a transaction of its own, through the shared project-stream
+ * retry (WP-124, PROGRESS backlog **368**): the sequence is read **per attempt** and the event is
+ * built from it inside the attempt, so a writer that took the sequence first costs one more
+ * attempt, not the pass. Before WP-124 the sequence was read once over the pool and a lost race
+ * threw out of the whole pass — the remaining matches waited a tick, and so did every row of the
+ * stranded-work table that rides the same timer.
+ *
+ * A match that loses all four attempts is **skipped and counted**, never thrown: nothing is lost
+ * (the append rolled back and the next pass finds the match again), and one contended project does
+ * not hold back another project's ticket. Any other failure still throws.
  */
 export const runIntakeReconciliation = async (
   options: IntakeReconciliationOptions,
@@ -132,37 +149,63 @@ export const runIntakeReconciliation = async (
   });
 
   let reEmitted = 0;
+  let contended = 0;
   for (const match of matches) {
-    const streamSeq = await options.eventStore.nextStreamSequence('project', match.projectId);
-    const event = domainEventSchemasByType['ticket.matched'].parse({
-      id: options.ids.next(),
-      stream_type: 'project',
-      stream_id: match.projectId,
-      stream_seq: streamSeq,
-      // The lost event is what caused this one, which is what makes the pair readable in the log.
-      cause_event_id: match.eventId,
-      correlation_id: null,
-      actor: INTAKE_RECONCILER_ACTOR,
-      occurred_at: options.clock.now(),
-      type: 'ticket.matched',
-      payload: match.payload,
-    }) as DomainEvent;
-
-    await options.unitOfWork.transaction(async (scope) => {
-      await scope.events.append([event]);
-    });
+    // One id per match, drawn outside the retry: a lost attempt rolled back, so the next one may
+    // append the same event id at the new sequence.
+    const eventId = options.ids.next();
+    try {
+      await appendOnProjectWithRetry(
+        options,
+        { projectId: match.projectId, writer: 'intake_reconcile' },
+        async (scope, streamSeq) => {
+          const event = domainEventSchemasByType['ticket.matched'].parse({
+            id: eventId,
+            stream_type: 'project',
+            stream_id: match.projectId,
+            stream_seq: streamSeq,
+            // The lost event is what caused this one, which is what makes the pair readable in the log.
+            cause_event_id: match.eventId,
+            correlation_id: null,
+            actor: INTAKE_RECONCILER_ACTOR,
+            occurred_at: options.clock.now(),
+            type: 'ticket.matched',
+            payload: match.payload,
+          }) as DomainEvent;
+          await scope.events.append([event]);
+        },
+      );
+    } catch (error) {
+      if (
+        !(error instanceof StreamConflictError) ||
+        error.streamType !== 'project' ||
+        error.streamId !== match.projectId
+      ) {
+        throw error;
+      }
+      contended += 1;
+      logger.warn(
+        {
+          project_id: match.projectId,
+          lost_event_id: match.eventId,
+          attempts: PROJECT_STREAM_APPEND_ATTEMPTS,
+        },
+        'a matched ticket with no task row could not be re-emitted: another writer took the project stream’s sequence on every attempt, so it is left for the next pass (PROGRESS backlog 368)',
+      );
+      continue;
+    }
     reEmitted += 1;
     logger.warn(
       {
         project_id: match.projectId,
         lost_event_id: match.eventId,
-        event_id: event.id,
+        event_id: eventId,
       },
       'a matched ticket had no task row, so its ticket.matched was re-emitted (PROGRESS backlog 20)',
     );
   }
 
-  return { found: matches.length, reEmitted };
+  return { found: matches.length, reEmitted, contended };
 };
 
 // ── The timer that drives it ─────────────────────────────────────────────────
@@ -232,45 +275,72 @@ export interface IntakeReconcileJobOptions
  * retry limit lasts. The enqueue is the last statement either way, so a crash before it leaves the
  * chain to be re-established by the next process start — which is why the composition root enqueues
  * one at boot rather than relying on the chain alone.
+ *
+ * **The two halves fail apart** (WP-124, PROGRESS backlog **368**). The intake reconciliation and
+ * the stranded-work table each run in a `try` of their own, so a throw from the first no longer
+ * skips every recovery row of the tick — the lost curation, the ask's run, the run nothing drives,
+ * the stranded stage, the knowledge apply. Each failure is logged where it happened; the first one
+ * is then rethrown, after both halves ran, so the job still fails into pg-boss's policy and an
+ * administrator's failed-jobs list rather than completing as if the pass were clean.
  */
 export const intakeReconcileHandler = (options: IntakeReconcileJobOptions): JobHandler => {
   const logger = options.logger ?? silentLogger;
   return async () => {
+    const failures: unknown[] = [];
     try {
-      const report = await runIntakeReconciliation({
-        ...options,
-        graceMs: options.intervalMs,
-        ...(options.limit === undefined ? {} : { limit: options.limit }),
-      });
-      if (report.reEmitted > 0) {
-        logger.info(
-          { found: report.found, re_emitted: report.reEmitted },
-          'intake reconciliation re-emitted matched tickets that had no task row',
+      try {
+        const report = await runIntakeReconciliation({
+          ...options,
+          graceMs: options.intervalMs,
+          ...(options.limit === undefined ? {} : { limit: options.limit }),
+        });
+        if (report.reEmitted > 0 || report.contended > 0) {
+          logger.info(
+            { found: report.found, re_emitted: report.reEmitted, contended: report.contended },
+            'intake reconciliation re-emitted matched tickets that had no task row',
+          );
+        }
+      } catch (error) {
+        failures.push(error);
+        logger.error(
+          { err: error },
+          'the intake reconciliation half of the recovery pass failed; the stranded-work table still runs on this tick (PROGRESS backlog 368)',
         );
       }
       if (options.stranded !== undefined) {
-        const sites = await runStrandedRecovery({
-          ...options.stranded,
-          jobs: options.jobs,
-          clock: options.clock,
-          graceMs: options.intervalMs,
-          ...(options.logger === undefined ? {} : { logger: options.logger }),
-        });
-        for (const site of sites) {
-          if (site.reEnqueued > 0 || site.ended > 0) {
-            logger.info(
-              {
-                site: site.site,
-                found: site.found,
-                re_enqueued: site.reEnqueued,
-                // Each row gets one attempt and then an ending, so the two counts together are
-                // what the pass did — reporting only the first would hide the ending (backlog 105).
-                ended: site.ended,
-              },
-              'the recovery pass acted on work whose wake-up was lost',
-            );
+        try {
+          const sites = await runStrandedRecovery({
+            ...options.stranded,
+            jobs: options.jobs,
+            clock: options.clock,
+            graceMs: options.intervalMs,
+            ...(options.logger === undefined ? {} : { logger: options.logger }),
+          });
+          for (const site of sites) {
+            if (site.reEnqueued > 0 || site.ended > 0) {
+              logger.info(
+                {
+                  site: site.site,
+                  found: site.found,
+                  re_enqueued: site.reEnqueued,
+                  // Each row gets one attempt and then an ending, so the two counts together are
+                  // what the pass did — reporting only the first would hide the ending (backlog 105).
+                  ended: site.ended,
+                },
+                'the recovery pass acted on work whose wake-up was lost',
+              );
+            }
           }
+        } catch (error) {
+          failures.push(error);
+          logger.error(
+            { err: error },
+            'the stranded-work half of the recovery pass failed (PROGRESS backlog 368)',
+          );
         }
+      }
+      if (failures.length > 0) {
+        throw failures[0];
       }
     } finally {
       await enqueueIntakeReconcile(options.jobs, {

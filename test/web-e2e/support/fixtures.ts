@@ -909,7 +909,12 @@ export const rediscoveryGate = rediscoveryGateResponseSchema.parse({
   can_start: true,
   blocker: null,
   ceiling_usd: 2,
-  last_discovery: { task_id: IDS.taskBug, state: 'done', cost_usd: 0.84 },
+  last_discovery: {
+    task_id: IDS.taskBug,
+    state: 'done',
+    cost_usd: 0.84,
+    findings_unrecorded: null,
+  },
 });
 
 export const orgSettings = orgSettingsResponseSchema.parse({
@@ -1121,8 +1126,9 @@ export const failedJobs = failedJobsResponseSchema.parse({
       error_truncated: false,
       exhaustion: {
         kind: 'relies_on_retries',
+        shape: 'per_duty',
         loss: 'one provider call the pipeline decided on',
-        recovered_by: null,
+        recovered_by: 'per duty: the last try of a duty a person waits on escalates its task',
       },
     },
   ],

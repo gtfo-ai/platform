@@ -12,7 +12,8 @@
  * ## The shapes, and the sites of each
  *
  * - **retries in place** — `project-stream.ts` (the shared helper: ten writers since WP-109, the
- *   knowledge passes, the onboarding recorders, the history recorder and the delivery measures) and
+ *   knowledge passes, the onboarding recorders, the history recorder and the delivery measures, and
+ *   the intake reconciler since WP-124) and
  *   `integrations/inbound.ts` (WP-15c's own loop, bounded by `DEFAULT_INBOUND_SEQUENCE_ATTEMPTS`,
  *   which predates the helper and retries a whole ingress transaction, not one append).
  * - **run stream, serialised by the row** — `pipeline/commands.ts` (a cancel from another process)
@@ -20,12 +21,11 @@
  *   transaction whose first write is a compare-and-set on the `runs` row (`runs.finish` answering
  *   `won`), so the only other writer of that run's stream — the process that ran it — is refused at
  *   the same row before it appends. Not a project-stream race, and out of WP-109's scope.
- * - **pass-retried, filed** — `pipeline/intake-reconcile.ts`. It appends `ticket.matched` on the
- *   **project** stream with the sequence read outside its transaction and no retry: a lost race
- *   throws out of the pass, the rest of that tick's matches wait for the next tick, and nothing is
- *   lost because the append rolled back and the match is found again. The same shape as 333's, on a
- *   pipeline writer rather than a knowledge or onboarding one, so it is **filed** (PROGRESS,
- *   WP-109's discovered work) rather than changed here.
+ *
+ * `pipeline/intake-reconcile.ts` was a fifth shape until WP-124 — *pass-retried*: it read the
+ * project stream's sequence outside its transaction and a lost race threw out of the whole pass
+ * (PROGRESS backlog 368). It now appends through the helper, so it is one of the helper's callers
+ * and no longer a site of its own.
  *
  * ## Scope
  *
@@ -49,8 +49,6 @@ const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
   // run stream, serialised by the `runs` row's compare-and-set
   ['packages/application/src/pipeline/commands.ts', 1],
   ['packages/application/src/recovery/run-lease.ts', 1],
-  // project stream, pass-retried — filed by WP-109, not changed
-  ['packages/application/src/pipeline/intake-reconcile.ts', 1],
 ]);
 
 const SEQUENCE_READ = /\.\s*nextStreamSequence\s*\(/g;

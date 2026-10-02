@@ -220,7 +220,10 @@ test('org settings lists a failed job beside the dead letters, with no re-queue 
   await expect(job.getByText('pipeline.outbound')).toBeVisible();
   // Handler text is untrusted: its markup is on the screen as characters.
   await expect(job.getByText('outbound <script>window.__pwned = true;</script>')).toBeVisible();
-  await expect(job.getByText('Nothing recovers it automatically', { exact: false })).toBeVisible();
+  // WP-124: the census row's shape decides the sentence; the outbound queue's differs per duty.
+  await expect(
+    job.getByText('What recovers it depends on the duty it carried', { exact: false }),
+  ).toBeVisible();
   await expect(job.getByRole('button')).toHaveCount(0);
   await expect(page.getByText('The failed jobs could not be loaded.')).toHaveCount(0);
 });

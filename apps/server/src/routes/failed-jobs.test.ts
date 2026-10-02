@@ -120,7 +120,7 @@ describe('GET /api/org/failed-jobs (WP-108, backlog 325)', () => {
       retry_limit: 2,
       failed_at: '2026-09-30T08:48:00.000Z',
       error_truncated: false,
-      exhaustion: { kind: 'relies_on_retries' },
+      exhaustion: { kind: 'relies_on_retries', shape: 'per_duty' },
     });
     expect(job.error).toContain('provider answered 401');
     expect(response.body).not.toContain(FAKE_TOKEN);

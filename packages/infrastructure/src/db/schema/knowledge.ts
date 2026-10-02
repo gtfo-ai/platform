@@ -87,6 +87,10 @@ export const kbProposals = pgTable('kb_proposals', {
   decidedAt: timestamp('decided_at', { withTimezone: true }),
   appliedCommitSha: text('applied_commit_sha'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  /** The knowledge-apply recovery's mark — migration 0075 (WP-124, PROGRESS backlog 366). */
+  applyRecoveryAttemptedAt: timestamp('apply_recovery_attempted_at', { withTimezone: true }),
+  /** Platform text, set exactly when `status` is `apply_failed` (migration 0075). */
+  applyFailureReason: text('apply_failure_reason'),
 });
 
 export const kbIndexState = pgTable('kb_index_state', {
@@ -325,6 +329,19 @@ export const knowledgeCurations = pgTable('knowledge_curations', {
   proposals: integer('proposals').notNull().default(0),
   recoveryAttemptedAt: timestamp('recovery_attempted_at', { withTimezone: true }),
   abandonedAt: timestamp('abandoned_at', { withTimezone: true }),
+  detail: text('detail'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * The discovery recorder's recovery mark and ending — migration 0075 (WP-124, PROGRESS backlog
+ * 366). One row per `DiscoveryDraft` artifact the recovery pass re-enqueued `onboarding.discovery`
+ * for; `endedAt`/`detail` is set together when it gave up.
+ */
+export const discoveryRecordRecoveries = pgTable('discovery_record_recoveries', {
+  artifactId: uuid('artifact_id').primaryKey(),
+  recoveryAttemptedAt: timestamp('recovery_attempted_at', { withTimezone: true }).notNull(),
+  endedAt: timestamp('ended_at', { withTimezone: true }),
   detail: text('detail'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });

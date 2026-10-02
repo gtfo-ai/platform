@@ -47,6 +47,7 @@ import {
   rebaseAgainstCi,
 } from './gates.js';
 import { gitReads, integrationsForProject, noRunScopedSecrets } from './integrations.js';
+import { escalatingOnLastTry } from './job-escalation.js';
 import { prefetchObservability } from './observability-prefetch.js';
 import { REBASE_GATE_STAGE, recordRebaseCheck } from './rebase.js';
 import { reviewedMergeRequestPaths } from './review-paths.js';
@@ -1151,7 +1152,25 @@ const distinctPipelines = (
  *  - a comment arrived inside the window → open another window instead of returning the task;
  *  - otherwise → one `task.stage.returned`, whatever the number of threads.
  */
-export const reviewWindowHandler = (options: PipelineJobOptions): JobHandler<ReviewWindowData> => {
+export const reviewWindowHandler = (options: PipelineJobOptions): JobHandler<ReviewWindowData> =>
+  /**
+   * **Bound and escalate** (WP-124, TD-004's M7 amendment, PROGRESS backlog 366): a window whose
+   * every try failed used to leave the task at `ready_for_merge` with the reviewer's comments
+   * unanswered and only an administrator's failed-jobs list saying so. Its last try now escalates
+   * the task with a brief first (`job-escalation.ts`), and the throw still ends the job.
+   */
+  escalatingOnLastTry(options, reviewWindowWork(options), (job) => ({
+    taskId: job.data.task_id as Id,
+    projectId: job.data.project_id as Id,
+    queue: JOB_QUEUES.mrCommentDebounce,
+    duty: null,
+    causeEventId: null,
+    what: `turn the review comments on merge request !${job.data.iid} into a return`,
+    remedy:
+      'The comments are on the merge request; read them, then return the task to the stage that should answer them, or hand it back at Ready.',
+  }));
+
+const reviewWindowWork = (options: PipelineJobOptions): JobHandler<ReviewWindowData> => {
   const logger: Logger = options.logger ?? silentLogger;
 
   return async (job) => {

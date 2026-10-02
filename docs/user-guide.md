@@ -115,7 +115,11 @@ already approved is left alone. The button shows the run's budget cap (a ceiling
 prediction) and what the last discovery cost; it is off, with the reason, while a discovery is
 running or parked, before the first discovery, and after three re-evaluations in a row recorded
 nothing. A project that was never evaluated is not re-checked: the readiness panel keeps saying
-there is no evaluation until discovery runs.
+there is no evaluation until discovery runs. When a discovery run finished but its findings were
+never recorded — the recording failed, was retried once by the platform and failed again — the
+button's panel says so with the reason, and the discovery task is escalated (or, already finished,
+its people are told in chat): the run was paid for and the project kept its previous evaluation, and
+re-evaluating runs it again.
 
 ### Step 3 — Business interview
 
@@ -605,7 +609,12 @@ Two messages come from the platform rather than from a task:
   rewrites a page because one names it;
 - the **proposal queue**: what agents have suggested, each approvable or rejectable;
 - what an approval does: a commit on an `agentic/knowledge/*` branch and a merge request. Never the
-  default branch, and never without a maintainer's decision.
+  default branch, and never without a maintainer's decision;
+- **apply failed**: an approved proposal the platform could not commit — its apply failed or never
+  ran, the recovery pass asked for one more apply, and an hour later it was still not committed (the
+  project may have no git binding, or the provider refused the commit). The card says so, with the
+  reason, and offers **Approve again**, which asks for another apply; **Reject** ends it. Until then
+  nothing retries it on its own.
 
 The knowledge base lives **in your repository**
 ([BD-012](decisions/business/BD-012-knowledge-in-repo.md)), which is why there is no "export": it is

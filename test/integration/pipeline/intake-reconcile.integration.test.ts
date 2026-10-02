@@ -225,8 +225,12 @@ describe('the bound on re-emission', () => {
     const first = await runIntakeReconciliation(options);
     const second = await runIntakeReconciliation(options);
 
-    expect(first).toEqual({ found: 1, reEmitted: 1 });
-    expect(second, 'the second pass sees its own mark').toEqual({ found: 0, reEmitted: 0 });
+    expect(first).toEqual({ found: 1, reEmitted: 1, contended: 0 });
+    expect(second, 'the second pass sees its own mark').toEqual({
+      found: 0,
+      reEmitted: 0,
+      contended: 0,
+    });
     const { rows } = await pool.query<{ count: number }>(
       "select count(*)::int as count from events where type = 'ticket.matched'",
     );

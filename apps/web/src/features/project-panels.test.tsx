@@ -162,6 +162,38 @@ describe('the proposal queue', () => {
     expect(container.textContent).toContain('significance 0.50');
   });
 
+  it('says why an approved proposal failed to apply, as text, and offers to approve it again (WP-124)', async () => {
+    proposals = {
+      items: [
+        proposal({
+          status: 'apply_failed',
+          decided_at: '2026-09-14T11:00:00.000Z',
+          apply_failure_reason: `the platform could not commit this approved change ${HOSTILE_EVIDENCE}`,
+        }),
+      ],
+      next_cursor: null,
+    };
+    const container = await renderScreen();
+    const notice = await waitFor(() => {
+      const found = container.querySelector('[data-apply-failed="true"]');
+      expect(found).not.toBeNull();
+      return found as Element;
+    });
+    expect(notice.textContent).toContain('apply failed');
+    expect(notice.textContent).toContain('could not commit this approved change');
+    expect(container.querySelector('script')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Approve again' })).toBeTruthy();
+  });
+
+  it('draws no apply failure on a proposal that has none (the other side)', async () => {
+    const container = await renderScreen();
+    await waitFor(() => {
+      expect(container.textContent).toContain('conventions.md');
+    });
+    expect(container.querySelector('[data-apply-failed="true"]')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Approve again' })).toBeNull();
+  });
+
   it('renders a mined citation as text, whatever the merge request it came from said', async () => {
     const container = await renderScreen();
     await waitFor(() => {

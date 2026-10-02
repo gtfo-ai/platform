@@ -59,7 +59,7 @@ import type { UnitOfWork } from '../ports/unit-of-work.js';
 import type { KnowledgeProposalStore, KnowledgeStore, StoredKnowledgeProposal } from './ports.js';
 
 /** Why the apply job was asked for — a log field, and the only thing that separates two wake-ups. */
-export type KnowledgeApplyReason = 'auto_apply' | 'decision' | 'sweep';
+export type KnowledgeApplyReason = 'auto_apply' | 'decision' | 'sweep' | 'recovery';
 
 export interface KnowledgeApplyData {
   readonly project_id: string;
@@ -438,7 +438,8 @@ export const knowledgeApplyHandler =
     };
     if (report.status === 'unavailable') {
       // Reported, not thrown: a project with no git binding is a configuration a deployment is
-      // legitimately in, and the proposals stay queued until it has one (standing rule 20).
+      // legitimately in, and the proposals stay queued until it has one (standing rule 20) — or, since
+      // WP-124, until the apply recovery's pass ends them `apply_failed` about an hour later.
       logger.warn(fields, 'knowledge proposals could not be applied; they are left where they are');
       return;
     }

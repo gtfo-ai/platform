@@ -743,6 +743,14 @@ export const rediscoveryGateResponseSchema = z.strictObject({
       task_id: idSchema,
       state: taskStateSchema,
       cost_usd: z.number().nonnegative(),
+      /**
+       * Why this discovery's findings were never recorded — set when the recovery pass re-asked for
+       * the recording once and gave up (WP-124, PROGRESS backlog 366): the run was paid for and the
+       * project kept its previous evaluation. Platform text; `null` when nothing was lost.
+       */
+      findings_unrecorded: z
+        .strictObject({ at: isoDateTimeSchema, reason: nonEmptyStringSchema })
+        .nullable(),
     })
     .nullable(),
 });
@@ -1917,6 +1925,19 @@ export const MAX_FAILED_JOB_ERROR_CHARS = MAX_DEAD_LETTER_ERROR_CHARS;
 export const jobExhaustionKindSchema = z.enum(['bounds_itself', 'relies_on_retries']);
 
 /**
+ * What a queue's exhaustion does about the effect it lost — TD-004's M7 amendment (WP-124, PROGRESS
+ * backlog 366): a recovery row finds it, the job's last try escalated its task, or it is listed
+ * only because the next transition re-derives it. `per_duty` for `pipeline.outbound`, whose
+ * duties differ and whose payload this list never reads.
+ */
+export const jobExhaustionShapeSchema = z.enum([
+  'recovery_row',
+  'bound_and_escalate',
+  'notification_shaped',
+  'per_duty',
+]);
+
+/**
  * One job pg-boss moved to `failed` after its last retry (WP-108, backlog 325).
  *
  * `queue` is a **string**, not an enum: a job of a queue this build no longer declares is one way to
@@ -1938,6 +1959,7 @@ export const failedJobSchema = z.strictObject({
   exhaustion: z
     .strictObject({
       kind: jobExhaustionKindSchema,
+      shape: jobExhaustionShapeSchema,
       loss: nonEmptyStringSchema,
       recovered_by: nonEmptyStringSchema.nullable(),
     })

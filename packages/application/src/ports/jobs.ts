@@ -148,6 +148,19 @@ export interface CronSchedule extends CronScheduleDefinition {
   readonly key: string;
 }
 
+/**
+ * Which try of its job a handler is running (WP-124, TD-004's M7 amendment).
+ *
+ * `count` is pg-boss's `retry_count`: 0 on the first try, one more on each retry. pg-boss fails a
+ * job instead of retrying it once `retry_count` has reached `retry_limit` (`failJobsBody` in
+ * pg-boss 12.30.0's `dist/plans.js`), so the try where `count >= limit` is the **last** one — what
+ * a bound-and-escalate handler reads before it lets a throw end the job.
+ */
+export interface JobRetries {
+  readonly count: number;
+  readonly limit: number;
+}
+
 /** One unit of work handed to a handler. */
 export interface JobContext<TData extends JobData = JobData> {
   readonly id: string;
@@ -155,7 +168,17 @@ export interface JobContext<TData extends JobData = JobData> {
   readonly data: TData;
   /** Aborted when the job's lease expires or the worker is stopping. */
   readonly signal: AbortSignal;
+  /**
+   * Which try this is. Both adapters answer it; it is optional only so a test that drives a
+   * handler by hand need not invent one, and {@link isLastTry} reads an absent value as "not the
+   * last", the direction that leaves the throw to the retry policy.
+   */
+  readonly retries?: JobRetries;
 }
+
+/** Is this the try after which a throw fails the job for good? (`JobRetries` says why.) */
+export const isLastTry = (job: Pick<JobContext, 'retries'>): boolean =>
+  job.retries !== undefined && job.retries.count >= job.retries.limit;
 
 /** Throwing fails the job and hands it to the retry policy; returning completes it. */
 export type JobHandler<TData extends JobData = JobData> = (job: JobContext<TData>) => Promise<void>;

@@ -50,6 +50,8 @@ const json = (body: unknown, status = 200): Response =>
 interface World {
   readonly blocker?: { code: string; detail: string; task_id: string | null } | null;
   readonly refuse?: boolean;
+  /** WP-124: the recovery pass's reason for a discovery whose findings were never recorded. */
+  readonly unrecorded?: string;
 }
 
 let started: { url: string; key: string | null }[];
@@ -76,7 +78,15 @@ const fetchFor = (world: World = {}) =>
         can_start: world.blocker === undefined || world.blocker === null,
         blocker: world.blocker ?? null,
         ceiling_usd: 2,
-        last_discovery: { task_id: TASK, state: 'done', cost_usd: 0.84 },
+        last_discovery: {
+          task_id: TASK,
+          state: 'done',
+          cost_usd: 0.84,
+          findings_unrecorded:
+            world.unrecorded === undefined
+              ? null
+              : { at: '2026-09-13T05:00:00.000Z', reason: world.unrecorded },
+        },
       });
     }
     if (url.includes('/readiness')) {
@@ -153,5 +163,20 @@ describe('the re-evaluate control', () => {
     fireEvent.click(await button());
     expect(await screen.findByText('Discovery was not run again.')).toBeTruthy();
     expect(screen.getByText(/may not do this/)).toBeTruthy();
+  });
+
+  it('says, as text, that the last discovery’s findings were never recorded (WP-124, backlog 366)', async () => {
+    render(createApp({ fetchImpl: fetchFor({ unrecorded: HOSTILE }), realtime: false }).element);
+    await button();
+    const notice = document.querySelector('[data-findings-unrecorded="true"]');
+    expect(notice?.textContent).toContain('The last discovery’s findings were never recorded');
+    expect(notice?.textContent).toContain(HOSTILE);
+    expect(document.querySelector('img')).toBeNull();
+  });
+
+  it('says nothing of the kind when nothing was lost (the other side)', async () => {
+    render(createApp({ fetchImpl: fetchFor(), realtime: false }).element);
+    await button();
+    expect(document.querySelector('[data-findings-unrecorded="true"]')).toBeNull();
   });
 });

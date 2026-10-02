@@ -22,6 +22,11 @@
  * Inventing a sixth status would have meant a migration, a new label in three enums and a state the
  * UI would have to learn — for a fact two existing columns already carry.
  *
+ * **A seventh exists since WP-124, for a fact no column carried**: `apply_failed`, an approved
+ * proposal the recovery pass re-enqueued once and still could not get committed (migration 0075,
+ * PROGRESS backlog 366). It is decidable again, and approving it is how a maintainer asks for
+ * another apply.
+ *
  * ## The enqueue is optional, and the residual is stated
  *
  * A composition root may hold no job client, so this command takes `jobs` as **nullable** and says
@@ -89,8 +94,15 @@ export interface DecideProposalOptions {
   readonly logger?: Logger;
 }
 
-/** The statuses a human may still decide on. `auto_applied` is a decision the policy already made. */
-const DECIDABLE = new Set(['scored', 'queued']);
+/**
+ * The statuses a human may still decide on. `auto_applied` is a decision the policy already made.
+ *
+ * `apply_failed` (WP-124, PROGRESS backlog 366) is decidable again: the platform re-tried its
+ * commit once and gave up, and a maintainer's approval is what asks for another apply — the store
+ * clears the failure with the decision, and the enqueue below is the new attempt. A rejection
+ * ends it, as for any proposal.
+ */
+const DECIDABLE = new Set(['scored', 'queued', 'apply_failed']);
 
 export const decideKnowledgeProposal = async (
   options: DecideProposalOptions,

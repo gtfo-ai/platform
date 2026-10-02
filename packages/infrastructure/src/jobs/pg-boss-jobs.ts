@@ -40,12 +40,17 @@ import { PgBoss } from 'pg-boss';
 /** Default schema pg-boss is installed into — must match `db.DEFAULT_PGBOSS_SCHEMA`. */
 export const DEFAULT_JOBS_SCHEMA = 'pgboss';
 
-/** One job as the adapter sees it. A structural subset of pg-boss's `Job`. */
+/**
+ * One job as the adapter sees it. A structural subset of pg-boss's `JobWithMetadata`: the worker
+ * fetches with `includeMetadata: true` (WP-124) so a handler can be told which try it is running.
+ */
 export interface PgBossJobRecord {
   readonly id: string;
   readonly name: string;
   readonly data: unknown;
   readonly signal: AbortSignal;
+  readonly retryCount?: number;
+  readonly retryLimit?: number;
 }
 
 /** One schedule row as the adapter sees it. A structural subset of pg-boss's `Schedule`. */
@@ -239,6 +244,41 @@ export const pgBossQueueOptions = (definition: JobQueueDefinition): Record<strin
   });
 };
 
+/**
+ * The options every worker is registered with — one function, so the unit tier holds the
+ * registration without a database.
+ *
+ * **No burst trigger, and that is measured rather than overlooked** (WP-124, PROGRESS backlog
+ * **392**). pg-boss 12.30.0 picks each fetch's delay as *burst → notify → base*
+ * (`JobPollingOptions` in `dist/types.d.ts`, `resolveInterval` in `dist/manager.js`), and with
+ * `batchSize: 1` the only burst trigger is `burstWhenReadyExceeds`, which reads a **cached**
+ * `readyCount`. The cache is populated with `persistQueueStats: false` — the supervisor's monitor
+ * writes `pgboss.queue.ready_count` (`cacheQueueStats`, `dist/plans.js`; only `insertQueueStats`
+ * is gated on that flag) and every process re-reads the queue table into the cache
+ * (`onCacheQueues`, `dist/manager.js`) — but on two 60-second cadences, so it was **too late to
+ * matter**: with the trigger set to 1 on every worker, 20 intakes on one `ROLE=all` process still
+ * took 38.9 s and 50 took 98.9 s at the shipped 2 s interval, identical to the runs without it,
+ * because the cache read 0 for the first 57 s and the worker's copy had not been refreshed by the
+ * time the backlog was gone. TD-004's M7 amendment's other branch is therefore the one built:
+ * `pipeline.outbound`, the queue a burst lands on, polls at its own shorter interval
+ * (`PIPELINE_OUTBOUND_POLLING_INTERVAL_SECONDS`, `@platform/application`). Per-queue
+ * LISTEN/NOTIFY stays out for 0.1 (one more connection per process, backlog 371).
+ */
+export const pgBossWorkOptions = (request: {
+  readonly pollingIntervalSeconds: number;
+  readonly concurrency?: number;
+}): Record<string, unknown> =>
+  defined({
+    // batchSize 1 keeps the port's one-job-per-handler contract: a batch settles as a unit, so one
+    // poisonous job would otherwise retry its innocent neighbours with it.
+    batchSize: 1,
+    pollingIntervalSeconds: request.pollingIntervalSeconds,
+    // The job's `retryCount` and `retryLimit` reach the handler as `JobContext.retries`, which is
+    // how a bound-and-escalate handler knows its last try (TD-004's M7 amendment).
+    includeMetadata: true,
+    localConcurrency: request.concurrency,
+  });
+
 export const createPgBossJobs = (options: PgBossJobsOptions = {}): JobsRuntime => {
   const boss = buildPgBoss(options);
   const onError = options.onError ?? ((error: unknown) => process.emitWarning(String(error)));
@@ -324,16 +364,14 @@ export const createPgBossJobs = (options: PgBossJobsOptions = {}): JobsRuntime =
         queue: string;
         data: TData;
         signal: AbortSignal;
+        retries?: { count: number; limit: number };
       }) => Promise<void>;
 
       await boss.work(
         request.queue,
-        defined({
-          // batchSize 1 keeps the port's one-job-per-handler contract: a batch settles as a unit,
-          // so one poisonous job would otherwise retry its innocent neighbours with it.
-          batchSize: 1,
+        pgBossWorkOptions({
           pollingIntervalSeconds: request.pollingIntervalSeconds ?? defaultPollingSeconds,
-          localConcurrency: request.concurrency,
+          ...(request.concurrency === undefined ? {} : { concurrency: request.concurrency }),
         }),
         async (received) => {
           for (const job of received) {
@@ -342,6 +380,9 @@ export const createPgBossJobs = (options: PgBossJobsOptions = {}): JobsRuntime =
               queue: job.name,
               data: (job.data ?? {}) as TData,
               signal: job.signal,
+              ...(typeof job.retryCount === 'number' && typeof job.retryLimit === 'number'
+                ? { retries: { count: job.retryCount, limit: job.retryLimit } }
+                : {}),
             });
           }
         },

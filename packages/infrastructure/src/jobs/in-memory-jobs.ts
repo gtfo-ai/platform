@@ -377,6 +377,8 @@ export const createInMemoryJobs = (options: InMemoryJobsOptions = {}): InMemoryJ
         queue: job.queue,
         data: job.data,
         signal: controller.signal,
+        // pg-boss's `retry_count` is 0 on the first try; `attempts` was already counted above.
+        retries: { count: job.attempts - 1, limit: job.retryLimit },
       });
       job.state = 'completed';
     } catch (error) {

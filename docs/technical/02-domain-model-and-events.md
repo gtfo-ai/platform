@@ -245,7 +245,8 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > **As built at WP-84 (PROGRESS backlog 165, Q95).** An approval gets the question's reminder: an `approval_reminder` kind on the same queue, halfway through the working time between `requested_at` and `deadline_at`, counted in `approvals.reminders_sent` (migration 0059) through `ApprovalRepository.recordReminder`, guarded by `status = 'pending'`. The reminder is text naming the task page; its row names the approval (`notifications.approval_id`, what a retry or a re-post re-checks — WP-84 review round 1) but carries no `message_ref`, so the settled-approval edit, which reads only rows with one, never mistakes it for the message whose buttons it removes. Like the question's, it appends no event and is not on `ApprovalRecord`.
 
 ### KnowledgeProposal
-`scored → (discarded | queued | auto_applied) → (applied | rejected)`.
+`scored → (discarded | queued | auto_applied) → (applied | rejected)`, and since WP-124
+`(queued | auto_applied) → apply_failed → (queued | rejected)`.
 
 > **Read at WP-18b, which built the machine.** There is no state between "a human said yes" and "a
 > commit carries it", and that is deliberate rather than an omission: **`queued` with `decided_at`
@@ -255,6 +256,15 @@ Guards: WIP limits on `queued → active`; iteration limits on any `returned`; b
 > learn, for a fact two existing columns already carry. `discarded` is written rather than skipped —
 > technical/07's "below `discard_below` → dropped (audit only)" is an audit only if the drop is
 > visible.
+
+> **A seventh status at WP-124 (PROGRESS backlog 366, TD-004's M7 amendment, migration 0075), for a
+> fact no column carried.** An approved proposal whose apply job failed or never ran read `queued`
+> with `decided_at` for ever — the same card as an undecided one — while the nightly hygiene pass
+> re-asked for an apply every night. The recovery pass's `knowledge_apply` row now re-enqueues one
+> apply per project under `apply_recovery_attempted_at`, and an hour later moves a still-uncommitted
+> proposal to **`apply_failed`** with a platform sentence in `apply_failure_reason`. It is not
+> awaiting apply, so nothing retries it; a maintainer's **approve** moves it back to `queued` (the
+> decision clears the mark and the reason) and asks for an apply, and **reject** ends it.
 
 ## Event catalogue
 
@@ -367,6 +377,27 @@ Custom project stages (product/04) register handlers on `task.stage.completed` f
 - **KnowledgeSaga**: retro → proposals → Librarian → apply policy → index rebuild.
 - **ShadowSaga**: like PipelineSaga, plus a comparison step. Nothing is replaced: outbound actions go through the same `IntegrationActionExecutor` as a normal task, and its shadow guard refuses every *mutating* one — the task's `mode` is a required, zod-parsed field on a mutating request, and a shadow task's write is recorded `would_have` without reaching the provider (technical/06 § "Outbound: actions"). Reads are performed normally, because a shadow task needs its context.
 - **MaintenanceScheduler**: creates chore tasks on schedule within budget. **Built at WP-36** as a daily cron (`maintenance.schedule`, `exclusive`) rather than as an event-driven saga — there is no event to react to — walking the projects and creating one ordinary `chore` task per due chore type per period (`packages/application/src/maintenance/scheduler.ts`). **Since WP-94 (Q100 per its recommendation) the dial's level binds it:** a project whose autonomy level in force is Observe gets no chore (a named `info` line; the maintenance card says *paused at Observe*; **since WP-113, Q111 (c)**, one digest line on the pass the pause begins and one on the pass it ends — the pass compares its blocker with the one it recorded last, `projects.maintenance_last_blocker`, and says nothing on the days between), and at the other three positions a chore still carries no frozen dial. Three of product/18:31's five chore types are **refused by name** on this build (`flaky`, `docs`, `lint`) and the reason per type is `MAINTENANCE_CHORES` in the domain ring; the *"within budget"* half is `features.maintenance.budget_usd`, enforced at every chore run's admission by the stage executor against `cost_entries` **and against the chore runs the ledger has not recorded yet**, in the mechanism WP-34 built for shadow mode (the ledger writes from a handler that commits after the run's own transaction, so a cap read from its rows alone admits one run per dispatcher lag — measured, and stated at `packages/application/src/cost/pending.ts`).
+
+## Jobs, and what a job that spent its retries does (WP-124)
+
+Every job queue is declared once, in `JOB_QUEUE_DEFINITIONS` (`packages/application/src/ports/job-queues.ts`,
+WP-86), and every one declares **what its exhaustion does** in `JOB_EXHAUSTION`
+(`packages/application/src/ports/job-exhaustion.ts`) — TD-004's M7 amendment, built at WP-124 (PROGRESS
+backlog 366). The table is held to the registered set by `job-exhaustion.test.ts`, and the
+administrator's failed-jobs list (`GET /api/org/failed-jobs`, Settings) publishes each row's shape beside
+the job. There is no re-queue from that list in 0.1.
+
+| shape | what happens when the job spends its retries | queues |
+|---|---|---|
+| **recovery row** | a row of `recovery/stranded.ts`'s table finds the lost effect by its database trace, re-enqueues it once under a mark, then makes it visible | `deadline.sweep`, `task.ask`, `knowledge.proposals`, `bootstrap.history`, **`knowledge.apply`** (`knowledge_apply`: the proposal reads `apply_failed`), **`onboarding.discovery`** (`discovery_record`: the discovery task escalates with a brief) |
+| **bound and escalate** | the job carries a task a person waits on; its **last** try escalates the task with a brief (or, for a task already `done`, tells its people by an escalation notification — Q113) before the throw ends the job (`pipeline/job-escalation.ts`) | `stage.execute` (the archetype: its own start bound, then `stranded_stage`), **`mr.comment.debounce`** |
+| **notification-shaped** | listed only: the next transition or tick re-derives the effect, or what is lost is a notification (rule 20) | `pipeline.intake.reconcile`, `ticket.poll`, `mr.poll`, `knowledge.index`, `knowledge.hygiene`, `notify.digest`, `maintenance.schedule`, `price.list.maintain`, `db.partitions.maintain` |
+| **per duty** | `pipeline.outbound` carries twenty-nine duties of all three shapes, declared one by one in `OUTBOUND_DUTY_EXHAUSTION` | recovery rows: `intake_check`, `notify`, `notify_organisation`, `close_superseded_mr`, `revoke_run_credential`, `dependency_gate_resume`; bound and escalate: `review_only_post`, `ticket_lint_post`, `spike_report`, `breakdown_create`, `dependency_gate`, `ready_head_check`; notification-shaped: the rest, among them `workpad` and `status` |
+
+`pipeline.outbound` polls at its own **0.5 s** (`PIPELINE_OUTBOUND_POLLING_INTERVAL_SECONDS`, WP-124,
+PROGRESS backlog 392); every other queue keeps `APP_JOBS_POLL_INTERVAL_SECONDS`. A worker takes one job
+per fetch (`batchSize: 1`) and pg-boss's burst trigger is not used: its ready-count cache refreshes on
+a 60-second cadence, measured too late to matter for a burst that drains in under two minutes.
 
 ## Invariants (enforced in domain)
 

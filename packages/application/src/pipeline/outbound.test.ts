@@ -19,6 +19,7 @@ import { describe, expect, it } from 'vitest';
 import { EventBus } from '../events/event-bus.js';
 import { transactionIsOpen } from '../events/open-transaction.js';
 import type { StoredEvent } from '../ports/event-store.js';
+import { PIPELINE_OUTBOUND_POLLING_INTERVAL_SECONDS } from '../ports/job-queues.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
 import { askingRefinedSpec } from '../testing/artifact-fixtures.js';
@@ -394,5 +395,27 @@ describe('a ticket write that is delivered twice', () => {
     // Two events, two renders: a key stable across events would leave the ticket showing the task's
     // first state for ever, which is the failure a "one comment per task" key would have.
     expect(calls.upsertWorkpad).toBe(2);
+  });
+});
+
+/**
+ * WP-124, PROGRESS backlog **392** (criterion 4): the drain option is held **on the registration**.
+ * A burst of intakes lands on `pipeline.outbound`, and a worker takes one job per polling interval,
+ * so this queue polls at its own shorter interval while every other queue keeps the deployment's
+ * (`APP_JOBS_POLL_INTERVAL_SECONDS`, absent here, so the adapter's default).
+ */
+describe('the outbound queue’s cadence (backlog 392)', () => {
+  it('registers pipeline.outbound at its own shorter interval, and leaves the other queues at the default', async () => {
+    const harness = harnessWith(noCalls());
+    await harness.runtime.start();
+
+    expect(harness.jobs.registrations.get(JOB_QUEUES.pipelineOutbound)).toMatchObject({
+      pollingIntervalSeconds: PIPELINE_OUTBOUND_POLLING_INTERVAL_SECONDS,
+      concurrency: 1,
+    });
+    expect(PIPELINE_OUTBOUND_POLLING_INTERVAL_SECONDS).toBe(0.5);
+    for (const queue of [JOB_QUEUES.stageExecute, JOB_QUEUES.mrCommentDebounce]) {
+      expect(harness.jobs.registrations.get(queue)?.pollingIntervalSeconds, queue).toBeUndefined();
+    }
   });
 });

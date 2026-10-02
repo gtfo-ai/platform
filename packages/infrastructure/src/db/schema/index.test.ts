@@ -59,8 +59,10 @@ describe('Drizzle schema', () => {
     // run on its way to the process holding the run's lease, which no table could carry because the
     // register it lands in is per process (migration 0060, WP-85, TD-028 decision 9, backlog 134),
     // plus `chat_threads` — which task a chat thread belongs to, which only an adapter's per-call
-    // memory held, so a threaded reply reached nothing (migration 0062, WP-88, backlog 195).
-    expect(tables.length).toBe(69);
+    // memory held, so a threaded reply reached nothing (migration 0062, WP-88, backlog 195), plus
+    // `discovery_record_recoveries` — the discovery recorder's recovery mark and ending, keyed on
+    // the artifact as `knowledge_curations` is (migration 0075, WP-124, backlog 366).
+    expect(tables.length).toBe(70);
   });
 
   it('names every table and column in snake_case, matching the wire format', () => {

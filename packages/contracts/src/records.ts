@@ -167,6 +167,12 @@ export const knowledgeProposalRecordSchema = z.strictObject({
   decided_at: isoDateTimeSchema.nullish(),
   applied_commit_sha: shaSchema.nullish(),
   created_at: isoDateTimeSchema,
+  /**
+   * Why the platform gave up committing this proposal — platform text, present exactly when
+   * `status` is `apply_failed` (WP-124, PROGRESS backlog 366). Optional, so a record written before
+   * it still parses.
+   */
+  apply_failure_reason: nonEmptyStringSchema.nullish(),
 });
 
 /**

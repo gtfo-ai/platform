@@ -12,7 +12,12 @@
  * the fake advances a virtual clock; pg-boss waits on the real one.
  */
 import { randomUUID } from 'node:crypto';
-import { coalescingSlotStart, type JobData, type JobsRuntime } from '@platform/application';
+import {
+  coalescingSlotStart,
+  isLastTry,
+  type JobData,
+  type JobsRuntime,
+} from '@platform/application';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 /** What one implementation gives the suite. */
@@ -469,6 +474,40 @@ export const runJobsContract = (harness: JobsContractHarness): void => {
       );
       await context.waitFor(() => dead.executions.length > 0, 'the dead letter to arrive');
       expect(dead.executions[0]?.data).toEqual({ attempt: 'first' });
+    });
+
+    /**
+     * WP-124 (TD-004's M7 amendment): a bound-and-escalate handler acts on its **last** try, so
+     * both adapters must say which try a handler is running — pg-boss's `retry_count` read through
+     * `includeMetadata`, and the fake's own count — and agree on where the last one is.
+     */
+    it('tells a handler which try it is running, and the last try is the one at the limit', async () => {
+      const queue = uniqueQueue('tries');
+      const tries: { count: number; limit: number; last: boolean }[] = [];
+      await context.runtime.jobs.defineQueue({ name: queue, retryLimit: 2 });
+      const worker = await context.runtime.jobs.work({
+        queue,
+        pollingIntervalSeconds: context.pollingIntervalSeconds,
+        handler: async (job) => {
+          tries.push({
+            count: job.retries?.count ?? -1,
+            limit: job.retries?.limit ?? -1,
+            last: isLastTry(job),
+          });
+          throw new Error('deliberate handler failure');
+        },
+      });
+
+      await context.runtime.jobs.enqueue({ queue });
+      await context.waitFor(() => tries.length >= 3, 'the job to be tried three times');
+      await settle();
+      await worker.stop();
+
+      expect(tries).toEqual([
+        { count: 0, limit: 2, last: false },
+        { count: 1, limit: 2, last: false },
+        { count: 2, limit: 2, last: true },
+      ]);
     });
 
     it('stops delivering to a stopped worker', async () => {

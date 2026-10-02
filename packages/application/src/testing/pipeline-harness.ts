@@ -72,7 +72,13 @@ import type { CommunicationPort } from '../ports/integrations/communication.js';
 import type { GitProviderPort } from '../ports/integrations/git-provider.js';
 import type { HeldConnectionLiveness } from '../ports/integrations/inbound-connection.js';
 import type { TaskManagementPort, TicketRefInput } from '../ports/integrations/task-management.js';
-import type { CronScheduleDefinition, EnqueueRequest, JobHandler, Jobs } from '../ports/jobs.js';
+import type {
+  CronScheduleDefinition,
+  EnqueueRequest,
+  JobHandler,
+  Jobs,
+  WorkRequest,
+} from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import { silentLogger } from '../ports/logger.js';
 import {
@@ -144,6 +150,12 @@ export interface RecordingJobs extends Jobs {
   readonly enqueued: readonly EnqueueRequest[];
   readonly handlers: ReadonlyMap<string, JobHandler>;
   /**
+   * Every worker registration as it was asked for, per queue (WP-124): the polling interval and
+   * the concurrency a composition chose are part of what it composed, and a recorder that kept
+   * only the handler could not hold a queue to its cadence.
+   */
+  readonly registrations: ReadonlyMap<string, Omit<WorkRequest, 'handler'>>;
+  /**
    * Every cron schedule declared on this instance (WP-32).
    *
    * It used to be a no-op, which made "the digest tick is scheduled, in the organisation's zone"
@@ -159,6 +171,7 @@ export interface RecordingJobs extends Jobs {
 export const recordingJobs = (): RecordingJobs => {
   const enqueued: EnqueueRequest[] = [];
   const handlers = new Map<string, JobHandler>();
+  const registrations = new Map<string, Omit<WorkRequest, 'handler'>>();
   const crons: CronScheduleDefinition[] = [];
   return {
     defineQueue: async () => {},
@@ -173,8 +186,11 @@ export const recordingJobs = (): RecordingJobs => {
     listCronSchedules: async () => crons.map((cron) => ({ ...cron, key: cron.key ?? '' })),
     work: async (request) => {
       handlers.set(request.queue, request.handler as JobHandler);
+      const { handler: _handler, ...registration } = request;
+      registrations.set(request.queue, registration);
       return { queue: request.queue, stop: async () => {} };
     },
+    registrations,
     get enqueued() {
       return [...enqueued];
     },

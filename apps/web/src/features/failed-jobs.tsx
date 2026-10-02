@@ -5,7 +5,9 @@
  * provider call, a timer or a schedule whose handler threw on every attempt its queue allows. Until
  * WP-108 they had no list, no count and no audit row. Each card says which queue, how often it was
  * tried, why it failed, and — from the platform's census of its queues — what such a failure drops
- * and what, if anything, recovers it.
+ * and what, if anything, recovers it. Since WP-124 that last sentence is read off the queue's
+ * declared **shape** (a recovery row, bound-and-escalate, or listed only) rather than off whether a
+ * recovery is named.
  *
  * It is a **read**: there is no re-queue, because not every queue's handler has been shown to
  * re-validate on fire. What a failed job left is the recovery pass's (where the card names a row of
@@ -35,18 +37,29 @@ import {
 } from '../ui/kit.js';
 import { UntrustedText } from '../ui/untrusted.js';
 
+/**
+ * What recovers a failed job, from its queue's declared shape (TD-004's M7 amendment, WP-124):
+ * a recovery row finds what it left, its last try escalated its task, or it is listed only because
+ * the next transition (or tick) re-derives the effect. `pipeline.outbound`'s duties differ, and
+ * this list never reads a payload, so its card names every duty's answer.
+ */
 const recoveryLine = (job: FailedJob): string => {
   if (job.exhaustion === null) {
     return 'This build does not declare that queue, so what its failure costs is not known here.';
   }
-  const { recovered_by: recoveredBy } = job.exhaustion;
-  if (recoveredBy === null) {
-    return 'Nothing recovers it automatically: look at what it was for, and act on it by hand.';
+  const { shape, recovered_by: recoveredBy } = job.exhaustion;
+  switch (shape) {
+    case 'recovery_row':
+      return `The platform’s recovery pass finds what it left and tries once more, then makes it visible: ${recoveredBy ?? 'its row'}.`;
+    case 'bound_and_escalate':
+      return 'Its last try escalated the task it carried, with a brief on the task page — or, for a task already finished, an escalation message to its people. Act on the task.';
+    case 'per_duty':
+      return `What recovers it depends on the duty it carried, which this list does not read: ${recoveredBy ?? 'see the census'}.`;
+    case 'notification_shaped':
+      return recoveredBy === 'next_tick'
+        ? 'Its schedule runs again on its next tick, which redoes the work.'
+        : 'Listed only: the next transition re-derives what it was for, or what it dropped was a notification. Nothing re-runs it.';
   }
-  if (recoveredBy === 'next_tick') {
-    return 'Its schedule runs again on its next tick, which redoes the work.';
-  }
-  return `Recovered by the platform’s recovery pass: ${recoveredBy}.`;
 };
 
 const FailedJobCard = ({ job }: { readonly job: FailedJob }): ReactElement => (

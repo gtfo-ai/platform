@@ -130,6 +130,7 @@ export * from './pipeline/epic-split.js';
 export * from './pipeline/gates.js';
 export * from './pipeline/intake-reconcile.js';
 export * from './pipeline/integrations.js';
+export * from './pipeline/job-escalation.js';
 export * from './pipeline/jobs.js';
 export * from './pipeline/lease.js';
 export * from './pipeline/live-runs.js';
@@ -185,6 +186,8 @@ export * from './ports/workspace.js';
 // The lost-wake-up recovery — PROGRESS backlog 101's table (WP-36)
 export * from './recovery/deadline.js';
 export * from './recovery/deferred-dependency.js';
+export * from './recovery/discovery-record.js';
+export * from './recovery/knowledge-apply.js';
 export * from './recovery/notification-repost.js';
 export * from './recovery/orphan-workspaces.js';
 export * from './recovery/run-credential.js';

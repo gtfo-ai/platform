@@ -178,6 +178,8 @@ export const knowledgeProposalStatusEnum = pgEnum('knowledge_proposal_status', [
   'queued',
   'auto_applied',
   'applied',
+  // WP-124, migration 0075: an approved proposal the recovery pass could not get committed.
+  'apply_failed',
   'rejected',
   'discarded',
 ]);

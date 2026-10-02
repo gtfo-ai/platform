@@ -105,6 +105,12 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '../../../..');
  * a transaction it owns, under `retryOnTaskConflict`. Its ending when the bound is spent is the
  * fifth shape: logged, and left to the next pass — the task is still stranded and still marked, so
  * the next pass finds it again, which `run-lease.ts` cannot rely on (its run is terminal by then).
+ *
+ * `pipeline/job-escalation.ts` joined them at **WP-124** with **two** sites — the escalation and the
+ * amended brief of `escalateTaskWithBrief`, the ending of a job a person waits on that spent its
+ * tries (TD-004's M7 amendment) and of the discovery-record recovery row. A transaction of its own
+ * under `retryOnTaskConflict`; a spent bound escapes to the wrapper, which logs it and rethrows the
+ * job's own failure, so the job still ends `failed` and listed.
  */
 const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
   ['packages/application/src/pipeline/commands.ts', 4],
@@ -136,6 +142,11 @@ const EXPECTED_SITES: ReadonlyMap<string, number> = new Map([
   // stage nothing ever ran, in a transaction it owns, under `retryOnTaskConflict`; a spent bound is
   // logged and the next pass ends it, because the task is still stranded and still marked.
   ['packages/application/src/recovery/stranded-stage.ts', 1],
+  // WP-124 (PROGRESS backlog 366, TD-004's M7 amendment): the bound-and-escalate ending of a job a
+  // person waits on — `escalateTaskWithBrief`'s escalation and its amended brief for a task already
+  // waiting — in a transaction it owns, under `retryOnTaskConflict`; a spent bound escapes to the
+  // wrapper, which logs it and rethrows the job's own failure, so the failed job stays listed.
+  ['packages/application/src/pipeline/job-escalation.ts', 2],
 ]);
 
 /** Tracked *and* committable-but-untracked, which is the tree the pre-push hook sees (rule 85). */
@@ -171,7 +182,7 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     );
   });
 
-  it('counts thirty-six, which is the number the change states', () => {
+  it('counts thirty-eight, which is the number the change states', () => {
     // Twenty-one inherited from WP-15d (`saga.ts` 11, `transitions.ts` 5, `stage-executor.ts` 5 —
     // backlog 18 counted twenty before `stage-executor.ts` gained its fifth) plus the one
     // `escalateTaskAfterConflict` adds, which is the ending for the other twenty-one; plus four
@@ -208,8 +219,10 @@ describe('the whole-row `tasks.save` census (WP-15e)', () => {
     // **Plus one at WP-108**: the stranded-stage recovery's escalation (backlog 320).
     // **Plus one at WP-110 review round 1**: the saga's close of a merge request whose task already
     // waits for a human writes the amended brief (`amendEscalation`), with the handler's ending.
+    // **Plus two at WP-124**: `job-escalation.ts`'s escalation and amended brief, the
+    // bound-and-escalate ending of a job a person waits on (backlog 366).
     const total = [...census().values()].reduce((sum, count) => sum + count, 0);
-    expect(total).toBe(36);
+    expect(total).toBe(38);
     expect([...EXPECTED_SITES.values()].reduce((sum, count) => sum + count, 0)).toBe(total);
   });
 

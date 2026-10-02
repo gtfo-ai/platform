@@ -44,6 +44,26 @@ export const PIPELINE_OUTBOUND_RETRY = {
 } as const;
 
 /**
+ * How often a `pipeline.outbound` worker looks for its next job — **its own interval, shorter than
+ * every other queue's** (WP-124, PROGRESS backlog **392**, TD-004's M7 amendment).
+ *
+ * A worker registered with `batchSize: 1` takes one job per polling interval even with a backlog,
+ * and `pipeline.outbound` is the queue a burst lands on: every intake, status, workpad and
+ * notification of every project, at one worker per process. Measured at the shipped 2 s on one
+ * `ROLE=all` process: 20 intakes for one project took 38.9 s to admit and 50 took 98.9 s, a second
+ * project's one intake waited behind them (40.9 s, 101.0 s), and at 50 the intake reconciler,
+ * whose grace is its 60 s interval, re-emitted 21 matches whose intake jobs were still queued
+ * (load 3.4–5.3; the table is under backlog 392). pg-boss's burst trigger was tried first, as the
+ * ruling asked, and changed nothing (`pgBossWorkOptions` in the pg-boss adapter says why).
+ *
+ * `0.5` is pg-boss 12.30.0's floor (`pollingIntervalSeconds` must be ≥ 0.5, `JobPollingOptions`).
+ * What it costs: an idle process fetches this queue twice a second rather than once every two
+ * seconds — one indexed `update … returning` on the queue's job partition, **not measured on a
+ * large job table**. Every other queue keeps `APP_JOBS_POLL_INTERVAL_SECONDS`.
+ */
+export const PIPELINE_OUTBOUND_POLLING_INTERVAL_SECONDS = 0.5;
+
+/**
  * `notify.digest`'s retry policy, named for the reason {@link PIPELINE_OUTBOUND_RETRY} is: the
  * undelivered gauge derives how long a digest row may legitimately wait from it (WP-65).
  */

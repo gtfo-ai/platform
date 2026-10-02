@@ -938,13 +938,27 @@ marks it **failed**. **Settings → Failed jobs** (admin only; `GET /api/org/fai
 lists them, newest first (**Show older** pages back to the oldest, WP-114): the queue, how many times it was tried, the retry limit, when it failed and
 the failure's message (redacted by the platform's patterns and cut at 2 000 characters; the job's
 payload is never shown). Beside each one is the platform's own census of that queue — whether it
-ends its own failures or relies on the retries, what a failed job of it drops, and what recovers it:
-a row of the recovery pass (for example a lost stage is re-enqueued once and then escalated, a lost
-reminder is sent), the queue's next scheduled run, or **nothing**, which is the case to act on by
-hand (a ticket status, a workpad or a comment the pipeline decided on and never wrote, a knowledge
-commit, a day's digest). There is **no re-queue**: not every queue's handler is shown to re-check its
-state when it fires again. pg-boss keeps a failed job for its retention window, days rather than for
-ever, so the list is not an archive; the log has every failure.
+ends its own failures or relies on the retries, what a failed job of it drops, and, since WP-124,
+its **shape** (TD-004's M7 amendment), which is what the card's last sentence reads:
+
+- **a recovery row** finds what the job left and tries once more, then makes it visible — a lost
+  stage is re-enqueued once and then escalated, a lost reminder is sent, an approved knowledge change
+  whose apply failed is re-applied once and then reads **apply failed** on the project's proposal
+  queue (a maintainer approves it again to retry), and a discovery run whose findings were never
+  recorded is recorded once more and then its task is escalated;
+- **bound and escalate**: the job's last try escalated the task it carried, with a brief on the task
+  page — a review-comment window, a review or lint post, a spike report, a breakdown's child tickets,
+  the dependency check, a resume's head check. A task that had already finished (a review-only or
+  lint task is `done` by the time its post runs) cannot escalate, so its people get an escalation
+  message instead — on a project with a chat binding (OPEN-QUESTIONS Q113);
+- **listed only**: the next transition re-derives what the job was for (a ticket status, a workpad,
+  a conflict warning), the queue's next scheduled run redoes it, or what it dropped was a
+  notification or a metric (a day's digest, a chat edit). Nothing re-runs it.
+
+`pipeline.outbound` carries all three, one per duty, and the card names them, because this list
+never reads a job's payload. There is **no re-queue**: not every queue's handler is shown to re-check
+its state when it fires again. pg-boss keeps a failed job for its retention window, days rather than
+for ever, so the list is not an archive; the log has every failure.
 
 ## 10. Known limits of this build
 

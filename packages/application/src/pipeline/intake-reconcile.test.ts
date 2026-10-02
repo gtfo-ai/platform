@@ -12,6 +12,9 @@ import { describe, expect, it } from 'vitest';
 import type { EnqueueRequest, JobContext, Jobs, JobWorker } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { TransactionScope, UnitOfWork } from '../ports/unit-of-work.js';
+import type { StrandedWorkStore } from '../recovery/stranded.js';
+import { MemoryEventing } from '../testing/memory-eventing.js';
+import { RIVAL_COMPONENT, racingProjectStream } from '../testing/project-stream-race.js';
 import {
   INTAKE_RECONCILE_KEY,
   INTAKE_RECONCILER_COMPONENT,
@@ -113,7 +116,7 @@ describe('one reconciliation pass', () => {
 
     const report = await runIntakeReconciliation(optionsFor(harness));
 
-    expect(report).toEqual({ found: 1, reEmitted: 1 });
+    expect(report).toEqual({ found: 1, reEmitted: 1, contended: 0 });
     expect(harness.appended).toHaveLength(1);
     const event = harness.appended[0] as Extract<DomainEvent, { type: 'ticket.matched' }>;
     expect(event.type).toBe('ticket.matched');
@@ -149,7 +152,11 @@ describe('one reconciliation pass', () => {
 
   it('does nothing, loudly or otherwise, when every matched ticket has a task', async () => {
     const harness = harnessFor([]);
-    expect(await runIntakeReconciliation(optionsFor(harness))).toEqual({ found: 0, reEmitted: 0 });
+    expect(await runIntakeReconciliation(optionsFor(harness))).toEqual({
+      found: 0,
+      reEmitted: 0,
+      contended: 0,
+    });
     expect(harness.appended).toEqual([]);
   });
 
@@ -331,5 +338,141 @@ describe('starting the recovery', () => {
 
     expect(worker).toBeNull();
     expect(harness.enqueued).toEqual([]);
+  });
+});
+
+/**
+ * A lost sequence race, in the PostgreSQL shape (WP-124, PROGRESS backlog **368**).
+ *
+ * `racingProjectStream` has a rival append at the very sequence the writer just read, so the
+ * writer's append meets the stream's sequence guard exactly as it would against migration 0005's
+ * — over the in-memory eventing, which enforces the same uniqueness. Before WP-124 the first lost
+ * race threw out of the pass, and the stranded-work table on the same tick never ran.
+ */
+describe('a pass whose project stream another writer keeps winning (backlog 368)', () => {
+  const OTHER_PROJECT = '00000000-0000-4000-8000-0000000000b2' as Id;
+  const matchOf = (index: number, projectId: Id = PROJECT): UnstartedMatch => ({
+    eventId: `00000000-0000-4000-9000-00000000010${index}` as Id,
+    projectId,
+    payload: { ...matchPayload(), project_id: projectId },
+  });
+
+  const strandedStore = (ran: string[]): StrandedWorkStore => ({
+    strandedBootstraps: async () => {
+      ran.push('stranded');
+      return [];
+    },
+    markBootstrapAttempt: async () => {},
+    endBootstrap: async () => {},
+    strandedAsks: async () => [],
+    markAskAttempt: async () => {},
+    endAsk: async () => {},
+    strandedHistoryRecords: async () => [],
+    markHistoryRecordAttempt: async () => {},
+    endHistoryRecord: async () => {},
+    strandedCurations: async () => [],
+    markCurationAttempt: async () => {},
+    endCuration: async () => {},
+    asksWithEndedRun: async () => [],
+  });
+
+  const passOver = (losses: number, matches: readonly UnstartedMatch[]) => {
+    const eventing = new MemoryEventing();
+    const race = racingProjectStream(eventing, losses);
+    const enqueued: EnqueueRequest[] = [];
+    const ran: string[] = [];
+    let ids = 0;
+    const jobs: Jobs = {
+      ...harnessFor().jobs,
+      enqueue: async (request) => {
+        enqueued.push(request as EnqueueRequest);
+        return { status: 'enqueued', jobId: 'j' };
+      },
+    };
+    const handler = intakeReconcileHandler({
+      store: { findUnstartedMatches: async () => matches },
+      unitOfWork: eventing,
+      eventStore: race.eventStore,
+      ids: {
+        next: () => {
+          ids += 1;
+          return `00000000-0000-4000-a000-${String(ids).padStart(12, '0')}` as Id;
+        },
+      },
+      clock: { now: () => NOW },
+      jobs,
+      intervalMs: 45_000,
+      stranded: { unitOfWork: eventing, store: strandedStore(ran) },
+    });
+    const reEmitted = async (projectId: Id = PROJECT): Promise<DomainEvent[]> =>
+      (await eventing.store.readStream('project', projectId))
+        .map((stored) => stored.event)
+        .filter(
+          (event) =>
+            event.type === 'ticket.matched' &&
+            (event.actor as Actor & { component?: string }).component ===
+              INTAKE_RECONCILER_COMPONENT,
+        );
+    return { handler, race, enqueued, ran, reEmitted, eventing };
+  };
+
+  it('re-emits every match once through three lost races, and the stranded pass still runs in that tick', async () => {
+    const pass = passOver(3, [matchOf(1), matchOf(2)]);
+
+    await pass.handler({} as JobContext);
+
+    expect(pass.race.lost(), 'the rival won three sequences').toBe(3);
+    const events = await pass.reEmitted();
+    // Each lost match once — never twice, never zero — at a sequence the rival did not take.
+    expect(events.map((event) => event.cause_event_id).sort()).toEqual(
+      [matchOf(1).eventId, matchOf(2).eventId].sort(),
+    );
+    const rivals = (await pass.eventing.store.readStream('project', PROJECT)).filter(
+      (stored) =>
+        (stored.event.actor as Actor & { component?: string }).component === RIVAL_COMPONENT,
+    );
+    expect(rivals).toHaveLength(3);
+    expect(pass.ran, 'the stranded-work table ran on the same tick').toEqual(['stranded']);
+    expect(
+      pass.enqueued.filter((request) => request.queue === JOB_QUEUES.intakeReconcile),
+    ).toHaveLength(1);
+  });
+
+  it('skips a match that loses every attempt, counts it, and still re-emits the next project’s and runs the stranded pass', async () => {
+    // Four losses: the first match's every attempt, so the helper's bound is spent on it alone.
+    const pass = passOver(4, [matchOf(1), matchOf(2, OTHER_PROJECT)]);
+    const report = await runIntakeReconciliation({
+      store: { findUnstartedMatches: async () => [matchOf(1), matchOf(2, OTHER_PROJECT)] },
+      unitOfWork: pass.eventing,
+      eventStore: pass.race.eventStore,
+      ids: { next: () => '00000000-0000-4000-a000-000000000777' as Id },
+      clock: { now: () => NOW },
+      graceMs: 45_000,
+    });
+
+    expect(report).toEqual({ found: 2, reEmitted: 1, contended: 1 });
+    expect(await pass.reEmitted(PROJECT)).toHaveLength(0);
+    expect(await pass.reEmitted(OTHER_PROJECT)).toHaveLength(1);
+  });
+
+  it('runs the stranded pass even when the intake half throws, and then fails the job (the canary for the separate try)', async () => {
+    const pass = passOver(0, []);
+    const failing = intakeReconcileHandler({
+      store: {
+        findUnstartedMatches: async () => {
+          throw new Error('the intake query failed');
+        },
+      },
+      unitOfWork: pass.eventing,
+      eventStore: pass.race.eventStore,
+      ids: { next: () => '00000000-0000-4000-a000-000000000001' as Id },
+      clock: { now: () => NOW },
+      jobs: harnessFor().jobs,
+      intervalMs: 45_000,
+      stranded: { unitOfWork: pass.eventing, store: strandedStore(pass.ran) },
+    });
+
+    await expect(failing({} as JobContext)).rejects.toThrow('the intake query failed');
+    expect(pass.ran, 'a failed intake half no longer skips the table').toEqual(['stranded']);
   });
 });

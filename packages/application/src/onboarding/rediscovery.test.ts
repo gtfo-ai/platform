@@ -278,6 +278,29 @@ describe('readRediscoveryGate', () => {
     expect(harness.store.snapshot()).toHaveLength(1);
   });
 
+  it('carries the recovery’s ending for the last discovery task, asked of that task, and null without it (WP-124)', async () => {
+    const { harness, discovery, gate, projectId } = setup();
+    await startProjectDiscovery(discovery, { projectId, requestedByUserId: USER });
+    await settle(harness);
+    const asked: string[] = [];
+    const lost = { at: '2026-10-02T10:00:00.000Z' as IsoDateTime, reason: 'never recorded' };
+    const read = await readRediscoveryGate(
+      {
+        ...gate,
+        findingsUnrecorded: async (taskId) => {
+          asked.push(taskId);
+          return lost;
+        },
+      },
+      projectId,
+    );
+    expect(read.lastDiscovery?.findingsUnrecorded).toEqual(lost);
+    expect(asked).toEqual([read.lastDiscovery?.taskId]);
+    expect(
+      (await readRediscoveryGate(gate, projectId)).lastDiscovery?.findingsUnrecorded,
+    ).toBeNull();
+  });
+
   it('reads the project’s own stage budget when it sets one', async () => {
     const { gate, projectId } = setup({ stageBudgetUsd: 3.5 });
     expect((await readRediscoveryGate(gate, projectId)).ceilingUsd).toBe(3.5);

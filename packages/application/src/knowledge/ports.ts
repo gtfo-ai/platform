@@ -364,6 +364,12 @@ export interface StoredKnowledgeProposal {
   readonly decidedAt: IsoDateTime | null;
   readonly appliedCommitSha: string | null;
   readonly createdAt: IsoDateTime;
+  /**
+   * Why the platform gave up committing it — set exactly when `status` is `apply_failed` (WP-124,
+   * migration 0075). Optional so a proposal built before the column existed still type-checks; a
+   * store reads it as `null` when unset.
+   */
+  readonly applyFailureReason?: string | null;
 }
 
 /**

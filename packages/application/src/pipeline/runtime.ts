@@ -48,6 +48,7 @@ import type { NotifyOptions } from '../notify/options.js';
 import type { DependencyMetadataPort } from '../ports/dependency-metadata.js';
 import type { EventStore } from '../ports/event-store.js';
 import type { SecretRedactor } from '../ports/integrations/audit.js';
+import { PIPELINE_OUTBOUND_POLLING_INTERVAL_SECONDS } from '../ports/job-queues.js';
 import type { JobWorker } from '../ports/jobs.js';
 import { JOB_QUEUES } from '../ports/jobs.js';
 import type { Logger } from '../ports/logger.js';
@@ -407,6 +408,9 @@ export const createPipelineRuntime = (options: PipelineRuntimeOptions): Pipeline
         await options.jobs.work<OutboundJobData>({
           queue: JOB_QUEUES.pipelineOutbound,
           handler: pipelineOutboundHandler(outboundOptions),
+          // WP-124, backlog 392: its own, shorter interval — a burst of intakes lands here, and a
+          // worker takes one job per interval. The constant has the measurement and the cost.
+          pollingIntervalSeconds: PIPELINE_OUTBOUND_POLLING_INTERVAL_SECONDS,
           /**
            * One, and the trade is stated rather than assumed.
            *

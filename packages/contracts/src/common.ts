@@ -385,12 +385,19 @@ export const knowledgeProposalTypeSchema = z.enum([
  */
 export const MAX_PROPOSAL_DELTA_BYTES = 64 * 1024;
 
-/** KnowledgeProposal state machine (technical/02). */
+/**
+ * KnowledgeProposal state machine (technical/02).
+ *
+ * `apply_failed` (WP-124, migration 0075, PROGRESS backlog 366): an approved proposal the recovery
+ * pass re-enqueued once and still could not get committed. Not awaiting apply, so nothing retries
+ * it; a maintainer's re-approval moves it back to `queued` and asks for an apply.
+ */
 export const knowledgeProposalStatusSchema = z.enum([
   'scored',
   'queued',
   'auto_applied',
   'applied',
+  'apply_failed',
   'rejected',
   'discarded',
 ]);

@@ -217,7 +217,28 @@ describe('GET /api/projects/:project_id/rediscovery', () => {
       can_start: true,
       blocker: null,
       ceiling_usd: 2,
-      last_discovery: { task_id: TASK, state: 'done', cost_usd: 0.84 },
+      last_discovery: { task_id: TASK, state: 'done', cost_usd: 0.84, findings_unrecorded: null },
+    });
+  });
+
+  it('publishes why the last discovery’s findings were never recorded, when the recovery gave up (WP-124)', async () => {
+    world.gate = {
+      ceilingUsd: 2,
+      lastDiscovery: {
+        taskId: TASK,
+        state: 'done',
+        costUsd: 0.84,
+        findingsUnrecorded: { at: '2026-10-02T10:00:00.000Z', reason: 'never recorded' },
+      },
+      blocker: null,
+    };
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/projects/${PROJECT}/rediscovery`,
+    });
+    expect(JSON.parse(response.body).last_discovery.findings_unrecorded).toEqual({
+      at: '2026-10-02T10:00:00.000Z',
+      reason: 'never recorded',
     });
   });
 

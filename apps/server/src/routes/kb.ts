@@ -158,6 +158,10 @@ const toRecord = (proposal: StoredKnowledgeProposal) =>
     decided_at: proposal.decidedAt,
     applied_commit_sha: proposal.appliedCommitSha,
     created_at: proposal.createdAt,
+    // WP-124: present only on an `apply_failed` row — platform text, never provider text.
+    ...(proposal.applyFailureReason === undefined || proposal.applyFailureReason === null
+      ? {}
+      : { apply_failure_reason: proposal.applyFailureReason }),
   });
 
 export const registerKbRoutes = async (

@@ -34,15 +34,16 @@
  * dispatcher's transaction where every read is a nested pool borrow (PROGRESS backlog 19). The
  * `artifact.created` handler enqueues and nothing else.
  *
- * The residual is this module's own, and it is **not** recovered by `recovery/stranded.ts` — that
- * table's curation row keys on the two artifact types the `knowledge.proposals` queue curates, and
- * a `DiscoveryDraft` is neither. `HandlerContext.afterCommit` is at-most-once, so a process that
- * dies between the handler's commit and its enqueue loses this wake-up and the project keeps its
- * previous readiness evaluation (or none). That is notification-shaped loss, which is the
- * direction standing rule 20 says to fail in — the artifact is still on the task and the wizard can
- * ask for the evaluation again. It is **not** silently invisible: `GET …/readiness` still answers
- * 409 with the row count, which is the operator-facing difference between "no producer" and "this
- * project's producer did not run".
+ * **A lost or failed recording is recovered since WP-124** (PROGRESS backlog 366, TD-004's M7
+ * amendment). Until then it was this module's own residual: `HandlerContext.afterCommit` is
+ * at-most-once and a job that threw on every try became an administrator's failed-jobs row, so a
+ * paid discovery run's evaluation and drafted pages were lost while the task read `done`. The
+ * `discovery_record` row of `recovery/stranded.ts`'s table (`recovery/discovery-record.ts`) now finds
+ * the project's newest `DiscoveryDraft` with no evaluation recorded from it and no job owed, enqueues
+ * this job once more under a mark, and then escalates the discovery task with a brief — which, for a
+ * task already `done`, is an escalation message to its people and a reason on the project's
+ * re-evaluation read (OPEN-QUESTIONS Q113). `GET …/readiness` still answers 409 with the row count
+ * for a project nothing has evaluated.
  *
  * ## The byte budget (standing rule 63)
  *

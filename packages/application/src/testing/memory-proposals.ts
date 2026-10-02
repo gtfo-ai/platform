@@ -123,11 +123,17 @@ export const memoryProposalStore = (
     decide: async (tx: Transaction, decision: KnowledgeProposalDecision) => {
       const index = rows.findIndex((row) => row.id === decision.id);
       const row = rows[index];
-      if (row === undefined || (row.status !== 'queued' && row.status !== 'scored')) {
+      if (
+        row === undefined ||
+        (row.status !== 'queued' && row.status !== 'scored' && row.status !== 'apply_failed')
+      ) {
         return false;
       }
+      // WP-124: a decision clears an apply failure, as the adapter's statement does — and, as the
+      // adapter reads it back, a row with no failure has no `applyFailureReason` key at all.
+      const { applyFailureReason: _cleared, ...unfailed } = row;
       replace(index, {
-        ...row,
+        ...unfailed,
         status: decision.status,
         decidedByUserId: decision.decidedByUserId,
         decidedAt: decision.decidedAt,

@@ -36,6 +36,7 @@ const job = (overrides: Partial<FailedJob>): FailedJob => ({
   error_truncated: false,
   exhaustion: {
     kind: 'relies_on_retries',
+    shape: 'notification_shaped',
     loss: 'one provider call the pipeline decided on',
     recovered_by: null,
   },
@@ -96,6 +97,7 @@ describe('failed jobs on the settings page (WP-108)', () => {
           error: null,
           exhaustion: {
             kind: 'relies_on_retries',
+            shape: 'recovery_row',
             loss: 'one expiry or reminder',
             recovered_by: 'deadline, deadline_reminder',
           },
@@ -118,14 +120,14 @@ describe('failed jobs on the settings page (WP-108)', () => {
     expect(first).toContain('tried 3 times');
     expect(first).toContain(HOSTILE_ERROR);
     expect(first).toContain('one provider call the pipeline decided on');
-    expect(first).toContain('Nothing recovers it automatically');
+    expect(first).toContain('Listed only: the next transition re-derives what it was for');
     expect(container.querySelector('script')).toBeNull();
     const second =
       container.querySelector('[data-failed-job="00000000-0000-4000-8000-0000000000a2"]')
         ?.textContent ?? '';
     expect(second).toContain('recorded no message');
     expect(second).toContain(
-      'Recovered by the platform’s recovery pass: deadline, deadline_reminder.',
+      'The platform’s recovery pass finds what it left and tries once more, then makes it visible: deadline, deadline_reminder.',
     );
     const third =
       container.querySelector('[data-failed-job="00000000-0000-4000-8000-0000000000a3"]')
@@ -134,6 +136,38 @@ describe('failed jobs on the settings page (WP-108)', () => {
     expect(container.querySelector('[data-failed-job-count]')?.textContent).toBe('3 failed jobs.');
     // A read: nothing here re-queues a job.
     expect(screen.queryAllByRole('button', { name: /re-?queue/i })).toHaveLength(0);
+  });
+
+  /**
+   * WP-124, TD-004's M7 amendment: the sentence is read off the queue's declared shape, one per
+   * shape — parameterised over the set the contract declares (standing rule 68).
+   */
+  it.each([
+    ['bound_and_escalate', null, 'Its last try escalated the task it carried'],
+    ['per_duty', 'per duty: some escalate', 'What recovers it depends on the duty it carried'],
+    ['notification_shaped', 'next_tick', 'Its schedule runs again on its next tick'],
+    ['recovery_row', 'knowledge_apply', 'tries once more, then makes it visible: knowledge_apply.'],
+  ] as const)('says what recovers a %s queue', async (shape, recoveredBy, sentence) => {
+    const fetchImpl = fetchFor({
+      items: [
+        job({
+          exhaustion: {
+            kind: 'relies_on_retries',
+            shape,
+            loss: 'something',
+            recovered_by: recoveredBy,
+          },
+        }),
+      ],
+      total: 1,
+      next_cursor: null,
+    });
+    const { container } = render(createApp({ fetchImpl, realtime: false }).element);
+    await waitFor(() => {
+      expect(container.querySelector('[data-failed-job-recovery="true"]')?.textContent).toContain(
+        sentence,
+      );
+    });
   });
 
   it('states a page as the newest N of the total, never as the total', async () => {

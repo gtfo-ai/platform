@@ -5616,6 +5616,7 @@
             "queued",
             "auto_applied",
             "applied",
+            "apply_failed",
             "rejected",
             "discarded"
           ]
@@ -5652,6 +5653,16 @@
         },
         "created_at": {
           "$ref": "#/$defs/IsoDateTime"
+        },
+        "apply_failure_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [

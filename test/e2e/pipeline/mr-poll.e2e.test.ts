@@ -256,6 +256,38 @@ describe('a poll-only binding (WP-123)', () => {
       return Number(rows[0]?.n) >= 1;
     });
   };
+  /**
+   * **Quiet: nothing the pipeline decided is still owed** — no event awaiting dispatch and no
+   * `pipeline.outbound` job `created`, `retry` or `active` — and then the fake git's read count
+   * unchanged across two samples one harness polling interval apart (PROGRESS backlog 419).
+   *
+   * `ready_for_merge` is **already true** while the duties entering the rebase gate and Ready
+   * enqueued (`risk_route`, `coverage`, …) are still queued, and two of them read the default
+   * branch (`risk-routing.ts`, `coverage.ts`). A baseline taken on the state alone let such a read
+   * land after it and count as a poll's (rule 87's second question: the predicate was true before
+   * the event). So the baseline is taken here, after the last thing those duties do — their job
+   * leaving the queue — and the stable count guards a read still in flight as the job completes.
+   */
+  const quiesced = async (pipeline: PipelineE2E, reads: () => number): Promise<number> => {
+    await pipeline.waitFor('no dispatch and no outbound job owed', async () => {
+      const rows = await pipeline.query<{ owed: string }>(
+        `select ((select count(*) from event_dispatch where dead_lettered_at is null)
+               + (select count(*) from pgboss.job
+                   where name = 'pipeline.outbound' and state in ('created', 'retry', 'active'))
+               )::text as owed`,
+      );
+      return Number(rows[0]?.owed) === 0;
+    });
+    let previous = reads();
+    await pipeline.waitFor('the provider read count to hold still', async () => {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const now = reads();
+      const stable = now === previous;
+      previous = now;
+      return stable;
+    });
+    return previous;
+  };
   const ofType = async (pipeline: PipelineE2E, type: string) =>
     (await pipeline.events()).filter((event) => event.type === type);
   const toReady = async (label: string, extraEnv: Record<string, string> = {}) => {
@@ -419,7 +451,8 @@ describe('a poll-only binding (WP-123)', () => {
         .filter(
           (call) => call.method === 'getDefaultBranchHead' || call.method === 'listDiscussions',
         ).length;
-    const readsBefore = reads();
+    // Backlog 419: the baseline only once the Ready entry's own duties have read what they read.
+    const readsBefore = await quiesced(pipeline, reads);
 
     const switchedOn = await dbNow(pipeline);
     await pollOnlyOn(pipeline, { receives_webhooks: true });

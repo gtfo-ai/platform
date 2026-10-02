@@ -88,4 +88,7 @@ has not been shown for every queue (backlog 325's condition).
 a shorter per-queue `pollingIntervalSeconds` for `pipeline.outbound` and `pipeline.intake`. Per-queue
 LISTEN/NOTIFY is not used in 0.1: it holds one more connection per process and moves the pool floor,
 whose upgrade cost backlog 371 measured. Built by M7 **WP-124**, which measures first and states the
-choice at the registration.
+choice at the registration. *As built at WP-124 (session 11):* the cache **is** populated, but it
+refreshes every 60 s, so the burst branch measured identical to doing nothing at the shipped cadence;
+the per-queue branch was built — `pipeline.outbound` polls at 0.5 s (50 queued intakes drained in
+25.0 s instead of 98.9 s; PROGRESS backlog 392 has the table).

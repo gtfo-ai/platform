@@ -11,7 +11,7 @@
  * a `task_asks` row `pending` for ever. Nothing re-emits it, nothing retries it, and nothing logs
  * it — `EventBus` logs only the case where a callback *threw*.
  *
- * ## Twelve sites, ten of them here, and the other two named rather than silently absent
+ * ## Fourteen sites, twelve of them here, and the other two named rather than silently absent
  *
  * | site | entry | what is lost | where the recovery is |
  * |---|---|---|---|
@@ -26,6 +26,8 @@
  * | a reminder's timer (WP-84) | **291** | BD-006's one reminder before the escalation | **here** — `deadline_reminder`, the fourth row of `./deadline.ts` (WP-108), which also reminds a backfilled row and one open before reminders existed |
  * | a rework's close (WP-59) | **178** | a rejected merge request stays open, detached from every task | **here** — `superseded_mr`, in `./superseded-mr.ts` |
  * | a deferred dependency-gate ending (WP-67) | **240** | a question nobody asks, or a block nobody applies, on an `active` task | **here** — `deferred_dependency`, in `./deferred-dependency.ts` (WP-84) |
+ * | a knowledge apply that failed or never ran (WP-124) | **366** | a change a human accepted, never committed; the proposal reads approved for ever | **here** — `knowledge_apply`, in `./knowledge-apply.ts`: one apply per project under a mark, then `apply_failed` with a reason on the proposal queue |
+ * | a discovery run's recording that failed or never ran (WP-124) | **366** | a paid run's readiness evaluation and drafted pages | **here** — `discovery_record`, in `./discovery-record.ts`: the recording job once more under a mark, then the discovery task escalates with a brief |
  * | a create answer the runner never received (WP-103) | **286** | a run container, sidecar, network and control directory nobody holds a handle for | `./orphan-workspaces.ts`, on **the runner's own timer** at this pass's interval — it needs the launcher client, which only a process configured to run agents holds, while this pass rides a job any worker takes |
  *
  * …plus three rows that are **not** lost wake-ups at all and ride the same pass because each is the
@@ -147,6 +149,16 @@ import type {
   DeferredDependencyRecoverySite,
   StrandedDeferredDependency,
 } from './deferred-dependency.js';
+import {
+  type DiscoveryRecordRecoverySite,
+  recoverStrandedDiscoveryRecords,
+  type StrandedDiscoveryRecord,
+} from './discovery-record.js';
+import {
+  type KnowledgeApplyRecoverySite,
+  recoverStrandedApplies,
+  type StrandedApply,
+} from './knowledge-apply.js';
 import type { NotificationRepostSite, UndeliveredNotification } from './notification-repost.js';
 import {
   enqueueRunCredentialRevocation,
@@ -394,6 +406,24 @@ export interface StrandedRecoveryOptions {
    * the pipeline store, so a composition with no pipeline has nothing to give it.
    */
   readonly stages?: StrandedStageRecoverySite;
+  /**
+   * The knowledge-apply site (WP-124, PROGRESS backlog **366**, `./knowledge-apply.ts`): an
+   * approved proposal no commit carries and no apply job is working on.
+   *
+   * **Absent is "a failed apply is never recovered"** — every build before WP-124, where such a
+   * proposal read approved for ever and the nightly hygiene pass re-asked for an apply every night.
+   * Optional for the reason `credentials` is: a composition with no knowledge ring has no worker
+   * for the apply it enqueues.
+   */
+  readonly applies?: KnowledgeApplyRecoverySite;
+  /**
+   * The discovery-record site (WP-124, PROGRESS backlog **366**, `./discovery-record.ts`): a
+   * discovery run's draft no evaluation was recorded from.
+   *
+   * **Absent is "a lost recording is never recovered"** — every build before WP-124. Optional for
+   * the reason `runs` is: its ending escalates through the pipeline store.
+   */
+  readonly discoveryRecords?: DiscoveryRecordRecoverySite;
   readonly logger?: Logger;
 }
 
@@ -539,11 +569,21 @@ export const runStrandedRecovery = async (
   const deferredSite = options.deferredDependencies;
   const repostSite = options.notifications;
   const stageSite = options.stages;
+  const applySite = options.applies;
+  const discoverySite = options.discoveryRecords;
   // The re-post bound is the gauge's own, not the grace: a row younger than the job's retry window
   // still has an attempt of its own left (`./notification-repost.ts`).
   const repostBefore = new Date(at - IMMEDIATE_UNDELIVERED_AFTER_MS).toISOString() as IsoDateTime;
   const found = await options.unitOfWork.transaction(async (scope) => ({
     stages: stageSite === undefined ? [] : await strandedStagesIn(stageSite, scope.tx, query),
+    applies:
+      applySite === undefined
+        ? ([] as readonly StrandedApply[])
+        : await applySite.store.strandedApplies(scope.tx, query),
+    discoveries:
+      discoverySite === undefined
+        ? ([] as readonly StrandedDiscoveryRecord[])
+        : await discoverySite.store.strandedDiscoveryRecords(scope.tx, query),
     deferred:
       deferredSite === undefined
         ? []
@@ -826,6 +866,14 @@ export const runStrandedRecovery = async (
   }
   if (stageSite !== undefined) {
     sites.push(await recoverStrandedStages(options, stageSite, found.stages, now));
+  }
+  if (applySite !== undefined) {
+    sites.push(await recoverStrandedApplies(options, applySite, found.applies, now));
+  }
+  if (discoverySite !== undefined) {
+    sites.push(
+      await recoverStrandedDiscoveryRecords(options, discoverySite, found.discoveries, now),
+    );
   }
   if (repostSite !== undefined) {
     let reposted = 0;

@@ -266,7 +266,19 @@ export const KnowledgeScreen = ({ projectKey }: { readonly projectKey: string })
                     </li>
                   ))}
                 </ul>
-                {proposal.status === 'queued' || proposal.status === 'scored' ? (
+                {proposal.status === 'apply_failed' ? (
+                  // WP-124, backlog 366: approved, re-tried once by the recovery pass, and still not
+                  // committed. Approving again is how a maintainer asks for another apply.
+                  <p className="text-xs text-warning" data-apply-failed="true">
+                    <Badge tone="danger">apply failed</Badge>{' '}
+                    <UntrustedText
+                      value={proposal.apply_failure_reason ?? 'no reason was recorded'}
+                    />
+                  </p>
+                ) : null}
+                {proposal.status === 'queued' ||
+                proposal.status === 'scored' ||
+                proposal.status === 'apply_failed' ? (
                   <div className="flex gap-2">
                     <Button
                       tone="primary"
@@ -275,7 +287,7 @@ export const KnowledgeScreen = ({ projectKey }: { readonly projectKey: string })
                         decide.mutate({ proposalId: proposal.id, decision: 'approve' });
                       }}
                     >
-                      Approve
+                      {proposal.status === 'apply_failed' ? 'Approve again' : 'Approve'}
                     </Button>
                     <Button
                       tone="danger"

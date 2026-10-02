@@ -67,6 +67,8 @@ export type RediscoveryGateReader = (projectId: string) => Promise<{
     readonly taskId: string;
     readonly state: string;
     readonly costUsd: number;
+    /** WP-124: why this task's findings were never recorded, when the recovery gave up. */
+    readonly findingsUnrecorded?: { readonly at: string; readonly reason: string } | null;
   } | null;
   readonly blocker: {
     readonly code: string;
@@ -252,6 +254,7 @@ export const registerRediscoveryRoutes = async (
                 task_id: gate.lastDiscovery.taskId,
                 state: gate.lastDiscovery.state as never,
                 cost_usd: gate.lastDiscovery.costUsd,
+                findings_unrecorded: gate.lastDiscovery.findingsUnrecorded ?? null,
               },
       };
     },
