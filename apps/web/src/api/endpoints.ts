@@ -44,6 +44,7 @@ import {
   createIdentityMappingRequestSchema,
   createIntegrationRequestSchema,
   createProjectRequestSchema,
+  createTaskRequestSchema,
   deadLettersResponseSchema,
   decideApprovalRequestSchema,
   decideBreakdownRequestSchema,
@@ -108,6 +109,7 @@ import {
   startHistoryBootstrapResponseSchema,
   startShadowBatchRequestSchema,
   startShadowBatchResponseSchema,
+  startTaskResponseSchema,
   steerRunRequestSchema,
   steerRunResponseSchema,
   submitFeedbackRequestSchema,
@@ -245,6 +247,15 @@ export interface Endpoints {
     body: z.input<typeof startHistoryBootstrapRequestSchema>,
     idempotencyKey: string,
   ) => Promise<z.output<typeof startHistoryBootstrapResponseSchema>>;
+  /**
+   * WP-122, product/04's manual Start: record a ticket as matched by hand. `202` names the match;
+   * the task is intake's to create, so the board learns of it on the project's topic.
+   */
+  readonly startTask: (
+    projectId: string,
+    body: z.input<typeof createTaskRequestSchema>,
+    idempotencyKey: string,
+  ) => Promise<z.output<typeof startTaskResponseSchema>>;
   readonly projectTasks: (
     projectId: string,
     query?: { readonly state?: string; readonly limit?: number; readonly cursor?: string },
@@ -535,6 +546,13 @@ const seg = (value: string): string => encodeURIComponent(value);
 export const transcriptDownloadPath = (runId: string): string =>
   `/api/runs/${seg(runId)}/transcript.jsonl`;
 
+/**
+ * The task's record as one JSON document — `GET /api/tasks/:id/export` (WP-112), product/09's
+ * *"Export as JSON per task"*. A **path** for `DownloadLink`, for `transcriptDownloadPath`'s reason
+ * (WP-122, PROGRESS backlog 381).
+ */
+export const taskExportPath = (taskId: string): string => `/api/tasks/${seg(taskId)}/export`;
+
 /** The workspace tarball a take-over exported for this run, when it asked for one (WP-44). */
 export const exportDownloadPath = (runId: string): string => `/api/runs/${seg(runId)}/export.tar`;
 
@@ -641,6 +659,13 @@ export const createEndpoints = (client: ApiClient): Endpoints => {
         method: 'POST',
         schema: startHistoryBootstrapResponseSchema,
         body: startHistoryBootstrapRequestSchema.parse(body),
+        idempotencyKey,
+      }),
+    startTask: (projectId, body, idempotencyKey) =>
+      client.command(`/api/projects/${seg(projectId)}/tasks`, {
+        method: 'POST',
+        schema: startTaskResponseSchema,
+        body: createTaskRequestSchema.parse(body),
         idempotencyKey,
       }),
     projectTasks: (projectId, query) =>

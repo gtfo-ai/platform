@@ -9,6 +9,7 @@ import {
   createMemoryAuditLog,
   createVirtualTimer,
   noSecretsRedactor,
+  type TaskManagementPort,
 } from '@platform/application';
 import { fixedClock } from '@platform/domain';
 import { describe, expect, it } from 'vitest';
@@ -133,5 +134,33 @@ describe('createJiraCloudRegistration', () => {
       secrets: { api_token: SECRETS.api_token },
     });
     expect(port.capabilities().webhooks).toBe(false);
+  });
+});
+
+/**
+ * WP-122 pre-review round: `ticketScope` is `project_keys`, compared exactly as the webhook compares
+ * a delivered key (`projectKeyOf`), asked with the key Jira answered — so an empty list is
+ * `unscoped` and admits any key, and a declared list refuses another project's ticket.
+ */
+describe('the Jira binding’s declared scope (WP-122)', () => {
+  const portWith = (projectKeys: readonly string[]) =>
+    createJiraCloudRegistration(deps()).create({
+      integrationId: INTEGRATION_ID as never,
+      config: { ...CONFIG, project_keys: [...projectKeys] },
+      secrets: SECRETS,
+      redactor: noSecretsRedactor(),
+    } as never) as TaskManagementPort;
+
+  it('admits a ticket of a declared project, refuses another naming the list, and admits any key when none is declared', () => {
+    const scoped = portWith(['ACME', 'OPS']);
+    expect(scoped.ticketScope('ACME-12')).toEqual({ kind: 'in_scope' });
+    expect(scoped.ticketScope('OPS-1')).toEqual({ kind: 'in_scope' });
+    expect(scoped.ticketScope('OTHER-12')).toEqual({
+      kind: 'out_of_scope',
+      scope: ['ACME', 'OPS'],
+    });
+    // The prefix, not a substring: `ACMEX` is another project.
+    expect(scoped.ticketScope('ACMEX-1').kind).toBe('out_of_scope');
+    expect(portWith([]).ticketScope('OTHER-12')).toEqual({ kind: 'unscoped' });
   });
 });

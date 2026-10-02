@@ -91,6 +91,7 @@ import {
   autonomyPresetFor,
   epicSplitRouting,
   iterationLimitsFor,
+  picksUpNewTickets,
   pipelineDialFor,
   spikeRefusal,
   templateForIssueType,
@@ -370,8 +371,7 @@ export const runIntakeCheck = async (
    * wants it delivered turns the dial. Shadow mode is the other half of the same decision and is
    * the only thing that runs at this position (`shadow/batch.ts`).
    */
-  const preset = autonomyPresetFor(settings);
-  if (preset !== null && !preset.picksUpNewTickets) {
+  if (!picksUpNewTickets(settings)) {
     (options.logger ?? silentLogger).info(
       { project_id: projectId, ticket_key: ticket.key },
       'this project’s autonomy dial does not pick up new tickets, so no task was created',

@@ -85,6 +85,7 @@ const TASK_DETAIL: TaskDetailResponse = {
   },
   taken_over: null,
   can_raise_budget: false,
+  can_export: false,
   // WP-29: required and always present, so a server that forgot to project it fails here rather
   // than rendering a task page with no human-time line.
   human_time: {

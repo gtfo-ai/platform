@@ -40,6 +40,7 @@ import {
   taskModeSchema,
   taskStateSchema,
   templateIdSchema,
+  ticketRefSchema,
   unitIntervalSchema,
   urlSchema,
   usdSchema,
@@ -1135,12 +1136,53 @@ export const listTasksQuerySchema = paginationQuerySchema.extend({
  * already sends `limit` and `cursor`. `next_cursor` is opaque: it is the keyset the server issued,
  * and a client that parses it is reading a shape no contract fixes.
  */
-export const tasksResponseSchema = page(taskRecordSchema);
+export const tasksResponseSchema = page(taskRecordSchema).extend({
+  /**
+   * Whether the **caller** may start a task by hand in this project — `task.create` over their
+   * effective role there (WP-122). The board offers the ticket-key form only then; the route refuses
+   * everyone else regardless. A fact about the caller, like `can_raise_budget`.
+   */
+  can_start_task: z.boolean(),
+});
 
+/** The longest ticket key `POST /api/projects/:id/tasks` accepts (WP-122). */
+export const MAX_TICKET_KEY_CHARS = 64;
+
+/**
+ * A ticket key a person typed — untrusted text on its way to a provider's URL and an event payload
+ * (BD-022), so its character set is **fixed and refused**, never escaped or rewritten: letters,
+ * digits, `.`, `_` and `-`, starting with a letter or a digit. That admits every key Jira issues
+ * (`PROJ-123`) and the fake provider's, and refuses a slash, a `?`, a `#`, whitespace and anything
+ * that could change which path the adapter asks for.
+ */
+export const ticketKeyInputSchema = z
+  .string()
+  .min(1)
+  .max(MAX_TICKET_KEY_CHARS)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/, 'letters, digits, ".", "_" and "-" only');
+
+/**
+ * `POST /api/projects/:id/tasks` — product/04 S0's manual "Start" (WP-122).
+ *
+ * **Only the key.** The template and the mode were in this schema before anything served it, and
+ * both are gone on purpose: the manual start bypasses the pick-up rule **and nothing else**, so the
+ * ticket is classified exactly as a matched ticket is (its issue type through the project's
+ * templates), and a shadow task has a command of its own (`POST …/shadow-batches`).
+ */
 export const createTaskRequestSchema = z.strictObject({
-  ticket_key: nonEmptyStringSchema,
-  template: templateIdSchema.optional(),
-  mode: taskModeSchema.optional(),
+  ticket_key: ticketKeyInputSchema,
+});
+
+/**
+ * The answer to a manual start: the `ticket.matched` the platform recorded, never a task — the
+ * task is created by intake from that event, exactly as for a rule match, so the WIP limits, the
+ * autonomy dial and one task per ticket decide it there (`202 Accepted`). `performed: false` is a
+ * replay of an `Idempotency-Key` that already recorded one.
+ */
+export const startTaskResponseSchema = z.strictObject({
+  performed: z.boolean(),
+  event_id: idSchema,
+  ticket: ticketRefSchema,
 });
 
 /**
@@ -1266,6 +1308,12 @@ export const taskDetailResponseSchema = z.strictObject({
    * the route refuses everyone else regardless.
    */
   can_raise_budget: z.boolean(),
+  /**
+   * Whether the **caller** may download this task's record — `task.export` over their effective
+   * role in the task's project (WP-122, PROGRESS backlog 381). The page offers *Download JSON* only
+   * then; the export route refuses everyone else regardless.
+   */
+  can_export: z.boolean(),
   /** The take-over in force, or `null` — see {@link takenOverSchema}. */
   taken_over: takenOverSchema.nullable(),
   /** Human minutes derived from events by the WP-29 projector; never summed with the USD. */
@@ -2041,9 +2089,10 @@ export const taskExportResponseSchema = z.strictObject({
   /** The document's format; bumped when its shape changes, so a reader can tell. */
   format: z.literal(1),
   exported_at: isoDateTimeSchema,
-  // Not `can_raise_budget`: that is a fact about the **caller** (WP-131 review round 2), and a
-  // document handed to someone else must not carry the exporter's permissions.
-  ...taskDetailResponseSchema.omit({ can_raise_budget: true }).shape,
+  // Not `can_raise_budget` nor `can_export`: those are facts about the **caller** (WP-131 review
+  // round 2, WP-122), and a document handed to someone else must not carry the exporter's
+  // permissions.
+  ...taskDetailResponseSchema.omit({ can_raise_budget: true, can_export: true }).shape,
   human_actions: z
     .strictObject({
       items: z.array(taskAuditEntrySchema),
@@ -2624,6 +2673,7 @@ export type BusinessInterviewResponse = z.infer<typeof businessInterviewResponse
 export type ListTasksQuery = z.infer<typeof listTasksQuerySchema>;
 export type TasksResponse = z.infer<typeof tasksResponseSchema>;
 export type CreateTaskRequest = z.infer<typeof createTaskRequestSchema>;
+export type StartTaskResponse = z.infer<typeof startTaskResponseSchema>;
 export type TaskDetailResponse = z.infer<typeof taskDetailResponseSchema>;
 export type TakenOver = z.infer<typeof takenOverSchema>;
 export type IdentityCandidate = z.infer<typeof identityCandidateSchema>;

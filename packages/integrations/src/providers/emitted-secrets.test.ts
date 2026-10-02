@@ -929,6 +929,7 @@ const JIRA_SCENARIOS: Readonly<Record<string, string>> = {
   read_ticket: 'readTicket',
   match_tickets: 'matchTickets',
   poll_plan: 'pollPlan',
+  ticket_scope: 'ticketScope',
   transition: 'transition',
   upsert_workpad: 'upsertWorkpad',
   add_comment: 'addComment',
@@ -990,6 +991,8 @@ describe('jira emits no string carrying its own credentials (rules 31, 35)', () 
     emitted.match_tickets = await port.matchTickets({ kind: 'label', label: 'agentic' });
     // WP-87: pure, off the config — and a plan carries the pick-up rule, which is config text.
     emitted.poll_plan = port.pollPlan();
+    // WP-122: pure, off the config — an out-of-scope verdict quotes `project_keys`, config text.
+    emitted.ticket_scope = port.ticketScope('OTHER-1');
     // The target is the platform's own status mapping, not provider text, so it is not planted:
     // the *response* it is matched against is (`Done ${JIRA_TOKEN}` as the transition name).
     emitted.transition = await port.transition(ref, 'Done');

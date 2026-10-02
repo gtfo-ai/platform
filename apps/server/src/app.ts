@@ -143,11 +143,13 @@ import { databaseRunQueries, registerRunRoutes } from './routes/runs.js';
 import { registerSettingsRoutes } from './routes/settings.js';
 import { registerShadowRoutes } from './routes/shadow.js';
 import { registerStatsRoutes } from './routes/stats.js';
+import { registerTaskStartRoutes } from './routes/task-start.js';
 import { registerTaskRoutes } from './routes/tasks.js';
 import { registerWebhookRoutes } from './routes/webhooks.js';
 import type { ShadowCommands } from './shadow.js';
 import type { SseHub } from './sse/hub.js';
 import { registerSseRoutes } from './sse/routes.js';
+import type { TaskStartCommands } from './task-start.js';
 import { type ClientFallback, createClientFallback } from './web/fallback.js';
 
 /**
@@ -220,6 +222,13 @@ export interface BuildAppOptions {
    * composed none. Nullable like `shadow`; the routes answer `503` by name.
    */
   readonly projectConfig?: ProjectConfigCommands | null;
+  /**
+   * The manual start from a ticket key (WP-122), or `null`/absent for a process that composed no
+   * integration stack. Optional like `projectConfig`: `app.test.ts` and the census build an app
+   * with no database, and the route is registered either way and answers `503` by name — behind
+   * its guard, which is what the census probes.
+   */
+  readonly taskStart?: TaskStartCommands | null;
   /**
    * The dead-letter list and its re-queue (WP-95, PROGRESS backlog 126), or `null`/absent for a
    * process that composed no eventing. Optional like `projectConfig`: `app.test.ts` and the census
@@ -694,6 +703,19 @@ export const buildApp = async (options: BuildAppOptions): Promise<FastifyInstanc
     await registerKbRoutes(app, {
       database: options.database,
       knowledge: options.knowledge,
+    });
+    // WP-122: product/04's manual Start. The command reads a provider and appends an event, so it is
+    // the composition root's; the guard's and the key's reads are bound here.
+    await registerTaskStartRoutes(app, {
+      queries: {
+        projectRole: async (projectId, userId) =>
+          findProjectRole(options.database, projectId, userId),
+        projectExists: async (projectId) =>
+          (await findProjectById(options.database, projectId)) !== null,
+        claimAttempt: async (query) => claimCommandAttempt(options.database, query),
+        releaseAttempt: async (query) => releaseCommandAttempt(options.database, query),
+      },
+      commands: options.taskStart ?? null,
     });
     await registerTaskRoutes(app, {
       queries: {

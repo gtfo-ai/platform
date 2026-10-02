@@ -176,6 +176,12 @@ export interface FakeTaskManagementOptions {
    * does. `0` (the default) keeps writes immediately visible.
    */
   readonly searchLagMs?: number;
+  /**
+   * The binding's declared scope (WP-122 pre-review round), as Jira's `project_keys`: a ticket key's
+   * prefix before the first `-` must be one of these. Absent or empty is `unscoped`, every real
+   * provider's default.
+   */
+  readonly projectKeys?: readonly string[];
 }
 
 interface StoredComment {
@@ -679,6 +685,16 @@ export const createFakeTaskManagement = (
     },
 
     pollPlan: () => poll,
+
+    ticketScope: (ticketKey) => {
+      const keys = options.projectKeys ?? [];
+      if (keys.length === 0) {
+        return { kind: 'unscoped' };
+      }
+      return keys.includes(ticketKey.split('-')[0] ?? ticketKey)
+        ? { kind: 'in_scope' }
+        : { kind: 'out_of_scope', scope: [...keys] };
+    },
 
     transition: async (ticketRef, targetStatusName): Promise<TransitionResult> => {
       core.enter('transition');

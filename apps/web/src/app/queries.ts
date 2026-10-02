@@ -193,6 +193,31 @@ export const useShadowCommands = (mint?: MintKey) => {
 };
 
 /**
+ * product/04's manual Start (WP-122): `POST /api/projects/:id/tasks` with a ticket key.
+ *
+ * One key per **intent** (`app/idempotency.ts`): a double-click must not record the match twice,
+ * and a corrected key is a new intent. The answer names a recorded match, not a task — intake makes
+ * the task — so the board's own read is invalidated and the project topic does the rest.
+ */
+export const useStartTask = (mint?: MintKey) => {
+  const { endpoints } = useServices();
+  const queryClient = useQueryClient();
+  const intents = useIntentKeys(mint);
+  return useMutation({
+    mutationFn: (input: { projectId: string; ticket_key: string }) =>
+      endpoints.startTask(
+        input.projectId,
+        { ticket_key: input.ticket_key },
+        intents.keyFor(['task.start', input]),
+      ),
+    onSuccess: async (_result, input) => {
+      intents.release(['task.start', input]);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.project(input.projectId) });
+    },
+  });
+};
+
+/**
  * `GET /api/projects/:id/history-bootstraps` — the batches, the gate and the estimate (WP-35).
  *
  * `mergeRequests` is part of the query key, so moving the number re-asks the server for the
@@ -587,6 +612,35 @@ export const useIntegrations = () => {
     queryFn: () => endpoints.integrations(),
     ...FOREVER,
   });
+};
+
+/**
+ * The integrations a **picker** may offer (WP-122, PROGRESS backlog 388): every live row, of one
+ * type when the picker names one — never a retired one (WP-114), whose credential is destroyed and
+ * whose bind, flag or write the server refuses `409 integration_retired`.
+ *
+ * One selector rather than a filter per screen: three pickers wrote `retired_at === null` by hand,
+ * and a fourth that forgot it would offer a choice that answers 409. `integrations.tsx` keeps the
+ * unfiltered read on purpose — it is the list that shows retired rows.
+ */
+export const bindableIntegrations = <
+  T extends { readonly retired_at: string | null; readonly type: string },
+>(
+  items: readonly T[],
+  type?: string,
+): T[] =>
+  items.filter(
+    (integration) =>
+      integration.retired_at === null && (type === undefined || integration.type === type),
+  );
+
+/** {@link useIntegrations} narrowed to what a picker may offer — {@link bindableIntegrations}. */
+export const useBindableIntegrations = (type?: string) => {
+  const integrations = useIntegrations();
+  return {
+    ...integrations,
+    items: bindableIntegrations(integrations.data?.items ?? [], type),
+  };
 };
 
 /**

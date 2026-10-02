@@ -214,6 +214,11 @@ const fakeTaskManagementConfigSchema = z.strictObject({
    * (`pickupRuleOf`) — so a tier can poll the rule a status mapping moves a ticket out of.
    */
   pickup_status: z.string().min(1).nullish(),
+  /**
+   * WP-122 pre-review round: the binding's declared scope, Jira's `project_keys` — what
+   * `ticketScope` answers from, so a tier can set it the way an operator does.
+   */
+  project_keys: z.array(z.string().min(1)).default([]),
 });
 
 /** The plan the binding's config states — `null` unless it switched polling on. */
@@ -231,12 +236,35 @@ const fakePollPlanOf = (config: unknown): TicketPollPlan | null => {
   };
 };
 
-/** The prebuilt port, answering `pollPlan()` from **this binding's** config rather than its own. */
-const withPollPlan = (port: TaskManagementPort, plan: TicketPollPlan | null): TaskManagementPort =>
-  new Proxy(port, {
+/** {@link TaskManagementPort.ticketScope} as Jira answers it, from this binding's `project_keys`. */
+const fakeTicketScopeOf =
+  (config: unknown): TaskManagementPort['ticketScope'] =>
+  (ticketKey) => {
+    const keys = fakeTaskManagementConfigSchema.parse(config).project_keys;
+    if (keys.length === 0) {
+      return { kind: 'unscoped' };
+    }
+    return keys.includes(ticketKey.split('-')[0] ?? ticketKey)
+      ? { kind: 'in_scope' }
+      : { kind: 'out_of_scope', scope: [...keys] };
+  };
+
+/**
+ * The prebuilt port, answering `pollPlan()` and `ticketScope()` from **this binding's** config
+ * rather than its own.
+ */
+const withBindingConfig = (port: TaskManagementPort, config: unknown): TaskManagementPort => {
+  const plan: TicketPollPlan | null = fakePollPlanOf(config);
+  const ticketScope = fakeTicketScopeOf(config);
+  return new Proxy(port, {
     get: (target, key, receiver) =>
-      key === 'pollPlan' ? () => plan : Reflect.get(target, key, receiver),
+      key === 'pollPlan'
+        ? () => plan
+        : key === 'ticketScope'
+          ? ticketScope
+          : Reflect.get(target, key, receiver),
   });
+};
 
 export const fakeTaskManagementRegistration = (
   options: FakeRegistrationOptions<TaskManagementPort>,
@@ -250,7 +278,7 @@ export const fakeTaskManagementRegistration = (
   agentTooling: null,
   create: ({ config, secrets, redactor }) => {
     refuseWrongToken(FAKE_TASK_MANAGEMENT_PROVIDER_ID, options.token, secrets.token);
-    return withPollPlan(withInboundRedactor(options.port, redactor), fakePollPlanOf(config));
+    return withBindingConfig(withInboundRedactor(options.port, redactor), config);
   },
 });
 
@@ -296,7 +324,7 @@ export const fakeErrorsRegistration = (
 /**
  * The log-store fake, as a registration (WP-89). `excerpt_selector` is **binding** configuration,
  * as it is for Loki, so the port answers `excerptSelector()` from the binding's config rather than
- * from the prebuilt fake — the shape `withPollPlan` gives the task manager — and a selector this
+ * from the prebuilt fake — the shape `withBindingConfig` gives the task manager — and a selector this
  * fake's grammar cannot parse is refused at the config parse, as Loki refuses one.
  */
 export const fakeLogsRegistration = (

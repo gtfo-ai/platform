@@ -78,6 +78,41 @@ const fetchFor = (options: {
   }) as typeof fetch;
 };
 
+/**
+ * WP-122 (PROGRESS backlog 388): a live and a retired integration, for the picker case. The retired
+ * one's name is a sentence a test can search for, so its absence is a fact about this screen.
+ */
+const pickerIntegrations = {
+  items: [
+    {
+      id: '00000000-0000-4000-8000-0000000000f1',
+      type: 'communication',
+      provider: 'slack',
+      name: 'Live workspace',
+      config: {},
+      health: { status: 'unknown', checked_at: null, detail: null },
+      config_refusal: null,
+      retired_at: null,
+    },
+    {
+      id: '00000000-0000-4000-8000-0000000000f2',
+      type: 'communication',
+      provider: 'slack',
+      name: 'Retired workspace',
+      config: {},
+      health: { status: 'unknown', checked_at: null, detail: null },
+      config_refusal: null,
+      retired_at: '2026-09-30T09:00:00.000Z',
+    },
+  ],
+};
+
+/** The screen's own fake server, with `GET /api/integrations` answering the picker fixture. */
+const withPickerIntegrations =
+  (base: typeof fetch): typeof fetch =>
+  async (input, init) =>
+    String(input).endsWith('/api/integrations') ? json(pickerIntegrations) : base(input, init);
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -189,6 +224,21 @@ describe('the organisation settings document on the settings page', () => {
         'This change lowers no project’s value in force.',
       );
     });
+  });
+
+  it('leaves a retired account out of the default chat account picker (WP-122)', async () => {
+    render(createApp({ fetchImpl: withPickerIntegrations(fetchFor({})), realtime: false }).element);
+    const picker = (await screen.findByLabelText(
+      'Organisation default chat account',
+    )) as HTMLSelectElement;
+    await waitFor(() => {
+      expect([...picker.options].map((option) => option.textContent)).toContain(
+        'slack / Live workspace',
+      );
+    });
+    expect([...picker.options].map((option) => option.textContent)).not.toContain(
+      'slack / Retired workspace',
+    );
   });
 
   it('saves quiet hours and flags the default chat account, whose name renders as text', async () => {

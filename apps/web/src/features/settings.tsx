@@ -22,6 +22,7 @@
  * A **project's** settings are `features/project-settings.tsx`, which mirrors the whole wizard.
  */
 import type { ReactElement } from 'react';
+import { readErrorDetail } from '../api/read-error.js';
 import {
   useOrgBudgets,
   useOrgUsers,
@@ -100,7 +101,10 @@ export const SettingsScreen = (): ReactElement => {
         {users.isError ? (
           <ErrorNotice
             title="The user list could not be loaded."
-            detail="Reading the organisation needs the viewer role or above."
+            detail={readErrorDetail(
+              users.error,
+              'Reading the organisation needs the viewer role or above.',
+            )}
           />
         ) : null}
         {users.isSuccess && users.data.items.length === 0 ? (
@@ -174,7 +178,10 @@ export const SettingsScreen = (): ReactElement => {
         {budgets.isError ? (
           <ErrorNotice
             title="The organisation budgets could not be loaded."
-            detail="Reading a budget needs the viewer role; setting one needs maintainer."
+            detail={readErrorDetail(
+              budgets.error,
+              'Reading a budget needs the viewer role; setting one needs maintainer.',
+            )}
           />
         ) : null}
         <Budgets

@@ -17,7 +17,7 @@
  */
 import type { CappedProject, OrganisationSettings } from '@platform/contracts';
 import { type ReactElement, useState } from 'react';
-import { useIntegrations, useOrgSettings, useSettingsCommands } from '../app/queries.js';
+import { useBindableIntegrations, useOrgSettings, useSettingsCommands } from '../app/queries.js';
 import {
   Badge,
   Button,
@@ -135,11 +135,9 @@ const SettingsForm = ({
   readonly pending: boolean;
   readonly onSave: (body: Patch) => void;
 }): ReactElement => {
-  const integrations = useIntegrations();
-  const chatAccounts = (integrations.data?.items ?? []).filter(
-    // A retired account (WP-114) posts nowhere: its credential is destroyed.
-    (integration) => integration.type === 'communication' && integration.retired_at === null,
-  );
+  // A retired account (WP-114) posts nowhere: its credential is destroyed, and the selector leaves
+  // it out (WP-122).
+  const chatAccounts = useBindableIntegrations('communication').items;
   const [lists, setLists] = useState<Record<(typeof LIST_KINDS)[number], string>>({
     allow: (settings.commands?.allow ?? []).join('\n'),
     ask: (settings.commands?.ask ?? []).join('\n'),

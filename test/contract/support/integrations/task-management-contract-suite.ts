@@ -187,6 +187,19 @@ export const runTaskManagementContract = (harness: TaskManagementContractHarness
       });
     });
 
+    describe('the declared scope (WP-122)', () => {
+      it('admits the binding’s own ticket, and never refuses with an empty scope', () => {
+        // The ticket this binding delivers is inside whatever it declares; a provider with no scope
+        // concept answers `unscoped`. An `out_of_scope` verdict names a non-empty list, because the
+        // manual start's refusal quotes it and an empty one would refuse with nothing to name.
+        expect(['in_scope', 'unscoped']).toContain(port.ticketScope(context.ticket.key).kind);
+        const other = port.ticketScope('ZZZQ-1');
+        if (other.kind === 'out_of_scope') {
+          expect(other.scope.length).toBeGreaterThan(0);
+        }
+      });
+    });
+
     describe('polling (WP-87)', () => {
       it('polls nothing for a binding that did not switch polling on', () => {
         // Off is the default: a plan here would have the poller read a provider nobody asked it to.

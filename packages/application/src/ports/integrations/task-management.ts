@@ -268,6 +268,15 @@ export type TaskManagementInboundEvent =
   | 'ticket.comment.added'
   | 'ticket.status.changed';
 
+/**
+ * {@link TaskManagementPort.ticketScope}'s answer. `scope` is the binding's own declared list
+ * (configuration an operator wrote, never ticket content), so a refusal may name it.
+ */
+export type TicketScopeVerdict =
+  | { readonly kind: 'unscoped' }
+  | { readonly kind: 'in_scope' }
+  | { readonly kind: 'out_of_scope'; readonly scope: readonly string[] };
+
 // ── The port ─────────────────────────────────────────────────────────────────
 
 export interface TaskManagementPort extends IntegrationPort<TaskManagementCapabilities> {
@@ -296,6 +305,18 @@ export interface TaskManagementPort extends IntegrationPort<TaskManagementCapabi
    * configuration the adapter was built with and calls nobody.
    */
   readonly pollPlan: () => TicketPollPlan | null;
+
+  /**
+   * Whether a ticket is inside this binding's **declared scope** (WP-122 pre-review round) — the
+   * filter a provider applies to what it delivers, as distinct from the pick-up rule: Jira's
+   * `project_keys`, which its webhook applies to every delivery. Pure: it reads the configuration
+   * the adapter was built with and calls nobody. A provider with no scope concept, or a binding that
+   * declares none, answers `unscoped` — never a refusal.
+   *
+   * Asked with the key **as the provider answered it** (`Ticket.ref.key` after `readTicket`), never
+   * the key a person typed, so the comparison is the one the webhook makes on a delivered key.
+   */
+  readonly ticketScope: (ticketKey: string) => TicketScopeVerdict;
 
   /**
    * Moves the ticket to a status **by name**, resolving the provider's transition at runtime.

@@ -63,6 +63,8 @@ import {
 } from '@platform/contracts';
 import { Link, useSearch } from '@tanstack/react-router';
 import { type ReactElement, useState } from 'react';
+import { taskExportPath } from '../api/endpoints.js';
+import { isForbiddenError, readErrorDetail } from '../api/read-error.js';
 import {
   useArtifactBody,
   useProjects,
@@ -88,7 +90,7 @@ import {
   Metric,
   SectionHeading,
 } from '../ui/kit.js';
-import { ExternalLink, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
+import { DownloadLink, ExternalLink, UntrustedProse, UntrustedText } from '../ui/untrusted.js';
 import { AskThread } from './ask-thread.js';
 import { BreakdownPanel } from './breakdown-panel.js';
 import { FeedbackForm } from './feedback.js';
@@ -970,7 +972,8 @@ const QuestionCard = ({
  *
  * `org.audit.read` is **maintainer** (Q36), so a member sees a sentence rather than an error: a
  * 403 here is *"you may not read this"*, which is a different fact from a failure (standing rule
- * 18) and is the one thing an `ErrorNotice` would state wrongly.
+ * 18) and is the one thing an `ErrorNotice` would state wrongly. **Only** a 403 (WP-122, backlog
+ * 385): a 503 or a 500 was rendered as the same role sentence, so an outage read as a missing role.
  */
 const TaskActivity = ({ taskId }: { readonly taskId: string }): ReactElement => {
   const audit = useTaskAudit(taskId);
@@ -978,10 +981,20 @@ const TaskActivity = ({ taskId }: { readonly taskId: string }): ReactElement => 
     <div>
       <SectionHeading>Who did what</SectionHeading>
       {audit.isPending ? <Loading label="Loading this task's activity…" /> : null}
-      {audit.error === null || audit.error === undefined ? null : (
+      {audit.error === null || audit.error === undefined ? null : isForbiddenError(audit.error) ? (
         <EmptyState
           title="Not shown"
-          hint="Every human action on this task is recorded; reading the record needs the maintainer role."
+          hint={readErrorDetail(
+            audit.error,
+            'Every human action on this task is recorded; reading the record needs the maintainer role.',
+          )}
+        />
+      ) : (
+        // WP-122 (backlog 385): an outage is not a role. Only a 403 is "not shown"; anything else is
+        // a failure, stated as the server stated it.
+        <ErrorNotice
+          title="This task's activity could not be loaded."
+          detail={readErrorDetail(audit.error, 'Reading the record needs the maintainer role.')}
         />
       )}
       {audit.data === undefined || audit.data.items.length > 0 ? null : (
@@ -1258,6 +1271,7 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
     human_time: humanTime,
     taken_over: takenOver,
     can_raise_budget: canRaiseBudget,
+    can_export: canExport,
   } = detail.data;
   // The route may be entered without a project key (from the inbox or the agents view), so the
   // link back to the board is resolved from the task's own project rather than from the URL.
@@ -1329,6 +1343,18 @@ export const TaskDetailScreen = ({ taskId }: { readonly taskId: string }): React
           <Badge tone="accent">{task.state}</Badge>
           <Badge>{task.template}</Badge>
           {task.mode === 'shadow' ? <Badge tone="warning">shadow</Badge> : null}
+          {/*
+            product/09's *"Export as JSON per task"* (WP-112's route, WP-122's link, backlog 381):
+            offered only to a caller the route would admit (`can_export`, `task.export`), through
+            `DownloadLink` — the one renderer that may write a URL attribute.
+          */}
+          {canExport ? (
+            <DownloadLink
+              path={taskExportPath(task.id)}
+              label="Download JSON"
+              className="text-xs text-accent underline"
+            />
+          ) : null}
           <div className="ml-auto flex gap-2">
             <Button
               disabled={commands.pause.isPending}

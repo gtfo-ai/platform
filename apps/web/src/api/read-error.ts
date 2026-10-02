@@ -11,5 +11,15 @@
  */
 import { ApiError } from './http.js';
 
+/** Is this read error the caller's role — a `403` from the server, and nothing else? */
+export const isForbiddenError = (error: unknown): boolean =>
+  error instanceof ApiError && error.status === 403;
+
+/**
+ * The sentence a screen shows for a failed read. A **role sentence** (*"… needs the admin role"*)
+ * is written only as this function's `forbidden` argument — `apps/web/src/role-sentence.test.ts`
+ * refuses one anywhere else (WP-122, PROGRESS backlog 385, which found five more screens that had
+ * named every failure a permission problem).
+ */
 export const readErrorDetail = (error: unknown, forbidden: string): string =>
-  error instanceof ApiError && error.status === 403 ? forbidden : String(error);
+  isForbiddenError(error) ? forbidden : String(error);

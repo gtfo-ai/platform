@@ -458,6 +458,7 @@ export const taskDetail = taskDetailResponseSchema.parse({
   // nullable, so a client can tell "not taken over" from "this build does not report it".
   taken_over: null,
   can_raise_budget: false,
+  can_export: false,
   /**
    * WP-29's minutes, with the per-user breakdown **on** — which is not this project's default and
    * is exactly why the corpus carries it: `by_user` is the one place the task screen renders a
@@ -524,6 +525,7 @@ export const bugTaskDetail = taskDetailResponseSchema.parse({
   task: bugTask,
   taken_over: null,
   can_raise_budget: false,
+  can_export: false,
   // Nothing recorded, and the breakdown off — the shipped default (product/18:32). `by_user: null`
   // and an empty list are different answers, and this is the first.
   human_time: {
@@ -557,6 +559,7 @@ export const takenOverTaskDetail = taskDetailResponseSchema.parse({
     current_stage: 'implementation',
   },
   can_raise_budget: false,
+  can_export: false,
   taken_over: {
     at: now,
     branch: 'agentic/demo-3',
@@ -1139,6 +1142,6 @@ export const kbHealth = kbHealthResponseSchema.parse({
   created_at: now,
 });
 
-export const tasksPage = { items: [featureTask, bugTask], next_cursor: null };
+export const tasksPage = { items: [featureTask, bugTask], next_cursor: null, can_start_task: true };
 
 export const projectsPage = { items: [project] };

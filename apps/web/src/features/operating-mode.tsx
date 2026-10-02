@@ -48,6 +48,7 @@
  */
 import type { AutonomyResponse, BudgetRecord } from '@platform/contracts';
 import { type ReactElement, useState } from 'react';
+import { readErrorDetail } from '../api/read-error.js';
 import {
   useOnboardingCommands,
   useProjectAudit,
@@ -1146,7 +1147,7 @@ export const SettingsAudit = ({ projectId }: { readonly projectId: string }): Re
       {audit.isError ? (
         <ErrorNotice
           title="The settings audit could not be loaded."
-          detail="Reading it needs the maintainer role."
+          detail={readErrorDetail(audit.error, 'Reading it needs the maintainer role.')}
         />
       ) : null}
       {audit.isSuccess && audit.data.items.length === 0 ? (

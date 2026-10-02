@@ -375,6 +375,18 @@ export const autonomyPresetFor = (settings: ProjectSettings): AutonomyPreset | n
   settings.autonomy === null ? null : effectiveAutonomyPreset(settings.autonomy, settings.config);
 
 /**
+ * Does this project's dial create a task for a new ticket? product/18's Observe does not
+ * (`picksUpNewTickets: false`, WP-34).
+ *
+ * One predicate for the two places that ask (WP-122): the intake check, which drops the ticket, and
+ * the manual start, which refuses by name **before** recording a match intake would then drop — a
+ * `202` for a ticket nothing will start is the silence standing rule 18 forbids. A dial that was
+ * never materialised picks the ticket up (`autonomyPresetFor`'s `null`, BD-027:14).
+ */
+export const picksUpNewTickets = (settings: ProjectSettings): boolean =>
+  autonomyPresetFor(settings)?.picksUpNewTickets ?? true;
+
+/**
  * The dial's two **pipeline** policies, as a task freezes them at start (WP-62, backlog 72 (b)).
  *
  * `businessReview` and `stopAfterStage` are read here, off the project's materialised preset, and

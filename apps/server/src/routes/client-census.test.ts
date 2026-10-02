@@ -72,9 +72,8 @@ const ADMITTED_GAPS: Readonly<Record<string, string>> = {
   // gave it the knowledge screen's health panel. WP-31's `/api/org/identities` pair left it when
   // WP-43 gave it a screen, and WP-27's `take-over`/`hand-back` and WP-40's breakdown pair left it
   // when WP-44 did, so the comparison above now sees all of them. A route added without a caller
-  // is invisible here again, and nothing but a hand-written case would say so — which is the case
-  // WP-112's task export is: `GET /api/tasks/:id/export` has no screen, and is asserted by hand
-  // below.
+  // is invisible here again, and nothing but a hand-written case would say so. WP-112's task export
+  // was that case until WP-122 gave it the task page's *Download JSON*; the list is empty again.
 };
 
 /**
@@ -714,26 +713,36 @@ describe('the client’s endpoint list against the server’s router', () => {
     expect(`${probed.status} ${probed.code}`).toBe('401 unauthenticated');
   });
 
-  it('serves the task export WP-112 added, which no screen calls — asserted by hand', async () => {
-    // PROGRESS backlog 310: technical/08 listed `GET /api/tasks/:id/export` and product/09 promised
-    // it, and nothing served it. **No screen calls it** — it is a document an operator takes away
-    // with a session or an API key — so the comparison above cannot see it, which is exactly the
-    // class this file's gap-list note names. This case is the shape `kb/health`'s was before WP-95
-    // gave that read a screen: served, refusing an anonymous caller, and *absent* from the client's
-    // list. A screen that gains the call fails the last line, and the right edit is then to invert
-    // it, as the `kb/health` case did.
-    const probed = await probe('/api/tasks/{}/export');
-    expect(probed.served).toBe(true);
-    expect(probed.status).toBe(401);
-    expect(probed.code).toBe('unauthenticated');
-
+  it('serves the task export WP-112 added, the client calls it, and it refuses an anonymous caller', async () => {
+    // PROGRESS backlog 310 served it and 381 gave it a caller: the task page's *Download JSON*
+    // (WP-122), so the two-way equality above now covers it and the hand assertion that stood here
+    // — *absent* from the client's list — is inverted, as the `kb/health` case was at WP-95.
     const paths = clientPaths(
       webSourceFiles().map((path) => ({
         path,
         source: readSource(path),
       })),
     );
-    expect(paths).not.toContain('/api/tasks/{}/export');
+    expect(paths).toContain('/api/tasks/{}/export');
+    const probed = await probe('/api/tasks/{}/export');
+    expect(probed.served).toBe(true);
+    expect(`${probed.status} ${probed.code}`).toBe('401 unauthenticated');
+  });
+
+  it('serves the manual start WP-122 added, the client calls it, and it refuses an anonymous caller by POST before validating the body', async () => {
+    // product/04's manual Start (backlog 379). The path has a `GET` sibling — the board's task
+    // read — so the probe above meets that one; the `POST` is asked by its own method, with no
+    // body at all, so a guard that slipped to `preHandler` answers 400 here instead of 401.
+    const paths = clientPaths(
+      webSourceFiles().map((path) => ({
+        path,
+        source: readSource(path),
+      })),
+    );
+    expect(paths).toContain('/api/projects/{}/tasks');
+    const response = await app.inject({ method: 'POST', url: probeUrl('/api/projects/{}/tasks') });
+    const body = response.json() as ApiErrorBody;
+    expect(`${response.statusCode} ${body.error?.code ?? ''}`).toBe('401 unauthenticated');
   });
 
   it('serves the dead-letter pair WP-95 added, the client calls both, and each refuses an anonymous caller by its own method', async () => {

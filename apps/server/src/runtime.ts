@@ -111,6 +111,7 @@ import { createShadowCommands } from './shadow.js';
 import { SseHub } from './sse/hub.js';
 import { startTranscriptBridge } from './sse/transcript-bridge.js';
 import { createStorageSamplers } from './storage.js';
+import { createTaskStartCommands } from './task-start.js';
 import { BUNDLED_WEB_ROOT } from './web/bundle.js';
 import {
   composeOrphanWorkspaceReaper,
@@ -859,6 +860,24 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           logger: loggerPort,
         })
       : null;
+    /**
+     * product/04's manual Start (WP-122): the ticket read through the process's one executor and the
+     * same binding loader the shadow batch uses. Composed for every process that serves the API —
+     * it needs no job client, because the match it records is dispatched like any other event.
+     */
+    const taskStart =
+      capabilities.api && stack !== null
+        ? createTaskStartCommands({
+            pool: database.pool,
+            eventing,
+            integrations: createProjectIntegrationsPort({
+              pool: database.pool,
+              secretKey: config.secretKey,
+              stack,
+            }),
+            logger: loggerPort,
+          })
+        : null;
     const shadowGate = capabilities.api
       ? async (projectId: string) => {
           const settings = await createProjectSettingsPort(database.pool, loggerPort).forProject(
@@ -1073,6 +1092,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
       knowledge: knowledgeCommands,
       onboarding: onboardingCommands,
       shadow: shadowCommands,
+      taskStart,
       projectConfig,
       shadowGate,
       historyBootstrap: bootstrapCommands,

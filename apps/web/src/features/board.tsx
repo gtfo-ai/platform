@@ -10,17 +10,19 @@
  *
  * Drag is not supported by design: the pipeline owns state (product/10).
  */
-import type { TaskRecord } from '@platform/contracts';
+import { createTaskRequestSchema, type TaskRecord } from '@platform/contracts';
 import { Link } from '@tanstack/react-router';
-import type { ReactElement } from 'react';
-import { useProjectByKey, useProjectTasks } from '../app/queries.js';
+import { type ReactElement, useState } from 'react';
+import { useProjectByKey, useProjectTasks, useStartTask } from '../app/queries.js';
 import { useServices } from '../app/services.js';
 import { useTopics } from '../realtime/provider.js';
 import {
   Badge,
+  Button,
   Card,
   EmptyState,
   ErrorNotice,
+  Field,
   formatElapsed,
   formatUsd,
   Loading,
@@ -48,6 +50,17 @@ export const BOARD_COLUMNS = [
 export const columnFor = (state: string): string =>
   BOARD_COLUMNS.find((column) => (column.states as readonly string[]).includes(state))?.id ??
   'active';
+
+/**
+ * What an empty board says — **only what exists** (WP-122, PROGRESS backlog 379). The pick-up rules
+ * a binding has are a label, a status, an epic or a query (`ticketMatchRuleSchema`); the hint used
+ * to name *"a component"*, which no rule is, and *"a manual start"*, which no screen offered. The
+ * form is named only to a caller it is shown to.
+ */
+export const emptyBoardHint = (canStart: boolean): string =>
+  canStart
+    ? "Tasks appear here when a ticket matches this project's intake rule — a label, a status, an epic or a query — or when you start one by its key above."
+    : "Tasks appear here when a ticket matches this project's intake rule — a label, a status, an epic or a query. A member of the project can also start one by its key.";
 
 /**
  * One card.
@@ -154,6 +167,74 @@ const TaskCard = ({
   );
 };
 
+/**
+ * product/04 S0's manual **Start** (WP-122, PROGRESS backlog 379): a ticket named by its key, for a
+ * ticket no intake rule matches.
+ *
+ * Rendered only for a caller who holds `task.create` in this project (`can_start_task`, the
+ * server's own `can()` over the effective role); the route refuses everyone else regardless. The
+ * key is checked against the contract's character set **before** it is sent, so a typo is a
+ * sentence here rather than a `400`, and the server's refusal — no tracker bound, the ticket
+ * already has a task, the tracker does not know the key — is shown as the server said it. A
+ * success is a recorded match, not a task: intake creates the task, and the project topic puts it
+ * on the board.
+ */
+export const StartTicketForm = ({ projectId }: { readonly projectId: string }): ReactElement => {
+  const start = useStartTask();
+  const [key, setKey] = useState('');
+  const [invalid, setInvalid] = useState<string | null>(null);
+  const [started, setStarted] = useState<string | null>(null);
+  return (
+    <form
+      aria-label="Start a ticket by its key"
+      className="flex flex-wrap items-end gap-2"
+      onSubmit={(event) => {
+        event.preventDefault();
+        const parsed = createTaskRequestSchema.safeParse({ ticket_key: key.trim() });
+        if (!parsed.success) {
+          setInvalid(
+            'A ticket key is letters, digits, ".", "_" and "-", at most 64 characters — for example ACME-123.',
+          );
+          return;
+        }
+        setInvalid(null);
+        setStarted(null);
+        start.mutate(
+          { projectId, ticket_key: parsed.data.ticket_key },
+          {
+            onSuccess: (answer) => {
+              setStarted(answer.ticket.key);
+              setKey('');
+            },
+          },
+        );
+      }}
+    >
+      <Field
+        label="Start a ticket"
+        hint="For a ticket no intake rule matches. The WIP limits, the dial and one task per ticket still apply."
+        placeholder="ACME-123"
+        value={key}
+        onChange={(event) => setKey(event.target.value)}
+      />
+      <Button type="submit" tone="primary" disabled={start.isPending || key.trim() === ''}>
+        Start
+      </Button>
+      {invalid === null ? null : <ErrorNotice title="That is not a ticket key." detail={invalid} />}
+      {start.isError ? (
+        <ErrorNotice title="The ticket was not started." detail={String(start.error)} />
+      ) : null}
+      {started === null ? null : (
+        <p role="status" className="basis-full text-xs text-fg-muted">
+          {'Started '}
+          <UntrustedText value={started} />
+          {' — its task appears on the board once intake has created it.'}
+        </p>
+      )}
+    </form>
+  );
+};
+
 export const BoardScreen = ({ projectKey }: { readonly projectKey: string }): ReactElement => {
   const { project, isPending, isError, error } = useProjectByKey(projectKey);
   const tasks = useProjectTasks(project?.id ?? null);
@@ -177,6 +258,7 @@ export const BoardScreen = ({ projectKey }: { readonly projectKey: string }): Re
 
   const nowMs = now();
   const items = tasks.data?.items ?? [];
+  const canStart = tasks.data?.can_start_task === true;
 
   return (
     <div className="flex flex-col gap-4">
@@ -228,11 +310,10 @@ export const BoardScreen = ({ projectKey }: { readonly projectKey: string }): Re
         <ErrorNotice title="Tasks could not be loaded." detail={String(tasks.error)} />
       ) : null}
 
+      {canStart ? <StartTicketForm projectId={project.id} /> : null}
+
       {tasks.isSuccess && items.length === 0 ? (
-        <EmptyState
-          title="The board is empty"
-          hint="Tasks appear here when a ticket matches this project's intake rules — a label, a component or a manual start from a ticket key. Nothing is picked up until a rule matches."
-        />
+        <EmptyState title="The board is empty" hint={emptyBoardHint(canStart)} />
       ) : null}
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">

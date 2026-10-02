@@ -299,6 +299,26 @@ column called "unknown".
 **There is no drag-and-drop, by design.** The pipeline owns task state; you move a task with a
 command that the domain can refuse, not by dropping a card.
 
+### Starting a ticket by hand
+
+A ticket reaches the board when it matches the project's **intake rule** — the label, status, epic or
+query its task-management integration picks up. For a ticket no rule matches, a **member** (or above)
+types its key into **Start a ticket** above the columns and presses **Start**; the form is not shown
+to a viewer. The key is letters, digits, `.`, `_` and `-` (for example `ACME-123`).
+
+The start reads the ticket from the tracker and records it as matched **by hand** — and that is the
+only thing it skips. The task is then created exactly as for a rule match: it gets the template its
+issue type maps to, it is **queued** if the project is at its WIP limit, it waits for a human if
+the default branch is unprotected, and a ticket that already has a task is not started twice. So the
+answer is *Started ACME-123 — its task appears on the board once intake has created it*, not a task.
+The start is refused, by name and with nothing recorded, when the project binds no task-management
+integration, when its autonomy dial is **Observe** (which picks up no new tickets), when the ticket
+already has a task, when the ticket is in a tracker project the integration is not set to read
+(a Jira integration's `project_keys`, the same filter a webhook delivery honours), when the tracker
+does not know the key, and when the tracker cannot be read at that moment (try again). Each start
+leaves one row in the audit log — not in the task's own *Who did what*, because the task does not
+exist yet when the start is recorded — and pressing **Start** twice sends one start.
+
 ## 4. Task detail
 
 Left: the stage timeline. Centre: artifacts, runs, questions and approvals. Right: checks, cost and
@@ -310,6 +330,10 @@ characters, never as markup and never as a link. The line above it says how many
 platform replaced in it before storing it. An artifact produced **before** the upgrade that
 introduced that redaction is not shown at all: nothing redacted it, artifacts are never rewritten,
 and the platform will not publish a document it cannot vouch for — it says so by name instead.
+
+**Download JSON**, beside the task's key, is the task's whole record as one document — everything
+this page shows, each run's record, the task's events and, for a maintainer, who did what — offered to
+a member or above. A viewer is not offered it; the export would refuse them.
 
 ### What you can do from here
 

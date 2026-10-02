@@ -1030,6 +1030,9 @@ const stubTaskManagement = (
           reporter: null,
           updated_at: '2026-06-01T09:00:00.000Z',
         }),
+        // No declared scope, as a binding with no `project_keys` (WP-122): a test that wants one
+        // overrides it.
+        ticketScope: () => ({ kind: 'unscoped' }),
         upsertWorkpad: async () => ({
           provider: 'fake-jira',
           ticket_key: 'ACME-1',

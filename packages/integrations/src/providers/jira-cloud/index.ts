@@ -87,6 +87,7 @@ import {
   type TicketMatchRule,
   type TicketPollPlan,
   type TicketRefInput,
+  type TicketScopeVerdict,
   type TransitionResult,
   ticketSchema,
 } from '@platform/application';
@@ -119,7 +120,7 @@ import {
   toTicket,
   toTicketMatch,
 } from './mapping.js';
-import { createJiraInboundNormaliser, type JiraPickupRule } from './webhook.js';
+import { createJiraInboundNormaliser, type JiraPickupRule, projectKeyOf } from './webhook.js';
 
 export * from './adf.js';
 export * from './client.js';
@@ -1167,6 +1168,21 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     };
   };
 
+  /**
+   * The binding's declared scope (WP-122 pre-review round): `project_keys`, compared exactly as the
+   * webhook compares a delivered key (`projectKeyOf`, `webhook.ts`), and asked with the key Jira
+   * answered (`Ticket.ref.key`, Jira's own upper-case canonical form). An empty list is
+   * `unscoped`, which is what `config.ts` says it means.
+   */
+  const ticketScope = (ticketKey: string): TicketScopeVerdict => {
+    if (config.project_keys.length === 0) {
+      return { kind: 'unscoped' };
+    }
+    return config.project_keys.includes(projectKeyOf(ticketKey))
+      ? { kind: 'in_scope' }
+      : { kind: 'out_of_scope', scope: [...config.project_keys] };
+  };
+
   const inbound = createJiraInboundNormaliser({
     siteUrl,
     projectKeys: config.project_keys,
@@ -1190,6 +1206,7 @@ export const createJiraCloudTaskManagement = (options: JiraCloudOptions): TaskMa
     readTicket,
     matchTickets,
     pollPlan,
+    ticketScope,
     transition,
     upsertWorkpad,
     addComment,

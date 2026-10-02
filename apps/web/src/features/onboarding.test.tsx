@@ -233,6 +233,41 @@ const fetchFor = (readiness: 'recorded' | 'absent') =>
     return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
   }) as typeof fetch;
 
+/**
+ * WP-122 (PROGRESS backlog 388): a live and a retired integration, for the picker case. The retired
+ * one's name is a sentence a test can search for, so its absence is a fact about this screen.
+ */
+const pickerIntegrations = {
+  items: [
+    {
+      id: '00000000-0000-4000-8000-0000000000f1',
+      type: 'communication',
+      provider: 'slack',
+      name: 'Live workspace',
+      config: {},
+      health: { status: 'unknown', checked_at: null, detail: null },
+      config_refusal: null,
+      retired_at: null,
+    },
+    {
+      id: '00000000-0000-4000-8000-0000000000f2',
+      type: 'communication',
+      provider: 'slack',
+      name: 'Retired workspace',
+      config: {},
+      health: { status: 'unknown', checked_at: null, detail: null },
+      config_refusal: null,
+      retired_at: '2026-09-30T09:00:00.000Z',
+    },
+  ],
+};
+
+/** The screen's own fake server, with `GET /api/integrations` answering the picker fixture. */
+const withPickerIntegrations =
+  (base: typeof fetch): typeof fetch =>
+  async (input, init) =>
+    String(input).endsWith('/api/integrations') ? json(pickerIntegrations) : base(input, init);
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -244,6 +279,14 @@ beforeEach(() => {
 });
 
 describe('the onboarding wizard', () => {
+  it('leaves a retired integration out of the binding picker (WP-122)', async () => {
+    render(
+      createApp({ fetchImpl: withPickerIntegrations(fetchFor('absent')), realtime: false }).element,
+    );
+    expect(await screen.findByText('Live workspace')).toBeTruthy();
+    expect(screen.queryByText('Retired workspace')).toBeNull();
+  });
+
   it('shows every step, the business interview included', async () => {
     render(createApp({ fetchImpl: fetchFor('absent'), realtime: false }).element);
     for (const title of [

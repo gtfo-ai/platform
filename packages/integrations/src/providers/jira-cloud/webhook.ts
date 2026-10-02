@@ -302,7 +302,8 @@ const ignored = (
   ignored: [{ reason, detail }],
 });
 
-const projectKeyOf = (issueKey: string): string => issueKey.split('-')[0] ?? issueKey;
+/** The Jira project an issue key belongs to: `ABC-123` → `ABC` — the webhook's scope filter's key. */
+export const projectKeyOf = (issueKey: string): string => issueKey.split('-')[0] ?? issueKey;
 
 /**
  * An item's own `toString`, or `''` — never `Object.prototype.toString` (backlog 185, the reader's

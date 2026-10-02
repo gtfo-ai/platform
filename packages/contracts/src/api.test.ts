@@ -14,6 +14,7 @@ import {
   integrationsResponseSchema,
   kbHealthResponseSchema,
   listTasksQuerySchema,
+  MAX_TICKET_KEY_CHARS,
   orgAuditQuerySchema,
   orgAuditResponseSchema,
   orgUsersResponseSchema,
@@ -90,6 +91,35 @@ describe('request DTOs', () => {
       ticket_key: 'PROJ-123',
     });
     expect(createTaskRequestSchema.safeParse({ ticket_key: '' }).success).toBe(false);
+  });
+
+  /**
+   * WP-122: the key is untrusted text on its way into a provider's URL, so its character set is
+   * fixed and anything outside it is refused rather than escaped; and the template and mode the
+   * unserved sketch carried are refused, because a manual start bypasses the pick-up rule and
+   * nothing else (classification included).
+   */
+  it('refuses a ticket key outside its character set, and every field but the key', () => {
+    for (const key of ['ACME-1', 'acme_2.x', 'X', 'A'.repeat(MAX_TICKET_KEY_CHARS)]) {
+      expect(createTaskRequestSchema.safeParse({ ticket_key: key }).success, key).toBe(true);
+    }
+    for (const key of [
+      '../ACME-1',
+      'ACME-1/comment',
+      'ACME 1',
+      'ACME-1?x=1',
+      '#12',
+      '-ACME',
+      'A'.repeat(MAX_TICKET_KEY_CHARS + 1),
+    ]) {
+      expect(createTaskRequestSchema.safeParse({ ticket_key: key }).success, key).toBe(false);
+    }
+    expect(
+      createTaskRequestSchema.safeParse({ ticket_key: 'ACME-1', template: 'bug' }).success,
+    ).toBe(false);
+    expect(
+      createTaskRequestSchema.safeParse({ ticket_key: 'ACME-1', mode: 'shadow' }).success,
+    ).toBe(false);
   });
 
   it('writes a knowledge document by path and content only', () => {
@@ -522,13 +552,24 @@ describe('the list envelopes and the KB health report', () => {
       created_at: AT,
       updated_at: AT,
     };
-    expect(tasksResponseSchema.parse({ items: [task], next_cursor: null })).toBeTruthy();
     expect(
-      tasksResponseSchema.parse({ items: [task], next_cursor: `${AT}|${uuid(12)}` }),
+      tasksResponseSchema.parse({ items: [task], next_cursor: null, can_start_task: true }),
+    ).toBeTruthy();
+    expect(
+      tasksResponseSchema.parse({
+        items: [task],
+        next_cursor: `${AT}|${uuid(12)}`,
+        can_start_task: false,
+      }),
     ).toBeTruthy();
     // `next_cursor` is required, not optional: "no more pages" and "the field was forgotten" would
     // otherwise be the same response.
-    expect(tasksResponseSchema.safeParse({ items: [task] }).success).toBe(false);
+    expect(tasksResponseSchema.safeParse({ items: [task], can_start_task: true }).success).toBe(
+      false,
+    );
+    // So is the caller's capability (WP-122): a board that cannot tell "may not start" from "the
+    // server did not say" would offer or hide the form by accident.
+    expect(tasksResponseSchema.safeParse({ items: [task], next_cursor: null }).success).toBe(false);
   });
 
   it('publishes one health report, with its findings bounded to the kinds the domain computes', () => {

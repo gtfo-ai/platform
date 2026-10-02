@@ -30,6 +30,7 @@
  */
 import type { IdentityMapping } from '@platform/contracts';
 import { type FormEvent, type ReactElement, useState } from 'react';
+import { readErrorDetail } from '../api/read-error.js';
 import {
   useIdentityCandidates,
   useOrgIdentities,
@@ -122,7 +123,10 @@ export const IdentityMappings = (): ReactElement => {
       {identities.isError ? (
         <ErrorNotice
           title="The identity mappings could not be loaded."
-          detail="Reading and writing them needs the admin role, because a mapping decides who may act as whom."
+          detail={readErrorDetail(
+            identities.error,
+            'Reading and writing them needs the admin role, because a mapping decides who may act as whom.',
+          )}
         />
       ) : null}
       {identities.isSuccess && identities.data.items.length === 0 ? (

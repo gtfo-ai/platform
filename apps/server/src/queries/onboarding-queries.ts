@@ -1571,6 +1571,49 @@ export const claimIdempotentAttemptInTransaction = async (
 };
 
 /**
+ * Writes a command's `human_actions` row **inside a transaction the command holds**, and completes
+ * the key's claim beside it — for a command that claimed its key **before** it performed
+ * (`claimIdempotentAttempt`, WP-67's claim-before-effect) and whose effect is one transaction the
+ * route does not own (WP-122's manual start: the `ticket.matched` and its audit row commit
+ * together, the ruling's *"one transaction"*).
+ *
+ * {@link claimIdempotentAttemptInTransaction} cannot serve it: its claim is an `insert … on
+ * conflict do nothing` that answers `false` for the row the earlier claim already wrote. This is
+ * `insertHumanAction` + `completeCommandAttempt` in raw SQL on the transaction's own client: the
+ * completion upserts, and leaves a row that is already completed exactly as it is.
+ */
+export const recordHumanActionInTransaction = async (
+  client: { query(text: string, values?: unknown[]): Promise<{ rows: unknown[] }> },
+  input: HumanActionInput,
+): Promise<void> => {
+  const inserted = await client.query(
+    'insert into human_actions (task_id, user_id, action, params) values ($1, $2, $3, $4::jsonb) returning id',
+    [input.taskId ?? null, input.userId, input.action, JSON.stringify(input.params)],
+  );
+  const key = input.params.idempotency_key;
+  if (typeof key !== 'string') {
+    return;
+  }
+  const digest = input.params.body_digest;
+  await client.query(
+    `insert into command_idempotency
+       (user_id, action, idempotency_key, body_digest, completed_at, human_action_id)
+     values ($1, $2, $3, $4, now(), $5)
+     on conflict (user_id, action, idempotency_key) do update
+        set completed_at = greatest(now(), command_idempotency.claimed_at),
+            human_action_id = excluded.human_action_id
+      where command_idempotency.completed_at is null`,
+    [
+      input.userId,
+      input.action,
+      key,
+      typeof digest === 'string' ? digest : null,
+      (inserted.rows[0] as { id: string }).id,
+    ],
+  );
+};
+
+/**
  * What a previous attempt under this `Idempotency-Key` asked for, or `null` when there was none.
  *
  * **Read out of `command_idempotency` since WP-67** (migration 0053), where it used to be a JSON

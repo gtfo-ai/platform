@@ -341,6 +341,7 @@ const DETAIL: TaskDetailResponse = taskDetailResponseSchema.parse({
   task: TASK_RECORD,
   taken_over: null,
   can_raise_budget: false,
+  can_export: false,
   human_time: {
     total_minutes: 0,
     by_kind: { review: 0, question: 0, approval: 0, steer: 0 },
@@ -554,5 +555,37 @@ describe('GET /api/tasks/:task_id/export (WP-112)', () => {
     world.detail = null;
     const reply = await app.inject({ method: 'GET', url });
     expect(reply.statusCode, reply.body).toBe(404);
+  });
+});
+
+/**
+ * WP-122 (PROGRESS backlog 381): `can_export` is the task page's *Download JSON* — `task.export`
+ * over the caller's effective role in the task's project, so a viewer is not offered a link the
+ * export route would refuse. A fact about the caller, so the exported document carries none.
+ */
+describe('GET /api/tasks/:task_id — can_export (WP-122)', () => {
+  let app: FastifyInstance;
+  let world: World;
+
+  beforeEach(async () => {
+    ({ app, world } = await build());
+    world.detail = DETAIL;
+  });
+
+  it('answers false to a viewer and true to a member of the task’s project, and the export carries neither', async () => {
+    world.orgRole = 'viewer';
+    world.role = 'viewer';
+    const viewer = await app.inject({ method: 'GET', url: `/api/tasks/${TASK}` });
+    expect(viewer.statusCode, viewer.body).toBe(200);
+    expect((viewer.json() as { can_export: boolean }).can_export).toBe(false);
+    const refused = await app.inject({ method: 'GET', url: `/api/tasks/${TASK}/export` });
+    expect(refused.statusCode).toBe(403);
+
+    world.role = 'member';
+    const member = await app.inject({ method: 'GET', url: `/api/tasks/${TASK}` });
+    expect((member.json() as { can_export: boolean }).can_export).toBe(true);
+    const exported = await app.inject({ method: 'GET', url: `/api/tasks/${TASK}/export` });
+    expect(exported.statusCode, exported.body).toBe(200);
+    expect(Object.hasOwn(exported.json() as object, 'can_export')).toBe(false);
   });
 });

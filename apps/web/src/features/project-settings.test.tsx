@@ -199,6 +199,41 @@ const fetchFor = (
     return json({ error: { code: 'not_found', message: 'no such route' } }, 404);
   }) as typeof fetch;
 
+/**
+ * WP-122 (PROGRESS backlog 388): a live and a retired integration, for the picker case. The retired
+ * one's name is a sentence a test can search for, so its absence is a fact about this screen.
+ */
+const pickerIntegrations = {
+  items: [
+    {
+      id: '00000000-0000-4000-8000-0000000000f1',
+      type: 'communication',
+      provider: 'slack',
+      name: 'Live workspace',
+      config: {},
+      health: { status: 'unknown', checked_at: null, detail: null },
+      config_refusal: null,
+      retired_at: null,
+    },
+    {
+      id: '00000000-0000-4000-8000-0000000000f2',
+      type: 'communication',
+      provider: 'slack',
+      name: 'Retired workspace',
+      config: {},
+      health: { status: 'unknown', checked_at: null, detail: null },
+      config_refusal: null,
+      retired_at: '2026-09-30T09:00:00.000Z',
+    },
+  ],
+};
+
+/** The screen's own fake server, with `GET /api/integrations` answering the picker fixture. */
+const withPickerIntegrations =
+  (base: typeof fetch): typeof fetch =>
+  async (input, init) =>
+    String(input).endsWith('/api/integrations') ? json(pickerIntegrations) : base(input, init);
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -577,6 +612,48 @@ describe('the project prompt files card (WP-113)', () => {
 });
 
 describe('the project settings page', () => {
+  it('leaves a retired integration out of the binding picker (WP-122)', async () => {
+    render(createApp({ fetchImpl: withPickerIntegrations(fetchFor({})), realtime: false }).element);
+    expect(await screen.findByText('Live workspace')).toBeTruthy();
+    expect(screen.queryByText('Retired workspace')).toBeNull();
+  });
+
+  /**
+   * WP-122 (PROGRESS backlog 385): the settings audit named every failure *"needs the maintainer
+   * role"*. A 503 is shown as what the server said; only a 403 keeps the role sentence.
+   */
+  it('does not name a 503 on the settings audit a permission problem, and keeps the sentence for a 403', async () => {
+    const failing =
+      (status: number, code: string, message: string): typeof fetch =>
+      async (input, init) =>
+        String(input).endsWith(`/api/projects/${PROJECT}/audit`)
+          ? json({ error: { code, message } }, status)
+          : fetchFor({})(input, init);
+    render(
+      createApp({
+        fetchImpl: failing(503, 'audit_unavailable', 'the audit store is not reachable'),
+        realtime: false,
+      }).element,
+    );
+    // The client retries a failed read once (`retry: 1`), so the notice arrives after that retry.
+    expect(
+      await screen.findByText('The settings audit could not be loaded.', {}, { timeout: 5_000 }),
+    ).toBeTruthy();
+    expect(document.body.textContent).toContain('the audit store is not reachable');
+    expect(document.body.textContent).not.toContain('needs the maintainer role');
+    cleanup();
+    render(
+      createApp({
+        fetchImpl: failing(403, 'forbidden', 'role member may not perform org.audit.read'),
+        realtime: false,
+      }).element,
+    );
+    expect(
+      await screen.findByText('The settings audit could not be loaded.', {}, { timeout: 5_000 }),
+    ).toBeTruthy();
+    expect(document.body.textContent).toContain('Reading it needs the maintainer role.');
+  });
+
   it('mirrors all five wizard steps and shows the audit of who changed what', async () => {
     // product/18:55 — *"nothing is only reachable during onboarding"*. The headings are the five
     // steps, plus the audit product/18:5 requires and PROGRESS backlog 52 records as unread.

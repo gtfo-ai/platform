@@ -102,6 +102,11 @@ const DECLARED: Readonly<Record<string, { readonly count: number; readonly reaso
     reason:
       'a statistic; it reads `templateByIssueType`, which the port never takes from the document',
   },
+  'packages/application/src/pipeline/manual-start.ts': {
+    count: 1,
+    reason:
+      'the manual start (WP-122) asks only `picksUpNewTickets`, the predicate intake asks on the same settings, so the two answer alike; the match it records goes through intake, which parks a refused configuration at its first step',
+  },
   'packages/application/src/pipeline/saga.ts': {
     count: 4,
     reason:

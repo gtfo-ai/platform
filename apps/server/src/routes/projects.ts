@@ -63,6 +63,7 @@ import {
 } from '@platform/contracts';
 import {
   type ConfigValues,
+  can,
   MAX_PROJECT_PROMPT_CHARS,
   mergeProjectConfig,
   PROPOSED_REVIEW_CHECKLISTS,
@@ -593,9 +594,14 @@ export const registerProjectRoutes = async (
         // and a project that does not exist are different facts, and only one of them is a 200.
         throw new NotFoundError(`project ${request.params.project_id}`);
       }
+      const role = request.effectiveRole;
       return {
         items: [...page.items],
         next_cursor: page.next === undefined ? null : encodeTaskCursor(page.next),
+        // WP-122: whether this caller may start a ticket by hand here — the start route's own
+        // capability over the role this guard resolved, so the board offers the form only to someone
+        // the route would admit.
+        can_start_task: role !== undefined && can(role, 'task.create'),
       };
     },
   );

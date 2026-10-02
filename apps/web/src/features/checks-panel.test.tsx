@@ -117,6 +117,7 @@ const TASK_DETAIL: TaskDetailResponse = {
   task: TASK_ROW,
   taken_over: null,
   can_raise_budget: false,
+  can_export: false,
   human_time: {
     total_minutes: 0,
     by_kind: { review: 0, question: 0, approval: 0, steer: 0 },

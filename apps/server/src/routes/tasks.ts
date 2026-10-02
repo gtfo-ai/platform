@@ -67,7 +67,7 @@ import { scopedProject, scopeToProject } from './scope.js';
 export interface TaskQueries {
   readonly taskDetail: (
     taskId: string,
-  ) => Promise<Omit<TaskDetailResponse, 'can_raise_budget'> | null>;
+  ) => Promise<Omit<TaskDetailResponse, 'can_raise_budget' | 'can_export'> | null>;
   readonly taskProjectId: (taskId: string) => Promise<string | null>;
   readonly projectRole: (projectId: string, userId: string) => Promise<UserRole | null>;
   readonly artifactBody: (artifactId: string) => Promise<ArtifactBody>;
@@ -131,7 +131,13 @@ export const registerTaskRoutes = async (
       // rule over the effective role the guard resolved (`budget.write`, maintainer), so the page
       // offers the control only to someone the route would admit. The route refuses the rest.
       const role = request.effectiveRole;
-      return { ...detail, can_raise_budget: role !== undefined && can(role, 'budget.write') };
+      return {
+        ...detail,
+        can_raise_budget: role !== undefined && can(role, 'budget.write'),
+        // WP-122 (backlog 381): the page offers *Download JSON* only to a caller the export route
+        // would admit — `task.export` over the same effective role.
+        can_export: role !== undefined && can(role, 'task.export'),
+      };
     },
   );
 
