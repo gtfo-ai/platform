@@ -19,6 +19,11 @@
  * database with real `handler_executions` rows; both are driven there, and the arithmetic of every
  * cap is the unit tier's (`packages/application/src/human-time/minutes.test.ts`).
  *
+ * The review comments are resolved ones on a task at `ready_for_merge`, which is also one of the two
+ * signals of WP-90's review-thread refresh; since WP-116 (PROGRESS backlog 306) the test asserts the
+ * refresh each comment enqueues — one provider read and the stored count — rather than reaching it
+ * silently.
+ *
  * **What this tier cannot say about the minutes themselves**: every delivery it makes happens
  * within seconds, so a review window measured here is seconds long. The assertions are therefore
  * about *which rows exist and what they are attributed to* — one window per reviewer, the mapped
@@ -181,11 +186,43 @@ describe('human time, from events this instance really produced', () => {
     });
     expect(mapped.status, JSON.stringify(mapped.body)).toBe(200);
 
+    /**
+     * **Each comment also wakes WP-90's review-thread refresh** (PROGRESS backlog 306, WP-116): a
+     * resolved comment on a task at `ready_for_merge` is one of its two signals, so each delivery
+     * here enqueues one `review_threads_refresh`, which reads the provider's discussions once and
+     * writes the count. The threads therefore exist **on the provider** — opened by the reviewer and
+     * resolved before the comment that says so — rather than only in the deliveries, which named a
+     * discussion the fake had never heard of until WP-116.
+     */
+    const reviewThreads = async () =>
+      (
+        await pipeline.query<{ review_threads: { open: number; resolved: number } | null }>(
+          'select review_threads from tasks where id = $1',
+          [taskId],
+        )
+      )[0]?.review_threads ?? null;
+    const discussionReads = () =>
+      pipeline.gitCalls().filter((call) => call.method === 'listDiscussions').length;
+    let resolvedSoFar = 0;
     for (const author of ['ada', 'grace']) {
+      const thread = pipeline.git.addHumanDiscussion({
+        project: GIT_PROJECT,
+        iid: pipeline.world.mr.iid,
+        authorId: author,
+        text: `${author} would like a bound on the retry helper`,
+      });
+      await pipeline.git.resolveDiscussion(
+        { project_path: GIT_PROJECT, iid: pipeline.world.mr.iid, url: pipeline.world.mr.url },
+        thread.id,
+      );
+      // The state the wait below must not already be in (rule 87's second question, asked here).
+      expect((await reviewThreads())?.resolved ?? 0).toBe(resolvedSoFar);
+      resolvedSoFar += 1;
+      const readsBefore = discussionReads();
       const delivery = pipeline.git.emitReviewComment({
         project: GIT_PROJECT,
         iid: pipeline.world.mr.iid,
-        discussionId: `discussion-${author}`,
+        discussionId: thread.id,
         authorId: author,
         text: `${author} would like a bound on the retry helper`,
         // Resolved, on purpose: an **unresolved** comment on a task at `ready_for_merge` wakes
@@ -195,7 +232,19 @@ describe('human time, from events this instance really produced', () => {
         resolved: true,
       });
       expect((await pipeline.deliverGit(delivery)).status).toBe(202);
+      // The wait binds `saveReviewThreads`, the **last** row the refresh writes, after its provider
+      // read (rule 87). Its predicate is false before this delivery: the count was absent before
+      // the first, and one resolved fewer before the second — asserted just above.
+      await pipeline.waitFor(`the refresh after ${author}’s resolved comment`, async () => {
+        const counted = await reviewThreads();
+        return counted?.resolved === resolvedSoFar;
+      });
+      expect(await reviewThreads()).toMatchObject({ open: 0, resolved: resolvedSoFar });
+      // One provider read per signal, never a diff (the module's own bound).
+      expect(discussionReads() - readsBefore).toBe(1);
     }
+    // A count, never a transition: neither refresh moved the task.
+    expect((await pipeline.task()).state).toBe('ready_for_merge');
 
     await pipeline.waitFor('both review windows to be recorded', async () => {
       const rows = await entriesOf(pipeline, taskId);

@@ -34,7 +34,7 @@ import { promisify } from 'node:util';
 import { type Logger, WORKSPACE_LABELS } from '@platform/application';
 import { workspace } from '@platform/infrastructure';
 import { PLATFORM_SKILLS } from '@platform/prompts';
-import { harnessVolumeLabels, sweepStaleHarnessVolumes } from './harness-volumes.js';
+import { harnessLabels, sweepStaleHarnessResources } from './harness-volumes.js';
 
 const run = promisify(execFile);
 
@@ -285,6 +285,8 @@ const startRepoContainer = async (name: string, network: string): Promise<void> 
     '-d',
     '--name',
     name,
+    // Marked like the volumes (WP-116, backlog 329): its `git daemon` outlives a killed file.
+    ...harnessLabels(),
     '--network',
     network,
     ALPINE_IMAGE,
@@ -359,10 +361,12 @@ export const startDockerFixture = async (
   // reached through the CLI (which pulls) or through the engine (which does not).
   const images = imageTagsOf(providerImages);
   await ensureImages(images);
-  // The two volumes a killed run left behind, which no label sweep could see before they carried
-  // a label (WP-96, backlog 7 bullet 8): only this repository's exact names, only marked, and only
-  // a creator pid that is no longer alive — a parallel file's volumes are left alone.
-  await sweepStaleHarnessVolumes(docker);
+  // What a killed run left behind — the repository container, the network and the two volumes —
+  // which no label sweep could see before they carried a label (WP-96 for the volumes, backlog 7
+  // bullet 8; WP-116 for the container and the network, backlog 329): only this repository's exact
+  // names, only marked, and only a creator pid that is no longer alive — a parallel file's are left
+  // alone. Containers go first, because the daemon refuses a network something is attached to.
+  await sweepStaleHarnessResources(docker);
   const suffix = uniqueSuffix();
   const network = `agentic-e2e-${suffix}`;
   const repoContainer = `agentic-e2e-repo-${suffix}`;
@@ -397,7 +401,9 @@ export const startDockerFixture = async (
   // would be a file every run's container could see the name of.
   const exportDir = await workspace.shortTempDir('agentic-e2e-out-');
 
-  await docker(['network', 'create', network]);
+  // Marked like the volumes (WP-116, backlog 329), so the start sweep above can find it after a
+  // killed run; it was created bare before, and removed only by name in the cleanup.
+  await docker(['network', 'create', ...harnessLabels(), network]);
   // A **bind-backed** named volume for the control channel: `volume-subpath` needs
   // `type=volume`, and TD-025 §2 has the runner reading the socket and the token through its own
   // mount of the same volume. A plain named volume lives inside the daemon's storage, which this
@@ -406,11 +412,11 @@ export const startDockerFixture = async (
   // same name is idempotent, which is what lets the provider's own `ensureVolume` run afterwards.
   await docker(
     options.controlVolumeBind === false
-      ? ['volume', 'create', ...harnessVolumeLabels(), controlVolume]
+      ? ['volume', 'create', ...harnessLabels(), controlVolume]
       : [
           'volume',
           'create',
-          ...harnessVolumeLabels(),
+          ...harnessLabels(),
           '--driver',
           'local',
           '--opt',
@@ -429,7 +435,7 @@ export const startDockerFixture = async (
   await docker([
     'volume',
     'create',
-    ...harnessVolumeLabels(),
+    ...harnessLabels(),
     '--label',
     `${WORKSPACE_LABELS.role}=shared`,
     cacheVolume,

@@ -25,6 +25,8 @@ import {
   CHAT_INTEGRATION_ID,
   inboundEvent,
   type PipelineE2E,
+  type SeededWorld,
+  type StartPipelineOptions,
   startPipeline,
 } from '../support/pipeline.js';
 import { featureScenarios, TICKETS } from '../support/scenarios.js';
@@ -45,6 +47,7 @@ type Transport = (typeof TRANSPORTS)[number];
 
 const STRANGER = 'U0FAKESTRANGE';
 const DECIDER = 'U0FAKEDECIDER';
+const ANSWERER = 'U0FAKEANSWERR';
 
 /** Every plan of the feature template waits for a human, so the task stops at the gate. */
 const PLAN_ALWAYS = {
@@ -85,13 +88,16 @@ const inboxErrors = async (pipeline: PipelineE2E): Promise<string[]> =>
   ).map((row) => row.error ?? '');
 
 /** Starts an instance whose chat binding is Slack in Socket Mode, and waits for the socket. */
-const startSlack = async (label: string): Promise<{ pipeline: PipelineE2E; slack: FakeSlack }> => {
+const startSlack = async (
+  label: string,
+  options: Partial<Pick<StartPipelineOptions, 'scenarios' | 'config'>> = {},
+): Promise<{ pipeline: PipelineE2E; slack: FakeSlack }> => {
   const slack = createFakeSlack();
   const pipeline = await startPipeline({
-    scenarios: featureScenarios,
+    scenarios: options.scenarios ?? featureScenarios,
     label,
     tickets: TICKETS,
-    config: PLAN_ALWAYS,
+    config: 'config' in options ? options.config : PLAN_ALWAYS,
     slack,
   });
   harness = pipeline;
@@ -317,5 +323,196 @@ describe('the Socket Mode connection', () => {
     harness = undefined;
     expect(slack.connections.every((connection) => connection.closed)).toBe(true);
     expect(slack.opens()).toBe(opensBefore);
+  }, 240_000);
+});
+
+/** The question refinement asks: blocking, and with no options, so a typed reply is the answer. */
+const QUESTION_TEXT = 'Which currency should the footer total be shown in?';
+const ANSWER_TEXT = 'EUR on every invoice, please';
+
+/** `featureScenarios` with a refinement that parks the task on one blocking question. */
+const askingScenarios = (world: SeededWorld) => {
+  const base = featureScenarios(world);
+  return {
+    ...base,
+    refinement: {
+      structuredOutput: {
+        ...(base.refinement.structuredOutput as Record<string, unknown>),
+        decision: 'ask',
+        questions: [{ id: 'q1', text: QUESTION_TEXT, blocking: true }],
+      },
+    },
+  };
+};
+
+describe('a question answered by a reply in its Slack thread (WP-116, backlog 300)', () => {
+  /**
+   * WP-88's answer path, one tier up from `slack-thread-reply.integration.test.ts`: there the
+   * question's `notifications` row is written by the test through the production store; here the
+   * **notify duty** posts the question with `postQuestion` and records its address, so the join the
+   * directory reads — the duty's `message_ref.thread_id` against the duty's `chat_threads` row,
+   * `class = 'question'` — is the one production writes, and the reply comes through the HTTP door.
+   */
+  it('posts the blocking question into the task thread, takes a typed reply over HTTP as its answer, and edits the message', async () => {
+    const { pipeline, slack } = await startSlack('slack-question', {
+      scenarios: askingScenarios,
+      config: undefined,
+    });
+    await pipeline.publish([
+      inboundEvent('ticket.matched', {
+        project_id: pipeline.projectId,
+        ticket: {
+          provider: 'fake-task-management',
+          key: 'ACME-1',
+          url: 'https://tickets.example.test/browse/ACME-1',
+        },
+        rule: 'label:agentic',
+        priority: 'High',
+        issue_type: 'Story',
+        epic: null,
+        links: [],
+      }),
+    ]);
+    const parked = await pipeline.settle(
+      'waiting_answers',
+      (task) => task.state === 'waiting_answers',
+    );
+    const [question] = await pipeline.query<{ id: string; status: string; blocking: boolean }>(
+      'select id, status, blocking from questions where task_id = $1',
+      [parked.id],
+    );
+    expect(question).toMatchObject({ status: 'open', blocking: true });
+    const questionId = question?.id as string;
+
+    // ── the question is posted into the task's thread ─────────────────────────
+    // The wait binds `markDelivered`, the **last** row the notify duty writes for this post: the
+    // row exists from the plan with `message_ref` null, and the address is written only after
+    // `postQuestion` returned (rule 87). So the fake's record below is what that row implies.
+    type Ref = { channel: string; message_id: string; thread_id: string | null };
+    let ref: Ref | null = null;
+    await pipeline.waitFor('the question’s message address to be recorded', async () => {
+      const [row] = await pipeline.query<{ message_ref: Ref | null }>(
+        `select message_ref from notifications
+          where class = 'question' and question_id = $1 and message_ref is not null`,
+        [questionId],
+      );
+      ref = row?.message_ref ?? null;
+      return ref !== null;
+    });
+    const address = ref as unknown as Ref;
+    const posted = slack.posted.find(
+      (message) => message.channel === address.channel && message.ts === address.message_id,
+    );
+    expect(posted, 'the recorded address names a message the adapter posted').toBeDefined();
+    expect(posted?.text).toContain(QUESTION_TEXT);
+    // Into the task's thread — the one the duty recorded in `chat_threads` — and not as a new root.
+    const threads = await pipeline.query<{ channel: string; thread_id: string; task_id: string }>(
+      'select channel, thread_id, task_id from chat_threads',
+    );
+    expect(threads).toEqual([
+      { channel: SLACK_E2E_CHANNEL, thread_id: address.thread_id, task_id: parked.id },
+    ]);
+    expect(posted?.threadTs).toBe(address.thread_id);
+    // Posted through `postQuestion`: the reply-to-answer line is the question's own Block Kit.
+    expect(JSON.stringify(posted?.blocks)).toContain('Reply in this thread to answer');
+    const posts = await pipeline.query<{ action: string; status: string }>(
+      `select action, status from integration_actions
+        where integration_id = $1 and action = 'post_question'`,
+      [CHAT_INTEGRATION_ID],
+    );
+    expect(posts).toEqual([{ action: 'post_question', status: 'ok' }]);
+
+    // ── a mapped person replies in that thread, over HTTP ────────────────────
+    await pipeline.query(
+      `insert into user_identities (provider, external_id, user_id, display_name)
+       values ('slack', $1, $2, 'answerer')`,
+      [ANSWERER, pipeline.userId],
+    );
+    const editsOf = async () =>
+      pipeline.query<{ status: string }>(
+        `select status from integration_actions
+          where integration_id = $1 and action = 'update_message'`,
+        [CHAT_INTEGRATION_ID],
+      );
+    // Both waits below would be satisfied by the state before the reply if this did not hold.
+    expect(await editsOf()).toEqual([]);
+    expect(slack.updated).toEqual([]);
+    const replied = await pipeline.deliverChat(
+      signedHttpDelivery(threadReplyFor(address.thread_id as string, ANSWERER, ANSWER_TEXT)),
+    );
+    expect(replied.status).toBe(202);
+
+    // The answer, the event and the audit row are written in **one** transaction — the delivery's
+    // (WP-88's applier) — so a wait on the question's status binds all three; it was `open` above.
+    await pipeline.waitFor('the question to be answered', async () => {
+      const [row] = await pipeline.query<{ status: string }>(
+        'select status from questions where id = $1',
+        [questionId],
+      );
+      return row?.status === 'answered';
+    });
+    const [answered] = await pipeline.query<{
+      answer: string | null;
+      answered_by_user_id: string | null;
+      answered_via: string | null;
+    }>('select answer, answered_by_user_id, answered_via from questions where id = $1', [
+      questionId,
+    ]);
+    expect(answered).toEqual({
+      answer: ANSWER_TEXT,
+      answered_by_user_id: pipeline.userId,
+      answered_via: 'slack',
+    });
+    const events = (await pipeline.events()).filter(
+      (event) => event.type === 'task.question.answered',
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]?.payload).toMatchObject({
+      task_id: parked.id,
+      question_id: questionId,
+      answer: ANSWER_TEXT,
+      answered_by_user_id: pipeline.userId,
+      channel: 'slack',
+    });
+    // An answer, not feedback: the reply was addressed to the open question.
+    expect((await pipeline.events()).some((event) => event.type === 'feedback.received')).toBe(
+      false,
+    );
+
+    // One `human_actions` row, in the route's vocabulary, with the door named and none of the words.
+    const audit = await pipeline.query<{
+      action: string;
+      user_id: string | null;
+      task_id: string | null;
+      params: Record<string, unknown>;
+    }>('select action, user_id, task_id, params from human_actions order by created_at');
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({
+      action: 'task.question.answer',
+      user_id: pipeline.userId,
+      task_id: parked.id,
+      params: {
+        task_id: parked.id,
+        question_id: questionId,
+        channel: 'slack',
+        provider: 'slack',
+        integration_id: CHAT_INTEGRATION_ID,
+      },
+    });
+    expect(typeof audit[0]?.params.delivery_id).toBe('string');
+    expect(JSON.stringify(audit)).not.toContain(ANSWER_TEXT);
+
+    // ── the question's message is edited ─────────────────────────────────────
+    // The wait binds the executor's `update_message` row, written after the provider answered
+    // (rule 87), and there was none before the reply; the fake's record is what that row implies.
+    await pipeline.waitFor('the question’s message to be edited', async () =>
+      (await editsOf()).some((row) => row.status === 'ok'),
+    );
+    const edits = slack.updated.filter(
+      (update) => update.channel === address.channel && update.ts === address.message_id,
+    );
+    expect(edits).toHaveLength(1);
+    // Settled, and it never repeats the answer (WP-88 criterion 2).
+    expect(edits[0]?.text).not.toContain(ANSWER_TEXT);
   }, 240_000);
 });
