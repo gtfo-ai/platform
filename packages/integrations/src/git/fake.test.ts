@@ -787,6 +787,13 @@ describe('FakeGitProvider merge-request listing (WP-110, divergence 21)', () => 
       port.listMergeRequests(PROJECT, { updatedAfter: 'yesterday', limit: 1 }),
     ).rejects.toMatchObject({ code: 'invalid_request' });
     expect(port.pollPlan()).toBeNull();
-    expect(build({ pollIntervalSeconds: 90 }).pollPlan()).toEqual({ interval_seconds: 90 });
+    expect(build({ pollIntervalSeconds: 90 }).pollPlan()).toEqual({
+      interval_seconds: 90,
+      receives_webhooks: false,
+    });
+    expect(build({ pollIntervalSeconds: 90, receivesWebhooks: true }).pollPlan()).toEqual({
+      interval_seconds: 90,
+      receives_webhooks: true,
+    });
   });
 });

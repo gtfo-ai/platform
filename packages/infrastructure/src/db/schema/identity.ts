@@ -197,6 +197,11 @@ export const bindings = pgTable('bindings', {
   pollCursor: timestamp('poll_cursor', { withTimezone: true }),
   /** The merge-request poller's cursor, the git half of `pollCursor` (migration 0068, WP-110). */
   mrPollCursor: timestamp('mr_poll_cursor', { withTimezone: true }),
+  /**
+   * The default branch's head the merge-request poller last read, on a **poll-only** git binding
+   * (migration 0074, WP-123); `null` until the first such poll.
+   */
+  mrPollDefaultHead: text('mr_poll_default_head'),
 });
 
 /**

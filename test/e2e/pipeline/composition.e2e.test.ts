@@ -77,6 +77,9 @@ describe('an instance started the way main.ts starts one', () => {
       label: 'default-composition',
       logLevel: 'warn',
       logDestination: destination,
+      // WP-123 (backlog 372): an operator's `.env` from before the rename, which `main.ts` still
+      // reads for one release — the warn it earns is asserted below.
+      env: { APP_TICKET_POLL_SWEEP_INTERVAL_MS: '60000' },
     });
     logged = lines.join('').split('\n');
 
@@ -110,6 +113,17 @@ describe('an instance started the way main.ts starts one', () => {
     expect(missing).toBeDefined();
     expect(missing).toContain('APP_KNOWLEDGE_MIRROR_ROOT');
     expect(missing).toContain('vault_unavailable');
+  });
+
+  it('warns that APP_TICKET_POLL_SWEEP_INTERVAL_MS is deprecated, naming its replacement (WP-123)', () => {
+    const warned = logged.find((line) => line.includes('APP_TICKET_POLL_SWEEP_INTERVAL_MS'));
+    expect(warned).toBeDefined();
+    expect(JSON.parse(warned as string)).toMatchObject({
+      level: 40,
+      variable: 'APP_TICKET_POLL_SWEEP_INTERVAL_MS',
+      replacement: 'APP_POLL_SWEEP_INTERVAL_MS',
+      ignored: false,
+    });
   });
 
   it('names the agent runner as the one collaborator it still has no adapter for', () => {

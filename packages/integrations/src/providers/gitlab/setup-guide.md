@@ -90,10 +90,9 @@ Leave **Enable SSL verification** on.
 > With neither token configured the platform rejects every delivery. That is deliberate: an
 > endpoint that accepts unverified webhooks looks exactly like one that works.
 
-The webhook is the **recommended** way in, and the only way for some events: a review comment, an
-approval, a finished pipeline and a default-branch move reach the platform only as deliveries. If
-GitLab cannot reach the instance at `APP_BASE_URL`, switch polling on (step 3a) for the merge-request
-events — and know what you give up.
+The webhook is the **recommended** way in, and the only way for some events: an approval and a
+finished pipeline reach the platform only as deliveries. If GitLab cannot reach the instance at
+`APP_BASE_URL`, switch polling on (step 3a) — and know what you give up.
 
 ## 3a. Poll merge requests when GitLab cannot reach you
 
@@ -109,12 +108,35 @@ You can have both. A merge the webhook reported and a poll lists again is **one*
 appends a merge request's open, merge or close only when its log does not already say so, whichever
 of the two saw it first.
 
+**A poll-only binding also reads the default branch and the review comments** (WP-123). A binding
+with **neither** `webhook_secret_token` nor `webhook_signing_token` set receives no delivery at all
+(every one is refused, above), so it is **poll-only**, and each of its polls makes two more reads:
+
+- **The default branch's head** (the project's default branch, then that branch's commit — two
+  requests per poll), compared with the head the last poll saw. When it moved, the platform records
+  `default_branch.moved` — so a task waiting at Ready re-enters the rebase gate and is re-checked
+  for conflicts, exactly as a Push hook would make it. The first poll only learns the head; it
+  records no move.
+- **The comments on each merge request waiting at Ready** (*List all merge request discussion
+  items*), at most **twenty** merge requests per poll, the ones that reached Ready first. A comment a
+  person wrote after the task reached Ready is recorded as `mr.review.comment`, once, so a
+  reviewer's comment returns the task to Implementation after the usual two-minute window. GitLab's
+  own system notes (*"added 1 commit"*) and the platform's own notes (its conflict warning) are not
+  review comments and are skipped. The comparison is between GitLab's clock and the platform's, so
+  a comment written up to five minutes **before** the task reached Ready is read too, and a GitLab
+  clock up to five minutes slow loses no comment.
+
+A binding **with** a webhook secret makes neither read: its webhook already brings both events, and
+one door per binding means nothing can arrive twice. So configure either a webhook secret **or**
+nothing — a secret set for a webhook GitLab cannot reach turns both reads off.
+
 What polling does not see, so you can choose knowingly:
 
-- **Approvals, review comments, finished pipelines and default-branch moves.** A list of merge
-  requests says what each one *is*, not what happened inside it, so these stay webhook-only. The CI
-  gate does not need the pipeline event (it asks GitLab for the head's pipeline itself); review
-  feedback, approval time and the conflict re-check on a default-branch move do.
+- **Approvals and finished pipelines.** A list of merge requests says what each one *is*, not what
+  happened inside it, so these stay webhook-only. The CI gate does not need the pipeline event (it
+  asks GitLab for the head's pipeline itself). An approval counts toward the approver's review time
+  and changes nothing else, so a poll-only binding undercounts that metric. A comment read by a poll
+  is dated by the poll that read it, up to one interval after it was written.
 - **Merge requests that changed before you switched it on.** The first poll reads the last interval
   only. A merge request opened last month and edited today is an update, not a new one, so it does
   not start a review.

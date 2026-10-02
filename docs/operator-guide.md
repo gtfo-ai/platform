@@ -590,8 +590,14 @@ configuration, and a `project` to list. A poll turns each merge request into the
 would have sent — a new or reopened one, an update, a merge, a close — so review-only mode starts
 and a task learns that its merge request merged. A merge seen by the webhook and by a poll is one
 merge. Approvals, review comments, finished pipelines and default-branch moves are **not** in a
-merge-request listing and stay webhook-only; the GitLab setup guide's step 3a lists what that costs.
-One setting, `APP_TICKET_POLL_SWEEP_INTERVAL_MS`, bounds how long a lost poll of either kind waits.
+merge-request listing. A GitLab binding with **no webhook secret at all** — neither
+`webhook_secret_token` nor `webhook_signing_token`, so no delivery can reach it — is **poll-only**, and
+its polls make two more reads (WP-123): the default branch's head, so a task waiting at Ready is
+re-checked for conflicts when `main` moves, and the comments on each merge request waiting at Ready
+(at most twenty per poll), so a reviewer's comment returns the task to Implementation. A binding
+with a webhook secret makes neither read: its webhook carries both. Approvals stay webhook-only
+(they count toward review time and change nothing else); the GitLab setup guide's step 3a lists the
+rest. One setting, `APP_POLL_SWEEP_INTERVAL_MS`, bounds how long a lost poll of either kind waits.
 
 ## 5. Upgrade
 
@@ -665,6 +671,16 @@ until it can: a `warn` line names it, the project's settings page says why under
 files*, and its stages run without their prompt files. Fix the cause and press **Re-read now** (or
 `POST /api/projects/:project_id/config/refresh`); the next index run of the project does the same.
 The platform cannot un-leak a credential already committed to a project's history — rotate it.
+
+**Upgrading past the build that renamed the poll sweep variable (WP-123).** `APP_TICKET_POLL_SWEEP_INTERVAL_MS`
+is now **`APP_POLL_SWEEP_INTERVAL_MS`** — it has governed the merge-request poller's sweep as well as
+the ticket poller's since WP-110, and the old name said tickets. The old name is **still read for one
+release**: set alone it applies, and every start logs a `warn` naming the new one; set beside the new
+name it is ignored (the new one wins) and the `warn` says so. Rename the line in your `.env` now — the
+release after this one stops reading the old name, and a value under it then silently falls back to the
+default of a minute. The same build adds migration 0074 (`bindings.mr_poll_default_head`, the
+last-seen default-branch head of a poll-only GitLab binding); its first poll after the upgrade reads
+the head and records no move.
 
 ### What a failed migration looks like
 

@@ -160,7 +160,29 @@ export interface GitProviderContractContext {
    * contract (rule 23): the merge-request poller asks `pollPlan()`, and a provider that answered a
    * plan for a binding that never asked would read a provider nobody asked it to.
    */
-  readonly polling: { readonly port: GitProviderPort; readonly intervalSeconds: number };
+  readonly polling: {
+    readonly port: GitProviderPort;
+    readonly intervalSeconds: number;
+    /**
+     * WP-123: `port` is built **with** this provider's webhook secret, and this one polls with
+     * **none** — a poll-only binding, whose plan must say no webhook reaches it, because the
+     * poller makes its two extra reads (the default branch, the review notes) on that answer alone.
+     */
+    readonly pollOnlyPort: GitProviderPort;
+  };
+  /**
+   * WP-123: a merge request whose threads hold one person's note, one provider **system** note and
+   * one the platform posted (opening with its `<!-- agentic:… -->` marker), each at its own instant
+   * — what the poll-only binding's review-note read lists and filters. Named rather than counted,
+   * because the filter reads `system`, `created_at` and the body, and an adapter that mapped any
+   * of them wrongly passes a presence check.
+   */
+  readonly notes: {
+    readonly iid: number;
+    readonly human: { readonly threadId: string; readonly noteId: string; readonly at: string };
+    readonly systemNoteId: string;
+    readonly platformNoteId: string;
+  };
   /** Head sha of a pipeline the harness seeded, with one failing job that has a log. */
   readonly pipelineSha: string;
   readonly failingJobName: string;
@@ -897,6 +919,41 @@ export const runGitProviderContract = (harness: GitProviderContractHarness): voi
         expect(port.pollPlan()).toBeNull();
         const plan = mergeRequestPollPlanSchema.parse(context.polling.port.pollPlan());
         expect(plan.interval_seconds).toBe(context.polling.intervalSeconds);
+      });
+
+      /**
+       * WP-123 (backlog 373): the poller reads the default branch and the waiting merge requests'
+       * notes **only** for a binding no webhook reaches — so the plan has to tell the two apart, in
+       * both directions (rule 42): a provider that always said `false` would read twice on a
+       * webhook binding, and one that always said `true` would leave a poll-only binding deaf.
+       */
+      it('says whether a webhook can reach the binding, so a poll-only binding is told apart (WP-123)', () => {
+        expect(mergeRequestPollPlanSchema.parse(context.polling.port.pollPlan())).toMatchObject({
+          receives_webhooks: true,
+        });
+        expect(
+          mergeRequestPollPlanSchema.parse(context.polling.pollOnlyPort.pollPlan()),
+        ).toMatchObject({ receives_webhooks: false });
+      });
+
+      /**
+       * WP-123: what the review-note read stands on — each note's instant, its `system` flag, its
+       * body as written (the platform's marker is read off it) and the thread it belongs to.
+       */
+      it('lists the notes a poll reads: the thread, the instant, the system flag and the body (WP-123)', async () => {
+        const discussions = await port.listDiscussions(mrRef(context.notes.iid));
+        const notes = discussions.flatMap((discussion) =>
+          discussion.notes.map((note) => ({ thread: discussion.id, note })),
+        );
+        const byId = new Map(notes.map((entry) => [entry.note.id, entry]));
+        const human = byId.get(context.notes.human.noteId);
+        expect(human?.thread).toBe(context.notes.human.threadId);
+        expect(human?.note.system).toBe(false);
+        expect(Date.parse(human?.note.created_at ?? '')).toBe(Date.parse(context.notes.human.at));
+        expect(byId.get(context.notes.systemNoteId)?.note.system).toBe(true);
+        const platform = byId.get(context.notes.platformNoteId)?.note;
+        expect(platform?.system).toBe(false);
+        expect(platform?.body.trimStart().startsWith('<!-- agentic:')).toBe(true);
       });
 
       it('lists merged merge requests since an instant', async () => {

@@ -17,10 +17,11 @@
 import {
   type MergeRequestPollStore,
   type PolledBinding,
+  type ReadyMergeRequest,
   TICKET_POLL_CONFIG_KEYS,
   type TicketPollStore,
 } from '@platform/application';
-import type { Id, IsoDateTime } from '@platform/contracts';
+import { type Id, type IsoDateTime, mergeRequestRefSchema } from '@platform/contracts';
 import type { SqlExecutor } from '../events/sql.js';
 
 interface PollingRow extends Record<string, unknown> {
@@ -45,7 +46,7 @@ const bindingPollStatements = (
   sql: SqlExecutor,
   type: 'task_management' | 'git',
   column: 'poll_cursor' | 'mr_poll_cursor',
-): MergeRequestPollStore => ({
+): Pick<MergeRequestPollStore, 'listPolling' | 'cursorOf' | 'advanceCursor'> => ({
   listPolling: async (limit) => {
     const { rows } = await sql.query<PollingRow>(
       `select b.project_id, b.integration_id
@@ -105,7 +106,67 @@ export const createPostgresTicketPollStore = (
   },
 });
 
-/** The merge-request poller's rows (WP-110, migration 0068): git bindings, `mr_poll_cursor`. */
+interface ReadyRow extends Record<string, unknown> {
+  readonly task_id: string;
+  readonly mr_ref: unknown;
+  readonly entered_at: string;
+}
+
+/**
+ * The merge-request poller's rows (WP-110, migration 0068): git bindings, `mr_poll_cursor` — and,
+ * since WP-123 (migration 0074), the poll-only binding's last-seen default head and the tasks
+ * waiting at Ready whose notes it reads.
+ */
 export const createPostgresMergeRequestPollStore = (
   options: PostgresTicketPollStoreOptions,
-): MergeRequestPollStore => bindingPollStatements(options.sql, 'git', 'mr_poll_cursor');
+): MergeRequestPollStore => ({
+  ...bindingPollStatements(options.sql, 'git', 'mr_poll_cursor'),
+  defaultHeadOf: async (binding) => {
+    const { rows } = await options.sql.query<{ head: string | null }>(
+      `select mr_poll_default_head as head from bindings
+        where project_id = $1 and integration_id = $2`,
+      [binding.projectId, binding.integrationId],
+    );
+    return rows[0]?.head ?? null;
+  },
+  recordDefaultHead: async (binding, sha) => {
+    await options.sql.query(
+      `update bindings set mr_poll_default_head = $3
+        where project_id = $1 and integration_id = $2`,
+      [binding.projectId, binding.integrationId, sha],
+    );
+  },
+  /**
+   * Tasks at `ready_for_merge` with a merge request, joined to their **current** stage row (the
+   * attempt `stage_attempts` names, as the stranded-stage read joins it) for its `entered_at`, in
+   * the database's own microsecond rendering. Oldest entry first. A row whose `mr_ref` fails the
+   * contract's schema is left out rather than thrown on (rule 20: one bad row must not stop every
+   * other task's notes).
+   */
+  readyMergeRequests: async (binding, limit) => {
+    const { rows } = await options.sql.query<ReadyRow>(
+      `select t.id as task_id, t.mr_ref,
+              to_char(s.entered_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as entered_at
+         from tasks t
+         join task_stages s
+           on s.task_id = t.id and s.stage = t.current_stage
+          and s.attempt = coalesce((t.stage_attempts ->> t.current_stage)::int, 1)
+        where t.project_id = $1 and t.state = 'ready_for_merge' and t.mr_ref is not null
+        order by s.entered_at, t.id
+        limit $2`,
+      [binding.projectId, limit],
+    );
+    const ready: ReadyMergeRequest[] = [];
+    for (const row of rows) {
+      const mr = mergeRequestRefSchema.safeParse(row.mr_ref);
+      if (mr.success) {
+        ready.push({
+          taskId: row.task_id as Id,
+          mr: mr.data,
+          enteredAt: row.entered_at as IsoDateTime,
+        });
+      }
+    }
+    return ready;
+  },
+});

@@ -78,7 +78,7 @@ import {
 } from './bootstrap.js';
 import { composeBreakdown } from './breakdown.js';
 import { createTaskCommands } from './commands.js';
-import { loadServerConfig, type ServerConfig } from './config.js';
+import { deprecatedEnvironment, loadServerConfig, type ServerConfig } from './config.js';
 import { enqueueOnlyJobs } from './enqueue-only-jobs.js';
 import { composeInboundConnections } from './inbound-connections.js';
 import {
@@ -217,6 +217,20 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
     logger.warn(
       { role: config.role, unimplemented: capabilities.unimplemented },
       'this ROLE names workloads no work package has built yet; the process will not run them',
+    );
+  }
+  // WP-123 (PROGRESS backlog 372): a renamed variable an operator still sets is named at every
+  // start, with what replaces it, until the old name is dropped.
+  for (const deprecated of deprecatedEnvironment(env)) {
+    logger.warn(
+      {
+        variable: deprecated.variable,
+        replacement: deprecated.replacement,
+        ignored: deprecated.ignored,
+      },
+      deprecated.ignored
+        ? `${deprecated.variable} is deprecated and ignored because ${deprecated.replacement} is also set; remove it`
+        : `${deprecated.variable} is deprecated; rename it to ${deprecated.replacement} (the old name is read for one more release)`,
     );
   }
   if (roleIsIdle(config.role)) {
@@ -566,7 +580,7 @@ export const startRuntime = async (options: StartRuntimeOptions = {}): Promise<S
           stageConcurrency: 1,
           intakeReconcileIntervalMs: config.intakeReconcileIntervalMs,
           jobsSchema: config.jobs.schema,
-          ticketPollSweepIntervalMs: config.ticketPollSweepIntervalMs,
+          pollSweepIntervalMs: config.pollSweepIntervalMs,
           // Non-null on this branch by construction: `capabilities.worker` is what got us here and
           // it is one of the two conditions the stack is built under.
           stack: stack as NonNullable<typeof stack>,

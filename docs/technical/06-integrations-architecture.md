@@ -518,7 +518,8 @@ the existing suite (BD-017).
   > webhook-only); and tickets that matched before polling was switched on, because a binding's first
   > poll reads its last interval only — a first read of every ticket ever labelled would start closed
   > ones. **A lost poll is recovered**: a poll re-arms itself in a `finally`, and a sweep job
-  > (`APP_TICKET_POLL_SWEEP_INTERVAL_MS`, default a minute) enqueues a poll for every polling binding,
+  > (`APP_POLL_SWEEP_INTERVAL_MS`, default a minute — `APP_TICKET_POLL_SWEEP_INTERVAL_MS` before
+  > WP-123, still read for one release with a `warn`) enqueues a poll for every polling binding,
   > which `stately` collapses onto a live chain's queued job and which restarts a lost one — so the
   > bound on a lost chain is one sweep. The webhook URL is still built from `APP_BASE_URL`
   > (`APP_WEBHOOK_PUBLIC_URL` was removed, backlog 127).
@@ -558,6 +559,31 @@ the existing suite (BD-017).
   > closed between two polls is one `mr.closed`; `blocking_threads_resolved` is never sent. Two
   > `mr.updated` for one push can still land (one per door); the head handler orders them by the
   > provider's instant.
+  >
+  > **Amended at WP-123 (PROGRESS backlog 373): a poll-only binding re-checks Ready and hears a
+  > reviewer.** The sentence above is now true only of a binding a webhook can reach. A git binding
+  > whose plan says **no** webhook reaches it (`MergeRequestPollPlan.receives_webhooks: false`; for
+  > GitLab, neither `webhook_secret_token` nor `webhook_signing_token` is set, so every delivery is
+  > refused — so a secret set for a webhook GitLab cannot actually reach turns **both** paths off for
+  > that binding, as the setup guide warns) makes two more reads per `mr.poll`, both through the executor outside every
+  > transaction: **(a)** `getDefaultBranchHead`, compared with `bindings.mr_poll_default_head`
+  > (migration 0074) — a different head is recorded as `default_branch.moved` by
+  > `recordNormalisedDelivery` on the key `<provider>:poll:<project>:<path>@default:<old>..<new>`
+  > and then written (a poll that dies between the two records the same key again and collides), and
+  > the first read records nothing — the one move it cannot record is an exact repeat of an earlier
+  > pair (A → B → A → B), which needs the protected default branch force-pushed twice; **(b)** for each task at
+  > `ready_for_merge` (at most `MR_POLL_REVIEW_TASKS_LIMIT`, 20, oldest entry first, a `warn` past
+  > it), `listDiscussions` — each note a person wrote (not `system`, not `isPlatformNote`) at or
+  > after the Ready stage row's `entered_at` **less five minutes** (`REVIEW_NOTE_SKEW_MS`: the
+  > comparison crosses the provider's clock and the platform's, so it errs toward reading a note
+  > early rather than losing one) is recorded as `mr.review.comment` on the key
+  > `<provider>:poll:<project>:<path>!<iid>#note:<id>`. Both reads fail open (a `warn`, retried next
+  > poll; the stored head and the per-note keys lose nothing). **Only for a poll-only binding, by
+  > the ruling**: a binding with a webhook gets both events from its deliveries, so no event
+  > arrives by two doors and no cross-door dedup is needed. **Approvals stay webhook-only** — they
+  > feed the human-time projector's review minutes and nothing else. Residuals: a polled note is
+  > dated by the poll that recorded it (up to one interval late), and a person's note written up to
+  > five minutes before the task entered Ready arms the review window a webhook would not have.
 - **Slack** uses Socket Mode (research/03): a long-lived connection in the API process (or a dedicated `slack` process when scaling), emitting the same domain events.
   > **As built at WP-43.** The connection is held by **the process that serves `/webhooks/*`** —
   > `ROLE=all` or `ROLE=api` — and by construction rather than by a flag: `startRuntime` hands the

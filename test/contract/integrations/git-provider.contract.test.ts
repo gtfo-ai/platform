@@ -14,6 +14,8 @@ const INTEGRATION_ID = '00000000-0000-4000-8000-0000000000a2';
 const PROJECT_ID = '00000000-0000-4000-8000-0000000000b2';
 const PROJECT = 'acme/api';
 const FAILING_JOB = 'test:unit';
+/** WP-123: the person's note's instant, stated rather than the fake clock's, so the suite compares it. */
+const HUMAN_NOTE_AT = '2026-06-02T09:15:00.000Z';
 
 runGitProviderContract({
   name: 'in-memory fake',
@@ -98,6 +100,30 @@ runGitProviderContract({
     const merged = await openOn('agentic/merged');
     port.emitMergeRequestEvent({ event: 'mr.merged', project: PROJECT, iid: merged.ref.iid });
 
+    // WP-123: a merge request with a person's note, a system note and the platform's own.
+    const noted = await openOn('agentic/noted');
+    const humanThread = port.addHumanDiscussion({
+      project: PROJECT,
+      iid: noted.ref.iid,
+      authorId: 'dana',
+      text: 'Please rename totals.',
+      createdAt: HUMAN_NOTE_AT,
+    });
+    const humanNoteId = humanThread.notes[0]?.id ?? '';
+    const systemThread = port.addHumanDiscussion({
+      project: PROJECT,
+      iid: noted.ref.iid,
+      authorId: 'dana',
+      text: 'added 1 commit',
+      system: true,
+    });
+    const platformThread = port.addHumanDiscussion({
+      project: PROJECT,
+      iid: noted.ref.iid,
+      authorId: 'agentic-bot',
+      text: '<!-- agentic:conflict-warning:task-1 -->\nThis merge request overlaps another.',
+    });
+
     // WP-37: the one handle this fake resolves. Everything else answers `null` (divergence 11).
     port.seedUser('@dana-reviewer', '4242');
 
@@ -161,8 +187,22 @@ runGitProviderContract({
         mergedIid: merged.ref.iid,
       },
       polling: {
-        port: createFakeGitProvider({ integrationId: INTEGRATION_ID, pollIntervalSeconds: 90 }),
+        port: createFakeGitProvider({
+          integrationId: INTEGRATION_ID,
+          pollIntervalSeconds: 90,
+          receivesWebhooks: true,
+        }),
         intervalSeconds: 90,
+        pollOnlyPort: createFakeGitProvider({
+          integrationId: INTEGRATION_ID,
+          pollIntervalSeconds: 90,
+        }),
+      },
+      notes: {
+        iid: noted.ref.iid,
+        human: { threadId: humanThread.id, noteId: humanNoteId, at: HUMAN_NOTE_AT },
+        systemNoteId: systemThread.notes[0]?.id ?? '',
+        platformNoteId: platformThread.notes[0]?.id ?? '',
       },
       commits: {
         since: '2000-01-01T00:00:00.000Z',

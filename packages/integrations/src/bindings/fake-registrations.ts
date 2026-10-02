@@ -119,13 +119,22 @@ const fakeGitConfigSchema = z.strictObject({
     .min(MIN_TICKET_POLL_INTERVAL_SECONDS)
     .max(MAX_TICKET_POLL_INTERVAL_SECONDS)
     .default(DEFAULT_TICKET_POLL_INTERVAL_SECONDS),
+  /**
+   * WP-123: whether a webhook can reach this binding — the plan's `receives_webhooks`. GitLab
+   * answers it from its two webhook secrets; this fake has no secret fields beside `token`, so a
+   * tier states it here. Absent is `false`: a poll-only binding, GitLab's answer with no secret.
+   */
+  receives_webhooks: z.boolean().default(false),
 });
 
 /** The prebuilt git port, answering `pollPlan()` from **this binding's** config (WP-110). */
 const withGitPollPlan = (port: GitProviderPort, config: unknown): GitProviderPort => {
   const parsed = fakeGitConfigSchema.parse(config);
   const plan: MergeRequestPollPlan | null = parsed.poll_enabled
-    ? { interval_seconds: parsed.poll_interval_seconds }
+    ? {
+        interval_seconds: parsed.poll_interval_seconds,
+        receives_webhooks: parsed.receives_webhooks,
+      }
     : null;
   return new Proxy(port, {
     get: (target, key, receiver) =>

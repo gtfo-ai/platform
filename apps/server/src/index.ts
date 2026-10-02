@@ -18,6 +18,9 @@ export { authPlugin, CSRF_HEADER, CSRF_HEADER_VALUE, csrfViolation } from './aut
 export { type Actor, effectiveRole, requirePermission } from './auth/rbac.js';
 export {
   argon2ConfigSchema,
+  DEPRECATED_ENVIRONMENT_VARIABLES,
+  type DeprecatedVariable,
+  deprecatedEnvironment,
   loadServerConfig,
   POOL_RESERVATIONS,
   requiredPoolConnections,

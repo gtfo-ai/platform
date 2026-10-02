@@ -105,9 +105,18 @@ describe('the fake registrations’ poll plans (WP-110)', () => {
         redactor: noSecretsRedactor(),
       }) as typeof fake;
     expect(create({}).pollPlan()).toBeNull();
-    expect(create({ poll_enabled: true }).pollPlan()).toEqual({ interval_seconds: 60 });
+    expect(create({ poll_enabled: true }).pollPlan()).toEqual({
+      interval_seconds: 60,
+      receives_webhooks: false,
+    });
     expect(create({ poll_enabled: true, poll_interval_seconds: 30 }).pollPlan()).toEqual({
       interval_seconds: 30,
+      receives_webhooks: false,
+    });
+    // WP-123: a binding a webhook reaches says so, and the poller makes neither poll-only read.
+    expect(create({ poll_enabled: true, receives_webhooks: true }).pollPlan()).toEqual({
+      interval_seconds: 60,
+      receives_webhooks: true,
     });
     expect(() => create({ poll_enabled: true, poll_interval_seconds: 5 })).toThrow();
   });

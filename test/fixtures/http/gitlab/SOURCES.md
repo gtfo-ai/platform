@@ -291,3 +291,21 @@ reader repeating the search.
   comment, a label and an approval are believed to; nothing here measured it). The poller is written
   for all three — its window starts five minutes behind the cursor, and a listing whose transition
   the log already holds appends nothing (`packages/application/src/pipeline/mr-poll.ts`).
+
+## Pages read for WP-123 — `merge-request-notes.json`
+
+- `https://docs.gitlab.com/api/discussions/` § "List all merge request discussion items" (re-read
+  **2026-10-02**) — the read a **poll-only** binding makes for each merge request waiting at Ready
+  (PROGRESS backlog 373 half (b)): a discussion's `id`, `individual_note` and `notes`, and each note's
+  `id`, `type`, `body`, `author`, `created_at`, `system`, `resolvable` and `resolved`. The poller keeps
+  a note a person wrote after the task entered Ready — `system: false`, a body that does not open
+  with the platform's `<!-- agentic:… -->` marker, a `created_at` at or after the entry less five
+  minutes — and records it as `mr.review.comment` with the discussion's `id` as the thread.
+  `merge-request-notes.json` records one interaction, **`documented-adapted`**: the page's shape,
+  with three discussions of this corpus's own on merge request 33 at three instants — a person's
+  `DiscussionNote`, a provider **system** note and a note the platform posted. The page's example
+  shows **no** system note; the shape used for it (`individual_note: true`, `type: null`,
+  `system: true`, `resolvable: false`) is the one `discussions.json` already carries, and it is not
+  a recording. What the corpus cannot say: which actions GitLab writes a system note for, and whether
+  a note's `created_at` is ever rewritten (an edited note keeps it, by the page's `updated_at` beside
+  it — not measured).

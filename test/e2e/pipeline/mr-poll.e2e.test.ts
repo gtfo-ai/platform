@@ -86,7 +86,7 @@ describe('the merge-request poller', () => {
       ciStatus: null,
       // The sweep is what notices a binding switched on after boot; turned down so the case does
       // not wait a minute for it. The binding's own interval stays at the 30-second floor.
-      env: { APP_TICKET_POLL_SWEEP_INTERVAL_MS: '500' },
+      env: { APP_POLL_SWEEP_INTERVAL_MS: '500' },
     });
     harness = pipeline;
 
@@ -160,7 +160,7 @@ describe('the merge-request poller', () => {
         version: 1,
         status_mapping: { refinement: 'In Progress', ready_for_merge: 'In Review' },
       },
-      env: { APP_TICKET_POLL_SWEEP_INTERVAL_MS: '500' },
+      env: { APP_POLL_SWEEP_INTERVAL_MS: '500' },
     });
     harness = pipeline;
 
@@ -202,5 +202,239 @@ describe('the merge-request poller', () => {
         ),
       ),
     ).toBe(true);
+  }, 240_000);
+});
+
+/**
+ * **WP-123 criterion 2: a poll-only binding re-checks a task at Ready when `main` moves, and hears a
+ * reviewer** (PROGRESS backlog 373). The git binding here has no webhook (`receives_webhooks` is
+ * absent, which the fake's registration reads as GitLab reads a binding with neither webhook secret),
+ * so the only door for `default_branch.moved` and `mr.review.comment` is the poll.
+ *
+ * Three harness moves, each stated:
+ *
+ *  - **Polls are nudged** (`start_after = now()` on the queued `mr.poll` job) rather than waited
+ *    for: the binding's interval cannot go below 30 seconds, and a case needs three polls.
+ *  - **"A poll ran after X" is a completed `mr.poll` job that started after X**, both instants on
+ *    the database's clock — the last row a poll writes (rule 87), and the only one a poll that
+ *    recorded nothing writes at all.
+ *  - **The task's Ready entry is moved ten minutes back** in the notes case, and each note is
+ *    written three minutes ago: after the entry, so the poll reads it, and older than BD-007's
+ *    two-minute window, so the window returns the task when it fires instead of opening another
+ *    (`reviewWindowHandler` compares the newest note with now). Without it the case would wait two
+ *    real minutes for a window. The window's job is nudged like the polls.
+ */
+describe('a poll-only binding (WP-123)', () => {
+  const pollOnlyOn = async (pipeline: PipelineE2E, extra: Record<string, unknown> = {}) => {
+    await pipeline.query(
+      `update bindings set config = config || $3::jsonb
+        where project_id = $1 and integration_id = $2`,
+      [
+        pipeline.projectId,
+        GIT_INTEGRATION_ID,
+        JSON.stringify({ poll_enabled: true, poll_interval_seconds: 30, ...extra }),
+      ],
+    );
+  };
+  const dbNow = async (pipeline: PipelineE2E): Promise<string> =>
+    (await pipeline.query<{ now: string }>('select now()::text as now'))[0]?.now as string;
+  const nudge = (pipeline: PipelineE2E, queue: string) =>
+    pipeline.query(
+      `update pgboss.job set start_after = now() where name = $1 and state = 'created'`,
+      [queue],
+    );
+  /** Waits for one whole poll of this binding that started after `since` (see the docblock). */
+  const pollCompletedAfter = async (pipeline: PipelineE2E, since: string, what: string) => {
+    await pipeline.waitFor(what, async () => {
+      await nudge(pipeline, 'mr.poll');
+      const rows = await pipeline.query<{ n: string }>(
+        `select count(*)::text as n from pgboss.job
+          where name = 'mr.poll' and data->>'kind' = 'poll' and state = 'completed'
+            and started_on > $1::timestamptz`,
+        [since],
+      );
+      return Number(rows[0]?.n) >= 1;
+    });
+  };
+  const ofType = async (pipeline: PipelineE2E, type: string) =>
+    (await pipeline.events()).filter((event) => event.type === type);
+  const toReady = async (label: string, extraEnv: Record<string, string> = {}) => {
+    const pipeline = await startPipeline({
+      scenarios: featureScenarios,
+      label,
+      tickets: TICKETS,
+      env: { APP_POLL_SWEEP_INTERVAL_MS: '500', ...extraEnv },
+    });
+    harness = pipeline;
+    await pipeline.publish([
+      inboundEvent('ticket.matched', {
+        project_id: pipeline.projectId,
+        ticket: {
+          provider: 'fake-task-management',
+          key: 'ACME-1',
+          url: 'https://tickets.example.test/browse/ACME-1',
+        },
+        rule: 'label:agentic',
+        priority: 'High',
+        issue_type: 'Story',
+        epic: null,
+        links: [],
+      }),
+    ]);
+    await pipeline.settle('ready_for_merge', (task) => task.state === 'ready_for_merge');
+    return pipeline;
+  };
+
+  it('re-enters the rebase gate when a poll sees the default branch move, and a second poll appends nothing', async () => {
+    const pipeline = await toReady('mr-poll-default-branch');
+    const before = await pipeline.task();
+    expect(before.stage_attempts.rebase_gate).toBe(1);
+
+    await pollOnlyOn(pipeline);
+    // The first poll reads the head and records no event: it has never seen the branch move.
+    await pipeline.waitFor('the first poll to record the head it read', async () => {
+      await nudge(pipeline, 'mr.poll');
+      const rows = await pipeline.query<{ head: string | null }>(
+        `select mr_poll_default_head as head from bindings
+          where project_id = $1 and integration_id = $2`,
+        [pipeline.projectId, GIT_INTEGRATION_ID],
+      );
+      return (rows[0]?.head ?? null) !== null;
+    });
+    expect(await ofType(pipeline, 'default_branch.moved')).toEqual([]);
+
+    const moved = 'd'.repeat(40);
+    pipeline.git.moveDefaultBranch(GIT_PROJECT, moved);
+    const rearmed = await pipeline.settle('the rebase gate a second time, from a poll', (task) => {
+      return (task.stage_attempts.rebase_gate ?? 0) >= 2 && task.state === 'ready_for_merge';
+    });
+    expect(rearmed.iteration_counters.rebase_rechecks).toBe(1);
+    const events = await ofType(pipeline, 'default_branch.moved');
+    expect(events.map((event) => event.payload)).toEqual([
+      { project_id: pipeline.projectId, branch: 'main', new_head: moved },
+    ]);
+    expect(
+      (await pipeline.inbox()).filter((row) =>
+        row.delivery_id.startsWith(`${POLL_PREFIX}${pipeline.projectId}:${GIT_PROJECT}@default:`),
+      ),
+    ).toHaveLength(1);
+
+    // A whole poll after the move was recorded appends nothing more.
+    await pollCompletedAfter(pipeline, await dbNow(pipeline), 'a poll after the move');
+    expect(await ofType(pipeline, 'default_branch.moved')).toHaveLength(1);
+    expect((await pipeline.task()).stage_attempts.rebase_gate).toBe(2);
+  }, 240_000);
+
+  it('returns a task at Ready for a person’s polled note, and not for a system note or the platform’s own', async () => {
+    const pipeline = await toReady('mr-poll-review-notes');
+    const task = await pipeline.task();
+    await pipeline.query(
+      `update task_stages set entered_at = now() - interval '10 minutes'
+        where task_id = $1 and stage = 'ready_for_merge' and exited_at is null`,
+      [task.id],
+    );
+    const threeMinutesAgo = () => new Date(Date.now() - 3 * 60_000).toISOString();
+    const systemThread = pipeline.git.addHumanDiscussion({
+      project: GIT_PROJECT,
+      iid: pipeline.world.mr.iid,
+      authorId: 'dana',
+      text: 'added 1 commit',
+      system: true,
+      createdAt: threeMinutesAgo(),
+    });
+    const platformThread = pipeline.git.addHumanDiscussion({
+      project: GIT_PROJECT,
+      iid: pipeline.world.mr.iid,
+      authorId: 'agentic-bot',
+      text: `<!-- agentic:conflict-warning:${task.id} -->\nThis merge request overlaps another.`,
+      createdAt: threeMinutesAgo(),
+    });
+
+    const notesAdded = await dbNow(pipeline);
+    await pollOnlyOn(pipeline);
+    await pollCompletedAfter(pipeline, notesAdded, 'a poll after the two notes');
+    expect(await ofType(pipeline, 'mr.review.comment')).toEqual([]);
+    expect(
+      await pipeline.query(`select id from pgboss.job where name = 'mr.comment.debounce'`),
+    ).toEqual([]);
+    expect((await pipeline.task()).state).toBe('ready_for_merge');
+
+    const humanThread = pipeline.git.addHumanDiscussion({
+      project: GIT_PROJECT,
+      iid: pipeline.world.mr.iid,
+      authorId: 'dana',
+      text: 'Please rename totals before this merges.',
+      createdAt: threeMinutesAgo(),
+    });
+    await pipeline.waitFor('the task returned to implementation for the polled note', async () => {
+      await nudge(pipeline, 'mr.poll');
+      await nudge(pipeline, 'mr.comment.debounce');
+      return (await ofType(pipeline, 'task.stage.returned')).some(
+        (event) =>
+          (event.payload as { from_stage?: string }).from_stage === 'ready_for_merge' &&
+          (event.payload as { to_stage?: string }).to_stage === 'implementation',
+      );
+    });
+    const returned = (await ofType(pipeline, 'task.stage.returned')).find(
+      (event) => (event.payload as { from_stage?: string }).from_stage === 'ready_for_merge',
+    );
+    expect((returned?.payload as { reason?: string } | undefined)?.reason).toContain(
+      'Please rename totals',
+    );
+    const comments = await ofType(pipeline, 'mr.review.comment');
+    expect(comments.map((event) => (event.payload as { thread_id: string }).thread_id)).toEqual([
+      humanThread.id,
+    ]);
+    const threads = comments.map((event) => (event.payload as { thread_id: string }).thread_id);
+    expect(threads).not.toContain(systemThread.id);
+    expect(threads).not.toContain(platformThread.id);
+    expect(
+      (await pipeline.inbox()).filter((row) =>
+        row.delivery_id.startsWith(
+          `${POLL_PREFIX}${pipeline.projectId}:${GIT_PROJECT}!${pipeline.world.mr.iid}#note:`,
+        ),
+      ),
+    ).toHaveLength(1);
+  }, 240_000);
+
+  it('makes neither read on a binding a webhook reaches', async () => {
+    const pipeline = await toReady('mr-poll-webhook-binding');
+    const task = await pipeline.task();
+    await pipeline.query(
+      `update task_stages set entered_at = now() - interval '10 minutes'
+        where task_id = $1 and stage = 'ready_for_merge' and exited_at is null`,
+      [task.id],
+    );
+    pipeline.git.addHumanDiscussion({
+      project: GIT_PROJECT,
+      iid: pipeline.world.mr.iid,
+      authorId: 'dana',
+      text: 'Please rename totals before this merges.',
+      createdAt: new Date(Date.now() - 3 * 60_000).toISOString(),
+    });
+    pipeline.git.moveDefaultBranch(GIT_PROJECT, 'e'.repeat(40));
+    const reads = () =>
+      pipeline
+        .gitCalls()
+        .filter(
+          (call) => call.method === 'getDefaultBranchHead' || call.method === 'listDiscussions',
+        ).length;
+    const readsBefore = reads();
+
+    const switchedOn = await dbNow(pipeline);
+    await pollOnlyOn(pipeline, { receives_webhooks: true });
+    await pollCompletedAfter(pipeline, switchedOn, 'a first poll of the webhook binding');
+    await pollCompletedAfter(pipeline, await dbNow(pipeline), 'a second poll of it');
+
+    expect(reads(), 'no default-branch read and no notes read').toBe(readsBefore);
+    const head = await pipeline.query<{ head: string | null }>(
+      `select mr_poll_default_head as head from bindings
+        where project_id = $1 and integration_id = $2`,
+      [pipeline.projectId, GIT_INTEGRATION_ID],
+    );
+    expect(head[0]?.head ?? null).toBeNull();
+    expect(await ofType(pipeline, 'default_branch.moved')).toEqual([]);
+    expect(await ofType(pipeline, 'mr.review.comment')).toEqual([]);
+    expect((await pipeline.task()).state).toBe('ready_for_merge');
   }, 240_000);
 });

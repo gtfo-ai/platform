@@ -424,3 +424,87 @@ describe('a poll over the fake git provider (WP-110 criterion 2)', () => {
     expect((await eventTypes(mr.ref.iid)).filter((type) => type === 'mr.merged')).toHaveLength(1);
   });
 });
+
+describe('a poll-only binding’s rows (WP-123, migration 0074)', () => {
+  it('keeps the default branch’s last-seen head on the binding, apart from both cursors', async () => {
+    const binding = { projectId, integrationId };
+    const other = await bind({ bindingConfig: { poll_enabled: true } });
+    await pool.query('update bindings set mr_poll_default_head = null');
+
+    expect(await store().defaultHeadOf(binding)).toBeNull();
+    await store().recordDefaultHead(binding, '1'.repeat(40));
+    await store().recordDefaultHead(binding, '2'.repeat(40));
+
+    expect(await store().defaultHeadOf(binding)).toBe('2'.repeat(40));
+    expect(await store().defaultHeadOf(other)).toBeNull();
+    const row = await pool.query<{ poll_cursor: Date | null; mr_poll_cursor: Date | null }>(
+      'select poll_cursor, mr_poll_cursor from bindings where project_id = $1',
+      [projectId],
+    );
+    expect(row.rows[0]).toEqual({ poll_cursor: null, mr_poll_cursor: null });
+    // A binding that no longer exists reads null and writes nothing.
+    const gone = { projectId: randomUUID() as Id, integrationId };
+    await store().recordDefaultHead(gone, '3'.repeat(40));
+    expect(await store().defaultHeadOf(gone)).toBeNull();
+  });
+
+  it('lists the project’s tasks waiting at Ready with a merge request, by their current entry, oldest first', async () => {
+    const { projectId: project, integrationId: integration } = await bind({});
+    const mrRef = (iid: number) => ({
+      provider: FAKE_GIT_PROVIDER_ID,
+      project_path: PROJECT_PATH,
+      iid,
+      url: `https://git.example.test/acme/api/-/merge_requests/${iid}`,
+    });
+    const task = async (
+      key: string,
+      state: string,
+      mr: JsonObject | null,
+      entries: readonly string[],
+    ): Promise<string> => {
+      const inserted = await pool.query<{ id: string }>(
+        `insert into tasks (project_id, ticket_provider, ticket_key, ticket_url, template, mode,
+                            state, current_stage, stage_attempts, mr_ref)
+           values ($1, 'fake-task-management', $2, 'https://tickets.example.test/x', 'feature',
+                   'normal', $3, 'ready_for_merge', $4::jsonb, $5::jsonb)
+           returning id`,
+        [project, key, state, JSON.stringify({ ready_for_merge: entries.length }), mr],
+      );
+      const id = inserted.rows[0]?.id as string;
+      for (const [index, at] of entries.entries()) {
+        await pool.query(
+          `insert into task_stages (task_id, stage, attempt, state, entered_at, exited_at)
+             values ($1, 'ready_for_merge', $2, $3, $4::timestamptz, $5)`,
+          [
+            id,
+            index + 1,
+            index + 1 === entries.length ? 'running' : 'returned',
+            at,
+            index + 1 === entries.length ? null : at,
+          ],
+        );
+      }
+      return id;
+    };
+    // Entered Ready twice: the **second** entry is the one its notes are read from.
+    const twice = await task('ACME-1', 'ready_for_merge', mrRef(1), [
+      '2026-06-01T08:00:00.000Z',
+      '2026-06-01T10:00:00.123456Z',
+    ]);
+    const first = await task('ACME-2', 'ready_for_merge', mrRef(2), ['2026-06-01T09:00:00.000Z']);
+    await task('ACME-3', 'active', mrRef(3), ['2026-06-01T07:00:00.000Z']);
+    await task('ACME-4', 'ready_for_merge', null, ['2026-06-01T07:00:00.000Z']);
+
+    const binding = { projectId: project, integrationId: integration };
+    const ready = await store().readyMergeRequests(binding, 10);
+
+    expect(ready.map((entry) => [entry.taskId, entry.mr.iid, entry.enteredAt])).toEqual([
+      [first, 2, '2026-06-01T09:00:00.000000Z'],
+      // The database's own microseconds, never a `Date`'s milliseconds.
+      [twice, 1, '2026-06-01T10:00:00.123456Z'],
+    ]);
+    expect(await store().readyMergeRequests(binding, 1)).toHaveLength(1);
+    // Another project's waiting task is not this binding's.
+    expect(await store().readyMergeRequests({ projectId, integrationId }, 10)).toEqual([]);
+  });
+});

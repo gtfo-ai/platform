@@ -60,10 +60,10 @@ written before this change carry no deadline (backlog 162).
 The `poll.<provider>` cron named above is built as **one** `ticket.poll` queue keyed per binding
 (`packages/application/src/pipeline/ticket-poll.ts`), declared in `JOB_QUEUE_DEFINITIONS` with every other
 queue: a binding opts in, its interval is binding configuration, and its cursor is `bindings.poll_cursor`
-(migration 0061). A lost poll is recovered by a sweep on `APP_TICKET_POLL_SWEEP_INTERVAL_MS`.
+(migration 0061). A lost poll is recovered by a sweep on `APP_POLL_SWEEP_INTERVAL_MS` (`APP_TICKET_POLL_SWEEP_INTERVAL_MS` before WP-123, still read for one release with a `warn`).
 *Extended at WP-110 (session 11):* `mr.poll` is the same shape for git bindings — one queue keyed per
 binding, its cursor `bindings.mr_poll_cursor` (migration 0068), recovered by the same sweep and its
-variable (whose name now undersells it — PROGRESS backlog 372).
+variable (renamed at WP-123, PROGRESS backlog 372).
 
 ## Amendment (M7 architect pass, session 11, 2026-10-02) — every queue's exhaustion has a declared shape
 

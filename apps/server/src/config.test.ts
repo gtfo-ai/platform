@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  deprecatedEnvironment,
   loadServerConfig,
   POOL_RESERVATIONS,
   poolTerms,
@@ -598,5 +599,73 @@ describe('the intake reconciliation interval', () => {
     expect(() => load({ APP_INTAKE_RECONCILE_INTERVAL_MS: value })).toThrow(
       /intakeReconcileIntervalMs/,
     );
+  });
+});
+
+/**
+ * WP-123 (PROGRESS backlog 372): the poll sweep's variable is `APP_POLL_SWEEP_INTERVAL_MS`, and
+ * the old `APP_TICKET_POLL_SWEEP_INTERVAL_MS` is still read for one release with a `warn` — the
+ * four combinations of the two names, each with the interval it yields and the warning it earns.
+ */
+describe('the poll sweep interval and its renamed variable (WP-123)', () => {
+  it('reads the new name alone, and warns about nothing', () => {
+    const env = { ...MINIMAL, APP_POLL_SWEEP_INTERVAL_MS: '30000' };
+    expect(loadServerConfig(env).pollSweepIntervalMs).toBe(30_000);
+    expect(deprecatedEnvironment(env)).toEqual([]);
+  });
+
+  it('still reads the old name alone, and warns that it is deprecated', () => {
+    const env = { ...MINIMAL, APP_TICKET_POLL_SWEEP_INTERVAL_MS: '45000' };
+    expect(loadServerConfig(env).pollSweepIntervalMs).toBe(45_000);
+    expect(deprecatedEnvironment(env)).toEqual([
+      {
+        variable: 'APP_TICKET_POLL_SWEEP_INTERVAL_MS',
+        replacement: 'APP_POLL_SWEEP_INTERVAL_MS',
+        ignored: false,
+      },
+    ]);
+  });
+
+  it('lets the new name win when both are set, and warns that the old one is ignored', () => {
+    const env = {
+      ...MINIMAL,
+      APP_POLL_SWEEP_INTERVAL_MS: '30000',
+      APP_TICKET_POLL_SWEEP_INTERVAL_MS: '45000',
+    };
+    expect(loadServerConfig(env).pollSweepIntervalMs).toBe(30_000);
+    expect(deprecatedEnvironment(env)).toEqual([
+      {
+        variable: 'APP_TICKET_POLL_SWEEP_INTERVAL_MS',
+        replacement: 'APP_POLL_SWEEP_INTERVAL_MS',
+        ignored: true,
+      },
+    ]);
+  });
+
+  it('defaults to a minute with neither, and warns about nothing', () => {
+    expect(load().pollSweepIntervalMs).toBe(SERVER_CONFIG_DEFAULTS.pollSweepIntervalMs);
+    expect(SERVER_CONFIG_DEFAULTS.pollSweepIntervalMs).toBe(60_000);
+    expect(deprecatedEnvironment(MINIMAL)).toEqual([]);
+  });
+
+  it('treats a blank new name as unset, so the old one still applies', () => {
+    const env = {
+      ...MINIMAL,
+      APP_POLL_SWEEP_INTERVAL_MS: '  ',
+      APP_TICKET_POLL_SWEEP_INTERVAL_MS: '45000',
+    };
+    expect(loadServerConfig(env).pollSweepIntervalMs).toBe(45_000);
+    expect(deprecatedEnvironment(env)).toMatchObject([{ ignored: false }]);
+  });
+
+  it('refuses an interval under the floor whichever name carries it', () => {
+    expect(() => load({ APP_POLL_SWEEP_INTERVAL_MS: '100' })).toThrow(/pollSweepIntervalMs/);
+    expect(() => load({ APP_TICKET_POLL_SWEEP_INTERVAL_MS: '100' })).toThrow(/pollSweepIntervalMs/);
+  });
+
+  it('ships the new name in .env.example and not the old one', () => {
+    const text = readFileSync(new URL('../../../.env.example', import.meta.url), 'utf8');
+    expect(text).toMatch(/^APP_POLL_SWEEP_INTERVAL_MS=60000$/m);
+    expect(text).not.toMatch(/^APP_TICKET_POLL_SWEEP_INTERVAL_MS=/m);
   });
 });

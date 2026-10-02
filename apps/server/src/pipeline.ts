@@ -345,10 +345,11 @@ export interface ComposePipelineOptions {
   readonly jobsSchema: string;
   /**
    * How often the ticket poller's sweep — and, since WP-110, the merge-request poller's — re-arms a
-   * polling binding whose chain was lost (`APP_TICKET_POLL_SWEEP_INTERVAL_MS`, WP-87) — the bound on
-   * a lost poll, and how soon a binding switched on through the API is first polled.
+   * polling binding whose chain was lost (`APP_POLL_SWEEP_INTERVAL_MS`, WP-87; named
+   * `APP_TICKET_POLL_SWEEP_INTERVAL_MS` before WP-123) — the bound on a lost poll, and how soon a
+   * binding switched on through the API is first polled.
    */
-  readonly ticketPollSweepIntervalMs: number;
+  readonly pollSweepIntervalMs: number;
   /** Built once per process by {@link composeIntegrationStack}; the ingress shares it. */
   readonly stack: IntegrationStack;
   /**
@@ -1603,7 +1604,7 @@ export const composePipeline = async (
       clock: { now: nowIso },
     },
     clock: { now: nowIso },
-    sweepIntervalMs: options.ticketPollSweepIntervalMs,
+    sweepIntervalMs: options.pollSweepIntervalMs,
     logger: options.logger,
   });
 
@@ -1629,7 +1630,7 @@ export const composePipeline = async (
       clock: { now: nowIso },
     },
     clock: { now: nowIso },
-    sweepIntervalMs: options.ticketPollSweepIntervalMs,
+    sweepIntervalMs: options.pollSweepIntervalMs,
     logger: options.logger,
   });
 

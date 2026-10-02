@@ -67,7 +67,11 @@ export const gitlabReplayContext = (
   const replay = createGitLabReplay(
     replayFixtureNames().flatMap((name) => loadReplayFixture(name)),
   );
-  const build = (config: Readonly<Record<string, unknown>> = {}) =>
+  const build = (
+    config: Readonly<Record<string, unknown>> = {},
+    // WP-123: a binding with no webhook secret is poll-only; every other port here has both.
+    webhookSecrets: boolean = true,
+  ) =>
     createGitLabProvider({
       integrationId: GITLAB_INTEGRATION_ID,
       config: gitlabConfigSchema.parse({
@@ -79,11 +83,13 @@ export const gitlabReplayContext = (
         request_timeout_ms: 0,
         ...config,
       }),
-      secrets: {
-        token: FAKE_BINDING_TOKEN,
-        webhook_secret_token: FAKE_SECRET_TOKEN,
-        webhook_signing_token: FAKE_SIGNING_TOKEN,
-      },
+      secrets: webhookSecrets
+        ? {
+            token: FAKE_BINDING_TOKEN,
+            webhook_secret_token: FAKE_SECRET_TOKEN,
+            webhook_signing_token: FAKE_SIGNING_TOKEN,
+          }
+        : { token: FAKE_BINDING_TOKEN },
       fetchImpl: replay.fetchImpl,
       clock: fixedClock(CLOCK_AT),
       // Required since WP-11 (standing rule 31): the binding's own credentials are what this suite
@@ -135,6 +141,20 @@ export const gitlabReplayContext = (
     polling: {
       port: build({ poll_enabled: true, poll_interval_seconds: 90 }),
       intervalSeconds: 90,
+      // WP-123: the same binding with neither webhook secret — every delivery would be refused.
+      pollOnlyPort: build({ poll_enabled: true, poll_interval_seconds: 90 }, false),
+    },
+    // WP-123: `merge-request-notes.json` records merge request 33's threads — a person's note, a
+    // system note and the platform's conflict warning, each at its own instant.
+    notes: {
+      iid: 33,
+      human: {
+        threadId: 'c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c301',
+        noteId: '3301',
+        at: '2026-06-02T09:15:00.000Z',
+      },
+      systemNoteId: '3302',
+      platformNoteId: '3303',
     },
     commits: {
       since: '2000-01-01T00:00:00.000Z',

@@ -222,7 +222,7 @@ the CLI and a real `claude` never reached the sidecar (measured, backlog 342).
   `bindings.mr_poll_cursor`, migration 0068): a merge-request open, merge or close the project's log already
   holds is dropped by `recordNormalisedDelivery` whichever door brought it
   (`integrations/merge-request-lifecycle.ts`), and each ticket poll also re-reads its live tasks' tickets (a
-  `keys` rule, at most 100 per poll), recording `ticket.updated` only, never `ticket.matched`. The door itself is **rate-limited per `integrations.id`** (Q60): past the bucket a delivery answers
+  `keys` rule, at most 100 per poll), recording `ticket.updated` only, never `ticket.matched`. A **poll-only** git binding (no webhook secret configured, `MergeRequestPollPlan.receives_webhooks: false`) also records `default_branch.moved` from a head comparison (`bindings.mr_poll_default_head`, migration 0074) and the human review notes of merge requests waiting at Ready (WP-123), so it re-checks the rebase gate and hears a reviewer without a webhook. The door itself is **rate-limited per `integrations.id`** (Q60): past the bucket a delivery answers
   `429` with `Retry-After`, reaches no signature check and writes no `inbox` row.
 - **A run's prompt and its tools** (WP-17): `packages/domain/src/prompt/` is the assembler and the
   data-block contract, `packages/prompts/roles/<role>/prompt.md` are the shipped role prompts, and

@@ -186,6 +186,15 @@
  *     both, and a test that wants the second kind of change makes it with `emitMergeRequestEvent`.
  *     `pollPlan()` answers `null` unless the fake was built with `pollIntervalSeconds`; resolved
  *     through `fakeGitRegistration` it is the **binding's** config that decides, as for GitLab.
+ * 22. **Kinder — a delivery is verified whatever the plan's `receives_webhooks` says** (WP-123).
+ *     GitLab answers `receives_webhooks: false` exactly when it has no webhook secret, and then
+ *     refuses every delivery; this fake's `receivesWebhooks` (and its registration's
+ *     `receives_webhooks` config key) is a separate statement from `webhookSecret`, so a tier can
+ *     hold a poll-only binding that still accepts a delivery. A test of the poll-only reads must
+ *     therefore assert that nothing arrived by the webhook rather than rely on the fake refusing
+ *     it. And a note's `created_at` is the fake's clock unless `addHumanDiscussion` is given one —
+ *     a clock that starts at `FAKE_EPOCH`, months behind any platform instant, so a tier comparing
+ *     a note with a stage's `entered_at` states the note's instant.
  */
 import {
   type CodeownersRules,
@@ -280,6 +289,11 @@ export interface FakeGitOptions {
   readonly credentialPrefix?: string;
   /** What `pollPlan()` answers (WP-110): `null`, the default, is a fake that does not poll. */
   readonly pollIntervalSeconds?: number | null;
+  /**
+   * The plan's `receives_webhooks` (WP-123). @default `false` — a poll-only binding, which is
+   * GitLab's answer for a binding with no webhook secret.
+   */
+  readonly receivesWebhooks?: boolean;
 }
 
 interface StoredProject {
@@ -575,6 +589,17 @@ export interface FakeGitProvider extends GitProviderPort {
     readonly text: string;
     readonly path?: string;
     readonly line?: number;
+    /**
+     * The note's `created_at` (WP-123). @default the fake's own clock, which starts at
+     * `FAKE_EPOCH`; a tier that compares the note with a platform instant — the poller asks for
+     * notes written after the task entered Ready — states the instant instead.
+     */
+    readonly createdAt?: string;
+    /**
+     * A provider **system** note — *"changed the description"*, *"added 1 commit"* — rather than a
+     * person's (WP-123). GitLab writes one as an individual, non-resolvable note, and so does this.
+     */
+    readonly system?: boolean;
   }): Discussion;
   emitMergeRequestEvent(input: {
     readonly event: 'mr.opened' | 'mr.updated' | 'mr.merged' | 'mr.closed';
@@ -1577,7 +1602,10 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
     pollPlan: (): MergeRequestPollPlan | null =>
       options.pollIntervalSeconds === undefined || options.pollIntervalSeconds === null
         ? null
-        : { interval_seconds: options.pollIntervalSeconds },
+        : {
+            interval_seconds: options.pollIntervalSeconds,
+            receives_webhooks: options.receivesWebhooks ?? false,
+          },
 
     listCommits: async (project, options): Promise<readonly RepositoryCommit[]> => {
       core.enter('list_commits');
@@ -1757,17 +1785,17 @@ export const createFakeGitProvider = (options: FakeGitOptions): FakeGitProvider 
         id: `disc-${discussionCounter}`,
         project: input.project,
         iid: input.iid,
-        resolvable: true,
+        resolvable: input.system !== true,
         resolved: false,
         notes: [
           {
             id: `n-${noteCounter}`,
             author: identityOf(input.authorId),
             body: input.text,
-            created_at: core.clock.now(),
+            created_at: input.createdAt ?? core.clock.now(),
             path: input.path ?? null,
             line: input.line ?? null,
-            system: false,
+            system: input.system === true,
           },
         ],
       };

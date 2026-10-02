@@ -223,6 +223,20 @@ export const mergeRequestPollPlanSchema = z.strictObject({
     .int()
     .min(MIN_TICKET_POLL_INTERVAL_SECONDS)
     .max(MAX_TICKET_POLL_INTERVAL_SECONDS),
+  /**
+   * Whether a **webhook** can reach this binding at all — `true` when the binding holds a secret the
+   * provider's deliveries are verified with (GitLab: `webhook_secret_token` or
+   * `webhook_signing_token`), `false` for a **poll-only** binding (WP-123, PROGRESS backlog 373).
+   *
+   * The poller decides two reads on it: a poll-only binding also compares the default branch's head
+   * with the last one it saw (`default_branch.moved`) and lists the notes of each merge request
+   * waiting at Ready (`mr.review.comment`). A binding a webhook can reach gets both from its
+   * deliveries and makes neither read, so no event can arrive by both doors and no cross-door dedup
+   * is needed — the ruling's condition. A delivery an adapter cannot verify is refused, so "has no
+   * secret" is exactly "receives no delivery". On the port rather than read off a GitLab key,
+   * because the pipeline may not know which provider it is talking to (BD-017).
+   */
+  receives_webhooks: z.boolean(),
 });
 
 /**

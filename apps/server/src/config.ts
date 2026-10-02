@@ -183,8 +183,13 @@ const serverConfigFields = z.strictObject({
    * switched on through the API is first polled. **No `0`**: polling is switched per binding, in its
    * configuration, and a process-wide off switch would be a second answer to the same question. The
    * sweep is one query over `bindings`, so the floor is about queue churn, not cost.
+   *
+   * `APP_POLL_SWEEP_INTERVAL_MS` since WP-123 (PROGRESS backlog 372): the old name,
+   * `APP_TICKET_POLL_SWEEP_INTERVAL_MS`, said tickets for a setting that governs both pollers. It is
+   * still read for one release — the new name wins when both are set — and every start that finds
+   * it set logs a `warn` ({@link deprecatedEnvironment}).
    */
-  ticketPollSweepIntervalMs: z.int().min(250).max(3_600_000),
+  pollSweepIntervalMs: z.int().min(250).max(3_600_000),
 
   /**
    * BD-004: `api` talks to Anthropic, `local` runs the operator's own `claude` binary.
@@ -532,7 +537,7 @@ export const SERVER_CONFIG_DEFAULTS = {
   // The Anthropic API, which is what both provider modes authenticate against (measured, WP-53).
   modelEgressHosts: ['api.anthropic.com'],
   intakeReconcileIntervalMs: 60_000,
-  ticketPollSweepIntervalMs: 60_000,
+  pollSweepIntervalMs: 60_000,
   argon2: { memoryCostKib: 19_456, timeCost: 2, parallelism: 1 },
 } as const;
 
@@ -800,6 +805,50 @@ const readSecret = (name: string, env: EnvLike): string | undefined =>
   db.readEnvWithFile(name, env);
 
 /** Leaves anything unparseable in place so the schema reports it against the right variable. */
+/** A variable's value, or `undefined` when it is unset or blank — how every reader here treats both. */
+const nonEmpty = (raw: string | undefined): string | undefined =>
+  raw === undefined || raw.trim() === '' ? undefined : raw;
+
+/** The pre-WP-123 name of `APP_POLL_SWEEP_INTERVAL_MS`, read for one release (backlog 372). */
+const DEPRECATED_POLL_SWEEP_INTERVAL_VARIABLE = 'APP_TICKET_POLL_SWEEP_INTERVAL_MS';
+
+/**
+ * Every variable {@link loadServerConfig} still reads **only** as a deprecated fallback. Deliberately
+ * absent from `.env.example` — shipping the old name would teach it — so the compose census, which
+ * otherwise holds every name the server reads to be declared there, excludes these by this list.
+ */
+export const DEPRECATED_ENVIRONMENT_VARIABLES: readonly string[] = [
+  DEPRECATED_POLL_SWEEP_INTERVAL_VARIABLE,
+];
+
+/** One deprecated variable an operator still sets, and what to set instead. */
+export interface DeprecatedVariable {
+  readonly variable: string;
+  readonly replacement: string;
+  /** `true` when the replacement is set too, so the deprecated value is not used at all. */
+  readonly ignored: boolean;
+}
+
+/**
+ * The deprecated environment variables this start found set (WP-123, PROGRESS backlog 372) — the
+ * composition root logs a `warn` per entry, naming the replacement, because a rename an operator
+ * never hears about becomes a setting that silently stops applying when the old name is dropped.
+ *
+ * Kept out of {@link loadServerConfig}, which is pure and has no logger; `startRuntime` asks it
+ * with the same environment. One entry today: `APP_TICKET_POLL_SWEEP_INTERVAL_MS`, read for one
+ * release after its rename to `APP_POLL_SWEEP_INTERVAL_MS`.
+ */
+export const deprecatedEnvironment = (env: EnvLike = process.env): readonly DeprecatedVariable[] =>
+  nonEmpty(env[DEPRECATED_POLL_SWEEP_INTERVAL_VARIABLE]) === undefined
+    ? []
+    : [
+        {
+          variable: DEPRECATED_POLL_SWEEP_INTERVAL_VARIABLE,
+          replacement: 'APP_POLL_SWEEP_INTERVAL_MS',
+          ignored: nonEmpty(env.APP_POLL_SWEEP_INTERVAL_MS) !== undefined,
+        },
+      ];
+
 const numberFromEnv = (raw: string | undefined, fallback: number | null): unknown => {
   const value = raw?.trim();
   if (value === undefined || value === '') {
@@ -1007,9 +1056,9 @@ export const loadServerConfig = (env: EnvLike = process.env): ServerConfig => {
       env.APP_INTAKE_RECONCILE_INTERVAL_MS,
       SERVER_CONFIG_DEFAULTS.intakeReconcileIntervalMs,
     ),
-    ticketPollSweepIntervalMs: numberFromEnv(
-      env.APP_TICKET_POLL_SWEEP_INTERVAL_MS,
-      SERVER_CONFIG_DEFAULTS.ticketPollSweepIntervalMs,
+    pollSweepIntervalMs: numberFromEnv(
+      nonEmpty(env.APP_POLL_SWEEP_INTERVAL_MS) ?? env[DEPRECATED_POLL_SWEEP_INTERVAL_VARIABLE],
+      SERVER_CONFIG_DEFAULTS.pollSweepIntervalMs,
     ),
 
     argon2: {

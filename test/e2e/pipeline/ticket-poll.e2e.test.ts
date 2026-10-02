@@ -55,7 +55,7 @@ const start = async (label: string): Promise<{ pipeline: PipelineE2E; sql: pg.Po
     tickets: LABELLED,
     // The sweep is what notices a binding switched on after boot; turned down so a case does not
     // wait a minute for it. The binding's own interval stays at the 30-second floor.
-    env: { APP_TICKET_POLL_SWEEP_INTERVAL_MS: '500' },
+    env: { APP_POLL_SWEEP_INTERVAL_MS: '500' },
   });
   harness = pipeline;
   pool = createTestPool(pipeline.database.connectionString, { max: 2 });
@@ -175,7 +175,7 @@ describe('the ticket poller, on a status-rule binding (WP-110)', () => {
         version: 1,
         status_mapping: { refinement: 'In Progress', ready_for_merge: 'In Review' },
       },
-      env: { APP_TICKET_POLL_SWEEP_INTERVAL_MS: '500' },
+      env: { APP_POLL_SWEEP_INTERVAL_MS: '500' },
     });
     harness = pipeline;
     pool = createTestPool(pipeline.database.connectionString, { max: 2 });

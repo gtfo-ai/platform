@@ -19,7 +19,9 @@ import {
   type MergeRequestLifecycleEvent,
 } from '../integrations/merge-request-lifecycle.js';
 import { exactSecretRedactor } from '../integrations/redaction.js';
+import { IntegrationError } from '../ports/integrations/common.js';
 import type {
+  Discussion,
   GitProviderPort,
   MergeRequestListing,
   MergeRequestPollPlan,
@@ -33,11 +35,14 @@ import { type PipelineIntegrations, staticPipelineIntegrations } from './integra
 import {
   type MergeRequestPollerOptions,
   type MergeRequestPollStore,
+  MR_POLL_REVIEW_TASKS_LIMIT,
   MR_POLL_SWEEP_KEY,
   mergeRequestPollHandler,
   mrPollKey,
   polledMergeRequestDrafts,
   pollMergeRequestBinding,
+  REVIEW_NOTE_SKEW_MS,
+  type ReadyMergeRequest,
 } from './mr-poll.js';
 import type { PolledBinding } from './ticket-poll.js';
 
@@ -47,8 +52,13 @@ const NOW = '2026-06-01T10:00:00.000Z' as IsoDateTime;
 /** Obviously fake, and what every redaction assertion looks for. */
 const PLANTED = 'FAKE-PLANTED-gitlab-token-0123456789';
 const BINDING: PolledBinding = { projectId: PROJECT, integrationId: INTEGRATION };
-const PLAN: MergeRequestPollPlan = { interval_seconds: 60 };
+/** Poll-only, as a GitLab binding with neither webhook secret is (WP-123). */
+const PLAN: MergeRequestPollPlan = { interval_seconds: 60, receives_webhooks: false };
 const HEAD = 'a'.repeat(40);
+/** WP-123: three heads of the default branch. */
+const SHA_A = '1'.repeat(40);
+const SHA_B = '2'.repeat(40);
+const SHA_C = '3'.repeat(40);
 
 const listing = (
   iid: number,
@@ -111,6 +121,16 @@ interface World {
   reread: number[];
   /** Thrown by the next re-read, then cleared (review round 3). */
   rereadFails: Error | null;
+  /** WP-123: the default branch as the provider says it is now, and how often it was read. */
+  head: { branch: string; sha: string };
+  headReads: number;
+  /** Thrown by the next head read, then cleared. */
+  headFails: Error | null;
+  /** WP-123: each merge request's threads, by iid, and every iid whose threads were read. */
+  discussions: Map<number, Discussion[]>;
+  discussionReads: number[];
+  /** Thrown by the threads read of this iid, every time. */
+  discussionFails: Map<number, Error>;
 }
 
 const portFor = (world: World): GitProviderPort =>
@@ -139,6 +159,23 @@ const portFor = (world: World): GitProviderPort =>
       const listed = world.listings.findLast((entry) => entry.ref.iid === ref.iid);
       return { state: world.current.get(ref.iid) ?? listed?.state ?? 'opened' };
     }) as unknown as GitProviderPort['getMergeRequest'],
+    getDefaultBranchHead: (async () => {
+      world.headReads += 1;
+      if (world.headFails !== null) {
+        const error = world.headFails;
+        world.headFails = null;
+        throw error;
+      }
+      return { ...world.head };
+    }) satisfies GitProviderPort['getDefaultBranchHead'],
+    listDiscussions: (async (ref) => {
+      world.discussionReads.push(ref.iid);
+      const failure = world.discussionFails.get(ref.iid);
+      if (failure !== undefined) {
+        throw failure;
+      }
+      return world.discussions.get(ref.iid) ?? [];
+    }) satisfies GitProviderPort['listDiscussions'],
   }) as unknown as GitProviderPort;
 
 const integrationsFor = (world: World, integrationId: Id = INTEGRATION): PipelineIntegrations => {
@@ -176,6 +213,12 @@ interface Harness {
    * can land between the poller's pre-read and its record (review round 1).
    */
   readonly afterPollerRead: { run: (() => void) | null };
+  /** WP-123: `bindings.mr_poll_default_head`, and a write that fails once when armed. */
+  readonly defaultHead: { value: string | null; failNextWrite: boolean };
+  /** WP-123: the tasks the store says wait at Ready, oldest entry first. */
+  readonly ready: ReadyMergeRequest[];
+  /** WP-123: the `limit` each `readyMergeRequests` call asked with. */
+  readonly readyLimits: number[];
 }
 
 const harnessFor = (
@@ -192,6 +235,12 @@ const harnessFor = (
     current: new Map(),
     reread: [],
     rereadFails: null,
+    head: { branch: 'main', sha: SHA_A },
+    headReads: 0,
+    headFails: null,
+    discussions: new Map(),
+    discussionReads: [],
+    discussionFails: new Map(),
   };
   const rows = new Map<string, InboxDelivery>();
   const events: DomainEvent[] = [];
@@ -225,6 +274,12 @@ const harnessFor = (
         },
       } as unknown as TransactionScope),
   };
+  const defaultHead: { value: string | null; failNextWrite: boolean } = {
+    value: null,
+    failNextWrite: false,
+  };
+  const ready: ReadyMergeRequest[] = [];
+  const readyLimits: number[] = [];
   const store: MergeRequestPollStore = {
     listPolling: async () => overrides.polling ?? [BINDING],
     cursorOf: async () => cursor.value,
@@ -232,6 +287,18 @@ const harnessFor = (
       if (cursor.value === null || Date.parse(to) > Date.parse(cursor.value)) {
         cursor.value = to;
       }
+    },
+    defaultHeadOf: async () => defaultHead.value,
+    recordDefaultHead: async (_binding, sha) => {
+      if (defaultHead.failNextWrite) {
+        defaultHead.failNextWrite = false;
+        throw new Error('the database went away before the head was written');
+      }
+      defaultHead.value = sha;
+    },
+    readyMergeRequests: async (_binding, limit) => {
+      readyLimits.push(limit);
+      return ready.slice(0, limit);
     },
   };
   const jobs: Jobs = {
@@ -285,7 +352,19 @@ const harnessFor = (
     clock: { now: () => NOW },
     sweepIntervalMs: 60_000,
   };
-  return { options, world, rows, events, cursor, enqueued, recordFailure, afterPollerRead };
+  return {
+    options,
+    world,
+    rows,
+    events,
+    cursor,
+    enqueued,
+    recordFailure,
+    afterPollerRead,
+    defaultHead,
+    ready,
+    readyLimits,
+  };
 };
 
 const context = (data: unknown): JobContext =>
@@ -803,6 +882,288 @@ describe('a poll of one git binding', () => {
     });
     expect(await pollMergeRequestBinding(gone.options, BINDING)).toEqual({ kind: 'unbound' });
     expect(gone.world.asked).toEqual([]);
+  });
+});
+
+describe('a poll-only binding: the default branch (WP-123, backlog 373 (a))', () => {
+  const movedEvents = (harness: Harness) =>
+    harness.events.filter((event) => event.type === 'default_branch.moved');
+
+  it('records nothing on the first read, then one default_branch.moved under the new head, and nothing for an unchanged head', async () => {
+    const harness = harnessFor();
+
+    const first = await pollMergeRequestBinding(harness.options, BINDING);
+    expect(first).toMatchObject({ kind: 'polled', defaultBranch: 'first_read' });
+    expect(harness.events).toEqual([]);
+    expect(harness.defaultHead.value).toBe(SHA_A);
+
+    harness.world.head = { branch: 'main', sha: SHA_B };
+    const second = await pollMergeRequestBinding(harness.options, BINDING);
+    expect(second).toMatchObject({ defaultBranch: 'moved' });
+    expect(movedEvents(harness).map((event) => event.payload)).toEqual([
+      { project_id: PROJECT, branch: 'main', new_head: SHA_B },
+    ]);
+    expect(movedEvents(harness)[0]?.actor).toEqual({
+      kind: 'integration',
+      integration_id: INTEGRATION,
+      provider: 'gitlab',
+    });
+    expect([...harness.rows.values()].map((row) => row.deliveryId)).toEqual([
+      `gitlab:poll:${PROJECT}:acme/api@default:${SHA_A}..${SHA_B}`,
+    ]);
+    expect([...harness.rows.values()][0]?.payload).toMatchObject({
+      source: 'poll',
+      default_branch: { branch: 'main', sha: SHA_B, previous: SHA_A },
+    });
+    expect(harness.defaultHead.value).toBe(SHA_B);
+
+    const third = await pollMergeRequestBinding(harness.options, BINDING);
+    expect(third).toMatchObject({ defaultBranch: 'unchanged' });
+    expect(movedEvents(harness)).toHaveLength(1);
+    expect(harness.world.headReads).toBe(3);
+  });
+
+  it('appends nothing twice when the poll that recorded a move died before writing the head', async () => {
+    const harness = harnessFor();
+    harness.defaultHead.value = SHA_A;
+    harness.world.head = { branch: 'main', sha: SHA_B };
+    harness.defaultHead.failNextWrite = true;
+
+    await expect(pollMergeRequestBinding(harness.options, BINDING)).rejects.toThrow(
+      'before the head was written',
+    );
+    expect(movedEvents(harness)).toHaveLength(1);
+    expect(harness.defaultHead.value).toBe(SHA_A);
+
+    const retry = await pollMergeRequestBinding(harness.options, BINDING);
+    expect(retry).toMatchObject({ defaultBranch: 'duplicate' });
+    expect(movedEvents(harness)).toHaveLength(1);
+    expect(harness.defaultHead.value).toBe(SHA_B);
+  });
+
+  const moveThrough = async (harness: Harness, heads: readonly string[]) => {
+    harness.defaultHead.value = SHA_A;
+    for (const sha of heads) {
+      harness.world.head = { branch: 'main', sha };
+      await pollMergeRequestBinding(harness.options, BINDING);
+    }
+    return movedEvents(harness).map((event) => event.payload.new_head);
+  };
+
+  it('records a move back to a head the branch had before, because the key names both heads', async () => {
+    // A → B → C → B: a key of the new head alone would collide on the second B.
+    expect(await moveThrough(harnessFor(), [SHA_B, SHA_C, SHA_B])).toEqual([SHA_B, SHA_C, SHA_B]);
+  });
+
+  it('records nothing for a move that repeats an earlier pair of heads exactly — the stated residual', async () => {
+    // A → B → A → B: the second A..B collides with the first on the inbox key. Reaching it needs the
+    // default branch force-pushed back to an exact earlier commit twice, which the protected default
+    // branch the platform requires (GitLab setup guide, step 4) forbids.
+    expect(await moveThrough(harnessFor(), [SHA_B, SHA_A, SHA_B])).toEqual([SHA_B, SHA_A]);
+  });
+
+  it('fails open: a refused head read is a warn, the stored head stays, and the next poll records the move (rule 20)', async () => {
+    const harness = harnessFor();
+    harness.defaultHead.value = SHA_A;
+    harness.world.head = { branch: 'main', sha: SHA_B };
+    harness.world.headFails = new IntegrationError(
+      'forbidden',
+      'gitlab',
+      'the token lost its scope',
+    );
+
+    const failed = await pollMergeRequestBinding(harness.options, BINDING);
+    expect(failed).toMatchObject({ kind: 'polled', defaultBranch: 'failed' });
+    expect(harness.defaultHead.value).toBe(SHA_A);
+    expect(movedEvents(harness)).toEqual([]);
+
+    const next = await pollMergeRequestBinding(harness.options, BINDING);
+    expect(next).toMatchObject({ defaultBranch: 'moved' });
+    expect(movedEvents(harness)).toHaveLength(1);
+  });
+});
+
+describe('a poll-only binding: review notes on a task waiting at Ready (WP-123, backlog 373 (b))', () => {
+  const ENTERED = '2026-06-01T09:00:00.000Z' as IsoDateTime;
+  const at = (minutes: number): string =>
+    new Date(Date.parse(ENTERED) + minutes * 60_000).toISOString();
+  const waiting = (iid: number, taskSuffix: string): ReadyMergeRequest => ({
+    taskId: `00000000-0000-4000-8000-0000000c${taskSuffix.padStart(4, '0')}` as Id,
+    mr: {
+      provider: 'gitlab',
+      project_path: 'acme/api',
+      iid,
+      url: `https://gitlab.example.test/acme/api/-/merge_requests/${iid}`,
+      branch: `agentic/${iid}`,
+      head_sha: HEAD,
+    },
+    enteredAt: ENTERED,
+  });
+  const thread = (
+    id: string,
+    note: { id: string; body: string; at: string; system?: boolean },
+    resolved = false,
+  ): Discussion => ({
+    id,
+    resolvable: note.system !== true,
+    resolved,
+    notes: [
+      {
+        id: note.id,
+        author: {
+          provider: 'gitlab',
+          external_id: '77',
+          display_name: 'Dana Reviewer',
+          verified: false,
+        },
+        body: note.body,
+        created_at: note.at,
+        path: null,
+        line: null,
+        system: note.system === true,
+      },
+    ],
+  });
+  const comments = (harness: Harness) =>
+    harness.events.filter((event) => event.type === 'mr.review.comment');
+
+  it('records a person’s note written after the task entered Ready as mr.review.comment, once — and no system or platform note', async () => {
+    const harness = harnessFor();
+    harness.ready.push(waiting(7, '1'));
+    harness.world.discussions.set(7, [
+      thread('d-human', { id: '1101', body: 'Please rename totals.', at: at(1) }),
+      thread('d-system', { id: '1102', body: 'added 1 commit', at: at(2), system: true }),
+      thread('d-platform', {
+        id: '1103',
+        body: '<!-- agentic:conflict-warning:task-1 -->\nThis merge request overlaps another.',
+        at: at(3),
+      }),
+    ]);
+
+    const report = await pollMergeRequestBinding(harness.options, BINDING);
+
+    expect(report).toMatchObject({
+      kind: 'polled',
+      review: { tasks: 1, capped: false, recorded: 1, failed: 0 },
+    });
+    expect(comments(harness).map((event) => event.payload)).toEqual([
+      {
+        project_id: PROJECT,
+        task_id: null,
+        mr: waiting(7, '1').mr,
+        thread_id: 'd-human',
+        author: {
+          provider: 'gitlab',
+          external_id: '77',
+          display_name: 'Dana Reviewer',
+          verified: false,
+        },
+        text: 'Please rename totals.',
+        resolved: false,
+      },
+    ]);
+    expect([...harness.rows.values()].map((row) => row.deliveryId)).toContain(
+      `gitlab:poll:${PROJECT}:acme/api!7#note:1101`,
+    );
+
+    const again = await pollMergeRequestBinding(harness.options, BINDING);
+    expect(again).toMatchObject({ review: { recorded: 0 } });
+    expect(comments(harness)).toHaveLength(1);
+    expect(harness.world.discussionReads).toEqual([7, 7]);
+  });
+
+  it('reads a note written up to the clock allowance before the entry, and none before that', async () => {
+    const allowance = REVIEW_NOTE_SKEW_MS / 60_000;
+    const harness = harnessFor();
+    harness.ready.push(waiting(7, '1'));
+    harness.world.discussions.set(7, [
+      thread('d-inside', { id: '1', body: 'Inside the allowance.', at: at(1 - allowance) }),
+      thread('d-before', { id: '2', body: 'Before the allowance.', at: at(-1 - allowance) }),
+    ]);
+
+    await pollMergeRequestBinding(harness.options, BINDING);
+
+    expect(comments(harness).map((event) => event.payload.thread_id)).toEqual(['d-inside']);
+  });
+
+  it('carries a resolved thread’s resolution, as the webhook does', async () => {
+    const harness = harnessFor();
+    harness.ready.push(waiting(7, '1'));
+    harness.world.discussions.set(7, [
+      thread('d-done', { id: '9', body: 'Fixed, thanks.', at: at(1) }, true),
+    ]);
+
+    await pollMergeRequestBinding(harness.options, BINDING);
+
+    expect(comments(harness).map((event) => event.payload.resolved)).toEqual([true]);
+  });
+
+  it('redacts a planted credential before the event and the row are built from the note', async () => {
+    const harness = harnessFor();
+    harness.ready.push(waiting(7, '1'));
+    harness.world.discussions.set(7, [
+      thread('d-leak', { id: '5', body: `the job printed ${PLANTED}`, at: at(1) }),
+    ]);
+
+    await pollMergeRequestBinding(harness.options, BINDING);
+
+    expect(comments(harness)).toHaveLength(1);
+    expect(JSON.stringify(harness.events)).not.toContain(PLANTED);
+    expect(JSON.stringify([...harness.rows.values()])).not.toContain(PLANTED);
+    expect(JSON.stringify(comments(harness)[0]?.payload)).toContain('[REDACTED');
+  });
+
+  it('fails open per task: a refused notes read is counted, and the next task is still read (rule 20)', async () => {
+    const harness = harnessFor();
+    harness.ready.push(waiting(7, '1'), waiting(8, '2'));
+    harness.world.discussionFails.set(
+      7,
+      new IntegrationError('forbidden', 'gitlab', 'the token lost its scope'),
+    );
+    harness.world.discussions.set(8, [
+      thread('d-8', { id: '81', body: 'One more thing.', at: at(1) }),
+    ]);
+
+    const report = await pollMergeRequestBinding(harness.options, BINDING);
+
+    expect(report).toMatchObject({ review: { tasks: 2, failed: 1, recorded: 1 } });
+    expect(comments(harness).map((event) => event.payload.mr.iid)).toEqual([8]);
+  });
+
+  it('reads at most the cap of waiting tasks, oldest entry first, and says it was capped', async () => {
+    const harness = harnessFor();
+    for (let index = 0; index < MR_POLL_REVIEW_TASKS_LIMIT + 2; index += 1) {
+      harness.ready.push(waiting(100 + index, String(index)));
+    }
+
+    const report = await pollMergeRequestBinding(harness.options, BINDING);
+
+    expect(harness.readyLimits).toEqual([MR_POLL_REVIEW_TASKS_LIMIT + 1]);
+    expect(report).toMatchObject({ review: { tasks: MR_POLL_REVIEW_TASKS_LIMIT, capped: true } });
+    expect(harness.world.discussionReads).toHaveLength(MR_POLL_REVIEW_TASKS_LIMIT);
+    expect(harness.world.discussionReads[0]).toBe(100);
+  });
+});
+
+describe('a binding a webhook can reach (WP-123)', () => {
+  it('makes neither the default-branch read nor the notes read', async () => {
+    const harness = harnessFor();
+    harness.world.plan = { interval_seconds: 60, receives_webhooks: true };
+    harness.defaultHead.value = SHA_A;
+    harness.world.head = { branch: 'main', sha: SHA_B };
+    harness.ready.push({
+      taskId: '00000000-0000-4000-8000-0000000c0001' as Id,
+      mr: { iid: 7, url: 'https://gitlab.example.test/acme/api/-/merge_requests/7' },
+      enteredAt: '2026-06-01T09:00:00.000Z' as IsoDateTime,
+    });
+
+    const report = await pollMergeRequestBinding(harness.options, BINDING);
+
+    expect(report).toMatchObject({ kind: 'polled', defaultBranch: 'webhook', review: null });
+    expect(harness.world.headReads).toBe(0);
+    expect(harness.world.discussionReads).toEqual([]);
+    expect(harness.readyLimits).toEqual([]);
+    expect(harness.events).toEqual([]);
   });
 });
 

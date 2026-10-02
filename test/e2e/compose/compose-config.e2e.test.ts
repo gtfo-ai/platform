@@ -66,7 +66,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadServerConfig } from '@platform/server';
+import { DEPRECATED_ENVIRONMENT_VARIABLES, loadServerConfig } from '@platform/server';
 import { describe, expect, it } from 'vitest';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -460,11 +460,17 @@ describe('compose.yml gives the app service the environment the server reads (WP
 
   it.each(PRODUCT_SERVICES)('delivers every variable the server reads to `%s`', (service) => {
     const delivered = new Set(Object.keys(serviceEnvironment(service, projectWith(STOCK_ENV))));
-    const missing = [...namesServerReads()].filter((name) => !delivered.has(name)).sort();
-    // **No deliberate omission**: every one of the names `loadServerConfig` reads is declared in
-    // `.env.example`, so a stock instance delivers all of them. Before WP-50 this list was twenty
-    // names long, among them `APP_INTEGRATION_SECRET_ENV`, `APP_METRICS_USERNAME`,
-    // `APP_TRUST_PROXY`, every `APP_SSE_*`, every `APP_DB_*` and every `_FILE` variant.
+    const missing = [...namesServerReads()]
+      .filter((name) => !delivered.has(name))
+      // WP-123: a name read only as a deprecated fallback is not shipped — the stock file would
+      // teach the old name. The list is the server's own, so a new one is a decision, not a gap.
+      .filter((name) => !DEPRECATED_ENVIRONMENT_VARIABLES.includes(name))
+      .sort();
+    // **No deliberate omission** beyond the deprecated names: every other name `loadServerConfig`
+    // reads is declared in `.env.example`, so a stock instance delivers all of them. Before WP-50
+    // this list was twenty names long, among them `APP_INTEGRATION_SECRET_ENV`,
+    // `APP_METRICS_USERNAME`, `APP_TRUST_PROXY`, every `APP_SSE_*`, every `APP_DB_*` and every
+    // `_FILE` variant.
     expect(missing).toEqual([]);
   });
 

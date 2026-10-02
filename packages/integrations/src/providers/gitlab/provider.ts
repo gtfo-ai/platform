@@ -1044,10 +1044,19 @@ export const createGitLabProvider = (options: GitLabProviderOptions): GitLabProv
         .slice(0, listOptions.limit);
     },
 
-    /** WP-110: on when the binding says so **and** names one project, which is what a poll lists. */
+    /**
+     * WP-110: on when the binding says so **and** names one project, which is what a poll lists.
+     * WP-123: `receives_webhooks` is whether either webhook secret is set — with neither, every
+     * delivery is refused (`verifyGitLabDelivery`), so the binding is poll-only.
+     */
     pollPlan: (): MergeRequestPollPlan | null =>
       config.poll_enabled && config.project !== null && config.project !== undefined
-        ? { interval_seconds: config.poll_interval_seconds }
+        ? {
+            interval_seconds: config.poll_interval_seconds,
+            receives_webhooks:
+              (options.secrets.webhook_secret_token ?? '') !== '' ||
+              (options.secrets.webhook_signing_token ?? '') !== '',
+          }
         : null,
 
     listMergedMergeRequests: async (

@@ -1,0 +1,24 @@
+-- 0074 — the default branch's last-seen head on a poll-only git binding (WP-123, PROGRESS backlog
+-- 373 half (a)).
+--
+-- ## `bindings.mr_poll_default_head`
+--
+-- A GitLab binding that polls and has **no** webhook secret (neither `webhook_secret_token` nor
+-- `webhook_signing_token`) hears about a push to its default branch from nowhere: the Push hook is
+-- the only door `default_branch.moved` had, so a task waiting at `ready_for_merge` was never
+-- re-checked for conflicts when `main` moved. Since WP-123 each `mr.poll` of such a binding reads
+-- `getDefaultBranchHead` and compares it with this column
+-- (`packages/application/src/pipeline/mr-poll.ts`). When they differ it records a
+-- `default_branch.moved` through `recordNormalisedDelivery`, under an `inbox` key naming **both**
+-- heads (`@default:<old>..<new>`), and then writes the new head here.
+--
+-- **The provider's sha, never a platform value.** `null` is "never read": the first poll writes the
+-- head it read and records no event, because a poll that has never seen the branch cannot say it
+-- moved. The PUT that replaces a project's bindings deletes and re-inserts the rows, so it resets the
+-- column to that answer. **One writer**, `MergeRequestPollStore.recordDefaultHead`, after the event
+-- (if any) is recorded — so a poll that dies between the two records the same key again next time
+-- and the `inbox` row collapses it; **one reader**, `MergeRequestPollStore.defaultHeadOf`.
+--
+-- A binding with a webhook secret never reads it: the webhook is that binding's door for the event,
+-- and only one door per binding means no cross-door dedup is needed (the ruling of WP-123).
+alter table bindings add column mr_poll_default_head text;
